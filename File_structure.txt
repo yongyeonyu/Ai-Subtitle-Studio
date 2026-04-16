@@ -1,0 +1,112 @@
+ai_subtitle_studio/
+├── main.py                          ← 프로그램 실행 진입점
+├── config.py                        ← 전역 환경 변수 (경로, 모델명 등) 
+├── logger.py                        ← 시스템 로그 기록 및 UI 연동
+│
+├── dataset/                         ← 각종 설정 및 사용자 데이터 (Root 위치)
+│   ├── folder_settings.json         ← 최근 폴더 및 경로 설정 
+│   ├── user_settings.json           ← AI 모델 및 자막 규칙 설정 (실시간 반영)
+│   └── auto_tracker.json            ← iCloud/NAS 파일 처리 상태 추적 데이터 (자동 생성)
+│
+├── core/                            ← 심장부 (백엔드 및 로직 모음)
+│   ├── __init__.py                  ← 패키지 인식 파일
+│   ├── state_manager.py             ← 🧠 FSM (상태 머신) 중앙 제어 엔진 (모드/상태/UI 통제)
+│   ├── backend.py                   ← AI 백엔드 작업 관리 및 스레드 제어 (재시작/자동처리)
+│   ├── media_processor.py           ← 🔊 VAD 초정밀 스캔 및 Whisper 단어 단위 인식 엔진
+│   ├── subtitle_engine.py           ← 🤖 LLM 자막 최적화 및 환각 필터링, SRT 저장
+│   ├── diarize.py                   ← 🗣️ 화자 분리 및 목소리 지문 인식
+│   ├── data_manager.py              ← 📂 설정 및 교정 사전 파일 I/O 관리
+│   ├── path_manager.py              ← 🗺️ 폴더 및 경로 관리 (NAS/iCloud/자동감지 대응)
+│   ├── cloud_sync.py                ← ☁️ iCloud/NAS 드롭존 스마트 폴링 감시 (리스트 콜백)
+│   ├── auto_tracker.py              ← 📋 파일 처리 상태 추적기 (완료/처리중/신규 상태관리)
+│   ├── utils.py                     ← 🛠️ 시간 변환 및 규칙 로드 유틸리티
+│   ├── worker_threads.py            ← 백그라운드 워커 스레드 관리
+│   └── time_history.py              ← 처리 시간 기록 및 ETA 학습용 데이터
+│
+└── ui/                              ← 얼굴 (사용자 인터페이스 모음)
+    ├── main_window.py               ← 앱 메인 화면 (파일 큐 관리, CloudSyncManager 통합, 자동처리)
+    ├── editor_widget.py             ← 에디터 UI 골격 및 상태 머신(SM) 아바타
+    ├── editor_pipeline.py           ← 자막 생성/재시작 파이프라인 흐름 제어 (SM 연동)
+    ├── editor_segments.py           ← 자막 데이터 큐 처리 및 세그먼트 I/O (SM 연동)
+    ├── editor_timeline_video.py     ← 비디오 싱크 및 자막 분할 핸들러
+    ├── undo_manager.py              ← ↩️ 실행취소/다시실행 스냅샷 스택 관리
+    ├── subtitle_text_edit.py        ← 화자 색상 강조 및 단축키 적용 에디터
+    ├── timestamp_area.py            ← 시간 표시 및 삭제 버튼 영역
+    ├── timeline_constants.py        ← 타임라인 UI 상수 및 갭 계산 유틸
+    ├── timeline_waveform.py         ← 📈 실시간 오디오 파형 렌더링
+    ├── timeline_global.py           ← 하단 전체 영상 미니맵
+    ├── timeline_canvas.py           ← 메인 캔버스 (네비게이션/드래그/재인식 시각화)
+    ├── timeline_widget.py           ← 타임라인 모듈 조립 컨테이너
+    ├── video_player_widget.py       ← 영상 플레이어 및 오디오 엔진
+    ├── export_dialog.py             ← 자막 영상 렌더링 출력 설정
+    ├── settings_dialog.py           ← 설정창 통합 관리
+    ├── settings_common.py           ← 설정창 공통 UI 및 버튼
+    ├── settings_ai.py               ← ⚙️ AI 엔진 설정
+    ├── settings_speaker.py          ← 🗣️ 화자 및 목소리 설정
+    ├── settings_gap.py              ← ⏱️ 자막 간격 규칙 설정
+    ├── settings_advanced.py         ← 🛠️ 상세 파라미터 제어
+    ├── settings_export.py           ← 📤 자막 파일 내보내기 설정
+    ├── editor_popup_qt.py           ← 단어 교정 팝업 메뉴
+    └── folder_dialog.py             ← 파일/폴더 일괄 선택 다이얼로그
+ 
+================================================================================
+[버전 정보 및 최근 업데이트 내역]
+버전: v01.00.03 (초정밀 동기화 및 자동처리 시스템 빌드)
+ 
+1. iCloud/NAS 자동처리 파이프라인 (신규)
+   - AutoTracker 모듈 신설 (core/auto_tracker.py): 파일별 처리 상태(신규/업로드중/처리중/완료)를
+     auto_tracker.json에 영속 저장. 앱 재시작 시 비정상 종료된 '처리중' 파일을 자동으로 '신규'로 리셋.
+   - CloudSyncManager 업그레이드 (core/cloud_sync.py): 단일 파일 콜백 → 리스트 콜백으로 변경.
+     5초간 파일 크기 고정 감지로 iCloud 업로드 완료 판단. is_busy_callback으로 앱 사용 중 자동 처리 대기.
+   - CloudSyncManager를 backend에서 main_window로 이전, 앱 생명주기와 일치시킴.
+   - _sig_auto_start_pipeline Signal 추가 (main_window.py): 워커 스레드에서 직접 UI 접근 대신
+     Signal로 메인 스레드에 안전하게 자동시작 위임.
+   - is_auto_start 모드 (backend.py): 에디터 열림 직후 0.5초 후 자동 시작, 전사 완료 2초 후
+     threading.Timer로 자동 저장 및 다음 파일 이동 (QTimer 워커 스레드 사용 버그 수정 포함).
+   - path_manager.py: get/set_icloud_auto_detect, get/set_nas_auto_detect 함수 추가.
+ 
+2. 자막 싱크(Sync) 초정밀 동기화 엔진
+   - Word-level Timestamps: Whisper 문장 단위 대신 단어 단위 타임스탬프로 시작/끝 시간을 0.01초 단위로 정밀 조립.
+   - VAD-Whisper 교차 검증 (Cross-Masking): VAD 무음 구간을 Whisper가 침범하면 환각으로 간주하고 자동 삭제.
+   - 안전 쿠션(Padding): VAD 절단 시 앞뒤 1.0초 여유를 주어 경계선 왜곡(Boundary Effect) 방지.
+ 
+3. LLM 환각 차단 및 성능 최적화
+   - Hallucination Filter: _HALLUC_PHRASES 필터로 "한국어 대화" 등 시스템 헛소리 사전 차단.
+   - Contextual Relay: 마지막 유의미한 문장(최소 15자)만 다음 프롬프트로 전달해 청크 간 문맥 연속성 확보.
+   - _clean() 이중 호출 제거로 최적화 속도 개선.
+ 
+--------------------------------------------------------------------------------
+버전: v01.00.02 (안정화 빌드)
+ 
+1. 무음 구간(Gap) 표준화 및 타임라인 싱크 완벽 구현
+   - 투명 글자(\u200B) 꼼수 문자를 제거하고 순수 시간 간격(Time Gap) 기반으로 무음 구간을 SRT에 저장.
+   - SRT 불러오기 시 무음 블록이 다음 자막에 덮어씌워지거나 병합(자석 효과)되는 버그 원천 차단.
+   - 타임라인에서 뒤쪽 자막을 앞으로 당길 때 발생하는 '튕김 현상' 유연화 로직 적용.
+ 
+2. 에디터 텍스트 처리 및 UX 극대화
+   - 말줄임표(.., ...) 자동 삭제 현상 수정 (_clean 필터 예외 처리).
+   - Shift + Enter 줄바꿈 시 세그먼트 분리 버그 수정 (윗줄 시간 상속 및 동일 시간 내 병합).
+   - 실행 취소(Cmd+Z) / 다시 실행(Cmd+Shift+Z) UndoManager로 완전 분리, 스냅샷 스택 재구현.
+ 
+3. UndoManager 모듈 분리 (신규: ui/undo_manager.py)
+   - editor_pipeline.py의 undo 메서드 6개를 UndoManager 클래스로 이전.
+   - _route_undo/_route_redo 라우터로 단축키 연결.
+     (텍스트 포커스 시 QTextDocument undo, 타임라인 포커스 시 스냅샷 undo 자동 분기)
+   - push() / push_immediate() 호출 위치: _on_enter_pressed, _on_backspace_merged,
+     _on_drag_started, _on_gap_activated, subtitle_text_edit.py 내부.
+ 
+4. canvas_end_map 키 타입 불일치 버그 수정 (editor_segments.py)
+   - Gap 앞 자막의 끝 시간 조회 시 라인 번호(int)로 float 키 dict를 잘못 조회하던 버그 수정.
+   - prev_line → prev_start(시작 시간) float 키 조회로 변경, 드래그 끝 시간이 Gap에 정확히 반영.
+ 
+5. 자막 출력 및 클라우드 연동
+   - ExportDialog 호출 시 TypeError(인자 순서 어긋남) 버그 수정.
+   - 렌더링 완료 후 iCloud 드롭존 자동 복사 및 백업 기능 추가.
+   - 화자 1명 감지 시 _화자.srt 파일 생성 생략으로 디스크 관리 최적화.
+ 
+--------------------------------------------------------------------------------
+버전: v01.00.01 (초기 안정화 빌드)
+   - 프로젝트 구조 개편 및 core/ui 모듈 분리 완료.
+   - NAS 및 iCloud 동기화 기능 안정화.
+   - config.DATASET_DIR 기반 경로 통일.
+================================================================================

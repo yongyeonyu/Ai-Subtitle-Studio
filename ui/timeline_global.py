@@ -1,0 +1,110 @@
+# Version: 01.00.00
+"""
+ui/timeline_global.py
+타임라인 하단 전체 영상 미니맵 위젯 (GlobalCanvas)
+"""
+import numpy as np
+from PyQt6.QtWidgets import QWidget, QSizePolicy
+from PyQt6.QtCore import Qt, pyqtSignal, QRect
+from PyQt6.QtGui import QPainter, QColor, QPen
+import config
+
+class GlobalCanvas(QWidget):
+    seek_frac = pyqtSignal(float)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(36)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus) 
+        self.segments = []
+        self.view_start = 0.0
+        self.view_end = 1.0
+        self.playhead_sec = 0.0
+        self.total_duration = 0.0 
+        self._waveform: np.ndarray | None = None  
+        self.vad_segments = []
+
+    def set_waveform(self, wf: np.ndarray):
+        self._waveform = wf
+        self.update()
+        
+    def set_vad_segments(self, vad_segs: list):
+        self.vad_segments = vad_segs
+        self.update()
+
+    def set_playhead(self, sec):
+        if self.playhead_sec == sec: return
+        self.playhead_sec = sec; self.update()
+
+    def update_segments(self, segs, total_dur): 
+        self.segments = [s for s in segs if not s.get("is_gap")]
+        self.total_duration = total_dur
+        self.update()
+
+    def update_viewport(self, s, e):
+        if self.view_start == s and self.view_end == e: return
+        self.view_start, self.view_end = s, e; self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor("#111111"))
+        
+        w = self.width()
+        mid_y = self.height() // 2
+        total = self.total_duration
+
+        if self._waveform is not None and len(self._waveform) > 0:
+            p.setPen(QPen(QColor("#555555"), 1))
+            wf_len = len(self._waveform)
+            for i in range(w):
+                idx = int((i / w) * wf_len)
+                if idx < wf_len:
+                    amp = float(self._waveform[idx])
+                    h = max(1, int(amp * 14))
+                    p.drawLine(i, mid_y - h, i, mid_y + h)
+
+        if total <= 0: return
+        sc = w / total
+        
+        if getattr(self, 'vad_segments', None):
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(255, 200, 0, 180)) 
+            for vs in self.vad_segments:
+                vx = int(vs["start"] * sc)
+                vw = max(1, int((vs["end"] - vs["start"]) * sc))
+                p.drawRect(QRect(vx, 2, vw, 10))
+        
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("#666666"))
+        for s in self.segments:
+            x = int(s["start"] * sc)
+            sw = max(1, int((s["end"] - s["start"]) * sc))
+            p.drawRect(QRect(x, 14, sw, 18))
+            
+        p.setPen(QPen(QColor(config.ACCENT), 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(QRect(int(self.view_start * w), 1, max(1, int((self.view_end - self.view_start) * w)), 34))
+        
+        if self.playhead_sec >= 0:
+            p.setPen(QPen(QColor("#FF4444"), 2))
+            px = int(self.playhead_sec * sc)
+            p.drawLine(px, 0, px, self.height())
+
+    def wheelEvent(self, ev):
+        dy, dx = ev.angleDelta().y(), ev.angleDelta().x()
+        delta = -(dy if dy != 0 else dx)
+        w = self.parent()
+        while w:
+            if hasattr(w, "scroll"):
+                w.scroll.horizontalScrollBar().setValue(w.scroll.horizontalScrollBar().value() + delta // 2)
+                ev.accept(); return
+            w = w.parent()
+        ev.ignore()
+
+    def mousePressEvent(self, e):
+        self.setFocus() 
+        self.seek_frac.emit(e.pos().x() / max(1, self.width()))
+        
+    def mouseMoveEvent(self, e):
+        if e.buttons() & Qt.MouseButton.LeftButton: self.seek_frac.emit(e.pos().x() / max(1, self.width()))
