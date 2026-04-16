@@ -1,11 +1,25 @@
-# Python
+# ── Python ──
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# OS
-.DS_Store
-
-# Env
+# ── 환경변수 (보안) ──
 .env
-``
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── 런타임 자동 생성 데이터 ──
+dataset/auto_tracker.json
+dataset/folder_settings.json
+dataset/time_history.json
+
+# ── 출력 파일 (음성/영상) ──
+output/
+
+# ── IDE ──
+.vscode/
+.idea/
