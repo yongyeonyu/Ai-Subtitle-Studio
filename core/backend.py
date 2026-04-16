@@ -30,6 +30,18 @@ class CoreBackend:
         self.pipeline_start_time = 0.0
         self.is_first_start = True
 
+    # ─────────────────────────────────────────────
+    # 설정 로드 중앙화 (필수)
+    # ─────────────────────────────────────────────
+    def _load_settings(self) -> dict:
+        try:
+            with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception as e:
+            get_logger().log(f"⚠️ 설정 로드 실패: {e}")
+            return {}
+
     def start_pipeline(self, files, folder=None, is_icloud=False, is_auto_start=False):
         self._active = True
         self.files_to_process = list(files)
@@ -68,61 +80,74 @@ class CoreBackend:
 
     def _precalculate_etas(self):
         total_expected_time = 0.0
-        try:
-            with open(_SETTINGS_PATH, "r", encoding="utf-8") as f: s = json.load(f)
-            max_spk  = int(s.get('max_speakers', 1))
-            dia_flag = "O" if max_spk > 1 else "X"
-            model_key = f"STT:{s.get('selected_whisper_model','기본')}|LLM:{s.get('selected_model','기본')}|DIA:{dia_flag}"
 
-            for i, target_file in enumerate(self.files_to_process):
-                try:
-                    cmd = ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
-                           '-show_entries', 'stream=width,height,r_frame_rate:format=duration',
-                           '-of', 'json', target_file]
-                    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=5)
-                    probe  = json.loads(result.stdout)
+        s = self._load_settings()
+        max_spk  = int(s.get('max_speakers', 1))
+        dia_flag = "O" if max_spk > 1 else "X"
+        model_key = f"STT:{s.get('selected_whisper_model','기본')}|LLM:{s.get('selected_model','기본')}|DIA:{dia_flag}"
 
-                    fmt          = probe.get('format', {})
-                    duration_sec = float(fmt.get('duration', 0)) if fmt.get('duration') else 0.0
-                    streams      = probe.get('streams', [])
+        for i, target_file in enumerate(self.files_to_process):
+            try:
+                cmd = [
+                    'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                    '-show_entries', 'stream=width,height,r_frame_rate:format=duration',
+                    '-of', 'json', target_file
+                ]
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=5)
+                probe  = json.loads(result.stdout)
 
-                    if streams:
-                        strm = streams[0]
-                        if duration_sec == 0.0:
-                            duration_sec = float(strm.get('duration', 0)) if strm.get('duration') else 0.0
-                        w, h    = strm.get('width', 0), strm.get('height', 0)
-                        fps_str = strm.get('r_frame_rate', '0/0')
-                        if '/' in fps_str:
-                            n, d = fps_str.split('/')
-                            fps = int(n)/int(d) if int(d) != 0 else 0
-                        else: fps = float(fps_str)
-                        info_txt = f"{w}x{h} ({fps:.2f}fps)" if w and h else "오디오 파일"
-                    else: info_txt = "오디오 파일"
+                fmt          = probe.get('format', {})
+                duration_sec = float(fmt.get('duration', 0)) if fmt.get('duration') else 0.0
+                streams      = probe.get('streams', [])
 
-                    self._video_durations[target_file] = duration_sec
+                if streams:
+                    strm = streams[0]
+                    if duration_sec == 0.0:
+                        duration_sec = float(strm.get('duration', 0)) if strm.get('duration') else 0.0
+                    w, h    = strm.get('width', 0), strm.get('height', 0)
+                    fps_str = strm.get('r_frame_rate', '0/0')
+                    if '/' in fps_str:
+                        n, d = fps_str.split('/')
+                        fps = int(n) / int(d) if int(d) != 0 else 0
+                    else:
+                        fps = float(fps_str)
+                    info_txt = f"{w}x{h} ({fps:.2f}fps)" if w and h else "오디오 파일"
+                else:
+                    info_txt = "오디오 파일"
 
-                    if duration_sec > 0:
-                        m_len, s_len = divmod(int(duration_sec), 60)
-                        h_len, m_len = divmod(m_len, 60)
-                        len_txt = f"{h_len:02d}:{m_len:02d}:{s_len:02d}" if h_len > 0 else f"{m_len:02d}:{s_len:02d}"
-                    else: len_txt = "-"
+                self._video_durations[target_file] = duration_sec
 
-                    expected_time = get_expected_time(model_key, duration_sec)
-                    if expected_time > 0: total_expected_time += expected_time
-                    if hasattr(self.ui, '_sig_update_queue'):
-                        self.ui._sig_update_queue.emit(i, "⏳ 대기 중", str(expected_time), info_txt, len_txt)
-                except Exception: pass
+                if duration_sec > 0:
+                    m_len, s_len = divmod(int(duration_sec), 60)
+                    h_len, m_len = divmod(m_len, 60)
+                    len_txt = f"{h_len:02d}:{m_len:02d}:{s_len:02d}" if h_len > 0 else f"{m_len:02d}:{s_len:02d}"
+                else:
+                    len_txt = "-"
 
-            self.total_expected_time = total_expected_time
-            if total_expected_time > 0 and hasattr(self.ui, '_sig_update_queue_header'):
-                t_mins, t_secs = int(total_expected_time // 60), int(total_expected_time % 60)
-                t_hours = t_mins // 60
-                if t_hours > 0:
-                    t_mins = t_mins % 60
-                    total_str = f"{t_hours}시간 {t_mins}분 {t_secs}초"
-                else: total_str = f"{t_mins}분 {t_secs}초"
-                self.ui._sig_update_queue_header.emit(1, len(self.files_to_process), 0, total_str)
-        except Exception: pass
+                expected_time = get_expected_time(model_key, duration_sec)
+                if expected_time > 0:
+                    total_expected_time += expected_time
+
+                if hasattr(self.ui, '_sig_update_queue'):
+                    self.ui._sig_update_queue.emit(i, "⏳ 대기 중", str(expected_time), info_txt, len_txt)
+
+            except Exception as e:
+                # 너무 조용히 삼키지 말고 최소 로그는 남김
+                get_logger().log(f"⚠️ ETA 계산 실패: {os.path.basename(target_file)} / {e}")
+                if hasattr(self.ui, '_sig_update_queue'):
+                    self.ui._sig_update_queue.emit(i, "⏳ 대기 중", "예상불가", "오류", "-")
+
+        self.total_expected_time = total_expected_time
+
+        if total_expected_time > 0 and hasattr(self.ui, '_sig_update_queue_header'):
+            t_mins, t_secs = int(total_expected_time // 60), int(total_expected_time % 60)
+            t_hours = t_mins // 60
+            if t_hours > 0:
+                t_mins = t_mins % 60
+                total_str = f"{t_hours}시간 {t_mins}분 {t_secs}초"
+            else:
+                total_str = f"{t_mins}분 {t_secs}초"
+            self.ui._sig_update_queue_header.emit(1, len(self.files_to_process), 0, total_str)
 
     def _run_all(self):
         try:
@@ -269,6 +294,7 @@ class CoreBackend:
 
                 try:
                     with open(_SETTINGS_PATH, "r", encoding="utf-8") as f: s = json.load(f)
+                    s = self._load_settings()
                     model_name = s.get('selected_model', '기본')
                     api_key = s.get('google_api_key', '')
                     user_prompt = s.get('custom_prompt', '')
@@ -594,7 +620,7 @@ class CoreBackend:
 
                 # 💡 [수정됨] 완료 알림 전송
                 self._send_ntfy_notification(
-                    title="AI PD Studio 알림",
+                    title=f"{config.APP_NAME} 알림",
                     message=f"✅ [{os.path.basename(target_file)}]\n투명 자막 영상이 iCloud에 준비되었습니다!\n아이패드에서 편집을 시작하세요 🎬",
                     tags="tada,sparkles"
                 )
@@ -607,22 +633,15 @@ class CoreBackend:
         return False
 
     def _reload_speaker_settings(self):
-        if os.path.exists(_SETTINGS_PATH):
-            try:
-                with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
-                    s = json.load(f)
-                    self.min_speakers = int(s.get("min_speakers", 1))
-                    self.max_speakers = int(s.get("max_speakers", 1))
-            except Exception: pass
+        s = self._load_settings()
+        self.min_speakers = int(s.get("min_speakers", 1))
+        self.max_speakers = int(s.get("max_speakers", 1))
+
 
     def _load_selected_model(self):
-        if os.path.exists(_SETTINGS_PATH):
-            try:
-                with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
-                    return json.load(f).get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
-            except Exception: pass
-        return getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b")
-
+        s = self._load_settings()
+        return s.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
+    
     def _prepare_speaker_map(self, audio_path):
         try:
             from .diarize import get_speaker_map
@@ -630,22 +649,24 @@ class CoreBackend:
         except Exception: self._speaker_map = []
 
     def _send_ntfy_notification(self, title: str, message: str, tags: str = ""):
-        """아이패드로 ntfy 알림을 전송하는 전용 함수 (한글 깨짐 방지 적용)"""
+        """ntfy 알림 전송 (config.NTFY_TOPIC 기반, 한글 깨짐 방지 Base64 적용)"""
         try:
             import urllib.request
             import base64
-            
-            topic = "Ai_Subtitle_Studio" 
+
+            topic = getattr(config, "NTFY_TOPIC", "")
+            if not topic:
+                return  # 토픽 비어있으면 비활성
+
             url = f"https://ntfy.sh/{topic}"
-            
-            # 💡 [핵심] ntfy 헤더에 한글을 보낼 때는 Base64(RFC 2047) 형식으로 인코딩해야 깨지지 않습니다!
+
             encoded_title = f"=?UTF-8?B?{base64.b64encode(title.encode('utf-8')).decode('utf-8')}?="
-            
-            req = urllib.request.Request(url, data=message.encode('utf-8'), method='POST')
-            req.add_header('Title', encoded_title)
+
+            req = urllib.request.Request(url, data=message.encode("utf-8"), method="POST")
+            req.add_header("Title", encoded_title)
             if tags:
-                req.add_header('Tags', tags)
-                
+                req.add_header("Tags", tags)
+
             urllib.request.urlopen(req, timeout=3)
         except Exception as e:
-            get_logger().log(f"    └ ⚠️ 아이패드 알림 전송 실패: {e}")
+            get_logger().log(f"    └ ⚠️ 알림 전송 실패: {e}")
