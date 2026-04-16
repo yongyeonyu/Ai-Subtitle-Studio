@@ -68,16 +68,22 @@ class CoreBackend:
         self._speaker_map = []
 
     def stop(self):
+        """백엔드 작업을 안전하게 중단한다 (Phase‑1 최종 버전)"""
         self._active = False
-        try:
-            threading.Thread(
-                target=lambda: subprocess.run(["pkill", "-f", "mlx_whisper"], capture_output=True),
-                daemon=True
-            ).start()
-        except Exception: pass
-        if hasattr(self, '_edit_event'):  self._edit_event.set()
-        if hasattr(self, '_start_event'): self._start_event.set()
 
+        # ✅ Whisper / ML 프로세스는 VideoProcessor가 책임
+        try:
+            if hasattr(self, "video_processor"):
+                self.video_processor.stop_transcribe()
+        except Exception as e:
+            get_logger().log(f"⚠️ stop_transcribe 실패: {e}")
+
+        # ✅ 대기 중인 editor / pipeline 이벤트 해제
+        if hasattr(self, '_edit_event'):
+            self._edit_event.set()
+        if hasattr(self, '_start_event'):
+            self._start_event.set()
+            
     def _precalculate_etas(self):
         total_expected_time = 0.0
 
@@ -152,19 +158,24 @@ class CoreBackend:
     def _run_all(self):
         try:
             for i, target_file in enumerate(self.files_to_process):
-                if not self._active: return
+                if not self._active:
+                    return
                 if hasattr(self.ui, '_sig_update_queue'):
                     self.ui._sig_update_queue.emit(i, "⏳ 오디오 추출 중", "", "", "")
                 self._process_one(target_file, i)
-            self.ui.request_show_home()
+
         except Exception as e:
             if str(e) not in ("USER_PREV", "USER_EXIT"):
-                get_logger().log(f"\n❌ 치명적 에러: {e}"); get_logger().log(traceback.format_exc())
-            try:
-                if hasattr(self, 'ui') and self.ui: self.ui.request_show_home()
-            except (RuntimeError, AttributeError): pass
+                get_logger().log(f"\n❌ 치명적 에러: {e}")
+                get_logger().log(traceback.format_exc())
+
         finally:
             self._active = False
+            try:
+                if hasattr(self.ui, 'request_show_home'):
+                    self.ui.request_show_home()
+            except Exception:
+                pass
 
     def _process_one(self, target_file, queue_index: int):
         # 💡 [신규] 기존 파일 백업 로직 추가
@@ -293,14 +304,16 @@ class CoreBackend:
                     t_diarize.join()
 
                 try:
-                    with open(_SETTINGS_PATH, "r", encoding="utf-8") as f: s = json.load(f)
                     s = self._load_settings()
                     model_name = s.get('selected_model', '기본')
                     api_key = s.get('google_api_key', '')
                     user_prompt = s.get('custom_prompt', '')
                     chunk_time_limit = int(s.get('chunk_time_limit', 60))
-                except:
-                    model_name = ""; api_key = ""; user_prompt = ""; chunk_time_limit = 60
+                except Exception:
+                    model_name = ""
+                    api_key = ""
+                    user_prompt = ""
+                    chunk_time_limit = 60
 
                 is_gemini = "API" in model_name or "Gemini" in model_name
 
@@ -387,8 +400,11 @@ class CoreBackend:
                         opt = grouped_opt
 
                     auto_collected_segs.extend(opt)
-                    self.ui.append_segments_to_editor(opt)
-                    self.ui.update_editor_status(last_c_idx, last_t_total)
+                    if hasattr(self.ui, "_sig_append_segments"):
+                        self.ui._sig_append_segments.emit(opt)
+
+                    if hasattr(self.ui, "_sig_update_editor_status"):
+                        self.ui._sig_update_editor_status.emit(last_c_idx, last_t_total)
 
                 while self._active:
                     item = opt_queue.get()
