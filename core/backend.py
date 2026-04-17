@@ -498,6 +498,14 @@ class CoreBackend:
             save_srt(final_segments, srt_path, apply_offset=True)
             get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료")
 
+            # ✅ 파일별 자막 생성 완료 알림
+            self._send_ntfy_notification(
+                title=f"{config.APP_NAME} 알림",
+                message=f"✅ [{os.path.basename(target_file)}] 자막 생성이 완료되었습니다.",
+                tags="white_check_mark"
+            )
+
+
             if hasattr(self.ui, '_sig_update_queue'):
                 try: self.ui._sig_update_queue.emit(queue_index, "✅ 자막출력(srt)", "완료", "", "")
                 except RuntimeError: pass

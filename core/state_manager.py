@@ -147,9 +147,6 @@ class SubtitleStateManager(QObject):
         self.is_dirty, self.is_locked = True, False
         self._msg, self._btn_text, self._btn_enabled = "✨ 생성 완료", "🔄 재시작", True
         self._broadcast()
-        name = os.path.basename(self.current_file) if self.current_file else ""
-        msg = f"✅ [{name}] 자막 생성이 완료되었습니다." if name else "✅ 자막 생성이 완료되었습니다."
-        self._send_ntfy("✅ AI PD Studio", msg)
 
     def complete_auto_mode(self):
         """iCloud 자동 처리 완료"""
