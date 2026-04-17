@@ -80,8 +80,17 @@ class EditorTimelineVideoMixin:
 
         current_sec = pos_ms / 1000.0
         self.timeline.set_playhead(current_sec)
-        self.timeline.center_to_sec(current_sec, smooth=True)
 
+        # ✅ 재생 중: 플레이헤드를 화면 중앙에 고정
+        # 매 33ms마다 직접 스크롤 → smooth 보간 불필요 → 떨림 없음
+        canvas = self.timeline.canvas
+        viewport_w = self.timeline.scroll.viewport().width()
+        center_x = int(current_sec * canvas.pps) - (viewport_w // 2)
+        center_x = max(0, center_x)
+
+        self.timeline._target_scroll_x = float(center_x)
+        self.timeline._current_scroll_x = float(center_x)
+        self.timeline.scroll.horizontalScrollBar().setValue(center_x)
 
     def _on_scrub(self, sec: float):
         self.timeline.set_playhead(sec)    # ✅ 이 1줄 추가
