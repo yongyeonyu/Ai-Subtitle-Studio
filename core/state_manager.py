@@ -164,9 +164,6 @@ class SubtitleStateManager(QObject):
         self.is_dirty, self.is_locked = False, False
         self._msg, self._btn_text, self._btn_enabled = "✨ 저장 완료", "🔄 재시작", True
         self._broadcast()
-        name = os.path.basename(self.current_file) if self.current_file else ""
-        msg = f"💾 [{name}] 자막이 저장되었습니다." if name else "💾 자막이 저장되었습니다."
-        self._send_ntfy("💾 AI Subtitle Studio", msg)
 
     def start_editing(self):
         """수동 편집 시작"""
