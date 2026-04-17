@@ -278,10 +278,6 @@ class EditorWidget(EditorPipelineMixin, EditorSegmentsMixin, EditorTimelineVideo
         if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'seg_right_clicked'):
             self.timeline.canvas.seg_right_clicked.connect(self._on_timeline_seg_right_clicked)
 
-        # ✅ [추가] 텍스트+시간 분리 요청 시그널 연결 (핵심 1줄)
-        if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'sig_split_request'):
-            self.timeline.canvas.sig_split_request.connect(self.split_segment_with_text)
-
         if hasattr(self.timeline, 'seg_time_changed'): self.timeline.seg_time_changed.connect(self._on_seg_time_changed)
         if hasattr(self.timeline, 'seg_to_gap'):       self.timeline.seg_to_gap.connect(self._on_seg_to_gap)
         if hasattr(self.timeline, 'gap_activated'):    self.timeline.gap_activated.connect(self._on_gap_activated)
@@ -473,6 +469,14 @@ class EditorWidget(EditorPipelineMixin, EditorSegmentsMixin, EditorTimelineVideo
         self.corrections, self.subtitle_rules, self.settings = _dm_cleanup_rules(
             self.corrections, self.subtitle_rules, self.settings, self._get_current_segments
         )
+
+        # ✅ 추가: 시그널 안전 해제
+        try:
+            if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
+                self.timeline.canvas.sig_split_request.disconnect()
+                self.timeline.canvas.sig_inline_text_changed.disconnect()
+        except (TypeError, RuntimeError):
+            pass
 
     def _toggle_focus(self):
         if self.text_edit.hasFocus():

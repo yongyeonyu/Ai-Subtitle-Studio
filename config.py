@@ -14,11 +14,6 @@ CORRECTIONS_DIR  = DATASET_DIR              # 호환용 alias
 CORRECTIONS_FILE = os.path.join(DATASET_DIR, "dataset_correction.json")
 RULES_FILE       = os.path.join(DATASET_DIR, "subtitle_rule.json")
 
-# 교정사전 및 규칙 파일 경로
-# ✅ 수정: CORRECTIONS_DIR 중복 제거 → DATASET_DIR로 통일
-DATASET_DIR = os.path.join(BASE_DIR, "dataset")
-OUTPUT_DIR  = os.path.join(BASE_DIR, "output")
-
 CORRECTIONS_DIR = DATASET_DIR  # ✅ 추가
 
 # iCloud 드롭존
