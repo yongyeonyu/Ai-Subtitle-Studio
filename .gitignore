@@ -25,4 +25,4 @@ output/
 
 # ── IDE ──
 .vscode/
-.idea/
+.idea/venv/
