@@ -47,7 +47,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🎬 AI PD Studio - 소설가유모씨")
+        self.setWindowTitle("🎬 AI Subtitle Studio")
         self.setMinimumSize(600, 500)
         self.recent_folders = []; self.add_recent_folder_callback = None
         self._editor_widget = None; self.backend = None

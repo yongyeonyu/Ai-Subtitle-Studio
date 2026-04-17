@@ -43,9 +43,27 @@ class EditorPipelineMixin:
                 except Exception: pass
                 main_w.backend.sig_batch_finished.connect(self._on_batch_finished)
 
-    def _on_batch_finished(self):
-        self.sm.set_custom_status("✅ 배치 작업이 모두 완료되었습니다.")
+def _on_batch_finished(self):
+    self.sm.set_custom_status("✅ 배치 작업이 모두 완료되었습니다.")
+    self._send_ntfy_batch_complete()
 
+def _send_ntfy_batch_complete(self):
+    try:
+        import config, urllib.request, base64
+        topic = getattr(config, "NTFY_TOPIC", "")
+        if not topic: return
+        url = f"https://ntfy.sh/{topic}"
+        msg = "🎉🎬 모든 파일의 자막 생성이 완료되었습니다! 작업 완료!"
+        title = f"{config.APP_NAME} 알림"
+        data = base64.b64encode(msg.encode("utf-8")).decode("utf-8")
+        req = urllib.request.Request(url, data=data.encode("utf-8"), method="POST")
+        req.add_header("Title", base64.b64encode(title.encode("utf-8")).decode("utf-8"))
+        req.add_header("Encoding", "base64")
+        req.add_header("Tags", "tada,sparkles,clapper")
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass
+    
     # ---------------------------------------------------------
     # Pipeline & State Machine Logic
     # ---------------------------------------------------------
