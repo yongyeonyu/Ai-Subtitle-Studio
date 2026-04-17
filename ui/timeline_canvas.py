@@ -84,9 +84,7 @@ class TimelineCanvas(QWidget):
         self._cursor_timer  = QTimer(self)
         self._cursor_timer.setInterval(500)
         self._cursor_timer.timeout.connect(self._blink_cursor)
-        # 재인식 구간 시각화 변수
-        self.re_recog_zone = None
-        self.re_recog_progress = None
+
         # [크PD] 성능: speech_mask 캐시
         self._speech_mask: np.ndarray | None = None
         self._speech_mask_wf_len: int = 0
@@ -215,9 +213,12 @@ class TimelineCanvas(QWidget):
                     self._commit_inline_edit()
                     return
 
+
         elif key == Qt.Key.Key_Escape:
-            self._cancel_inline_edit()
+            self._edit_text = self._edit_orig   # 원본 복원
+            self._end_inline_edit()
             return
+
 
         elif key == Qt.Key.Key_Backspace:
             if cur > 0:
@@ -754,21 +755,6 @@ class TimelineCanvas(QWidget):
         if w: sb = w.horizontalScrollBar(); sb.setValue(sb.value() + delta // 2)
         event.accept()
 
-    def mouseDoubleClickEvent(self, ev):
-        if ev.button() != Qt.MouseButton.LeftButton: return
-        
-        if self._edit_active:
-            self._commit_inline_edit()
-            return
-            
-        x, y = ev.pos().x(), ev.pos().y()
-        self._last_click_x = x
-        self._last_click_y = y  # 💡 클릭한 Y좌표(몇 번째 줄인지) 저장
-        
-        if SEG_TOP <= y <= SEG_BOT:
-            seg = next((s for s in self.segments if self._x(s["start"]) <= x <= self._x(s["end"])), None)
-            if seg: self.seg_double_clicked.emit(seg.get("line", 0), seg["start"])
-
 
     def mousePressEvent(self, ev):
         # 플레이헤드 노란 원 메뉴는 기존 유지
@@ -900,10 +886,30 @@ class TimelineCanvas(QWidget):
         self._drag_adj_orig_end_r = self._drag_adj_r["end"] if self._drag_adj_r else 0.0
         if edge != "center": self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
 
+    def mouseDoubleClickEvent(self, ev):
+        if ev.button() != Qt.MouseButton.LeftButton:
+            return
+
+        # ✅ 편집 중이면 더블클릭 = 커밋
+        if self._edit_active:
+            self._commit_inline_edit()
+            return
+
+        x, y = ev.pos().x(), ev.pos().y()
+
+        if SEG_TOP <= y <= SEG_BOT:
+            seg = next(
+                (s for s in self.segments if self._x(s["start"]) <= x <= self._x(s["end"])),
+                None
+            )
+            if seg:
+                self.seg_double_clicked.emit(seg.get("line", 0), seg["start"])
+
+
     def mouseMoveEvent(self, ev):
         x, y = ev.pos().x(), ev.pos().y()
 
-        # 💡 편집 모드일 때 마우스 커서를 '텍스트 입력(I-Beam)' 모양으로 고정
+        # ✅ 편집 모드일 때 커서 고정 + 드래그/호버 차단
         if self._edit_active:
             seg = next((s for s in self.segments if s.get("line") == self._edit_line), None)
             if seg and SEG_TOP <= y <= SEG_BOT and self._x(seg["start"]) + HANDLE_R < x < self._x(seg["end"]) - HANDLE_R:
@@ -960,14 +966,6 @@ class TimelineCanvas(QWidget):
 
         if self._hover_handle != new_hh: self._hover_handle = new_hh; self.update()
         
-        # 💡 [추가] 편집 모드일 때 마우스 커서를 '텍스트 입력(I-Beam)' 모양으로 변경!
-        if self._edit_active:
-            seg = next((s for s in self.segments if s.get("line") == self._edit_line), None)
-            # 마우스가 텍스트 영역(핸들 안쪽)에 있는지 확인
-            if seg and SEG_TOP <= y <= SEG_BOT and self._x(seg["start"]) + HANDLE_R < x < self._x(seg["end"]) - HANDLE_R:
-                self.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
-                return
-
         # 기존 마우스 모양 로직
         if hover_handle: self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
         elif hover_center: self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
