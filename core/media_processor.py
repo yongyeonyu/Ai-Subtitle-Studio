@@ -6,6 +6,7 @@ video_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 
 2. 무음 세그먼트와 음성 섹터를 앱 로그에 완벽하게 분리하여 출력
 3. 후발대(Whisper)는 무조건 선발대가 지정한 음성 섹터의 시작점부터 인식 시작 (30초 청크 유지)
 """
+import sys
 import os, subprocess, json, re, config, shutil, time, wave, threading
 from concurrent.futures import ThreadPoolExecutor
 from logger import get_logger
@@ -34,6 +35,12 @@ class VideoProcessor:
             except: pass
         self.language = getattr(config, "LANGUAGE", "ko")
         self._executor = ThreadPoolExecutor(max_workers=self.io_workers)
+        # ── 런타임 핸들 ──
+        self._whisper_proc = None
+        self._vad_loaded = False
+        self._vad_model = None
+        self._vad_utils = None
+
 
     # 💡 파라미터에 target_start_sec와 target_end_sec 추가
     # 💡 1. 메인 파이프라인 (불필요한 중복 로직 싹 걷어내고 아주 깔끔해졌습니다)
@@ -60,10 +67,25 @@ class VideoProcessor:
         vad_model = s.get("selected_vad", "silero")
 
         master_filter = f"highpass=f={s.get('none_hp',200)},lowpass=f={s.get('none_lp',3000)},afftdn=nf={s.get('none_nf',-25)},loudnorm=I={s.get('none_target',-14)}"
+
+        dm_vol = s.get("dm_vol", s.get("none_vol", 3.5))
+        df_vol = s.get("df_vol", 3.5)
+
         _FILTERS = {
-            "demucs": f"speechnorm=e=12:r=0.0001:l=1,volume={s.get('dm_vol',3.5)},loudnorm=I=-14:LRA=11:tp=-1.0",
-            "deepfilter": f"highpass=f={s.get('df_hp',100)},lowpass=f=8000,equalizer=f=3000:width_type=h:width=2000:g={s.get('df_eq_g',8)},acompressor=threshold={s.get('df_comp_th',-28)}dB:ratio=4:attack=5:release=50,speechnorm=e=12:r=0.0001:l=1,volume={s.get('df_vol',3.5)},loudnorm=I=-14:LRA=11:tp=-1.0",
-            "none": "anull" 
+            "demucs": (
+                f"speechnorm=e=12:r=0.0001:l=1,"
+                f"volume={dm_vol},"
+                f"loudnorm=I=-14:LRA=11:tp=-1.0"
+            ),
+            "deepfilter": (
+                f"highpass=f={s.get('df_hp',100)},lowpass=f=8000,"
+                f"equalizer=f=3000:width_type=h:width=2000:g={s.get('df_eq_g',8)},"
+                f"acompressor=threshold={s.get('df_comp_th',-28)}dB:ratio=4:attack=5:release=50,"
+                f"speechnorm=e=12:r=0.0001:l=1,"
+                f"volume={df_vol},"
+                f"loudnorm=I=-14:LRA=11:tp=-1.0"
+            ),
+            "none": "anull",
         }
         active_filter = _FILTERS.get(audio_ai, "anull")
 
@@ -113,7 +135,17 @@ class VideoProcessor:
     def _split_with_vad(self, wav_path: str, chunk_dir: str, vad_model: str, s: dict, target_start_sec=0.0, target_end_sec=None, is_single_segment=False):
         try:
             import torch
-            model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', force_reload=False, onnx=False)
+            if not self._vad_loaded:
+                self._vad_model, self._vad_utils = torch.hub.load(
+                    repo_or_dir="snakers4/silero-vad",
+                    model="silero_vad",
+                    force_reload=False,
+                    onnx=False
+                )
+                self._vad_loaded = True
+
+            model = self._vad_model
+            utils = self._vad_utils
             (get_speech_timestamps, _, read_audio, _, _) = utils
             
             v_thresh = float(s.get("vad_threshold", 0.5))
@@ -196,14 +228,25 @@ class VideoProcessor:
         except: pass
 
     def _load_all_settings(self):
-        # 💡 [경로 수정] 마찬가지로 실제 데이터셋 폴더 위치를 가리키도록 변경합니다.
+        """user_settings.json 로드 (오류 시 로그 남김)"""
         settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
-        if os.path.exists(settings_path):
-            try:
-                with open(settings_path, "r", encoding="utf-8") as f: return json.load(f)
-            except: pass
-        return {}
- 
+
+        if not os.path.exists(settings_path):
+            return {}
+
+        try:
+            with open(settings_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+            else:
+                get_logger().log("⚠️ user_settings.json 형식 오류: dict 아님")
+                return {}
+        except Exception as e:
+            get_logger().log(f"⚠️ user_settings.json 로드 실패: {e}")
+            return {}
+
+
     def transcribe(self, chunk_dir: str, is_fast_mode: bool = False, target_end_sec: float = None, is_single: bool = False):
         chunks = sorted([f for f in os.listdir(chunk_dir) if f.endswith(".wav")])
         if not chunks: yield [], 0, 0; return
@@ -259,7 +302,15 @@ for p in {safe_paths}:
 os._exit(0)
 """
 
-        proc = subprocess.Popen(["python3.11", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace")
+        proc = subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,   # ✅ 여기
+            encoding="utf-8",
+            errors="replace"
+        )
+        self._whisper_proc = proc
+
 
         prev_end = 0.0
         for item in q:
@@ -332,5 +383,21 @@ os._exit(0)
             get_logger().log(f"  ▶ 진행 상황: {int(prev_end // 60):02d}분 {int(prev_end % 60):02d}초 / {int(t_sec // 60):02d}분 {int(t_sec % 60):02d}초 ({int(pct)}%)")
             yield chunk_segs, item["idx"] + 1, total
 
-        proc.wait(); shutil.rmtree(chunk_dir, ignore_errors=True)
+        proc.wait()
+        self._whisper_proc = None
+        shutil.rmtree(chunk_dir, ignore_errors=True)  
         get_logger().log("🎊 모든 자막 생성 완료")
+
+    def stop_transcribe(self):
+        """현재 실행 중인 Whisper 프로세스가 있으면 안전하게 종료"""
+        try:
+            if self._whisper_proc and self._whisper_proc.poll() is None:
+                self._whisper_proc.terminate()
+                try:
+                    self._whisper_proc.wait(timeout=2)
+                except Exception:
+                    self._whisper_proc.kill()
+        except Exception:
+            pass
+        finally:
+            self._whisper_proc = None

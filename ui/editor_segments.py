@@ -1,4 +1,4 @@
-# Version: 01.00.01
+# Version: 01.00.05
 """
 ui/editor_segments.py
 EditorWidget의 자막 에디터 조작, 큐 처리, 세그먼트 I/O 메서드 모음.
@@ -261,99 +261,49 @@ class EditorSegmentsMixin:
     # ---------------------------------------------------------
 
     def _get_current_segments(self) -> list[dict]:
-        doc = self.text_edit.document()
         segments = []
+        block = self.text_edit.document().begin()
+        line_idx = 0  # 💡 텍스트 에디터의 실제 줄(블록) 번호 추적
         
-        last_valid_start = 0.0
-        # settings가 로드되기 전일 수도 있으므로 안전하게 가져옵니다.
-        last_valid_spk = self.settings.get("spk1_id", "00") if hasattr(self, "settings") else "00"
-
-        # 💡 [핵심 수정] 타임라인 세그먼트 정보를 가져올 때 '라인 번호'와 '시작 시간' 두 가지 맵을 준비합니다.
-        canvas_segs = self.timeline.canvas.segments if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas') else []
-        line_end_map = {s.get("line"): s.get("end") for s in canvas_segs if "line" in s}
-        time_end_map = {round(s.get("start", -1.0), 2): s.get("end") for s in canvas_segs if "start" in s}
-
-        # 💡 1. 텍스트 에디터의 블록을 읽어 세그먼트로 변환 (1블록 = 1세그먼트 원칙 적용)
-        for i in range(doc.blockCount()):
-            block = doc.findBlockByNumber(i)
+        # 1. 텍스트 블록 추출 및 같은 시간대(화자 분리) 병합
+        while block.isValid():
+            data = block.userData()
+            text = block.text().strip()
             
-            # 에디터의 소프트 줄바꿈(\u2028)을 실제 자막 줄바꿈(\n)으로 변환합니다.
-            raw_text = block.text()
-            text = raw_text.replace('\u2028', '\n').strip()
-            
-            ud = block.userData()
-            if isinstance(ud, SubtitleBlockData):
-                spk = ud.spk_id
-                start_sec = ud.start_sec
-                is_gap = ud.is_gap
-                
-                last_valid_start = start_sec
-                last_valid_spk = spk
-            else:
-                # 새롭게 생성된 블록이나 UserData가 없는 경우 이전 값을 상속받습니다.
-                spk = last_valid_spk
-                start_sec = last_valid_start
-                is_gap = not bool(text)
-
-            # 기존의 복잡했던 서브 라인 분리 및 병합 로직을 모두 제거하고 구조를 단순화했습니다.
-            if text or is_gap:
-                # 💡 [시간 보정 로직 강화] 라인 번호로 먼저 찾고, 없으면 시작 시간으로 찾습니다.
-                c_end = line_end_map.get(i) or time_end_map.get(round(start_sec, 2))
-                
-                segments.append({
-                    "start": start_sec,
-                    "text": text,
-                    "line": i,
-                    "is_gap": is_gap,
-                    "end": c_end,  # 찾은 끝 시간을 임시로 넣어둡니다.
-                    # 자막에 줄바꿈(\n)이 포함된 경우, 그 줄 수만큼 동일한 화자 정보를 배열로 만듭니다.
-                    "speaker_list": [spk] * (text.count('\n') + 1)
-                })
-
-        # 💡 2. Gap 시작 시간 보정
-        for i, seg in enumerate(segments):
-            if seg.get("is_gap") and i > 0:
-                prev_line = segments[i-1].get("line", -1)
-                prev_start = segments[i-1].get("start", -1.0)
-                
-                prev_end = line_end_map.get(prev_line) or time_end_map.get(round(prev_start, 2))
-                
-                if prev_end is not None:
-                    seg["start"] = prev_end
+            if data is not None and text:
+                # 시작 시간이 같으면 이전 세그먼트에 병합 (화자 분리 처리)
+                if segments and abs(segments[-1]["start"] - data.start_sec) < 0.05:
+                    segments[-1]["text"] += "\n" + text
                 else:
-                    seg["start"] = max(seg["start"], segments[i-1]["start"] + 0.1)
+                    segments.append({
+                        "line": line_idx,  # 💡 [핵심 버그 수정] 커서 이동 시 위치를 찾기 위한 줄 번호 필수 추가!
+                        "start": data.start_sec,
+                        "end": getattr(data, 'end_sec', None),
+                        "text": text,
+                        "is_gap": getattr(data, 'is_gap', False),
+                        "spk": getattr(data, 'spk_id', 'SPEAKER_00')
+                    })
+            
+            block = block.next()
+            line_idx += 1
 
-        # 시작 시간이 역전되는 버그 방지
-        for i in range(1, len(segments)):
-            if segments[i]["start"] <= segments[i-1]["start"]:
-                segments[i]["start"] = segments[i-1]["start"] + 0.1
-
-        # 💡 3. 세그먼트 끝(end) 시간 계산
+        # 2. 끝 시간(End Time) 계산
         for i, seg in enumerate(segments):
             is_last = (i + 1 == len(segments))
+            
             if is_last:
                 if hasattr(self, 'video_player') and getattr(self.video_player, 'total_time', 0) > seg["start"]:
-                    next_start = self.video_player.total_time if seg["is_gap"] else min(seg["start"] + 3.0, self.video_player.total_time)
-                else: 
+                    next_start = self.video_player.total_time if seg.get("is_gap") else min(seg["start"] + 3.0, self.video_player.total_time)
+                else:
                     next_start = seg["start"] + 3.0
-            else: 
+            else:
                 next_start = segments[i+1]["start"]
                 
-            c_end = seg.get("end") # 위에서 임시 저장해둔 값
-            
-            # 이미 찾은 c_end가 유효 범위 내에 있다면 유지, 아니면 다음 자막 시작점과 맞물리게 설정합니다.
+            c_end = seg.get("end") 
             if c_end is not None and seg["start"] < c_end <= next_start + 0.05:
                 seg["end"] = c_end
             else:
                 seg["end"] = next_start
-
-        # 💡 4. 비디오 최대 시간을 넘어가지 않도록 최종 클리핑
-        if hasattr(self, 'video_player') and getattr(self.video_player, 'total_time', 0) > 0.1:
-            max_time = self.video_player.total_time
-            for seg in segments:
-                if seg["start"] >= max_time: seg["start"] = max_time - 0.1
-                if seg["end"] > max_time: seg["end"] = max_time
-                if seg["end"] <= seg["start"]: seg["start"] = max(0.0, seg["end"] - 0.1)
                 
         return segments
 
@@ -386,7 +336,8 @@ class EditorSegmentsMixin:
     def _on_cursor_moved(self):
         if self._sync_lock: return
         line_num = self.text_edit.textCursor().blockNumber()
-        segs = self._get_current_segments()
+        # [크PD] 캐시 사용 — 커서 이동마다 전체 문서 재파싱 방지
+        segs = getattr(self, '_cached_segs', None) or self._get_current_segments()
         for seg in reversed(segs):
             if seg["line"] <= line_num:
                 if self._active_seg_start != seg["start"]:
@@ -540,3 +491,118 @@ class EditorSegmentsMixin:
             from logger import get_logger
             get_logger().log(f"⚠️ 정밀 삽입 오류: {e}")
 
+    
+    def split_segment_with_text(self, line_num: int, split_sec: float, cursor: int):
+        """
+        플레이헤드 시간(split_sec) + 텍스트 커서(cursor) 기준으로
+        현재 세그먼트를 2개로 분리한다.
+
+        [v01.00.04]
+        - block.text() 직접 사용 (canvas stale 데이터 참조 제거)
+        - secondary_block_positions 삭제 로직 제거
+          (현재 _get_current_segments()는 블록별 독립 세그먼트로 관리하므로
+           같은 start_sec인 인접 블록을 지우면 다른 자막이 삭제되는 버그 발생)
+        - '-' 화자 구분자 제거
+        """
+        doc = self.text_edit.document()
+        block = doc.findBlockByNumber(int(line_num))
+        if not block.isValid():
+            return
+
+        try:
+            self._undo_mgr.push_immediate()
+        except Exception:
+            pass
+
+        ud = block.userData()
+        if not isinstance(ud, SubtitleBlockData):
+            return
+
+        start_sec = float(ud.start_sec)
+        spk_id    = ud.spk_id
+        split_sec = float(split_sec)
+
+        # 범위 체크
+        try:
+            canvas_segs = self.timeline.canvas.segments
+            end_map = {s.get("line"): float(s.get("end", 0.0))
+                       for s in canvas_segs if s.get("line") is not None}
+            end_sec = end_map.get(int(line_num))
+            if end_sec is not None:
+                if split_sec <= start_sec + 0.05 or split_sec >= end_sec - 0.05:
+                    return
+            else:
+                if split_sec <= start_sec + 0.05:
+                    return
+        except Exception:
+            if split_sec <= start_sec + 0.05:
+                return
+
+        # block.text() 직접 사용 (sig_inline_text_changed로 항상 최신 상태 보장)
+        full_text = block.text().replace("\u2028", "\n")
+
+        cursor = max(0, min(int(cursor), len(full_text)))
+        left  = full_text[:cursor].rstrip()
+        right = full_text[cursor:].lstrip()
+
+        if not left or not right:
+            return
+
+        def _strip_leading_dash(t: str) -> str:
+            lines = [l.strip() for l in t.splitlines() if l.strip()]
+            if not lines:
+                return ""
+            if lines[0].startswith("-"):
+                lines[0] = lines[0].lstrip("-").strip()
+            return "\n".join(lines)
+
+        left  = _strip_leading_dash(left)
+        right = _strip_leading_dash(right)
+
+        if not left or not right:
+            return
+
+        left_doc  = left.replace("\n", "\u2028")
+        right_doc = right.replace("\n", "\u2028")
+
+        cur = QTextCursor(block)
+        cur.beginEditBlock()
+
+        # primary block → left 파트로 교체 (StartOfBlock~EndOfBlock 범위만 선택)
+        cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        cur.movePosition(QTextCursor.MoveOperation.EndOfBlock,
+                         QTextCursor.MoveMode.KeepAnchor)
+        cur.removeSelectedText()
+        cur.insertText(left_doc)
+        cur.block().setUserData(
+            SubtitleBlockData(spk_id, round(start_sec, 2), is_gap=False)
+        )
+
+        # 새 블록 삽입 → right 파트
+        cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        cur.insertBlock()
+        cur.insertText(right_doc)
+        cur.block().setUserData(
+            SubtitleBlockData(spk_id, round(split_sec, 2), is_gap=False)
+        )
+
+        cur.endEditBlock()
+
+        # 💡 [타임라인 튕김 완벽 방지] 커서 이동 시 화면이 중앙으로 강제 점프하는 것을 잠급니다.
+        self._sync_lock = True  # 자동 센터링 방지 잠금
+        cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        self.text_edit.setTextCursor(cur)
+        
+        self._active_seg_start = round(split_sec, 2)
+        if hasattr(self, 'timeline'):
+            self.timeline.set_active(self._active_seg_start)
+            # 🎯 자막의 중간이 아니라, 대표님이 우클릭한 그 시점(split_sec)을 중앙으로!
+            self.timeline.center_to_sec(split_sec, smooth=True)
+        self._sync_lock = False
+
+        if hasattr(self, "sm"): self.sm.is_dirty = True
+        else: self._is_dirty = True
+
+        self.text_edit.update_margins()
+        if hasattr(self.text_edit, 'timestampArea'): self.text_edit.timestampArea.update()
+        self._schedule_timeline()

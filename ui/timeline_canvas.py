@@ -1,4 +1,4 @@
-# Version: 01.00.01
+# Version: 01.00.05
 """
 ui/timeline_canvas.py
 [v01.00.01 수정사항]
@@ -31,6 +31,7 @@ class TimelineCanvas(QWidget):
     sig_inline_text_changed = pyqtSignal(int, str)
     sig_editing_mode        = pyqtSignal(bool)
     # 💡 [신규 추가] 플레이헤드 메뉴 요청 시그널 (글로벌 좌표, 클릭된 시간)
+    sig_split_request = pyqtSignal(int, float, int)  # (line, split_sec, cursor)
     playhead_menu_requested = pyqtSignal(QPoint, float)
 
     def __init__(self, parent=None):
@@ -83,9 +84,12 @@ class TimelineCanvas(QWidget):
         self._cursor_timer  = QTimer(self)
         self._cursor_timer.setInterval(500)
         self._cursor_timer.timeout.connect(self._blink_cursor)
-        # 💡 [신규 추가] 재인식 구간 시각화를 위한 변수
+        # 재인식 구간 시각화 변수
         self.re_recog_zone = None
         self.re_recog_progress = None
+        # [크PD] 성능: speech_mask 캐시
+        self._speech_mask: np.ndarray | None = None
+        self._speech_mask_wf_len: int = 0
 
     def start_inline_edit(self, line_num: int, start_sec: float):
         self.active_seg_start = start_sec
@@ -147,16 +151,23 @@ class TimelineCanvas(QWidget):
             self.update()
 
     def _commit_inline_edit(self):
-        if not self._edit_active: return
-        safe_for_editor = self._edit_text.replace("\n", "\u2028") 
+        if not self._edit_active:
+            return
+
+        safe_for_editor = self._edit_text.replace("\n", "\u2028")
         line = self._edit_line
-        
+
         for s in self.segments:
             if s.get("line") == line:
-                s["text"] = self._edit_text 
+                s["text"] = self._edit_text
                 break
-                
+
         self.sig_inline_text_changed.emit(line, safe_for_editor)
+
+        # ✅ commit에서는 split emit 하지 않음 (분리는 Enter 처리에서만)
+        if hasattr(self, "_pending_split_sec"):
+            del self._pending_split_sec
+
         self._end_inline_edit()
 
     def _end_inline_edit(self):
@@ -167,67 +178,120 @@ class TimelineCanvas(QWidget):
         self.update(); self.setFocus()
     # ----------------------------------
 
-
-    # 💡 [여기서부터 수정됨] 인라인 에디터 키보드 제어 (엔터, Shift+Enter, 스페이스)
+    # 인라인 에디터 키보드 제어 (v01.00.04: 화살표/Backspace/Delete/Home/End 복원)
     def _handle_edit_key(self, ev):
-        key  = ev.key(); text = self._edit_text; cur  = self._edit_cursor
-        
+        key  = ev.key()
+        text = self._edit_text
+        cur  = self._edit_cursor
+
+        # ── 행/열 계산 헬퍼 ──
+        def _row_col(t, c):
+            lines = t.split('\n')
+            r = 0; col = c
+            for i, ln in enumerate(lines):
+                if col <= len(ln): r = i; break
+                col -= (len(ln) + 1)
+            else:
+                r = len(lines) - 1
+                col = max(0, col)
+            return r, col, lines
+
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if ev.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                ch = "\n"
-                self._edit_text = text[:cur] + ch + text[cur:]
+                self._edit_text = text[:cur] + "\n" + text[cur:]
                 self._edit_cursor = cur + 1
             else:
-                self._commit_inline_edit(); return
-        elif key == Qt.Key.Key_Space:
-            ch = " "
-            self._edit_text = text[:cur] + ch + text[cur:]
-            self._edit_cursor = cur + 1
-        elif key == Qt.Key.Key_Escape:
-            self._cancel_inline_edit(); return
-        else:
-            # 💡 [핵심] 현재 커서가 몇 번째 줄의 몇 번째 칸인지 계산
-            lines = text.split('\n')
-            r = 0; c = cur
-            for i, line in enumerate(lines):
-                if c <= len(line): r = i; break
-                c -= (len(line) + 1)
+                if hasattr(self, "_pending_split_sec"):
+                    # split 전 block 먼저 동기화
+                    safe_text = self._edit_text.replace("\n", "\u2028")
+                    self.sig_inline_text_changed.emit(self._edit_line, safe_text)
+                    self.sig_split_request.emit(int(self._edit_line),
+                                                float(self._pending_split_sec),
+                                                int(self._edit_cursor))
+                    del self._pending_split_sec
+                    self._end_inline_edit()
+                    return
+                else:
+                    self._commit_inline_edit()
+                    return
 
-            if key == Qt.Key.Key_Backspace:
-                if cur > 0: self._edit_text = text[:cur-1] + text[cur:]; self._edit_cursor = cur - 1
-            elif key == Qt.Key.Key_Delete:
-                if cur < len(text): self._edit_text = text[:cur] + text[cur+1:]
-            elif key == Qt.Key.Key_Left: 
-                self._edit_cursor = max(0, cur - 1)
-            elif key == Qt.Key.Key_Right: 
-                self._edit_cursor = min(len(self._edit_text), cur + 1)
-            elif key == Qt.Key.Key_Up: # 💡 윗 줄로 이동
-                if r > 0:
-                    new_c = min(c, len(lines[r-1]))
-                    self._edit_cursor = sum(len(l) + 1 for l in lines[:r-1]) + new_c
-                else: self._edit_cursor = 0
-            elif key == Qt.Key.Key_Down: # 💡 아랫 줄로 이동
-                if r < len(lines) - 1:
-                    new_c = min(c, len(lines[r+1]))
-                    self._edit_cursor = sum(len(l) + 1 for l in lines[:r+1]) + new_c
-                else: self._edit_cursor = len(text)
-            elif key == Qt.Key.Key_Home: # 💡 줄 맨 앞으로
-                self._edit_cursor = sum(len(l) + 1 for l in lines[:r])
-            elif key == Qt.Key.Key_End:  # 💡 줄 맨 뒤로
-                self._edit_cursor = sum(len(l) + 1 for l in lines[:r]) + len(lines[r])
+        elif key == Qt.Key.Key_Escape:
+            self._cancel_inline_edit()
+            return
+
+        elif key == Qt.Key.Key_Backspace:
+            if cur > 0:
+                self._edit_text = text[:cur - 1] + text[cur:]
+                self._edit_cursor = cur - 1
+
+        elif key == Qt.Key.Key_Delete:
+            if cur < len(text):
+                self._edit_text = text[:cur] + text[cur + 1:]
+
+        elif key == Qt.Key.Key_Left:
+            self._edit_cursor = max(0, cur - 1)
+
+        elif key == Qt.Key.Key_Right:
+            self._edit_cursor = min(len(self._edit_text), cur + 1)
+
+        elif key == Qt.Key.Key_Up:
+            r, col, lines = _row_col(text, cur)
+            if r > 0:
+                new_col = min(col, len(lines[r - 1]))
+                self._edit_cursor = sum(len(l) + 1 for l in lines[:r - 1]) + new_col
             else:
-                ch = ev.text()
-                if ch and ch.isprintable():
-                    self._edit_text = text[:cur] + ch + text[cur:]; self._edit_cursor = cur + len(ch)
+                self._edit_cursor = 0
+
+        elif key == Qt.Key.Key_Down:
+            r, col, lines = _row_col(text, cur)
+            if r < len(lines) - 1:
+                new_col = min(col, len(lines[r + 1]))
+                self._edit_cursor = sum(len(l) + 1 for l in lines[:r + 1]) + new_col
+            else:
+                self._edit_cursor = len(text)
+
+        elif key == Qt.Key.Key_Home:
+            r, col, lines = _row_col(text, cur)
+            self._edit_cursor = sum(len(l) + 1 for l in lines[:r])
+
+        elif key == Qt.Key.Key_End:
+            r, col, lines = _row_col(text, cur)
+            self._edit_cursor = sum(len(l) + 1 for l in lines[:r]) + len(lines[r])
+
+        elif key == Qt.Key.Key_Space:
+            self._edit_text = text[:cur] + " " + text[cur:]
+            self._edit_cursor = cur + 1
+
+        else:
+            ch = ev.text()
+            if ch and ch.isprintable():
+                self._edit_text = text[:cur] + ch + text[cur:]
+                self._edit_cursor = cur + len(ch)
 
         for s in self.segments:
-            if s.get("line") == self._edit_line: s["text"] = self._edit_text; break
-            
+            if s.get("line") == self._edit_line:
+                s["text"] = self._edit_text
+                break
+
         safe_text = self._edit_text.replace("\n", "\u2028")
         self.sig_inline_text_changed.emit(self._edit_line, safe_text)
-        
-        self._cursor_vis = True; self.update()
+        self._cursor_vis = True
+        self.update()
     # ----------------------------------
+
+    def _cancel_inline_edit(self):
+        """Esc: 원본 텍스트 복원 후 편집 취소"""
+        if not self._edit_active:
+            return
+        for s in self.segments:
+            if s.get("line") == self._edit_line:
+                s["text"] = self._edit_orig
+                break
+        safe_orig = self._edit_orig.replace("\n", "\u2028")
+        self.sig_inline_text_changed.emit(self._edit_line, safe_orig)
+        if hasattr(self, "_pending_split_sec"):
+            del self._pending_split_sec
+        self._end_inline_edit()
 
     def inputMethodEvent(self, ev):
         if not self._edit_active: super().inputMethodEvent(ev); return
@@ -396,7 +460,9 @@ class TimelineCanvas(QWidget):
             self.update()
 
     def set_vad_segments(self, vad_segs: list):
-        self.vad_segments = vad_segs; self.update()
+        self.vad_segments = vad_segs
+        self._speech_mask = None   # [크PD] 캐시 무효화
+        self.update()
 
     def set_active(self, sec: float | None):
         self.active_seg_start = sec; self.update()
@@ -406,7 +472,9 @@ class TimelineCanvas(QWidget):
         self.playhead_sec = sec; self.update()
 
     def set_waveform(self, wf: np.ndarray):
-        self._waveform = wf; self.update()
+        self._waveform = wf
+        self._speech_mask = None   # [크PD] 캐시 무효화
+        self.update()
 
     def _x(self, sec: float) -> int: return int(sec * self.pps)
     def total_width(self) -> int: return max(self.width(), int(self.total_duration * self.pps) + self.width())
@@ -436,13 +504,15 @@ class TimelineCanvas(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # 💡 [아래 코드로 교체하세요]
+
+        # [크PD] total_width() 를 paintEvent 당 1회만 계산
+        total_w = self.total_width()
+
         total_secs = self.total_duration + 2
         sec_f = 0.0
-        
-        # 폰트 설정 (여기서 크기를 결정합니다)
-        ruler_font = QFont(config.FONT, 12) # 12pt로 시원하게 키웠습니다.
+
+        # 폰트 설정
+        ruler_font = QFont(config.FONT, 12)
         ruler_font.setBold(True)
         p.setFont(ruler_font)
         
@@ -460,7 +530,7 @@ class TimelineCanvas(QWidget):
             sec_f = round(sec_f + 0.1, 1)
 
         # 1. 파형 배경 그리기
-        p.fillRect(QRect(0, RULER_H, self.total_width(), WAVE_H), QColor("#0a0a0a"))
+        p.fillRect(QRect(0, RULER_H, total_w, WAVE_H), QColor("#0a0a0a"))
 
         if self._waveform is not None:
             wf = self._waveform
@@ -468,47 +538,53 @@ class TimelineCanvas(QWidget):
 
             # A. 0점 가이드 라인
             p.setPen(QPen(QColor("#333333"), 1))
-            p.drawLine(0, WAVE_MID, self.total_width(), WAVE_MID)
+            p.drawLine(0, WAVE_MID, total_w, WAVE_MID)
 
-            # B. VAD 구간별 speech_mask 사전 계산 (음성 구간 강조)
-            # 웨이브폼 샘플링: 100 samples/sec
-            speech_mask: np.ndarray | None = None
-            if self.vad_segments and wf_len > 0:
-                speech_mask = np.zeros(wf_len, dtype=bool)
+            # B. speech_mask 캐시 — 파형 데이터나 VAD가 바뀔 때만 재계산
+            if self._speech_mask is None or self._speech_mask_wf_len != wf_len:
+                mask = np.zeros(wf_len, dtype=bool)
                 for vs in self.vad_segments:
                     s_idx = max(0, int(vs["start"] * 100))
-                    e_idx = min(wf_len, int(vs["end"]   * 100) + 1)
-                    speech_mask[s_idx:e_idx] = True
+                    e_idx = min(wf_len, int(vs["end"] * 100) + 1)
+                    mask[s_idx:e_idx] = True
+                self._speech_mask = mask
+                self._speech_mask_wf_len = wf_len
+            speech_mask = self._speech_mask
 
-            for x in range(0, self.total_width(), 1):
+            # C. 파형 렌더링 — 가시 영역(clip rect)만 순회 (핵심 최적화)
+            clip      = event.rect()
+            x_start   = max(0, clip.left())
+            x_end     = min(total_w, clip.right() + 1)
+
+            # QColor/QPen 사전 생성 (루프 안에서 매번 생성 금지)
+            pen_top_norm  = QPen(QColor(100, 220, 255), 1)
+            pen_bot_norm  = QPen(QColor( 40, 130, 170), 1)
+            pen_top_loud  = QPen(QColor(160, 255, 255), 1)
+            pen_bot_loud  = QPen(QColor( 80, 180, 210), 1)
+            pen_top_sil   = QPen(QColor( 75,  75,  75), 1)
+            pen_bot_sil   = QPen(QColor( 45,  45,  45), 1)
+
+            for x in range(x_start, x_end):
                 idx = int((x / self.pps) * 100)
                 if idx >= wf_len:
                     break
                 val = wf[idx]
-                if val < 0.008:   # 노이즈 컷 (이전 0.03 → 0.008, 더 디테일)
+                if val < 0.008:
                     continue
 
-                # 진폭 2.0배 확대 (이전 1.4배)
-                h = int(val * WAVE_HALF * 2.0)
-                h = min(h, WAVE_HALF - 1)
+                h = min(int(val * WAVE_HALF * 2.0), WAVE_HALF - 1)
+                in_sp = speech_mask[idx]
 
-                # 음성 구간: 밝은 청록 / 비음성 구간: 어두운 회색
-                in_speech = (speech_mask is not None and speech_mask[idx])
-                if in_speech:
-                    top_color = QColor(100, 220, 255)   # 밝은 청록
-                    bot_color = QColor( 40, 130, 170)   # 어두운 청록
-                    # 매우 큰 진폭(loud)은 더 밝게 강조
+                if in_sp:
                     if val > 0.6:
-                        top_color = QColor(160, 255, 255)
-                        bot_color = QColor( 80, 180, 210)
+                        p.setPen(pen_top_loud); p.drawLine(x, WAVE_MID,     x, WAVE_MID - h)
+                        p.setPen(pen_bot_loud); p.drawLine(x, WAVE_MID + 1, x, WAVE_MID + h)
+                    else:
+                        p.setPen(pen_top_norm); p.drawLine(x, WAVE_MID,     x, WAVE_MID - h)
+                        p.setPen(pen_bot_norm); p.drawLine(x, WAVE_MID + 1, x, WAVE_MID + h)
                 else:
-                    top_color = QColor(75, 75, 75)
-                    bot_color = QColor(45, 45, 45)
-
-                p.setPen(QPen(top_color, 1))
-                p.drawLine(x, WAVE_MID,     x, WAVE_MID - h)
-                p.setPen(QPen(bot_color, 1))
-                p.drawLine(x, WAVE_MID + 1, x, WAVE_MID + h)
+                    p.setPen(pen_top_sil); p.drawLine(x, WAVE_MID,     x, WAVE_MID - h)
+                    p.setPen(pen_bot_sil); p.drawLine(x, WAVE_MID + 1, x, WAVE_MID + h)
 
         # 2. VAD 섹터 (기본 배경)
         if self.vad_segments:
@@ -693,8 +769,9 @@ class TimelineCanvas(QWidget):
             seg = next((s for s in self.segments if self._x(s["start"]) <= x <= self._x(s["end"])), None)
             if seg: self.seg_double_clicked.emit(seg.get("line", 0), seg["start"])
 
+
     def mousePressEvent(self, ev):
-        # 💡 [신규] 플레이헤드 노란색 원 클릭 감지
+        # 플레이헤드 노란 원 메뉴는 기존 유지
         if ev.button() == Qt.MouseButton.LeftButton or ev.button() == Qt.MouseButton.RightButton:
             if hasattr(self, '_playhead_handle_rect') and self._playhead_handle_rect.contains(ev.pos()):
                 self.playhead_menu_requested.emit(ev.globalPosition().toPoint(), self.playhead_sec)
@@ -702,58 +779,61 @@ class TimelineCanvas(QWidget):
 
         x, y = ev.pos().x(), ev.pos().y()
 
-        # 💡 [핵심 수정] 편집 모드일 때 클릭 처리
+        # 편집 중 클릭 처리
         if self._edit_active:
             seg = next((s for s in self.segments if s.get("line") == self._edit_line), None)
-            
             if seg and SEG_TOP <= y <= SEG_BOT:
                 x1, x2 = self._x(seg["start"]), self._x(seg["end"])
                 if x1 + HANDLE_R < x < x2 - HANDLE_R:
-                    text_start_x = x1 + HANDLE_R + 6
-                    rel_x = x - text_start_x
+                    # [크PD] 클릭 위치 → _edit_cursor 재계산 (Bug 2 수정)
+                    from PyQt6.QtGui import QFontMetrics, QFont as _QFont
+                    fm   = QFontMetrics(_QFont(config.FONT, 14))
+                    lh   = fm.height() + 4
+                    tx0  = x1 + HANDLE_R + 6
+                    rel_x = x - tx0
                     rel_y = y - (SEG_TOP + 5)
-                    
-                    from PyQt6.QtGui import QFontMetrics, QFont
-                    import config
-                    fm = QFontMetrics(QFont(config.FONT, 14))
-                    line_h = fm.height() + 4
-                    
-                    # 💡 클릭한 줄 높이 계산 적용
+
                     lines = self._edit_text.split('\n')
-                    click_line = max(0, int(rel_y / line_h))
-                    if click_line >= len(lines): click_line = len(lines) - 1
-                    
-                    target_line_text = lines[click_line]
-                    
-                    if rel_x <= 0: 
-                        cursor_col = 0
+                    cl    = max(0, min(int(rel_y / lh), len(lines) - 1))
+                    ln_txt = lines[cl]
+
+                    if rel_x <= 0:
+                        col = 0
                     else:
-                        cursor_col = len(target_line_text)
-                        for i in range(1, len(target_line_text) + 1):
-                            if fm.horizontalAdvance(target_line_text[:i]) > rel_x:
-                                w_prev = fm.horizontalAdvance(target_line_text[:i-1])
-                                w_curr = fm.horizontalAdvance(target_line_text[:i])
-                                if (rel_x - w_prev) < (w_curr - rel_x): cursor_col = i - 1
-                                else: cursor_col = i
+                        col = len(ln_txt)
+                        for i in range(1, len(ln_txt) + 1):
+                            if fm.horizontalAdvance(ln_txt[:i]) > rel_x:
+                                wp = fm.horizontalAdvance(ln_txt[:i - 1])
+                                wc = fm.horizontalAdvance(ln_txt[:i])
+                                col = i - 1 if (rel_x - wp) < (wc - rel_x) else i
                                 break
-                                
-                    self._edit_cursor = sum(len(l) + 1 for l in lines[:click_line]) + cursor_col
-                    self._cursor_vis = True
+
+                    self._edit_cursor = sum(len(l) + 1 for l in lines[:cl]) + col
+                    self._cursor_vis  = True
                     self.update()
             return
 
-        # --- 아래는 편집 모드가 아닐 때의 기존 로직 ---
-        self._just_committed = False     
-        self.setFocus() 
+        self._just_committed = False
+        self.setFocus()
+
+        # ✅ [핵심] 우클릭: 즉시 분리 ❌ → 분리 모드 인라인 편집 ✅
         if ev.button() == Qt.MouseButton.RightButton:
             if SEG_TOP <= y <= SEG_BOT:
                 seg = self._seg_at(x)
-                if seg: self.seg_right_clicked.emit(seg["start"], ev.globalPosition().toPoint())
+                if seg:
+                    self._last_click_x = x
+                    self._last_click_y = y
+                    self._pending_split_sec = float(self.playhead_sec)
+                    self.start_inline_edit(seg.get("line", 0), seg["start"])
             return
-        if ev.button() != Qt.MouseButton.LeftButton: return
 
+        # 이하 기존 좌클릭 로직은 대표님 원본 그대로 유지(생략)
+        if ev.button() != Qt.MouseButton.LeftButton:
+            return
+
+        # ↓↓↓ 이하 기존 코드 그대로 (대표님 원본 유지) ↓↓↓
         self.focus_mode = "waveform" if y <= SEG_TOP else "segment"
-        self.update() 
+        self.update()
 
         for seg in self.segments:
             x1, x2 = self._x(seg["start"]), self._x(seg["end"]); sw = x2 - x1
@@ -790,7 +870,7 @@ class TimelineCanvas(QWidget):
         for s in self.segments:
             x1, x2 = self._x(s["start"]), self._x(s["end"]); mid_y = SEG_TOP + (SEG_BOT - SEG_TOP) // 2
             hx1 = min(x1 + 2 + HANDLE_R // 2, (x1 + x2) // 2); hx2 = max(x2 - 2 - HANDLE_R // 2, (x1 + x2) // 2)
-            if abs(y - mid_y) <= 25: 
+            if abs(y - mid_y) <= 25:
                 dist_l = abs(x - hx1)
                 if dist_l < best_dist: best_dist = dist_l; best_click = (s, "square_left")
                 dist_r = abs(x - hx2)
@@ -808,6 +888,7 @@ class TimelineCanvas(QWidget):
         if seg: self.seg_clicked.emit(seg.get("line", 0), seg["start"]); return
 
         self._is_scrubbing = True; self.scrub_sec.emit(max(0.0, x / self.pps))
+
 
     def _setup_drag(self, s, edge, x):
         self.drag_started.emit(); self._drag_seg, self._drag_edge = s, edge; self._drag_x0 = x

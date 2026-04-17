@@ -148,7 +148,7 @@ class EditorWidget(EditorPipelineMixin, EditorSegmentsMixin, EditorTimelineVideo
 
         self._playhead_timer = QTimer()
         self._playhead_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._playhead_timer.setInterval(10)
+        self._playhead_timer.setInterval(33)   # [크PD] 10ms(100fps) → 33ms(30fps)
         self._playhead_timer.timeout.connect(self._sync_playhead)
         self._playhead_timer.start()
 
@@ -267,11 +267,21 @@ class EditorWidget(EditorPipelineMixin, EditorSegmentsMixin, EditorTimelineVideo
             self.timeline.canvas.show_waveform = True
             self.timeline.canvas.update()
 
+        # ✅ 여기 딱 한 번만 connect
+        if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'sig_split_request'):
+            self.timeline.canvas.sig_split_request.connect(self.split_segment_with_text)
+
         self.timeline.seg_clicked.connect(self._on_timeline_seg_clicked)
         self.timeline.seg_double_clicked.connect(self._on_timeline_seg_double_clicked)
         self.timeline.scrub_sec.connect(self._on_scrub)
+
         if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'seg_right_clicked'):
             self.timeline.canvas.seg_right_clicked.connect(self._on_timeline_seg_right_clicked)
+
+        # ✅ [추가] 텍스트+시간 분리 요청 시그널 연결 (핵심 1줄)
+        if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'sig_split_request'):
+            self.timeline.canvas.sig_split_request.connect(self.split_segment_with_text)
+
         if hasattr(self.timeline, 'seg_time_changed'): self.timeline.seg_time_changed.connect(self._on_seg_time_changed)
         if hasattr(self.timeline, 'seg_to_gap'):       self.timeline.seg_to_gap.connect(self._on_seg_to_gap)
         if hasattr(self.timeline, 'gap_activated'):    self.timeline.gap_activated.connect(self._on_gap_activated)

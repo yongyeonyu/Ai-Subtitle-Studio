@@ -1,4 +1,4 @@
-# Version: 01.00.00
+# Version: 01.00.01
 """
 ui/editor_timeline_video.py
 EditorWidget의 타임라인 동기화, 비디오 제어, 화자 관리, 단축키 액션 메서드 모음.
@@ -121,7 +121,8 @@ class EditorTimelineVideoMixin:
             self.video_player.seek(sec); self.video_player.pause_video()
             if hasattr(self.video_player, 'media_player'):
                 self.video_player.media_player.play(); self.video_player.media_player.pause()
-        segs = self._get_current_segments()
+        # [크PD] 캐시 사용 — scrub마다 전체 문서 재파싱 방지
+        segs = getattr(self, '_cached_segs', None) or self._get_current_segments()
         for seg in segs:
             if seg["start"] <= sec < seg["end"]:
                 if self._active_seg_start != seg["start"]:

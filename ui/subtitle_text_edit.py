@@ -325,12 +325,22 @@ class SubtitleTextEdit(QTextEdit):
         
         self.update_margins() 
         cur.endEditBlock()
-        self.setTextCursor(cur)
+        
+        # 💡 [핵심 수정] 화자 분리 시점(start_sec)을 기점으로 화면 정렬
+        parent = getattr(self, "_parent_widget", None)
+        if parent:
+            parent._sync_lock = True
+            self.setTextCursor(cur)
+            if hasattr(parent, 'timeline'):
+                # 🎯 화자 분리가 일어난 현재 시점을 중앙으로 고정
+                parent.timeline.center_to_sec(start_sec, smooth=True)
+            parent._sync_lock = False
+        
         self.document().contentsChanged.emit()
         
         if parent and hasattr(parent, "_highlighter"): parent._highlighter.rehighlight()
         if hasattr(self, 'timestampArea'): self.timestampArea.update()
-
+    
     def _handle_simple_break(self):
         """Shift + Enter: 동일 자막 세그먼트 내에서 줄바꿈 (구조적 통일)"""
         cur = self.textCursor()
@@ -392,7 +402,20 @@ class SubtitleTextEdit(QTextEdit):
         cur.endEditBlock()
         
         cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-        self.setTextCursor(cur)
+        
+        # 💡 [구조 개선] 커서 이동 명령어는 밖으로 빼고, 타임라인 잠금만 parent로 감쌉니다.
+        parent = getattr(self, "_parent_widget", None)
+        if parent: parent._sync_lock = True
+        
+        self.setTextCursor(cur)  # 👈 parent가 없어도 무조건 커서는 이동하도록 밖으로 분리!
+        
+        if parent:
+            parent._active_seg_start = new_sec
+            if hasattr(parent, 'timeline'):
+                parent.timeline.set_active(new_sec)
+                # 🎯 엔터로 생성된 새 지점(new_sec)을 타임라인 중앙으로!
+                parent.timeline.center_to_sec(new_sec, smooth=True)
+            parent._sync_lock = False
         
         last_word = before.split()[-1] if before else ""
         if last_word: 
