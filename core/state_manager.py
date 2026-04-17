@@ -5,6 +5,7 @@ core/state_manager.py
 - ntfy 푸시 알람 기능 추가: 주요 상태 전이 시 config.NTFY_TOPIC으로 알람 전송
   (NTFY_TOPIC이 비어있으면 자동 비활성화)
 """
+import os
 import threading
 import urllib.request
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -38,6 +39,7 @@ class SubtitleStateManager(QObject):
         self._msg = "💤 대기중"
         self._btn_text = "▶️ 시작"
         self._btn_enabled = True
+        self.current_file = ""    # ✅ 추가
 
     # ---------------------------------------------------------
     # ntfy 알람 (백그라운드 스레드)
@@ -141,21 +143,33 @@ class SubtitleStateManager(QObject):
 
     def complete_ai(self):
         """AI 작업 완료"""
-        # 💡 [수정] self.mode = self.MODE_EDIT 삭제 (기존 [iCloud 자동] 모드 유지)
         self.state = self.ST_COMP
         self.is_dirty, self.is_locked = True, False
         self._msg, self._btn_text, self._btn_enabled = "✨ 생성 완료", "🔄 재시작", True
         self._broadcast()
-        self._send_ntfy("✅ AI PD Studio", "자막 생성이 완료되었습니다.")
+        name = os.path.basename(self.current_file) if self.current_file else ""
+        msg = f"✅ [{name}] 자막 생성이 완료되었습니다." if name else "✅ 자막 생성이 완료되었습니다."
+        self._send_ntfy("✅ AI PD Studio", msg)
 
     def complete_auto_mode(self):
         """iCloud 자동 처리 완료"""
-        # 💡 [수정] self.mode = self.MODE_EDIT 삭제 (MODE_AUTO 상태 유지)
         self.state = self.ST_COMP
         self.is_dirty, self.is_locked = True, False
         self._msg, self._btn_text, self._btn_enabled = "☁️ 자동처리 완료", "🔄 재시작", True
         self._broadcast()
-        self._send_ntfy("✅ AI PD Studio", "iCloud 자동 처리가 완료되었습니다!")
+        name = os.path.basename(self.current_file) if self.current_file else ""
+        msg = f"✅ [{name}] iCloud 자동 처리가 완료되었습니다!" if name else "✅ iCloud 자동 처리가 완료되었습니다!"
+        self._send_ntfy("✅ AI PD Studio", msg)
+
+    def complete_save(self):
+        """수동/자동 저장 완료"""
+        self.mode, self.state = self.MODE_EDIT, self.ST_SAVED
+        self.is_dirty, self.is_locked = False, False
+        self._msg, self._btn_text, self._btn_enabled = "✨ 저장 완료", "🔄 재시작", True
+        self._broadcast()
+        name = os.path.basename(self.current_file) if self.current_file else ""
+        msg = f"💾 [{name}] 자막이 저장되었습니다." if name else "💾 자막이 저장되었습니다."
+        self._send_ntfy("💾 AI PD Studio", msg)
 
     def start_editing(self):
         """수동 편집 시작"""
@@ -171,14 +185,6 @@ class SubtitleStateManager(QObject):
         self.state = self.ST_AUTOSAVE
         self._msg = "💾 자동 저장 중..."
         self._broadcast()
-
-    def complete_save(self):
-        """수동/자동 저장 완료"""
-        self.mode, self.state = self.MODE_EDIT, self.ST_SAVED
-        self.is_dirty, self.is_locked = False, False
-        self._msg, self._btn_text, self._btn_enabled = "✨ 저장 완료", "🔄 재시작", True
-        self._broadcast()
-        self._send_ntfy("💾 AI PD Studio", "자막이 저장되었습니다.")
 
     def update_progress(self, current, total, percentage, custom_msg=""):
         """진행률 중계 (ntfy 전송 없음 — 빈번한 호출)"""

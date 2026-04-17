@@ -67,6 +67,7 @@ class EditorWidget(EditorPipelineMixin, EditorSegmentsMixin, EditorTimelineVideo
 
         self.video_name     = video_name
         self.media_path     = media_path
+        self.sm.current_file = media_path or ""    # ✅ 추가
         self.corrections    = _dm_load_corrections()
         self.subtitle_rules = _dm_load_rules()
         self.settings       = _dm_load_settings()
