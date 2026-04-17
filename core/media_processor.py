@@ -305,7 +305,7 @@ os._exit(0)
         proc = subprocess.Popen(
             [sys.executable, "-c", script],
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,   # ✅ 여기
+            stderr=subprocess.PIPE,   # ✅ 여기
             encoding="utf-8",
             errors="replace"
         )
