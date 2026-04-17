@@ -1,6 +1,10 @@
 # Version: 01.00.02
 import os
 
+# .env 파일 로드
+from dotenv import load_dotenv
+load_dotenv()
+
 # ── 🏷️ 앱 기본 정보 ──
 APP_NAME      = "AI Subtitle Studio"
 INSTANCE_PORT = 47291
