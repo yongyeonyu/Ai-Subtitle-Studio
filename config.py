@@ -85,7 +85,7 @@ DEFAULT_ADV_SETTINGS = {
 # ── 🔔 ntfy 푸시 알람 설정 ──
 # ✅ 수정: 보안 처리 → .env 또는 환경변수에서 로드
 # 설정 방법: 터미널에서 export NTFY_TOPIC="토픽명" 또는 .env 파일에 NTFY_TOPIC=토픽명
-NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "Ai_Subtitle_Studio")
 
 # ── 🎨 다크 UI 테마 ──
 BG           = "#1a1a1a"
