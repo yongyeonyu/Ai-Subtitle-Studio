@@ -1,4 +1,4 @@
-# Version: 01.00.03
+# Version: 01.00.04
 """
 core/state_manager.py
 [v01.00.03 수정사항]
@@ -96,6 +96,15 @@ class SubtitleStateManager(QObject):
         self._msg, self._btn_text, self._btn_enabled = "💤 대기중", "▶️ 시작", True
         self._broadcast()
 
+    def init_auto_state(self):
+        """iCloud 자동 모드 전용 최초 로드 — IDLE 상태, 버튼 활성화"""
+        self.mode = self.MODE_AUTO
+        self.state = self.ST_IDLE
+        self.is_dirty, self.is_locked = False, False
+        # [크PD] False → True: 버튼이 활성화되어야 QTimer.singleShot click() 이 동작함
+        self._msg, self._btn_text, self._btn_enabled = "💤 대기중", "▶️ 시작", True
+        self._broadcast()
+
     def start_ai_all(self):
         """전체 생성 시작"""
         self.mode, self.state = self.MODE_AI_ALL, self.ST_PROC
@@ -133,13 +142,14 @@ class SubtitleStateManager(QObject):
         self._broadcast()
         # self._send_ntfy("☁️ AI Subtitle Studio", "iCloud 자동 처리를 시작합니다.")
 
-    def stop_processing(self, msg="중지되었습니다."):
-        """중단"""
+    def stop_processing(self, msg="중지되었습니다.", send_ntfy=True):
+        """중단 — send_ntfy=False 이면 ntfy 전송 생략 (캐시 리셋 등 내부 동작 시)"""
         self.mode, self.state = self.MODE_EDIT, self.ST_IDLE
-        self.is_locked = False 
+        self.is_locked = False
         self._msg, self._btn_text, self._btn_enabled = msg, "🔄 재시작", True
         self._broadcast()
-        self._send_ntfy("⏹️ AI Subtitle Studio", f"처리가 중단되었습니다: {msg}")
+        if send_ntfy:
+            self._send_ntfy("⏹️ AI Subtitle Studio", f"처리가 중단되었습니다: {msg}")
 
     def complete_ai(self):
         """AI 작업 완료"""
@@ -147,6 +157,7 @@ class SubtitleStateManager(QObject):
         self.is_dirty, self.is_locked = True, False
         self._msg, self._btn_text, self._btn_enabled = "✨ 생성 완료", "🔄 재시작", True
         self._broadcast()
+        # 💡 [중복 방지] 백엔드에서 통합 발송하므로 주석 처리합니다.
 
     def complete_auto_mode(self):
         """iCloud 자동 처리 완료"""
@@ -154,9 +165,7 @@ class SubtitleStateManager(QObject):
         self.is_dirty, self.is_locked = True, False
         self._msg, self._btn_text, self._btn_enabled = "☁️ 자동처리 완료", "🔄 재시작", True
         self._broadcast()
-        name = os.path.basename(self.current_file) if self.current_file else ""
-        msg = f"✅ [{name}] iCloud 자동 처리가 완료되었습니다!" if name else "✅ iCloud 자동 처리가 완료되었습니다!"
-        self._send_ntfy("✅ AI Subtitle Studio", msg)
+        # 💡 [중복 방지] 백엔드에서 통합 발송하므로 주석 처리합니다.
 
     def complete_save(self):
         """수동/자동 저장 완료"""

@@ -113,7 +113,6 @@ class EditorWidget(EditorPipelineMixin, EditorSegmentsMixin, EditorTimelineVideo
 
         self.editor_popup = EditorPopup(self)
         
-        # 💡 [핵심 복구] 이 줄이 지워져서 화면이 안 나왔던 것입니다!
         self._build_ui()   
         
         self._undo_mgr = UndoManager(self)
@@ -149,7 +148,7 @@ class EditorWidget(EditorPipelineMixin, EditorSegmentsMixin, EditorTimelineVideo
 
         self._playhead_timer = QTimer()
         self._playhead_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._playhead_timer.setInterval(33)   # [크PD] 10ms(100fps) → 33ms(30fps)
+        self._playhead_timer.setInterval(33)   
         self._playhead_timer.timeout.connect(self._sync_playhead)
         self._playhead_timer.start()
 
@@ -179,8 +178,15 @@ class EditorWidget(EditorPipelineMixin, EditorSegmentsMixin, EditorTimelineVideo
         self.end_shortcut.activated.connect(self._set_segment_end_to_playhead)
 
         QTimer.singleShot(500, self._hook_backend_signals)
-        if segments: self.sm.complete_ai()
-        else:        self.sm.init_state()
+        
+        # 💡 [핵심 교정부] 시작 시점에 is_auto_start인지 확인 후 올바른 모드로 초기화합니다.
+        if segments: 
+            self.sm.complete_ai()
+        else:
+            if getattr(self, 'is_auto_start', False):
+                self.sm.init_auto_state()
+            else:
+                self.sm.init_state()
 
         if EditorWidget._auto_start_next:
             EditorWidget._auto_start_next = False

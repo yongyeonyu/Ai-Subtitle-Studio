@@ -1,4 +1,4 @@
-# Version: 01.00.03
+# Version: 01.00.04
 """
 core/backend.py
 [추가] STEP 6: iCloud 자동 모드 시 백그라운드에서 투명 MOV 자동 렌더링 및 iCloud 업로드 기능 추가
@@ -57,7 +57,8 @@ class CoreBackend:
             self.ui.init_queue_list(self.files_to_process)
 
         self._video_durations = {}
-        threading.Thread(target=self._precalculate_etas, daemon=True, name="eta-calculator").start()
+        self._eta_thread = threading.Thread(target=self._precalculate_etas, daemon=True, name="eta-calculator")
+        self._eta_thread.start()
         get_logger().log(f"🚀 총 {len(self.files_to_process)}개 파일 처리 시작!")
         self._pipeline_thread = threading.Thread(target=self._run_all, daemon=True, name="pipeline-main")
         self._pipeline_thread.start()
@@ -156,13 +157,30 @@ class CoreBackend:
             self.ui._sig_update_queue_header.emit(1, len(self.files_to_process), 0, total_str)
 
     def _run_all(self):
+        # [크PD] ETA 계산이 끝난 뒤 파이프라인을 시작해야 큐 헤더 "1/N" 표시가 정확함.
+        # _precalculate_etas 스레드가 살아있으면 최대 30초 대기.
+        eta_thread = getattr(self, '_eta_thread', None)
+        if eta_thread and eta_thread.is_alive():
+            eta_thread.join(timeout=30)
+
         try:
+            total_files = len(self.files_to_process)
             for i, target_file in enumerate(self.files_to_process):
                 if not self._active:
                     return
                 if hasattr(self.ui, '_sig_update_queue'):
                     self.ui._sig_update_queue.emit(i, "⏳ 오디오 추출 중", "", "", "")
+                # 큐 헤더 현재 파일 번호 즉시 갱신
+                if hasattr(self.ui, '_sig_update_queue_header'):
+                    self.ui._sig_update_queue_header.emit(i + 1, total_files, 0, "")
                 self._process_one(target_file, i)
+
+            if self._active:
+                self._send_ntfy_notification(
+                    title=f"🏆 {config.APP_NAME} 작업 종료",
+                    message=f"🎉 {total_files}개 파일 처리 완료!\n아이패드에서 확인해 보세요, 대표님.",
+                    tags="checkered_flag,tada"
+                )
 
         except Exception as e:
             if str(e) not in ("USER_PREV", "USER_EXIT"):
@@ -228,9 +246,10 @@ class CoreBackend:
             final_segments  = segs; action_state[0] = "exit"
             self.stop(); start_event.set(); edit_event.set()
 
-        is_batch = len(self.files_to_process) > 1
-        self.ui.open_editor_for_file(target_file, on_save, on_start, on_prev, on_exit, is_batch=is_batch)
-
+        # ── 수정 후 (복사해서 덮어쓰기) ──
+        is_auto_mode = getattr(self, 'is_auto_start', False)
+        self.ui.open_editor_for_file(target_file, on_save, on_start, on_prev, on_exit, is_batch=is_auto_mode)
+        
         if getattr(self, 'is_auto_start', False):
             threading.Timer(0.5, on_start).start()
 
@@ -409,7 +428,7 @@ class CoreBackend:
                 while self._active:
                     item = opt_queue.get()
                     if item is _SENTINEL:
-                        _flush_buffer() 
+                        _flush_buffer()
                         break
 
                     chunk_segs, c_idx, t_total = item
@@ -425,7 +444,9 @@ class CoreBackend:
                         self.ui._sig_update_queue_header.emit(queue_index + 1, total_files, overall_pct, "")
 
                     if not chunk_segs:
-                        self.ui.update_editor_status(c_idx, t_total)
+                        # [크PD] worker thread → Signal 경유 (직접 호출 금지)
+                        if hasattr(self.ui, '_sig_update_status'):
+                            self.ui._sig_update_status.emit(c_idx, t_total)
                         continue
 
                     seg_buffer.extend(chunk_segs)
@@ -469,16 +490,28 @@ class CoreBackend:
                         os.remove(srt_p)
                         get_logger().log("    └ 🗑️ 기존 자막 파일을 삭제했습니다. (새로 생성)")
 
-                    if hasattr(self, 'ui') and getattr(self.ui, '_editor_widget', None):
-                        ed = self.ui._editor_widget
-                        if hasattr(ed, 'text_edit'):
-                            ed.text_edit.blockSignals(True)
-                            ed.text_edit.clear()
-                            ed.text_edit.blockSignals(False)
-                        if hasattr(ed, 'timeline') and hasattr(ed.timeline, 'canvas'):
-                            ed.timeline.canvas.segments.clear()
-                            ed.timeline.canvas.update()
-                        ed._is_dirty = False
+                    # [크PD] Qt 위젯 조작은 반드시 메인 스레드에서 해야 함.
+                    # 직접 호출하면 "QObject: Cannot create children for a parent
+                    # that is in a different thread" → Segfault 발생.
+                    def _clear_editor_main():
+                        ed = getattr(self.ui, '_editor_widget', None)
+                        if ed is None:
+                            return
+                        try:
+                            if hasattr(ed, 'text_edit'):
+                                ed.text_edit.blockSignals(True)
+                                ed.text_edit.clear()
+                                ed.text_edit.blockSignals(False)
+                            if hasattr(ed, 'timeline') and hasattr(ed.timeline, 'canvas'):
+                                ed.timeline.canvas.segments.clear()
+                                ed.timeline.canvas.update()
+                            ed._is_dirty = False
+                        except Exception as ex:
+                            get_logger().log(f"    └ ⚠️ 에디터 초기화 중 오류: {ex}")
+
+                    from PyQt6.QtCore import QTimer as _QT
+                    _QT.singleShot(0, _clear_editor_main)
+
                 except Exception as e:
                     get_logger().log(f"    └ ⚠️ 초기화 중 오류: {e}")
 
@@ -498,32 +531,43 @@ class CoreBackend:
             save_srt(final_segments, srt_path, apply_offset=True)
             get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료")
 
-            # ✅ 파일별 자막 생성 완료 알림
-            self._send_ntfy_notification(
-                title=f"{config.APP_NAME} 알림",
-                message=f"✅ [{os.path.basename(target_file)}] 자막 생성이 완료되었습니다.",
-                tags="white_check_mark"
-            )
+            # 💡 [수정] 수동/자동 상관없이 영상 출력 옵션을 체크하도록 제한을 풀었습니다.
+            is_video_export = False
+            export_settings = {}
+            try:
+                try: from ui.export_dialog import _load_es
+                except ImportError: from export_dialog import _load_es
+                export_settings = _load_es()
+                is_video_export = export_settings.get("icloud", False) # 자막영상출력(mov) ON 여부
+            except Exception: pass
 
+            base_name = os.path.splitext(os.path.basename(target_file))[0]
+            current_idx = queue_index + 1
+            total_cnt = len(self.files_to_process)
+
+            # 💡 [수정] 영상 렌더링이 '꺼져' 있다면 무조건 자막 완료 알림 전송!
+            if not is_video_export:
+                self._send_ntfy_notification(
+                    title=f"📝 {config.APP_NAME} 알림",
+                    message=f"[{current_idx}/{total_cnt}] {base_name}.srt 생성 완료!\n🎯 다음 작업으로 넘어갑니다.",
+                    tags="memo,sparkles"
+                )
 
             if hasattr(self.ui, '_sig_update_queue'):
                 try: self.ui._sig_update_queue.emit(queue_index, "✅ 자막출력(srt)", "완료", "", "")
                 except RuntimeError: pass
 
             # ── STEP 6: 자막 영상(MOV) 백그라운드 렌더링 ─────────────────
-            if getattr(self, 'is_auto_start', False):
+            # 영상 렌더링이 켜져있다면 무조건 진행 (렌더링 완료 후 내부에서 통합 알림 전송)
+            if is_video_export:
                 try:
-                    try: from ui.export_dialog import _load_es
-                    except ImportError: from export_dialog import _load_es
-                    s = _load_es()
-
-                    if s.get("icloud", False):
-                        get_logger().log(f"\n  [STEP 6] 🎥 투명 자막 영상(MOV) 자동 렌더링 및 iCloud 백업 중...")
-                        if hasattr(self.ui, '_sig_update_queue'):
-                            self.ui._sig_update_queue.emit(queue_index, "🎥 자막영상출력(mov)", "렌더링 중...", "", "")
-                        self._run_background_render(srt_path, target_file, s)
+                    get_logger().log(f"\n  [STEP 6] 🎥 투명 자막 영상(MOV) 백그라운드 렌더링 및 iCloud 백업 중...")
+                    if hasattr(self.ui, '_sig_update_queue'):
+                        self.ui._sig_update_queue.emit(queue_index, "🎥 자막영상출력(mov)", "렌더링 중...", "", "")
+                    # 인덱스 전달
+                    self._run_background_render(srt_path, target_file, export_settings, current_idx, total_cnt)
                 except Exception as e:
-                    get_logger().log(f"❌ MOV 자동 렌더링 오류: {e}")
+                    get_logger().log(f"❌ MOV 렌더링 오류: {e}")
                     get_logger().log(traceback.format_exc())
 
             try:
@@ -553,7 +597,7 @@ class CoreBackend:
     # ---------------------------------------------------------
     # 💡 [신규] 백그라운드 MOV 렌더링 엔진
     # ---------------------------------------------------------
-    def _run_background_render(self, srt_path, target_file, s):
+    def _run_background_render(self, srt_path, target_file, s, current_idx=1, total_cnt=1):
         import tempfile, shutil, re
         from PyQt6.QtGui import QColor, QImage
         from PyQt6.QtCore import Qt
@@ -642,14 +686,14 @@ class CoreBackend:
                     shutil.copy2(out_p, dest_file)
                     get_logger().log(f"    └ ✅ iCloud 복사 완료")
 
-                # 💡 [수정됨] 완료 알림 전송
+                # 💡 2. [수정됨] 자막 + 영상 통합 완료 알림! (영상 출력이 ON일 때만 울립니다)
+                base_name = os.path.splitext(os.path.basename(target_file))[0]
                 self._send_ntfy_notification(
-                    title=f"{config.APP_NAME} 알림",
-                    message=f"✅ [{os.path.basename(target_file)}]\n투명 자막 영상이 iCloud에 준비되었습니다!\n아이패드에서 편집을 시작하세요 🎬",
-                    tags="tada,sparkles"
+                    title=f"🎞️ {config.APP_NAME} 알림",
+                    message=f"[{current_idx}/{total_cnt}] {base_name}.srt / {base_name}.mov 생성 완료!\n🚀 자막과 영상 인코딩이 모두 끝났습니다.",
+                    tags="film_projector,rocket"
                 )
                 get_logger().log("    └ 📱 아이패드로 작업 완료 알림 전송 성공!")
-
 
                 return True
         finally:

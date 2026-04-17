@@ -408,8 +408,6 @@ class MainWindow(QMainWindow):
                 except:
                     self.queue_table.setItem(idx, 4, make_item(time_txt))
 
-
-
     # [ui/main_window.py] _update_live_queue_header 함수 전체 교체
     def _update_live_queue_header(self):
         import time
@@ -425,25 +423,27 @@ class MainWindow(QMainWindow):
             h, m = divmod(m, 60)
             return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
-        # 💡 [상단 헤더] 전체 시간 합계 표시 (Total Elapsed / Total Expected)
         c = getattr(self, '_current_file_idx', 1)
         t = getattr(self, '_total_files', 1)
-        pct = min(99, int((elapsed_total / expected_total) * 100)) if expected_total > 0 else 0
-        self.queue_header_lbl.setText(f"📋 처리할 파일 리스트 ({c} / {t} 진행 중) - {pct}% 완료   [⏱️ {fmt_mm_ss(elapsed_total)} / {fmt_mm_ss(expected_total)}]")
+        pct = getattr(self, '_real_pct', 0)  # 진짜 퍼센트 유지
+        
+        # 💡 [핵심 수정] 전체 예상 시간이 0(모름)일 때 00:00 표기 방지
+        exp_total_str = fmt_mm_ss(expected_total) if expected_total > 0 else "예상불가"
+        self.queue_header_lbl.setText(f"📋 처리할 파일 리스트 ({c} / {t} 진행 중) - {pct}% 완료   [⏱️ {fmt_mm_ss(elapsed_total)} / {exp_total_str}]")
 
-        # 💡 [큐 테이블] 현재 진행 중인 파일의 시간 렌더링
+        # 💡 [큐 테이블] 개별 파일 예상 시간이 0일 때 00:00으로 덮어쓰는 엉망진창 버그 해결
         for i in range(self.queue_table.rowCount()):
             status_item = self.queue_table.item(i, 0)
             if status_item and "자막 생성 중" in status_item.text():
-                # 해당 파일이 시작된 시각 기준 경과 시간 계산
                 start_t = self._file_start_times.get(i, now)
                 elapsed_file = now - start_t
                 expected_file = self._expected_seconds.get(i, 0)
                 
                 time_cell = self.queue_table.item(i, 4)
                 if time_cell:
-                    # 💡 [표시 형식] 03:44 / 11:36
-                    time_cell.setText(f"{fmt_mm_ss(elapsed_file)} / {fmt_mm_ss(expected_file)}")
+                    # 예상 시간이 0보다 크면 시간 표시, 아니면 '학습 중' 유지
+                    exp_file_str = fmt_mm_ss(expected_file) if expected_file > 0 else "학습 중"
+                    time_cell.setText(f"{fmt_mm_ss(elapsed_file)} / {exp_file_str}")
 
     def _clear_cache(self):
         reply = QMessageBox.question(
@@ -895,21 +895,23 @@ class MainWindow(QMainWindow):
                 stale_widget.deleteLater()
 
     def _init_editor(self, target_file: str, is_batch=False):
-        """삭제되었던 에디터 초기화 함수 복구"""
+        """에디터 초기화 함수"""
         from ui.editor_widget import EditorWidget
         vname = os.path.basename(target_file)
         self._remove_old_editor()
-        
+
         editor = EditorWidget(video_name=vname, segments=[], media_path=target_file, parent=self)
-        
-        # 💡 [핵심] 파이프라인에서 인식하도록 is_auto_start 변수를 사용합니다.
-        editor.is_auto_start = is_batch 
-        
-        self._editor_widget = editor 
-        
+        editor.is_auto_start = is_batch
+        self._editor_widget = editor
+
         if is_batch:
-            if hasattr(editor, 'update_status'):
-                editor.update_status("🚀 AI 엔진이 시작되었습니다. (자동 감지)")
+            # [크PD] init_auto_state() 만 호출 (IDLE + 버튼 활성화).
+            # start_auto_mode()를 여기서 미리 호출하면 SM이 ST_PROC 상태가 되어
+            # QTimer.singleShot click() → _on_start_clicked → _stop_pipeline() 경로로
+            # 빠지면서 "처리가 중단됩니다" ntfy 발송 + "재시작" 버튼 상태로 고착되는 버그 발생.
+            # 실제 start_auto_mode() 는 click() → _start_pipeline() 안에서 호출됨.
+            editor.sm.init_auto_state()
+            QTimer.singleShot(600, lambda e=editor: e.btn_start.click() if hasattr(e, 'btn_start') else None)
 
         # 시그널 연결
         def safe_home(*args): QTimer.singleShot(0, self.show_home)
@@ -921,51 +923,17 @@ class MainWindow(QMainWindow):
         if self._on_start_cb: editor.sig_start.connect(self._on_start_cb)
         editor.sig_prev.connect(handle_prev)
         editor.sig_exit.connect(force_exit_app)
-        
-        if self._on_save_cb: 
+
+        if self._on_save_cb:
             editor.sig_next.connect(self._on_save_cb)
-        else: 
+        else:
             editor.sig_next.connect(safe_home)
-            
+
         editor.sig_save.connect(lambda segs: self._save_srt(target_file, segs))
         editor.sig_auto_save.connect(lambda segs: self._save_srt(target_file, segs))
 
-        if hasattr(editor, 'set_terminal_visible_layout'): 
+        if hasattr(editor, 'set_terminal_visible_layout'):
             editor.set_terminal_visible_layout(self._log_visible)
+
         self.stack.insertWidget(1, editor)
         self.stack.setCurrentIndex(1)
-        from ui.editor_widget import EditorWidget
-        vname = os.path.basename(target_file)
-        self._remove_old_editor()
-        editor = EditorWidget(video_name=vname, segments=[], media_path=target_file, parent=self)
-        
-        # 💡 [교정] pipeline.py에서 체크하는 변수명인 is_auto_start로 변경합니다.
-        editor.is_auto_start = is_batch 
-        
-        self._editor_widget = editor
-        
-        if is_batch:
-            if hasattr(editor, 'update_status'):
-                editor.update_status("🚀 AI 엔진이 시작되었습니다. (자동 감지)")
-
-        def safe_home(*args): QTimer.singleShot(0, self.show_home)
-        def force_exit_app(*args): self.close()
-        def handle_prev(*args):
-            if self._on_prev_cb: self._on_prev_cb()
-            safe_home()
-
-        if self._on_start_cb: editor.sig_start.connect(self._on_start_cb)
-        editor.sig_prev.connect(handle_prev)
-        editor.sig_exit.connect(force_exit_app)
-        
-        if self._on_save_cb: 
-            editor.sig_next.connect(self._on_save_cb)
-        else: 
-            editor.sig_next.connect(safe_home)
-            
-        editor.sig_save.connect(lambda segs: self._save_srt(target_file, segs))
-        editor.sig_auto_save.connect(lambda segs: self._save_srt(target_file, segs))
-
-        self._editor_widget = editor
-        if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(self._log_visible)
-        self.stack.insertWidget(1, editor); self.stack.setCurrentIndex(1)
