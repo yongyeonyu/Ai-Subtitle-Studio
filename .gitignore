@@ -26,3 +26,5 @@ output/
 # ── IDE ──
 .vscode/
 .idea/venv/
+
+.env
