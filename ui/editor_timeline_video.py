@@ -64,57 +64,29 @@ class EditorTimelineVideoMixin:
     # ---------------------------------------------------------
     # Playhead & Scrub Sync
     # ---------------------------------------------------------
-    def _sync_playhead(self):
-        import time 
-        
-        if hasattr(self, 'video_player'):
-            actual_sec = self.video_player.current_time
-            
-            if self._is_video_playing():
-                now = time.time()
-                if not hasattr(self, '_smooth_playhead_sec'):
-                    self._smooth_playhead_sec = actual_sec
-                    self._last_sync_time = now
-                    
-                dt = now - getattr(self, '_last_sync_time', now)
-                self._last_sync_time = now
-                
-                # 시스템 시계로 전진하되 비디오 시간과 지속적으로 싱크를 맞춤
-                self._smooth_playhead_sec += dt
-                diff = actual_sec - self._smooth_playhead_sec
-                
-                if abs(diff) > 0.3: 
-                    self._smooth_playhead_sec = actual_sec
-                else:
-                    # 미세하게 당겨주어 비디오 싱크를 유지 (0.05~0.1 사이가 가장 적당함)
-                    self._smooth_playhead_sec += diff * 0.08
-                    
-                sec = self._smooth_playhead_sec
-            else:
-                sec = actual_sec
-                self._smooth_playhead_sec = actual_sec
-                self._last_sync_time = time.time()
 
-            self.timeline.set_playhead(sec)
-            
-            if self._is_video_playing():
-                self.timeline.center_to_sec(sec, smooth=True)
-                segs = getattr(self, '_cached_segs', [])
-                for seg in segs:
-                    if seg["start"] <= sec < seg["end"]:
-                        if self._active_seg_start != seg["start"]:
-                            self._active_seg_start = seg["start"]
-                            self.timeline.set_active(seg["start"])
-                            line_num = seg.get("line", 0)
-                            self._highlighter.set_current_line(line_num)
-                            block = self.text_edit.document().findBlockByNumber(line_num)
-                            if block.isValid():
-                                cur = QTextCursor(block)
-                                self._sync_lock = True
-                                self.text_edit.setTextCursor(cur)
-                                self.text_edit.ensureCursorVisible()
-                                self._sync_lock = False
-                        break
+    def _sync_playhead(self):
+        if not hasattr(self, 'video_player') or not hasattr(self, 'timeline'):
+            return
+
+        player = self.video_player.media_player
+        if player.playbackState() != player.PlaybackState.PlayingState:
+            return
+
+        pos_ms = player.position()
+        dur_ms = player.duration()
+        if dur_ms <= 0:
+            return
+
+        current_sec = pos_ms / 1000.0
+        self.timeline.set_playhead(current_sec)
+
+        # ✅ 플레이헤드를 화면 중앙에 고정 (기존 smooth scroll 시스템 활용)
+        canvas = self.timeline.canvas
+        viewport_w = self.timeline.scroll.viewport().width()
+        center_x = int(current_sec * canvas.pps) - (viewport_w // 2)
+        self.timeline._target_scroll_x = float(max(0, center_x))
+
 
     def _on_scrub(self, sec: float):
         if hasattr(self, 'video_player'):
@@ -466,7 +438,7 @@ class EditorTimelineVideoMixin:
         self._redraw_timeline()
 
     def _set_segment_start_to_playhead(self):
-        sself._undo_mgr.push_immediate() # 💡 추가
+        self._undo_mgr.push_immediate() # 💡 추가
         sec = getattr(self.video_player, 'current_time', 0.0)
         cur = self.text_edit.textCursor(); block = cur.block(); ud = block.userData()
         if not isinstance(ud, SubtitleBlockData) or ud.is_gap: return
