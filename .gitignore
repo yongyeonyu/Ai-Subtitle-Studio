@@ -16,6 +16,9 @@ Thumbs.db
 dataset/auto_tracker.json
 dataset/folder_settings.json
 dataset/time_history.json
+dataset/user_settings.json
+dataset/subtitle_rule.json
+
 
 # ── 출력 파일 (음성/영상) ──
 output/

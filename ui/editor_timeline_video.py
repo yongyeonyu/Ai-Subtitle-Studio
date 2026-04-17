@@ -80,12 +80,7 @@ class EditorTimelineVideoMixin:
 
         current_sec = pos_ms / 1000.0
         self.timeline.set_playhead(current_sec)
-
-        # ✅ 플레이헤드를 화면 중앙에 고정 (기존 smooth scroll 시스템 활용)
-        canvas = self.timeline.canvas
-        viewport_w = self.timeline.scroll.viewport().width()
-        center_x = int(current_sec * canvas.pps) - (viewport_w // 2)
-        self.timeline._target_scroll_x = float(max(0, center_x))
+        self.timeline.center_to_sec(current_sec, smooth=True)
 
 
     def _on_scrub(self, sec: float):
