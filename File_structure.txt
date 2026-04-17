@@ -1,7 +1,9 @@
 ai_subtitle_studio/
 ├── main.py                          ← 프로그램 실행 진입점
-├── config.py                        ← 전역 환경 변수 (경로, 모델명 등) 
+├── config.py                        ← 전역 환경 변수 (경로, 모델명, NTFY 등) 
 ├── logger.py                        ← 시스템 로그 기록 및 UI 연동
+├── .env                             ← 🔒 ntfy 토픽 등 보안 변수 (git 미추적)
+├── requirements.txt                 ← 의존성 패키지 목록
 │
 ├── dataset/                         ← 각종 설정 및 사용자 데이터 (Root 위치)
 │   ├── folder_settings.json         ← 최근 폴더 및 경로 설정 
@@ -51,6 +53,56 @@ ai_subtitle_studio/
  
 ================================================================================
 [버전 정보 및 최근 업데이트 내역]
+버전: v01.00.05 (타임라인 동기화 복원 및 알림 시스템 개선 빌드)
+
+1. 타임라인 플레이헤드 동기화 복원 및 중앙 고정 스크롤
+   - _sync_playhead 함수 복원: 재생 중 플레이헤드를 화면 중앙에 고정하는 스크롤 시스템 구현.
+     _target_scroll_x, _current_scroll_x, setValue를 동시 설정하여 smooth scroll 타이머와 충돌 방지.
+   - _on_scrub에 set_playhead 직접 호출 추가: 클릭/스크러빙 시 플레이헤드가 즉시 표시되도록 수정.
+   - mouseDoubleClickEvent에 _last_click_x/_last_click_y 복원: 더블클릭 인라인 편집 진입 시
+     커서 위치 계산이 정상 동작하도록 복구.
+   - sself 오타 수정 (_set_segment_start_to_playhead 내 self 참조 오류).
+
+2. ntfy 푸시 알림 시스템 개선
+   - NTFY_TOPIC 보안 처리: config.py에 하드코딩 대신 .env 파일 + python-dotenv로 로드.
+     .env는 .gitignore에 추가하여 GitHub 노출 방지.
+   - 파일별 자막 완료 알림 (신규): backend.py SRT 저장 직후 파일명 포함 ntfy 알림 전송.
+     (예: "✅ [DJI_001.MP4] 자막 생성이 완료되었습니다.")
+   - 배치 전체 완료 알림 (신규): _on_batch_finished에서 모든 파일 처리 완료 시
+     "🎉🎬 모든 파일의 자막 생성이 완료되었습니다!" 알림 전송.
+   - state_manager.py complete_ai/complete_save 중복 알림 제거.
+   - state_manager에 current_file 속성 추가: 알림 메시지에 파일명 포함.
+
+3. 앱 이름 통일
+   - "AI PD Studio" → "AI Subtitle Studio"로 전체 변경.
+     (main_window.py 창 타이틀, state_manager.py ntfy 메시지 등)
+
+4. 개발 환경 정비
+   - requirements.txt 업데이트: python-dotenv, packaging 추가.
+   - venv/ 폴더 .gitignore 추가: 맥북/윈도우 간 git 충돌 방지.
+   - dataset/user_settings.json, dataset/subtitle_rule.json .gitignore 추가.
+   - 윈도우/맥북 git 동기화 워크플로우 안정화.
+
+--------------------------------------------------------------------------------
+버전: v01.00.04 (인라인 에디터 및 자막 분할 고도화 빌드)
+
+1. 타임라인 인라인 에디터 고도화
+   - 더블클릭 위치 기반 커서 정밀 배치 (줄바꿈 포함 다중 줄 텍스트 지원).
+   - 한글 IME 조합 중 밑줄 시각화 및 preedit 렌더링.
+   - 화살표/Home/End/Backspace/Delete 키보드 네비게이션 완벽 구현.
+   - 우클릭 분리 모드: 세그먼트 우클릭 → 인라인 편집 진입 → Enter로 분할 확정.
+   - Shift+Enter 줄바꿈, Escape 원본 복원.
+
+2. 플레이헤드 메뉴 시스템 (신규)
+   - 플레이헤드 상단 노란색 원형 핸들 추가 (클릭 시 메뉴 표시).
+   - "현재 자막 세그먼트만 재인식" / "현재부터 끝까지 재인식" 메뉴 구현.
+   - 재인식 진행률 시각화: 타임라인 캔버스에 초록색(타겟) + 노란색(완료) 오버레이.
+
+3. 편집 모드 마우스 가드
+   - 인라인 편집 중 mouseMoveEvent에서 드래그/호버 차단.
+   - 편집 영역 내 IBeamCursor, 영역 외 ArrowCursor 자동 전환.
+
+--------------------------------------------------------------------------------
 버전: v01.00.03 (초정밀 동기화 및 자동처리 시스템 빌드)
  
 1. iCloud/NAS 자동처리 파이프라인 (신규)
