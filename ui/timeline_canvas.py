@@ -764,6 +764,9 @@ class TimelineCanvas(QWidget):
                 return
 
         x, y = ev.pos().x(), ev.pos().y()
+        self._last_click_x = x      # ✅ 이 2줄 추가
+        self._last_click_y = y      # ✅
+
 
         # 편집 중 클릭 처리
         if self._edit_active:

@@ -84,6 +84,7 @@ class EditorTimelineVideoMixin:
 
 
     def _on_scrub(self, sec: float):
+        self.timeline.set_playhead(sec)    # ✅ 이 1줄 추가
         if hasattr(self, 'video_player'):
             self.video_player.seek(sec); self.video_player.pause_video()
             if hasattr(self.video_player, 'media_player'):
