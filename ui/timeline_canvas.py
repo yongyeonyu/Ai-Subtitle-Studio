@@ -1,9 +1,10 @@
-# Version: 01.00.05
+# Version: 01.00.06
 """
 ui/timeline_canvas.py
-[v01.00.01 수정사항]
-- _end_inline_edit 중복 정의 제거 (버그 수정)
-- 웨이브폼 렌더링 개선: 노이즈 컷 0.008, 진폭 ×2.0, VAD 기반 음성 구간 청록색 강조
+[v01.00.06 수정사항]
+- boundary_times 속성 추가 (멀티 영상 경계선 초록색 1px)
+- paintEvent에 경계선 렌더링 추가
+- 룰러 HH:MM:SS 형식으로 변경
 """
 import numpy as np
 from PyQt6.QtWidgets import QWidget, QSizePolicy
@@ -30,15 +31,13 @@ class TimelineCanvas(QWidget):
     step_frame              = pyqtSignal(int)
     sig_inline_text_changed = pyqtSignal(int, str)
     sig_editing_mode        = pyqtSignal(bool)
-    # 💡 [신규 추가] 플레이헤드 메뉴 요청 시그널 (글로벌 좌표, 클릭된 시간)
-    sig_split_request = pyqtSignal(int, float, int)  # (line, split_sec, cursor)
+    sig_split_request       = pyqtSignal(int, float, int)
     playhead_menu_requested = pyqtSignal(QPoint, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # 💡 [신규] 재인식 구간 및 진행률 저장 변수
-        self.re_recog_zone = None      # (start_sec, end_sec)
-        self.re_recog_progress = None  # 현재 완료된 지점 (sec)
+        self.re_recog_zone = None
+        self.re_recog_progress = None
         self.setMinimumHeight(CANVAS_H)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMouseTracking(True)
@@ -55,6 +54,7 @@ class TimelineCanvas(QWidget):
         self.active_seg_start: float | None = None
         self.playhead_sec: float = 0.0
         self._waveform = None
+        self.boundary_times: list[float] = []  # 🆕 멀티 영상 경계 시간
 
         self._hover_line:  int | None = None
         self._hover_handle: tuple | None = None  
@@ -85,7 +85,6 @@ class TimelineCanvas(QWidget):
         self._cursor_timer.setInterval(500)
         self._cursor_timer.timeout.connect(self._blink_cursor)
 
-        # [크PD] 성능: speech_mask 캐시
         self._speech_mask: np.ndarray | None = None
         self._speech_mask_wf_len: int = 0
 
@@ -112,7 +111,6 @@ class TimelineCanvas(QWidget):
             fm = QFontMetrics(QFont(config.FONT, 14))
             line_h = fm.height() + 4
             
-            # 💡 [핵심] 줄바꿈을 기준으로 텍스트를 나누고 어느 줄을 클릭했는지 계산
             lines = text.split('\n')
             click_line = max(0, int(rel_y / line_h))
             if click_line >= len(lines): click_line = len(lines) - 1
@@ -131,7 +129,6 @@ class TimelineCanvas(QWidget):
                         else: cursor_col = i
                         break
                         
-            # 몇 번째 줄인지까지 더해서 최종 1차원 커서 인덱스 도출
             self._edit_cursor = sum(len(l) + 1 for l in lines[:click_line]) + cursor_col
             self._last_click_x = None
             self._last_click_y = None
@@ -151,21 +148,15 @@ class TimelineCanvas(QWidget):
     def _commit_inline_edit(self):
         if not self._edit_active:
             return
-
         safe_for_editor = self._edit_text.replace("\n", "\u2028")
         line = self._edit_line
-
         for s in self.segments:
             if s.get("line") == line:
                 s["text"] = self._edit_text
                 break
-
         self.sig_inline_text_changed.emit(line, safe_for_editor)
-
-        # ✅ commit에서는 split emit 하지 않음 (분리는 Enter 처리에서만)
         if hasattr(self, "_pending_split_sec"):
             del self._pending_split_sec
-
         self._end_inline_edit()
 
     def _end_inline_edit(self):
@@ -174,15 +165,12 @@ class TimelineCanvas(QWidget):
         self._cursor_timer.stop()
         self.sig_editing_mode.emit(False)
         self.update(); self.setFocus()
-    # ----------------------------------
 
-    # 인라인 에디터 키보드 제어 (v01.00.04: 화살표/Backspace/Delete/Home/End 복원)
     def _handle_edit_key(self, ev):
         key  = ev.key()
         text = self._edit_text
         cur  = self._edit_cursor
 
-        # ── 행/열 계산 헬퍼 ──
         def _row_col(t, c):
             lines = t.split('\n')
             r = 0; col = c
@@ -200,7 +188,6 @@ class TimelineCanvas(QWidget):
                 self._edit_cursor = cur + 1
             else:
                 if hasattr(self, "_pending_split_sec"):
-                    # split 전 block 먼저 동기화
                     safe_text = self._edit_text.replace("\n", "\u2028")
                     self.sig_inline_text_changed.emit(self._edit_line, safe_text)
                     self.sig_split_request.emit(int(self._edit_line),
@@ -213,12 +200,10 @@ class TimelineCanvas(QWidget):
                     self._commit_inline_edit()
                     return
 
-
         elif key == Qt.Key.Key_Escape:
-            self._edit_text = self._edit_orig   # 원본 복원
+            self._edit_text = self._edit_orig
             self._end_inline_edit()
             return
-
 
         elif key == Qt.Key.Key_Backspace:
             if cur > 0:
@@ -278,10 +263,8 @@ class TimelineCanvas(QWidget):
         self.sig_inline_text_changed.emit(self._edit_line, safe_text)
         self._cursor_vis = True
         self.update()
-    # ----------------------------------
 
     def _cancel_inline_edit(self):
-        """Esc: 원본 텍스트 복원 후 편집 취소"""
         if not self._edit_active:
             return
         for s in self.segments:
@@ -303,14 +286,10 @@ class TimelineCanvas(QWidget):
             self._edit_text = self._edit_text[:cur] + commit + self._edit_text[cur:]
             self._edit_cursor = cur + len(commit)
             actual = self._edit_text.replace(" / ", "\n")
-            
             for s in self.segments:
                 if s.get("line") == self._edit_line: s["text"] = actual; break
-                
-            # 🚨 [핵심 방어선] 한글 조합이 끝나고 에디터로 보낼 때도 완벽하게 세탁!
             safe_text = actual.replace("\n", "\u2028")
             self.sig_inline_text_changed.emit(self._edit_line, safe_text)
-            
         self._cursor_vis = True; self.update()
 
     def inputMethodQuery(self, query):
@@ -326,13 +305,11 @@ class TimelineCanvas(QWidget):
         self._snap_closest_diamond(); return False
 
     def keyPressEvent(self, ev):
-        # 💡 [추가] 편집 중일 때는 무조건 모든 키보드 입력을 텍스트 수정으로 넘깁니다.
         if self._edit_active:
             self._handle_edit_key(ev)
             ev.accept()
             return
             
-        # 💡 [수정] F2뿐만 아니라 Enter(Return) 키를 눌러도 편집 모드로 진입합니다!
         if ev.key() in (Qt.Key.Key_F2, Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.active_seg_start is not None:
             seg = next((s for s in self.segments if abs(s["start"] - self.active_seg_start) < 0.5), None)
             if seg: self.start_inline_edit(seg.get("line", 0), seg["start"])
@@ -462,7 +439,7 @@ class TimelineCanvas(QWidget):
 
     def set_vad_segments(self, vad_segs: list):
         self.vad_segments = vad_segs
-        self._speech_mask = None   # [크PD] 캐시 무효화
+        self._speech_mask = None
         self.update()
 
     def set_active(self, sec: float | None):
@@ -474,14 +451,13 @@ class TimelineCanvas(QWidget):
 
     def set_waveform(self, wf: np.ndarray):
         self._waveform = wf
-        self._speech_mask = None   # [크PD] 캐시 무효화
+        self._speech_mask = None
         self.update()
 
     def _x(self, sec: float) -> int: return int(sec * self.pps)
     def total_width(self) -> int: return max(self.width(), int(self.total_duration * self.pps) + self.width())
 
     def _icon_rect(self, x1: int, x2: int) -> QRect: 
-        # 💡 [변경] 자막 상자 맨 아래 테두리(SEG_BOT) 바깥쪽 하단 중앙에 배치합니다.
         return QRect(x1 + (x2 - x1) // 2 - (ICON_SZ // 2), SEG_BOT + 8, ICON_SZ, ICON_SZ)
 
     def _plus_rect(self, x1: int, x2: int) -> QRect: 
@@ -506,13 +482,18 @@ class TimelineCanvas(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # [크PD] total_width() 를 paintEvent 당 1회만 계산
         total_w = self.total_width()
-
         total_secs = self.total_duration + 2
         sec_f = 0.0
 
-        # 폰트 설정
+        # 🆕 룰러 HH:MM:SS 포맷
+        def _fmt_ruler(sec):
+            s = int(sec)
+            h, rem = divmod(s, 3600)
+            m, sc = divmod(rem, 60)
+            if h > 0: return f"{h}:{m:02d}:{sc:02d}"
+            return f"{m:02d}:{sc:02d}"
+
         ruler_font = QFont(config.FONT, 12)
         ruler_font.setBold(True)
         p.setFont(ruler_font)
@@ -522,26 +503,24 @@ class TimelineCanvas(QWidget):
             if abs(sec_i - round(sec_i, 0)) < 0.01:
                 sec_i = round(sec_i)
                 if sec_i % 5 == 0 and sec_i != 0:
-                    p.setPen(QColor("#BBBBBB")); p.drawLine(tx, 0, tx, 15); p.drawText(tx + 5, RULER_H - 5, f"{int(sec_i)}s")
+                    p.setPen(QColor("#BBBBBB")); p.drawLine(tx, 0, tx, 15)
+                    p.drawText(tx + 5, RULER_H - 5, _fmt_ruler(sec_i))
                 elif sec_i % 1 == 0:
                     p.setPen(QColor("#666666")); p.drawLine(tx, 0, tx, 8)
-                    if sec_i > 0: p.drawText(tx + 2, RULER_H - 2, f"{int(sec_i)}")
+                    if sec_i > 0: p.drawText(tx + 2, RULER_H - 2, _fmt_ruler(sec_i))
             elif abs(sec_i * 2 - round(sec_i * 2)) < 0.01: p.setPen(QColor("#444444")); p.drawLine(tx, 0, tx, 5)
             else: p.setPen(QColor("#333333")); p.drawLine(tx, 0, tx, 3)
             sec_f = round(sec_f + 0.1, 1)
 
-        # 1. 파형 배경 그리기
         p.fillRect(QRect(0, RULER_H, total_w, WAVE_H), QColor("#0a0a0a"))
 
         if self._waveform is not None:
             wf = self._waveform
             wf_len = len(wf)
 
-            # A. 0점 가이드 라인
             p.setPen(QPen(QColor("#333333"), 1))
             p.drawLine(0, WAVE_MID, total_w, WAVE_MID)
 
-            # B. speech_mask 캐시 — 파형 데이터나 VAD가 바뀔 때만 재계산
             if self._speech_mask is None or self._speech_mask_wf_len != wf_len:
                 mask = np.zeros(wf_len, dtype=bool)
                 for vs in self.vad_segments:
@@ -552,12 +531,10 @@ class TimelineCanvas(QWidget):
                 self._speech_mask_wf_len = wf_len
             speech_mask = self._speech_mask
 
-            # C. 파형 렌더링 — 가시 영역(clip rect)만 순회 (핵심 최적화)
             clip      = event.rect()
             x_start   = max(0, clip.left())
             x_end     = min(total_w, clip.right() + 1)
 
-            # QColor/QPen 사전 생성 (루프 안에서 매번 생성 금지)
             pen_top_norm  = QPen(QColor(100, 220, 255), 1)
             pen_bot_norm  = QPen(QColor( 40, 130, 170), 1)
             pen_top_loud  = QPen(QColor(160, 255, 255), 1)
@@ -587,24 +564,18 @@ class TimelineCanvas(QWidget):
                     p.setPen(pen_top_sil); p.drawLine(x, WAVE_MID,     x, WAVE_MID - h)
                     p.setPen(pen_bot_sil); p.drawLine(x, WAVE_MID + 1, x, WAVE_MID + h)
 
-        # 2. VAD 섹터 (기본 배경)
         if self.vad_segments:
             p.setPen(Qt.PenStyle.NoPen); p.setBrush(QColor(255, 200, 0, 40)) 
             for vs in self.vad_segments:
                 vx1 = self._x(vs["start"]); vx2 = self._x(vs["end"])
                 p.drawRect(QRect(vx1, RULER_H, vx2 - vx1, WAVE_H))
 
-        # 💡 [핵심] 3. 재인식 모드 시각화 (초록색 타겟 + 노란색 진행률)
         if self.re_recog_zone:
             rs, re_sec = self.re_recog_zone
             rp = self.re_recog_progress if self.re_recog_progress is not None else rs
-
-            # A. 진행 완료 구역 (노란색)
             yx1 = self._x(rs); yx2 = self._x(rp)
             if yx2 > yx1:
                 p.fillRect(QRect(yx1, RULER_H, yx2 - yx1, WAVE_H), QColor(255, 255, 0, 100))
-
-            # B. 남은 타겟 구역 (초록색)
             gx1 = self._x(max(rs, rp)); gx2 = self._x(re_sec)
             if gx2 > gx1:
                 p.fillRect(QRect(gx1, RULER_H, gx2 - gx1, WAVE_H), QColor(0, 255, 0, 70))
@@ -638,66 +609,48 @@ class TimelineCanvas(QWidget):
             text_rect = QRect(x1 + HANDLE_R + 6, SEG_TOP + 5, sw - (HANDLE_R * 2) - 12, SEG_BOT - SEG_TOP - 10)
             is_editing = (self._edit_active and self._edit_line == seg.get("line"))
 
-            # ui/timeline_canvas.py 의 paintEvent 내 수정 부분
             if is_editing:
                 disp_text = self._edit_text
                 preedit = getattr(self, '_ime_preedit', '')
                 cur = self._edit_cursor
-                
-                # 한글 조합중인 글자를 렌더링용 텍스트에 임시 삽입
                 if preedit:
                     disp_text = disp_text[:cur] + preedit + disp_text[cur:]
-                    
                 lines = disp_text.split('\n')
                 fm = p.fontMetrics()
                 line_h = fm.height()
                 tx0 = text_rect.x(); ty0 = text_rect.y() + fm.ascent()
-                
                 p.fillRect(text_rect, QColor("#002200"))
-                
-                # 시각적 커서 위치 계산
                 vis_cur = cur + len(preedit)
                 r = 0; c = vis_cur
                 for i, line in enumerate(lines):
                     if c <= len(line): r = i; break
                     c -= (len(line) + 1)
-                    
                 curr_y = ty0
                 for i, line in enumerate(lines):
                     p.setPen(QColor("#FFFF88"))
-                    
                     if preedit and i == r:
                         pre_start = c - len(preedit)
                         p.drawText(tx0, curr_y, line)
                         pre_w_start = fm.horizontalAdvance(line[:pre_start])
                         pre_w_end = fm.horizontalAdvance(line[:c])
-                        
                         p.setPen(QColor("#FFFF00"))
                         p.drawText(tx0 + pre_w_start, curr_y, preedit) 
                         p.setPen(QPen(QColor("#FFFF00"), 1))
                         p.drawLine(tx0 + pre_w_start, curr_y + 1, tx0 + pre_w_end, curr_y + 1)
                     else:
                         p.drawText(tx0, curr_y, line)
-                        
-                        # 커서 깜빡임 (실제 텍스트 길이 위치에 정확히 그림!)
                         if self._cursor_vis and i == r:
                             cx = tx0 + fm.horizontalAdvance(line[:c])
                             cursor_top = curr_y - fm.ascent()
                             cursor_bot = cursor_top + line_h
                             p.setPen(QPen(QColor("#FFFFFF"), 1))
                             p.drawLine(cx, cursor_top, cx, cursor_bot)
-                            
                         curr_y += line_h + 4
-
-            # 💡 [핵심 복구] 편집 중이 아닐 때 일반 자막을 그리는 로직! (이게 빠져있었습니다)
             else:
                 p.setPen(QColor("#FFFFFF"))
-                # 줄바꿈(\n)이 포함된 다중 줄 텍스트를 평상시에도 예쁘게 출력합니다.
                 p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, seg.get("text", ""))
 
-            # -------------------------------------------------------------
-            
-            ir = self._icon_rect(x1, x2) # 이 아래로는 기존 코드 그대로 유지!
+            ir = self._icon_rect(x1, x2)
             if sw > ICON_SZ + HANDLE_R + 4:
                 p.fillRect(ir, QColor("#550000")); p.setPen(QColor("#FF6666")); p.setFont(QFont(config.FONT, 18, QFont.Weight.Bold)) 
                 p.drawText(ir, Qt.AlignmentFlag.AlignCenter, "✕")
@@ -720,15 +673,22 @@ class TimelineCanvas(QWidget):
                 is_hover = (getattr(self, '_hover_diamond', None) == i)
                 color = QColor("#FFD700") if is_hover else QColor("#AAAAAA")
                 p.setPen(QPen(QColor("#000000"), 1)); p.setBrush(QBrush(color)); p.drawRoundedRect(rect, 4, 4); p.setBrush(Qt.BrushStyle.NoBrush)
-                    
+
+        # 🆕 멀티 영상 경계선 (초록색 1px)
+        if self.boundary_times:
+            pen_boundary = QPen(QColor("#4AFF80"), 1)
+            for bt in self.boundary_times:
+                bx = self._x(bt)
+                p.setPen(pen_boundary)
+                p.drawLine(bx, 0, bx, CANVAS_H)
+
         if self.playhead_sec >= 0:
             ph_color = QColor("#4AFF80") if getattr(self, 'focus_mode', 'segment') == "waveform" else QColor("#FF4444")
             p.setPen(QPen(ph_color, 2)); px = self._x(self.playhead_sec); p.drawLine(px, 0, px, CANVAS_H)
-            # 💡 [신규] 플레이헤드 윗부분에 메뉴 호출용 동그란 핸들 그리기
             handle_r = 7
             self._playhead_handle_rect = QRect(int(px - handle_r), 2, handle_r * 2, handle_r * 2)
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
-            p.setBrush(QBrush(QColor("#FFCC00")))  # 눈에 잘 띄는 노란색
+            p.setBrush(QBrush(QColor("#FFCC00")))
             p.setPen(QPen(QColor("#FFFFFF"), 1))
             p.drawEllipse(self._playhead_handle_rect)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
@@ -755,37 +715,30 @@ class TimelineCanvas(QWidget):
         if w: sb = w.horizontalScrollBar(); sb.setValue(sb.value() + delta // 2)
         event.accept()
 
-
     def mousePressEvent(self, ev):
-        # 플레이헤드 노란 원 메뉴는 기존 유지
         if ev.button() == Qt.MouseButton.LeftButton or ev.button() == Qt.MouseButton.RightButton:
             if hasattr(self, '_playhead_handle_rect') and self._playhead_handle_rect.contains(ev.pos()):
                 self.playhead_menu_requested.emit(ev.globalPosition().toPoint(), self.playhead_sec)
                 return
 
         x, y = ev.pos().x(), ev.pos().y()
-        self._last_click_x = x      # ✅ 이 2줄 추가
-        self._last_click_y = y      # ✅
+        self._last_click_x = x
+        self._last_click_y = y
 
-
-        # 편집 중 클릭 처리
         if self._edit_active:
             seg = next((s for s in self.segments if s.get("line") == self._edit_line), None)
             if seg and SEG_TOP <= y <= SEG_BOT:
                 x1, x2 = self._x(seg["start"]), self._x(seg["end"])
                 if x1 + HANDLE_R < x < x2 - HANDLE_R:
-                    # [크PD] 클릭 위치 → _edit_cursor 재계산 (Bug 2 수정)
                     from PyQt6.QtGui import QFontMetrics, QFont as _QFont
                     fm   = QFontMetrics(_QFont(config.FONT, 14))
                     lh   = fm.height() + 4
                     tx0  = x1 + HANDLE_R + 6
                     rel_x = x - tx0
                     rel_y = y - (SEG_TOP + 5)
-
                     lines = self._edit_text.split('\n')
                     cl    = max(0, min(int(rel_y / lh), len(lines) - 1))
                     ln_txt = lines[cl]
-
                     if rel_x <= 0:
                         col = 0
                     else:
@@ -796,7 +749,6 @@ class TimelineCanvas(QWidget):
                                 wc = fm.horizontalAdvance(ln_txt[:i])
                                 col = i - 1 if (rel_x - wp) < (wc - rel_x) else i
                                 break
-
                     self._edit_cursor = sum(len(l) + 1 for l in lines[:cl]) + col
                     self._cursor_vis  = True
                     self.update()
@@ -805,7 +757,6 @@ class TimelineCanvas(QWidget):
         self._just_committed = False
         self.setFocus()
 
-        # ✅ [핵심] 우클릭: 즉시 분리 ❌ → 분리 모드 인라인 편집 ✅
         if ev.button() == Qt.MouseButton.RightButton:
             if SEG_TOP <= y <= SEG_BOT:
                 seg = self._seg_at(x)
@@ -816,11 +767,9 @@ class TimelineCanvas(QWidget):
                     self.start_inline_edit(seg.get("line", 0), seg["start"])
             return
 
-        # 이하 기존 좌클릭 로직은 대표님 원본 그대로 유지(생략)
         if ev.button() != Qt.MouseButton.LeftButton:
             return
 
-        # ↓↓↓ 이하 기존 코드 그대로 (대표님 원본 유지) ↓↓↓
         self.focus_mode = "waveform" if y <= SEG_TOP else "segment"
         self.update()
 
@@ -878,7 +827,6 @@ class TimelineCanvas(QWidget):
 
         self._is_scrubbing = True; self.scrub_sec.emit(max(0.0, x / self.pps))
 
-
     def _setup_drag(self, s, edge, x):
         self.drag_started.emit(); self._drag_seg, self._drag_edge = s, edge; self._drag_x0 = x
         self._drag_s0_start, self._drag_s0_end = s["start"], s["end"]
@@ -892,14 +840,10 @@ class TimelineCanvas(QWidget):
     def mouseDoubleClickEvent(self, ev):
         if ev.button() != Qt.MouseButton.LeftButton:
             return
-
-        # ✅ 편집 중이면 더블클릭 = 커밋
         if self._edit_active:
             self._commit_inline_edit()
             return
-
         x, y = ev.pos().x(), ev.pos().y()
-
         if SEG_TOP <= y <= SEG_BOT:
             seg = next(
                 (s for s in self.segments if self._x(s["start"]) <= x <= self._x(s["end"])),
@@ -908,11 +852,9 @@ class TimelineCanvas(QWidget):
             if seg:
                 self.seg_double_clicked.emit(seg.get("line", 0), seg["start"])
 
-
     def mouseMoveEvent(self, ev):
         x, y = ev.pos().x(), ev.pos().y()
 
-        # ✅ 편집 모드일 때 커서 고정 + 드래그/호버 차단
         if self._edit_active:
             seg = next((s for s in self.segments if s.get("line") == self._edit_line), None)
             if seg and SEG_TOP <= y <= SEG_BOT and self._x(seg["start"]) + HANDLE_R < x < self._x(seg["end"]) - HANDLE_R:
@@ -920,9 +862,6 @@ class TimelineCanvas(QWidget):
             else:
                 self.setCursor(Qt.CursorShape.ArrowCursor)
             return
-
-        # --- 아래는 기존 마우스 이동 로직 (편집 아닐 때) ---
-        # (기존의 panning, scrubbing, hover_diamond 처리 등 유지)
 
         if getattr(self, '_is_panning', False) and (ev.buttons() & Qt.MouseButton.LeftButton):
             current_x = ev.globalPosition().x(); delta_x = self._pan_last_x - current_x
@@ -969,7 +908,6 @@ class TimelineCanvas(QWidget):
 
         if self._hover_handle != new_hh: self._hover_handle = new_hh; self.update()
         
-        # 기존 마우스 모양 로직
         if hover_handle: self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
         elif hover_center: self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
         else: self.unsetCursor()

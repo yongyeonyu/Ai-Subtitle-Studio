@@ -1,10 +1,11 @@
-# Version: 01.00.01
+# Version: 01.00.02
 """
 ui/timeline_widget.py
-타임라인 위젯의 최종 조립을 담당하는 껍데기 파일 (리팩토링 및 import 정리 완료)
+타임라인 위젯의 최종 조립을 담당하는 껍데기 파일
+[v01.00.02] set_boundary_times 추가 (멀티 영상 경계선)
 """
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QCheckBox, QHBoxLayout, QScrollArea, QSizePolicy
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve, QPoint
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPoint
 
 from ui.timeline_constants import CANVAS_H
 from ui.timeline_canvas import TimelineCanvas
@@ -133,6 +134,12 @@ class TimelineWidget(QWidget):
 
     def set_playhead(self, sec):
         self.canvas.set_playhead(sec); self.global_canvas.set_playhead(sec)
+
+    # 🆕 멀티 영상 경계 시간 설정
+    def set_boundary_times(self, times: list[float]):
+        """멀티 영상 경계 시간 설정 — 타임라인에 초록색 세로선 표시"""
+        self.canvas.boundary_times = times or []
+        self.canvas.update()
 
     def _update_smooth_scroll(self):
         if abs(self._target_scroll_x - self._current_scroll_x) > 0.5:
