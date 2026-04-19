@@ -1,6 +1,10 @@
-## AI Subtitle Studio - 의존성
+## AI Subtitle Studio - Requirements
+## python 3.11
 ## python3.11 -m pip install -r requirements.txt
 
+# ================================
+# UI / 기본 라이브러리
+# ================================
 PyQt6>=6.6.0
 opencv-python>=4.9.0
 Pillow>=10.0.0
@@ -10,8 +14,39 @@ watchdog>=3.0.0
 python-dotenv>=1.0.0
 packaging>=23.0
 
-## macOS 전용 (Apple Silicon)
-## pip install mlx-whisper torch torchaudio
+# ================================
+# Audio / Media I/O
+# ================================
+soundfile>=0.12.1
 
-## 화자 분리 (선택)
-## pyannote.audio>=3.1.0
+# ================================
+# Whisper / STT (macOS Apple Silicon)
+# ================================
+# ⚠️ mlx-whisper는 macOS + Apple Silicon 전용
+mlx-whisper>=0.4.3
+
+# PyTorch stack
+# (최신 torch / torchaudio / torchcodec 조합 정상 동작 확인)
+torch
+torchaudio
+torchcodec
+
+# ================================
+# VAD (Voice Activity Detection)
+# ================================
+silero-vad>=6.2.1
+
+# ================================
+# Audio Enhancement (선택)
+# ================================
+deepfilternet>=0.5.6
+
+# ================================
+# Speaker Diarization (선택 / 실험적)
+# ================================
+# pyannote.audio는 torch/torchaudio 의존성 충돌 가능
+# 필요 시 별도 환경에서 설치 권장
+# pyannote.audio>=3.1.0
+
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.14

@@ -263,24 +263,28 @@ class EditorSegmentsMixin:
     def _get_current_segments(self) -> list[dict]:
         segments = []
         block = self.text_edit.document().begin()
-        line_idx = 0  # 💡 텍스트 에디터의 실제 줄(블록) 번호 추적
+        line_idx = 0
         
-        # 1. 텍스트 블록 추출 및 같은 시간대(화자 분리) 병합
         while block.isValid():
             data = block.userData()
             text = block.text().strip()
+            is_gap = getattr(data, 'is_gap', False) if data else False
             
-            if data is not None and text:
-                # 시작 시간이 같으면 이전 세그먼트에 병합 (화자 분리 처리)
-                if segments and abs(segments[-1]["start"] - data.start_sec) < 0.05:
+            # ✅ [#1 핵심 수정] 갭 블록도 포함 — 무음구간이 End Time 계산에 반영됩니다
+            if data is not None and (text or is_gap):
+                # ✅ 갭 블록은 절대 이전 세그먼트에 병합하지 않음 (갭↔자막 병합 방지)
+                if (not is_gap
+                    and segments
+                    and not segments[-1].get("is_gap")
+                    and abs(segments[-1]["start"] - data.start_sec) < 0.05):
                     segments[-1]["text"] += "\n" + text
                 else:
                     segments.append({
-                        "line": line_idx,  # 💡 [핵심 버그 수정] 커서 이동 시 위치를 찾기 위한 줄 번호 필수 추가!
+                        "line": line_idx,
                         "start": data.start_sec,
                         "end": getattr(data, 'end_sec', None),
                         "text": text,
-                        "is_gap": getattr(data, 'is_gap', False),
+                        "is_gap": is_gap,
                         "spk": getattr(data, 'spk_id', 'SPEAKER_00')
                     })
             
@@ -545,8 +549,11 @@ class EditorSegmentsMixin:
         left  = full_text[:cursor].rstrip()
         right = full_text[cursor:].lstrip()
 
-        if not left or not right:
+        # ✅ 수정: right가 비어있으면 "새자막"으로 대체
+        if not left:
             return
+        if not right:
+            right = "새자막"
 
         def _strip_leading_dash(t: str) -> str:
             lines = [l.strip() for l in t.splitlines() if l.strip()]
@@ -559,8 +566,11 @@ class EditorSegmentsMixin:
         left  = _strip_leading_dash(left)
         right = _strip_leading_dash(right)
 
-        if not left or not right:
+        # ✅ 수정: right가 비어있으면 "새자막"으로 대체
+        if not left:
             return
+        if not right:
+            right = "새자막"
 
         left_doc  = left.replace("\n", "\u2028")
         right_doc = right.replace("\n", "\u2028")

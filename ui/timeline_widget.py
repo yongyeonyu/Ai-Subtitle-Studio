@@ -17,6 +17,8 @@ class TimelineWidget(QWidget):
     seg_right_clicked       = pyqtSignal(float, QPoint)
     seg_double_clicked      = pyqtSignal(int, float)
     seg_time_changed        = pyqtSignal(int, float, float, str)
+    diamond_merge           = pyqtSignal(int, int)       # ✅ [#9]
+    sig_smart_split         = pyqtSignal(int, float, bool)  # ✅ [#6, #10]
     seg_to_gap              = pyqtSignal(int)
     gap_activated           = pyqtSignal(float, float)
     gap_to_segs             = pyqtSignal(float, float)
@@ -86,6 +88,10 @@ class TimelineWidget(QWidget):
         self.canvas.sig_editing_mode.connect(self.sig_editing_mode.emit)
         self.canvas.playhead_menu_requested.connect(self.playhead_menu_requested.emit)
         
+        # 기존 canvas 시그널 포워딩들 근처에 추가
+        self.canvas.diamond_merge.connect(self.diamond_merge)
+        self.canvas.sig_smart_split.connect(self.sig_smart_split)
+
         self.global_canvas.seek_frac.connect(self._on_global_seek)
         self._wf_worker = None
         self.canvas.step_frame.connect(self.step_frame) 
@@ -172,31 +178,53 @@ class TimelineWidget(QWidget):
         mods = ev.modifiers()
         if mods & Qt.KeyboardModifier.ControlModifier or mods & Qt.KeyboardModifier.MetaModifier:
             dy = ev.angleDelta().y()
+            if dy == 0:
+                ev.accept()
+                return
+
             dur = self.canvas.total_duration
             min_pps = 5.0
-            if dur > 0: min_pps = (self.scroll.width() - 20) / dur
-            max_pps = 150.0  
-            
-            new_pps = self.canvas.pps * 1.2 if dy > 0 else self.canvas.pps / 1.2
-            new_pps = max(min_pps, min(max_pps, new_pps))
-            
+            if dur > 0:
+                min_pps = (self.scroll.width() - 20) / dur
+            max_pps = 500.0
+
+            # ✅ 부드러운 확대: 1.08배 (기존 1.2배 → 점프감 제거)
+            factor = 1.08 if dy > 0 else 1.0 / 1.08
+            new_pps = max(min_pps, min(max_pps, self.canvas.pps * factor))
+
+            if abs(new_pps - self.canvas.pps) < 0.01:
+                ev.accept()
+                return
+
+            # ✅ 마우스 커서 위치 기준 줌 (커서 아래의 시간이 고정됨)
+            mouse_x = ev.position().x()
             sb = self.scroll.horizontalScrollBar()
-            scroll_ratio = sb.value() / sb.maximum() if sb.maximum() > 0 else 0
-            
+            old_scroll = sb.value()
+            # 마우스 커서가 가리키는 시간(초)
+            sec_at_cursor = (old_scroll + mouse_x) / self.canvas.pps
+
+            old_pps = self.canvas.pps
             self.canvas.pps = new_pps
-            tw = int(dur * self.canvas.pps) + self.scroll.width()
+
+            tw = int(dur * new_pps) + self.scroll.width()
             self.canvas.setFixedWidth(max(tw, self.scroll.width()))
             self.canvas.update()
-            
-            if sb.maximum() > 0:
-                sb.setValue(int(scroll_ratio * sb.maximum()))
-                
+
+            # ✅ 줌 후에도 같은 시간이 마우스 커서 아래에 오도록 스크롤 보정
+            new_scroll = int(sec_at_cursor * new_pps - mouse_x)
+            new_scroll = max(0, min(new_scroll, sb.maximum()))
+            sb.setValue(new_scroll)
+            self._target_scroll_x = float(new_scroll)
+            self._current_scroll_x = float(new_scroll)
+
             ev.accept()
             return
 
         dy, dx = ev.angleDelta().y(), ev.angleDelta().x()
         delta = -(dy if dy != 0 else dx)
-        self.scroll.horizontalScrollBar().setValue(self.scroll.horizontalScrollBar().value() + delta // 2)
+        self.scroll.horizontalScrollBar().setValue(
+            self.scroll.horizontalScrollBar().value() + delta // 2
+        )
         ev.accept()
 
     def _sync_vp(self):

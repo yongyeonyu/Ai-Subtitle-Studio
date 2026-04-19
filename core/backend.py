@@ -1,12 +1,12 @@
-# Version: 01.00.06
+# Version: 01.00.07
 """
 core/backend.py
-[v01.00.06 수정사항]
-- ntfy: _is_auto_pipeline 체크 (iCloud/NAS 자동모드에서만 발송)
-- state_manager에서 ntfy 제거 → backend 통합 발송
-- ffmpeg returncode 체크 + stderr 로그
+[v01.00.07] 모드/상태 정의 문서 반영
+- do_optimize 종료 시 완료 숫자 전달 (EditorPipeline이 완료 판단)
+- ntfy: _is_auto_pipeline 체크 (iCloud/NAS 자동모드에서만)
 - start_event.wait timeout 추가
-- 기존 로직 변경 없음 (offset/timebase 미적용 — 단일파일 안전 우선)
+- ffmpeg returncode 체크
+- 기존 기능 100% 유지
 """
 
 import os, threading, traceback, queue, json, time, subprocess
@@ -77,16 +77,13 @@ class CoreBackend:
                 self.video_processor.stop_transcribe()
         except Exception as e:
             get_logger().log(f"⚠️ stop_transcribe 실패: {e}")
-        if hasattr(self, '_edit_event'):
-            self._edit_event.set()
-        if hasattr(self, '_start_event'):
-            self._start_event.set()
-            
+        if hasattr(self, '_edit_event'): self._edit_event.set()
+        if hasattr(self, '_start_event'): self._start_event.set()
+
     def _precalculate_etas(self):
         total_expected_time = 0.0
-
         s = self._load_settings()
-        max_spk  = int(s.get('max_speakers', 1))
+        max_spk = int(s.get('max_speakers', 1))
         dia_flag = "O" if max_spk > 1 else "X"
         model_key = f"STT:{s.get('selected_whisper_model','기본')}|LLM:{s.get('selected_model','기본')}|DIA:{dia_flag}"
 
@@ -98,17 +95,17 @@ class CoreBackend:
                     '-of', 'json', target_file
                 ]
                 result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
-                probe  = json.loads(result.stdout)
+                probe = json.loads(result.stdout)
 
-                fmt          = probe.get('format', {})
+                fmt = probe.get('format', {})
                 duration_sec = float(fmt.get('duration', 0)) if fmt.get('duration') else 0.0
-                streams      = probe.get('streams', [])
+                streams = probe.get('streams', [])
 
                 if streams:
                     strm = streams[0]
                     if duration_sec == 0.0:
                         duration_sec = float(strm.get('duration', 0)) if strm.get('duration') else 0.0
-                    w, h    = strm.get('width', 0), strm.get('height', 0)
+                    w, h = strm.get('width', 0), strm.get('height', 0)
                     fps_str = strm.get('r_frame_rate', '0/0')
                     if '/' in fps_str:
                         n, d = fps_str.split('/')
@@ -168,7 +165,6 @@ class CoreBackend:
                     self.ui._sig_update_queue_header.emit(i + 1, total_files, 0, "")
                 self._process_one(target_file, i)
 
-            # ✅ ntfy: 자동모드에서만 전체 완료 알림
             if getattr(self.ui, '_is_auto_pipeline', False):
                 self._send_ntfy_notification(
                     title=f"🏆 {config.APP_NAME} 작업 종료",
@@ -189,17 +185,15 @@ class CoreBackend:
             except Exception:
                 pass
 
-    def _process_one(self, target_file, queue_index: int):
+    def _process_one(self, target_file, queue_index):
         # ── 백업 ──
         try:
             from .path_manager import get_srt_path
             import datetime, shutil
-            
             base_path = os.path.splitext(target_file)[0]
             srt_p = get_srt_path(target_file)
             mov_p = f"{base_path}_자막소스.mov"
             backup_dir = os.path.join(os.path.dirname(target_file), "자막백업")
-            
             if os.path.exists(srt_p) or os.path.exists(mov_p):
                 os.makedirs(backup_dir, exist_ok=True)
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -211,11 +205,10 @@ class CoreBackend:
         except Exception as e:
             get_logger().log(f"⚠️ 백업 중 오류 발생 (무시하고 진행): {e}")
 
-        # ── 이벤트/콜백 설정 ──
-        edit_event  = threading.Event(); start_event = threading.Event()
-        self._edit_event  = edit_event; self._start_event = start_event
-        final_segments = []; action_state = ["wait"]
-        self._action_state = action_state
+        # ── 이벤트/콜백 ──
+        edit_event = threading.Event(); start_event = threading.Event()
+        self._edit_event = edit_event; self._start_event = start_event
+        final_segments = []; action_state = ["wait"]; self._action_state = action_state
 
         def on_save(segs):
             nonlocal final_segments
@@ -227,7 +220,8 @@ class CoreBackend:
                 self.pipeline_start_time = time.time(); self.is_first_start = False
             action_state[0] = "start"; start_event.set()
 
-        def on_prev(): action_state[0] = "prev"; start_event.set(); edit_event.set()
+        def on_prev():
+            action_state[0] = "prev"; start_event.set(); edit_event.set()
 
         def on_exit(segs):
             nonlocal final_segments
@@ -236,11 +230,10 @@ class CoreBackend:
 
         is_auto_mode = getattr(self, 'is_auto_start', False)
         self.ui.open_editor_for_file(target_file, on_save, on_start, on_prev, on_exit, is_batch=is_auto_mode)
-        
+
         if is_auto_mode:
             threading.Timer(0.5, on_start).start()
 
-        # ── 시작 대기 (timeout 추가) ──
         if not start_event.wait(timeout=600):
             get_logger().log("❌ 시작 이벤트 타임아웃 (600초)")
             return
@@ -255,7 +248,7 @@ class CoreBackend:
             fsize = os.path.getsize(target_file) / (1024*1024) if os.path.exists(target_file) else 0
 
             get_logger().log(f"\n{'='*44}\n🎬 [{queue_index+1}/{len(self.files_to_process)}] {vname}\n{'='*44}\n\n{'─'*44}\n  📂 파일: {vname} ({fsize:.1f} MB)\n{'─'*44}")
-            
+
             res = self.video_processor.extract_audio(target_file)
             if not res:
                 get_logger().log("❌ 오디오 추출 실패"); edit_event.wait()
@@ -264,7 +257,8 @@ class CoreBackend:
                 break
 
             chunk_dir, vad_segs = res
-            if hasattr(self.ui, '_sig_set_vad_segments'): self.ui._sig_set_vad_segments.emit(vad_segs)
+            if hasattr(self.ui, '_sig_set_vad_segments'):
+                self.ui._sig_set_vad_segments.emit(vad_segs)
 
             get_logger().log("\n  [STEP 2] 🎤 Whisper 변환 + LLM 최적화 파이프라인 가동...")
 
@@ -273,13 +267,18 @@ class CoreBackend:
                 max_spk = int(s.get('max_speakers', 1)); dia_flag = "O" if max_spk > 1 else "X"
                 model_key = f"STT:{s.get('selected_whisper_model','기본')}|LLM:{s.get('selected_model','기본')}|DIA:{dia_flag}"
 
-                if target_file in getattr(self, '_video_durations', {}): video_duration_sec = self._video_durations[target_file]
-                else: chunks = [f for f in os.listdir(chunk_dir) if f.endswith('.wav')]; video_duration_sec = len(chunks) * 30.0
+                if target_file in getattr(self, '_video_durations', {}):
+                    video_duration_sec = self._video_durations[target_file]
+                else:
+                    chunks = [f for f in os.listdir(chunk_dir) if f.endswith('.wav')]
+                    video_duration_sec = len(chunks) * 30.0
 
                 expected_time = get_expected_time(model_key, video_duration_sec)
                 if hasattr(self.ui, '_sig_update_queue'):
-                    if expected_time > 0: self.ui._sig_update_queue.emit(queue_index, "자막 생성 중", str(expected_time), "", "")
-                    else: self.ui._sig_update_queue.emit(queue_index, "자막 생성 중", "예상불가 (학습 중)", "", "")
+                    if expected_time > 0:
+                        self.ui._sig_update_queue.emit(queue_index, "자막 생성 중", str(expected_time), "", "")
+                    else:
+                        self.ui._sig_update_queue.emit(queue_index, "자막 생성 중", "예상불가 (학습 중)", "", "")
                 process_start_time = time.time()
             except Exception:
                 process_start_time = time.time(); video_duration_sec = 0.0
@@ -301,11 +300,11 @@ class CoreBackend:
                     for chunk_segs, c_idx, t_total in self.video_processor.transcribe(chunk_dir, is_fast_mode=is_auto_mode):
                         if not self._active: break
                         opt_queue.put((chunk_segs, c_idx, t_total))
-                finally: opt_queue.put(_SENTINEL)
+                finally:
+                    opt_queue.put(_SENTINEL)
 
             def do_optimize():
                 from .subtitle_engine import optimize_segments
-
                 total_files = len(self.files_to_process)
 
                 if t_diarize and t_diarize.is_alive():
@@ -322,7 +321,6 @@ class CoreBackend:
                     model_name = ""; api_key = ""; user_prompt = ""; chunk_time_limit = 60
 
                 is_gemini = "API" in model_name or "Gemini" in model_name
-
                 seg_buffer = []
                 last_c_idx = 0
                 last_t_total = 1
@@ -330,21 +328,17 @@ class CoreBackend:
                 def _flush_buffer():
                     nonlocal seg_buffer
                     if not seg_buffer: return
-
-                    chunk_segs = seg_buffer
-                    seg_buffer = []
+                    chunk_segs = seg_buffer; seg_buffer = []
 
                     try:
                         if is_gemini and len(chunk_segs) > 1:
                             from .subtitle_engine import ask_gemini_to_split
                             from .utils import load_subtitle_rules
-
                             chunk_start = chunk_segs[0]["start"]
                             chunk_end = chunk_segs[-1]["end"]
                             full_text = " ".join([seg["text"] for seg in chunk_segs])
                             rules = load_subtitle_rules()
                             res_chunks = ask_gemini_to_split(full_text, 15, rules, model_name, user_prompt, api_key)
-
                             if res_chunks and len(res_chunks) > 0:
                                 opt = []
                                 dur = (chunk_end - chunk_start) / len(res_chunks)
@@ -378,14 +372,17 @@ class CoreBackend:
                             if text.startswith("-"): text = text.lstrip("-").strip()
                             spk = seg.get("speaker", "00")
                             if not grouped_opt:
-                                seg["text_list"] = [text]; seg["speaker_list"] = [spk]; grouped_opt.append(seg)
+                                seg["text_list"] = [text]; seg["speaker_list"] = [spk]
+                                grouped_opt.append(seg)
                             else:
                                 prev = grouped_opt[-1]
                                 gap = seg["start"] - prev["end"]
                                 if gap < 1.5 and spk != prev["speaker_list"][-1] and len(prev["speaker_list"]) < 2:
-                                    prev["text_list"].append(text); prev["speaker_list"].append(spk); prev["end"] = max(prev["end"], seg["end"])
+                                    prev["text_list"].append(text); prev["speaker_list"].append(spk)
+                                    prev["end"] = max(prev["end"], seg["end"])
                                 else:
-                                    seg["text_list"] = [text]; seg["speaker_list"] = [spk]; grouped_opt.append(seg)
+                                    seg["text_list"] = [text]; seg["speaker_list"] = [spk]
+                                    grouped_opt.append(seg)
 
                         for seg in grouped_opt:
                             if len(seg.get("text_list", [])) > 1:
@@ -427,7 +424,6 @@ class CoreBackend:
                         continue
 
                     seg_buffer.extend(chunk_segs)
-
                     buffer_start = seg_buffer[0]["start"]
                     buffer_end = seg_buffer[-1]["end"]
                     current_duration = buffer_end - buffer_start
@@ -435,10 +431,14 @@ class CoreBackend:
                     if current_duration >= chunk_time_limit:
                         _flush_buffer()
 
+                # ✅ [v01.00.07] 완료 숫자 전달 — EditorPipeline이 완료 판단
+                if hasattr(self.ui, '_sig_update_status'):
+                    self.ui._sig_update_status.emit(last_t_total, last_t_total)
+
             t_trans = threading.Thread(target=do_transcribe, daemon=True, name="transcriber")
-            t_opt   = threading.Thread(target=do_optimize,   daemon=True, name="optimizer")
+            t_opt = threading.Thread(target=do_optimize, daemon=True, name="optimizer")
             t_trans.start(); t_opt.start()
-            t_trans.join();  t_opt.join()
+            t_trans.join(); t_opt.join()
 
             try:
                 with open(_SETTINGS_PATH, "r", encoding="utf-8") as f: s = json.load(f)
@@ -515,7 +515,6 @@ class CoreBackend:
             current_idx = queue_index + 1
             total_cnt = len(self.files_to_process)
 
-            # ✅ ntfy: 자동모드에서만 SRT 완료 알림
             if not is_video_export and getattr(self.ui, '_is_auto_pipeline', False):
                 self._send_ntfy_notification(
                     title=f"📝 {config.APP_NAME} 알림",
@@ -572,7 +571,7 @@ class CoreBackend:
 
         segs = _parse_srt(srt_path)
         if not segs: return False
-        
+
         res_text = s.get("res", "4K (3840px)")
         width = 3840 if "4K" in res_text else 1920
         fs = int(s.get("size", 60))
@@ -583,10 +582,10 @@ class CoreBackend:
 
         bg_c = QColor(s.get("bg_c", "#000000"))
         bg_rgba = (bg_c.red(), bg_c.green(), bg_c.blue(), int(s.get("bg_op", 50)*2.55)) if s.get("bg", False) else None
-        
+
         bdr_w = int(s.get("bdr_w", 2))
         bdr_w = max(1, int(bdr_w * res_scale)) if bdr_w > 0 and not s.get("no_bdr", False) else 0
-        
+
         txt_c = QColor(s.get("txt_c", "#FFFFFF"))
         bdr_c = QColor(s.get("bdr_c", "#FFFFFF"))
         shd_c = QColor(s.get("shd_c", "#000000"))
@@ -633,11 +632,12 @@ class CoreBackend:
             with open(concat, "w", encoding="utf-8") as f:
                 for t0, t1, txt in events:
                     f.write(f"file '{txt_png.get(txt, blank) if txt else blank}'\nduration {t1-t0:.6f}\n")
-                if events: f.write(f"file '{txt_png.get(events[-1][2], blank) if events[-1][2] else blank}'\n")
+                if events:
+                    f.write(f"file '{txt_png.get(events[-1][2], blank) if events[-1][2] else blank}'\n")
 
             enc = ["-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le"]
             if "빠른" in s.get("quality", "빠른"): enc.extend(["-q:v", "15"])
-            
+
             cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat, "-vf", "format=yuva444p10le"] + enc + [out_p]
             r = subprocess.run(cmd, capture_output=True, text=True)
             if r.returncode != 0:
@@ -649,13 +649,12 @@ class CoreBackend:
                 dest_dir = getattr(config, "ICLOUD_DROPZONE", os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT"))
                 os.makedirs(dest_dir, exist_ok=True)
                 dest_file = os.path.join(dest_dir, os.path.basename(out_p))
-                
+
                 if os.path.abspath(out_p) != os.path.abspath(dest_file):
                     get_logger().log("    └ ☁️ iCloud로 자동 복사 중...")
                     shutil.copy2(out_p, dest_file)
                     get_logger().log(f"    └ ✅ iCloud 복사 완료")
 
-                # ✅ ntfy: 자동모드에서만 MOV 완료 알림
                 base_name = os.path.splitext(os.path.basename(target_file))[0]
                 if getattr(self.ui, '_is_auto_pipeline', False):
                     self._send_ntfy_notification(
@@ -676,12 +675,13 @@ class CoreBackend:
     def _load_selected_model(self):
         s = self._load_settings()
         return s.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
-    
+
     def _prepare_speaker_map(self, audio_path):
         try:
             from .diarize import get_speaker_map
             self._speaker_map = get_speaker_map(audio_path, self.min_speakers, self.max_speakers)
-        except Exception: self._speaker_map = []
+        except Exception:
+            self._speaker_map = []
 
     def _send_ntfy_notification(self, title, message, tags=""):
         try:

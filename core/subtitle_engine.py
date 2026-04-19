@@ -665,6 +665,8 @@ def save_srt(segments: list[dict], srt_path: str, apply_offset: bool = True):
 
     for seg in segments:
         text = seg.get("text", "").strip()
+        text = text.replace("\u2028", "\n")  # ✅ 소프트 줄바꿈 → SRT 표준 줄바꿈
+
         
         if not text or text == "\u200B": 
             continue

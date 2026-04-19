@@ -8,7 +8,7 @@ WAVE_H   = 75
 SEG_H    = 90
 SEG_TOP  = RULER_H + WAVE_H
 SEG_BOT  = SEG_TOP + SEG_H
-CANVAS_H = SEG_BOT + 35  # 💡 하단에 버튼 전용 여백 35픽셀을 추가합니다!
+CANVAS_H = SEG_BOT + 22   #✅ [X]/[+] 아이콘(20px) + 최소 여백(2px)만 확보
 WAVE_MID = RULER_H + WAVE_H // 2
 WAVE_HALF = WAVE_H // 2 - 3
 

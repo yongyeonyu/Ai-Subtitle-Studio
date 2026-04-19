@@ -1,10 +1,11 @@
-# Version: 01.00.15
+# Version: 01.00.16
 """
 ui/editor_pipeline.py
-[v01.00.15 수정사항]
-- update_progress: QTimer 이름 충돌 수정 + 0% 고정 방지 + 완료 감지 강화
-- _start_pipeline: _completion_handled 플래그 리셋
-- _send_ntfy_batch_complete: _is_auto_pipeline 체크 (수동 모드 ntfy 차단)
+[v01.00.16] 모드/상태 정의 문서 반영
+- _on_save: is_locked 체크 제거 (상태 무관 저장)
+- _on_prev: 생성 중 중단 + 단일 다이얼로그 (main_window 중복 제거)
+- update_progress: 완료 조건 단일화 (EditorPipeline만 완료 판단)
+- 기존 기능 100% 유지
 """
 import os, time, threading
 from PyQt6.QtWidgets import QMessageBox, QMenu
@@ -16,12 +17,14 @@ from core.data_manager import save_settings as _dm_save_settings
 from core.subtitle_engine import save_srt
 from core.path_manager import get_srt_path
 
+
 class PartialSignals(QObject):
     status = pyqtSignal(str, str)
     progress = pyqtSignal(int, int)
     chunk_time = pyqtSignal(float)
     done = pyqtSignal(list)
     finished = pyqtSignal()
+
 
 class EditorPipelineMixin:
     # ---------------------------------------------------------
@@ -94,7 +97,7 @@ class EditorPipelineMixin:
         if hasattr(main_w, "backend") and main_w.backend:
             main_w.backend.stop()
         QTimer.singleShot(1000, self._safe_enable_start_btn)
-    
+
     def _start_pipeline(self, is_restart=False):
         self._completion_handled = False
         if getattr(self, 'is_auto_start', False):
@@ -102,7 +105,7 @@ class EditorPipelineMixin:
         else:
             self.sm.start_ai_all()
         self._process_start_time = time.time()
-        self._backend_finished = False 
+        self._backend_finished = False
         QTimer.singleShot(50, lambda: self._execute_pipeline_logic(is_restart))
 
     def _set_process_completed(self):
@@ -111,7 +114,8 @@ class EditorPipelineMixin:
         else:
             self.sm.complete_ai()
         if hasattr(self, '_spinner_timer'): self._spinner_timer.stop()
-    
+        get_logger().log("✅ 자막 생성 완료 (EditorPipeline 확정)")
+
     def _execute_pipeline_logic(self, is_restart):
         main_w = self.window()
         self.text_edit.clear()
@@ -137,13 +141,36 @@ class EditorPipelineMixin:
     # ---------------------------------------------------------
     # Main Button Actions & Dialogs
     # ---------------------------------------------------------
+    def _go_home(self):
+        """
+        메인(홈)으로 확실히 이동:
+        1) 기존 구조: sig_prev emit
+        2) 실패/미연결 대비: main_window의 홈 이동 메서드가 있으면 직접 호출
+        """
+        # 1) 기존 시그널 방식
+        try:
+            self.sig_prev.emit()
+        except Exception:
+            pass
+
+        # 2) fallback (메인 윈도우 구현에 따라 이름이 다를 수 있어 가능한 후보를 호출)
+        try:
+            main_w = self.window()
+            for name in ("handle_prev", "show_home", "go_home", "_go_home", "_show_home", "show_main"):
+                if hasattr(main_w, name) and callable(getattr(main_w, name)):
+                    # handle_prev는 보통 시그널 슬롯이므로 직접 호출해도 무방
+                    getattr(main_w, name)()
+                    break
+        except Exception:
+            pass
+    
     def _show_confirm_dialog(self, title, text):
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle(title)
         msg_box.setText(text)
         msg_box.setStandardButtons(
             QMessageBox.StandardButton.Yes |
-            QMessageBox.StandardButton.No  |
+            QMessageBox.StandardButton.No |
             QMessageBox.StandardButton.Cancel
         )
         msg_box.button(QMessageBox.StandardButton.Yes).setText("예")
@@ -152,54 +179,216 @@ class EditorPipelineMixin:
         msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
         return msg_box.exec()
 
+    # ✅ [#4] 저장은 상태와 무관 + dirty 해제 + 저장 직후 이전 질문 스킵
+    def _on_save(self, *args, skip_auto_next=False):
+        segs = self._get_current_segments()
+        if not segs:
+            return
+
+        try:
+            if getattr(self, 'media_path', None):
+                srt_path = get_srt_path(self.media_path)
+                save_srt(segs, srt_path)
+                get_logger().log(f"💾 저장 완료: {os.path.basename(srt_path)}")
+        except Exception as e:
+            get_logger().log(f"⚠️ 저장 실패: {e}")
+            return
+
+        try:
+            self.sig_save.emit(segs)
+        except Exception:
+            pass
+
+        # ✅ [핵심] dirty 해제 — 생성 중(locked)에는 상태 전이 없이 dirty만 내림
+        try:
+            if hasattr(self, "sm"):
+                if getattr(self.sm, "is_locked", False):
+                    self.sm.is_dirty = False
+                else:
+                    self.sm.complete_save()
+        except Exception:
+            pass
+
+        # ✅ [핵심] 저장 직후 "이전"에서는 다시 묻지 않도록 1회 스킵 플래그
+        self._skip_prev_confirm_once = True
+
+        # ✅ [신규] 프로젝트 자동 저장
+        try:
+            self._auto_save_project(segs)
+        except Exception as e:
+            get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {e}")
+
+    def _auto_save_project(self, segs: list = None):
+        """저장 시 프로젝트 JSON 자동 생성/업데이트 (작업 환경 포함)"""
+        from core.project_manager import (
+            save_project, create_project, load_project,
+            ensure_projects_dir, PROJECTS_DIR
+        )
+
+        media_path = getattr(self, 'media_path', None)
+        if not media_path:
+            return
+
+        main_w = self.window()
+        project_path = getattr(main_w, '_current_project_path', None)
+
+        if not project_path:
+            base_name = os.path.splitext(os.path.basename(media_path))[0]
+            project_path = create_project(
+                name=base_name,
+                media_paths=[media_path],
+                srt_path=get_srt_path(media_path)
+            )
+            main_w._current_project_path = project_path
+            get_logger().log(f"📝 프로젝트 자동 생성: {os.path.basename(project_path)}")
+
+        workspace = {}
+        if hasattr(self, 'video_player'):
+            workspace["last_playhead"] = getattr(self.video_player, 'current_time', 0.0)
+        if hasattr(self, 'text_edit'):
+            workspace["last_cursor_block"] = self.text_edit.textCursor().blockNumber()
+        if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
+            workspace["zoom_pps"] = self.timeline.canvas.pps
+        if hasattr(self, 'splitter'):
+            workspace["splitter_sizes"] = self.splitter.sizes()
+        try:
+            workspace["terminal_visible"] = main_w._log_visible
+        except Exception:
+            pass
+
+        save_project(
+            filepath=project_path,
+            srt_path=get_srt_path(media_path),
+            segments=segs,
+            workspace=workspace
+        )
+        get_logger().log(f"📦 프로젝트 저장 완료: {os.path.basename(project_path)}")
+
+    def _go_home(self):
+        """메인(홈)으로 확실히 이동하는 공통 함수"""
+        try:
+            self._cleanup()
+        except Exception:
+            pass
+
+        # 1) 기존 시그널 방식
+        try:
+            self.sig_prev.emit()
+        except Exception:
+            pass
+
+        # 2) fallback — 시그널 미연결 시 main_window 직접 호출
+        try:
+            main_w = self.window()
+            for name in ("handle_prev", "show_home", "go_home", "_show_home", "show_main"):
+                if hasattr(main_w, name) and callable(getattr(main_w, name)):
+                    getattr(main_w, name)()
+                    break
+        except Exception:
+            pass
+
+    # ✅ [#5] 이전: dirty 기반 판단 + 저장 직후 확인 스킵 + 이동 보장
     def _on_prev(self):
         from core.state_manager import SubtitleStateManager
+
+        # 생성 중이면 먼저 중단
         if self.sm.state == SubtitleStateManager.ST_PROC:
-            QMessageBox.warning(self, "작업 중", "AI 작업 중에는 이동할 수 없습니다.")
+            self._stop_pipeline()
+
+        # ✅ 1) 저장 직후 "이전"은 확인창 없이 즉시 이동
+        if getattr(self, "_skip_prev_confirm_once", False):
+            self._skip_prev_confirm_once = False
+            self._go_home()
             return
-        if not self.sm.is_dirty:
-            self.sig_prev.emit()
-            if hasattr(self.window(), 'show_home'):
-                self.window().show_home()
+
+        # ✅ 2) dirty 기반 판단 (기존: segs 존재 여부 → 수정: dirty 여부)
+        is_dirty = False
+        try:
+            is_dirty = bool(getattr(self.sm, "is_dirty", False))
+        except Exception:
+            pass
+
+        # dirty가 아니면 바로 이동
+        if not is_dirty:
+            self._go_home()
             return
-        reply = self._show_confirm_dialog("메인 화면으로 이동", "수정된 내용을 저장하시겠습니까?")
+
+        # ✅ 3) dirty면 저장확인 다이얼로그
+        reply = self._show_confirm_dialog(
+            "이전으로 이동",
+            "저장되지 않은 변경사항이 있습니다.\n저장하시겠습니까?"
+        )
+
+        if reply == QMessageBox.StandardButton.Cancel:
+            return
+
         if reply == QMessageBox.StandardButton.Yes:
             self._on_save()
-            self.sig_prev.emit()
-            if hasattr(self.window(), 'show_home'):
-                self.window().show_home()
-        elif reply == QMessageBox.StandardButton.No:
-            self.sig_prev.emit()
-            if hasattr(self.window(), 'show_home'):
-                self.window().show_home()
 
-    def _on_save(self, *args, skip_auto_next=False):
-        if self.sm.is_locked: return
-        segs = self._get_current_segments()
-        if getattr(self, 'media_path', None):
-            srt_path = get_srt_path(self.media_path)
-            save_srt(segs, srt_path)
-            self.sm.complete_save()
-            self.sig_save.emit(segs)
+        # Yes(저장 후 이동) / No(저장 없이 이동) 모두 메인으로
+        self._go_home()
 
+    # ✅ [수정] 종료(X버튼): dirty 기반 판단 + 저장 직후 확인 스킵
     def _on_exit(self):
-        if not self.sm.is_dirty:
-            if hasattr(self.window(), 'show_home'):
-                self.window().show_home()
+        from core.state_manager import SubtitleStateManager
+
+        # 생성 중이면 먼저 중단
+        if self.sm.state == SubtitleStateManager.ST_PROC:
+            self._stop_pipeline()
+
+        # ✅ 저장 직후면 확인 없이 즉시 종료
+        if getattr(self, "_skip_prev_confirm_once", False):
+            self._skip_prev_confirm_once = False
+            self.sig_exit.emit()
             return
-        reply = self._show_confirm_dialog("편집 종료", "수정된 내용을 저장하시겠습니까?")
+
+        # ✅ dirty 기반 판단
+        is_dirty = False
+        try:
+            is_dirty = bool(getattr(self.sm, "is_dirty", False))
+        except Exception:
+            pass
+
+        if not is_dirty:
+            self.sig_exit.emit()
+            return
+
+        # dirty면 저장확인
+        reply = self._show_confirm_dialog(
+            "종료",
+            "저장되지 않은 변경사항이 있습니다.\n저장하시겠습니까?"
+        )
+
+        if reply == QMessageBox.StandardButton.Cancel:
+            return
+
         if reply == QMessageBox.StandardButton.Yes:
             self._on_save()
-            if hasattr(self.window(), 'show_home'):
-                self.window().show_home()
-        elif reply == QMessageBox.StandardButton.No:
-            if hasattr(self.window(), 'show_home'):
-                self.window().show_home()
+
+        self.sig_exit.emit()
 
     def _on_next(self):
         QMessageBox.information(self, "알림", "개발중입니다.")
 
     def _show_export_dialog(self):
+        # ✅ dirty면 저장 확인 후 출력
+        is_dirty = False
+        try:
+            if hasattr(self, "sm"):
+                is_dirty = bool(getattr(self.sm, "is_dirty", False))
+        except Exception:
+            pass
+
+        if is_dirty:
+            reply = self._show_confirm_dialog(
+                "자막 출력",
+                "변경된 자막이 저장되지 않았습니다.\n저장 후 출력하시겠습니까?"
+            )
+            if reply == QMessageBox.StandardButton.Cancel:
+                return
+            if reply == QMessageBox.StandardButton.Yes:
+                self._on_save()
+
         from ui.export_dialog import ExportDialog
         segs = self._get_current_segments()
         if segs:
@@ -262,7 +451,7 @@ class EditorPipelineMixin:
         start_sec = sec
         for s in segs:
             if s["start"] <= sec < s["end"]:
-                start_sec = s["start"] 
+                start_sec = s["start"]
                 break
         self._run_partial_backend(start_sec, 99999.0, is_single=False)
 
@@ -322,28 +511,30 @@ class EditorPipelineMixin:
     # ---------------------------------------------------------
     # Progress & Status
     # ---------------------------------------------------------
+    # ✅ [v01.00.16] 완료 조건 단일화 — EditorPipeline만 완료 판단
     def update_progress(self, c_idx, t_total):
         import threading as _th
         if _th.current_thread() is not _th.main_thread():
             QTimer.singleShot(0, lambda c=c_idx, t=t_total: self.update_progress(c, t))
             return
-        if c_idx >= t_total and t_total > 0:
-            self._backend_finished = True
-        # 진척도 계산
+
         total_vid_time = getattr(self.video_player, 'total_time', 0.0) if hasattr(self, 'video_player') else 0.0
         segs = self._get_current_segments()
         current_end = segs[-1].get('end', 0.0) if segs else 0.0
+
         if total_vid_time > 0 and current_end > 0:
             pct = min(100, int((current_end / total_vid_time) * 100))
         elif t_total > 0:
             pct = min(100, int((c_idx / t_total) * 100))
         else:
             pct = 0
+
         self.sm.update_progress(c_idx, t_total, pct)
-        # 완료 감지 강화
-        if c_idx >= t_total and t_total > 0 and not getattr(self, '_completion_handled', False):
+
+        # ✅ 완료 조건 단일화
+        if t_total > 0 and c_idx >= t_total and not getattr(self, '_completion_handled', False):
             self._completion_handled = True
-            QTimer.singleShot(2000, self._set_process_completed)
+            QTimer.singleShot(0, self._set_process_completed)
 
     def update_status(self, text, is_final=False, is_raw=False):
         import threading as _th

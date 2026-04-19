@@ -293,11 +293,13 @@ class EditorWidget(EditorPipelineMixin, EditorSegmentsMixin, EditorTimelineVideo
         if hasattr(self.timeline, 'drag_finished'):    self.timeline.drag_finished.connect(self._on_drag_finished)
         if hasattr(self.timeline, 'step_frame'):       self.timeline.step_frame.connect(self._on_step_frame)
         if hasattr(self.timeline, 'lock_chk'):         self.timeline.lock_chk.toggled.connect(self._on_lock_changed)
+        if hasattr(self.timeline, 'diamond_merge'):    self.timeline.diamond_merge.connect(self._on_diamond_merge)
         if hasattr(self.timeline, 'sig_inline_text_changed'): self.timeline.sig_inline_text_changed.connect(self._on_inline_text_changed)
         if hasattr(self.timeline, 'sig_editing_mode'):        self.timeline.sig_editing_mode.connect(self._on_seg_editing_mode)
-        if hasattr(self.timeline, 'playhead_menu_requested'):
-            self.timeline.playhead_menu_requested.connect(self._show_playhead_menu)
-
+        if hasattr(self.timeline, 'playhead_menu_requested'): self.timeline.playhead_menu_requested.connect(self._show_playhead_menu)
+        if hasattr(self.timeline, 'diamond_merge'):           self.timeline.diamond_merge.connect(self._on_diamond_merge)
+        if hasattr(self.timeline, 'sig_smart_split'):         self.timeline.sig_smart_split.connect(self._on_smart_split)
+            
         root.addWidget(self.timeline)
         root.addWidget(self._build_buttons())
 
@@ -430,24 +432,60 @@ class EditorWidget(EditorPipelineMixin, EditorSegmentsMixin, EditorTimelineVideo
         self.splitter.setSizes([6500, 3500] if is_visible else [4000, 6000])
 
     def _force_ui_log(self, msg: str): get_logger().log(msg)
-
-    def _fallback_parse_srt(self, srt_path: str) -> list[dict]:
+    
+    def _fallback_parse_srt(self, srt_path: str) -> list:
         segments = []; content = ""
         for enc in ['utf-8-sig', 'utf-8', 'cp949', 'euc-kr']:
             try:
                 with open(srt_path, "r", encoding=enc) as f: content = f.read(); break
             except Exception: continue
         if not content: return segments
+
         content = content.replace('\r\n', '\n').replace('\r', '\n')
-        pattern = re.compile(
-            r'(\d{2}:\d{2}:\d{2}[,.]\d{2,3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{2,3})\n(.*?)(?=\n(?:\s*\d+\s*\n)?\s*\d{2}:\d{2}:\d{2}[,.]|\Z)',
-            re.DOTALL
+
+        # ✅ [#12] 블록 단위 파싱으로 변경 — 빈 줄로 SRT 항목을 분리
+        blocks = re.split(r'\n\s*\n', content.strip())
+        ts_re = re.compile(
+            r'(\d{2}:\d{2}:\d{2}[,.]\d{2,3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{2,3})'
         )
-        def _ts(ts): h, mn, s = ts.replace(',', '.').split(':'); return int(h)*3600+int(mn)*60+float(s)
-        for m in pattern.finditer(content):
-            try: segments.append({"start": _ts(m.group(1)), "end": _ts(m.group(2)),
-                                   "text": m.group(3).strip(), "is_gap": False})
-            except Exception: continue
+        def _ts(ts):
+            h, mn, s = ts.replace(',', '.').split(':')
+            return int(h) * 3600 + int(mn) * 60 + float(s)
+
+        for block in blocks:
+            lines = block.strip().split('\n')
+            if len(lines) < 2:
+                continue
+
+            # 타임코드 줄 찾기
+            ts_line_idx = None
+            for i, line in enumerate(lines):
+                if ts_re.search(line):
+                    ts_line_idx = i
+                    break
+            if ts_line_idx is None:
+                continue
+
+            m = ts_re.search(lines[ts_line_idx])
+            if not m:
+                continue
+
+            # 타임코드 아래의 모든 줄이 자막 텍스트
+            text_lines = lines[ts_line_idx + 1:]
+            text = '\n'.join(text_lines).strip()
+            if not text:
+                continue
+
+            try:
+                segments.append({
+                    "start": _ts(m.group(1)),
+                    "end": _ts(m.group(2)),
+                    "text": text,
+                    "is_gap": False
+                })
+            except Exception:
+                continue
+
         return segments
 
     def _update_engine_label_text(self):
