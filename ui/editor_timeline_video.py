@@ -358,7 +358,7 @@ class EditorTimelineVideoMixin:
         right_end.movePosition(QTextCursor.MoveOperation.EndOfBlock)
         cur.setPosition(right_end.position(), QTextCursor.MoveMode.KeepAnchor)
 
-        cur.insertText("\u2028" + "\u2028".join(right_texts))
+        cur.insertText(" " + " ".join(right_texts))
         cur.endEditBlock()
 
         self._mark_dirty()

@@ -145,9 +145,9 @@ class CoreBackend:
                     self.ui.request_show_home()
             except Exception:
                 pass
-
-    def _process_one(self, target_file, queue_index):
-        # ── 백업 ──
+    
+    def _backup_existing(self, target_file):
+        """기존 자막/MOV 파일 백업"""
         try:
             from .path_manager import get_srt_path
             import datetime, shutil
@@ -165,6 +165,103 @@ class CoreBackend:
                 get_logger().log("📦 기존 자막 파일을 '자막백업' 폴더에 안전하게 복사(백업)했습니다.")
         except Exception as e:
             get_logger().log(f"⚠️ 백업 중 오류 발생 (무시하고 진행): {e}")
+
+    def _handle_restart(self, target_file):
+        """재시작 시 에디터/SRT 초기화"""
+        get_logger().log("\n🔄 현재 파일의 자막 생성을 처음부터 다시 시작합니다...")
+        try:
+            from .path_manager import get_srt_path
+            srt_p = get_srt_path(target_file)
+            if os.path.exists(srt_p):
+                os.remove(srt_p)
+                get_logger().log("    └ 🗑️ 기존 자막 파일을 삭제했습니다. (새로 생성)")
+
+            def _clear_editor_main():
+                ed = getattr(self.ui, '_editor_widget', None)
+                if ed is None: return
+                try:
+                    if hasattr(ed, 'text_edit'):
+                        ed.text_edit.blockSignals(True)
+                        ed.text_edit.clear()
+                        ed.text_edit.blockSignals(False)
+                    if hasattr(ed, 'timeline') and hasattr(ed.timeline, 'canvas'):
+                        ed.timeline.canvas.segments.clear()
+                        ed.timeline.canvas.update()
+                    ed._is_dirty = False
+                except Exception as ex:
+                    get_logger().log(f"    └ ⚠️ 에디터 초기화 중 오류: {ex}")
+
+            from PyQt6.QtCore import QTimer as _QT
+            _QT.singleShot(0, _clear_editor_main)
+        except Exception as e:
+            get_logger().log(f"    └ ⚠️ 초기화 중 오류: {e}")
+
+    def _save_and_export(self, target_file, queue_index, final_segments, is_auto_mode):
+        """SRT 저장 + MOV 렌더링 + 완료 처리"""
+        get_logger().log(f"\n  [STEP 5] 💾 SRT 저장 중...")
+        try:
+            from .subtitle_engine import save_srt
+            from .path_manager import get_srt_path
+            srt_path = get_srt_path(target_file)
+            save_srt(final_segments, srt_path, apply_offset=True)
+            get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료")
+
+            is_video_export = False
+            export_settings = {}
+            try:
+                try: from ui.export_dialog import _load_es
+                except ImportError: from export_dialog import _load_es
+                export_settings = _load_es()
+                is_video_export = export_settings.get("icloud", False)
+            except Exception: pass
+
+            base_name = os.path.splitext(os.path.basename(target_file))[0]
+            current_idx = queue_index + 1
+            total_cnt = len(self.files_to_process)
+
+            if not is_video_export and getattr(self.ui, '_is_auto_pipeline', False):
+                self._send_ntfy_notification(
+                    title=f"📝 {config.APP_NAME} 알림",
+                    message=f"[{current_idx}/{total_cnt}] {base_name}.srt 생성 완료!\n🎯 다음 작업으로 넘어갑니다.",
+                    tags="memo,sparkles"
+                )
+
+            if hasattr(self.ui, '_sig_update_queue'):
+                try: self.ui._sig_update_queue.emit(queue_index, "✅ 자막출력(srt)", "완료", "", "")
+                except RuntimeError: pass
+
+            # ── STEP 6: MOV 렌더링 ──
+            if is_video_export:
+                try:
+                    get_logger().log(f"\n  [STEP 6] 🎥 투명 자막 영상(MOV) 백그라운드 렌더링 및 iCloud 백업 중...")
+                    if hasattr(self.ui, '_sig_update_queue'):
+                        self.ui._sig_update_queue.emit(queue_index, "🎥 자막영상출력(mov)", "렌더링 중...", "", "")
+                    self._run_background_render(srt_path, target_file, export_settings, current_idx, total_cnt)
+                except Exception as e:
+                    get_logger().log(f"❌ MOV 렌더링 오류: {e}")
+                    get_logger().log(traceback.format_exc())
+
+            try:
+                from .auto_tracker import AutoTracker
+                AutoTracker().mark_completed(target_file)
+                if hasattr(self.ui, 'mark_cloud_file_done'):
+                    self.ui.mark_cloud_file_done(target_file)
+            except Exception: pass
+
+            if hasattr(self.ui, '_sig_update_queue'):
+                try:
+                    if is_auto_mode:
+                        self.ui._sig_update_queue.emit(queue_index, "✅ 완료 (다음파일)", "작업 종료", "", "")
+                    else:
+                        self.ui._sig_update_queue.emit(queue_index, "✅ 자막생성완료", "작업 종료", "", "")
+                except RuntimeError: pass
+
+        except Exception as e:
+            get_logger().log(f"❌ 처리 실패: {e}")
+
+    def _process_one(self, target_file, queue_index):
+        # ── STEP 0: 백업 ──
+        self._backup_existing(target_file)
 
         # ── 이벤트/콜백 ──
         edit_event = threading.Event(); start_event = threading.Event()
@@ -202,6 +299,7 @@ class CoreBackend:
         if action_state[0] == "exit": self.ui.request_show_home(); raise Exception("USER_EXIT")
         if action_state[0] == "next": return
 
+        # ── STT 파이프라인 루프 ──
         while True:
             self._active = True; self._speaker_map = []; edit_event.clear()
             self._reload_speaker_settings()
@@ -245,8 +343,18 @@ class CoreBackend:
 
             opt_queue = queue.Queue()
             base_name = os.path.splitext(os.path.basename(target_file))[0]
+
+            # 교체 (m4a 안전 fallback)
             cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
-            audio_for_diarization = cleaned_wav if os.path.exists(cleaned_wav) else target_file
+            raw_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}.wav")
+            if os.path.exists(cleaned_wav):
+                audio_for_diarization = cleaned_wav
+            elif os.path.exists(raw_wav):
+                audio_for_diarization = raw_wav
+            else:
+                wav_in_chunks = sorted([os.path.join(chunk_dir, f) for f in os.listdir(chunk_dir) if f.endswith('.wav')])
+                audio_for_diarization = wav_in_chunks[0] if wav_in_chunks else target_file
+
 
             t_diarize = None
             if self.max_speakers > 1:
@@ -356,9 +464,8 @@ class CoreBackend:
 
                     if hasattr(self.ui, "_sig_append_segments"):
                         self.ui._sig_append_segments.emit(opt)
-
-                    if hasattr(self.ui, "_sig_update_editor_status"):
-                        self.ui._sig_update_editor_status.emit(last_c_idx, last_t_total)
+                    if hasattr(self.ui, "_sig_update_status"):
+                        self.ui._sig_update_status.emit(last_c_idx, last_t_total)
 
                 while self._active:
                     item = opt_queue.get()
@@ -391,7 +498,6 @@ class CoreBackend:
                     if current_duration >= chunk_time_limit:
                         _flush_buffer()
 
-                # ✅ [v01.00.07] 완료 숫자 전달 — EditorPipeline이 완료 판단
                 if hasattr(self.ui, '_sig_update_status'):
                     self.ui._sig_update_status.emit(last_t_total, last_t_total)
 
@@ -399,6 +505,19 @@ class CoreBackend:
             t_opt = threading.Thread(target=do_optimize, daemon=True, name="optimizer")
             t_trans.start(); t_opt.start()
             t_trans.join(); t_opt.join()
+            
+            if hasattr(self.ui, '_sig_update_queue'):
+                try:
+                    self.ui._sig_update_queue.emit(queue_index, "✅ 자막 생성 완료", "완료", "", "")
+                except RuntimeError:
+                    pass
+
+            try:
+                s = load_settings()
+                model_key = get_model_key(s)
+                proc_time = time.time() - process_start_time
+                add_history(model_key, video_duration_sec, proc_time)
+            except Exception: pass
 
             try:
                 s = load_settings()
@@ -417,34 +536,7 @@ class CoreBackend:
             edit_event.wait()
 
             if action_state[0] == "restart":
-                get_logger().log("\n🔄 현재 파일의 자막 생성을 처음부터 다시 시작합니다...")
-                try:
-                    from .path_manager import get_srt_path
-                    srt_p = get_srt_path(target_file)
-                    if os.path.exists(srt_p):
-                        os.remove(srt_p)
-                        get_logger().log("    └ 🗑️ 기존 자막 파일을 삭제했습니다. (새로 생성)")
-
-                    def _clear_editor_main():
-                        ed = getattr(self.ui, '_editor_widget', None)
-                        if ed is None: return
-                        try:
-                            if hasattr(ed, 'text_edit'):
-                                ed.text_edit.blockSignals(True)
-                                ed.text_edit.clear()
-                                ed.text_edit.blockSignals(False)
-                            if hasattr(ed, 'timeline') and hasattr(ed.timeline, 'canvas'):
-                                ed.timeline.canvas.segments.clear()
-                                ed.timeline.canvas.update()
-                            ed._is_dirty = False
-                        except Exception as ex:
-                            get_logger().log(f"    └ ⚠️ 에디터 초기화 중 오류: {ex}")
-
-                    from PyQt6.QtCore import QTimer as _QT
-                    _QT.singleShot(0, _clear_editor_main)
-                except Exception as e:
-                    get_logger().log(f"    └ ⚠️ 초기화 중 오류: {e}")
-
+                self._handle_restart(target_file)
                 action_state[0] = "next"; continue
 
             if not self._active: return
@@ -452,73 +544,14 @@ class CoreBackend:
             if action_state[0] == "exit": self.ui.request_show_home(); raise Exception("USER_EXIT")
             break
 
-        # ── STEP 5: SRT 저장 ──
-        get_logger().log(f"\n  [STEP 5] 💾 SRT 저장 중...")
-        try:
-            from .subtitle_engine import save_srt
-            from .path_manager import get_srt_path
-            srt_path = get_srt_path(target_file)
-            save_srt(final_segments, srt_path, apply_offset=True)
-            get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료")
-
-            is_video_export = False
-            export_settings = {}
-            try:
-                try: from ui.export_dialog import _load_es
-                except ImportError: from export_dialog import _load_es
-                export_settings = _load_es()
-                is_video_export = export_settings.get("icloud", False)
-            except Exception: pass
-
-            base_name = os.path.splitext(os.path.basename(target_file))[0]
-            current_idx = queue_index + 1
-            total_cnt = len(self.files_to_process)
-
-            if not is_video_export and getattr(self.ui, '_is_auto_pipeline', False):
-                self._send_ntfy_notification(
-                    title=f"📝 {config.APP_NAME} 알림",
-                    message=f"[{current_idx}/{total_cnt}] {base_name}.srt 생성 완료!\n🎯 다음 작업으로 넘어갑니다.",
-                    tags="memo,sparkles"
-                )
-
-            if hasattr(self.ui, '_sig_update_queue'):
-                try: self.ui._sig_update_queue.emit(queue_index, "✅ 자막출력(srt)", "완료", "", "")
-                except RuntimeError: pass
-
-            # ── STEP 6: MOV 렌더링 ──
-            if is_video_export:
-                try:
-                    get_logger().log(f"\n  [STEP 6] 🎥 투명 자막 영상(MOV) 백그라운드 렌더링 및 iCloud 백업 중...")
-                    if hasattr(self.ui, '_sig_update_queue'):
-                        self.ui._sig_update_queue.emit(queue_index, "🎥 자막영상출력(mov)", "렌더링 중...", "", "")
-                    self._run_background_render(srt_path, target_file, export_settings, current_idx, total_cnt)
-                except Exception as e:
-                    get_logger().log(f"❌ MOV 렌더링 오류: {e}")
-                    get_logger().log(traceback.format_exc())
-
-            try:
-                from .auto_tracker import AutoTracker
-                AutoTracker().mark_completed(target_file)
-                if hasattr(self.ui, 'mark_cloud_file_done'):
-                    self.ui.mark_cloud_file_done(target_file)
-            except Exception: pass
-
-            if hasattr(self.ui, '_sig_update_queue'):
-                try:
-                    if is_auto_mode:
-                        self.ui._sig_update_queue.emit(queue_index, "✅ 완료 (다음파일)", "작업 종료", "", "")
-                    else:
-                        self.ui._sig_update_queue.emit(queue_index, "✅ 자막생성완료", "작업 종료", "", "")
-                except RuntimeError: pass
-
-        except Exception as e:
-            get_logger().log(f"❌ 처리 실패: {e}")
+        # ── STEP 5~6: 저장 + 내보내기 ──
+        self._save_and_export(target_file, queue_index, final_segments, is_auto_mode)
 
         if action_state[0] == "exit" or not getattr(self, '_active', True):
             try:
                 if hasattr(self, 'ui') and self.ui: self.ui.request_show_home()
             except RuntimeError: pass
-            raise Exception("USER_EXIT")
+            raise Exception("USER_EXIT")    
 
     def _run_background_render(self, srt_path, target_file, s, current_idx=1, total_cnt=1):
         """MOV 렌더링 → renderer.py에 위임"""
