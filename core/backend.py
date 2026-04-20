@@ -15,7 +15,6 @@ from logger import get_logger
 
 from .media_processor import VideoProcessor
 from .time_history import get_expected_time, add_history
-from .utils import load_subtitle_rules
 
 _SENTINEL = object()
 _SETTINGS_PATH = os.path.join(config.DATASET_DIR, "user_settings.json")
@@ -595,15 +594,5 @@ class CoreBackend:
             self._speaker_map = []
 
     def _send_ntfy_notification(self, title, message, tags=""):
-        try:
-            import urllib.request, base64
-            topic = getattr(config, "NTFY_TOPIC", "")
-            if not topic: return
-            url = f"https://ntfy.sh/{topic}"
-            encoded_title = f"=?UTF-8?B?{base64.b64encode(title.encode('utf-8')).decode('utf-8')}?="
-            req = urllib.request.Request(url, data=message.encode("utf-8"), method="POST")
-            req.add_header("Title", encoded_title)
-            if tags: req.add_header("Tags", tags)
-            urllib.request.urlopen(req, timeout=3)
-        except Exception as e:
-            get_logger().log(f"    └ ⚠️ 알림 전송 실패: {e}")
+        from .notifier import send_ntfy
+        send_ntfy(title, message, tags)

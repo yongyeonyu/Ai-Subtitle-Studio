@@ -1,0 +1,128 @@
+# Version: 02.01.00
+# Phase: PHASE1-B
+"""
+ui/queue_widget.py
+큐 테이블 + 헤더 + 진행률 + 애니메이션
+- main_window.py에서 분리
+"""
+
+import time
+from PyQt6.QtWidgets import QTableWidgetItem
+from PyQt6.QtCore import Qt
+
+
+class QueueMixin:
+    """큐 테이블 관리 (MainWindow에 Mixin으로 결합)"""
+
+    def _animate_queue_status(self):
+        self._queue_anim_idx = (self._queue_anim_idx + 1) % len(self._queue_anim_frames)
+        for i in range(self.queue_table.rowCount()):
+            item = self.queue_table.item(i, 0)
+            if item:
+                txt = item.text()
+                if "자막 생성 중" in txt and "완료" not in txt:
+                    item.setText(f"{self._queue_anim_frames[self._queue_anim_idx]} 자막 생성 중")
+                elif "자막영상출력" in txt or "영상출력" in txt:
+                    item.setText(f"{self._queue_anim_frames[self._queue_anim_idx]} 자막영상출력(mov)")
+
+    def init_queue_list(self, files):
+        import os
+        self._current_file_idx = 1
+        self._total_files = len(files)
+        self._expected_seconds = {}
+        self._file_start_times = {}
+        self.queue_table.setRowCount(0)
+        self.queue_header_lbl.setText(
+            f"📋 처리할 파일 리스트 (1 / {len(files)} 대기 중) - 0% 완료 [⏱️ 00:00 / 00:00]"
+        )
+        for i, f in enumerate(files):
+            self.queue_table.insertRow(i)
+            def mk(text):
+                it = QTableWidgetItem(text)
+                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                return it
+            self.queue_table.setItem(i, 0, mk("⏳ 대기 중"))
+            self.queue_table.setItem(i, 1, QTableWidgetItem(os.path.basename(f)))
+            self.queue_table.setItem(i, 2, mk("분석 중..."))
+            self.queue_table.setItem(i, 3, mk("-"))
+            self.queue_table.setItem(i, 4, mk("계산 중"))
+        self._live_timer.start(1000)
+
+    def update_queue_status(self, idx, status, time_txt="", info_txt="", len_txt=""):
+        if idx < self.queue_table.rowCount():
+            def mk(text):
+                it = QTableWidgetItem(text)
+                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                return it
+            def fmt(sec):
+                try:
+                    s = float(sec)
+                    m, s = divmod(int(s), 60)
+                    h, m = divmod(m, 60)
+                    return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+                except:
+                    return "00:00"
+            if status:
+                self.queue_table.setItem(idx, 0, mk(status))
+                if "자막 생성 중" in status and idx not in self._file_start_times:
+                    self._file_start_times[idx] = time.time()
+            if info_txt:
+                self.queue_table.setItem(idx, 2, mk(info_txt))
+            if len_txt:
+                self.queue_table.setItem(idx, 3, mk(len_txt))
+            if time_txt:
+                try:
+                    sec_val = float(time_txt)
+                    self._expected_seconds[idx] = sec_val
+                    self.queue_table.setItem(idx, 4, mk(fmt(sec_val)))
+                except (ValueError, TypeError):
+                    self.queue_table.setItem(idx, 4, mk(time_txt))
+
+    def _update_live_queue_header(self):
+        if not self.backend or not getattr(self.backend, '_active', False):
+            return
+        if getattr(self.backend, 'pipeline_start_time', 0) == 0:
+            return
+
+        now = time.time()
+        elapsed = now - self.backend.pipeline_start_time
+        expected = getattr(self.backend, 'total_expected_time', 0.0)
+
+        def fmt(sec):
+            m, s = divmod(int(sec), 60)
+            h, m = divmod(m, 60)
+            return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+
+        c = getattr(self, '_current_file_idx', 1)
+        t = getattr(self, '_total_files', 1)
+        pct = getattr(self, '_real_pct', 0)
+        exp_str = fmt(expected) if expected > 0 else "예상불가"
+
+        self.queue_header_lbl.setText(
+            f"📋 처리할 파일 리스트 ({c} / {t} 진행 중) - {pct}% 완료   [⏱️ {fmt(elapsed)} / {exp_str}]"
+        )
+
+        for i in range(self.queue_table.rowCount()):
+            si = self.queue_table.item(i, 0)
+            if not si:
+                continue
+            status_text = si.text()
+            if "완료" in status_text:
+                continue
+            if "자막 생성 중" in status_text:
+                st = self._file_start_times.get(i, now)
+                ef = now - st
+                xf = self._expected_seconds.get(i, 0)
+                tc = self.queue_table.item(i, 4)
+                if tc:
+                    tc.setText(f"{fmt(ef)} / {fmt(xf) if xf > 0 else '학습 중'}")
+
+    def update_queue_header(self, current, total, pct, eta_str=""):
+        self._current_file_idx = current
+        self._total_files = total
+        if pct == 100:
+            if hasattr(self, '_live_timer'):
+                self._live_timer.stop()
+            self.queue_header_lbl.setText(
+                f"📋 처리할 파일 리스트 ({total} / {total} 완료) - 100% 완료"
+            )

@@ -38,37 +38,6 @@ class EditorSegmentsMixin:
         except RuntimeError: return
 
         if not self._segment_queue:
-            if getattr(self, '_backend_finished', False):
-                self._backend_finished = False
-                self._set_process_completed()
-                is_last = False
-                main_w = self.window()
-                if hasattr(main_w, "backend") and main_w.backend:
-                    files = main_w.backend.files_to_process
-                    if files and self.media_path and os.path.normpath(self.media_path) == os.path.normpath(files[-1]):
-                        is_last = True
-                if getattr(self, 'is_batch_mode', False):
-                    if not is_last:
-                        self.update_status("✅ 자막 처리 완료! 저장 후 다음 파일로 이동합니다...", is_final=True)
-                        try: self._nav_timer.timeout.disconnect()
-                        except Exception: pass
-                        self._nav_timer.timeout.connect(self._on_save)
-                        self._nav_timer.start(500)
-                    else:
-                        self.update_status("✅ 자막 생성 완료! (자동 저장됨)", is_final=True)
-                        try: self._nav_timer.timeout.disconnect()
-                        except Exception: pass
-                        self._nav_timer.timeout.connect(self._on_save)
-                        self._nav_timer.start(500)
-                else:
-                    self.update_status("✅ 모든 자막 작성이 완료되었습니다! 마음껏 편집하세요.", is_final=True)
-                    try: self.btn_start.setEnabled(True)
-                    except RuntimeError: pass
-                    if hasattr(main_w, '_sig_update_queue') and hasattr(main_w.backend, 'files_to_process'):
-                        idx = len(main_w.backend.files_to_process) - 1
-                        if idx >= 0:
-                            main_w._sig_update_queue.emit(idx, "✅ 자막생성완료", "완료", "", "")
-                            main_w._sig_update_queue_header.emit(idx + 1, idx + 1, 100, "")
             return
 
         cont_thresh = float(self.settings.get("continuous_threshold", 2.0))
@@ -225,9 +194,6 @@ class EditorSegmentsMixin:
 
         self._schedule_timeline()
 
-        if getattr(self, '_backend_finished', False):
-            self._set_process_completed()
-
         if is_initial:
             self._is_initial_load = False
             if hasattr(self, 'timeline'):
@@ -239,22 +205,6 @@ class EditorSegmentsMixin:
                 self.timeline.set_playhead(added_end); self.timeline.center_to_sec(added_end, smooth=True)
             if hasattr(self, 'video_player'):
                 self.video_player.seek(added_end)
-
-        if getattr(self, '_backend_finished', False):
-            self._backend_finished = False
-            main_w = self.window()
-            if getattr(self, 'is_batch_mode', False):
-                self.update_status("✅ 자막 생성 완료! 자동으로 다음 파일로 넘어갑니다...", is_final=True)
-                QTimer.singleShot(1500, self._on_next)
-            else:
-                self.update_status("✅ 모든 자막 작성이 완료되었습니다! 마음껏 편집하세요.", is_final=True)
-                try: self.btn_start.setEnabled(True)
-                except RuntimeError: pass
-                if hasattr(main_w, '_sig_update_queue') and hasattr(main_w.backend, 'files_to_process'):
-                    idx = len(main_w.backend.files_to_process) - 1
-                    if idx >= 0:
-                        main_w._sig_update_queue.emit(idx, "✅ 자막생성완료", "완료", "", "")
-                        main_w._sig_update_queue_header.emit(idx + 1, idx + 1, 100, "")
 
     # ---------------------------------------------------------
     # Segment I/O

@@ -1,11 +1,10 @@
-# Version: 01.00.08
+# Version: 02.01.00
+# Phase: PHASE1-B
 """
 ui/main_window.py
-[v01.00.08] 모드/상태 정의 문서 반영
-- handle_prev: 다이얼로그 제거 (EditorPipeline._on_prev가 단일 처리)
-- closeEvent: 파이프라인 중단 + 저장 보장 + 종료
-- 기존 기능 100% 유지
+[v02.01.00] 리팩토링: Mixin 분리 + import 정리 + 버전 통합
 """
+
 import os, json, re
 
 from PyQt6.QtWidgets import (
@@ -16,29 +15,27 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
+from ui.queue_widget import QueueMixin
+from ui.project_ui import ProjectUIMixin
+from ui.cloud_ui import CloudUIMixin
 
 import config
 from logger import get_logger
 from core.cloud_sync import CloudSyncManager
-from core.project_manager import (
-    create_project, save_project, load_project, list_projects,
-    add_media_to_project, merge_srt_to_project, get_boundary_times, PROJECTS_DIR
-)
+from core.project_manager import load_project, get_boundary_times
 from core.path_manager import (
-    get_video_files, get_pending_videos, get_srt_path, get_last_folder, set_last_folder,
-    get_nas_path, set_nas_path, get_icloud_path, set_icloud_path, ensure_nas_mounted,
+    get_srt_path, get_last_folder, set_last_folder,
+    get_icloud_path, ensure_nas_mounted,
     get_recent_folders, add_recent_folder,
-    get_icloud_auto_detect, set_icloud_auto_detect,
-    get_nas_auto_detect, set_nas_auto_detect
+    get_icloud_auto_detect, get_nas_auto_detect
 )
-from ui.order_dialog import OrderDialog
 from ui.folder_dialog import FolderDialog
 
 DATASET_DIR   = "dataset"
 SETTINGS_FILE = os.path.join(DATASET_DIR, "user_settings.json")
 
 
-class MainWindow(QMainWindow):
+class MainWindow(QueueMixin, ProjectUIMixin, CloudUIMixin, QMainWindow):
     _sig_show_home           = pyqtSignal()
     _sig_append_segments     = pyqtSignal(list)
     _sig_update_status       = pyqtSignal(int, int)
@@ -75,27 +72,6 @@ class MainWindow(QMainWindow):
         self._cloud_sync_manager = CloudSyncManager(get_icloud_path(), self._on_files_detected, self._is_app_busy)
         if getattr(self, '_is_icloud_auto_mode', False):
             self._cloud_sync_manager.start()
-
-    # ── iCloud 자동 ──
-    def _on_files_detected(self, files_list):
-        get_logger().log(f"🚀 자동 처리 큐 진입: {len(files_list)}개 파일")
-        self._sig_auto_start_pipeline.emit(files_list)
-
-    def _do_auto_start_pipeline(self, files_list):
-        if self.backend:
-            self._is_auto_pipeline = True
-            self.backend.start_pipeline(files_list, is_auto_start=True)
-            if self._editor_widget and hasattr(self._editor_widget, 'update_status'):
-                self._editor_widget.update_status("🚀 AI 엔진이 시작되었습니다. (자동 감지)")
-
-    def _is_app_busy(self):
-        if self._editor_widget is not None: return True
-        if self.backend and getattr(self.backend, '_active', False): return True
-        return False
-
-    def mark_cloud_file_done(self, filepath):
-        if hasattr(self, '_cloud_sync_manager'):
-            self._cloud_sync_manager.mark_done(filepath)
 
     # ── 설정 ──
     def _load_local_settings(self):
@@ -214,7 +190,11 @@ class MainWindow(QMainWindow):
         else: self._recent_buttons = []
         right_col.addStretch(); columns.addWidget(left_widget, stretch=1); columns.addWidget(right_widget, stretch=1); layout.addLayout(columns); layout.addStretch()
         bottom_bar = QHBoxLayout()
-        version_lbl = QLabel("v0.1.0 (Build 01.00.08)"); version_lbl.setStyleSheet(f"color: {config.FG2}; font-size: 11px;")
+                
+        from config import APP_VERSION
+        version_lbl = QLabel(f"v{APP_VERSION}")
+        version_lbl.setStyleSheet(f"color: {config.FG2}; font-size: 11px;")
+
         btn_settings = QPushButton("⚙️ 경로설정"); btn_settings.setStyleSheet(f"background: {config.BG3}; color: {config.FG}; border: none; padding: 6px 12px; border-radius: 4px;"); btn_settings.clicked.connect(self._show_path_settings)
         btn_clear_cache = QPushButton("🗑️ 캐쉬삭제"); btn_clear_cache.setStyleSheet(f"background: {config.BG3}; color: {config.FG}; border: none; padding: 6px 12px; border-radius: 4px;"); btn_clear_cache.clicked.connect(self._clear_cache)
         btn_exit = QPushButton("❌ 종료"); btn_exit.setStyleSheet(f"background: #882222; color: #FFF; font-weight: bold; border: none; padding: 6px 12px; border-radius: 4px;"); btn_exit.clicked.connect(self._quick_exit)
@@ -222,30 +202,6 @@ class MainWindow(QMainWindow):
         layout.addLayout(bottom_bar)
 
     # ── iCloud / NAS 헬퍼 ──
-    def _get_icloud_files(self):
-        path = get_icloud_path()
-        if not path or not os.path.exists(path):
-            path = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT")
-            if not os.path.exists(path): return [], "경로 없음", ""
-        v_exts = {'.mov', '.mp4', '.m4v', '.MOV', '.MP4', '.M4V', '.lrf', '.LRF'}; a_exts = {'.wav', '.m4a', '.mp3', '.aac', '.m2a'}
-        v_count = a_count = comp_v_count = comp_a_count = 0; files = []
-        try:
-            from core.auto_tracker import AutoTracker; tracker = AutoTracker()
-        except ImportError: tracker = None
-        try:
-            for f in os.listdir(path):
-                if f.startswith('.') or "_자막소스.mov" in f: continue
-                ext = os.path.splitext(f)[1].lower(); file_path = os.path.join(path, f)
-                status = tracker.get_status(file_path) if tracker else None
-                if status == "완료":
-                    if ext in v_exts: comp_v_count += 1
-                    elif ext in a_exts: comp_a_count += 1
-                    continue
-                if ext in v_exts: v_count += 1; files.append((f, file_path))
-                elif ext in a_exts: a_count += 1; files.append((f, file_path))
-                elif ext == '.srt': files.append((f, file_path))
-            return sorted(files), f"대기 : 영상 {v_count:02d}개 / 음성 {a_count:02d}개", f"✅ 작업완료 : 영상 {comp_v_count:02d}개 / 음성 {comp_a_count:02d}개"
-        except Exception: return [], "오류", ""
 
     def _icloud_btn(self, text, file_data, default_cmd, is_nas=False, subtitle="", comp_title=""):
         w = QWidget(); w.setObjectName("MenuButton"); w.setStyleSheet(f"QWidget#MenuButton {{ background-color: {config.BG2}; border: 1px solid {config.BG3}; border-radius: 8px; }} QWidget#MenuButton:hover {{ background-color: #333333; border: 2px solid #4AFF80; }}"); w.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -275,61 +231,6 @@ class MainWindow(QMainWindow):
         w.mousePressEvent = _on_w_click; return w
 
     def _dummy_action(self): pass
-
-    # ── 큐 / 진척도 ──
-    def _animate_queue_status(self):
-        self._queue_anim_idx = (self._queue_anim_idx + 1) % len(self._queue_anim_frames)
-        for i in range(self.queue_table.rowCount()):
-            item = self.queue_table.item(i, 0)
-            if item:
-                txt = item.text()
-                if "자막 생성 중" in txt: item.setText(f"{self._queue_anim_frames[self._queue_anim_idx]} 자막 생성 중")
-                elif "자막영상출력" in txt or "영상출력" in txt: item.setText(f"{self._queue_anim_frames[self._queue_anim_idx]} 자막영상출력(mov)")
-
-    def init_queue_list(self, files):
-        self._current_file_idx = 1; self._total_files = len(files); self._expected_seconds = {}; self._file_start_times = {}; self.queue_table.setRowCount(0)
-        self.queue_header_lbl.setText(f"📋 처리할 파일 리스트 (1 / {len(files)} 대기 중) - 0% 완료 [⏱️ 00:00 / 00:00]")
-        for i, f in enumerate(files):
-            self.queue_table.insertRow(i)
-            def make_item(text): it = QTableWidgetItem(text); it.setTextAlignment(Qt.AlignmentFlag.AlignCenter); return it
-            self.queue_table.setItem(i, 0, make_item("⏳ 대기 중")); self.queue_table.setItem(i, 1, QTableWidgetItem(os.path.basename(f)))
-            self.queue_table.setItem(i, 2, make_item("분석 중...")); self.queue_table.setItem(i, 3, make_item("-")); self.queue_table.setItem(i, 4, make_item("계산 중"))
-        self._live_timer.start(1000)
-
-    def update_queue_status(self, idx, status, time_txt="", info_txt="", len_txt=""):
-        if idx < self.queue_table.rowCount():
-            def make_item(text): it = QTableWidgetItem(text); it.setTextAlignment(Qt.AlignmentFlag.AlignCenter); return it
-            def fmt(sec):
-                try: s = float(sec); m, s = divmod(int(s), 60); h, m = divmod(m, 60); return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
-                except: return "00:00"
-            if status:
-                self.queue_table.setItem(idx, 0, make_item(status))
-                if "자막 생성 중" in status and idx not in self._file_start_times: import time; self._file_start_times[idx] = time.time()
-            if info_txt: self.queue_table.setItem(idx, 2, make_item(info_txt))
-            if len_txt: self.queue_table.setItem(idx, 3, make_item(len_txt))
-            if time_txt:
-                try: sec_val = float(time_txt); self._expected_seconds[idx] = sec_val; self.queue_table.setItem(idx, 4, make_item(fmt(sec_val)))
-                except: self.queue_table.setItem(idx, 4, make_item(time_txt))
-
-    def _update_live_queue_header(self):
-        import time
-        if not self.backend or not getattr(self.backend, '_active', False) or getattr(self.backend, 'pipeline_start_time', 0) == 0: return
-        now = time.time(); elapsed = now - self.backend.pipeline_start_time; expected = getattr(self.backend, 'total_expected_time', 0.0)
-        def fmt(sec): m, s = divmod(int(sec), 60); h, m = divmod(m, 60); return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
-        c = getattr(self, '_current_file_idx', 1); t = getattr(self, '_total_files', 1); pct = getattr(self, '_real_pct', 0)
-        exp_str = fmt(expected) if expected > 0 else "예상불가"
-        self.queue_header_lbl.setText(f"📋 처리할 파일 리스트 ({c} / {t} 진행 중) - {pct}% 완료   [⏱️ {fmt(elapsed)} / {exp_str}]")
-        for i in range(self.queue_table.rowCount()):
-            si = self.queue_table.item(i, 0)
-            if si and "자막 생성 중" in si.text():
-                st = self._file_start_times.get(i, now); ef = now - st; xf = self._expected_seconds.get(i, 0); tc = self.queue_table.item(i, 4)
-                if tc: tc.setText(f"{fmt(ef)} / {fmt(xf) if xf > 0 else '학습 중'}")
-
-    def update_queue_header(self, current, total, pct, eta_str=""):
-        self._current_file_idx = current; self._total_files = total
-        if pct == 100:
-            if hasattr(self, '_live_timer'): self._live_timer.stop()
-            self.queue_header_lbl.setText(f"📋 처리할 파일 리스트 ({total} / {total} 완료) - 100% 완료")
 
     # ── 시그널 ──
     def _connect_signals(self):
@@ -394,84 +295,6 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "SRT 파일 선택", get_last_folder() or os.path.expanduser("~"), "SRT Files (*.srt)")
         if path: set_last_folder(os.path.dirname(path)); self._add_recent_folder(os.path.dirname(path)); self._open_srt_in_editor(path)
 
-    def start_icloud_sync(self):
-        self._is_auto_pipeline = True; self.backend.start_pipeline([], is_icloud=True)
-
-    # ── 프로젝트 ──
-    def _create_project(self):
-        from PyQt6.QtWidgets import QInputDialog
-        name, ok = QInputDialog.getText(self, "프로젝트 만들기", "프로젝트 이름:")
-        if not ok or not name.strip(): return
-        paths, _ = QFileDialog.getOpenFileNames(self, "영상/음성 파일 선택", get_last_folder() or os.path.expanduser("~"), "영상/음성 파일 (*.mp4 *.mov *.MOV *.MP4 *.m4v *.lrf *.wav *.m4a *.m2a *.mp3 *.aac)")
-        if not paths: return
-        if len(paths) > 1:
-            dlg = OrderDialog(paths, self)
-            if dlg.exec() != QDialog.DialogCode.Accepted: return
-            paths = dlg.ordered_files
-        if not paths: return
-        filepath = create_project(name.strip(), media_paths=paths, user_settings=self._load_local_settings())
-        self._current_project_path = filepath; self._is_auto_pipeline = False
-        project_data = load_project(filepath)
-        if project_data: self._project_boundary_times = get_boundary_times(project_data)
-        get_logger().log(f"📝 프로젝트 생성: {name.strip()} ({len(paths)}개 미디어)")
-        if self.backend: self.backend.start_pipeline(paths)
-
-    def _open_project(self):
-        filepath, _ = QFileDialog.getOpenFileName(self, "프로젝트 열기", PROJECTS_DIR, "Project Files (*.json)")
-        if not filepath: return
-        project = load_project(filepath)
-        if not project: QMessageBox.warning(self, "오류", "프로젝트 파일을 읽을 수 없습니다."); return
-        self._current_project_path = filepath; self._is_auto_pipeline = False
-        self._project_boundary_times = get_boundary_times(project)
-        saved = project.get("user_settings", {})
-        if saved: self._save_local_settings(saved); get_logger().log("⚙️ 프로젝트 설정 복원 완료")
-        media = [m["path"] for m in sorted(project.get("media", []), key=lambda x: x.get("order", 0)) if os.path.exists(m["path"])]
-        srt_path = project.get("subtitle", {}).get("path", "") or project.get("subtitles", {}).get("srt_path", "")
-        get_logger().log(f"📦 프로젝트 로드: {project.get('project_name', '')} (미디어 {len(media)}개)")
-        if srt_path and os.path.exists(srt_path): self._open_srt_in_editor(srt_path)
-        elif media and self.backend: self.backend.start_pipeline(media)
-        else: QMessageBox.warning(self, "오류", "프로젝트에 유효한 미디어 파일이 없습니다.")
-
-    def _save_current_project(self, segments=None):
-        fp = getattr(self, '_current_project_path', None)
-        if not fp: return
-        save_project(fp, segments=segments, user_settings=self._load_local_settings()); get_logger().log("💾 프로젝트 저장 완료")
-
-    def _add_video_to_project(self):
-        fp = getattr(self, '_current_project_path', None)
-        if not fp: QMessageBox.warning(self, "오류", "열려있는 프로젝트가 없습니다."); return
-        project = load_project(fp)
-        if not project: return
-        new_paths, _ = QFileDialog.getOpenFileNames(self, "추가할 영상/음성 선택", get_last_folder() or os.path.expanduser("~"), "Media Files (*.mp4 *.mov *.MOV *.MP4 *.wav *.m4a *.m2a *.mp3 *.aac *.lrf)")
-        if not new_paths: return
-        existing = [m["path"] for m in sorted(project.get("media", []), key=lambda x: x.get("order", 0))]
-        dlg = OrderDialog(existing + new_paths, self, title="영상 순서 편집 (기존 + 추가)")
-        if dlg.exec() != QDialog.DialogCode.Accepted: return
-        if not dlg.ordered_files: return
-        add_media_to_project(fp, new_paths)
-        new_only = [p for p in dlg.ordered_files if p not in set(existing)]
-        if new_only and self.backend: get_logger().log(f"➕ 프로젝트에 {len(new_only)}개 영상 추가"); self.backend.start_pipeline(new_only)
-        else: self.show_home()
-
-    # ── NAS ──
-    def _get_nas_folders(self):
-        nas_path = get_nas_path()
-        if not nas_path: return []
-        local_path = nas_path
-        if nas_path.startswith("smb://"): parts = nas_path.replace("smb://", "").split("/"); local_path = f"/Volumes/{parts[1]}" if len(parts) > 1 else "/Volumes/video"
-        if not os.path.exists(local_path): return []
-        try: return sorted([(f, os.path.join(local_path, f)) for f in os.listdir(local_path) if not f.startswith('.') and os.path.isdir(os.path.join(local_path, f))])
-        except Exception: return []
-
-    def _open_nas_root(self):
-        nas_url = get_nas_path()
-        if not nas_url: QMessageBox.warning(self, "오류", "NAS 경로가 설정되지 않았습니다."); return
-        if not ensure_nas_mounted(nas_url): QMessageBox.warning(self, "오류", "NAS 마운트에 실패했습니다."); return
-        local_path = nas_url
-        if nas_url.startswith("smb://"): parts = nas_url.replace("smb://", "").split("/"); local_path = f"/Volumes/{parts[1]}" if len(parts) > 1 else "/Volumes/video"
-        self._is_auto_pipeline = False; dlg = FolderDialog(local_path, self)
-        if dlg.exec() and dlg.selected_files: self._add_recent_folder(local_path); self.backend.start_pipeline(dlg.selected_files, folder=local_path)
-
     # ── 경로 설정 ──
     def _show_path_settings(self):
         dlg = QDialog(self); dlg.setWindowTitle("경로설정"); dlg.setMinimumWidth(450); dlg.setStyleSheet(f"background-color: {config.BG}; color: {config.FG};")
@@ -525,28 +348,10 @@ class MainWindow(QMainWindow):
     def _refresh_video(self):
         if self._editor_widget and hasattr(self._editor_widget, 'video_player'): self._editor_widget.video_player.resizeEvent(None)
 
-    # ── SRT 파싱 ──
-    def _parse_srt_file(self, srt_path):
-        segments = []
-        if not os.path.exists(srt_path): return segments
-        content = ""
-        for enc in ['utf-8-sig', 'utf-8', 'cp949', 'euc-kr']:
-            try:
-                with open(srt_path, "r", encoding=enc) as f: content = f.read(); break
-            except UnicodeDecodeError: continue
-        if not content: return segments
-        content = content.replace('\r\n', '\n').replace('\r', '\n')
-        pattern = re.compile(r'(\d{2}:\d{2}:\d{2}[,.]\d{2,3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{2,3})\n(.*?)(?=\n(?:\s*\d+\s*\n)?\s*\d{2}:\d{2}:\d{2}[,.]|\Z)', re.DOTALL)
-        for m in pattern.finditer(content):
-            try:
-                def srt_to_sec(ts): h, mn, s = ts.replace(',', '.').split(':'); return int(h)*3600 + int(mn)*60 + float(s)
-                segments.append({"start": srt_to_sec(m.group(1)), "end": srt_to_sec(m.group(2)), "text": m.group(3).strip()})
-            except: continue
-        return segments
-
     # ── SRT 에디터 (항상 단일 파일) ──
     def _open_srt_in_editor(self, srt_path):
-        segments = self._parse_srt_file(srt_path)
+        from core.srt_parser import parse_srt
+        segments = parse_srt(srt_path)
         from ui.editor_widget import EditorWidget
         self._remove_old_editor()
         base_path = os.path.splitext(srt_path)[0]; media_extensions = ['.mp4', '.mov', '.MOV', '.MP4', '.wav', '.m4a', '.m2a', '.mp3', '.aac']
@@ -675,7 +480,7 @@ class MainWindow(QMainWindow):
 
         if is_batch: editor.sm.init_auto_state()
         else: editor.sm.init_state()
-        if hasattr(editor, 'btn_start'): editor.btn_start.setText("▶️ 시작")
+        if hasattr(editor, 'btn_start'): editor.btn_start.setText("🧠 시작")
         if is_batch: QTimer.singleShot(600, lambda e=editor: e.btn_start.click() if hasattr(e, 'btn_start') else None)
 
         def safe_home(*args): QTimer.singleShot(0, self.show_home)
@@ -690,7 +495,9 @@ class MainWindow(QMainWindow):
         editor.sig_prev.connect(handle_prev); editor.sig_exit.connect(force_exit_app)
         if self._on_save_cb: editor.sig_next.connect(self._on_save_cb)
         else: editor.sig_next.connect(safe_home)
-        editor.sig_save.connect(lambda segs: self._save_srt(target_file, segs)); editor.sig_auto_save.connect(lambda segs: self._save_srt(target_file, segs))
+        srt_save_path = get_srt_path(target_file)
+        editor.sig_save.connect(lambda segs, p=srt_save_path: self._save_srt(p, segs))
+        editor.sig_auto_save.connect(lambda segs, p=srt_save_path: self._save_srt(p, segs))
         if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(self._log_visible)
         self.stack.insertWidget(1, editor)
         if hasattr(editor, 'timeline'): editor.timeline.set_boundary_times(self._project_boundary_times or [])

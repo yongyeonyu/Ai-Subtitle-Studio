@@ -1,6 +1,6 @@
 ai_subtitle_studio/
 ├── main.py                          ← 프로그램 실행 진입점                              [미관리]
-├── config.py                        ← 전역 환경 변수 (경로, 모델명, NTFY_TOPIC)          [미관리]
+├── config.py                        ← 전역 환경 변수 + OS 감지 (IS_MAC/IS_WINDOWS)      v02.01.00 | ✅
 ├── logger.py                        ← 시스템 로그 기록 및 UI 연동                        [미관리]
 │
 ├── dataset/
@@ -8,17 +8,31 @@ ai_subtitle_studio/
 │   ├── user_settings.json           ← AI 모델 및 자막 규칙 설정 (실시간 반영)
 │   └── auto_tracker.json            ← iCloud/NAS 파일 처리 상태 추적 (자동 생성)
 │
-├── projects/                        ← 프로젝트 시스템 저장소 (Phase 1-A)
-│   └── *.json                       ← 프로젝트 메타데이터 (미디어 순서, 타임라인, 설정)
+├── projects/                        ← 프로젝트 시스템 저장소 (Phase 1-A)   [gitignore]
+│   └── *.json                       ← 프로젝트 메타데이터
+│                                       - 미디어 순서 / 타임라인
+│                                       - 자막 세그먼트
+│                                       - 작업 환경(workspace)
 │
 ├── core/
 │   ├── __init__.py                                                                      [미관리]
-│   ├── state_manager.py             ← FSM 상태 머신 (ViewModel 전용)       v01.00.06 | ✅ 리팩토링 완료
-│   ├── backend.py                   ← AI 백엔드 파이프라인 총괄              v01.00.07 | ✅ 리팩토링 완료
-│   ├── media_processor.py           ← VAD + Whisper STT 엔진             v01.00.01 | ❌ 리팩토링 미진행
-│   ├── subtitle_engine.py           ← LLM 자막 최적화 / SRT 저장            v01.00.01 | ❌ 리팩토링 미진행
+│   ├── state_manager.py             ← FSM 상태 머신 (ViewModel 전용)       v02.01.00 | ✅ 리팩토링 완료
+│   ├── backend.py                   ← AI 백엔드 파이프라인 총괄              v02.01.00 | ✅ 리팩토링 완료
+│   │                                   - MOV 렌더링 → renderer.py 분리
+│   │                                   - ntfy → notifier.py 분리
+│   ├── backend_fast.py              ← 멀티 클립 배치 전용 파이프라인          v02.01.00 | ✅ 신규
+│   ├── media_processor.py           ← 오디오 추출 + VAD + Whisper 호출      v02.01.00 | ✅ 리팩토링 완료
+│   │                                   - Whisper 백엔드 → whisper_mlx/faster 분리
+│   │                                   - VAD 캐시 + 청크 병합 최적화
+│   ├── whisper_mlx.py               ← macOS 전용 Whisper (MLX)             v02.01.00 | ✅ 신규
+│   ├── whisper_faster.py            ← Windows 전용 Whisper (스텁)           v02.01.00 | ✅ 신규
+│   ├── renderer.py                  ← MOV 렌더링 (backend에서 분리)          v02.01.00 | ✅ 신규
+│   ├── notifier.py                  ← ntfy 푸시 알림 유틸                    v02.01.00 | ✅ 신규
+│   ├── srt_parser.py                ← SRT 파싱 유틸 (통합)                   v02.01.00 | ✅ 신규
+│   ├── subtitle_engine.py           ← LLM 자막 최적화 / SRT 저장            v02.01.00 | ⚠️ 줄바꿈 처리 수정
 │   ├── diarize.py                   ← 화자 분리 및 화자 매핑                 v01.00.00 | ❌ 리팩토링 미진행
-│   ├── project_manager.py           ← 프로젝트 생성/로드/저장                v02.00.00 | ✅ 신규
+│   ├── project_manager.py           ← 프로젝트 생성/로드/저장                v02.01.00 | ✅ Phase1-A 핵심
+│   │                                   - workspace(작업 환경) 저장/복원
 │   ├── data_manager.py              ← 설정 및 교정 사전 파일 I/O             v01.00.00 | ❌ 리팩토링 미진행
 │   ├── path_manager.py              ← 경로 관리 (NAS/iCloud/로컬)           v01.00.00 | ❌ 리팩토링 미진행
 │   ├── cloud_sync.py                ← iCloud/NAS 드롭존 감시                v01.00.00 | ❌ 리팩토링 미진행
@@ -28,19 +42,28 @@ ai_subtitle_studio/
 │   └── time_history.py              ← 처리 시간 기록 / ETA 학습              v01.00.00 | ❌ 리팩토링 미진행
 │
 └── ui/
-    ├── main_window.py               ← 메인 화면 + 프로젝트 UI               v01.00.08 | ✅ 리팩토링 완료
-    ├── editor_widget.py             ← 에디터 UI 골격 + SM 연동              v01.00.06 | ❌ 리팩토링 미진행
-    ├── editor_pipeline.py           ← 자막 생성/재시작 파이프라인             v01.00.16 | ✅ 리팩토링 완료
-    ├── editor_segments.py           ← 자막 세그먼트 큐 처리                  v01.00.01 | ⚠️ 부분 패치
-    ├── editor_timeline_video.py     ← 비디오 싱크 / 자막 분할 핸들러          v01.00.02 | ✅ 리팩토링 완료
+    ├── main_window.py               ← 메인 화면 + 에디터 전환                v02.01.00 | ✅ 리팩토링 완료
+    │                                   - 큐 → queue_widget.py 분리
+    │                                   - 프로젝트 → project_ui.py 분리
+    │                                   - iCloud/NAS → cloud_ui.py 분리
+    ├── queue_widget.py              ← 큐 테이블 + 헤더 + 애니메이션          v02.01.00 | ✅ 신규 (Mixin)
+    ├── project_ui.py                ← 프로젝트 만들기/열기/저장/추가          v02.01.00 | ✅ 신규 (Mixin)
+    ├── cloud_ui.py                  ← iCloud/NAS 자동처리 로직               v02.01.00 | ✅ 신규 (Mixin)
+    ├── editor_widget.py             ← 에디터 UI 골격 + SM 연동              v02.01.00 | ⚠️ 작업환경 복원 추가
+    ├── editor_pipeline.py           ← 자막 생성/재시작 파이프라인             v02.01.00 | ✅ 리팩토링 완료
+    │                                   - 액션 → editor_actions.py 분리
+    ├── editor_actions.py            ← 저장/이전/종료/내보내기/설정            v02.01.00 | ✅ 신규 (Mixin)
+    ├── editor_segments.py           ← 자막 세그먼트 큐 처리                  v02.01.00 | ✅ 리팩토링 완료
+    │                                   - 완료 판단 제거 (sm/backend 위임)
+    ├── editor_timeline_video.py     ← 비디오 싱크 / 자막 분할 핸들러          v02.01.00 | ✅ 리팩토링 완료
     ├── undo_manager.py              ← Undo/Redo 스냅샷 스택                 v01.00.00 | ❌ 리팩토링 미진행
     ├── subtitle_text_edit.py        ← 화자 색상 강조 / 단축키                v01.00.00 | ❌ 리팩토링 미진행
     ├── timestamp_area.py            ← 시간 표시 및 삭제 버튼 영역             v01.00.00 | ❌ 리팩토링 미진행
-    ├── timeline_constants.py        ← 타임라인 UI 상수 / 갭 계산             v01.00.00 | ❌ 리팩토링 미진행
+    ├── timeline_constants.py        ← 타임라인 UI 상수 / 갭 계산             v02.01.00 | ⚠️ 하단 여백 조정
     ├── timeline_waveform.py         ← 오디오 파형 렌더링                     v01.00.00 | ❌ 리팩토링 미진행
     ├── timeline_global.py           ← 전체 영상 미니맵                       v01.00.00 | ❌ 리팩토링 미진행
-    ├── timeline_canvas.py           ← 메인 타임라인 캔버스                   v01.00.06 | ✅ 리팩토링 완료 (⚠️ 부분 패치 포함)
-    ├── timeline_widget.py           ← 타임라인 조립 컨테이너                  v01.00.02 | ✅ 리팩토링 완료
+    ├── timeline_canvas.py           ← 메인 타임라인 캔버스                   v02.01.00 | ✅ 리팩토링 완료
+    ├── timeline_widget.py           ← 타임라인 조립 컨테이너                  v02.01.00 | ✅ 리팩토링 완료
     ├── video_player_widget.py       ← 영상/오디오 플레이어                    v01.00.01 | ❌ 리팩토링 미진행
     ├── export_dialog.py             ← 자막 영상 렌더링 설정                   v01.00.00 | ❌ 리팩토링 미진행
     ├── settings_dialog.py           ← 설정창 통합 진입                       v01.00.00 | ❌ 리팩토링 미진행
@@ -55,158 +78,110 @@ ai_subtitle_studio/
     └── folder_dialog.py             ← 파일/폴더 일괄 선택                    v01.00.00 | ❌ 리팩토링 미진행
 
 ================================================================================
-[파일 상태 요약]
-  ✅ 리팩토링 완료  : 7개
-  ⚠️ 부분 패치     : 2개 (editor_segments.py, timeline_canvas.py)
-  ❌ 리팩토링 미진행 : 22개
-  🆕 신규           : 2개 (project_manager.py, order_dialog.py)
+[파일 상태 요약]  (PHASE1-B 리팩토링 기준)
+
+  ✅ 리팩토링 완료   : 15개
+     - config.py
+     - state_manager.py
+     - backend.py / backend_fast.py
+     - media_processor.py
+     - project_manager.py
+     - main_window.py
+     - editor_pipeline.py
+     - editor_segments.py
+     - editor_timeline_video.py
+     - timeline_canvas.py
+     - timeline_widget.py
+     - editor_widget.py
+
+  🆕 신규 (PHASE1-B) : 9개
+     - whisper_mlx.py / whisper_faster.py
+     - renderer.py
+     - notifier.py
+     - srt_parser.py
+     - backend_fast.py
+     - editor_actions.py
+     - queue_widget.py
+     - project_ui.py
+     - cloud_ui.py
+
+  ⚠️ 부분 패치       : 2개
+     - subtitle_engine.py
+     - timeline_constants.py
+
+  ❌ 리팩토링 미진행  : 16개
+
+================================================================================
+
+================================================================================
+[PHASE1-B 리팩토링 요약]
+
+1. 코드 분리 (역할별 Mixin/모듈화)
+   - Whisper 백엔드 분리 (OS별: MLX / faster-whisper)
+   - MOV 렌더링 분리 (renderer.py)
+   - ntfy 알림 분리 (notifier.py)
+   - SRT 파서 통합 (srt_parser.py)
+   - editor_pipeline → editor_actions 분리
+   - main_window → queue_widget / project_ui / cloud_ui 분리
+
+2. 속도 최적화
+   - demucs 캐시 재사용 (2회차 ~40초 절약)
+   - VAD 캐시 (2회차 ~3초 절약)
+   - Whisper 청크 병합 (호출 횟수 30~50% 감소)
+
+3. 멀티 클립 지원 (MVP-1)
+   - backend_fast.py: 멀티 클립 배치 전용 파이프라인
+   - 자동 프로젝트 생성 (멀티 파일 선택 시)
+   - 파일 단위 순차 처리 + SRT 개별 저장
+
+4. 프로젝트 시스템 안정화
+   - 프로젝트 JSON 자동 생성/저장
+   - 작업 환경(workspace) 저장/복원
+   - SRT / JSON 줄바꿈(\u2028) 정규화
+
+5. 상태 관리 개선
+   - 완료 판단: backend + state_manager 단일 책임
+   - editor_segments에서 완료 판단 제거
+   - 큐 테이블 상태 덮어씌우기 버그 해결
+
+6. OS 감지
+   - config.py: IS_MAC / IS_WINDOWS / IS_APPLE_SILICON
+   - Whisper 백엔드 자동 선택
+
 ================================================================================
 
 ================================================================================
-[버전 정보 및 최근 업데이트 내역]
+[이전 버전 히스토리]
 
-버전: v01.00.05 (안정화 + 프로젝트 기반 스냅샷)
+버전: v01.00.05 (PHASE1-A 안정화 + 프로젝트 기반 스냅샷)
+   - 자막 싱크 치명적 버그 수정 (stderr 복원)
+   - editor_pipeline 완료 감지 안정화
+   - 프로젝트 시스템 도입 (projects/ + project_manager.py)
+   - 멀티 영상 경계선 시각화
+   - 타임라인 룰러 HH:MM:SS
+   - ntfy 구조 정리 (backend 통합)
 
-1. 자막 싱크 치명적 버그 수정
-   - Whisper 서브프로세스 stderr 출력이 stdout으로 섞이면서
-     JSON 파싱 실패 → 초기 청크 유실 → 자막 60초 밀림 발생
-   - stderr=subprocess.PIPE 복원으로 문제 완전 해결
-   - 자막 싱크 100% 정상화
-
-2. editor_pipeline 완료 감지 안정화
-   - _completion_handled 플래그 도입
-   - QTimer 기반 완료 확정 로직 추가
-   - 0% 고정 / 완료 미전이 문제 완화
-   ※ state machine 전이 일부는 의도적으로 보류
-
-3. 프로젝트 시스템 도입 (Phase 1-A)
-   - projects/ 디렉터리 신설
-   - project_manager.py 추가
-   - 프로젝트 단위:
-     - 미디어 순서 관리
-     - 타임라인 경계(boundary_times)
-     - 사용자 설정 복원
-
-4. 멀티 영상 경계선 시각화
-   - timeline_canvas.py: 초록색 1px 경계선 렌더링
-   - timeline_widget.py: set_boundary_times API 추가
-   - main_window.py: 프로젝트 → 타임라인 경계 전달
-
-5. 타임라인 룰러 개선
-   - 초 단위 표시 제거
-   - HH:MM:SS 형식으로 통일 (예: 02:00)
-
-6. ntfy 알림 구조 정리
-   - state_manager에서 ntfy 완전 제거
-   - backend에서만 통합 관리
-   - 자동(iCloud/NAS) 모드에서만 알림 발송
-   - 수동 작업 시 알림 미전송
-
-7. UI / UX 개선
-   - 프로젝트 홈 2열 구조
-   - 프로젝트 만들기 / 열기 UI
-   - 영상 순서 편집 다이얼로그(order_dialog)
-
-※ 보류된 항목
-- state machine 완료/이전 전이 버그
-- 프로젝트 이름 입력 UI 가독성
-- 기타 자잘한 UX 버그
-  → 실사용 후 일괄 리팩토링 예정
-
-================================================================================
-[버전 정보 및 최근 업데이트 내역]
 버전: v01.00.04 (UI/UX 개선 및 버그 수정 빌드)
+   - 에디터 UI 개선 (이전 버튼 통합, 종료 버튼 제거)
+   - 웨이브폼 렌더링 개선 (VAD 기반 컬러링)
+   - 간격 설정 창 최적화
+   - ntfy 푸시 알람 기능 추가
+   - 다수 버그 수정
 
-1. 에디터 UI 개선
-   - "이전" 버튼에 저장 확인 다이얼로그 통합: 종료 버튼의 기능을 이전 버튼으로 마이그레이션.
-     변경사항이 있으면 예/아니요/취소 다이얼로그를 띄운 후 메인 화면으로 복귀.
-   - "종료" 버튼 제거 (editor_widget.py): 버튼 배치 단순화.
-   - "다음" 버튼: 현재 개발 중 알림 표시.
-   - 종료 다이얼로그 통일: 에디터 이전 버튼, window X 버튼 모두 예/아니요/취소 방식으로 통일.
-   - engine_lbl 폰트 13px → 11px (-2pt 축소).
-   - 하단 버튼 전체 min-height: 40px 추가로 이전/다음 버튼 높이 통일.
-
-2. 웨이브폼 렌더링 개선 (timeline_canvas.py)
-   - 노이즈 컷 임계값 0.03 → 0.008 (더 섬세한 파형 표현).
-   - 진폭 배율 1.4× → 2.0× (음성이 더 도드라지게).
-   - VAD 기반 구간 컬러링: 음성 구간은 밝은 청록색, 비음성 구간은 어두운 회색으로 구분.
-   - 특히 큰 진폭(val > 0.6) 구간은 더욱 밝게 강조.
-
-3. 간격 설정 창 최적화 (settings_gap.py)
-   - 파라미터 폼 전체를 QScrollArea로 감싸 화면 높이 초과(off-screen) 방지.
-   - 화면 높이의 92% 이내로 최대 높이 제한.
-   - 폼 row 간격 축소 (verticalSpacing=3).
-
-4. ntfy 푸시 알람 기능 추가 (state_manager.py, config.py)
-   - config.NTFY_TOPIC에 토픽명 설정 시 자동 활성화.
-   - 알람 전송 시점: 자막 생성 시작, 생성 완료, 저장 완료, 처리 중단, iCloud 자동 처리 시작/완료.
-   - 백그라운드 스레드로 전송하여 UI 블로킹 없음. NTFY_TOPIC 미설정 시 자동 비활성화.
-
-5. 버그 수정 (리팩토링)
-   - timeline_canvas.py: _end_inline_edit 중복 정의 제거.
-   - video_player_widget.py: _get_audio_ai_setting 내 미정의 변수 paths 참조 오류 제거.
-   - undo_manager.py: _restore 메서드 완성 (canvas_end_map 복원, 커서 위치 복원, 시그널 해제).
-   - main_window.py: _init_editor 시그널 이중 연결 중복 코드 제거.
-   - main_window.py: "소설가유모씨 전용 자막 자동 생성기" 부제목 제거, 상단 여백 축소.
-   - main_window.py: 터미널 로그 열릴 때 최근 폴더 1개만 표시 (_recent_buttons 추적 방식으로 수정).
-
---------------------------------------------------------------------------------
 버전: v01.00.03 (초정밀 동기화 및 자동처리 시스템 빌드)
+   - iCloud/NAS 자동처리 파이프라인
+   - Word-level Timestamps 초정밀 동기화
+   - LLM 환각 차단 및 성능 최적화
 
-1. iCloud/NAS 자동처리 파이프라인 (신규)
-   - AutoTracker 모듈 신설 (core/auto_tracker.py): 파일별 처리 상태(신규/업로드중/처리중/완료)를
-     auto_tracker.json에 영속 저장. 앱 재시작 시 비정상 종료된 '처리중' 파일을 자동으로 '신규'로 리셋.
-   - CloudSyncManager 업그레이드 (core/cloud_sync.py): 단일 파일 콜백 → 리스트 콜백으로 변경.
-     5초간 파일 크기 고정 감지로 iCloud 업로드 완료 판단. is_busy_callback으로 앱 사용 중 자동 처리 대기.
-   - CloudSyncManager를 backend에서 main_window로 이전, 앱 생명주기와 일치시킴.
-   - _sig_auto_start_pipeline Signal 추가 (main_window.py): 워커 스레드에서 직접 UI 접근 대신
-     Signal로 메인 스레드에 안전하게 자동시작 위임.
-   - is_auto_start 모드 (backend.py): 에디터 열림 직후 0.5초 후 자동 시작, 전사 완료 2초 후
-     threading.Timer로 자동 저장 및 다음 파일 이동 (QTimer 워커 스레드 사용 버그 수정 포함).
-   - path_manager.py: get/set_icloud_auto_detect, get/set_nas_auto_detect 함수 추가.
-
-2. 자막 싱크(Sync) 초정밀 동기화 엔진
-   - Word-level Timestamps: Whisper 문장 단위 대신 단어 단위 타임스탬프로 시작/끝 시간을 0.01초 단위로 정밀 조립.
-   - VAD-Whisper 교차 검증 (Cross-Masking): VAD 무음 구간을 Whisper가 침범하면 환각으로 간주하고 자동 삭제.
-   - 안전 쿠션(Padding): VAD 절단 시 앞뒤 1.0초 여유를 주어 경계선 왜곡(Boundary Effect) 방지.
-
-3. LLM 환각 차단 및 성능 최적화
-   - Hallucination Filter: _HALLUC_PHRASES 필터로 "한국어 대화" 등 시스템 헛소리 사전 차단.
-   - Contextual Relay: 마지막 유의미한 문장(최소 15자)만 다음 프롬프트로 전달해 청크 간 문맥 연속성 확보.
-   - _clean() 이중 호출 제거로 최적화 속도 개선.
-
---------------------------------------------------------------------------------
 버전: v01.00.02 (안정화 빌드)
+   - 무음 구간(Gap) 표준화
+   - 에디터 텍스트 처리 UX
+   - UndoManager 모듈 분리
+   - 자막 출력 및 클라우드 연동
 
-1. 무음 구간(Gap) 표준화 및 타임라인 싱크 완벽 구현
-   - 투명 글자(\u200B) 꼼수 문자를 제거하고 순수 시간 간격(Time Gap) 기반으로 무음 구간을 SRT에 저장.
-   - SRT 불러오기 시 무음 블록이 다음 자막에 덮어씌워지거나 병합(자석 효과)되는 버그 원천 차단.
-   - 타임라인에서 뒤쪽 자막을 앞으로 당길 때 발생하는 '튕김 현상' 유연화 로직 적용.
-
-2. 에디터 텍스트 처리 및 UX 극대화
-   - 말줄임표(.., ...) 자동 삭제 현상 수정 (_clean 필터 예외 처리).
-   - Shift + Enter 줄바꿈 시 세그먼트 분리 버그 수정 (윗줄 시간 상속 및 동일 시간 내 병합).
-   - 실행 취소(Cmd+Z) / 다시 실행(Cmd+Shift+Z) UndoManager로 완전 분리, 스냅샷 스택 재구현.
-
-3. UndoManager 모듈 분리 (신규: ui/undo_manager.py)
-   - editor_pipeline.py의 undo 메서드 6개를 UndoManager 클래스로 이전.
-   - _route_undo/_route_redo 라우터로 단축키 연결.
-     (텍스트 포커스 시 QTextDocument undo, 타임라인 포커스 시 스냅샷 undo 자동 분기)
-   - push() / push_immediate() 호출 위치: _on_enter_pressed, _on_backspace_merged,
-     _on_drag_started, _on_gap_activated, subtitle_text_edit.py 내부.
-
-4. canvas_end_map 키 타입 불일치 버그 수정 (editor_segments.py)
-   - Gap 앞 자막의 끝 시간 조회 시 라인 번호(int)로 float 키 dict를 잘못 조회하던 버그 수정.
-   - prev_line → prev_start(시작 시간) float 키 조회로 변경, 드래그 끝 시간이 Gap에 정확히 반영.
-
-5. 자막 출력 및 클라우드 연동
-   - ExportDialog 호출 시 TypeError(인자 순서 어긋남) 버그 수정.
-   - 렌더링 완료 후 iCloud 드롭존 자동 복사 및 백업 기능 추가.
-   - 화자 1명 감지 시 _화자.srt 파일 생성 생략으로 디스크 관리 최적화.
-
---------------------------------------------------------------------------------
 버전: v01.00.01 (초기 안정화 빌드)
-   - 프로젝트 구조 개편 및 core/ui 모듈 분리 완료.
-   - NAS 및 iCloud 동기화 기능 안정화.
-   - config.DATASET_DIR 기반 경로 통일.
+   - 프로젝트 구조 개편 및 core/ui 모듈 분리 완료
+   - NAS 및 iCloud 동기화 기능 안정화
+   - config.DATASET_DIR 기반 경로 통일
+
 ================================================================================
