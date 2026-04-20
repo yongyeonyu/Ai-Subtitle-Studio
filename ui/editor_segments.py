@@ -157,7 +157,9 @@ class EditorSegmentsMixin:
             text = self._JUNK_NO_BRACKET_3PART_END.sub('', text)
             text = self._JUNK_START_RE.sub('', text).strip()
             text = text.replace('\r', '')
-            
+            # ✅ HTML 태그 제거
+            text = re.sub(r'<[^>]+>', '', text)
+
             parts = [re.sub(r'\s+', ' ', p).strip() for p in text.split('\n')]
             parts = [p for p in parts if p]
             if not parts: continue

@@ -227,7 +227,8 @@ class CoreBackend:
                 )
 
             if hasattr(self.ui, '_sig_update_queue'):
-                try: self.ui._sig_update_queue.emit(queue_index, "✅ 자막출력(srt)", "완료", "", "")
+                try: 
+                    self.ui._sig_update_queue.emit(queue_index, "✅ 자막출력(srt)", "", "", "")
                 except RuntimeError: pass
 
             # ── STEP 6: MOV 렌더링 ──
@@ -235,7 +236,7 @@ class CoreBackend:
                 try:
                     get_logger().log(f"\n  [STEP 6] 🎥 투명 자막 영상(MOV) 백그라운드 렌더링 및 iCloud 백업 중...")
                     if hasattr(self.ui, '_sig_update_queue'):
-                        self.ui._sig_update_queue.emit(queue_index, "🎥 자막영상출력(mov)", "렌더링 중...", "", "")
+                        self.ui._sig_update_queue.emit(queue_index, "🎥 자막영상출력(mov)", "", "", "")
                     self._run_background_render(srt_path, target_file, export_settings, current_idx, total_cnt)
                 except Exception as e:
                     get_logger().log(f"❌ MOV 렌더링 오류: {e}")
@@ -251,10 +252,11 @@ class CoreBackend:
             if hasattr(self.ui, '_sig_update_queue'):
                 try:
                     if is_auto_mode:
-                        self.ui._sig_update_queue.emit(queue_index, "✅ 완료 (다음파일)", "작업 종료", "", "")
+                        self.ui._sig_update_queue.emit(queue_index, "✅ 완료 (다음파일)", "", "", "")
                     else:
-                        self.ui._sig_update_queue.emit(queue_index, "✅ 자막생성완료", "작업 종료", "", "")
-                except RuntimeError: pass
+                        self.ui._sig_update_queue.emit(queue_index, "✅ 자막생성완료", "", "", "")
+                except RuntimeError:
+                    pass
 
         except Exception as e:
             get_logger().log(f"❌ 처리 실패: {e}")
@@ -505,19 +507,13 @@ class CoreBackend:
             t_opt = threading.Thread(target=do_optimize, daemon=True, name="optimizer")
             t_trans.start(); t_opt.start()
             t_trans.join(); t_opt.join()
-            
+
+            # ✅ STT 완료 → 큐 즉시 업데이트
             if hasattr(self.ui, '_sig_update_queue'):
                 try:
-                    self.ui._sig_update_queue.emit(queue_index, "✅ 자막 생성 완료", "완료", "", "")
+                    self.ui._sig_update_queue.emit(queue_index, "✅ 자막 생성 완료", "", "", "")
                 except RuntimeError:
                     pass
-
-            try:
-                s = load_settings()
-                model_key = get_model_key(s)
-                proc_time = time.time() - process_start_time
-                add_history(model_key, video_duration_sec, proc_time)
-            except Exception: pass
 
             try:
                 s = load_settings()

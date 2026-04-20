@@ -78,21 +78,32 @@ class EditorLifecycleMixin:
 
     def _remove_old_editor(self):
         old = self.stack.widget(1)
-        if old:
-            if hasattr(old, '_cleanup'):
-                try: old._cleanup()
-                except: pass
-            if hasattr(old, 'video_player'):
-                try:
-                    vp = old.video_player
-                    if hasattr(vp, '_ui_timer'): vp._ui_timer.stop()
-                    if hasattr(vp, 'audio_player'): vp.audio_player.stop()
-                    if hasattr(vp, '_worker') and getattr(vp, '_worker', None): vp._worker.stop(); vp._worker.wait(200)
-                except: pass
-            self.stack.removeWidget(old); old.hide()
-            if not hasattr(self, '_trash_bin'): self._trash_bin = []
-            self._trash_bin.append(old)
-            if len(self._trash_bin) > 3: self._trash_bin.pop(0).deleteLater()
+        if not old:
+            return
+        if hasattr(old, '_cleanup'):
+            try: old._cleanup()
+            except: pass
+        if hasattr(old, 'video_player'):
+            try:
+                vp = old.video_player
+                if hasattr(vp, '_ui_timer'): vp._ui_timer.stop()
+                if hasattr(vp, 'audio_player'): vp.audio_player.stop()
+                if hasattr(vp, '_worker') and getattr(vp, '_worker', None): vp._worker.stop(); vp._worker.wait(200)
+            except: pass
+        try:
+            self.stack.removeWidget(old)
+            old.hide()
+        except RuntimeError:
+            return
+        if not hasattr(self, '_trash_bin'):
+            self._trash_bin = []
+        self._trash_bin.append(old)
+        while len(self._trash_bin) > 3:
+            widget = self._trash_bin.pop(0)
+            try:
+                widget.deleteLater()
+            except (RuntimeError, AttributeError):
+                pass
 
     def _save_srt(self, srt_path, segments):
         try:

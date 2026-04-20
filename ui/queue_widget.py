@@ -79,14 +79,19 @@ class QueueMixin:
                     self.queue_table.setItem(idx, 4, mk(time_txt))
 
     def _update_live_queue_header(self):
-        if not self.backend or not getattr(self.backend, '_active', False):
+        active_backend = None
+        if getattr(self, 'backend_fast', None) and getattr(self.backend_fast, '_active', False):
+            active_backend = self.backend_fast
+        elif self.backend and getattr(self.backend, '_active', False):
+            active_backend = self.backend
+        if not active_backend:
             return
-        if getattr(self.backend, 'pipeline_start_time', 0) == 0:
+        if getattr(active_backend, 'pipeline_start_time', 0) == 0:
             return
 
         now = time.time()
-        elapsed = now - self.backend.pipeline_start_time
-        expected = getattr(self.backend, 'total_expected_time', 0.0)
+        elapsed = now - active_backend.pipeline_start_time
+        expected = getattr(active_backend, 'total_expected_time', 0.0)
 
         def fmt(sec):
             m, s = divmod(int(sec), 60)
@@ -95,7 +100,14 @@ class QueueMixin:
 
         c = getattr(self, '_current_file_idx', 1)
         t = getattr(self, '_total_files', 1)
-        pct = getattr(self, '_real_pct', 0)
+        # 완료 파일 수 기반 진행률
+        done_count = 0
+        for i in range(self.queue_table.rowCount()):
+            si = self.queue_table.item(i, 0)
+            if si and "완료" in si.text():
+                done_count += 1
+        pct = int((done_count / t) * 100) if t > 0 else 0
+        
         exp_str = fmt(expected) if expected > 0 else "예상불가"
 
         self.queue_header_lbl.setText(
@@ -120,6 +132,7 @@ class QueueMixin:
     def update_queue_header(self, current, total, pct, eta_str=""):
         self._current_file_idx = current
         self._total_files = total
+        self._real_pct = pct  # ✅ 이 줄 추가
         if pct == 100:
             if hasattr(self, '_live_timer'):
                 self._live_timer.stop()

@@ -53,7 +53,7 @@ class MainWindow(
         self.setWindowTitle("🎬 AI Subtitle Studio")
         self.setMinimumSize(600, 500)
         self.recent_folders = []; self.add_recent_folder_callback = None
-        self._editor_widget = None; self.backend = None
+        self._editor_widget = None; self.backend = None; self.backend_fast = None
         self._backup_nums = {}
         self._preview_containers = []
         self._expected_seconds = {}
@@ -76,7 +76,6 @@ class MainWindow(
         if getattr(self, '_is_icloud_auto_mode', False):
             self._cloud_sync_manager.start()
 
-    # ── 설정 ──
     def _add_recent_folder(self, folder_path):
         if not folder_path or not str(folder_path).strip(): return
         add_recent_folder(folder_path)
@@ -85,7 +84,7 @@ class MainWindow(
         recent = settings.get("recent_folders", [])
         if folder_path in recent: recent.remove(folder_path)
         recent.insert(0, folder_path)
-        self.recent_folders = recent[:3]
+        self.recent_folders = recent[:10]  # ✅ 3 → 10
         settings["recent_folders"] = self.recent_folders
         save_settings(settings)
         if self.add_recent_folder_callback: self.add_recent_folder_callback(folder_path)
@@ -182,8 +181,38 @@ class MainWindow(
         set_last_folder(os.path.dirname(paths[0])); self._add_recent_folder(os.path.dirname(paths[0]))
         self._is_auto_pipeline = False; self._current_project_path = None; self._project_boundary_times = []
         srt = [p for p in paths if p.lower().endswith(".srt")]; vid = [p for p in paths if not p.lower().endswith(".srt")]
-        if srt: self._open_srt_in_editor(srt[0])
-        elif vid and self.backend: self.backend.start_pipeline(vid)
+        if srt:
+            self._open_srt_in_editor(srt[0])
+        elif vid and len(vid) == 1 and self.backend:
+            self.backend.start_pipeline(vid)
+        elif vid and len(vid) > 1:
+            self._start_batch(vid)
+
+    def _start_batch(self, files, folder=None):
+        """멀티 파일 → backend_fast 배치 모드 (중복 호출 방지)"""
+        if not files:
+            return
+
+        # ✅ 중복 호출 방지
+        if getattr(self, "_batch_starting", False):
+            return
+        self._batch_starting = True
+
+        try:
+            from core.backend_fast import CoreBackendFast
+            self._is_auto_pipeline = True
+            if not getattr(self, "backend_fast", None):
+                self.backend_fast = CoreBackendFast(self)
+
+            # 이미 실행 중이면 재진입 방지
+            if getattr(self.backend_fast, "_active", False):
+                return
+
+            self.backend_fast.start_batch(files, folder=folder)
+        finally:
+            # UI 이벤트 중복 클릭 방지용 짧은 쿨다운
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(500, lambda: setattr(self, "_batch_starting", False))
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "폴더 선택", get_last_folder() or os.path.expanduser("~"))
@@ -191,15 +220,33 @@ class MainWindow(
         set_last_folder(folder); self._add_recent_folder(folder)
         self._is_auto_pipeline = False; self._current_project_path = None; self._project_boundary_times = []
         dlg = FolderDialog(folder, self)
-        if dlg.exec() and dlg.selected_files: self.backend.start_pipeline(dlg.selected_files, folder=folder)
+        if dlg.exec() and dlg.selected_files:
+            if len(dlg.selected_files) == 1 and self.backend:
+                self.backend.start_pipeline(dlg.selected_files, folder=folder)
+            elif len(dlg.selected_files) > 1:
+                self._start_batch(dlg.selected_files, folder=folder)
 
     def _open_recent(self, folder):
         if not os.path.exists(folder):
             if not ensure_nas_mounted(folder): QMessageBox.warning(self, "오류", f"폴더를 찾을 수 없습니다:\n{folder}"); return
         set_last_folder(folder); self._add_recent_folder(folder)
         self._is_auto_pipeline = False; self._current_project_path = None; self._project_boundary_times = []
-        dlg = FolderDialog(folder, self)
-        if dlg.exec() and dlg.selected_files: self.backend.start_pipeline(dlg.selected_files, folder=folder)
+        
+        # 해당 폴더에서 파일 선택 다이얼로그
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "파일 선택", folder,
+            "Media/SRT Files (*.mp4 *.mov *.MOV *.MP4 *.wav *.m4a *.m2a *.mp3 *.aac *.srt)"
+        )
+        if not paths: return
+        
+        srt = [p for p in paths if p.lower().endswith(".srt")]
+        vid = [p for p in paths if not p.lower().endswith(".srt")]
+        if srt:
+            self._open_srt_in_editor(srt[0])
+        elif vid and len(vid) == 1 and self.backend:
+            self.backend.start_pipeline(vid)
+        elif vid and len(vid) > 1:
+            self._start_batch(vid)
 
     def open_editor_directly(self):
         path, _ = QFileDialog.getOpenFileName(self, "SRT 파일 선택", get_last_folder() or os.path.expanduser("~"), "SRT Files (*.srt)")

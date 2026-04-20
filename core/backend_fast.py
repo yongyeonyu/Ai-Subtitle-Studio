@@ -22,12 +22,38 @@ class CoreBackendFast(CoreBackend):
     - 에디터 편집 대기 없이 STT → SRT 저장 자동 진행
     """
 
+    def __init__(self, main_window):
+        super().__init__(main_window)
+        # 부모에서 등록한 UI 콜백 중복 방지 — 이미 backend가 등록했으므로 재등록 안 함
+        # get_logger().set_ui_callback은 부모에서 이미 호출됨
+        # 여기서는 추가 콜백 등록 없이 초기화만 완료
+
     def start_batch(self, files, folder=None):
-        """멀티 파일 배치 시작 (자동 모드 강제)"""
+        """멀티 파일 배치 시작 (직접 스레드 관리 — 부모 start_pipeline 호출 안 함)"""
         if not files:
             return
-        get_logger().log(f"⚡ 배치 모드: {len(files)}개 파일 자동 처리 시작")
-        self.start_pipeline(files, folder=folder, is_auto_start=True)
+        if self._active:
+            return
+
+        self._active = True
+        self.files_to_process = list(files)
+        self.current_folder = folder
+        self.is_auto_start = True
+        self.total_expected_time = 0.0
+        self.pipeline_start_time = time.time()
+        self.is_first_start = False
+
+        if hasattr(self.ui, 'init_queue_list'):
+            self.ui.init_queue_list(self.files_to_process)
+
+        self._video_durations = {}
+        self._eta_thread = threading.Thread(target=self._precalculate_etas, daemon=True, name="eta-calculator")
+        self._eta_thread.start()
+
+        get_logger().log(f"⚡ 배치 모드: {len(self.files_to_process)}개 파일 자동 처리 시작")
+
+        self._pipeline_thread = threading.Thread(target=self._run_all, daemon=True, name="batch-main")
+        self._pipeline_thread.start()
 
     def _process_one_fast(self, target_file, queue_index):
         """
@@ -74,10 +100,14 @@ class CoreBackendFast(CoreBackend):
                 video_duration_sec = len(chunks) * 30.0
 
             expected_time = get_expected_time(model_key, video_duration_sec)
+            self._expected_map = getattr(self, "_expected_map", {})
+            self._expected_map[target_file] = float(expected_time) if expected_time and expected_time > 0 else -1.0
+
             if hasattr(self.ui, '_sig_update_queue'):
                 eta_str = str(expected_time) if expected_time > 0 else "예상불가"
                 self.ui._sig_update_queue.emit(queue_index, "⚡ 자막 생성 중", eta_str, "", "")
             process_start_time = time.time()
+
         except Exception:
             process_start_time = time.time()
             video_duration_sec = 0.0
@@ -143,10 +173,26 @@ class CoreBackendFast(CoreBackend):
                 last_t_total = t_total
 
                 total_files = len(self.files_to_process)
-                if t_total > 0:
-                    pct = int(((queue_index + (c_idx / t_total)) / total_files) * 100)
+
+                # 예상시간 기반 진행률
+                total_exp = getattr(self, 'total_expected_time', 0.0)
+                if total_exp > 0:
+                    # 이전 파일들의 예상시간 합산
+                    done_exp = 0.0
+                    exp_map = getattr(self, '_expected_map', {})
+                    for j in range(queue_index):
+                        f = self.files_to_process[j]
+                        done_exp += exp_map.get(f, 0.0) if exp_map.get(f, 0.0) > 0 else 0.0
+                    # 현재 파일 진행분
+                    cur_exp = exp_map.get(self.files_to_process[queue_index], 0.0)
+                    if cur_exp > 0 and t_total > 0:
+                        cur_progress = cur_exp * (c_idx / t_total)
+                    else:
+                        cur_progress = 0.0
+                    pct = min(99, int(((done_exp + cur_progress) / total_exp) * 100))
                 else:
-                    pct = int((queue_index / total_files) * 100)
+                    pct = int(((queue_index + (c_idx / t_total if t_total > 0 else 0)) / total_files) * 100)
+
 
                 if hasattr(self.ui, '_sig_update_queue_header'):
                     self.ui._sig_update_queue_header.emit(queue_index + 1, total_files, pct, "")
@@ -176,9 +222,41 @@ class CoreBackendFast(CoreBackend):
         # ── 큐 즉시 업데이트 ──
         if hasattr(self.ui, '_sig_update_queue'):
             try:
-                self.ui._sig_update_queue.emit(queue_index, "✅ 자막 생성 완료", "완료", "", "")
+                elapsed = time.time() - process_start_time
+                exp = -1.0
+                try:
+                    exp = getattr(self, "_expected_map", {}).get(target_file, -1.0)
+                except Exception:
+                    exp = -1.0
+
+                def _fmt(sec):
+                    m, s = divmod(int(sec), 60)
+                    return f"{m:02d}:{s:02d}"
+
+                if exp and exp > 0:
+                    eta_done = f"{_fmt(elapsed)} / {_fmt(exp)}"
+                else:
+                    eta_done = f"{_fmt(elapsed)} / -"
+
+                if hasattr(self.ui, '_sig_update_queue'):
+                    try:
+                        self.ui._sig_update_queue.emit(queue_index, "✅ 자막 생성 완료", eta_done, "", "")
+                    except RuntimeError:
+                        pass
+
             except RuntimeError:
                 pass
+
+        # ── 큐 헤더 진행률 갱신 ──
+        total_exp = getattr(self, 'total_expected_time', 0.0)
+        if total_exp > 0 and hasattr(self.ui, '_sig_update_queue_header'):
+            done_exp = 0.0
+            exp_map = getattr(self, '_expected_map', {})
+            for j in range(queue_index + 1):
+                f = self.files_to_process[j]
+                done_exp += exp_map.get(f, 0.0) if exp_map.get(f, 0.0) > 0 else 0.0
+            pct = min(100, int((done_exp / total_exp) * 100))
+            self.ui._sig_update_queue_header.emit(queue_index + 1, len(self.files_to_process), pct, "")             
 
         # ── 히스토리 기록 ──
         try:

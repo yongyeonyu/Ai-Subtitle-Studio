@@ -41,14 +41,25 @@ class HomeUIMixin:
         nas_folders = self._get_nas_folders()
         right_col.addWidget(self._icloud_btn("🗄️ NAS 자동처리", nas_folders, self._open_nas_root, is_nas=True))
         valid_folders = [f for f in get_recent_folders() if f and f.strip()]
+        
+        # ✅ 중복 제거 (순서 유지)
+        seen = set()
+        unique_folders = []
+        for f in valid_folders:
+            norm = os.path.normpath(f)
+            if norm not in seen:
+                seen.add(norm)
+                unique_folders.append(f)
+        valid_folders = unique_folders[:10]
+
         if valid_folders:
             recent_container = QWidget(); recent_container.setObjectName("MenuButton")
             recent_container.setStyleSheet(f"QWidget#MenuButton {{ background-color: {config.BG2}; border: 1px solid {config.BG3}; border-radius: 8px; }} QWidget#MenuButton:hover {{ background-color: #333333; border: 2px solid #4AFF80; }}")
             recent_layout = QVBoxLayout(recent_container); recent_layout.setContentsMargins(20, 10, 20, 10); recent_layout.setSpacing(4)
             recent_lbl = QLabel("📂 최근 폴더"); recent_lbl.setStyleSheet(f"color: {config.FG}; font-size: 14px; font-weight: bold; border: none; background: transparent;"); recent_layout.addWidget(recent_lbl)
             self._recent_buttons = []
-            max_visible = 1 if getattr(self, '_log_visible', False) else 3
-            for i, folder in enumerate(valid_folders[:3]):
+            max_visible = 3 if getattr(self, '_log_visible', False) else 10
+            for i, folder in enumerate(valid_folders[:10]):
                 display_name = os.path.basename(folder.rstrip('\\/')) or folder
                 file_lbl = QLabel(f"📁 {display_name}"); file_lbl.setStyleSheet(f"QLabel {{ color: {config.FG2}; font-size: 11px; border: none; padding: 2px 4px; background: transparent; }} QLabel:hover {{ color: #4AFF80; background: #3d3d3d; border-radius: 4px; }}"); file_lbl.setCursor(Qt.CursorShape.PointingHandCursor); file_lbl.setToolTip(folder)
                 file_lbl.mousePressEvent = (lambda e, f=folder: self._open_recent(f) if e.button() == Qt.MouseButton.LeftButton else None)

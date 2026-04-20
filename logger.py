@@ -27,7 +27,12 @@ class AppLogger:
         return cls._instance
 
     def set_ui_callback(self, callback):
-        """MainWindow.append_log 등록. 스레드 안전."""
+        """MainWindow.append_log 등록. 중복 방지."""
+        if self._ui_callback:
+            try:
+                self._emitter.log_signal.disconnect(self._ui_callback)
+            except Exception:
+                pass
         self._ui_callback = callback
         self._emitter.log_signal.connect(callback)
 
