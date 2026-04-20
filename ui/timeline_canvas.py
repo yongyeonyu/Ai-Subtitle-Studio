@@ -12,6 +12,7 @@ import numpy as np
 from PyQt6.QtWidgets import QWidget, QSizePolicy
 from PyQt6.QtCore import Qt, QRect, QPoint, pyqtSignal, QTimer
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QCursor, QPolygon, QBrush
+from ui.editor_helpers import find_segment_at
 
 import config
 from ui.timeline_constants import (
@@ -316,20 +317,10 @@ class TimelineCanvas(QWidget):
         self._end_inline_edit()
 
     def _emit_smart_split_at_playhead(self):
-        """
-        ✅ [#6, #10] 플레이헤드 위치의 세그먼트를 찾아 스마트 분할 시그널 emit.
-        - 플레이헤드가 세그먼트 중간보다 왼쪽 → 새자막이 왼쪽, 기존자막 오른쪽
-        - 플레이헤드가 세그먼트 중간보다 오른쪽 → 기존자막 왼쪽, 새자막 오른쪽
-        """
         sec = self.playhead_sec
-        seg = None
-        for s in self.segments:
-            if s["start"] <= sec < s["end"]:
-                seg = s
-                break
+        seg = find_segment_at(self.segments, sec, skip_gap=True)
         if not seg:
             return
-        # 범위 체크 (경계 너무 가까우면 분할 불가)
         if sec <= seg["start"] + 0.05 or sec >= seg["end"] - 0.05:
             return
         mid = (seg["start"] + seg["end"]) / 2.0

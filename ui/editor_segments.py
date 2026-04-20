@@ -15,10 +15,24 @@ from core.data_manager import save_correction as _dm_save_correction
 
 # 수정 — 절대 import로 통일 (editor_widget.py, editor_timeline_video.py와 동일)
 from ui.subtitle_text_edit import SubtitleBlockData
-
+from ui.editor_helpers import get_sub_block_indices
 
 class EditorSegmentsMixin:
     """자막 에디터 조작 / 큐 처리 / 세그먼트 I/O"""
+    # ---------------------------------------------------------
+    # Common Helpers (여러 Mixin에서 공용)
+    # ---------------------------------------------------------
+    def _mark_dirty(self):
+        if hasattr(self, "sm"):
+            self.sm.is_dirty = True
+        else:
+            self._is_dirty = True
+
+    def _finalize_edit(self):
+        self.text_edit.update_margins()
+        if hasattr(self.text_edit, 'timestampArea'):
+            self.text_edit.timestampArea.update()
+        self._schedule_timeline()
 
     # ---------------------------------------------------------
     # Segment Queue
@@ -433,10 +447,7 @@ class EditorSegmentsMixin:
                     cur.block().setUserData(SubtitleBlockData("00", gap_start, is_gap=True))
 
             # 💡 [핵심 수정] 상태 머신의 더티 플래그를 활성화합니다!
-            if hasattr(self, 'sm'):
-                self.sm.is_dirty = True
-            else:
-                self._is_dirty = True 
+            self._mark_dirty()
                 
             self.text_edit.update_margins()
             cur.endEditBlock()
@@ -560,9 +571,5 @@ class EditorSegmentsMixin:
             self.timeline.center_to_sec(split_sec, smooth=True)
         self._sync_lock = False
 
-        if hasattr(self, "sm"): self.sm.is_dirty = True
-        else: self._is_dirty = True
-
-        self.text_edit.update_margins()
-        if hasattr(self.text_edit, 'timestampArea'): self.text_edit.timestampArea.update()
-        self._schedule_timeline()
+        self._mark_dirty()
+        self._finalize_edit()

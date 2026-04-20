@@ -9,15 +9,16 @@ core/backend.py
 - 기존 기능 100% 유지
 """
 
-import os, threading, traceback, queue, json, time, subprocess
+import os, threading, traceback, queue, time
 import config
 from logger import get_logger
 
 from .media_processor import VideoProcessor
 from .time_history import get_expected_time, add_history
+from .settings import load_settings, get_model_key
+from .media_info import probe_media
 
 _SENTINEL = object()
-_SETTINGS_PATH = os.path.join(config.DATASET_DIR, "user_settings.json")
 
 
 class CoreBackend:
@@ -33,15 +34,6 @@ class CoreBackend:
         self.total_expected_time = 0.0
         self.pipeline_start_time = 0.0
         self.is_first_start = True
-
-    def _load_settings(self) -> dict:
-        try:
-            with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data if isinstance(data, dict) else {}
-        except Exception as e:
-            get_logger().log(f"⚠️ 설정 로드 실패: {e}")
-            return {}
 
     def start_pipeline(self, files, folder=None, is_icloud=False, is_auto_start=False):
         self._active = True
@@ -81,56 +73,26 @@ class CoreBackend:
 
     def _precalculate_etas(self):
         total_expected_time = 0.0
-        s = self._load_settings()
-        max_spk = int(s.get('max_speakers', 1))
-        dia_flag = "O" if max_spk > 1 else "X"
-        model_key = f"STT:{s.get('selected_whisper_model','기본')}|LLM:{s.get('selected_model','기본')}|DIA:{dia_flag}"
+        s = load_settings()
+        model_key = get_model_key(s)
 
         for i, target_file in enumerate(self.files_to_process):
             try:
-                cmd = [
-                    'ffprobe', '-v', 'error', '-select_streams', 'v:0',
-                    '-show_entries', 'stream=width,height,r_frame_rate:format=duration',
-                    '-of', 'json', target_file
-                ]
-                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
-                probe = json.loads(result.stdout)
-
-                fmt = probe.get('format', {})
-                duration_sec = float(fmt.get('duration', 0)) if fmt.get('duration') else 0.0
-                streams = probe.get('streams', [])
-
-                if streams:
-                    strm = streams[0]
-                    if duration_sec == 0.0:
-                        duration_sec = float(strm.get('duration', 0)) if strm.get('duration') else 0.0
-                    w, h = strm.get('width', 0), strm.get('height', 0)
-                    fps_str = strm.get('r_frame_rate', '0/0')
-                    if '/' in fps_str:
-                        n, d = fps_str.split('/')
-                        fps = int(n) / int(d) if int(d) != 0 else 0
-                    else:
-                        fps = float(fps_str)
-                    info_txt = f"{w}x{h} ({fps:.2f}fps)" if w and h else "오디오 파일"
-                else:
-                    info_txt = "오디오 파일"
+                info = probe_media(target_file)
+                duration_sec = info["duration"]
+                info_txt = info["info_txt"]
+                len_txt = info["len_txt"]
 
                 self._video_durations[target_file] = duration_sec
-
-                if duration_sec > 0:
-                    m_len, s_len = divmod(int(duration_sec), 60)
-                    h_len, m_len = divmod(m_len, 60)
-                    len_txt = f"{h_len:02d}:{m_len:02d}:{s_len:02d}" if h_len > 0 else f"{m_len:02d}:{s_len:02d}"
-                else:
-                    len_txt = "-"
 
                 expected_time = get_expected_time(model_key, duration_sec)
                 if expected_time > 0:
                     total_expected_time += expected_time
 
                 if hasattr(self.ui, '_sig_update_queue'):
-                    self.ui._sig_update_queue.emit(i, "⏳ 대기 중", str(expected_time), info_txt, len_txt)
-
+                    self.ui._sig_update_queue.emit(
+                        i, "⏳ 대기 중", str(expected_time), info_txt, len_txt
+                    )
             except Exception as e:
                 get_logger().log(f"⚠️ ETA 계산 실패: {os.path.basename(target_file)} / {e}")
                 if hasattr(self.ui, '_sig_update_queue'):
@@ -262,9 +224,8 @@ class CoreBackend:
             get_logger().log("\n  [STEP 2] 🎤 Whisper 변환 + LLM 최적화 파이프라인 가동...")
 
             try:
-                with open(_SETTINGS_PATH, "r", encoding="utf-8") as f: s = json.load(f)
-                max_spk = int(s.get('max_speakers', 1)); dia_flag = "O" if max_spk > 1 else "X"
-                model_key = f"STT:{s.get('selected_whisper_model','기본')}|LLM:{s.get('selected_model','기본')}|DIA:{dia_flag}"
+                s = load_settings()
+                model_key = get_model_key(s)
 
                 if target_file in getattr(self, '_video_durations', {}):
                     video_duration_sec = self._video_durations[target_file]
@@ -311,7 +272,7 @@ class CoreBackend:
                     t_diarize.join()
 
                 try:
-                    s = self._load_settings()
+                    s = load_settings()
                     model_name = s.get('selected_model', '기본')
                     api_key = s.get('google_api_key', '')
                     user_prompt = s.get('custom_prompt', '')
@@ -440,9 +401,8 @@ class CoreBackend:
             t_trans.join(); t_opt.join()
 
             try:
-                with open(_SETTINGS_PATH, "r", encoding="utf-8") as f: s = json.load(f)
-                max_spk = int(s.get('max_speakers', 1)); dia_flag = "O" if max_spk > 1 else "X"
-                model_key = f"STT:{s.get('selected_whisper_model','기본')}|LLM:{s.get('selected_model','기본')}|DIA:{dia_flag}"
+                s = load_settings()
+                model_key = get_model_key(s)
                 proc_time = time.time() - process_start_time
                 add_history(model_key, video_duration_sec, proc_time)
             except Exception: pass
@@ -578,12 +538,12 @@ class CoreBackend:
         return success
 
     def _reload_speaker_settings(self):
-        s = self._load_settings()
+        s = load_settings()
         self.min_speakers = int(s.get("min_speakers", 1))
         self.max_speakers = int(s.get("max_speakers", 1))
 
     def _load_selected_model(self):
-        s = self._load_settings()
+        s = load_settings()
         return s.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
 
     def _prepare_speaker_map(self, audio_path):

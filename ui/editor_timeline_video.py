@@ -1,50 +1,63 @@
-# Version: 01.00.02
+# Version: 01.01.00
 """
 ui/editor_timeline_video.py
-[v01.00.02] 리팩토링 + 버그 수정
-- _on_seg_time_changed: square_left/square_right 드래그 시 Gap 생성 보장
-- 코드 정리 (불필요 주석 제거, 일관성 개선)
+[v01.01.00] 리팩토링: editor_helpers 통합 + probe_media 적용
+- Gap 헬퍼 → editor_helpers.py로 완전 이관
+- ffprobe 직호출 → core.media_info.probe_media() 통합
+- find_segment_at / get_sub_block_indices / _sync_cursor_to_seg 적용
+- _mark_dirty / _finalize_edit 공용 메서드 활용
 """
-import os, json, subprocess
+
+import os
 from PyQt6.QtWidgets import QMenu
 from PyQt6.QtCore import Qt, QTimer, QSettings, QPoint
 from PyQt6.QtGui import QTextCursor, QColor, QIcon, QPixmap, QPainter
 from PyQt6.QtMultimedia import QMediaPlayer
 
 import config
+from core.media_info import probe_media
 from ui.subtitle_text_edit import SubtitleBlockData
+from ui.editor_helpers import (
+    find_segment_at, get_sub_block_indices,
+    make_gap_ud, delete_block_safely, insert_gap_after,
+    merge_adjacent_gaps_around
+)
+
 
 
 class EditorTimelineVideoMixin:
     """타임라인/비디오 동기화 / 화자 관리 / 단축키 액션"""
 
     # ---------------------------------------------------------
-    # Timeline Segment Events
+    # Common: Cursor ↔ Block Sync
     # ---------------------------------------------------------
-    def _on_timeline_seg_clicked(self, line_num: int, start_sec: float):
-        self._active_seg_start = start_sec
-        self.timeline.set_active(start_sec)
-        segs = self._get_current_segments()
-        for seg in segs:
-            if seg["line"] == line_num:
-                self.timeline.center_to_sec((seg["start"] + seg["end"]) / 2, smooth=True)
-                break
-
-        doc = self.text_edit.document()
-        block = doc.findBlockByNumber(line_num)
+    def _sync_cursor_to_seg(self, seg):
+        """커서↔블록 동기화: active 설정 + 하이라이트 + 커서 이동"""
+        self._active_seg_start = seg["start"]
+        self.timeline.set_active(seg["start"])
+        line_num = seg.get("line", 0)
+        self._highlighter.set_current_line(line_num)
+        block = self.text_edit.document().findBlockByNumber(line_num)
         if block.isValid():
-            cur = QTextCursor(block)
             self._sync_lock = True
+            cur = QTextCursor(block)
             self.text_edit.setTextCursor(cur)
             self.text_edit.ensureCursorVisible()
             self._sync_lock = False
-            self._highlighter.set_current_line(line_num)
-            self.text_edit.setFocus()
 
+    # ---------------------------------------------------------
+    # Timeline Segment Events
+    # ---------------------------------------------------------
+    def _on_timeline_seg_clicked(self, line_num: int, start_sec: float):
+        segs = self._get_current_segments()
+        seg = next((s for s in segs if s["line"] == line_num), None)
+        if seg:
+            self._sync_cursor_to_seg(seg)
+            self.timeline.center_to_sec((seg["start"] + seg["end"]) / 2, smooth=True)
+        self.text_edit.setFocus()
         if hasattr(self, 'video_player'):
             self.video_player.pause_video()
             self.video_player.seek(start_sec)
-
         self._redraw_timeline()
 
     def _on_timeline_seg_double_clicked(self, line_num: int, start_sec: float):
@@ -70,11 +83,9 @@ class EditorTimelineVideoMixin:
     def _sync_playhead(self):
         if not hasattr(self, 'video_player') or not hasattr(self, 'timeline'):
             return
-
         player = self.video_player.media_player
         if player.playbackState() != player.PlaybackState.PlayingState:
             return
-
         pos_ms = player.position()
         dur_ms = player.duration()
         if dur_ms <= 0:
@@ -85,32 +96,15 @@ class EditorTimelineVideoMixin:
 
         canvas = self.timeline.canvas
         viewport_w = self.timeline.scroll.viewport().width()
-        center_x = int(current_sec * canvas.pps) - (viewport_w // 2)
-        center_x = max(0, center_x)
-
+        center_x = max(0, int(current_sec * canvas.pps) - (viewport_w // 2))
         self.timeline._target_scroll_x = float(center_x)
         self.timeline._current_scroll_x = float(center_x)
         self.timeline.scroll.horizontalScrollBar().setValue(center_x)
 
-        # ✅ [#7] 재생 중 텍스트 에디터도 현재 세그먼트에 맞춰 커서 이동
         segs = getattr(self, '_cached_segs', None) or self._get_current_segments()
-        for seg in segs:
-            if seg.get("is_gap"):
-                continue
-            if seg["start"] <= current_sec < seg["end"]:
-                if self._active_seg_start != seg["start"]:
-                    self._active_seg_start = seg["start"]
-                    self.timeline.set_active(seg["start"])
-                    line_num = seg.get("line", 0)
-                    self._highlighter.set_current_line(line_num)
-                    block = self.text_edit.document().findBlockByNumber(line_num)
-                    if block.isValid():
-                        self._sync_lock = True
-                        cur = QTextCursor(block)
-                        self.text_edit.setTextCursor(cur)
-                        self.text_edit.ensureCursorVisible()
-                        self._sync_lock = False
-                break
+        seg = find_segment_at(segs, current_sec, skip_gap=True)
+        if seg and self._active_seg_start != seg["start"]:
+            self._sync_cursor_to_seg(seg)
 
     def _on_scrub(self, sec: float):
         self.timeline.set_playhead(sec)
@@ -122,22 +116,10 @@ class EditorTimelineVideoMixin:
                 self.video_player.media_player.pause()
 
         segs = getattr(self, '_cached_segs', None) or self._get_current_segments()
-        for seg in segs:
-            if seg["start"] <= sec < seg["end"]:
-                if self._active_seg_start != seg["start"]:
-                    self._active_seg_start = seg["start"]
-                    self.timeline.set_active(seg["start"])
-                    self.timeline.center_to_sec(sec, smooth=True)
-                    line_num = seg.get("line", 0)
-                    self._highlighter.set_current_line(line_num)
-                    block = self.text_edit.document().findBlockByNumber(line_num)
-                    if block.isValid():
-                        cur = QTextCursor(block)
-                        self._sync_lock = True
-                        self.text_edit.setTextCursor(cur)
-                        self.text_edit.ensureCursorVisible()
-                        self._sync_lock = False
-                break
+        seg = find_segment_at(segs, sec, skip_gap=False)
+        if seg and self._active_seg_start != seg["start"]:
+            self._sync_cursor_to_seg(seg)
+            self.timeline.center_to_sec(sec, smooth=True)
 
     def _on_step_frame(self, direction: int):
         if not hasattr(self, 'video_player'):
@@ -151,21 +133,10 @@ class EditorTimelineVideoMixin:
         self.video_player.seek(new_sec)
 
         segs = self._get_current_segments()
-        for seg in segs:
-            if seg["start"] <= new_sec < seg["end"]:
-                if self._active_seg_start != seg["start"]:
-                    self._active_seg_start = seg["start"]
-                    self.timeline.set_active(seg["start"])
-                    line_num = seg.get("line", 0)
-                    self._highlighter.set_current_line(line_num)
-                    block = self.text_edit.document().findBlockByNumber(line_num)
-                    if block.isValid():
-                        cur = QTextCursor(block)
-                        self._sync_lock = True
-                        self.text_edit.setTextCursor(cur)
-                        self.text_edit.ensureCursorVisible()
-                        self._sync_lock = False
-                break
+        seg = find_segment_at(segs, new_sec, skip_gap=False)
+        if seg and self._active_seg_start != seg["start"]:
+            self._sync_cursor_to_seg(seg)
+
         self.timeline.set_playhead(new_sec)
         self.timeline.center_to_sec(new_sec, smooth=False)
 
@@ -176,6 +147,7 @@ class EditorTimelineVideoMixin:
         doc = self.text_edit.document()
         cur = QTextCursor(doc)
         cur.beginEditBlock()
+
         block = doc.findBlockByNumber(line_num)
         if not block.isValid():
             cur.endEditBlock()
@@ -186,17 +158,17 @@ class EditorTimelineVideoMixin:
             cur.endEditBlock()
             return
 
-        old_start = ud.start_sec
-        ud.start_sec = round(new_start, 2)
+        old_start = float(ud.start_sec)
+        ud.start_sec = round(float(new_start), 2)
 
-        # 같은 자막 덩어리의 하위 줄도 시작 시간 동기화
-        for i in range(line_num + 1, doc.blockCount()):
-            b = doc.findBlockByNumber(i)
-            u = b.userData()
-            if isinstance(u, SubtitleBlockData) and abs(u.start_sec - old_start) < 0.05 and not u.is_gap:
+        for idx in get_sub_block_indices(doc, line_num, old_start)[1:]:
+            u = doc.findBlockByNumber(idx).userData()
+            if isinstance(u, SubtitleBlockData):
                 u.start_sec = ud.start_sec
-            else:
-                break
+
+        sub_now = get_sub_block_indices(doc, line_num, ud.start_sec)
+        last_idx = sub_now[-1] if sub_now else line_num
+        last_block = doc.findBlockByNumber(last_idx)
 
         # ── 앞쪽 Gap 처리 ──
         prev_block = block.previous()
@@ -204,69 +176,33 @@ class EditorTimelineVideoMixin:
             prev_ud = prev_block.userData()
             if isinstance(prev_ud, SubtitleBlockData):
                 if prev_ud.is_gap:
-                    # 기존 Gap이 현재 자막과 겹치면 제거
-                    if abs(prev_ud.start_sec - ud.start_sec) < 0.05:
-                        c2 = QTextCursor(prev_block)
-                        c2.select(QTextCursor.SelectionType.BlockUnderCursor)
-                        c2.removeSelectedText()
-                        if not c2.atEnd():
-                            c2.deleteChar()
+                    if abs(float(prev_ud.start_sec) - float(ud.start_sec)) < 0.05:
+                        delete_block_safely(prev_block)
                 else:
-                    # ✅ 버그1 수정: 앞으로 당길 때 (start가 뒤로 이동) Gap 생성
-                    if edge_type not in ("diamond", "gap") and new_start > old_start + 0.05:
-                        c2 = QTextCursor(prev_block)
-                        c2.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-                        c2.insertText("\n")
-                        c2.block().setUserData(SubtitleBlockData("00", old_start, is_gap=True))
+                    if edge_type not in ("diamond", "gap") and float(new_start) > old_start + 0.05:
+                        insert_gap_after(prev_block, old_start)
 
         # ── 뒤쪽 Gap 처리 ──
-        # 블록 인덱스가 변경되었을 수 있으므로 다시 탐색
-        block = doc.findBlockByNumber(line_num)
-        if not block.isValid():
-            cur.endEditBlock()
-            return
-
-        # 같은 자막 덩어리의 마지막 줄 찾기
-        last_block = block
-        while True:
-            nxt = last_block.next()
-            if nxt.isValid():
-                n_ud = nxt.userData()
-                if isinstance(n_ud, SubtitleBlockData) and not n_ud.is_gap and abs(n_ud.start_sec - ud.start_sec) < 0.05:
-                    last_block = nxt
-                else:
-                    break
-            else:
-                break
-
         next_block = last_block.next()
         if next_block.isValid():
             next_ud = next_block.userData()
             if isinstance(next_ud, SubtitleBlockData):
                 if not next_ud.is_gap:
-                    is_same_subtitle = abs(next_ud.start_sec - ud.start_sec) < 0.05
-                    # ✅ 버그1 수정: 뒤로 당길 때 (end가 앞으로 이동) Gap 생성
-                    if not is_same_subtitle and edge_type not in ("diamond", "gap") and new_end < next_ud.start_sec - 0.05:
-                        c3 = QTextCursor(last_block)
-                        c3.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-                        c3.insertText("\n")
-                        c3.block().setUserData(SubtitleBlockData("00", new_end, is_gap=True))
+                    is_same = abs(float(next_ud.start_sec) - float(ud.start_sec)) < 0.05
+                    if (not is_same
+                            and edge_type not in ("diamond", "gap")
+                            and float(new_end) < float(next_ud.start_sec) - 0.05):
+                        insert_gap_after(last_block, float(new_end))
                 else:
-                    # 기존 Gap 시간 업데이트 또는 제거
-                    next_next_block = next_block.next()
-                    if next_next_block.isValid():
-                        nnu = next_next_block.userData()
-                        if isinstance(nnu, SubtitleBlockData) and abs(new_end - nnu.start_sec) < 0.05:
-                            # Gap이 불필요해짐 → 제거
-                            c3 = QTextCursor(next_block)
-                            c3.select(QTextCursor.SelectionType.BlockUnderCursor)
-                            c3.removeSelectedText()
-                            if not c3.atEnd():
-                                c3.deleteChar()
+                    next_next = next_block.next()
+                    if next_next.isValid():
+                        nnu = next_next.userData()
+                        if isinstance(nnu, SubtitleBlockData) and abs(float(new_end) - float(nnu.start_sec)) < 0.05:
+                            delete_block_safely(next_block)
                         else:
-                            next_ud.start_sec = new_end
+                            next_ud.start_sec = round(float(new_end), 2)
                     else:
-                        next_ud.start_sec = new_end
+                        next_ud.start_sec = round(float(new_end), 2)
 
         self.text_edit.update_margins()
         cur.endEditBlock()
@@ -275,7 +211,7 @@ class EditorTimelineVideoMixin:
         QTimer.singleShot(0, self._redraw_timeline)
 
     def _on_seg_to_gap(self, line_num: int):
-        """자막 세그먼트 → 무음구간(Gap)으로 변환 (블록 삭제 X, Gap 변환 O)"""
+        """자막 세그먼트 → 무음구간(Gap)으로 변환"""
         self._undo_mgr.push_immediate()
         doc = self.text_edit.document()
         block = doc.findBlockByNumber(line_num)
@@ -286,76 +222,29 @@ class EditorTimelineVideoMixin:
         if not isinstance(ud, SubtitleBlockData) or ud.is_gap:
             return
 
-        seg_start = ud.start_sec
+        seg_start = float(ud.start_sec)
+        sub_indices = get_sub_block_indices(doc, line_num, seg_start)
 
         cur = QTextCursor(doc)
         cur.beginEditBlock()
 
-        # ── 1) 같은 start_sec인 하위 블록(화자 분리 등) 수집 ──
-        sub_indices = [line_num]
-        for i in range(line_num + 1, doc.blockCount()):
-            b = doc.findBlockByNumber(i)
-            b_ud = b.userData()
-            if (isinstance(b_ud, SubtitleBlockData)
-                    and not b_ud.is_gap
-                    and abs(b_ud.start_sec - seg_start) < 0.05):
-                sub_indices.append(i)
-            else:
-                break
-
-        # ── 2) 하위 블록 삭제 (첫 번째만 남김, 뒤에서부터) ──
+        # 하위 블록 삭제 (첫 번째만 남김)
         for idx in reversed(sub_indices[1:]):
-            b = doc.findBlockByNumber(idx)
-            c = QTextCursor(b)
-            c.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            c.movePosition(QTextCursor.MoveOperation.EndOfBlock,
-                            QTextCursor.MoveMode.KeepAnchor)
-            c.removeSelectedText()
-            c.deletePreviousChar()
+            delete_block_safely(doc.findBlockByNumber(idx))
 
-        # ── 3) 첫 번째 블록: 텍스트만 비우고 Gap으로 변환 ──
+        # 첫 블록: 텍스트 제거 + Gap 변환
         block = doc.findBlockByNumber(line_num)
         cur.setPosition(block.position())
-        cur.movePosition(QTextCursor.MoveOperation.EndOfBlock,
-                          QTextCursor.MoveMode.KeepAnchor)
+        cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
         cur.removeSelectedText()
-        block.setUserData(SubtitleBlockData("00", round(seg_start, 2), is_gap=True))
+        block.setUserData(make_gap_ud(seg_start))
 
-        # ── 4) 인접 Gap 병합 (연속 Gap 방지) ──
-        current_line = block.blockNumber()
+        # 인접 Gap 병합
+        merge_adjacent_gaps_around(block)
 
-        # 뒤쪽 Gap 흡수
-        next_b = block.next()
-        if next_b.isValid():
-            n_ud = next_b.userData()
-            if isinstance(n_ud, SubtitleBlockData) and n_ud.is_gap:
-                c2 = QTextCursor(next_b)
-                c2.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                c2.movePosition(QTextCursor.MoveOperation.EndOfBlock,
-                                QTextCursor.MoveMode.KeepAnchor)
-                c2.removeSelectedText()
-                # 기존 (버그): c2.deleteChar()
-                #   → 다음 블록(자막)이 Gap 블록에 병합 → userData 소멸!
-                # 수정: deletePreviousChar → 빈 Gap을 이전 블록에 병합 (다음 블록 무관)
-                c2.deletePreviousChar()
-
-        # 앞쪽 Gap 흡수 (앞 Gap의 start가 더 빠르므로 현재 블록을 삭제)
-        block = doc.findBlockByNumber(current_line)
-        prev_b = block.previous()
-        if prev_b.isValid():
-            p_ud = prev_b.userData()
-            if isinstance(p_ud, SubtitleBlockData) and p_ud.is_gap:
-                c3 = QTextCursor(block)
-                c3.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                c3.movePosition(QTextCursor.MoveOperation.EndOfBlock,
-                                QTextCursor.MoveMode.KeepAnchor)
-                c3.removeSelectedText()
-                c3.deletePreviousChar()
-
-        self.text_edit.update_margins()
         cur.endEditBlock()
         self.text_edit.setTextCursor(cur)
-        self._schedule_timeline()
+        self._finalize_edit()
 
     def _on_gap_activated(self, gap_start: float, gap_end: float):
         self._undo_mgr.push_immediate()
@@ -383,7 +272,7 @@ class EditorTimelineVideoMixin:
                 if orig_time > gap_end + 0.05:
                     cur.setPosition(doc.findBlockByNumber(1).position())
                     cur.insertText("\n")
-                    doc.findBlockByNumber(1).setUserData(SubtitleBlockData("00", gap_end, is_gap=True))
+                    doc.findBlockByNumber(1).setUserData(make_gap_ud(gap_end))
                     doc.findBlockByNumber(2).setUserData(SubtitleBlockData(orig_spk, orig_time, is_gap=False))
         else:
             target_idx = None
@@ -402,7 +291,7 @@ class EditorTimelineVideoMixin:
                 if not next_b.isValid() or (isinstance(next_b.userData(), SubtitleBlockData) and next_b.userData().start_sec > gap_end + 0.05):
                     cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
                     cur.insertText("\n")
-                    cur.block().setUserData(SubtitleBlockData("00", gap_end, is_gap=True))
+                    cur.block().setUserData(make_gap_ud(gap_end))
             else:
                 cur.movePosition(QTextCursor.MoveOperation.End)
                 if doc.lastBlock().text().strip():
@@ -410,14 +299,11 @@ class EditorTimelineVideoMixin:
                 cur.insertText("새 자막")
                 cur.block().setUserData(SubtitleBlockData(self.settings.get("spk1_id", "00"), gap_start, is_gap=False))
                 cur.insertText("\n")
-                cur.block().setUserData(SubtitleBlockData("00", gap_end, is_gap=True))
+                cur.block().setUserData(make_gap_ud(gap_end))
 
-        self.text_edit.update_margins()
         cur.endEditBlock()
         self.text_edit.setTextCursor(cur)
-        if hasattr(self.text_edit, 'timestampArea'):
-            self.text_edit.timestampArea.update()
-        self._schedule_timeline()
+        self._finalize_edit()
 
     def _on_gap_to_segs(self, gap_start: float, gap_end: float):
         self._undo_mgr.push_immediate()
@@ -433,188 +319,103 @@ class EditorTimelineVideoMixin:
         if right:
             right["start"] = round(right["start"] - gap_dur * pull, 2)
             self._on_seg_time_changed(right.get("line", 0), right["start"], right["end"], "gap")
-        self.text_edit.update_margins()
+
         self.text_edit.textCursor().endEditBlock()
-        self._schedule_timeline()
+        self._finalize_edit()
 
     def _on_diamond_merge(self, left_line: int, right_line: int):
-        """다이아몬드 더블클릭: 좌우 자막 세그먼트 1쌍만 병합 (선택+교체 방식)"""
+        """다이아몬드 더블클릭: 좌우 자막 세그먼트 1쌍만 병합"""
         self._undo_mgr.push_immediate()
         doc = self.text_edit.document()
 
         left_block = doc.findBlockByNumber(left_line)
         right_block = doc.findBlockByNumber(right_line)
-        if not left_block.isValid() or not right_block.isValid():
-            return
+        if not left_block.isValid() or not right_block.isValid(): return
 
         left_ud = left_block.userData()
         right_ud = right_block.userData()
-        if not isinstance(left_ud, SubtitleBlockData) or not isinstance(right_ud, SubtitleBlockData):
-            return
-        if left_ud.is_gap or right_ud.is_gap:
-            return
+        if not isinstance(left_ud, SubtitleBlockData) or not isinstance(right_ud, SubtitleBlockData): return
+        if left_ud.is_gap or right_ud.is_gap: return
 
-        left_start = left_ud.start_sec
-        right_start = right_ud.start_sec
+        left_last = get_sub_block_indices(doc, left_line, left_ud.start_sec)[-1]
+        right_last = get_sub_block_indices(doc, right_line, right_ud.start_sec)[-1]
 
-        # ── 1) 왼쪽 세그먼트의 마지막 블록 ──
-        left_last = left_line
-        for i in range(left_line + 1, doc.blockCount()):
-            b = doc.findBlockByNumber(i)
-            b_ud = b.userData()
-            if (isinstance(b_ud, SubtitleBlockData)
-                    and not b_ud.is_gap
-                    and abs(b_ud.start_sec - left_start) < 0.05):
-                left_last = i
-            else:
-                break
-
-        # ── 2) 오른쪽 세그먼트의 마지막 블록 (딱 1개 세그먼트만) ──
-        right_last = right_line
-        for i in range(right_line + 1, doc.blockCount()):
-            b = doc.findBlockByNumber(i)
-            b_ud = b.userData()
-            if (isinstance(b_ud, SubtitleBlockData)
-                    and not b_ud.is_gap
-                    and abs(b_ud.start_sec - right_start) < 0.05):
-                right_last = i
-            else:
-                break
-
-        # ── 3) 오른쪽 텍스트 수집 ──
         right_texts = []
         for i in range(right_line, right_last + 1):
-            b = doc.findBlockByNumber(i)
-            t = b.text()
-            if t.strip():
-                right_texts.append(t)
-        if not right_texts:
-            return
+            t = doc.findBlockByNumber(i).text()
+            if t.strip(): right_texts.append(t)
+        if not right_texts: return
 
         cur = QTextCursor(doc)
         cur.beginEditBlock()
 
-        # ── 4) 핵심: "왼쪽 끝 ~ 오른쪽 끝" 범위를 선택 후 소프트 줄바꿈으로 교체 ──
-        #    이 방식은 오른쪽 블록을 별도로 삭제하지 않으므로
-        #    자막3(오른쪽 다음 블록)을 절대 건드리지 않습니다.
         left_last_block = doc.findBlockByNumber(left_last)
         right_last_block = doc.findBlockByNumber(right_last)
 
-        # 왼쪽 마지막 블록 끝에서 시작
         cur.setPosition(left_last_block.position())
         cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-
-        # 오른쪽 마지막 블록 끝까지 선택
         right_end = QTextCursor(right_last_block)
         right_end.movePosition(QTextCursor.MoveOperation.EndOfBlock)
         cur.setPosition(right_end.position(), QTextCursor.MoveMode.KeepAnchor)
 
-        # 선택 영역을 소프트 줄바꿈 텍스트로 교체
-        replacement = "\u2028".join(right_texts)
-        cur.insertText("\u2028" + replacement)
-
+        cur.insertText("\u2028" + "\u2028".join(right_texts))
         cur.endEditBlock()
 
-        if hasattr(self, "sm"):
-            self.sm.is_dirty = True
-        else:
-            self._is_dirty = True
-
-        self.text_edit.update_margins()
-        if hasattr(self.text_edit, 'timestampArea'):
-            self.text_edit.timestampArea.update()
-        self._schedule_timeline()
+        self._mark_dirty()
+        self._finalize_edit()
 
     def _on_smart_split(self, line_num: int, split_sec: float, new_on_left: bool):
-        """
-        ✅ [#6, #10] 스마트 자막 분할
-        - new_on_left=True  → 플레이헤드가 중간 왼쪽: 왼쪽에 "새자막", 기존자막은 오른쪽
-        - new_on_left=False → 플레이헤드가 중간 오른쪽: 기존자막은 왼쪽, 오른쪽에 "새자막"
-        """
+        """스마트 자막 분할"""
         self._undo_mgr.push_immediate()
         doc = self.text_edit.document()
         block = doc.findBlockByNumber(int(line_num))
-        if not block.isValid():
-            return
+        if not block.isValid(): return
 
         ud = block.userData()
-        if not isinstance(ud, SubtitleBlockData) or ud.is_gap:
-            return
+        if not isinstance(ud, SubtitleBlockData) or ud.is_gap: return
 
         seg_start = float(ud.start_sec)
         spk_id = ud.spk_id
         split_sec = float(split_sec)
+        if split_sec <= seg_start + 0.05: return
 
-        # 범위 체크
-        if split_sec <= seg_start + 0.05:
-            return
-
-        # 기존 텍스트 수집 (같은 start_sec 블록 전부)
-        full_lines = []
-        sub_indices = [block.blockNumber()]
-        full_lines.append(block.text())
-        for i in range(block.blockNumber() + 1, doc.blockCount()):
-            b = doc.findBlockByNumber(i)
-            b_ud = b.userData()
-            if (isinstance(b_ud, SubtitleBlockData)
-                    and not b_ud.is_gap
-                    and abs(b_ud.start_sec - seg_start) < 0.05):
-                sub_indices.append(i)
-                full_lines.append(b.text())
-            else:
-                break
-
+        sub_indices = get_sub_block_indices(doc, block.blockNumber(), seg_start)
+        full_lines = [doc.findBlockByNumber(idx).text() for idx in sub_indices]
         original_text = "\u2028".join(full_lines)
 
         cur = QTextCursor(doc)
         cur.beginEditBlock()
 
-        # ── 하위 블록 삭제 (뒤에서부터, 첫 번째만 남김) ──
         for idx in reversed(sub_indices[1:]):
             b = doc.findBlockByNumber(idx)
             c = QTextCursor(b)
             c.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            c.movePosition(QTextCursor.MoveOperation.EndOfBlock,
-                            QTextCursor.MoveMode.KeepAnchor)
+            c.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
             c.removeSelectedText()
-            if doc.blockCount() > 1:
-                c.deletePreviousChar()
+            if doc.blockCount() > 1: c.deletePreviousChar()
 
-        # ── 첫 번째 블록 텍스트 교체 + 새 블록 삽입 ──
         block = doc.findBlockByNumber(sub_indices[0])
         cur.setPosition(block.position())
-        cur.movePosition(QTextCursor.MoveOperation.EndOfBlock,
-                          QTextCursor.MoveMode.KeepAnchor)
+        cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
         cur.removeSelectedText()
 
         if new_on_left:
-            # 왼쪽 = "새자막" (seg_start ~ split_sec)
-            # 오른쪽 = 기존 텍스트 (split_sec ~ 원래 end)
             cur.insertText("새자막")
-            cur.block().setUserData(
-                SubtitleBlockData(spk_id, round(seg_start, 2), is_gap=False))
-
+            cur.block().setUserData(SubtitleBlockData(spk_id, round(seg_start, 2), is_gap=False))
             cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
             cur.insertBlock()
             cur.insertText(original_text)
-            cur.block().setUserData(
-                SubtitleBlockData(spk_id, round(split_sec, 2), is_gap=False))
+            cur.block().setUserData(SubtitleBlockData(spk_id, round(split_sec, 2), is_gap=False))
         else:
-            # 왼쪽 = 기존 텍스트 (seg_start ~ split_sec)
-            # 오른쪽 = "새자막" (split_sec ~ 원래 end)
             cur.insertText(original_text)
-            cur.block().setUserData(
-                SubtitleBlockData(spk_id, round(seg_start, 2), is_gap=False))
-
+            cur.block().setUserData(SubtitleBlockData(spk_id, round(seg_start, 2), is_gap=False))
             cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
             cur.insertBlock()
             cur.insertText("새자막")
-            cur.block().setUserData(
-                SubtitleBlockData(spk_id, round(split_sec, 2), is_gap=False))
+            cur.block().setUserData(SubtitleBlockData(spk_id, round(split_sec, 2), is_gap=False))
 
         cur.endEditBlock()
 
-        # ✅ 타임라인 튕김 방지
         self._sync_lock = True
         cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
         self.text_edit.setTextCursor(cur)
@@ -624,15 +425,8 @@ class EditorTimelineVideoMixin:
             self.timeline.center_to_sec(split_sec, smooth=True)
         self._sync_lock = False
 
-        if hasattr(self, "sm"):
-            self.sm.is_dirty = True
-        else:
-            self._is_dirty = True
-
-        self.text_edit.update_margins()
-        if hasattr(self.text_edit, 'timestampArea'):
-            self.text_edit.timestampArea.update()
-        self._schedule_timeline()
+        self._mark_dirty()
+        self._finalize_edit()
 
     # ---------------------------------------------------------
     # Video Control
@@ -667,20 +461,9 @@ class EditorTimelineVideoMixin:
         self.video_player.load(path, segs)
         if hasattr(self.timeline, 'load_waveform'):
             self.timeline.load_waveform(path)
-        self.video_fps = 30.0
-        try:
-            cmd = ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
-                   '-show_entries', 'stream=r_frame_rate', '-of', 'json', path]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3)
-            probe = json.loads(res.stdout)
-            fps_str = probe.get('streams', [{}])[0].get('r_frame_rate', '30/1')
-            if '/' in fps_str:
-                n, d = fps_str.split('/')
-                self.video_fps = float(n) / float(d) if float(d) != 0 else 30.0
-            else:
-                self.video_fps = float(fps_str)
-        except Exception:
-            pass
+
+        info = probe_media(path)
+        self.video_fps = info.get("fps", 0.0) or 30.0
 
         self._vid_wait_cnt = 0
         def init_video():
@@ -744,22 +527,18 @@ class EditorTimelineVideoMixin:
         self._undo_mgr.push_immediate()
         doc = self.text_edit.document()
         block = doc.findBlockByNumber(line_num)
-        if block.isValid():
-            ud = block.userData()
-            if isinstance(ud, SubtitleBlockData):
-                old_start = ud.start_sec
-                ud.spk_id = new_spk_id
-                for i in range(line_num + 1, doc.blockCount()):
-                    b = doc.findBlockByNumber(i)
-                    u = b.userData()
-                    if isinstance(u, SubtitleBlockData) and abs(u.start_sec - old_start) < 0.05 and not u.is_gap:
-                        u.spk_id = new_spk_id
-                    else:
-                        break
-                self._highlighter.rehighlight()
-                if hasattr(self.text_edit, 'timestampArea'):
-                    self.text_edit.timestampArea.update()
-                self._schedule_timeline()
+        if not block.isValid(): return
+        ud = block.userData()
+        if not isinstance(ud, SubtitleBlockData): return
+
+        ud.spk_id = new_spk_id
+        for idx in get_sub_block_indices(doc, line_num, ud.start_sec)[1:]:
+            u = doc.findBlockByNumber(idx).userData()
+            if isinstance(u, SubtitleBlockData):
+                u.spk_id = new_spk_id
+
+        self._highlighter.rehighlight()
+        self._finalize_edit()
 
     def _on_speaker_circle_dropped(self, from_line: int, to_line: int):
         self._undo_mgr.push_immediate()
@@ -790,12 +569,10 @@ class EditorTimelineVideoMixin:
             new_b = doc.findBlockByNumber(idx)
             if blocks_data[i]["ud"]:
                 new_b.setUserData(blocks_data[i]["ud"])
-        self.text_edit.update_margins()
+
         cursor.endEditBlock()
         self._highlighter.rehighlight()
-        if hasattr(self.text_edit, 'timestampArea'):
-            self.text_edit.timestampArea.update()
-        self._schedule_timeline()
+        self._finalize_edit()
 
     # ---------------------------------------------------------
     # Shortcut Actions
@@ -856,11 +633,7 @@ class EditorTimelineVideoMixin:
         if sec > orig_start and prev_block.isValid():
             prev_ud = prev_block.userData()
             if isinstance(prev_ud, SubtitleBlockData) and not prev_ud.is_gap:
-                c = QTextCursor(prev_block)
-                c.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-                c.insertText("\n")
-                gap_block = prev_block.next()
-                gap_block.setUserData(SubtitleBlockData("00", orig_start, is_gap=True))
+                insert_gap_after(prev_block, orig_start)
 
         b = first_block
         while b.isValid():
@@ -908,11 +681,7 @@ class EditorTimelineVideoMixin:
         if next_block.isValid() and isinstance(next_block.userData(), SubtitleBlockData) and next_block.userData().is_gap:
             next_block.userData().start_sec = sec
         else:
-            c = QTextCursor(last_block)
-            c.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-            c.insertText("\n")
-            gap_block = last_block.next()
-            gap_block.setUserData(SubtitleBlockData("00", sec, is_gap=True))
+            insert_gap_after(last_block, sec)
 
         cur.endEditBlock()
         self.text_edit.update_margins()

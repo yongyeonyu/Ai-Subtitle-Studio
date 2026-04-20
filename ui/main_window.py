@@ -30,9 +30,7 @@ from core.path_manager import (
     get_icloud_auto_detect, get_nas_auto_detect
 )
 from ui.folder_dialog import FolderDialog
-
-DATASET_DIR   = "dataset"
-SETTINGS_FILE = os.path.join(DATASET_DIR, "user_settings.json")
+from core.settings import load_settings, save_settings
 
 
 class MainWindow(QueueMixin, ProjectUIMixin, CloudUIMixin, QMainWindow):
@@ -74,32 +72,19 @@ class MainWindow(QueueMixin, ProjectUIMixin, CloudUIMixin, QMainWindow):
             self._cloud_sync_manager.start()
 
     # ── 설정 ──
-    def _load_local_settings(self):
-        if os.path.exists(SETTINGS_FILE):
-            try:
-                with open(SETTINGS_FILE, "r", encoding="utf-8") as f: return json.load(f)
-            except Exception: pass
-        return {}
-
-    def _save_local_settings(self, data):
-        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
-        try:
-            with open(SETTINGS_FILE, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception: pass
-
     def _add_recent_folder(self, folder_path):
         if not folder_path or not str(folder_path).strip(): return
         add_recent_folder(folder_path)
         self.recent_folders = get_recent_folders()
-        settings = self._load_local_settings()
+        settings = load_settings()
         recent = settings.get("recent_folders", [])
         if folder_path in recent: recent.remove(folder_path)
         recent.insert(0, folder_path)
         self.recent_folders = recent[:3]
         settings["recent_folders"] = self.recent_folders
-        self._save_local_settings(settings)
+        save_settings(settings)
         if self.add_recent_folder_callback: self.add_recent_folder_callback(folder_path)
-
+    
     # ── UI 빌드 ──
     def _build_ui(self):
         central = QWidget(); self.setCentralWidget(central)
@@ -145,7 +130,7 @@ class MainWindow(QueueMixin, ProjectUIMixin, CloudUIMixin, QMainWindow):
         queue_layout.addWidget(self.queue_table); self.log_splitter.addWidget(term_widget); self.log_splitter.addWidget(queue_widget)
         self.log_splitter.setStretchFactor(0, 1); self.log_splitter.setStretchFactor(1, 1); self.log_splitter.setSizes([500, 500])
         lc_layout_main.addWidget(self.log_splitter); layout.addWidget(self._log_content)
-        settings = self._load_local_settings(); self._log_visible = settings.get("show_terminal_log", False)
+        settings = load_settings(); self._log_visible = settings.get("show_terminal_log", False)
         if self._log_visible: self._log_content.show(); self._log_toggle_btn.setText("▼ 터미널 로그 숨기기")
         else: self._log_content.hide(); self._log_toggle_btn.setText("▲ 터미널 로그 보기")
         self._queue_anim_frames = ["📑", "📄", "📃", "📝"]; self._queue_anim_idx = 0
@@ -341,7 +326,7 @@ class MainWindow(QueueMixin, ProjectUIMixin, CloudUIMixin, QMainWindow):
         for i, btn in enumerate(getattr(self, '_recent_buttons', [])):
             try: btn.setVisible(i == 0 if self._log_visible else True)
             except: pass
-        settings = self._load_local_settings(); settings["show_terminal_log"] = self._log_visible; self._save_local_settings(settings)
+        settings = load_settings(); settings["show_terminal_log"] = self._log_visible; save_settings(settings)
         if self._editor_widget and hasattr(self._editor_widget, 'set_terminal_visible_layout'): self._editor_widget.set_terminal_visible_layout(self._log_visible)
         QTimer.singleShot(10, self._refresh_video)
 
