@@ -157,14 +157,29 @@ class VideoProcessor:
                 with wave.open(cleaned_wav, "r") as w:
                     total_dur = w.getnframes() / float(w.getframerate())
 
-                grouped = []
+                GAP_MERGE_LIMIT = 3.0
+
+                merged_sectors = []
                 for ts in vad_segments:
-                    cur_start = max(0.0, ts["start"] - MARGIN)
-                    sec_end = min(total_dur, ts["end"] + MARGIN)
-                    while cur_start < sec_end:
-                        cur_end = min(sec_end, cur_start + MAX_CHUNK_DUR)
-                        grouped.append({"start": cur_start, "end": cur_end})
-                        cur_start = cur_end
+                    s = max(0.0, ts["start"] - MARGIN)
+                    e = min(total_dur, ts["end"] + MARGIN)
+                    if merged_sectors and (s - merged_sectors[-1]["end"]) <= GAP_MERGE_LIMIT:
+                        merged_sectors[-1]["end"] = e
+                    else:
+                        merged_sectors.append({"start": s, "end": e})
+
+                grouped = []
+                
+                for seg in merged_sectors:
+                    dur = seg["end"] - seg["start"]
+                    if dur <= MAX_CHUNK_DUR:
+                        grouped.append(seg)
+                    else:
+                        cur_start = seg["start"]
+                        while cur_start < seg["end"]:
+                            cur_end = min(seg["end"], cur_start + MAX_CHUNK_DUR)
+                            grouped.append({"start": cur_start, "end": cur_end})
+                            cur_start = cur_end
 
                 for idx, seg in enumerate(grouped):
                     out = os.path.join(chunk_dir, f"vad_{idx:03d}_{seg['start']:.3f}.wav")
@@ -280,15 +295,34 @@ class VideoProcessor:
                 get_logger().log(f"  [{int(sm):02d}:{ss:05.2f}] 음성섹터{i+1} 확보 완료")
             
             MAX_CHUNK_DUR = 30.0
-            MARGIN = 1.0 
-            grouped = []
+            MARGIN = 1.0
+            GAP_MERGE_LIMIT = 3.0  # ✅ 섹터 간 갭이 3초 이내면 하나로 묶음
+
+            # ✅ 1단계: 인접 섹터 병합 (짧은 섹터들을 하나로)
+            merged_sectors = []
             for ts in timestamps:
-                cur_start = max(0.0, ts["start"] - MARGIN)
-                sec_end = min(total_dur, ts["end"] + MARGIN)
-                while cur_start < sec_end:
-                    cur_end = min(sec_end, cur_start + MAX_CHUNK_DUR)
-                    grouped.append({"start": cur_start, "end": cur_end})
-                    cur_start = cur_end
+                s = max(0.0, ts["start"] - MARGIN)
+                e = min(total_dur, ts["end"] + MARGIN)
+                if merged_sectors and (s - merged_sectors[-1]["end"]) <= GAP_MERGE_LIMIT:
+                    # 이전 섹터와 갭이 작으면 병합
+                    merged_sectors[-1]["end"] = e
+                else:
+                    merged_sectors.append({"start": s, "end": e})
+
+            # ✅ 2단계: 30초 초과 섹터만 분할
+            grouped = []
+            for seg in merged_sectors:
+                dur = seg["end"] - seg["start"]
+                if dur <= MAX_CHUNK_DUR:
+                    # 30초 이하 → 그대로 1개 청크
+                    grouped.append(seg)
+                else:
+                    # 30초 초과 → 분할
+                    cur_start = seg["start"]
+                    while cur_start < seg["end"]:
+                        cur_end = min(seg["end"], cur_start + MAX_CHUNK_DUR)
+                        grouped.append({"start": cur_start, "end": cur_end})
+                        cur_start = cur_end
 
             for idx, seg in enumerate(grouped):
                 out = os.path.join(chunk_dir, f"vad_{idx:03d}_{seg['start']:.3f}.wav")
