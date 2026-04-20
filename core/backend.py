@@ -464,10 +464,13 @@ class CoreBackend:
 
                     auto_collected_segs.extend(opt)
 
-                    if hasattr(self.ui, "_sig_append_segments"):
-                        self.ui._sig_append_segments.emit(opt)
-                    if hasattr(self.ui, "_sig_update_status"):
-                        self.ui._sig_update_status.emit(last_c_idx, last_t_total)
+                    try:
+                        if hasattr(self.ui, "_sig_append_segments"):
+                            self.ui._sig_append_segments.emit(opt)
+                        if hasattr(self.ui, "_sig_update_status"):
+                            self.ui._sig_update_status.emit(last_c_idx, last_t_total)
+                    except RuntimeError:
+                        pass
 
                 while self._active:
                     item = opt_queue.get()
@@ -484,12 +487,23 @@ class CoreBackend:
                     else:
                         overall_pct = int((queue_index / total_files) * 100)
 
-                    if hasattr(self.ui, '_sig_update_queue_header'):
-                        self.ui._sig_update_queue_header.emit(queue_index + 1, total_files, overall_pct, "")
+ 
+                    if hasattr(self.ui, '_sig_update_status'):
+                        self.ui._sig_update_status.emit(c_idx, t_total)
+
+                    # 교체: try/except 감싸기
+                    try:
+                        if hasattr(self.ui, '_sig_update_queue_header'):
+                            self.ui._sig_update_queue_header.emit(queue_index + 1, total_files, overall_pct, "")
+                    except RuntimeError:
+                        pass
 
                     if not chunk_segs:
-                        if hasattr(self.ui, '_sig_update_status'):
-                            self.ui._sig_update_status.emit(c_idx, t_total)
+                        try:
+                            if hasattr(self.ui, '_sig_update_status'):
+                                self.ui._sig_update_status.emit(c_idx, t_total)
+                        except RuntimeError:
+                            pass
                         continue
 
                     seg_buffer.extend(chunk_segs)
