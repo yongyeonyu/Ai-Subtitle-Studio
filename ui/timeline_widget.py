@@ -32,14 +32,14 @@ class TimelineWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(CANVAS_H + 65)
+        self.setMinimumHeight(CANVAS_H + 55)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True) 
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 6, 10, 4)
-        lay.setSpacing(4)
+        lay.setContentsMargins(10, 4, 10, 1)
+        lay.setSpacing(1)
 
         self.lock_chk = QCheckBox("편집 고정")
         self.lock_chk.setStyleSheet("""
@@ -59,7 +59,7 @@ class TimelineWidget(QWidget):
         self.scroll.setWidgetResizable(False)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll.setFixedHeight(CANVAS_H + 22)
+        self.scroll.setFixedHeight(CANVAS_H + 16)
         self.scroll.setStyleSheet("QScrollArea{border:none;}")
 
         self._vp = QTimer(); self._vp.setInterval(16)
