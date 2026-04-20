@@ -122,10 +122,92 @@ class VideoProcessor:
 
         vad_segments = []
         if vad_model != "none":
-            get_logger().log(f"  └ 🔍 세부 공정 4: {vad_model.upper()} 음성 섹터 스캔 중...")
-            # _split_with_vad로 모든 인자 전달
-            vad_success, vad_segments = self._split_with_vad(cleaned_wav, chunk_dir, vad_model, s, target_start_sec, target_end_sec, is_single_segment)
-            if not vad_success: vad_model = "none"            
+            import hashlib
+
+            # ✅ VAD 캐시 경로
+            vad_cache_path = os.path.join(
+                config.OUTPUT_DIR,
+                f"{base_name}_vad_cache.json"
+            )
+
+            # ✅ cleaned_wav의 수정 시간 + 크기로 캐시 유효성 판단
+            cache_valid = False
+            if os.path.exists(vad_cache_path) and os.path.exists(cleaned_wav):
+                try:
+                    with open(vad_cache_path, "r") as f:
+                        cache_data = json.load(f)
+                    wav_stat = os.stat(cleaned_wav)
+                    if (cache_data.get("wav_mtime") == wav_stat.st_mtime
+                            and cache_data.get("wav_size") == wav_stat.st_size
+                            and cache_data.get("vad_model") == vad_model
+                            and not is_partial):
+                        cache_valid = True
+                except Exception:
+                    pass
+
+            if cache_valid:
+                # ✅ 캐시 사용
+                get_logger().log(f"  └ ♻️ [VAD 캐시] 이전 분석 결과를 재사용합니다.")
+                vad_segments = cache_data.get("timestamps", [])
+
+                # 청크 파일 재생성 (chunk_dir은 항상 새로 만들어짐)
+                MAX_CHUNK_DUR = 30.0
+                MARGIN = 1.0
+                import wave
+                with wave.open(cleaned_wav, "r") as w:
+                    total_dur = w.getnframes() / float(w.getframerate())
+
+                grouped = []
+                for ts in vad_segments:
+                    cur_start = max(0.0, ts["start"] - MARGIN)
+                    sec_end = min(total_dur, ts["end"] + MARGIN)
+                    while cur_start < sec_end:
+                        cur_end = min(sec_end, cur_start + MAX_CHUNK_DUR)
+                        grouped.append({"start": cur_start, "end": cur_end})
+                        cur_start = cur_end
+
+                for idx, seg in enumerate(grouped):
+                    out = os.path.join(chunk_dir, f"vad_{idx:03d}_{seg['start']:.3f}.wav")
+                    subprocess.run([
+                        "ffmpeg", "-y", "-nostdin", "-loglevel", "error",
+                        "-ss", str(seg["start"]),
+                        "-t", str(seg["end"] - seg["start"]),
+                        "-i", cleaned_wav,
+                        "-acodec", "pcm_s16le", out
+                    ], capture_output=True)
+
+                try:
+                    with open(os.path.join(chunk_dir, "vad_strict.json"), "w") as f:
+                        json.dump(vad_segments, f)
+                except Exception:
+                    pass
+
+                vad_success = True
+            else:
+                # ✅ VAD 새로 실행
+                get_logger().log(f"  └ 🔍 세부 공정 4: {vad_model.upper()} 음성 섹터 스캔 중...")
+                vad_success, vad_segments = self._split_with_vad(
+                    cleaned_wav, chunk_dir, vad_model, s,
+                    target_start_sec, target_end_sec, is_single_segment
+                )
+
+                # ✅ 캐시 저장
+                if vad_success and not is_partial:
+                    try:
+                        wav_stat = os.stat(cleaned_wav)
+                        cache_obj = {
+                            "wav_mtime": wav_stat.st_mtime,
+                            "wav_size": wav_stat.st_size,
+                            "vad_model": vad_model,
+                            "timestamps": vad_segments
+                        }
+                        with open(vad_cache_path, "w") as f:
+                            json.dump(cache_obj, f)
+                    except Exception:
+                        pass
+
+            if not vad_success:
+                vad_model = "none"     
         
         # ... (이후 30초 강제 분할 모드 로직은 동일) ...
         return chunk_dir, vad_segments

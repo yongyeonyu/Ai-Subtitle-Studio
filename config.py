@@ -1,4 +1,18 @@
 # Version: 01.00.02
+
+
+# === OS / Platform Detection ===
+import platform
+
+OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
+IS_MAC = OS_NAME == "Darwin"
+IS_WINDOWS = OS_NAME == "Windows"
+IS_LINUX = OS_NAME == "Linux"
+
+# CPU / Apple Silicon
+MACHINE = platform.machine()         # "arm64", "x86_64"
+IS_APPLE_SILICON = IS_MAC and MACHINE == "arm64"
+
 import os
 
 # .env 파일 로드
