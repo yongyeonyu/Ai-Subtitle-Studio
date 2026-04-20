@@ -169,7 +169,7 @@ class VideoProcessor:
                         merged_sectors.append({"start": s, "end": e})
 
                 grouped = []
-                
+
                 for seg in merged_sectors:
                     dur = seg["end"] - seg["start"]
                     if dur <= MAX_CHUNK_DUR:
@@ -392,39 +392,28 @@ class VideoProcessor:
                     with wave.open(cp, "r") as w: t_sec = ov_start + (w.getnframes()/float(w.getframerate()))
                 except: t_sec = ov_start + 30.0
 
-        safe_paths = json.dumps([x["input_path"] for x in q])
+        safe_paths = [x["input_path"] for x in q]
         s = self._load_all_settings()
         tr = "(" + ", ".join([str(round(x*0.2,1)) for x in range(int(s.get("w_none_temp_max", 0.4)/0.2)+1)]) + ",)"
 
-        script = f"""
-import mlx_whisper, json, sys, os
-sys.stdout.reconfigure(encoding='utf-8')
+        # ✅ OS별 Whisper 백엔드 자동 선택
+        import config as _cfg
+        if _cfg.IS_MAC:
+            from .whisper_mlx import run_whisper
+        else:
+            from .whisper_faster import run_whisper
 
-for p in {safe_paths}:
-    try:
-        # 💡 [핵심 교정] 문맥 이어받기(condition_on_previous_text)를 False로 끄고, 
-        # 이전 텍스트 억지로 주입하던 로직을 완전 삭제하여 무한 앵무새 루프를 원천 차단합니다!
-        r = mlx_whisper.transcribe(
-            p, 
-            path_or_hf_repo={safe_model}, 
-            language='{self.language}', 
-            word_timestamps=True, 
-            temperature={tr},
-            condition_on_previous_text=False
+        proc = run_whisper(
+            chunk_paths=safe_paths,
+            model=target_model,
+            language=self.language,
+            temperature_tuple=tr
         )
-        print(json.dumps(r, ensure_ascii=False), flush=True)
-    except Exception as e: 
-        print(json.dumps({{"error": str(e)}}, ensure_ascii=False), flush=True)
-os._exit(0)
-"""
 
-        proc = subprocess.Popen(
-            [sys.executable, "-c", script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,   # ✅ 여기
-            encoding="utf-8",
-            errors="replace"
-        )
+        if proc is None:
+            get_logger().log("❌ Whisper 백엔드를 실행할 수 없습니다.")
+            return
+
         self._whisper_proc = proc
 
 
