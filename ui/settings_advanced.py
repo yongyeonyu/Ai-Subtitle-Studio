@@ -16,8 +16,10 @@ from ui.settings_common import DEFAULT_ADV_SETTINGS, CUSTOM_DEFAULTS_FILE, _crea
 
 class AdvancedSettingsDialog(QDialog):
     def __init__(self, settings: dict, parent=None):
+
         super().__init__(parent)
         self.setWindowTitle("🛠️ 오디오 & Whisper 엔진 상세 튜닝")
+
         self.setMinimumWidth(800)
         self.setMinimumHeight(650)
         
@@ -261,6 +263,7 @@ class AdvancedSettingsDialog(QDialog):
         layout.addLayout(chk_layout)
         # 💡 [교정] save_def_callback이 포함된 새 코드를 함수 안으로 옮겼습니다.
         layout.addLayout(_create_bottom_buttons(self, self._on_ok, self._on_reset, self._on_save, save_def_callback=self._on_save_default))
+
                 
     def _add_slider(self, form, key, title, tip_template, min_val, max_val, default_actual, multiplier, format_str, show_disable=True):
         h_layout = QHBoxLayout()

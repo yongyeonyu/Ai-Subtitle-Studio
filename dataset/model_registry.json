@@ -1,0 +1,95 @@
+{
+  "models": [
+    {
+      "id": "whisper-large-v3-mlx",
+      "name": "Whisper Large V3 (MLX)",
+      "category": "STT",
+      "os": ["mac"],
+      "pip_packages": ["mlx-whisper"],
+      "model_path": "",
+      "required": true,
+      "hidden": false
+    },
+    {
+      "id": "whisper-large-v3-faster",
+      "name": "Whisper Large V3 (CUDA)",
+      "category": "STT",
+      "os": ["windows"],
+      "pip_packages": ["faster-whisper"],
+      "model_path": "models/faster-whisper-large-v3",
+      "required": true,
+      "hidden": false
+    },
+    {
+      "id": "whisper-medium-mlx",
+      "name": "Whisper Medium (MLX, 빠른모드)",
+      "category": "STT",
+      "os": ["mac"],
+      "pip_packages": ["mlx-whisper"],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-medium-faster",
+      "name": "Whisper Medium (CUDA, 빠른모드)",
+      "category": "STT",
+      "os": ["windows"],
+      "pip_packages": ["faster-whisper"],
+      "model_path": "models/faster-whisper-medium",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "silero-vad",
+      "name": "Silero VAD",
+      "category": "VAD",
+      "os": ["mac", "windows"],
+      "pip_packages": ["silero-vad"],
+      "model_path": "",
+      "required": true,
+      "hidden": false
+    },
+    {
+      "id": "deepfilter",
+      "name": "DeepFilterNet (노이즈 제거)",
+      "category": "Audio",
+      "os": ["mac", "windows"],
+      "pip_packages": ["deepfilternet"],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "demucs",
+      "name": "Demucs (음성 분리)",
+      "category": "Audio",
+      "os": ["mac", "windows"],
+      "pip_packages": ["demucs"],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "speechbrain-diarize",
+      "name": "SpeechBrain 화자 분리",
+      "category": "Diarize",
+      "os": ["mac", "windows"],
+      "pip_packages": ["speechbrain"],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama (로컬 LLM)",
+      "category": "LLM",
+      "os": ["mac", "windows"],
+      "pip_packages": [],
+      "model_path": "",
+      "install_cmd": "https://ollama.com/download",
+      "required": false,
+      "hidden": false
+    }
+  ]
+}
