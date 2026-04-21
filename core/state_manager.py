@@ -42,7 +42,7 @@ class SubtitleStateManager(QObject):
         self.is_locked = False
         self.is_dirty = False
         self._status_msg = "💤 대기중"
-        self._button_text = "▶ 시작"
+        self._button_text = "🧠 시작"
         self._button_enabled = True
         self.current_file = ""
 
