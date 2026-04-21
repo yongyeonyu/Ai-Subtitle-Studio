@@ -207,20 +207,26 @@ class TimelinePaintMixin:
                 color = QColor("#FFD700") if is_hover else QColor("#AAAAAA")
                 p.setPen(QPen(QColor("#000000"), 1)); p.setBrush(QBrush(color)); p.drawRoundedRect(rect, 4, 4); p.setBrush(Qt.BrushStyle.NoBrush)
 
-        # 멀티클립 박스 (파란 2px 테두리)
+        # 멀티클립 박스
         if self._multiclip_boxes:
             for box in self._multiclip_boxes:
                 bx1 = self._x(box["start"])
                 bx2 = self._x(box["end"])
                 bw = bx2 - bx1
                 clip_idx = box.get("index", 1) - 1
+
                 is_active = (clip_idx == getattr(self, '_active_clip_idx', -1))
-                color = "#4AFF80" if is_active else "#4FC3F7"
-                width = 3 if is_active else 2
+                if is_active:
+                    color = "#4AFF80"
+                    width = 3
+                else:
+                    color = "#666666"
+                    width = 1
+
                 p.setPen(QPen(QColor(color), width))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(int(bx1), 0, int(bw), CANVAS_H)
-                p.setPen(QColor(color))
+                p.setPen(QColor(label_color))
                 p.setFont(QFont("", 9, QFont.Weight.Bold))
                 p.drawText(int(bx1) + 4, 12, f"CLIP {box.get('index', '?')}")
 

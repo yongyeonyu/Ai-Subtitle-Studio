@@ -88,6 +88,18 @@ class TimelineInputMixin:
         x, y = ev.pos().x(), ev.pos().y()
         self._last_click_x = x; self._last_click_y = y
 
+        # 멀티클립 박스 클릭 감지 (최우선)
+        if self._multiclip_boxes and ev.button() == Qt.MouseButton.LeftButton:
+            for box in self._multiclip_boxes:
+                bx1, bx2 = self._x(box["start"]), self._x(box["end"])
+                if bx1 <= x <= bx2:
+                    new_idx = box.get("index", 1) - 1
+                    if new_idx != self._active_clip_idx:
+                        self._active_clip_idx = new_idx
+                        self.sig_clip_selected.emit(new_idx)
+                        self.update()
+                    break
+
         if self._edit_active:
             if ev.button() == Qt.MouseButton.RightButton:
                 self._show_mic_menu(ev.globalPosition().toPoint()); return
@@ -123,8 +135,8 @@ class TimelineInputMixin:
 
         self._just_committed = False; self.setFocus()
 
-        # 멀티클립 박스 클릭 감지
-        if self._multiclip_boxes and SEG_TOP <= y <= SEG_BOT:
+        # 멀티클립 박스 클릭 감지 (전체 높이)
+        if self._multiclip_boxes:
             for box in self._multiclip_boxes:
                 bx1, bx2 = self._x(box["start"]), self._x(box["end"])
                 if bx1 <= x <= bx2:

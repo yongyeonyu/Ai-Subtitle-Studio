@@ -420,10 +420,9 @@ class VideoProcessor:
         prev_end = 0.0
         for item in q:
             line = proc.stdout.readline()
-            get_logger().log(f"  🔍 whisper raw: {line[:300] if line else 'EMPTY'}")
             if not line: break
-
             chunk_segs = []
+
             try:
                 data = json.loads(line)
                 if "segments" in data:

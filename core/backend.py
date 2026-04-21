@@ -631,9 +631,6 @@ class CoreBackend:
             # ── STEP 0: 클립 길이 사전 계산 (오디오 추출 없이) ──
             get_logger().log(f"🎬 멀티클립: {total_files}개 클립 정보 수집 중...")
 
-            if hasattr(self.ui, 'init_queue_list'):
-                self.ui.init_queue_list(self.files_to_process)
-
             clip_boundaries = []
             cumulative = 0.0
             for i, target_file in enumerate(self.files_to_process):
@@ -745,9 +742,8 @@ class CoreBackend:
                 for chunk_segs, c_idx, t_total in self.video_processor.transcribe(chunk_dir):
                     if not self._active:
                         return
-                    get_logger().log(f"    📝 chunk {c_idx}/{t_total}: {len(chunk_segs)}개 세그먼트")
                     clip_segments.extend(chunk_segs)
-                get_logger().log(f"    📊 총 {len(clip_segments)}개 세그먼트 (오프셋 적용 전)")
+                get_logger().log(f"    📊 총 {len(clip_segments)}개 세그먼트")
 
                 # 시간 오프셋 적용
                 for seg in clip_segments:

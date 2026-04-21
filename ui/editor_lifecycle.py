@@ -57,14 +57,17 @@ class EditorLifecycleMixin:
         
         # 멀티클립 박스 전달
         if hasattr(self, '_multiclip_boundaries') and self._multiclip_boundaries:
+
             boxes = []
             for i, bd in enumerate(self._multiclip_boundaries):
                 boxes.append({
                     "start": bd["start"],
                     "end": bd["end"],
                     "index": i + 1,
-                    "name": bd.get("name", "")
+                    "name": bd.get("name", ""),
+                    "file": bd.get("file", "")   # ← 추가
                 })
+
             total_dur = self._multiclip_boundaries[-1]["end"]
 
             # 메인 캔버스
