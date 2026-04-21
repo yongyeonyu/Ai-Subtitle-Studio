@@ -8,6 +8,7 @@ ui/editor_actions.py
 
 import os
 from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtCore import Qt
 
 from logger import get_logger
 from core.data_manager import save_settings as _dm_save_settings
@@ -250,13 +251,14 @@ class EditorActionsMixin:
     # ---------------------------------------------------------
     def _show_settings(self):
         from ui.settings_dialog import SettingsDialog
+        self.setCursor(Qt.CursorShape.WaitCursor)
         dlg = SettingsDialog(self.settings, self)
+        self.unsetCursor()
         if dlg.exec():
             self.settings = dlg.result_settings
             _dm_save_settings(self.settings)
             if hasattr(self, '_update_engine_label_text'):
                 self._update_engine_label_text()
-
     def _show_adv_settings(self):
         from ui.settings_dialog import AdvancedSettingsDialog
         dlg = AdvancedSettingsDialog(self.settings, self)

@@ -114,8 +114,12 @@ class TimelineInputMixin:
                                     col = i - 1 if (rel_x - wp) < (wc - rel_x) else i; break
                         self._edit_cursor = sum(len(l) + 1 for l in lines[:cl]) + col
                         self._cursor_vis = True; self.update()
-                if not is_inside: self._commit_inline_edit()
-            return
+                if is_inside:
+                    return
+                # 바깥 클릭 → 커밋 후 정상 클릭 동작으로 fall-through
+                self._commit_inline_edit()
+            else:
+                return
 
         self._just_committed = False; self.setFocus()
 

@@ -118,16 +118,29 @@ class SettingsDialog(QDialog):
         # 4. Whisper 모델
         self.combo_whisper = QComboBox()
         w_models = list(DEFAULT_WHISPER_MODELS)
+
         hf_cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
         if os.path.exists(hf_cache_dir):
             for folder_name in os.listdir(hf_cache_dir):
                 if folder_name.startswith("models--") and "whisper" in folder_name.lower():
                     repo_name = folder_name.replace("models--", "", 1).replace("--", "/", 1)
                     if repo_name not in w_models: w_models.append(repo_name)
+        self.combo_whisper.setUpdatesEnabled(False)
+        self.combo_whisper.blockSignals(True)
         self.combo_whisper.addItems(w_models)
         self.combo_whisper.setMinimumWidth(350)
         curr_w = settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", w_models[0] if w_models else ""))
-        self.combo_whisper.setCurrentText(curr_w) if curr_w in w_models else self.combo_whisper.addItem(curr_w) or self.combo_whisper.setCurrentText(curr_w)
+        # ── OS에 맞지 않는 저장값이면 기본값으로 교체 ──
+        if not config.IS_MAC and "mlx-community" in curr_w:
+            curr_w = "large-v3"
+        elif config.IS_MAC and curr_w in ("large-v3", "large-v3-turbo", "medium", "small", "base", "tiny"):
+            curr_w = "mlx-community/whisper-large-v3-mlx"
+        if curr_w in w_models:
+            self.combo_whisper.setCurrentText(curr_w)
+        else:
+            self.combo_whisper.setCurrentIndex(0)
+        self.combo_whisper.blockSignals(False)
+        self.combo_whisper.setUpdatesEnabled(True)
         form.addRow("Whisper 모델:", self.combo_whisper)
 
         # 5. 음성 처리 AI
@@ -152,7 +165,7 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(form)
         layout.addSpacing(10)
-        layout.addLayout(_create_bottom_buttons(self, self._on_ok, save_callback=self._on_save, save_def_callback=self._on_save_default))
+        layout.addLayout(_create_bottom_buttons(self, self._on_ok, save_callback=self._on_save, save_def_callback=self._on_save_default))   
 
     # --- [유틸리티 함수] ---
     def _update_chunk_display(self, value):

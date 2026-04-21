@@ -43,7 +43,7 @@ ICLOUD_DROPZONE    = os.path.expanduser(
 )
 
 # ── 🎙️ Whisper 및 오디오 설정 ──
-WHISPER_MODEL  = "mlx-community/whisper-large-v3-mlx"
+WHISPER_MODEL = "mlx-community/whisper-large-v3-mlx" if IS_MAC else "large-v3"
 LANGUAGE       = "ko"
 TIME_OFFSET    = 0.2
 

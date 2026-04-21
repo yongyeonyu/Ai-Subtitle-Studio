@@ -20,13 +20,24 @@ import config
 
 DATASET_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dataset")
 
-DEFAULT_WHISPER_MODELS = [
-    "mlx-community/whisper-large-v3-mlx",
-    "mlx-community/whisper-large-v3-turbo",
-    "mlx-community/whisper-medium-mlx",
-    "mlx-community/whisper-small-mlx",
-    "mlx-community/whisper-base-mlx"
-]
+# ── OS별 Whisper 모델 목록 ──
+if config.IS_MAC:
+    DEFAULT_WHISPER_MODELS = [
+        "mlx-community/whisper-large-v3-mlx",
+        "mlx-community/whisper-large-v3-turbo",
+        "mlx-community/whisper-medium-mlx",
+        "mlx-community/whisper-small-mlx",
+        "mlx-community/whisper-base-mlx"
+    ]
+else:
+    DEFAULT_WHISPER_MODELS = [
+        "large-v3",
+        "large-v3-turbo",
+        "medium",
+        "small",
+        "base",
+        "tiny"
+    ]
 
 DEFAULT_ADV_SETTINGS = {
     # Silero

@@ -376,7 +376,7 @@ class VideoProcessor:
             except: pass
 
         total = len(chunks)
-        target_model = "mlx-community/whisper-medium-mlx" if is_fast_mode else self.whisper_model
+        target_model = self.whisper_model
         safe_model = json.dumps(target_model)
         
         get_logger().log(f"\n🎯 Whisper 정밀 인식 시작 (총 {total}블록)")
