@@ -182,6 +182,7 @@ class MainWindow(
         if not paths: return
         set_last_folder(os.path.dirname(paths[0])); self._add_recent_folder(os.path.dirname(paths[0]))
         self._is_auto_pipeline = False; self._current_project_path = None; self._project_boundary_times = []
+        self._multiclip_boundaries = []  # ← 추가: 초기화
         srt = [p for p in paths if p.lower().endswith(".srt")]; vid = [p for p in paths if not p.lower().endswith(".srt")]
         if srt:
             self._open_srt_in_editor(srt[0])

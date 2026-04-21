@@ -745,7 +745,9 @@ class CoreBackend:
                 for chunk_segs, c_idx, t_total in self.video_processor.transcribe(chunk_dir):
                     if not self._active:
                         return
+                    get_logger().log(f"    📝 chunk {c_idx}/{t_total}: {len(chunk_segs)}개 세그먼트")
                     clip_segments.extend(chunk_segs)
+                get_logger().log(f"    📊 총 {len(clip_segments)}개 세그먼트 (오프셋 적용 전)")
 
                 # 시간 오프셋 적용
                 for seg in clip_segments:

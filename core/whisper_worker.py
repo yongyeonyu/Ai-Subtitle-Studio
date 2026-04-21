@@ -8,9 +8,9 @@ stdin으로 작업 수신 → stdout으로 JSON 결과 반환
 import sys
 import json
 
-
 def main():
     import io
+    sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 

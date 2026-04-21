@@ -40,6 +40,7 @@ def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple:
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
 
     # 작업 정보 전송

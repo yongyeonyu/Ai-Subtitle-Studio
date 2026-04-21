@@ -420,7 +420,9 @@ class VideoProcessor:
         prev_end = 0.0
         for item in q:
             line = proc.stdout.readline()
+            get_logger().log(f"  🔍 whisper raw: {line[:300] if line else 'EMPTY'}")
             if not line: break
+
             chunk_segs = []
             try:
                 data = json.loads(line)
@@ -479,7 +481,9 @@ class VideoProcessor:
                             "text": seg.get("text", "").strip(),
                             "words": offset_words  
                         })
-            except: pass
+            except Exception as e:
+                get_logger().log(f"  ⚠️ JSON 파싱 오류: {e}")
+                get_logger().log(f"  ⚠️ raw line: {line[:200] if line else 'empty'}")
 
             if chunk_segs: 
                 prev_end = chunk_segs[-1]["end"]

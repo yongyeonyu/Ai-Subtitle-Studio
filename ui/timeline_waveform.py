@@ -93,16 +93,16 @@ class MultiClipWaveformWorker(QThread):
                 clip_start = clip["start"]
                 clip_dur = clip["end"] - clip["start"]
 
-                # cleaned.wav 경로 확인
                 import config
                 base_name = os.path.splitext(os.path.basename(clip_file))[0]
                 cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
 
-                if not os.path.exists(cleaned_wav):
-                    # cleaned.wav 없으면 원본에서 추출
-                    src = clip_file
-                else:
+                if os.path.exists(cleaned_wav):
                     src = cleaned_wav
+                else:
+                    src = clip_file
+
+                print(f"  🎵 파형 로드 [{i+1}/{len(self._clips)}] {os.path.basename(src)}", flush=True)
 
                 fd, tmp = tempfile.mkstemp(suffix=".raw")
                 os.close(fd)
@@ -124,11 +124,11 @@ class MultiClipWaveformWorker(QThread):
                         if mx > 1e-6:
                             downs = downs / mx
 
-                        # 전체 배열에 끼워넣기
                         start_px = int(clip_start * 100)
                         end_px = min(start_px + len(downs), total_px)
                         combined[start_px:end_px] = downs[:end_px - start_px]
 
+                        print(f"  ✅ 파형 완료 [{i+1}] px:{start_px}-{end_px}", flush=True)
                         self.clip_ready.emit(i, combined.copy())
 
                 try:
@@ -136,7 +136,9 @@ class MultiClipWaveformWorker(QThread):
                 except:
                     pass
 
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  ❌ 파형 오류 [{i+1}]: {e}", flush=True)
 
+        print(f"  🎊 전체 파형 완료: {total_dur:.1f}초", flush=True)
         self.all_ready.emit(combined, total_dur)
+
