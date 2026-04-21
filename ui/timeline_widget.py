@@ -124,12 +124,14 @@ class TimelineWidget(QWidget):
             p.setPen(QPen(QColor("#FFFF00"), 2))
             p.drawRect(0, 0, self.width() - 1, self.height() - 1)
 
-    def update_segments(self, segs, active_sec=None, total_dur=0.0):
+    def update_segments(self, segs, active_sec=None, total_dur=0.0, fit_view=False):
         dur = total_dur or (segs[-1]["end"] if segs else 0.0)
         tw = int(dur * self.canvas.pps) + self.scroll.width()
         self.canvas.setFixedWidth(max(tw, self.scroll.width()))
         self.canvas.update_segments(segs, active_sec, dur)
-        self.global_canvas.update_segments(segs, dur) 
+        self.global_canvas.update_segments(segs, dur)
+        if fit_view:
+            self.fit_to_view()
 
     def set_vad_segments(self, vad_segs: list):
         self.canvas.set_vad_segments(vad_segs)
@@ -291,3 +293,20 @@ class TimelineWidget(QWidget):
     def _on_clip_global_wf_ready(self, wf, dur):
         self.global_canvas.set_waveform(wf)
         self.global_canvas.update()
+
+    def fit_to_view(self):
+        """전체 타임라인이 화면에 딱 맞도록 pps 자동 조정"""
+        dur = self.canvas.total_duration
+        if dur <= 0:
+            return
+        visible_w = self.scroll.width() - 20
+        if visible_w <= 0:
+            return
+        new_pps = max(5.0, min(500.0, visible_w / dur))
+        self.canvas.pps = new_pps
+        tw = int(dur * new_pps) + self.scroll.width()
+        self.canvas.setFixedWidth(max(tw, self.scroll.width()))
+        self.canvas.update()
+        self.scroll.horizontalScrollBar().setValue(0)
+        self._target_scroll_x = 0.0
+        self._current_scroll_x = 0.0

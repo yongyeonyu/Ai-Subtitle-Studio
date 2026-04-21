@@ -1,6 +1,8 @@
-## AI Subtitle Studio - Requirements
-## python 3.11
-## python3.11 -m pip install -r requirements.txt
+## ================================================================
+## AI Subtitle Studio - Requirements (공통)
+## Python 3.11
+## 설치: python3.11 -m pip install -r requirements.txt
+## ================================================================
 
 # ================================
 # UI / 기본 라이브러리
@@ -20,16 +22,10 @@ packaging>=23.0
 soundfile>=0.12.1
 
 # ================================
-# Whisper / STT (macOS Apple Silicon)
+# PyTorch (CPU 기본 — OS별 GPU 가속은 별도 파일 참조)
 # ================================
-# ⚠️ mlx-whisper는 macOS + Apple Silicon 전용
-mlx-whisper>=0.4.3
-
-# PyTorch stack
-# (최신 torch / torchaudio / torchcodec 조합 정상 동작 확인)
 torch
 torchaudio
-torchcodec
 
 # ================================
 # VAD (Voice Activity Detection)
@@ -37,9 +33,16 @@ torchcodec
 silero-vad>=6.2.1
 
 # ================================
-# Audio Enhancement (선택)
+# 음성인식 (마이크 입력 / 인라인 편집)
 # ================================
-deepfilternet>=0.5.6
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.14
+
+# ================================
+# LLM / AI API
+# ================================
+google-genai>=1.0.0
+huggingface_hub>=0.20.0
 
 # ================================
 # Speaker Diarization (선택 / 실험적)
@@ -47,6 +50,3 @@ deepfilternet>=0.5.6
 # pyannote.audio는 torch/torchaudio 의존성 충돌 가능
 # 필요 시 별도 환경에서 설치 권장
 # pyannote.audio>=3.1.0
-
-SpeechRecognition>=3.10.0
-pyaudio>=0.2.14

@@ -17,16 +17,23 @@ class GlobalCanvas(QWidget):
         super().__init__(parent)
         self.setFixedHeight(36)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus) 
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.segments = []
         self.view_start = 0.0
         self.view_end = 1.0
         self.playhead_sec = 0.0
-        self.total_duration = 0.0 
-        self._waveform: np.ndarray | None = None  
+        self.total_duration = 0.0
+        self._waveform: np.ndarray | None = None
         self.vad_segments = []
-        self.vad_segments = []
-        self._multiclip_boxes = []   # ← 추가
+        self._multiclip_boxes = []
+        self._whisper_progress_sec = 0.0   # ← 추가
+        
+    def set_whisper_progress(self, sec: float):
+        """Whisper 인식 진행 위치(초) → 옐로우존 업데이트"""
+        if self._whisper_progress_sec == sec:
+            return
+        self._whisper_progress_sec = sec
+        self.update()
 
     def set_waveform(self, wf: np.ndarray):
         self._waveform = wf
@@ -52,23 +59,54 @@ class GlobalCanvas(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor("#111111"))
-        
+
         w = self.width()
         mid_y = self.height() // 2
         total = self.total_duration
 
         if self._waveform is not None and len(self._waveform) > 0:
-            p.setPen(QPen(QColor("#555555"), 1))
             wf_len = len(self._waveform)
+
+            # VAD 기반 speech mask
+            speech_mask = np.zeros(wf_len, dtype=bool)
+            if self.vad_segments:
+                for vs in self.vad_segments:
+                    s_idx = max(0, int(vs["start"] * 100))
+                    e_idx = min(wf_len, int(vs["end"] * 100) + 1)
+                    speech_mask[s_idx:e_idx] = True
+
             for i in range(w):
                 idx = int((i / w) * wf_len)
                 if idx < wf_len:
                     amp = float(self._waveform[idx])
                     h = max(1, int(amp * 14))
+                    if speech_mask[idx]:
+                        p.setPen(QPen(QColor(100, 220, 255), 1))   # 파란색 (음성)
+                    else:
+                        p.setPen(QPen(QColor("#555555"), 1))        # 회색 (무음)
                     p.drawLine(i, mid_y - h, i, mid_y + h)
 
-        if total <= 0: return
+        if total <= 0:
+            p.end()
+            return
         sc = w / total
+
+        # ✅ VAD 그린존 오버레이
+        if self.vad_segments:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(74, 255, 128, 40))
+            for vs in self.vad_segments:
+                vx = int(vs["start"] * sc)
+                vw = max(1, int((vs["end"] - vs["start"]) * sc))
+                p.drawRect(vx, 0, vw, self.height())
+
+        # ✅ Whisper 옐로우존
+        whisper_sec = getattr(self, '_whisper_progress_sec', 0.0)
+        if whisper_sec > 0:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(255, 204, 0, 50))
+            wx = int(whisper_sec * sc)
+            p.drawRect(0, 0, wx, self.height())
 
         # 멀티클립 박스
         if self._multiclip_boxes:
@@ -81,18 +119,21 @@ class GlobalCanvas(QWidget):
                 p.setPen(QColor("#4FC3F7"))
                 p.setFont(QFont("", 7))
                 p.drawText(bx + 2, 10, str(box.get("index", "")))
-        
+
+        # 자막 세그먼트 블록
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor("#666666"))
         for s in self.segments:
             x = int(s["start"] * sc)
             sw = max(1, int((s["end"] - s["start"]) * sc))
             p.drawRect(QRect(x, 14, sw, 18))
-            
+
+        # 뷰포트 박스
         p.setPen(QPen(QColor(config.ACCENT), 2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(QRect(int(self.view_start * w), 1, max(1, int((self.view_end - self.view_start) * w)), 34))
-        
+
+        # 플레이헤드
         if self.playhead_sec >= 0:
             p.setPen(QPen(QColor("#FF4444"), 2))
             px = int(self.playhead_sec * sc)

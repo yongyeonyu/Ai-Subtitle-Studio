@@ -119,15 +119,42 @@ except Exception:
 
 
 def _fetch_models():
-    try:
-        r = requests.get("http://localhost:11434/api/tags", timeout=0.05)
-        if r.status_code == 200:
-            models = r.json().get("models", [])
-            return sorted(models, key=lambda x: x['name'])
-    except Exception:
-        pass
-    return [{"name": getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"), "size": 0, "details": {}}]
+    settings = load_settings()
 
+    models = []
+    try:
+        from core.model_manager import get_local_llm_models
+        models = get_local_llm_models()
+    except Exception:
+        models = []
+
+    merged = {}
+    for m in models:
+        name = (m.get("name") or "").strip()
+        if not name:
+            continue
+        merged[name] = {
+            "name": name,
+            "size": int(m.get("size", 0) or 0),
+            "details": dict(m.get("details", {}) or {}),
+        }
+
+    for fallback_name in [
+        (settings.get("selected_model", "") or "").strip(),
+        (getattr(config, "OLLAMA_MODEL", "") or "").strip(),
+    ]:
+        if fallback_name and fallback_name not in merged and not fallback_name.startswith("Gemini "):
+            merged[fallback_name] = {
+                "name": fallback_name,
+                "size": 0,
+                "details": {
+                    "family": "Local",
+                    "parameter_size": "Unknown",
+                    "format": "ollama",
+                },
+            }
+
+    return sorted(merged.values(), key=lambda x: x["name"].lower())
 
 def _create_bottom_buttons(dialog, accept_callback, reset_callback=None,
                            save_callback=None, save_def_callback=None):

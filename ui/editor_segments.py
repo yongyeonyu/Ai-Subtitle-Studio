@@ -334,6 +334,10 @@ class EditorSegmentsMixin:
         self.timeline.update_segments(segs, self._active_seg_start, total_dur)
         if hasattr(self, 'video_player'): self.video_player.segments = segs
 
+        # ✅ 최초 로드 시 화면에 맞춤
+        if getattr(self, '_needs_fit_view', True) and segs:
+            self.timeline.fit_to_view()
+            self._needs_fit_view = False
     def _schedule_timeline(self):
         if getattr(self, '_inline_updating', False): return
         if not self._timeline_timer.isActive(): self._timeline_timer.start(150)  # [크PD] 300→150ms 실시간성 개선

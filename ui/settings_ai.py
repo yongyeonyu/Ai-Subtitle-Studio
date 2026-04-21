@@ -41,7 +41,13 @@ class SettingsDialog(QDialog):
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         # 1. LLM 모델 (제미나이 포함)
-        self.models_data = _fetch_models()
+        self.models_data = []
+        if parent is not None and getattr(parent, "_local_llm_models", None):
+            self.models_data = [dict(m) for m in parent._local_llm_models]
+
+        if not self.models_data:
+            self.models_data = _fetch_models()
+
         self.combo_llm = QComboBox()
         bypass_item = {"name": "사용 안함 (Whisper 단독 진행)", "size": 0, "details": {}}
         self.combo_llm.addItem(bypass_item["name"], bypass_item)

@@ -64,6 +64,7 @@ class MainWindow(
         self._is_auto_pipeline = False
         self._current_project_path = None
         self._project_boundary_times = []
+        self._local_llm_models = []
 
         self._is_icloud_auto_mode = get_icloud_auto_detect()
         self._is_nas_auto_mode = get_nas_auto_detect()
@@ -72,6 +73,7 @@ class MainWindow(
         self._live_timer.timeout.connect(self._update_live_queue_header)
 
         self._build_ui(); self._connect_signals()
+        QTimer.singleShot(0, self._warmup_local_llm_models)
 
         self._cloud_sync_manager = CloudSyncManager(get_icloud_path(), self._on_files_detected, self._is_app_busy)
         if getattr(self, '_is_icloud_auto_mode', False):
@@ -145,7 +147,7 @@ class MainWindow(
     # ── 시그널 ──
     def _connect_signals(self):
         self._sig_show_home.connect(self.show_home); self._sig_append_segments.connect(self._do_append_segments); self._sig_update_status.connect(self._do_update_status); self._sig_open_editor.connect(self._do_open_editor)
-        self._sig_set_vad_segments.connect(lambda v: self._editor_widget.set_vad_segments(v) if self._editor_widget else None)
+        self._sig_set_vad_segments.connect(self._on_vad_segments)
         self._sig_update_queue.connect(self.update_queue_status); self._sig_update_queue_header.connect(self.update_queue_header); self._sig_auto_start_pipeline.connect(self._do_auto_start_pipeline)
         self._sig_load_multiclip_waveform.connect(self._do_load_multiclip_waveform)
 
@@ -312,3 +314,37 @@ class MainWindow(
     def _do_load_multiclip_waveform(self, clip_boundaries):
         if self._editor_widget and hasattr(self._editor_widget, 'timeline'):
             self._editor_widget.timeline.load_multiclip_waveform(clip_boundaries)
+
+    def _on_vad_segments(self, vad_segs):
+        if not self._editor_widget:
+            return
+        # 멀티클립: VAD 시간을 현재 클립 offset만큼 보정 + 누적
+        if hasattr(self, '_multiclip_boundaries') and self._multiclip_boundaries:
+            ci = max(0, getattr(self, '_current_file_idx', 1) - 1)
+            if ci < len(self._multiclip_boundaries):
+                offset = self._multiclip_boundaries[ci]["start"]
+                vad_segs = [{"start": v["start"] + offset, "end": v["end"] + offset} for v in vad_segs]
+            if not hasattr(self, '_accumulated_vad'):
+                self._accumulated_vad = []
+            self._accumulated_vad.extend(vad_segs)
+            self._editor_widget.set_vad_segments(list(self._accumulated_vad))
+        else:
+            self._editor_widget.set_vad_segments(vad_segs)
+
+    def _warmup_local_llm_models(self):
+        try:
+            from core.model_manager import get_local_llm_models
+            self._local_llm_models = get_local_llm_models()
+            if not self._local_llm_models:
+                self._local_llm_models = [{
+                    "name": getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"),
+                    "size": 0,
+                    "details": {},
+                }]
+        except Exception as e:
+            self._local_llm_models = [{
+                "name": getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"),
+                "size": 0,
+                "details": {},
+            }]
+            get_logger().log(f"⚠️ 로컬 LLM 자동 스캔 실패: {e}")

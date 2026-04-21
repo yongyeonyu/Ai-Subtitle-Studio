@@ -22,7 +22,6 @@ class TimelinePaintMixin:
 
         total_w = self.total_width()
         total_secs = self.total_duration + 2
-        sec_f = 0.0
 
         def _fmt_ruler(sec):
             s = int(sec)
@@ -34,20 +33,52 @@ class TimelinePaintMixin:
         ruler_font = QFont(config.FONT, 12)
         ruler_font.setBold(True)
         p.setFont(ruler_font)
+        fm_ruler = p.fontMetrics()
 
+        # ✅ pps 기반 적응형 룰러 간격 계산
+        MIN_LABEL_PX = 80  # 라벨 간 최소 픽셀 간격
+        nice_steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
+        major_step = 1.0
+        for ns in nice_steps:
+            if ns * self.pps >= MIN_LABEL_PX:
+                major_step = ns
+                break
+        else:
+            major_step = nice_steps[-1]
+
+        # 서브 틱: major를 5등분 (또는 2등분)
+        if major_step >= 10:
+            sub_step = major_step / 5
+        elif major_step >= 1:
+            sub_step = major_step / 5
+        elif major_step >= 0.5:
+            sub_step = 0.1
+        else:
+            sub_step = major_step / 2
+
+        # 메이저 틱 + 라벨
+        sec_i = 0.0
+        while sec_i <= total_secs:
+            tx = self._x(sec_i)
+            if sec_i > 0:
+                p.setPen(QColor("#BBBBBB"))
+                p.drawLine(tx, 0, tx, 15)
+                label = _fmt_ruler(sec_i)
+                lw = fm_ruler.horizontalAdvance(label)
+                p.drawText(tx - lw // 2, RULER_H - 4, label)
+            sec_i = round(sec_i + major_step, 3)
+
+        # 서브 틱 (라벨 없음)
+        sec_f = 0.0
         while sec_f <= total_secs:
-            tx = self._x(sec_f); sec_i = sec_f
-            if abs(sec_i - round(sec_i, 0)) < 0.01:
-                sec_i = round(sec_i)
-                if sec_i % 5 == 0 and sec_i != 0:
-                    p.setPen(QColor("#BBBBBB")); p.drawLine(tx, 0, tx, 15)
-                    p.drawText(tx + 5, RULER_H - 5, _fmt_ruler(sec_i))
-                elif sec_i % 1 == 0:
-                    p.setPen(QColor("#666666")); p.drawLine(tx, 0, tx, 8)
-                    if sec_i > 0: p.drawText(tx + 2, RULER_H - 2, _fmt_ruler(sec_i))
-            elif abs(sec_i * 2 - round(sec_i * 2)) < 0.01: p.setPen(QColor("#444444")); p.drawLine(tx, 0, tx, 5)
-            else: p.setPen(QColor("#333333")); p.drawLine(tx, 0, tx, 3)
-            sec_f = round(sec_f + 0.1, 1)
+            # 메이저 틱 위치면 스킵
+            if major_step > 0 and abs(round(sec_f / major_step) * major_step - sec_f) < 0.001:
+                sec_f = round(sec_f + sub_step, 3)
+                continue
+            tx = self._x(sec_f)
+            p.setPen(QColor("#555555"))
+            p.drawLine(tx, 0, tx, 6)
+            sec_f = round(sec_f + sub_step, 3)
 
         p.fillRect(QRect(0, RULER_H, total_w, WAVE_H), QColor("#0a0a0a"))
 

@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 import importlib
+import shutil
 
 import config
 from logger import get_logger
@@ -209,3 +210,199 @@ def get_install_summary() -> dict:
         "installed_models": installed,
         "installed_pip_packages": sorted(list(pip_list))
     }
+
+def _iter_ollama_bins() -> list:
+    candidates = [
+        shutil.which("ollama"),
+        shutil.which("ollama.exe"),
+
+        # macOS
+        "/opt/homebrew/bin/ollama",
+        "/usr/local/bin/ollama",
+        os.path.expanduser("~/.ollama/bin/ollama"),
+
+        # Windows
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Ollama\ollama.exe"),
+    ]
+
+    result = []
+    for path in candidates:
+        if path and path not in result and os.path.exists(path):
+            result.append(path)
+    return result
+
+def _merge_local_llm_models(dst: dict, items: list):
+    for m in items:
+        name = (m.get("name") or "").strip()
+        if not name:
+            continue
+
+        size = int(m.get("size", 0) or 0)
+        details = dict(m.get("details", {}) or {})
+
+        if name not in dst:
+            dst[name] = {
+                "name": name,
+                "size": size,
+                "details": details,
+            }
+            continue
+
+        prev = dst[name]
+        if int(prev.get("size", 0) or 0) <= 0 and size > 0:
+            prev["size"] = size
+        if not prev.get("details") and details:
+            prev["details"] = details
+
+def _scan_ollama_manifest_models() -> list:
+    manifest_roots = [
+        # macOS / Linux
+        os.path.expanduser("~/.ollama/models/manifests"),
+        os.path.expanduser("~/Library/Application Support/Ollama/models/manifests"),
+
+        # Windows
+        os.path.expandvars(r"%USERPROFILE%\.ollama\models\manifests"),
+    ]
+
+    found = {}
+    for root in manifest_roots:
+        if not root or not os.path.isdir(root):
+            continue
+
+        for cur_root, _, files in os.walk(root):
+            for fname in files:
+                full_path = os.path.join(cur_root, fname)
+                rel_parts = [p for p in os.path.relpath(full_path, root).split(os.sep) if p]
+
+                if len(rel_parts) >= 4:
+                    namespace = rel_parts[1]
+                    model = rel_parts[2]
+                    tag = rel_parts[3]
+                    if namespace == "library":
+                        name = f"{model}:{tag}"
+                    else:
+                        name = f"{namespace}/{model}:{tag}"
+                elif len(rel_parts) >= 2:
+                    model = rel_parts[-2]
+                    tag = rel_parts[-1]
+                    name = f"{model}:{tag}"
+                else:
+                    continue
+
+                found[name] = {
+                    "name": name,
+                    "size": 0,
+                    "details": {
+                        "family": "Ollama Local",
+                        "parameter_size": "Local",
+                        "format": "ollama",
+                    },
+                }
+
+    return sorted(found.values(), key=lambda x: x["name"].lower())
+
+def _fetch_local_llm_models_from_cli() -> list:
+    for ollama_bin in _iter_ollama_bins():
+        try:
+            result = subprocess.run(
+                [ollama_bin, "list"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=0.8
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                continue
+
+            found = {}
+            for raw in result.stdout.splitlines():
+                line = raw.strip()
+                if not line or line.upper().startswith("NAME"):
+                    continue
+
+                parts = line.split()
+                if not parts:
+                    continue
+
+                name = parts[0].strip()
+                if not name:
+                    continue
+
+                found[name] = {
+                    "name": name,
+                    "size": 0,
+                    "details": {
+                        "family": "Ollama Local",
+                        "parameter_size": "Local",
+                        "format": "ollama",
+                    },
+                }
+
+            if found:
+                return sorted(found.values(), key=lambda x: x["name"].lower())
+
+        except Exception:
+            pass
+
+    return []
+
+def _fetch_local_llm_models_from_api() -> list:
+    try:
+        import requests
+    except Exception:
+        return []
+
+    for url in ("http://127.0.0.1:11434/api/tags", "http://localhost:11434/api/tags"):
+        try:
+            r = requests.get(url, timeout=0.6)
+            if r.status_code != 200:
+                continue
+
+            models = []
+            for m in r.json().get("models", []):
+                name = (m.get("name") or "").strip()
+                if not name:
+                    continue
+
+                models.append({
+                    "name": name,
+                    "size": int(m.get("size", 0) or 0),
+                    "details": dict(m.get("details", {}) or {}),
+                })
+
+            if models:
+                return sorted(models, key=lambda x: x["name"].lower())
+
+        except Exception:
+            pass
+
+    return []
+
+def get_local_llm_models() -> list:
+    merged = {}
+
+    # 1) 설치 파일 스캔 (앱 실행 시 Ollama 서버가 안 떠 있어도 잡힘)
+    _merge_local_llm_models(merged, _scan_ollama_manifest_models())
+
+    # 2) CLI 보강
+    _merge_local_llm_models(merged, _fetch_local_llm_models_from_cli())
+
+    # 3) API 보강 (size/details 채우기)
+    _merge_local_llm_models(merged, _fetch_local_llm_models_from_api())
+
+    if merged:
+        return sorted(merged.values(), key=lambda x: x["name"].lower())
+
+    fallback = (getattr(config, "OLLAMA_MODEL", "") or "").strip()
+    if fallback:
+        return [{
+            "name": fallback,
+            "size": 0,
+            "details": {
+                "family": "Default",
+                "parameter_size": "Unknown",
+                "format": "ollama",
+            },
+        }]
+    return []

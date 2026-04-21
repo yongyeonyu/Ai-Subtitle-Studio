@@ -28,7 +28,7 @@ class ClipCard(QFrame):
         super().__init__(parent)
         self.file_path = file_path
         self.index = index
-        self.setFixedSize(200, 160)
+        self.setFixedSize(240, 190)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self._selected = False
         self._extract_info()
@@ -61,9 +61,9 @@ class ClipCard(QFrame):
             tmp = os.path.join(tempfile.gettempdir(), f"mc_thumb_{abs(hash(self.file_path))}.jpg")
             subprocess.run(
                 ["ffmpeg", "-y", "-nostdin", "-loglevel", "error",
-                 "-i", self.file_path, "-vframes", "1",
-                 "-vf", "scale=192:108:force_original_aspect_ratio=decrease,pad=192:108:-1:-1:color=black",
-                 tmp],
+                "-i", self.file_path, "-vframes", "1",
+                "-vf", "scale=224:126:force_original_aspect_ratio=decrease,pad=224:126:-1:-1:color=black",
+                tmp],
                 capture_output=True, timeout=10
             )
             if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
@@ -76,6 +76,7 @@ class ClipCard(QFrame):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         w, h = self.width(), self.height()
 
         border_color = "#4AFF80" if self._selected else "#555555"
@@ -84,44 +85,50 @@ class ClipCard(QFrame):
         painter.drawRoundedRect(1, 1, w - 2, h - 2, 6, 6)
 
         thumb_y = 4
+        thumb_h = 126
         if self.thumbnail and not self.thumbnail.isNull():
             tx = (w - self.thumbnail.width()) // 2
             painter.drawPixmap(tx, thumb_y, self.thumbnail)
         else:
-            painter.fillRect(4, thumb_y, w - 8, 108, QColor("#1a1a1a"))
+            painter.fillRect(4, thumb_y, w - 8, thumb_h, QColor("#1a1a1a"))
             painter.setPen(QColor("#666666"))
-            painter.drawText(4, thumb_y, w - 8, 108, Qt.AlignmentFlag.AlignCenter, "No Preview")
+            painter.setFont(QFont("", 11))
+            painter.drawText(4, thumb_y, w - 8, thumb_h, Qt.AlignmentFlag.AlignCenter, "No Preview")
 
+        # ── 좌상단 순번 ──
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(0, 0, 0, 180))
-        painter.drawRoundedRect(6, 6, 30, 22, 4, 4)
+        painter.setBrush(QColor(0, 0, 0, 200))
+        painter.drawRoundedRect(6, 6, 32, 24, 4, 4)
         painter.setPen(QColor("#4AFF80"))
-        painter.setFont(QFont("", 11, QFont.Weight.Bold))
-        painter.drawText(6, 6, 30, 22, Qt.AlignmentFlag.AlignCenter, str(self.index))
+        painter.setFont(QFont("", 13, QFont.Weight.Bold))
+        painter.drawText(6, 6, 32, 24, Qt.AlignmentFlag.AlignCenter, str(self.index))
 
-        painter.setFont(QFont("", 9))
-        fm = painter.fontMetrics()
-        date_w = fm.horizontalAdvance(self.date_str) + 10
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(0, 0, 0, 180))
-        painter.drawRoundedRect(w - date_w - 6, 6, date_w, 22, 4, 4)
-        painter.setPen(QColor("#FFFFFF"))
-        painter.drawText(w - date_w - 6, 6, date_w, 22, Qt.AlignmentFlag.AlignCenter, self.date_str)
-
+        # ── 우상단 날짜 ──
         painter.setFont(QFont("", 10, QFont.Weight.Bold))
         fm = painter.fontMetrics()
-        dur_w = fm.horizontalAdvance(self.duration_str) + 10
+        date_w = fm.horizontalAdvance(self.date_str) + 12
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(0, 0, 0, 180))
-        painter.drawRoundedRect(w - dur_w - 6, 108 - 18, dur_w, 22, 4, 4)
-        painter.setPen(QColor("#FFD700"))
-        painter.drawText(w - dur_w - 6, 108 - 18, dur_w, 22, Qt.AlignmentFlag.AlignCenter, self.duration_str)
+        painter.setBrush(QColor(0, 0, 0, 210))
+        painter.drawRoundedRect(w - date_w - 6, 6, date_w, 24, 4, 4)
+        painter.setPen(QColor("#FFFFFF"))
+        painter.drawText(w - date_w - 6, 6, date_w, 24, Qt.AlignmentFlag.AlignCenter, self.date_str)
 
+        # ── 우하단 영상 길이 ──
+        painter.setFont(QFont("", 12, QFont.Weight.Bold))
+        fm = painter.fontMetrics()
+        dur_w = fm.horizontalAdvance(self.duration_str) + 14
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 210))
+        painter.drawRoundedRect(w - dur_w - 6, thumb_y + thumb_h - 26, dur_w, 24, 4, 4)
+        painter.setPen(QColor("#FFD700"))
+        painter.drawText(w - dur_w - 6, thumb_y + thumb_h - 26, dur_w, 24, Qt.AlignmentFlag.AlignCenter, self.duration_str)
+
+        # ── 파일명 ──
         name = os.path.splitext(os.path.basename(self.file_path))[0]
-        painter.setPen(QColor("#CCCCCC"))
-        painter.setFont(QFont("", 9))
+        painter.setPen(QColor("#EEEEEE"))
+        painter.setFont(QFont("", 11))
         elided = painter.fontMetrics().elidedText(name, Qt.TextElideMode.ElideMiddle, w - 16)
-        painter.drawText(8, 116, w - 16, 40, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, elided)
+        painter.drawText(8, thumb_y + thumb_h + 4, w - 16, 40, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, elided)
 
         painter.end()
 
@@ -154,7 +161,7 @@ class AddCard(QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(200, 160)
+        self.setFixedSize(240, 190)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def paintEvent(self, event):
@@ -292,7 +299,7 @@ class MultiClipEditor(QDialog):
     def __init__(self, file_paths, parent=None, reorder_only=False, show_multiclip=True):
         super().__init__(parent)
         self.setWindowTitle("🎬 멀티 클립 정렬")
-        self.setMinimumWidth(850)
+        self.setMinimumWidth(1050)
         self.setStyleSheet("""
             QDialog { background-color: #121212; color: #FFFFFF; }
             QLabel { color: #FFFFFF; background: transparent; }
@@ -332,7 +339,7 @@ class MultiClipEditor(QDialog):
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll.setFixedHeight(200)
+        self.scroll.setFixedHeight(240)
         self.scroll.setStyleSheet("QScrollArea { border: 1px solid #333; background: #1a1a1a; border-radius: 6px; }")
 
         self.container = ClipContainer(self)

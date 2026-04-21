@@ -1,0 +1,28 @@
+## ================================================================
+## AI Subtitle Studio - Requirements (Windows)
+## Python 3.11
+## 설치: python -m pip install -r requirements-windows.txt
+## ================================================================
+##
+## 🪟 Windows 전용 패키지
+## 이 파일 하나만 설치하면 공통 + Windows 전용이 모두 설치됩니다.
+##
+## ⚠️ CUDA GPU 가속이 필요하면 아래 torch 재설치 명령을 먼저 실행하세요:
+##   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+##
+## ================================================================
+
+# ================================
+# 공통 의존성 포함
+# ================================
+-r requirements.txt
+
+# ================================
+# Whisper / STT (faster-whisper — CUDA/CPU)
+# ================================
+faster-whisper>=1.0.0
+
+# ================================
+# Audio Enhancement (선택)
+# ================================
+deepfilternet>=0.5.6

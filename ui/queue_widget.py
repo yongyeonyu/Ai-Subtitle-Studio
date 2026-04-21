@@ -31,6 +31,8 @@ class QueueMixin:
         self._total_files = len(files)
         self._expected_seconds = {}
         self._file_start_times = {}
+        self._file_complete_times = {}
+        self._accumulated_vad = []   # ← 멀티클립 VAD 누적 초기화
 
         self.queue_table.setUpdatesEnabled(False)
         self.queue_table.setRowCount(0)
@@ -72,6 +74,16 @@ class QueueMixin:
                 self.queue_table.setItem(idx, 0, mk(status))
                 if "자막 생성 중" in status and idx not in self._file_start_times:
                     self._file_start_times[idx] = time.time()
+                # ✅ 완료 시 소요시간/예상시간 즉시 기록
+                if "완료" in status:
+                    self._file_complete_times[idx] = time.time()
+                    st = self._file_start_times.get(idx, 0)
+                    if st > 0:
+                        elapsed = time.time() - st
+                        expected = self._expected_seconds.get(idx, 0)
+                        e_str = fmt(elapsed)
+                        x_str = fmt(expected) if expected > 0 else "?"
+                        self.queue_table.setItem(idx, 4, mk(f"{e_str} / {x_str}"))
             if info_txt:
                 self.queue_table.setItem(idx, 2, mk(info_txt))
             if len_txt:
@@ -80,9 +92,12 @@ class QueueMixin:
                 try:
                     sec_val = float(time_txt)
                     self._expected_seconds[idx] = sec_val
-                    self.queue_table.setItem(idx, 4, mk(fmt(sec_val)))
+                    # ✅ 이미 완료된 항목은 time_txt로 덮어쓰지 않음
+                    if idx not in self._file_complete_times:
+                        self.queue_table.setItem(idx, 4, mk(fmt(sec_val)))
                 except (ValueError, TypeError):
-                    self.queue_table.setItem(idx, 4, mk(time_txt))
+                    if idx not in self._file_complete_times:
+                        self.queue_table.setItem(idx, 4, mk(time_txt))
 
     def _update_live_queue_header(self):
         active_backend = None

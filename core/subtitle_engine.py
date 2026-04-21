@@ -13,12 +13,17 @@ import json
 import re
 import urllib.request
 import difflib  
+import threading
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import config
 from logger import get_logger
 from .utils import seconds_to_srt_time, load_subtitle_rules
+
+_OLLAMA_WARMED = set()
+_OLLAMA_WARM_LOCK = threading.Lock()
 
 # 💡 [설정 데이터 로드]
 def _get_user_settings():
@@ -313,61 +318,71 @@ def is_natural_break(word: str, next_word: str, rules: dict) -> bool:
 def ask_exaone_to_split(text: str, threshold: int, rules: dict, model: str, user_prompt: str) -> list[str] | None:
     if "사용 안함" in model:
         return None
-        
-    end_words   = ", ".join(rules.get("end_words",   []))
+
+    end_words = ", ".join(rules.get("end_words", []))
     start_words = ", ".join(rules.get("start_words", []))
-    
+
     if user_prompt.strip():
         combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n[사용자 추가 지시문]\n{user_prompt.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
     else:
         combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
-        
-    prompt = combined_prompt.replace("{threshold}", str(threshold)) \
-                            .replace("{end_words}", end_words) \
-                            .replace("{start_words}", start_words) \
-                            .replace("{text}", text)
-    
+
+    prompt = (
+        combined_prompt
+        .replace("{threshold}", str(threshold))
+        .replace("{end_words}", end_words)
+        .replace("{start_words}", start_words)
+        .replace("{text}", text)
+    )
+
     try:
         body = json.dumps({
-            "model": model, 
-            "prompt": prompt, 
+            "model": model,
+            "prompt": prompt,
             "stream": False,
-            "format": "json", 
-            "options": {"temperature": 0.0, "num_predict": 256},
+            "format": "json",
+            "keep_alive": -1,
+            "options": {
+                "temperature": 0.0,
+                "num_predict": 256,
+            },
         }).encode("utf-8")
-        
+
         req = urllib.request.Request(
             "http://localhost:11434/api/generate",
             data=body,
-            headers={"Content-Type": "application/json", "Connection": "keep-alive"},
+            headers={
+                "Content-Type": "application/json",
+                "Connection": "keep-alive",
+            },
         )
-        
-        with urllib.request.urlopen(req, timeout=120) as resp:  
-            out_text = json.loads(resp.read().decode("utf-8")).get("response", "")
-            
-            chunks = []
-            try:
-                parsed = json.loads(out_text)
-                if isinstance(parsed, dict) and "result" in parsed:
-                    chunks = parsed["result"]
-                elif isinstance(parsed, list):
-                    chunks = parsed
-                else:
-                    raise ValueError("JSON 구조 오류")
-            except Exception:
-                import re
-                matches = re.findall(r'"([^"]*)"', out_text)
-                chunks = [m for m in matches if m != "result" and len(m) > 1]
 
-            final_chunks = []
-            for c in chunks:
-                if not isinstance(c, str): continue
-                c = _clean(c)
-                if c and len(c.replace(" ", "").replace("\n", "")) >= 2:
-                    final_chunks.append(c)
-                    
-            return final_chunks if final_chunks else None
-            
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            out_text = json.loads(resp.read().decode("utf-8")).get("response", "")
+
+        chunks = []
+        try:
+            parsed = json.loads(out_text)
+            if isinstance(parsed, dict) and "result" in parsed:
+                chunks = parsed["result"]
+            elif isinstance(parsed, list):
+                chunks = parsed
+            else:
+                raise ValueError("JSON 구조 오류")
+        except Exception:
+            matches = re.findall(r'"([^"]*)"', out_text)
+            chunks = [m for m in matches if m != "result" and len(m) > 1]
+
+        final_chunks = []
+        for c in chunks:
+            if not isinstance(c, str):
+                continue
+            c = _clean(c)
+            if c and len(c.replace(" ", "").replace("\n", "")) >= 2:
+                final_chunks.append(c)
+
+        return final_chunks if final_chunks else None
+
     except Exception as e:
         get_logger().log(f"[LLM 연결/파싱 실패] {e}")
         return None
@@ -548,13 +563,13 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
         return segments
 
     global _EXAONE_WORKERS, _GAP_BREAK_SEC, _MIN_DURATION, _MAX_CPS, _DEDUP_WINDOW
-    
-    model     = get_selected_llm()
-    short_m   = model.split(":")[0].upper()
-    rules     = load_subtitle_rules()
+
+    model = get_selected_llm()
+    short_m = model.split(":")[0].upper()
+    rules = load_subtitle_rules()
     threshold = 10
-    
     user_prompt = ""
+    api_key = ""
 
     settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
     if os.path.exists(settings_path):
@@ -567,12 +582,12 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
                 _MIN_DURATION = float(s.get("sub_min_duration", 0.2))
                 _MAX_CPS = int(s.get("sub_max_cps", 12))
                 _DEDUP_WINDOW = float(s.get("sub_dedup_window", 0.5))
-                
+
                 if "user_prompt" in s:
                     user_prompt = s["user_prompt"]
-                elif "llm_prompt" in s: 
+                elif "llm_prompt" in s:
                     user_prompt = s["llm_prompt"]
-                # --- [추가] API 키 로드 ---
+
                 api_key = s.get("google_api_key", "")
         except Exception:
             pass
@@ -583,47 +598,74 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
     raw_corr = get_local_dataset_corrections()
     corrections: dict = {}
     if raw_corr:
-        corrections = dict(sorted({k: v for k, v in raw_corr.items() if k}.items(), key=lambda x: len(x[0]), reverse=True))
+        corrections = dict(
+            sorted(
+                {k: v for k, v in raw_corr.items() if k}.items(),
+                key=lambda x: len(x[0]),
+                reverse=True,
+            )
+        )
 
     segments = _sanitize(segments, corrections)
     segments = _dedup_close(segments)
     segments = _absorb_tiny(segments, threshold)
-    segments = _global_dedup(segments) 
+    segments = _global_dedup(segments)
     segments = _pre_merge(segments, threshold)
 
-    if "사용 안함" in model:
-        get_logger().log(f"⏩ LLM을 생략하고 파이썬 내장 알고리즘으로 자막을 즉시 분할합니다...")
-    elif "Gemini" in model:
-        # 💡 [핵심 추가] 제미나이 무료 API는 동시 요청 제한이 있어 워커를 1개로 제한합니다.
-        _EXAONE_WORKERS = 1 
-        get_logger().log(f"🤖 {short_m} API 안전 모드: {_EXAONE_WORKERS}개 워커 순차 처리 중...")
-    else:
-        get_logger().log(f"{short_m} {_EXAONE_WORKERS}개 워커 병렬 처리 ({len(segments)}개)...")
-    
     args = [(seg, rules, threshold, corrections, model, user_prompt, api_key) for seg in segments]
     optimized: list[dict] = []
-    
-    try:
-        with ThreadPoolExecutor(max_workers=_EXAONE_WORKERS, thread_name_prefix="llm") as ex:
-            futures    = {ex.submit(_process_one, a): i for i, a in enumerate(args)}
-            result_map: dict[int, list] = {}
-            for fut in as_completed(futures):
-                idx = futures[fut]
+
+    if "사용 안함" in model:
+        get_logger().log("⏩ LLM 미사용: 스레드풀 없이 파이썬 내장 알고리즘만 즉시 적용합니다...")
+        for idx, a in enumerate(args):
+            try:
+                optimized.extend(_process_one(a))
+            except Exception as e:
+                get_logger().log(f"LLM 처리 오류: {e}")
+                optimized.append(segments[idx])
+
+    else:
+        if "Gemini" in model:
+            _EXAONE_WORKERS = 1
+            get_logger().log(f"🤖 {short_m} API 안전 모드: {_EXAONE_WORKERS}개 워커 순차 처리 중...")
+        else:
+            _warmup_ollama_model(model)
+            get_logger().log(f"{short_m} {min(_EXAONE_WORKERS, len(args))}개 워커 병렬 처리 ({len(segments)}개)...")
+
+        max_workers = max(1, min(_EXAONE_WORKERS, len(args)))
+
+        if max_workers == 1:
+            for idx, a in enumerate(args):
                 try:
-                    result_map[idx] = fut.result()
+                    optimized.extend(_process_one(a))
                 except Exception as e:
                     get_logger().log(f"LLM 처리 오류: {e}")
-                    result_map[idx] = [segments[idx]]
-        for i in range(len(args)):
-            optimized.extend(result_map.get(i, []))
-    except Exception as e:
-        get_logger().log(f"LLM 처리 오류: {e}")
-        optimized = segments
+                    optimized.append(segments[idx])
+        else:
+            try:
+                with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="llm") as ex:
+                    futures = {ex.submit(_process_one, a): i for i, a in enumerate(args)}
+                    result_map: dict[int, list] = {}
+
+                    for fut in as_completed(futures):
+                        idx = futures[fut]
+                        try:
+                            result_map[idx] = fut.result()
+                        except Exception as e:
+                            get_logger().log(f"LLM 처리 오류: {e}")
+                            result_map[idx] = [segments[idx]]
+
+                for i in range(len(args)):
+                    optimized.extend(result_map.get(i, []))
+
+            except Exception as e:
+                get_logger().log(f"LLM 처리 오류: {e}")
+                optimized = segments
 
     optimized = _absorb_tiny(optimized, threshold)
     optimized = _enforce_len(optimized, threshold, rules)
     optimized = adjust_timing(optimized)
-    optimized = _global_dedup(optimized) 
+    optimized = _global_dedup(optimized)
 
     get_logger().log(f"━━━ 자막 최적화 완료: {len(optimized)}개 ━━━\n")
     return optimized
@@ -771,9 +813,10 @@ def ask_gemini_to_split(text: str, threshold: int, rules: dict, model_name: str,
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0),
             )
-            
-            # 💡 [핵심 방어선 추가] LLM이 제멋대로 붙인 마크다운 찌꺼기(```json 등)를 완벽하게 제거합니다.
+
+            out_text = response.text or ""
             out_text = out_text.strip().strip('`')
+
             if out_text.lower().startswith('json'):
                 out_text = out_text[4:].strip()
 
@@ -806,4 +849,41 @@ def ask_gemini_to_split(text: str, threshold: int, rules: dict, model_name: str,
                 continue
             return [text] # 💡 기타 에러 시 원본 반환
     return [text]
-                
+
+def _warmup_ollama_model(model: str):
+    if not model or "사용 안함" in model or "Gemini" in model:
+        return
+
+    with _OLLAMA_WARM_LOCK:
+        if model in _OLLAMA_WARMED:
+            return
+
+        try:
+            body = json.dumps({
+                "model": model,
+                "prompt": " ",
+                "stream": False,
+                "keep_alive": -1,
+                "options": {
+                    "temperature": 0.0,
+                    "num_predict": 1
+                },
+            }).encode("utf-8")
+
+            req = urllib.request.Request(
+                "http://localhost:11434/api/generate",
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Connection": "keep-alive",
+                },
+            )
+
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()
+
+            _OLLAMA_WARMED.add(model)
+            get_logger().log(f"🔥 Ollama 워밍업 완료: {model}")
+
+        except Exception as e:
+            get_logger().log(f"⚠️ Ollama 워밍업 실패: {e}")

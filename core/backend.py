@@ -24,9 +24,12 @@ _SENTINEL = object()
 class CoreBackend:
     def __init__(self, main_window):
         self.ui = main_window
-        self.files_to_process = []; self.current_folder = None
-        self.min_speakers = 1; self.max_speakers = 1
-        self._active = False; self._speaker_map = []
+        self.files_to_process = []
+        self.current_folder = None
+        self.min_speakers = 1
+        self.max_speakers = 1
+        self._active = False
+        self._speaker_map = []
         get_logger().set_ui_callback(main_window.append_log)
         self.video_processor = VideoProcessor()
         self._pipeline_thread = None
@@ -34,6 +37,12 @@ class CoreBackend:
         self.total_expected_time = 0.0
         self.pipeline_start_time = 0.0
         self.is_first_start = True
+
+        self._prefetch_cache = {}
+        self._prefetch_threads = {}
+        self._prefetch_generation = 0
+        self._prefetch_lock = threading.Lock()
+
 
     def start_pipeline(self, files, folder=None, is_icloud=False, is_auto_start=False):
         self._active = True
@@ -45,15 +54,31 @@ class CoreBackend:
         self.pipeline_start_time = 0.0
         self.is_first_start = True
 
-        if not self.files_to_process: return
+        with self._prefetch_lock:
+            self._prefetch_generation += 1
+            self._prefetch_cache = {}
+            self._prefetch_threads = {}
+
+        if not self.files_to_process:
+            return
+
         if hasattr(self.ui, 'init_queue_list'):
             self.ui.init_queue_list(self.files_to_process)
 
         self._video_durations = {}
-        self._eta_thread = threading.Thread(target=self._precalculate_etas, daemon=True, name="eta-calculator")
+        self._eta_thread = threading.Thread(
+            target=self._precalculate_etas,
+            daemon=True,
+            name="eta-calculator"
+        )
         self._eta_thread.start()
+
         get_logger().log(f"🚀 총 {len(self.files_to_process)}개 파일 처리 시작!")
-        self._pipeline_thread = threading.Thread(target=self._run_all, daemon=True, name="pipeline-main")
+        self._pipeline_thread = threading.Thread(
+            target=self._run_all,
+            daemon=True,
+            name="pipeline-main"
+        )
         self._pipeline_thread.start()
 
     def restart_current_file(self):
@@ -63,13 +88,25 @@ class CoreBackend:
 
     def stop(self):
         self._active = False
+
         try:
             if hasattr(self, "video_processor"):
                 self.video_processor.stop_transcribe()
         except Exception as e:
             get_logger().log(f"⚠️ stop_transcribe 실패: {e}")
-        if hasattr(self, '_edit_event'): self._edit_event.set()
-        if hasattr(self, '_start_event'): self._start_event.set()
+
+        try:
+            with self._prefetch_lock:
+                self._prefetch_generation += 1
+                self._prefetch_cache.clear()
+                self._prefetch_threads.clear()
+        except Exception:
+            pass
+
+        if hasattr(self, '_edit_event'):
+            self._edit_event.set()
+        if hasattr(self, '_start_event'):
+            self._start_event.set()
 
     def _precalculate_etas(self):
         total_expected_time = 0.0
@@ -111,19 +148,18 @@ class CoreBackend:
             self.ui._sig_update_queue_header.emit(1, len(self.files_to_process), 0, total_str)
 
     def _run_all(self):
-        eta_thread = getattr(self, '_eta_thread', None)
-        if eta_thread and eta_thread.is_alive():
-            eta_thread.join(timeout=30)
+        total_files = len(self.files_to_process)
 
         try:
-            total_files = len(self.files_to_process)
             for i, target_file in enumerate(self.files_to_process):
                 if not self._active:
                     return
+
                 if hasattr(self.ui, '_sig_update_queue'):
                     self.ui._sig_update_queue.emit(i, "⏳ 오디오 추출 중", "", "", "")
                 if hasattr(self.ui, '_sig_update_queue_header'):
                     self.ui._sig_update_queue_header.emit(i + 1, total_files, 0, "")
+
                 self._process_one(target_file, i)
 
             if getattr(self.ui, '_is_auto_pipeline', False):
@@ -145,7 +181,7 @@ class CoreBackend:
                     self.ui.request_show_home()
             except Exception:
                 pass
-    
+
     def _backup_existing(self, target_file):
         """기존 자막/MOV 파일 백업"""
         try:
@@ -294,7 +330,7 @@ class CoreBackend:
         self.ui.open_editor_for_file(target_file, on_save, on_start, on_prev, on_exit, is_batch=is_auto_mode)
 
         if is_auto_mode:
-            threading.Timer(0.5, on_start).start()
+            threading.Timer(0.05, on_start).start()
 
         if not start_event.wait(timeout=600):
             get_logger().log("❌ 시작 이벤트 타임아웃 (600초)")
@@ -312,13 +348,27 @@ class CoreBackend:
 
             get_logger().log(f"\n{'='*44}\n🎬 [{queue_index+1}/{len(self.files_to_process)}] {vname}\n{'='*44}\n\n{'─'*44}\n  📂 파일: {vname} ({fsize:.1f} MB)\n{'─'*44}")
 
-            res = self.video_processor.extract_audio(target_file)
-            if not res:
-                get_logger().log("❌ 오디오 추출 실패"); edit_event.wait()
-                if action_state[0] == "restart":
-                    get_logger().log("\n🔄 재시작합니다..."); action_state[0] = "next"; continue
-                break
+            res = self._get_audio_extract_result(target_file)
 
+            next_file = self.files_to_process[queue_index + 1] if (queue_index + 1) < len(self.files_to_process) else None
+            if next_file:
+                self._prefetch_audio_for_file(next_file)
+
+            if not res:
+                get_logger().log("❌ 오디오 추출 실패")
+                if hasattr(self.ui, '_sig_update_queue'):
+                    try:
+                        self.ui._sig_update_queue.emit(queue_index, "❌ 오류", "", "", "")
+                    except RuntimeError:
+                        pass
+
+                if action_state[0] == "restart":
+                    get_logger().log("\n🔄 재시작합니다...")
+                    action_state[0] = "next"
+                    continue
+
+                return
+            
             chunk_dir, vad_segs = res
             if hasattr(self.ui, '_sig_set_vad_segments'):
                 self.ui._sig_set_vad_segments.emit(vad_segs)
@@ -369,7 +419,7 @@ class CoreBackend:
 
             def do_transcribe():
                 try:
-                    for chunk_segs, c_idx, t_total in self.video_processor.transcribe(chunk_dir, is_fast_mode=is_auto_mode):
+                    for chunk_segs, c_idx, t_total in self.video_processor.transcribe(chunk_dir, is_fast_mode=False):      
                         if not self._active: break
                         opt_queue.put((chunk_segs, c_idx, t_total))
                 finally:
@@ -543,7 +593,7 @@ class CoreBackend:
                 def _auto_proceed():
                     nonlocal final_segments
                     final_segments = nonlocal_final; action_state[0] = "next"; edit_event.set()
-                threading.Timer(2.0, _auto_proceed).start()
+                threading.Timer(0.05, _auto_proceed).start()
 
             edit_event.wait()
 
@@ -612,6 +662,11 @@ class CoreBackend:
         self.total_expected_time = 0.0
         self.pipeline_start_time = 0.0
 
+        with self._prefetch_lock:
+            self._prefetch_generation += 1
+            self._prefetch_cache = {}
+            self._prefetch_threads = {}
+
         if not self.files_to_process:
             return
         if hasattr(self.ui, 'init_queue_list'):
@@ -679,8 +734,9 @@ class CoreBackend:
                     total_str = f"{t_hours}시간 {t_mins}분 {t_secs}초"
                 else:
                     total_str = f"{t_mins}분 {t_secs}초"
-                    self.ui._sig_update_queue_header.emit(1, total_files, 0, total_str)
 
+                self.ui._sig_update_queue_header.emit(1, total_files, 0, total_str)
+            
             # 멀티클립 경계 정보를 UI에 전달 (에디터 열기 전)
             self.ui._multiclip_boundaries = clip_boundaries
 
@@ -727,9 +783,6 @@ class CoreBackend:
             if not start_event.wait(timeout=600):
                 get_logger().log("❌ 시작 이벤트 타임아웃")
                 return
-            if action_state[0] in ("prev", "exit"):
-                self.ui.request_show_home()
-                return
 
             if action_state[0] in ("prev", "exit"):
                 self.ui.request_show_home()
@@ -756,7 +809,12 @@ class CoreBackend:
                     self.ui._sig_update_queue.emit(i, "⏳ 오디오 추출 중", "", "", "")
 
                 self._backup_existing(target_file)
-                res = self.video_processor.extract_audio(target_file)
+                res = self._get_audio_extract_result(target_file)
+
+                next_file = self.files_to_process[i + 1] if (i + 1) < total_files else None
+                if next_file:
+                    self._prefetch_audio_for_file(next_file)
+
                 if not res:
                     get_logger().log(f"  ❌ 오디오 추출 실패: {vname}")
                     if hasattr(self.ui, '_sig_update_queue'):
@@ -837,3 +895,62 @@ class CoreBackend:
                     self.ui.request_show_home()
             except Exception:
                 pass
+    def _prefetch_audio_for_file(self, target_file):
+        if not target_file or not self._active:
+            return
+
+        current_generation = self._prefetch_generation
+
+        with self._prefetch_lock:
+            if target_file in self._prefetch_cache:
+                return
+            if target_file in self._prefetch_threads:
+                th = self._prefetch_threads[target_file]
+                if th.is_alive():
+                    return
+
+        def _task():
+            vp = VideoProcessor()
+            try:
+                res = vp.extract_audio(target_file)
+                with self._prefetch_lock:
+                    if current_generation == self._prefetch_generation:
+                        self._prefetch_cache[target_file] = res
+            except Exception as e:
+                get_logger().log(f"⚠️ 오디오 선추출 실패: {os.path.basename(target_file)} / {e}")
+                with self._prefetch_lock:
+                    if current_generation == self._prefetch_generation:
+                        self._prefetch_cache[target_file] = None
+
+            finally:
+                try:
+                    vp.stop_transcribe()
+                except Exception:
+                    pass
+                with self._prefetch_lock:
+                    self._prefetch_threads.pop(target_file, None)
+
+        th = threading.Thread(
+            target=_task,
+            daemon=True,
+            name=f"prefetch-{os.path.basename(target_file)}"
+        )
+        with self._prefetch_lock:
+            self._prefetch_threads[target_file] = th
+        th.start()
+
+    def _get_audio_extract_result(self, target_file):
+        th = None
+        with self._prefetch_lock:
+            th = self._prefetch_threads.get(target_file)
+
+        if th and th.is_alive():
+            th.join()
+
+        with self._prefetch_lock:
+            cached = self._prefetch_cache.pop(target_file, None)
+
+        if cached:
+            return cached
+
+        return self.video_processor.extract_audio(target_file)

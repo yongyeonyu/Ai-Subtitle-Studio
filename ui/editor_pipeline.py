@@ -97,7 +97,7 @@ class EditorPipelineMixin:
             self.sm.start_ai_all()
         self._process_start_time = time.time()
         self._backend_finished = False
-        QTimer.singleShot(50, lambda: self._execute_pipeline_logic(is_restart))
+        self._execute_pipeline_logic(is_restart)
 
     def _set_process_completed(self):
         if getattr(self, 'is_auto_start', False):
@@ -111,6 +111,7 @@ class EditorPipelineMixin:
         main_w = self.window()
         self.text_edit.clear()
         self._segment_queue.clear()
+
         if is_restart:
             if hasattr(main_w, "backend") and main_w.backend:
                 main_w.backend.restart_current_file()
@@ -118,8 +119,9 @@ class EditorPipelineMixin:
         else:
             self.sig_start.emit()
             self._spinner_timer.start()
-        QTimer.singleShot(500, self._safe_enable_start_btn)
 
+        QTimer.singleShot(50, self._safe_enable_start_btn)
+        
     def _on_start_clicked(self):
         from core.state_manager import SubtitleStateManager
         if self.sm.state == SubtitleStateManager.ST_PROC:
