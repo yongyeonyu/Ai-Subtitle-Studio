@@ -33,6 +33,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     sig_inline_text_changed = pyqtSignal(int, str)
     sig_editing_mode        = pyqtSignal(bool)
     sig_split_request       = pyqtSignal(int, float, int)
+    sig_clip_selected       = pyqtSignal(int)   # ← 추가: clip_idx
     playhead_menu_requested = pyqtSignal(QPoint, float)
     diamond_merge           = pyqtSignal(int, int)
     sig_smart_split         = pyqtSignal(int, float, bool)
@@ -62,7 +63,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._waveform = None
         self.boundary_times: list[float] = []
         self._multiclip_boxes: list[dict] = []   # ← 추가
-
+        self._active_clip_idx: int = -1   # ← 추가
         self._hover_line:  int | None = None
         self._hover_handle: tuple | None = None
 

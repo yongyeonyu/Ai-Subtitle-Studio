@@ -123,6 +123,18 @@ class TimelineInputMixin:
 
         self._just_committed = False; self.setFocus()
 
+        # 멀티클립 박스 클릭 감지
+        if self._multiclip_boxes and SEG_TOP <= y <= SEG_BOT:
+            for box in self._multiclip_boxes:
+                bx1, bx2 = self._x(box["start"]), self._x(box["end"])
+                if bx1 <= x <= bx2:
+                    new_idx = box.get("index", 1) - 1
+                    if new_idx != self._active_clip_idx:
+                        self._active_clip_idx = new_idx
+                        self.sig_clip_selected.emit(new_idx)
+                        self.update()
+                    break
+
         if ev.button() == Qt.MouseButton.RightButton:
             if y < SEG_TOP: self._emit_smart_split_at_playhead(); return
             if SEG_TOP <= y <= SEG_BOT:

@@ -286,7 +286,9 @@ class EditorWidget(EditorActionsMixin, EditorPipelineMixin, EditorSegmentsMixin,
 
         if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'seg_right_clicked'):
             self.timeline.canvas.seg_right_clicked.connect(self._on_timeline_seg_right_clicked)
-
+                
+        # 멀티클립 전환
+        if hasattr(self.timeline, 'sig_clip_selected'):self.timeline.sig_clip_selected.connect(self._on_clip_selected)
         if hasattr(self.timeline, 'seg_time_changed'): self.timeline.seg_time_changed.connect(self._on_seg_time_changed)
         if hasattr(self.timeline, 'seg_to_gap'):       self.timeline.seg_to_gap.connect(self._on_seg_to_gap)
         if hasattr(self.timeline, 'gap_activated'):    self.timeline.gap_activated.connect(self._on_gap_activated)
@@ -486,3 +488,12 @@ class EditorWidget(EditorActionsMixin, EditorPipelineMixin, EditorSegmentsMixin,
         fw = QApplication.focusWidget()
         if hasattr(fw, 'redo') and fw.hasFocus(): fw.redo()
         else: self._undo_mgr.redo()
+
+    def _on_clip_selected(self, clip_idx):
+        """멀티클립: 선택한 클립의 영상으로 전환"""
+        boxes = getattr(self.timeline.canvas, '_multiclip_boxes', [])
+        if clip_idx < 0 or clip_idx >= len(boxes):
+            return
+        clip_file = boxes[clip_idx].get("file", "")
+        if clip_file and os.path.exists(clip_file) and hasattr(self, 'video_player'):
+            self.video_player.load(clip_file, self._get_current_segments())

@@ -29,7 +29,8 @@ class TimelineWidget(QWidget):
     sig_inline_text_changed = pyqtSignal(int, str)
     sig_editing_mode        = pyqtSignal(bool)
     playhead_menu_requested = pyqtSignal(QPoint, float)
-
+    sig_clip_selected       = pyqtSignal(int)   # ← 추가
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(CANVAS_H + 55)
@@ -84,6 +85,7 @@ class TimelineWidget(QWidget):
         self.canvas.scrub_sec.connect(self.scrub_sec)
         self.canvas.drag_started.connect(self.drag_started)
         self.canvas.drag_finished.connect(self.drag_finished)
+        self.canvas.sig_clip_selected.connect(self._on_clip_selected)
         self.canvas.sig_inline_text_changed.connect(self.sig_inline_text_changed.emit)
         self.canvas.sig_editing_mode.connect(self.sig_editing_mode.emit)
         self.canvas.playhead_menu_requested.connect(self.playhead_menu_requested.emit)
@@ -261,3 +263,27 @@ class TimelineWidget(QWidget):
             sec = frac * self.canvas.total_duration
             self.center_to_sec(sec, smooth=False) 
             self.scrub_sec.emit(sec)
+
+    def _on_clip_selected(self, clip_idx):
+        """클립 선택 → 글로벌 캔버스 해당 클립 파형으로 전환"""
+        boxes = getattr(self.canvas, '_multiclip_boxes', [])
+        if clip_idx < 0 or clip_idx >= len(boxes):
+            return
+
+        box = boxes[clip_idx]
+        clip_file = box.get("file", "")
+
+        # 글로벌 캔버스를 해당 클립 파형으로 전환
+        if clip_file:
+            if self._wf_worker:
+                self._wf_worker.quit()
+            self._wf_worker = WaveformWorker(clip_file, self)
+            self._wf_worker.ready.connect(self._on_clip_global_wf_ready)
+            self._wf_worker.start()
+
+        # 시그널 전달 (에디터에서 비디오 전환용)
+        self.sig_clip_selected.emit(clip_idx)
+
+    def _on_clip_global_wf_ready(self, wf, dur):
+        self.global_canvas.set_waveform(wf)
+        self.global_canvas.update()

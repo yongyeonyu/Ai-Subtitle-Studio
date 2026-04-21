@@ -213,11 +213,14 @@ class TimelinePaintMixin:
                 bx1 = self._x(box["start"])
                 bx2 = self._x(box["end"])
                 bw = bx2 - bx1
-                p.setPen(QPen(QColor("#4FC3F7"), 2))
+                clip_idx = box.get("index", 1) - 1
+                is_active = (clip_idx == getattr(self, '_active_clip_idx', -1))
+                color = "#4AFF80" if is_active else "#4FC3F7"
+                width = 3 if is_active else 2
+                p.setPen(QPen(QColor(color), width))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(int(bx1), 0, int(bw), CANVAS_H)
-                # 클립 번호 라벨
-                p.setPen(QColor("#4FC3F7"))
+                p.setPen(QColor(color))
                 p.setFont(QFont("", 9, QFont.Weight.Bold))
                 p.drawText(int(bx1) + 4, 12, f"CLIP {box.get('index', '?')}")
 
