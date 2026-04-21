@@ -628,18 +628,39 @@ class CoreBackend:
             total_files = len(self.files_to_process)
             first_file = self.files_to_process[0]
 
-            # ── STEP 0: 클립 길이 사전 계산 (오디오 추출 없이) ──
+            # ── STEP 0: 클립 길이 사전 계산 ──
             get_logger().log(f"🎬 멀티클립: {total_files}개 클립 정보 수집 중...")
+
+            if hasattr(self.ui, 'init_queue_list'):
+                self.ui.init_queue_list(self.files_to_process)
 
             clip_boundaries = []
             cumulative = 0.0
+            s = load_settings()
+            model_key = get_model_key(s)
+            total_expected = 0.0
+
             for i, target_file in enumerate(self.files_to_process):
                 vname = os.path.basename(target_file)
                 try:
                     info = probe_media(target_file)
                     clip_dur = info["duration"]
+                    info_txt = info["info_txt"]
+                    len_txt = info["len_txt"]
+
+                    expected = get_expected_time(model_key, clip_dur)
+                    if expected > 0:
+                        total_expected += expected
+
+                    if hasattr(self.ui, '_sig_update_queue'):
+                        self.ui._sig_update_queue.emit(
+                            i, "⏳ 대기 중", str(expected), info_txt, len_txt
+                        )
                 except Exception:
                     clip_dur = 30.0
+                    info_txt = ""
+                    len_txt = ""
+
                 clip_boundaries.append({
                     "start": cumulative,
                     "end": cumulative + clip_dur,
@@ -649,7 +670,18 @@ class CoreBackend:
                 cumulative += clip_dur
                 get_logger().log(f"  📂 [{i+1}/{total_files}] {vname}: {clip_dur:.1f}초")
 
-            self._multiclip_boundaries = clip_boundaries
+            self.total_expected_time = total_expected
+            if total_expected > 0 and hasattr(self.ui, '_sig_update_queue_header'):
+                t_mins, t_secs = int(total_expected // 60), int(total_expected % 60)
+                t_hours = t_mins // 60
+                if t_hours > 0:
+                    t_mins = t_mins % 60
+                    total_str = f"{t_hours}시간 {t_mins}분 {t_secs}초"
+                else:
+                    total_str = f"{t_mins}분 {t_secs}초"
+                    self.ui._sig_update_queue_header.emit(1, total_files, 0, total_str)
+
+            # 멀티클립 경계 정보를 UI에 전달 (에디터 열기 전)
             self.ui._multiclip_boundaries = clip_boundaries
 
             # ── STEP 1: 에디터 열기 (클립 박스만 표시, 파형 아직 없음) ──

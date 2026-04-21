@@ -214,7 +214,6 @@ class TimelinePaintMixin:
                 bx2 = self._x(box["end"])
                 bw = bx2 - bx1
                 clip_idx = box.get("index", 1) - 1
-
                 is_active = (clip_idx == getattr(self, '_active_clip_idx', -1))
                 if is_active:
                     color = "#4AFF80"
@@ -222,11 +221,10 @@ class TimelinePaintMixin:
                 else:
                     color = "#666666"
                     width = 1
-
                 p.setPen(QPen(QColor(color), width))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(int(bx1), 0, int(bw), CANVAS_H)
-                p.setPen(QColor(label_color))
+                p.setPen(QColor(color))
                 p.setFont(QFont("", 9, QFont.Weight.Bold))
                 p.drawText(int(bx1) + 4, 12, f"CLIP {box.get('index', '?')}")
 

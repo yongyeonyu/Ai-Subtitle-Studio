@@ -182,19 +182,23 @@ class TimelineWidget(QWidget):
         self._mc_worker.start()
 
     def _on_clip_waveform_ready(self, clip_idx, partial_wf):
-        """클립 하나 완료 → 즉시 파형 갱신"""
+        """클립 하나 완료 → 즉시 파형 갱신 (줌/크기 유지)"""
         self.canvas.set_waveform(partial_wf)
         self.global_canvas.set_waveform(partial_wf)
-        # 글로벌 캔버스 duration을 전체 클립 합산으로 유지
+        # duration만 갱신, pps/줌은 건드리지 않음
         if hasattr(self, '_mc_worker') and self._mc_worker._clips:
             total_dur = self._mc_worker._clips[-1]["end"]
             self.global_canvas.total_duration = total_dur
-            self.canvas.total_duration = total_dur
+            if self.canvas.total_duration < total_dur:
+                self.canvas.total_duration = total_dur
             self.global_canvas.update()
 
     def _on_waveform_ready(self, wf, d):
         self.canvas.set_waveform(wf)
         self.global_canvas.set_waveform(wf)
+        # 멀티클립일 때는 duration/pps 건드리지 않음
+        if not getattr(self, '_mc_worker', None):
+            self.global_canvas.total_duration = d
 
     def wheelEvent(self, ev):
         mods = ev.modifiers()
