@@ -1,138 +1,82 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 core/whisper_faster.py
 Windows 전용 Whisper 백엔드 (faster-whisper)
+- PyQt6 충돌 회피를 위해 별도 subprocess에서 실행
 - media_processor.py의 proc.stdout.readline() 인터페이스와 호환
-- subprocess 대신 스레드 + 파이프로 JSON 스트리밍
 """
-import io
 import json
-import threading
+import os
+import subprocess
+import sys
 from logger import get_logger
-
-
-class _FakeProc:
-    """media_processor가 기대하는 Popen 호환 객체"""
-
-    def __init__(self):
-        self._reader, self._writer = io.StringIO(), None
-        self._buffer = io.StringIO()
-        self._lock = threading.Lock()
-        self._done = threading.Event()
-        self._lines = []
-        self._line_ready = threading.Event()
-        self._line_idx = 0
-        self.returncode = 0
-        self.stderr = io.StringIO()
-
-        # stdout 흉내
-        self.stdout = self
-
-    def _push_line(self, line: str):
-        with self._lock:
-            self._lines.append(line)
-        self._line_ready.set()
-
-    def readline(self):
-        while True:
-            with self._lock:
-                if self._line_idx < len(self._lines):
-                    line = self._lines[self._line_idx]
-                    self._line_idx += 1
-                    return line
-            if self._done.is_set():
-                with self._lock:
-                    if self._line_idx < len(self._lines):
-                        line = self._lines[self._line_idx]
-                        self._line_idx += 1
-                        return line
-                return ""
-            self._line_ready.wait(timeout=1.0)
-            self._line_ready.clear()
-
-    def wait(self):
-        self._done.wait()
-        return 0
-
-    def poll(self):
-        return 0 if self._done.is_set() else None
-
-    def terminate(self):
-        self._done.set()
-
-    def kill(self):
-        self._done.set()
 
 
 def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple: str):
     """
-    faster-whisper 실행.
+    faster-whisper를 별도 프로세스로 실행.
     media_processor.py 호환: Popen-like 객체 반환 (stdout.readline() 가능)
     """
-    proc = _FakeProc()
+    fw_model = _convert_model_name(model)
 
-    def _worker():
-        try:
-            from faster_whisper import WhisperModel
+    # whisper_worker.py 경로
+    worker_script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "whisper_worker.py"
+    )
 
-            # 모델명 변환: mlx 모델명 → faster-whisper 호환
-            fw_model = _convert_model_name(model)
+    task = {
+        "chunk_paths": chunk_paths,
+        "model": fw_model,
+        "language": language,
+    }
 
-            get_logger().log(f"  🔧 faster-whisper 모델 로딩: {fw_model}")
-            whisper = WhisperModel(fw_model, device="cuda", compute_type="float16")
+    get_logger().log(f"  🔧 faster-whisper subprocess 시작: {fw_model}")
 
-            for chunk_path in chunk_paths:
-                try:
-                    segments, info = whisper.transcribe(
-                        chunk_path,
-                        language=language,
-                        word_timestamps=True,
-                        beam_size=5,
-                        condition_on_previous_text=False
-                    )
+    proc = subprocess.Popen(
+        [sys.executable, worker_script],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+    )
 
-                    result_segments = []
-                    for seg in segments:
-                        words = []
-                        if seg.words:
-                            for w in seg.words:
-                                words.append({
-                                    "word": w.word,
-                                    "start": w.start,
-                                    "end": w.end
-                                })
+    # 작업 정보 전송
+    proc.stdin.write(json.dumps(task, ensure_ascii=False) + "\n")
+    proc.stdin.flush()
+    proc.stdin.close()
 
-                        result_segments.append({
-                            "start": seg.start,
-                            "end": seg.end,
-                            "text": seg.text.strip(),
-                            "words": words
-                        })
+    # stderr 로그를 비동기로 출력
+    import threading
 
-                    result = {"segments": result_segments}
-                    proc._push_line(json.dumps(result, ensure_ascii=False) + "\n")
+    def _log_stderr():
+        for line in proc.stderr:
+            line = line.rstrip()
+            if line:
+                get_logger().log(line)
 
-                except Exception as e:
-                    get_logger().log(f"  ❌ 청크 처리 오류: {e}")
-                    proc._push_line(json.dumps({"error": str(e)}, ensure_ascii=False) + "\n")
-
-        except Exception as e:
-            get_logger().log(f"❌ faster-whisper 로딩 실패: {e}")
-            for _ in chunk_paths:
-                proc._push_line(json.dumps({"error": str(e)}, ensure_ascii=False) + "\n")
-        finally:
-            proc._done.set()
-            proc._line_ready.set()
-
-    t = threading.Thread(target=_worker, daemon=True, name="faster-whisper")
-    t.start()
+    threading.Thread(target=_log_stderr, daemon=True, name="whisper-stderr").start()
 
     return proc
 
 
 def _convert_model_name(mlx_model: str) -> str:
-    """mlx-community 모델명을 faster-whisper 호환 모델명으로 변환"""
+    """mlx-community 모델명을 faster-whisper 호환 모델명으로 변환 (로컬 우선)"""
+
+    # ✅ 로컬 모델 폴더 우선 확인
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    local_models = {
+        "large-v3": os.path.join(project_root, "models", "faster-whisper-large-v3"),
+        "medium": os.path.join(project_root, "models", "faster-whisper-medium"),
+    }
+    for size, path in local_models.items():
+        if os.path.exists(os.path.join(path, "model.bin")):
+            if size in mlx_model.lower() or mlx_model in ("large-v3", size):
+                get_logger().log(f"  📂 로컬 모델 사용: {path}")
+                return path
+
+    # 온라인 모델명 변환
     conversions = {
         "mlx-community/whisper-large-v3-mlx": "large-v3",
         "mlx-community/whisper-large-v3-turbo": "large-v3-turbo",
@@ -142,21 +86,17 @@ def _convert_model_name(mlx_model: str) -> str:
         "mlx-community/whisper-tiny-mlx": "tiny",
     }
 
-    # 정확히 매칭되면 변환
     if mlx_model in conversions:
         return conversions[mlx_model]
 
-    # "mlx-community/" 접두사 제거 후 매칭 시도
     stripped = mlx_model.replace("mlx-community/", "").replace("-mlx", "")
     for key, val in conversions.items():
         if val in stripped:
             return val
 
-    # 이미 faster-whisper 형식이면 그대로
     valid = ["tiny", "base", "small", "medium", "large", "large-v2", "large-v3", "large-v3-turbo"]
     if mlx_model in valid:
         return mlx_model
 
-    # 기본값
     get_logger().log(f"  ⚠️ 모델명 변환 불가: {mlx_model} → medium 사용")
     return "medium"
