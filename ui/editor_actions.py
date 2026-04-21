@@ -49,6 +49,11 @@ class EditorActionsMixin:
             QMessageBox.StandardButton.No |
             QMessageBox.StandardButton.Cancel
         )
+        msg_box.setStyleSheet("""
+            QMessageBox { background-color: #1a1a1a; color: #FFFFFF; }
+            QPushButton { background-color: #333333; color: #FFFFFF; border: 2px solid #FFFFFF; padding: 6px 16px; border-radius: 4px; font-weight: bold; }
+            QPushButton:hover { background-color: #555555; }
+        """)
         msg_box.button(QMessageBox.StandardButton.Yes).setText("예")
         msg_box.button(QMessageBox.StandardButton.No).setText("아니요")
         msg_box.button(QMessageBox.StandardButton.Cancel).setText("취소")

@@ -288,7 +288,9 @@ class CoreBackend:
             final_segments = segs; action_state[0] = "exit"
             self.stop(); start_event.set(); edit_event.set()
 
-        is_auto_mode = getattr(self, 'is_auto_start', False)
+        # 변경: 첫 파일은 수동, 이후 파일은 자동 진행
+        is_auto_mode = getattr(self, 'is_auto_start', False) or (queue_index > 0 and len(self.files_to_process) > 1)
+
         self.ui.open_editor_for_file(target_file, on_save, on_start, on_prev, on_exit, is_batch=is_auto_mode)
 
         if is_auto_mode:
@@ -599,3 +601,209 @@ class CoreBackend:
     def _send_ntfy_notification(self, title, message, tags=""):
         from .notifier import send_ntfy
         send_ntfy(title, message, tags)
+
+    def start_multiclip_pipeline(self, files, folder=None):
+        """멀티클립 품질모드: 모든 클립 순차 STT → 하나의 에디터에서 편집"""
+        self._active = True
+        self.files_to_process = list(files)
+        self.current_folder = folder
+        self.is_auto_start = False
+        self.is_first_start = True
+        self.total_expected_time = 0.0
+        self.pipeline_start_time = 0.0
+
+        if not self.files_to_process:
+            return
+        if hasattr(self.ui, 'init_queue_list'):
+            self.ui.init_queue_list(self.files_to_process)
+
+        get_logger().log(f"🎬 멀티클립 품질모드: {len(self.files_to_process)}개 클립 순차 처리")
+        self._pipeline_thread = threading.Thread(
+            target=self._run_multiclip, daemon=True, name="multiclip-main"
+        )
+        self._pipeline_thread.start()
+
+    def _run_multiclip(self):
+        try:
+            total_files = len(self.files_to_process)
+            first_file = self.files_to_process[0]
+
+            # ── STEP 0: 클립 길이 사전 계산 (오디오 추출 없이) ──
+            get_logger().log(f"🎬 멀티클립: {total_files}개 클립 정보 수집 중...")
+
+            if hasattr(self.ui, 'init_queue_list'):
+                self.ui.init_queue_list(self.files_to_process)
+
+            clip_boundaries = []
+            cumulative = 0.0
+            for i, target_file in enumerate(self.files_to_process):
+                vname = os.path.basename(target_file)
+                try:
+                    info = probe_media(target_file)
+                    clip_dur = info["duration"]
+                except Exception:
+                    clip_dur = 30.0
+                clip_boundaries.append({
+                    "start": cumulative,
+                    "end": cumulative + clip_dur,
+                    "file": target_file,
+                    "name": vname
+                })
+                cumulative += clip_dur
+                get_logger().log(f"  📂 [{i+1}/{total_files}] {vname}: {clip_dur:.1f}초")
+
+            self._multiclip_boundaries = clip_boundaries
+            self.ui._multiclip_boundaries = clip_boundaries
+
+            # ── STEP 1: 에디터 열기 (클립 박스만 표시, 파형 아직 없음) ──
+            edit_event = threading.Event()
+            start_event = threading.Event()
+            self._edit_event = edit_event
+            self._start_event = start_event
+            final_segments = []
+            action_state = ["wait"]
+            self._action_state = action_state
+
+            def on_save(segs):
+                nonlocal final_segments
+                final_segments = segs
+                action_state[0] = "next"
+                edit_event.set()
+
+            def on_start():
+                if getattr(self, 'is_first_start', True):
+                    self.pipeline_start_time = time.time()
+                    self.is_first_start = False
+                action_state[0] = "start"
+                start_event.set()
+
+            def on_prev():
+                action_state[0] = "prev"
+                start_event.set()
+                edit_event.set()
+
+            def on_exit(segs):
+                nonlocal final_segments
+                final_segments = segs
+                action_state[0] = "exit"
+                self.stop()
+                start_event.set()
+                edit_event.set()
+
+            self.ui.open_editor_for_file(
+                first_file, on_save, on_start, on_prev, on_exit, is_batch=False
+            )
+
+            # 시작 버튼 대기
+            if not start_event.wait(timeout=600):
+                get_logger().log("❌ 시작 이벤트 타임아웃")
+                return
+            if action_state[0] in ("prev", "exit"):
+                self.ui.request_show_home()
+                return
+
+            if action_state[0] in ("prev", "exit"):
+                self.ui.request_show_home()
+                return
+
+            # ── 멀티클립 파형 로드 시작 (병렬) ──
+            if hasattr(self.ui, '_sig_load_multiclip_waveform'):
+                self.ui._sig_load_multiclip_waveform.emit(clip_boundaries)
+
+            # ── STEP 2: 클립별 오디오 추출 + Whisper (순차) ──
+            get_logger().log(f"\n🎤 멀티클립 STT 시작...")
+
+            for i, target_file in enumerate(self.files_to_process):
+                if not self._active:
+                    return
+
+                vname = os.path.basename(target_file)
+                bd = clip_boundaries[i]
+                offset = bd["start"]
+
+                get_logger().log(f"\n{'='*44}\n🎬 [{i+1}/{total_files}] {vname}\n{'='*44}")
+
+                if hasattr(self.ui, '_sig_update_queue'):
+                    self.ui._sig_update_queue.emit(i, "⏳ 오디오 추출 중", "", "", "")
+
+                self._backup_existing(target_file)
+                res = self.video_processor.extract_audio(target_file)
+                if not res:
+                    get_logger().log(f"  ❌ 오디오 추출 실패: {vname}")
+                    if hasattr(self.ui, '_sig_update_queue'):
+                        self.ui._sig_update_queue.emit(i, "❌ 오류", "", "", "")
+                    continue
+
+                chunk_dir, vad_segs = res
+
+                if hasattr(self.ui, '_sig_update_queue'):
+                    self.ui._sig_update_queue.emit(i, "⏳ 자막 생성 중", "", "", "")
+
+                get_logger().log(f"  🎤 Whisper 변환 중...")
+
+                clip_segments = []
+                for chunk_segs, c_idx, t_total in self.video_processor.transcribe(chunk_dir):
+                    if not self._active:
+                        return
+                    clip_segments.extend(chunk_segs)
+
+                # 시간 오프셋 적용
+                for seg in clip_segments:
+                    seg["start"] += offset
+                    seg["end"] += offset
+                    seg["_clip_idx"] = i
+                    if "words" in seg:
+                        for w in seg["words"]:
+                            w["start"] += offset
+                            w["end"] += offset
+
+                # 최적화
+                from .subtitle_engine import optimize_segments
+                opt = optimize_segments(clip_segments)
+                for seg in opt:
+                    if seg["start"] < 0.0:
+                        seg["start"] = 0.0
+                    if seg["end"] <= seg["start"]:
+                        seg["end"] = seg["start"] + 0.5
+                    seg["_clip_idx"] = i
+
+                # 에디터에 즉시 전달 (클립 완료될 때마다)
+                if hasattr(self.ui, '_sig_append_segments'):
+                    self.ui._sig_append_segments.emit(opt)
+
+                if hasattr(self.ui, '_sig_update_queue'):
+                    self.ui._sig_update_queue.emit(i, "✅ 완료", "", "", "")
+
+                get_logger().log(f"  ✅ 클립 {i+1} 자막 완료 ({len(opt)}개 세그먼트)")
+
+            get_logger().log(f"\n🎊 전체 {total_files}개 클립 처리 완료! 에디터에서 편집 후 저장하세요.")
+
+            if hasattr(self.ui, '_sig_update_status'):
+                self.ui._sig_update_status.emit(total_files, total_files)
+
+            # ── 편집 대기 ──
+            edit_event.wait()
+
+            if action_state[0] == "exit" or not self._active:
+                self.ui.request_show_home()
+                return
+
+            # ── 통합 SRT 저장 ──
+            if final_segments:
+                from .subtitle_engine import save_srt
+                from .path_manager import get_srt_path
+                srt_path = get_srt_path(first_file)
+                save_srt(final_segments, srt_path, apply_offset=True)
+                get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료 (멀티클립 통합)")
+
+        except Exception as e:
+            if str(e) not in ("USER_PREV", "USER_EXIT"):
+                get_logger().log(f"\n❌ 치명적 에러: {e}")
+                get_logger().log(traceback.format_exc())
+        finally:
+            self._active = False
+            try:
+                if hasattr(self.ui, 'request_show_home'):
+                    self.ui.request_show_home()
+            except Exception:
+                pass

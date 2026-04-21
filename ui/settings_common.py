@@ -120,7 +120,7 @@ except Exception:
 
 def _fetch_models():
     try:
-        r = requests.get("http://localhost:11434/api/tags", timeout=0.2)
+        r = requests.get("http://localhost:11434/api/tags", timeout=0.05)
         if r.status_code == 200:
             models = r.json().get("models", [])
             return sorted(models, key=lambda x: x['name'])

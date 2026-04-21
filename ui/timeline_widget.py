@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPoint
 from ui.timeline_constants import CANVAS_H
 from ui.timeline_canvas import TimelineCanvas
 from ui.timeline_global import GlobalCanvas
-from ui.timeline_waveform import WaveformWorker
+from ui.timeline_waveform import WaveformWorker, MultiClipWaveformWorker
 
 class TimelineWidget(QWidget):
     seg_clicked             = pyqtSignal(int, float)
@@ -169,6 +169,26 @@ class TimelineWidget(QWidget):
         self._wf_worker = WaveformWorker(path, self)
         self._wf_worker.ready.connect(self._on_waveform_ready)
         self._wf_worker.start()
+
+    def load_multiclip_waveform(self, clip_boundaries):
+        """멀티클립: 클립별 부분 파형을 순차 로드하여 합성"""
+        if self._wf_worker:
+            self._wf_worker.quit()
+        self._mc_worker = MultiClipWaveformWorker(clip_boundaries, self)
+        self._mc_worker.clip_ready.connect(self._on_clip_waveform_ready)
+        self._mc_worker.all_ready.connect(self._on_waveform_ready)
+        self._mc_worker.start()
+
+    def _on_clip_waveform_ready(self, clip_idx, partial_wf):
+        """클립 하나 완료 → 즉시 파형 갱신"""
+        self.canvas.set_waveform(partial_wf)
+        self.global_canvas.set_waveform(partial_wf)
+        # 글로벌 캔버스 duration을 전체 클립 합산으로 유지
+        if hasattr(self, '_mc_worker') and self._mc_worker._clips:
+            total_dur = self._mc_worker._clips[-1]["end"]
+            self.global_canvas.total_duration = total_dur
+            self.canvas.total_duration = total_dur
+            self.global_canvas.update()
 
     def _on_waveform_ready(self, wf, d):
         self.canvas.set_waveform(wf)

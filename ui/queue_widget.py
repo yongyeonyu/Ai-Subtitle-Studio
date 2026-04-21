@@ -31,10 +31,10 @@ class QueueMixin:
         self._total_files = len(files)
         self._expected_seconds = {}
         self._file_start_times = {}
+
+        self.queue_table.setUpdatesEnabled(False)
         self.queue_table.setRowCount(0)
-        self.queue_header_lbl.setText(
-            f"📋 처리할 파일 리스트 (1 / {len(files)} 대기 중) - 0% 완료 [⏱️ 00:00 / 00:00]"
-        )
+
         for i, f in enumerate(files):
             self.queue_table.insertRow(i)
             def mk(text):
@@ -43,9 +43,15 @@ class QueueMixin:
                 return it
             self.queue_table.setItem(i, 0, mk("⏳ 대기 중"))
             self.queue_table.setItem(i, 1, QTableWidgetItem(os.path.basename(f)))
-            self.queue_table.setItem(i, 2, mk("분석 중..."))
+            self.queue_table.setItem(i, 2, mk("분석 중.."))
             self.queue_table.setItem(i, 3, mk("-"))
             self.queue_table.setItem(i, 4, mk("계산 중"))
+
+        self.queue_table.setUpdatesEnabled(True)
+
+        self.queue_header_lbl.setText(
+            f"📋 처리할 파일 리스트 (1 / {len(files)} 진행 중 - 0% 완료 [⏱️ 00:00 / 00:00]"
+        )
         self._live_timer.start(1000)
 
     def update_queue_status(self, idx, status, time_txt="", info_txt="", len_txt=""):

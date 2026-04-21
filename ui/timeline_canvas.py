@@ -61,6 +61,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.playhead_sec: float = 0.0
         self._waveform = None
         self.boundary_times: list[float] = []
+        self._multiclip_boxes: list[dict] = []   # ← 추가
 
         self._hover_line:  int | None = None
         self._hover_handle: tuple | None = None

@@ -6,7 +6,8 @@ ui/timeline_global.py
 import numpy as np
 from PyQt6.QtWidgets import QWidget, QSizePolicy
 from PyQt6.QtCore import Qt, pyqtSignal, QRect
-from PyQt6.QtGui import QPainter, QColor, QPen
+from PyQt6.QtGui import QPainter, QColor, QPen, QFont
+
 import config
 
 class GlobalCanvas(QWidget):
@@ -24,6 +25,8 @@ class GlobalCanvas(QWidget):
         self.total_duration = 0.0 
         self._waveform: np.ndarray | None = None  
         self.vad_segments = []
+        self.vad_segments = []
+        self._multiclip_boxes = []   # ← 추가
 
     def set_waveform(self, wf: np.ndarray):
         self._waveform = wf
@@ -66,14 +69,18 @@ class GlobalCanvas(QWidget):
 
         if total <= 0: return
         sc = w / total
-        
-        if getattr(self, 'vad_segments', None):
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(255, 200, 0, 180)) 
-            for vs in self.vad_segments:
-                vx = int(vs["start"] * sc)
-                vw = max(1, int((vs["end"] - vs["start"]) * sc))
-                p.drawRect(QRect(vx, 2, vw, 10))
+
+        # 멀티클립 박스
+        if self._multiclip_boxes:
+            for box in self._multiclip_boxes:
+                bx = int(box["start"] * sc)
+                bw = max(1, int((box["end"] - box["start"]) * sc))
+                p.setPen(QPen(QColor("#4FC3F7"), 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(QRect(bx, 1, bw, self.height() - 2))
+                p.setPen(QColor("#4FC3F7"))
+                p.setFont(QFont("", 7))
+                p.drawText(bx + 2, 10, str(box.get("index", "")))
         
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor("#666666"))

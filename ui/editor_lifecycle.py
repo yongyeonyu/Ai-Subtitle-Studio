@@ -54,6 +54,38 @@ class EditorLifecycleMixin:
         if is_batch: editor.sm.init_auto_state()
         else: editor.sm.init_state()
         if hasattr(editor, 'btn_start'): editor.btn_start.setText("🧠 시작")
+        
+        # 멀티클립 박스 전달
+        if hasattr(self, '_multiclip_boundaries') and self._multiclip_boundaries:
+            boxes = []
+            for i, bd in enumerate(self._multiclip_boundaries):
+                boxes.append({
+                    "start": bd["start"],
+                    "end": bd["end"],
+                    "index": i + 1,
+                    "name": bd.get("name", "")
+                })
+            total_dur = self._multiclip_boundaries[-1]["end"]
+
+            # 메인 캔버스
+            editor.timeline.canvas._multiclip_boxes = boxes
+            editor.timeline.canvas.boundary_times = [bd["end"] for bd in self._multiclip_boundaries[:-1]]
+            editor.timeline.canvas.total_duration = total_dur
+            # 줌을 전체 클립이 딱 맞도록 설정
+            scroll_w = max(200, self.width() - 40)
+            editor.timeline.canvas.pps = scroll_w / total_dur
+            editor.timeline.canvas.setMinimumWidth(int(total_dur * editor.timeline.canvas.pps) + 20)
+
+            # 글로벌 캔버스
+            gc = editor.timeline.global_canvas
+            gc.total_duration = total_dur
+            gc._multiclip_boxes = boxes
+            gc.segments = []
+            gc.update()
+
+            editor.timeline.canvas.update()
+            editor.timeline.load_multiclip_waveform(self._multiclip_boundaries)
+            
         if is_batch: QTimer.singleShot(600, lambda e=editor: e.btn_start.click() if hasattr(e, 'btn_start') else None)
 
         def safe_home(*args): QTimer.singleShot(0, self.show_home)

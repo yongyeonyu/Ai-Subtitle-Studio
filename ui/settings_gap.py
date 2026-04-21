@@ -282,6 +282,7 @@ class GapSettingsDialog(QDialog):
         left_col.setSpacing(2)
         right_col = QVBoxLayout()
         right_col.setSpacing(2)
+        right_col.setContentsMargins(15, 0, 0, 0)   # ← 추가: 왼쪽 마진 15px
         
         # ==========================================
         # 👈 [왼쪽 단] 파라미터 튜닝 + 분할/삭제

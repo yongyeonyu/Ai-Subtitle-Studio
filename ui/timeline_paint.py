@@ -207,6 +207,20 @@ class TimelinePaintMixin:
                 color = QColor("#FFD700") if is_hover else QColor("#AAAAAA")
                 p.setPen(QPen(QColor("#000000"), 1)); p.setBrush(QBrush(color)); p.drawRoundedRect(rect, 4, 4); p.setBrush(Qt.BrushStyle.NoBrush)
 
+        # 멀티클립 박스 (파란 2px 테두리)
+        if self._multiclip_boxes:
+            for box in self._multiclip_boxes:
+                bx1 = self._x(box["start"])
+                bx2 = self._x(box["end"])
+                bw = bx2 - bx1
+                p.setPen(QPen(QColor("#4FC3F7"), 2))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(int(bx1), 0, int(bw), CANVAS_H)
+                # 클립 번호 라벨
+                p.setPen(QColor("#4FC3F7"))
+                p.setFont(QFont("", 9, QFont.Weight.Bold))
+                p.drawText(int(bx1) + 4, 12, f"CLIP {box.get('index', '?')}")
+
         if self.boundary_times:
             pen_boundary = QPen(QColor("#4AFF80"), 1)
             for bt in self.boundary_times:

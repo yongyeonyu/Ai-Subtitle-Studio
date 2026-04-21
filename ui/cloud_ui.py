@@ -115,7 +115,7 @@ class CloudUIMixin:
     def _open_nas_root(self):
         nas_url = get_nas_path()
         if not nas_url:
-            QMessageBox.warning(self, "오류", "NAS 경로가 설정되지 않았습니다.")
+            QMessageBox.warning(self, "오류", "NAS 경로가 설정되지 않았습니다")
             return
         if not ensure_nas_mounted(nas_url):
             QMessageBox.warning(self, "오류", "NAS 마운트에 실패했습니다.")
@@ -128,4 +128,7 @@ class CloudUIMixin:
         dlg = FolderDialog(local_path, self)
         if dlg.exec() and dlg.selected_files:
             self._add_recent_folder(local_path)
-            self.backend.start_pipeline(dlg.selected_files, folder=local_path)
+            if len(dlg.selected_files) == 1 and self.backend:
+                self.backend.start_pipeline(dlg.selected_files, folder=local_path)
+            elif len(dlg.selected_files) > 1:
+                self._show_multiclip_then_batch(dlg.selected_files, folder=local_path, show_multiclip=False)

@@ -108,7 +108,14 @@ class HomeUIMixin:
     def _dummy_action(self): pass
 
     def _show_path_settings(self):
-        dlg = QDialog(self); dlg.setWindowTitle("경로설정"); dlg.setMinimumWidth(450); dlg.setStyleSheet(f"background-color: {config.BG}; color: {config.FG};")
+        dlg = QDialog(self); dlg.setWindowTitle("경로설정"); dlg.setMinimumWidth(450); dlg.setStyleSheet(f"""
+            QDialog {{ background-color: {config.BG}; color: {config.FG}; }}
+            QLabel {{ color: {config.FG}; }}
+            QCheckBox {{ color: {config.FG}; }}
+            QCheckBox::indicator {{ width: 16px; height: 16px; border: 2px solid #FFFFFF; border-radius: 3px; background-color: transparent; }}
+            QCheckBox::indicator:checked {{ background-color: #4AFF80; border: 2px solid #4AFF80; }}
+        """)
+
         layout = QVBoxLayout(dlg); layout.addWidget(QLabel("NAS 루트 경로:"))
         nas_input = QLineEdit(get_nas_path()); nas_input.setStyleSheet(f"background: {config.BG2}; border: 1px solid {config.BG3}; padding: 4px;"); layout.addWidget(nas_input)
         layout.addWidget(QLabel("iCloud 동기화 경로:"))

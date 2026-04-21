@@ -47,7 +47,8 @@ class MainWindow(
     _sig_update_queue        = pyqtSignal(int, str, str, str, str)
     _sig_update_queue_header = pyqtSignal(int, int, int, str)
     _sig_auto_start_pipeline = pyqtSignal(list)
-
+    _sig_load_multiclip_waveform = pyqtSignal(list)
+    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("🎬 AI Subtitle Studio")
@@ -146,6 +147,7 @@ class MainWindow(
         self._sig_show_home.connect(self.show_home); self._sig_append_segments.connect(self._do_append_segments); self._sig_update_status.connect(self._do_update_status); self._sig_open_editor.connect(self._do_open_editor)
         self._sig_set_vad_segments.connect(lambda v: self._editor_widget.set_vad_segments(v) if self._editor_widget else None)
         self._sig_update_queue.connect(self.update_queue_status); self._sig_update_queue_header.connect(self.update_queue_header); self._sig_auto_start_pipeline.connect(self._do_auto_start_pipeline)
+        self._sig_load_multiclip_waveform.connect(self._do_load_multiclip_waveform)
 
     # ── 홈 / 에디터 전환 ──
     def show_home(self):
@@ -186,7 +188,7 @@ class MainWindow(
         elif vid and len(vid) == 1 and self.backend:
             self.backend.start_pipeline(vid)
         elif vid and len(vid) > 1:
-            self._start_batch(vid)
+            self._show_multiclip_then_batch(vid, show_multiclip=True)
 
     def _start_batch(self, files, folder=None):
         """멀티 파일 → backend_fast 배치 모드 (중복 호출 방지)"""
@@ -224,21 +226,18 @@ class MainWindow(
             if len(dlg.selected_files) == 1 and self.backend:
                 self.backend.start_pipeline(dlg.selected_files, folder=folder)
             elif len(dlg.selected_files) > 1:
-                self._start_batch(dlg.selected_files, folder=folder)
+                self._show_multiclip_then_batch(dlg.selected_files, folder=folder, show_multiclip=False)
 
     def _open_recent(self, folder):
         if not os.path.exists(folder):
             if not ensure_nas_mounted(folder): QMessageBox.warning(self, "오류", f"폴더를 찾을 수 없습니다:\n{folder}"); return
         set_last_folder(folder); self._add_recent_folder(folder)
         self._is_auto_pipeline = False; self._current_project_path = None; self._project_boundary_times = []
-        
-        # 해당 폴더에서 파일 선택 다이얼로그
         paths, _ = QFileDialog.getOpenFileNames(
             self, "파일 선택", folder,
             "Media/SRT Files (*.mp4 *.mov *.MOV *.MP4 *.wav *.m4a *.m2a *.mp3 *.aac *.srt)"
         )
         if not paths: return
-        
         srt = [p for p in paths if p.lower().endswith(".srt")]
         vid = [p for p in paths if not p.lower().endswith(".srt")]
         if srt:
@@ -246,7 +245,7 @@ class MainWindow(
         elif vid and len(vid) == 1 and self.backend:
             self.backend.start_pipeline(vid)
         elif vid and len(vid) > 1:
-            self._start_batch(vid)
+            self._show_multiclip_then_batch(vid, show_multiclip=False)
 
     def open_editor_directly(self):
         path, _ = QFileDialog.getOpenFileName(self, "SRT 파일 선택", get_last_folder() or os.path.expanduser("~"), "SRT Files (*.srt)")
@@ -254,15 +253,24 @@ class MainWindow(
 
     # ── 캐시 / 종료 / 로그 ──
     def _clear_cache(self):
-        reply = QMessageBox.question(self, '캐쉬 삭제', 'output 폴더 내의 임시 파일들을 모두 삭제하시겠습니까?', QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-        if reply == QMessageBox.StandardButton.Yes:
+        msg = QMessageBox(self)
+        msg.setWindowTitle('캐쉬 삭제')
+        msg.setText('output 폴더 내의 임시 파일들을 모두 삭제하시겠습니까?')
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        msg.setStyleSheet("""
+            QMessageBox { background-color: #1a1a1a; color: #FFFFFF; }
+            QPushButton { background-color: #333333; color: #FFFFFF; border: 2px solid #FFFFFF; padding: 6px 16px; border-radius: 4px; font-weight: bold; }
+            QPushButton:hover { background-color: #555555; }
+        """)
+        if msg.exec() == QMessageBox.StandardButton.Yes:
             import shutil; output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
             try:
                 if os.path.exists(output_dir): shutil.rmtree(output_dir); os.makedirs(output_dir, exist_ok=True)
                 from core.auto_tracker import TRACKER_FILE
                 if os.path.exists(TRACKER_FILE): os.remove(TRACKER_FILE)
                 if hasattr(self, '_cloud_sync_manager'): mgr = self._cloud_sync_manager; mgr._size_cache.clear(); mgr._in_flight.clear()
-                QMessageBox.information(self, "완료", "🗑️ 캐쉬 삭제 완료"); self.show_home()
+                QMessageBox.information(self, "완료", "캐쉬 삭제 완료"); self.show_home()
             except Exception as e: QMessageBox.warning(self, "오류", f"삭제 중 오류: {e}")
 
     def _quick_exit(self):
@@ -285,3 +293,21 @@ class MainWindow(
 
     def _refresh_video(self):
         if self._editor_widget and hasattr(self._editor_widget, 'video_player'): self._editor_widget.video_player.resizeEvent(None)
+
+    def _show_multiclip_then_batch(self, files, folder=None, show_multiclip=True):
+        from ui.multiclip_editor import MultiClipEditor
+        dlg = MultiClipEditor(files, self, show_multiclip=show_multiclip)
+        if dlg.exec():
+            self._multiclip_files = list(dlg.sorted_files)
+            if dlg.selected_mode == "fast":
+                self._start_batch(dlg.sorted_files, folder=folder)
+            elif dlg.selected_mode == "quality":
+                if self.backend:
+                    self.backend.start_pipeline(dlg.sorted_files, folder=folder, is_auto_start=True)
+            elif dlg.selected_mode == "multiclip":
+                if self.backend:
+                    self.backend.start_multiclip_pipeline(dlg.sorted_files, folder=folder)   
+
+    def _do_load_multiclip_waveform(self, clip_boundaries):
+        if self._editor_widget and hasattr(self._editor_widget, 'timeline'):
+            self._editor_widget.timeline.load_multiclip_waveform(clip_boundaries)
