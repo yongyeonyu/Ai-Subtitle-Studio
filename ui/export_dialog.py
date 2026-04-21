@@ -27,7 +27,11 @@ def _load_es()->dict:
     try:
         if os.path.exists(_SETTINGS_PATH):
             with open(_SETTINGS_PATH,"r",encoding="utf-8") as f:
-                return json.load(f).get("export_dialog",{})
+                d = json.load(f).get("export_dialog",{})
+                # Windows에서 iCloud 옵션 강제 비활성화
+                if not getattr(config, "IS_MAC", False):
+                    d["icloud"] = False
+                return d
     except: pass
     return {}
 
@@ -300,7 +304,8 @@ class ExportDialog(QDialog):
         self.icloud_chk = QCheckBox("렌더링 완료 후 iCloud로 자동 복사")
         self.icloud_chk.setStyleSheet("font-weight: bold; color: #4AFF80; padding-top: 8px;")
         l1.addWidget(self.icloud_chk)
-        l1.addStretch()
+        if not getattr(config, "IS_MAC", False):
+            self.icloud_chk.setVisible(False)
 
         # ── 탭2: 텍스트 ──
         t2=QWidget(); l2=QVBoxLayout(t2); tabs.addTab(t2,"✏️ 텍스트")
