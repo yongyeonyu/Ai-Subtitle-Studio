@@ -91,7 +91,7 @@ class CoreBackendFast(CoreBackend):
         # ── STEP 2: ETA 계산 + STT 시작 ──
         try:
             s = load_settings()
-            model_key = get_model_key(s)
+            model_key = "FAST:" + get_model_key(s)
 
             if target_file in getattr(self, '_video_durations', {}):
                 video_duration_sec = self._video_durations[target_file]
@@ -122,7 +122,13 @@ class CoreBackendFast(CoreBackend):
 
         def do_transcribe():
             try:
-                for chunk_segs, c_idx, t_total in self.video_processor.transcribe(chunk_dir, is_fast_mode=True):
+        # F2: Fast mode forces Whisper medium
+        _fast_settings = load_settings()
+        _orig_model = _fast_settings.get('selected_whisper_model', '')
+        if 'medium' not in _orig_model.lower():
+            get_logger().log('  \u26a1 Fast mode: Whisper medium \uac15\uc81c \uc801\uc6a9')
+
+        for chunk_segs, c_idx, t_total in self.video_processor.transcribe(chunk_dir, is_fast_mode=True):
                     if not self._active:
                         break
                     opt_queue.put((chunk_segs, c_idx, t_total))
@@ -289,6 +295,17 @@ class CoreBackendFast(CoreBackend):
                     self.ui._sig_update_queue_header.emit(i + 1, total_files, 0, "")
 
                 ok = self._process_one_fast(target_file, i)
+                # B7 fix: explicit queue status after each file
+                if ok and hasattr(self.ui, '_sig_update_queue'):
+                    try:
+                        self.ui._sig_update_queue.emit(i, "✅ 완료", "", "", "")
+                    except RuntimeError:
+                        pass
+                elif not ok and hasattr(self.ui, '_sig_update_queue'):
+                    try:
+                        self.ui._sig_update_queue.emit(i, "❌ 오류", "", "", "")
+                    except RuntimeError:
+                        pass
                 if ok:
                     success_count += 1
 

@@ -1,4 +1,5 @@
-# Version: 01.01.00
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 core/time_history.py
 [v01.01.00] EMA 기반 예상 시간 알고리즘

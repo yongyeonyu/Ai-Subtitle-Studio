@@ -1,4 +1,5 @@
-# Version: 02.00.03 (Smart Polling V3 - Status Feedback)
+# Version: 02.02.00
+# Phase: PHASE1-B
 import os, time, threading
 from logger import get_logger
 from core.auto_tracker import AutoTracker

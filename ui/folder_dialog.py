@@ -1,4 +1,5 @@
-# Version: 01.00.00
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 [Version History]
 - v0.1.0 (Build 00.01.00) : 최초 생성. 계층형 폴더/파일 트리 및 일괄 선택 기능 구현

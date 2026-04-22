@@ -46,7 +46,7 @@ class TimelinePaintMixin:
         fm_ruler = p.fontMetrics()
 
         MIN_LABEL_PX = 80
-        nice_steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
+        nice_steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600]
 
         major_step = 1.0
         for ns in nice_steps:
@@ -260,10 +260,17 @@ class TimelinePaintMixin:
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(int(bx1), 0, int(bw), CANVAS_H)
 
-                label_rect = QRect(int(bx1) + 6, 2, 58, 16)
-                p.setPen(QColor(color))
+                # CLIP label: top-right outside box
+                clip_label = f"CLIP {box.get('index', '?')}"
                 p.setFont(QFont("", 9, QFont.Weight.Bold))
-                p.drawText(label_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"CLIP {box.get('index', '?')}")
+                lbl_w = p.fontMetrics().horizontalAdvance(clip_label) + 10
+                lbl_x = int(bx2) - lbl_w - 4
+                lbl_y = 20
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(0, 0, 0, 180))
+                p.drawRoundedRect(lbl_x, lbl_y, lbl_w, 16, 3, 3)
+                p.setPen(QColor(color))
+                p.drawText(QRect(lbl_x, lbl_y, lbl_w, 16), Qt.AlignmentFlag.AlignCenter, clip_label)
 
         if self.boundary_times:
             pen_boundary = QPen(QColor("#4AFF80"), 1)

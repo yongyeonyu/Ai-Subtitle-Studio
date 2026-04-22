@@ -1,4 +1,5 @@
-# Version: 01.00.00
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 logger.py - PyQt6 버전 (크PD 변환)
 싱글톤 AppLogger: pyqtSignal로 UI 스레드에 안전하게 전달

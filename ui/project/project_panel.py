@@ -1,4 +1,6 @@
-﻿# Version: 02.02.00
+# Version: 02.02.00
+# Phase: PHASE1-B
+# Version: 02.02.00
 # Phase: PHASE1-B
 """
 ui/project/project_panel.py

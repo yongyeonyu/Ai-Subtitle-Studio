@@ -1,4 +1,5 @@
-# Version: 01.00.00
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 core/settings.py
 앱 전체 설정 로딩/저장 통합 모듈

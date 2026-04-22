@@ -1,4 +1,5 @@
-# Version: 01.00.01
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 ui/video_player_widget.py - PyQt6 비디오 플레이어
 [v01.00.01 버그수정] _get_audio_ai_setting: 미정의 변수 'paths' 참조 오류 제거

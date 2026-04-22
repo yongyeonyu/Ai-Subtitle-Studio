@@ -1,4 +1,5 @@
-# Version: 01.00.00
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 ui/home_ui.py
 MainWindow 홈 화면 빌드 Mixin

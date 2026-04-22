@@ -1,4 +1,5 @@
-# Version: 01.00.02
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 core/path_manager.py
 [수정] 들여쓰기 에러(IndentationError) 해결 및 음성 파일 확장자 지원 추가

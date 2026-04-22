@@ -1,4 +1,5 @@
-# Version: 01.00.01
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 ui/undo_manager.py
 [v01.00.01 수정사항]

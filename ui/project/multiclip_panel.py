@@ -187,8 +187,13 @@ class ClipCard(QFrame):
         )
 
         name = os.path.splitext(os.path.basename(self.file_path))[0]
-        painter.setPen(QColor("#EEEEEE"))
-        painter.setFont(QFont("", 11))
+        # Filename background + bold font for readability
+        name_bg_y = thumb_y + thumb_h + 2
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 160))
+        painter.drawRoundedRect(4, name_bg_y, w - 8, 24, 3, 3)
+        painter.setPen(QColor("#FFFFFF"))
+        painter.setFont(QFont("", 11, QFont.Weight.Bold))
         elided = painter.fontMetrics().elidedText(
             name,
             Qt.TextElideMode.ElideMiddle,
@@ -452,26 +457,26 @@ class MultiClipEditor(QDialog):
         btn_layout.addWidget(btn_cancel)
 
         if self._reorder_only:
-            btn_ok = QPushButton(f"확인 ({len(self.sorted_files)}개)")
+            btn_ok = QPushButton("확인")
             btn_ok.setStyleSheet(
                 "background:#4AFF80; color:#000; padding:8px 24px; font-weight:bold; border-radius:4px;"
             )
             btn_ok.clicked.connect(self.accept)
             btn_layout.addWidget(btn_ok)
         else:
-            btn_fast = QPushButton(f"빠른모드 ({len(self.sorted_files)}개)")
+            btn_fast = QPushButton("빠른모드")
             btn_fast.setStyleSheet(
                 "background:#FFD700; color:#000; padding:8px 24px; font-weight:bold; border-radius:4px;"
             )
             btn_fast.clicked.connect(self._accept_fast)
 
-            btn_quality = QPushButton(f"품질모드 ({len(self.sorted_files)}개)")
+            btn_quality = QPushButton("품질모드")
             btn_quality.setStyleSheet(
                 "background:#4AFF80; color:#000; padding:8px 24px; font-weight:bold; border-radius:4px;"
             )
             btn_quality.clicked.connect(self._accept_quality)
 
-            btn_multiclip = QPushButton(f"멀티클립 편집 ({len(self.sorted_files)}개)")
+            btn_multiclip = QPushButton("멀티클립 편집")
             btn_multiclip.setStyleSheet(
                 "background:#4FC3F7; color:#000; padding:8px 24px; font-weight:bold; border-radius:4px;"
             )

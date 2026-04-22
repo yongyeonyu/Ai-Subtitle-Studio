@@ -1,4 +1,5 @@
-# Version: 01.00.00
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 core/media_info.py
 ffprobe 기반 미디어 정보 조회 유틸

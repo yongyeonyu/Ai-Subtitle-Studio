@@ -174,6 +174,8 @@ class TimelineWidget(QWidget):
 
         if fit_view:
             self.fit_to_view()
+        elif self._waveform_mode == "multi":
+            self.fit_to_view()
 
     def set_vad_segments(self, vad_segs: list):
         self.canvas.set_vad_segments(vad_segs)
@@ -235,6 +237,9 @@ class TimelineWidget(QWidget):
         self._wf_worker.start()
 
     def load_multiclip_waveform(self, clip_boundaries):
+        # Guard: skip if already loading multiclip waveform
+        if self._waveform_mode == "multi" and self._mc_worker and self._mc_worker.isRunning():
+            return
         self._waveform_mode = "multi"
 
         if self._wf_worker:
@@ -272,6 +277,7 @@ class TimelineWidget(QWidget):
             if self.canvas.total_duration < total_dur:
                 self.canvas.total_duration = total_dur
             self.global_canvas.update()
+            self.fit_to_view()
 
     def _on_waveform_ready(self, wf, d):
         sender = self.sender()
@@ -286,6 +292,7 @@ class TimelineWidget(QWidget):
             if self.canvas.total_duration < d:
                 self.canvas.total_duration = d
             self.global_canvas.update()
+            self.fit_to_view()
             return
 
         if sender is not self._wf_worker:

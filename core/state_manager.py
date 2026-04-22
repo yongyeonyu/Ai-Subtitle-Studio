@@ -1,4 +1,5 @@
-# Version: 01.00.06
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 core/state_manager.py
 [v01.00.06] 모드/상태 정의 문서 1:1 반영

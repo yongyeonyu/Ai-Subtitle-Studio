@@ -1,4 +1,5 @@
-# Version: 02.01.00
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 core/project_manager.py
 프로젝트 JSON 파일 생성 / 저장 / 로드

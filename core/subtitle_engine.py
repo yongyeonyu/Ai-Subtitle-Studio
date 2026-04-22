@@ -1,4 +1,5 @@
-# Version: 01.00.01
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장 
 [개선] LLM 프롬프트를 사용자 역할지정(user_settings)과 시스템 하드코딩(포맷 유지)으로 분리하여 안전하게 병합

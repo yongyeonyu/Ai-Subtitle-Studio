@@ -1,4 +1,4 @@
-# Version: 02.01.00
+# Version: 02.02.00
 # Phase: PHASE1-B
 """
 ui/queue_widget.py
@@ -72,7 +72,7 @@ class QueueMixin:
                     return "00:00"
             if status:
                 self.queue_table.setItem(idx, 0, mk(status))
-                if "자막 생성 중" in status and idx not in self._file_start_times:
+                if ("자막 생성 중" in status or "오디오 추출 중" in status) and idx not in self._file_start_times:
                     self._file_start_times[idx] = time.time()
                 # ✅ 완료 시 소요시간/예상시간 즉시 기록
                 if "완료" in status:

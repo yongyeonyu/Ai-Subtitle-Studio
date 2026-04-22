@@ -137,7 +137,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
     def set_vad_segments(self, vad_segs):
         self.vad_segments = vad_segs
-        self._speech_mask = None
+        self._speech_mask = None      # 마스크 재계산 트리거
         self.update()
 
     def set_active(self, sec):

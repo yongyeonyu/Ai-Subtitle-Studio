@@ -1,4 +1,5 @@
-# Version: 01.00.01
+# Version: 02.02.00
+# Phase: PHASE1-B
 
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import QSize, Qt, QRect, QPoint

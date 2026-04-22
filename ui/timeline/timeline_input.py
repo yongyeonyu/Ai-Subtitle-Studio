@@ -8,7 +8,7 @@ from PyQt6.QtCore import QRect, Qt
 from PyQt6.QtGui import QCursor, QFont, QFontMetrics
 
 import config
-from ui.editor_helpers import find_segment_at
+from ui.editor.editor_helpers import find_segment_at
 
 from ui.timeline.timeline_constants import (
     HANDLE_R,

@@ -1,194 +1,76 @@
-# AI Subtitle Studio - Agent Customization Guide
+# AGENTS.md — AI Subtitle Studio 개발 가이드
 
-This file helps AI agents understand the codebase, conventions, and language-specific design patterns in AI Subtitle Studio.
+## 프로젝트 개요
+- **AI Subtitle Studio**: macOS/Windows용 AI 기반 자막 생성 앱
+- **Phase1**: STT + 자막 편집 (현재 개발 중)
+- **Phase2**: Gemma4 등 AI로 러프컷 제작 (예정)
+- **iPad**: 자막 에디터 중심 + 프리미엄 기능 (예정)
 
-## Project Overview
+## 대표님 작업 스타일
 
-**AI Subtitle Studio** is a PyQt6-based desktop application for automated subtitle generation, editing, and optimization for YouTube videos. It combines Whisper ASR, LLM-powered text correction, and speaker diarization.
+### 개발 방식
+- **create_all.py 패턴**: 수정사항을 Python 스크립트로 묶어서 한 번에 적용
+  - 스크립트가 파일을 읽고 → 패치 적용 → 백업 생성 → 결과 출력
+  - 알파벳 순서로 버전 관리: create_all.py → create_all_b.py → create_all_c.py ...
+  - 한글 인코딩 이슈 → base64 또는 구조 기반 매칭 사용
+- **단계적 리팩토링**: 폴더 이동 시 shim 파일로 하위 호환 유지
+- **버전 헤더 통일**: 모든 .py 파일에 `# Version: XX.XX.XX` / `# Phase: PHASE1-B`
 
-**Key Language Focus**: Korean-first development with multi-language support architecture.
+### 코드 원칙
+- 모든 수정 파일은 헤더 버전 업데이트
+- 폴더 이동 시 반드시 shim 생성 (기존 import 깨뜨리지 않음)
+- Phase2를 고려한 폴더 구조 설계
+- 파일 분할: 기능별로 300줄 이하 유지 목표
 
----
+### 커뮤니케이션
+- 호칭: "대표님"
+- 한국어로 대화
+- 코드 확인 후 수정 (grep/sed로 사전 확인 → 패치 생성)
+- 검증: ast.parse로 문법 확인 필수
 
-## 🌐 Language & Internationalization
-
-### Core Language Configuration
-
-- **Primary Language**: Korean (`ko`) — default in [config.py](config.py#L11)
-- **Language Setting**: `LANGUAGE = "ko"` in `config` module
-- **Secondary Support**: English (through translation features)
-- **Encoding Standard**: UTF-8 (with fallbacks: cp949, euc-kr for legacy Korean text files)
-
-### Language Usage Patterns
-
-#### 1. **Configuration Level** ([config.py](config.py))
-```python
-LANGUAGE = "ko"  # Whisper model language parameter
-WHISPER_MODEL = "mlx-community/whisper-large-v3-mlx"  # Multilingual model
+## 현재 폴더 구조 (v02.02.00)
 ```
-- Change `LANGUAGE` to support other Whisper-supported languages (`en`, `ja`, `zh`, etc.)
-- See [media_processor.py](core/media_processor.py#L35) for how language is passed to Whisper
-
-#### 2. **LLM Prompts & Rules** ([core/subtitle_engine.py](core/subtitle_engine.py))
-- **System Prompt**: Hardcoded Korean-specific rules in `_HARDCODED_LLM_RULES`
-- **User Prompt**: Loaded from [config.py](config.py#L16) as `DEFAULT_LLM_PROMPT` (Korean instructions)
-- **Rules Content**: Lines 6, 70 specify language constraints: Korean & English only
-
-**When Adding Languages**:
-- Update LLM prompts in `config.py:DEFAULT_LLM_PROMPT` with language-specific rules
-- Add language-aware rules to `_HARDCODED_LLM_RULES` in [subtitle_engine.py](core/subtitle_engine.py#L64)
-- Update `_HALLUC_PHRASES` list (line 52) to include common non-translation outputs in the target language
-
-#### 3. **UI Text** (All UI modules in `ui/` folder)
-- **Current State**: All UI strings are hardcoded in Korean
-- **Pattern**: No i18n framework (gettext, fluent, etc.) is currently used
-- **Location Examples**:
-  - [main_window.py](ui/main_window.py): Dialog titles, buttons, labels
-  - [settings_*.py](ui/settings_dialog.py): Settings panel labels (AI, Advanced, Speaker, Gap, Export)
-  - Editor widgets: Status messages, tooltips
-
-**To Support Multiple UI Languages**:
-1. Extract hardcoded strings to a centralized translation module
-2. Consider a simple JSON-based i18n system (matching project's JSON-heavy config approach)
-3. Alternative: Implement gettext support if more languages needed
-
-#### 4. **Translation Features** ([core/worker_threads.py](core/worker_threads.py#L66))
-- Built-in `_translate()` method supports English ↔ Korean translation
-- Used for dictionary lookups and terminology assistance
-- LLM-based (calls Ollama with language-specific prompts)
-
----
-
-## 📝 Text Encoding Standards
-
-### Multi-Encoding Support
-
-The application handles legacy Korean subtitle files with fallback encoding:
-
-```python
-# From [editor_widget.py](ui/editor_widget.py#L423) and [main_window.py](ui/main_window.py#L752)
-for enc in ['utf-8-sig', 'utf-8', 'cp949', 'euc-kr']:
-    try:
-        with open(srt_path, "r", encoding=enc) as f:
-            content = f.read()
-            break
-    except:
-        continue
+ai_subtitle_studio/
+├── core/
+│   ├── pipeline/      ← 백엔드 파이프라인 (5파일)
+│   ├── audio/         ← 오디오/Whisper (6파일)
+│   └── (settings, utils, etc.)
+├── ui/
+│   ├── main/          ← 메인윈도우 (4파일)
+│   ├── editor/        ← 에디터 (8파일)
+│   ├── settings/      ← 설정 (7파일)
+│   ├── timeline/      ← 타임라인 (9파일)
+│   └── project/       ← 프로젝트 (4파일)
+└── dataset/           ← 설정/학습 데이터 (JSON)
 ```
 
-- **utf-8-sig**: UTF-8 with BOM (byte order mark)
-- **utf-8**: Modern standard
-- **cp949**: Windows Korean code page (legacy)
-- **euc-kr**: Unix Korean encoding (legacy)
+## 버전 규칙
+- **앱 버전**: config.py `APP_VERSION`
+- **파일 버전**: 각 .py 첫 줄 `# Version: XX.XX.XX`
+- 기능 추가 → 중간 버전 (02.01.x → 02.02.x)
+- 디버깅/안정화 → 패치 버전 (02.02.00 → 02.02.01)
 
-**When Writing Files**:
-- Always use `encoding="utf-8"` with `ensure_ascii=False` for JSON output
-- Example: [main_window.py](ui/main_window.py#L111) saves settings as UTF-8 JSON
+## 주요 기술 스택
+- Python 3.11
+- PyQt6 (UI)
+- MLX Whisper (macOS STT)
+- faster-whisper (Windows STT)
+- Ollama (로컬 LLM)
+- Gemini API (클라우드 LLM)
+- ffmpeg (오디오/비디오 처리)
 
----
+## 테스트 환경
+- macOS: MacBook Air (M-series, homebrew Python 3.11)
+- Windows: 추후 진행 (CUDA, faster-whisper)
 
-## 🛠️ Development Conventions
-
-### Import & Module Paths
-
-- **Base Path Setup**: [main.py](main.py#L7) adds BASE_DIR to `sys.path` before any core imports
-- **Required**: Must happen before importing UI modules that depend on core
-
-### Configuration Loading
-
-- All JSON configs live in [dataset/](dataset/) folder
-- Settings loaded at runtime, reflected immediately in UI
-- Files: `user_settings.json`, `subtitle_rule.json`, `dataset_correction.json`
-- See [subtitle_engine.py](core/subtitle_engine.py#L20-L29) for config loading patterns
-
-### Worker Threads & LLM Integration
-
-- LLM calls happen in [worker_threads.py](core/worker_threads.py) (non-blocking)
-- Ollama server must be running: `exaone3.5:7.8b` (Korean-optimized model)
-- Prompt engineering in `_translate()` method (lines 66-88) shows best practices for LLM interaction
-
----
-
-## 🔤 Text Processing Rules
-
-### Subtitle Optimization Rules ([core/subtitle_engine.py](core/subtitle_engine.py#L64-L87))
-
-Critical hardcoded rules (must be language-aware when adapting):
-
-1. **Punctuation Normalization**: Remove periods, add commas/tildes contextually
-2. **Character Limits**: ~{threshold} characters per line (±5 char tolerance)
-3. **Line Breaking**: Split at grammatically appropriate boundaries
-4. **Language Constraint** (Line 70): Korean & English only — expand if supporting other languages
-5. **Hallucination Prevention** (Line 52): Filter common transcription artifacts
-
-### Correction Dictionary
-
-- [dataset_correction.json](dataset/dataset_correction.json): Custom term mappings
-- Loaded per-project for domain-specific corrections
-
----
-
-## 🎯 When Working on Language-Related Features
-
-### Checklist for Multi-Language Support
-
-- [ ] Update `LANGUAGE` in [config.py](config.py#L11)
-- [ ] Adapt LLM prompts in [config.py](config.py#L16) for target language grammar
-- [ ] Extend `_HALLUC_PHRASES` in [subtitle_engine.py](core/subtitle_engine.py#L52) with target-language artifacts
-- [ ] Test encoding with sample subtitle files from target language
-- [ ] Update UI text if pursuing full i18n (currently all Korean)
-- [ ] Verify Whisper model supports target language (`check model size/capabilities`)
-- [ ] Update LLM rules (lines 6, 70) to reflect language constraints
-
-### Testing Language Features
-
-- Whisper accuracy: Test with sample audio in target language
-- Encoding: Verify all subtitle file formats load correctly
-- LLM output: Check prompt yields correct language in responses
-- UI rendering: Ensure all text renders correctly (especially for CJK languages)
-
----
-
-## 📚 Key Files for Language Work
-
-| File | Purpose | Language-Related Lines |
-|------|---------|----------------------|
-| [config.py](config.py) | Global settings | 11, 16-22 (LANGUAGE, prompts) |
-| [core/media_processor.py](core/media_processor.py) | Whisper integration | 35 (language param) |
-| [core/subtitle_engine.py](core/subtitle_engine.py) | Text optimization | 52, 64, 70 (rules, constraints) |
-| [core/worker_threads.py](core/worker_threads.py) | LLM translation | 66-88 (translation logic) |
-| [ui/editor_widget.py](ui/editor_widget.py) | Subtitle editing | 423 (encoding handling) |
-| [ui/main_window.py](ui/main_window.py) | Main UI | 752-754 (encoding), 111 (JSON save) |
-
----
-
-## 🔍 Architecture Insights for Agents
-
-### State & Pipeline
-
-- State managed via FSM in [core/state_manager.py](core/state_manager.py)
-- Pipeline flow in [ui/editor_pipeline.py](ui/editor_pipeline.py)
-- Language/encoding decisions flow from config → media_processor → subtitle_engine
-
-### Data Flow for Language Processing
-
-1. **Input**: Audio file + language config
-2. **ASR**: Whisper (language-specific model) → raw transcript
-3. **LLM**: Ollama applies language-specific rules → optimized subtitle
-4. **Output**: SRT file (UTF-8) with optimized text
-
-### Common Gotchas
-
-- No multi-language UI framework (all strings hardcoded Korean)
-- LLM rules are language-specific; changing language without updating prompts causes failures
-- Encoding fallback (cp949, euc-kr) handles legacy files; always write UTF-8
-- Ollama model must match language (current: Korean-optimized exaone3.5)
-
----
-
-## 📖 Related Documentation
-
-- [Development Notes](development_notes.md) — Build commands, threading patterns, known issues
-- [config.py](config.py) — All configurable language & LLM settings
-- [requirements.txt](requirements.txt) — Dependencies (PyQt6, mlx-whisper, requests)
-
+## 오늘 완료한 작업 (2026-04-23)
+1. B1~B12 버그 수정 (멀티클립 오버레이, 큐 상태, 룰러, 웨이브폼 등)
+2. F2/F3/F8/F9/F10/F12 기능 추가/확인
+3. 전체 73개 파일 헤더 v02.02.00 통일
+4. 폴더 구조 리팩토링 5단계 완료
+   - core/pipeline/ (5파일)
+   - ui/main/ (4파일)  
+   - ui/settings/ (7파일)
+   - ui/editor/ (8파일)
+   - core/audio/ (6파일)
+5. config.py APP_VERSION = "02.02.00"
