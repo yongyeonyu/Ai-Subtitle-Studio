@@ -15,11 +15,13 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from ui.queue_widget import QueueMixin
-from ui.project_ui import ProjectUIMixin
 from ui.cloud_ui import CloudUIMixin
 from ui.home_ui import HomeUIMixin
 from ui.editor_lifecycle import EditorLifecycleMixin
-from ui.workspace_mixin import WorkspaceMixin
+
+from ui.project.project_panel import ProjectUIMixin
+from ui.project.workspace_restore import WorkspaceMixin
+from ui.project.multiclip_panel import MultiClipEditor
 
 import config
 from logger import get_logger
@@ -298,7 +300,7 @@ class MainWindow(
         if self._editor_widget and hasattr(self._editor_widget, 'video_player'): self._editor_widget.video_player.resizeEvent(None)
 
     def _show_multiclip_then_batch(self, files, folder=None, show_multiclip=True):
-        from ui.multiclip_editor import MultiClipEditor
+        from ui.project.multiclip_panel import MultiClipEditor
         dlg = MultiClipEditor(files, self, show_multiclip=show_multiclip)
         if dlg.exec():
             self._multiclip_files = list(dlg.sorted_files)
