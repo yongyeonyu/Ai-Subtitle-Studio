@@ -14,10 +14,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ui.timeline_canvas import TimelineCanvas
-from ui.timeline_constants import CANVAS_H
-from ui.timeline_global import GlobalCanvas
-from ui.timeline_waveform import MultiClipWaveformWorker, WaveformWorker
+from ui.timeline.timeline_constants import CANVAS_H
+from ui.timeline.timeline_canvas import TimelineCanvas
+from ui.timeline.timeline_global import GlobalCanvas
+from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker
 
 
 class TimelineWidget(QWidget):

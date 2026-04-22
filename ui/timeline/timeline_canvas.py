@@ -10,7 +10,8 @@ from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 import config
-from ui.timeline_constants import (
+
+from ui.timeline.timeline_constants import (
     CANVAS_H,
     HANDLE_R,
     ICON_SZ,
@@ -22,9 +23,9 @@ from ui.timeline_constants import (
     WAVE_MID,
     _build_gaps,
 )
-from ui.timeline_inline_edit import TimelineInlineEditMixin
-from ui.timeline_input import TimelineInputMixin
-from ui.timeline_paint import TimelinePaintMixin
+from ui.timeline.timeline_paint import TimelinePaintMixin
+from ui.timeline.timeline_input import TimelineInputMixin
+from ui.timeline.timeline_inline_edit import TimelineInlineEditMixin
 
 
 class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintMixin, QWidget):

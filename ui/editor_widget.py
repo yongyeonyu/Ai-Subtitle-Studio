@@ -31,7 +31,7 @@ from core.data_manager import (
     cleanup_rules as _dm_cleanup_rules, load_subtitle_rules as _dm_load_rules
 )
 from core.state_manager import SubtitleStateManager
-from ui.timeline_widget import TimelineWidget
+from ui.timeline.timeline_widget import TimelineWidget
 from ui.editor_popup_qt import EditorPopup
 from ui.video_player_widget import VideoPlayerWidget
 from ui.subtitle_text_edit import SubtitleTextEdit, SubtitleHighlighter, SubtitleBlockData

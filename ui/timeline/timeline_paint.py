@@ -9,7 +9,8 @@ from PyQt6.QtCore import QPoint, QRect, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygon
 
 import config
-from ui.timeline_constants import (
+
+from ui.timeline.timeline_constants import (
     CANVAS_H,
     HANDLE_R,
     ICON_SZ,

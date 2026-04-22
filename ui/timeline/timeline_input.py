@@ -9,7 +9,8 @@ from PyQt6.QtGui import QCursor, QFont, QFontMetrics
 
 import config
 from ui.editor_helpers import find_segment_at
-from ui.timeline_constants import (
+
+from ui.timeline.timeline_constants import (
     HANDLE_R,
     ICON_SZ,
     SEG_BOT,

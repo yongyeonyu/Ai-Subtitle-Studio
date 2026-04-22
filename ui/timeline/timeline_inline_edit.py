@@ -10,7 +10,7 @@ from PyQt6.QtCore import QRect, Qt, QTimer
 from PyQt6.QtGui import QFont, QFontMetrics
 
 import config
-from ui.timeline_constants import HANDLE_R, SEG_BOT, SEG_TOP
+from ui.timeline.timeline_constants import HANDLE_R, SEG_BOT, SEG_TOP
 
 
 class TimelineInlineEditMixin:
