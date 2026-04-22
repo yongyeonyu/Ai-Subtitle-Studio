@@ -1,16 +1,24 @@
-# Version: 01.00.00
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 ui/timeline_paint.py
-TimelineCanvas의 paintEvent / _draw_handle 분리
+Timeline paint mixin
 """
 import numpy as np
-from PyQt6.QtCore import Qt, QRect, QPoint
-from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QPolygon, QBrush
+from PyQt6.QtCore import QPoint, QRect, Qt
+from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygon
 
 import config
 from ui.timeline_constants import (
-    RULER_H, WAVE_H, SEG_TOP, SEG_BOT, CANVAS_H,
-    WAVE_MID, WAVE_HALF, ICON_SZ, HANDLE_R
+    CANVAS_H,
+    HANDLE_R,
+    ICON_SZ,
+    RULER_H,
+    SEG_BOT,
+    SEG_TOP,
+    WAVE_H,
+    WAVE_HALF,
+    WAVE_MID,
 )
 
 
@@ -27,7 +35,8 @@ class TimelinePaintMixin:
             s = int(sec)
             h, rem = divmod(s, 3600)
             m, sc = divmod(rem, 60)
-            if h > 0: return f"{h}:{m:02d}:{sc:02d}"
+            if h > 0:
+                return f"{h}:{m:02d}:{sc:02d}"
             return f"{m:02d}:{sc:02d}"
 
         ruler_font = QFont(config.FONT, 12)
@@ -35,9 +44,9 @@ class TimelinePaintMixin:
         p.setFont(ruler_font)
         fm_ruler = p.fontMetrics()
 
-        # ✅ pps 기반 적응형 룰러 간격 계산
-        MIN_LABEL_PX = 80  # 라벨 간 최소 픽셀 간격
+        MIN_LABEL_PX = 80
         nice_steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
+
         major_step = 1.0
         for ns in nice_steps:
             if ns * self.pps >= MIN_LABEL_PX:
@@ -46,16 +55,11 @@ class TimelinePaintMixin:
         else:
             major_step = nice_steps[-1]
 
-        # 서브 틱: major를 5등분 (또는 2등분)
-        if major_step >= 10:
+        if major_step >= 0.5:
             sub_step = major_step / 5
-        elif major_step >= 1:
-            sub_step = major_step / 5
-        elif major_step >= 0.5:
-            sub_step = 0.1
         else:
             sub_step = major_step / 2
-
+        
         # 메이저 틱 + 라벨
         sec_i = 0.0
         while sec_i <= total_secs:
@@ -128,10 +132,11 @@ class TimelinePaintMixin:
                     p.setPen(pen_top_sil); p.drawLine(x, WAVE_MID, x, WAVE_MID - h)
                     p.setPen(pen_bot_sil); p.drawLine(x, WAVE_MID + 1, x, WAVE_MID + h)
 
-        if self.vad_segments:
-            p.setPen(Qt.PenStyle.NoPen); p.setBrush(QColor(255, 200, 0, 40))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(255, 200, 0, 40))
             for vs in self.vad_segments:
-                vx1 = self._x(vs["start"]); vx2 = self._x(vs["end"])
+                vx1 = self._x(vs["start"])
+                vx2 = self._x(vs["end"])
                 p.drawRect(QRect(vx1, RULER_H, vx2 - vx1, WAVE_H))
 
         if self.re_recog_zone:
@@ -238,26 +243,26 @@ class TimelinePaintMixin:
                 color = QColor("#FFD700") if is_hover else QColor("#AAAAAA")
                 p.setPen(QPen(QColor("#000000"), 1)); p.setBrush(QBrush(color)); p.drawRoundedRect(rect, 4, 4); p.setBrush(Qt.BrushStyle.NoBrush)
 
-        # 멀티클립 박스
         if self._multiclip_boxes:
             for box in self._multiclip_boxes:
                 bx1 = self._x(box["start"])
                 bx2 = self._x(box["end"])
                 bw = bx2 - bx1
+
                 clip_idx = box.get("index", 1) - 1
-                is_active = (clip_idx == getattr(self, '_active_clip_idx', -1))
-                if is_active:
-                    color = "#4AFF80"
-                    width = 3
-                else:
-                    color = "#666666"
-                    width = 1
+                is_active = clip_idx == getattr(self, "_active_clip_idx", -1)
+
+                color = "#4AFF80" if is_active else "#666666"
+                width = 3 if is_active else 1
+
                 p.setPen(QPen(QColor(color), width))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(int(bx1), 0, int(bw), CANVAS_H)
+
+                label_rect = QRect(int(bx1) + 6, 2, 58, 16)
                 p.setPen(QColor(color))
                 p.setFont(QFont("", 9, QFont.Weight.Bold))
-                p.drawText(int(bx1) + 4, 12, f"CLIP {box.get('index', '?')}")
+                p.drawText(label_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"CLIP {box.get('index', '?')}")
 
         if self.boundary_times:
             pen_boundary = QPen(QColor("#4AFF80"), 1)
@@ -276,7 +281,7 @@ class TimelinePaintMixin:
                 p.drawText(mic_x, mic_y + 20, "🎤")
                 p.setFont(QFont(config.FONT, 10))
                 p.setPen(QColor("#FF8888"))
-                p.drawText(mic_x + 24, mic_y + 18, "음성인식 중...")
+                p.drawText(mic_x + 24, mic_y + 18, "Listening...")
 
         if self.playhead_sec >= 0:
             ph_color = QColor("#4AFF80") if getattr(self, 'focus_mode', 'segment') == "waveform" else QColor("#FF4444")

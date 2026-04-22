@@ -1,22 +1,26 @@
-# Version: 01.00.00
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 ui/timeline_input.py
-TimelineCanvas의 마우스/키보드/드래그/스크럽/스냅 분리
+Timeline input mixin
 """
-from PyQt6.QtCore import Qt, QRect
-from PyQt6.QtGui import QCursor, QFontMetrics, QFont
+from PyQt6.QtCore import QRect, Qt
+from PyQt6.QtGui import QCursor, QFont, QFontMetrics
 
 import config
 from ui.editor_helpers import find_segment_at
 from ui.timeline_constants import (
-    SEG_TOP, SEG_BOT, ICON_SZ, HANDLE_R, _build_gaps
+    HANDLE_R,
+    ICON_SZ,
+    SEG_BOT,
+    SEG_TOP,
+    _build_gaps,
 )
 
-
 class TimelineInputMixin:
-
     def focusNextPrevChild(self, next):
-        self._snap_closest_diamond(); return False
+        self._snap_closest_diamond()
+        return False
 
     def keyPressEvent(self, ev):
         if self._edit_active:
@@ -48,17 +52,27 @@ class TimelineInputMixin:
         super().keyPressEvent(ev)
 
     def _jump_to_prev_segment(self):
-        if not self.segments: return
+        if not self.segments:
+            return
+
         target = None
-        for s in reversed(self.segments):
-            if s["start"] < self.playhead_sec - 0.1: target = s["start"]; break
+        for seg in reversed(self.segments):
+            if seg["start"] < self.playhead_sec - 0.1:
+                target = seg["start"]
+                break
+
         self.scrub_sec.emit(target if target is not None else 0.0)
 
     def _jump_to_next_segment(self):
-        if not self.segments: return
+        if not self.segments:
+            return
+
         target = None
-        for s in self.segments:
-            if s["start"] > self.playhead_sec + 0.1: target = s["start"]; break
+        for seg in self.segments:
+            if seg["start"] > self.playhead_sec + 0.1:
+                target = seg["start"]
+                break
+
         self.scrub_sec.emit(target if target is not None else self.total_duration)
 
     def _emit_smart_split_at_playhead(self):
@@ -72,12 +86,23 @@ class TimelineInputMixin:
     def wheelEvent(self, event):
         mods = event.modifiers()
         if mods & Qt.KeyboardModifier.ControlModifier or mods & Qt.KeyboardModifier.MetaModifier:
-            event.ignore(); return
-        dy, dx = event.angleDelta().y(), event.angleDelta().x(); delta = -(dy if dy != 0 else dx)
-        w = self.parent()
-        from PyQt6.QtWidgets import QScrollArea as _SA
-        while w and not isinstance(w, _SA): w = w.parent()
-        if w: sb = w.horizontalScrollBar(); sb.setValue(sb.value() + delta // 2)
+            event.ignore()
+            return
+
+        dy = event.angleDelta().y()
+        dx = event.angleDelta().x()
+        delta = -(dy if dy != 0 else dx)
+
+        widget = self.parent()
+        from PyQt6.QtWidgets import QScrollArea as _ScrollArea
+
+        while widget and not isinstance(widget, _ScrollArea):
+            widget = widget.parent()
+
+        if widget:
+            scrollbar = widget.horizontalScrollBar()
+            scrollbar.setValue(scrollbar.value() + delta // 2)
+
         event.accept()
 
     def mousePressEvent(self, ev):

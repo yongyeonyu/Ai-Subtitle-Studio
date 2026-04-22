@@ -1,11 +1,14 @@
-# Version: 01.01.00
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 ui/timeline_waveform.py
-[v01.01.00] 긴 영상 웨이브폼 지원
-- timeout: 영상 길이 비례 (최소 60초, 최대 600초)
-- ffprobe로 duration 먼저 확인
+Timeline waveform workers
 """
-import subprocess, os, tempfile, json
+import json
+import os
+import subprocess
+import tempfile
+
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -19,12 +22,22 @@ class WaveformWorker(QThread):
 
     def _get_duration(self) -> float:
         try:
-            r = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                 "-of", "json", self._path],
-                capture_output=True, text=True, timeout=10
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "json",
+                    self._path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
-            return float(json.loads(r.stdout).get("format", {}).get("duration", 0))
+            return float(json.loads(result.stdout).get("format", {}).get("duration", 0))
         except Exception:
             return 0.0
 
@@ -36,12 +49,28 @@ class WaveformWorker(QThread):
 
             fd, tmp = tempfile.mkstemp(suffix=".raw")
             os.close(fd)
+
             subprocess.run(
-                ["ffmpeg", "-y", "-i", self._path,
-                 "-vn", "-ac", "1", "-ar", "2000",
-                 "-f", "f32le", "-loglevel", "error", tmp],
-                capture_output=True, timeout=timeout
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    self._path,
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "2000",
+                    "-f",
+                    "f32le",
+                    "-loglevel",
+                    "error",
+                    tmp,
+                ],
+                capture_output=True,
+                timeout=timeout,
             )
+
             if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
                 return
 
@@ -64,18 +93,16 @@ class WaveformWorker(QThread):
             pass
         finally:
             if tmp:
-                try: os.remove(tmp)
-                except: pass
+                try:
+                    os.remove(tmp)
+                except Exception:
+                    pass
 
 class MultiClipWaveformWorker(QThread):
-    """클립별 부분 파형 로드 → 전체 배열에 합성"""
-    clip_ready = pyqtSignal(int, np.ndarray)  # (clip_idx, partial_waveform)
-    all_ready = pyqtSignal(np.ndarray, float)  # (combined_waveform, total_duration)
+    clip_ready = pyqtSignal(int, np.ndarray)
+    all_ready = pyqtSignal(np.ndarray, float)
 
     def __init__(self, clip_boundaries, parent=None):
-        """
-        clip_boundaries: [{"start": 0.0, "end": 30.0, "file": "path", "name": "..."}, ...]
-        """
         super().__init__(parent)
         self._clips = clip_boundaries
 
@@ -87,58 +114,72 @@ class MultiClipWaveformWorker(QThread):
         total_px = max(1, int(total_dur * 100))
         combined = np.zeros(total_px, dtype=np.float32)
 
-        for i, clip in enumerate(self._clips):
+        import config
+
+        for idx, clip in enumerate(self._clips):
+            tmp = None
             try:
                 clip_file = clip["file"]
                 clip_start = clip["start"]
                 clip_dur = clip["end"] - clip["start"]
 
-                import config
                 base_name = os.path.splitext(os.path.basename(clip_file))[0]
                 cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
-
-                if os.path.exists(cleaned_wav):
-                    src = cleaned_wav
-                else:
-                    src = clip_file
-
-                print(f"  🎵 파형 로드 [{i+1}/{len(self._clips)}] {os.path.basename(src)}", flush=True)
+                src = cleaned_wav if os.path.exists(cleaned_wav) else clip_file
 
                 fd, tmp = tempfile.mkstemp(suffix=".raw")
                 os.close(fd)
+
                 subprocess.run(
-                    ["ffmpeg", "-y", "-i", src,
-                     "-vn", "-ac", "1", "-ar", "2000",
-                     "-f", "f32le", "-loglevel", "error", tmp],
-                    capture_output=True, timeout=max(60, int(clip_dur * 0.5) + 30)
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        src,
+                        "-vn",
+                        "-ac",
+                        "1",
+                        "-ar",
+                        "2000",
+                        "-f",
+                        "f32le",
+                        "-loglevel",
+                        "error",
+                        tmp,
+                    ],
+                    capture_output=True,
+                    timeout=max(60, int(clip_dur * 0.5) + 30),
                 )
 
-                if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
-                    samples = np.fromfile(tmp, dtype=np.float32)
-                    if len(samples) > 1:
-                        clip_px = max(1, int(clip_dur * 100))
-                        chunk = max(1, len(samples) // clip_px)
-                        trim = (len(samples) // chunk) * chunk
-                        downs = np.abs(samples[:trim].reshape(-1, chunk)).max(axis=1)
-                        mx = float(downs.max())
-                        if mx > 1e-6:
-                            downs = downs / mx
+                if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
+                    continue
 
-                        start_px = int(clip_start * 100)
-                        end_px = min(start_px + len(downs), total_px)
-                        combined[start_px:end_px] = downs[:end_px - start_px]
+                samples = np.fromfile(tmp, dtype=np.float32)
+                if len(samples) < 2:
+                    continue
 
-                        print(f"  ✅ 파형 완료 [{i+1}] px:{start_px}-{end_px}", flush=True)
-                        self.clip_ready.emit(i, combined.copy())
+                clip_px = max(1, int(clip_dur * 100))
+                chunk = max(1, len(samples) // clip_px)
+                trim = (len(samples) // chunk) * chunk
+                downs = np.abs(samples[:trim].reshape(-1, chunk)).max(axis=1)
 
-                try:
-                    os.remove(tmp)
-                except:
-                    pass
+                mx = float(downs.max())
+                if mx > 1e-6:
+                    downs = downs / mx
 
-            except Exception as e:
-                print(f"  ❌ 파형 오류 [{i+1}]: {e}", flush=True)
+                start_px = int(clip_start * 100)
+                end_px = min(start_px + len(downs), total_px)
+                combined[start_px:end_px] = downs[: end_px - start_px]
 
-        print(f"  🎊 전체 파형 완료: {total_dur:.1f}초", flush=True)
+                self.clip_ready.emit(idx, combined.copy())
+
+            except Exception:
+                pass
+            finally:
+                if tmp:
+                    try:
+                        os.remove(tmp)
+                    except Exception:
+                        pass
+
         self.all_ready.emit(combined, total_dur)
-

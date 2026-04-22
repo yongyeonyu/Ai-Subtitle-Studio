@@ -1,21 +1,30 @@
-# Version: 01.01.00
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 ui/timeline_canvas.py
-[v01.01.00] Mixin 분리: Paint / Input / InlineEdit
+Timeline canvas
 """
 import numpy as np
-from PyQt6.QtWidgets import QWidget, QSizePolicy
-from PyQt6.QtCore import Qt, QRect, QPoint, pyqtSignal, QTimer
+from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QCursor
+from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 import config
 from ui.timeline_constants import (
-    RULER_H, WAVE_H, SEG_TOP, SEG_BOT, CANVAS_H,
-    WAVE_MID, WAVE_HALF, ICON_SZ, HANDLE_R, _build_gaps
+    CANVAS_H,
+    HANDLE_R,
+    ICON_SZ,
+    RULER_H,
+    SEG_BOT,
+    SEG_TOP,
+    WAVE_H,
+    WAVE_HALF,
+    WAVE_MID,
+    _build_gaps,
 )
-from ui.timeline_paint import TimelinePaintMixin
-from ui.timeline_input import TimelineInputMixin
 from ui.timeline_inline_edit import TimelineInlineEditMixin
+from ui.timeline_input import TimelineInputMixin
+from ui.timeline_paint import TimelinePaintMixin
 
 
 class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintMixin, QWidget):
@@ -99,33 +108,57 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     # ---------------------------------------------------------
     # State / Utility
     # ---------------------------------------------------------
-    def set_zoom(self, new_pps): self.pps = max(5.0, min(500.0, new_pps)); self.update()
+    def set_zoom(self, new_pps):
+        self.pps = max(5.0, min(500.0, new_pps))
+        self.update()
 
     def update_segments(self, segs, active_sec, total_dur):
         self.segments = [s for s in segs if not s.get("is_gap")]
-        self.total_duration = total_dur or (segs[-1]["end"] if segs else 0)
+        self.total_duration = total_dur or (segs[-1]["end"] if segs else 0.0)
+
         new_gaps = _build_gaps(self.segments, self.total_duration)
-        old_active = {(g["start"], g["end"]) for g in self.gap_segments if g.get("active")}
-        for g in new_gaps:
-            if (g["start"], g["end"]) in old_active: g["active"] = True
+        old_active = {
+            (g["start"], g["end"])
+            for g in self.gap_segments
+            if g.get("active")
+        }
+
+        for gap in new_gaps:
+            if (gap["start"], gap["end"]) in old_active:
+                gap["active"] = True
+
         self.gap_segments = new_gaps
-        if active_sec is not None: self.active_seg_start = active_sec
+
+        if active_sec is not None:
+            self.active_seg_start = active_sec
+
         self.update()
 
     def set_vad_segments(self, vad_segs):
-        self.vad_segments = vad_segs; self._speech_mask = None; self.update()
+        self.vad_segments = vad_segs
+        self._speech_mask = None
+        self.update()
 
-    def set_active(self, sec): self.active_seg_start = sec; self.update()
+    def set_active(self, sec):
+        self.active_seg_start = sec
+        self.update()
 
     def set_playhead(self, sec):
-        if self.playhead_sec == sec: return
-        self.playhead_sec = sec; self.update()
+        if self.playhead_sec == sec:
+            return
+        self.playhead_sec = sec
+        self.update()
 
     def set_waveform(self, wf):
-        self._waveform = wf; self._speech_mask = None; self.update()
+        self._waveform = wf
+        self._speech_mask = None
+        self.update()
 
-    def _x(self, sec): return int(sec * self.pps)
-    def total_width(self): return max(self.width(), int(self.total_duration * self.pps) + self.width())
+    def _x(self, sec):
+        return int(sec * self.pps)
+
+    def total_width(self):
+        return max(self.width(), int(self.total_duration * self.pps) + self.width())
 
     def _icon_rect(self, x1, x2):
         return QRect(x1 + (x2 - x1) // 2 - (ICON_SZ // 2), SEG_BOT + 1, ICON_SZ, ICON_SZ)
@@ -134,28 +167,37 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         return QRect(x1 + (x2 - x1) // 2 - (ICON_SZ // 2), SEG_BOT + 1, ICON_SZ, ICON_SZ)
 
     def _seg_at(self, x):
-        for s in self.segments:
-            if self._x(s["start"]) <= x <= self._x(s["end"]): return s
+        for seg in self.segments:
+            if self._x(seg["start"]) <= x <= self._x(seg["end"]):
+                return seg
         return None
 
     def _get_prev_seg(self, seg):
         segs = sorted(self.segments, key=lambda s: s["start"])
-        try: idx = segs.index(seg); return segs[idx - 1] if idx > 0 else None
-        except ValueError: return None
+        try:
+            idx = segs.index(seg)
+            return segs[idx - 1] if idx > 0 else None
+        except ValueError:
+            return None
 
     def _get_next_seg(self, seg):
         segs = sorted(self.segments, key=lambda s: s["start"])
-        try: idx = segs.index(seg); return segs[idx + 1] if idx + 1 < len(segs) else None
-        except ValueError: return None
+        try:
+            idx = segs.index(seg)
+            return segs[idx + 1] if idx + 1 < len(segs) else None
+        except ValueError:
+            return None
 
     def _get_fps(self):
-        w = self.parent()
-        while w:
-            if hasattr(w, 'video_fps'): return float(w.video_fps)
-            w = w.parent()
+        widget = self.parent()
+        while widget:
+            if hasattr(widget, "video_fps"):
+                return float(widget.video_fps)
+            widget = widget.parent()
         return 30.0
 
     def _snap_to_frame(self, sec):
         fps = self._get_fps()
-        if fps <= 0: fps = 30.0
+        if fps <= 0:
+            fps = 30.0
         return round(round(sec * fps) / fps, 3)

@@ -1,23 +1,27 @@
-# Version: 01.00.00
+# Version: 02.02.00
+# Phase: PHASE1-B
 """
 ui/timeline_global.py
-타임라인 하단 전체 영상 미니맵 위젯 (GlobalCanvas)
+Global timeline minimap
 """
 import numpy as np
-from PyQt6.QtWidgets import QWidget, QSizePolicy
-from PyQt6.QtCore import Qt, pyqtSignal, QRect
-from PyQt6.QtGui import QPainter, QColor, QPen, QFont
+from PyQt6.QtCore import QRect, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 import config
 
+
 class GlobalCanvas(QWidget):
     seek_frac = pyqtSignal(float)
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
+
         self.setFixedHeight(36)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
         self.segments = []
         self.view_start = 0.0
         self.view_end = 1.0
@@ -26,10 +30,9 @@ class GlobalCanvas(QWidget):
         self._waveform: np.ndarray | None = None
         self.vad_segments = []
         self._multiclip_boxes = []
-        self._whisper_progress_sec = 0.0   # ← 추가
+        self._whisper_progress_sec = 0.0
         
     def set_whisper_progress(self, sec: float):
-        """Whisper 인식 진행 위치(초) → 옐로우존 업데이트"""
         if self._whisper_progress_sec == sec:
             return
         self._whisper_progress_sec = sec
@@ -38,23 +41,28 @@ class GlobalCanvas(QWidget):
     def set_waveform(self, wf: np.ndarray):
         self._waveform = wf
         self.update()
-        
+
     def set_vad_segments(self, vad_segs: list):
         self.vad_segments = vad_segs
         self.update()
 
     def set_playhead(self, sec):
-        if self.playhead_sec == sec: return
-        self.playhead_sec = sec; self.update()
+        if self.playhead_sec == sec:
+            return
+        self.playhead_sec = sec
+        self.update()
 
-    def update_segments(self, segs, total_dur): 
+    def update_segments(self, segs, total_dur):
         self.segments = [s for s in segs if not s.get("is_gap")]
         self.total_duration = total_dur
         self.update()
 
     def update_viewport(self, s, e):
-        if self.view_start == s and self.view_end == e: return
-        self.view_start, self.view_end = s, e; self.update()
+        if self.view_start == s and self.view_end == e:
+            return
+        self.view_start = s
+        self.view_end = e
+        self.update()
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -140,19 +148,25 @@ class GlobalCanvas(QWidget):
             p.drawLine(px, 0, px, self.height())
 
     def wheelEvent(self, ev):
-        dy, dx = ev.angleDelta().y(), ev.angleDelta().x()
+        dy = ev.angleDelta().y()
+        dx = ev.angleDelta().x()
         delta = -(dy if dy != 0 else dx)
-        w = self.parent()
-        while w:
-            if hasattr(w, "scroll"):
-                w.scroll.horizontalScrollBar().setValue(w.scroll.horizontalScrollBar().value() + delta // 2)
-                ev.accept(); return
-            w = w.parent()
+
+        widget = self.parent()
+        while widget:
+            if hasattr(widget, "scroll"):
+                scrollbar = widget.scroll.horizontalScrollBar()
+                scrollbar.setValue(scrollbar.value() + delta // 2)
+                ev.accept()
+                return
+            widget = widget.parent()
+
         ev.ignore()
 
     def mousePressEvent(self, e):
-        self.setFocus() 
+        self.setFocus()
         self.seek_frac.emit(e.pos().x() / max(1, self.width()))
-        
+
     def mouseMoveEvent(self, e):
-        if e.buttons() & Qt.MouseButton.LeftButton: self.seek_frac.emit(e.pos().x() / max(1, self.width()))
+        if e.buttons() & Qt.MouseButton.LeftButton:
+            self.seek_frac.emit(e.pos().x() / max(1, self.width()))
