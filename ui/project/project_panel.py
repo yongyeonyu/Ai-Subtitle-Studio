@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import QFileDialog, QDialog, QMessageBox, QInputDialog
 
 from logger import get_logger
 from core.path_manager import get_last_folder
-from core.project_manager import (
+from core.project.project_manager import (
     PROJECTS_DIR,
     add_media_to_project,
     create_project,

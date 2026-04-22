@@ -36,7 +36,7 @@ if BASE_DIR not in sys.path:
 os.environ["QT_LOGGING_RULES"] = "qt.multimedia.*=false;qt.multimedia.ffmpeg.*=false;qt.qpa.fonts=false"
 os.environ["AV_LOG_LEVEL"] = "16"
 
-from ui.main_window import MainWindow
+from ui.main.main_window import MainWindow
 from core.path_manager import get_recent_folders, add_recent_folder
 
 
@@ -73,7 +73,7 @@ def main():
     win = MainWindow()
 
     # ✅ 1순위 수정: 백엔드 먼저 연결
-    from core.backend import CoreBackend
+    from core.pipeline.backend_core import CoreBackend
     backend = CoreBackend(win)
     win.backend = backend
 

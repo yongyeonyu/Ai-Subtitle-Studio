@@ -8,7 +8,7 @@ settings 다이얼로그 공통 상수, 유틸 함수, 공유 데이터
 import os
 import json
 
-from core.data_manager import load_settings, save_settings, save_default_settings
+from core.project.data_manager import load_settings, save_settings, save_default_settings
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QComboBox, QSpinBox, QPushButton, QSlider, QFrame,

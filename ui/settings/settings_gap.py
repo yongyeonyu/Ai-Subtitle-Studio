@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QFontMetrics, QCursor
 from PyQt6.QtCore import Qt, QTimer, QRect  # 💡 QRect 추가
-from core.data_manager import save_settings, save_default_settings
+from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, CUSTOM_DEFAULTS_FILE, _create_bottom_buttons
 
 

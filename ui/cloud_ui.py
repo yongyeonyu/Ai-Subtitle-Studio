@@ -13,7 +13,7 @@ from logger import get_logger
 from core.path_manager import (
     get_icloud_path, get_nas_path, ensure_nas_mounted
 )
-from ui.folder_dialog import FolderDialog
+from ui.dialogs.folder_dialog import FolderDialog
 
 
 class CloudUIMixin:

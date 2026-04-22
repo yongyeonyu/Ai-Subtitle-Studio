@@ -241,7 +241,7 @@ class MulticlipPipelineMixin:
                             w["end"] += offset
 
                 # 최적화
-                from core.subtitle_engine import optimize_segments
+                from core.engine.subtitle_engine import optimize_segments
 
                 opt = optimize_segments(clip_segments)
                 for seg in opt:
@@ -282,7 +282,7 @@ class MulticlipPipelineMixin:
 
             # ── 통합 SRT 저장 ──
             if final_segments:
-                from core.subtitle_engine import save_srt
+                from core.engine.subtitle_engine import save_srt
                 from core.path_manager import get_srt_path
 
                 srt_path = get_srt_path(first_file)

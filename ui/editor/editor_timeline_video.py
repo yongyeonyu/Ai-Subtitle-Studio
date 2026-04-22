@@ -17,7 +17,7 @@ from PyQt6.QtMultimedia import QMediaPlayer
 
 import config
 from core.media_info import probe_media
-from ui.subtitle_text_edit import SubtitleBlockData
+from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_helpers import (
     find_segment_at, get_sub_block_indices,
     make_gap_ud, delete_block_safely, insert_gap_after,

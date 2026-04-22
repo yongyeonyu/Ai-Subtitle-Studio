@@ -7,7 +7,7 @@ ui/undo_manager.py
 """
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
-from ui.subtitle_text_edit import SubtitleBlockData
+from ui.editor.subtitle_text_edit import SubtitleBlockData
 
 
 class SnapshotState:

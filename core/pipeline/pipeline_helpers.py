@@ -87,7 +87,7 @@ class PipelineHelpersMixin:
         """SRT 저장 + MOV 렌더링 + 완료 처리"""
         get_logger().log("\n  [STEP 5] 💾 SRT 저장 중...")
         try:
-            from core.subtitle_engine import save_srt
+            from core.engine.subtitle_engine import save_srt
             from core.path_manager import get_srt_path
 
             srt_path = get_srt_path(target_file)
@@ -98,9 +98,9 @@ class PipelineHelpersMixin:
             export_settings = {}
             try:
                 try:
-                    from ui.export_dialog import _load_es
+                    from ui.dialogs.export_dialog import _load_es
                 except ImportError:
-                    from export_dialog import _load_es
+                    from ui.dialogs.export_dialog import _load_es
                 export_settings = _load_es()
                 is_video_export = export_settings.get("icloud", False)
             except Exception:

@@ -11,8 +11,8 @@ from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore import Qt
 
 from logger import get_logger
-from core.data_manager import save_settings as _dm_save_settings
-from core.subtitle_engine import save_srt
+from core.project.data_manager import save_settings as _dm_save_settings
+from core.engine.subtitle_engine import save_srt
 from core.path_manager import get_srt_path
 
 
@@ -102,7 +102,7 @@ class EditorActionsMixin:
     # 프로젝트 자동 저장
     # ---------------------------------------------------------
     def _auto_save_project(self, segs: list = None):
-        from core.project_manager import (
+        from core.project.project_manager import (
             save_project, create_project, load_project,
             ensure_projects_dir, PROJECTS_DIR
         )
@@ -243,7 +243,7 @@ class EditorActionsMixin:
             if reply == QMessageBox.StandardButton.Yes:
                 self._on_save()
 
-        from ui.export_dialog import ExportDialog
+        from ui.dialogs.export_dialog import ExportDialog
         segs = self._get_current_segments()
         if segs:
             dlg = ExportDialog(segs, getattr(self, 'video_name', ''), self)

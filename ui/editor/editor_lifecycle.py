@@ -12,7 +12,7 @@ from PyQt6.QtGui import QTextCursor
 import config
 from logger import get_logger
 from core.path_manager import get_srt_path
-from core.project_manager import load_project
+from core.project.project_manager import load_project
 
 
 class EditorLifecycleMixin:
@@ -143,7 +143,7 @@ class EditorLifecycleMixin:
 
     def _save_srt(self, srt_path, segments):
         try:
-            from core.subtitle_engine import save_srt
+            from core.engine.subtitle_engine import save_srt
             save_srt(segments, srt_path, apply_offset=False)
             get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료")
             self._auto_save_project(srt_path, segments)
@@ -152,7 +152,7 @@ class EditorLifecycleMixin:
 
     def _backup_srt(self, srt_path, segments):
         try:
-            from core.subtitle_engine import save_srt; import datetime
+            from core.engine.subtitle_engine import save_srt; import datetime
             base = os.path.splitext(os.path.basename(srt_path))[0]; date_str = datetime.date.today().strftime("%Y%m%d"); num = self._backup_nums.get(srt_path, 1)
             backup_dir = os.path.join(os.path.dirname(srt_path), "자막백업"); os.makedirs(backup_dir, exist_ok=True)
             save_srt(segments, os.path.join(backup_dir, f"{base}_{date_str}_{num:03d}.srt"), apply_offset=False)

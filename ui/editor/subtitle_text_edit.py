@@ -11,7 +11,7 @@ from PyQt6.QtGui import (
     QSyntaxHighlighter, QTextDocument, QKeyEvent, QTextBlockUserData, QPainter, QTextBlockFormat
 )
 import config
-from ui.timestamp_area import TimestampArea
+from ui.editor.timestamp_area import TimestampArea
 
 class SubtitleBlockData(QTextBlockUserData):
     def __init__(self, spk_id: str, start_sec: float, is_gap: bool = False):

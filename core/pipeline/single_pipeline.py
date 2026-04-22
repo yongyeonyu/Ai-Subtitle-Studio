@@ -240,7 +240,7 @@ class SinglePipelineMixin:
                     opt_queue.put(_SENTINEL)
 
             def do_optimize():
-                from core.subtitle_engine import optimize_segments
+                from core.engine.subtitle_engine import optimize_segments
 
                 total_files = len(self.files_to_process)
 
@@ -274,7 +274,7 @@ class SinglePipelineMixin:
 
                     try:
                         if is_gemini and len(chunk_segs) > 1:
-                            from core.subtitle_engine import ask_gemini_to_split
+                            from core.engine.subtitle_engine import ask_gemini_to_split
                             from core.utils import load_subtitle_rules
 
                             chunk_start = chunk_segs[0]["start"]

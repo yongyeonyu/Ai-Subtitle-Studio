@@ -23,9 +23,9 @@ def render_subtitle_mov(srt_path: str, target_file: str, export_settings: dict,
     from PyQt6.QtCore import Qt
 
     try:
-        from ui.export_dialog import _parse_srt, _make_png
+        from ui.dialogs.export_dialog import _parse_srt, _make_png
     except ImportError:
-        from export_dialog import _parse_srt, _make_png
+        from ui.dialogs.export_dialog import _parse_srt, _make_png
 
     s = export_settings
     segs = _parse_srt(srt_path)

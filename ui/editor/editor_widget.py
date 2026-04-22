@@ -8,7 +8,7 @@ ui/editor_widget.py
 - 하단 버튼 전체 min-height: 40px 추가 (이전/다음 높이 통일)
 """
 import re, os, sys, json, atexit, threading, shutil, time
-from ui.undo_manager import UndoManager
+from ui.editor.undo_manager import UndoManager
 
 def _mac_safe_exit():
     try: sys.stdout.flush(); sys.stderr.flush()
@@ -26,7 +26,7 @@ from PyQt6.QtMultimedia import QMediaPlayer
 
 import config
 from logger import get_logger
-from core.data_manager import (
+from core.project.data_manager import (
     load_settings as _dm_load_settings, save_settings as _dm_save_settings,
     load_corrections as _dm_load_corrections, save_correction as _dm_save_correction,
     cleanup_rules as _dm_cleanup_rules, load_subtitle_rules as _dm_load_rules
@@ -34,8 +34,8 @@ from core.data_manager import (
 from core.state_manager import SubtitleStateManager
 from ui.timeline.timeline_widget import TimelineWidget
 from ui.editor.editor_popup_qt import EditorPopup
-from ui.video_player_widget import VideoPlayerWidget
-from ui.subtitle_text_edit import SubtitleTextEdit, SubtitleHighlighter, SubtitleBlockData
+from ui.editor.video_player_widget import VideoPlayerWidget
+from ui.editor.subtitle_text_edit import SubtitleTextEdit, SubtitleHighlighter, SubtitleBlockData
 from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.editor.editor_actions import EditorActionsMixin
 from ui.editor.editor_segments import EditorSegmentsMixin

@@ -12,10 +12,10 @@ from PyQt6.QtGui import QTextCursor
 from logger import get_logger
 
 # 💡 [경로 수정] editor_data_manager -> core.data_manager
-from core.data_manager import save_correction as _dm_save_correction
+from core.project.data_manager import save_correction as _dm_save_correction
 
 # 수정 — 절대 import로 통일 (editor_widget.py, editor_timeline_video.py와 동일)
-from ui.subtitle_text_edit import SubtitleBlockData
+from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_helpers import get_sub_block_indices
 
 class EditorSegmentsMixin:
@@ -418,7 +418,7 @@ class EditorSegmentsMixin:
             cur.beginEditBlock()
             spk1_id = self.settings.get("spk1_id", "00")
             spk2_id = self.settings.get("spk2_id", "01")
-            from ui.subtitle_text_edit import SubtitleBlockData
+            from ui.editor.subtitle_text_edit import SubtitleBlockData
             
             for i, seg in enumerate(new_segments):
                 if not cur.atBlockStart(): cur.insertBlock()

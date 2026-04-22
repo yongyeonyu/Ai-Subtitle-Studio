@@ -1,4 +1,0 @@
-# Version: 02.02.00
-# Phase: PHASE1-B
-# Shim: moved to ui.editor.editor_segments
-from ui.editor.editor_segments import *  # noqa: F401,F403

@@ -21,7 +21,7 @@ from datetime import datetime
 
 import config
 from logger import get_logger
-from .utils import seconds_to_srt_time, load_subtitle_rules
+from core.utils import seconds_to_srt_time, load_subtitle_rules
 
 _OLLAMA_WARMED = set()
 _OLLAMA_WARM_LOCK = threading.Lock()

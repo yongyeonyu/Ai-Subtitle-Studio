@@ -94,7 +94,7 @@ class FileOpsMixin:
         self._is_auto_pipeline = False
         self._current_project_path = None
         self._project_boundary_times = []
-        from ui.folder_dialog import FolderDialog
+        from ui.dialogs.folder_dialog import FolderDialog
 
         dlg = FolderDialog(folder, self)
         if dlg.exec() and dlg.selected_files:

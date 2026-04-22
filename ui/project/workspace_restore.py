@@ -10,7 +10,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
 
 from logger import get_logger
-from core.project_manager import load_project
+from core.project.project_manager import load_project
 
 
 class WorkspaceMixin:
@@ -48,7 +48,7 @@ class WorkspaceMixin:
 
     def _auto_save_project(self, srt_path, segments):
         try:
-            from core.project_manager import PROJECTS_DIR, create_project, save_project
+            from core.project.project_manager import PROJECTS_DIR, create_project, save_project
 
             editor = self._editor_widget
             if not editor:

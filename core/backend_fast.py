@@ -114,7 +114,7 @@ class CoreBackendFast(CoreBackend):
 
         # ── STEP 3: Whisper + LLM (동기 실행) ──
         import queue as _queue
-        from .subtitle_engine import optimize_segments
+        from core.engine.subtitle_engine import optimize_segments
 
         _SENTINEL = object()
         opt_queue = _queue.Queue()
