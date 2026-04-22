@@ -459,7 +459,9 @@ class EditorTimelineVideoMixin:
     def _load_video(self, path: str):
         segs = self._get_current_segments()
         self.video_player.load(path, segs)
-        if hasattr(self.timeline, 'load_waveform'):
+
+        is_multiclip = bool(getattr(self.window(), "_multiclip_boundaries", []))
+        if hasattr(self.timeline, 'load_waveform') and not is_multiclip:
             self.timeline.load_waveform(path)
 
         info = probe_media(path)

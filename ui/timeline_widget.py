@@ -125,11 +125,16 @@ class TimelineWidget(QWidget):
             p.drawRect(0, 0, self.width() - 1, self.height() - 1)
 
     def update_segments(self, segs, active_sec=None, total_dur=0.0, fit_view=False):
-        dur = total_dur or (segs[-1]["end"] if segs else 0.0)
+        seg_end = segs[-1]["end"] if segs else 0.0
+        prev_dur = getattr(self.canvas, "total_duration", 0.0)
+
+        dur = max(prev_dur, total_dur or 0.0, seg_end)
+
         tw = int(dur * self.canvas.pps) + self.scroll.width()
         self.canvas.setFixedWidth(max(tw, self.scroll.width()))
         self.canvas.update_segments(segs, active_sec, dur)
         self.global_canvas.update_segments(segs, dur)
+
         if fit_view:
             self.fit_to_view()
 
