@@ -15,36 +15,6 @@ from core.path_manager import get_srt_path
 from core.project.project_manager import load_project
 
 
-def _save_srt_impl(srt_path, segments):
-    import os
-    from logger import get_logger
-
-    if not segments:
-        get_logger().log('❌ 빈 세그먼트라 SRT 저장을 건너뜁니다.')
-        return
-
-    def _fmt(sec: float) -> str:
-        total_ms = int(round(float(sec) * 1000.0))
-        h = total_ms // 3600000
-        m = (total_ms % 3600000) // 60000
-        s = (total_ms % 60000) // 1000
-        ms = total_ms % 1000
-        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
-    try:
-        out_dir = os.path.dirname(srt_path)
-        if out_dir:
-            os.makedirs(out_dir, exist_ok=True)
-        with open(srt_path, 'w', encoding='utf-8') as f:
-            for i, seg in enumerate(segments, 1):
-                f.write(f"{i}\n")
-                f.write(f"{_fmt(seg.get('start', 0.0))} --> {_fmt(seg.get('end', 0.0))}\n")
-                f.write(f"{str(seg.get('text', '') or '').strip()}\n\n")
-        get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료")
-    except Exception as e:
-        get_logger().log(f"❌ SRT 저장 실패: {e}")
-
-
 class EditorLifecycleMixin:
 
     def _open_srt_in_editor(self, srt_path):
@@ -57,9 +27,9 @@ class EditorLifecycleMixin:
         editor = EditorWidget(video_name=os.path.basename(srt_path), segments=segments, media_path=media_path, parent=self)
         editor._project_clips = None
         def _save_and_home(segs=None):
-            if segs is not None: _save_srt_impl(srt_path, segs)
+            if segs is not None: self._save_srt(srt_path, segs)
             QTimer.singleShot(0, self.show_home)
-        editor.sig_save.connect(lambda segs, p=srt_path: _save_srt_impl(p, segs)); editor.sig_auto_save.connect(lambda segs, p=srt_path: _save_srt_impl(p, segs)); editor.sig_next.connect(_save_and_home); editor.sig_exit.connect(lambda _: self.close())
+        editor.sig_save.connect(lambda segs: self._save_srt(srt_path, segs)); editor.sig_auto_save.connect(lambda segs: self._save_srt(srt_path, segs)); editor.sig_next.connect(_save_and_home); editor.sig_exit.connect(lambda _: self.close())
         self._editor_widget = editor
         if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(self._log_visible)
         if hasattr(editor, 'timeline') and self._project_boundary_times: editor.timeline.set_boundary_times(self._project_boundary_times)
@@ -135,8 +105,8 @@ class EditorLifecycleMixin:
         if self._on_save_cb: editor.sig_next.connect(self._on_save_cb)
         else: editor.sig_next.connect(safe_home)
         srt_save_path = get_srt_path(target_file)
-        editor.sig_save.connect(lambda segs, p=srt_save_path: _save_srt_impl(p, segs))
-        editor.sig_auto_save.connect(lambda segs, p=srt_save_path: _save_srt_impl(p, segs))
+        editor.sig_save.connect(lambda segs, p=srt_save_path: self._save_srt(p, segs))
+        editor.sig_auto_save.connect(lambda segs, p=srt_save_path: self._save_srt(p, segs))
         if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(self._log_visible)
         self.stack.insertWidget(1, editor)
         if hasattr(editor, 'timeline'): editor.timeline.set_boundary_times(self._project_boundary_times or [])
@@ -175,6 +145,50 @@ class EditorLifecycleMixin:
             except (RuntimeError, AttributeError):
                 pass
 
+
+    def _fmt(sec: float) -> str:
+        total_ms = int(round(float(sec) * 1000.0))
+        h = total_ms // 3600000
+        m = (total_ms % 3600000) // 60000
+        s = (total_ms % 60000) // 1000
+        ms = total_ms % 1000
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    try:
+        out_dir = os.path.dirname(srt_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            for i, seg in enumerate(segments, 1):
+                f.write(f"{i}\n")
+                f.write(f"{_fmt(seg.get('start', 0.0))} --> {_fmt(seg.get('end', 0.0))}\n")
+                f.write(f"{str(seg.get('text', '') or '').strip()}\n\n")
+        get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료")
+    except Exception as e:
+        get_logger().log(f"❌ SRT 저장 실패: {e}")
+
+    def _fmt(sec: float) -> str:
+        total_ms = int(round(float(sec) * 1000.0))
+        h = total_ms // 3600000
+        m = (total_ms % 3600000) // 60000
+        s = (total_ms % 60000) // 1000
+        ms = total_ms % 1000
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    try:
+        out_dir = os.path.dirname(srt_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            for i, seg in enumerate(segments, 1):
+                f.write(f"{i}\n")
+                f.write(f"{_fmt(seg.get('start', 0.0))} --> {_fmt(seg.get('end', 0.0))}\n")
+                f.write(f"{str(seg.get('text', '') or '').strip()}\n\n")
+        project_path = save_project_snapshot(self, segments=segments, srt_path=srt_path, reason='srt_save')
+        get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료")
+        get_logger().log(f"💾 프로젝트 자동 저장 완료: {project_path}")
+    except Exception as e:
+        get_logger().log(f"❌ SRT 저장 실패: {e}")
 
     def _backup_srt(self, srt_path, segments):
         try:
@@ -243,4 +257,98 @@ class EditorLifecycleMixin:
         if self.backend: self.backend.stop()
         QTimer.singleShot(100, lambda: os._exit(0))
 
+
+    def _fmt(sec: float) -> str:
+        total_ms = int(round(float(sec) * 1000.0))
+        h = total_ms // 3600000
+        m = (total_ms % 3600000) // 60000
+        s = (total_ms % 60000) // 1000
+        ms = total_ms % 1000
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    try:
+        out_dir = os.path.dirname(srt_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            for i, seg in enumerate(segments, 1):
+                f.write(f"{i}\n")
+                f.write(f"{_fmt(seg.get('start', 0.0))} --> {_fmt(seg.get('end', 0.0))}\n")
+                f.write(f"{str(seg.get('text', '') or '').strip()}\n\n")
+        get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료")
+    except Exception as e:
+        get_logger().log(f"❌ SRT 저장 실패: {e}")
+
+
+    def _fmt(sec: float) -> str:
+        total_ms = int(round(float(sec) * 1000.0))
+        h = total_ms // 3600000
+        m = (total_ms % 3600000) // 60000
+        s = (total_ms % 60000) // 1000
+        ms = total_ms % 1000
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    try:
+        out_dir = os.path.dirname(srt_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            for i, seg in enumerate(segments, 1):
+                f.write(f"{i}\n")
+                f.write(f"{_fmt(seg.get('start', 0.0))} --> {_fmt(seg.get('end', 0.0))}\n")
+                f.write(f"{str(seg.get('text', '') or '').strip()}\n\n")
+        get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료")
+    except Exception as e:
+        get_logger().log(f"❌ SRT 저장 실패: {e}")
+
+
+    def _fmt(sec: float) -> str:
+        total_ms = int(round(float(sec) * 1000.0))
+        h = total_ms // 3600000
+        m = (total_ms % 3600000) // 60000
+        s = (total_ms % 60000) // 1000
+        ms = total_ms % 1000
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    try:
+        out_dir = os.path.dirname(srt_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            for i, seg in enumerate(segments, 1):
+                f.write(f"{i}\n")
+                f.write(f"{_fmt(seg.get('start', 0.0))} --> {_fmt(seg.get('end', 0.0))}\n")
+                f.write(f"{str(seg.get('text', '') or '').strip()}\n\n")
+        get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료")
+    except Exception as e:
+        get_logger().log(f"❌ SRT 저장 실패: {e}")
+
+def _save_srt(self, srt_path, segments):
+    import os
+    from logger import get_logger
+
+    if not segments:
+        get_logger().log('❌ 빈 세그먼트라 SRT 저장을 건너뜁니다.')
+        return
+
+    def _fmt(sec: float) -> str:
+        total_ms = int(round(float(sec) * 1000.0))
+        h = total_ms // 3600000
+        m = (total_ms % 3600000) // 60000
+        s = (total_ms % 60000) // 1000
+        ms = total_ms % 1000
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    try:
+        out_dir = os.path.dirname(srt_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            for i, seg in enumerate(segments, 1):
+                f.write(f"{i}\n")
+                f.write(f"{_fmt(seg.get('start', 0.0))} --> {_fmt(seg.get('end', 0.0))}\n")
+                f.write(f"{str(seg.get('text', '') or '').strip()}\n\n")
+        get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료")
+    except Exception as e:
+        get_logger().log(f"❌ SRT 저장 실패: {e}")
 

@@ -5,7 +5,6 @@ ui/main/main_file_ops.py
 FileOpsMixin — 파일/폴더 선택 · 배치 시작 · 멀티클립 진입 · 캐시 삭제 · 종료
 """
 import os
-import sys
 
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
 from PyQt6.QtCore import QTimer
@@ -19,32 +18,6 @@ from core.settings import load_settings, save_settings
 
 class FileOpsMixin:
     """파일/폴더 선택 및 배치·멀티클립 모드 진입 관련 메서드."""
-
-    def _prepare_dialog_state(self):
-        try:
-            fw = QApplication.focusWidget()
-            if fw is not None:
-                fw.clearFocus()
-        except Exception:
-            pass
-        try:
-            self.unsetCursor()
-            self.update()
-        except Exception:
-            pass
-        QApplication.processEvents()
-
-    def _safe_open_file_names(self, title, folder, flt):
-        self._prepare_dialog_state()
-        return QFileDialog.getOpenFileNames(self, title, folder, flt)
-
-    def _safe_open_file_name(self, title, folder, flt):
-        self._prepare_dialog_state()
-        return QFileDialog.getOpenFileName(self, title, folder, flt)
-
-    def _safe_open_directory(self, title, folder):
-        self._prepare_dialog_state()
-        return QFileDialog.getExistingDirectory(self, title, folder)
 
     def _add_recent_folder(self, folder_path):
         if not folder_path or not str(folder_path).strip():
@@ -63,7 +36,8 @@ class FileOpsMixin:
             self.add_recent_folder_callback(folder_path)
 
     def select_files(self):
-        paths, _ = self._safe_open_file_names(
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
             "파일 선택",
             get_last_folder() or os.path.expanduser("~"),
             "Media/SRT Files (*.mp4 *.mov *.MOV *.MP4 *.wav *.m4a *.m2a *.mp3 *.aac *.srt)",
@@ -110,8 +84,8 @@ class FileOpsMixin:
             QTimer.singleShot(500, lambda: setattr(self, "_batch_starting", False))
 
     def select_folder(self):
-        folder = self._safe_open_directory(
-            "폴더 선택", get_last_folder() or os.path.expanduser("~")
+        folder = QFileDialog.getExistingDirectory(
+            self, "폴더 선택", get_last_folder() or os.path.expanduser("~")
         )
         if not folder or not ensure_nas_mounted(folder):
             return
@@ -143,7 +117,8 @@ class FileOpsMixin:
         self._is_auto_pipeline = False
         self._current_project_path = None
         self._project_boundary_times = []
-        paths, _ = self._safe_open_file_names(
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
             "파일 선택",
             folder,
             "Media/SRT Files (*.mp4 *.mov *.MOV *.MP4 *.wav *.m4a *.m2a *.mp3 *.aac *.srt)",
@@ -160,7 +135,8 @@ class FileOpsMixin:
             self._show_multiclip_then_batch(vid, show_multiclip=False)
 
     def open_editor_directly(self):
-        path, _ = self._safe_open_file_name(
+        path, _ = QFileDialog.getOpenFileName(
+            self,
             "SRT 파일 선택",
             get_last_folder() or os.path.expanduser("~"),
             "SRT Files (*.srt)",

@@ -5,7 +5,6 @@ ui/main/main_file_ops.py
 FileOpsMixin — 파일/폴더 선택 · 배치 시작 · 멀티클립 진입 · 캐시 삭제 · 종료
 """
 import os
-import sys
 
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
 from PyQt6.QtCore import QTimer

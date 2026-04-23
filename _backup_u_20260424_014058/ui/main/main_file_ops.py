@@ -36,15 +36,24 @@ class FileOpsMixin:
 
     def _safe_open_file_names(self, title, folder, flt):
         self._prepare_dialog_state()
-        return QFileDialog.getOpenFileNames(self, title, folder, flt)
+        opts = QFileDialog.Option(0)
+        if sys.platform == 'darwin':
+            opts |= QFileDialog.Option.DontUseNativeDialog
+        return QFileDialog.getOpenFileNames(self, title, folder, flt, options=opts)
 
     def _safe_open_file_name(self, title, folder, flt):
         self._prepare_dialog_state()
-        return QFileDialog.getOpenFileName(self, title, folder, flt)
+        opts = QFileDialog.Option(0)
+        if sys.platform == 'darwin':
+            opts |= QFileDialog.Option.DontUseNativeDialog
+        return QFileDialog.getOpenFileName(self, title, folder, flt, options=opts)
 
     def _safe_open_directory(self, title, folder):
         self._prepare_dialog_state()
-        return QFileDialog.getExistingDirectory(self, title, folder)
+        opts = QFileDialog.Option(0)
+        if sys.platform == 'darwin':
+            opts |= QFileDialog.Option.DontUseNativeDialog
+        return QFileDialog.getExistingDirectory(self, title, folder, options=opts)
 
     def _add_recent_folder(self, folder_path):
         if not folder_path or not str(folder_path).strip():

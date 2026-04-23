@@ -144,13 +144,6 @@ class EditorActionsMixin:
             segments=segs,
             workspace=workspace
         )
-        from core.project.project_phase1b import enrich_existing_project_file
-        _owner = locals().get('main_w', self.window() if hasattr(self, 'window') else self)
-        _media_path = getattr(self, 'media_path', '') or ''
-        _srt_path = ''
-        if _media_path:
-            _srt_path = os.path.splitext(_media_path)[0] + '.srt'
-        enrich_existing_project_file(project_path, _owner, self, segs, _srt_path or None)
         get_logger().log(f"📦 프로젝트 저장 완료: {os.path.basename(project_path)}")
 
     # ---------------------------------------------------------
