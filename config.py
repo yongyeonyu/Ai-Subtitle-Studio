@@ -29,6 +29,7 @@ INSTANCE_PORT = 47291
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 DATASET_DIR = os.path.join(BASE_DIR, "dataset")
 OUTPUT_DIR  = os.path.join(BASE_DIR, "output")
+VOICE_DATA_DIR = os.path.join(BASE_DIR, "voice_data")
 
 CORRECTIONS_DIR  = DATASET_DIR              # 호환용 alias
 CORRECTIONS_FILE = os.path.join(DATASET_DIR, "dataset_correction.json")
@@ -127,3 +128,4 @@ DEFAULT_MAX_CHARS = 20
 # ✅ 유지: 앱 실행 시 필요 폴더 보장
 os.makedirs(DATASET_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR,  exist_ok=True)
+os.makedirs(VOICE_DATA_DIR, exist_ok=True)

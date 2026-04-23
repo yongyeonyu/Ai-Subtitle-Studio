@@ -1,23 +1,36 @@
 # AGENTS.md — AI Subtitle Studio 개발 가이드
 
 ## 프로젝트 개요
-- **AI Subtitle Studio**: macOS/Windows용 AI 기반 자막 생성 및 편집 앱
+- **프로젝트명**: AI Subtitle Studio
 - **개발자**: 대표님
-- **AI 어시스턴트**: Microsoft Copilot (코드 생성 + create_all 스크립트 기반 패치)
+- **AI 어시스턴트**: Microsoft Copilot
+- **목적**: macOS / Windows에서 동작하는 AI 기반 자막 생성·편집·자동화 앱 개발
 
 ---
 
 ## 🎯 최종 목표
 
-### 1. macOS/Windows 데스크탑 앱
-- **Phase1**: STT + 자막 편집 (현재 개발 중, PHASE1-B)
-- **Phase2**: Gemma4 등 AI로 **자동 러프컷 편집** — 최종 목표는 영상 자막 생성부터 컷편집까지 원스톱 자동화
+### 1) macOS / Windows 데스크탑 앱
+#### Phase1
+- Whisper 기반 STT
+- 자막 편집
+- 화자 분리
+- 멀티클립 처리
+- 자막 저장 / 출력
 
-### 2. iPad 앱 (유료 출시 예정)
-- 자막 에디터 중심의 모바일 앱
-- 프리미엄 기능: **Whisper STT + LLM 자막 최적화**
-- 무료: 자막 편집/타이밍 조정
-- 유료: AI 자막 생성 (Whisper) + LLM 문장 최적화 + 자동 화자 분리
+#### Phase2
+- Gemma4 등 AI 기반 **자동 러프컷 편집**
+- 자막 생성 → 러프컷 → 출력까지 원스톱 자동화
+
+#### Phase3
+- 프록시 업로드
+- 외부 서비스 연동
+- API / 자동화 고도화
+
+### 2) iPad 앱 (유료 출시 예정)
+- 자막 에디터 중심 모바일 앱
+- 무료: 자막 편집 / 타이밍 조정
+- 유료: Whisper STT + LLM 자막 최적화 + 자동 화자 분리
 
 ---
 
@@ -25,137 +38,351 @@
 
 ### 회사 (Windows)
 - Windows 11 + CUDA GPU
-- Python 3.11 + faster-whisper (CUDA 가속)
-- 주로 R3(AI 모델 관리), R4(Windows 전기능) 작업
-- faster-whisper subprocess worker 기반
+- Python 3.11
+- faster-whisper (CUDA)
+- 주 작업:
+  - Windows 기능 통합
+  - 모델 관리
+  - 배치 처리
+  - faster-whisper subprocess worker
 
 ### 집 (macOS)
-- MacBook Air (Apple Silicon, M-series)
-- Python 3.11 (homebrew) + MLX Whisper
-- 주로 UI/UX 개발, 리팩토링, 버그 수정
-- MLX persistent worker 기반 (모델 1회 로드 후 재사용)
+- MacBook Air (Apple Silicon)
+- Python 3.11 (Homebrew / venv)
+- MLX Whisper
+- 주 작업:
+  - UI/UX
+  - 리팩토링
+  - 버그 수정
+  - MLX persistent worker
 
 ### 공통
-- PyQt6 (크로스 플랫폼 UI)
-- Ollama (로컬 LLM) / Gemini API (클라우드 LLM)
-- ffmpeg (오디오/비디오 처리)
+- PyQt6
+- ffmpeg
+- Ollama / Gemini API
 - Git (main 브랜치 단일 운영)
 
 ---
 
-## 🔧 코드 수정 방식: create_all 스크립트 패턴
+## 🔧 코드 수정 원칙
 
-### 원칙
-**모든 코드 수정은 Python 스크립트(`create_all_X.py`)로 수행합니다.**
-수동 편집은 하지 않으며, 스크립트가 파일을 읽고 → 패치 적용 → 백업 생성 → 결과 출력합니다.
+### 최우선 원칙
+**모든 코드 수정은 create_all 계열 Python 스크립트로 수행합니다.**
 
-### 장점
-1. **실수 방지** — 수십 개 파일 수동 수정 시 빠뜨리기 쉬운 부분을 스크립트가 정확하게 처리
-2. **재현 가능** — 같은 스크립트를 다시 돌려도 동일한 결과
-3. **자동 백업** — 매 실행 시 `_backup_X_날짜/` 폴더에 원본 보관
-4. **한 눈에 검증** — `[OK]`, `[WARN]`, `[SKIP]` 태그로 즉시 확인
-5. **AST 문법 검사** — 스크립트 생성 시 `ast.parse()`로 사전 검증
-
-### 스크립트 명명 규칙
-```
-create_all.py    → 첫 번째 대규모 변경 (파일 생성/분할)
-create_all_b.py  → 두 번째 패치 (버그 수정)
-create_all_c.py  → 세 번째 패치
-...
-create_all_i.py  → 아홉 번째 패치
-```
-
-### 스크립트 구조
-```python
-#!/usr/bin/env python3
-def main():
-    # 1) 백업 디렉토리 생성
-    # 2) 파일 읽기 → 패턴 매칭 → 치환
-    # 3) 결과 출력 [OK] / [WARN]
-    
-if __name__ == "__main__":
-    main()
-```
-
-### 한글 인코딩 주의
-- 스크립트 내 한글 문자열 매칭 시 인코딩 깨짐 문제 발생 가능
-- **해결책**: 구조 기반 매칭 (한글이 아닌 코드 패턴으로 탐색) 또는 base64 인코딩
+즉,
+- 수동 편집보다 `create_all_X.py` 우선
+- 스크립트가 파일 읽기 → 패치 → 백업 → 검증 → 저장까지 수행
+- 사람이 직접 파일을 열어 편집하는 방식은 원칙적으로 지양
 
 ---
 
-## 📁 폴더 구조 (v02.02.00)
+## create_all 패턴 운영 규칙
 
-```
+### 기본 원칙
+1. **수정 전 백업 생성**
+2. **패치 후 AST 문법 검사**
+3. **결과를 `[OK] / [SKIP] / [WARN]` 형태로 출력**
+4. **동일 스크립트 재실행 시 재현 가능해야 함**
+5. **가능하면 여러 파일 수정도 한 번에 묶어서 처리**
+
+### 명명 규칙
+- `create_all.py`
+- `create_all_b.py`
+- `create_all_c.py`
+- ...
+- `create_all_x.py`
+
+### 출력 규칙
+- `[OK]` 수정 완료
+- `[SKIP]` 변경 없음
+- `[WARN]` 대상 없음 / 패턴 불일치
+
+### 백업 규칙
+- `_backup_x_YYYYMMDD_HHMMSS/` 형식 사용
+
+---
+
+## ✅ 스크립트 작성 규칙 (중요)
+
+### 1) Base64 사용 금지
+- Base64는 사용하지 않음
+- 이유:
+  - 파일 크기 증가
+  - 디버깅 어려움
+  - 사람이 즉시 검토 불가
+
+### 2) 긴 스크립트는 `repr()` 임베딩 우선
+- 긴 텍스트/파일 전체 교체 시
+- **repr() 임베딩 방식 우선**
+- 문자열 escape 실수 줄이고 안정성 확보
+
+### 3) 링크 출력 전 자동 refresh
+- 파일 생성 후 바로 링크 출력하지 않음
+- 반드시:
+  1. 파일 생성
+  2. `ast.parse()` 재검사
+  3. 같은 경로에 다시 write (refresh)
+  4. 그 후 링크 출력
+
+### 4) 링크 불안 시 처리
+- 즉시 재발급
+- 필요 시 파일명 변경 후 새 링크 생성
+
+---
+
+## ⚠️ 한글 / 인코딩 주의
+
+### 원칙
+- 한글 문자열 직접 매칭은 최대한 피함
+- 가능하면 **구조 기반 / 코드 패턴 기반 매칭**
+- 긴 한국어 UI 문자열은 파일 전체 교체 또는 repr 임베딩 우선
+
+### 인코딩
+- UTF-8 고정
+- PowerShell / macOS zsh 차이 고려
+- `.write_text(..., encoding="utf-8")` 기본 사용
+
+---
+
+## 🧭 운영 방식
+
+### Windows에서는
+- PowerShell 명령 사용
+- faster-whisper 중심
+- CUDA 경로 / 모델 캐시 / subprocess worker 확인
+
+### macOS에서는
+- zsh / bash 명령 사용
+- PowerShell 명령 사용 금지
+- MLX Whisper / UI 중심 작업
+
+### 환경 차이 주의
+- Windows 명령:
+  - `Get-Content`
+  - `Select-String`
+- macOS 명령:
+  - `python3 - << 'PY'`
+  - `grep`
+  - `sed`
+  - `find`
+
+---
+
+## 📁 폴더 구조 (기준: v02.02.00)
+
+```text
 ai_subtitle_studio/
-├── main.py · config.py · logger.py
+├── main.py
+├── config.py
+├── logger.py
 ├── core/
-│   ├── pipeline/      ← 백엔드 파이프라인 (5파일)
-│   ├── audio/         ← 오디오/Whisper (6파일)
-│   ├── engine/        ← 자막 엔진 (1파일)
-│   ├── project/       ← 프로젝트 관리 (2파일)
-│   └── (settings, utils, path_manager, etc.)
+│   ├── pipeline/
+│   ├── audio/
+│   ├── engine/
+│   ├── project/
+│   └── ...
 ├── ui/
-│   ├── main/          ← 메인윈도우 (4파일)
-│   ├── editor/        ← 에디터 (14파일)
-│   ├── settings/      ← 설정 (7파일)
-│   ├── timeline/      ← 타임라인 (9파일)
-│   ├── project/       ← 프로젝트 UI (4파일)
-│   └── dialogs/       ← 다이얼로그 (2파일)
-└── dataset/           ← 설정/학습 데이터 (JSON)
+│   ├── main/
+│   ├── editor/
+│   ├── settings/
+│   ├── timeline/
+│   ├── project/
+│   └── dialogs/
+├── dataset/
+├── output/
+└── voice_data/
 ```
 
 ---
 
 ## 📐 코드 원칙
 
-1. **헤더 통일**: 모든 .py 파일에 `# Version: XX.XX.XX` / `# Phase: PHASE1-B`
-2. **파일 크기**: 기능별 분할, 300줄 이하 유지 목표
-3. **폴더 이동 시**: shim 파일 → 안정화 확인 → shim 제거 + 직접 import
-4. **Phase2 고려**: 폴더 구조는 향후 자동 편집 기능 추가를 고려해 설계
-5. **Whisper 모델**: 사용자가 large-v3를 선택한 경우 절대 자동 다운그레이드 금지
+1. **헤더 통일**
+   - 모든 `.py` 파일 첫 줄:
+     - `# Version: XX.XX.XX`
+     - `# Phase: PHASE1-B`
+
+2. **파일 분할**
+   - 기능별로 분리
+   - 과도한 단일 파일 지양
+
+3. **폴더 이동**
+   - 필요 시 shim → 안정화 확인 → shim 제거
+
+4. **Phase2 확장 고려**
+   - 폴더 구조 / 클래스 분리는 Phase2 자동 러프컷 확장 고려
+
+5. **Whisper 모델 존중**
+   - 사용자가 `large-v3` 선택 시 자동 다운그레이드 금지
+
+6. **UI 수정 시**
+   - 대표님이 의도한 레이아웃 유지 우선
+   - 기능보다 시각적 일관성 / 사용감 우선 확인
 
 ---
 
 ## 📌 버전 규칙
 
-- **앱 버전**: `config.py` → `APP_VERSION`
-- **파일 버전**: 각 .py 첫 줄 `# Version: XX.XX.XX`
-- 기능 추가 → 중간 버전 (02.01.x → 02.02.x)
-- 디버깅/안정화 → 패치 버전 (02.02.00 → 02.02.01)
-- PHASE1-B 기준 버전은 02.00.00부터 시작
+### 앱 버전
+- `config.py` → `APP_VERSION`
+
+### 파일 버전
+- 각 `.py` 헤더 버전 사용
+
+### 증가 규칙
+- 기능 추가 → 마이너/중간 버전
+- 안정화/버그 수정 → 패치 버전
+- PHASE1-B 시작 버전은 `02.00.00`
 
 ---
 
-## ✅ v02.02.00 완료 내역 (2026-04-22~23)
+## 🗂️ 작업 방식
 
-### 버그 수정 12건 (B1~B12)
-- 멀티클립 오버레이, 웨이브폼, 큐 상태, 룰러, 썸네일 등
+### 기본 순서
+1. 현상 확인
+2. 관련 코드 확인
+3. 이미 수정된 것 / 안 된 것 분리
+4. 남은 것만 create_all로 묶기
+5. 실행 로그 확인
+6. 통과 후 커밋
 
-### 기능 추가 6건 (F2/F3/F8/F9/F10/F12)
-- 빠른모드 Whisper medium 강제, ETA 모드별 분리 등
-
-### 인프라 리팩토링
-- 폴더 구조 8개 신규 (pipeline, audio, engine, project, main, editor, settings, dialogs)
-- 73개 파일 헤더 v02.02.00 통일
-- 23개 shim 파일 생성 → 안정화 후 삭제
-- STRUCTURE.txt + AGENTS.md + RELEASE_v02.02.00.md 문서 추가
+### 응답 방식
+- 한 번에 너무 크게 가지 않음
+- **한 스텝씩**
+- 각 스텝마다 필요한 코드 / 로그만 요청
+- 불필요한 설명 최소화
 
 ---
 
-## 🔮 앞으로 남은 작업
+## 🚨 예외 규칙: 수동 수정 허용 범위
 
-### PHASE1-B 잔여
-- R3: AI 모델 관리 시스템 (Windows 환경)
-- R4: Windows 전기능 연동 (faster-whisper, CUDA)
+원칙은 create_all이지만, 아래 경우는 **응급조치로 수동 수정 허용**:
 
-### PHASE2 예정
-- F1: 상황별 오디오 프리셋
-- F4: NTFY 알림 설정 UI
-- F5: 도움말 시스템
-- F11: 에디터 클립 추가 + 드래그 순서 변경
-- **자동 러프컷 편집 (Gemma4 등 AI 기반)**
+1. create_all 자체가 깨져서 반복 실패할 때
+2. 매우 짧은 1줄/2줄 수정으로 즉시 복구 가능한 경우
+3. 현 시점에서 작업을 멈추면 전체 흐름이 끊기는 경우
 
-### iPad 앱
-- 자막 에디터 UI (SwiftUI)
-- Whisper STT + LLM 최적화 (프리미엄)
-- App Store 유료 출시
+단,
+- 수동 수정 후 반드시 다음 단계에서 create_all 또는 정리본 반영
+- 수동 수정은 **임시 복구**로 취급
+
+---
+
+## 🔊 화자 학습 규칙
+
+### 저장 경로
+- `voice_data/` 사용
+- 기존 `dataset/my_voice.wav`는 legacy 취급
+
+### 파일 규칙
+- 예:
+  - `voice_data/spk1_voice.wav`
+  - `voice_data/spk2_voice.wav`
+  - `voice_data/spk3_voice.wav`
+
+### 기존 파일 마이그레이션
+- `dataset/my_voice.wav`
+  → `voice_data/voice_backup/my_voice_00.wav` 백업
+  → `voice_data/spk1_voice.wav`로 이동
+
+### 세그먼트 우클릭 학습
+- 자막 세그먼트 우클릭 메뉴에서
+  - `음성 화자로 학습 → 화자 1/2/3`
+- 파일명 입력창 표시
+- ffmpeg로 WAV 추출
+- 저장 후 로그 출력
+
+### 학습 데이터 사용 로그
+- diarize에서 학습 데이터 사용 시 로그 출력
+- 캐시 사용 시 로그가 생략될 수 있으므로 speaker cache 주의
+
+---
+
+## 🧪 디버깅 원칙
+
+### false success 금지
+- 실패했는데 성공 로그 출력되는 구조 금지
+- 세그먼트 0개면:
+  - 저장 금지
+  - 완료 로그 금지
+  - 오류 로그로 종료
+
+### worker 출력
+- stdout / stderr 구분 철저
+- `\n` 리터럴 실수 금지
+- JSON line protocol 깨지지 않도록 주의
+
+### 캐시 주의
+- `*_speaker_cache.json`
+- 캐시가 남아 있으면 학습 데이터 로그/재계산 안 보일 수 있음
+
+---
+
+## 🏠 집 / 🏢 회사 Git 운영 규칙
+
+### 회사
+- 커밋 후 가능하면 바로 push
+- Windows 전용 수정 반영
+
+### 집
+- 작업 전 `git pull`
+- 회사 커밋 유무 먼저 확인
+- 원격에 없으면 집에서는 필요한 부분만 재구성
+
+### 중요
+- 회사 작업 후 push 누락 주의
+- 맥에서 `git log --all --oneline | grep <hash>`로 확인 가능
+
+---
+
+## ✅ 현재 유지하고 싶은 작업 스타일
+
+1. 한 스텝씩 진행
+2. 먼저 코드/로그 확인
+3. 이미 수정된 것 제외
+4. 남은 것만 create_all
+5. 긴 스크립트는 repr() 임베딩
+6. 링크 출력 전 refresh
+7. 필요하면 짧은 응급 수동 수정 후 정리
+8. 대표님이 원하는 UI/동작 우선 반영
+
+---
+
+## 📌 현재 확정된 UI/운영 메모
+
+### 화자 설정 UI
+현재 방향:
+```text
+[목소리학습] SPK1_VOICE.WAV [재생버튼]
+[목소리학습] 학습 데이터 없음 [ ]사용
+[목소리학습] 학습 데이터 없음 [ ]사용
+```
+
+- 재생 버튼은 재생/정지 가능
+- 정렬은 최대한 동일한 x축 유지
+- 간격은 과도하게 넓히지 않음
+
+---
+
+## 🔮 남은 작업 운영 방식
+
+### PHASE1-B
+- 버그 수정
+- Windows/맥 정합성 확보
+- create_all 기반 안정화
+- UI/UX 마감
+
+### PHASE2 이상
+- 자동 러프컷
+- 알림 / 도움말 / 프리셋
+- iPad 연동
+- API / 자동화
+
+---
+
+## 마지막 원칙
+- Copilot은 **대표님의 코딩 파트너**로 동작
+- 설명보다 **실제 수정과 검증** 우선
+- 항상 현재 작업 맥락을 유지
+- 응답은 존댓말
+- 가능하면 짧고 정확하게

@@ -128,9 +128,11 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
         for l in centroids:
             centroids[l] = np.mean(centroids[l], axis=0)
 
-        ref_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dataset", "my_voice.wav")
+        _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        ref_file = os.path.join(_project_root, "voice_data", "spk1_voice.wav")
         ref_emb = None
         if os.path.exists(ref_file):
+            get_logger().log(f"🔊 화자 학습 데이터 사용: {ref_file}")
             try:
                 get_logger().log("🎙️ 대표님 목소리(화자 1) 지문 데이터를 분석하여 우선 매칭합니다...")
                 r_sig, r_fs = torchaudio.load(ref_file)

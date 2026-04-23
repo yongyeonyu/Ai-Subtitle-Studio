@@ -297,7 +297,92 @@ class TimelineInlineEditMixin:
             act = menu.addAction("🎤 음성으로 입력")
             act.triggered.connect(self._start_listening)
 
+        menu.addSeparator()
+        learn_menu = menu.addMenu("🎤 음성 화자로 학습")
+        for _spk_i in range(1, 4):
+            _act = learn_menu.addAction(f"화자 {_spk_i}")
+            _act.triggered.connect(lambda checked, idx=_spk_i: self._learn_speaker_from_segment(idx))
+
         menu.exec(gpos)
+
+    def _learn_speaker_from_segment(self, spk_idx):
+        seg = next((s for s in self.segments if s.get("line") == self._edit_line), None)
+        if not seg:
+            return
+
+        import os, subprocess, config
+        from PyQt6.QtWidgets import QInputDialog
+        from logger import get_logger
+
+        start_sec = seg["start"]
+        end_sec = seg["end"]
+        duration = end_sec - start_sec
+        if duration < 0.3:
+            get_logger().log("voice learn skipped: segment too short")
+            return
+
+        default_name = f"spk{spk_idx}_voice"
+        name, ok = QInputDialog.getText(
+            self,
+            "화자 음성 저장",
+            "파일 이름 (확장자 제외):",
+            text=default_name,
+        )
+        if not ok or not name.strip():
+            return
+
+        name = name.strip()
+        if not name.endswith(".wav"):
+            name += ".wav"
+
+        owner = self.parent()
+        while owner and not hasattr(owner, "media_path"):
+            owner = owner.parent()
+
+        if not owner:
+            get_logger().log("voice learn failed: media_path owner not found")
+            return
+
+        media_path = getattr(owner, "media_path", "") or ""
+        if not media_path:
+            get_logger().log("voice learn failed: media_path empty")
+            return
+
+        base_name = os.path.splitext(os.path.basename(media_path))[0]
+        cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
+        src = cleaned_wav if os.path.exists(cleaned_wav) else media_path
+
+        voice_dir = getattr(config, "VOICE_DATA_DIR", os.path.join(config.BASE_DIR, "voice_data"))
+        os.makedirs(voice_dir, exist_ok=True)
+        voice_path = os.path.join(voice_dir, name)
+
+        try:
+            proc = subprocess.run(
+                [
+                    "ffmpeg", "-y", "-nostdin", "-loglevel", "error",
+                    "-ss", str(start_sec), "-t", str(duration),
+                    "-i", src,
+                    "-ac", "1", "-ar", "16000",
+                    "-acodec", "pcm_s16le",
+                    voice_path,
+                ],
+                capture_output=True,
+                timeout=30,
+            )
+
+            if proc.returncode != 0:
+                err = (proc.stderr or b"").decode("utf-8", errors="ignore") if isinstance(proc.stderr, (bytes, bytearray)) else str(proc.stderr or "")
+                get_logger().log(f"voice learn failed spk{spk_idx}: {err[:300]}")
+                return
+
+            if not os.path.exists(voice_path) or os.path.getsize(voice_path) <= 0:
+                get_logger().log(f"voice learn failed spk{spk_idx}: wav not created -> {voice_path}")
+                return
+
+            get_logger().log(f"voice learned spk{spk_idx}: {name} ({duration:.1f}s) -> {voice_path}")
+
+        except Exception as e:
+            get_logger().log(f"voice learn failed spk{spk_idx}: {e}")
 
     def _start_listening(self):
         if self._is_listening:

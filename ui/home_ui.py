@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDialog, QLineEdit, QCheckBox
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 
 import config
 from core.path_manager import (
@@ -63,7 +63,11 @@ class HomeUIMixin:
             for i, folder in enumerate(valid_folders[:10]):
                 display_name = os.path.basename(folder.rstrip('\\/')) or folder
                 file_lbl = QLabel(f"📁 {display_name}"); file_lbl.setStyleSheet(f"QLabel {{ color: {config.FG2}; font-size: 11px; border: none; padding: 2px 4px; background: transparent; }} QLabel:hover {{ color: #4AFF80; background: #3d3d3d; border-radius: 4px; }}"); file_lbl.setCursor(Qt.CursorShape.PointingHandCursor); file_lbl.setToolTip(folder)
-                file_lbl.mousePressEvent = (lambda e, f=folder: self._open_recent(f) if e.button() == Qt.MouseButton.LeftButton else None)
+                def _on_recent_click(e, f=folder, lbl=file_lbl):
+                    if e.button() == Qt.MouseButton.LeftButton:
+                        self._defer_home_action(lbl, lambda: self._open_recent(f))
+                        e.accept()
+                file_lbl.mousePressEvent = _on_recent_click
                 if i >= max_visible: file_lbl.setVisible(False)
                 recent_layout.addWidget(file_lbl); self._recent_buttons.append(file_lbl)
             right_col.addWidget(recent_container)
@@ -79,6 +83,14 @@ class HomeUIMixin:
         bottom_bar.addWidget(version_lbl); bottom_bar.addStretch(); bottom_bar.addWidget(btn_settings); bottom_bar.addWidget(btn_clear_cache); bottom_bar.addWidget(btn_exit)
         layout.addLayout(bottom_bar)
 
+    def _defer_home_action(self, widget, action):
+        try:
+            widget.unsetCursor()
+            widget.update()
+        except Exception:
+            pass
+        QTimer.singleShot(0, action)
+
     def _icloud_btn(self, text, file_data, default_cmd, is_nas=False, subtitle="", comp_title=""):
         w = QWidget(); w.setObjectName("MenuButton"); w.setStyleSheet(f"QWidget#MenuButton {{ background-color: {config.BG2}; border: 1px solid {config.BG3}; border-radius: 8px; }} QWidget#MenuButton:hover {{ background-color: #333333; border: 2px solid #4AFF80; }}"); w.setCursor(Qt.CursorShape.PointingHandCursor)
         layout = QVBoxLayout(w); layout.setContentsMargins(20, 14, 20, 14); layout.setSpacing(6)
@@ -93,8 +105,23 @@ class HomeUIMixin:
         else:
             for name, fpath in file_data[:5]:
                 display_name = f"📁 {name}" if is_nas else name; file_lbl = QLabel(display_name); file_lbl.setStyleSheet(f"QLabel {{ color: {config.FG2}; font-size: 11px; border: none; padding: 2px 4px; background: transparent; }} QLabel:hover {{ color: #4AFF80; background: #3d3d3d; border-radius: 4px; }}")
-                file_lbl.mousePressEvent = (lambda e, p=fpath: self._open_srt_in_editor(p) if p.endswith(".srt") else self.backend.start_pipeline([p])); preview_layout.addWidget(file_lbl)
-        layout.addWidget(preview_container); w.mousePressEvent = (lambda e: default_cmd()); self._preview_containers.append(preview_container); preview_container.setVisible(not getattr(self, '_log_visible', False))
+                def _on_preview_click(e, p=fpath, lbl=file_lbl):
+                    if e.button() == Qt.MouseButton.LeftButton:
+                        if p.endswith(".srt"):
+                            self._defer_home_action(lbl, lambda: self._open_srt_in_editor(p))
+                        else:
+                            self._defer_home_action(lbl, lambda: self.backend.start_pipeline([p]))
+                        e.accept()
+                file_lbl.mousePressEvent = _on_preview_click
+                preview_layout.addWidget(file_lbl)
+        layout.addWidget(preview_container)
+        def _on_w_click(e):
+            if e.button() == Qt.MouseButton.LeftButton:
+                self._defer_home_action(w, default_cmd)
+                e.accept()
+        w.mousePressEvent = _on_w_click
+        self._preview_containers.append(preview_container)
+        preview_container.setVisible(not getattr(self, '_log_visible', False))
         return w
 
     def _btn(self, text, desc, cmd):
@@ -103,8 +130,11 @@ class HomeUIMixin:
         lbl = QLabel(text); lbl.setStyleSheet(f"color: {config.FG}; font-size: 14px; font-weight: bold; border: none; background: transparent;"); lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); layout.addWidget(lbl)
         if desc: sub = QLabel(desc); sub.setStyleSheet(f"color: {config.FG2}; font-size: 11px; border: none; background: transparent;"); sub.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); layout.addWidget(sub)
         def _on_w_click(e):
-            if e.button() == Qt.MouseButton.LeftButton: cmd(); e.accept()
-        w.mousePressEvent = _on_w_click; return w
+            if e.button() == Qt.MouseButton.LeftButton:
+                self._defer_home_action(w, cmd)
+                e.accept()
+        w.mousePressEvent = _on_w_click
+        return w
 
     def _dummy_action(self): pass
 
