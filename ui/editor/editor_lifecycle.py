@@ -141,6 +141,8 @@ class EditorLifecycleMixin:
                                         _s['speaker'] = _s.get('spk_id', '00')
                                 editor.append_segments(_rsegs)
                                 get_logger().log(f'  [PRE] 기존 자막 사전 로드: {os.path.basename(_rf)} ({len(_rsegs)}개)')
+                                if hasattr(self, '_sig_update_queue'):
+                                    self._sig_update_queue.emit(_ri, '기존 자막 사용', str(len(_rsegs)), '', '')
                         except Exception as _re:
                             get_logger().log(f'  [PRE] 기존 자막 사전 로드 실패: {os.path.basename(_rf)} / {_re}')
             

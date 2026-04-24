@@ -110,7 +110,9 @@ class EditorPipelineMixin:
 
     def _execute_pipeline_logic(self, is_restart):
         main_w = self.window()
-        self.text_edit.clear()
+        # 기존 자막이 사전 로드된 상태면 clear하지 않음
+        if not self.text_edit.toPlainText().strip():
+            self.text_edit.clear()
         self._segment_queue.clear()
 
         if is_restart:
