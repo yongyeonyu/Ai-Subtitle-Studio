@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 ui/project/multiclip_panel.py
@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from datetime import datetime
 
-from PyQt6.QtCore import QPoint, QMimeData, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QRect, QMimeData, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -33,18 +33,20 @@ MEDIA_FILTER = "Media Files (*.mp4 *.mov *.MOV *.MP4 *.wav *.m4a *.m2a *.mp3 *.a
 
 
 class ClipCard(QFrame):
+    remove_clicked = pyqtSignal(int)
     def __init__(self, file_path, index, parent=None):
         super().__init__(parent)
         self.file_path = file_path
         self.index = index
         self._selected = False
 
-        self.setFixedSize(240, 190)
+        self.setFixedSize(240, 206)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
 
         self.thumbnail = None
         self.duration_str = "?"
         self.date_str = "?"
+        self._delete_rect = QRect()
 
         self._extract_info()
         self._extract_thumbnail()
@@ -147,12 +149,24 @@ class ClipCard(QFrame):
                 "No Preview",
             )
 
+        painter.setFont(QFont("", 11, QFont.Weight.Bold))
+        fm_top = painter.fontMetrics()
+        x_text = '[X]'
+        x_w = fm_top.horizontalAdvance(x_text) + 12
+        num_w = 32
+        self._delete_rect = QRect(6, 6, x_w, 24)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor('#661111'))
+        painter.drawRoundedRect(self._delete_rect, 4, 4)
+        painter.setPen(QColor('#FF8080'))
+        painter.drawText(self._delete_rect, Qt.AlignmentFlag.AlignCenter, x_text)
+        num_x = 6 + x_w + 4
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(0, 0, 0, 200))
-        painter.drawRoundedRect(6, 6, 32, 24, 4, 4)
+        painter.drawRoundedRect(num_x, 6, num_w, 24, 4, 4)
         painter.setPen(QColor("#4AFF80"))
         painter.setFont(QFont("", 13, QFont.Weight.Bold))
-        painter.drawText(6, 6, 32, 24, Qt.AlignmentFlag.AlignCenter, str(self.index))
+        painter.drawText(num_x, 6, num_w, 24, Qt.AlignmentFlag.AlignCenter, str(self.index))
 
         painter.setFont(QFont("", 10, QFont.Weight.Bold))
         fm = painter.fontMetrics()
@@ -173,13 +187,15 @@ class ClipCard(QFrame):
         painter.setFont(QFont("", 12, QFont.Weight.Bold))
         fm = painter.fontMetrics()
         dur_w = fm.horizontalAdvance(self.duration_str) + 14
+        panel_x = w - dur_w - 6
+        panel_y = thumb_y + thumb_h - 26
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(0, 0, 0, 210))
-        painter.drawRoundedRect(w - dur_w - 6, thumb_y + thumb_h - 26, dur_w, 24, 4, 4)
+        painter.drawRoundedRect(panel_x, panel_y, dur_w, 24, 4, 4)
         painter.setPen(QColor("#FFD700"))
         painter.drawText(
-            w - dur_w - 6,
-            thumb_y + thumb_h - 26,
+            panel_x,
+            panel_y,
             dur_w,
             24,
             Qt.AlignmentFlag.AlignCenter,
@@ -187,31 +203,31 @@ class ClipCard(QFrame):
         )
 
         name = os.path.splitext(os.path.basename(self.file_path))[0]
-        # Filename background + bold font for readability
+        # Filename background + wrapped font for readability
         name_bg_y = thumb_y + thumb_h + 2
+        name_bg_h = 44
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(0, 0, 0, 160))
-        painter.drawRoundedRect(4, name_bg_y, w - 8, 24, 3, 3)
+        painter.drawRoundedRect(4, name_bg_y, w - 8, name_bg_h, 3, 3)
         painter.setPen(QColor("#FFFFFF"))
-        painter.setFont(QFont("", 11, QFont.Weight.Bold))
-        elided = painter.fontMetrics().elidedText(
-            name,
-            Qt.TextElideMode.ElideMiddle,
-            w - 16,
-        )
+        painter.setFont(QFont("", 9, QFont.Weight.Bold))
         painter.drawText(
             8,
             thumb_y + thumb_h + 4,
             w - 16,
             40,
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
-            elided,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
+            name,
         )
 
         painter.end()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            if hasattr(self, '_delete_rect') and self._delete_rect.contains(event.pos()):
+                self.remove_clicked.emit(self.index - 1)
+                event.accept()
+                return
             self._drag_start = event.pos()
         super().mousePressEvent(event)
 
@@ -491,6 +507,12 @@ class MultiClipEditor(QDialog):
         layout.addLayout(btn_layout)
         self._rebuild_cards()
 
+    def _remove_clip(self, idx):
+        if idx < 0 or idx >= len(self.sorted_files):
+            return
+        self.sorted_files.pop(idx)
+        self._rebuild_cards()
+
     def _rebuild_cards(self):
         existing = {card.file_path: card for card in self.cards}
 
@@ -505,6 +527,7 @@ class MultiClipEditor(QDialog):
                 card.update()
             else:
                 card = ClipCard(file_path, i + 1, self.container)
+                card.remove_clicked.connect(self._remove_clip)
 
             new_cards.append(card)
             self.container.layout.addWidget(card)

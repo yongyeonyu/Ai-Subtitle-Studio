@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 ui/timeline_paint.py
@@ -244,6 +244,8 @@ class TimelinePaintMixin:
                 color = QColor("#FFD700") if is_hover else QColor("#AAAAAA")
                 p.setPen(QPen(QColor("#000000"), 1)); p.setBrush(QBrush(color)); p.drawRoundedRect(rect, 4, 4); p.setBrush(Qt.BrushStyle.NoBrush)
 
+        self._clip_delete_rects = []
+        self._clip_add_rect = QRect()
         if self._multiclip_boxes:
             for box in self._multiclip_boxes:
                 bx1 = self._x(box["start"])
@@ -260,17 +262,45 @@ class TimelinePaintMixin:
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(int(bx1), 0, int(bw), CANVAS_H)
 
-                # CLIP label: top-right outside box
+                # CLIP label: top-right outside box + delete
                 clip_label = f"CLIP {box.get('index', '?')}"
+                delete_label = '[X]'
                 p.setFont(QFont("", 9, QFont.Weight.Bold))
-                lbl_w = p.fontMetrics().horizontalAdvance(clip_label) + 10
-                lbl_x = int(bx2) - lbl_w - 4
+                fm = p.fontMetrics()
+                label_w = fm.horizontalAdvance(clip_label) + 10
+                delete_w = fm.horizontalAdvance(delete_label) + 10
+                total_w = label_w + 6 + delete_w
+                lbl_x = int(bx2) - total_w - 4
                 lbl_y = 20
+                clip_rect = QRect(lbl_x, lbl_y, label_w, 16)
+                delete_rect = QRect(lbl_x + label_w + 6, lbl_y, delete_w, 16)
+                self._clip_delete_rects.append((clip_idx, delete_rect))
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(QColor(0, 0, 0, 180))
-                p.drawRoundedRect(lbl_x, lbl_y, lbl_w, 16, 3, 3)
+                p.drawRoundedRect(clip_rect, 3, 3)
+                p.drawRoundedRect(delete_rect, 3, 3)
                 p.setPen(QColor(color))
-                p.drawText(QRect(lbl_x, lbl_y, lbl_w, 16), Qt.AlignmentFlag.AlignCenter, clip_label)
+                p.drawText(clip_rect, Qt.AlignmentFlag.AlignCenter, clip_label)
+                p.setPen(QColor('#FF8080'))
+                p.drawText(delete_rect, Qt.AlignmentFlag.AlignCenter, delete_label)
+
+        if self._multiclip_boxes:
+            placeholder_dur = 30.0
+            last_box = self._multiclip_boxes[-1]
+            px1 = self._x(last_box['end'])
+            px2 = self._x(last_box['end'] + placeholder_dur)
+            pw = px2 - px1
+            p.setPen(QPen(QColor('#555555'), 1, Qt.PenStyle.DashLine))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(int(px1), 0, int(pw), CANVAS_H)
+            self._clip_add_placeholder = {'start': last_box['end'], 'end': last_box['end'] + placeholder_dur}
+            self._clip_add_rect = QRect(int(px1 + (pw // 2) - 14), int((CANVAS_H // 2) - 14), 28, 28)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor('#112233'))
+            p.drawRoundedRect(self._clip_add_rect, 4, 4)
+            p.setPen(QColor('#4AFF80'))
+            p.setFont(QFont(config.FONT, 18, QFont.Weight.Bold))
+            p.drawText(self._clip_add_rect, Qt.AlignmentFlag.AlignCenter, '+')
 
         if self.boundary_times:
             pen_boundary = QPen(QColor("#4AFF80"), 1)

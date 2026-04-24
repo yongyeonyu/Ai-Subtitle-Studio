@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 + Whisper 섹터 동기화)
@@ -382,6 +382,8 @@ class VideoProcessor:
 
         self._whisper_proc = proc
         prev_end = 0.0
+        had_error = False
+        processed_count = 0
 
         try:
             if _cfg.IS_MAC:
@@ -402,6 +404,13 @@ class VideoProcessor:
                         continue
                     if data.get("done"):
                         break
+
+                    if data.get("fatal_error") or data.get("error"):
+                        had_error = True
+                        msg = data.get("fatal_error") or data.get("error") or "unknown whisper worker error"
+                        stage = data.get("stage", "worker")
+                        get_logger().log(f"  [FAIL] Whisper worker error ({stage}): {msg}")
+                        raise RuntimeError(f"whisper_worker_error[{stage}]: {msg}")
 
                     idx = int(data.get("index", received))
                     item = q[idx]
@@ -424,6 +433,7 @@ class VideoProcessor:
                     )
 
                     yield chunk_segs, item["idx"] + 1, total
+                    processed_count += 1
                     received += 1
 
             else:
@@ -456,13 +466,23 @@ class VideoProcessor:
                         f"{int(t_sec // 60):02d}분 {int(t_sec % 60):02d}초 ({int(pct)}%)"
                     )
                     yield chunk_segs, item["idx"] + 1, total
+                    processed_count += 1
 
                 proc.wait()
+                if proc.returncode not in (0, None):
+                    had_error = True
+                    raise RuntimeError(f"whisper_worker_exit_code={proc.returncode}")
+                if processed_count == 0 and total > 0:
+                    had_error = True
+                    raise RuntimeError("whisper produced 0 chunks")
 
         finally:
             self._whisper_proc = None
             shutil.rmtree(chunk_dir, ignore_errors=True)
-            get_logger().log("🎊 모든 자막 생성 완료")
+            if had_error:
+                get_logger().log("[WARN] Whisper transcription aborted due to worker failure")
+            else:
+                get_logger().log("[DONE] Whisper transcription completed")
 
     def stop_transcribe(self):
         try:

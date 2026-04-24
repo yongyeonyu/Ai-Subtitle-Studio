@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 core/pipeline/multiclip_pipeline.py
@@ -28,6 +28,20 @@ class MulticlipPipelineMixin:
         self.is_first_start = True
         self.total_expected_time = 0.0
         self.pipeline_start_time = 0.0
+        self._reuse_existing_multiclip_subtitles = False
+
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            candidates = []
+            for _f in self.files_to_process:
+                if os.path.exists(os.path.splitext(_f)[0] + '.srt'):
+                    candidates.append(_f)
+            if candidates:
+                self._reuse_existing_multiclip_subtitles = QMessageBox.question(
+                    self.ui, '기존 자막 사용', '기존 자막을 사용하겠습니까?'
+                ) == QMessageBox.StandardButton.Yes
+        except Exception:
+            self._reuse_existing_multiclip_subtitles = False
 
         with self._prefetch_lock:
             self._prefetch_generation += 1
@@ -55,10 +69,10 @@ class MulticlipPipelineMixin:
             # ── STEP 0: 클립 길이 사전 계산 ──
             get_logger().log(f"🎬 멀티클립: {total_files}개 클립 정보 수집 중...")
 
-            if hasattr(self.ui, "init_queue_list"):
-                self.ui.init_queue_list(self.files_to_process)
-
+            # Queue UI was already initialized on the main thread in
+            # start_multiclip_pipeline(); do not touch QWidget/timers here.
             clip_boundaries = []
+            failed_clips = []
             cumulative = 0.0
             s = load_settings()
             model_key = get_model_key(s)
@@ -183,6 +197,30 @@ class MulticlipPipelineMixin:
                 if hasattr(self.ui, "_sig_update_queue"):
                     self.ui._sig_update_queue.emit(i, "⏳ 오디오 추출 중", "", "", "")
 
+                if getattr(self, "_reuse_existing_multiclip_subtitles", False):
+                    existing_srt = os.path.splitext(target_file)[0] + ".srt"
+                    if os.path.exists(existing_srt):
+                        try:
+                            from core.srt_parser import parse_srt
+                            clip_segments = parse_srt(existing_srt)
+                            if clip_segments:
+                                for seg in clip_segments:
+                                    seg["start"] = float(seg.get("start", 0.0)) + offset
+                                    seg["end"] = float(seg.get("end", 0.0)) + offset
+                                    seg["_clip_idx"] = i
+                                    if "speaker" not in seg:
+                                        seg["speaker"] = seg.get("spk_id", "00")
+                                if hasattr(self.ui, "_sig_append_segments"):
+                                    self.ui._sig_append_segments.emit(clip_segments)
+                                if hasattr(self.ui, "_sig_update_queue"):
+                                    self.ui._sig_update_queue.emit(i, "기존 자막 사용", str(len(clip_segments)), "", "")
+                                get_logger().log(f"  ✅ 기존 자막 사용: {vname} ({len(clip_segments)}개 세그먼트)")
+                                continue
+                            else:
+                                get_logger().log(f"  ⚠️ 기존 자막 파일이 비어있음: {vname}")
+                        except Exception as e:
+                            get_logger().log(f"  ⚠️ 기존 자막 로드 실패: {vname} / {e}")
+
                 self._backup_existing(target_file)
                 res = self._get_audio_extract_result(target_file)
 
@@ -293,12 +331,12 @@ class MulticlipPipelineMixin:
 
         except Exception as e:
             if str(e) not in ("USER_PREV", "USER_EXIT"):
+                try:
+                    if hasattr(self.ui, "_sig_update_queue") and "i" in locals():
+                        self.ui._sig_update_queue.emit(i, "오류", str(e), "", "")
+                except Exception:
+                    pass
                 get_logger().log(f"\n❌ 치명적 에러: {e}")
                 get_logger().log(traceback.format_exc())
         finally:
             self._active = False
-            try:
-                if hasattr(self.ui, "request_show_home"):
-                    self.ui.request_show_home()
-            except Exception:
-                pass

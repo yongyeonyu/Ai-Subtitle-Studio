@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 core/whisper_faster.py
@@ -66,7 +66,7 @@ def _convert_model_name(mlx_model: str) -> str:
     """mlx-community 모델명을 faster-whisper 호환 모델명으로 변환 (로컬 우선)"""
 
     # ✅ 로컬 모델 폴더 우선 확인
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     local_models = {
         "large-v3": os.path.join(project_root, "models", "faster-whisper-large-v3"),
         "medium": os.path.join(project_root, "models", "faster-whisper-medium"),
@@ -76,6 +76,18 @@ def _convert_model_name(mlx_model: str) -> str:
             if size in mlx_model.lower() or mlx_model in ("large-v3", size):
                 get_logger().log(f"  📂 로컬 모델 사용: {path}")
                 return path
+
+    # If local model was explicitly requested but not found, return a non-repo local path
+    # so faster-whisper fails fast locally instead of entering Hugging Face download.
+    requested = (mlx_model or "").lower()
+    if "large-v3" in requested:
+        missing = os.path.join(project_root, "models", "__missing_faster_whisper_large_v3__")
+        get_logger().log(f"  [FAIL] local large-v3 model missing: {missing}")
+        return missing
+    if requested == "medium" or "whisper-medium" in requested:
+        missing = os.path.join(project_root, "models", "__missing_faster_whisper_medium__")
+        get_logger().log(f"  [FAIL] local medium model missing: {missing}")
+        return missing
 
     # 온라인 모델명 변환
     conversions = {

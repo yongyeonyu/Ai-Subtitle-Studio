@@ -1,12 +1,19 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 core/whisper_worker.py
-별도 프로세스에서 faster-whisper 실행 (PyQt6 충돌 회피)
-stdin으로 작업 수신 → stdout으로 JSON 결과 반환
+Run faster-whisper in a separate process and return JSON lines per chunk.
+Fail fast on model-load / chunk errors so caller can mark the job as failed.
 """
 import sys
 import json
+import traceback
+
+
+def _write_json_line(obj):
+    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
 
 def main():
     import io
@@ -14,17 +21,14 @@ def main():
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-    # stdin에서 작업 정보 읽기
     task = json.loads(sys.stdin.readline())
-
     chunk_paths = task["chunk_paths"]
     model_path = task["model"]
     language = task["language"]
 
     from faster_whisper import WhisperModel
-
-    # compute_type 자동 선택
     import ctranslate2
+
     device = "cpu"
     try:
         supported = ctranslate2.get_supported_compute_types("cuda")
@@ -45,12 +49,18 @@ def main():
                 compute = p
                 break
 
-    sys.stderr.write(f"  🔧 device={device}, compute_type={compute}\n")
+    sys.stderr.write(f"  [FW] device={device}, compute_type={compute}\n")
     sys.stderr.flush()
 
-    whisper = WhisperModel(model_path, device=device, compute_type=compute)
-    sys.stderr.write(f"  ✅ 모델 로딩 완료\n")
-    sys.stderr.flush()
+    try:
+        whisper = WhisperModel(model_path, device=device, compute_type=compute)
+        sys.stderr.write("  [FW] model load complete\n")
+        sys.stderr.flush()
+    except Exception as e:
+        sys.stderr.write(traceback.format_exc())
+        sys.stderr.flush()
+        _write_json_line({"fatal_error": str(e), "stage": "model_load", "model": model_path})
+        sys.exit(2)
 
     for chunk_path in chunk_paths:
         try:
@@ -59,9 +69,8 @@ def main():
                 language=language,
                 word_timestamps=True,
                 beam_size=5,
-                condition_on_previous_text=False
+                condition_on_previous_text=False,
             )
-
             result_segments = []
             for seg in segments:
                 words = []
@@ -70,22 +79,20 @@ def main():
                         words.append({
                             "word": w.word,
                             "start": w.start,
-                            "end": w.end
+                            "end": w.end,
                         })
                 result_segments.append({
                     "start": seg.start,
                     "end": seg.end,
                     "text": seg.text.strip(),
-                    "words": words
+                    "words": words,
                 })
-
-            result = {"segments": result_segments}
-            sys.stdout.write(json.dumps(result, ensure_ascii=False) + "\n")
-            sys.stdout.flush()
-
+            _write_json_line({"segments": result_segments, "chunk_path": chunk_path})
         except Exception as e:
-            sys.stdout.write(json.dumps({"error": str(e)}, ensure_ascii=False) + "\n")
-            sys.stdout.flush()
+            sys.stderr.write(traceback.format_exc())
+            sys.stderr.flush()
+            _write_json_line({"error": str(e), "stage": "transcribe", "chunk_path": chunk_path})
+            sys.exit(3)
 
 
 if __name__ == "__main__":

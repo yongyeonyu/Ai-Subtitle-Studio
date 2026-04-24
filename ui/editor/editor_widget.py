@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 ui/editor_widget.py
@@ -116,6 +116,7 @@ class EditorWidget(EditorActionsMixin, EditorPipelineMixin, EditorSegmentsMixin,
         self.editor_popup = EditorPopup(self)
         
         self._build_ui()   
+        QTimer.singleShot(0, self._hook_multiclip_clip_signals)
         
         self._undo_mgr = UndoManager(self)
 
@@ -477,6 +478,30 @@ class EditorWidget(EditorActionsMixin, EditorPipelineMixin, EditorSegmentsMixin,
             if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'): self.timeline.canvas.setFocus()
             elif hasattr(self, 'timeline'): self.timeline.setFocus()
         else: self.text_edit.setFocus()
+
+    def _hook_multiclip_clip_signals(self):
+        try:
+            canvas = self.timeline.canvas
+            if hasattr(canvas, 'sig_clip_selected'):
+                try:
+                    canvas.sig_clip_selected.disconnect(self._on_clip_selected)
+                except Exception:
+                    pass
+                canvas.sig_clip_selected.connect(self._on_clip_selected)
+            if hasattr(canvas, 'sig_clip_delete_requested'):
+                try:
+                    canvas.sig_clip_delete_requested.disconnect(self._on_clip_delete_requested)
+                except Exception:
+                    pass
+                canvas.sig_clip_delete_requested.connect(self._on_clip_delete_requested)
+            if hasattr(canvas, 'sig_clip_add_requested'):
+                try:
+                    canvas.sig_clip_add_requested.disconnect(self._on_clip_add_requested)
+                except Exception:
+                    pass
+                canvas.sig_clip_add_requested.connect(self._on_clip_add_requested)
+        except Exception:
+            pass
 
     def _route_undo(self):
         from PyQt6.QtWidgets import QApplication

@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 ui/timeline_input.py
@@ -113,6 +113,17 @@ class TimelineInputMixin:
 
         x, y = ev.pos().x(), ev.pos().y()
         self._last_click_x = x; self._last_click_y = y
+
+        if ev.button() == Qt.MouseButton.LeftButton:
+            for clip_idx, rect in getattr(self, '_clip_delete_rects', []) or []:
+                if rect.contains(x, y):
+                    self.sig_clip_delete_requested.emit(int(clip_idx))
+                    ev.accept()
+                    return
+            if hasattr(self, '_clip_add_rect') and getattr(self, '_clip_add_rect', QRect()).contains(x, y):
+                self.sig_clip_add_requested.emit()
+                ev.accept()
+                return
 
         # 멀티클립 박스 클릭 감지 (최우선)
         if self._multiclip_boxes and ev.button() == Qt.MouseButton.LeftButton:

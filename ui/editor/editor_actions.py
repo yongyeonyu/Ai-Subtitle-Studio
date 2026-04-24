@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 ui/editor_actions.py
@@ -138,8 +138,22 @@ class EditorActionsMixin:
         except Exception:
             pass
 
+        _media_paths = list(getattr(main_w, '_multiclip_files', []) or [])
+        if not _media_paths:
+            _media_paths = [media_path]
+        workspace['selected_segment_line'] = workspace.get('last_cursor_block', 0)
+        try:
+            workspace['edit_lock'] = bool(self.timeline.lock_chk.isChecked())
+        except Exception:
+            workspace['edit_lock'] = False
+        try:
+            workspace['scroll_x'] = int(self.timeline.scroll.horizontalScrollBar().value())
+        except Exception:
+            workspace['scroll_x'] = 0
+        workspace['active_clip_idx'] = int(getattr(self.timeline.canvas, '_active_clip_idx', getattr(main_w, '_active_clip_idx', 0)) or 0)
         save_project(
             filepath=project_path,
+            media_paths=_media_paths,
             srt_path=get_srt_path(media_path),
             segments=segs,
             workspace=workspace

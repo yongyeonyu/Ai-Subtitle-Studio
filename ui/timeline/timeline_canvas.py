@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 ui/timeline_canvas.py
@@ -43,7 +43,9 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     sig_inline_text_changed = pyqtSignal(int, str)
     sig_editing_mode        = pyqtSignal(bool)
     sig_split_request       = pyqtSignal(int, float, int)
-    sig_clip_selected       = pyqtSignal(int)   # ← 추가: clip_idx
+    sig_clip_selected       = pyqtSignal(int)
+    sig_clip_delete_requested = pyqtSignal(int)
+    sig_clip_add_requested    = pyqtSignal()   #  : clip_idx
     playhead_menu_requested = pyqtSignal(QPoint, float)
     diamond_merge           = pyqtSignal(int, int)
     sig_smart_split         = pyqtSignal(int, float, bool)
@@ -72,8 +74,11 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.playhead_sec: float = 0.0
         self._waveform = None
         self.boundary_times: list[float] = []
-        self._multiclip_boxes: list[dict] = []   # ← 추가
-        self._active_clip_idx: int = -1   # ← 추가
+        self._multiclip_boxes: list[dict] = []   # 
+        self._clip_delete_rects: list[tuple[int, QRect]] = []
+        self._clip_add_rect = QRect()
+        self._clip_add_placeholder = None  
+        self._active_clip_idx: int = -1   #  
         self._hover_line:  int | None = None
         self._hover_handle: tuple | None = None
 

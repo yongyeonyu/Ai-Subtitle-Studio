@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 core/project/project_phase1b.py
@@ -114,7 +114,7 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
         data = json.load(f)
     media_files = _media_paths(owner, editor, data)
     mode = 'multiclip' if len(media_files) > 1 else 'single'
-    data['version'] = '02.02.00'
+    data['version'] = '02.02.01'
     data['phase'] = 'PHASE1-B'
     data['mode'] = mode
     data['updated_at'] = datetime.now().isoformat(timespec='seconds')
