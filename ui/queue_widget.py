@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 ui/queue_widget.py
@@ -123,11 +123,17 @@ class QueueMixin:
         t = getattr(self, '_total_files', 1)
         # 완료 파일 수 기반 진행률
         done_count = 0
+        reuse_count = 0
         for i in range(self.queue_table.rowCount()):
             si = self.queue_table.item(i, 0)
-            if si and "완료" in si.text():
-                done_count += 1
-        pct = int((done_count / t) * 100) if t > 0 else 0
+            if si:
+                st = si.text()
+                if '기존자막' in st:
+                    reuse_count += 1
+                elif '완료' in st:
+                    done_count += 1
+        effective_total = max(1, t - reuse_count)
+        pct = int((done_count / effective_total) * 100)
         
         exp_str = fmt(expected) if expected > 0 else "예상불가"
 

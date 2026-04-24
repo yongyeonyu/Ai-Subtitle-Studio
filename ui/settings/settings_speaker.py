@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 ui/settings/settings_speaker.py
@@ -138,6 +138,13 @@ class SpeakerDialog(QDialog):
             self._play_buttons[idx] = btn_play
 
             def learn_voice():
+                import subprocess, sys
+                vd = config.VOICE_DATA_DIR
+                os.makedirs(vd, exist_ok=True)
+                if sys.platform == 'win32': os.startfile(vd)
+                elif sys.platform == 'darwin': subprocess.Popen(['open', vd])
+                else: subprocess.Popen(['xdg-open', vd])
+                return
                 path, _ = QFileDialog.getOpenFileName(
                     self,
                     "학습할 음성/영상 파일 선택",
@@ -176,8 +183,30 @@ class SpeakerDialog(QDialog):
 
             btn_voice.clicked.connect(learn_voice)
 
+            btn_del_voice = QPushButton('X')
+            btn_del_voice.setFixedWidth(28)
+            btn_del_voice.setFixedHeight(28)
+            btn_del_voice.setToolTip('학습 데이터 삭제')
+            btn_del_voice.setStyleSheet('QPushButton { background-color: #661111; color: #FF8080; font-weight: bold; border-radius: 4px; padding: 0px; }')
+            btn_del_voice.setEnabled(False)
+            def _delete_voice(spk_idx=idx):
+                files = self._list_voice_files(spk_idx)
+                if not files:
+                    return
+                vf = os.path.join(config.VOICE_DATA_DIR, files[0])
+                if os.path.exists(vf):
+                    try:
+                        os.remove(vf)
+                    except Exception:
+                        pass
+                self._refresh_voice_row(spk_idx)
+            btn_del_voice.clicked.connect(lambda _, i=idx: _delete_voice(i))
+            self._del_buttons = getattr(self, '_del_buttons', {})
+            self._del_buttons[idx] = btn_del_voice
+
             h.addWidget(btn_voice)
             h.addWidget(voice_label)
+            h.addWidget(btn_del_voice)
             h.addWidget(btn_play)
 
             chk = None
@@ -260,11 +289,15 @@ class SpeakerDialog(QDialog):
             label.setText(files[0])
             label.setStyleSheet("color: #4AFF80; font-size: 10px; background: transparent;")
             btn.setEnabled(True)
+            if hasattr(self, '_del_buttons') and idx in self._del_buttons:
+                self._del_buttons[idx].setEnabled(True)
         else:
             label.setText("학습 데이터 없음")
             label.setStyleSheet("color: #888888; font-size: 10px; background: transparent;")
             btn.setEnabled(False)
             btn.setText("▶")
+            if hasattr(self, '_del_buttons') and idx in self._del_buttons:
+                self._del_buttons[idx].setEnabled(False)
 
     def _toggle_preview(self, idx: int):
         path = self._primary_voice_path(idx)

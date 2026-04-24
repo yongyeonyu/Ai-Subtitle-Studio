@@ -217,7 +217,7 @@ class MulticlipPipelineMixin:
                                 if hasattr(self.ui, "_sig_append_segments"):
                                     self.ui._sig_append_segments.emit(clip_segments)
                                 if hasattr(self.ui, "_sig_update_queue"):
-                                    self.ui._sig_update_queue.emit(i, "기존 자막 사용", str(len(clip_segments)), "", "")
+                                    self.ui._sig_update_queue.emit(i, "✅기존자막", " - ", "", "")
                                 get_logger().log(f"  ✅ 기존 자막 사용: {vname} ({len(clip_segments)}개 세그먼트)")
                                 continue
                             else:
