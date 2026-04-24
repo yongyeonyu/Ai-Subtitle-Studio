@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 ui/settings_ai.py  ─  ⚙️ AI 엔진 설정 다이얼로그

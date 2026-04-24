@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 ui/settings_advanced.py  ─  🛠️ 오디오 & Whisper 엔진 상세 튜닝 다이얼로그

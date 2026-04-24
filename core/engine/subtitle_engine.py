@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장 

@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 export_dialog.py  ─ SRT → 투명 자막 동영상 출력 (Qt 네이티브 렌더링 & 미리보기 복구본)

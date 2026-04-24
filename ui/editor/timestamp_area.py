@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 
 from PyQt6.QtWidgets import QWidget

@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 ui/video_player_widget.py - PyQt6 비디오 플레이어
