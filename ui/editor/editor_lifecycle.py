@@ -121,6 +121,28 @@ class EditorLifecycleMixin:
 
             editor.timeline.canvas.update()
             editor.timeline.load_multiclip_waveform(self._multiclip_boundaries)
+
+            # PHASE1-B: 에디터 진입 직후 기존 자막 사전 로드
+            if getattr(self, '_reuse_existing_multiclip_subtitles', False) or getattr(getattr(self, 'backend', None), '_reuse_existing_multiclip_subtitles', False):
+                for _ri, _bd in enumerate(self._multiclip_boundaries):
+                    _rf = _bd.get('file', '')
+                    _rsrt = os.path.splitext(_rf)[0] + '.srt' if _rf else ''
+                    if _rsrt and os.path.exists(_rsrt):
+                        try:
+                            from core.srt_parser import parse_srt
+                            _rsegs = parse_srt(_rsrt)
+                            if _rsegs:
+                                _roff = float(_bd.get('start', 0.0))
+                                for _s in _rsegs:
+                                    _s['start'] = float(_s.get('start', 0.0)) + _roff
+                                    _s['end'] = float(_s.get('end', 0.0)) + _roff
+                                    _s['_clip_idx'] = _ri
+                                    if 'speaker' not in _s:
+                                        _s['speaker'] = _s.get('spk_id', '00')
+                                editor.append_segments(_rsegs)
+                                get_logger().log(f'  [PRE] 기존 자막 사전 로드: {os.path.basename(_rf)} ({len(_rsegs)}개)')
+                        except Exception as _re:
+                            get_logger().log(f'  [PRE] 기존 자막 사전 로드 실패: {os.path.basename(_rf)} / {_re}')
             
         if is_batch: QTimer.singleShot(600, lambda e=editor: e.btn_start.click() if hasattr(e, 'btn_start') else None)
 

@@ -186,6 +186,10 @@ class MulticlipPipelineMixin:
                 if not self._active:
                     return
 
+                # 기존 자막으로 이미 사전 로드된 클립은 skip
+                if getattr(self, '_reuse_existing_multiclip_subtitles', False) and i in locals().get('_reuse_done', set()):
+                    continue
+
                 vname = os.path.basename(target_file)
                 bd = clip_boundaries[i]
                 offset = bd["start"]
