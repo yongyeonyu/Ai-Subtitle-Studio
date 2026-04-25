@@ -67,6 +67,7 @@ class SpeakerDialog(QDialog):
 
         self._voice_labels = {}
         self._play_buttons = {}
+        self._del_buttons = {}
         self._preview_idx = None
         self._preview = QSoundEffect(self)
         self._preview.setLoopCount(1)
@@ -186,22 +187,11 @@ class SpeakerDialog(QDialog):
             btn_del_voice = QPushButton('X')
             btn_del_voice.setFixedWidth(28)
             btn_del_voice.setFixedHeight(28)
-            btn_del_voice.setToolTip('학습 데이터 삭제')
+            btn_del_voice.setToolTip('학습 데이터 사용 해제 (파일 유지)')
             btn_del_voice.setStyleSheet('QPushButton { background-color: #661111; color: #FF8080; font-weight: bold; border-radius: 4px; padding: 0px; }')
             btn_del_voice.setEnabled(False)
-            def _delete_voice(spk_idx=idx):
-                files = self._list_voice_files(spk_idx)
-                if not files:
-                    return
-                vf = os.path.join(config.VOICE_DATA_DIR, files[0])
-                if os.path.exists(vf):
-                    try:
-                        os.remove(vf)
-                    except Exception:
-                        pass
-                self._refresh_voice_row(spk_idx)
-            btn_del_voice.clicked.connect(lambda _, i=idx: _delete_voice(i))
-            self._del_buttons = getattr(self, '_del_buttons', {})
+            btn_del_voice.clicked.connect(lambda _, i=idx: self._toggle_voice_disable(i))
+            
             self._del_buttons[idx] = btn_del_voice
 
             h.addWidget(btn_voice)
@@ -234,7 +224,8 @@ class SpeakerDialog(QDialog):
 
         note = QLabel(
             "화자 ID는 diarize 결과 번호(00, 01, 02)에 맞춰 사용합니다.\n"
-            "voice_data 폴더의 spk1_/spk2_/spk3_ 접두 wav 파일이 학습 데이터로 사용됩니다."
+            "voice_data 폴더의 spk1_/spk2_/spk3_ 접두 wav 파일이 학습 데이터로 사용됩니다.\n"
+            "[X] 버튼은 파일을 삭제하지 않고 앱에서만 사용 해제합니다."
         )
         note.setWordWrap(True)
         note.setStyleSheet(
@@ -280,24 +271,60 @@ class SpeakerDialog(QDialog):
             return None
         return os.path.join(config.VOICE_DATA_DIR, files[0])
 
+    # ── [X] 버튼: disable/enable 토글 (파일 삭제 안 함) ──
+    def _toggle_voice_disable(self, idx: int):
+        """파일을 삭제하지 않고 앱 내부에서만 사용/해제를 토글합니다."""
+        key = f"spk{idx}_voice_disabled"
+        current = self.result.get(key, False)
+        self.result[key] = not current
+        self._refresh_voice_row(idx)
+
+    # ── row UI 새로고침 ───────────────────────────────────
     def _refresh_voice_row(self, idx: int):
         label = self._voice_labels[idx]
-        btn = self._play_buttons[idx]
+        btn_play = self._play_buttons[idx]
+        btn_del = self._del_buttons.get(idx)
         files = self._list_voice_files(idx)
+        disabled = self.result.get(f"spk{idx}_voice_disabled", False)
 
-        if files:
+        if files and not disabled:
             label.setText(files[0])
             label.setStyleSheet("color: #4AFF80; font-size: 10px; background: transparent;")
-            btn.setEnabled(True)
-            if hasattr(self, '_del_buttons') and idx in self._del_buttons:
-                self._del_buttons[idx].setEnabled(True)
+            btn_play.setEnabled(True)
+            if btn_del:
+                btn_del.setEnabled(True)
+                btn_del.setText("X")
+                btn_del.setToolTip("학습 데이터 사용 해제 (파일 유지)")
+                btn_del.setStyleSheet(
+                    "QPushButton { background-color: #661111; color: #FF8080; "
+                    "font-weight: bold; border-radius: 4px; padding: 0px; }"
+                )
+        elif files and disabled:
+            label.setText("사용 안 함")
+            label.setStyleSheet("color: #888888; font-size: 10px; background: transparent;")
+            btn_play.setEnabled(False)
+            btn_play.setText("▶")
+            if btn_del:
+                btn_del.setEnabled(True)
+                btn_del.setText("↩")
+                btn_del.setToolTip("학습 데이터 다시 사용")
+                btn_del.setStyleSheet(
+                    "QPushButton { background-color: #114411; color: #4AFF80; "
+                    "font-weight: bold; border-radius: 4px; padding: 0px; }"
+                )
         else:
             label.setText("학습 데이터 없음")
             label.setStyleSheet("color: #888888; font-size: 10px; background: transparent;")
-            btn.setEnabled(False)
-            btn.setText("▶")
-            if hasattr(self, '_del_buttons') and idx in self._del_buttons:
-                self._del_buttons[idx].setEnabled(False)
+            btn_play.setEnabled(False)
+            btn_play.setText("▶")
+            if btn_del:
+                btn_del.setEnabled(False)
+                btn_del.setText("X")
+                btn_del.setToolTip("학습 데이터 사용 해제 (파일 유지)")
+                btn_del.setStyleSheet(
+                    "QPushButton { background-color: #661111; color: #FF8080; "
+                    "font-weight: bold; border-radius: 4px; padding: 0px; }"
+                )
 
     def _toggle_preview(self, idx: int):
         path = self._primary_voice_path(idx)

@@ -31,6 +31,7 @@ class GlobalCanvas(QWidget):
         self.vad_segments = []
         self._multiclip_boxes = []
         self._whisper_progress_sec = 0.0
+        self._clip_label = ''
         
     def set_whisper_progress(self, sec: float):
         if self._whisper_progress_sec == sec:
@@ -44,6 +45,10 @@ class GlobalCanvas(QWidget):
 
     def set_vad_segments(self, vad_segs: list):
         self.vad_segments = vad_segs
+        self.update()
+
+    def set_clip_label(self, text: str):
+        self._clip_label = str(text or "")
         self.update()
 
     def set_playhead(self, sec):
@@ -115,19 +120,6 @@ class GlobalCanvas(QWidget):
             p.setBrush(QColor(255, 204, 0, 50))
             wx = int(whisper_sec * sc)
             p.drawRect(0, 0, wx, self.height())
-
-        # 멀티클립 박스
-        if self._multiclip_boxes:
-            for box in self._multiclip_boxes:
-                bx = int(box["start"] * sc)
-                bw = max(1, int((box["end"] - box["start"]) * sc))
-                p.setPen(QPen(QColor("#4FC3F7"), 1))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRect(QRect(bx, 1, bw, self.height() - 2))
-                p.setPen(QColor("#4FC3F7"))
-                p.setFont(QFont("", 7))
-                p.drawText(bx + 2, 10, str(box.get("index", "")))
-
         # 자막 세그먼트 블록
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor("#666666"))
@@ -140,6 +132,15 @@ class GlobalCanvas(QWidget):
         p.setPen(QPen(QColor(config.ACCENT), 2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(QRect(int(self.view_start * w), 1, max(1, int((self.view_end - self.view_start) * w)), 34))
+
+        # 선택 클립 라벨 (우상단 숫자만)
+        if self._clip_label:
+            p.setPen(QColor("#4FC3F7"))
+            p.setFont(QFont("", 11))
+            fm = p.fontMetrics()
+            txt = str(self._clip_label)
+            tw = fm.horizontalAdvance(txt)
+            p.drawText(max(4, self.width() - tw - 6), 10, txt)
 
         # 플레이헤드
         if self.playhead_sec >= 0:

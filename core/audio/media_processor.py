@@ -194,9 +194,42 @@ class VideoProcessor:
                         pass
 
             if not vad_success:
-                vad_model = "none"     
-        
-        # ... (이후 30초 강제 분할 모드 로직은 동일) ...
+                vad_model = "none"
+
+        # VAD=none 또는 VAD 실패 시: 30초 단위 강제 분할
+        if vad_model == "none":
+            import wave
+            existing_chunks = [f for f in os.listdir(chunk_dir) if f.endswith('.wav')]
+            if not existing_chunks and os.path.exists(cleaned_wav):
+                get_logger().log("  └ 🔪 VAD 없음: 30초 단위 강제 분할...")
+                try:
+                    with wave.open(cleaned_wav, 'r') as wf:
+                        sr = wf.getframerate()
+                        n_channels = wf.getnchannels()
+                        sampwidth = wf.getsampwidth()
+                        total_frames = wf.getnframes()
+                        total_dur = total_frames / float(sr)
+                        chunk_sec = 30.0
+                        chunk_frames = int(chunk_sec * sr)
+                        idx = 0
+                        offset = 0.0
+                        while wf.tell() < total_frames:
+                            frames = wf.readframes(chunk_frames)
+                            if not frames:
+                                break
+                            chunk_name = f"vad_{idx:03d}_{offset:.3f}.wav"
+                            chunk_path = os.path.join(chunk_dir, chunk_name)
+                            with wave.open(chunk_path, 'w') as cf:
+                                cf.setnchannels(n_channels)
+                                cf.setsampwidth(sampwidth)
+                                cf.setframerate(sr)
+                                cf.writeframes(frames)
+                            idx += 1
+                            offset += chunk_sec
+                    get_logger().log(f"    → {idx}개 청크 생성 완료 (총 {total_dur:.1f}초)")
+                except Exception as e:
+                    get_logger().log(f"  ⚠️ 강제 분할 실패: {e}")
+
         return chunk_dir, vad_segments
 
     # 💡 [STEP 3] VAD 분할기 (들여쓰기 및 8개 인자 완벽 교정)
@@ -291,23 +324,31 @@ class VideoProcessor:
         except: pass
 
     def _load_all_settings(self):
-        """user_settings.json 로드 (오류 시 로그 남김)"""
+        """user_settings.json 로드 (오류 시 로그 남김). fast-mode override 지원."""
         settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
 
         if not os.path.exists(settings_path):
-            return {}
+            data = {}
+        else:
+            try:
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    get_logger().log("⚠️ user_settings.json 형식 오류: dict 아님")
+                    data = {}
+            except Exception as e:
+                get_logger().log(f"⚠️ user_settings.json 로드 실패: {e}")
+                data = {}
 
-        try:
-            with open(settings_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                return data
-            else:
-                get_logger().log("⚠️ user_settings.json 형식 오류: dict 아님")
-                return {}
-        except Exception as e:
-            get_logger().log(f"⚠️ user_settings.json 로드 실패: {e}")
-            return {}
+        # 빠른모드 오버라이드: _fast_mode_overrides가 있으면 적용
+        overrides = getattr(self, '_fast_mode_overrides', None)
+        if overrides and isinstance(overrides, dict):
+            data.update(overrides)
+        return data
+
+    def clear_fast_mode_overrides(self):
+        """빠른모드 오버라이드 제거 — 품질모드/멀티클립 진입 시 호출"""
+        self._fast_mode_overrides = None
 
     def transcribe(self, chunk_dir: str, is_fast_mode: bool = False, target_end_sec: float = None, is_single: bool = False):
         chunks = sorted([f for f in os.listdir(chunk_dir) if f.endswith(".wav")])
@@ -325,8 +366,9 @@ class VideoProcessor:
                 pass
 
         total = len(chunks)
-        target_model = self.whisper_model
-        get_logger().log(f"\n🎯 Whisper 정밀 인식 시작 (총 {total}블록)")
+        _s = self._load_all_settings()
+        target_model = _s.get("selected_whisper_model", self.whisper_model)
+        get_logger().log(f"\n🎯 Whisper 인식 시작 (총 {total}블록, 모델: {target_model.split(chr(47))[-1]})")
 
         t_sec = 1.0
         q = []

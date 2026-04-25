@@ -25,8 +25,8 @@ import shutil
 import config
 from logger import get_logger
 
-# 수정 — 절대 경로로 통일 (path_manager, time_history와 동일한 방식)
-DATASET_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dataset")
+# 수정 — 설정 경로를 앱 공통 경로(config.DATASET_DIR)로 통일
+DATASET_DIR = config.DATASET_DIR
 if not os.path.exists(DATASET_DIR):
     os.makedirs(DATASET_DIR)
 

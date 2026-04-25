@@ -69,7 +69,11 @@ class EditorActionsMixin:
             return
 
         try:
-            if getattr(self, 'media_path', None):
+            main_w = self.window()
+            multiclip_files = list(getattr(main_w, '_multiclip_files', []) or [])
+            if len(multiclip_files) > 1:
+                self._save_multiclip_srts(segs, multiclip_files)
+            elif getattr(self, 'media_path', None):
                 srt_path = get_srt_path(self.media_path)
                 save_srt(segs, srt_path)
                 get_logger().log(f"💾 저장 완료: {os.path.basename(srt_path)}")
@@ -97,6 +101,121 @@ class EditorActionsMixin:
             self._auto_save_project(segs)
         except Exception as e:
             get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {e}")
+
+    # ---------------------------------------------------------
+    # 멀티클립 SRT 저장 (개별 + 통합)
+    # ---------------------------------------------------------
+    def _save_multiclip_srts(self, segs, multiclip_files):
+        """멀티클립 자막을 개별 SRT + 통합 SRT로 저장합니다."""
+        main_w = self.window()
+
+        # boundaries 탐색: self → main_w → timeline canvas boxes
+        boundaries = (
+            getattr(self, '_multiclip_boundaries', None)
+            or getattr(main_w, '_multiclip_boundaries', None)
+            or (getattr(self.timeline.canvas, '_multiclip_boxes', None)
+                if hasattr(self, 'timeline') else None)
+            or []
+        )
+
+        # reuse indices 탐색: self → main_w
+        reuse_indices = (
+            getattr(self, '_reuse_clip_indices', None)
+            or getattr(main_w, '_reuse_clip_indices', None)
+            or set()
+        )
+
+        if not boundaries:
+            get_logger().log("⚠️ 멀티클립 boundaries 없음 — 단일 파일 저장으로 대체")
+            if getattr(self, "media_path", None):
+                srt_path = get_srt_path(self.media_path)
+                non_gap = [s for s in segs if not s.get("is_gap") and s.get("text", "").strip()]
+                save_srt(non_gap, srt_path)
+                get_logger().log(f"💾 저장 완료: {os.path.basename(srt_path)}")
+            return
+
+        def _clip_idx_for(start_sec):
+            """세그먼트 시작 시간으로 클립 인덱스 판별"""
+            for i, bd in enumerate(boundaries):
+                if bd["start"] <= start_sec < bd["end"]:
+                    return i
+            # 마지막 클립 끝 이후 → 마지막 클립 소속
+            if boundaries and start_sec >= boundaries[-1]["start"]:
+                return len(boundaries) - 1
+            return 0
+
+        # 세그먼트를 clip_idx별로 분류 (boundaries 기반)
+        clip_segs = {}
+        for seg in segs:
+            if seg.get("is_gap") or not seg.get("text", "").strip():
+                continue
+            cidx = _clip_idx_for(float(seg.get("start", 0.0)))
+            clip_segs.setdefault(cidx, []).append(seg)
+
+        saved_count = 0
+
+        # 개별 SRT 저장 (클립 로컬 타임스탬프)
+        for i, clip_file in enumerate(multiclip_files):
+            if i in reuse_indices:
+                continue  # G fix: skip reuse clips — prevent subtitle duplication
+            srt_path = get_srt_path(clip_file)
+            c_segs = clip_segs.get(i, [])
+            if not c_segs:
+                continue
+
+            offset = 0.0
+            if i < len(boundaries):
+                offset = boundaries[i].get("start", 0.0)
+
+            local_segs = []
+            for seg in c_segs:
+                ls = dict(seg)
+                ls["start"] = max(0.0, float(ls["start"]) - offset)
+                ls["end"] = max(0.0, float(ls["end"]) - offset)
+                local_segs.append(ls)
+
+            save_srt(local_segs, srt_path)
+            saved_count += 1
+            get_logger().log(
+                f"💾 개별 저장: {os.path.basename(srt_path)} ({len(local_segs)}개)"
+            )
+
+        # 통합 SRT 저장 (글로벌 타임스탬프, 기존자막 클립 제외)
+        project_path = getattr(main_w, '_current_project_path', None)
+        if project_path:
+            proj_name = os.path.splitext(os.path.basename(project_path))[0]
+        else:
+            proj_name = os.path.splitext(os.path.basename(multiclip_files[0]))[0]
+
+        proj_dir = os.path.dirname(multiclip_files[0])
+        combined_srt_path = os.path.join(proj_dir, f"{proj_name}_통합.srt")
+
+        combined_segs = []
+        for seg in segs:
+            if seg.get("is_gap") or not seg.get("text", "").strip():
+                continue
+            cidx = _clip_idx_for(float(seg.get("start", 0.0)))
+            if cidx in reuse_indices:
+                continue
+            combined_segs.append(seg)
+
+        combined_segs.sort(key=lambda s: float(s.get("start", 0.0)))
+
+        if combined_segs:
+            save_srt(combined_segs, combined_srt_path)
+            get_logger().log(
+                f"💾 통합 저장: {os.path.basename(combined_srt_path)} "
+                f"({len(combined_segs)}개, 기존자막 {len(reuse_indices)}클립 제외)"
+            )
+        elif segs:
+            non_gap = [s for s in segs if not s.get("is_gap") and s.get("text", "").strip()]
+            save_srt(non_gap, combined_srt_path)
+            get_logger().log(
+                f"💾 통합 저장: {os.path.basename(combined_srt_path)} "
+                f"({len(non_gap)}개, 전체 포함)"
+            )
+
+        get_logger().log(f"✅ 멀티클립 저장 완료: 개별 {saved_count}개 + 통합 1개")
 
     # ---------------------------------------------------------
     # 프로젝트 자동 저장
@@ -277,9 +396,8 @@ class EditorActionsMixin:
     # ---------------------------------------------------------
     def _show_settings(self):
         from ui.settings.settings_dialog import SettingsDialog
-        self.setCursor(Qt.CursorShape.WaitCursor)
+        # macOS Qt crash 회피: editor widget setCursor/unsetCursor 금지
         dlg = SettingsDialog(self.settings, self)
-        self.unsetCursor()
         if dlg.exec():
             self.settings = dlg.result_settings
             _dm_save_settings(self.settings)

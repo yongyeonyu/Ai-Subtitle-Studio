@@ -78,7 +78,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._clip_delete_rects: list[tuple[int, QRect]] = []
         self._clip_add_rect = QRect()
         self._clip_add_placeholder = None  
-        self._active_clip_idx: int = -1   #  
+        self._active_clip_idx: int = 0   # active clip index (init fix)
         self._hover_line:  int | None = None
         self._hover_handle: tuple | None = None
 

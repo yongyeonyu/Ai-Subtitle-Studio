@@ -29,57 +29,83 @@ from ui.editor.editor_helpers import (
 class EditorTimelineVideoMixin:
     """타임라인/비디오 동기화 / 화자 관리 / 단축키 액션"""
 
+    def _multiclip_active_offset(self) -> float:
+        owner = self.window()
+        bounds = list(getattr(owner, '_multiclip_boundaries', []) or [])
+        if not bounds:
+            return 0.0
+        clip_idx = int(getattr(self.timeline.canvas, '_active_clip_idx', getattr(owner, '_active_clip_idx', 0)) or 0)
+        clip_idx = max(0, min(clip_idx, len(bounds) - 1))
+        return float(bounds[clip_idx].get('start', 0.0))
+
+    def _global_to_local_sec(self, sec: float) -> float:
+        return max(0.0, float(sec) - self._multiclip_active_offset())
+
+    def _local_to_global_sec(self, sec: float) -> float:
+        return max(0.0, float(sec) + self._multiclip_active_offset())
+
+
     # ---------------------------------------------------------
     # Common: Cursor ↔ Block Sync
     # ---------------------------------------------------------
-    def _sync_cursor_to_seg(self, seg):
-        """커서↔블록 동기화: active 설정 + 하이라이트 + 커서 이동"""
+    def _sync_cursor_to_seg(self, seg, ensure_visible=True, move_cursor=True):
+        """커서↔블록 동기화: active/하이라이트 + (옵션) 커서 이동"""
         self._active_seg_start = seg["start"]
-        self.timeline.set_active(seg["start"])
+        # 재생 중에는 set_active()가 내부 smooth scroll을 유발하므로 canvas만 직접 갱신
+        player = getattr(getattr(self, 'video_player', None), 'media_player', None)
+        is_playing = bool(player and player.playbackState() == player.PlaybackState.PlayingState)
+        if is_playing and hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
+            self.timeline.canvas.set_active(seg["start"])
+        else:
+            self.timeline.set_active(seg["start"])
         line_num = seg.get("line", 0)
         self._highlighter.set_current_line(line_num)
+        if not move_cursor:
+            return
         block = self.text_edit.document().findBlockByNumber(line_num)
         if block.isValid():
             self._sync_lock = True
             cur = QTextCursor(block)
             self.text_edit.setTextCursor(cur)
-            self.text_edit.ensureCursorVisible()
+            if ensure_visible:
+                self.text_edit.ensureCursorVisible()
             self._sync_lock = False
 
     # ---------------------------------------------------------
     # Timeline Segment Events
     # ---------------------------------------------------------
-    def _on_timeline_seg_clicked(self, line_num: int, start_sec: float):
+
+    def _on_timeline_seg_clicked(self, line_num, start_sec):
         segs = self._get_current_segments()
         seg = next((s for s in segs if s["line"] == line_num), None)
         if seg:
             self._sync_cursor_to_seg(seg)
             self.timeline.center_to_sec((seg["start"] + seg["end"]) / 2, smooth=True)
+            if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
+                ctx = self._resolve_active_context(global_sec=float(start_sec))
+                self._apply_active_context(ctx, autoplay=False, show_thumbnail=True)
+            elif hasattr(self, 'video_player'):
+                self.video_player.pause_video()
+                self.video_player.seek_direct(float(start_sec))
         self.text_edit.setFocus()
-        if hasattr(self, 'video_player'):
-            self.video_player.pause_video()
-            self.video_player.seek(start_sec)
         self._redraw_timeline()
 
-    def _on_timeline_seg_double_clicked(self, line_num: int, start_sec: float):
+
+    def _on_timeline_seg_double_clicked(self, line_num, start_sec):
         lock_box = getattr(self.timeline, 'lock_chk', getattr(self.timeline, 'lock_cb', None))
         if lock_box and lock_box.isChecked():
             return
-
         self._active_seg_start = start_sec
         self.timeline.set_active(start_sec)
-
-        if hasattr(self, 'video_player'):
+        if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
+            ctx = self._resolve_active_context(global_sec=float(start_sec))
+            self._apply_active_context(ctx, autoplay=False, show_thumbnail=True)
+        elif hasattr(self, 'video_player'):
             self.video_player.pause_video()
-            self.video_player.seek(start_sec)
-
+            self.video_player.seek_direct(float(start_sec))
         if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'start_inline_edit'):
             self._undo_mgr.push_immediate()
             self.timeline.canvas.start_inline_edit(line_num, start_sec)
-
-    # ---------------------------------------------------------
-    # Playhead & Scrub Sync
-    # ---------------------------------------------------------
 
     def _sync_playhead(self):
         if not hasattr(self, 'video_player') or not hasattr(self, 'timeline'):
@@ -92,58 +118,71 @@ class EditorTimelineVideoMixin:
         if dur_ms <= 0:
             return
 
-        current_sec = pos_ms / 1000.0
+        current_sec = self._local_to_global_sec(pos_ms / 1000.0)
         self.timeline.set_playhead(current_sec)
+
+        # Context sync: skip resolve if within cached clip bounds (C fix v2)
+        if hasattr(self, '_resolve_active_context') and hasattr(self, 'video_player'):
+            _mc_boxes = list(getattr(self.timeline.canvas, '_multiclip_boxes', []) or []) if hasattr(self, 'timeline') else []
+            if _mc_boxes:
+                _cb = getattr(self, '_cached_clip_bounds', None)
+                if not (_cb and _cb[0] <= current_sec < _cb[1]):
+                    ctx = self._resolve_active_context(global_sec=current_sec)
+                    _cidx = int(ctx.get('clip_idx', 0))
+                    self._cached_clip_bounds = (float(ctx.get('clip_start', 0.0)), float(ctx.get('clip_end', 0.0)))
+                    if _cidx != getattr(self, '_last_sync_clip_idx', -1):
+                        self._last_sync_clip_idx = _cidx
+                        self.video_player.set_context_segments(list(ctx.get('local_segments', []) or []))
 
         canvas = self.timeline.canvas
         viewport_w = self.timeline.scroll.viewport().width()
         center_x = max(0, int(current_sec * canvas.pps) - (viewport_w // 2))
-        self.timeline._target_scroll_x = float(center_x)
-        self.timeline._current_scroll_x = float(center_x)
-        self.timeline.scroll.horizontalScrollBar().setValue(center_x)
+        # 재생 중 direct setValue 금지: smooth target만 갱신 + 작은 변화는 무시
+        if abs(float(center_x) - float(getattr(self.timeline, '_target_scroll_x', 0.0))) >= 12.0:
+            self.timeline._target_scroll_x = float(center_x)
 
         segs = getattr(self, '_cached_segs', None) or self._get_current_segments()
         seg = find_segment_at(segs, current_sec, skip_gap=True)
         if seg and self._active_seg_start != seg["start"]:
-            self._sync_cursor_to_seg(seg)
+            # 세그먼트 경계에서만 에디터 커서/화면을 해당 자막으로 따라가게 함
+            self._sync_cursor_to_seg(seg, ensure_visible=True, move_cursor=True)
 
-    def _on_scrub(self, sec: float):
+
+    def _on_scrub(self, sec):
         self.timeline.set_playhead(sec)
-        if hasattr(self, 'video_player'):
-            self.video_player.seek(sec)
+        if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
+            ctx = self._resolve_active_context(global_sec=float(sec))
+            self._apply_active_context(ctx, autoplay=False, show_thumbnail=True)
+        elif hasattr(self, 'video_player'):
             self.video_player.pause_video()
-            if hasattr(self.video_player, 'media_player'):
-                self.video_player.media_player.play()
-                self.video_player.media_player.pause()
-
+            self.video_player.seek_direct(float(sec))
         segs = getattr(self, '_cached_segs', None) or self._get_current_segments()
         seg = find_segment_at(segs, sec, skip_gap=False)
         if seg and self._active_seg_start != seg["start"]:
             self._sync_cursor_to_seg(seg)
             self.timeline.center_to_sec(sec, smooth=True)
 
-    def _on_step_frame(self, direction: int):
+
+    def _on_step_frame(self, direction):
         if not hasattr(self, 'video_player'):
             return
         fps = getattr(self, 'video_fps', 30.0)
         frame_sec = 1.0 / fps
-        new_sec = max(0.0, self.video_player.current_time + (direction * frame_sec))
-        if hasattr(self.video_player, 'total_time') and self.video_player.total_time > 0:
-            new_sec = min(new_sec, self.video_player.total_time)
-        self.video_player.pause_video()
-        self.video_player.seek(new_sec)
-
+        current_global = float(getattr(self.timeline.canvas, 'playhead_sec', 0.0) or 0.0)
+        new_global = max(0.0, current_global + (direction * frame_sec))
+        if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
+            ctx = self._resolve_active_context(global_sec=new_global)
+            self._apply_active_context(ctx, autoplay=False, show_thumbnail=True)
+        else:
+            self.video_player.pause_video()
+            self.video_player.seek_direct(new_global)
         segs = self._get_current_segments()
-        seg = find_segment_at(segs, new_sec, skip_gap=False)
+        seg = find_segment_at(segs, new_global, skip_gap=False)
         if seg and self._active_seg_start != seg["start"]:
             self._sync_cursor_to_seg(seg)
+        self.timeline.set_playhead(new_global)
+        self.timeline.center_to_sec(new_global, smooth=False)
 
-        self.timeline.set_playhead(new_sec)
-        self.timeline.center_to_sec(new_sec, smooth=False)
-
-    # ---------------------------------------------------------
-    # Segment Time Edit (✅ 버그1 수정: Gap 생성 보장)
-    # ---------------------------------------------------------
     def _on_seg_time_changed(self, line_num: int, new_start: float, new_end: float, edge_type: str = ""):
         doc = self.text_edit.document()
         cur = QTextCursor(doc)
@@ -459,6 +498,10 @@ class EditorTimelineVideoMixin:
 
     def _load_video(self, path: str):
         segs = self._get_current_segments()
+        is_multiclip = bool(getattr(self.window(), "_multiclip_boundaries", []))
+        if is_multiclip and hasattr(self, '_build_local_segments_for_clip'):
+            clip_idx = int(getattr(self.timeline.canvas, '_active_clip_idx', getattr(self.window(), '_active_clip_idx', 0)) or 0)
+            segs = self._build_local_segments_for_clip(clip_idx, segs)
         self.video_player.load(path, segs)
 
         is_multiclip = bool(getattr(self.window(), "_multiclip_boundaries", []))
@@ -480,7 +523,7 @@ class EditorTimelineVideoMixin:
                 last_pos = settings.value(f"last_pos_{self.media_path}", 0.0, type=float)
                 if last_pos > 0:
                     if hasattr(self, 'video_player'):
-                        self.video_player.seek(last_pos)
+                        self.video_player.seek(self._global_to_local_sec(last_pos))
                     if hasattr(self, 'timeline'):
                         self.timeline.set_playhead(last_pos)
                         self.timeline.center_to_sec(last_pos, smooth=False)
@@ -764,12 +807,30 @@ class EditorTimelineVideoMixin:
             boxes.append({'start': bd['start'], 'end': bd['end'], 'index': i + 1, 'name': bd.get('name', ''), 'file': bd.get('file', '')})
         total_dur = owner._multiclip_boundaries[-1]['end'] if owner._multiclip_boundaries else 0.0
         self.timeline.canvas._multiclip_boxes = boxes
+        self.timeline.canvas._active_clip_idx = 0
         self.timeline.canvas.boundary_times = [bd['end'] for bd in owner._multiclip_boundaries[:-1]]
         self.timeline.canvas.total_duration = total_dur
-        self.timeline.canvas._active_clip_idx = int(getattr(owner, '_active_clip_idx', 0) or 0)
+        # 초기 로드시 stale owner active idx 사용 금지
+        try:
+            owner._active_clip_idx = 0
+        except Exception:
+            pass
         gc = self.timeline.global_canvas
         gc.total_duration = total_dur
         gc._multiclip_boxes = boxes
+        gc._active_clip_idx = 0
+        try:
+            if boxes:
+                self.timeline._selected_clip_idx = 0
+                self.timeline._selected_clip_offset = float(boxes[0].get('start', 0.0))
+                self.timeline._selected_clip_duration = max(0.001, float(boxes[0].get('end', 0.0)) - float(boxes[0].get('start', 0.0)))
+                self.timeline._selected_clip_label = str(boxes[0].get('index', 1))
+                gc.set_clip_label(self.timeline._selected_clip_label)
+            else:
+                self.timeline._selected_clip_label = ''
+                gc.set_clip_label('')
+        except Exception:
+            pass
         self.timeline.canvas.update()
         gc.update()
         try:

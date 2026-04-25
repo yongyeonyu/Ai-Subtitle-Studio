@@ -333,7 +333,17 @@ class EditorSegmentsMixin:
         if hasattr(self, 'video_player') and self.video_player.total_time > 0.0:
             total_dur = max(total_dur, self.video_player.total_time)
         self.timeline.update_segments(segs, self._active_seg_start, total_dur)
-        if hasattr(self, 'video_player'): self.video_player.segments = segs
+        if hasattr(self, 'video_player'):
+            _mc_boxes = list(getattr(self.timeline.canvas, '_multiclip_boxes', []) or []) if hasattr(self, 'timeline') else []
+            if _mc_boxes and hasattr(self, '_resolve_active_context'):
+                try:
+                    _gsec = float(getattr(self.timeline.canvas, 'playhead_sec', 0.0) or 0.0)
+                    _ctx = self._resolve_active_context(global_sec=_gsec)
+                    self.video_player.set_context_segments(list(_ctx.get('local_segments', []) or []))
+                except Exception:
+                    self.video_player.segments = segs
+            else:
+                self.video_player.segments = segs
 
         # ✅ 최초 로드 시 화면에 맞춤
         if getattr(self, '_needs_fit_view', True) and segs:

@@ -113,11 +113,16 @@ class _WorkerProxy:
         if getattr(self.parent_widget, 'has_vocal_track', False):
             self.parent_widget.vocal_player.stop()
 
-    def seek(self, sec: float): 
-        self.media_player.setPosition(int(sec * 1000))
-        if getattr(self.parent_widget, 'has_vocal_track', False):
-            self.parent_widget.vocal_player.setPosition(int(sec * 1000))
 
+    def seek(self, sec):
+        if sec > 0.05:
+            self._hide_thumbnail()
+        sec = max(0.0, float(sec))
+        self.current_time = sec
+        self._pending_seek_sec = sec
+        self.media_player.setPosition(int(sec * 1000))
+        if getattr(self, 'has_vocal_track', False):
+            self.vocal_player.setPosition(int(sec * 1000))
 
 class VideoPlayerWidget(QWidget):
     def __init__(self, parent=None):
@@ -130,6 +135,15 @@ class VideoPlayerWidget(QWidget):
         self.current_time: float  = 0.0
         self.total_time: float    = 0.0 
         self._last_sub: str       = ""
+        self._current_source_path: str = ""
+        self._pending_seek_sec: float | None = None
+        self._pending_segments: list | None = None
+        self._pending_autoplay: bool = False
+        self._source_ready: bool = True
+        self._end_of_media_callback = None
+        self._pending_thumb_path: str | None = None
+        self._pending_thumb_sec: float = 0.0
+        self._pending_segments: list | None = None
 
         self.media_player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -144,6 +158,7 @@ class VideoPlayerWidget(QWidget):
         self._worker = _WorkerProxy(self)
 
         self.media_player.durationChanged.connect(self._on_duration_changed)
+        self.media_player.mediaStatusChanged.connect(self._on_media_status_changed)
 
         _pretendard = "/Library/Fonts/Pretendard-Regular.ttf"
         if os.path.exists(_pretendard):
@@ -156,8 +171,40 @@ class VideoPlayerWidget(QWidget):
         self._ui_timer.timeout.connect(self._ui_tick)
         self._ui_timer.start()
 
-    def _on_duration_changed(self, duration: int):
+
+    def _on_duration_changed(self, duration):
         self.total_time = duration / 1000.0
+        if duration <= 0:
+            return
+        self._source_ready = True
+        if self._pending_segments is not None:
+            self.segments = list(self._pending_segments)
+            self._pending_segments = None
+        if self._pending_seek_sec is not None:
+            pending = float(self._pending_seek_sec)
+            self._pending_seek_sec = None
+            self.current_time = pending
+            self.media_player.setPosition(int(pending * 1000))
+            if getattr(self, 'has_vocal_track', False):
+                self.vocal_player.setPosition(int(pending * 1000))
+        if self._pending_thumb_path:
+            path = self._pending_thumb_path
+            sec = float(self._pending_thumb_sec)
+            self._pending_thumb_path = None
+            self._pending_thumb_sec = 0.0
+            self._extract_and_show_thumbnail_at(path, sec)
+        self._refresh_subtitle_now()
+        if self._pending_autoplay:
+            self._pending_autoplay = False
+            self.toggle_play()
+
+    def _on_media_status_changed(self, status):
+        """EndOfMedia -> next clip callback"""
+        from PyQt6.QtMultimedia import QMediaPlayer as _QMP
+        if status == _QMP.MediaStatus.EndOfMedia:
+            cb = getattr(self, '_end_of_media_callback', None)
+            if callable(cb):
+                cb()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -231,20 +278,23 @@ class VideoPlayerWidget(QWidget):
             pass
         return "demucs"
 
-    def load(self, path: str, segments: list[dict] | None = None):
-        self.segments = segments or []
+
+    def load(self, path, segments=None):
+        self.segments = list(segments or [])
+        if self._pending_segments is None:
+            self._pending_segments = list(self.segments)
         if os.path.exists(path):
+            self._current_source_path = path
+            self._pending_seek_sec = self._pending_seek_sec if self._pending_seek_sec is not None else 0.0
+            self._source_ready = False
             self.media_player.setSource(QUrl.fromLocalFile(path))
-            
             file_dir = os.path.dirname(path)
             base_name = os.path.splitext(os.path.basename(path))[0]
             vocal_path = os.path.join(file_dir, f"{base_name}_vocals.wav")
-            
             selected_audio_ai = self._get_audio_ai_setting()
-            
             if os.path.exists(vocal_path) and selected_audio_ai == "demucs":
                 self.vocal_player.setSource(QUrl.fromLocalFile(vocal_path))
-                self.audio_output.setVolume(0.0) 
+                self.audio_output.setVolume(0.0)
                 self.vocal_audio_output.setVolume(1.0)
                 self.has_vocal_track = True
                 self.info_label.setText(f"🎙️ AI 보컬 모드 | {os.path.basename(path)}")
@@ -252,8 +302,35 @@ class VideoPlayerWidget(QWidget):
                 self.audio_output.setVolume(1.0)
                 self.has_vocal_track = False
                 self.info_label.setText(f"🎞️ {os.path.basename(path)}")
+            if self._pending_thumb_path is None:
+                self._extract_and_show_thumbnail(path)
 
-            self._extract_and_show_thumbnail(path)
+
+    def _extract_and_show_thumbnail_at(self, path, sec=0.0):
+        self.video_stack.setCurrentIndex(1)
+        temp_dir = __import__('tempfile').gettempdir()
+        thumb_path = __import__('os').path.join(temp_dir, "thumb_temp_cpd.jpg")
+        sec = max(0.0, float(sec))
+        hh = int(sec // 3600)
+        mm = int((sec % 3600) // 60)
+        ss = sec % 60.0
+        ts = f"{hh:02d}:{mm:02d}:{ss:06.3f}"
+        cmd = ["ffmpeg", "-y", "-ss", ts, "-i", path, "-frames:v", "1", "-q:v", "2", thumb_path]
+        kwargs = {'stdout': __import__('subprocess').DEVNULL, 'stderr': __import__('subprocess').DEVNULL}
+        if __import__('os').name == 'nt':
+            kwargs['creationflags'] = 0x08000000
+        try:
+            __import__('subprocess').run(cmd, check=True, timeout=3.0, **kwargs)
+            if __import__('os').path.exists(thumb_path):
+                pixmap = QPixmap(thumb_path)
+                if not pixmap.isNull():
+                    self.thumb_label.set_pixmap(pixmap)
+                try:
+                    __import__('os').remove(thumb_path)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _extract_and_show_thumbnail(self, path: str):
         self.video_stack.setCurrentIndex(1)
@@ -280,21 +357,84 @@ class VideoPlayerWidget(QWidget):
         if self.video_stack.currentIndex() == 1:
             self.video_stack.setCurrentIndex(0)
 
-    def seek(self, sec: float):
-        if sec > 0.05: 
-            self._hide_thumbnail()
+    def _refresh_subtitle_now(self):
+        cur_sub = ""
+        now = float(getattr(self, 'current_time', 0.0) or 0.0)
+        for seg in list(getattr(self, 'segments', []) or []):
+            try:
+                if float(seg.get('start', 0.0)) <= now < float(seg.get('end', 0.0)):
+                    cur_sub = str(seg.get('text', '') or '')
+                    break
+            except Exception:
+                continue
+        self._last_sub = cur_sub
+        try:
+            self.sub_label.setText(cur_sub)
+        except Exception:
+            pass
+
+    def set_context_segments(self, segments: list[dict] | None = None):
+        self.segments = list(segments or [])
+        self._refresh_subtitle_now()
+
+
+    def load_clip_context(self, path, segments=None, seek_sec=0.0, autoplay=False, show_thumbnail=True):
+        segments = list(segments or [])
+        seek_sec = max(0.0, float(seek_sec))
+        self.segments = segments
+        same_file = (os.path.normpath(getattr(self, '_current_source_path', '') or '') == os.path.normpath(path))
+        if same_file:
+            self.seek_direct(seek_sec)
+            self._refresh_subtitle_now()
+            if show_thumbnail:
+                self._extract_and_show_thumbnail_at(path, seek_sec)
+            if autoplay:
+                self.toggle_play()
+            return
+        self._current_source_path = path
+        self._pending_segments = segments
+        self._pending_seek_sec = seek_sec
+        self._pending_autoplay = bool(autoplay)
+        self._pending_thumb_path = path if show_thumbnail else None
+        self._pending_thumb_sec = seek_sec if show_thumbnail else 0.0
+        self.load(path, segments)
+
+    def set_active_context(self, path: str, segments: list[dict] | None = None, seek_sec: float = 0.0, autoplay: bool = False, show_thumbnail: bool = True):
+        self.load_clip_context(path, segments=segments, seek_sec=seek_sec, autoplay=autoplay, show_thumbnail=show_thumbnail)
+
+
+    def seek_direct(self, sec):
+        sec = max(0.0, float(sec))
         self.current_time = sec
+        self._pending_seek_sec = None
         self.media_player.setPosition(int(sec * 1000))
         if getattr(self, 'has_vocal_track', False):
             self.vocal_player.setPosition(int(sec * 1000))
+        self._refresh_subtitle_now()
+
+    def seek(self, sec: float):
+        if sec > 0.05:
+            self._hide_thumbnail()
+        self.current_time = sec
+        self._pending_seek_sec = float(sec)
+        self.media_player.setPosition(int(sec * 1000))
+        if getattr(self, 'has_vocal_track', False):
+            self.vocal_player.setPosition(int(sec * 1000))
+        self._refresh_subtitle_now()
+
 
     def toggle_play(self):
-        self._hide_thumbnail() 
+        if not getattr(self, '_source_ready', True):
+            self._pending_autoplay = True
+            return
+        self._hide_thumbnail()
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
             if getattr(self, 'has_vocal_track', False):
                 self.vocal_player.pause()
         else:
+            if self.current_time > 0.05:
+                self.media_player.setPosition(int(self.current_time * 1000))
             if getattr(self, 'has_vocal_track', False):
                 self.vocal_player.setPosition(self.media_player.position())
             self.media_player.play()
@@ -315,7 +455,10 @@ class VideoPlayerWidget(QWidget):
 
     def _ui_tick(self):
         self._update_btn()
-        self.current_time = self.media_player.position() / 1000.0
+        if not getattr(self, '_source_ready', True):
+            return
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.current_time = self.media_player.position() / 1000.0
 
         def format_time(sec):
             m, s = divmod(int(sec), 60)

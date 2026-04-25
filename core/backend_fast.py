@@ -1,4 +1,4 @@
-# Version: 02.02.00
+# Version: 02.02.01
 # Phase: PHASE1-B
 """
 core/backend_fast.py
@@ -10,7 +10,7 @@ core/backend_fast.py
 import os, threading, time
 import config
 from logger import get_logger
-from .backend import CoreBackend
+from .pipeline.backend_core import CoreBackend
 from .settings import load_settings, get_model_key
 from .time_history import get_expected_time, add_history
 
@@ -73,7 +73,17 @@ class CoreBackendFast(CoreBackend):
         # ── STEP 0: 백업 ──
         self._backup_existing(target_file)
 
-        # ── STEP 1: 오디오 추출 ──
+        # ── STEP 1: 오디오 추출 (빠른모드 오버라이드 적용) ──
+        self.video_processor._fast_mode_overrides = {
+            "selected_whisper_model": "mlx-community/whisper-large-v3-turbo",
+            "selected_vad": "none",
+            "selected_audio_ai": "none",
+            "use_basic_filter": False,
+            "min_speakers": 1,
+            "max_speakers": 1,
+        }
+        get_logger().log("  ⚡ 빠른모드: turbo / VAD off / AudioAI off / 화자1명")
+
         if hasattr(self.ui, '_sig_update_queue'):
             self.ui._sig_update_queue.emit(queue_index, "⏳ 오디오 추출 중", "", "", "")
 
@@ -83,6 +93,9 @@ class CoreBackendFast(CoreBackend):
             if hasattr(self.ui, '_sig_update_queue'):
                 self.ui._sig_update_queue.emit(queue_index, "❌ 추출 실패", "", "", "")
             return False
+
+        # 빠른모드 오버라이드 제거 (이후 품질모드 오염 방지)
+        self.video_processor.clear_fast_mode_overrides()
 
         chunk_dir, vad_segs = res
         if hasattr(self.ui, '_sig_set_vad_segments'):
@@ -122,13 +135,7 @@ class CoreBackendFast(CoreBackend):
 
         def do_transcribe():
             try:
-        # F2: Fast mode forces Whisper medium
-        _fast_settings = load_settings()
-        _orig_model = _fast_settings.get('selected_whisper_model', '')
-        if 'medium' not in _orig_model.lower():
-            get_logger().log('  \u26a1 Fast mode: Whisper medium \uac15\uc81c \uc801\uc6a9')
-
-        for chunk_segs, c_idx, t_total in self.video_processor.transcribe(chunk_dir, is_fast_mode=True):
+                for chunk_segs, c_idx, t_total in self.video_processor.transcribe(chunk_dir, is_fast_mode=True):
                     if not self._active:
                         break
                     opt_queue.put((chunk_segs, c_idx, t_total))
@@ -142,6 +149,8 @@ class CoreBackendFast(CoreBackend):
             except Exception:
                 chunk_time_limit = 60
 
+            get_logger().log('  ⚡ 빠른모드: LLM 최적화 skip')
+
             seg_buffer = []
             last_c_idx = 0
             last_t_total = 1
@@ -152,10 +161,7 @@ class CoreBackendFast(CoreBackend):
                     return
                 chunk_segs = seg_buffer
                 seg_buffer = []
-                try:
-                    opt = optimize_segments(chunk_segs)
-                except Exception:
-                    opt = chunk_segs
+                opt = chunk_segs
 
                 for seg in opt:
                     if seg["start"] < 0.0:

@@ -35,8 +35,10 @@ def _save_srt_impl(srt_path, segments):
         out_dir = os.path.dirname(srt_path)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
+        # 빈 텍스트 / gap 세그먼트 필터링
+        filtered = [s for s in segments if not s.get('is_gap') and str(s.get('text', '') or '').strip()]
         with open(srt_path, 'w', encoding='utf-8') as f:
-            for i, seg in enumerate(segments, 1):
+            for i, seg in enumerate(filtered, 1):
                 f.write(f"{i}\n")
                 f.write(f"{_fmt(seg.get('start', 0.0))} --> {_fmt(seg.get('end', 0.0))}\n")
                 f.write(f"{str(seg.get('text', '') or '').strip()}\n\n")
@@ -105,6 +107,7 @@ class EditorLifecycleMixin:
 
             # 메인 캔버스
             editor.timeline.canvas._multiclip_boxes = boxes
+            editor.timeline.canvas._active_clip_idx = 0
             editor.timeline.canvas.boundary_times = [bd["end"] for bd in self._multiclip_boundaries[:-1]]
             editor.timeline.canvas.total_duration = total_dur
             # 줌을 전체 클립이 딱 맞도록 설정
@@ -116,7 +119,24 @@ class EditorLifecycleMixin:
             gc = editor.timeline.global_canvas
             gc.total_duration = total_dur
             gc._multiclip_boxes = boxes
+            gc._active_clip_idx = 0
             gc.segments = []
+            try:
+                self._active_clip_idx = 0
+            except Exception:
+                pass
+            try:
+                if boxes:
+                    editor.timeline._selected_clip_idx = 0
+                    editor.timeline._selected_clip_offset = float(boxes[0].get('start', 0.0))
+                    editor.timeline._selected_clip_duration = max(0.001, float(boxes[0].get('end', 0.0)) - float(boxes[0].get('start', 0.0)))
+                    editor.timeline._selected_clip_label = str(boxes[0].get('index', 1))
+                    gc.set_clip_label(editor.timeline._selected_clip_label)
+                else:
+                    editor.timeline._selected_clip_label = ''
+                    gc.set_clip_label('')
+            except Exception:
+                pass
             gc.update()
 
             editor.timeline.canvas.update()

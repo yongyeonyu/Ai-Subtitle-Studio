@@ -21,9 +21,7 @@ from core.engine.subtitle_engine import save_srt
 from logger import get_logger
 
 # ── 설정 저장 로직 ──
-_SETTINGS_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dataset", "user_settings.json"
-)
+_SETTINGS_PATH = os.path.join(config.DATASET_DIR, "user_settings.json")
 def _load_es()->dict:
     try:
         if os.path.exists(_SETTINGS_PATH):

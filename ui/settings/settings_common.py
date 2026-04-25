@@ -19,7 +19,7 @@ from PyQt6.QtCore import Qt, QTimer
 import requests
 import config
 
-DATASET_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dataset")
+DATASET_DIR = config.DATASET_DIR
 
 # ── OS별 Whisper 모델 목록 ──
 if config.IS_MAC:

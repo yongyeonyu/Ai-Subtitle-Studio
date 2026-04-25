@@ -138,6 +138,9 @@ class SinglePipelineMixin:
                 f"\n{'=' * 44}\n\n{'─' * 44}\n  📂 파일: {vname} ({fsize:.1f} MB)\n{'─' * 44}"
             )
 
+            # 품질모드: 빠른모드 오버라이드가 남아있으면 제거
+            if hasattr(self, 'video_processor'):
+                self.video_processor.clear_fast_mode_overrides()
             res = self._get_audio_extract_result(target_file)
 
             next_file = (

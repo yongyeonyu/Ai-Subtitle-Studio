@@ -106,6 +106,15 @@ class TimelineInputMixin:
 
         event.accept()
 
+    def _hit_multiclip_box(self, x: int):
+        if not self._multiclip_boxes:
+            return None
+        for box in self._multiclip_boxes:
+            bx1, bx2 = self._x(box["start"]), self._x(box["end"])
+            if bx1 <= x <= bx2:
+                return box
+        return None
+
     def mousePressEvent(self, ev):
         if ev.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             if hasattr(self, '_playhead_handle_rect') and self._playhead_handle_rect.contains(ev.pos()):
@@ -125,17 +134,14 @@ class TimelineInputMixin:
                 ev.accept()
                 return
 
-        # 멀티클립 박스 클릭 감지 (최우선)
-        if self._multiclip_boxes and ev.button() == Qt.MouseButton.LeftButton:
-            for box in self._multiclip_boxes:
-                bx1, bx2 = self._x(box["start"]), self._x(box["end"])
-                if bx1 <= x <= bx2:
-                    new_idx = box.get("index", 1) - 1
-                    if new_idx != self._active_clip_idx:
-                        self._active_clip_idx = new_idx
-                        self.sig_clip_selected.emit(new_idx)
-                        self.update()
-                    break
+        # 멀티클립 박스 클릭 감지 (단일 경로)
+        hit_box = self._hit_multiclip_box(x) if ev.button() == Qt.MouseButton.LeftButton else None
+        if hit_box is not None:
+            new_idx = hit_box.get("index", 1) - 1
+            if new_idx != self._active_clip_idx:
+                self._active_clip_idx = new_idx
+                self.sig_clip_selected.emit(new_idx)
+                self.update()
 
         if self._edit_active:
             if ev.button() == Qt.MouseButton.RightButton:
@@ -172,17 +178,7 @@ class TimelineInputMixin:
 
         self._just_committed = False; self.setFocus()
 
-        # 멀티클립 박스 클릭 감지 (전체 높이)
-        if self._multiclip_boxes:
-            for box in self._multiclip_boxes:
-                bx1, bx2 = self._x(box["start"]), self._x(box["end"])
-                if bx1 <= x <= bx2:
-                    new_idx = box.get("index", 1) - 1
-                    if new_idx != self._active_clip_idx:
-                        self._active_clip_idx = new_idx
-                        self.sig_clip_selected.emit(new_idx)
-                        self.update()
-                    break
+        # 멀티클립 박스 클릭은 상단 단일 경로에서만 처리
 
         if ev.button() == Qt.MouseButton.RightButton:
             if y < SEG_TOP: self._emit_smart_split_at_playhead(); return

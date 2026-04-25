@@ -29,6 +29,7 @@ class MulticlipPipelineMixin:
         self.total_expected_time = 0.0
         self.pipeline_start_time = 0.0
         self._reuse_existing_multiclip_subtitles = False
+        self._reuse_clip_indices = set()
 
         try:
             from PyQt6.QtWidgets import QMessageBox
@@ -219,6 +220,11 @@ class MulticlipPipelineMixin:
                                 if hasattr(self.ui, "_sig_update_queue"):
                                     self.ui._sig_update_queue.emit(i, "✅기존자막", " - ", "", "")
                                 get_logger().log(f"  ✅ 기존 자막 사용: {vname} ({len(clip_segments)}개 세그먼트)")
+                                self._reuse_clip_indices.add(i)
+                                try:
+                                    self.ui._reuse_clip_indices = set(self._reuse_clip_indices)
+                                except Exception:
+                                    pass
                                 continue
                             else:
                                 get_logger().log(f"  ⚠️ 기존 자막 파일이 비어있음: {vname}")
@@ -226,6 +232,9 @@ class MulticlipPipelineMixin:
                             get_logger().log(f"  ⚠️ 기존 자막 로드 실패: {vname} / {e}")
 
                 self._backup_existing(target_file)
+                # 멀티클립: 빠른모드 오버라이드가 남아있으면 제거
+                if hasattr(self, 'video_processor'):
+                    self.video_processor.clear_fast_mode_overrides()
                 res = self._get_audio_extract_result(target_file)
 
                 next_file = (
