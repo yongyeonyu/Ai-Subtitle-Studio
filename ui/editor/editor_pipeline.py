@@ -158,6 +158,46 @@ class EditorPipelineMixin:
         if self.sm.state == SubtitleStateManager.ST_PROC:
             self._stop_pipeline()
         elif self.sm.state in [SubtitleStateManager.ST_COMP, SubtitleStateManager.ST_SAVED]:
+            # 멀티클립 재시작 지원
+            main_w = self.window()
+            if hasattr(main_w, "backend") and main_w.backend:
+                backend = main_w.backend
+                if hasattr(backend, "_start_event") and hasattr(backend, "_action_state"):
+                    # 재시작 전 자막 에디터/세그먼트 클리어
+                    try:
+                        self.text_edit.clear()
+                        self._redraw_timeline()
+                    except Exception:
+                        pass
+                    # 큐헤더/타이머 리셋
+                    try:
+                        import time as _time
+                        backend.pipeline_start_time = _time.time()
+                        backend.is_first_start = False
+                        mw = self.window()
+                        if hasattr(mw, '_live_timer'):
+                            mw._live_timer.start()
+                        if hasattr(mw, '_sig_update_queue_header'):
+                            total = len(getattr(backend, 'files_to_process', []))
+                            mw._sig_update_queue_header.emit(1, total, 0, '')
+                    except Exception:
+                        pass
+                    backend._action_state[0] = "start"
+                    backend._active = True
+                    backend._reuse_existing_multiclip_subtitles = False
+                    backend._reuse_clip_indices = set()
+                    # main_window의 stale reuse flag도 클리어
+                    try:
+                        main_w._reuse_existing_multiclip_subtitles = False
+                    except Exception:
+                        pass
+                    backend._start_event.set()
+                    if hasattr(backend, "_edit_event"):
+                        backend._edit_event.set()
+                    self.sm.start_processing()
+                    if hasattr(self, "_spinner_timer"):
+                        self._spinner_timer.start()
+                    return
             self._start_pipeline(is_restart=True)
         else:
             self._start_pipeline(is_restart=False)

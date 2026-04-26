@@ -71,6 +71,19 @@ class EditorLifecycleMixin:
             from core.project.project_phase1b import apply_project_ui_state
             apply_project_ui_state(self, editor, self._current_project_path)
 
+    def _finalize_reuse_completion(self, editor):
+        """기존자막 reuse 완료 후 상태 전환"""
+        try:
+            if hasattr(editor, '_set_process_completed'):
+                editor._set_process_completed()
+            if hasattr(editor, '_redraw_timeline'):
+                editor._redraw_timeline()
+            if hasattr(editor, 'timeline'):
+                editor.timeline.fit_to_view()
+        except Exception as e:
+            from logger import get_logger
+            get_logger().log(f'⚠️ reuse 완료 상태 전환 실패: {e}')
+
     def _init_editor(self, target_file, is_batch=False):
         from ui.editor.editor_widget import EditorWidget
         vname = os.path.basename(target_file); self._remove_old_editor()
@@ -143,7 +156,9 @@ class EditorLifecycleMixin:
             editor.timeline.load_multiclip_waveform(self._multiclip_boundaries)
 
             # PHASE1-B: 에디터 진입 직후 기존 자막 사전 로드
-            if getattr(self, '_reuse_existing_multiclip_subtitles', False) or getattr(getattr(self, 'backend', None), '_reuse_existing_multiclip_subtitles', False):
+            # backend에서만 reuse flag 읽기 (stale self 값 무시)
+            _reuse_flag = getattr(getattr(self, 'backend', None), '_reuse_existing_multiclip_subtitles', False)
+            if _reuse_flag is True:
                 for _ri, _bd in enumerate(self._multiclip_boundaries):
                     _rf = _bd.get('file', '')
                     _rsrt = os.path.splitext(_rf)[0] + '.srt' if _rf else ''
@@ -165,10 +180,15 @@ class EditorLifecycleMixin:
                                     self._sig_update_queue.emit(_ri, '✅기존자막', ' - ', '', '')
                         except Exception as _re:
                             get_logger().log(f'  [PRE] 기존 자막 사전 로드 실패: {os.path.basename(_rf)} / {_re}')
+                # reuse 완료 → 완료 상태 전환 (버튼 "재시작"으로)
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(500, lambda: self._finalize_reuse_completion(editor))
             
         if is_batch: QTimer.singleShot(600, lambda e=editor: e.btn_start.click() if hasattr(e, 'btn_start') else None)
 
-        def safe_home(*args): QTimer.singleShot(0, self.show_home)
+        def safe_home(*args):
+                        from PyQt6.QtCore import QTimer as _QT
+                        _QT.singleShot(0, self.show_home)
         def force_exit_app(*args): self.close()
         def handle_prev(*args):
             if self._on_prev_cb: self._on_prev_cb()

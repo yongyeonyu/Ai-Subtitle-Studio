@@ -43,6 +43,11 @@ class MulticlipPipelineMixin:
                 ) == QMessageBox.StandardButton.Yes
         except Exception:
             self._reuse_existing_multiclip_subtitles = False
+        # reuse flag를 ui(main_window)에도 동기화
+        try:
+            self.ui._reuse_existing_multiclip_subtitles = self._reuse_existing_multiclip_subtitles
+        except Exception:
+            pass
 
         with self._prefetch_lock:
             self._prefetch_generation += 1
@@ -324,12 +329,42 @@ class MulticlipPipelineMixin:
             if hasattr(self.ui, "_sig_update_status"):
                 self.ui._sig_update_status.emit(total_files, total_files)
 
-            # ── 편집 대기 ──
-            edit_event.wait()
+            # 완료 상태 설정 → 버튼 "재시작"으로 전환 + 큐헤더 100%
+            try:
+                if hasattr(self.ui, "_sig_update_queue_header"):
+                    self.ui._sig_update_queue_header.emit(total_files, total_files, 100, "")
+            except Exception:
+                pass
+            try:
+                if hasattr(self.ui, "_editor_widget") and self.ui._editor_widget:
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, self.ui._editor_widget._set_process_completed)
+            except Exception:
+                pass
 
-            if action_state[0] == "exit" or not self._active:
-                self.ui.request_show_home()
-                return
+            # ── 편집 대기 (재시작 루프) ──
+            while True:
+                edit_event.clear()
+                edit_event.wait()
+
+                if action_state[0] == "exit" or not self._active:
+                    self.ui.request_show_home()
+                    return
+
+                if action_state[0] == "start":
+                    # 재시작: 기존 자막 클리어 후 STT 재실행
+                    get_logger().log("\n🔄 멀티클립 재시작...")
+                    action_state[0] = "wait"
+                    self._active = True
+                    if hasattr(self.ui, "_sig_clear_editor"):
+                        try:
+                            self.ui._sig_clear_editor.emit()
+                        except Exception:
+                            pass
+                    break  # while 루프 탈출 → 아래 통합 SRT 저장은 skip
+
+                # save 등 다른 action → 정상 종료
+                break
 
             # ── 통합 SRT 저장 ──
             if final_segments:
