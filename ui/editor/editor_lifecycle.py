@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.02
 # Phase: PHASE1-B
 """
 ui/editor_lifecycle.py
@@ -51,11 +51,17 @@ class EditorLifecycleMixin:
 
     def _open_srt_in_editor(self, srt_path):
         from core.srt_parser import parse_srt
-        segments = parse_srt(srt_path)
+        from core.subtitle_existing import backup_existing_srt, find_media_for_srt, validate_srt_duration
         from ui.editor.editor_widget import EditorWidget
         self._remove_old_editor()
-        base_path = os.path.splitext(srt_path)[0]; media_extensions = ['.mp4', '.mov', '.MOV', '.MP4', '.wav', '.m4a', '.m2a', '.mp3', '.aac']
-        media_path = next((base_path + ext for ext in media_extensions if os.path.exists(base_path + ext)), srt_path)
+        media_path = find_media_for_srt(srt_path) or srt_path
+        ok, reason = validate_srt_duration(srt_path, media_path)
+        if ok:
+            segments = parse_srt(srt_path)
+        else:
+            QMessageBox.warning(self, "기존 자막 오류", reason)
+            backup_existing_srt(srt_path)
+            segments = []
         editor = EditorWidget(video_name=os.path.basename(srt_path), segments=segments, media_path=media_path, parent=self)
         editor._project_clips = None
         def _save_and_home(segs=None):
@@ -165,6 +171,12 @@ class EditorLifecycleMixin:
                     if _rsrt and os.path.exists(_rsrt):
                         try:
                             from core.srt_parser import parse_srt
+                            from core.subtitle_existing import backup_existing_srt, validate_srt_duration
+                            _ok, _reason = validate_srt_duration(_rsrt, _rf)
+                            if not _ok:
+                                QMessageBox.warning(self, "기존 자막 오류", _reason)
+                                backup_existing_srt(_rsrt)
+                                continue
                             _rsegs = parse_srt(_rsrt)
                             if _rsegs:
                                 _roff = float(_bd.get('start', 0.0))
@@ -324,5 +336,4 @@ class EditorLifecycleMixin:
             except: pass
         if self.backend: self.backend.stop()
         QTimer.singleShot(100, lambda: os._exit(0))
-
 

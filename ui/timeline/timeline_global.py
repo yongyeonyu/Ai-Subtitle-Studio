@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.02
 # Phase: PHASE1-B
 """
 ui/timeline_global.py

@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.02
 # Phase: PHASE1-B
 """
 ui/editor_segments.py
@@ -341,9 +341,9 @@ class EditorSegmentsMixin:
                     _ctx = self._resolve_active_context(global_sec=_gsec)
                     self.video_player.set_context_segments(list(_ctx.get('local_segments', []) or []))
                 except Exception:
-                    self.video_player.segments = segs
+                    self.video_player.set_context_segments(segs)
             else:
-                self.video_player.segments = segs
+                self.video_player.set_context_segments(segs)
 
         # ✅ 최초 로드 시 화면에 맞춤
         if getattr(self, '_needs_fit_view', True) and segs:

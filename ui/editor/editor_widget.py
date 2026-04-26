@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.02
 # Phase: PHASE1-B
 """
 ui/editor_widget.py
@@ -139,7 +139,14 @@ class EditorWidget(EditorActionsMixin, EditorPipelineMixin, EditorSegmentsMixin,
                 srt_guess = os.path.join(os.path.dirname(media_path), video_name)
             if os.path.exists(srt_guess):
                 from core.srt_parser import parse_srt
-                segments = parse_srt(srt_guess)
+                from core.subtitle_existing import backup_existing_srt, validate_srt_duration
+                ok, reason = validate_srt_duration(srt_guess, media_path)
+                if ok:
+                    segments = parse_srt(srt_guess)
+                else:
+                    QMessageBox.warning(self, "기존 자막 오류", reason)
+                    backup_existing_srt(srt_guess)
+                    segments = []
 
         self._is_initial_load = True if segments else False
         if segments:
@@ -674,4 +681,3 @@ class EditorWidget(EditorActionsMixin, EditorPipelineMixin, EditorSegmentsMixin,
         nxt_global = float(nxt_box.get('start', 0.0))
         ctx = self._resolve_active_context(global_sec=nxt_global, clip_idx=nxt)
         self._apply_active_context(ctx, autoplay=True, show_thumbnail=False)
-

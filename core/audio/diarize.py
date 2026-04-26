@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.02
 # Phase: PHASE1-B
 """
 diarize.py - AI 화자 분리 (SpeechBrain 엔진 적용 완료)
@@ -131,7 +131,14 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
         _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         ref_file = os.path.join(_project_root, "voice_data", "spk1_voice.wav")
         ref_emb = None
-        if os.path.exists(ref_file):
+        try:
+            from core.settings import load_settings
+            ref_disabled = bool(load_settings().get("spk1_voice_disabled", False))
+        except Exception:
+            ref_disabled = False
+        if ref_disabled:
+            get_logger().log("🔇 화자 1 학습 데이터가 사용 해제되어 목소리 매칭을 건너뜁니다.")
+        if os.path.exists(ref_file) and not ref_disabled:
             get_logger().log(f"🔊 화자 학습 데이터 사용: {ref_file}")
             try:
                 get_logger().log("🎙️ 대표님 목소리(화자 1) 지문 데이터를 분석하여 우선 매칭합니다...")

@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.02
 # Phase: PHASE1-B
 """
 ui/timeline_widget.py
@@ -143,6 +143,15 @@ class TimelineWidget(QWidget):
         self._smooth_scroll_timer.timeout.connect(self._update_smooth_scroll)
         self._smooth_scroll_timer.start()
 
+    def _canvas_width_for_duration(self, dur: float, pps: float | None = None) -> int:
+        pps = float(self.canvas.pps if pps is None else pps)
+        end_padding = 96
+        return max(int(float(dur) * pps) + end_padding, self.scroll.width())
+
+    def _clamp_scroll_x(self, value: float) -> float:
+        sb = self.scroll.horizontalScrollBar()
+        return float(max(0, min(int(value), sb.maximum())))
+
     def _on_canvas_right_clicked(self, start_sec, gpos):
         self.seg_right_clicked.emit(start_sec, gpos)
 
@@ -180,7 +189,6 @@ class TimelineWidget(QWidget):
         )
         self._selected_clip_label = str(box.get("index", clip_idx + 1))
         self.canvas._active_clip_idx = int(clip_idx)
-        self.global_canvas.total_duration = self._selected_clip_duration
         self.global_canvas.set_clip_label(self._selected_clip_label)
         return True
 
@@ -201,27 +209,14 @@ class TimelineWidget(QWidget):
         global_start = float(sb.value()) / max(0.001, float(self.canvas.pps))
         global_end = float(sb.value() + self.scroll.width()) / max(0.001, float(self.canvas.pps))
 
-        if self._selected_clip_idx >= 0 and self._selected_clip_duration > 0:
-            clip_start = self._selected_clip_offset
-            clip_end = clip_start + self._selected_clip_duration
-            vis_start = max(global_start, clip_start)
-            vis_end = min(global_end, clip_end)
-            if vis_end <= vis_start:
-                return 0.0, 1.0
-            return (
-                (vis_start - clip_start) / self._selected_clip_duration,
-                (vis_end - clip_start) / self._selected_clip_duration,
-            )
-
-        return global_start / dur, global_end / dur
+        return max(0.0, min(1.0, global_start / dur)), max(0.0, min(1.0, global_end / dur))
 
     def update_segments(self, segs, active_sec=None, total_dur=0.0, fit_view=False):
         seg_end = segs[-1]["end"] if segs else 0.0
         prev_dur = getattr(self.canvas, "total_duration", 0.0)
         dur = max(prev_dur, total_dur or 0.0, seg_end)
 
-        total_width = int(dur * self.canvas.pps) + self.scroll.width()
-        self.canvas.setFixedWidth(max(total_width, self.scroll.width()))
+        self.canvas.setFixedWidth(self._canvas_width_for_duration(dur))
         self.canvas.update_segments(segs, active_sec, dur)
         self.global_canvas.update_segments(segs, dur)
 
@@ -242,7 +237,7 @@ class TimelineWidget(QWidget):
 
     def set_playhead(self, sec):
         self.canvas.set_playhead(sec)
-        self.global_canvas.set_playhead(self._global_to_local_sec(sec))
+        self.global_canvas.set_playhead(sec)
 
     def set_boundary_times(self, times: list[float]):
         self.canvas.boundary_times = times or []
@@ -251,13 +246,13 @@ class TimelineWidget(QWidget):
     def _update_smooth_scroll(self):
         delta = float(self._target_scroll_x - self._current_scroll_x)
         if abs(delta) > 2.0:
-            self._current_scroll_x += delta * 0.15
+            self._current_scroll_x = self._clamp_scroll_x(self._current_scroll_x + delta * 0.15)
             self.scroll.horizontalScrollBar().setValue(int(self._current_scroll_x))
 
     def center_to_sec(self, sec, smooth=False):
         target_x = int(sec * self.canvas.pps)
         half_w = self.scroll.width() // 2
-        target_val = max(0, target_x - half_w)
+        target_val = self._clamp_scroll_x(max(0, target_x - half_w))
 
         if smooth:
             self._target_scroll_x = float(target_val)
@@ -329,15 +324,10 @@ class TimelineWidget(QWidget):
         if self.sender() is not self._mc_worker:
             return
 
-        # partial ready는 현재 선택된 클립에만 반영
-        # 이전 구현은 clip_ready 순서대로 선택 컨텍스트/라벨을 덮어써서
-        # 마지막 클립 번호가 초기 표시되는 문제를 만들었음
         if self._selected_clip_idx < 0:
             _boxes = getattr(self.canvas, '_multiclip_boxes', []) or []
             if _boxes:
                 self._apply_selected_clip_context(0)
-        if int(clip_idx) != int(getattr(self, '_selected_clip_idx', -1)):
-            return
 
         self.canvas.set_waveform(partial_wf)
         self.global_canvas.set_waveform(partial_wf)
@@ -356,10 +346,8 @@ class TimelineWidget(QWidget):
                 self._apply_selected_clip_context(0)
 
             self.canvas.set_waveform(wf)
-            if self._selected_clip_idx >= 0 and self._selected_clip_duration > 0:
-                self.global_canvas.total_duration = self._selected_clip_duration
-            else:
-                self.global_canvas.total_duration = d
+            self.global_canvas.set_waveform(wf)
+            self.global_canvas.total_duration = d
             self.global_canvas.update()
             if not self._multiclip_fit_done:
                 self.fit_to_view()
@@ -402,12 +390,11 @@ class TimelineWidget(QWidget):
 
             self.canvas.pps = new_pps
 
-            total_width = int(dur * new_pps) + self.scroll.width()
-            self.canvas.setFixedWidth(max(total_width, self.scroll.width()))
+            self.canvas.setFixedWidth(self._canvas_width_for_duration(dur, new_pps))
             self.canvas.update()
 
             new_scroll = int(sec_at_cursor * new_pps - mouse_x)
-            new_scroll = max(0, min(new_scroll, scrollbar.maximum()))
+            new_scroll = int(self._clamp_scroll_x(new_scroll))
             scrollbar.setValue(new_scroll)
             self._target_scroll_x = float(new_scroll)
             self._current_scroll_x = float(new_scroll)
@@ -428,15 +415,7 @@ class TimelineWidget(QWidget):
         self.global_canvas.update_viewport(start_frac, end_frac)
 
     def _on_global_seek(self, frac):
-        if self._selected_clip_idx >= 0 and self._selected_clip_duration > 0:
-            local_sec = max(
-                0.0,
-                min(self._selected_clip_duration, float(frac) * self._selected_clip_duration),
-            )
-            sec = self._selected_clip_offset + local_sec
-            self.center_to_sec(sec, smooth=False)
-            self.scrub_sec.emit(sec)
-        elif self.canvas.total_duration > 0:
+        if self.canvas.total_duration > 0:
             sec = float(frac) * self.canvas.total_duration
             self.center_to_sec(sec, smooth=False)
             self.scrub_sec.emit(sec)
@@ -447,21 +426,7 @@ class TimelineWidget(QWidget):
             return
 
         box = boxes[clip_idx]
-        clip_file = box.get("file", "")
         self._apply_selected_clip_context(int(clip_idx))
-
-        if clip_file:
-            if self._wf_worker:
-                try:
-                    self._wf_worker.quit()
-                    self._wf_worker.wait(100)
-                except Exception:
-                    pass
-
-            self._wf_worker = WaveformWorker(clip_file, self)
-            self._wf_worker.ready.connect(self._on_clip_global_wf_ready)
-            self._wf_worker.start()
-
         self.sig_clip_selected.emit(clip_idx)
 
     def _on_clip_global_wf_ready(self, wf, dur):
@@ -487,8 +452,7 @@ class TimelineWidget(QWidget):
         new_pps = max(5.0, min(500.0, visible_w / dur))
         self.canvas.pps = new_pps
 
-        total_width = int(dur * new_pps) + self.scroll.width()
-        self.canvas.setFixedWidth(max(total_width, self.scroll.width()))
+        self.canvas.setFixedWidth(self._canvas_width_for_duration(dur, new_pps))
         self.canvas.update()
 
         self.scroll.horizontalScrollBar().setValue(0)

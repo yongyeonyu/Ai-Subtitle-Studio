@@ -1,4 +1,4 @@
-# Version: 02.03.01
+# Version: 02.03.02
 # Phase: PHASE1-B
 """
 core/pipeline/single_pipeline.py
@@ -485,10 +485,15 @@ class SinglePipelineMixin:
             if action_state[0] == "exit":
                 self.ui.request_show_home()
                 raise Exception("USER_EXIT")
-            break
 
-        # ── STEP 5~6: 저장 + 내보내기 ──
-        self._save_and_export(target_file, queue_index, final_segments, is_auto_mode)
+            # ── STEP 5~6: 저장 + 내보내기 ──
+            self._save_and_export(target_file, queue_index, final_segments, is_auto_mode)
+
+            if action_state[0] == "restart":
+                self._handle_restart(target_file)
+                action_state[0] = "start"
+                continue
+            break
 
         if action_state[0] == "exit" or not getattr(self, "_active", True):
             try:

@@ -1,4 +1,4 @@
-# Version: 02.03.01
+# Version: 02.03.02
 # Phase: PHASE1-B
 """
 core/pipeline/pipeline_helpers.py
@@ -23,9 +23,16 @@ class PipelineHelpersMixin:
         try:
             from PyQt6.QtWidgets import QMessageBox
             from core.path_manager import get_srt_path
+            from core.subtitle_existing import backup_existing_srt, validate_srt_duration
 
             srt_p = get_srt_path(target_file)
             if not srt_p or not os.path.exists(srt_p):
+                return False
+
+            ok, reason = validate_srt_duration(srt_p, target_file)
+            if not ok:
+                QMessageBox.warning(self.ui, "기존 자막 오류", reason)
+                backup_existing_srt(srt_p)
                 return False
 
             use_existing = QMessageBox.question(
@@ -34,7 +41,7 @@ class PipelineHelpersMixin:
                 "기존 자막을 사용하겠습니까?",
             ) == QMessageBox.StandardButton.Yes
             if not use_existing:
-                self._move_existing_srt_to_backup(target_file)
+                backup_existing_srt(srt_p)
             return use_existing
         except Exception:
             return False
@@ -42,24 +49,8 @@ class PipelineHelpersMixin:
     def _move_existing_srt_to_backup(self, target_file) -> bool:
         """기존 SRT를 자막백업 폴더로 이동합니다."""
         try:
-            from core.path_manager import get_srt_path
-            import datetime
-            import shutil
-
-            srt_p = get_srt_path(target_file)
-            if not srt_p or not os.path.exists(srt_p):
-                return False
-
-            backup_dir = os.path.join(os.path.dirname(srt_p), "자막백업")
-            os.makedirs(backup_dir, exist_ok=True)
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            dst = os.path.join(
-                backup_dir,
-                f"{os.path.basename(srt_p)}.{timestamp}.bak",
-            )
-            shutil.move(srt_p, dst)
-            get_logger().log(f"📦 기존 자막 백업 이동: {os.path.basename(srt_p)} → 자막백업")
-            return True
+            from core.subtitle_existing import backup_existing_srt
+            return backup_existing_srt(target_file)
         except Exception as e:
             get_logger().log(f"⚠️ 기존 자막 백업 이동 실패: {e}")
             return False

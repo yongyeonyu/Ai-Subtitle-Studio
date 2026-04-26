@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.02
 # Phase: PHASE1-B
 """
 core/pipeline/multiclip_pipeline.py
@@ -100,6 +100,7 @@ class MulticlipPipelineMixin:
         self._pipeline_thread.start()
 
     def _run_multiclip(self):
+        restart_handoff = False
         try:
             total_files = len(self.files_to_process)
             first_file = self.files_to_process[0]
@@ -390,6 +391,7 @@ class MulticlipPipelineMixin:
                 if action_state[0] == "start":
                     # 재시작: 기존 자막 클리어 후 새 멀티클립 스레드로 STT 재실행
                     get_logger().log("\n🔄 멀티클립 재시작...")
+                    restart_handoff = True
                     action_state[0] = "wait"
                     self._active = False
                     if hasattr(self.ui, "_sig_clear_editor"):
@@ -434,4 +436,5 @@ class MulticlipPipelineMixin:
                 get_logger().log(f"\n❌ 치명적 에러: {e}")
                 get_logger().log(traceback.format_exc())
         finally:
-            self._active = False
+            if not restart_handoff:
+                self._active = False
