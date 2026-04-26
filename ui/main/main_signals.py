@@ -103,26 +103,21 @@ class SignalHandlersMixin:
         canvas.update()
 
     def _warmup_local_llm_models(self):
-        try:
-            from core.model_manager import get_local_llm_models
-
-            self._local_llm_models = get_local_llm_models()
-            if not self._local_llm_models:
-                self._local_llm_models = [
-                    {
-                        "name": getattr(
-                            config, "OLLAMA_MODEL", "exaone3.5:7.8b"
-                        ),
-                        "size": 0,
-                        "details": {},
-                    }
-                ]
-        except Exception as e:
-            self._local_llm_models = [
-                {
+        import threading
+        def _scan():
+            try:
+                from core.model_manager import get_local_llm_models
+                models = get_local_llm_models()
+                if not models:
+                    models = [{
+                        "name": getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"),
+                        "size": 0, "details": {},
+                    }]
+                self._local_llm_models = models
+            except Exception as e:
+                self._local_llm_models = [{
                     "name": getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"),
-                    "size": 0,
-                    "details": {},
-                }
-            ]
-            get_logger().log(f"⚠️ 로컬 LLM 자동 스캔 실패: {e}")
+                    "size": 0, "details": {},
+                }]
+                get_logger().log(f"⚠️ 로컬 LLM 자동 스캔 실패: {e}")
+        threading.Thread(target=_scan, daemon=True, name="llm-warmup").start()

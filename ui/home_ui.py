@@ -84,15 +84,26 @@ class HomeUIMixin:
         layout.addLayout(bottom_bar)
 
     def _defer_home_action(self, widget, action):
+        # F fix v2: 모든 MenuButton hover 강제 리셋
         try:
+            for child in self.home_page.findChildren(QWidget, "MenuButton"):
+                if hasattr(child, "_normal_ss"):
+                    child.setStyleSheet(child._normal_ss)
             widget.unsetCursor()
-            widget.update()
+            from PyQt6.QtWidgets import QApplication
+            QApplication.processEvents()
         except Exception:
             pass
-        QTimer.singleShot(0, action)
+        QTimer.singleShot(100, action)
 
     def _icloud_btn(self, text, file_data, default_cmd, is_nas=False, subtitle="", comp_title=""):
-        w = QWidget(); w.setObjectName("MenuButton"); w.setStyleSheet(f"QWidget#MenuButton {{ background-color: {config.BG2}; border: 1px solid {config.BG3}; border-radius: 8px; }} QWidget#MenuButton:hover {{ background-color: #333333; border: 2px solid #4AFF80; }}"); w.setCursor(Qt.CursorShape.PointingHandCursor)
+        _normal_ss = f"QWidget#MenuButton {{ background-color: {config.BG2}; border: 1px solid {config.BG3}; border-radius: 8px; }}"
+        _hover_ss = f"QWidget#MenuButton {{ background-color: #333333; border: 2px solid #4AFF80; border-radius: 8px; }}"
+        w = QWidget(); w.setObjectName("MenuButton"); w.setStyleSheet(_normal_ss)
+        w._normal_ss = _normal_ss; w._hover_ss = _hover_ss
+        w.enterEvent = lambda e, _w=w: _w.setStyleSheet(_w._hover_ss)
+        w.leaveEvent = lambda e, _w=w: _w.setStyleSheet(_w._normal_ss)
+        w.setCursor(Qt.CursorShape.PointingHandCursor)
         layout = QVBoxLayout(w); layout.setContentsMargins(20, 14, 20, 14); layout.setSpacing(6)
         active = getattr(self, '_is_nas_auto_mode', False) if is_nas else getattr(self, '_is_icloud_auto_mode', False)
         text_color = config.FG if active else config.FG2
@@ -125,7 +136,13 @@ class HomeUIMixin:
         return w
 
     def _btn(self, text, desc, cmd):
-        w = QWidget(); w.setObjectName("MenuButton"); w.setStyleSheet(f"QWidget#MenuButton {{ background-color: {config.BG2}; border: 1px solid {config.BG3}; border-radius: 8px; }} QWidget#MenuButton:hover {{ background-color: #333333; border: 2px solid #4AFF80; }}"); w.setCursor(Qt.CursorShape.PointingHandCursor)
+        _normal_ss = f"QWidget#MenuButton {{ background-color: {config.BG2}; border: 1px solid {config.BG3}; border-radius: 8px; }}"
+        _hover_ss = f"QWidget#MenuButton {{ background-color: #333333; border: 2px solid #4AFF80; border-radius: 8px; }}"
+        w = QWidget(); w.setObjectName("MenuButton"); w.setStyleSheet(_normal_ss)
+        w._normal_ss = _normal_ss; w._hover_ss = _hover_ss
+        w.enterEvent = lambda e, _w=w: _w.setStyleSheet(_w._hover_ss)
+        w.leaveEvent = lambda e, _w=w: _w.setStyleSheet(_w._normal_ss)
+        w.setCursor(Qt.CursorShape.PointingHandCursor)
         layout = QVBoxLayout(w); layout.setContentsMargins(20, 14, 20, 14); layout.setSpacing(4)
         lbl = QLabel(text); lbl.setStyleSheet(f"color: {config.FG}; font-size: 14px; font-weight: bold; border: none; background: transparent;"); lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); layout.addWidget(lbl)
         if desc: sub = QLabel(desc); sub.setStyleSheet(f"color: {config.FG2}; font-size: 11px; border: none; background: transparent;"); sub.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); layout.addWidget(sub)

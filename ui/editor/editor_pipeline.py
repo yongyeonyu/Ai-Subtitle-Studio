@@ -107,6 +107,34 @@ class EditorPipelineMixin:
             self.sm.complete_ai()
         if hasattr(self, '_spinner_timer'): self._spinner_timer.stop()
         get_logger().log("✅ 자막 생성 완료 (EditorPipeline 확정)")
+        # E fix: 자막 생성 완료 후 타임라인/캔버스 재동기화
+        QTimer.singleShot(200, self._post_completion_sync)
+
+    def _post_completion_sync(self):
+        """E fix: 자막 생성 완료 후 타임라인/글로벌 캔버스 재동기화"""
+        try:
+            self._redraw_timeline()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "timeline"):
+                boxes = list(getattr(self.timeline.canvas, "_multiclip_boxes", []) or [])
+                if boxes:
+                    self.timeline.fit_to_view()
+                    gc = self.timeline.global_canvas
+                    gc.total_duration = self.timeline.canvas.total_duration
+                    gc.update()
+                    self.timeline.canvas.update()
+                else:
+                    self.timeline.fit_to_view()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_resolve_active_context") and hasattr(self, "_apply_active_context"):
+                ctx = self._resolve_active_context()
+                self._apply_active_context(ctx, autoplay=False, show_thumbnail=True)
+        except Exception:
+            pass
 
     def _execute_pipeline_logic(self, is_restart):
         main_w = self.window()
