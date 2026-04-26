@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 core/project/project_snapshot.py
@@ -18,7 +18,7 @@ os.makedirs(PROJECTS_DIR, exist_ok=True)
 
 
 def _safe_name(name: str) -> str:
-    banned = '<>:"/\|?*'
+    banned = r'<>:"/\|?*'
     out = ''.join('_' if c in banned else c for c in (name or '').strip())
     out = out.strip().strip('.')
     return out or 'untitled_project'
@@ -110,7 +110,7 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
     mode = 'multiclip' if len(media_files) > 1 else 'single'
     project_path = _auto_project_path(owner, media_files, mode)
     return {
-        'version': '02.02.00',
+        'version': '02.03.00',
         'phase': 'PHASE1-B',
         'mode': mode,
         'project_path': os.path.abspath(project_path),

@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.01
 # Phase: PHASE1-B
 """
 ui/editor_pipeline.py
@@ -165,8 +165,12 @@ class EditorPipelineMixin:
                 if hasattr(backend, "_start_event") and hasattr(backend, "_action_state"):
                     # 재시작 전 자막 에디터/세그먼트 클리어
                     try:
-                        self.text_edit.clear()
-                        self._redraw_timeline()
+                        if hasattr(main_w, '_sig_clear_editor'):
+                            main_w._sig_clear_editor.emit()
+                        else:
+                            self.text_edit.clear()
+                            self._segment_queue.clear()
+                            self._redraw_timeline()
                     except Exception:
                         pass
                     # 큐헤더/타이머 리셋
@@ -182,7 +186,9 @@ class EditorPipelineMixin:
                             mw._sig_update_queue_header.emit(1, total, 0, '')
                     except Exception:
                         pass
-                    backend._action_state[0] = "start"
+                    files = list(getattr(backend, 'files_to_process', []) or [])
+                    is_multiclip = len(files) > 1
+                    backend._action_state[0] = "start" if is_multiclip else "restart"
                     backend._active = True
                     backend._reuse_existing_multiclip_subtitles = False
                     backend._reuse_clip_indices = set()

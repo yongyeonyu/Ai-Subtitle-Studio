@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.01
 # Phase: PHASE1-B
 """
 core/pipeline/backend_core.py
@@ -51,6 +51,7 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         self.files_to_process = list(files)
         self.current_folder = folder
         self.is_auto_start = is_auto_start
+        self._reuse_existing_single_subtitle = False
 
         self.total_expected_time = 0.0
         self.pipeline_start_time = 0.0
@@ -63,6 +64,11 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
 
         if not self.files_to_process:
             return
+
+        if len(self.files_to_process) == 1 and not is_auto_start:
+            self._reuse_existing_single_subtitle = self._ask_single_existing_subtitle(
+                self.files_to_process[0]
+            )
 
         if hasattr(self.ui, "init_queue_list"):
             self.ui.init_queue_list(self.files_to_process)

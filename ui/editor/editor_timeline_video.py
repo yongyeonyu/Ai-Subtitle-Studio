@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 ui/editor_timeline_video.py
@@ -10,6 +10,7 @@ ui/editor_timeline_video.py
 """
 
 import os
+import time
 from PyQt6.QtWidgets import QMenu
 from PyQt6.QtCore import Qt, QTimer, QSettings, QPoint
 from PyQt6.QtGui import QTextCursor, QColor, QIcon, QPixmap, QPainter
@@ -120,13 +121,16 @@ class EditorTimelineVideoMixin:
 
         current_sec = self._local_to_global_sec(pos_ms / 1000.0)
         self.timeline.set_playhead(current_sec)
+        now_mono = time.monotonic()
 
         # Context sync: skip resolve if within cached clip bounds (C fix v2)
         if hasattr(self, '_resolve_active_context') and hasattr(self, 'video_player'):
             _mc_boxes = list(getattr(self.timeline.canvas, '_multiclip_boxes', []) or []) if hasattr(self, 'timeline') else []
             if _mc_boxes:
                 _cb = getattr(self, '_cached_clip_bounds', None)
-                if not (_cb and _cb[0] <= current_sec < _cb[1]):
+                last_ctx_at = float(getattr(self, '_last_play_context_sync_at', 0.0) or 0.0)
+                if not (_cb and _cb[0] <= current_sec < _cb[1]) and (now_mono - last_ctx_at) >= 0.25:
+                    self._last_play_context_sync_at = now_mono
                     ctx = self._resolve_active_context(global_sec=current_sec)
                     _cidx = int(ctx.get('clip_idx', 0))
                     self._cached_clip_bounds = (float(ctx.get('clip_start', 0.0)), float(ctx.get('clip_end', 0.0)))
@@ -138,14 +142,19 @@ class EditorTimelineVideoMixin:
         viewport_w = self.timeline.scroll.viewport().width()
         center_x = max(0, int(current_sec * canvas.pps) - (viewport_w // 2))
         # 재생 중 direct setValue 금지: smooth target만 갱신 + 작은 변화는 무시
-        if abs(float(center_x) - float(getattr(self.timeline, '_target_scroll_x', 0.0))) >= 12.0:
+        last_scroll_at = float(getattr(self, '_last_play_scroll_sync_at', 0.0) or 0.0)
+        if (now_mono - last_scroll_at) >= 0.10 and abs(float(center_x) - float(getattr(self.timeline, '_target_scroll_x', 0.0))) >= 24.0:
+            self._last_play_scroll_sync_at = now_mono
             self.timeline._target_scroll_x = float(center_x)
 
         segs = getattr(self, '_cached_segs', None) or self._get_current_segments()
         seg = find_segment_at(segs, current_sec, skip_gap=True)
         if seg and self._active_seg_start != seg["start"]:
-            # 세그먼트 경계에서만 에디터 커서/화면을 해당 자막으로 따라가게 함
-            self._sync_cursor_to_seg(seg, ensure_visible=True, move_cursor=True)
+            # 재생 중에는 세그먼트 경계에서만 가볍게 하이라이트를 갱신한다.
+            last_cursor_at = float(getattr(self, '_last_play_cursor_sync_at', 0.0) or 0.0)
+            if (now_mono - last_cursor_at) >= 0.20:
+                self._last_play_cursor_sync_at = now_mono
+                self._sync_cursor_to_seg(seg, ensure_visible=False, move_cursor=False)
 
 
     def _on_scrub(self, sec):

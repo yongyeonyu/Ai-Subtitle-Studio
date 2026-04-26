@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 + Whisper 섹터 동기화)
@@ -22,7 +22,7 @@ class VideoProcessor:
         self.whisper_model = getattr(config, "WHISPER_MODEL", "mlx-community/whisper-large-v3-mlx")
         self.audio_ai = "demucs"
         self.vad_model = "silero"
-        self.io_workers = 6
+        self.io_workers = max(6, min(12, (os.cpu_count() or 8)))
 
         settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
         if os.path.exists(settings_path):
@@ -32,7 +32,7 @@ class VideoProcessor:
                     self.whisper_model = s.get("selected_whisper_model", self.whisper_model)
                     self.audio_ai = s.get("selected_audio_ai", "demucs")
                     self.vad_model = s.get("selected_vad", "silero")
-                    self.io_workers = int(s.get("io_workers", 6))
+                    self.io_workers = max(1, int(s.get("io_workers", self.io_workers)))
             except Exception:
                 pass
 
@@ -204,29 +204,15 @@ class VideoProcessor:
                 get_logger().log("  └ 🔪 VAD 없음: 30초 단위 강제 분할...")
                 try:
                     with wave.open(cleaned_wav, 'r') as wf:
-                        sr = wf.getframerate()
-                        n_channels = wf.getnchannels()
-                        sampwidth = wf.getsampwidth()
-                        total_frames = wf.getnframes()
-                        total_dur = total_frames / float(sr)
-                        chunk_sec = 30.0
-                        chunk_frames = int(chunk_sec * sr)
-                        idx = 0
-                        offset = 0.0
-                        while wf.tell() < total_frames:
-                            frames = wf.readframes(chunk_frames)
-                            if not frames:
-                                break
-                            chunk_name = f"vad_{idx:03d}_{offset:.3f}.wav"
-                            chunk_path = os.path.join(chunk_dir, chunk_name)
-                            with wave.open(chunk_path, 'w') as cf:
-                                cf.setnchannels(n_channels)
-                                cf.setsampwidth(sampwidth)
-                                cf.setframerate(sr)
-                                cf.writeframes(frames)
-                            idx += 1
-                            offset += chunk_sec
-                    get_logger().log(f"    → {idx}개 청크 생성 완료 (총 {total_dur:.1f}초)")
+                        total_dur = wf.getnframes() / float(wf.getframerate())
+                    chunk_sec = max(10.0, float(s.get("ff_chunk", 25)))
+                    grouped = []
+                    cur = 0.0
+                    while cur < total_dur:
+                        grouped.append({"start": cur, "end": min(total_dur, cur + chunk_sec)})
+                        cur += chunk_sec
+                    self._write_grouped_chunks_parallel(cleaned_wav, chunk_dir, grouped)
+                    get_logger().log(f"    → {len(grouped)}개 청크 병렬 생성 완료 (총 {total_dur:.1f}초)")
                 except Exception as e:
                     get_logger().log(f"  ⚠️ 강제 분할 실패: {e}")
 

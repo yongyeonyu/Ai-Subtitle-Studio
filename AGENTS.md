@@ -1,3 +1,12 @@
+<!--
+Document-Version: 02.03.00
+Phase: PHASE1-B
+Last-Updated: 2026-04-26
+Updated-By: Codex with 대표님
+Previous-Content: 프로젝트 개발 가이드, create_all 규칙, 환경별 작업 방식, NAS/LLM/성능 운영 규칙
+This-Update: 문서 최종 갱신 규칙, v02.03.00 기준 문서 버전 관리, Copilot 인계 메모 유지 규칙 추가
+Copilot-Handoff: 이 문서는 커밋 직전 최종 상태 기준으로만 갱신합니다. 중간 작업 중에는 불필요하게 수정하지 않습니다.
+-->
 # AGENTS.md — AI Subtitle Studio 개발 가이드
 
 ## 프로젝트 개요
@@ -59,7 +68,7 @@
 ### 공통
 - PyQt6
 - ffmpeg
-- Ollama / Gemini API
+- Ollama / Gemini API / OpenAI API
 - Git (main 브랜치 단일 운영)
 
 ---
@@ -168,7 +177,7 @@
 
 ---
 
-## 📁 폴더 구조 (기준: v02.02.00)
+## 📁 폴더 구조 (기준: v02.03.00)
 
 ```text
 ai_subtitle_studio/
@@ -199,7 +208,7 @@ ai_subtitle_studio/
 
 1. **헤더 통일**
    - 모든 `.py` 파일 첫 줄:
-     - `# Version: XX.XX.XX`
+     - `# Version: 02.03.00`
      - `# Phase: PHASE1-B`
 
 2. **파일 분할**
@@ -380,9 +389,81 @@ ai_subtitle_studio/
 
 ---
 
+
+### NAS 자동처리 규칙 (v02.03.00)
+- 메인 화면 `NAS 자동 처리`는 NAS 루트의 모든 하위 폴더를 보여주며, UI가 넘치면 스크롤로 처리합니다.
+- 자동감지 제외 폴더는 폴더 선택창의 `[  ] 제외` 체크로 지정하고 `dataset/folder_settings.json`의 `nas_excluded_folders`에 저장합니다.
+- NAS 감시는 1분마다 실행합니다.
+- 자동 시작 조건은 최하위 작업 폴더 용량이 5분간 변하지 않는 것입니다.
+- 프로젝트 폴더 아래 카메라 폴더가 있으면 카메라 폴더 이름순으로 하나씩 큐에 전달합니다.
+- 폴더 작업이 완료되면 `auto_tracker.json`에 폴더와 파일 완료 상태를 남기고 로그에 파일 수/용량/소요시간 요약을 출력합니다.
+- iCloud와 NAS 자동감지가 동시에 켜져 있으면 iCloud가 우선입니다.
+- 메인 하단 `자동시작 ON/OFF`는 `dataset/user_settings.json`의 `auto_start_enabled`에 저장합니다.
+- `자동설정`의 자동 처리 모드는 `auto_start_mode` 값으로 저장하며 `fast`, `quality`, `preset`을 사용합니다.
+
+## 📚 문서 최종 갱신 규칙
+
+### 대상 문서
+- `AGENTS.md`
+- `ACTION_ITEMS.md`
+- `File_structure.txt`
+- `RELEASE_v02.03.00.md`
+
+### 운영 원칙
+1. 위 문서들은 **커밋 직전 최종 업데이트**로 반영합니다.
+2. 중간 작업 중에는 불필요하게 갱신하지 않습니다.
+3. 문서 갱신 시 상단 주석에 다음 내용을 유지합니다.
+   - `Document-Version`
+   - `Phase`
+   - `Last-Updated`
+   - `Updated-By`
+   - `Previous-Content`
+   - `This-Update`
+   - `Copilot-Handoff`
+4. 기존 내용이 무엇이었는지 요약을 남겨 Copilot이 변경 맥락을 이어받을 수 있게 합니다.
+5. 대표님과 Codex/Copilot이 한 작업 내용 중 다음 세션에 필요한 내용은 `AGENTS.md`, `ACTION_ITEMS.md`, `File_structure.txt`, 릴리즈 노트에 반영합니다.
+6. 완료되어 더 이상 추적할 필요가 없는 중복/낡은 내용은 삭제하거나 완료 섹션으로 이동합니다.
+7. v02.03.00 작업 중 생성되는 문서도 v02.03.00 기준으로 관리합니다.
+
 ## 마지막 원칙
 - Copilot은 **대표님의 코딩 파트너**로 동작
 - 설명보다 **실제 수정과 검증** 우선
 - 항상 현재 작업 맥락을 유지
 - 응답은 존댓말
 - 가능하면 짧고 정확하게
+
+
+---
+
+## 🧠 v02.03.00 현재 작업 맥락
+
+- 현재 작업 버전: **v02.03.00**
+- `STRUCTURE.txt`는 삭제 예정/삭제 완료 문서이며, 구조 문서는 **File_structure.txt**를 기준으로 봅니다.
+- LLM은 3-provider 방향:
+  - Ollama: 무료/로컬, 기본 우선
+  - Gemini: API, 무료 제한/유료 병행
+  - OpenAI: API, 저비용/고품질 선택
+- API Key는 평문 JSON 저장 금지:
+  - macOS: Keychain
+  - Windows: Credential Manager 또는 keyring
+  - `user_settings.json`에는 provider/model/저장 여부만 기록
+- macOS 성능 방향:
+  - MLX Whisper persistent worker 유지
+  - 모델 preload / 오디오 prefetch / UI update throttling 우선
+  - 배터리 절약보다 STT 속도 우선
+
+## 📌 v02.03.00 즉시 주의할 항목
+
+1. 멀티클립에서 기존자막 사용 질문에 **아니요** 선택 시:
+   - 기존 SRT 자동 로드 금지
+   - 확인된 개별 SRT는 `자막백업/`으로 이동
+   - 에디터는 빈 상태로 시작
+2. 프로젝트 루트에 `_backup*/`, `create_all*.py`를 장기 보관하지 않습니다.
+3. 대규모 리팩토링은 `ACTION_ITEMS.md`의 R13 기준으로 영역별 진행합니다.
+
+### LLM / Ollama / 성능 규칙 (v02.03.00)
+- LLM 모델 UI는 `전체/무료/유료` 필터를 제공합니다. 무료는 Ollama 로컬 및 무료/제한 API, 유료는 과금 API 모델입니다.
+- Ollama 추천 모델은 `core/model_manager.py`의 `OLLAMA_RECOMMENDED_MODELS`를 기준으로 표시하고, 설정창에서 `ollama pull` / `ollama rm`으로 설치/삭제합니다.
+- requirements는 `requirements-mac.txt`, `requirements-windows.txt` 두 개만 운영합니다. `requirements.txt`는 사용하지 않습니다.
+- 오디오 프리셋 기본값은 `core/audio/audio_presets.py`와 `dataset/audio_presets.json`을 같이 갱신합니다.
+- STT 성능 기본값은 `prefetch_ahead`, `io_workers`, `stt_parallel_level`, `ff_threads`를 우선 확인합니다.

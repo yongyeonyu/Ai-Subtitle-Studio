@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 ui/editor_lifecycle.py
@@ -175,12 +175,30 @@ class EditorLifecycleMixin:
                                     if 'speaker' not in _s:
                                         _s['speaker'] = _s.get('spk_id', '00')
                                 editor.append_segments(_rsegs)
+                                try:
+                                    _backend = getattr(self, 'backend', None)
+                                    if _backend is not None:
+                                        if not hasattr(_backend, '_reuse_clip_indices'):
+                                            _backend._reuse_clip_indices = set()
+                                        _backend._reuse_clip_indices.add(_ri)
+                                    if not hasattr(self, '_reuse_clip_indices'):
+                                        self._reuse_clip_indices = set()
+                                    self._reuse_clip_indices.add(_ri)
+                                except Exception:
+                                    pass
                                 get_logger().log(f'  [PRE] 기존 자막 사전 로드: {os.path.basename(_rf)} ({len(_rsegs)}개)')
                                 if hasattr(self, '_sig_update_queue'):
                                     self._sig_update_queue.emit(_ri, '✅기존자막', ' - ', '', '')
                         except Exception as _re:
                             get_logger().log(f'  [PRE] 기존 자막 사전 로드 실패: {os.path.basename(_rf)} / {_re}')
                 # reuse 완료 → 완료 상태 전환 (버튼 "재시작"으로)
+                try:
+                    _reuse_count = len(getattr(self, '_reuse_clip_indices', set()) or set())
+                    _total_count = len(self._multiclip_boundaries)
+                    if _total_count > 0 and _reuse_count >= _total_count and hasattr(self, '_sig_update_queue_header'):
+                        self._sig_update_queue_header.emit(_total_count, _total_count, 100, '')
+                except Exception:
+                    pass
                 from PyQt6.QtCore import QTimer
                 QTimer.singleShot(500, lambda: self._finalize_reuse_completion(editor))
             

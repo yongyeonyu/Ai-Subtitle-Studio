@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 ui/settings_advanced.py  ─  🛠️ 오디오 & Whisper 엔진 상세 튜닝 다이얼로그
@@ -7,13 +7,14 @@ import json
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QPushButton, QSlider, QToolTip, QTabWidget,
-    QWidget, QTextEdit, QCheckBox, QMessageBox
+    QWidget, QTextEdit, QCheckBox, QMessageBox, QComboBox
 )
 from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt, QTimer
 import config
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, CUSTOM_DEFAULTS_FILE, _create_bottom_buttons
+from core.audio.audio_presets import load_audio_presets, apply_audio_preset
 
 class AdvancedSettingsDialog(QDialog):
     def __init__(self, settings: dict, parent=None):
@@ -35,9 +36,30 @@ class AdvancedSettingsDialog(QDialog):
             QTextEdit { background-color: #1E1E1E; color: #FFFFFF; border: 1px solid #555555; border-radius: 4px; padding: 8px; font-size: 13px; }
         """)
         self.result = dict(settings)
+        self.audio_presets = load_audio_presets()
+        current_preset = self.result.get("audio_preset", "")
+        if current_preset in self.audio_presets:
+            self.result = apply_audio_preset(self.result, current_preset)
         self.sliders_info = [] 
 
         layout = QVBoxLayout(self)
+        preset_layout = QHBoxLayout()
+        preset_lbl = QLabel("오디오 프리셋:")
+        preset_lbl.setStyleSheet("font-weight: bold; color: #4AFF80;")
+        self.combo_audio_preset = QComboBox()
+        self.combo_audio_preset.addItem("직접 설정", "")
+        for name, preset in self.audio_presets.items():
+            desc = preset.get("description", "")
+            self.combo_audio_preset.addItem(f"{name} - {desc}" if desc else name, name)
+        if current_preset:
+            for _i in range(self.combo_audio_preset.count()):
+                if self.combo_audio_preset.itemData(_i) == current_preset:
+                    self.combo_audio_preset.setCurrentIndex(_i)
+                    break
+        preset_layout.addWidget(preset_lbl)
+        preset_layout.addWidget(self.combo_audio_preset, stretch=1)
+        layout.addLayout(preset_layout)
+        self.combo_audio_preset.currentIndexChanged.connect(self._on_audio_preset_changed)
         self.tabs = QTabWidget()
         
         # 탭 1: Silero
@@ -266,6 +288,21 @@ class AdvancedSettingsDialog(QDialog):
         layout.addLayout(_create_bottom_buttons(self, self._on_ok, self._on_reset, self._on_save, save_def_callback=self._on_save_default))
 
                 
+    def _on_audio_preset_changed(self, *args):
+        preset_name = self.combo_audio_preset.currentData()
+        if not preset_name:
+            self.result["audio_preset"] = ""
+            return
+        self.result = apply_audio_preset(self.result, preset_name)
+        for slider, key, multiplier, chk_disable in self.sliders_info:
+            if key in self.result:
+                try:
+                    slider.setValue(int(float(self.result[key]) * multiplier))
+                except Exception:
+                    pass
+            if chk_disable is not None and f"{key}_disabled" in self.result:
+                chk_disable.setChecked(bool(self.result.get(f"{key}_disabled", False)))
+
     def _add_slider(self, form, key, title, tip_template, min_val, max_val, default_actual, multiplier, format_str, show_disable=True):
         h_layout = QHBoxLayout()
         
@@ -398,6 +435,7 @@ class AdvancedSettingsDialog(QDialog):
             if chk_disable:
                 self.result[f"{key}_disabled"] = chk_disable.isChecked()
         self.result["user_prompt"] = self.edit_user_prompt.toPlainText()
+        self.result["audio_preset"] = self.combo_audio_preset.currentData() or ""
         if "hf_token" in self.result: del self.result["hf_token"]
         if "llm_prompt" in self.result: del self.result["llm_prompt"]
         save_settings(self.result)
@@ -406,6 +444,7 @@ class AdvancedSettingsDialog(QDialog):
     def _on_save_default(self):
         # 💡 [완성] 프롬프트까지 포함하여 전체 설정을 기본값으로 저장합니다.
         self.result["user_prompt"] = self.edit_user_prompt.toPlainText()
+        self.result["audio_preset"] = self.combo_audio_preset.currentData() or ""
         
         # 찌꺼기 데이터 정리
         if "hf_token" in self.result: del self.result["hf_token"]
@@ -415,6 +454,7 @@ class AdvancedSettingsDialog(QDialog):
         QMessageBox.information(self, "완료", "현재 오디오/엔진 설정을 시스템 기본값으로 저장했습니다.")
     def _on_ok(self):
         self.result["user_prompt"] = self.edit_user_prompt.toPlainText()
+        self.result["audio_preset"] = self.combo_audio_preset.currentData() or ""
         
         if "hf_token" in self.result:
             del self.result["hf_token"]

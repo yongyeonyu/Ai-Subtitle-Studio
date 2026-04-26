@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 core/path_manager.py
@@ -22,7 +22,8 @@ DEFAULT_SETTINGS = {
     "nas_path": "",
     "icloud_path": "",
     "recent_folders": [],
-    "auto_detect_enabled": False 
+    "auto_detect_enabled": False,
+    "nas_excluded_folders": []
 }
 
 def load_settings():
@@ -157,4 +158,12 @@ def get_nas_auto_detect() -> bool:
 def set_nas_auto_detect(is_active: bool):
     settings = load_settings()
     settings["nas_auto_detect"] = is_active
+    save_settings(settings)
+
+def get_nas_excluded_folders() -> list:
+    return load_settings().get("nas_excluded_folders", [])
+
+def set_nas_excluded_folders(paths: list):
+    settings = load_settings()
+    settings["nas_excluded_folders"] = [p for p in paths if p]
     save_settings(settings)

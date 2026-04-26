@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 ui/main/main_window.py
@@ -30,8 +30,8 @@ import config
 from logger import get_logger
 from core.cloud_sync import CloudSyncManager
 from core.path_manager import (
-    get_icloud_path, get_recent_folders,
-    get_icloud_auto_detect, get_nas_auto_detect,
+    get_icloud_path, get_nas_path, get_local_path, ensure_nas_mounted,
+    get_icloud_auto_detect, get_nas_auto_detect, get_nas_excluded_folders,
 )
 from core.settings import load_settings, save_settings
 
@@ -58,6 +58,8 @@ class MainWindow(
     _sig_load_multiclip_waveform = pyqtSignal(list)
     _sig_set_recog_zone      = pyqtSignal(float, float)
     _sig_set_recog_progress  = pyqtSignal(float)
+    _sig_clear_editor        = pyqtSignal()
+    _sig_restart_multiclip   = pyqtSignal(list, object)
 
     def __init__(self):
         super().__init__()
@@ -79,6 +81,8 @@ class MainWindow(
         self._project_boundary_times = []
         self._local_llm_models = []
 
+        settings = load_settings()
+        self._auto_start_on = settings.get("auto_start_enabled", True)
         self._is_icloud_auto_mode = get_icloud_auto_detect()
         self._is_nas_auto_mode = get_nas_auto_detect()
 
@@ -92,8 +96,17 @@ class MainWindow(
         self._cloud_sync_manager = CloudSyncManager(
             get_icloud_path(), self._on_files_detected, self._is_app_busy
         )
-        if getattr(self, "_is_icloud_auto_mode", False):
+        self._nas_sync_manager = CloudSyncManager(
+            get_local_path(get_nas_path()), self._on_files_detected, self._is_app_busy,
+            mode="nas", scan_interval=60, stable_seconds=300, exclude_callback=get_nas_excluded_folders
+        )
+        if self._auto_start_on and getattr(self, "_is_icloud_auto_mode", False):
             self._cloud_sync_manager.start()
+        elif self._auto_start_on and getattr(self, "_is_nas_auto_mode", False):
+            nas_path = get_nas_path()
+            if ensure_nas_mounted(nas_path):
+                self._nas_sync_manager.dropzone_path = get_local_path(nas_path)
+                self._nas_sync_manager.start()
 
     # ── UI 빌드 ──────────────────────────────────────────
     def _build_ui(self):
@@ -253,6 +266,8 @@ class MainWindow(
         self._sig_load_multiclip_waveform.connect(self._do_load_multiclip_waveform)
         self._sig_set_recog_zone.connect(self._on_recog_zone)
         self._sig_set_recog_progress.connect(self._on_recog_progress)
+        self._sig_clear_editor.connect(self._do_clear_editor)
+        self._sig_restart_multiclip.connect(self._do_restart_multiclip)
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self):

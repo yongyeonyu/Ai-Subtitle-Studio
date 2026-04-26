@@ -1,177 +1,157 @@
+<!--
+Document-Version: 02.03.00
+Phase: PHASE1-B
+Last-Updated: 2026-04-26
+Updated-By: Codex with 대표님
+Previous-Content: v02.03.00 파일/폴더 구조, STRUCTURE.txt 삭제 후 단일 구조 문서
+This-Update: 문서 관리 주석과 Copilot 인계 기준 추가, 최신 작업 영역 요약 유지
+Copilot-Handoff: 이 문서는 커밋 직전 최종 상태 기준으로만 갱신합니다. 중간 작업 중에는 불필요하게 수정하지 않습니다.
+-->
 ================================================================================
 AI Subtitle Studio — 프로젝트 구조 및 버전 관리 문서
 생성일: 2026-04-20
-최종 수정: 2026-04-24
+최종 수정: 2026-04-26
 Phase: PHASE1-B
-App Version: 02.02.01
+App Version: 02.03.00
+구조 문서 기준: File_structure.txt
+비고: STRUCTURE.txt는 삭제하고 본 문서로 단일화
 ================================================================================
 
 ai_subtitle_studio/
-├── main.py  ← 프로그램 실행 진입점                                              [미관리]
-├── main.bat  ← Windows 실행 배치 파일                                           [미관리]
-├── config.py  ← 전역 환경 변수 + OS 감지 + voice_data 경로                      v02.02.01 | ✅
-├── logger.py  ← 시스템 로그 기록 및 UI 연동                                     [미관리]
+├── main.py                         ← 프로그램 실행 진입점                    v02.03.00
+├── main.bat                        ← Windows 실행 배치 파일
+├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v02.03.00
+├── logger.py                       ← 시스템 로그 기록 및 UI 연동             v02.03.00
+├── AGENTS.md                       ← 개발 가이드 / Copilot 핸드오프
+├── ACTION_ITEMS.md                 ← 전체 액션아이템
+├── RELEASE_v02.02.00.md            ← 이전 릴리즈 노트
+├── RELEASE_v02.03.00.md            ← 현재 작업 릴리즈 노트
+├── File_structure.txt              ← 현재 구조 문서
 │
 ├── dataset/
-│   ├── folder_settings.json  ← 최근 폴더 및 경로 설정
-│   ├── user_settings.json  ← AI 모델 / 자막 규칙 / 화자 설정
-│   ├── auto_tracker.json  ← iCloud/NAS 처리 상태 추적
-│   └── model_registry.json  ← AI 모델 레지스트리 (설치/OS 매핑)                  🆕
+│   ├── custom_defaults.json        ← 기본 설정 preset (API Key 평문 저장 금지)
+│   ├── model_registry.json         ← 모델 레지스트리
+│   └── dataset_correction.json     ← 교정 데이터
 │
-├── voice_data/  ← 화자 학습 음성 저장 폴더                                      🆕
-│   └── *.wav
-│
-├── projects/  ← 프로젝트 저장소 [gitignore]
-│   └── *.json  ← 프로젝트 메타 / 타임라인 / workspace
-│
-├── output/  ← 오디오 추출 / VAD 캐시 / 중간 결과물 [gitignore]
-│   ├── *_cleaned.wav
-│   ├── *_vad_cache.json
-│   └── *_chunks/
+├── voice_data/                     ← 화자 학습 음성 저장 폴더
+├── projects/                       ← 프로젝트 저장소 [gitignore]
+├── output/                         ← 오디오 추출 / VAD 캐시 / 중간 결과물 [gitignore]
 │
 ├── core/
-│   ├── __init__.py                                                              [미관리]
-│   ├── settings.py  ← 설정 로딩/저장/model_key 통합                             v02.02.01 | ✅
-│   ├── media_info.py  ← ffprobe 미디어 정보 유틸                                v02.02.01 | ✅
-│   ├── state_manager.py  ← FSM 상태 머신 (ViewModel)                            v02.02.01 | ✅
-│   ├── model_manager.py  ← AI 모델 설치/삭제/검증/LLM 자동 스캔                v02.02.01 | ✅
-│   ├── path_manager.py  ← 경로 관리 (NAS/iCloud/SRT 경로 등)                    v02.02.01 | ✅
-│   ├── cloud_sync.py  ← iCloud/NAS 드롭존 감시                                  v02.02.01 | ⚠️
-│   ├── time_history.py  ← ETA 학습 (EMA α=0.4)                                  v02.02.01 | ✅
-│   ├── auto_tracker.py  ← 파일 처리 상태 추적기                                 v02.02.01 | ⚠️
-│   ├── notifier.py  ← ntfy 푸시 알림 유틸                                       v02.02.01 | ✅
-│   ├── srt_parser.py  ← SRT 파싱 유틸                                            v02.02.01 | ✅
+│   ├── settings.py                 ← 설정 로딩/저장/model_key 통합            v02.03.00
+│   ├── media_info.py               ← ffprobe 미디어 정보 유틸                 v02.03.00
+│   ├── state_manager.py            ← FSM 상태 머신                            v02.03.00
+│   ├── model_manager.py            ← AI 모델 설치/삭제/검증/LLM 자동 스캔     v02.03.00
+│   ├── path_manager.py             ← 경로 관리                                v02.03.00
+│   ├── cloud_sync.py               ← iCloud/NAS 드롭존 감시                   v02.03.00
+│   ├── time_history.py             ← ETA 학습                                 v02.03.00
+│   ├── auto_tracker.py             ← 파일 처리 상태 추적기                    v02.03.00
+│   ├── notifier.py                 ← ntfy 푸시 알림                           v02.03.00
+│   ├── srt_parser.py               ← SRT 파싱 유틸                            v02.03.00
+│   ├── backend_fast.py             ← 빠른모드 배치 파이프라인                 v02.03.00
+│   ├── renderer.py                 ← MOV 렌더링                               v02.03.00
+│   ├── utils.py                    ← 시간 변환 / 규칙 유틸                    v02.03.00
+│   │
+│   ├── llm/                        ← LLM provider 계층                         🆕 v02.03.00
+│   │   ├── secure_keys.py          ← macOS Keychain / keyring API Key 저장
+│   │   ├── provider_registry.py    ← Ollama/Gemini/OpenAI 모델 표시 메타
+│   │   └── openai_provider.py      ← OpenAI Responses API adapter
 │   │
 │   ├── engine/
-│   │   └── subtitle_engine.py  ← LLM 자막 최적화 / SRT 저장                     v02.02.01 | ✅
+│   │   └── subtitle_engine.py      ← 자막 최적화 / LLM 분기 / SRT 저장        v02.03.00
 │   │
 │   ├── audio/
-│   │   ├── media_processor.py  ← 오디오 추출 + VAD + Whisper                    v02.02.01 | ✅
-│   │   ├── whisper_mlx.py  ← macOS Whisper (MLX) persistent worker             v02.02.01 | ✅
-│   │   ├── whisper_faster.py  ← Windows Whisper (faster-whisper subprocess)     v02.02.01 | ✅
-│   │   ├── whisper_worker.py  ← Windows faster-whisper subprocess worker        v02.02.01 | ✅
-│   │   └── diarize.py  ← 화자 분리 및 화자 매핑                                 v02.02.01 | ⚠️
+│   │   ├── media_processor.py      ← 오디오 추출 + VAD + Whisper              v02.03.00
+│   │   ├── whisper_mlx.py          ← macOS Whisper MLX persistent worker      v02.03.00
+│   │   ├── whisper_faster.py       ← Windows faster-whisper client            v02.03.00
+│   │   ├── whisper_worker.py       ← Windows subprocess worker                v02.03.00
+│   │   ├── worker_threads.py       ← 백그라운드 worker                         v02.03.00
+│   │   └── diarize.py              ← 화자 분리 및 매핑                        v02.03.00
 │   │
 │   ├── pipeline/
-│   │   ├── backend_core.py  ← 단일/공통 파이프라인 진입                         v02.02.01 | ✅
-│   │   ├── single_pipeline.py  ← 단일 파일 자막 생성 파이프라인                 v02.02.01 | ✅
-│   │   └── multiclip_pipeline.py  ← 멀티클립 자막 생성/기존자막 재사용          v02.02.01 | ✅
+│   │   ├── backend_core.py         ← 단일/공통 파이프라인 진입                v02.03.00
+│   │   ├── single_pipeline.py      ← 단일 파일 자막 생성 파이프라인           v02.03.00
+│   │   ├── multiclip_pipeline.py   ← 멀티클립 자막 생성/reuse/restart         v02.03.00
+│   │   └── pipeline_helpers.py     ← 백업/저장/렌더/prefetch 공통             v02.03.00
 │   │
 │   └── project/
-│       ├── project_manager.py  ← 프로젝트 생성/로드/저장                        v02.02.01 | ✅
-│       └── project_phase1b.py  ← PHASE1-B 프로젝트 저장 보강                    v02.02.01 | ✅
+│       ├── project_manager.py      ← 프로젝트 생성/로드/저장                 v02.03.00
+│       ├── project_phase1b.py      ← PHASE1-B 프로젝트 저장 보강             v02.03.00
+│       ├── project_snapshot.py     ← 프로젝트 snapshot schema                v02.03.00
+│       └── data_manager.py         ← 설정/교정 데이터 I/O                    v02.03.00
 │
 └── ui/
-    ├── __init__.py                                                              [미관리]
-    ├── queue_widget.py  ← 큐 테이블 + 헤더 + ETA / 완료시간                     v02.02.01 | ✅
-    ├── timeline_constants.py  ← 타임라인 UI 상수 / 갭 계산                      v02.02.01 | ⚠️
-    ├── timeline_waveform.py  ← 오디오 파형 렌더링                               v02.02.01 | ✅
-    ├── timeline_global.py  ← 전체 영상 미니맵 (그린존/옐로우존)                 v02.02.01 | ✅
-    ├── timeline_canvas.py  ← 타임라인 캔버스 (본체)                             v02.02.01 | ✅
-    ├── timeline_paint.py  ← paintEvent 분리 (적응형 룰러)                       v02.02.01 | ✅
-    ├── timeline_input.py  ← 마우스/키보드/드래그                                v02.02.01 | ✅
-    ├── timeline_inline_edit.py  ← 인라인 편집 + 음성인식                        v02.02.01 | ✅
-    ├── timeline_widget.py  ← 타임라인 조립 컨테이너                             v02.02.01 | ✅
-    ├── video_player_widget.py  ← 영상/오디오 플레이어                           v02.02.01 | ⚠️
+    ├── home_ui.py                  ← 홈 화면 빌드 Mixin                       v02.03.00
+    ├── queue_widget.py             ← 큐 테이블 + 헤더 + ETA                   v02.03.00
+    ├── cloud_ui.py                 ← iCloud/NAS 자동처리 UI                  v02.03.00
     │
     ├── main/
-    │   ├── main_window.py  ← 메인 화면 본체 (Mixin 조합)                        v02.02.01 | ✅
-    │   ├── home_ui.py  ← 홈 화면 빌드 Mixin                                     v02.02.01 | ✅
-    │   ├── main_signals.py  ← MainWindow 시그널/슬롯 핸들러                     v02.02.01 | ✅
-    │   └── main_file_ops.py  ← 파일/폴더 열기 / 최근 경로 처리                  v02.02.01 | ✅
+    │   ├── main_window.py          ← 메인 화면 본체                           v02.03.00
+    │   ├── main_signals.py         ← 시그널/슬롯 핸들러                       v02.03.00
+    │   └── main_file_ops.py        ← 파일/폴더 열기                           v02.03.00
     │
     ├── editor/
-    │   ├── editor_widget.py  ← 에디터 UI 골격 + SM 연동                         v02.02.01 | ✅
-    │   ├── editor_lifecycle.py  ← 에디터 열기/저장/닫기                         v02.02.01 | ✅
-    │   ├── editor_pipeline.py  ← 자막 생성/재시작 파이프라인                    v02.02.01 | ✅
-    │   ├── editor_actions.py  ← 저장/이전/종료/내보내기                         v02.02.01 | ✅
-    │   ├── editor_segments.py  ← 자막 세그먼트 큐 처리                          v02.02.01 | ✅
-    │   ├── editor_timeline_video.py  ← 비디오 싱크 / 자막 분할                  v02.02.01 | ✅
-    │   ├── editor_helpers.py  ← EditorWidget 공유 유틸                          v02.02.01 | ✅
-    │   ├── subtitle_text_edit.py  ← 화자 색상 강조 / 단축키                     v02.02.01 | ✅
-    │   ├── timestamp_area.py  ← 시간 표시 및 삭제 버튼                          v02.02.01 | ✅
-    │   ├── undo_manager.py  ← Undo/Redo 스냅샷 스택                             v02.02.01 | ✅
-    │   └── editor_popup_qt.py  ← 단어 교정 팝업 메뉴                            v02.02.01 | ⚠️
+    │   ├── editor_widget.py        ← 에디터 UI 골격                           v02.03.00
+    │   ├── editor_lifecycle.py     ← 에디터 열기/저장/닫기                    v02.03.00
+    │   ├── editor_pipeline.py      ← 자막 생성/재시작 파이프라인              v02.03.00
+    │   ├── editor_actions.py       ← 저장/이전/종료/내보내기                  v02.03.00
+    │   ├── editor_segments.py      ← 자막 세그먼트 큐 처리                    v02.03.00
+    │   ├── editor_timeline_video.py← 비디오 싱크 / 자막 분할                  v02.03.00
+    │   ├── video_player_widget.py  ← 영상/오디오 플레이어                     v02.03.00
+    │   └── 기타 editor helper 파일
     │
-    ├── project/
-    │   ├── project_panel.py  ← 프로젝트 만들기/열기/추가                        v02.02.01 | ✅
-    │   ├── workspace_restore.py  ← 프로젝트 저장/복원 Mixin                     v02.02.01 | ✅
-    │   ├── order_dialog.py  ← 프로젝트 영상 순서 편집                           v02.02.01 | ✅
-    │   └── multiclip_panel.py  ← 멀티클립 정렬 / 추가 / 재진입 패널            v02.02.01 | ✅
-    │
-    ├── settings/
-    │   ├── settings_dialog.py  ← 설정창 통합 진입                               v02.02.01 | ✅
-    │   ├── settings_common.py  ← 설정 공통 UI (LLM 자동 스캔)                   v02.02.01 | ✅
-    │   ├── settings_ai.py  ← AI 엔진 설정 (LLM 목록 자동 로드)                 v02.02.01 | ✅
-    │   ├── settings_speaker.py  ← 화자 설정 / voice_data / 재생                 v02.02.01 | ✅
-    │   ├── settings_gap.py  ← 자막 간격 규칙                                    v02.02.01 | ✅
-    │   ├── settings_advanced.py  ← 상세 파라미터                                v02.02.01 | ✅
-    │   └── settings_export.py  ← 자막 출력 설정                                 v02.02.01 | ✅
-    │
-    ├── cloud_ui.py  ← iCloud/NAS 자동처리 UI                                    v02.02.01 | ✅
-    ├── export_dialog.py  ← 자막 영상 렌더링 설정                                v02.02.01 | ✅
-    └── folder_dialog.py  ← 파일/폴더 일괄 선택                                  v02.02.01 | ✅
-
+    ├── timeline/                   ← 타임라인 캔버스/입력/페인트/파형         v02.03.00
+    ├── project/                    ← 프로젝트/멀티클립 패널                  v02.03.00
+    ├── settings/                   ← AI/화자/갭/상세/출력 설정                v02.03.00
+    └── dialogs/                    ← 폴더 선택 / 내보내기 다이얼로그          v02.03.00
 
 ================================================================================
-[구조 변경 요약]  (2026-04-24 기준)
+[v02.03.00 핵심 변경]
+================================================================================
 
-  ✅ 폴더 리팩토링 5단계 완료
-     - core/pipeline/
-     - core/audio/
-     - ui/main/
-     - ui/editor/
-     - ui/settings/
+1. 멀티클립 reuse/restart 안정화
+   - 기존자막 사전 로드 인덱스 기록
+   - backend 중복 append 방지
+   - 재시작 clear 시그널 추가
+   - 재시작 시 새 멀티클립 run을 메인 스레드 시그널로 시작
 
-  ✅ 버전 헤더 통일
-     - PHASE1-B 기준 수정 파일 헤더를 02.02.01로 통일
-     - 수동 편집이 아닌 create_all 계열 스크립트 중심으로 관리
+2. LLM provider 확장
+   - `core/llm/` 추가
+   - OpenAI Responses API adapter 추가
+   - Gemini/OpenAI API Key는 OS 보안 저장소 사용
+   - 설정 UI에서 무료/유료 모델 표시
 
-  ✅ Windows 환경 핵심 동작 확인
-     - faster-whisper 로컬 모델 경로 인식
-     - 기존 자막 사전 로드
-     - 기존 자막 유지 상태에서 STT 진행
-     - false success 제거
-     - 홈 화면 강제 복귀 제거
+3. 보안
+   - `dataset/*.json`, `core/dataset/*.json`에 API Key 평문 저장 금지
+   - 기존 Gemini 키는 Keychain으로 이전
+
+4. 정리
+   - `STRUCTURE.txt` 삭제
+   - 루트 `_backup*/`, `create_all*.py` 삭제
+   - 구조 문서는 `File_structure.txt` 기준
 
 ================================================================================
-[파일 상태 요약]  (2026-04-24 기준)
+[다음 주요 액션]
+================================================================================
 
-  ✅ 핵심 기능/리팩토링 완료 : PHASE1-B 주요 경로 정리 완료
-     - core/audio/*         : Windows/macOS Whisper 경로 정리 완료
-     - core/pipeline/*      : single / multiclip 파이프라인 분리 완료
-     - core/project/*       : 프로젝트 저장/복원 Phase1-B 정리 완료
-     - ui/main/*            : 메인 윈도우 / 시그널 / 파일열기 분리 완료
-     - ui/editor/*          : 에디터 라이프사이클 / 파이프라인 / 액션 분리 완료
-     - ui/settings/*        : AI / 화자 / 내보내기 설정 구조 정리 완료
-     - ui/queue_widget.py   : 큐 상태 / ETA / 기존자막 헤더 처리 완료
-
-  ✅ 이번 세션에서 실제 확인 완료된 기능
-     - 기존 자막 프롬프트 + 실제 로드
-     - 기존 자막 에디터 진입 즉시 사전 로드
-     - 시작 버튼 클릭 후 기존 자막 유지
-     - 큐 상태 즉시 "✅기존자막" 반영
-     - 기존 자막 클립 예상 시간 " - " 처리
-     - 큐 헤더 진행률에서 기존 자막 클립 제외
-     - [목소리학습] 클릭 시 voice_data 폴더 바로 열기
-     - 화자 옆 [X] 버튼 표시 + enable/disable 동작
-     - 멀티클립 홈 화면 이탈 버그 제거
-     - Windows local model path 수정
-     - false success 제거
-
-  ⚠️ 남은 PHASE1-B 구조 이슈 (ACTION_ITEMS.md 기준 별도 관리)
-     - 멀티클립 플레이헤드 동기화
-     - 멀티클립 undo/redo 포커스 의존 문제
-     - 멀티클립 자막 저장 규칙 (개별/통합)
-     - 화자 설정 [X] 버튼 동작을 delete → disable-only 로 변경
+- B14: 기존자막 "아니요" 선택 시 SRT 자동 로드 금지 + 자막백업 이동
+- R13: 전체 리팩토링 / 리네이밍 / 기능 분할 / 중복 통합 / Phase2 대응
+- Phase2 roughcut schema 및 UI 설계
 
 ================================================================================
-[문서 관리 원칙]
 
-  1. 실제 코드 구조 기준으로만 STRUCTURE.txt 갱신
-  2. 완료 항목은 ACTION_ITEMS.md에서 제거하고, STRUCTURE.txt에는 반영
-  3. 남은 항목은 ACTION_ITEMS.md에서만 추적
-  4. 수정 파일 버전 헤더는 02.02.01 통일
-  5. create_all 스크립트 중심으로 수정/백업/AST 검사 수행
+[2026-04-26 NAS 자동화 보강]
+- core/cloud_sync.py: NAS 최하위 폴더 단위 감시, 1분 스캔, 5분 용량 안정화, 완료 요약
+- ui/cloud_ui.py: NAS 하위 폴더 요약, 제외 폴더 저장, 자동 큐 진입
+- ui/home_ui.py: 자동설정 UI, 자동시작 ON/OFF, NAS 스크롤 카드
+- ui/dialogs/folder_dialog.py: 취소 버튼, `[  ] 제외` 자동감지 제외 UI
+- core/path_manager.py: NAS 자동감지 제외 폴더 저장/로드
 
-================================================================================
+[2026-04-26 LLM/성능 보강]
+- ui/settings/settings_ai.py: LLM 전체/무료/유료 필터, Ollama 추천 모델 설치/삭제/새로고침
+- core/model_manager.py: Ollama 추천 모델 카탈로그, pull/rm 래퍼
+- core/audio/audio_presets.py + dataset/audio_presets.json: 전체 상세 파라미터 포함 기본 프리셋
+- requirements-mac.txt / requirements-windows.txt: OS별 2개 requirements 체계
+- core/audio/media_processor.py: VAD none 청크 병렬 생성, 동적 io_workers
+- core/pipeline/single_pipeline.py / multiclip_pipeline.py: prefetch_ahead 기반 선추출 확대
+- ui/editor/video_player_widget.py: 재생 중 UI timer 완화

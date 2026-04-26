@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 ui/main/main_signals.py
@@ -30,10 +30,57 @@ class SignalHandlersMixin:
         if self._editor_widget:
             self._editor_widget.append_segments(segments)
 
+    def _do_clear_editor(self):
+        ed = getattr(self, '_editor_widget', None)
+        if not ed:
+            return
+        try:
+            if hasattr(ed, '_queue_timer') and ed._queue_timer.isActive():
+                ed._queue_timer.stop()
+        except Exception:
+            pass
+        try:
+            if hasattr(ed, '_segment_queue'):
+                ed._segment_queue.clear()
+        except Exception:
+            pass
+        try:
+            if hasattr(ed, 'text_edit'):
+                ed.text_edit.clear()
+        except Exception:
+            pass
+        try:
+            if hasattr(ed, 'timeline'):
+                ed.timeline.update_segments([], 0.0, getattr(ed.timeline.canvas, 'total_duration', 0.0))
+                ed.timeline.set_playhead(0.0)
+        except Exception:
+            pass
+        try:
+            vp = getattr(ed, 'video_player', None)
+            if vp is not None:
+                vp.set_context_segments([])
+                vp.seek(0.0)
+        except Exception:
+            pass
+        try:
+            ed._cached_segs = []
+            ed._active_seg_start = 0.0
+        except Exception:
+            pass
+
     def _do_update_status(self, c_idx, t_total):
         if self._editor_widget:
             if hasattr(self._editor_widget, "update_progress"):
                 self._editor_widget.update_progress(c_idx, t_total)
+
+    def _do_restart_multiclip(self, files, folder=None):
+        if not self.backend:
+            return
+        try:
+            self.backend._force_no_reuse_once = True
+        except Exception:
+            pass
+        self.backend.start_multiclip_pipeline(list(files or []), folder=folder)
 
     def open_editor_for_file(
         self, target_file, on_save, on_start, on_prev, on_exit, is_batch=False

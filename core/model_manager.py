@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 core/model_manager.py
@@ -407,3 +407,66 @@ def get_local_llm_models() -> list:
             },
         }]
     return []
+
+OLLAMA_RECOMMENDED_MODELS = [
+    {"name": "gemma3:4b", "label": "Gemma3 4B - 무료/로컬 추천", "note": "16GB Mac 기본 자막 교정 균형"},
+    {"name": "qwen3:4b", "label": "Qwen3 4B - 무료/로컬 추론", "note": "한국어/추론 균형"},
+    {"name": "llama3.2:3b", "label": "Llama3.2 3B - 무료/로컬 빠름", "note": "빠른 대량 교정"},
+    {"name": "qwen2.5:7b", "label": "Qwen2.5 7B - 무료/로컬 품질", "note": "긴 문장 교정"},
+    {"name": "mistral:7b", "label": "Mistral 7B - 무료/로컬 범용", "note": "범용 보조"},
+    {"name": "phi4-mini:latest", "label": "Phi4 Mini - 무료/로컬 경량", "note": "가벼운 교정"},
+    {"name": "deepseek-r1:7b", "label": "DeepSeek R1 7B - 무료/로컬 사고", "note": "러프컷 판단 실험"},
+    {"name": "gemma3:12b", "label": "Gemma3 12B - 무료/로컬 고품질", "note": "16GB에서 느릴 수 있음"},
+]
+
+
+def is_ollama_available() -> bool:
+    return bool(_iter_ollama_bins())
+
+
+def _run_ollama(args: list[str], timeout: int = 3600) -> tuple[bool, str]:
+    bins = _iter_ollama_bins()
+    if not bins:
+        return False, "Ollama 실행 파일을 찾을 수 없습니다."
+    try:
+        result = subprocess.run([bins[0], *args], capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+        out = (result.stdout or "") + (result.stderr or "")
+        return result.returncode == 0, out.strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def get_ollama_catalog_models() -> list[dict]:
+    installed = {m.get("name") for m in get_local_llm_models()}
+    rows = []
+    for item in OLLAMA_RECOMMENDED_MODELS:
+        row = dict(item)
+        row["installed"] = row["name"] in installed
+        rows.append(row)
+    return rows
+
+
+def install_ollama_model(model_name: str) -> bool:
+    model_name = (model_name or "").strip()
+    if not model_name:
+        return False
+    get_logger().log(f"📦 Ollama 모델 설치 시작: {model_name}")
+    ok, out = _run_ollama(["pull", model_name], timeout=7200)
+    if ok:
+        get_logger().log(f"✅ Ollama 모델 설치 완료: {model_name}")
+    else:
+        get_logger().log(f"❌ Ollama 모델 설치 실패: {model_name} / {out[:300]}")
+    return ok
+
+
+def uninstall_ollama_model(model_name: str) -> bool:
+    model_name = (model_name or "").strip()
+    if not model_name:
+        return False
+    get_logger().log(f"🗑️ Ollama 모델 삭제 시작: {model_name}")
+    ok, out = _run_ollama(["rm", model_name], timeout=300)
+    if ok:
+        get_logger().log(f"✅ Ollama 모델 삭제 완료: {model_name}")
+    else:
+        get_logger().log(f"❌ Ollama 모델 삭제 실패: {model_name} / {out[:300]}")
+    return ok

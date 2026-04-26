@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 core/project_manager.py
@@ -133,7 +133,7 @@ def create_project(
 
     project = {
         "app": "AI Subtitle Studio",
-        "version": "02.02.01",
+        "version": "02.03.00",
         "project_name": name,
         "created_at": now,
         "updated_at": now,

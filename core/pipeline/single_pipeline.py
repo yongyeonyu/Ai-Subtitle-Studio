@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.01
 # Phase: PHASE1-B
 """
 core/pipeline/single_pipeline.py
@@ -119,6 +119,9 @@ class SinglePipelineMixin:
             raise Exception("USER_EXIT")
         if action_state[0] == "next":
             return
+        if action_state[0] == "restart":
+            self._handle_restart(target_file)
+            action_state[0] = "start"
 
         # ── STT 파이프라인 루프 ──
         while True:
@@ -143,13 +146,12 @@ class SinglePipelineMixin:
                 self.video_processor.clear_fast_mode_overrides()
             res = self._get_audio_extract_result(target_file)
 
-            next_file = (
-                self.files_to_process[queue_index + 1]
-                if (queue_index + 1) < len(self.files_to_process)
-                else None
-            )
-            if next_file:
-                self._prefetch_audio_for_file(next_file)
+            try:
+                prefetch_ahead = max(1, int(load_settings().get("prefetch_ahead", 3)))
+            except Exception:
+                prefetch_ahead = 3
+            for _pf in self.files_to_process[queue_index + 1: queue_index + 1 + prefetch_ahead]:
+                self._prefetch_audio_for_file(_pf)
 
             if not res:
                 get_logger().log("❌ 오디오 추출 실패")
@@ -254,7 +256,17 @@ class SinglePipelineMixin:
                 try:
                     s = load_settings()
                     model_name = s.get("selected_model", "기본")
-                    api_key = s.get("google_api_key", "")
+                    try:
+                        from core.llm.secure_keys import get_api_key
+                        from core.llm.openai_provider import is_openai_model
+                        if "Gemini" in model_name:
+                            api_key = get_api_key("google") or s.get("google_api_key", "")
+                        elif is_openai_model(model_name):
+                            api_key = get_api_key("openai") or s.get("openai_api_key", "")
+                        else:
+                            api_key = ""
+                    except Exception:
+                        api_key = ""
                     user_prompt = s.get("custom_prompt", "")
                     chunk_time_limit = int(s.get("chunk_time_limit", 60))
                 except Exception:
@@ -263,7 +275,7 @@ class SinglePipelineMixin:
                     user_prompt = ""
                     chunk_time_limit = 60
 
-                is_gemini = "API" in model_name or "Gemini" in model_name
+                is_gemini = "Gemini" in model_name
                 seg_buffer = []
                 last_c_idx = 0
                 last_t_total = 1

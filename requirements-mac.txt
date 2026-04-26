@@ -1,30 +1,26 @@
-## ================================================================
 ## AI Subtitle Studio - Requirements (macOS Apple Silicon)
 ## Python 3.11
 ## 설치: python3.11 -m pip install -r requirements-mac.txt
-## ================================================================
-##
-## 🍎 macOS (Apple Silicon) 전용 패키지
-## 이 파일 하나만 설치하면 공통 + macOS 전용이 모두 설치됩니다.
-##
-## ================================================================
 
-# ================================
-# 공통 의존성 포함
-# ================================
--r requirements.txt
-
-# ================================
-# Whisper / STT (MLX — Apple Silicon GPU 가속)
-# ================================
+PyQt6>=6.6.0
+opencv-python>=4.9.0
+Pillow>=10.0.0
+numpy>=1.26.0
+requests>=2.31.0
+watchdog>=3.0.0
+python-dotenv>=1.0.0
+packaging>=23.0
+soundfile>=0.12.1
+silero-vad>=6.2.1
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.14
+google-genai>=1.0.0
+huggingface_hub>=0.20.0
+keyring>=25.0.0
+scikit-learn>=1.4.0
+speechbrain>=1.0.0
+torch
+torchaudio
 mlx-whisper>=0.4.3
-
-# ================================
-# Audio Enhancement (Demucs 보컬 분리)
-# ================================
 deepfilternet>=0.5.6
-
-# ================================
-# Codec (미디어 디코딩)
-# ================================
 torchcodec

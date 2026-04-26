@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 ui/settings_common.py
@@ -140,21 +140,8 @@ def _fetch_models():
             "details": dict(m.get("details", {}) or {}),
         }
 
-    for fallback_name in [
-        (settings.get("selected_model", "") or "").strip(),
-        (getattr(config, "OLLAMA_MODEL", "") or "").strip(),
-    ]:
-        if fallback_name and fallback_name not in merged and not fallback_name.startswith("Gemini "):
-            merged[fallback_name] = {
-                "name": fallback_name,
-                "size": 0,
-                "details": {
-                    "family": "Local",
-                    "parameter_size": "Unknown",
-                    "format": "ollama",
-                },
-            }
-
+    # Ollama가 감지되지 않으면 로컬 모델은 표시하지 않습니다.
+    # 단, 현재 선택값이 실제 감지 목록에 있으면 그대로 유지됩니다.
     return sorted(merged.values(), key=lambda x: x["name"].lower())
 
 def _create_bottom_buttons(dialog, accept_callback, reset_callback=None,

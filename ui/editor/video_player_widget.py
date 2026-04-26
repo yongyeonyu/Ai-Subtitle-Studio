@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 ui/video_player_widget.py - PyQt6 비디오 플레이어
@@ -8,6 +8,7 @@ import os
 import json
 import subprocess
 import tempfile
+from bisect import bisect_right
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QSizePolicy, QStackedWidget)
@@ -144,6 +145,10 @@ class VideoPlayerWidget(QWidget):
         self._pending_thumb_path: str | None = None
         self._pending_thumb_sec: float = 0.0
         self._pending_segments: list | None = None
+        self._subtitle_starts: list[float] = []
+        self._subtitle_cache_idx: int = -1
+        self._last_time_label_ms: int = -250
+        self._last_btn_state = None
 
         self.media_player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -167,7 +172,7 @@ class VideoPlayerWidget(QWidget):
 
         self._build_ui()
         self._ui_timer = QTimer()
-        self._ui_timer.setInterval(16)
+        self._ui_timer.setInterval(int(self._get_video_ui_interval_ms()))
         self._ui_timer.timeout.connect(self._ui_tick)
         self._ui_timer.start()
 
@@ -178,7 +183,7 @@ class VideoPlayerWidget(QWidget):
             return
         self._source_ready = True
         if self._pending_segments is not None:
-            self.segments = list(self._pending_segments)
+            self._set_segments(self._pending_segments)
             self._pending_segments = None
         if self._pending_seek_sec is not None:
             pending = float(self._pending_seek_sec)
@@ -267,6 +272,16 @@ class VideoPlayerWidget(QWidget):
 
         layout.addWidget(ctrl)
 
+    def _get_video_ui_interval_ms(self) -> int:
+        try:
+            settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
+            if os.path.exists(settings_path):
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    return max(24, min(80, int(json.load(f).get("video_ui_interval_ms", 33))))
+        except Exception:
+            pass
+        return 33
+
     def _get_audio_ai_setting(self) -> str:
         """user_settings.json에서 selected_audio_ai를 읽어 반환. 실패 시 'demucs' 기본값."""
         try:
@@ -280,7 +295,7 @@ class VideoPlayerWidget(QWidget):
 
 
     def load(self, path, segments=None):
-        self.segments = list(segments or [])
+        self._set_segments(segments or [])
         if self._pending_segments is None:
             self._pending_segments = list(self.segments)
         if os.path.exists(path):
@@ -307,6 +322,8 @@ class VideoPlayerWidget(QWidget):
 
 
     def _extract_and_show_thumbnail_at(self, path, sec=0.0):
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            return
         self.video_stack.setCurrentIndex(1)
         temp_dir = __import__('tempfile').gettempdir()
         thumb_path = __import__('os').path.join(temp_dir, "thumb_temp_cpd.jpg")
@@ -333,6 +350,8 @@ class VideoPlayerWidget(QWidget):
             pass
 
     def _extract_and_show_thumbnail(self, path: str):
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            return
         self.video_stack.setCurrentIndex(1)
         temp_dir = tempfile.gettempdir()
         thumb_path = os.path.join(temp_dir, "thumb_temp_cpd.jpg")
@@ -358,30 +377,57 @@ class VideoPlayerWidget(QWidget):
             self.video_stack.setCurrentIndex(0)
 
     def _refresh_subtitle_now(self):
-        cur_sub = ""
-        now = float(getattr(self, 'current_time', 0.0) or 0.0)
-        for seg in list(getattr(self, 'segments', []) or []):
-            try:
-                if float(seg.get('start', 0.0)) <= now < float(seg.get('end', 0.0)):
-                    cur_sub = str(seg.get('text', '') or '')
-                    break
-            except Exception:
-                continue
+        cur_sub = self._find_subtitle_at(float(getattr(self, 'current_time', 0.0) or 0.0))
         self._last_sub = cur_sub
         try:
             self.sub_label.setText(cur_sub)
         except Exception:
             pass
 
+    def _set_segments(self, segments):
+        cleaned = []
+        for seg in list(segments or []):
+            try:
+                item = dict(seg)
+                item["start"] = float(item.get("start", 0.0))
+                item["end"] = float(item.get("end", 0.0))
+                item["text"] = str(item.get("text", "") or "")
+                cleaned.append(item)
+            except Exception:
+                continue
+        self.segments = sorted(cleaned, key=lambda s: s["start"])
+        self._subtitle_starts = [s["start"] for s in self.segments]
+        self._subtitle_cache_idx = -1
+
+    def _find_subtitle_at(self, now: float) -> str:
+        idx = int(getattr(self, "_subtitle_cache_idx", -1))
+        if 0 <= idx < len(self.segments):
+            seg = self.segments[idx]
+            if seg["start"] <= now < seg["end"]:
+                return seg["text"]
+            if idx + 1 < len(self.segments):
+                nxt = self.segments[idx + 1]
+                if nxt["start"] <= now < nxt["end"]:
+                    self._subtitle_cache_idx = idx + 1
+                    return nxt["text"]
+
+        idx = bisect_right(self._subtitle_starts, now) - 1
+        self._subtitle_cache_idx = idx
+        if 0 <= idx < len(self.segments):
+            seg = self.segments[idx]
+            if seg["start"] <= now < seg["end"]:
+                return seg["text"]
+        return ""
+
     def set_context_segments(self, segments: list[dict] | None = None):
-        self.segments = list(segments or [])
+        self._set_segments(segments or [])
         self._refresh_subtitle_now()
 
 
     def load_clip_context(self, path, segments=None, seek_sec=0.0, autoplay=False, show_thumbnail=True):
         segments = list(segments or [])
         seek_sec = max(0.0, float(seek_sec))
-        self.segments = segments
+        self._set_segments(segments)
         same_file = (os.path.normpath(getattr(self, '_current_source_path', '') or '') == os.path.normpath(path))
         if same_file:
             self.seek_direct(seek_sec)
@@ -451,6 +497,9 @@ class VideoPlayerWidget(QWidget):
 
     def _update_btn(self):
         is_playing = self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        if self._last_btn_state == is_playing:
+            return
+        self._last_btn_state = is_playing
         self.btn_play.setText("⏸ 정지" if is_playing else "▶ 재생")
 
     def _ui_tick(self):
@@ -464,13 +513,12 @@ class VideoPlayerWidget(QWidget):
             m, s = divmod(int(sec), 60)
             return f"{m:02d}:{s:02d}"
 
-        self.time_label.setText(f"{format_time(self.current_time)} / {format_time(self.total_time)}")
+        pos_ms = int(self.current_time * 1000)
+        if abs(pos_ms - self._last_time_label_ms) >= 250:
+            self._last_time_label_ms = pos_ms
+            self.time_label.setText(f"{format_time(self.current_time)} / {format_time(self.total_time)}")
         
-        cur_sub = ""
-        for seg in self.segments:
-            if seg['start'] <= self.current_time < seg['end']:
-                cur_sub = seg['text']
-                break
+        cur_sub = self._find_subtitle_at(float(self.current_time))
 
         if cur_sub != self._last_sub:
             self._last_sub = cur_sub

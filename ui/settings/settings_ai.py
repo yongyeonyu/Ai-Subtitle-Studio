@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 ui/settings_ai.py  ─  ⚙️ AI 엔진 설정 다이얼로그
@@ -13,6 +13,8 @@ from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import (
     DEFAULT_WHISPER_MODELS, _fetch_models, _create_bottom_buttons, DATASET_DIR
 )
+from core.llm.provider_registry import cloud_model_items
+from core.llm.secure_keys import get_api_key, set_api_key
 
 
 class SettingsDialog(QDialog):
@@ -41,32 +43,53 @@ class SettingsDialog(QDialog):
         form   = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        # 1. LLM 모델 (제미나이 포함)
+        # 1. LLM 모델 (무료/유료 필터 + Ollama 설치/삭제)
+        self.llm_filter = settings.get("llm_cost_filter", "all")
         self.models_data = []
         if parent is not None and getattr(parent, "_local_llm_models", None):
             self.models_data = [dict(m) for m in parent._local_llm_models]
-
         if not self.models_data:
             self.models_data = _fetch_models()
 
-        self.combo_llm = QComboBox()
-        bypass_item = {"name": "사용 안함 (Whisper 단독 진행)", "size": 0, "details": {}}
-        self.combo_llm.addItem(bypass_item["name"], bypass_item)
-        
-        for m in self.models_data:
-            self.combo_llm.addItem(m['name'], m)
-            
-        gemini_pro = {"name": "Gemini 2.5 Pro (API)", "size": 0, "details": {"family": "Google API", "parameter_size": "Cloud", "format": "api"}}
-        gemini_flash = {"name": "Gemini 2.5 Flash (API)", "size": 0, "details": {"family": "Google API", "parameter_size": "Cloud", "format": "api"}}
-        self.combo_llm.addItem(gemini_pro["name"], gemini_pro)
-        self.combo_llm.addItem(gemini_flash["name"], gemini_flash)
+        filter_row = QHBoxLayout()
+        self.btn_llm_all = QPushButton("전체")
+        self.btn_llm_free = QPushButton("무료")
+        self.btn_llm_paid = QPushButton("유료")
+        for btn, value in ((self.btn_llm_all, "all"), (self.btn_llm_free, "free"), (self.btn_llm_paid, "paid")):
+            btn.setCheckable(True)
+            btn.setFixedSize(64, 30)
+            btn.clicked.connect(lambda _=False, v=value: self._set_llm_filter(v))
+            filter_row.addWidget(btn)
+        filter_row.addStretch()
+        form.addRow("LLM 필터:", filter_row)
 
+        self.combo_llm = QComboBox()
         self.combo_llm.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.combo_llm.setMinimumWidth(350)
-        curr_llm = settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
-        idx = self.combo_llm.findText(curr_llm)
-        if idx >= 0: self.combo_llm.setCurrentIndex(idx)
-        form.addRow("LLM 모델:", self.combo_llm)
+        llm_model_row = QHBoxLayout()
+        self.btn_ollama_delete = QPushButton("삭제")
+        self.btn_ollama_delete.setFixedSize(64, 30)
+        self.btn_ollama_delete.clicked.connect(self._delete_current_ollama)
+        llm_model_row.addWidget(self.combo_llm)
+        llm_model_row.addWidget(self.btn_ollama_delete)
+        form.addRow("LLM 모델:", llm_model_row)
+
+        ollama_row = QHBoxLayout()
+        self.combo_ollama_catalog = QComboBox()
+        self.combo_ollama_catalog.setMinimumWidth(270)
+        self.btn_ollama_install = QPushButton("설치")
+        self.btn_ollama_refresh = QPushButton("새로고침")
+        self.btn_ollama_install.setFixedSize(64, 30)
+        self.btn_ollama_refresh.setFixedSize(82, 30)
+        self.btn_ollama_install.clicked.connect(self._install_selected_ollama)
+        self.btn_ollama_refresh.clicked.connect(self._refresh_ollama_models)
+        ollama_row.addWidget(self.combo_ollama_catalog)
+        ollama_row.addWidget(self.btn_ollama_install)
+        ollama_row.addWidget(self.btn_ollama_refresh)
+        form.addRow("미설치 LLM 모델:", ollama_row)
+
+        self._reload_ollama_catalog()
+        self._rebuild_llm_combo(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b")))
 
         # 💡 [레이아웃 조정] LLM 메뉴 바로 밑에 4가지 정보를 한 줄로 표시
         self.lbl_model_info = QLabel()
@@ -76,12 +99,18 @@ class SettingsDialog(QDialog):
         self.combo_llm.currentIndexChanged.connect(self._update_model_info)
         self._update_model_info()
 
-        # 2. Google API Key
+        # 2. API Keys (OS 보안 저장소)
         self.input_api_key = QLineEdit()
-        self.input_api_key.setPlaceholderText("AI Studio 발급 API Key 입력")
+        self.input_api_key.setPlaceholderText("AI Studio 발급 Google API Key 입력")
         self.input_api_key.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
-        self.input_api_key.setText(settings.get("google_api_key", ""))
+        self.input_api_key.setText(get_api_key("google"))
         form.addRow("Google API Key:", self.input_api_key)
+
+        self.input_openai_api_key = QLineEdit()
+        self.input_openai_api_key.setPlaceholderText("OpenAI API Key 입력")
+        self.input_openai_api_key.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
+        self.input_openai_api_key.setText(get_api_key("openai"))
+        form.addRow("OpenAI API Key:", self.input_openai_api_key)
 
         # 3. 자막 묶음 단위 (슬라이더 세팅)
         chunk_layout = QHBoxLayout()
@@ -174,6 +203,104 @@ class SettingsDialog(QDialog):
         layout.addSpacing(10)
         layout.addLayout(_create_bottom_buttons(self, self._on_ok, save_callback=self._on_save, save_def_callback=self._on_save_default))   
 
+    def _is_paid_item(self, item: dict) -> bool:
+        details = dict(item.get("details", {}) or {})
+        provider = details.get("provider", "ollama")
+        billing = str(details.get("billing", "")).lower()
+        return provider in ("openai", "google") and "무료" not in billing
+
+    def _all_llm_items(self):
+        items = []
+        bypass = {"name": "사용 안함 (Whisper 단독 진행)", "size": 0, "details": {"provider": "none", "billing": "무료"}, "display_name": "사용 안함 (Whisper 단독 진행)"}
+        items.append(bypass)
+        for m in self.models_data:
+            item = dict(m)
+            details = dict(item.get("details", {}) or {})
+            details.setdefault("provider", "ollama")
+            details.setdefault("format", "ollama")
+            details.setdefault("billing", "무료/로컬")
+            item["details"] = details
+            item.setdefault("display_name", f"{item.get('name', '')} [무료/로컬]")
+            items.append(item)
+        items.extend(cloud_model_items())
+        return items
+
+    def _set_llm_filter(self, value):
+        self.llm_filter = value
+        current = (self.combo_llm.currentData() or {}).get("name", "") if hasattr(self, "combo_llm") else ""
+        self._rebuild_llm_combo(current)
+
+    def _sync_llm_filter_buttons(self):
+        for btn, value in ((self.btn_llm_all, "all"), (self.btn_llm_free, "free"), (self.btn_llm_paid, "paid")):
+            btn.blockSignals(True)
+            btn.setChecked(self.llm_filter == value)
+            btn.setStyleSheet("background-color: #4AFF80; color: #000000; padding: 6px;" if self.llm_filter == value else "background-color: #444444; color: #FFFFFF; padding: 6px;")
+            btn.blockSignals(False)
+
+    def _rebuild_llm_combo(self, preferred_name=""):
+        self._sync_llm_filter_buttons()
+        self.combo_llm.blockSignals(True)
+        self.combo_llm.clear()
+        for item in self._all_llm_items():
+            paid = self._is_paid_item(item)
+            if self.llm_filter == "free" and paid:
+                continue
+            if self.llm_filter == "paid" and not paid:
+                continue
+            self.combo_llm.addItem(item.get("display_name", item.get("name", "")), item)
+        for i in range(self.combo_llm.count()):
+            data = self.combo_llm.itemData(i) or {}
+            if data.get("name") == preferred_name or self.combo_llm.itemText(i) == preferred_name:
+                self.combo_llm.setCurrentIndex(i)
+                break
+        self.combo_llm.blockSignals(False)
+        if hasattr(self, "lbl_model_info"):
+            self._update_model_info()
+
+    def _reload_ollama_catalog(self):
+        self.combo_ollama_catalog.clear()
+        try:
+            from core.model_manager import get_ollama_catalog_models
+            for row in get_ollama_catalog_models():
+                if row.get("installed"):
+                    continue
+                self.combo_ollama_catalog.addItem(row.get('label', row['name']), row)
+            if self.combo_ollama_catalog.count() == 0:
+                self.combo_ollama_catalog.addItem("설치 가능한 미설치 모델 없음", {})
+        except Exception as e:
+            self.combo_ollama_catalog.addItem(f"Ollama 확인 실패: {e}", {})
+
+    def _refresh_ollama_models(self):
+        self.models_data = _fetch_models()
+        self._reload_ollama_catalog()
+        self._rebuild_llm_combo((self.combo_llm.currentData() or {}).get("name", ""))
+
+    def _install_selected_ollama(self):
+        data = self.combo_ollama_catalog.currentData() or {}
+        name = data.get("name", "")
+        if not name:
+            return
+        if QMessageBox.question(self, "Ollama 모델 설치", f"{name} 모델을 설치할까요?") != QMessageBox.StandardButton.Yes:
+            return
+        from core.model_manager import install_ollama_model
+        ok = install_ollama_model(name)
+        QMessageBox.information(self, "Ollama", "설치 완료" if ok else "설치 실패. 로그를 확인하세요.")
+        self._refresh_ollama_models()
+
+    def _delete_current_ollama(self):
+        data = self.combo_llm.currentData() or {}
+        details = dict(data.get("details", {}) or {})
+        name = data.get("name", "")
+        if details.get("provider") != "ollama" or not name:
+            QMessageBox.information(self, "Ollama", "삭제할 로컬 Ollama 모델을 선택하세요.")
+            return
+        if QMessageBox.question(self, "Ollama 모델 삭제", f"{name} 모델을 삭제할까요?") != QMessageBox.StandardButton.Yes:
+            return
+        from core.model_manager import uninstall_ollama_model
+        ok = uninstall_ollama_model(name)
+        QMessageBox.information(self, "Ollama", "삭제 완료" if ok else "삭제 실패. 로그를 확인하세요.")
+        self._refresh_ollama_models()
+
     # --- [유틸리티 함수] ---
     def _update_chunk_display(self, value):
         self.lbl_chunk_time.setText(f"{value // 60:02d}분 {value % 60:02d}초")
@@ -198,19 +325,29 @@ class SettingsDialog(QDialog):
         details = m_data.get('details', {})
         
         # 💡 [핵심] 줄바꿈 기호 없이 완벽하게 가로 한 줄로 하드코딩!
-        single_line_text = f"📦 <b>용량:</b> {size_gb:.2f} GB &nbsp;&nbsp;|&nbsp;&nbsp; 🧠 <b>패밀리:</b> {details.get('family','Unknown')} &nbsp;&nbsp;|&nbsp;&nbsp; 📊 <b>파라미터:</b> {details.get('parameter_size','Unknown')} &nbsp;&nbsp;|&nbsp;&nbsp; ⚙️ <b>포맷:</b> {details.get('format','gguf').upper()}"
+        billing = details.get('billing', '무료/로컬' if details.get('format') == 'ollama' else '')
+        single_line_text = f"📦 <b>용량:</b> {size_gb:.2f} GB &nbsp;&nbsp;|&nbsp;&nbsp; 🧠 <b>패밀리:</b> {details.get('family','Unknown')} &nbsp;&nbsp;|&nbsp;&nbsp; 📊 <b>파라미터:</b> {details.get('parameter_size','Unknown')} &nbsp;&nbsp;|&nbsp;&nbsp; ⚙️ <b>포맷:</b> {details.get('format','gguf').upper()} &nbsp;&nbsp;|&nbsp;&nbsp; 💳 <b>비용:</b> {billing}"
         
         self.lbl_model_info.setText(single_line_text)
     def _collect_settings(self):
         res = dict(self.result_settings)
+        m_data = self.combo_llm.currentData() or {}
+        provider = (m_data.get('details', {}) or {}).get('provider', 'ollama')
+        google_key_saved = set_api_key("google", self.input_api_key.text().strip())
+        openai_key_saved = set_api_key("openai", self.input_openai_api_key.text().strip())
         res.update({
-            "selected_model": self.combo_llm.currentText(),
+            "selected_model": m_data.get('name') or self.combo_llm.currentText(),
+            "selected_llm_provider": provider,
             "selected_whisper_model": self.combo_whisper.currentText(),
             "selected_audio_ai": self.audio_map[self.combo_audio.currentText()],
             "selected_vad": self.vad_map[self.combo_vad.currentText()],
-            "google_api_key": self.input_api_key.text().strip(),
-            "chunk_time_limit": 99999 if self.chk_chunk_all.isChecked() else self.slider_chunk.value()
+            "google_api_key_saved": bool(google_key_saved),
+            "openai_api_key_saved": bool(openai_key_saved),
+            "chunk_time_limit": 99999 if self.chk_chunk_all.isChecked() else self.slider_chunk.value(),
+            "llm_cost_filter": self.llm_filter
         })
+        res.pop("google_api_key", None)
+        res.pop("openai_api_key", None)
         return res
 
     def _on_ok(self): self.result_settings = self._collect_settings(); self.accept()

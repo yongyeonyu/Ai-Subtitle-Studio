@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 ui/queue_widget.py
@@ -132,8 +132,12 @@ class QueueMixin:
                     reuse_count += 1
                 elif '완료' in st:
                     done_count += 1
-        effective_total = max(1, t - reuse_count)
-        pct = int((done_count / effective_total) * 100)
+        if reuse_count >= t and t > 0:
+            pct = 100
+        else:
+            effective_total = max(1, t - reuse_count)
+            pct = int((done_count / effective_total) * 100)
+        pct = max(0, min(100, pct))
         
         exp_str = fmt(expected) if expected > 0 else "예상불가"
 

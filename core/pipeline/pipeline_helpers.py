@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.01
 # Phase: PHASE1-B
 """
 core/pipeline/pipeline_helpers.py
@@ -17,6 +17,52 @@ from core.settings import load_settings, get_model_key
 
 class PipelineHelpersMixin:
     """CoreBackend 에서 사용하는 공통 헬퍼 메서드 모음."""
+
+    def _ask_single_existing_subtitle(self, target_file) -> bool:
+        """단일 클립에 기존 SRT가 있으면 사용 여부를 묻고, 미사용 시 백업 이동합니다."""
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            from core.path_manager import get_srt_path
+
+            srt_p = get_srt_path(target_file)
+            if not srt_p or not os.path.exists(srt_p):
+                return False
+
+            use_existing = QMessageBox.question(
+                self.ui,
+                "기존 자막 사용",
+                "기존 자막을 사용하겠습니까?",
+            ) == QMessageBox.StandardButton.Yes
+            if not use_existing:
+                self._move_existing_srt_to_backup(target_file)
+            return use_existing
+        except Exception:
+            return False
+
+    def _move_existing_srt_to_backup(self, target_file) -> bool:
+        """기존 SRT를 자막백업 폴더로 이동합니다."""
+        try:
+            from core.path_manager import get_srt_path
+            import datetime
+            import shutil
+
+            srt_p = get_srt_path(target_file)
+            if not srt_p or not os.path.exists(srt_p):
+                return False
+
+            backup_dir = os.path.join(os.path.dirname(srt_p), "자막백업")
+            os.makedirs(backup_dir, exist_ok=True)
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            dst = os.path.join(
+                backup_dir,
+                f"{os.path.basename(srt_p)}.{timestamp}.bak",
+            )
+            shutil.move(srt_p, dst)
+            get_logger().log(f"📦 기존 자막 백업 이동: {os.path.basename(srt_p)} → 자막백업")
+            return True
+        except Exception as e:
+            get_logger().log(f"⚠️ 기존 자막 백업 이동 실패: {e}")
+            return False
 
     # ─── 백업 ────────────────────────────────────────────
     def _backup_existing(self, target_file):
@@ -57,8 +103,12 @@ class PipelineHelpersMixin:
 
             srt_p = get_srt_path(target_file)
             if os.path.exists(srt_p):
-                os.remove(srt_p)
-                get_logger().log("    └ 🗑️ 기존 자막 파일을 삭제했습니다. (새로 생성)")
+                moved = self._move_existing_srt_to_backup(target_file)
+                if moved:
+                    get_logger().log("    └ 📦 기존 자막 파일을 백업 후 제거했습니다. (새로 생성)")
+                elif os.path.exists(srt_p):
+                    os.remove(srt_p)
+                    get_logger().log("    └ 🗑️ 기존 자막 파일을 삭제했습니다. (새로 생성)")
 
             def _clear_editor_main():
                 ed = getattr(self.ui, "_editor_widget", None)
@@ -70,8 +120,15 @@ class PipelineHelpersMixin:
                         ed.text_edit.clear()
                         ed.text_edit.blockSignals(False)
                     if hasattr(ed, "timeline") and hasattr(ed.timeline, "canvas"):
-                        ed.timeline.canvas.segments.clear()
-                        ed.timeline.canvas.update()
+                        ed.timeline.update_segments([], 0.0, getattr(ed.timeline.canvas, "total_duration", 0.0))
+                        ed.timeline.set_playhead(0.0)
+                    if hasattr(ed, "video_player"):
+                        ed.video_player.set_context_segments([])
+                        ed.video_player.seek(0.0)
+                    if hasattr(ed, "_segment_queue"):
+                        ed._segment_queue.clear()
+                    ed._cached_segs = []
+                    ed._active_seg_start = 0.0
                     ed._is_dirty = False
                 except Exception as ex:
                     get_logger().log(f"    └ ⚠️ 에디터 초기화 중 오류: {ex}")

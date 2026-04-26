@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 ui/settings_gap.py  ─  ⏱️ 자막 간격 및 환각/앵무새 방어 정밀 시뮬레이터 (X5 Edition)

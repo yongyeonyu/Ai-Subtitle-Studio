@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 diarize.py - AI 화자 분리 (SpeechBrain 엔진 적용 완료)

@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 core/pipeline/multiclip_pipeline.py
@@ -19,6 +19,33 @@ from core.media_info import probe_media
 class MulticlipPipelineMixin:
     """멀티클립 품질모드: 모든 클립 순차 STT → 하나의 에디터에서 편집."""
 
+    def _move_existing_multiclip_srts_to_backup(self, files):
+        """기존자막 reuse 거부 시 개별 SRT를 자막백업 폴더로 이동합니다."""
+        import datetime
+        import shutil
+        from core.path_manager import get_srt_path
+
+        moved = 0
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        for target_file in files:
+            srt_path = get_srt_path(target_file)
+            if not srt_path or not os.path.exists(srt_path):
+                continue
+            base_name = os.path.basename(srt_path)
+            if base_name.endswith("_통합.srt"):
+                continue
+            backup_dir = os.path.join(os.path.dirname(srt_path), "자막백업")
+            os.makedirs(backup_dir, exist_ok=True)
+            dst = os.path.join(backup_dir, f"{base_name}.{timestamp}.bak")
+            try:
+                shutil.move(srt_path, dst)
+                moved += 1
+                get_logger().log(f"📦 기존 자막 백업 이동: {base_name} → 자막백업")
+            except Exception as e:
+                get_logger().log(f"⚠️ 기존 자막 백업 이동 실패: {base_name} / {e}")
+        if moved:
+            get_logger().log(f"✅ 기존 자막 {moved}개를 자막백업 폴더로 이동했습니다.")
+
     def start_multiclip_pipeline(self, files, folder=None):
         """멀티클립 품질모드 진입점"""
         self._active = True
@@ -37,10 +64,15 @@ class MulticlipPipelineMixin:
             for _f in self.files_to_process:
                 if os.path.exists(os.path.splitext(_f)[0] + '.srt'):
                     candidates.append(_f)
-            if candidates:
+            if getattr(self, '_force_no_reuse_once', False):
+                self._force_no_reuse_once = False
+                self._reuse_existing_multiclip_subtitles = False
+            elif candidates:
                 self._reuse_existing_multiclip_subtitles = QMessageBox.question(
                     self.ui, '기존 자막 사용', '기존 자막을 사용하겠습니까?'
                 ) == QMessageBox.StandardButton.Yes
+                if not self._reuse_existing_multiclip_subtitles:
+                    self._move_existing_multiclip_srts_to_backup(candidates)
         except Exception:
             self._reuse_existing_multiclip_subtitles = False
         # reuse flag를 ui(main_window)에도 동기화
@@ -193,7 +225,10 @@ class MulticlipPipelineMixin:
                     return
 
                 # 기존 자막으로 이미 사전 로드된 클립은 skip
-                if getattr(self, '_reuse_existing_multiclip_subtitles', False) and i in locals().get('_reuse_done', set()):
+                if getattr(self, '_reuse_existing_multiclip_subtitles', False) and i in getattr(self, '_reuse_clip_indices', set()):
+                    if hasattr(self.ui, "_sig_update_queue"):
+                        self.ui._sig_update_queue.emit(i, "✅기존자막", " - ", "", "")
+                    get_logger().log(f"  ⏭️ 기존 자막 사전 로드됨, STT 건너뜀: {os.path.basename(target_file)}")
                     continue
 
                 vname = os.path.basename(target_file)
@@ -242,11 +277,12 @@ class MulticlipPipelineMixin:
                     self.video_processor.clear_fast_mode_overrides()
                 res = self._get_audio_extract_result(target_file)
 
-                next_file = (
-                    self.files_to_process[i + 1] if (i + 1) < total_files else None
-                )
-                if next_file:
-                    self._prefetch_audio_for_file(next_file)
+                try:
+                    prefetch_ahead = max(1, int(load_settings().get("prefetch_ahead", 3)))
+                except Exception:
+                    prefetch_ahead = 3
+                for _pf in self.files_to_process[i + 1: i + 1 + prefetch_ahead]:
+                    self._prefetch_audio_for_file(_pf)
 
                 if not res:
                     get_logger().log(f"  ❌ 오디오 추출 실패: {vname}")
@@ -352,16 +388,27 @@ class MulticlipPipelineMixin:
                     return
 
                 if action_state[0] == "start":
-                    # 재시작: 기존 자막 클리어 후 STT 재실행
+                    # 재시작: 기존 자막 클리어 후 새 멀티클립 스레드로 STT 재실행
                     get_logger().log("\n🔄 멀티클립 재시작...")
                     action_state[0] = "wait"
-                    self._active = True
+                    self._active = False
                     if hasattr(self.ui, "_sig_clear_editor"):
                         try:
                             self.ui._sig_clear_editor.emit()
                         except Exception:
                             pass
-                    break  # while 루프 탈출 → 아래 통합 SRT 저장은 skip
+                    try:
+                        self._reuse_existing_multiclip_subtitles = False
+                        self._reuse_clip_indices = set()
+                        self.ui._reuse_existing_multiclip_subtitles = False
+                        self.ui._reuse_clip_indices = set()
+                    except Exception:
+                        pass
+                    if hasattr(self.ui, "_sig_restart_multiclip"):
+                        self.ui._sig_restart_multiclip.emit(list(self.files_to_process), self.current_folder)
+                    else:
+                        threading.Timer(0.05, lambda: self.start_multiclip_pipeline(list(self.files_to_process), self.current_folder)).start()
+                    return
 
                 # save 등 다른 action → 정상 종료
                 break

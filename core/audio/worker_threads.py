@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 core/worker_threads.py - PyQt6 QThread 워커 (크PD 변환)

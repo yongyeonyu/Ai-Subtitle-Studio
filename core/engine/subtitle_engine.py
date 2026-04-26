@@ -1,4 +1,4 @@
-# Version: 02.02.01
+# Version: 02.03.00
 # Phase: PHASE1-B
 """
 core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장 
@@ -15,6 +15,9 @@ import re
 import urllib.request
 import difflib  
 import threading
+
+from core.llm.secure_keys import get_api_key
+from core.llm.openai_provider import is_openai_model, split_text as openai_split_text
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -388,6 +391,41 @@ def ask_exaone_to_split(text: str, threshold: int, rules: dict, model: str, user
         get_logger().log(f"[LLM 연결/파싱 실패] {e}")
         return None
 
+def _build_llm_prompt(text: str, threshold: int, rules: dict, user_prompt: str) -> str:
+    end_words = ", ".join(rules.get("end_words", []))
+    start_words = ", ".join(rules.get("start_words", []))
+    if user_prompt.strip():
+        combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n[사용자 추가 지시문]\n{user_prompt.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
+    else:
+        combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
+    return (
+        combined_prompt
+        .replace("{threshold}", str(threshold))
+        .replace("{end_words}", end_words)
+        .replace("{start_words}", start_words)
+        .replace("{text}", text)
+    )
+
+
+def ask_openai_to_split(text: str, threshold: int, rules: dict, model_name: str, user_prompt: str, api_key: str) -> list[str] | None:
+    if not api_key:
+        get_logger().log("❌ API 키가 없습니다. 환경설정에서 OpenAI API Key를 입력해주세요.")
+        return None
+    try:
+        chunks = openai_split_text(api_key, model_name, _build_llm_prompt(text, threshold, rules, user_prompt))
+    except Exception as e:
+        get_logger().log(f"[OpenAI 연결/파싱 실패] {e}")
+        return None
+    final_chunks = []
+    for c in chunks or []:
+        if not isinstance(c, str):
+            continue
+        c = _clean(c)
+        if c and len(c.replace(" ", "").replace("\n", "")) >= 2:
+            final_chunks.append(c)
+    return final_chunks if final_chunks else None
+
+
 def _process_one(args: tuple) -> list[dict]:
     # 전달받은 인자 개수가 7개면 api_key까지 받고, 아니면 빈 문자열로 처리합니다.
     if len(args) == 7:
@@ -427,6 +465,8 @@ def _process_one(args: tuple) -> list[dict]:
     # [수정] LLM 호출 분기 부분
     if "Gemini" in model:
         chunks = ask_gemini_to_split(text, threshold, rules, model, user_prompt, api_key)
+    elif is_openai_model(model):
+        chunks = ask_openai_to_split(text, threshold, rules, model, user_prompt, api_key)
     else:
         chunks = ask_exaone_to_split(text, threshold, rules, model, user_prompt)
 
@@ -589,7 +629,12 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
                 elif "llm_prompt" in s:
                     user_prompt = s["llm_prompt"]
 
-                api_key = s.get("google_api_key", "")
+                if "Gemini" in model:
+                    api_key = get_api_key("google") or s.get("google_api_key", "")
+                elif is_openai_model(model):
+                    api_key = get_api_key("openai") or s.get("openai_api_key", "")
+                else:
+                    api_key = ""
         except Exception:
             pass
 
@@ -626,7 +671,7 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
                 optimized.append(segments[idx])
 
     else:
-        if "Gemini" in model:
+        if "Gemini" in model or is_openai_model(model):
             _EXAONE_WORKERS = 1
             get_logger().log(f"🤖 {short_m} API 안전 모드: {_EXAONE_WORKERS}개 워커 순차 처리 중...")
         else:
@@ -852,7 +897,7 @@ def ask_gemini_to_split(text: str, threshold: int, rules: dict, model_name: str,
     return [text]
 
 def _warmup_ollama_model(model: str):
-    if not model or "사용 안함" in model or "Gemini" in model:
+    if not model or "사용 안함" in model or "Gemini" in model or is_openai_model(model):
         return
 
     with _OLLAMA_WARM_LOCK:
