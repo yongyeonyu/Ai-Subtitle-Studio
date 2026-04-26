@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.03
 # Phase: PHASE1-B
 """
 media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 + Whisper 섹터 동기화)
@@ -14,6 +14,19 @@ from logger import get_logger
 
 _CHUNK_DURATION = 30     
 _OVERLAP_SEC    = 3      
+
+
+def _parse_worker_json_line(line: str):
+    line = (line or "").strip()
+    if not line or not line.startswith("{"):
+        return None
+    try:
+        return json.loads(line)
+    except Exception as e:
+        get_logger().log(f"  ⚠️ JSON 파싱 오류: {e}")
+        get_logger().log(f"  ⚠️ raw line: {line[:200] if line else 'empty'}")
+        return None
+
 
 class VideoProcessor:
     # [media_processor.py] __init__ 함수 내부
@@ -421,11 +434,8 @@ class VideoProcessor:
                     if not line:
                         break
 
-                    try:
-                        data = json.loads(line)
-                    except Exception as e:
-                        get_logger().log(f"  ⚠️ JSON 파싱 오류: {e}")
-                        get_logger().log(f"  ⚠️ raw line: {line[:200] if line else 'empty'}")
+                    data = _parse_worker_json_line(line)
+                    if data is None:
                         continue
 
                     if data.get("task_id") != mac_task_id:
@@ -470,11 +480,8 @@ class VideoProcessor:
                     if not line:
                         break
 
-                    try:
-                        data = json.loads(line)
-                    except Exception as e:
-                        get_logger().log(f"  ⚠️ JSON 파싱 오류: {e}")
-                        get_logger().log(f"  ⚠️ raw line: {line[:200] if line else 'empty'}")
+                    data = _parse_worker_json_line(line)
+                    if data is None:
                         continue
 
                     chunk_segs = self._parse_whisper_payload(

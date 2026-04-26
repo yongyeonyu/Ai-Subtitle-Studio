@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.02
 # Phase: PHASE1-B
 """
 core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장 
@@ -12,22 +12,18 @@ core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장
 import os
 import json
 import re
-import urllib.request
 import difflib  
-import threading
 
 from core.llm.secure_keys import get_api_key
+from core.llm.gemini_provider import split_text as gemini_split_text
+from core.llm.ollama_provider import split_text as ollama_split_text, warmup_model as warmup_ollama_model
 from core.llm.openai_provider import is_openai_model, split_text as openai_split_text
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 
 import config
 from logger import get_logger
-from core.utils import seconds_to_srt_time, load_subtitle_rules
-
-_OLLAMA_WARMED = set()
-_OLLAMA_WARM_LOCK = threading.Lock()
+from core.utils import load_subtitle_rules
 
 # 💡 [설정 데이터 로드]
 def _get_user_settings():
@@ -340,43 +336,7 @@ def ask_exaone_to_split(text: str, threshold: int, rules: dict, model: str, user
     )
 
     try:
-        body = json.dumps({
-            "model": model,
-            "prompt": prompt,
-            "stream": False,
-            "format": "json",
-            "keep_alive": -1,
-            "options": {
-                "temperature": 0.0,
-                "num_predict": 256,
-            },
-        }).encode("utf-8")
-
-        req = urllib.request.Request(
-            "http://localhost:11434/api/generate",
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "Connection": "keep-alive",
-            },
-        )
-
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            out_text = json.loads(resp.read().decode("utf-8")).get("response", "")
-
-        chunks = []
-        try:
-            parsed = json.loads(out_text)
-            if isinstance(parsed, dict) and "result" in parsed:
-                chunks = parsed["result"]
-            elif isinstance(parsed, list):
-                chunks = parsed
-            else:
-                raise ValueError("JSON 구조 오류")
-        except Exception:
-            matches = re.findall(r'"([^"]*)"', out_text)
-            chunks = [m for m in matches if m != "result" and len(m) > 1]
-
+        chunks = ollama_split_text(model, prompt) or []
         final_chunks = []
         for c in chunks:
             if not isinstance(c, str):
@@ -675,7 +635,7 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
             _EXAONE_WORKERS = 1
             get_logger().log(f"🤖 {short_m} API 안전 모드: {_EXAONE_WORKERS}개 워커 순차 처리 중...")
         else:
-            _warmup_ollama_model(model)
+            warmup_ollama_model(model, logger=get_logger())
             get_logger().log(f"{short_m} {min(_EXAONE_WORKERS, len(args))}개 워커 병렬 처리 ({len(segments)}개)...")
 
         max_workers = max(1, min(_EXAONE_WORKERS, len(args)))
@@ -717,219 +677,24 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
     return optimized
 
 def save_srt(segments: list[dict], srt_path: str, apply_offset: bool = True):
-    if apply_offset:
-        segments = adjust_timing(segments)
-
-    # 💡 [클로드 리뷰 반영 완료] 구버전 하드코딩 방식을 config.DATASET_DIR로 깔끔하게 통일!
-    settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
-    s = {}
-    if os.path.exists(settings_path):
-        try:
-            with open(settings_path, "r", encoding="utf-8") as f: s = json.load(f)
-        except Exception:
-            pass
-
-    # 💡 [신규 최적화 로직] 화자 설정이 2명 이상이더라도, 실제 인식된 화자가 1명이면 화자 파일 생성을 건너뜁니다!
-    max_speakers = int(s.get("max_speakers", 1))
-    unique_speakers = set()
-    for seg in segments:
-        if "speaker_list" in seg and seg["speaker_list"]:
-            unique_speakers.update(seg["speaker_list"])
-        elif "speaker" in seg:
-            unique_speakers.add(seg["speaker"])
-            
-    # 설정이 2명 이상이고, 실제로 등장한 화자도 2명 이상일 때만 화자 분리 파일 생성
-    generate_color_srt = (max_speakers > 1) and (len(unique_speakers) > 1)
-
-    spk1_id = s.get("spk1_id", "00"); spk1_c = s.get("spk1_color", "#FFFFFF")
-    spk2_id = s.get("spk2_id", "01"); spk2_c = s.get("spk2_color", "#FFFF00")
-    spk3_id = s.get("spk3_id", "02"); spk3_c = s.get("spk3_color", "#00FFFF")
-    cmap = {spk1_id: spk1_c, spk2_id: spk2_c, spk3_id: spk3_c}
-
-    lines_plain = []
-    lines_color = []
-    idx = 1
-    seen = set()
-
-    for seg in segments:
-        text = seg.get("text", "").strip()
-        text = text.replace("\u2028", "\n")  # ✅ 소프트 줄바꿈 → SRT 표준 줄바꿈
-
-        
-        if not text or text == "\u200B": 
-            continue
-
-        start_t = max(0.0, seg["start"])
-
-        end_t = seg["end"]
-        if end_t <= start_t: end_t = start_t + 0.1
-
-        key = (round(start_t, 1), text)
-        if key in seen: continue
-        seen.add(key)
-        
-        ts_str = f"{seconds_to_srt_time(start_t)} --> {seconds_to_srt_time(end_t)}"
-        lines_plain += [str(idx), ts_str, text, ""]
-        
-        spk_list = seg.get("speaker_list", [])
-        colored_parts = []
-        for i, line in enumerate(text.split('\n')):
-            cl = line.strip()
-            
-            spk = spk_list[i] if i < len(spk_list) else spk1_id
-            color = cmap.get(spk, "#FFFFFF")
-            colored_parts.append(f'<font color="{color}">{cl}</font>')
-                
-        lines_color += [str(idx), ts_str, "\n".join(colored_parts), ""]
-        idx += 1
-
-    target_dir = os.path.dirname(os.path.abspath(srt_path))
-    base_name = os.path.splitext(os.path.basename(srt_path))[0]
-    backup_dir = os.path.join(target_dir, "자막백업")
-    
-    os.makedirs(target_dir, exist_ok=True)
-    os.makedirs(backup_dir, exist_ok=True)
-    
-    plain_srt_path = os.path.join(target_dir, f"{base_name}.srt")
-    color_srt_path = os.path.join(target_dir, f"{base_name}_화자.srt")
-    
-    plain_content = "\n".join(lines_plain)
-    color_content = "\n".join(lines_color)
-
-    with open(plain_srt_path, "w", encoding="utf-8") as f:
-        f.write(plain_content)
-        
-    # 💡 [조건부 생성] 
-    if generate_color_srt:
-        with open(color_srt_path, "w", encoding="utf-8") as f:
-            f.write(color_content)
-
-    now = datetime.now()
-    date_str = now.strftime("%Y%m%d")
-    time_str = now.strftime("%H%M%S") 
-    
-    backup_plain = os.path.join(backup_dir, f"{base_name}_{date_str}_{time_str}.srt")
-    with open(backup_plain, "w", encoding="utf-8") as f:
-        f.write(plain_content)
-        
-    # 💡 [조건부 백업] 
-    if generate_color_srt:
-        backup_color = os.path.join(backup_dir, f"{base_name}_화자_{date_str}_{time_str}.srt")
-        with open(backup_color, "w", encoding="utf-8") as f:
-            f.write(color_content)
-
-    # 💡 로그 메시지도 조건에 따라 센스있게 다르게 출력합니다.
-    log_msg = f"✅ 자막 저장 및 자동 백업 완료: {time_str}"
-    if not generate_color_srt:
-        log_msg += " (단일 화자 감지: 화자 분리 파일 생략)"
-    get_logger().log(log_msg)
+    from core.engine.srt_writer import save_srt as _save_srt
+    return _save_srt(segments, srt_path, apply_offset=apply_offset, adjust_timing_func=adjust_timing)
 
 def ask_gemini_to_split(text: str, threshold: int, rules: dict, model_name: str, user_prompt: str, api_key: str) -> list[str] | None:
     if not api_key:
         get_logger().log("❌ API 키가 없습니다. 환경설정에서 Google API Key를 입력해주세요.")
         return None
-    
-    from google import genai
-    from google.genai import types
-    import time  # 💡 [핵심] 기다림을 위한 시간 모듈 추가
-    
-    client = genai.Client(api_key=api_key)
-    
-    gemini_model = "gemini-2.5-pro" if "Pro" in model_name else "gemini-2.5-flash"
-    
-    end_words   = ", ".join(rules.get("end_words",   []))
-    start_words = ", ".join(rules.get("start_words", []))
-    
-    if user_prompt.strip():
-        combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n[사용자 추가 지시문]\n{user_prompt.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
-    else:
-        combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
-        
-    prompt = combined_prompt.replace("{threshold}", str(threshold)) \
-                            .replace("{end_words}", end_words) \
-                            .replace("{start_words}", start_words) \
-                            .replace("{text}", text)
-                            
-    # 💡 [핵심 추가] 구글이 거절하면 최대 3번까지 끈질기게 기다렸다가 다시 묻는 '인내심 루프'
-    max_retries = 2 # 유료 계정은 2번이면 충분합니다.
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=gemini_model,
-                contents=prompt,
-                config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0),
-            )
 
-            out_text = response.text or ""
-            out_text = out_text.strip().strip('`')
+    try:
+        chunks = gemini_split_text(api_key, model_name, _build_llm_prompt(text, threshold, rules, user_prompt))
+    except Exception:
+        return [text]
 
-            if out_text.lower().startswith('json'):
-                out_text = out_text[4:].strip()
-
-            chunks = []
-            import json
-            try:
-                # 찌꺼기가 제거된 순수 JSON 문자열만 파싱합니다.
-                parsed = json.loads(out_text)
-                if isinstance(parsed, dict) and "result" in parsed:
-                    chunks = parsed["result"]
-                elif isinstance(parsed, list):
-                    chunks = parsed
-            except Exception:
-                import re
-                matches = re.findall(r'"([^"]*)"', out_text)
-                chunks = [m for m in matches if m != "result" and len(m) > 1]
-
-            final_chunks = []
-            for c in chunks:
-                if not isinstance(c, str): continue
-                c = _clean(c) # _clean 함수는 기존 파일 상단에 있는 것을 그대로 사용합니다.
-                if c and len(c.replace(" ", "").replace("\n", "")) >= 2:
-                    final_chunks.append(c)
-                    
-            return final_chunks if final_chunks else [text] # 💡 실패해도 원본은 돌려줘서 튕김 방지
-            
-        except Exception as e:
-            if "429" in str(e):
-                time.sleep(1) # 💡 22초 안 쉽니다! 1초만 쉬고 바로 풀악셀!
-                continue
-            return [text] # 💡 기타 에러 시 원본 반환
-    return [text]
-
-def _warmup_ollama_model(model: str):
-    if not model or "사용 안함" in model or "Gemini" in model or is_openai_model(model):
-        return
-
-    with _OLLAMA_WARM_LOCK:
-        if model in _OLLAMA_WARMED:
-            return
-
-        try:
-            body = json.dumps({
-                "model": model,
-                "prompt": " ",
-                "stream": False,
-                "keep_alive": -1,
-                "options": {
-                    "temperature": 0.0,
-                    "num_predict": 1
-                },
-            }).encode("utf-8")
-
-            req = urllib.request.Request(
-                "http://localhost:11434/api/generate",
-                data=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "Connection": "keep-alive",
-                },
-            )
-
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                resp.read()
-
-            _OLLAMA_WARMED.add(model)
-            get_logger().log(f"🔥 Ollama 워밍업 완료: {model}")
-
-        except Exception as e:
-            get_logger().log(f"⚠️ Ollama 워밍업 실패: {e}")
+    final_chunks = []
+    for c in chunks or []:
+        if not isinstance(c, str):
+            continue
+        c = _clean(c)
+        if c and len(c.replace(" ", "").replace("\n", "")) >= 2:
+            final_chunks.append(c)
+    return final_chunks if final_chunks else [text]

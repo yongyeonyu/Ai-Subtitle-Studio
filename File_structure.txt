@@ -1,18 +1,18 @@
 <!--
-Document-Version: 02.03.00
+Document-Version: 02.03.03
 Phase: PHASE1-B
-Last-Updated: 2026-04-26
+Last-Updated: 2026-04-27
 Updated-By: Codex with 대표님
 Previous-Content: v02.03.00 파일/폴더 구조, STRUCTURE.txt 삭제 후 단일 구조 문서
-This-Update: 문서 관리 주석과 Copilot 인계 기준 추가, 최신 작업 영역 요약 유지
-Copilot-Handoff: 이 문서는 커밋 직전 최종 상태 기준으로만 갱신합니다. 중간 작업 중에는 불필요하게 수정하지 않습니다.
+This-Update: v02.03.03 신규 provider/mixin/위젯 분리 파일 반영
+Copilot-Handoff: v02.03.03 커밋 기준. 구조 문서는 신규 분리 파일 중심으로 갱신되었습니다.
 -->
 ================================================================================
 AI Subtitle Studio — 프로젝트 구조 및 버전 관리 문서
 생성일: 2026-04-20
-최종 수정: 2026-04-26
+최종 수정: 2026-04-27
 Phase: PHASE1-B
-App Version: 02.03.00
+App Version: 02.03.03
 구조 문서 기준: File_structure.txt
 비고: STRUCTURE.txt는 삭제하고 본 문서로 단일화
 ================================================================================
@@ -20,7 +20,7 @@ App Version: 02.03.00
 ai_subtitle_studio/
 ├── main.py                         ← 프로그램 실행 진입점                    v02.03.00
 ├── main.bat                        ← Windows 실행 배치 파일
-├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v02.03.00
+├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v02.03.03
 ├── logger.py                       ← 시스템 로그 기록 및 UI 연동             v02.03.00
 ├── AGENTS.md                       ← 개발 가이드 / Copilot 핸드오프
 ├── ACTION_ITEMS.md                 ← 전체 액션아이템
@@ -55,14 +55,17 @@ ai_subtitle_studio/
 │   ├── llm/                        ← LLM provider 계층                         🆕 v02.03.00
 │   │   ├── secure_keys.py          ← macOS Keychain / keyring API Key 저장
 │   │   ├── provider_registry.py    ← Ollama/Gemini/OpenAI 모델 표시 메타
-│   │   └── openai_provider.py      ← OpenAI Responses API adapter
+│   │   ├── openai_provider.py      ← OpenAI Responses API adapter
+│   │   ├── gemini_provider.py      ← Gemini API adapter                         🆕 v02.03.03
+│   │   └── ollama_provider.py      ← Ollama local adapter / warmup              🆕 v02.03.03
 │   │
 │   ├── engine/
-│   │   └── subtitle_engine.py      ← 자막 최적화 / LLM 분기 / SRT 저장        v02.03.00
+│   │   ├── subtitle_engine.py      ← 자막 최적화 / LLM 분기                    v02.03.03
+│   │   └── srt_writer.py           ← SRT 저장 / 화자 SRT / 자막백업             🆕 v02.03.03
 │   │
 │   ├── audio/
-│   │   ├── media_processor.py      ← 오디오 추출 + VAD + Whisper              v02.03.00
-│   │   ├── whisper_mlx.py          ← macOS Whisper MLX persistent worker      v02.03.00
+│   │   ├── media_processor.py      ← 오디오 추출 + VAD + Whisper              v02.03.03
+│   │   ├── whisper_mlx.py          ← macOS Whisper MLX persistent worker      v02.03.03
 │   │   ├── whisper_faster.py       ← Windows faster-whisper client            v02.03.00
 │   │   ├── whisper_worker.py       ← Windows subprocess worker                v02.03.00
 │   │   ├── worker_threads.py       ← 백그라운드 worker                         v02.03.00
@@ -81,28 +84,32 @@ ai_subtitle_studio/
 │       └── data_manager.py         ← 설정/교정 데이터 I/O                    v02.03.00
 │
 └── ui/
-    ├── home_ui.py                  ← 홈 화면 빌드 Mixin                       v02.03.00
+    ├── home_ui.py                  ← 홈 화면 빌드 Mixin                       v02.03.03
     ├── queue_widget.py             ← 큐 테이블 + 헤더 + ETA                   v02.03.00
-    ├── cloud_ui.py                 ← iCloud/NAS 자동처리 UI                  v02.03.00
+    ├── cloud_ui.py                 ← iCloud/NAS 자동처리 UI                  v02.03.03
     │
     ├── main/
     │   ├── main_window.py          ← 메인 화면 본체                           v02.03.00
     │   ├── main_signals.py         ← 시그널/슬롯 핸들러                       v02.03.00
-    │   └── main_file_ops.py        ← 파일/폴더 열기                           v02.03.00
+    │   └── main_file_ops.py        ← 파일/폴더 열기                           v02.03.03
     │
     ├── editor/
-    │   ├── editor_widget.py        ← 에디터 UI 골격                           v02.03.00
-    │   ├── editor_lifecycle.py     ← 에디터 열기/저장/닫기                    v02.03.00
+    │   ├── editor_widget.py        ← 에디터 UI 골격                           v02.03.03
+    │   ├── editor_lifecycle.py     ← 에디터 열기/저장/닫기                    v02.03.03
     │   ├── editor_pipeline.py      ← 자막 생성/재시작 파이프라인              v02.03.00
     │   ├── editor_actions.py       ← 저장/이전/종료/내보내기                  v02.03.00
     │   ├── editor_segments.py      ← 자막 세그먼트 큐 처리                    v02.03.00
-    │   ├── editor_timeline_video.py← 비디오 싱크 / 자막 분할                  v02.03.00
+    │   ├── editor_timeline_video.py← 타임라인 싱크 / 자막 분할                v02.03.03
+    │   ├── editor_video_controls.py← 비디오 제어 / 재생 단축키                🆕 v02.03.03
+    │   ├── editor_multiclip_context.py← 멀티클립 context / clip 전환           🆕 v02.03.03
+    │   ├── editor_multiclip_ops.py ← 멀티클립 파일 추가/삭제/리매핑           🆕 v02.03.03
+    │   ├── editor_speaker_ops.py   ← 화자 메뉴 / 화자 드래그 조작             🆕 v02.03.03
     │   ├── video_player_widget.py  ← 영상/오디오 플레이어                     v02.03.00
     │   └── 기타 editor helper 파일
     │
     ├── timeline/                   ← 타임라인 캔버스/입력/페인트/파형         v02.03.00
     ├── project/                    ← 프로젝트/멀티클립 패널                  v02.03.00
-    ├── settings/                   ← AI/화자/갭/상세/출력 설정                v02.03.00
+    ├── settings/                   ← AI/화자/갭/상세/출력 설정                v02.03.03
     └── dialogs/                    ← 폴더 선택 / 내보내기 다이얼로그          v02.03.00
 
 ================================================================================

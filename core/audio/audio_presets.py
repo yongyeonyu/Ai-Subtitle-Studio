@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.03
 # Phase: PHASE1-B
 """
 core/audio/audio_presets.py
@@ -50,5 +50,37 @@ def apply_audio_preset(settings: dict, preset_name: str) -> dict:
     out = dict(settings)
     for key, value in dict(preset.get("settings", {}) or {}).items():
         out[key] = value
+    for key, value in recommend_ai_settings_for_preset(preset_name).items():
+        out[key] = value
     out["audio_preset"] = preset_name
     return out
+
+
+def recommend_ai_settings_for_preset(preset_name: str) -> dict:
+    """Return STT/LLM defaults that match an audio capture situation."""
+    name = (preset_name or "").strip()
+    if not name:
+        return {}
+
+    whisper_quality = "mlx-community/whisper-large-v3-mlx" if config.IS_MAC else "large-v3"
+    whisper_fast = "mlx-community/whisper-large-v3-turbo" if config.IS_MAC else "large-v3-turbo"
+
+    if name == "마이크 없음/풀속도":
+        return {
+            "selected_whisper_model": whisper_fast,
+            "selected_model": "사용 안함 (Whisper 단독 진행)",
+        }
+
+    if name in {"야외", "차량", "스마트폰", "브이로그실내"}:
+        return {
+            "selected_whisper_model": whisper_quality,
+            "selected_model": "exaone3.5:7.8b",
+        }
+
+    if name in {"스튜디오", "실내일반", "인터뷰", "강연"}:
+        return {
+            "selected_whisper_model": whisper_quality,
+            "selected_model": "exaone3.5:2.4b",
+        }
+
+    return {"selected_whisper_model": whisper_quality}

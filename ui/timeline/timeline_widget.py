@@ -148,9 +148,9 @@ class TimelineWidget(QWidget):
         end_padding = 96
         return max(int(float(dur) * pps) + end_padding, self.scroll.width())
 
-    def _clamp_scroll_x(self, value: float) -> float:
+    def _clamp_scroll_x(self, value: float) -> int:
         sb = self.scroll.horizontalScrollBar()
-        return float(max(0, min(int(value), sb.maximum())))
+        return max(0, min(int(value), sb.maximum()))
 
     def _on_canvas_right_clicked(self, start_sec, gpos):
         self.seg_right_clicked.emit(start_sec, gpos)
@@ -246,20 +246,20 @@ class TimelineWidget(QWidget):
     def _update_smooth_scroll(self):
         delta = float(self._target_scroll_x - self._current_scroll_x)
         if abs(delta) > 2.0:
-            self._current_scroll_x = self._clamp_scroll_x(self._current_scroll_x + delta * 0.15)
+            self._current_scroll_x = float(self._clamp_scroll_x(self._current_scroll_x + delta * 0.15))
             self.scroll.horizontalScrollBar().setValue(int(self._current_scroll_x))
 
     def center_to_sec(self, sec, smooth=False):
         target_x = int(sec * self.canvas.pps)
         half_w = self.scroll.width() // 2
-        target_val = self._clamp_scroll_x(max(0, target_x - half_w))
+        target_val = int(self._clamp_scroll_x(max(0, target_x - half_w)))
 
         if smooth:
             self._target_scroll_x = float(target_val)
         else:
             self._target_scroll_x = float(target_val)
             self._current_scroll_x = float(target_val)
-            self.scroll.horizontalScrollBar().setValue(target_val)
+            self.scroll.horizontalScrollBar().setValue(int(target_val))
 
     def load_waveform(self, path: str, force: bool = False):
         if self._waveform_mode == "multi" and not force:

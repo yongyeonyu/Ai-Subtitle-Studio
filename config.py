@@ -1,4 +1,4 @@
-# Version: 02.03.02
+# Version: 02.03.03
 # Phase: PHASE1-B
 
 
@@ -9,7 +9,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "02.03.02"
+APP_VERSION = "02.03.03"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"

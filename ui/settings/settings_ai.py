@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.03
 # Phase: PHASE1-B
 """
 ui/settings_ai.py  ─  ⚙️ AI 엔진 설정 다이얼로그
@@ -15,6 +15,7 @@ from ui.settings.settings_common import (
 )
 from core.llm.provider_registry import cloud_model_items
 from core.llm.secure_keys import get_api_key, set_api_key
+from core.audio.audio_presets import load_audio_presets, apply_audio_preset
 
 
 class SettingsDialog(QDialog):
@@ -38,10 +39,21 @@ class SettingsDialog(QDialog):
             QSlider::handle:horizontal { background: #4AFF80; border: 1px solid #4AFF80; width: 14px; margin: -4px 0; border-radius: 7px; }
         """)
         self.result_settings = dict(settings)
+        self.audio_presets = load_audio_presets()
 
         layout = QVBoxLayout(self)
         form   = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        preset_row = QHBoxLayout()
+        self.combo_audio_preset = QComboBox()
+        self.combo_audio_preset.addItem("직접 설정", "")
+        for name, preset in self.audio_presets.items():
+            desc = preset.get("description", "")
+            self.combo_audio_preset.addItem(f"{name} - {desc}" if desc else name, name)
+        self.combo_audio_preset.setMinimumWidth(350)
+        preset_row.addWidget(self.combo_audio_preset)
+        form.addRow("오디오 프리셋:", preset_row)
 
         # 1. LLM 모델 (무료/유료 필터 + Ollama 설치/삭제)
         self.llm_filter = settings.get("llm_cost_filter", "all")
@@ -198,6 +210,8 @@ class SettingsDialog(QDialog):
             if v == curr_vad: self.combo_vad.setCurrentText(k); break
         self.combo_vad.setMinimumWidth(350)
         form.addRow("음성 구간 탐지(VAD):", self.combo_vad)
+        self._sync_audio_preset_combo(settings.get("audio_preset", ""))
+        self.combo_audio_preset.currentIndexChanged.connect(self._on_audio_preset_changed)
 
         layout.addLayout(form)
         layout.addSpacing(10)
@@ -269,6 +283,60 @@ class SettingsDialog(QDialog):
                 self.combo_ollama_catalog.addItem("설치 가능한 미설치 모델 없음", {})
         except Exception as e:
             self.combo_ollama_catalog.addItem(f"Ollama 확인 실패: {e}", {})
+
+    def _sync_audio_preset_combo(self, preset_name: str):
+        self.combo_audio_preset.blockSignals(True)
+        for i in range(self.combo_audio_preset.count()):
+            if self.combo_audio_preset.itemData(i) == preset_name:
+                self.combo_audio_preset.setCurrentIndex(i)
+                break
+        self.combo_audio_preset.blockSignals(False)
+
+    def _set_combo_by_data_value(self, combo, value: str, mapping: dict | None = None):
+        if value is None:
+            return False
+        if mapping:
+            for text, data_value in mapping.items():
+                if data_value == value:
+                    combo.setCurrentText(text)
+                    return True
+            return False
+        for i in range(combo.count()):
+            if combo.itemText(i) == value:
+                combo.setCurrentIndex(i)
+                return True
+        return False
+
+    def _set_llm_combo_by_name(self, model_name: str):
+        if not model_name:
+            return False
+        for i in range(self.combo_llm.count()):
+            data = self.combo_llm.itemData(i) or {}
+            if data.get("name") == model_name or self.combo_llm.itemText(i) == model_name:
+                self.combo_llm.setCurrentIndex(i)
+                return True
+        if self.llm_filter != "all":
+            old_filter = self.llm_filter
+            self.llm_filter = "all"
+            self._rebuild_llm_combo(model_name)
+            if self._set_llm_combo_by_name(model_name):
+                return True
+            self.llm_filter = old_filter
+            self._rebuild_llm_combo((self.combo_llm.currentData() or {}).get("name", ""))
+        return False
+
+    def _on_audio_preset_changed(self, *args):
+        preset_name = self.combo_audio_preset.currentData()
+        if not preset_name:
+            self.result_settings["audio_preset"] = ""
+            return
+
+        self.result_settings = apply_audio_preset(self.result_settings, preset_name)
+        self._set_combo_by_data_value(self.combo_audio, self.result_settings.get("selected_audio_ai"), self.audio_map)
+        self._set_combo_by_data_value(self.combo_vad, self.result_settings.get("selected_vad"), self.vad_map)
+        self._set_combo_by_data_value(self.combo_whisper, self.result_settings.get("selected_whisper_model"))
+        self._set_llm_combo_by_name(self.result_settings.get("selected_model", ""))
+        self._update_model_info()
 
     def _refresh_ollama_models(self):
         self.models_data = _fetch_models()
@@ -344,7 +412,8 @@ class SettingsDialog(QDialog):
             "google_api_key_saved": bool(google_key_saved),
             "openai_api_key_saved": bool(openai_key_saved),
             "chunk_time_limit": 99999 if self.chk_chunk_all.isChecked() else self.slider_chunk.value(),
-            "llm_cost_filter": self.llm_filter
+            "llm_cost_filter": self.llm_filter,
+            "audio_preset": self.combo_audio_preset.currentData() or ""
         })
         res.pop("google_api_key", None)
         res.pop("openai_api_key", None)

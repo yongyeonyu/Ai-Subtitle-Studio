@@ -1,11 +1,11 @@
 <!--
-Document-Version: 02.03.00
+Document-Version: 02.03.03
 Phase: PHASE1-B
-Last-Updated: 2026-04-26
+Last-Updated: 2026-04-27
 Updated-By: Codex with 대표님
 Previous-Content: 프로젝트 개발 가이드, create_all 규칙, 환경별 작업 방식, NAS/LLM/성능 운영 규칙
-This-Update: 문서 최종 갱신 규칙, v02.03.00 기준 문서 버전 관리, Copilot 인계 메모 유지 규칙 추가
-Copilot-Handoff: 이 문서는 커밋 직전 최종 상태 기준으로만 갱신합니다. 중간 작업 중에는 불필요하게 수정하지 않습니다.
+This-Update: v02.03.03 기준 리팩토링/MLX JSON 채널 분리/NAS 선택창/AI 프리셋 연동 완료 상태 반영
+Copilot-Handoff: v02.03.03 커밋 기준. 핵심 변경은 provider/mixin 분리, NAS 선택 UX, MLX stdout JSON 안정화, AI 메뉴 오디오 프리셋 연동입니다.
 -->
 # AGENTS.md — AI Subtitle Studio 개발 가이드
 

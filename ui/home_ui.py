@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.03
 # Phase: PHASE1-B
 """
 ui/home_ui.py
@@ -26,6 +26,7 @@ class HomeUIMixin:
 
     def _build_home_content(self):
         self._preview_containers = []
+        self._watchdog_labels = []
         old_layout = self.home_page.layout()
         if old_layout is not None: QWidget().setLayout(old_layout)
         layout = QVBoxLayout(self.home_page); layout.setContentsMargins(30, 20, 30, 15); layout.setSpacing(8); layout.addSpacing(40)
@@ -85,6 +86,7 @@ class HomeUIMixin:
         btn_exit = QPushButton("❌ 종료"); btn_exit.setStyleSheet(f"background: #882222; color: #FFF; font-weight: bold; border: none; padding: 6px 12px; border-radius: 4px;"); btn_exit.clicked.connect(self._quick_exit)
         bottom_bar.addWidget(version_lbl); bottom_bar.addStretch(); bottom_bar.addWidget(btn_settings); bottom_bar.addWidget(btn_auto_start); bottom_bar.addWidget(btn_clear_cache); bottom_bar.addWidget(btn_exit)
         layout.addLayout(bottom_bar)
+        self._ensure_watchdog_timer()
 
 
     def _is_auto_start_enabled(self):
@@ -98,12 +100,43 @@ class HomeUIMixin:
             return "background: #4AFF80; color: #000; font-weight: bold; border: none; padding: 6px 12px; border-radius: 4px;"
         return "background: #555; color: #FFF; font-weight: bold; border: none; padding: 6px 12px; border-radius: 4px;"
 
+    def _ensure_watchdog_timer(self):
+        if not hasattr(self, "_home_watchdog_timer"):
+            self._home_watchdog_timer = QTimer(self)
+            self._home_watchdog_timer.timeout.connect(self._tick_home_watchdog_labels)
+        if self._watchdog_labels and self._is_auto_start_enabled():
+            if not self._home_watchdog_timer.isActive():
+                self._home_watchdog_timer.start(1000)
+            self._tick_home_watchdog_labels()
+        elif self._home_watchdog_timer.isActive():
+            self._home_watchdog_timer.stop()
+
+    def _watchdog_interval_for(self, is_nas: bool) -> int:
+        manager = getattr(self, "_nas_sync_manager" if is_nas else "_cloud_sync_manager", None)
+        if manager is not None:
+            return max(1, int(getattr(manager, "scan_interval", 60 if is_nas else 3) or 1))
+        return 60 if is_nas else 3
+
+    def _tick_home_watchdog_labels(self):
+        if not getattr(self, "_watchdog_labels", None):
+            return
+        for label, is_nas in list(self._watchdog_labels):
+            interval = self._watchdog_interval_for(is_nas)
+            key = "_nas_watchdog_left" if is_nas else "_icloud_watchdog_left"
+            left = int(getattr(self, key, interval) or interval)
+            left = interval if left <= 1 else left - 1
+            setattr(self, key, left)
+            label.setText(f"Watchdog {left:02d}s")
+            label.setVisible(self._is_auto_start_enabled())
+
     def _toggle_auto_start_enabled(self):
         settings = load_settings()
         enabled = not bool(settings.get("auto_start_enabled", True))
         settings["auto_start_enabled"] = enabled
         save_settings(settings)
         if enabled:
+            self._icloud_watchdog_left = self._watchdog_interval_for(False)
+            self._nas_watchdog_left = self._watchdog_interval_for(True)
             self._start_configured_watchers()
         else:
             if hasattr(self, "_cloud_sync_manager"):
@@ -160,6 +193,11 @@ class HomeUIMixin:
             sub_lbl = QLabel(subtitle); sub_lbl.setStyleSheet(f"color: {config.ACCENT}; font-size: 11px; font-weight: bold; border: none; background: transparent; padding-left: 10px;"); title_row.addWidget(sub_lbl)
         if comp_title:
             comp_lbl = QLabel(comp_title); comp_lbl.setStyleSheet("color: #4AFF80; font-size: 11px; font-weight: bold; border: none; background: transparent; padding-left: 15px;"); title_row.addWidget(comp_lbl)
+        if active and self._is_auto_start_enabled():
+            wd_lbl = QLabel()
+            wd_lbl.setStyleSheet("color: #4AFF80; font-size: 11px; font-weight: bold; border: none; background: transparent; padding-left: 12px;")
+            title_row.addWidget(wd_lbl)
+            self._watchdog_labels.append((wd_lbl, is_nas))
         title_row.addStretch(); layout.addLayout(title_row)
         preview_container = QWidget(); preview_layout = QVBoxLayout(preview_container); preview_layout.setContentsMargins(0, 0, 0, 0); preview_layout.setSpacing(6)
         if not file_data:

@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.03
 # Phase: PHASE1-B
 """
 ui/cloud_ui.py
@@ -151,6 +151,9 @@ class CloudUIMixin:
         if dlg.exec():
             set_nas_excluded_folders(sorted(dlg.excluded_folders))
             self._add_recent_folder(local_path)
+            if getattr(dlg, "saved_only", False):
+                self.show_home()
+                return
             if dlg.selected_files:
                 if len(dlg.selected_files) == 1 and self.backend:
                     self.backend.start_pipeline(dlg.selected_files, folder=local_path)

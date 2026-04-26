@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.03
 # Phase: PHASE1-B
 """
 core/whisper_mlx.py
@@ -8,6 +8,7 @@ macOS (Apple Silicon) 전용 Whisper 백엔드
 """
 
 import sys
+import os
 import subprocess
 import json
 import threading
@@ -20,6 +21,7 @@ def _build_worker_script() -> str:
 import json
 import os
 import sys
+import contextlib
 import mlx_whisper
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -48,15 +50,16 @@ for raw in sys.stdin:
 
     for idx, p in enumerate(chunk_paths):
         try:
-            result = mlx_whisper.transcribe(
-                p,
-                path_or_hf_repo=model,
-                language=language,
-                word_timestamps=True,
-                temperature=temperature,
-                condition_on_previous_text=False,
-                verbose=False,
-            )
+            with contextlib.redirect_stdout(sys.stderr):
+                result = mlx_whisper.transcribe(
+                    p,
+                    path_or_hf_repo=model,
+                    language=language,
+                    word_timestamps=True,
+                    temperature=temperature,
+                    condition_on_previous_text=False,
+                    verbose=False,
+                )
             print(json.dumps({
                 "task_id": task_id,
                 "index": idx,
@@ -78,10 +81,19 @@ os._exit(0)
 """
 
 def _attach_stderr_logger(proc):
+    ignored_fragments = (
+        "resource_tracker: There appear to be",
+        "leaked semaphore objects to clean up at shutdown",
+    )
+
     def _reader():
         try:
             for line in proc.stderr:
                 line = line.rstrip()
+                if any(fragment in line for fragment in ignored_fragments):
+                    continue
+                if "frames/s" in line and ("%" in line or "it/s" in line):
+                    continue
                 if line:
                     get_logger().log(f"[mlx-whisper] {line}")
         except Exception:
@@ -97,6 +109,12 @@ def ensure_worker(proc=None):
     if proc and proc.poll() is None:
         return proc
 
+    env = os.environ.copy()
+    env["PYTHONWARNINGS"] = _merged_pythonwarnings(
+        env.get("PYTHONWARNINGS"),
+        "ignore:resource_tracker:UserWarning:multiprocessing.resource_tracker",
+    )
+
     new_proc = subprocess.Popen(
         [sys.executable, "-u", "-c", _build_worker_script()],
         stdin=subprocess.PIPE,
@@ -105,6 +123,7 @@ def ensure_worker(proc=None):
         encoding="utf-8",
         errors="replace",
         bufsize=1,
+        env=env,
     )
     _attach_stderr_logger(new_proc)
     get_logger().log("🍎 MLX Whisper persistent worker 시작")
@@ -126,6 +145,12 @@ def submit_task(proc, chunk_paths: list, model: str, language: str, temperature_
     proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
     proc.stdin.flush()
     return task_id
+
+def _merged_pythonwarnings(current: str | None, rule: str) -> str:
+    parts = [p for p in (current or "").split(",") if p]
+    if rule not in parts:
+        parts.append(rule)
+    return ",".join(parts)
 
 def stop_worker(proc):
     if not proc:
@@ -160,31 +185,40 @@ def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple:
     safe_paths = json.dumps(chunk_paths)
 
     script = f"""
-import mlx_whisper, json, sys, os
+import mlx_whisper, json, sys, os, contextlib
 sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
 
 for p in {safe_paths}:
     try:
-        r = mlx_whisper.transcribe(
-            p,
-            path_or_hf_repo={safe_model},
-            language='{language}',
-            word_timestamps=True,
-            temperature={temperature_tuple},
-            condition_on_previous_text=False
-        )
+        with contextlib.redirect_stdout(sys.stderr):
+            r = mlx_whisper.transcribe(
+                p,
+                path_or_hf_repo={safe_model},
+                language='{language}',
+                word_timestamps=True,
+                temperature={temperature_tuple},
+                condition_on_previous_text=False
+            )
         print(json.dumps(r, ensure_ascii=False), flush=True)
     except Exception as e:
         print(json.dumps({{"error": str(e)}}, ensure_ascii=False), flush=True)
 os._exit(0)
 """
 
+    env = os.environ.copy()
+    env["PYTHONWARNINGS"] = _merged_pythonwarnings(
+        env.get("PYTHONWARNINGS"),
+        "ignore:resource_tracker:UserWarning:multiprocessing.resource_tracker",
+    )
+
     proc = subprocess.Popen(
         [sys.executable, "-c", script],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         encoding="utf-8",
-        errors="replace"
+        errors="replace",
+        env=env,
     )
 
     return proc

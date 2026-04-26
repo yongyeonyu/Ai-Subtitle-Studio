@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.03.03
 # Phase: PHASE1-B
 """
 ui/main/main_file_ops.py
@@ -123,7 +123,9 @@ class FileOpsMixin:
         from ui.dialogs.folder_dialog import FolderDialog
 
         dlg = FolderDialog(folder, self)
-        if dlg.exec() and dlg.selected_files:
+        if dlg.exec() and getattr(dlg, "saved_only", False):
+            return
+        if dlg.result() and dlg.selected_files:
             if len(dlg.selected_files) == 1 and self.backend:
                 self.backend.start_pipeline(dlg.selected_files, folder=folder)
             elif len(dlg.selected_files) > 1:

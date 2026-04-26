@@ -1,4 +1,4 @@
-# Version: 02.03.02
+# Version: 02.03.03
 # Phase: PHASE1-B
 """
 ui/editor_lifecycle.py
@@ -211,14 +211,12 @@ class EditorLifecycleMixin:
                         self._sig_update_queue_header.emit(_total_count, _total_count, 100, '')
                 except Exception:
                     pass
-                from PyQt6.QtCore import QTimer
                 QTimer.singleShot(500, lambda: self._finalize_reuse_completion(editor))
             
         if is_batch: QTimer.singleShot(600, lambda e=editor: e.btn_start.click() if hasattr(e, 'btn_start') else None)
 
         def safe_home(*args):
-                        from PyQt6.QtCore import QTimer as _QT
-                        _QT.singleShot(0, self.show_home)
+            QTimer.singleShot(0, self.show_home)
         def force_exit_app(*args): self.close()
         def handle_prev(*args):
             if self._on_prev_cb: self._on_prev_cb()
@@ -336,4 +334,3 @@ class EditorLifecycleMixin:
             except: pass
         if self.backend: self.backend.stop()
         QTimer.singleShot(100, lambda: os._exit(0))
-
