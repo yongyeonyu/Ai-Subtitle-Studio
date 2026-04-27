@@ -1,4 +1,4 @@
-# Version: 02.03.03
+# Version: 02.03.04
 # Phase: PHASE1-B
 """
 ui/home_ui.py
@@ -7,7 +7,8 @@ MainWindow 홈 화면 빌드 Mixin
 import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QDialog, QLineEdit, QCheckBox, QScrollArea, QComboBox
+    QDialog, QLineEdit, QCheckBox, QScrollArea, QComboBox, QMessageBox,
+    QGridLayout
 )
 from PyQt6.QtCore import Qt, QTimer
 
@@ -37,6 +38,7 @@ class HomeUIMixin:
         left_col.addWidget(self._btn("📁 폴더 선택", "폴더에서 영상 일괄 선택", self.select_folder))
         left_col.addWidget(self._btn("📝 프로젝트 만들기", "영상 묶어서 프로젝트 관리", self._create_project))
         left_col.addWidget(self._btn("📦 프로젝트 열기", "기존 프로젝트 불러오기", self._open_project))
+        left_col.addWidget(self._editor_shortcuts_panel())
         left_col.addWidget(self._btn("✂️ cut 편집 도우미", "개발 중", self._dummy_action))
         left_col.addStretch()
         right_widget = QWidget(); right_col = QVBoxLayout(right_widget); right_col.setContentsMargins(0, 0, 0, 0); right_col.setSpacing(8)
@@ -252,7 +254,127 @@ class HomeUIMixin:
         w.mousePressEvent = _on_w_click
         return w
 
+    def _editor_shortcuts_panel(self):
+        panel = QWidget()
+        panel.setStyleSheet(f"background-color: {config.BG2}; border: 1px solid {config.BG3}; border-radius: 8px;")
+        layout = QGridLayout(panel)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setHorizontalSpacing(6)
+        layout.setVerticalSpacing(6)
+        actions = [
+            ("⚙️ AI", self._open_main_ai_settings),
+            ("🛠️ 상세설정", self._open_main_adv_settings),
+            ("🗣️ 화자", self._open_main_speaker_settings),
+            ("⏱️ 간격", self._open_main_gap_settings),
+            ("🎬 비디오", self._toggle_main_video),
+            ("🎥 자막출력", self._open_main_export_dialog),
+        ]
+        for idx, (text, cmd) in enumerate(actions):
+            btn = QPushButton(text)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setMinimumHeight(30)
+            btn.setStyleSheet(
+                f"QPushButton {{ background: {config.BG3}; color: {config.FG}; "
+                "border: none; padding: 5px 8px; border-radius: 4px; font-weight: bold; } "
+                "QPushButton:hover { background: #3d3d3d; color: #4AFF80; }"
+            )
+            btn.clicked.connect(cmd)
+            layout.addWidget(btn, idx // 2, idx % 2)
+        return panel
+
     def _dummy_action(self): pass
+
+    def _active_editor(self):
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None:
+            return None
+        try:
+            if editor.parent() is None:
+                return None
+        except Exception:
+            pass
+        return editor
+
+    def _show_editor_required_message(self, action_name):
+        QMessageBox.information(
+            self,
+            action_name,
+            "현재 열린 에디터가 없습니다.\n파일이나 프로젝트를 먼저 열어주세요."
+        )
+
+    def _activate_editor_for_main_action(self):
+        editor = self._active_editor()
+        if editor is None:
+            return None
+        try:
+            self.stack.setCurrentWidget(editor)
+        except Exception:
+            try:
+                self.stack.setCurrentIndex(1)
+            except Exception:
+                pass
+        return editor
+
+    def _open_main_ai_settings(self):
+        editor = self._active_editor()
+        if editor is not None and hasattr(editor, "_show_settings"):
+            editor._show_settings()
+            return
+        from ui.settings.settings_dialog import SettingsDialog
+        settings = load_settings()
+        dlg = SettingsDialog(settings, self)
+        if dlg.exec():
+            save_settings(dlg.result_settings)
+
+    def _open_main_adv_settings(self):
+        editor = self._active_editor()
+        if editor is not None and hasattr(editor, "_show_adv_settings"):
+            editor._show_adv_settings()
+            return
+        from ui.settings.settings_dialog import AdvancedSettingsDialog
+        settings = load_settings()
+        dlg = AdvancedSettingsDialog(settings, self)
+        if dlg.exec():
+            settings.update(dlg.result)
+            save_settings(settings)
+
+    def _open_main_speaker_settings(self):
+        editor = self._active_editor()
+        if editor is not None and hasattr(editor, "_show_speaker_settings"):
+            editor._show_speaker_settings()
+            return
+        from ui.settings.settings_dialog import SpeakerDialog
+        settings = load_settings()
+        dlg = SpeakerDialog(settings, self)
+        if dlg.exec():
+            settings.update(dlg.result)
+            save_settings(settings)
+
+    def _open_main_gap_settings(self):
+        editor = self._active_editor()
+        if editor is not None and hasattr(editor, "_show_gap_settings"):
+            editor._show_gap_settings()
+            return
+        from ui.settings.settings_dialog import GapSettingsDialog
+        settings = load_settings()
+        dlg = GapSettingsDialog(settings, self)
+        if dlg.exec():
+            settings.update(dlg.result)
+            save_settings(settings)
+
+    def _toggle_main_video(self):
+        editor = self._activate_editor_for_main_action()
+        if editor is None or not hasattr(editor, "_toggle_video"):
+            self._show_editor_required_message("비디오")
+            return
+        editor._toggle_video()
+
+    def _open_main_export_dialog(self):
+        editor = self._activate_editor_for_main_action()
+        if editor is None or not hasattr(editor, "_show_export_dialog"):
+            self._show_editor_required_message("자막출력")
+            return
+        editor._show_export_dialog()
 
     def _show_path_settings(self):
         dlg = QDialog(self); dlg.setWindowTitle("자동설정"); dlg.setMinimumWidth(520); dlg.setStyleSheet(f"""
