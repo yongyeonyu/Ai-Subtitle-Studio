@@ -1,18 +1,18 @@
 <!--
-Document-Version: 02.04.00
+Document-Version: 02.06.00
 Phase: PHASE1-C
 Last-Updated: 2026-04-28
 Updated-By: Codex with 대표님
-Previous-Content: v02.03.03 provider/mixin/위젯 분리 파일 구조
-This-Update: v02.04.00 PHASE1-C Apple 스타일 통합 UI, 전역 메뉴바, 공용 아이콘, 설정/타임라인 UI 구조 반영
-Copilot-Handoff: v02.04.00 커밋 기준. 전역 메뉴는 ui/menu_bar.py, 공용 아이콘/스타일은 ui/style.py, 통합 대시보드는 ui/main/main_window.py와 ui/home_ui.py를 우선 확인하세요.
+Previous-Content: v02.04.00 PHASE1-C Apple 스타일 통합 UI 파일 구조
+This-Update: v02.06.00 P6 멀티클립 STT/LLM 병렬 파이프라인 구조 반영
+Copilot-Handoff: v02.06.00 커밋 기준. 멀티클립 성능/안정화는 core/pipeline/multiclip_pipeline.py의 STT/LLM worker 분리 구조를 우선 확인하세요.
 -->
 ================================================================================
 AI Subtitle Studio — 프로젝트 구조 및 버전 관리 문서
 생성일: 2026-04-20
 최종 수정: 2026-04-28
 Phase: PHASE1-C
-App Version: 02.04.00
+App Version: 02.06.00
 구조 문서 기준: File_structure.txt
 비고: STRUCTURE.txt는 삭제하고 본 문서로 단일화
 ================================================================================
@@ -20,13 +20,14 @@ App Version: 02.04.00
 ai_subtitle_studio/
 ├── main.py                         ← 프로그램 실행 진입점                    v02.03.00
 ├── main.bat                        ← Windows 실행 배치 파일
-├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v02.04.00
+├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v02.06.00
 ├── logger.py                       ← 시스템 로그 기록 및 UI 연동             v02.03.00
 ├── AGENTS.md                       ← 개발 가이드 / Copilot 핸드오프
 ├── ACTION_ITEMS.md                 ← 전체 액션아이템
 ├── RELEASE_v02.02.00.md            ← 이전 릴리즈 노트
 ├── RELEASE_v02.03.00.md            ← 이전 작업 릴리즈 노트
 ├── RELEASE_v02.04.00.md            ← PHASE1-C Apple UI 릴리즈 노트
+├── RELEASE_v02.06.00.md            ← P6 멀티클립 성능/안정화 릴리즈 노트
 ├── File_structure.txt              ← 현재 구조 문서
 │
 ├── dataset/
@@ -75,7 +76,7 @@ ai_subtitle_studio/
 │   ├── pipeline/
 │   │   ├── backend_core.py         ← 단일/공통 파이프라인 진입                v02.03.00
 │   │   ├── single_pipeline.py      ← 단일 파일 자막 생성 파이프라인           v02.03.00
-│   │   ├── multiclip_pipeline.py   ← 멀티클립 자막 생성/reuse/restart         v02.03.00
+│   │   ├── multiclip_pipeline.py   ← 멀티클립 STT/LLM 병렬 파이프라인/reuse    v02.06.00
 │   │   └── pipeline_helpers.py     ← 백업/저장/렌더/prefetch 공통             v02.03.00
 │   │
 │   └── project/
@@ -114,6 +115,16 @@ ai_subtitle_studio/
     ├── project/                    ← 프로젝트/멀티클립 패널                  v02.03.00
     ├── settings/                   ← AI/화자/갭/상세/출력 설정                v02.04.00
     └── dialogs/                    ← 폴더 선택 / 내보내기 다이얼로그          v02.03.00
+
+================================================================================
+[v02.06.00 핵심 변경]
+================================================================================
+
+1. P6 멀티클립 STT/LLM 병렬 파이프라인
+   - `core/pipeline/multiclip_pipeline.py`에 Whisper worker와 LLM worker 분리
+   - 클립1 LLM 최적화 중 클립2 Whisper가 시작되는 구조로 처리 시간 단축
+   - LLM worker는 단일 순서 큐로 append 순서를 클립1 → 클립2 → 클립3으로 유지
+   - 기존 자막 reuse도 같은 큐를 거치게 하여 신규 STT 결과와 순서 충돌 방지
 
 ================================================================================
 [v02.04.00 핵심 변경]

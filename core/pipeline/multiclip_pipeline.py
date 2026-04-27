@@ -1,10 +1,11 @@
-# Version: 02.03.02
+# Version: 02.06.00
 # Phase: PHASE1-B
 """
 core/pipeline/multiclip_pipeline.py
 MulticlipPipelineMixin — 멀티클립 품질모드 파이프라인 (start_multiclip_pipeline, _run_multiclip)
 """
 import os
+import queue
 import threading
 import traceback
 import time
@@ -17,7 +18,7 @@ from core.media_info import probe_media
 
 
 class MulticlipPipelineMixin:
-    """멀티클립 품질모드: 모든 클립 순차 STT → 하나의 에디터에서 편집."""
+    """멀티클립 품질모드: 클립 단위 STT/LLM 파이프라인 → 하나의 에디터에서 편집."""
 
     def _move_existing_multiclip_srts_to_backup(self, files):
         """기존자막 reuse 거부 시 개별 SRT를 자막백업 폴더로 이동합니다."""
@@ -92,12 +93,256 @@ class MulticlipPipelineMixin:
             self.ui.init_queue_list(self.files_to_process)
 
         get_logger().log(
-            f"🎬 멀티클립 품질모드: {len(self.files_to_process)}개 클립 순차 처리"
+            f"🎬 멀티클립 품질모드: {len(self.files_to_process)}개 클립 STT/LLM 병렬 파이프라인"
         )
         self._pipeline_thread = threading.Thread(
             target=self._run_multiclip, daemon=True, name="multiclip-main"
         )
         self._pipeline_thread.start()
+
+    def _emit_multiclip_queue_status(self, idx, status, expected="", info_txt="", len_txt=""):
+        if hasattr(self.ui, "_sig_update_queue"):
+            self.ui._sig_update_queue.emit(idx, status, expected, info_txt, len_txt)
+
+    def _offset_multiclip_segments(self, segments, offset, clip_idx):
+        for seg in segments:
+            seg["start"] = float(seg.get("start", 0.0)) + offset
+            seg["end"] = float(seg.get("end", 0.0)) + offset
+            seg["_clip_idx"] = clip_idx
+            if "speaker" not in seg:
+                seg["speaker"] = seg.get("spk_id", "00")
+            for word in seg.get("words", []) or []:
+                word["start"] = float(word.get("start", 0.0)) + offset
+                word["end"] = float(word.get("end", 0.0)) + offset
+        return segments
+
+    def _sanitize_multiclip_segments(self, segments, clip_idx):
+        clean = []
+        for seg in segments or []:
+            try:
+                start = max(0.0, float(seg.get("start", 0.0)))
+                end = float(seg.get("end", start + 0.5))
+            except Exception:
+                continue
+            if end <= start:
+                end = start + 0.5
+            seg["start"] = start
+            seg["end"] = end
+            seg["_clip_idx"] = clip_idx
+            if "speaker" not in seg:
+                seg["speaker"] = seg.get("spk_id", "00")
+            clean.append(seg)
+        return clean
+
+    def _try_load_existing_multiclip_srt(self, target_file, clip_idx, offset):
+        if not getattr(self, "_reuse_existing_multiclip_subtitles", False):
+            return None
+
+        existing_srt = os.path.splitext(target_file)[0] + ".srt"
+        vname = os.path.basename(target_file)
+        if not os.path.exists(existing_srt):
+            return None
+
+        try:
+            from core.srt_parser import parse_srt
+            segments = parse_srt(existing_srt)
+        except Exception as e:
+            get_logger().log(f"  ⚠️ 기존 자막 로드 실패: {vname} / {e}")
+            return None
+
+        if not segments:
+            get_logger().log(f"  ⚠️ 기존 자막 파일이 비어있음: {vname}")
+            return None
+
+        self._offset_multiclip_segments(segments, offset, clip_idx)
+        self._reuse_clip_indices.add(clip_idx)
+        try:
+            self.ui._reuse_clip_indices = set(self._reuse_clip_indices)
+        except Exception:
+            pass
+        return segments
+
+    def _run_multiclip_stt_llm_pipeline(self, clip_boundaries, total_files):
+        """Whisper worker와 LLM worker를 분리해 클립 단위로 겹쳐 처리합니다."""
+        from core.engine.subtitle_engine import optimize_segments
+
+        stt_queue = queue.Queue()
+        out_queue = queue.Queue()
+        sentinel = object()
+
+        def stt_worker():
+            try:
+                get_logger().log("\n🎤 멀티클립 STT/LLM 병렬 파이프라인 시작...")
+
+                try:
+                    prefetch_ahead = max(1, int(load_settings().get("prefetch_ahead", 3)))
+                except Exception:
+                    prefetch_ahead = 3
+
+                for i, target_file in enumerate(self.files_to_process):
+                    if not self._active:
+                        break
+
+                    vname = os.path.basename(target_file)
+                    bd = clip_boundaries[i]
+                    offset = bd["start"]
+
+                    get_logger().log(
+                        f"\n{'=' * 44}\n🎬 [{i + 1}/{total_files}] {vname}\n{'=' * 44}"
+                    )
+
+                    existing = self._try_load_existing_multiclip_srt(target_file, i, offset)
+                    if existing is not None:
+                        self._emit_multiclip_queue_status(i, "⏳ LLM 대기", "", "", "")
+                        get_logger().log(
+                            f"  ✅ 기존 자막 사용: {vname} ({len(existing)}개 세그먼트)"
+                        )
+                        stt_queue.put(
+                            {
+                                "idx": i,
+                                "name": vname,
+                                "segments": existing,
+                                "skip_optimize": True,
+                            }
+                        )
+                        continue
+
+                    self._emit_multiclip_queue_status(i, "⏳ 오디오 추출 중", "", "", "")
+                    self._backup_existing(target_file)
+
+                    if hasattr(self, 'video_processor'):
+                        self.video_processor.clear_fast_mode_overrides()
+
+                    res = self._get_audio_extract_result(target_file)
+                    for prefetch_file in self.files_to_process[i + 1: i + 1 + prefetch_ahead]:
+                        self._prefetch_audio_for_file(prefetch_file)
+
+                    if not res:
+                        get_logger().log(f"  ❌ 오디오 추출 실패: {vname}")
+                        self._emit_multiclip_queue_status(i, "❌ 오류", "", "", "")
+                        continue
+
+                    chunk_dir, vad_segs = res
+
+                    if hasattr(self.ui, "_current_file_idx"):
+                        self.ui._current_file_idx = i + 1
+                    if hasattr(self.ui, "_sig_set_vad_segments"):
+                        self.ui._sig_set_vad_segments.emit(vad_segs)
+                    if hasattr(self.ui, "_sig_set_recog_zone"):
+                        self.ui._sig_set_recog_zone.emit(offset, bd["end"])
+
+                    self._emit_multiclip_queue_status(i, "⏳ Whisper 중", "", "", "")
+                    get_logger().log("  🎤 Whisper 변환 중...")
+
+                    clip_segments = []
+                    for chunk_segs, _chunk_idx, _chunk_total in self.video_processor.transcribe(
+                        chunk_dir
+                    ):
+                        if not self._active:
+                            break
+                        clip_segments.extend(chunk_segs)
+                        if chunk_segs and hasattr(self.ui, "_sig_set_recog_progress"):
+                            last_end = max(seg["end"] for seg in chunk_segs) + offset
+                            self.ui._sig_set_recog_progress.emit(last_end)
+
+                    if not self._active:
+                        break
+
+                    self._offset_multiclip_segments(clip_segments, offset, i)
+                    get_logger().log(
+                        f"    📊 Whisper 완료: {len(clip_segments)}개 세그먼트 → LLM 큐 전달"
+                    )
+                    self._emit_multiclip_queue_status(i, "⏳ LLM 대기", "", "", "")
+                    stt_queue.put(
+                        {
+                            "idx": i,
+                            "name": vname,
+                            "segments": clip_segments,
+                            "skip_optimize": False,
+                        }
+                    )
+            except Exception as e:
+                out_queue.put({"fatal": True, "error": e})
+            finally:
+                stt_queue.put(sentinel)
+                if hasattr(self.ui, "_sig_set_recog_zone"):
+                    self.ui._sig_set_recog_zone.emit(-1.0, -1.0)
+
+        def llm_worker():
+            while True:
+                item = stt_queue.get()
+                if item is sentinel:
+                    break
+                if not self._active:
+                    break
+
+                idx = item["idx"]
+                vname = item["name"]
+                segments = item["segments"]
+
+                if item.get("skip_optimize"):
+                    optimized = self._sanitize_multiclip_segments(segments, idx)
+                else:
+                    self._emit_multiclip_queue_status(idx, "⏳ LLM 최적화 중", "", "", "")
+                    get_logger().log(
+                        f"  🧠 LLM 최적화 중: [{idx + 1}/{total_files}] {vname}"
+                    )
+                    try:
+                        optimized = optimize_segments(segments)
+                    except Exception as e:
+                        get_logger().log(
+                            f"  ⚠️ LLM 최적화 실패, Whisper 결과 유지: {vname} / {e}"
+                        )
+                        optimized = segments
+                    optimized = self._sanitize_multiclip_segments(optimized, idx)
+
+                out_queue.put(
+                    {
+                        "idx": idx,
+                        "name": vname,
+                        "segments": optimized,
+                        "skip_optimize": item.get("skip_optimize", False),
+                    }
+                )
+
+            out_queue.put(sentinel)
+
+        stt_thread = threading.Thread(
+            target=stt_worker, daemon=True, name="multiclip-stt-worker"
+        )
+        llm_thread = threading.Thread(
+            target=llm_worker, daemon=True, name="multiclip-llm-worker"
+        )
+        stt_thread.start()
+        llm_thread.start()
+
+        processed_count = 0
+        while True:
+            item = out_queue.get()
+            if item is sentinel:
+                break
+            if item.get("fatal"):
+                raise item["error"]
+
+            idx = item["idx"]
+            optimized = item["segments"]
+            if hasattr(self.ui, "_sig_append_segments"):
+                self.ui._sig_append_segments.emit(optimized)
+            self._emit_multiclip_queue_status(
+                idx,
+                "✅기존자막" if item.get("skip_optimize") else "✅ 완료",
+                "",
+                "",
+                "",
+            )
+            processed_count += 1
+            get_logger().log(
+                f"  ✅ 클립 {idx + 1} 자막 완료 ({len(optimized)}개 세그먼트)"
+            )
+
+        stt_thread.join(timeout=2.0)
+        llm_thread.join(timeout=2.0)
+        return processed_count
 
     def _run_multiclip(self):
         restart_handoff = False
@@ -218,149 +463,13 @@ class MulticlipPipelineMixin:
                 self.ui.request_show_home()
                 return
 
-            # ── STEP 2: 클립별 오디오 추출 + Whisper (순차) ──
-            get_logger().log("\n🎤 멀티클립 STT 시작...")
-
-            for i, target_file in enumerate(self.files_to_process):
-                if not self._active:
-                    return
-
-                # 기존 자막으로 이미 사전 로드된 클립은 skip
-                if getattr(self, '_reuse_existing_multiclip_subtitles', False) and i in getattr(self, '_reuse_clip_indices', set()):
-                    if hasattr(self.ui, "_sig_update_queue"):
-                        self.ui._sig_update_queue.emit(i, "✅기존자막", " - ", "", "")
-                    get_logger().log(f"  ⏭️ 기존 자막 사전 로드됨, STT 건너뜀: {os.path.basename(target_file)}")
-                    continue
-
-                vname = os.path.basename(target_file)
-                bd = clip_boundaries[i]
-                offset = bd["start"]
-
-                get_logger().log(
-                    f"\n{'=' * 44}\n🎬 [{i + 1}/{total_files}] {vname}\n{'=' * 44}"
-                )
-
-                if hasattr(self.ui, "_sig_update_queue"):
-                    self.ui._sig_update_queue.emit(i, "⏳ 오디오 추출 중", "", "", "")
-
-                if getattr(self, "_reuse_existing_multiclip_subtitles", False):
-                    existing_srt = os.path.splitext(target_file)[0] + ".srt"
-                    if os.path.exists(existing_srt):
-                        try:
-                            from core.srt_parser import parse_srt
-                            clip_segments = parse_srt(existing_srt)
-                            if clip_segments:
-                                for seg in clip_segments:
-                                    seg["start"] = float(seg.get("start", 0.0)) + offset
-                                    seg["end"] = float(seg.get("end", 0.0)) + offset
-                                    seg["_clip_idx"] = i
-                                    if "speaker" not in seg:
-                                        seg["speaker"] = seg.get("spk_id", "00")
-                                if hasattr(self.ui, "_sig_append_segments"):
-                                    self.ui._sig_append_segments.emit(clip_segments)
-                                if hasattr(self.ui, "_sig_update_queue"):
-                                    self.ui._sig_update_queue.emit(i, "✅기존자막", " - ", "", "")
-                                get_logger().log(f"  ✅ 기존 자막 사용: {vname} ({len(clip_segments)}개 세그먼트)")
-                                self._reuse_clip_indices.add(i)
-                                try:
-                                    self.ui._reuse_clip_indices = set(self._reuse_clip_indices)
-                                except Exception:
-                                    pass
-                                continue
-                            else:
-                                get_logger().log(f"  ⚠️ 기존 자막 파일이 비어있음: {vname}")
-                        except Exception as e:
-                            get_logger().log(f"  ⚠️ 기존 자막 로드 실패: {vname} / {e}")
-
-                self._backup_existing(target_file)
-                # 멀티클립: 빠른모드 오버라이드가 남아있으면 제거
-                if hasattr(self, 'video_processor'):
-                    self.video_processor.clear_fast_mode_overrides()
-                res = self._get_audio_extract_result(target_file)
-
-                try:
-                    prefetch_ahead = max(1, int(load_settings().get("prefetch_ahead", 3)))
-                except Exception:
-                    prefetch_ahead = 3
-                for _pf in self.files_to_process[i + 1: i + 1 + prefetch_ahead]:
-                    self._prefetch_audio_for_file(_pf)
-
-                if not res:
-                    get_logger().log(f"  ❌ 오디오 추출 실패: {vname}")
-                    if hasattr(self.ui, "_sig_update_queue"):
-                        self.ui._sig_update_queue.emit(i, "❌ 오류", "", "", "")
-                    continue
-
-                chunk_dir, vad_segs = res
-
-                # ── 멀티클립 VAD 그린존 전달 ──
-                if hasattr(self.ui, "_current_file_idx"):
-                    self.ui._current_file_idx = i + 1  # 1-based
-                if hasattr(self.ui, "_sig_set_vad_segments"):
-                    self.ui._sig_set_vad_segments.emit(vad_segs)
-
-                # ── Whisper 인식 존 설정 (그린→옐로우 진행) ──
-                if hasattr(self.ui, "_sig_set_recog_zone"):
-                    self.ui._sig_set_recog_zone.emit(offset, bd["end"])
-
-                if hasattr(self.ui, "_sig_update_queue"):
-                    self.ui._sig_update_queue.emit(i, "⏳ 자막 생성 중", "", "", "")
-
-                get_logger().log("  🎤 Whisper 변환 중...")
-
-                # ── Whisper transcribe (단일 루프) ──
-                clip_segments = []
-                for chunk_segs, c_idx, t_total in self.video_processor.transcribe(
-                    chunk_dir
-                ):
-                    if not self._active:
-                        return
-                    clip_segments.extend(chunk_segs)
-                    # ── 옐로우존 진행률 업데이트 ──
-                    if chunk_segs and hasattr(self.ui, "_sig_set_recog_progress"):
-                        last_end = max(seg["end"] for seg in chunk_segs) + offset
-                        self.ui._sig_set_recog_progress.emit(last_end)
-
-                get_logger().log(f"    📊 총 {len(clip_segments)}개 세그먼트")
-
-                # 시간 오프셋 적용
-                for seg in clip_segments:
-                    seg["start"] += offset
-                    seg["end"] += offset
-                    seg["_clip_idx"] = i
-                    if "words" in seg:
-                        for w in seg["words"]:
-                            w["start"] += offset
-                            w["end"] += offset
-
-                # 최적화
-                from core.engine.subtitle_engine import optimize_segments
-
-                opt = optimize_segments(clip_segments)
-                for seg in opt:
-                    if seg["start"] < 0.0:
-                        seg["start"] = 0.0
-                    if seg["end"] <= seg["start"]:
-                        seg["end"] = seg["start"] + 0.5
-                    seg["_clip_idx"] = i
-
-                # 에디터에 즉시 전달 (클립 완료될 때마다)
-                if hasattr(self.ui, "_sig_append_segments"):
-                    self.ui._sig_append_segments.emit(opt)
-
-                # ── 클립 완료 → 인식 존 클리어 ──
-                if hasattr(self.ui, "_sig_set_recog_zone"):
-                    self.ui._sig_set_recog_zone.emit(-1.0, -1.0)
-
-                if hasattr(self.ui, "_sig_update_queue"):
-                    self.ui._sig_update_queue.emit(i, "✅ 완료", "", "", "")
-
-                get_logger().log(
-                    f"  ✅ 클립 {i + 1} 자막 완료 ({len(opt)}개 세그먼트)"
-                )
+            # ── STEP 2: 클립별 Whisper + LLM 파이프라인 병렬 처리 ──
+            processed_count = self._run_multiclip_stt_llm_pipeline(
+                clip_boundaries, total_files
+            )
 
             get_logger().log(
-                f"\n🎊 전체 {total_files}개 클립 처리 완료! 에디터에서 편집 후 저장하세요."
+                f"\n🎊 전체 {processed_count}/{total_files}개 클립 처리 완료! 에디터에서 편집 후 저장하세요."
             )
 
             if hasattr(self.ui, "_sig_update_status"):

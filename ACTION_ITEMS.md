@@ -1,15 +1,15 @@
 <!--
-Document-Version: 02.04.00
+Document-Version: 02.06.00
 Phase: PHASE1-C
 Last-Updated: 2026-04-28
 Updated-By: Codex with 대표님
-Previous-Content: PHASE1-A 완료 섹션과 PHASE1-B 잔여 항목 혼재
-This-Update: PHASE1-C Apple 스타일 UI 개선 완료분 정리, 완료 액션아이템 삭제, 남은 실사용 확인 항목만 CHECKPOINT로 축소
-Copilot-Handoff: v02.04.00 기준. PHASE1-A는 완료되어 제거했고 PHASE1-C UI 작업은 기능 보존 원칙으로 수행했습니다. 공통 아이콘은 ui/style.py, 전역 메뉴바/상태 레일은 ui/menu_bar.py, 통합 레이아웃은 ui/main/main_window.py와 ui/home_ui.py를 우선 확인하세요. "이전/다음" 전역 액션은 제거했습니다. 남은 항목은 실사용 영상/멀티클립에서만 확인 가능한 CHECKPOINT입니다.
+Previous-Content: v02.04.00 PHASE1-C 완료 요약과 PHASE1-B P6 미구현 항목
+This-Update: v02.06.00 P6 멀티클립 STT/LLM 병렬 파이프라인 구현, 완료 항목 제거, 실사용 확인 체크포인트만 유지
+Copilot-Handoff: v02.06.00 기준. P6는 core/pipeline/multiclip_pipeline.py에서 Whisper worker와 LLM worker를 분리해 구현했습니다. 다음 채팅에서는 CHECKPOINT-P6-PARALLEL 실사용 확인과 기존 CHECKPOINT 항목부터 이어가세요.
 -->
 # AI Subtitle Studio — 전체 액션아이템
 # 최종 수정: 2026-04-28
-# App Version: 02.04.00
+# App Version: 02.06.00
 
 ================================================================================
   PHASE1-B 잔여 / 체크포인트
@@ -30,6 +30,11 @@ Copilot-Handoff: v02.04.00 기준. PHASE1-A는 완료되어 제거했고 PHASE1-
 
 [멀티클립 / 타임라인]
 
+  CHECKPOINT-P6-PARALLEL | 멀티클립 STT/LLM 병렬 파이프라인 실사용 확인 | 대표님 확인
+       | - 구현 완료: 클립1 Whisper 완료 후 LLM 최적화가 도는 동안 클립2 Whisper 시작
+       | - append 순서는 LLM worker 단일 순서 큐로 클립1 → 클립2 → 클립3 유지
+       | - 실제 멀티클립 3개 이상에서 로그 순서와 에디터 append 순서 확인 필요
+
   CHECKPOINT-B11 | 멀티클립 플레이헤드 동기화 실사용 확인        | 대표님 확인
        | - 클립2/3 재생 시 비디오 current time과 타임라인 offset 동기화 확인
        | - CLIP2 클릭 → 재생 시 플레이헤드가 CLIP2 시작 위치로 이동해야 정상
@@ -44,11 +49,6 @@ Copilot-Handoff: v02.04.00 기준. PHASE1-A는 완료되어 제거했고 PHASE1-
        | - 자막 에디터/글로벌 캔버스/디테일 캔버스 포커스와 무관하게 Ctrl+Z 결과 통일
        | - undo 1회 무반응 또는 2회 전체 자막 삭제가 없어야 정상
        | - 실제 키보드 포커스 전환 상태에서 확인
-
-  P6   | 멀티클립 Whisper/LLM 클립 단위 파이프라인 병렬화     | 공통
-       | - 클립1 Whisper 완료 즉시 클립2 Whisper 시작
-       | - 동시에 LLM은 클립1 결과 후처리
-       | - 결과 append 순서는 클립1 → 클립2 → 클립3 유지
 
 [자동처리 / 재시작]
 
