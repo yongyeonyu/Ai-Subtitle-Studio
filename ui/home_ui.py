@@ -1,4 +1,4 @@
-# Version: 02.03.04
+# Version: 02.03.05
 # Phase: PHASE1-B
 """
 ui/home_ui.py
@@ -7,8 +7,7 @@ MainWindow 홈 화면 빌드 Mixin
 import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QDialog, QLineEdit, QCheckBox, QScrollArea, QComboBox, QMessageBox,
-    QGridLayout
+    QDialog, QLineEdit, QCheckBox, QScrollArea, QComboBox, QMessageBox
 )
 from PyQt6.QtCore import Qt, QTimer
 
@@ -38,7 +37,6 @@ class HomeUIMixin:
         left_col.addWidget(self._btn("📁 폴더 선택", "폴더에서 영상 일괄 선택", self.select_folder))
         left_col.addWidget(self._btn("📝 프로젝트 만들기", "영상 묶어서 프로젝트 관리", self._create_project))
         left_col.addWidget(self._btn("📦 프로젝트 열기", "기존 프로젝트 불러오기", self._open_project))
-        left_col.addWidget(self._editor_shortcuts_panel())
         left_col.addWidget(self._btn("✂️ cut 편집 도우미", "개발 중", self._dummy_action))
         left_col.addStretch()
         right_widget = QWidget(); right_col = QVBoxLayout(right_widget); right_col.setContentsMargins(0, 0, 0, 0); right_col.setSpacing(8)
@@ -86,7 +84,7 @@ class HomeUIMixin:
         btn_auto_start = QPushButton(self._auto_start_label()); btn_auto_start.setStyleSheet(self._auto_start_style()); btn_auto_start.clicked.connect(self._toggle_auto_start_enabled)
         btn_clear_cache = QPushButton("🗑️ 캐쉬삭제"); btn_clear_cache.setStyleSheet(f"background: {config.BG3}; color: {config.FG}; border: none; padding: 6px 12px; border-radius: 4px;"); btn_clear_cache.clicked.connect(self._clear_cache)
         btn_exit = QPushButton("❌ 종료"); btn_exit.setStyleSheet(f"background: #882222; color: #FFF; font-weight: bold; border: none; padding: 6px 12px; border-radius: 4px;"); btn_exit.clicked.connect(self._quick_exit)
-        bottom_bar.addWidget(version_lbl); bottom_bar.addStretch(); bottom_bar.addWidget(btn_settings); bottom_bar.addWidget(btn_auto_start); bottom_bar.addWidget(btn_clear_cache); bottom_bar.addWidget(btn_exit)
+        bottom_bar.addWidget(version_lbl); bottom_bar.addWidget(self._editor_shortcuts_row()); bottom_bar.addStretch(); bottom_bar.addWidget(btn_settings); bottom_bar.addWidget(btn_auto_start); bottom_bar.addWidget(btn_clear_cache); bottom_bar.addWidget(btn_exit)
         layout.addLayout(bottom_bar)
         self._ensure_watchdog_timer()
 
@@ -254,13 +252,11 @@ class HomeUIMixin:
         w.mousePressEvent = _on_w_click
         return w
 
-    def _editor_shortcuts_panel(self):
-        panel = QWidget()
-        panel.setStyleSheet(f"background-color: {config.BG2}; border: 1px solid {config.BG3}; border-radius: 8px;")
-        layout = QGridLayout(panel)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setHorizontalSpacing(6)
-        layout.setVerticalSpacing(6)
+    def _editor_shortcuts_row(self):
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(8, 0, 0, 0)
+        layout.setSpacing(5)
         actions = [
             ("⚙️ AI", self._open_main_ai_settings),
             ("🛠️ 상세설정", self._open_main_adv_settings),
@@ -269,18 +265,18 @@ class HomeUIMixin:
             ("🎬 비디오", self._toggle_main_video),
             ("🎥 자막출력", self._open_main_export_dialog),
         ]
-        for idx, (text, cmd) in enumerate(actions):
+        style = (
+            f"QPushButton {{ background: {config.BG3}; color: {config.FG}; border: none; "
+            "padding: 6px 10px; font-size: 11px; border-radius: 3px; } "
+            "QPushButton:hover { background: #444444; }"
+        )
+        for text, cmd in actions:
             btn = QPushButton(text)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setMinimumHeight(30)
-            btn.setStyleSheet(
-                f"QPushButton {{ background: {config.BG3}; color: {config.FG}; "
-                "border: none; padding: 5px 8px; border-radius: 4px; font-weight: bold; } "
-                "QPushButton:hover { background: #3d3d3d; color: #4AFF80; }"
-            )
+            btn.setStyleSheet(style)
             btn.clicked.connect(cmd)
-            layout.addWidget(btn, idx // 2, idx % 2)
-        return panel
+            layout.addWidget(btn)
+        return row
 
     def _dummy_action(self): pass
 
