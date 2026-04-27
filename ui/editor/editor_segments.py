@@ -210,6 +210,7 @@ class EditorSegmentsMixin:
         self._sync_lock = False
 
         self._schedule_timeline()
+        self._refresh_video_subtitle_context()
 
         if is_initial:
             self._is_initial_load = False
@@ -349,6 +350,29 @@ class EditorSegmentsMixin:
         if getattr(self, '_needs_fit_view', True) and segs:
             self.timeline.fit_to_view()
             self._needs_fit_view = False
+
+    def _refresh_video_subtitle_context(self):
+        if not hasattr(self, 'video_player'):
+            return
+        segs = self._get_current_segments()
+        self._cached_segs = segs
+        try:
+            _mc_boxes = list(getattr(self.timeline.canvas, '_multiclip_boxes', []) or []) if hasattr(self, 'timeline') else []
+            if _mc_boxes and hasattr(self, '_resolve_active_context'):
+                _gsec = float(getattr(self.timeline.canvas, 'playhead_sec', 0.0) or 0.0)
+                ctx = self._resolve_active_context(global_sec=_gsec)
+                if ctx:
+                    segs = list(ctx.get('local_segments', []) or [])
+        except Exception:
+            pass
+        try:
+            if hasattr(self.video_player, 'refresh_subtitle_context'):
+                self.video_player.refresh_subtitle_context(segs)
+            else:
+                self.video_player.set_context_segments(segs)
+        except Exception:
+            pass
+
     def _schedule_timeline(self):
         if getattr(self, '_inline_updating', False): return
         if not self._timeline_timer.isActive(): self._timeline_timer.start(150)  # [크PD] 300→150ms 실시간성 개선

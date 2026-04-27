@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.04.00
 # Phase: PHASE1-B
 """
 export_dialog.py  ─ SRT → 투명 자막 동영상 출력 (Qt 네이티브 렌더링 & 미리보기 복구본)
@@ -19,6 +19,7 @@ from PyQt6.QtGui  import QColor, QPixmap, QImage, QFont, QPainter, QPen, QBrush,
 import config
 from core.engine.subtitle_engine import save_srt
 from logger import get_logger
+from ui.style import button_style, settings_dialog_stylesheet
 
 # ── 설정 저장 로직 ──
 _SETTINGS_PATH = os.path.join(config.DATASET_DIR, "user_settings.json")
@@ -280,12 +281,12 @@ class ExportDialog(QDialog):
             if d and os.path.exists(d): self._srt_dir=d
         self._txt_c=QColor(config.ACCENT); self._bdr_c=QColor("#FFFFFF"); self._shd_c=QColor("#000000"); self._bg_c=QColor("#000000")
         self._fonts=_avail_fonts()
-        self.setWindowTitle("자막 동영상 출력"); self.setMinimumWidth(560); self.setStyleSheet(f"background:{config.BG};color:{config.FG};font-size:13px;")
+        self.setWindowTitle("자막 동영상 출력"); self.setMinimumWidth(560); self.setStyleSheet(settings_dialog_stylesheet())
         self._build_ui(); self._load(); self._refresh_preview()
 
     def _build_ui(self):
         root=QVBoxLayout(self); root.setSpacing(8)
-        tabs=QTabWidget(); tabs.setStyleSheet(f"QTabBar::tab{{background:{config.BG2};padding:8px 15px;}} QTabBar::tab:selected{{background:{config.BG3};}}")
+        tabs=QTabWidget()
         root.addWidget(tabs)
 
         def lrow(lbl,w,lw=130):
@@ -301,7 +302,7 @@ class ExportDialog(QDialog):
         
         # 💡 iCloud 자동 업로드 체크박스 추가
         self.icloud_chk = QCheckBox("렌더링 완료 후 iCloud로 자동 복사")
-        self.icloud_chk.setStyleSheet("font-weight: bold; color: #4AFF80; padding-top: 8px;")
+        self.icloud_chk.setStyleSheet("font-weight: bold; color: #34C759; padding-top: 8px;")
         l1.addWidget(self.icloud_chk)
         if not getattr(config, "IS_MAC", False):
             self.icloud_chk.setVisible(False)
@@ -355,14 +356,14 @@ class ExportDialog(QDialog):
         self.prev_1_btn=QPushButton("1줄"); self.prev_2_btn=QPushButton("2줄")
         for b in [self.prev_1_btn, self.prev_2_btn]:
             b.setCheckable(True); b.setFixedWidth(60)
-            b.setStyleSheet(f"QPushButton{{background:{config.BG3};padding:4px;}} QPushButton:checked{{background:{config.ACCENT};color:#000;}}")
+            b.setStyleSheet(button_style("toolbar", font_size="12px", padding="4px 8px") + " QPushButton:checked { background: #1F3A56; border-color: #007AFF; color: #D7EBFF; }")
         self.prev_1_btn.setChecked(True)
         self.prev_1_btn.clicked.connect(self._on_prev1); self.prev_2_btn.clicked.connect(self._on_prev2)
         line_row.addWidget(self.prev_1_btn); line_row.addWidget(self.prev_2_btn); line_row.addStretch()
         gv.addLayout(line_row)
 
         self.prev_lbl=QLabel(); self.prev_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.prev_lbl.setMinimumHeight(120); self.prev_lbl.setStyleSheet("background:#222;border-radius:4px;"); gv.addWidget(self.prev_lbl)
+        self.prev_lbl.setMinimumHeight(120); self.prev_lbl.setStyleSheet("background:#151C20;border:1px solid #2D3942;border-radius:7px;"); gv.addWidget(self.prev_lbl)
         root.addWidget(grp)
 
         # [ui/export_dialog.py] _build_ui 함수 맨 아래 버튼부 교체
@@ -370,7 +371,7 @@ class ExportDialog(QDialog):
 
         # 1. 저장 버튼 (상세설정창의 Cyan 컬러 & 이모지 적용)
         btn_save = QPushButton("💾 저장")
-        btn_save.setStyleSheet("background-color: #4fc3f7; color: #000000; padding: 8px 16px; font-size: 13px; font-weight: bold; border-radius: 4px;")
+        btn_save.setStyleSheet(button_style("toolbar", font_size="13px", padding="8px 16px"))
         btn_save.setToolTip("설정 저장 (창 유지)")
         btn_save.clicked.connect(self._save)
         br.addWidget(btn_save)
@@ -380,14 +381,14 @@ class ExportDialog(QDialog):
 
         # 2. 취소 버튼 (상세설정창의 Dark Gray 컬러)
         btn_cancel = QPushButton("취소")
-        btn_cancel.setStyleSheet("background-color: #444444; color: #FFFFFF; padding: 8px 16px; font-size: 13px; font-weight: bold; border-radius: 4px;")
+        btn_cancel.setStyleSheet(button_style("toolbar", font_size="13px", padding="8px 16px"))
         btn_cancel.setToolTip("저장하지 않고 닫기")
         btn_cancel.clicked.connect(self.reject)
         br.addWidget(btn_cancel)
 
         # 3. 확인 버튼 (상세설정창의 Bright Green 컬러)
         btn_ok = QPushButton("확인")
-        btn_ok.setStyleSheet("background-color: #4AFF80; color: #000000; padding: 8px 16px; font-size: 13px; font-weight: bold; border-radius: 4px;")
+        btn_ok.setStyleSheet(button_style("primary", font_size="13px", padding="8px 16px"))
         btn_ok.setToolTip("설정 저장 후 닫기")
         btn_ok.clicked.connect(self._ok)
         br.addWidget(btn_ok)
@@ -395,7 +396,7 @@ class ExportDialog(QDialog):
         # 4. 렌더링 시작 버튼 (강조를 위해 높이와 여백을 살짝 더 줌)
         self.render_btn = QPushButton("🚀 렌더링 시작")
         self.render_btn.setFixedHeight(36)
-        self.render_btn.setStyleSheet(f"background-color: {config.ACCENT}; color: #000000; padding: 8px 24px; font-size: 14px; font-weight: bold; border-radius: 4px;")
+        self.render_btn.setStyleSheet(button_style("primary", font_size="14px", padding="8px 24px"))
         self.render_btn.clicked.connect(self._render)
         br.addWidget(self.render_btn)
 

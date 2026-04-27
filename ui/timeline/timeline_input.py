@@ -220,7 +220,7 @@ class TimelineInputMixin:
         for i in range(len(self.segments) - 1):
             s1 = self.segments[i]; s2 = self.segments[i + 1]
             if abs(s1["end"] - s2["start"]) < 0.05:
-                bx = self._x(s1["end"]); r = int(HANDLE_R * 1.2); cy = SEG_BOT - (r // 2)
+                bx = self._x(s1["end"]); r = max(8, HANDLE_R); cy = SEG_TOP + 96
                 rect = QRect(bx - r, cy - r, r * 2, r * 2)
                 if rect.contains(x, y):
                     self.drag_started.emit(); self._drag_edge = "diamond"; self._drag_diamond_idx = i
@@ -266,7 +266,7 @@ class TimelineInputMixin:
         for i in range(len(self.segments) - 1):
             s1 = self.segments[i]; s2 = self.segments[i + 1]
             if abs(s1["end"] - s2["start"]) < 0.05:
-                bx = self._x(s1["end"]); w = int(HANDLE_R * 1.2) * 2; h = 10; cy = SEG_BOT - (h // 2)
+                bx = self._x(s1["end"]); w = max(12, int(HANDLE_R * 1.2)); h = 12; cy = SEG_TOP + 96
                 rect = QRect(int(bx - w / 2), int(cy - h / 2), w, h)
                 if rect.adjusted(-5, -5, 5, 5).contains(x, y):
                     self._drag_seg = None; self._drag_edge = None; self._drag_diamond_idx = None
@@ -307,7 +307,7 @@ class TimelineInputMixin:
         for i in range(len(self.segments) - 1):
             s1 = self.segments[i]; s2 = self.segments[i + 1]
             if abs(s1["end"] - s2["start"]) < 0.05:
-                bx = self._x(s1["end"]); r = HANDLE_R; cy = SEG_BOT - r + 2
+                bx = self._x(s1["end"]); r = max(8, HANDLE_R); cy = SEG_TOP + 96
                 if abs(x - bx) <= r + 5 and abs(y - cy) <= r + 5: hover_dia = i; break
         if getattr(self, '_hover_diamond', None) != hover_dia: self._hover_diamond = hover_dia; self.update()
         if hover_dia is not None: self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor)); return

@@ -1,4 +1,4 @@
-# Version: 02.03.02
+# Version: 02.04.00
 # Phase: PHASE1-B
 """
 ui/settings_gap.py  ─  ⏱️ 자막 간격 및 환각/앵무새 방어 정밀 시뮬레이터 (X5 Edition)
@@ -16,6 +16,7 @@ from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, CUSTOM_DEFAULTS_FILE, _create_bottom_buttons
+from ui.style import button_style, label_style, settings_dialog_stylesheet
 
 
 from ui.settings.gap_simulator import GapSimulatorWidget
@@ -23,25 +24,24 @@ from ui.settings.gap_simulator import GapSimulatorWidget
 class GapSettingsDialog(QDialog):
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("⏱️ 자막 간격 및 환각/앵무새 방어 정밀 시뮬레이터 (X5 Edition)")
-        self.setMinimumWidth(1300)
+        self.setWindowTitle("자막 간격 시뮬레이터")
+        self.setMinimumWidth(1180)
         # [v01.00.10] 화면 넘침 방지: 최대 높이를 현재 화면의 90%로 제한
         from PyQt6.QtWidgets import QApplication as _QApp, QScrollArea
         screen_h = _QApp.primaryScreen().availableGeometry().height()
         self.setMaximumHeight(int(screen_h * 0.92))
         
-        self.setStyleSheet("""
-            QDialog { background-color: #121212; color: #FFFFFF; }
-            QLabel { color: #FFFFFF; background: transparent; }
-        """)
+        self.setStyleSheet(settings_dialog_stylesheet())
         self.result = dict(settings)
         self.sliders_info = []
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
         
-        h1 = QHBoxLayout(); h1.addWidget(QLabel("<b style='font-size: 16px;'>■ 실시간 AI 엔진 시뮬레이터 (X5 시승기 테스트셋)</b>")); h1.addStretch(); layout.addLayout(h1)
+        h1 = QHBoxLayout(); h1.addWidget(QLabel("<b style='font-size: 15px;'>실시간 AI 엔진 시뮬레이터</b>")); h1.addStretch(); layout.addLayout(h1)
         self.simulator = GapSimulatorWidget(); layout.addWidget(self.simulator)
-        sep0 = QFrame(); sep0.setFixedHeight(1); sep0.setStyleSheet("background-color: #444444; margin: 15px 0;"); layout.addWidget(sep0)
+        sep0 = QFrame(); sep0.setFixedHeight(1); sep0.setStyleSheet("background-color: #24313A; margin: 6px 0;"); layout.addWidget(sep0)
 
         # [v01.00.10] 파라미터 폼 전체를 QScrollArea로 감싸 화면 넘침 방지
         scroll_container = QWidget()
@@ -50,17 +50,17 @@ class GapSettingsDialog(QDialog):
         scroll_layout.setSpacing(4)
 
         two_col_layout = QHBoxLayout()
-        two_col_layout.setSpacing(0)
+        two_col_layout.setSpacing(12)
         left_col = QVBoxLayout()
         left_col.setSpacing(2)
         right_col = QVBoxLayout()
         right_col.setSpacing(2)
-        right_col.setContentsMargins(15, 0, 0, 0)   # ← 추가: 왼쪽 마진 15px
+        right_col.setContentsMargins(8, 0, 0, 0)
         
         # ==========================================
         # 👈 [왼쪽 단] 파라미터 튜닝 + 분할/삭제
         # ==========================================
-        h2 = QHBoxLayout(); h2.addWidget(QLabel("<b style='font-size: 14px; color: #4AFF80;'>■ 파라미터 튜닝</b>")); h2.addStretch(); left_col.addLayout(h2)
+        h2 = QHBoxLayout(); h2.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>파라미터 튜닝</b>")); h2.addStretch(); left_col.addLayout(h2)
         form1 = QFormLayout()
         form1.setVerticalSpacing(3)
         form1.setHorizontalSpacing(8)
@@ -90,9 +90,9 @@ class GapSettingsDialog(QDialog):
             "[-] 짧게: 단독 자막이 오디오가 끝나자마자 칼같이 바로 사라집니다."))
 
         left_col.addLayout(form1)
-        sep1 = QFrame(); sep1.setFixedHeight(1); sep1.setStyleSheet("background-color: #444444; margin: 15px 0;"); left_col.addWidget(sep1)
+        sep1 = QFrame(); sep1.setFixedHeight(1); sep1.setStyleSheet("background-color: #24313A; margin: 8px 0;"); left_col.addWidget(sep1)
 
-        h3 = QHBoxLayout(); h3.addWidget(QLabel("<b style='font-size: 14px; color: #4AFF80;'>■ LLM 자막 분할 및 삭제 로직</b>")); h3.addStretch(); left_col.addLayout(h3)
+        h3 = QHBoxLayout(); h3.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>LLM 자막 분할 및 삭제 로직</b>")); h3.addStretch(); left_col.addLayout(h3)
         form3 = QFormLayout()
 
         self.slider_split = QSlider(Qt.Orientation.Horizontal); self.slider_split.setRange(5, 50)
@@ -140,7 +140,7 @@ class GapSettingsDialog(QDialog):
         # ==========================================
         # 👉 [오른쪽 단] 환청 방지 및 시스템 병합
         # ==========================================
-        h4 = QHBoxLayout(); h4.addWidget(QLabel("<b style='font-size: 14px; color: #4AFF80;'>■ 환청 방지 및 시스템 병합 로직 (고급)</b>")); h4.addStretch(); right_col.addLayout(h4)
+        h4 = QHBoxLayout(); h4.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>환청 방지 및 시스템 병합 로직 (고급)</b>")); h4.addStretch(); right_col.addLayout(h4)
         form4 = QFormLayout()
 
         self.slider_min_chars = QSlider(Qt.Orientation.Horizontal); self.slider_min_chars.setRange(1, 20)
@@ -194,7 +194,7 @@ class GapSettingsDialog(QDialog):
         right_col.addLayout(form4); right_col.addStretch()
 
         two_col_layout.addLayout(left_col)
-        v_sep = QFrame(); v_sep.setFrameShape(QFrame.Shape.VLine); v_sep.setStyleSheet("background-color: #444444; margin: 0 15px;")
+        v_sep = QFrame(); v_sep.setFrameShape(QFrame.Shape.VLine); v_sep.setStyleSheet("background-color: #24313A; margin: 0 8px;")
         two_col_layout.addWidget(v_sep)
         two_col_layout.addLayout(right_col)
 
@@ -204,11 +204,7 @@ class GapSettingsDialog(QDialog):
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setWidget(scroll_container)
-        scroll_area.setStyleSheet(
-            "QScrollArea { border: none; background: transparent; }"
-            "QScrollBar:vertical { width: 8px; background: #1a1a1a; border-radius: 4px; }"
-            "QScrollBar::handle:vertical { background: #555555; border-radius: 4px; min-height: 20px; }"
-        )
+        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         layout.addWidget(scroll_area, stretch=1)
 
         layout.addLayout(_create_bottom_buttons(self, self._on_ok, self._on_reset, self._on_save, save_def_callback=self._on_save_default))
@@ -247,9 +243,9 @@ class GapSettingsDialog(QDialog):
         # 💡 [수정] 마우스를 올렸을 때(Hover) 즉각적인 툴팁이 뜨도록 커스텀 라벨 적용
         class HoverLabel(QLabel):
             def __init__(self, tip_text):
-                super().__init__("❓")
+                super().__init__("?")
                 self.tip = tip_text
-                self.setStyleSheet("font-size: 14px; background: transparent; margin-right: 5px;")
+                self.setStyleSheet("color: #7A8792; font-size: 12px; font-weight: 700; background: transparent; margin-right: 3px;")
                 self.setCursor(Qt.CursorShape.WhatsThisCursor)
                 
             def enterEvent(self, event):
@@ -264,13 +260,7 @@ class GapSettingsDialog(QDialog):
         layout.addWidget(help_icon)
         
         # -, + 버튼 스타일 및 로직
-        btn_style = """
-            QPushButton { 
-                background: #444444; color: #FFFFFF; border: none; border-radius: 4px; 
-                font-weight: bold; min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px; 
-            } 
-            QPushButton:hover { background: #4AFF80; color: #000000; }
-        """
+        btn_style = button_style("toolbar", font_size="12px", padding="2px 6px") + " QPushButton { min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px; }"
         
         btn_m = QPushButton("-")
         btn_m.setStyleSheet(btn_style)

@@ -1,12 +1,6 @@
-# Version: 02.03.16
+# Version: 02.04.00
 # Phase: PHASE1-C
-"""
-ui/editor_widget.py
-[v01.00.06 수정사항]
-- btn_exit (종료 버튼) 제거 — 이전 버튼으로 기능 이전
-- engine_lbl 폰트 13px → 11px (-2pt)
-- 하단 버튼 전체 min-height: 40px 추가 (이전/다음 높이 통일)
-"""
+"""Editor widget and function-preserving PHASE1-C layout."""
 import re, os, sys, json, atexit, threading, shutil, time
 from ui.editor.undo_manager import UndoManager
 
@@ -18,10 +12,11 @@ atexit.register(_mac_safe_exit)
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
-    QPushButton, QLabel, QSizePolicy, QMessageBox, QMenu, QLineEdit, QComboBox
+    QPushButton, QLabel, QSizePolicy, QMessageBox, QMenu, QLineEdit, QComboBox,
+    QToolButton
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint, QSettings
-from PyQt6.QtGui import QKeySequence, QShortcut, QColor, QTextCursor, QIcon, QPixmap, QPainter
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint, QSettings, QSize
+from PyQt6.QtGui import QKeySequence, QShortcut, QColor, QTextCursor, QIcon
 from PyQt6.QtMultimedia import QMediaPlayer
 
 import config
@@ -33,7 +28,7 @@ from core.project.data_manager import (
 )
 from core.state_manager import SubtitleStateManager
 from ui.timeline.timeline_widget import TimelineWidget
-from ui.style import button_style, label_style, panel_style
+from ui.style import button_style, label_style, line_icon, panel_style, tool_button_style
 from ui.editor.editor_popup_qt import EditorPopup
 from ui.editor.video_player_widget import VideoPlayerWidget
 from ui.editor.subtitle_text_edit import SubtitleTextEdit, SubtitleHighlighter, SubtitleBlockData
@@ -229,8 +224,11 @@ class EditorWidget(
         if hasattr(self, 'status_lbl'):
             self.status_lbl.setText(lbl_txt)
         if hasattr(self, 'btn_start'):
-            self.btn_start.setText(btn_txt)
+            self.btn_start.setText(self._clean_action_label(btn_txt))
             self.btn_start.setEnabled(btn_en)
+        main_w = self.window()
+        if hasattr(main_w, "sync_menu_from_editor"):
+            main_w.sync_menu_from_editor(self)
         if hasattr(self, 'text_edit'):
             self.text_edit.setReadOnly(is_locked)
             self.text_edit.setStyleSheet(
@@ -266,10 +264,10 @@ class EditorWidget(
         root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.splitter.setStyleSheet("QSplitter::handle { background: #2D3942; width: 1px; }")
+        self.splitter.setHandleWidth(1)
+        self.splitter.setStyleSheet("QSplitter::handle { background: #0F1518; width: 1px; }")
         editor_wrap = QWidget(); editor_wrap.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
-        ew_layout   = QVBoxLayout(editor_wrap); ew_layout.setContentsMargins(10, 8, 10, 10); ew_layout.setSpacing(6)
-        ew_layout.addWidget(self._build_editor_header())
+        ew_layout   = QVBoxLayout(editor_wrap); ew_layout.setContentsMargins(8, 8, 8, 8); ew_layout.setSpacing(6)
 
         self.text_edit = SubtitleTextEdit()
         self.text_edit._parent_widget = self
@@ -288,6 +286,7 @@ class EditorWidget(
         self.text_edit.speaker_circle_dropped.connect(self._on_speaker_circle_dropped)
 
         ew_layout.addWidget(self._build_editor_mode_bar())
+        ew_layout.addWidget(self._build_table_header())
         ew_layout.addWidget(self.text_edit)
         self.splitter.addWidget(editor_wrap)
         self.video_player = VideoPlayerWidget()
@@ -296,6 +295,20 @@ class EditorWidget(
         self.splitter.setStretchFactor(0, 63); self.splitter.setStretchFactor(1, 37)
         self.splitter.setCollapsible(0, False); self.splitter.setCollapsible(1, False)
         root.addWidget(self.splitter, stretch=1)
+        self._video_preview_expanded = False
+        self._video_preview_min_sizes = None
+        self.btn_video_expand = QToolButton(self)
+        self.btn_video_expand.setText("◀")
+        self.btn_video_expand.setToolTip("비디오 미리보기 폭 확장 / 기본 폭")
+        self.btn_video_expand.setFixedSize(34, 38)
+        self.btn_video_expand.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_video_expand.setStyleSheet(
+            "QToolButton { background: #202A31; color: #F5F7FA; border: 1px solid #3A4650; "
+            "border-radius: 17px; font-size: 14px; font-weight: 800; } "
+            "QToolButton:hover { background: #2A363F; border-color: #007AFF; }"
+        )
+        self.btn_video_expand.clicked.connect(self._toggle_video_preview_width)
+        self.btn_video_expand.raise_()
 
         self.timeline = TimelineWidget()
         self.timeline.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
@@ -331,7 +344,10 @@ class EditorWidget(
         if hasattr(self.timeline, 'sig_smart_split'):         self.timeline.sig_smart_split.connect(self._on_smart_split)
             
         root.addWidget(self.timeline)
-        root.addWidget(self._build_buttons())
+        self._internal_button_bar = self._build_buttons()
+        self._internal_button_bar.setFixedHeight(0)
+        self._internal_button_bar.setVisible(False)
+        root.addWidget(self._internal_button_bar)
 
     def _on_inline_text_changed(self, line_num: int, new_text: str):
         doc = self.text_edit.document()
@@ -375,24 +391,52 @@ class EditorWidget(
         lay.addLayout(title_box, stretch=1)
 
         quick = QLineEdit()
-        quick.setObjectName("mockQuickFind")
+        quick.setObjectName("quickFind")
         quick.setFixedWidth(76)
-        quick.setToolTip("UI placeholder: 빠른 자막 검색/필터")
+        quick.setPlaceholderText("검색")
+        quick.setToolTip("빠른 자막 검색")
         quick.setStyleSheet(
             "QLineEdit { background: #0F1518; color: #F5F7FA; border: 1px solid #2D3942; "
             "border-radius: 8px; padding: 5px 8px; font-size: 11px; }"
         )
+        quick.returnPressed.connect(lambda q=quick: self._search_subtitle_text(q.text()))
         lay.addWidget(quick)
         add_mock = QPushButton("+")
-        add_mock.setToolTip("UI placeholder: 빠른 세그먼트/메모 추가")
+        add_mock.setToolTip("현재 위치에 새 자막 추가")
         add_mock.setStyleSheet(button_style("toolbar", font_size="12px", padding="5px 9px"))
+        add_mock.clicked.connect(self._split_at_playhead_or_cut)
         lay.addWidget(add_mock)
         lay.addWidget(self._build_speaker_strip())
         return header
 
+    def _build_table_header(self) -> QWidget:
+        header = QWidget()
+        header.setFixedHeight(30)
+        header.setStyleSheet("background: #1B2429; border: 1px solid #2D3942; border-radius: 6px;")
+        row = QHBoxLayout(header)
+        row.setContentsMargins(10, 0, 10, 0)
+        row.setSpacing(0)
+        cols = [
+            ("#", 58),
+            ("시작 시간", 150),
+            ("종료 시간", 150),
+            ("화자", 110),
+            ("자막", 0),
+        ]
+        for text, width in cols:
+            lbl = QLabel(text)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter if text != "자막" else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            lbl.setStyleSheet("color: #A9B0B7; font-size: 11px; font-weight: 600; background: transparent; border-right: 1px solid #2D3942;")
+            if width:
+                lbl.setFixedWidth(width)
+                row.addWidget(lbl)
+            else:
+                row.addWidget(lbl, stretch=1)
+        return header
+
     def _build_editor_mode_bar(self) -> QWidget:
         bar = QWidget()
-        bar.setStyleSheet("background: #1B2227; border: 1px solid #303A42; border-radius: 8px;")
+        bar.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
         row = QHBoxLayout(bar)
         row.setContentsMargins(8, 5, 8, 5)
         row.setSpacing(6)
@@ -402,9 +446,9 @@ class EditorWidget(
             active = label == "작성"
             btn.setStyleSheet(
                 "QPushButton { "
-                f"background: {'#303A42' if active else 'transparent'}; color: {'#FFFFFF' if active else '#A9B0B7'}; "
-                "border: 1px solid #303A42; border-radius: 6px; padding: 5px 10px; font-size: 11px; "
-                "} QPushButton:hover { background: #303A42; color: #FFFFFF; }"
+                f"background: {'#252D33' if active else 'transparent'}; color: {'#FFFFFF' if active else '#A9B0B7'}; "
+                "border: 1px solid #303A42; border-radius: 6px; padding: 5px 11px; font-size: 11px; "
+                "} QPushButton:hover { background: #252D33; color: #FFFFFF; }"
             )
             row.addWidget(btn)
         row.addStretch()
@@ -421,18 +465,33 @@ class EditorWidget(
         row.addWidget(sort_combo)
         search = QLineEdit()
         search.setPlaceholderText("검색")
-        search.setToolTip("UI placeholder: 자막 검색")
-        search.setFixedWidth(220)
+        search.setToolTip("자막 검색")
+        search.setFixedWidth(260)
         search.setStyleSheet(
             "QLineEdit { background: #11181C; color: #F5F7FA; border: 1px solid #303A42; "
             "border-radius: 6px; padding: 5px 8px; font-size: 11px; }"
         )
+        search.returnPressed.connect(lambda q=search: self._search_subtitle_text(q.text()))
         row.addWidget(search)
         more = QPushButton("···")
         more.setToolTip("UI placeholder: 추가 보기 옵션")
         more.setStyleSheet(button_style("toolbar", font_size="11px", padding="5px 8px"))
         row.addWidget(more)
         return bar
+
+    def _search_subtitle_text(self, query: str):
+        query = (query or "").strip()
+        if not query:
+            return
+        doc = self.text_edit.document()
+        start = self.text_edit.textCursor().position()
+        cur = doc.find(query, start)
+        if cur.isNull():
+            cur = doc.find(query, 0)
+        if cur.isNull():
+            return
+        self.text_edit.setTextCursor(cur)
+        self.text_edit.ensureCursorVisible()
 
     def _build_speaker_strip(self) -> QWidget:
         strip = QWidget()
@@ -489,24 +548,19 @@ class EditorWidget(
             btn.setStyleSheet(button_style("toolbar")); btn.clicked.connect(slot); btn_row.addWidget(btn)
         btn_row.addStretch(); left_vbox.addLayout(btn_row)
 
-        # ── 중앙 (btn_exit 제거) ──
+        # ── 중앙 ──
         center_w = QWidget(); center_hbox = QHBoxLayout(center_w)
         center_hbox.setContentsMargins(0, 0, 0, 0); center_hbox.setSpacing(5)
-        self.btn_prev  = QPushButton("◀ 이전")
-        self.btn_start = QPushButton("🧠 시작")
-        self.btn_save  = QPushButton("💾 저장")
-        self.btn_exp   = QPushButton("🎥 자막출력")
-        self.btn_next  = QPushButton("다음 ▶")
+        self.btn_start = self._make_action_toolbutton("시작", "restart")
+        self.btn_save  = self._make_action_toolbutton("저장", "save")
+        self.btn_exp   = self._make_action_toolbutton("자막출력", "export")
         self._bot_btns = [
-            (self.btn_prev,  "◀ 이전",     "이전", self._on_prev),
             (self.btn_start, "🧠 시작",    "시작", self._on_start_clicked),
             (self.btn_save,  "💾 저장",    "저장", self._on_save),
             (self.btn_exp,   "🎥 자막출력", "출력", self._show_export_dialog),
-            (self.btn_next,  "다음 ▶",    "다음",  self._on_next),
         ]
-        # [v01.00.06] min-height: 40px — 이전/다음 높이 통일
         for btn, _, _, slot in self._bot_btns:
-            btn.setStyleSheet(button_style("primary")); btn.clicked.connect(slot); center_hbox.addWidget(btn)
+            btn.clicked.connect(slot); center_hbox.addWidget(btn)
 
         # ── 우측 (engine_lbl 11px) ──
         right_w = QWidget(); right_vbox = QVBoxLayout(right_w); right_vbox.setContentsMargins(0, 0, 15, 0)
@@ -522,8 +576,28 @@ class EditorWidget(
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 0); grid.setColumnStretch(2, 1)
         return w
 
+    def _make_line_icon(self, name: str, color="#F5F7FA") -> QIcon:
+        return line_icon(name, color)
+
+    def _make_action_toolbutton(self, text: str, icon_name: str) -> QToolButton:
+        btn = QToolButton()
+        btn.setText(text)
+        btn.setIcon(self._make_line_icon(icon_name))
+        btn.setIconSize(QSize(24, 24))
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        btn.setMinimumSize(92, 58)
+        btn.setStyleSheet(tool_button_style("toolbar"))
+        return btn
+
+    def _clean_action_label(self, text: str) -> str:
+        label = str(text or "")
+        for token in ("🧠", "▶", "🔄", "⏳", "⌛", "💾", "🎥"):
+            label = label.replace(token, "")
+        return label.strip() or "시작"
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._position_video_expand_button()
         is_compact = self.width() < 1100
         top_font = "10px" if is_compact else "11px"
         for btn, full_t, comp_t, _ in getattr(self, '_top_btns', []):
@@ -533,9 +607,50 @@ class EditorWidget(
         for btn, full_t, comp_t, _ in getattr(self, '_bot_btns', []):
             if btn != getattr(self, 'btn_start', None):
                 btn.setText(comp_t if is_compact else full_t)
-            btn.setStyleSheet(button_style("primary", font_size=bot_font, padding=bot_pad))
         if hasattr(self, "btn_log"):
             self.btn_log.setText("로그" if is_compact else self._terminal_log_button_text())
+
+    def _position_video_expand_button(self):
+        if not hasattr(self, "btn_video_expand") or not hasattr(self, "splitter"):
+            return
+        try:
+            handle = self.splitter.handle(1)
+            handle_pos = handle.mapTo(self, handle.rect().center())
+            y = self.splitter.y() + 44
+            self.btn_video_expand.move(handle_pos.x() - self.btn_video_expand.width() // 2, y)
+            self.btn_video_expand.raise_()
+        except Exception:
+            pass
+
+    def _toggle_video_preview_width(self):
+        if not hasattr(self, "splitter") or not hasattr(self, "video_player"):
+            return
+        if self._video_preview_min_sizes is None:
+            self._video_preview_min_sizes = list(self.splitter.sizes())
+        if self._video_preview_expanded:
+            self.splitter.setSizes(self._video_preview_min_sizes)
+            self._video_preview_expanded = False
+            self.btn_video_expand.setText("◀")
+            QTimer.singleShot(0, self._position_video_expand_button)
+            return
+
+        sizes = self.splitter.sizes()
+        total_w = max(1, sum(sizes))
+        current_video_w = sizes[1] if len(sizes) > 1 else int(total_w * 0.37)
+        editor_min_w = min(760, max(520, int(total_w * 0.36)))
+        try:
+            video_h = max(1, self.video_player.video_container.height())
+        except Exception:
+            video_h = max(1, self.video_player.height() - 78)
+        aspect = float(getattr(self, "_video_preview_aspect", 16 / 9) or 16 / 9)
+        aspect = 1.0 if aspect < 1.25 else 16 / 9
+        target_video_w = int(video_h * aspect) + 18
+        target_video_w = max(current_video_w, target_video_w)
+        target_video_w = min(target_video_w, max(current_video_w, total_w - editor_min_w))
+        self.splitter.setSizes([max(editor_min_w, total_w - target_video_w), target_video_w])
+        self._video_preview_expanded = True
+        self.btn_video_expand.setText("▶")
+        QTimer.singleShot(0, self._position_video_expand_button)
 
     # ---------------------------------------------------------
     # Helpers

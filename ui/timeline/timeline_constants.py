@@ -5,9 +5,9 @@ ui/timeline_constants.py
 Timeline constants and shared utilities
 """
 
-RULER_H = 18
-WAVE_H = 75
-SEG_H = 90
+RULER_H = 30
+WAVE_H = 34
+SEG_H = 124
 
 SEG_TOP = RULER_H + WAVE_H
 SEG_BOT = SEG_TOP + SEG_H

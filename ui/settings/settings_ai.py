@@ -1,4 +1,4 @@
-# Version: 02.03.03
+# Version: 02.04.00
 # Phase: PHASE1-B
 """
 ui/settings_ai.py  ─  ⚙️ AI 엔진 설정 다이얼로그
@@ -13,6 +13,7 @@ from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import (
     DEFAULT_WHISPER_MODELS, _fetch_models, _create_bottom_buttons, DATASET_DIR
 )
+from ui.style import button_style, label_style, settings_dialog_stylesheet
 from core.llm.provider_registry import cloud_model_items
 from core.llm.secure_keys import get_api_key, set_api_key
 from core.audio.audio_presets import load_audio_presets, apply_audio_preset
@@ -24,20 +25,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("⚙️ AI 엔진 설정")
         # 💡 [수정] 4가지 정보가 한 줄에 다 들어오도록 너비를 700px로 확장
         self.setMinimumWidth(700) 
-        self.setStyleSheet("""
-            QDialog { background-color: #121212; color: #FFFFFF; }
-            QLabel { color: #FFFFFF; background: transparent; font-weight: bold; }
-            QLineEdit { background-color: #2A2A2A; color: #FFFFFF; border: 1px solid #555555; padding: 4px; border-radius: 3px; }
-            QCheckBox { color: #FFFFFF; font-weight: bold; background: transparent; padding-right: 5px; }
-            QCheckBox::indicator { width: 16px; height: 16px; border: 2px solid #FFFFFF; border-radius: 3px; background-color: transparent; }
-            QCheckBox::indicator:checked { background-color: #4AFF80; border: 2px solid #4AFF80; }
-            QPushButton { background-color: #444444; color: #FFFFFF; border: none; font-weight: bold; border-radius: 4px; }
-            QPushButton:hover { background-color: #555555; }
-            QComboBox { background-color: #2A2A2A; color: #FFFFFF; border: 1px solid #444444; padding: 6px; border-radius: 4px; }
-            QComboBox QAbstractItemView { background-color: #121212; color: #FFFFFF; selection-background-color: #4AFF80; selection-color: #000000; border: 1px solid #4AFF80; }
-            QSlider::groove:horizontal { border: 1px solid #444444; height: 8px; background: #2A2A2A; margin: 2px 0; border-radius: 4px; }
-            QSlider::handle:horizontal { background: #4AFF80; border: 1px solid #4AFF80; width: 14px; margin: -4px 0; border-radius: 7px; }
-        """)
+        self.setStyleSheet(settings_dialog_stylesheet())
         self.result_settings = dict(settings)
         self.audio_presets = load_audio_presets()
 
@@ -105,7 +93,7 @@ class SettingsDialog(QDialog):
 
         # 💡 [레이아웃 조정] LLM 메뉴 바로 밑에 4가지 정보를 한 줄로 표시
         self.lbl_model_info = QLabel()
-        self.lbl_model_info.setStyleSheet("color: #AAAAAA; font-size: 11px; padding: 2px 5px 12px 5px; background: transparent;")
+        self.lbl_model_info.setStyleSheet(label_style("muted", 11) + "padding: 2px 5px 12px 5px;")
         self.lbl_model_info.setWordWrap(False) # 💡 자동 줄바꿈 강제 차단!
         form.addRow("", self.lbl_model_info)
         self.combo_llm.currentIndexChanged.connect(self._update_model_info)
@@ -248,7 +236,7 @@ class SettingsDialog(QDialog):
         for btn, value in ((self.btn_llm_all, "all"), (self.btn_llm_free, "free"), (self.btn_llm_paid, "paid")):
             btn.blockSignals(True)
             btn.setChecked(self.llm_filter == value)
-            btn.setStyleSheet("background-color: #4AFF80; color: #000000; padding: 6px;" if self.llm_filter == value else "background-color: #444444; color: #FFFFFF; padding: 6px;")
+            btn.setStyleSheet(button_style("primary" if self.llm_filter == value else "toolbar", padding="5px 10px"))
             btn.blockSignals(False)
 
     def _rebuild_llm_combo(self, preferred_name=""):
@@ -378,7 +366,7 @@ class SettingsDialog(QDialog):
     def _on_chunk_all_toggled(self, checked):
         for w in [self.slider_chunk, self.btn_chunk_minus, self.btn_chunk_plus]: w.setEnabled(not checked)
         self.lbl_chunk_time.setText("전체 진행") if checked else self._update_chunk_display(self.slider_chunk.value())
-        self.lbl_chunk_time.setStyleSheet("color: #4AFF80; font-weight: bold;" if checked else "color: #FFFFFF;")
+        self.lbl_chunk_time.setStyleSheet(label_style("accent" if checked else "text", 12, bold=True))
 
     def _update_model_info(self):
         m_data = self.combo_llm.currentData()

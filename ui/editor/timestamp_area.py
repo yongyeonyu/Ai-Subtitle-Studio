@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.04.00
 # Phase: PHASE1-B
 
 from PyQt6.QtWidgets import QWidget
@@ -11,7 +11,7 @@ class TimestampArea(QWidget):
         super().__init__(editor)
         self.editor = editor
         self.setMouseTracking(True)
-        self.ts_font = QFont("Menlo", 12)
+        self.ts_font = QFont("Menlo", 11)
         self._drag_start_line = -1 
         self._drag_current_y = -1
         self._drag_spk_color = None
@@ -19,7 +19,7 @@ class TimestampArea(QWidget):
         self._hovered_delete_line = -1
 
     def sizeHint(self) -> QSize:
-        return QSize(125, 0) 
+        return QSize(150, 0)
 
     def wheelEvent(self, event):
         self.editor.wheelEvent(event)
@@ -122,7 +122,7 @@ class TimestampArea(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(event.rect(), QColor("#F2F2F7"))
+        painter.fillRect(event.rect(), QColor("#11181C"))
         
         _pw = getattr(self.editor, '_parent_widget', None)
         speaker_colors = _pw._highlighter.speaker_colors if _pw and hasattr(_pw, '_highlighter') else {}
@@ -174,14 +174,14 @@ class TimestampArea(QWidget):
                         mins, secs = int(ud.start_sec) // 60, ud.start_sec % 60
                         ts_str = f"[{mins:02d}:{secs:05.2f}]"
                         painter.setPen(QColor(spk_color if is_active else ("#555555" if getattr(ud, 'is_gap', False) else config.ACCENT)))
-                        painter.drawText(QRect(26, int(first_line_top), 80, int(first_line_height)), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, ts_str)
+                        painter.drawText(QRect(28, int(first_line_top), 96, int(first_line_height)), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, ts_str)
 
                     # 3. 화자 동그라미 그리기
                     if not getattr(ud, 'is_gap', False):
                         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                         painter.setPen(Qt.PenStyle.NoPen)
                         painter.setBrush(QBrush(QColor(spk_color if is_active else "#444444")))
-                        painter.drawEllipse(QPoint(108, center_y), 5 if is_active else 3, 5 if is_active else 3)
+                        painter.drawEllipse(QPoint(128, center_y), 5 if is_active else 3, 5 if is_active else 3)
                         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
             block = block.next()
 
@@ -189,5 +189,5 @@ class TimestampArea(QWidget):
         if self._drag_start_line >= 0 and self._drag_spk_color:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setBrush(QBrush(QColor(self._drag_spk_color))); painter.setPen(QColor(255, 255, 255, 180))
-            painter.drawEllipse(QPoint(108, self._drag_current_y), 6, 6)
+            painter.drawEllipse(QPoint(128, self._drag_current_y), 6, 6)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)

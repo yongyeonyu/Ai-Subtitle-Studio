@@ -1,17 +1,19 @@
-# Version: 02.03.02
-# Phase: PHASE1-B
+# Version: 02.04.00
+# Phase: PHASE1-C
 """Gap settings live preview simulator widget."""
 
 from PyQt6.QtWidgets import QWidget, QToolTip
 from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QFontMetrics
 from PyQt6.QtCore import Qt, QRect
+import config
 
 
 class GapSimulatorWidget(QWidget):
     """실시간 AI 엔진 시뮬레이터 (X5 시승기 실전 데이터 + 오답 필터링 + 마우스 호버 툴팁)"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(380) 
+        self.setFixedHeight(340)
+        self.setStyleSheet("background: #0F1518; border: 1px solid #24313A; border-radius: 8px;")
         
         # 💡 [추가] 마우스 움직임을 추적하여 그려진 상자 위에서 툴팁을 띄우기 위함
         self.setMouseTracking(True)
@@ -39,12 +41,12 @@ class GapSimulatorWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         rect = self.rect()
-        painter.fillRect(rect, QColor("#121212"))
+        painter.fillRect(rect, QColor("#0F1518"))
         
         self.hover_rects.clear() # 💡 [추가] 화면을 다시 그릴 때마다 툴팁 영역 초기화
         
         max_time = 28.0
-        offset_x = 20
+        offset_x = 22
         usable_w = rect.width() - (offset_x * 2)
         px_per_sec = usable_w / max_time
         
@@ -135,14 +137,14 @@ class GapSimulatorWidget(QWidget):
         if final_res:
             final_res[-1]["end"] += self.single_ext
 
-        font_main = QFont("Arial", 11, QFont.Weight.Bold)
-        font_small = QFont("Arial", 9)
-        font_header = QFont("Arial", 12, QFont.Weight.Bold)
+        font_main = QFont(config.FONT, 10, QFont.Weight.DemiBold)
+        font_small = QFont(config.FONT, 8)
+        font_header = QFont(config.FONT, 11, QFont.Weight.DemiBold)
 
         def draw_box(y, start, end, color, txt, h_style=False, is_skip=False, is_final=False):
             x = offset_x + int(start * px_per_sec)
             w = max(int((end - start) * px_per_sec), 5)
-            h = 38 
+            h = 32
             
             # 💡 [추가] 마우스 호버 시 보여줄 툴팁 영역 저장
             box_rect = QRect(x, y, w, h)
@@ -156,16 +158,16 @@ class GapSimulatorWidget(QWidget):
                 self.hover_rects.append((box_rect, "🔵 [통과] AI 필터를 무사히 통과한 정상 자막입니다."))
 
             painter.setPen(Qt.PenStyle.NoPen)
-            if h_style: 
+            if h_style:
                 painter.setBrush(QBrush(QColor(color), Qt.BrushStyle.BDiagPattern))
             else:
                 painter.setBrush(QBrush(QColor(color)))
             
-            radius = 2 if is_final else 6
+            radius = 5
             painter.drawRoundedRect(x, y, w, h, radius, radius)
             
             if is_skip:
-                painter.setPen(QPen(QColor("#FFCC00"), 3))
+                painter.setPen(QPen(QColor("#FFCC00"), 2))
                 painter.drawRoundedRect(x, y, w, h, radius, radius)
                 
             painter.setPen(QColor("#FFFFFF" if not is_final else "#111111"))
@@ -175,7 +177,7 @@ class GapSimulatorWidget(QWidget):
             elided = fm.elidedText(txt, Qt.TextElideMode.ElideRight, w - 8)
             painter.drawText(x, y, w, h, Qt.AlignmentFlag.AlignCenter, elided)
 
-        painter.setPen(QPen(QColor(255, 255, 255, 120), 1, Qt.PenStyle.SolidLine))
+        painter.setPen(QPen(QColor("#6D7780"), 1, Qt.PenStyle.SolidLine))
         painter.setFont(font_small)
         last_end = 0
         for b in blocks:
@@ -194,32 +196,32 @@ class GapSimulatorWidget(QWidget):
             painter.drawText(x_s, 10, x_e - x_s, 15, Qt.AlignmentFlag.AlignCenter, f"{b['end']-b['start']:.1f}s")
             last_end = b["end"]
 
-        painter.setPen(QColor("#AAAAAA")); painter.setFont(font_header)
-        painter.drawText(offset_x, 60, "1. 원본 음성 (정답 및 오답 믹스)")
+        painter.setPen(QColor("#D6DEE5")); painter.setFont(font_header)
+        painter.drawText(offset_x, 54, "1. 원본 음성")
         for b in blocks:
-            draw_box(65, b["start"], b["end"], "#3A5A80", f"{b['text']} ({b['chars']}자)")
+            draw_box(60, b["start"], b["end"], "#253E56", f"{b['text']} ({b['chars']}자)")
 
-        painter.setPen(QColor("#AAAAAA")); painter.setFont(font_header)
-        painter.drawText(offset_x, 155, "2. AI 필터 (환각, 중복, 랩핑, 노이즈 삭제)")
+        painter.setPen(QColor("#D6DEE5")); painter.setFont(font_header)
+        painter.drawText(offset_x, 135, "2. AI 필터")
         for b in filtered:
             if b["reason"]: 
-                draw_box(160, b["start"], b["end"], "#FF4444", f"❌ {b['reason']}", h_style=True)
+                draw_box(140, b["start"], b["end"], "#C84A4A", f"삭제: {b['reason']}", h_style=True)
             else:
-                color = "#D35400" if b.get("is_skip") else "#4A90E2"
-                draw_box(160, b["start"], b["end"], color, b["text"], is_skip=b.get("is_skip"))
+                color = "#B66A1E" if b.get("is_skip") else "#1684E8"
+                draw_box(140, b["start"], b["end"], color, b["text"], is_skip=b.get("is_skip"))
 
-        painter.setPen(QColor("#4AFF80")); painter.setFont(font_header)
-        painter.drawText(offset_x, 250, "3. 최종 결과물 (타임라인 트랙 - 병합 및 간격 적용)")
+        painter.setPen(QColor("#34C759")); painter.setFont(font_header)
+        painter.drawText(offset_x, 218, "3. 최종 결과")
         
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(QColor("#222222")))
-        painter.drawRect(offset_x, 255, int(max_time * px_per_sec), 38)
+        painter.setBrush(QBrush(QColor("#151C20")))
+        painter.drawRoundedRect(offset_x, 223, int(max_time * px_per_sec), 34, 5, 5)
         
         for b in final_res:
-            draw_box(255, b["start"], b["end"], "#4AFF80", b["text"], is_skip=b.get("is_skip"), is_final=True)
+            draw_box(224, b["start"], b["end"], "#34C759", b["text"], is_skip=b.get("is_skip"), is_final=True)
 
-        painter.setPen(QPen(QColor("#666666"), 2, Qt.PenStyle.SolidLine))
-        y_axis = 330
+        painter.setPen(QPen(QColor("#5C6871"), 1, Qt.PenStyle.SolidLine))
+        y_axis = 292
         painter.drawLine(offset_x, y_axis, int(offset_x + max_time * px_per_sec), y_axis)
         painter.setFont(font_small)
         painter.setPen(QColor("#AAAAAA"))

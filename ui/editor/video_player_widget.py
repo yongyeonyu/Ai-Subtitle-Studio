@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.04.00
 # Phase: PHASE1-B
 """
 ui/video_player_widget.py - PyQt6 비디오 플레이어
@@ -6,12 +6,14 @@ ui/video_player_widget.py - PyQt6 비디오 플레이어
 """
 import os
 import json
+import hashlib
+import shutil
 import subprocess
 import tempfile
 from bisect import bisect_right
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QPushButton, QSizePolicy, QStackedWidget)
+                             QPushButton, QSizePolicy, QStackedWidget, QComboBox)
 from PyQt6.QtCore import Qt, QTimer, QRectF, QUrl
 from PyQt6.QtGui import QFont, QColor, QPainter, QFontMetrics, QBrush, QPainterPath, QPen, QPixmap
 
@@ -46,14 +48,32 @@ class ThumbnailLabel(QLabel):
             super().paintEvent(event)
 
 class SubtitleLabel(QLabel):
-    """비디오 플레이어 하단 자막 표시 위젯."""
-    _FONT = QFont("Pretendard Regular", 20)
+    """비디오 프리뷰 위에 출력 설정을 반영해 그리는 자막 overlay."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setWordWrap(False)
+        self._export_style = {}
+        self.refresh_export_style()
+
+    def refresh_export_style(self):
+        try:
+            settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
+            if os.path.exists(settings_path):
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    self._export_style = json.load(f).get("export_dialog", {}) or {}
+        except Exception:
+            self._export_style = {}
+
+    def setText(self, text):
+        self.refresh_export_style()
+        super().setText(text)
+
+    def _qcolor(self, key, default):
+        return QColor(str(self._export_style.get(key, default)))
 
     def paintEvent(self, event):
         text = self.text()
@@ -67,24 +87,102 @@ class SubtitleLabel(QLabel):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        font = self._FONT
+        style = self._export_style
+        try:
+            base_size = int(style.get("size", 60))
+        except Exception:
+            base_size = 60
+        # ExportDialog renders 60px against a 1920/3840px-wide transparent strip.
+        # Preview scales that proportionally to the live video widget width.
+        preview_scale = max(0.35, min(1.3, self.width() / 1920.0))
+        font_px = max(15, int(base_size * preview_scale))
+
+        font = QFont(style.get("font", "Apple SD Gothic Neo"))
+        font.setPixelSize(font_px)
+        if style.get("bold", True):
+            font.setWeight(QFont.Weight.Bold)
         painter.setFont(font)
         fm = QFontMetrics(font)
 
         lines  = text.split('\n')
         line_h = fm.height()
         text_w = max((fm.horizontalAdvance(ln) for ln in lines), default=0)
-        text_h = line_h * len(lines) + 4 * max(0, len(lines) - 1)
+        try:
+            line_spacing = int(style.get("lsp", 6) or 6)
+        except Exception:
+            line_spacing = 6
+        lsp = max(2, int(line_spacing * preview_scale))
+        text_h = line_h * len(lines) + lsp * max(0, len(lines) - 1)
 
-        x = (self.width()  - text_w) / 2
-        y = (self.height() - text_h) // 2
+        align = style.get("align", "가운데")
+        if align == "왼쪽":
+            x = int(self.width() * 0.04)
+        elif align == "오른쪽":
+            x = self.width() - text_w - int(self.width() * 0.04)
+        else:
+            x = (self.width() - text_w) / 2
+        y = max(8, self.height() - text_h - int(self.height() * 0.11))
 
-        painter.setPen(QColor("#FFFFFF"))
+        if style.get("bg", False):
+            bg_c = self._qcolor("bg_c", "#000000")
+            try:
+                bg_c.setAlpha(int(int(style.get("bg_op", 50)) * 2.55))
+            except Exception:
+                bg_c.setAlpha(128)
+            margin = max(4, int(int(style.get("bg_margin", 18)) * preview_scale))
+            radius = max(3, int(int(style.get("bg_radius", 10)) * preview_scale))
+            painter.setBrush(QBrush(bg_c))
+            painter.setPen(Qt.PenStyle.NoPen)
+            if style.get("bg_full", False):
+                painter.drawRect(QRectF(0, y - margin // 2, self.width(), text_h + margin))
+            else:
+                painter.drawRoundedRect(
+                    QRectF(x - margin, y - margin // 2, text_w + margin * 2, text_h + margin),
+                    radius,
+                    radius,
+                )
+
+        if style.get("shadow", False):
+            shadow = self._qcolor("shd_c", "#000000")
+            shadow.setAlpha(200)
+            try:
+                sx = int(int(style.get("shdx", 3)) * preview_scale)
+                sy = int(int(style.get("shdy", 3)) * preview_scale)
+            except Exception:
+                sx, sy = 2, 2
+            painter.setPen(shadow)
+            curr_y = y
+            for ln in lines:
+                lw = fm.horizontalAdvance(ln)
+                lx = x if align == "왼쪽" else (x + text_w - lw if align == "오른쪽" else x + (text_w - lw) / 2)
+                painter.drawText(int(lx + sx), int(curr_y + fm.ascent() + sy), ln)
+                curr_y += line_h + lsp
+
+        if not style.get("no_bdr", False):
+            try:
+                border_w = max(0, int(int(style.get("bdr_w", 2)) * preview_scale))
+            except Exception:
+                border_w = 1
+            if border_w > 0:
+                painter.setPen(self._qcolor("bdr_c", "#FFFFFF"))
+                for dx in range(-border_w, border_w + 1):
+                    for dy in range(-border_w, border_w + 1):
+                        if dx == 0 and dy == 0:
+                            continue
+                        curr_y = y
+                        for ln in lines:
+                            lw = fm.horizontalAdvance(ln)
+                            lx = x if align == "왼쪽" else (x + text_w - lw if align == "오른쪽" else x + (text_w - lw) / 2)
+                            painter.drawText(int(lx + dx), int(curr_y + fm.ascent() + dy), ln)
+                            curr_y += line_h + lsp
+
+        painter.setPen(self._qcolor("txt_c", "#FFFFFF"))
         curr_y = y
         for ln in lines:
-            lx = x + (text_w - fm.horizontalAdvance(ln)) / 2
+            lw = fm.horizontalAdvance(ln)
+            lx = x if align == "왼쪽" else (x + text_w - lw if align == "오른쪽" else x + (text_w - lw) / 2)
             painter.drawText(int(lx), int(curr_y + fm.ascent()), ln)
-            curr_y += line_h + 4
+            curr_y += line_h + lsp
 
 
 class _WorkerProxy:
@@ -149,6 +247,10 @@ class VideoPlayerWidget(QWidget):
         self._subtitle_cache_idx: int = -1
         self._last_time_label_ms: int = -250
         self._last_btn_state = None
+        self._proxy_proc: subprocess.Popen | None = None
+        self._proxy_original_path: str = ""
+        self._proxy_playback_path: str = ""
+        self._deferred_proxy_switch: str | None = None
 
         self.media_player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -213,17 +315,38 @@ class VideoPlayerWidget(QWidget):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        head = QWidget()
+        head.setFixedHeight(30)
+        head.setStyleSheet("background: transparent; border: none;")
+        head_lay = QHBoxLayout(head)
+        head_lay.setContentsMargins(0, 0, 0, 0)
+        title = QLabel("미리보기")
+        title.setStyleSheet("color: #F5F7FA; font-size: 12px; font-weight: 700; background: transparent; border: none;")
+        head_lay.addWidget(title)
+        head_lay.addStretch()
+        fit = QComboBox()
+        fit.addItems(["맞춤", "100%", "채움"])
+        fit.setFixedWidth(78)
+        fit.setStyleSheet("QComboBox { background: #202A31; color: #F5F7FA; border: 1px solid #2D3942; border-radius: 6px; padding: 4px 8px; font-size: 10px; }")
+        head_lay.addWidget(fit)
+        cam = QPushButton("▣")
+        cam.setFixedSize(28, 26)
+        cam.setStyleSheet("QPushButton { background: #202A31; color: #F5F7FA; border: 1px solid #2D3942; border-radius: 6px; }")
+        head_lay.addWidget(cam)
+        more = QPushButton("···")
+        more.setFixedSize(34, 26)
+        more.setStyleSheet("QPushButton { background: #202A31; color: #F5F7FA; border: 1px solid #2D3942; border-radius: 6px; }")
+        head_lay.addWidget(more)
+        layout.addWidget(head)
 
         self.video_container = QWidget()
         self.video_container.setStyleSheet("background: #000000; border-radius: 4px;")
         
-        vid_layout = QVBoxLayout(self.video_container)
-        vid_layout.setContentsMargins(0, 0, 0, 0)
-        vid_layout.setSpacing(0)
-
         self.video_stack = QStackedWidget()
+        self.video_stack.setParent(self.video_container)
         
         self.video_widget = QVideoWidget()
         self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -233,44 +356,56 @@ class VideoPlayerWidget(QWidget):
         self.thumb_label = ThumbnailLabel()
         self.video_stack.addWidget(self.thumb_label)
 
-        vid_layout.addWidget(self.video_stack, stretch=1) 
-
         self.sub_label = SubtitleLabel()
-        self.sub_label.setMinimumHeight(100)
-        vid_layout.addWidget(self.sub_label, stretch=0)
+        self.sub_label.setParent(self.video_container)
+        self.sub_label.raise_()
 
         layout.addWidget(self.video_container, stretch=1)
 
         ctrl = QWidget()
-        ctrl.setFixedHeight(36)
+        ctrl.setFixedHeight(42)
+        ctrl.setStyleSheet("background: transparent; border: none;")
         ctrl_layout = QHBoxLayout(ctrl)
         ctrl_layout.setContentsMargins(0, 0, 0, 0)
-        ctrl_layout.setSpacing(12)
+        ctrl_layout.setSpacing(8)
 
-        self.btn_play = QPushButton("▶ 재생")
+        self.btn_play = QPushButton("▶")
         self.btn_play.setToolTip("재생/일시정지 (Tab)")
         self.btn_play.setStyleSheet(f"""
             QPushButton {{
-                background: {config.ACCENT}; color: #000000;
-                border: none; padding: 6px 16px; font-weight: bold;
-                border-radius: 4px; font-size: 12px;
+                background: #252B31; color: #F5F7FA;
+                border: 1px solid #3A424A; padding: 6px 12px; font-weight: bold;
+                border-radius: 6px; font-size: 12px;
             }}
-            QPushButton:hover {{ background: {config.ACCENT_HOVER}; }}
+            QPushButton:hover {{ background: #303841; }}
         """)
         self.btn_play.clicked.connect(self.toggle_play)
         ctrl_layout.addWidget(self.btn_play)
 
         self.time_label = QLabel("00:00 / 00:00")
-        self.time_label.setStyleSheet(f"color: {config.FG}; font-size: 12px; font-weight: bold;")
+        self.time_label.setStyleSheet("color: #A9B0B7; font-size: 11px; font-weight: 500; background: transparent; border: none;")
         ctrl_layout.addWidget(self.time_label)
 
         ctrl_layout.addStretch()
 
         self.info_label = QLabel("영상을 불러오는 중...")
-        self.info_label.setStyleSheet(f"color: {config.FG2}; font-size: 11px;")
+        self.info_label.setStyleSheet("color: #A9B0B7; font-size: 10px; background: transparent; border: none;")
         ctrl_layout.addWidget(self.info_label)
 
         layout.addWidget(ctrl)
+        QTimer.singleShot(0, self._layout_video_overlay)
+
+    def _layout_video_overlay(self):
+        if not hasattr(self, "video_container"):
+            return
+        rect = self.video_container.rect()
+        self.video_stack.setGeometry(rect)
+        self.sub_label.setGeometry(rect)
+        self.sub_label.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._layout_video_overlay()
 
     def _get_video_ui_interval_ms(self) -> int:
         try:
@@ -293,6 +428,120 @@ class VideoPlayerWidget(QWidget):
             pass
         return "demucs"
 
+    def _is_video_file(self, path: str) -> bool:
+        return os.path.splitext(path)[1].lower() in {
+            ".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm", ".mts", ".m2ts"
+        }
+
+    def _preview_proxy_enabled(self) -> bool:
+        try:
+            settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
+            if os.path.exists(settings_path):
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    return bool(json.load(f).get("video_preview_proxy_enabled", True))
+        except Exception:
+            pass
+        return True
+
+    def _proxy_path_for(self, path: str) -> str:
+        st = os.stat(path)
+        key = f"{os.path.abspath(path)}|{int(st.st_mtime)}|{int(st.st_size)}"
+        digest = hashlib.sha1(key.encode("utf-8", errors="ignore")).hexdigest()[:20]
+        cache_dir = os.path.join(config.DATASET_DIR, "video_preview_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        return os.path.join(cache_dir, f"{digest}_preview.mp4")
+
+    def _playback_path_for(self, path: str) -> str:
+        self._proxy_original_path = path
+        self._proxy_playback_path = path
+        if not self._preview_proxy_enabled() or not self._is_video_file(path):
+            return path
+        if not shutil.which("ffmpeg"):
+            return path
+        try:
+            proxy_path = self._proxy_path_for(path)
+        except Exception:
+            return path
+        if os.path.exists(proxy_path) and os.path.getsize(proxy_path) > 1024:
+            self._proxy_playback_path = proxy_path
+            return proxy_path
+        self._start_proxy_build(path, proxy_path)
+        return path
+
+    def _start_proxy_build(self, src: str, dst: str):
+        if self._proxy_proc and self._proxy_proc.poll() is None:
+            return
+        tmp_dst = f"{dst}.tmp.mp4"
+        try:
+            if os.path.exists(tmp_dst):
+                os.remove(tmp_dst)
+        except Exception:
+            pass
+        cmd = [
+            "ffmpeg", "-y", "-nostdin", "-loglevel", "error",
+            "-i", src,
+            "-vf", "scale='min(640,iw)':-2",
+            "-threads", "1",
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "fastdecode",
+            "-profile:v", "baseline", "-level", "3.0", "-crf", "38",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "64k", "-ac", "1", "-ar", "22050",
+            "-movflags", "+faststart",
+            tmp_dst,
+        ]
+        kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        if os.name == "nt":
+            kwargs["creationflags"] = 0x08000000
+        try:
+            self.info_label.setText(f"저화질 프리뷰 준비 중 | {os.path.basename(src)}")
+            self._proxy_proc = subprocess.Popen(cmd, **kwargs)
+            self._proxy_target_tmp = tmp_dst
+            self._proxy_target_final = dst
+            self._proxy_timer = QTimer(self)
+            self._proxy_timer.setInterval(1000)
+            self._proxy_timer.timeout.connect(lambda: self._poll_proxy_build(src, tmp_dst, dst))
+            self._proxy_timer.start()
+        except Exception:
+            self._proxy_proc = None
+
+    def _poll_proxy_build(self, src: str, tmp_dst: str, dst: str):
+        proc = getattr(self, "_proxy_proc", None)
+        if proc is None or proc.poll() is None:
+            return
+        try:
+            self._proxy_timer.stop()
+        except Exception:
+            pass
+        ok = proc.returncode == 0 and os.path.exists(tmp_dst) and os.path.getsize(tmp_dst) > 1024
+        self._proxy_proc = None
+        if not ok:
+            try:
+                if os.path.exists(tmp_dst):
+                    os.remove(tmp_dst)
+            except Exception:
+                pass
+            return
+        try:
+            os.replace(tmp_dst, dst)
+        except Exception:
+            return
+        if os.path.normpath(src) != os.path.normpath(getattr(self, "_current_source_path", "") or ""):
+            return
+        self._proxy_playback_path = dst
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self._deferred_proxy_switch = dst
+            self.info_label.setText("저화질 프리뷰 준비 완료")
+            return
+        self._switch_to_proxy(dst)
+
+    def _switch_to_proxy(self, proxy_path: str):
+        if not proxy_path or not os.path.exists(proxy_path):
+            return
+        pos = max(0, self.media_player.position())
+        self.media_player.setSource(QUrl.fromLocalFile(proxy_path))
+        self.media_player.setPosition(pos)
+        self.info_label.setText(f"저화질 프리뷰 | {os.path.basename(self._proxy_original_path or proxy_path)}")
+
 
     def load(self, path, segments=None):
         self._set_segments(segments or [])
@@ -300,9 +549,10 @@ class VideoPlayerWidget(QWidget):
             self._pending_segments = list(self.segments)
         if os.path.exists(path):
             self._current_source_path = path
+            playback_path = self._playback_path_for(path)
             self._pending_seek_sec = self._pending_seek_sec if self._pending_seek_sec is not None else 0.0
             self._source_ready = False
-            self.media_player.setSource(QUrl.fromLocalFile(path))
+            self.media_player.setSource(QUrl.fromLocalFile(playback_path))
             file_dir = os.path.dirname(path)
             base_name = os.path.splitext(os.path.basename(path))[0]
             vocal_path = os.path.join(file_dir, f"{base_name}_vocals.wav")
@@ -316,7 +566,8 @@ class VideoPlayerWidget(QWidget):
             else:
                 self.audio_output.setVolume(1.0)
                 self.has_vocal_track = False
-                self.info_label.setText(f"🎞️ {os.path.basename(path)}")
+                prefix = "저화질 프리뷰" if os.path.normpath(playback_path) != os.path.normpath(path) else "원본 프리뷰"
+                self.info_label.setText(f"{prefix} | {os.path.basename(path)}")
             if self._pending_thumb_path is None:
                 self._extract_and_show_thumbnail(path)
 
@@ -381,6 +632,8 @@ class VideoPlayerWidget(QWidget):
         self._last_sub = cur_sub
         try:
             self.sub_label.setText(cur_sub)
+            self.sub_label.setVisible(bool(cur_sub))
+            self.sub_label.raise_()
         except Exception:
             pass
 
@@ -423,6 +676,10 @@ class VideoPlayerWidget(QWidget):
         self._set_segments(segments or [])
         self._refresh_subtitle_now()
 
+    def refresh_subtitle_context(self, segments: list[dict] | None = None):
+        if segments is not None:
+            self._set_segments(segments)
+        self._refresh_subtitle_now()
 
     def load_clip_context(self, path, segments=None, seek_sec=0.0, autoplay=False, show_thumbnail=True):
         segments = list(segments or [])
@@ -479,6 +736,10 @@ class VideoPlayerWidget(QWidget):
             if getattr(self, 'has_vocal_track', False):
                 self.vocal_player.pause()
         else:
+            if self._deferred_proxy_switch:
+                proxy_path = self._deferred_proxy_switch
+                self._deferred_proxy_switch = None
+                self._switch_to_proxy(proxy_path)
             if self.current_time > 0.05:
                 self.media_player.setPosition(int(self.current_time * 1000))
             if getattr(self, 'has_vocal_track', False):
@@ -500,7 +761,7 @@ class VideoPlayerWidget(QWidget):
         if self._last_btn_state == is_playing:
             return
         self._last_btn_state = is_playing
-        self.btn_play.setText("⏸ 정지" if is_playing else "▶ 재생")
+        self.btn_play.setText("⏸" if is_playing else "▶")
 
     def _ui_tick(self):
         self._update_btn()
@@ -523,6 +784,8 @@ class VideoPlayerWidget(QWidget):
         if cur_sub != self._last_sub:
             self._last_sub = cur_sub
             self.sub_label.setText(cur_sub)
+            self.sub_label.setVisible(bool(cur_sub))
+            self.sub_label.raise_()
 
     def closeEvent(self, event):
         if hasattr(self, '_ui_timer'): self._ui_timer.stop()

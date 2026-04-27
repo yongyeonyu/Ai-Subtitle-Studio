@@ -55,6 +55,10 @@ class EditorVideoControlsMixin:
 
         info = probe_media(path)
         self.video_fps = info.get("fps", 0.0) or 30.0
+        width = int(info.get("width", 0) or 0)
+        height = int(info.get("height", 0) or 0)
+        raw_aspect = (width / height) if width > 0 and height > 0 else 16 / 9
+        self._video_preview_aspect = (16 / 9) if raw_aspect >= 1.25 else 1.0
 
         self._vid_wait_cnt = 0
         def init_video():

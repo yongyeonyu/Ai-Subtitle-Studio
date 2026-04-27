@@ -150,6 +150,14 @@ class EditorTimelineVideoMixin:
             if (now_mono - last_cursor_at) >= 0.20:
                 self._last_play_cursor_sync_at = now_mono
                 self._sync_cursor_to_seg(seg, ensure_visible=False, move_cursor=False)
+        if seg:
+            last_scroll_at = float(getattr(self, '_last_editor_autoscroll_at', 0.0) or 0.0)
+            editing_active = bool(getattr(self.timeline.canvas, '_edit_active', False)) if hasattr(self.timeline, 'canvas') else False
+            if (not self.text_edit.hasFocus()) and (not editing_active) and (now_mono - last_scroll_at) >= 0.85:
+                self._last_editor_autoscroll_at = now_mono
+                self._sync_cursor_to_seg(seg, ensure_visible=True, move_cursor=True)
+        if hasattr(self.video_player, 'refresh_subtitle_context'):
+            self.video_player.refresh_subtitle_context()
 
 
     def _on_scrub(self, sec):

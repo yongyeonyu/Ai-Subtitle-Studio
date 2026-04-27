@@ -69,6 +69,8 @@ class EditorLifecycleMixin:
             QTimer.singleShot(0, self.show_home)
         editor.sig_save.connect(lambda segs, p=srt_path: _save_srt_impl(p, segs)); editor.sig_auto_save.connect(lambda segs, p=srt_path: _save_srt_impl(p, segs)); editor.sig_next.connect(_save_and_home); editor.sig_exit.connect(lambda _: self.close())
         self._editor_widget = editor
+        if hasattr(self, "global_menu_bar"):
+            self.global_menu_bar.bind_editor(editor)
         if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(self._log_visible)
         if hasattr(editor, 'timeline') and self._project_boundary_times: editor.timeline.set_boundary_times(self._project_boundary_times)
         self.stack.insertWidget(1, editor); self.stack.setCurrentWidget(editor)
@@ -108,6 +110,8 @@ class EditorLifecycleMixin:
         if is_batch: editor.sm.init_auto_state()
         else: editor.sm.init_state()
         if hasattr(editor, 'btn_start'): editor.btn_start.setText("🧠 시작")
+        if hasattr(self, "global_menu_bar"):
+            self.global_menu_bar.bind_editor(editor)
         
         # 멀티클립 박스 전달
         if hasattr(self, '_multiclip_boundaries') and self._multiclip_boundaries:
@@ -233,6 +237,8 @@ class EditorLifecycleMixin:
         self.stack.insertWidget(1, editor)
         if hasattr(editor, 'timeline'): editor.timeline.set_boundary_times(self._project_boundary_times or [])
         self.stack.setCurrentWidget(editor)
+        if hasattr(self, "global_menu_bar"):
+            self.global_menu_bar.bind_editor(editor)
         if self._current_project_path:
             self._restore_workspace(editor, self._current_project_path)
             from core.project.project_phase1b import apply_project_ui_state
@@ -255,6 +261,8 @@ class EditorLifecycleMixin:
         try:
             self.stack.removeWidget(old)
             old.hide()
+            if old is getattr(self, "_editor_widget", None) and hasattr(self, "global_menu_bar"):
+                self.global_menu_bar.clear_editor()
         except RuntimeError:
             return
         if not hasattr(self, '_trash_bin'):

@@ -1,4 +1,4 @@
-# Version: 02.03.16
+# Version: 02.04.00
 # Phase: PHASE1-C
 """
 ui/home_ui.py
@@ -7,9 +7,11 @@ MainWindow 홈 화면 빌드 Mixin
 import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QDialog, QLineEdit, QCheckBox, QScrollArea, QComboBox, QMessageBox
+    QDialog, QLineEdit, QCheckBox, QScrollArea, QComboBox, QMessageBox,
+    QToolButton
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QSize
+from PyQt6.QtGui import QIcon
 
 import config
 from core.path_manager import (
@@ -20,7 +22,7 @@ from core.path_manager import (
     get_nas_excluded_folders
 )
 from core.settings import load_settings, save_settings
-from ui.style import button_style, label_style, panel_style
+from ui.style import button_style, label_style, line_icon, tool_button_style, settings_dialog_stylesheet
 
 
 class HomeUIMixin:
@@ -51,14 +53,17 @@ class HomeUIMixin:
         left_widget = QWidget(); left_col = QVBoxLayout(left_widget); left_col.setContentsMargins(0, 0, 0, 0); left_col.setSpacing(4)
         if is_unified:
             left_col.addWidget(self._btn("⌂  홈", "", self.show_home))
-            left_col.addWidget(self._btn("▣  프로젝트", "", self._open_project))
             left_col.addWidget(self._btn("▤  자막 편집", "", self.select_files, active=True))
+            left_col.addWidget(self._btn("▣  프로젝트", "", self._open_project))
             left_col.addWidget(self._btn("◎  러프컷 편집 도우미", "PHASE2", self._open_roughcut_helper))
             left_col.addWidget(self._btn("▱  숏폼 제작기", "PHASE3", self._open_shortform_maker))
             left_col.addSpacing(8)
-            left_col.addWidget(self._btn("📂 파일 선택", "영상/음성/srt 직접 선택", self.select_files))
-            left_col.addWidget(self._btn("📁 폴더 선택", "폴더에서 영상 일괄 선택", self.select_folder))
-            left_col.addWidget(self._btn("📝 프로젝트 만들기", "영상 묶어서 프로젝트 관리", self._create_project))
+            left_col.addWidget(self._btn("◷  최근 작업", "", self._dummy_action))
+            icloud_files, count_str, comp_str = self._get_icloud_files()
+            nas_folders, nas_count, nas_comp = self._get_nas_folders()
+            left_col.addSpacing(6)
+            left_col.addWidget(self._icloud_btn("☁ iCloud 자동 처리", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
+            left_col.addWidget(self._icloud_btn("▣ NAS 자동 처리", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
         else:
             left_col.addWidget(self._btn("📂 파일 선택", "영상/음성/srt 직접 선택", self.select_files))
             left_col.addWidget(self._btn("📁 폴더 선택", "폴더에서 영상 일괄 선택", self.select_folder))
@@ -70,9 +75,11 @@ class HomeUIMixin:
             left_col.addStretch()
         right_widget = QWidget(); right_col = QVBoxLayout(right_widget); right_col.setContentsMargins(0, 0, 0, 0); right_col.setSpacing(8)
         icloud_files, count_str, comp_str = self._get_icloud_files()
-        right_col.addWidget(self._icloud_btn("☁️ iCloud 자동 처리", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
+        if not is_unified:
+            right_col.addWidget(self._icloud_btn("☁️ iCloud 자동 처리", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
         nas_folders, nas_count, nas_comp = self._get_nas_folders()
-        right_col.addWidget(self._icloud_btn("🗄️ NAS 자동 처리", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
+        if not is_unified:
+            right_col.addWidget(self._icloud_btn("🗄️ NAS 자동 처리", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
         valid_folders = [f for f in get_recent_folders() if f and f.strip()]
         
         # ✅ 중복 제거 (순서 유지)
@@ -85,7 +92,7 @@ class HomeUIMixin:
                 unique_folders.append(f)
         valid_folders = unique_folders[:10]
 
-        if valid_folders:
+        if valid_folders and not is_unified:
             recent_container = QWidget(); recent_container.setObjectName("MenuButton")
             recent_container.setStyleSheet("QWidget#MenuButton { background-color: #1B2429; border: 1px solid #2D3942; border-radius: 7px; }")
             recent_layout = QVBoxLayout(recent_container); recent_layout.setContentsMargins(10, 8, 10, 8); recent_layout.setSpacing(3)
@@ -107,27 +114,29 @@ class HomeUIMixin:
         if not is_unified:
             right_col.addStretch()
         columns.addWidget(left_widget, stretch=1)
-        columns.addWidget(right_widget, stretch=1)
+        if not is_unified:
+            columns.addWidget(right_widget, stretch=1)
         layout.addLayout(columns)
         layout.addStretch()
+        if is_unified:
+            layout.addWidget(self._project_info_card())
         bottom_bar = QHBoxLayout()
         from config import APP_VERSION
         version_lbl = QLabel(f"v{APP_VERSION}")
         version_lbl.setStyleSheet("color: #D1D1D6; font-size: 11px;")
-        btn_settings = QPushButton("⚙️ 자동설정"); btn_settings.setStyleSheet(button_style("toolbar")); btn_settings.clicked.connect(self._show_path_settings)
-        btn_auto_start = QPushButton(self._auto_start_label()); btn_auto_start.setStyleSheet(self._auto_start_style()); btn_auto_start.clicked.connect(self._toggle_auto_start_enabled)
-        btn_clear_cache = QPushButton("🗑️ 캐쉬삭제"); btn_clear_cache.setStyleSheet(button_style("toolbar")); btn_clear_cache.clicked.connect(self._clear_cache)
-        btn_log = QPushButton(self._terminal_log_label()); btn_log.setStyleSheet(button_style("toolbar")); btn_log.clicked.connect(self._toggle_log)
-        btn_exit = QPushButton("❌ 종료"); btn_exit.setStyleSheet(button_style("danger")); btn_exit.clicked.connect(self._quick_exit)
         bottom_bar.addWidget(version_lbl)
         if not is_unified:
             bottom_bar.addWidget(self._editor_shortcuts_row())
             bottom_bar.addStretch()
         else:
             bottom_bar.addStretch()
-        bottom_bar.addWidget(btn_settings); bottom_bar.addWidget(btn_auto_start); bottom_bar.addWidget(btn_clear_cache); bottom_bar.addWidget(btn_log); bottom_bar.addWidget(btn_exit)
-        if is_unified:
-            layout.addWidget(self._editor_shortcuts_row())
+        if not is_unified:
+            btn_settings = QPushButton("⚙️ 자동설정"); btn_settings.setStyleSheet(button_style("toolbar")); btn_settings.clicked.connect(self._show_path_settings)
+            btn_auto_start = QPushButton(self._auto_start_label()); btn_auto_start.setStyleSheet(self._auto_start_style()); btn_auto_start.clicked.connect(self._toggle_auto_start_enabled)
+            btn_clear_cache = QPushButton("🗑️ 캐쉬삭제"); btn_clear_cache.setStyleSheet(button_style("toolbar")); btn_clear_cache.clicked.connect(self._clear_cache)
+            btn_log = QPushButton(self._terminal_log_label()); btn_log.setStyleSheet(button_style("toolbar")); btn_log.clicked.connect(self._toggle_log)
+            btn_exit = QPushButton("❌ 종료"); btn_exit.setStyleSheet(button_style("danger")); btn_exit.clicked.connect(self._quick_exit)
+            bottom_bar.addWidget(btn_settings); bottom_bar.addWidget(btn_auto_start); bottom_bar.addWidget(btn_clear_cache); bottom_bar.addWidget(btn_log); bottom_bar.addWidget(btn_exit)
         layout.addLayout(bottom_bar)
         self._ensure_watchdog_timer()
 
@@ -179,6 +188,7 @@ class HomeUIMixin:
         settings = load_settings()
         enabled = not bool(settings.get("auto_start_enabled", True))
         settings["auto_start_enabled"] = enabled
+        self._auto_start_on = enabled
         save_settings(settings)
         if enabled:
             self._icloud_watchdog_left = self._watchdog_interval_for(False)
@@ -190,6 +200,8 @@ class HomeUIMixin:
             if hasattr(self, "_nas_sync_manager"):
                 self._nas_sync_manager.stop()
         self.show_home()
+        if hasattr(self, "global_menu_bar"):
+            self.global_menu_bar.refresh()
 
     def _start_configured_watchers(self):
         if not self._is_auto_start_enabled():
@@ -327,20 +339,94 @@ class HomeUIMixin:
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         actions = [
-            ("⚙️ AI", self._open_main_ai_settings),
-            ("🛠️ 상세설정", self._open_main_adv_settings),
-            ("🗣️ 화자", self._open_main_speaker_settings),
-            ("⏱️ 간격", self._open_main_gap_settings),
-            ("🎬 비디오", self._toggle_main_video),
-            ("🎥 자막출력", self._open_main_export_dialog),
+            ("AI", "ai", self._open_main_ai_settings),
+            ("상세설정", "settings", self._open_main_adv_settings),
+            ("화자", "speaker", self._open_main_speaker_settings),
+            ("화각", "sliders", self._dummy_action),
+            ("간격", "timeline", self._open_main_gap_settings),
+            ("비디오", "video", self._toggle_main_video),
+            ("자막출력", "export", self._open_main_export_dialog),
         ]
-        for text, cmd in actions:
-            btn = QPushButton(text)
+        for text, icon, cmd in actions:
+            btn = QToolButton()
+            btn.setText(text)
+            btn.setIcon(self._nav_icon(icon, "#A9B0B7" if text != "AI" else "#34C759"))
+            btn.setIconSize(QSize(20, 20))
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(button_style("toolbar", font_size="10px", padding="5px 7px"))
+            btn.setMinimumSize(42, 46)
+            btn.setStyleSheet(tool_button_style("toolbar"))
             btn.clicked.connect(cmd)
             layout.addWidget(btn)
         return row
+
+    def _utility_shortcuts_row(self):
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        actions = [
+            ("자동설정", "settings", self._show_path_settings),
+            ("자동시작", "sliders", self._toggle_auto_start_enabled),
+            ("캐쉬삭제", "trash", self._clear_cache),
+            ("로그", "terminal", self._toggle_log),
+            ("종료", "power", self._quick_exit),
+        ]
+        for text, icon, cmd in actions:
+            btn = QToolButton()
+            btn.setText(text)
+            btn.setIcon(self._nav_icon(icon, "#FF3B30" if text == "종료" else "#A9B0B7"))
+            btn.setIconSize(QSize(18, 18))
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+            btn.setMinimumSize(38, 42)
+            btn.setStyleSheet(tool_button_style("danger" if text == "종료" else "toolbar"))
+            btn.clicked.connect(cmd)
+            layout.addWidget(btn)
+        return row
+
+    def _project_info_card(self):
+        card = QWidget()
+        card.setStyleSheet("background: #1B2429; border: 1px solid #2D3942; border-radius: 7px;")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+        title = QLabel("프로젝트 정보")
+        title.setStyleSheet(label_style("text", 11, bold=True))
+        lay.addWidget(title)
+
+        def add_section(name, rows):
+            section = QLabel(name)
+            section.setStyleSheet(label_style("accent", 10, bold=True))
+            lay.addWidget(section)
+            for text in rows:
+                lbl = QLabel(text)
+                lbl.setWordWrap(True)
+                lbl.setStyleSheet(label_style("muted", 9))
+                lay.addWidget(lbl)
+
+        editor = self._active_editor()
+        project_name = os.path.basename(str(getattr(self, "_current_project_path", "") or "인터뷰_홍길동.assp"))
+        project_path = str(getattr(self, "_current_project_path", "") or "/Volumes/NAS/Project")
+        media_name = str(getattr(editor, "video_name", "") or "열린 영상 없음")
+        video_player = getattr(editor, "video_player", None) if editor is not None else None
+        duration = float(getattr(video_player, "total_time", 0.0) or 0.0)
+        seg_count = 0
+        speakers = set()
+        if editor is not None and hasattr(editor, "_get_current_segments"):
+            try:
+                segs = editor._get_current_segments()
+                seg_count = len([s for s in segs if not s.get("is_gap")])
+                speakers = {str(s.get("spk") or s.get("speaker") or "00") for s in segs if not s.get("is_gap")}
+            except Exception:
+                seg_count = 0
+
+        add_section("프로젝트", [project_name, project_path])
+        add_section("영상", [f"파일: {media_name}", f"길이: {duration:0.1f}s" if duration else "길이: -", "해상도/프레임: 로드 후 표시"])
+        add_section("자막", [f"세그먼트: {seg_count}", f"화자: {len(speakers) if speakers else 0}", "상태: 편집 대기"])
+        return card
+
+    def _nav_icon(self, name: str, color="#A9B0B7") -> QIcon:
+        return line_icon(name, color)
 
     def _show_development_notice(self, title, phase):
         QMessageBox.information(
@@ -451,19 +537,12 @@ class HomeUIMixin:
         editor._show_export_dialog()
 
     def _show_path_settings(self):
-        dlg = QDialog(self); dlg.setWindowTitle("자동설정"); dlg.setMinimumWidth(520); dlg.setStyleSheet(f"""
-            QDialog {{ background-color: {config.BG}; color: {config.FG}; }}
-            QLabel {{ color: {config.FG}; }}
-            QCheckBox {{ color: {config.FG}; }}
-            QCheckBox::indicator {{ width: 16px; height: 16px; border: 2px solid #FFFFFF; border-radius: 3px; background-color: transparent; }}
-            QCheckBox::indicator:checked {{ background-color: #4AFF80; border: 2px solid #4AFF80; }}
-            QComboBox {{ background: {config.BG2}; color: {config.FG}; border: 1px solid {config.BG3}; padding: 4px; }}
-        """)
+        dlg = QDialog(self); dlg.setWindowTitle("자동설정"); dlg.setMinimumWidth(520); dlg.setStyleSheet(settings_dialog_stylesheet())
         settings = load_settings()
         layout = QVBoxLayout(dlg); layout.addWidget(QLabel("NAS 루트 경로:"))
-        nas_input = QLineEdit(get_nas_path()); nas_input.setStyleSheet(f"background: {config.BG2}; border: 1px solid {config.BG3}; padding: 4px;"); layout.addWidget(nas_input)
+        nas_input = QLineEdit(get_nas_path()); layout.addWidget(nas_input)
         layout.addWidget(QLabel("iCloud 동기화 경로:"))
-        icloud_input = QLineEdit(get_icloud_path()); icloud_input.setStyleSheet(f"background: {config.BG2}; border: 1px solid {config.BG3}; padding: 4px;"); layout.addWidget(icloud_input)
+        icloud_input = QLineEdit(get_icloud_path()); layout.addWidget(icloud_input)
         icl_chk = QCheckBox("자동감지 및 처리활성화 iCloud"); icl_chk.setChecked(get_icloud_auto_detect()); layout.addWidget(icl_chk)
         nas_chk = QCheckBox("자동감지 및 처리활성화 NAS"); nas_chk.setChecked(get_nas_auto_detect()); layout.addWidget(nas_chk)
         layout.addWidget(QLabel("자동 처리 모드:"))
@@ -474,8 +553,6 @@ class HomeUIMixin:
                 mode_combo.setCurrentIndex(i); break
         layout.addWidget(mode_combo)
         shortcut_row = QHBoxLayout(); btn_ai = QPushButton("AI 설정"); btn_detail = QPushButton("상세설정")
-        btn_ai.setStyleSheet(f"background: {config.BG3}; color: {config.FG}; padding: 6px; border-radius: 4px;")
-        btn_detail.setStyleSheet(f"background: {config.BG3}; color: {config.FG}; padding: 6px; border-radius: 4px;")
         def open_ai_settings():
             from ui.settings.settings_dialog import SettingsDialog
             s = load_settings(); d = SettingsDialog(s, self)
@@ -486,7 +563,7 @@ class HomeUIMixin:
             if d.exec(): save_settings(d.result)
         btn_ai.clicked.connect(open_ai_settings); btn_detail.clicked.connect(open_advanced_settings)
         shortcut_row.addWidget(btn_ai); shortcut_row.addWidget(btn_detail); layout.addLayout(shortcut_row)
-        btn_layout = QHBoxLayout(); btn_save = QPushButton("저장"); btn_save.setStyleSheet(f"background: {config.ACCENT}; color: #000; font-weight: bold; padding: 6px;")
+        btn_layout = QHBoxLayout(); btn_save = QPushButton("저장"); btn_save.setStyleSheet(button_style("primary"))
         def save_all():
             set_nas_path(nas_input.text()); set_icloud_path(icloud_input.text())
             set_icloud_auto_detect(icl_chk.isChecked()); self._is_icloud_auto_mode = icl_chk.isChecked()

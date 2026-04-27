@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.04.00
 # Phase: PHASE1-B
 """
 ui/settings_advanced.py  ─  🛠️ 오디오 & Whisper 엔진 상세 튜닝 다이얼로그
@@ -14,6 +14,7 @@ from PyQt6.QtCore import Qt, QTimer
 import config
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, CUSTOM_DEFAULTS_FILE, _create_bottom_buttons
+from ui.style import button_style, label_style, settings_dialog_stylesheet
 from core.audio.audio_presets import load_audio_presets, apply_audio_preset
 
 class AdvancedSettingsDialog(QDialog):
@@ -25,16 +26,7 @@ class AdvancedSettingsDialog(QDialog):
         self.setMinimumWidth(800)
         self.setMinimumHeight(650)
         
-        self.setStyleSheet("""
-            QDialog { background-color: #121212; color: #FFFFFF; }
-            QLabel { color: #FFFFFF; background: transparent; }
-            QToolTip { background-color: #000000; color: #FFFFFF; border: 1px solid #666666; padding: 8px; font-size: 13px; white-space: nowrap; }
-            QTabWidget::pane { border: 1px solid #444444; top: -1px; background: #121212; }
-            QTabBar::tab { background: #2A2A2A; color: #FFFFFF; padding: 10px 15px; border: 1px solid #444444; border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }
-            QTabBar::tab:selected { background: #4AFF80; color: #000000; font-weight: bold; }
-            QTabBar::tab:hover:!selected { background: #444444; }
-            QTextEdit { background-color: #1E1E1E; color: #FFFFFF; border: 1px solid #555555; border-radius: 4px; padding: 8px; font-size: 13px; }
-        """)
+        self.setStyleSheet(settings_dialog_stylesheet())
         self.result = dict(settings)
         self.audio_presets = load_audio_presets()
         current_preset = self.result.get("audio_preset", "")
@@ -45,7 +37,7 @@ class AdvancedSettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         preset_layout = QHBoxLayout()
         preset_lbl = QLabel("오디오 프리셋:")
-        preset_lbl.setStyleSheet("font-weight: bold; color: #4AFF80;")
+        preset_lbl.setStyleSheet(label_style("accent", 13, bold=True))
         self.combo_audio_preset = QComboBox()
         self.combo_audio_preset.addItem("직접 설정", "")
         for name, preset in self.audio_presets.items():
@@ -209,12 +201,12 @@ class AdvancedSettingsDialog(QDialog):
         tab_llm = QWidget(); layout_llm = QVBoxLayout(tab_llm)
         
         lbl_sys = QLabel("<b>[시스템 설정]</b> (config.py 및 내부 시스템 강제 룰 - 수정 불가)")
-        lbl_sys.setStyleSheet("color: #4AFF80; font-size: 13px; padding-top: 5px;")
+        lbl_sys.setStyleSheet(label_style("accent", 13, bold=True) + "padding-top: 5px;")
         layout_llm.addWidget(lbl_sys)
         
         edit_sys_prompt = QTextEdit()
         edit_sys_prompt.setReadOnly(True)
-        edit_sys_prompt.setStyleSheet("background-color: #1A1A1A; color: #888888; border: 1px solid #444444; border-radius: 4px; padding: 8px; font-size: 12px;")
+        edit_sys_prompt.setStyleSheet("color: #8E98A1;")
         
         # 💡 config.py 내용만 깔끔하게 불러오도록 찌꺼기 텍스트 삭제
         sys_text = getattr(config, "DEFAULT_LLM_PROMPT", "")
@@ -222,7 +214,7 @@ class AdvancedSettingsDialog(QDialog):
         layout_llm.addWidget(edit_sys_prompt, stretch=5)
         
         lbl_user = QLabel("<b>[사용자 설정]</b> (이곳에 추가로 지시할 스타일을 입력하세요)")
-        lbl_user.setStyleSheet("color: #4AFF80; font-size: 13px; padding-top: 10px;")
+        lbl_user.setStyleSheet(label_style("accent", 13, bold=True) + "padding-top: 10px;")
         layout_llm.addWidget(lbl_user)
         
         self.edit_user_prompt = QTextEdit()
@@ -232,17 +224,17 @@ class AdvancedSettingsDialog(QDialog):
         layout_llm.addWidget(self.edit_user_prompt, stretch=5)
         
         btn_save_llm_default = QPushButton("프롬프트 저장")
-        btn_save_llm_default.setStyleSheet("background-color: #333333; color: #FFFFFF; font-weight: bold; padding: 8px; border-radius: 4px;")
+        btn_save_llm_default.setStyleSheet(button_style("toolbar"))
         def save_llm_default():
             DEFAULT_ADV_SETTINGS["user_prompt"] = self.edit_user_prompt.toPlainText()
             try:
                 with open(CUSTOM_DEFAULTS_FILE, "w", encoding="utf-8") as f:
                     json.dump(DEFAULT_ADV_SETTINGS, f, indent=4, ensure_ascii=False)
                 btn_save_llm_default.setText("✓ 프롬프트 저장 완료")
-                btn_save_llm_default.setStyleSheet("background-color: #4AFF80; color: #000000; font-weight: bold; padding: 8px; border-radius: 4px;")
+                btn_save_llm_default.setStyleSheet(button_style("primary"))
                 QTimer.singleShot(1500, lambda: [
                     btn_save_llm_default.setText("프롬프트 저장"),
-                    btn_save_llm_default.setStyleSheet("background-color: #333333; color: #FFFFFF; font-weight: bold; padding: 8px; border-radius: 4px;")
+                    btn_save_llm_default.setStyleSheet(button_style("toolbar"))
                 ])
             except Exception:
                 pass
@@ -266,11 +258,7 @@ class AdvancedSettingsDialog(QDialog):
         layout.addWidget(self.tabs)
         
         self.chk_disable_all = QCheckBox("🎙️ 오디오 상세 설정 전체 '사용 안 함'")
-        self.chk_disable_all.setStyleSheet("""
-            QCheckBox { color: #FFFFFF; font-size: 13px; font-weight: bold; padding-bottom: 5px; padding-right: 5px; background: transparent; }
-            QCheckBox::indicator { width: 15px; height: 15px; border: 1.5px solid #FFFFFF; background-color: transparent; border-radius: 2px; }
-            QCheckBox::indicator:checked { background-color: #4AFF80; border: 1.5px solid #4AFF80; }
-        """)
+        self.chk_disable_all.setStyleSheet(label_style("text", 13, bold=True) + "padding-bottom: 5px;")
         
         def toggle_all_disable():
             is_checked = self.chk_disable_all.isChecked()
@@ -330,10 +318,7 @@ class AdvancedSettingsDialog(QDialog):
         
         btn_minus = QPushButton("-")
         btn_plus = QPushButton("+")
-        btn_style = """
-            QPushButton { background: #444444; color: #FFFFFF; border: none; border-radius: 4px; font-weight: bold; min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px; }
-            QPushButton:hover { background: #4AFF80; color: #000000; }
-        """
+        btn_style = button_style("toolbar", font_size="12px", padding="2px 6px") + " QPushButton { min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px; }"
         btn_minus.setStyleSheet(btn_style); btn_plus.setStyleSheet(btn_style)
         btn_minus.clicked.connect(lambda: slider.setValue(slider.value() - 1))
         btn_plus.clicked.connect(lambda: slider.setValue(slider.value() + 1))
@@ -347,11 +332,7 @@ class AdvancedSettingsDialog(QDialog):
         
         if show_disable:
             chk_disable = QCheckBox("사용 안 함")
-            chk_disable.setStyleSheet("""
-                QCheckBox { color: #AAAAAA; font-size: 11px; margin-left: 5px; margin-right: 5px; background: transparent; }
-                QCheckBox::indicator { width: 13px; height: 13px; border: 1.5px solid #FFFFFF; background-color: transparent; border-radius: 2px; }
-                QCheckBox::indicator:checked { background-color: #4AFF80; border: 1.5px solid #4AFF80; }
-            """)
+            chk_disable.setStyleSheet(label_style("muted", 11) + "margin-left: 5px; margin-right: 5px;")
             
             def toggle_disable():
                 is_disabled = chk_disable.isChecked()
@@ -370,7 +351,7 @@ class AdvancedSettingsDialog(QDialog):
             chk_disable_ref = chk_disable
 
         btn_set_default = QPushButton("기본값 저장")
-        btn_set_default.setStyleSheet("font-size: 11px; padding: 2px 6px; background-color: #333333; color: #FFFFFF; border-radius: 2px;")
+        btn_set_default.setStyleSheet(button_style("toolbar", font_size="11px", padding="2px 6px"))
         
         def set_as_default():
             current_val = slider.value() / multiplier
@@ -386,10 +367,10 @@ class AdvancedSettingsDialog(QDialog):
             help_icon.tip = tip_template.format(default=new_default_str)
             
             btn_set_default.setText("✓ 저장됨")
-            btn_set_default.setStyleSheet("font-size: 11px; padding: 2px 6px; background-color: #4AFF80; color: #000000; font-weight: bold; border-radius: 2px;")
+            btn_set_default.setStyleSheet(button_style("primary", font_size="11px", padding="2px 6px"))
             QTimer.singleShot(1500, lambda: [
                 btn_set_default.setText("기본값 저장"),
-                btn_set_default.setStyleSheet("font-size: 11px; padding: 2px 6px; background-color: #333333; color: #FFFFFF; border-radius: 2px;")
+                btn_set_default.setStyleSheet(button_style("toolbar", font_size="11px", padding="2px 6px"))
             ])
             
         btn_set_default.clicked.connect(set_as_default)

@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.04.00
 # Phase: PHASE1-B
 """
 ui/settings/settings_speaker.py
@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.settings.settings_common import DATASET_DIR, _create_bottom_buttons
+from ui.style import button_style, label_style, settings_dialog_stylesheet
 
 
 class SpeakerDialog(QDialog):
@@ -35,31 +36,7 @@ class SpeakerDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("화자 설정")
         self.setMinimumWidth(900)
-        self.setStyleSheet(
-            """
-            QDialog { background-color: #121212; color: #FFFFFF; }
-            QLabel { color: #FFFFFF; background: transparent; font-weight: bold; }
-            QLineEdit {
-                background-color: #2A2A2A; color: #FFFFFF;
-                border: 1px solid #555555; padding: 4px; border-radius: 3px;
-            }
-            QCheckBox {
-                color: #FFFFFF; font-weight: bold; background: transparent;
-                spacing: 8px; padding-right: 10px;
-            }
-            QCheckBox::indicator {
-                width: 16px; height: 16px; border: 2px solid #FFFFFF;
-                border-radius: 3px; background-color: transparent;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #4AFF80; border: 2px solid #4AFF80;
-            }
-            QPushButton {
-                background-color: #444444; color: #FFFFFF; border: none;
-                font-weight: bold; border-radius: 4px; padding: 6px 10px;
-            }
-            """
-        )
+        self.setStyleSheet(settings_dialog_stylesheet())
 
         self.result = dict(settings)
         os.makedirs(config.VOICE_DATA_DIR, exist_ok=True)
@@ -116,14 +93,12 @@ class SpeakerDialog(QDialog):
             h.addWidget(btn_color)
 
             btn_voice = QPushButton("목소리학습")
-            btn_voice.setStyleSheet(
-                "background-color: #444; color: #FFF; font-size: 11px; padding: 6px; border-radius: 3px;"
-            )
+            btn_voice.setStyleSheet(button_style("toolbar", font_size="11px", padding="5px 9px"))
 
             voice_label = QLabel("")
             voice_label.setFixedWidth(90)
             voice_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            voice_label.setStyleSheet("color: #888888; font-size: 10px; background: transparent;")
+            voice_label.setStyleSheet(label_style("muted", 10))
             self._voice_labels[idx] = voice_label
 
             btn_play = QPushButton("▶")
@@ -131,10 +106,7 @@ class SpeakerDialog(QDialog):
             btn_play.setFixedHeight(28)
             btn_play.setEnabled(False)
             btn_play.setToolTip("재생 / 정지")
-            btn_play.setStyleSheet(
-                "QPushButton { background-color: #444444; color: #FFFFFF; "
-                "font-weight: bold; border-radius: 4px; padding: 0 0 0 1px; text-align: center; }"
-            )
+            btn_play.setStyleSheet(button_style("toolbar", font_size="12px", padding="0 0 0 1px"))
             btn_play.clicked.connect(lambda _, i=idx: self._toggle_preview(i))
             self._play_buttons[idx] = btn_play
 
@@ -188,7 +160,7 @@ class SpeakerDialog(QDialog):
             btn_del_voice.setFixedWidth(28)
             btn_del_voice.setFixedHeight(28)
             btn_del_voice.setToolTip('학습 데이터 사용 해제 (파일 유지)')
-            btn_del_voice.setStyleSheet('QPushButton { background-color: #661111; color: #FF8080; font-weight: bold; border-radius: 4px; padding: 0px; }')
+            btn_del_voice.setStyleSheet(button_style("danger", font_size="12px", padding="0"))
             btn_del_voice.setEnabled(False)
             btn_del_voice.clicked.connect(lambda _, i=idx: self._toggle_voice_disable(i))
             
@@ -229,7 +201,7 @@ class SpeakerDialog(QDialog):
         )
         note.setWordWrap(True)
         note.setStyleSheet(
-            "color: #CCCCCC; font-size: 11px; background: transparent; margin-top: 10px;"
+            label_style("muted", 11) + "margin-top: 10px;"
         )
         form.addRow("", note)
 
@@ -289,42 +261,33 @@ class SpeakerDialog(QDialog):
 
         if files and not disabled:
             label.setText(files[0])
-            label.setStyleSheet("color: #4AFF80; font-size: 10px; background: transparent;")
+            label.setStyleSheet(label_style("accent", 10, bold=True))
             btn_play.setEnabled(True)
             if btn_del:
                 btn_del.setEnabled(True)
                 btn_del.setText("X")
                 btn_del.setToolTip("학습 데이터 사용 해제 (파일 유지)")
-                btn_del.setStyleSheet(
-                    "QPushButton { background-color: #661111; color: #FF8080; "
-                    "font-weight: bold; border-radius: 4px; padding: 0px; }"
-                )
+                btn_del.setStyleSheet(button_style("danger", font_size="12px", padding="0"))
         elif files and disabled:
             label.setText("사용 안 함")
-            label.setStyleSheet("color: #888888; font-size: 10px; background: transparent;")
+            label.setStyleSheet(label_style("muted", 10))
             btn_play.setEnabled(False)
             btn_play.setText("▶")
             if btn_del:
                 btn_del.setEnabled(True)
                 btn_del.setText("↩")
                 btn_del.setToolTip("학습 데이터 다시 사용")
-                btn_del.setStyleSheet(
-                    "QPushButton { background-color: #114411; color: #4AFF80; "
-                    "font-weight: bold; border-radius: 4px; padding: 0px; }"
-                )
+                btn_del.setStyleSheet(button_style("primary", font_size="12px", padding="0"))
         else:
             label.setText("학습 데이터 없음")
-            label.setStyleSheet("color: #888888; font-size: 10px; background: transparent;")
+            label.setStyleSheet(label_style("muted", 10))
             btn_play.setEnabled(False)
             btn_play.setText("▶")
             if btn_del:
                 btn_del.setEnabled(False)
                 btn_del.setText("X")
                 btn_del.setToolTip("학습 데이터 사용 해제 (파일 유지)")
-                btn_del.setStyleSheet(
-                    "QPushButton { background-color: #661111; color: #FF8080; "
-                    "font-weight: bold; border-radius: 4px; padding: 0px; }"
-                )
+                btn_del.setStyleSheet(button_style("danger", font_size="12px", padding="0"))
 
     def _toggle_preview(self, idx: int):
         path = self._primary_voice_path(idx)

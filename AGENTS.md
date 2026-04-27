@@ -1,11 +1,11 @@
 <!--
-Document-Version: 02.03.03
-Phase: PHASE1-B
-Last-Updated: 2026-04-27
+Document-Version: 02.04.00
+Phase: PHASE1-C
+Last-Updated: 2026-04-28
 Updated-By: Codex with 대표님
-Previous-Content: 프로젝트 개발 가이드, create_all 규칙, 환경별 작업 방식, NAS/LLM/성능 운영 규칙
-This-Update: v02.03.03 기준 리팩토링/MLX JSON 채널 분리/NAS 선택창/AI 프리셋 연동 완료 상태 반영
-Copilot-Handoff: v02.03.03 커밋 기준. 핵심 변경은 provider/mixin 분리, NAS 선택 UX, MLX stdout JSON 안정화, AI 메뉴 오디오 프리셋 연동입니다.
+Previous-Content: v02.03.03 기준 리팩토링/MLX JSON 채널 분리/NAS 선택창/AI 프리셋 연동 완료 상태
+This-Update: v02.04.00 PHASE1-C 기능 보존형 Apple 스타일 UI 개선 완료 상태 반영
+Copilot-Handoff: v02.04.00 커밋 기준. 전역 메뉴바는 ui/menu_bar.py, 공용 아이콘/스타일은 ui/style.py, 통합 대시보드는 ui/main/main_window.py와 ui/home_ui.py를 먼저 확인하세요. 다음 작업은 v02.05.00부터 진행합니다.
 -->
 # AGENTS.md — AI Subtitle Studio 개발 가이드
 
@@ -177,7 +177,7 @@ Copilot-Handoff: v02.03.03 커밋 기준. 핵심 변경은 provider/mixin 분리
 
 ---
 
-## 📁 폴더 구조 (기준: v02.03.00)
+## 📁 폴더 구조 (기준: v02.04.00)
 
 ```text
 ai_subtitle_studio/
@@ -193,6 +193,8 @@ ai_subtitle_studio/
 ├── ui/
 │   ├── main/
 │   ├── editor/
+│   ├── menu_bar.py
+│   ├── style.py
 │   ├── settings/
 │   ├── timeline/
 │   ├── project/
@@ -208,8 +210,8 @@ ai_subtitle_studio/
 
 1. **헤더 통일**
    - 모든 `.py` 파일 첫 줄:
-     - `# Version: 02.03.00`
-     - `# Phase: PHASE1-B`
+     - `# Version: 02.04.00`
+     - `# Phase: PHASE1-C`
 
 2. **파일 분할**
    - 기능별로 분리
@@ -407,7 +409,7 @@ ai_subtitle_studio/
 - `AGENTS.md`
 - `ACTION_ITEMS.md`
 - `File_structure.txt`
-- `RELEASE_v02.03.00.md`
+- `RELEASE_v02.04.00.md`
 
 ### 운영 원칙
 1. 위 문서들은 **커밋 직전 최종 업데이트**로 반영합니다.
@@ -423,7 +425,7 @@ ai_subtitle_studio/
 4. 기존 내용이 무엇이었는지 요약을 남겨 Copilot이 변경 맥락을 이어받을 수 있게 합니다.
 5. 대표님과 Codex/Copilot이 한 작업 내용 중 다음 세션에 필요한 내용은 `AGENTS.md`, `ACTION_ITEMS.md`, `File_structure.txt`, 릴리즈 노트에 반영합니다.
 6. 완료되어 더 이상 추적할 필요가 없는 중복/낡은 내용은 삭제하거나 완료 섹션으로 이동합니다.
-7. v02.03.00 작업 중 생성되는 문서도 v02.03.00 기준으로 관리합니다.
+7. v02.04.00 작업 중 생성되는 문서도 v02.04.00 기준으로 관리합니다.
 
 ## 마지막 원칙
 - Copilot은 **대표님의 코딩 파트너**로 동작
@@ -435,9 +437,24 @@ ai_subtitle_studio/
 
 ---
 
-## 🧠 v02.03.00 현재 작업 맥락
+## 🧠 v02.04.00 현재 작업 맥락
 
-- 현재 작업 버전: **v02.03.00**
+- 현재 릴리즈 버전: **v02.04.00**
+- 다음 수정 시작 버전: **v02.05.00**
+- PHASE1-C Apple 스타일 UI 개선은 기능 보존 원칙으로 반영되었습니다.
+- 전역 메뉴:
+  - `ui/menu_bar.py`가 하단 실행 메뉴와 상단 상태 레일을 관리합니다.
+  - 불필요해진 전역 `이전` / `다음` 액션은 제거했습니다.
+  - 창 폭이 화면 절반 이하가 되면 메뉴 버튼 텍스트는 숨고 아이콘만 남습니다.
+- 통합 화면:
+  - `ui/main/main_window.py`와 `ui/home_ui.py`가 대시보드 중심 화면을 구성합니다.
+  - 왼쪽 사이드바에는 홈/자막 편집/프로젝트/Phase2/Phase3/최근 작업, iCloud/NAS 상태, 프로젝트/영상/자막 정보가 있습니다.
+- 에디터/비디오:
+  - 비디오 subtitle overlay와 자막 에디터 자동 스크롤은 재생 중 가볍게 동기화합니다.
+  - 디테일 타임라인은 다이아몬드/화살표/무음 세그먼트 affordance를 유지합니다.
+- 설정 UI:
+  - `ui/style.py`의 `line_icon()`, `button_style()`, `settings_dialog_stylesheet()`를 우선 사용합니다.
+  - 설정 하단 버튼은 `ui/settings/settings_common.py` 공통 헬퍼를 통해 아이콘과 크기를 맞춥니다.
 - `STRUCTURE.txt`는 삭제 예정/삭제 완료 문서이며, 구조 문서는 **File_structure.txt**를 기준으로 봅니다.
 - LLM은 3-provider 방향:
   - Ollama: 무료/로컬, 기본 우선
@@ -452,7 +469,7 @@ ai_subtitle_studio/
   - 모델 preload / 오디오 prefetch / UI update throttling 우선
   - 배터리 절약보다 STT 속도 우선
 
-## 📌 v02.03.00 즉시 주의할 항목
+## 📌 v02.04.00 즉시 주의할 항목
 
 1. 멀티클립에서 기존자막 사용 질문에 **아니요** 선택 시:
    - 기존 SRT 자동 로드 금지
@@ -460,8 +477,10 @@ ai_subtitle_studio/
    - 에디터는 빈 상태로 시작
 2. 프로젝트 루트에 `_backup*/`, `create_all*.py`를 장기 보관하지 않습니다.
 3. 대규모 리팩토링은 `ACTION_ITEMS.md`의 R13 기준으로 영역별 진행합니다.
+4. PHASE1-C 완료 항목은 `ACTION_ITEMS.md`에서 삭제했고, 실사용 확인이 필요한 항목만 CHECKPOINT로 남겼습니다.
+5. 다음 채팅에서는 `ACTION_ITEMS.md`의 CHECKPOINT와 Phase2/Phase3 항목을 기준으로 이어가면 됩니다.
 
-### LLM / Ollama / 성능 규칙 (v02.03.00)
+### LLM / Ollama / 성능 규칙 (v02.04.00)
 - LLM 모델 UI는 `전체/무료/유료` 필터를 제공합니다. 무료는 Ollama 로컬 및 무료/제한 API, 유료는 과금 API 모델입니다.
 - Ollama 추천 모델은 `core/model_manager.py`의 `OLLAMA_RECOMMENDED_MODELS`를 기준으로 표시하고, 설정창에서 `ollama pull` / `ollama rm`으로 설치/삭제합니다.
 - requirements는 `requirements-mac.txt`, `requirements-windows.txt` 두 개만 운영합니다. `requirements.txt`는 사용하지 않습니다.

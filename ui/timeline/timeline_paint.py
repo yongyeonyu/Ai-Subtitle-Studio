@@ -1,12 +1,12 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 02.04.00
+# Phase: PHASE1-C
 """
 ui/timeline_paint.py
 Timeline paint mixin
 """
 import numpy as np
-from PyQt6.QtCore import QPoint, QRect, Qt
-from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygon
+from PyQt6.QtCore import QPoint, QRect, QRectF, Qt
+from PyQt6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPen, QPolygon
 
 import config
 
@@ -31,6 +31,52 @@ class TimelinePaintMixin:
 
         total_w = self.total_width()
         total_secs = self.total_duration + 2
+        subtitle_top = SEG_TOP + 8
+        subtitle_bot = SEG_TOP + 56
+        speaker_top = subtitle_bot + 5
+        speaker_bot = speaker_top + 22
+        voice_mid = speaker_bot + 17
+        audio_mid = voice_mid + 28
+        track_bottom = CANVAS_H - 8
+
+        def _speaker_color(seg):
+            spk = str(seg.get("speaker", seg.get("spk_id", "00")) or "00")
+            palette = {
+                "00": "#579DFF",
+                "01": "#75C76B",
+                "02": "#FF9F2F",
+            }
+            return QColor(palette.get(spk, "#8E8E93"))
+
+        def _speaker_name(seg):
+            return str(seg.get("speaker_name") or seg.get("speaker", seg.get("spk_id", "홍길동")) or "홍길동")
+
+        def _draw_lane_wave(mid_y, color_top, color_bot, gain=1.0, alpha=210):
+            if self._waveform is None:
+                return
+            wf = self._waveform
+            wf_len = len(wf)
+            if wf_len <= 0:
+                return
+            clip = event.rect()
+            x_start = max(0, clip.left())
+            x_end = min(total_w, clip.right() + 1)
+            top = QColor(color_top); top.setAlpha(alpha)
+            bot = QColor(color_bot); bot.setAlpha(alpha)
+            p.setPen(QPen(QColor(255, 255, 255, 24), 1))
+            p.drawLine(x_start, mid_y, x_end, mid_y)
+            for x in range(x_start, x_end):
+                idx = int((x / max(0.001, self.pps)) * 100)
+                if idx >= wf_len:
+                    break
+                val = float(wf[idx])
+                if val < 0.006:
+                    continue
+                h = max(1, min(11, int(val * 18 * gain)))
+                p.setPen(QPen(top, 1)); p.drawLine(x, mid_y, x, mid_y - h)
+                p.setPen(QPen(bot, 1)); p.drawLine(x, mid_y + 1, x, mid_y + h)
+
+        p.fillRect(QRect(0, 0, total_w, CANVAS_H), QColor("#0F1518"))
 
         def _fmt_ruler(sec):
             s = int(sec)
@@ -40,7 +86,7 @@ class TimelinePaintMixin:
                 return f"{h}:{m:02d}:{sc:02d}"
             return f"{m:02d}:{sc:02d}"
 
-        ruler_font = QFont(config.FONT, 12)
+        ruler_font = QFont(config.FONT, 10)
         ruler_font.setBold(True)
         p.setFont(ruler_font)
         fm_ruler = p.fontMetrics()
@@ -66,11 +112,12 @@ class TimelinePaintMixin:
         while sec_i <= total_secs:
             tx = self._x(sec_i)
             if sec_i > 0:
-                p.setPen(QColor("#BBBBBB"))
-                p.drawLine(tx, 0, tx, 15)
+                p.setPen(QColor("#6F7A83"))
+                p.drawLine(tx, 10, tx, RULER_H - 9)
                 label = _fmt_ruler(sec_i)
                 lw = fm_ruler.horizontalAdvance(label)
-                p.drawText(tx - lw // 2, RULER_H - 4, label)
+                p.setPen(QColor("#A9B0B7"))
+                p.drawText(tx - lw // 2, RULER_H - 7, label)
             sec_i = round(sec_i + major_step, 3)
 
         # 서브 틱 (라벨 없음)
@@ -81,17 +128,17 @@ class TimelinePaintMixin:
                 sec_f = round(sec_f + sub_step, 3)
                 continue
             tx = self._x(sec_f)
-            p.setPen(QColor("#555555"))
-            p.drawLine(tx, 0, tx, 6)
+            p.setPen(QColor("#46525B"))
+            p.drawLine(tx, 13, tx, RULER_H - 14)
             sec_f = round(sec_f + sub_step, 3)
 
-        p.fillRect(QRect(0, RULER_H, total_w, WAVE_H), QColor("#0a0a0a"))
+        p.fillRect(QRect(0, RULER_H, total_w, WAVE_H), QColor("#070A0C"))
 
         if self._waveform is not None:
             wf = self._waveform
             wf_len = len(wf)
 
-            p.setPen(QPen(QColor("#333333"), 1))
+            p.setPen(QPen(QColor("#2D3942"), 1))
             p.drawLine(0, WAVE_MID, total_w, WAVE_MID)
 
             if self._speech_mask is None or self._speech_mask_wf_len != wf_len:
@@ -108,12 +155,12 @@ class TimelinePaintMixin:
             x_start = max(0, clip.left())
             x_end = min(total_w, clip.right() + 1)
 
-            pen_top_norm = QPen(QColor(100, 220, 255), 1)
-            pen_bot_norm = QPen(QColor(40, 130, 170), 1)
-            pen_top_loud = QPen(QColor(160, 255, 255), 1)
-            pen_bot_loud = QPen(QColor(80, 180, 210), 1)
-            pen_top_sil = QPen(QColor(75, 75, 75), 1)
-            pen_bot_sil = QPen(QColor(45, 45, 45), 1)
+            pen_top_norm = QPen(QColor(170, 176, 184), 1)
+            pen_bot_norm = QPen(QColor(104, 110, 118), 1)
+            pen_top_loud = QPen(QColor(220, 224, 228), 1)
+            pen_bot_loud = QPen(QColor(150, 156, 164), 1)
+            pen_top_sil = QPen(QColor(82, 87, 94), 1)
+            pen_bot_sil = QPen(QColor(56, 61, 68), 1)
 
             for x in range(x_start, x_end):
                 idx = int((x / self.pps) * 100)
@@ -134,7 +181,7 @@ class TimelinePaintMixin:
                     p.setPen(pen_bot_sil); p.drawLine(x, WAVE_MID + 1, x, WAVE_MID + h)
 
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(255, 200, 0, 40))
+            p.setBrush(QColor(87, 157, 255, 34))
             for vs in self.vad_segments:
                 vx1 = self._x(vs["start"])
                 vx2 = self._x(vs["end"])
@@ -150,33 +197,47 @@ class TimelinePaintMixin:
             if gx2 > gx1:
                 p.fillRect(QRect(gx1, RULER_H, gx2 - gx1, WAVE_H), QColor(0, 255, 0, 70))
 
+        p.fillRect(QRect(0, SEG_TOP, total_w, SEG_BOT - SEG_TOP), QColor("#11181C"))
+        p.setPen(QPen(QColor("#2D3942"), 1))
+        for y in (subtitle_top - 5, speaker_top - 3, voice_mid - 14, audio_mid - 14, track_bottom):
+            p.drawLine(0, y, total_w, y)
+
+        label_font = QFont(config.FONT, 9, QFont.Weight.Bold)
+        p.setFont(label_font)
+        for text, y in (("자막", subtitle_top + 20), ("화자", speaker_top + 15), ("음성 감지", voice_mid + 4), ("오디오", audio_mid + 4)):
+            p.setPen(QColor("#A9B0B7"))
+            p.drawText(8, y, text)
+
         for g in self.gap_segments:
             x1, x2 = self._x(g["start"]), self._x(g["end"]); sw = max(4, x2 - x1)
             rect = QRect(x1, SEG_TOP, sw, SEG_BOT - SEG_TOP)
-            p.fillRect(rect, QColor("#0d0d0d"))
+            p.fillRect(rect, QColor(20, 16, 0, 118))
             is_active = g.get("active", False)
             if is_active:
                 p.setPen(QPen(QColor("#FFFFFF"), 2)); p.drawRect(rect); ir = self._icon_rect(x1, x2)
-                p.fillRect(ir, QColor("#442222")); p.setPen(QColor("#FF8888")); p.setFont(QFont(config.FONT, 9, QFont.Weight.Bold))
+                p.fillRect(ir, QColor("#3B1D20")); p.setPen(QColor("#FF8A80")); p.setFont(QFont(config.FONT, 9, QFont.Weight.Bold))
                 p.drawText(ir, Qt.AlignmentFlag.AlignCenter, "✕")
             else:
-                p.setPen(QPen(QColor("#888888"), 1, Qt.PenStyle.DotLine)); p.drawRect(rect)
+                p.setPen(QPen(QColor("#4F5962"), 1, Qt.PenStyle.DotLine)); p.drawRect(rect)
                 if sw >= ICON_SZ + 8:
-                    ir = self._plus_rect(x1, x2); p.fillRect(ir, QColor("#112233")); p.setPen(QColor("#6699CC"))
+                    ir = self._plus_rect(x1, x2); p.fillRect(ir, QColor("#17232A")); p.setPen(QColor("#8EA4B8"))
                     p.setFont(QFont(config.FONT, 18, QFont.Weight.Bold)); p.drawText(ir, Qt.AlignmentFlag.AlignCenter, "+")
 
-        seg_font = QFont(config.FONT, 14); p.setFont(seg_font)
+        seg_font = QFont(config.FONT, 9); p.setFont(seg_font)
         for seg in self.segments:
             x1, x2 = self._x(seg["start"]), self._x(seg["end"]); sw = max(10, x2 - x1)
-            rect = QRect(x1, SEG_TOP, sw, SEG_BOT - SEG_TOP)
+            rect = QRect(x1 + 2, subtitle_top, max(8, sw - 4), subtitle_bot - subtitle_top)
             is_active = (self.active_seg_start is not None and abs(seg["start"] - self.active_seg_start) < 0.5)
             is_hover = self._hover_line == seg.get("line")
-            fill = (QColor("#1a3a1a") if is_active else QColor("#3a3a00") if is_hover else QColor("#2C2C2C"))
-            border = QColor("#FFFF00") if is_active else QColor(config.ACCENT)
+            fill = QColor("#1D3D76") if is_active else (QColor("#222A31") if is_hover else QColor("#242A30"))
+            border = QColor("#8AB8FF") if is_active else QColor("#3A4650")
             bw = 2 if is_active else (2 if is_hover else 1)
 
-            p.fillRect(rect, fill); p.setPen(QPen(border, bw)); p.drawRect(rect); p.setFont(seg_font)
-            text_rect = QRect(x1 + HANDLE_R + 6, SEG_TOP + 5, sw - (HANDLE_R * 2) - 12, SEG_BOT - SEG_TOP - 10)
+            grad = QLinearGradient(float(rect.left()), float(rect.top()), float(rect.left()), float(rect.bottom()))
+            grad.setColorAt(0, fill.lighter(112))
+            grad.setColorAt(1, fill.darker(118))
+            p.setBrush(QBrush(grad)); p.setPen(QPen(border, bw)); p.drawRoundedRect(QRectF(rect), 5, 5); p.setBrush(Qt.BrushStyle.NoBrush); p.setFont(seg_font)
+            text_rect = QRect(rect.x() + 10, rect.y() + 6, max(8, rect.width() - 20), rect.height() - 12)
             is_editing = (self._edit_active and self._edit_line == seg.get("line"))
 
             if is_editing:
@@ -189,7 +250,7 @@ class TimelinePaintMixin:
                 fm = p.fontMetrics()
                 line_h = fm.height()
                 tx0 = text_rect.x(); ty0 = text_rect.y() + fm.ascent()
-                p.fillRect(text_rect, QColor("#002200"))
+                p.fillRect(text_rect, QColor("#123A24"))
                 vis_cur = cur + len(preedit)
                 r = 0; c = vis_cur
                 for i, line in enumerate(lines):
@@ -217,13 +278,25 @@ class TimelinePaintMixin:
                         p.drawLine(cx, cursor_top, cx, cursor_bot)
                     curr_y += line_h + 4
             else:
-                p.setPen(QColor("#FFFFFF"))
+                p.setPen(QColor("#DCE3EA"))
                 p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, seg.get("text", ""))
 
             ir = self._icon_rect(x1, x2)
             if sw > ICON_SZ + HANDLE_R + 4:
-                p.fillRect(ir, QColor("#550000")); p.setPen(QColor("#FF6666")); p.setFont(QFont(config.FONT, 18, QFont.Weight.Bold))
+                p.fillRect(ir, QColor("#3B1D20")); p.setPen(QColor("#FF8A80")); p.setFont(QFont(config.FONT, 12, QFont.Weight.Bold))
                 p.drawText(ir, Qt.AlignmentFlag.AlignCenter, "✕")
+
+            spk_color = _speaker_color(seg)
+            speaker_rect = QRect(rect.x(), speaker_top, rect.width(), speaker_bot - speaker_top)
+            p.setPen(QPen(QColor("#2D3942"), 1))
+            p.setBrush(QColor("#1B2429"))
+            p.drawRoundedRect(QRectF(speaker_rect), 4, 4)
+            p.setBrush(spk_color)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(QRect(speaker_rect.x() + 9, speaker_rect.y() + 6, 8, 8))
+            p.setPen(spk_color)
+            p.setFont(QFont(config.FONT, 8, QFont.Weight.Bold))
+            p.drawText(QRect(speaker_rect.x() + 22, speaker_rect.y(), speaker_rect.width() - 26, speaker_rect.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, _speaker_name(seg))
 
             hovered = self._hover_handle
             lh = hovered and hovered[0] is seg and hovered[1] == "left"
@@ -235,14 +308,25 @@ class TimelinePaintMixin:
             p.setPen(QPen(QColor("#FF4444"), 4))
             for sx in self._snap_lines: p.drawLine(sx, SEG_TOP, sx, SEG_BOT)
 
+        _draw_lane_wave(voice_mid, "#579DFF", "#1F6FD6", gain=1.0, alpha=215)
+        _draw_lane_wave(audio_mid, "#75C76B", "#3D7F36", gain=0.95, alpha=190)
+
         for i in range(len(self.segments) - 1):
             s1 = self.segments[i]; s2 = self.segments[i + 1]
             if abs(s1["end"] - s2["start"]) < 0.05:
-                bx = self._x(s1["end"]); w = int(HANDLE_R * 1.2) * 2; h = 10; cy = SEG_BOT - (h // 2)
-                rect = QRect(int(bx - w / 2), int(cy - h / 2), w, h)
+                bx = self._x(s1["end"]); r = 5; cy = speaker_bot + 13
                 is_hover = (getattr(self, '_hover_diamond', None) == i)
-                color = QColor("#FFD700") if is_hover else QColor("#AAAAAA")
-                p.setPen(QPen(QColor("#000000"), 1)); p.setBrush(QBrush(color)); p.drawRoundedRect(rect, 4, 4); p.setBrush(Qt.BrushStyle.NoBrush)
+                color = QColor("#FFFFFF") if is_hover else QColor("#AAB0B6")
+                pts = QPolygon([
+                    QPoint(bx, cy - r),
+                    QPoint(bx + r, cy),
+                    QPoint(bx, cy + r),
+                    QPoint(bx - r, cy),
+                ])
+                p.setPen(QPen(QColor("#000000"), 1))
+                p.setBrush(QBrush(color))
+                p.drawPolygon(pts)
+                p.setBrush(Qt.BrushStyle.NoBrush)
 
         self._clip_delete_rects = []
         self._clip_add_rect = QRect()
@@ -333,7 +417,7 @@ class TimelinePaintMixin:
             p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
     def _draw_handle(self, p, bx, is_left, color):
-        cy = SEG_TOP + (SEG_BOT - SEG_TOP) // 2
+        cy = SEG_TOP + 32
         w = HANDLE_R; hw = HANDLE_R // 2; hh = 12; th = 4
         if is_left:
             bx += 2

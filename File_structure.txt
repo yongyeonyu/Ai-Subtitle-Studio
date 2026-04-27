@@ -1,18 +1,18 @@
 <!--
-Document-Version: 02.03.03
-Phase: PHASE1-B
-Last-Updated: 2026-04-27
+Document-Version: 02.04.00
+Phase: PHASE1-C
+Last-Updated: 2026-04-28
 Updated-By: Codex with 대표님
-Previous-Content: v02.03.00 파일/폴더 구조, STRUCTURE.txt 삭제 후 단일 구조 문서
-This-Update: v02.03.03 신규 provider/mixin/위젯 분리 파일 반영
-Copilot-Handoff: v02.03.03 커밋 기준. 구조 문서는 신규 분리 파일 중심으로 갱신되었습니다.
+Previous-Content: v02.03.03 provider/mixin/위젯 분리 파일 구조
+This-Update: v02.04.00 PHASE1-C Apple 스타일 통합 UI, 전역 메뉴바, 공용 아이콘, 설정/타임라인 UI 구조 반영
+Copilot-Handoff: v02.04.00 커밋 기준. 전역 메뉴는 ui/menu_bar.py, 공용 아이콘/스타일은 ui/style.py, 통합 대시보드는 ui/main/main_window.py와 ui/home_ui.py를 우선 확인하세요.
 -->
 ================================================================================
 AI Subtitle Studio — 프로젝트 구조 및 버전 관리 문서
 생성일: 2026-04-20
-최종 수정: 2026-04-27
-Phase: PHASE1-B
-App Version: 02.03.03
+최종 수정: 2026-04-28
+Phase: PHASE1-C
+App Version: 02.04.00
 구조 문서 기준: File_structure.txt
 비고: STRUCTURE.txt는 삭제하고 본 문서로 단일화
 ================================================================================
@@ -20,12 +20,13 @@ App Version: 02.03.03
 ai_subtitle_studio/
 ├── main.py                         ← 프로그램 실행 진입점                    v02.03.00
 ├── main.bat                        ← Windows 실행 배치 파일
-├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v02.03.03
+├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v02.04.00
 ├── logger.py                       ← 시스템 로그 기록 및 UI 연동             v02.03.00
 ├── AGENTS.md                       ← 개발 가이드 / Copilot 핸드오프
 ├── ACTION_ITEMS.md                 ← 전체 액션아이템
 ├── RELEASE_v02.02.00.md            ← 이전 릴리즈 노트
-├── RELEASE_v02.03.00.md            ← 현재 작업 릴리즈 노트
+├── RELEASE_v02.03.00.md            ← 이전 작업 릴리즈 노트
+├── RELEASE_v02.04.00.md            ← PHASE1-C Apple UI 릴리즈 노트
 ├── File_structure.txt              ← 현재 구조 문서
 │
 ├── dataset/
@@ -84,33 +85,57 @@ ai_subtitle_studio/
 │       └── data_manager.py         ← 설정/교정 데이터 I/O                    v02.03.00
 │
 └── ui/
-    ├── home_ui.py                  ← 홈 화면 빌드 Mixin                       v02.03.03
+    ├── home_ui.py                  ← 통합 대시보드/사이드바 빌드 Mixin        v02.04.00
+    ├── menu_bar.py                 ← 전역 하단 메뉴바 + 상단 상태 레일         🆕 v02.04.00
+    ├── style.py                    ← 공용 다크 스타일 + 재사용 line icon      v02.04.00
     ├── queue_widget.py             ← 큐 테이블 + 헤더 + ETA                   v02.03.00
     ├── cloud_ui.py                 ← iCloud/NAS 자동처리 UI                  v02.03.03
     │
     ├── main/
-    │   ├── main_window.py          ← 메인 화면 본체                           v02.03.00
+    │   ├── main_window.py          ← 메인 통합 화면 본체                      v02.04.00
     │   ├── main_signals.py         ← 시그널/슬롯 핸들러                       v02.03.00
     │   └── main_file_ops.py        ← 파일/폴더 열기                           v02.03.03
     │
     ├── editor/
-    │   ├── editor_widget.py        ← 에디터 UI 골격                           v02.03.03
+    │   ├── editor_widget.py        ← 에디터 UI 골격 / 검색 / 비디오 폭 토글    v02.04.00
     │   ├── editor_lifecycle.py     ← 에디터 열기/저장/닫기                    v02.03.03
     │   ├── editor_pipeline.py      ← 자막 생성/재시작 파이프라인              v02.03.00
     │   ├── editor_actions.py       ← 저장/이전/종료/내보내기                  v02.03.00
     │   ├── editor_segments.py      ← 자막 세그먼트 큐 처리                    v02.03.00
-    │   ├── editor_timeline_video.py← 타임라인 싱크 / 자막 분할                v02.03.03
+    │   ├── editor_timeline_video.py← 타임라인 싱크 / 자막 분할 / 자동 스크롤   v02.04.00
     │   ├── editor_video_controls.py← 비디오 제어 / 재생 단축키                🆕 v02.03.03
     │   ├── editor_multiclip_context.py← 멀티클립 context / clip 전환           🆕 v02.03.03
     │   ├── editor_multiclip_ops.py ← 멀티클립 파일 추가/삭제/리매핑           🆕 v02.03.03
     │   ├── editor_speaker_ops.py   ← 화자 메뉴 / 화자 드래그 조작             🆕 v02.03.03
-    │   ├── video_player_widget.py  ← 영상/오디오 플레이어                     v02.03.00
+    │   ├── video_player_widget.py  ← 영상/오디오 플레이어 / subtitle overlay  v02.04.00
     │   └── 기타 editor helper 파일
     │
-    ├── timeline/                   ← 타임라인 캔버스/입력/페인트/파형         v02.03.00
+    ├── timeline/                   ← 타임라인 캔버스/입력/페인트/파형         v02.04.00
     ├── project/                    ← 프로젝트/멀티클립 패널                  v02.03.00
-    ├── settings/                   ← AI/화자/갭/상세/출력 설정                v02.03.03
+    ├── settings/                   ← AI/화자/갭/상세/출력 설정                v02.04.00
     └── dialogs/                    ← 폴더 선택 / 내보내기 다이얼로그          v02.03.00
+
+================================================================================
+[v02.04.00 핵심 변경]
+================================================================================
+
+1. 기능 보존형 Apple 스타일 통합 UI
+   - `ui/menu_bar.py` 전역 메뉴바 신설
+   - 하단 중복 메뉴 정리, 불필요해진 이전/다음 전역 액션 제거
+   - 절반 화면 이하에서 메뉴 텍스트를 숨기고 아이콘 모드로 전환
+   - 상단 상태 레일에서 생성/편집/저장/출력/종료 상태 표시
+
+2. 에디터/비디오/타임라인 UX 보강
+   - 비디오 subtitle overlay context 갱신 및 재생 중 자동 스크롤 보강
+   - 디테일 타임라인 다이아몬드 핸들/화살표/무음 구간 affordance 유지
+   - 비디오 프리뷰 프록시는 원본 fps를 유지하며 해상도/비트레이트만 낮춤
+   - 16:9/1:1 영상 기준 비디오 폭 확장 토글 추가
+
+3. 설정/아이콘/문서 정리
+   - `ui/style.py` line_icon() 공용 아이콘 확장
+   - 설정 하단 버튼 아이콘/크기/높이 공통화
+   - 간격 시뮬레이터 다크 프로 톤으로 polish
+   - v02.04.00 릴리즈 노트 추가
 
 ================================================================================
 [v02.03.00 핵심 변경]

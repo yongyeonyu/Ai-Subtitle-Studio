@@ -1,4 +1,4 @@
-# Version: 02.03.17
+# Version: 02.04.00
 # Phase: PHASE1-C
 """
 ui/main/main_window.py
@@ -9,7 +9,7 @@ import os
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QStackedWidget, QTextEdit, QSplitter,
+    QStackedWidget, QTextEdit, QSplitter, QPushButton,
     QTableWidget, QHeaderView,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -18,8 +18,9 @@ from PyQt6.QtGui import QFont, QIcon
 from ui.queue_widget import QueueMixin
 from ui.cloud_ui import CloudUIMixin
 from ui.home_ui import HomeUIMixin
+from ui.menu_bar import GlobalMenuBar, StatusRail
 from ui.editor.editor_lifecycle import EditorLifecycleMixin
-from ui.style import app_stylesheet, button_style, label_style
+from ui.style import app_stylesheet, button_style, label_style, line_icon
 
 from ui.project.project_panel import ProjectUIMixin
 from ui.project.workspace_restore import WorkspaceMixin
@@ -125,13 +126,31 @@ class MainWindow(
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        main_layout.setSpacing(1)
         self.stack = QStackedWidget()
         self.stack.setStyleSheet(app_stylesheet())
 
+        top_bar = QWidget()
+        top_bar.setFixedHeight(42)
+        top_bar.setStyleSheet("background: #11181C; border-bottom: 1px solid #2D3942;")
+        top_lay = QHBoxLayout(top_bar)
+        top_lay.setContentsMargins(14, 0, 14, 0)
+        top_lay.setSpacing(8)
+        self.status_rail = StatusRail(top_bar)
+        top_lay.addWidget(self.status_rail, alignment=Qt.AlignmentFlag.AlignLeft)
+        top_lay.addStretch()
+        app_title = QLabel("AI Subtitle Studio")
+        app_title.setStyleSheet("color: #F5F7FA; font-size: 15px; font-weight: 700; background: transparent;")
+        top_lay.addWidget(app_title)
+        top_lay.addStretch()
+        saved = QLabel("저장됨: 오후 2:30  ●")
+        saved.setStyleSheet("color: #A9B0B7; font-size: 11px; background: transparent;")
+        top_lay.addWidget(saved)
+        main_layout.addWidget(top_bar)
+
         workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
         workspace_splitter.setChildrenCollapsible(False)
-        workspace_splitter.setStyleSheet("QSplitter::handle { background: #2D3942; width: 1px; }")
+        workspace_splitter.setStyleSheet("QSplitter::handle { background: #0F1518; width: 1px; }")
         main_layout.addWidget(workspace_splitter, stretch=1)
 
         self.home_page = QWidget()
@@ -151,14 +170,27 @@ class MainWindow(
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet(label_style("muted", 12))
+        quick_row = QHBoxLayout()
+        quick_row.setSpacing(10)
+        btn_file = self._empty_quick_button("파일", "file", self.select_files)
+        btn_folder = self._empty_quick_button("폴더", "folder", self.select_folder)
+        quick_row.addStretch()
+        quick_row.addWidget(btn_file)
+        quick_row.addWidget(btn_folder)
+        quick_row.addStretch()
         editor_placeholder.addStretch()
         editor_placeholder.addWidget(title)
         editor_placeholder.addWidget(subtitle)
+        editor_placeholder.addLayout(quick_row)
         editor_placeholder.addStretch()
         self.stack.addWidget(self.editor_page)
         workspace_splitter.addWidget(self.stack)
         workspace_splitter.setSizes([210, 1465])
         self.workspace_splitter = workspace_splitter
+
+        self.global_menu_bar = GlobalMenuBar(self)
+        self.global_menu_bar.set_status_rail(self.status_rail)
+        main_layout.addWidget(self.global_menu_bar)
 
         log_panel = self._build_log_panel()
         main_layout.addWidget(log_panel)
@@ -280,6 +312,14 @@ class MainWindow(
 
         return container
 
+    def _empty_quick_button(self, text, icon_name, slot):
+        btn = QPushButton(text)
+        btn.setIcon(line_icon(icon_name, "#A9B0B7", 24))
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(button_style("toolbar", font_size="12px", padding="8px 16px"))
+        btn.clicked.connect(slot)
+        return btn
+
     # ── 시그널 연결 ──────────────────────────────────────
     def _connect_signals(self):
         self._sig_show_home.connect(self.show_home)
@@ -318,6 +358,8 @@ class MainWindow(
             self._log_toggle_btn.setText("▲ 터미널 로그 보기")
         if self._editor_widget and hasattr(self._editor_widget, "set_terminal_visible_layout"):
             self._editor_widget.set_terminal_visible_layout(self._log_visible)
+        if hasattr(self, "global_menu_bar"):
+            self.global_menu_bar.refresh()
 
     def _toggle_log(self):
         self._apply_log_visible(not self._log_visible)
@@ -340,6 +382,10 @@ class MainWindow(
         except Exception as e:
             get_logger().log(f"⚠️ 터미널 로그 표시 설정 저장 실패: {e}")
         QTimer.singleShot(10, self._refresh_video)
+
+    def sync_menu_from_editor(self, editor=None):
+        if hasattr(self, "global_menu_bar"):
+            self.global_menu_bar.sync_from_editor(editor)
 
     def _refresh_video(self):
         if self._editor_widget and hasattr(self._editor_widget, "video_player"):

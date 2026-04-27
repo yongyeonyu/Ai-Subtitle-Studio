@@ -167,10 +167,10 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         return max(self.width(), int(self.total_duration * self.pps) + 96)
 
     def _icon_rect(self, x1, x2):
-        return QRect(x1 + (x2 - x1) // 2 - (ICON_SZ // 2), SEG_BOT + 1, ICON_SZ, ICON_SZ)
+        return QRect(x1 + (x2 - x1) // 2 - (ICON_SZ // 2), SEG_TOP + 22, ICON_SZ, ICON_SZ)
 
     def _plus_rect(self, x1, x2):
-        return QRect(x1 + (x2 - x1) // 2 - (ICON_SZ // 2), SEG_BOT + 1, ICON_SZ, ICON_SZ)
+        return QRect(x1 + (x2 - x1) // 2 - (ICON_SZ // 2), SEG_TOP + 22, ICON_SZ, ICON_SZ)
 
     def _seg_at(self, x):
         for seg in self.segments:
