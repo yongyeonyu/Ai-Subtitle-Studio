@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 02.03.16
+# Phase: PHASE1-C
 
 import re
 import time
@@ -65,7 +65,7 @@ class SubtitleTextEdit(QTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFont(QFont(config.FONT, 15))
-        self.setStyleSheet(f"QTextEdit {{ background: {config.BG}; color: {config.FG}; border: none; padding: 16px; line-height: 1.5; }}")
+        self.setStyleSheet("QTextEdit { background: #1C1C1E; color: #FFFFFF; border: none; padding: 16px; line-height: 1.5; }")
         self.setUndoRedoEnabled(True)
         self.setAcceptRichText(False)
         self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)

@@ -1,5 +1,5 @@
-# Version: 02.03.02
-# Phase: PHASE1-B
+# Version: 02.03.08
+# Phase: PHASE1-C
 """
 EditorWidget 비디오 제어 / 재생 단축키 Mixin.
 """
@@ -39,7 +39,7 @@ class EditorVideoControlsMixin:
             self.splitter.setSizes([1, 0])
         else:
             self.video_player.show()
-            self.splitter.setSizes([1000, 800])
+            self.splitter.setSizes([6500, 3500])
 
     def _load_video(self, path: str):
         segs = self._get_current_segments()

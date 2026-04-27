@@ -1,5 +1,5 @@
-# Version: 02.03.02
-# Phase: PHASE1-B
+# Version: 02.03.09
+# Phase: PHASE1-C
 """
 ui/timeline_widget.py
 Timeline widget container
@@ -206,8 +206,9 @@ class TimelineWidget(QWidget):
             return 0.0, 1.0
 
         sb = self.scroll.horizontalScrollBar()
+        view_w = self.scroll.viewport().width() if self.scroll.viewport() else self.scroll.width()
         global_start = float(sb.value()) / max(0.001, float(self.canvas.pps))
-        global_end = float(sb.value() + self.scroll.width()) / max(0.001, float(self.canvas.pps))
+        global_end = float(sb.value() + view_w) / max(0.001, float(self.canvas.pps))
 
         return max(0.0, min(1.0, global_start / dur)), max(0.0, min(1.0, global_end / dur))
 
@@ -331,6 +332,9 @@ class TimelineWidget(QWidget):
 
         self.canvas.set_waveform(partial_wf)
         self.global_canvas.set_waveform(partial_wf)
+        _boxes = getattr(self.canvas, '_multiclip_boxes', []) or []
+        if _boxes:
+            self.global_canvas.total_duration = float(_boxes[-1].get("end", self.canvas.total_duration))
         self.global_canvas.set_clip_label(str(self._selected_clip_label or 1))
         self.global_canvas.update()
 
@@ -416,7 +420,11 @@ class TimelineWidget(QWidget):
 
     def _on_global_seek(self, frac):
         if self.canvas.total_duration > 0:
-            sec = float(frac) * self.canvas.total_duration
+            frac = max(0.0, min(1.0, float(frac)))
+            if self._selected_clip_idx >= 0 and self._selected_clip_duration > 0:
+                sec = self._selected_clip_offset + (frac * self._selected_clip_duration)
+            else:
+                sec = frac * self.canvas.total_duration
             self.center_to_sec(sec, smooth=False)
             self.scrub_sec.emit(sec)
 
@@ -445,7 +453,7 @@ class TimelineWidget(QWidget):
         if dur <= 0:
             return
 
-        visible_w = self.scroll.width() - 20
+        visible_w = self.scroll.viewport().width() - 20
         if visible_w <= 0:
             return
 

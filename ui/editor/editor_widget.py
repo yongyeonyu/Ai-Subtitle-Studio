@@ -1,5 +1,5 @@
-# Version: 02.03.02
-# Phase: PHASE1-B
+# Version: 02.03.16
+# Phase: PHASE1-C
 """
 ui/editor_widget.py
 [v01.00.06 수정사항]
@@ -18,7 +18,7 @@ atexit.register(_mac_safe_exit)
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
-    QPushButton, QLabel, QSizePolicy, QMessageBox, QMenu
+    QPushButton, QLabel, QSizePolicy, QMessageBox, QMenu, QLineEdit, QComboBox
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint, QSettings
 from PyQt6.QtGui import QKeySequence, QShortcut, QColor, QTextCursor, QIcon, QPixmap, QPainter
@@ -33,6 +33,7 @@ from core.project.data_manager import (
 )
 from core.state_manager import SubtitleStateManager
 from ui.timeline.timeline_widget import TimelineWidget
+from ui.style import button_style, label_style, panel_style
 from ui.editor.editor_popup_qt import EditorPopup
 from ui.editor.video_player_widget import VideoPlayerWidget
 from ui.editor.subtitle_text_edit import SubtitleTextEdit, SubtitleHighlighter, SubtitleBlockData
@@ -265,9 +266,10 @@ class EditorWidget(
         root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.splitter.setStyleSheet(f"QSplitter::handle {{ background: {config.BG3}; width: 4px; }}")
-        editor_wrap = QWidget(); editor_wrap.setStyleSheet(f"background: {config.BG3}; border-radius: 4px;")
-        ew_layout   = QVBoxLayout(editor_wrap); ew_layout.setContentsMargins(2, 2, 2, 2)
+        self.splitter.setStyleSheet("QSplitter::handle { background: #2D3942; width: 1px; }")
+        editor_wrap = QWidget(); editor_wrap.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
+        ew_layout   = QVBoxLayout(editor_wrap); ew_layout.setContentsMargins(10, 8, 10, 10); ew_layout.setSpacing(6)
+        ew_layout.addWidget(self._build_editor_header())
 
         self.text_edit = SubtitleTextEdit()
         self.text_edit._parent_widget = self
@@ -285,16 +287,18 @@ class EditorWidget(
         self.text_edit.speaker_circle_clicked.connect(self._show_speaker_circle_menu)
         self.text_edit.speaker_circle_dropped.connect(self._on_speaker_circle_dropped)
 
+        ew_layout.addWidget(self._build_editor_mode_bar())
         ew_layout.addWidget(self.text_edit)
         self.splitter.addWidget(editor_wrap)
         self.video_player = VideoPlayerWidget()
+        self.video_player.setStyleSheet("background: #000000; border: 1px solid #2D3942; border-radius: 7px;")
         self.splitter.addWidget(self.video_player)
-        self.splitter.setStretchFactor(0, 40); self.splitter.setStretchFactor(1, 60)
+        self.splitter.setStretchFactor(0, 63); self.splitter.setStretchFactor(1, 37)
         self.splitter.setCollapsible(0, False); self.splitter.setCollapsible(1, False)
         root.addWidget(self.splitter, stretch=1)
 
         self.timeline = TimelineWidget()
-        self.timeline.setStyleSheet(f"background: {config.BG3}; border-radius: 4px;")
+        self.timeline.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
         if hasattr(self.timeline, 'canvas'):
             self.timeline.canvas.show_waveform = True
             self.timeline.canvas.update()
@@ -351,15 +355,119 @@ class EditorWidget(
 
     def _on_lock_changed(self, locked: bool):
         self.text_edit.setReadOnly(locked)
-        self.text_edit.setStyleSheet("background: #1a1a1a; color: #888888;" if locked else "")
+        self.text_edit.setStyleSheet("QTextEdit { background: #1C1C1E; color: #8E8E93; border: none; padding: 16px; }" if locked else "")
+
+    def _build_editor_header(self) -> QWidget:
+        header = QWidget()
+        lay = QHBoxLayout(header)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+
+        title_box = QVBoxLayout()
+        title_box.setContentsMargins(0, 0, 0, 0)
+        title_box.setSpacing(2)
+        title = QLabel("Subtitle Editor")
+        title.setStyleSheet(label_style("text", 14, bold=True))
+        media = QLabel(str(getattr(self, "video_name", "") or "Untitled"))
+        media.setStyleSheet(label_style("muted", 11))
+        title_box.addWidget(title)
+        title_box.addWidget(media)
+        lay.addLayout(title_box, stretch=1)
+
+        quick = QLineEdit()
+        quick.setObjectName("mockQuickFind")
+        quick.setFixedWidth(76)
+        quick.setToolTip("UI placeholder: 빠른 자막 검색/필터")
+        quick.setStyleSheet(
+            "QLineEdit { background: #0F1518; color: #F5F7FA; border: 1px solid #2D3942; "
+            "border-radius: 8px; padding: 5px 8px; font-size: 11px; }"
+        )
+        lay.addWidget(quick)
+        add_mock = QPushButton("+")
+        add_mock.setToolTip("UI placeholder: 빠른 세그먼트/메모 추가")
+        add_mock.setStyleSheet(button_style("toolbar", font_size="12px", padding="5px 9px"))
+        lay.addWidget(add_mock)
+        lay.addWidget(self._build_speaker_strip())
+        return header
+
+    def _build_editor_mode_bar(self) -> QWidget:
+        bar = QWidget()
+        bar.setStyleSheet("background: #1B2227; border: 1px solid #303A42; border-radius: 8px;")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(8, 5, 8, 5)
+        row.setSpacing(6)
+        for label in ("편집 모드", "작성", "시간", "검수"):
+            btn = QPushButton(label)
+            btn.setToolTip("UI placeholder: 표 기반 자막 편집 모드")
+            active = label == "작성"
+            btn.setStyleSheet(
+                "QPushButton { "
+                f"background: {'#303A42' if active else 'transparent'}; color: {'#FFFFFF' if active else '#A9B0B7'}; "
+                "border: 1px solid #303A42; border-radius: 6px; padding: 5px 10px; font-size: 11px; "
+                "} QPushButton:hover { background: #303A42; color: #FFFFFF; }"
+            )
+            row.addWidget(btn)
+        row.addStretch()
+        sort_lbl = QLabel("정렬")
+        sort_lbl.setStyleSheet(label_style("muted", 11, bold=True))
+        row.addWidget(sort_lbl)
+        sort_combo = QComboBox()
+        sort_combo.addItems(["시작 시간", "종료 시간", "화자"])
+        sort_combo.setToolTip("UI placeholder: 자막 행 정렬")
+        sort_combo.setStyleSheet(
+            "QComboBox { background: #11181C; color: #F5F7FA; border: 1px solid #303A42; "
+            "border-radius: 6px; padding: 4px 8px; font-size: 11px; }"
+        )
+        row.addWidget(sort_combo)
+        search = QLineEdit()
+        search.setPlaceholderText("검색")
+        search.setToolTip("UI placeholder: 자막 검색")
+        search.setFixedWidth(220)
+        search.setStyleSheet(
+            "QLineEdit { background: #11181C; color: #F5F7FA; border: 1px solid #303A42; "
+            "border-radius: 6px; padding: 5px 8px; font-size: 11px; }"
+        )
+        row.addWidget(search)
+        more = QPushButton("···")
+        more.setToolTip("UI placeholder: 추가 보기 옵션")
+        more.setStyleSheet(button_style("toolbar", font_size="11px", padding="5px 8px"))
+        row.addWidget(more)
+        return bar
+
+    def _build_speaker_strip(self) -> QWidget:
+        strip = QWidget()
+        strip.setStyleSheet("background: #1B2429; border: 1px solid #2D3942; border-radius: 10px;")
+        row = QHBoxLayout(strip)
+        row.setContentsMargins(8, 5, 8, 5)
+        row.setSpacing(6)
+        colors = ["#007AFF", "#34C759", "#FF9500"]
+        max_spk = max(1, min(3, int(self.settings.get("max_speakers", 1) or 1)))
+        for idx in range(1, max_spk + 1):
+            color = self.settings.get(f"spk{idx}_color", colors[idx - 1])
+            btn = QPushButton(f"● 화자 {idx}")
+            btn.setToolTip(f"화자 {idx} 설정")
+            btn.setStyleSheet(
+                "QPushButton { "
+                f"color: {color}; background: #0F1518; border: 1px solid #2D3942; "
+                "border-radius: 9px; padding: 5px 9px; font-size: 11px; font-weight: bold; "
+                "} QPushButton:hover { border: 1px solid #007AFF; }"
+            )
+            btn.clicked.connect(self._show_speaker_settings)
+            row.addWidget(btn)
+        add_btn = QPushButton("+")
+        add_btn.setToolTip("화자 추가/관리")
+        add_btn.setStyleSheet(button_style("toolbar", font_size="12px", padding="5px 9px"))
+        add_btn.clicked.connect(self._show_speaker_settings)
+        row.addWidget(add_btn)
+        return strip
 
     def _build_buttons(self) -> QWidget:
-        w = QWidget(); w.setFixedHeight(65)
-        grid = QGridLayout(w); grid.setContentsMargins(10, 2, 10, 2)
+        w = QWidget(); w.setFixedHeight(72); w.setStyleSheet("background: #151C20; border-top: 1px solid #2D3942;")
+        grid = QGridLayout(w); grid.setContentsMargins(10, 6, 10, 6)
 
         # ── 좌측 ──
         left_w    = QWidget(); left_vbox = QVBoxLayout(left_w); left_vbox.setContentsMargins(0, 0, 0, 0); left_vbox.setSpacing(5)
-        self.status_lbl.setStyleSheet(f"color: {config.YELLOW}; font-size: 13px; font-weight: bold;")
+        self.status_lbl.setStyleSheet(label_style("warning", 13, bold=True))
         left_vbox.addWidget(self.status_lbl, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
 
         btn_row = QHBoxLayout(); btn_row.setSpacing(5)
@@ -368,18 +476,17 @@ class EditorWidget(
         self.btn_spk = QPushButton("🗣️ 화자")
         self.btn_gap = QPushButton("⏱️ 간격")
         self.btn_vid = QPushButton("🎬 비디오")
+        self.btn_log = QPushButton(self._terminal_log_button_text())
         self._top_btns = [
             (self.btn_ai,  "⚙️ AI",      "AI",      self._show_settings),
             (self.btn_adv, "🛠️ 상세설정", "상세설정", self._show_adv_settings),
             (self.btn_spk, "🗣️ 화자",    "화자",     self._show_speaker_settings),
             (self.btn_gap, "⏱️ 간격",    "간격",     self._show_gap_settings),
             (self.btn_vid, "🎬 비디오",  "비디오",   self._toggle_video),
+            (self.btn_log, "터미널 로그", "로그",     self._toggle_terminal_log),
         ]
-        _top_style = (f"QPushButton {{ background: {config.BG3}; color: {config.FG}; border: none; "
-                      f"padding: 6px 10px; font-size: 11px; border-radius: 3px; }} "
-                      f"QPushButton:hover {{ background: #444444; }}")
         for btn, _, _, slot in self._top_btns:
-            btn.setStyleSheet(_top_style); btn.clicked.connect(slot); btn_row.addWidget(btn)
+            btn.setStyleSheet(button_style("toolbar")); btn.clicked.connect(slot); btn_row.addWidget(btn)
         btn_row.addStretch(); left_vbox.addLayout(btn_row)
 
         # ── 중앙 (btn_exit 제거) ──
@@ -398,18 +505,14 @@ class EditorWidget(
             (self.btn_next,  "다음 ▶",    "다음",  self._on_next),
         ]
         # [v01.00.06] min-height: 40px — 이전/다음 높이 통일
-        _bot_style = (f"QPushButton {{ background: #444444; color: #FFFFFF; border: none; "
-                      f"padding: 10px 18px; font-size: 13px; font-weight: bold; "
-                      f"border-radius: 4px; min-height: 40px; }} "
-                      f"QPushButton:hover {{ background: {config.ACCENT}; color: #000000; }}")
         for btn, _, _, slot in self._bot_btns:
-            btn.setStyleSheet(_bot_style); btn.clicked.connect(slot); center_hbox.addWidget(btn)
+            btn.setStyleSheet(button_style("primary")); btn.clicked.connect(slot); center_hbox.addWidget(btn)
 
         # ── 우측 (engine_lbl 11px) ──
         right_w = QWidget(); right_vbox = QVBoxLayout(right_w); right_vbox.setContentsMargins(0, 0, 15, 0)
         self.engine_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.engine_lbl.setStyleSheet(
-            f"color: {config.ACCENT}; font-size: 11px; font-weight: bold; line-height: 1.2;"
+            "color: #6E6E73; font-size: 11px; font-weight: bold; line-height: 1.2;"
         )
         right_vbox.addWidget(self.engine_lbl)
 
@@ -423,21 +526,16 @@ class EditorWidget(
         super().resizeEvent(event)
         is_compact = self.width() < 1100
         top_font = "10px" if is_compact else "11px"
-        top_style = (f"QPushButton {{ background: {config.BG3}; color: {config.FG}; border: none; "
-                     f"padding: 6px 8px; font-size: {top_font}; border-radius: 3px; }} "
-                     f"QPushButton:hover {{ background: #444444; }}")
         for btn, full_t, comp_t, _ in getattr(self, '_top_btns', []):
-            btn.setText(comp_t if is_compact else full_t); btn.setStyleSheet(top_style)
+            btn.setText(comp_t if is_compact else full_t); btn.setStyleSheet(button_style("toolbar", font_size=top_font, padding="6px 8px"))
         bot_font = "11px" if is_compact else "13px"
         bot_pad  = "8px 10px" if is_compact else "10px 18px"
-        bot_style = (f"QPushButton {{ background: #444444; color: #FFFFFF; border: none; "
-                     f"padding: {bot_pad}; font-size: {bot_font}; font-weight: bold; "
-                     f"border-radius: 4px; min-height: 40px; }} "
-                     f"QPushButton:hover {{ background: {config.ACCENT}; color: #000000; }}")
         for btn, full_t, comp_t, _ in getattr(self, '_bot_btns', []):
             if btn != getattr(self, 'btn_start', None):
                 btn.setText(comp_t if is_compact else full_t)
-            btn.setStyleSheet(bot_style)
+            btn.setStyleSheet(button_style("primary", font_size=bot_font, padding=bot_pad))
+        if hasattr(self, "btn_log"):
+            self.btn_log.setText("로그" if is_compact else self._terminal_log_button_text())
 
     # ---------------------------------------------------------
     # Helpers
@@ -455,9 +553,22 @@ class EditorWidget(
 
     def set_terminal_visible_layout(self, is_visible: bool):
         if not hasattr(self, 'splitter'): return
-        self.splitter.setSizes([6500, 3500] if is_visible else [4000, 6000])
+        self.splitter.setSizes([7200, 2800] if is_visible else [6500, 3500])
+        if hasattr(self, "btn_log"):
+            self.btn_log.setText(self._terminal_log_button_text())
 
     def _force_ui_log(self, msg: str): get_logger().log(msg)
+
+    def _terminal_log_button_text(self):
+        main_w = self.window()
+        visible = bool(getattr(main_w, "_log_visible", False))
+        return "터미널 로그 숨기기" if visible else "터미널 로그"
+
+    def _toggle_terminal_log(self):
+        main_w = self.window()
+        if hasattr(main_w, "_toggle_log"):
+            main_w._toggle_log()
+            self.set_terminal_visible_layout(bool(getattr(main_w, "_log_visible", False)))
 
     def _update_engine_label_text(self):
         short_w = self.settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "")).replace("mlx-community/", "").replace("-mlx", "") or "기본"

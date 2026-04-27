@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 02.03.08
+# Phase: PHASE1-C
 import os
 import json
 import time
@@ -87,7 +87,17 @@ class AutoTracker:
         self._save()
 
     def mark_completed(self, filepath: str):
-        if filepath in self.data:
+        if filepath not in self.data:
+            try:
+                size = os.path.getsize(filepath)
+            except Exception:
+                size = 0
+            self.data[filepath] = {
+                "size": size,
+                "status": "완료",
+                "updated_at": time.time()
+            }
+        else:
             self.data[filepath]["status"] = "완료"
             self.data[filepath]["updated_at"] = time.time()
-            self._save()
+        self._save()

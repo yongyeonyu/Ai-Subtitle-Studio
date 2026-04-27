@@ -71,7 +71,7 @@ class EditorLifecycleMixin:
         self._editor_widget = editor
         if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(self._log_visible)
         if hasattr(editor, 'timeline') and self._project_boundary_times: editor.timeline.set_boundary_times(self._project_boundary_times)
-        self.stack.insertWidget(1, editor); self.stack.setCurrentIndex(1)
+        self.stack.insertWidget(1, editor); self.stack.setCurrentWidget(editor)
         if self._current_project_path:
             self._restore_workspace(editor, self._current_project_path)
             from core.project.project_phase1b import apply_project_ui_state
@@ -232,7 +232,7 @@ class EditorLifecycleMixin:
         if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(self._log_visible)
         self.stack.insertWidget(1, editor)
         if hasattr(editor, 'timeline'): editor.timeline.set_boundary_times(self._project_boundary_times or [])
-        self.stack.setCurrentIndex(1)
+        self.stack.setCurrentWidget(editor)
         if self._current_project_path:
             self._restore_workspace(editor, self._current_project_path)
             from core.project.project_phase1b import apply_project_ui_state

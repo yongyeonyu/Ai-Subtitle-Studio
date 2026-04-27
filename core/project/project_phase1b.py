@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 02.03.11
+# Phase: PHASE1-C
 """
 core/project/project_phase1b.py
 PHASE1-B project save/load extension helpers.
@@ -41,6 +41,8 @@ def _workspace_snapshot(owner, editor) -> dict[str, Any]:
         'zoom_pps': float(getattr(canvas, 'pps', 0.0) or 0.0) if canvas else 0.0,
         'splitter_sizes': [],
         'terminal_visible': bool(getattr(owner, '_log_visible', False) or getattr(editor, '_log_visible', False) or getattr(editor, 'log_visible', False)),
+        'dashboard_mode': getattr(owner, '_dashboard_mode', 'dashboard') or 'dashboard',
+        'project_panel_visible': bool(getattr(owner, '_project_panel_visible', True)),
         'last_cursor_block': _selected_segment_line(editor),
         'selected_segment_line': _selected_segment_line(editor),
         'edit_lock': bool(lock_chk.isChecked()) if lock_chk is not None else False,
@@ -194,5 +196,11 @@ def apply_project_ui_state(owner, editor, project_path: str) -> None:
     try:
         if hasattr(owner, '_log_visible'):
             owner._log_visible = bool(ws.get('terminal_visible', False))
+        if hasattr(owner, '_apply_log_visible'):
+            owner._apply_log_visible(bool(ws.get('terminal_visible', False)))
+        if hasattr(owner, '_dashboard_mode'):
+            owner._dashboard_mode = ws.get('dashboard_mode', 'dashboard') or 'dashboard'
+        if hasattr(owner, '_project_panel_visible'):
+            owner._project_panel_visible = bool(ws.get('project_panel_visible', True))
     except Exception:
         pass

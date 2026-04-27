@@ -1,5 +1,5 @@
-# Version: 02.03.02
-# Phase: PHASE1-B
+# Version: 02.03.09
+# Phase: PHASE1-C
 """
 ui/timeline_global.py
 Global timeline minimap
@@ -83,9 +83,10 @@ class GlobalCanvas(QWidget):
             # VAD 기반 speech mask
             speech_mask = np.zeros(wf_len, dtype=bool)
             if self.vad_segments:
+                vad_scale = (wf_len / total) if total and total > 0 else 100.0
                 for vs in self.vad_segments:
-                    s_idx = max(0, int(vs["start"] * 100))
-                    e_idx = min(wf_len, int(vs["end"] * 100) + 1)
+                    s_idx = max(0, int(float(vs["start"]) * vad_scale))
+                    e_idx = min(wf_len, int(float(vs["end"]) * vad_scale) + 1)
                     speech_mask[s_idx:e_idx] = True
 
             for i in range(w):
@@ -166,8 +167,10 @@ class GlobalCanvas(QWidget):
 
     def mousePressEvent(self, e):
         self.setFocus()
-        self.seek_frac.emit(e.pos().x() / max(1, self.width()))
+        frac = max(0.0, min(1.0, e.pos().x() / max(1, self.width())))
+        self.seek_frac.emit(frac)
 
     def mouseMoveEvent(self, e):
         if e.buttons() & Qt.MouseButton.LeftButton:
-            self.seek_frac.emit(e.pos().x() / max(1, self.width()))
+            frac = max(0.0, min(1.0, e.pos().x() / max(1, self.width())))
+            self.seek_frac.emit(frac)

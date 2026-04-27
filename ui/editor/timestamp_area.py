@@ -122,7 +122,7 @@ class TimestampArea(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(event.rect(), QColor(config.BG2)) 
+        painter.fillRect(event.rect(), QColor("#F2F2F7"))
         
         _pw = getattr(self.editor, '_parent_widget', None)
         speaker_colors = _pw._highlighter.speaker_colors if _pw and hasattr(_pw, '_highlighter') else {}

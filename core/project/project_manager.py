@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 02.03.11
+# Phase: PHASE1-C
 """
 core/project_manager.py
 프로젝트 JSON 파일 생성 / 저장 / 로드
@@ -161,7 +161,9 @@ def create_project(
             "zoom_pps": 500.0,
             "scroll_position": 0.0,
             "splitter_sizes": [],
-            "terminal_visible": False
+            "terminal_visible": False,
+            "dashboard_mode": "dashboard",
+            "project_panel_visible": True
         },
 
         "user_settings": user_settings or {},

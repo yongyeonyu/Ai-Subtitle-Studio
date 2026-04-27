@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 02.03.11
+# Phase: PHASE1-C
 """
 ui/workspace_mixin.py
 Workspace restore mixin
@@ -22,6 +22,8 @@ class WorkspaceMixin:
             "scroll_position": 0.0,
             "splitter_sizes": [],
             "terminal_visible": getattr(self, "_log_visible", False),
+            "dashboard_mode": getattr(self, "_dashboard_mode", "dashboard"),
+            "project_panel_visible": bool(getattr(self, "_project_panel_visible", True)),
         }
 
         try:
@@ -103,6 +105,13 @@ class WorkspaceMixin:
                     splitter_sizes = workspace.get("splitter_sizes", [])
                     if splitter_sizes and hasattr(editor, "splitter"):
                         editor.splitter.setSizes(splitter_sizes)
+
+                    if hasattr(self, "_dashboard_mode"):
+                        self._dashboard_mode = workspace.get("dashboard_mode", "dashboard") or "dashboard"
+                    if hasattr(self, "_project_panel_visible"):
+                        self._project_panel_visible = bool(workspace.get("project_panel_visible", True))
+                    if hasattr(self, "_apply_log_visible"):
+                        self._apply_log_visible(bool(workspace.get("terminal_visible", False)))
 
                     playhead = workspace.get("last_playhead", 0.0)
                     if playhead > 0:

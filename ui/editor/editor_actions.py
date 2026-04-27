@@ -256,6 +256,8 @@ class EditorActionsMixin:
             workspace["terminal_visible"] = main_w._log_visible
         except Exception:
             pass
+        workspace["dashboard_mode"] = getattr(main_w, "_dashboard_mode", "dashboard") or "dashboard"
+        workspace["project_panel_visible"] = bool(getattr(main_w, "_project_panel_visible", True))
 
         _media_paths = list(getattr(main_w, '_multiclip_files', []) or [])
         if not _media_paths:

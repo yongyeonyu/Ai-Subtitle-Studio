@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 02.03.17
+# Phase: PHASE1-C
 """
 ui/main/main_window.py
 MainWindow — 메인 윈도우 클래스 (시그널 정의 · UI 빌드 · 시그널 연결)
@@ -13,12 +13,13 @@ from PyQt6.QtWidgets import (
     QTableWidget, QHeaderView,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QIcon
 
 from ui.queue_widget import QueueMixin
 from ui.cloud_ui import CloudUIMixin
 from ui.home_ui import HomeUIMixin
 from ui.editor.editor_lifecycle import EditorLifecycleMixin
+from ui.style import app_stylesheet, button_style, label_style
 
 from ui.project.project_panel import ProjectUIMixin
 from ui.project.workspace_restore import WorkspaceMixin
@@ -64,6 +65,9 @@ class MainWindow(
     def __init__(self):
         super().__init__()
         self.setWindowTitle("🎬 AI Subtitle Studio")
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "assets", "icons", "app_icon.svg")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
         self.setMinimumSize(600, 500)
         self.recent_folders = []
         self.add_recent_folder_callback = None
@@ -79,6 +83,13 @@ class MainWindow(
         self._is_auto_pipeline = False
         self._current_project_path = None
         self._project_boundary_times = []
+        self._dashboard_mode = "dashboard"
+        self._project_panel_visible = True
+        self._unified_dashboard = True
+        self._on_save_cb = None
+        self._on_start_cb = None
+        self._on_prev_cb = None
+        self._on_exit_cb = None
         self._local_llm_models = []
 
         settings = load_settings()
@@ -116,34 +127,59 @@ class MainWindow(
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         self.stack = QStackedWidget()
-        self.stack.setStyleSheet(f"background: {config.BG};")
-        main_layout.addWidget(self.stack, stretch=1)
+        self.stack.setStyleSheet(app_stylesheet())
+
+        workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
+        workspace_splitter.setChildrenCollapsible(False)
+        workspace_splitter.setStyleSheet("QSplitter::handle { background: #2D3942; width: 1px; }")
+        main_layout.addWidget(workspace_splitter, stretch=1)
+
         self.home_page = QWidget()
-        self.stack.addWidget(self.home_page)
+        self.home_page.setMinimumWidth(204)
+        self.home_page.setMaximumWidth(218)
+        self.home_page.setStyleSheet("background: #11181C;")
+        workspace_splitter.addWidget(self.home_page)
+
         self.editor_page = QWidget()
+        editor_placeholder = QVBoxLayout(self.editor_page)
+        editor_placeholder.setContentsMargins(32, 32, 32, 32)
+        editor_placeholder.setSpacing(10)
+        title = QLabel("작업을 선택하세요")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(label_style("normal", 20, bold=True))
+        subtitle = QLabel("파일, 프로젝트, iCloud, NAS 자동처리를 왼쪽에서 시작하면 이 영역에 자막 편집 작업 화면이 열립니다.")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet(label_style("muted", 12))
+        editor_placeholder.addStretch()
+        editor_placeholder.addWidget(title)
+        editor_placeholder.addWidget(subtitle)
+        editor_placeholder.addStretch()
         self.stack.addWidget(self.editor_page)
+        workspace_splitter.addWidget(self.stack)
+        workspace_splitter.setSizes([210, 1465])
+        self.workspace_splitter = workspace_splitter
+
         log_panel = self._build_log_panel()
         main_layout.addWidget(log_panel)
         self.show_home()
 
     def _build_log_panel(self):
         container = QWidget()
-        container.setStyleSheet(f"background: {config.BG2};")
+        container.setStyleSheet("background: #151C20;")
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         # ── 토글 바 ──
         toggle_bar = QWidget()
-        toggle_bar.setFixedHeight(28)
-        toggle_bar.setStyleSheet(f"background: {config.BG3};")
+        toggle_bar.setFixedHeight(24)
+        toggle_bar.setStyleSheet("background: #1B2429; border-top: 1px solid #2D3942;")
         toggle_bar.setCursor(Qt.CursorShape.PointingHandCursor)
         tb_layout = QHBoxLayout(toggle_bar)
-        tb_layout.setContentsMargins(20, 0, 0, 0)
+        tb_layout.setContentsMargins(16, 0, 0, 0)
         self._log_toggle_btn = QLabel("▲ 터미널 로그 보기")
-        self._log_toggle_btn.setStyleSheet(
-            f"color: {config.FG2}; font-size: 11px; font-weight: bold;"
-        )
+        self._log_toggle_btn.setStyleSheet(label_style("muted", 10, bold=True))
         tb_layout.addWidget(self._log_toggle_btn)
         tb_layout.addStretch()
         layout.addWidget(toggle_bar)
@@ -151,13 +187,13 @@ class MainWindow(
 
         # ── 로그 컨텐츠 ──
         self._log_content = QWidget()
-        self._log_content.setFixedHeight(220)
+        self._log_content.setFixedHeight(156)
         lc_layout_main = QVBoxLayout(self._log_content)
         lc_layout_main.setContentsMargins(0, 0, 0, 0)
 
         self.log_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.log_splitter.setStyleSheet(
-            f"QSplitter::handle {{ background: {config.BG3}; width: 2px; }}"
+            "QSplitter::handle { background: #2D3942; width: 2px; }"
         )
 
         # 터미널
@@ -166,20 +202,16 @@ class MainWindow(
         term_layout.setContentsMargins(0, 0, 0, 0)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setFont(QFont("Menlo", 10))
-        self.log_text.setStyleSheet(
-            f"background: {config.BG2}; color: {config.FG2}; border: none; padding: 8px;"
-        )
+        self.log_text.setFont(QFont("Menlo", 9))
+        self.log_text.setStyleSheet("background: #151C20; color: #A9B0B7; border: none; padding: 6px 8px;")
         term_layout.addWidget(self.log_text)
 
         # 큐 테이블
         queue_widget = QWidget()
         queue_layout = QVBoxLayout(queue_widget)
-        queue_layout.setContentsMargins(5, 5, 5, 5)
+        queue_layout.setContentsMargins(5, 3, 5, 5)
         self.queue_header_lbl = QLabel("📋 처리할 파일 리스트")
-        self.queue_header_lbl.setStyleSheet(
-            f"color: {config.FG}; font-weight: bold; font-size: 12px;"
-        )
+        self.queue_header_lbl.setStyleSheet(label_style("normal", 10, bold=True))
         queue_layout.addWidget(self.queue_header_lbl)
 
         self.queue_table = QTableWidget(0, 5)
@@ -216,12 +248,12 @@ class MainWindow(
         self.queue_table.setShowGrid(True)
         self.queue_table.setGridStyle(Qt.PenStyle.SolidLine)
         self.queue_table.setStyleSheet(
-            f"QTableWidget {{ background: {config.BG2}; color: {config.FG}; "
-            f"border: none; font-size: 11px; gridline-color: #FFFFFF; }} "
-            f"QTableWidget::item {{ padding: 6px 12px; }} "
-            f"QHeaderView::section {{ background: {config.BG3}; color: {config.FG2}; "
-            f"border: none; border-right: 1px solid #FFFFFF; "
-            f"border-bottom: 1px solid #FFFFFF; padding: 8px 12px; }}"
+            "QTableWidget { background: #151C20; color: #F5F7FA; "
+            "border: none; font-size: 11px; gridline-color: #3A4650; } "
+            "QTableWidget::item { padding: 4px 10px; } "
+            "QHeaderView::section { background: #1B2429; color: #A9B0B7; "
+            "border: none; border-right: 1px solid #3A4650; "
+            "border-bottom: 1px solid #3A4650; padding: 5px 10px; }"
         )
         queue_layout.addWidget(self.queue_table)
 
@@ -236,12 +268,7 @@ class MainWindow(
         # 초기 상태
         settings = load_settings()
         self._log_visible = settings.get("show_terminal_log", False)
-        if self._log_visible:
-            self._log_content.show()
-            self._log_toggle_btn.setText("▼ 터미널 로그 숨기기")
-        else:
-            self._log_content.hide()
-            self._log_toggle_btn.setText("▲ 터미널 로그 보기")
+        self._apply_log_visible(self._log_visible)
 
         # 큐 애니메이션
         self._queue_anim_frames = ["📑", "📄", "📃", "📝"]
@@ -272,23 +299,30 @@ class MainWindow(
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self):
         self.stack.setCurrentIndex(0)
-        if self._editor_widget:
+        if self._editor_widget and not getattr(self, "_unified_dashboard", False):
             self._trash_bin = getattr(self, "_trash_bin", [])
             self._trash_bin.append(self._editor_widget)
             if len(self._trash_bin) > 3:
                 self._trash_bin.pop(0)
-        self._editor_widget = None
+            self._editor_widget = None
         self._build_home_content()
 
     # ── 로그 토글 ────────────────────────────────────────
-    def _toggle_log(self):
-        self._log_visible = not self._log_visible
+    def _apply_log_visible(self, visible: bool):
+        self._log_visible = bool(visible)
         if self._log_visible:
             self._log_content.show()
             self._log_toggle_btn.setText("▼ 터미널 로그 숨기기")
         else:
             self._log_content.hide()
             self._log_toggle_btn.setText("▲ 터미널 로그 보기")
+        if self._editor_widget and hasattr(self._editor_widget, "set_terminal_visible_layout"):
+            self._editor_widget.set_terminal_visible_layout(self._log_visible)
+
+    def _toggle_log(self):
+        self._apply_log_visible(not self._log_visible)
+        if hasattr(self, "show_home") and self.stack.currentWidget() is self.home_page:
+            self.show_home()
         for c in getattr(self, "_preview_containers", []):
             try:
                 c.setVisible(not self._log_visible)
@@ -299,13 +333,12 @@ class MainWindow(
                 btn.setVisible(i == 0 if self._log_visible else True)
             except Exception:
                 pass
-        settings = load_settings()
-        settings["show_terminal_log"] = self._log_visible
-        save_settings(settings)
-        if self._editor_widget and hasattr(
-            self._editor_widget, "set_terminal_visible_layout"
-        ):
-            self._editor_widget.set_terminal_visible_layout(self._log_visible)
+        try:
+            settings = load_settings()
+            settings["show_terminal_log"] = self._log_visible
+            save_settings(settings)
+        except Exception as e:
+            get_logger().log(f"⚠️ 터미널 로그 표시 설정 저장 실패: {e}")
         QTimer.singleShot(10, self._refresh_video)
 
     def _refresh_video(self):

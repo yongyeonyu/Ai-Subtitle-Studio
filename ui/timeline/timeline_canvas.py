@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 02.03.09
+# Phase: PHASE1-C
 """
 ui/timeline_canvas.py
 Timeline canvas
@@ -164,7 +164,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         return int(sec * self.pps)
 
     def total_width(self):
-        return max(self.width(), int(self.total_duration * self.pps) + self.width())
+        return max(self.width(), int(self.total_duration * self.pps) + 96)
 
     def _icon_rect(self, x1, x2):
         return QRect(x1 + (x2 - x1) // 2 - (ICON_SZ // 2), SEG_BOT + 1, ICON_SZ, ICON_SZ)

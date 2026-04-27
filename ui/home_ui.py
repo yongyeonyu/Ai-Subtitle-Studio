@@ -1,5 +1,5 @@
-# Version: 02.03.05
-# Phase: PHASE1-B
+# Version: 02.03.16
+# Phase: PHASE1-C
 """
 ui/home_ui.py
 MainWindow 홈 화면 빌드 Mixin
@@ -20,6 +20,7 @@ from core.path_manager import (
     get_nas_excluded_folders
 )
 from core.settings import load_settings, save_settings
+from ui.style import button_style, label_style, panel_style
 
 
 class HomeUIMixin:
@@ -29,16 +30,44 @@ class HomeUIMixin:
         self._watchdog_labels = []
         old_layout = self.home_page.layout()
         if old_layout is not None: QWidget().setLayout(old_layout)
-        layout = QVBoxLayout(self.home_page); layout.setContentsMargins(30, 20, 30, 15); layout.setSpacing(8); layout.addSpacing(40)
-        title = QLabel("🎬 AI Subtitle Studio"); title.setAlignment(Qt.AlignmentFlag.AlignCenter); title.setStyleSheet(f"color: {config.FG}; font-size: 24px; font-weight: bold;"); layout.addWidget(title); layout.addSpacing(6)
-        columns = QHBoxLayout(); columns.setSpacing(8)
-        left_widget = QWidget(); left_col = QVBoxLayout(left_widget); left_col.setContentsMargins(0, 0, 0, 0); left_col.setSpacing(8)
-        left_col.addWidget(self._btn("📂 파일 선택", "영상/음성/srt 직접 선택", self.select_files))
-        left_col.addWidget(self._btn("📁 폴더 선택", "폴더에서 영상 일괄 선택", self.select_folder))
-        left_col.addWidget(self._btn("📝 프로젝트 만들기", "영상 묶어서 프로젝트 관리", self._create_project))
-        left_col.addWidget(self._btn("📦 프로젝트 열기", "기존 프로젝트 불러오기", self._open_project))
-        left_col.addWidget(self._btn("✂️ cut 편집 도우미", "개발 중", self._dummy_action))
-        left_col.addStretch()
+        is_unified = bool(getattr(self, "_unified_dashboard", False))
+        layout = QVBoxLayout(self.home_page)
+        layout.setContentsMargins(8 if is_unified else 30, 12 if is_unified else 20, 8 if is_unified else 30, 8 if is_unified else 15)
+        layout.setSpacing(5)
+        if not is_unified:
+            layout.addSpacing(40)
+        title = QLabel("AI Subtitle Studio")
+        title.setAlignment(Qt.AlignmentFlag.AlignLeft if is_unified else Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(f"color: #FFFFFF; font-size: {14 if is_unified else 24}px; font-weight: bold;")
+        layout.addWidget(title)
+        if is_unified:
+            sub_title = QLabel("Dashboard")
+            sub_title.setStyleSheet("color: #8E8E93; font-size: 10px; font-weight: bold; border: none; background: transparent;")
+            layout.addWidget(sub_title)
+        else:
+            layout.addSpacing(6)
+        columns = QVBoxLayout() if is_unified else QHBoxLayout()
+        columns.setSpacing(8)
+        left_widget = QWidget(); left_col = QVBoxLayout(left_widget); left_col.setContentsMargins(0, 0, 0, 0); left_col.setSpacing(4)
+        if is_unified:
+            left_col.addWidget(self._btn("⌂  홈", "", self.show_home))
+            left_col.addWidget(self._btn("▣  프로젝트", "", self._open_project))
+            left_col.addWidget(self._btn("▤  자막 편집", "", self.select_files, active=True))
+            left_col.addWidget(self._btn("◎  러프컷 편집 도우미", "PHASE2", self._open_roughcut_helper))
+            left_col.addWidget(self._btn("▱  숏폼 제작기", "PHASE3", self._open_shortform_maker))
+            left_col.addSpacing(8)
+            left_col.addWidget(self._btn("📂 파일 선택", "영상/음성/srt 직접 선택", self.select_files))
+            left_col.addWidget(self._btn("📁 폴더 선택", "폴더에서 영상 일괄 선택", self.select_folder))
+            left_col.addWidget(self._btn("📝 프로젝트 만들기", "영상 묶어서 프로젝트 관리", self._create_project))
+        else:
+            left_col.addWidget(self._btn("📂 파일 선택", "영상/음성/srt 직접 선택", self.select_files))
+            left_col.addWidget(self._btn("📁 폴더 선택", "폴더에서 영상 일괄 선택", self.select_folder))
+            left_col.addWidget(self._btn("📝 프로젝트 만들기", "영상 묶어서 프로젝트 관리", self._create_project))
+            left_col.addWidget(self._btn("📦 프로젝트 열기", "기존 프로젝트 불러오기", self._open_project))
+            left_col.addWidget(self._btn("✂️ 러프컷 편집 도우미", "PHASE2 핵심 기능", self._open_roughcut_helper))
+            left_col.addWidget(self._btn("📱 숏폼 제작기", "PHASE3 개발 예정", self._open_shortform_maker))
+        if not is_unified:
+            left_col.addStretch()
         right_widget = QWidget(); right_col = QVBoxLayout(right_widget); right_col.setContentsMargins(0, 0, 0, 0); right_col.setSpacing(8)
         icloud_files, count_str, comp_str = self._get_icloud_files()
         right_col.addWidget(self._icloud_btn("☁️ iCloud 자동 처리", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
@@ -58,14 +87,14 @@ class HomeUIMixin:
 
         if valid_folders:
             recent_container = QWidget(); recent_container.setObjectName("MenuButton")
-            recent_container.setStyleSheet(f"QWidget#MenuButton {{ background-color: {config.BG2}; border: 1px solid {config.BG3}; border-radius: 8px; }} QWidget#MenuButton:hover {{ background-color: #333333; border: 2px solid #4AFF80; }}")
-            recent_layout = QVBoxLayout(recent_container); recent_layout.setContentsMargins(20, 10, 20, 10); recent_layout.setSpacing(4)
-            recent_lbl = QLabel("📂 최근 폴더"); recent_lbl.setStyleSheet(f"color: {config.FG}; font-size: 14px; font-weight: bold; border: none; background: transparent;"); recent_layout.addWidget(recent_lbl)
+            recent_container.setStyleSheet("QWidget#MenuButton { background-color: #1B2429; border: 1px solid #2D3942; border-radius: 7px; }")
+            recent_layout = QVBoxLayout(recent_container); recent_layout.setContentsMargins(10, 8, 10, 8); recent_layout.setSpacing(3)
+            recent_lbl = QLabel("📂 최근 폴더"); recent_lbl.setStyleSheet("color: #FFFFFF; font-size: 12px; font-weight: bold; border: none; background: transparent;"); recent_layout.addWidget(recent_lbl)
             self._recent_buttons = []
             max_visible = 3 if getattr(self, '_log_visible', False) else 10
             for i, folder in enumerate(valid_folders[:10]):
                 display_name = os.path.basename(folder.rstrip('\\/')) or folder
-                file_lbl = QLabel(f"📁 {display_name}"); file_lbl.setStyleSheet(f"QLabel {{ color: {config.FG2}; font-size: 11px; border: none; padding: 2px 4px; background: transparent; }} QLabel:hover {{ color: #4AFF80; background: #3d3d3d; border-radius: 4px; }}"); file_lbl.setCursor(Qt.CursorShape.PointingHandCursor); file_lbl.setToolTip(folder)
+                file_lbl = QLabel(f"📁 {display_name}"); file_lbl.setStyleSheet("QLabel { color: #D1D1D6; font-size: 10px; border: none; padding: 2px 4px; background: transparent; } QLabel:hover { color: #FFFFFF; background: #26313A; border-radius: 4px; }"); file_lbl.setCursor(Qt.CursorShape.PointingHandCursor); file_lbl.setToolTip(folder)
                 def _on_recent_click(e, f=folder, lbl=file_lbl):
                     if e.button() == Qt.MouseButton.LeftButton:
                         self._defer_home_action(lbl, lambda: self._open_recent(f))
@@ -75,16 +104,30 @@ class HomeUIMixin:
                 recent_layout.addWidget(file_lbl); self._recent_buttons.append(file_lbl)
             right_col.addWidget(recent_container)
         else: self._recent_buttons = []
-        right_col.addStretch(); columns.addWidget(left_widget, stretch=1); columns.addWidget(right_widget, stretch=1); layout.addLayout(columns); layout.addStretch()
+        if not is_unified:
+            right_col.addStretch()
+        columns.addWidget(left_widget, stretch=1)
+        columns.addWidget(right_widget, stretch=1)
+        layout.addLayout(columns)
+        layout.addStretch()
         bottom_bar = QHBoxLayout()
         from config import APP_VERSION
         version_lbl = QLabel(f"v{APP_VERSION}")
-        version_lbl.setStyleSheet(f"color: {config.FG2}; font-size: 11px;")
-        btn_settings = QPushButton("⚙️ 자동설정"); btn_settings.setStyleSheet(f"background: {config.BG3}; color: {config.FG}; border: none; padding: 6px 12px; border-radius: 4px;"); btn_settings.clicked.connect(self._show_path_settings)
+        version_lbl.setStyleSheet("color: #D1D1D6; font-size: 11px;")
+        btn_settings = QPushButton("⚙️ 자동설정"); btn_settings.setStyleSheet(button_style("toolbar")); btn_settings.clicked.connect(self._show_path_settings)
         btn_auto_start = QPushButton(self._auto_start_label()); btn_auto_start.setStyleSheet(self._auto_start_style()); btn_auto_start.clicked.connect(self._toggle_auto_start_enabled)
-        btn_clear_cache = QPushButton("🗑️ 캐쉬삭제"); btn_clear_cache.setStyleSheet(f"background: {config.BG3}; color: {config.FG}; border: none; padding: 6px 12px; border-radius: 4px;"); btn_clear_cache.clicked.connect(self._clear_cache)
-        btn_exit = QPushButton("❌ 종료"); btn_exit.setStyleSheet(f"background: #882222; color: #FFF; font-weight: bold; border: none; padding: 6px 12px; border-radius: 4px;"); btn_exit.clicked.connect(self._quick_exit)
-        bottom_bar.addWidget(version_lbl); bottom_bar.addWidget(self._editor_shortcuts_row()); bottom_bar.addStretch(); bottom_bar.addWidget(btn_settings); bottom_bar.addWidget(btn_auto_start); bottom_bar.addWidget(btn_clear_cache); bottom_bar.addWidget(btn_exit)
+        btn_clear_cache = QPushButton("🗑️ 캐쉬삭제"); btn_clear_cache.setStyleSheet(button_style("toolbar")); btn_clear_cache.clicked.connect(self._clear_cache)
+        btn_log = QPushButton(self._terminal_log_label()); btn_log.setStyleSheet(button_style("toolbar")); btn_log.clicked.connect(self._toggle_log)
+        btn_exit = QPushButton("❌ 종료"); btn_exit.setStyleSheet(button_style("danger")); btn_exit.clicked.connect(self._quick_exit)
+        bottom_bar.addWidget(version_lbl)
+        if not is_unified:
+            bottom_bar.addWidget(self._editor_shortcuts_row())
+            bottom_bar.addStretch()
+        else:
+            bottom_bar.addStretch()
+        bottom_bar.addWidget(btn_settings); bottom_bar.addWidget(btn_auto_start); bottom_bar.addWidget(btn_clear_cache); bottom_bar.addWidget(btn_log); bottom_bar.addWidget(btn_exit)
+        if is_unified:
+            layout.addWidget(self._editor_shortcuts_row())
         layout.addLayout(bottom_bar)
         self._ensure_watchdog_timer()
 
@@ -94,6 +137,9 @@ class HomeUIMixin:
 
     def _auto_start_label(self):
         return "자동시작 ON" if self._is_auto_start_enabled() else "자동시작 OFF"
+
+    def _terminal_log_label(self):
+        return "터미널 로그 숨기기" if getattr(self, "_log_visible", False) else "터미널 로그 보기"
 
     def _auto_start_style(self):
         if self._is_auto_start_enabled():
@@ -178,24 +224,37 @@ class HomeUIMixin:
         QTimer.singleShot(100, action)
 
     def _icloud_btn(self, text, file_data, default_cmd, is_nas=False, subtitle="", comp_title=""):
-        _normal_ss = f"QWidget#MenuButton {{ background-color: {config.BG2}; border: 1px solid {config.BG3}; border-radius: 8px; }}"
-        _hover_ss = f"QWidget#MenuButton {{ background-color: #333333; border: 2px solid #4AFF80; border-radius: 8px; }}"
+        _normal_ss = "QWidget#MenuButton { background-color: #1B2429; border: 1px solid #2D3942; border-radius: 7px; }" if getattr(self, "_unified_dashboard", False) else "QWidget#MenuButton { background-color: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 12px; }"
+        _hover_ss = "QWidget#MenuButton { background-color: #26313A; border: 1px solid #3F8CFF; border-radius: 7px; }" if getattr(self, "_unified_dashboard", False) else "QWidget#MenuButton { background-color: #FFFFFF; border: 2px solid #007AFF; border-radius: 12px; }"
         w = QWidget(); w.setObjectName("MenuButton"); w.setStyleSheet(_normal_ss)
         w._normal_ss = _normal_ss; w._hover_ss = _hover_ss
         w.enterEvent = lambda e, _w=w: _w.setStyleSheet(_w._hover_ss)
         w.leaveEvent = lambda e, _w=w: _w.setStyleSheet(_w._normal_ss)
         w.setCursor(Qt.CursorShape.PointingHandCursor)
-        layout = QVBoxLayout(w); layout.setContentsMargins(20, 14, 20, 14); layout.setSpacing(6)
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(10 if getattr(self, "_unified_dashboard", False) else 20, 8 if getattr(self, "_unified_dashboard", False) else 14, 10 if getattr(self, "_unified_dashboard", False) else 20, 8 if getattr(self, "_unified_dashboard", False) else 14)
+        layout.setSpacing(3 if getattr(self, "_unified_dashboard", False) else 6)
         active = getattr(self, '_is_nas_auto_mode', False) if is_nas else getattr(self, '_is_icloud_auto_mode', False)
-        text_color = config.FG if active else config.FG2
-        title_row = QHBoxLayout(); lbl = QLabel(text); lbl.setStyleSheet(f"color: {text_color}; font-size: 14px; font-weight: bold; border: none; background: transparent;"); title_row.addWidget(lbl)
+        text_color = "#FFFFFF" if getattr(self, "_unified_dashboard", False) else ("#1D1D1F" if active else "#6E6E73")
+        title_row = QHBoxLayout()
+        title_row.setSpacing(4)
+        lbl = QLabel(text)
+        lbl.setStyleSheet(f"color: {text_color}; font-size: {11 if getattr(self, '_unified_dashboard', False) else 14}px; font-weight: bold; border: none; background: transparent;")
+        lbl.setMinimumWidth(0)
+        title_row.addWidget(lbl)
         if subtitle:
-            sub_lbl = QLabel(subtitle); sub_lbl.setStyleSheet(f"color: {config.ACCENT}; font-size: 11px; font-weight: bold; border: none; background: transparent; padding-left: 10px;"); title_row.addWidget(sub_lbl)
+            sub_lbl = QLabel(subtitle)
+            sub_lbl.setStyleSheet("color: #3F8CFF; font-size: 9px; font-weight: bold; border: none; background: transparent;" if getattr(self, "_unified_dashboard", False) else "color: #007AFF; font-size: 11px; font-weight: bold; border: none; background: transparent; padding-left: 10px;")
+            sub_lbl.setMinimumWidth(0)
+            title_row.addWidget(sub_lbl)
         if comp_title:
-            comp_lbl = QLabel(comp_title); comp_lbl.setStyleSheet("color: #4AFF80; font-size: 11px; font-weight: bold; border: none; background: transparent; padding-left: 15px;"); title_row.addWidget(comp_lbl)
+            comp_lbl = QLabel(comp_title)
+            comp_lbl.setStyleSheet("color: #34C759; font-size: 9px; font-weight: bold; border: none; background: transparent;" if getattr(self, "_unified_dashboard", False) else "color: #34C759; font-size: 11px; font-weight: bold; border: none; background: transparent; padding-left: 15px;")
+            comp_lbl.setMinimumWidth(0)
+            title_row.addWidget(comp_lbl)
         if active and self._is_auto_start_enabled():
             wd_lbl = QLabel()
-            wd_lbl.setStyleSheet("color: #4AFF80; font-size: 11px; font-weight: bold; border: none; background: transparent; padding-left: 12px;")
+            wd_lbl.setStyleSheet(label_style("accent", 9 if getattr(self, "_unified_dashboard", False) else 11, bold=True) + ("padding-left: 2px;" if getattr(self, "_unified_dashboard", False) else "padding-left: 12px;"))
             title_row.addWidget(wd_lbl)
             self._watchdog_labels.append((wd_lbl, is_nas))
         title_row.addStretch(); layout.addLayout(title_row)
@@ -207,7 +266,7 @@ class HomeUIMixin:
             for name, fpath in rows:
                 display_name = f"📁 {name}" if is_nas else name
                 file_lbl = QLabel(display_name); file_lbl.setToolTip(fpath)
-                file_lbl.setStyleSheet(f"QLabel {{ color: {config.FG2}; font-size: 11px; border: none; padding: 2px 4px; background: transparent; }} QLabel:hover {{ color: #4AFF80; background: #3d3d3d; border-radius: 4px; }}")
+                file_lbl.setStyleSheet("QLabel { color: #A9B0B7; font-size: 10px; border: none; padding: 2px 4px; background: transparent; } QLabel:hover { color: #FFFFFF; background: #26313A; border-radius: 5px; }" if getattr(self, "_unified_dashboard", False) else "QLabel { color: #6E6E73; font-size: 11px; border: none; padding: 2px 4px; background: transparent; } QLabel:hover { color: #007AFF; background: #F2F2F7; border-radius: 6px; }")
                 def _on_preview_click(e, p=fpath, lbl=file_lbl):
                     if e.button() == Qt.MouseButton.LeftButton:
                         if p.endswith(".srt"):
@@ -220,8 +279,8 @@ class HomeUIMixin:
                 file_lbl.mousePressEvent = _on_preview_click
                 preview_layout.addWidget(file_lbl)
         if is_nas:
-            scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QScrollArea.Shape.NoFrame); scroll.setMaximumHeight(170)
-            scroll.setStyleSheet(f"QScrollArea {{ background: transparent; border: none; }} QScrollBar:vertical {{ background: {config.BG3}; width: 8px; }}")
+            scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QScrollArea.Shape.NoFrame); scroll.setMaximumHeight(130 if getattr(self, "_unified_dashboard", False) else 170)
+            scroll.setStyleSheet("QScrollArea { background: transparent; border: none; } QScrollBar:vertical { background: #26313A; width: 6px; }" if getattr(self, "_unified_dashboard", False) else "QScrollArea { background: transparent; border: none; } QScrollBar:vertical { background: #E5E5EA; width: 8px; }")
             scroll.setWidget(preview_container); layout.addWidget(scroll); self._preview_containers.append(scroll)
             scroll.setVisible(not getattr(self, '_log_visible', False))
         else:
@@ -234,17 +293,27 @@ class HomeUIMixin:
         w.mousePressEvent = _on_w_click
         return w
 
-    def _btn(self, text, desc, cmd):
-        _normal_ss = f"QWidget#MenuButton {{ background-color: {config.BG2}; border: 1px solid {config.BG3}; border-radius: 8px; }}"
-        _hover_ss = f"QWidget#MenuButton {{ background-color: #333333; border: 2px solid #4AFF80; border-radius: 8px; }}"
+    def _btn(self, text, desc, cmd, active=False):
+        if getattr(self, "_unified_dashboard", False):
+            bg = "#26313A" if active else "transparent"
+            border = "#3F8CFF" if active else "transparent"
+            _normal_ss = f"QWidget#MenuButton {{ background-color: {bg}; border: 1px solid {border}; border-radius: 7px; }}"
+            _hover_ss = "QWidget#MenuButton { background-color: #26313A; border: 1px solid #3F8CFF; border-radius: 7px; }"
+        else:
+            _normal_ss = "QWidget#MenuButton { background-color: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 12px; }"
+            _hover_ss = "QWidget#MenuButton { background-color: #FFFFFF; border: 2px solid #007AFF; border-radius: 12px; }"
         w = QWidget(); w.setObjectName("MenuButton"); w.setStyleSheet(_normal_ss)
         w._normal_ss = _normal_ss; w._hover_ss = _hover_ss
         w.enterEvent = lambda e, _w=w: _w.setStyleSheet(_w._hover_ss)
         w.leaveEvent = lambda e, _w=w: _w.setStyleSheet(_w._normal_ss)
         w.setCursor(Qt.CursorShape.PointingHandCursor)
-        layout = QVBoxLayout(w); layout.setContentsMargins(20, 14, 20, 14); layout.setSpacing(4)
-        lbl = QLabel(text); lbl.setStyleSheet(f"color: {config.FG}; font-size: 14px; font-weight: bold; border: none; background: transparent;"); lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); layout.addWidget(lbl)
-        if desc: sub = QLabel(desc); sub.setStyleSheet(f"color: {config.FG2}; font-size: 11px; border: none; background: transparent;"); sub.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); layout.addWidget(sub)
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(10 if getattr(self, "_unified_dashboard", False) else 20, 8 if getattr(self, "_unified_dashboard", False) else 14, 10 if getattr(self, "_unified_dashboard", False) else 20, 8 if getattr(self, "_unified_dashboard", False) else 14)
+        layout.setSpacing(2 if getattr(self, "_unified_dashboard", False) else 4)
+        main_color = "#74A9FF" if active and getattr(self, "_unified_dashboard", False) else ("#FFFFFF" if getattr(self, "_unified_dashboard", False) else "#1D1D1F")
+        lbl = QLabel(text); lbl.setStyleSheet(f"color: {main_color}; font-size: {11 if getattr(self, '_unified_dashboard', False) else 14}px; font-weight: bold; border: none; background: transparent;"); lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); layout.addWidget(lbl)
+        if desc:
+            sub = QLabel(desc); sub.setStyleSheet("color: #7EE787; font-size: 9px; border: none; background: transparent;" if getattr(self, "_unified_dashboard", False) else "color: #6E6E73; font-size: 11px; border: none; background: transparent;"); sub.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); layout.addWidget(sub)
         def _on_w_click(e):
             if e.button() == Qt.MouseButton.LeftButton:
                 self._defer_home_action(w, cmd)
@@ -255,8 +324,8 @@ class HomeUIMixin:
     def _editor_shortcuts_row(self):
         row = QWidget()
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(8, 0, 0, 0)
-        layout.setSpacing(5)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
         actions = [
             ("⚙️ AI", self._open_main_ai_settings),
             ("🛠️ 상세설정", self._open_main_adv_settings),
@@ -265,20 +334,29 @@ class HomeUIMixin:
             ("🎬 비디오", self._toggle_main_video),
             ("🎥 자막출력", self._open_main_export_dialog),
         ]
-        style = (
-            f"QPushButton {{ background: {config.BG3}; color: {config.FG}; border: none; "
-            "padding: 6px 10px; font-size: 11px; border-radius: 3px; } "
-            "QPushButton:hover { background: #444444; }"
-        )
         for text, cmd in actions:
             btn = QPushButton(text)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(style)
+            btn.setStyleSheet(button_style("toolbar", font_size="10px", padding="5px 7px"))
             btn.clicked.connect(cmd)
             layout.addWidget(btn)
         return row
 
-    def _dummy_action(self): pass
+    def _show_development_notice(self, title, phase):
+        QMessageBox.information(
+            self,
+            title,
+            f"{title}는 {phase}에서 제공될 예정입니다.\n현재 기능은 기존 자막 편집 흐름에 영향을 주지 않습니다."
+        )
+
+    def _open_roughcut_helper(self):
+        self._show_development_notice("러프컷 편집 도우미", "PHASE2")
+
+    def _open_shortform_maker(self):
+        self._show_development_notice("숏폼 제작기", "PHASE3")
+
+    def _dummy_action(self):
+        self._show_development_notice("개발 중 기능", "후속 단계")
 
     def _active_editor(self):
         editor = getattr(self, "_editor_widget", None)
