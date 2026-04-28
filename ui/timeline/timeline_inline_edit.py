@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 02.07.00
 # Phase: PHASE1-B
 """
 ui/timeline_inline_edit.py
@@ -294,19 +294,32 @@ class TimelineInlineEditMixin:
             act = menu.addAction("🔴 음성인식 중지")
             act.triggered.connect(self._stop_listening)
         else:
-            act = menu.addAction("🎤 음성으로 입력")
-            act.triggered.connect(self._start_listening)
-
-        menu.addSeparator()
-        learn_menu = menu.addMenu("🎤 음성 화자로 학습")
-        for _spk_i in range(1, 4):
-            _act = learn_menu.addAction(f"화자 {_spk_i}")
-            _act.triggered.connect(lambda checked, idx=_spk_i: self._learn_speaker_from_segment(idx))
+            act = menu.addAction("🎤 음성으로 입력 (고품질)")
+            act.triggered.connect(lambda: self._start_listening("quality"))
+            fast_act = menu.addAction("⚡ 음성으로 입력 (빠름)")
+            fast_act.triggered.connect(lambda: self._start_listening("fast"))
 
         menu.exec(gpos)
 
-    def _learn_speaker_from_segment(self, spk_idx):
-        seg = next((s for s in self.segments if s.get("line") == self._edit_line), None)
+    def _show_speaker_learn_menu(self, line_num, gpos):
+        from PyQt6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background-color: #151C20; color: #F5F7FA; border: 1px solid #2D3942; "
+            "font-size: 13px; padding: 4px; } "
+            "QMenu::item { padding: 7px 22px 7px 10px; border-radius: 4px; } "
+            "QMenu::item:selected { background-color: #1F3A56; }"
+        )
+        learn_menu = menu.addMenu("음성으로 화자 학습")
+        for _spk_i in range(1, 4):
+            _act = learn_menu.addAction(f"화자 {_spk_i}")
+            _act.triggered.connect(lambda checked=False, idx=_spk_i, ln=line_num: self._learn_speaker_from_segment(idx, ln))
+        menu.exec(gpos)
+
+    def _learn_speaker_from_segment(self, spk_idx, line_num=None):
+        target_line = self._edit_line if line_num is None else line_num
+        seg = next((s for s in self.segments if s.get("line") == target_line), None)
         if not seg:
             return
 
@@ -384,38 +397,45 @@ class TimelineInlineEditMixin:
         except Exception as e:
             get_logger().log(f"voice learn failed spk{spk_idx}: {e}")
 
-    def _start_listening(self):
+    def _start_listening(self, profile="quality"):
         if self._is_listening:
             return
 
         self._is_listening = True
+        self._speech_stop_requested = False
         self.update()
 
         def _listen():
             try:
-                import speech_recognition as sr
+                from core.audio.live_stt import transcribe_microphone_once
+                from logger import get_logger
 
-                recognizer = sr.Recognizer()
-                recognizer.energy_threshold = 300
-                recognizer.dynamic_energy_threshold = True
+                result = transcribe_microphone_once(profile=profile)
+                if getattr(self, "_speech_stop_requested", False):
+                    return
+                if result.text:
+                    get_logger().log(
+                        f"🎙️ 마이크 STT 완료: {result.engine} / {result.model} / {result.elapsed:.1f}s"
+                    )
+                    self.sig_speech_result.emit(result.text)
+                else:
+                    get_logger().log("🎙️ 마이크 STT 결과 없음")
 
-                with sr.Microphone() as source:
-                    recognizer.adjust_for_ambient_noise(source, duration=0.3)
-                    audio = recognizer.listen(source, timeout=10, phrase_time_limit=30)
-
-                text = recognizer.recognize_google(audio, language="ko-KR")
-                if text and text.strip():
-                    self.sig_speech_result.emit(text.strip())
-
-            except Exception:
-                pass
+            except Exception as e:
+                try:
+                    from logger import get_logger
+                    get_logger().log(f"⚠️ 마이크 STT 실패: {e}")
+                except Exception:
+                    pass
             finally:
                 self._is_listening = False
+                self._speech_stop_requested = False
                 QTimer.singleShot(0, self.update)
 
         threading.Thread(target=_listen, daemon=True).start()
 
     def _stop_listening(self):
+        self._speech_stop_requested = True
         self._is_listening = False
         self.update()
 

@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 02.07.00
+# Phase: PHASE1-D
 """
 ui/editor_actions.py
 에디터 UI 버튼 액션 (저장/이전/종료/내보내기/설정)
@@ -14,6 +14,7 @@ from logger import get_logger
 from core.project.data_manager import save_settings as _dm_save_settings
 from core.engine.subtitle_engine import save_srt
 from core.path_manager import get_srt_path
+from ui.dialogs.message_box import confirm_save_changes
 
 
 class EditorActionsMixin:
@@ -41,24 +42,7 @@ class EditorActionsMixin:
             pass
 
     def _show_confirm_dialog(self, title, text):
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle(title)
-        msg_box.setText(text)
-        msg_box.setStandardButtons(
-            QMessageBox.StandardButton.Yes |
-            QMessageBox.StandardButton.No |
-            QMessageBox.StandardButton.Cancel
-        )
-        msg_box.setStyleSheet("""
-            QMessageBox { background-color: #1a1a1a; color: #FFFFFF; }
-            QPushButton { background-color: #333333; color: #FFFFFF; border: 2px solid #FFFFFF; padding: 6px 16px; border-radius: 4px; font-weight: bold; }
-            QPushButton:hover { background-color: #555555; }
-        """)
-        msg_box.button(QMessageBox.StandardButton.Yes).setText("예")
-        msg_box.button(QMessageBox.StandardButton.No).setText("아니요")
-        msg_box.button(QMessageBox.StandardButton.Cancel).setText("취소")
-        msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
-        return msg_box.exec()
+        return confirm_save_changes(self, title=title)
 
     # ---------------------------------------------------------
     # 저장
@@ -66,6 +50,9 @@ class EditorActionsMixin:
     def _on_save(self, *args, skip_auto_next=False):
         segs = self._get_current_segments()
         if not segs:
+            return
+        if hasattr(self, "_warn_pending_stt_before_save") and not self._warn_pending_stt_before_save(segs):
+            get_logger().log("💾 저장 취소: STT 미완료 세그먼트 확인 필요")
             return
 
         try:

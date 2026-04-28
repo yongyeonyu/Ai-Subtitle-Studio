@@ -21,9 +21,10 @@ class PipelineHelpersMixin:
     def _ask_single_existing_subtitle(self, target_file) -> bool:
         """단일 클립에 기존 SRT가 있으면 사용 여부를 묻고, 미사용 시 백업 이동합니다."""
         try:
-            from PyQt6.QtWidgets import QMessageBox
             from core.path_manager import get_srt_path
             from core.subtitle_existing import backup_existing_srt, validate_srt_duration
+            from ui.dialogs.message_box import ask_yes_no, show_message
+            from PyQt6.QtWidgets import QMessageBox
 
             srt_p = get_srt_path(target_file)
             if not srt_p or not os.path.exists(srt_p):
@@ -31,15 +32,22 @@ class PipelineHelpersMixin:
 
             ok, reason = validate_srt_duration(srt_p, target_file)
             if not ok:
-                QMessageBox.warning(self.ui, "기존 자막 오류", reason)
+                show_message(
+                    self.ui,
+                    "기존 자막 오류",
+                    reason,
+                    icon=QMessageBox.Icon.Warning,
+                    buttons=QMessageBox.StandardButton.Ok,
+                    default=QMessageBox.StandardButton.Ok,
+                )
                 backup_existing_srt(srt_p)
                 return False
 
-            use_existing = QMessageBox.question(
+            use_existing = ask_yes_no(
                 self.ui,
                 "기존 자막 사용",
-                "기존 자막을 사용하겠습니까?",
-            ) == QMessageBox.StandardButton.Yes
+                "기존 자막을 사용하시겠습니까?",
+            )
             if not use_existing:
                 backup_existing_srt(srt_p)
             return use_existing

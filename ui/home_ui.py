@@ -1,5 +1,5 @@
-# Version: 02.04.00
-# Phase: PHASE1-C
+# Version: 02.07.00
+# Phase: PHASE1-D
 """
 ui/home_ui.py
 MainWindow 홈 화면 빌드 Mixin
@@ -30,6 +30,20 @@ class HomeUIMixin:
     def _build_home_content(self):
         self._preview_containers = []
         self._watchdog_labels = []
+        for attr in ("status_rail", "saved_status_label"):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                try:
+                    widget.setParent(None)
+                except RuntimeError:
+                    if attr == "status_rail":
+                        from ui.menu_bar import StatusRail
+                        self.status_rail = StatusRail(self.home_page)
+                        if hasattr(self, "global_menu_bar"):
+                            self.global_menu_bar.set_status_rail(self.status_rail)
+                    else:
+                        self.saved_status_label = QLabel("저장됨: 오후 2:30  ●", self.home_page)
+                        self.saved_status_label.setStyleSheet("color: #A9B0B7; font-size: 11px; background: transparent;")
         old_layout = self.home_page.layout()
         if old_layout is not None: QWidget().setLayout(old_layout)
         is_unified = bool(getattr(self, "_unified_dashboard", False))
@@ -46,6 +60,8 @@ class HomeUIMixin:
             sub_title = QLabel("Dashboard")
             sub_title.setStyleSheet("color: #8E8E93; font-size: 10px; font-weight: bold; border: none; background: transparent;")
             layout.addWidget(sub_title)
+            if hasattr(self, "status_rail"):
+                layout.addWidget(self.status_rail)
         else:
             layout.addSpacing(6)
         columns = QVBoxLayout() if is_unified else QHBoxLayout()
@@ -54,6 +70,7 @@ class HomeUIMixin:
         if is_unified:
             left_col.addWidget(self._btn("⌂  홈", "", self.show_home))
             left_col.addWidget(self._btn("▤  자막 편집", "", self.select_files, active=True))
+            left_col.addWidget(self._btn("◉  STT 모드", "PHASE1-D", self._toggle_sidebar_stt_mode))
             left_col.addWidget(self._btn("▣  프로젝트", "", self._open_project))
             left_col.addWidget(self._btn("◎  러프컷 편집 도우미", "PHASE2", self._open_roughcut_helper))
             left_col.addWidget(self._btn("▱  숏폼 제작기", "PHASE3", self._open_shortform_maker))
@@ -120,6 +137,9 @@ class HomeUIMixin:
         layout.addStretch()
         if is_unified:
             layout.addWidget(self._project_info_card())
+            if hasattr(self, "saved_status_label"):
+                self.saved_status_label.setText("저장됨: 오후 2:30  ●")
+                layout.addWidget(self.saved_status_label, alignment=Qt.AlignmentFlag.AlignLeft)
         bottom_bar = QHBoxLayout()
         from config import APP_VERSION
         version_lbl = QLabel(f"v{APP_VERSION}")
@@ -143,6 +163,13 @@ class HomeUIMixin:
 
     def _is_auto_start_enabled(self):
         return bool(load_settings().get("auto_start_enabled", True))
+
+    def _toggle_sidebar_stt_mode(self):
+        editor = getattr(self, "_editor_widget", None)
+        if editor is not None and hasattr(editor, "_toggle_stt_mode"):
+            editor._toggle_stt_mode()
+        elif hasattr(self, "global_menu_bar"):
+            self.global_menu_bar.refresh()
 
     def _auto_start_label(self):
         return "자동시작 ON" if self._is_auto_start_enabled() else "자동시작 OFF"

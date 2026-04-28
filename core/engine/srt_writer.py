@@ -1,5 +1,5 @@
-# Version: 02.03.02
-# Phase: PHASE1-B
+# Version: 02.07.00
+# Phase: PHASE1-D
 """
 SRT 저장 / 화자 컬러 SRT / 자막백업 생성.
 """
@@ -49,6 +49,8 @@ def save_srt(segments: list[dict], srt_path: str, apply_offset: bool = True, adj
     seen = set()
 
     for seg in segments:
+        if seg.get("stt_pending"):
+            continue
         text = seg.get("text", "").strip().replace("\u2028", "\n")
         if not text or text == "\u200B":
             continue

@@ -188,6 +188,11 @@ def line_icon(name, color=None, size=28):
         painter.drawLine(int(size * 0.4), int(size * 0.35), int(size * 0.58), int(size * 0.24))
         painter.drawLine(int(size * 0.4), int(size * 0.65), int(size * 0.58), int(size * 0.76))
         painter.drawArc(QRectF(size * 0.52, size * 0.32, size * 0.22, size * 0.36), -45 * 16, 90 * 16)
+    elif name in ("mic", "stt"):
+        painter.drawRoundedRect(QRectF(size * 0.38, size * 0.18, size * 0.24, size * 0.42), 5, 5)
+        painter.drawArc(QRectF(size * 0.28, size * 0.36, size * 0.44, size * 0.28), 200 * 16, 140 * 16)
+        painter.drawLine(int(size * 0.5), int(size * 0.66), int(size * 0.5), int(size * 0.78))
+        painter.drawLine(int(size * 0.38), int(size * 0.78), int(size * 0.62), int(size * 0.78))
     elif name in ("sliders", "gap"):
         for y, x in ((0.32, 0.38), (0.5, 0.62), (0.68, 0.48)):
             painter.drawLine(int(size * 0.18), int(size * y), int(size * 0.82), int(size * y))
@@ -222,6 +227,14 @@ def line_icon(name, color=None, size=28):
         painter.drawArc(r, 35 * 16, 285 * 16)
         painter.drawLine(int(size * 0.70), int(size * 0.24), int(size * 0.78), int(size * 0.42))
         painter.drawLine(int(size * 0.70), int(size * 0.24), int(size * 0.52), int(size * 0.28))
+    elif name == "undo":
+        painter.drawArc(QRectF(size * 0.24, size * 0.26, size * 0.52, size * 0.48), 35 * 16, 250 * 16)
+        painter.drawLine(int(size * 0.30), int(size * 0.32), int(size * 0.18), int(size * 0.38))
+        painter.drawLine(int(size * 0.30), int(size * 0.32), int(size * 0.34), int(size * 0.48))
+    elif name == "redo":
+        painter.drawArc(QRectF(size * 0.24, size * 0.26, size * 0.52, size * 0.48), -105 * 16, 250 * 16)
+        painter.drawLine(int(size * 0.70), int(size * 0.32), int(size * 0.82), int(size * 0.38))
+        painter.drawLine(int(size * 0.70), int(size * 0.32), int(size * 0.66), int(size * 0.48))
     elif name == "trash":
         painter.drawLine(int(size * 0.32), int(size * 0.3), int(size * 0.68), int(size * 0.3))
         painter.drawRoundedRect(QRectF(size * 0.35, size * 0.36, size * 0.3, size * 0.4), 2, 2)

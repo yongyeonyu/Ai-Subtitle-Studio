@@ -109,7 +109,7 @@ class SinglePipelineMixin:
             threading.Timer(0.05, on_start).start()
 
         if not start_event.wait(timeout=600):
-            get_logger().log("❌ 시작 이벤트 타임아웃 (600초)")
+            get_logger().log("⏱️ 시작 이벤트 대기 시간이 초과되었습니다 (600초) --> 새 동작이 없어 메인으로 복귀합니다.")
             return
         if action_state[0] == "prev":
             self.ui.request_show_home()

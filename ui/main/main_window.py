@@ -1,4 +1,4 @@
-# Version: 02.04.00
+# Version: 02.07.00
 # Phase: PHASE1-C
 """
 ui/main/main_window.py
@@ -130,24 +130,6 @@ class MainWindow(
         self.stack = QStackedWidget()
         self.stack.setStyleSheet(app_stylesheet())
 
-        top_bar = QWidget()
-        top_bar.setFixedHeight(42)
-        top_bar.setStyleSheet("background: #11181C; border-bottom: 1px solid #2D3942;")
-        top_lay = QHBoxLayout(top_bar)
-        top_lay.setContentsMargins(14, 0, 14, 0)
-        top_lay.setSpacing(8)
-        self.status_rail = StatusRail(top_bar)
-        top_lay.addWidget(self.status_rail, alignment=Qt.AlignmentFlag.AlignLeft)
-        top_lay.addStretch()
-        app_title = QLabel("AI Subtitle Studio")
-        app_title.setStyleSheet("color: #F5F7FA; font-size: 15px; font-weight: 700; background: transparent;")
-        top_lay.addWidget(app_title)
-        top_lay.addStretch()
-        saved = QLabel("저장됨: 오후 2:30  ●")
-        saved.setStyleSheet("color: #A9B0B7; font-size: 11px; background: transparent;")
-        top_lay.addWidget(saved)
-        main_layout.addWidget(top_bar)
-
         workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
         workspace_splitter.setChildrenCollapsible(False)
         workspace_splitter.setStyleSheet("QSplitter::handle { background: #0F1518; width: 1px; }")
@@ -158,6 +140,9 @@ class MainWindow(
         self.home_page.setMaximumWidth(218)
         self.home_page.setStyleSheet("background: #11181C;")
         workspace_splitter.addWidget(self.home_page)
+        self.status_rail = StatusRail(self.home_page)
+        self.saved_status_label = QLabel("저장됨: 오후 2:30  ●", self.home_page)
+        self.saved_status_label.setStyleSheet("color: #A9B0B7; font-size: 11px; background: transparent;")
 
         self.editor_page = QWidget()
         editor_placeholder = QVBoxLayout(self.editor_page)
@@ -219,7 +204,7 @@ class MainWindow(
 
         # ── 로그 컨텐츠 ──
         self._log_content = QWidget()
-        self._log_content.setFixedHeight(156)
+        self._log_content.setFixedHeight(146)
         lc_layout_main = QVBoxLayout(self._log_content)
         lc_layout_main.setContentsMargins(0, 0, 0, 0)
 
@@ -234,8 +219,8 @@ class MainWindow(
         term_layout.setContentsMargins(0, 0, 0, 0)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setFont(QFont("Menlo", 9))
-        self.log_text.setStyleSheet("background: #151C20; color: #A9B0B7; border: none; padding: 6px 8px;")
+        self.log_text.setFont(QFont("Menlo", 8))
+        self.log_text.setStyleSheet("background: #151C20; color: #A9B0B7; border: none; padding: 4px 8px;")
         term_layout.addWidget(self.log_text)
 
         # 큐 테이블
@@ -243,7 +228,7 @@ class MainWindow(
         queue_layout = QVBoxLayout(queue_widget)
         queue_layout.setContentsMargins(5, 3, 5, 5)
         self.queue_header_lbl = QLabel("📋 처리할 파일 리스트")
-        self.queue_header_lbl.setStyleSheet(label_style("normal", 10, bold=True))
+        self.queue_header_lbl.setStyleSheet(label_style("normal", 9, bold=True))
         queue_layout.addWidget(self.queue_header_lbl)
 
         self.queue_table = QTableWidget(0, 5)
@@ -282,10 +267,10 @@ class MainWindow(
         self.queue_table.setStyleSheet(
             "QTableWidget { background: #151C20; color: #F5F7FA; "
             "border: none; font-size: 11px; gridline-color: #3A4650; } "
-            "QTableWidget::item { padding: 4px 10px; } "
+            "QTableWidget::item { padding: 2px 8px; } "
             "QHeaderView::section { background: #1B2429; color: #A9B0B7; "
             "border: none; border-right: 1px solid #3A4650; "
-            "border-bottom: 1px solid #3A4650; padding: 5px 10px; }"
+            "border-bottom: 1px solid #3A4650; padding: 3px 8px; }"
         )
         queue_layout.addWidget(self.queue_table)
 

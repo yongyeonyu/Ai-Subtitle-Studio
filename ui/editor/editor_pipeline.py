@@ -1,5 +1,5 @@
-# Version: 02.03.01
-# Phase: PHASE1-B
+# Version: 02.07.00
+# Phase: PHASE1-D
 """
 ui/editor_pipeline.py
 [v01.00.16] 모드/상태 정의 문서 반영
@@ -155,6 +155,9 @@ class EditorPipelineMixin:
         
     def _on_start_clicked(self):
         from core.state_manager import SubtitleStateManager
+        if getattr(self, "_stt_mode_enabled", False):
+            if hasattr(self, "_start_stt_vad_detection") and self._start_stt_vad_detection():
+                return
         if self.sm.state == SubtitleStateManager.ST_PROC:
             self._stop_pipeline()
         elif self.sm.state in [SubtitleStateManager.ST_COMP, SubtitleStateManager.ST_SAVED]:

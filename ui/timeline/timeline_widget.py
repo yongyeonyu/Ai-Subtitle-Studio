@@ -1,4 +1,4 @@
-# Version: 02.03.09
+# Version: 02.07.00
 # Phase: PHASE1-C
 """
 ui/timeline_widget.py
@@ -174,7 +174,7 @@ class TimelineWidget(QWidget):
 
             painter = QPainter(self)
             painter.setPen(QPen(QColor("#FFFF00"), 2))
-            painter.drawRect(0, 0, self.width() - 1, self.height() - 1)
+            painter.drawRect(1, 1, max(1, self.width() - 3), max(1, self.height() - 3))
 
     def _apply_selected_clip_context(self, clip_idx: int):
         boxes = getattr(self.canvas, "_multiclip_boxes", []) or []

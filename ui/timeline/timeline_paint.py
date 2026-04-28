@@ -1,4 +1,4 @@
-# Version: 02.04.00
+# Version: 02.07.00
 # Phase: PHASE1-C
 """
 ui/timeline_paint.py
@@ -40,7 +40,9 @@ class TimelinePaintMixin:
         track_bottom = CANVAS_H - 8
 
         def _speaker_color(seg):
-            spk = str(seg.get("speaker", seg.get("spk_id", "00")) or "00")
+            spk = str(seg.get("speaker", seg.get("spk_id", "")) or "")
+            if spk.startswith("SPEAKER_"):
+                spk = spk.replace("SPEAKER_", "")
             palette = {
                 "00": "#579DFF",
                 "01": "#75C76B",
@@ -49,7 +51,22 @@ class TimelinePaintMixin:
             return QColor(palette.get(spk, "#8E8E93"))
 
         def _speaker_name(seg):
-            return str(seg.get("speaker_name") or seg.get("speaker", seg.get("spk_id", "홍길동")) or "홍길동")
+            def label_for(raw, fallback="홍길동"):
+                spk = str(raw or "")
+                if spk.startswith("SPEAKER_"):
+                    spk = spk.replace("SPEAKER_", "")
+                if spk in ("00", "01", "02"):
+                    return f"화자{int(spk) + 1}"
+                return fallback
+
+            spk_list = list(seg.get("speaker_list", []) or [])
+            if len(spk_list) > 1:
+                return " / ".join(label_for(spk, f"화자{i + 1}") for i, spk in enumerate(spk_list))
+            if seg.get("speaker_name"):
+                return str(seg.get("speaker_name"))
+            if "speaker" in seg or "spk_id" in seg:
+                return label_for(seg.get("speaker", seg.get("spk_id")), "화자1")
+            return "홍길동"
 
         def _draw_lane_wave(mid_y, color_top, color_bot, gain=1.0, alpha=210):
             if self._waveform is None:
@@ -75,6 +92,37 @@ class TimelinePaintMixin:
                 h = max(1, min(11, int(val * 18 * gain)))
                 p.setPen(QPen(top, 1)); p.drawLine(x, mid_y, x, mid_y - h)
                 p.setPen(QPen(bot, 1)); p.drawLine(x, mid_y + 1, x, mid_y + h)
+
+        def _draw_vad_voice_lane(mid_y):
+            if self._waveform is None:
+                return
+            clip = event.rect()
+            lane_top = mid_y - 12
+            lane_h = 24
+            p.setPen(Qt.PenStyle.NoPen)
+            for vs in self.vad_segments:
+                x1 = self._x(float(vs.get("start", 0.0)))
+                x2 = self._x(float(vs.get("end", 0.0)))
+                if x2 < clip.left() or x1 > clip.right():
+                    continue
+                w = max(2, x2 - x1)
+                rect = QRectF(x1, lane_top, w, lane_h)
+                p.setBrush(QColor(22, 84, 156, 82))
+                p.drawRoundedRect(rect, 4, 4)
+                p.setPen(QPen(QColor(87, 157, 255, 210), 1))
+                p.drawLine(x1, lane_top + 2, x1, lane_top + lane_h - 2)
+                p.drawLine(x2, lane_top + 2, x2, lane_top + lane_h - 2)
+                p.setPen(QPen(QColor(116, 184, 255, 190), 1))
+                step = max(3, int(5 * max(1.0, self.pps / 40)))
+                for x in range(max(int(x1), clip.left()), min(int(x2), clip.right()) + 1, step):
+                    idx = int((x / max(0.001, self.pps)) * 100)
+                    if idx >= len(self._waveform):
+                        break
+                    val = float(self._waveform[idx])
+                    h = max(2, min(9, int(val * 15)))
+                    p.drawLine(x, mid_y - h, x, mid_y + h)
+            p.setPen(QPen(QColor(87, 157, 255, 80), 1))
+            p.drawLine(max(0, clip.left()), mid_y, min(total_w, clip.right() + 1), mid_y)
 
         p.fillRect(QRect(0, 0, total_w, CANVAS_H), QColor("#0F1518"))
 
@@ -229,8 +277,9 @@ class TimelinePaintMixin:
             rect = QRect(x1 + 2, subtitle_top, max(8, sw - 4), subtitle_bot - subtitle_top)
             is_active = (self.active_seg_start is not None and abs(seg["start"] - self.active_seg_start) < 0.5)
             is_hover = self._hover_line == seg.get("line")
-            fill = QColor("#1D3D76") if is_active else (QColor("#222A31") if is_hover else QColor("#242A30"))
-            border = QColor("#8AB8FF") if is_active else QColor("#3A4650")
+            is_stt_pending = bool(seg.get("stt_pending"))
+            fill = QColor("#4A1F24") if is_stt_pending else (QColor("#1D3D76") if is_active else (QColor("#222A31") if is_hover else QColor("#242A30")))
+            border = QColor("#FF453A") if is_stt_pending else (QColor("#8AB8FF") if is_active else QColor("#3A4650"))
             bw = 2 if is_active else (2 if is_hover else 1)
 
             grad = QLinearGradient(float(rect.left()), float(rect.top()), float(rect.left()), float(rect.bottom()))
@@ -278,7 +327,7 @@ class TimelinePaintMixin:
                         p.drawLine(cx, cursor_top, cx, cursor_bot)
                     curr_y += line_h + 4
             else:
-                p.setPen(QColor("#DCE3EA"))
+                p.setPen(QColor("#8A8F98") if is_stt_pending else QColor("#DCE3EA"))
                 p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, seg.get("text", ""))
 
             ir = self._icon_rect(x1, x2)
@@ -308,8 +357,8 @@ class TimelinePaintMixin:
             p.setPen(QPen(QColor("#FF4444"), 4))
             for sx in self._snap_lines: p.drawLine(sx, SEG_TOP, sx, SEG_BOT)
 
-        _draw_lane_wave(voice_mid, "#579DFF", "#1F6FD6", gain=1.0, alpha=215)
-        _draw_lane_wave(audio_mid, "#75C76B", "#3D7F36", gain=0.95, alpha=190)
+        _draw_vad_voice_lane(voice_mid)
+        _draw_lane_wave(audio_mid, "#7BD88F", "#2F8F46", gain=0.85, alpha=165)
 
         for i in range(len(self.segments) - 1):
             s1 = self.segments[i]; s2 = self.segments[i + 1]

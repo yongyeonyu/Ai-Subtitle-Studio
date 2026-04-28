@@ -289,7 +289,11 @@ def save_project(
                 "tags": seg.get("tags", []),
                 "llm_note": seg.get("llm_note", ""),
                 "srt_synced": True,
-                "is_deleted": seg.get("is_deleted", False)
+                "is_deleted": seg.get("is_deleted", False),
+                "stt_mode": bool(seg.get("stt_mode", False)),
+                "stt_pending": bool(seg.get("stt_pending", False)),
+                "original_text": seg.get("original_text", ""),
+                "dictated_text": seg.get("dictated_text", ""),
             })
 
         project.setdefault("subtitles", {})

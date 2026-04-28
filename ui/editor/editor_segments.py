@@ -1,4 +1,4 @@
-# Version: 02.03.02
+# Version: 02.07.00
 # Phase: PHASE1-B
 """
 ui/editor_segments.py
@@ -169,8 +169,14 @@ class EditorSegmentsMixin:
             
             # 💡 첫 번째 줄 삽입
             current_spk = spk_list[0] if len(spk_list) > 0 else spk1_id
+            stt_kwargs = {
+                "stt_mode": bool(seg.get("stt_mode", False)),
+                "stt_pending": bool(seg.get("stt_pending", False)),
+                "original_text": str(seg.get("original_text", "") or ""),
+                "dictated_text": str(seg.get("dictated_text", "") or ""),
+            }
             cur.insertText(parts[0])
-            cur.block().setUserData(SubtitleBlockData(current_spk, start_sec))
+            cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, **stt_kwargs))
             
             # 💡 두 번째 줄부터의 처리 (- 기호 유무로 완벽 통제)
             for p_idx in range(1, len(parts)):
@@ -180,7 +186,7 @@ class EditorSegmentsMixin:
                     # 🚨 '-' 기호가 있으면: 진짜 엔터(\n)를 쳐서 블록을 나누고 화자를 교체합니다.
                     current_spk = spk2_id if current_spk == spk1_id else spk1_id
                     cur.insertText("\n" + line_text)
-                    cur.block().setUserData(SubtitleBlockData(current_spk, start_sec))
+                    cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, **stt_kwargs))
                 else:
                     # 🚨 '-' 기호가 없으면: 화자를 유지하고 소프트 줄바꿈(\u2028)만 삽입하여 1개의 블록으로 묶습니다.
                     cur.insertText("\u2028" + line_text)
@@ -239,7 +245,8 @@ class EditorSegmentsMixin:
             is_gap = getattr(data, 'is_gap', False) if data else False
             
             # ✅ [#1 핵심 수정] 갭 블록도 포함 — 무음구간이 End Time 계산에 반영됩니다
-            if data is not None and (text or is_gap):
+            include_empty_stt = bool(getattr(data, 'stt_pending', False) or getattr(data, 'stt_mode', False))
+            if data is not None and (text or is_gap or include_empty_stt):
                 # ✅ 갭 블록은 절대 이전 세그먼트에 병합하지 않음 (갭↔자막 병합 방지)
                 if (not is_gap
                     and segments
@@ -253,7 +260,11 @@ class EditorSegmentsMixin:
                         "end": getattr(data, 'end_sec', None),
                         "text": text,
                         "is_gap": is_gap,
-                        "spk": getattr(data, 'spk_id', 'SPEAKER_00')
+                        "spk": getattr(data, 'spk_id', 'SPEAKER_00'),
+                        "stt_mode": bool(getattr(data, 'stt_mode', False)),
+                        "stt_pending": bool(getattr(data, 'stt_pending', False)),
+                        "original_text": getattr(data, 'original_text', '') or '',
+                        "dictated_text": getattr(data, 'dictated_text', '') or '',
                     })
             
             block = block.next()

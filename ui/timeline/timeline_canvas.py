@@ -1,4 +1,4 @@
-# Version: 02.03.09
+# Version: 02.07.00
 # Phase: PHASE1-C
 """
 ui/timeline_canvas.py
@@ -50,6 +50,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     diamond_merge           = pyqtSignal(int, int)
     sig_smart_split         = pyqtSignal(int, float, bool)
     sig_speech_result       = pyqtSignal(str)
+    speaker_changed         = pyqtSignal(int, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)

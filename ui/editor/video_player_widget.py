@@ -1,5 +1,5 @@
-# Version: 02.04.00
-# Phase: PHASE1-B
+# Version: 02.07.00
+# Phase: PHASE1-D
 """
 ui/video_player_widget.py - PyQt6 비디오 플레이어
 [v01.00.01 버그수정] _get_audio_ai_setting: 미정의 변수 'paths' 참조 오류 제거
@@ -301,9 +301,19 @@ class VideoPlayerWidget(QWidget):
             self._pending_thumb_sec = 0.0
             self._extract_and_show_thumbnail_at(path, sec)
         self._refresh_subtitle_now()
+        self._notify_editor_video_ready()
         if self._pending_autoplay:
             self._pending_autoplay = False
             self.toggle_play()
+
+    def _notify_editor_video_ready(self):
+        parent = self.parent()
+        while parent is not None:
+            if hasattr(parent, "_position_video_expand_button"):
+                QTimer.singleShot(0, parent._position_video_expand_button)
+                QTimer.singleShot(250, parent._position_video_expand_button)
+                return
+            parent = parent.parent()
 
     def _on_media_status_changed(self, status):
         """EndOfMedia -> next clip callback"""

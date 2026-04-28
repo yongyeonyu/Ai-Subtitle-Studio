@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 02.07.00
+# Phase: PHASE1-C
 """
 ui/timeline_constants.py
 Timeline constants and shared utilities
@@ -7,7 +7,7 @@ Timeline constants and shared utilities
 
 RULER_H = 30
 WAVE_H = 34
-SEG_H = 124
+SEG_H = 160
 
 SEG_TOP = RULER_H + WAVE_H
 SEG_BOT = SEG_TOP + SEG_H

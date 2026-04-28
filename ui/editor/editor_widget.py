@@ -1,4 +1,4 @@
-# Version: 02.04.00
+# Version: 02.07.00
 # Phase: PHASE1-C
 """Editor widget and function-preserving PHASE1-C layout."""
 import re, os, sys, json, atexit, threading, shutil, time
@@ -40,6 +40,7 @@ from ui.editor.editor_video_controls import EditorVideoControlsMixin
 from ui.editor.editor_multiclip_context import EditorMulticlipContextMixin
 from ui.editor.editor_speaker_ops import EditorSpeakerOpsMixin
 from ui.editor.editor_multiclip_ops import EditorMulticlipOpsMixin
+from ui.editor.editor_stt_mode import EditorSTTModeMixin
 
 DATASET_DIR   = "dataset"
 SETTINGS_FILE = os.path.join(DATASET_DIR, "user_settings.json")
@@ -54,6 +55,7 @@ class EditorWidget(
     EditorMulticlipContextMixin,
     EditorSpeakerOpsMixin,
     EditorMulticlipOpsMixin,
+    EditorSTTModeMixin,
     QWidget,
 ):
     sig_start     = pyqtSignal()
@@ -62,6 +64,8 @@ class EditorWidget(
     sig_auto_save = pyqtSignal(list)
     sig_exit      = pyqtSignal(list)
     sig_next      = pyqtSignal(list)
+    sig_live_stt_result = pyqtSignal(str)
+    sig_stt_vad_segments = pyqtSignal(list)
 
     _JUNK_TS_RE               = re.compile(r'[\[{(<\[【（《]\s*\d{1,3}[:.]\d{1,2}(?:[:.]\d+)?\s*[\]})>\]】）》]\s*')
     _JUNK_NO_BRACKET_3PART    = re.compile(r'(?<!\S)\d{1,3}[:\.]\d{2}[:\.]\d{2,3}(?!\S)')
@@ -110,6 +114,9 @@ class EditorWidget(
         self._sync_lock          = False
         self._segment_queue: list[dict] = []
         self._inline_updating    = False
+        self._init_stt_mode_state()
+        self.sig_live_stt_result.connect(self._apply_stt_text_to_current)
+        self.sig_stt_vad_segments.connect(self._apply_stt_vad_segments)
 
         self._queue_timer    = QTimer(); self._queue_timer.setSingleShot(True);    self._queue_timer.timeout.connect(self._flush_queue)
         self._timeline_timer = QTimer(); self._timeline_timer.setSingleShot(True); self._timeline_timer.timeout.connect(self._redraw_timeline)
@@ -309,6 +316,8 @@ class EditorWidget(
         )
         self.btn_video_expand.clicked.connect(self._toggle_video_preview_width)
         self.btn_video_expand.raise_()
+        QTimer.singleShot(0, self._position_video_expand_button)
+        QTimer.singleShot(150, self._position_video_expand_button)
 
         self.timeline = TimelineWidget()
         self.timeline.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
@@ -326,6 +335,8 @@ class EditorWidget(
 
         if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'seg_right_clicked'):
             self.timeline.canvas.seg_right_clicked.connect(self._on_timeline_seg_right_clicked)
+        if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'speaker_changed'):
+            self.timeline.canvas.speaker_changed.connect(self._change_speaker_for_line)
                 
         # 멀티클립 전환
         if hasattr(self.timeline, 'sig_clip_selected'): self.timeline.sig_clip_selected.connect(self._on_clip_selected)
@@ -614,10 +625,27 @@ class EditorWidget(
         if not hasattr(self, "btn_video_expand") or not hasattr(self, "splitter"):
             return
         try:
-            handle = self.splitter.handle(1)
-            handle_pos = handle.mapTo(self, handle.rect().center())
-            y = self.splitter.y() + 44
-            self.btn_video_expand.move(handle_pos.x() - self.btn_video_expand.width() // 2, y)
+            sizes = self.splitter.sizes()
+            if len(sizes) < 2 or self.splitter.width() <= 0:
+                QTimer.singleShot(0, self._position_video_expand_button)
+                return
+            if (
+                not getattr(self, "video_player", None)
+                or not self.video_player.isVisible()
+                or sizes[1] <= 8
+                or float(getattr(self.video_player, "total_time", 0.0) or 0.0) <= 0.0
+            ):
+                self.btn_video_expand.hide()
+                return
+
+            self.btn_video_expand.show()
+            split_origin = self.splitter.mapTo(self, QPoint(0, 0))
+            boundary_x = split_origin.x() + max(0, min(sizes[0], self.splitter.width()))
+            x = int(boundary_x - self.btn_video_expand.width() / 2)
+            y = split_origin.y() + int((self.splitter.height() - self.btn_video_expand.height()) / 2)
+            max_y = split_origin.y() + max(0, self.splitter.height() - self.btn_video_expand.height() - 8)
+            y = max(split_origin.y() + 8, min(y, max_y))
+            self.btn_video_expand.move(x, int(y))
             self.btn_video_expand.raise_()
         except Exception:
             pass
@@ -645,7 +673,8 @@ class EditorWidget(
         aspect = float(getattr(self, "_video_preview_aspect", 16 / 9) or 16 / 9)
         aspect = 1.0 if aspect < 1.25 else 16 / 9
         target_video_w = int(video_h * aspect) + 18
-        target_video_w = max(current_video_w, target_video_w)
+        if aspect > 1.01:
+            target_video_w = max(current_video_w, target_video_w)
         target_video_w = min(target_video_w, max(current_video_w, total_w - editor_min_w))
         self.splitter.setSizes([max(editor_min_w, total_w - target_video_w), target_video_w])
         self._video_preview_expanded = True

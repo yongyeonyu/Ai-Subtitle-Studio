@@ -154,8 +154,8 @@ class EditorMulticlipOpsMixin:
         if added_files:
             has_existing = any(os.path.exists(os.path.splitext(f)[0] + '.srt') for f in added_files)
             if has_existing:
-                from PyQt6.QtWidgets import QMessageBox
-                use_existing = QMessageBox.question(self, '기존 자막 사용', '기존 자막을 사용하겠습니까?') == QMessageBox.StandardButton.Yes
+                from ui.dialogs.message_box import ask_yes_no
+                use_existing = ask_yes_no(self, "기존 자막 사용", "기존 자막을 사용하시겠습니까?")
         owner._multiclip_files = new_files
         owner._multiclip_boundaries = new_bounds
         owner._project_boundary_times = [b['end'] for b in new_bounds[:-1]] if len(new_bounds) > 1 else []

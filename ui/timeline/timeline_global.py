@@ -1,5 +1,5 @@
-# Version: 02.03.09
-# Phase: PHASE1-C
+# Version: 02.07.00
+# Phase: PHASE1-D
 """
 ui/timeline_global.py
 Global timeline minimap
@@ -122,11 +122,11 @@ class GlobalCanvas(QWidget):
             wx = int(whisper_sec * sc)
             p.drawRect(0, 0, wx, self.height())
         # 자막 세그먼트 블록
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#666666"))
         for s in self.segments:
             x = int(s["start"] * sc)
             sw = max(1, int((s["end"] - s["start"]) * sc))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor("#FF453A") if s.get("stt_pending") else QColor("#666666"))
             p.drawRect(QRect(x, 14, sw, 18))
 
         # 뷰포트 박스

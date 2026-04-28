@@ -5,7 +5,7 @@ ui/timeline_input.py
 Timeline input mixin
 """
 from PyQt6.QtCore import QRect, Qt
-from PyQt6.QtGui import QCursor, QFont, QFontMetrics
+from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon, QPainter, QPixmap
 
 import config
 from ui.editor.editor_helpers import find_segment_at
@@ -115,6 +115,72 @@ class TimelineInputMixin:
                 return box
         return None
 
+    def _speaker_lane_rect_for_seg(self, seg):
+        subtitle_top = SEG_TOP + 8
+        subtitle_bot = subtitle_top + 48
+        speaker_top = subtitle_bot + 5
+        speaker_bot = speaker_top + 22
+        return QRect(self._x(seg["start"]), speaker_top, max(1, self._x(seg["end"]) - self._x(seg["start"])), speaker_bot - speaker_top)
+
+    def _speaker_lane_seg_at(self, x: int, y: int):
+        for seg in self.segments:
+            if self._speaker_lane_rect_for_seg(seg).contains(x, y):
+                return seg
+        return None
+
+    def _find_owner_with_settings(self):
+        owner = self.parent()
+        while owner and not hasattr(owner, "settings"):
+            owner = owner.parent()
+        return owner
+
+    def _speaker_options(self):
+        owner = self._find_owner_with_settings()
+        settings = getattr(owner, "settings", {}) if owner is not None else {}
+        max_spk = max(1, min(3, int(settings.get("max_speakers", 1) or 1)))
+        options = []
+        for idx in range(1, max_spk + 1):
+            if idx > 1 and not bool(settings.get(f"spk{idx}_enabled", False)):
+                continue
+            spk_id = str(settings.get(f"spk{idx}_id", f"{idx - 1:02d}") or f"{idx - 1:02d}")
+            color = str(settings.get(f"spk{idx}_color", "#FFFFFF") or "#FFFFFF")
+            name = str(settings.get(f"spk{idx}_name", "") or f"화자{idx}")
+            options.append((spk_id, name, color))
+        return options
+
+    def _speaker_icon(self, color_hex):
+        pix = QPixmap(20, 20)
+        pix.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(color_hex))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(4, 4, 12, 12)
+        painter.end()
+        return QIcon(pix)
+
+    def _show_speaker_select_menu(self, seg, gpos):
+        from PyQt6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background-color: #151C20; color: #F5F7FA; border: 1px solid #2D3942; "
+            "font-size: 13px; padding: 4px; } "
+            "QMenu::item { padding: 7px 22px 7px 10px; border-radius: 4px; } "
+            "QMenu::item:selected { background-color: #1F3A56; }"
+        )
+        line = int(seg.get("line", 0))
+        current = str(seg.get("speaker", seg.get("spk_id", "")) or "")
+        if current.startswith("SPEAKER_"):
+            current = current.replace("SPEAKER_", "")
+        for spk_id, name, color in self._speaker_options():
+            action = menu.addAction(self._speaker_icon(color), name)
+            action.setCheckable(True)
+            action.setChecked(spk_id == current)
+            action.triggered.connect(lambda checked=False, s=spk_id, ln=line: self.speaker_changed.emit(ln, s))
+        if not menu.isEmpty():
+            menu.exec(gpos)
+
     def mousePressEvent(self, ev):
         if ev.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             if hasattr(self, '_playhead_handle_rect') and self._playhead_handle_rect.contains(ev.pos()):
@@ -181,6 +247,10 @@ class TimelineInputMixin:
         # 멀티클립 박스 클릭은 상단 단일 경로에서만 처리
 
         if ev.button() == Qt.MouseButton.RightButton:
+            speaker_seg = self._speaker_lane_seg_at(x, y)
+            if speaker_seg:
+                self._show_speaker_learn_menu(int(speaker_seg.get("line", 0)), ev.globalPosition().toPoint())
+                return
             if y < SEG_TOP: self._emit_smart_split_at_playhead(); return
             if SEG_TOP <= y <= SEG_BOT:
                 seg = self._seg_at(x)
@@ -193,6 +263,11 @@ class TimelineInputMixin:
         if ev.button() != Qt.MouseButton.LeftButton: return
 
         self.focus_mode = "waveform" if y <= SEG_TOP else "segment"; self.update()
+
+        speaker_seg = self._speaker_lane_seg_at(x, y)
+        if speaker_seg:
+            self._show_speaker_select_menu(speaker_seg, ev.globalPosition().toPoint())
+            return
 
         for seg in self.segments:
             x1, x2 = self._x(seg["start"]), self._x(seg["end"]); sw = x2 - x1

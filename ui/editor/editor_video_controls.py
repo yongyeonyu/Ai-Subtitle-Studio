@@ -1,4 +1,4 @@
-# Version: 02.03.08
+# Version: 02.07.00
 # Phase: PHASE1-C
 """
 EditorWidget 비디오 제어 / 재생 단축키 Mixin.
@@ -40,6 +40,9 @@ class EditorVideoControlsMixin:
         else:
             self.video_player.show()
             self.splitter.setSizes([6500, 3500])
+        if hasattr(self, "_position_video_expand_button"):
+            QTimer.singleShot(0, self._position_video_expand_button)
+            QTimer.singleShot(120, self._position_video_expand_button)
 
     def _load_video(self, path: str):
         segs = self._get_current_segments()
@@ -48,6 +51,9 @@ class EditorVideoControlsMixin:
             clip_idx = int(getattr(self.timeline.canvas, '_active_clip_idx', getattr(self.window(), '_active_clip_idx', 0)) or 0)
             segs = self._build_local_segments_for_clip(clip_idx, segs)
         self.video_player.load(path, segs)
+        if hasattr(self, "_position_video_expand_button"):
+            QTimer.singleShot(400, self._position_video_expand_button)
+            QTimer.singleShot(1200, self._position_video_expand_button)
 
         is_multiclip = bool(getattr(self.window(), "_multiclip_boundaries", []))
         if hasattr(self.timeline, 'load_waveform') and not is_multiclip:

@@ -1,18 +1,18 @@
 <!--
-Document-Version: 02.06.00
-Phase: PHASE1-C
+Document-Version: 02.07.00
+Phase: PHASE1-D
 Last-Updated: 2026-04-28
 Updated-By: Codex with 대표님
-Previous-Content: v02.04.00 PHASE1-C Apple 스타일 통합 UI 파일 구조
-This-Update: v02.06.00 P6 멀티클립 STT/LLM 병렬 파이프라인 구조 반영
-Copilot-Handoff: v02.06.00 커밋 기준. 멀티클립 성능/안정화는 core/pipeline/multiclip_pipeline.py의 STT/LLM worker 분리 구조를 우선 확인하세요.
+Previous-Content: v02.06.00 P6 멀티클립 STT/LLM 병렬 파이프라인 구조
+This-Update: v02.07.00 PHASE1-D STT 모드, 화자 세그먼트 인터랙션, 공용 메시지 박스, 전역 UI 마감 구조 반영
+Copilot-Handoff: v02.07.00 커밋 기준. STT 모드는 core/audio/stt_vad.py, core/audio/live_stt.py, ui/editor/editor_stt_mode.py를 우선 확인하세요. 화자 세그먼트 인터랙션은 ui/timeline/timeline_input.py, 공용 확인창은 ui/dialogs/message_box.py입니다.
 -->
 ================================================================================
 AI Subtitle Studio — 프로젝트 구조 및 버전 관리 문서
 생성일: 2026-04-20
 최종 수정: 2026-04-28
-Phase: PHASE1-C
-App Version: 02.06.00
+Phase: PHASE1-D
+App Version: 02.07.00
 구조 문서 기준: File_structure.txt
 비고: STRUCTURE.txt는 삭제하고 본 문서로 단일화
 ================================================================================
@@ -20,7 +20,7 @@ App Version: 02.06.00
 ai_subtitle_studio/
 ├── main.py                         ← 프로그램 실행 진입점                    v02.03.00
 ├── main.bat                        ← Windows 실행 배치 파일
-├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v02.06.00
+├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v02.07.00
 ├── logger.py                       ← 시스템 로그 기록 및 UI 연동             v02.03.00
 ├── AGENTS.md                       ← 개발 가이드 / Copilot 핸드오프
 ├── ACTION_ITEMS.md                 ← 전체 액션아이템
@@ -28,6 +28,7 @@ ai_subtitle_studio/
 ├── RELEASE_v02.03.00.md            ← 이전 작업 릴리즈 노트
 ├── RELEASE_v02.04.00.md            ← PHASE1-C Apple UI 릴리즈 노트
 ├── RELEASE_v02.06.00.md            ← P6 멀티클립 성능/안정화 릴리즈 노트
+├── RELEASE_v02.07.00.md            ← PHASE1-D STT/UI/화자 릴리즈 노트
 ├── File_structure.txt              ← 현재 구조 문서
 │
 ├── dataset/
@@ -63,7 +64,7 @@ ai_subtitle_studio/
 │   │
 │   ├── engine/
 │   │   ├── subtitle_engine.py      ← 자막 최적화 / LLM 분기                    v02.03.03
-│   │   └── srt_writer.py           ← SRT 저장 / 화자 SRT / 자막백업             🆕 v02.03.03
+│   │   └── srt_writer.py           ← SRT 저장 / 화자 SRT / STT 미완료 제외      v02.07.00
 │   │
 │   ├── audio/
 │   │   ├── media_processor.py      ← 오디오 추출 + VAD + Whisper              v02.03.03
@@ -71,50 +72,72 @@ ai_subtitle_studio/
 │   │   ├── whisper_faster.py       ← Windows faster-whisper client            v02.03.00
 │   │   ├── whisper_worker.py       ← Windows subprocess worker                v02.03.00
 │   │   ├── worker_threads.py       ← 백그라운드 worker                         v02.03.00
+│   │   ├── live_stt.py             ← 마이크 one-shot STT 유틸                  🆕 v02.07.00
+│   │   ├── stt_vad.py              ← STT 모드용 최고 민감도 VAD-only 탐지       🆕 v02.07.00
 │   │   └── diarize.py              ← 화자 분리 및 매핑                        v02.03.00
 │   │
 │   ├── pipeline/
 │   │   ├── backend_core.py         ← 단일/공통 파이프라인 진입                v02.03.00
-│   │   ├── single_pipeline.py      ← 단일 파일 자막 생성 파이프라인           v02.03.00
-│   │   ├── multiclip_pipeline.py   ← 멀티클립 STT/LLM 병렬 파이프라인/reuse    v02.06.00
-│   │   └── pipeline_helpers.py     ← 백업/저장/렌더/prefetch 공통             v02.03.00
+│   │   ├── single_pipeline.py      ← 단일 파일 자막 생성/STT timeout 로그      v02.07.00
+│   │   ├── multiclip_pipeline.py   ← 멀티클립 STT/LLM 병렬 파이프라인/reuse    v02.07.00
+│   │   └── pipeline_helpers.py     ← 백업/저장/렌더/prefetch 공통             v02.07.00
 │   │
 │   └── project/
-│       ├── project_manager.py      ← 프로젝트 생성/로드/저장                 v02.03.00
-│       ├── project_phase1b.py      ← PHASE1-B 프로젝트 저장 보강             v02.03.00
-│       ├── project_snapshot.py     ← 프로젝트 snapshot schema                v02.03.00
+│       ├── project_manager.py      ← 프로젝트 생성/로드/저장                 v02.07.00
+│       ├── project_phase1b.py      ← PHASE1-B/PHASE1-D 프로젝트 저장 보강     v02.07.00
+│       ├── project_snapshot.py     ← 프로젝트 snapshot schema + STT meta      v02.07.00
 │       └── data_manager.py         ← 설정/교정 데이터 I/O                    v02.03.00
 │
 └── ui/
-    ├── home_ui.py                  ← 통합 대시보드/사이드바 빌드 Mixin        v02.04.00
-    ├── menu_bar.py                 ← 전역 하단 메뉴바 + 상단 상태 레일         🆕 v02.04.00
-    ├── style.py                    ← 공용 다크 스타일 + 재사용 line icon      v02.04.00
+    ├── home_ui.py                  ← 통합 대시보드/사이드바/상태 레일 배치     v02.07.00
+    ├── menu_bar.py                 ← 전역 메뉴바 + STT + undo/redo + 상태      v02.07.00
+    ├── style.py                    ← 공용 다크 스타일 + 재사용 line icon      v02.07.00
     ├── queue_widget.py             ← 큐 테이블 + 헤더 + ETA                   v02.03.00
     ├── cloud_ui.py                 ← iCloud/NAS 자동처리 UI                  v02.03.03
     │
     ├── main/
-    │   ├── main_window.py          ← 메인 통합 화면 본체                      v02.04.00
+    │   ├── main_window.py          ← 메인 통합 화면 본체                      v02.07.00
     │   ├── main_signals.py         ← 시그널/슬롯 핸들러                       v02.03.00
     │   └── main_file_ops.py        ← 파일/폴더 열기                           v02.03.03
     │
     ├── editor/
-    │   ├── editor_widget.py        ← 에디터 UI 골격 / 검색 / 비디오 폭 토글    v02.04.00
-    │   ├── editor_lifecycle.py     ← 에디터 열기/저장/닫기                    v02.03.03
-    │   ├── editor_pipeline.py      ← 자막 생성/재시작 파이프라인              v02.03.00
-    │   ├── editor_actions.py       ← 저장/이전/종료/내보내기                  v02.03.00
-    │   ├── editor_segments.py      ← 자막 세그먼트 큐 처리                    v02.03.00
+    │   ├── editor_widget.py        ← 에디터 UI 골격 / 검색 / 비디오 폭 토글    v02.07.00
+    │   ├── editor_lifecycle.py     ← 에디터 열기/저장/닫기                    v02.07.00
+    │   ├── editor_pipeline.py      ← 자막 생성/재시작/STT 시작 라우팅          v02.07.00
+    │   ├── editor_actions.py       ← 저장/undo/redo/종료/내보내기             v02.07.00
+    │   ├── editor_segments.py      ← 자막/STT 세그먼트 큐 처리                v02.07.00
     │   ├── editor_timeline_video.py← 타임라인 싱크 / 자막 분할 / 자동 스크롤   v02.04.00
-    │   ├── editor_video_controls.py← 비디오 제어 / 재생 단축키                🆕 v02.03.03
+    │   ├── editor_video_controls.py← 비디오 제어 / 재생 단축키                v02.07.00
     │   ├── editor_multiclip_context.py← 멀티클립 context / clip 전환           🆕 v02.03.03
-    │   ├── editor_multiclip_ops.py ← 멀티클립 파일 추가/삭제/리매핑           🆕 v02.03.03
+    │   ├── editor_multiclip_ops.py ← 멀티클립 파일 추가/삭제/리매핑           v02.07.00
     │   ├── editor_speaker_ops.py   ← 화자 메뉴 / 화자 드래그 조작             🆕 v02.03.03
-    │   ├── video_player_widget.py  ← 영상/오디오 플레이어 / subtitle overlay  v02.04.00
+    │   ├── editor_stt_mode.py      ← PHASE1-D STT 모드 상태/저장/마이크 입력  🆕 v02.07.00
+    │   ├── video_player_widget.py  ← 영상/오디오 플레이어 / subtitle overlay  v02.07.00
     │   └── 기타 editor helper 파일
     │
-    ├── timeline/                   ← 타임라인 캔버스/입력/페인트/파형         v02.04.00
+    ├── timeline/                   ← 타임라인 캔버스/입력/페인트/STT/화자      v02.07.00
     ├── project/                    ← 프로젝트/멀티클립 패널                  v02.03.00
     ├── settings/                   ← AI/화자/갭/상세/출력 설정                v02.04.00
-    └── dialogs/                    ← 폴더 선택 / 내보내기 다이얼로그          v02.03.00
+    └── dialogs/                    ← 폴더 선택 / 내보내기 / 공용 메시지       v02.07.00
+
+================================================================================
+[v02.07.00 핵심 변경]
+================================================================================
+
+1. PHASE1-D STT 모드
+   - `core/audio/stt_vad.py`로 Whisper/LLM 없이 최고 민감도 VAD-only 음성 구간 탐지
+   - `ui/editor/editor_stt_mode.py`에서 STT ON/OFF, 빈 빨간 STT 세그먼트 생성, 프로젝트 저장, SRT 제외 규칙 관리
+   - `core/audio/live_stt.py`로 현재 STT 세그먼트에 마이크 one-shot STT 입력을 적용하는 기반 추가
+
+2. 화자 세그먼트 인터랙션
+   - 화자 학습 메뉴를 자막 세그먼트 우클릭에서 화자 세그먼트 우클릭으로 이동
+   - 화자 세그먼트 왼쪽 클릭 시 사용 중인 화자 목록과 설정 색상 표시
+   - 미인식은 홍길동, 단일/복수 인식은 화자명 또는 화자1 / 화자2 형식으로 표시
+
+3. 전역 UI 마감과 메시지 박스 통일
+   - 상태 아이콘 레일을 프로젝트 바 상단 2줄로 이동하고 저장 상태는 프로젝트 바 하단으로 이동
+   - 중앙 상단 제목 라벨 제거, 터미널 로그 영역 확대, 저장 옆 Undo/Redo 연결
+   - `ui/dialogs/message_box.py`로 기존 자막/미저장 변경/STT 저장 확인창 스타일 통일
 
 ================================================================================
 [v02.06.00 핵심 변경]
@@ -177,7 +200,8 @@ ai_subtitle_studio/
 [다음 주요 액션]
 ================================================================================
 
-- B14: 기존자막 "아니요" 선택 시 SRT 자동 로드 금지 + 자막백업 이동
+- PHASE1-D CHECKPOINT: STT 세그먼트 저장/복원, 멀티클립 offset, 실제 마이크 입력 검증
+- PHASE1-D CHECKPOINT: 화자 세그먼트 좌클릭 변경/우클릭 학습 실사용 확인
 - R13: 전체 리팩토링 / 리네이밍 / 기능 분할 / 중복 통합 / Phase2 대응
 - Phase2 roughcut schema 및 UI 설계
 

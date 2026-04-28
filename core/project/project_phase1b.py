@@ -105,6 +105,10 @@ def _normalize_segments_for_legacy(segments: list[dict[str, Any]] | None, existi
             'llm_note': str(seg.get('llm_note', '') or ''),
             'srt_synced': bool(seg.get('srt_synced', True)),
             'is_deleted': bool(seg.get('is_deleted', False)),
+            'stt_mode': bool(seg.get('stt_mode', False)),
+            'stt_pending': bool(seg.get('stt_pending', False)),
+            'original_text': str(seg.get('original_text', '') or ''),
+            'dictated_text': str(seg.get('dictated_text', '') or ''),
         })
     return out
 

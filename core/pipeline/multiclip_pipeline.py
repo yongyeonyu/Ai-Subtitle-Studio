@@ -60,7 +60,7 @@ class MulticlipPipelineMixin:
         self._reuse_clip_indices = set()
 
         try:
-            from PyQt6.QtWidgets import QMessageBox
+            from ui.dialogs.message_box import ask_yes_no
             candidates = []
             for _f in self.files_to_process:
                 if os.path.exists(os.path.splitext(_f)[0] + '.srt'):
@@ -69,9 +69,11 @@ class MulticlipPipelineMixin:
                 self._force_no_reuse_once = False
                 self._reuse_existing_multiclip_subtitles = False
             elif candidates:
-                self._reuse_existing_multiclip_subtitles = QMessageBox.question(
-                    self.ui, '기존 자막 사용', '기존 자막을 사용하겠습니까?'
-                ) == QMessageBox.StandardButton.Yes
+                self._reuse_existing_multiclip_subtitles = ask_yes_no(
+                    self.ui,
+                    "기존 자막 사용",
+                    "기존 자막을 사용하시겠습니까?",
+                )
                 if not self._reuse_existing_multiclip_subtitles:
                     self._move_existing_multiclip_srts_to_backup(candidates)
         except Exception:
@@ -456,7 +458,7 @@ class MulticlipPipelineMixin:
 
             # 시작 버튼 대기
             if not start_event.wait(timeout=600):
-                get_logger().log("❌ 시작 이벤트 타임아웃")
+                get_logger().log("⏱️ 시작 이벤트 대기 시간이 초과되었습니다 (600초) --> 새 동작이 없어 메인으로 복귀합니다.")
                 return
 
             if action_state[0] in ("prev", "exit"):

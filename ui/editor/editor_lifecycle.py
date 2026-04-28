@@ -13,6 +13,7 @@ import config
 from logger import get_logger
 from core.path_manager import get_srt_path
 from core.project.project_manager import load_project
+from ui.dialogs.message_box import confirm_save_changes
 
 
 def _save_srt_impl(srt_path, segments):
@@ -302,18 +303,7 @@ class EditorLifecycleMixin:
                     pass
 
                 if is_dirty:
-                    msg_box = QMessageBox(self)
-                    msg_box.setWindowTitle("종료 확인")
-                    msg_box.setText("저장되지 않은 변경사항이 있습니다.\n저장하시겠습니까?")
-                    msg_box.setStandardButtons(
-                        QMessageBox.StandardButton.Yes |
-                        QMessageBox.StandardButton.No |
-                        QMessageBox.StandardButton.Cancel
-                    )
-                    msg_box.button(QMessageBox.StandardButton.Yes).setText("예")
-                    msg_box.button(QMessageBox.StandardButton.No).setText("아니요")
-                    msg_box.button(QMessageBox.StandardButton.Cancel).setText("취소")
-                    reply = msg_box.exec()
+                    reply = confirm_save_changes(self, title="종료 확인")
 
                     if reply == QMessageBox.StandardButton.Yes:
                         if hasattr(self._editor_widget, '_on_save'):

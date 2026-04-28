@@ -1,4 +1,4 @@
-# Version: 02.04.00
+# Version: 02.07.00
 # Phase: PHASE1-C
 
 import re
@@ -14,11 +14,25 @@ import config
 from ui.editor.timestamp_area import TimestampArea
 
 class SubtitleBlockData(QTextBlockUserData):
-    def __init__(self, spk_id: str, start_sec: float, is_gap: bool = False):
+    def __init__(
+        self,
+        spk_id: str,
+        start_sec: float,
+        is_gap: bool = False,
+        *,
+        stt_mode: bool = False,
+        stt_pending: bool = False,
+        original_text: str = "",
+        dictated_text: str = "",
+    ):
         super().__init__()
         self.spk_id = spk_id
         self.start_sec = start_sec
         self.is_gap = is_gap
+        self.stt_mode = bool(stt_mode)
+        self.stt_pending = bool(stt_pending)
+        self.original_text = original_text
+        self.dictated_text = dictated_text
 
 class SubtitleHighlighter(QSyntaxHighlighter):
     def __init__(self, document: QTextDocument):
@@ -42,11 +56,16 @@ class SubtitleHighlighter(QSyntaxHighlighter):
             
         ud = self.currentBlock().userData()
         spk_color = "#FFFFFF"
-        if isinstance(ud, SubtitleBlockData): spk_color = self.speaker_colors.get(ud.spk_id, "#FFFFFF")
+        if isinstance(ud, SubtitleBlockData):
+            spk_color = self.speaker_colors.get(ud.spk_id, "#FFFFFF")
+            if getattr(ud, "stt_pending", False):
+                spk_color = "#8A8F98"
 
         if len(text) > 0:
             cfmt = QTextCharFormat()
             cfmt.setForeground(QColor(spk_color))
+            if isinstance(ud, SubtitleBlockData) and getattr(ud, "stt_pending", False):
+                cfmt.setBackground(QColor(72, 40, 40, 80))
             self.setFormat(0, len(text), cfmt)
 
 class SubtitleTextEdit(QTextEdit):
@@ -259,6 +278,10 @@ class SubtitleTextEdit(QTextEdit):
                 self._last_arrow_tap[key] = current_time
         
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            parent = getattr(self, "_parent_widget", None)
+            if parent and getattr(parent, "_stt_mode_enabled", False) and hasattr(parent, "_handle_stt_enter"):
+                parent._handle_stt_enter()
+                return
             if mod & Qt.KeyboardModifier.ControlModifier or mod & Qt.KeyboardModifier.MetaModifier:
                 self._handle_speaker_split()
                 return
@@ -286,6 +309,11 @@ class SubtitleTextEdit(QTextEdit):
                 self.setTextCursor(cur)
                 return
         if key == Qt.Key.Key_Escape: self.esc_pressed.emit(); return
+        if key == Qt.Key.Key_Space and not cur.hasSelection():
+            parent = getattr(self, "_parent_widget", None)
+            if parent and getattr(parent, "_stt_mode_enabled", False) and hasattr(parent, "_handle_stt_space"):
+                parent._handle_stt_space()
+                return
         if key == Qt.Key.Key_Tab: self.tab_pressed.emit(); e.accept(); return
         if key == Qt.Key.Key_A and (mod & Qt.KeyboardModifier.ControlModifier or mod & Qt.KeyboardModifier.MetaModifier): self.selectAll(); return
         if key == Qt.Key.Key_C and (mod & Qt.KeyboardModifier.ControlModifier or mod & Qt.KeyboardModifier.MetaModifier): super().keyPressEvent(e); return

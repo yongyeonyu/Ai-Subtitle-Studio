@@ -77,6 +77,10 @@ def _normalized_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]
             'text': str(seg.get('text', '') or ''),
             'speaker': str(seg.get('speaker', seg.get('spk', '00')) or '00'),
             'speaker_list': list(seg.get('speaker_list', [])) if seg.get('speaker_list') else [],
+            'stt_mode': bool(seg.get('stt_mode', False)),
+            'stt_pending': bool(seg.get('stt_pending', False)),
+            'original_text': str(seg.get('original_text', '') or ''),
+            'dictated_text': str(seg.get('dictated_text', '') or ''),
         })
     return out
 
