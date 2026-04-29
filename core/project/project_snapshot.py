@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 03.00.26
+# Phase: PHASE2
 """
 core/project/project_snapshot.py
 Project JSON save/load helpers for PHASE1-B.
@@ -12,9 +12,11 @@ from datetime import datetime
 from typing import Any
 
 import config
+from core.project.project_context import build_editor_state
 
 PROJECTS_DIR = os.path.join(config.BASE_DIR, 'projects')
 os.makedirs(PROJECTS_DIR, exist_ok=True)
+PROJECT_SCHEMA_VERSION = '03.00.26'
 
 
 def _safe_name(name: str) -> str:
@@ -113,9 +115,16 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         media_files = [os.path.abspath(editor.media_path)]
     mode = 'multiclip' if len(media_files) > 1 else 'single'
     project_path = _auto_project_path(owner, media_files, mode)
-    return {
-        'version': '02.03.00',
-        'phase': 'PHASE1-B',
+    editor_state = build_editor_state(
+        mode=mode,
+        media_files=media_files,
+        segments=segments or [],
+        workspace=_ui_state(editor) if editor is not None else {},
+        clip_boundaries=list(getattr(owner, '_multiclip_boundaries', []) or []),
+    )
+    payload = {
+        'version': PROJECT_SCHEMA_VERSION,
+        'phase': 'PHASE2',
         'mode': mode,
         'project_path': os.path.abspath(project_path),
         'project_name': os.path.splitext(os.path.basename(project_path))[0],
@@ -123,13 +132,23 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         'media_files': media_files,
         'srt_path': os.path.abspath(srt_path) if srt_path else None,
         'segments': _normalized_segments(segments or []),
-        'ui_state': _ui_state(editor) if editor is not None else {},
+        'ui_state': editor_state.get('workspace', {}),
+        'editor_state': editor_state,
         'project_meta': {
             'project_boundary_times': list(getattr(owner, '_project_boundary_times', []) or []),
             'multiclip_boundaries': list(getattr(owner, '_multiclip_boundaries', []) or []),
             'sorted_files': list(getattr(owner, '_multiclip_files', []) or []),
         },
     }
+    try:
+        if os.path.exists(project_path):
+            with open(project_path, 'r', encoding='utf-8') as f:
+                existing = json.load(f)
+            payload['roughcut_state'] = existing.get('roughcut_state', {})
+    except Exception:
+        payload['roughcut_state'] = {}
+    payload.setdefault('roughcut_state', {})
+    return payload
 
 
 def save_project_snapshot(owner, segments: list[dict[str, Any]] | None = None, srt_path: str | None = None, reason: str = 'manual') -> str:

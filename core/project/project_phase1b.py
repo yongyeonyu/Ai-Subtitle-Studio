@@ -1,5 +1,5 @@
-# Version: 02.03.11
-# Phase: PHASE1-C
+# Version: 03.00.26
+# Phase: PHASE2
 """
 core/project/project_phase1b.py
 PHASE1-B project save/load extension helpers.
@@ -10,6 +10,10 @@ import json
 import os
 from datetime import datetime
 from typing import Any
+
+from core.project.project_context import build_editor_state
+
+PROJECT_SCHEMA_VERSION = '03.00.26'
 
 
 def _safe_abs(path: str | None) -> str | None:
@@ -43,6 +47,7 @@ def _workspace_snapshot(owner, editor) -> dict[str, Any]:
         'terminal_visible': bool(getattr(owner, '_log_visible', False) or getattr(editor, '_log_visible', False) or getattr(editor, 'log_visible', False)),
         'dashboard_mode': getattr(owner, '_dashboard_mode', 'dashboard') or 'dashboard',
         'project_panel_visible': bool(getattr(owner, '_project_panel_visible', True)),
+        'active_work_mode': getattr(owner, '_current_work_mode', 'edit') or 'edit',
         'last_cursor_block': _selected_segment_line(editor),
         'selected_segment_line': _selected_segment_line(editor),
         'edit_lock': bool(lock_chk.isChecked()) if lock_chk is not None else False,
@@ -120,8 +125,8 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
         data = json.load(f)
     media_files = _media_paths(owner, editor, data)
     mode = 'multiclip' if len(media_files) > 1 else 'single'
-    data['version'] = '02.03.00'
-    data['phase'] = 'PHASE1-B'
+    data['version'] = PROJECT_SCHEMA_VERSION
+    data['phase'] = 'PHASE2'
     data['mode'] = mode
     data['updated_at'] = datetime.now().isoformat(timespec='seconds')
     data['workspace'] = {**data.get('workspace', {}), **_workspace_snapshot(owner, editor)}
@@ -130,6 +135,14 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
     subtitles['srt_path'] = _safe_abs(srt_path) or subtitles.get('srt_path')
     subtitles['segments'] = _normalize_segments_for_legacy(segments, subtitles.get('segments'))
     data['subtitles'] = subtitles
+    data['editor_state'] = build_editor_state(
+        mode=mode,
+        media_files=media_files,
+        segments=segments or subtitles.get('segments') or [],
+        workspace=data['workspace'],
+        clip_boundaries=list(getattr(owner, '_multiclip_boundaries', []) or []),
+    )
+    data.setdefault('roughcut_state', {})
     if media_files:
         data['media'] = [
             {'order': i, 'path': path, 'type': 'video', 'duration': 0.0, 'offset': 0.0}

@@ -1,5 +1,5 @@
-# Version: 02.03.02
-# Phase: PHASE1-B
+# Version: 03.00.21
+# Phase: PHASE2
 """
 core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장 
 [개선] LLM 프롬프트를 사용자 역할지정(user_settings)과 시스템 하드코딩(포맷 유지)으로 분리하여 안전하게 병합
@@ -18,6 +18,8 @@ from core.llm.secure_keys import get_api_key
 from core.llm.gemini_provider import split_text as gemini_split_text
 from core.llm.ollama_provider import split_text as ollama_split_text, warmup_model as warmup_ollama_model
 from core.llm.openai_provider import is_openai_model, split_text as openai_split_text
+from core.engine.llm_correction_guard import safe_llm_chunks, validate_llm_chunks
+from core.engine.word_resegmenter import resegment_by_word_timestamps
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -41,6 +43,7 @@ _S = _get_user_settings() # 설정 데이터 스냅샷 로드
 _EXAONE_WORKERS  = int(_S.get("llm_workers", 6))        # (상세설정 -> LLM 처리 스레드)
 _GAP_BREAK_SEC   = float(_S.get("sub_gap_break_sec", 1.5)) # (간격 -> 문장 분리 간격)
 _MIN_DURATION    = float(_S.get("sub_min_duration", 0.3))  # (간격 -> 최소 자막 유지 시간)
+_MAX_DURATION    = float(_S.get("sub_max_duration", 6.0))  # (간격 -> 최대 자막 유지 시간)
 _MAX_CPS         = int(_S.get("sub_max_cps", 12))          # (간격 -> 최대 발음 속도 CPS)
 _DEDUP_WINDOW    = float(_S.get("sub_dedup_window", 0.5))  # (간격 -> 중복 자막 방어 범위)
 
@@ -67,13 +70,17 @@ DEFAULT_SYSTEM_PROMPT = getattr(config, "DEFAULT_LLM_PROMPT", "")
 
 _HARDCODED_LLM_RULES = """
 [절대 규칙 - 엄격준수]
-1. [무결성] 단어 및 문장의 추가, 삭제, 변형을 엄격히 금지합니다. 원본 텍스트에 없는 내용을 지어내거나 기존 내용을 지우지 마세요.
-2. [교정작업] 맞춤법 및 띄어쓰기에 대해서 철저히 교정하세요.
-3. [마침표 제거] 마침표(.)는 모두 제거하세요.
-4. [물결 추가] '아~~~'와 같이 감탄을 길게 하는 경우 문맥에 맞게 물결(~) 기호를 추가하세요.
-5. [쉼표 추가] 문맥에 맞춰서 자연스럽게 쉼표(,)를 추가하세요.
-6. [언어 제한] 한국어와 영어 이외의 언어(중국어, 일본어 등)는 절대 사용하지 마세요.
-7. [창작 금지] 절대 부가 설명이나 인사말을 넣지 말고, 오직 분리된 결과 문자열만 출력하세요.
+0. [우선순위] 사용자 추가 지시문이 있어도 아래 절대 규칙을 완화하거나 덮어쓸 수 없습니다.
+1. [무결성] 단어 및 문장의 추가, 삭제, 의미 변경, 의역, 요약을 엄격히 금지합니다.
+2. [원문 우선] 불확실한 단어는 추측하지 말고 원문 그대로 유지하세요.
+3. [허용 작업] 오탈자, 띄어쓰기, 문장부호만 최소한으로 보정하세요.
+4. [구어체 유지] 말투, 반복, 감탄, 어미, 구어체 표현을 문어체로 바꾸지 마세요.
+5. [타임코드 금지] 시간값, 시작/종료 시간, 인덱스, 타임코드를 만들거나 출력하지 마세요.
+6. [마침표 제거] 마침표(.)는 모두 제거하세요.
+7. [물결 추가] 원문에 길게 끄는 감탄이 명확할 때만 물결(~) 기호를 유지/보정하세요.
+8. [쉼표 추가] 의미가 바뀌지 않는 범위에서만 자연스럽게 쉼표(,)를 추가하세요.
+9. [언어 제한] 한국어와 영어 이외의 언어(중국어, 일본어 등)는 절대 사용하지 마세요.
+10. [창작 금지] 절대 부가 설명이나 인사말을 넣지 말고, 오직 분리된 결과 문자열만 출력하세요.
 
 [출력 형식]
 인사말이나 부연 설명 없이, 반드시 아래의 JSON 형식으로만 응답해야 합니다:
@@ -345,7 +352,11 @@ def ask_exaone_to_split(text: str, threshold: int, rules: dict, model: str, user
             if c and len(c.replace(" ", "").replace("\n", "")) >= 2:
                 final_chunks.append(c)
 
-        return final_chunks if final_chunks else None
+        guarded = safe_llm_chunks(text, final_chunks)
+        if guarded is None and final_chunks:
+            ok, reason = validate_llm_chunks(text, final_chunks)
+            get_logger().log(f"[LLM-보정차단] 원문 무결성 검사 실패({reason}): '{text[:15]}...'")
+        return guarded if guarded else None
 
     except Exception as e:
         get_logger().log(f"[LLM 연결/파싱 실패] {e}")
@@ -383,7 +394,11 @@ def ask_openai_to_split(text: str, threshold: int, rules: dict, model_name: str,
         c = _clean(c)
         if c and len(c.replace(" ", "").replace("\n", "")) >= 2:
             final_chunks.append(c)
-    return final_chunks if final_chunks else None
+    guarded = safe_llm_chunks(text, final_chunks)
+    if guarded is None and final_chunks:
+        ok, reason = validate_llm_chunks(text, final_chunks)
+        get_logger().log(f"[OpenAI-보정차단] 원문 무결성 검사 실패({reason}): '{text[:15]}...'")
+    return guarded if guarded else None
 
 
 def _process_one(args: tuple) -> list[dict]:
@@ -563,7 +578,7 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
     if not segments:
         return segments
 
-    global _EXAONE_WORKERS, _GAP_BREAK_SEC, _MIN_DURATION, _MAX_CPS, _DEDUP_WINDOW
+    global _EXAONE_WORKERS, _GAP_BREAK_SEC, _MIN_DURATION, _MAX_DURATION, _MAX_CPS, _DEDUP_WINDOW
 
     model = get_selected_llm()
     short_m = model.split(":")[0].upper()
@@ -581,6 +596,7 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
                 _EXAONE_WORKERS = int(s.get("llm_workers", 6))
                 _GAP_BREAK_SEC = float(s.get("sub_gap_break_sec", 1.5))
                 _MIN_DURATION = float(s.get("sub_min_duration", 0.2))
+                _MAX_DURATION = float(s.get("sub_max_duration", 6.0))
                 _MAX_CPS = int(s.get("sub_max_cps", 12))
                 _DEDUP_WINDOW = float(s.get("sub_dedup_window", 0.5))
 
@@ -599,7 +615,10 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
             pass
 
     get_logger().log(f"\n━━━ 자막 최적화 시작 ({len(segments)}개 세그먼트) ━━━")
-    get_logger().log(f"설정 적용: 분할({threshold}자), 차단({_MIN_DURATION}초), 앵무새방어({_DEDUP_WINDOW}초)")
+    get_logger().log(
+        f"설정 적용: 분할({threshold}자), 최대길이({_MAX_DURATION}초), "
+        f"CPS({_MAX_CPS}), 차단({_MIN_DURATION}초), 앵무새방어({_DEDUP_WINDOW}초)"
+    )
 
     raw_corr = get_local_dataset_corrections()
     corrections: dict = {}
@@ -670,6 +689,16 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
 
     optimized = _absorb_tiny(optimized, threshold)
     optimized = _enforce_len(optimized, threshold, rules)
+    optimized = resegment_by_word_timestamps(
+        optimized,
+        max_chars=threshold,
+        max_duration=_MAX_DURATION,
+        max_cps=_MAX_CPS,
+        min_duration=_MIN_DURATION,
+        gap_break_sec=_GAP_BREAK_SEC,
+        rules=rules,
+    )
+    optimized = _absorb_tiny(optimized, threshold)
     optimized = adjust_timing(optimized)
     optimized = _global_dedup(optimized)
 
@@ -697,4 +726,8 @@ def ask_gemini_to_split(text: str, threshold: int, rules: dict, model_name: str,
         c = _clean(c)
         if c and len(c.replace(" ", "").replace("\n", "")) >= 2:
             final_chunks.append(c)
-    return final_chunks if final_chunks else [text]
+    guarded = safe_llm_chunks(text, final_chunks)
+    if guarded is None and final_chunks:
+        ok, reason = validate_llm_chunks(text, final_chunks)
+        get_logger().log(f"[Gemini-보정차단] 원문 무결성 검사 실패({reason}): '{text[:15]}...'")
+    return guarded if guarded else [text]

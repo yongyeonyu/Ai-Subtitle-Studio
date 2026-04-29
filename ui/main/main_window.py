@@ -1,5 +1,5 @@
-# Version: 02.07.00
-# Phase: PHASE1-C
+# Version: 03.00.27
+# Phase: PHASE2
 """
 ui/main/main_window.py
 MainWindow — 메인 윈도우 클래스 (시그널 정의 · UI 빌드 · 시그널 연결)
@@ -85,6 +85,7 @@ class MainWindow(
         self._current_project_path = None
         self._project_boundary_times = []
         self._dashboard_mode = "dashboard"
+        self._current_work_mode = "edit"
         self._project_panel_visible = True
         self._unified_dashboard = True
         self._on_save_cb = None
@@ -371,6 +372,12 @@ class MainWindow(
     def sync_menu_from_editor(self, editor=None):
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.sync_from_editor(editor)
+
+    def open_help_dialog(self):
+        from ui.help.help_dialog import HelpDialog
+
+        dialog = HelpDialog(self)
+        dialog.exec()
 
     def _refresh_video(self):
         if self._editor_widget and hasattr(self._editor_widget, "video_player"):

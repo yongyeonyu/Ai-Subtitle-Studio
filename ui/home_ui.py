@@ -1,5 +1,5 @@
-# Version: 02.07.00
-# Phase: PHASE1-D
+# Version: 03.00.16
+# Phase: PHASE2
 """
 ui/home_ui.py
 MainWindow 홈 화면 빌드 Mixin
@@ -8,7 +8,7 @@ import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDialog, QLineEdit, QCheckBox, QScrollArea, QComboBox, QMessageBox,
-    QToolButton
+    QToolButton, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, QSize
 from PyQt6.QtGui import QIcon
@@ -30,6 +30,14 @@ class HomeUIMixin:
     def _build_home_content(self):
         self._preview_containers = []
         self._watchdog_labels = []
+        overlay = getattr(self, "_project_info_overlay", None)
+        if overlay is not None:
+            try:
+                overlay.setParent(None)
+                overlay.deleteLater()
+            except RuntimeError:
+                pass
+            self._project_info_overlay = None
         for attr in ("status_rail", "saved_status_label"):
             widget = getattr(self, attr, None)
             if widget is not None:
@@ -68,14 +76,14 @@ class HomeUIMixin:
         columns.setSpacing(8)
         left_widget = QWidget(); left_col = QVBoxLayout(left_widget); left_col.setContentsMargins(0, 0, 0, 0); left_col.setSpacing(4)
         if is_unified:
-            left_col.addWidget(self._btn("⌂  홈", "", self.show_home))
-            left_col.addWidget(self._btn("▤  자막 편집", "", self.select_files, active=True))
-            left_col.addWidget(self._btn("◉  STT 모드", "PHASE1-D", self._toggle_sidebar_stt_mode))
-            left_col.addWidget(self._btn("▣  프로젝트", "", self._open_project))
-            left_col.addWidget(self._btn("◎  러프컷 편집 도우미", "PHASE2", self._open_roughcut_helper))
-            left_col.addWidget(self._btn("▱  숏폼 제작기", "PHASE3", self._open_shortform_maker))
+            left_col.addWidget(self._btn("홈", "", self.show_home, icon_name="home"))
+            left_col.addWidget(self._btn("자막 편집", "", self.select_files, active=True, icon_name="subtitle"))
+            left_col.addWidget(self._btn("STT 모드", "", self._toggle_sidebar_stt_mode, icon_name="mic"))
+            left_col.addWidget(self._btn("프로젝트", "", self._open_project, icon_name="folder"))
+            left_col.addWidget(self._btn("러프컷 편집 도우미", "", self._open_roughcut_helper, icon_name="timeline"))
+            left_col.addWidget(self._btn("숏폼 제작기", "", self._open_shortform_maker, icon_name="video"))
             left_col.addSpacing(8)
-            left_col.addWidget(self._btn("◷  최근 작업", "", self._dummy_action))
+            left_col.addWidget(self._btn("최근 작업", "", self._dummy_action, icon_name="clock"))
             icloud_files, count_str, comp_str = self._get_icloud_files()
             nas_folders, nas_count, nas_comp = self._get_nas_folders()
             left_col.addSpacing(6)
@@ -136,7 +144,9 @@ class HomeUIMixin:
         layout.addLayout(columns)
         layout.addStretch()
         if is_unified:
-            layout.addWidget(self._project_info_card())
+            layout.addWidget(self._project_info_card(expanded=False))
+            if bool(getattr(self, "_project_info_expanded", False)):
+                QTimer.singleShot(0, self._show_project_info_overlay)
             if hasattr(self, "saved_status_label"):
                 self.saved_status_label.setText("저장됨: 오후 2:30  ●")
                 layout.addWidget(self.saved_status_label, alignment=Qt.AlignmentFlag.AlignLeft)
@@ -165,6 +175,7 @@ class HomeUIMixin:
         return bool(load_settings().get("auto_start_enabled", True))
 
     def _toggle_sidebar_stt_mode(self):
+        self._current_work_mode = "stt"
         editor = getattr(self, "_editor_widget", None)
         if editor is not None and hasattr(editor, "_toggle_stt_mode"):
             editor._toggle_stt_mode()
@@ -332,7 +343,7 @@ class HomeUIMixin:
         w.mousePressEvent = _on_w_click
         return w
 
-    def _btn(self, text, desc, cmd, active=False):
+    def _btn(self, text, desc, cmd, active=False, icon_name=None):
         if getattr(self, "_unified_dashboard", False):
             bg = "#26313A" if active else "transparent"
             border = "#3F8CFF" if active else "transparent"
@@ -346,13 +357,34 @@ class HomeUIMixin:
         w.enterEvent = lambda e, _w=w: _w.setStyleSheet(_w._hover_ss)
         w.leaveEvent = lambda e, _w=w: _w.setStyleSheet(_w._normal_ss)
         w.setCursor(Qt.CursorShape.PointingHandCursor)
+        if getattr(self, "_unified_dashboard", False):
+            w.setFixedHeight(30 if not desc else 50)
+            w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout = QVBoxLayout(w)
-        layout.setContentsMargins(10 if getattr(self, "_unified_dashboard", False) else 20, 8 if getattr(self, "_unified_dashboard", False) else 14, 10 if getattr(self, "_unified_dashboard", False) else 20, 8 if getattr(self, "_unified_dashboard", False) else 14)
-        layout.setSpacing(2 if getattr(self, "_unified_dashboard", False) else 4)
+        layout.setContentsMargins(10 if getattr(self, "_unified_dashboard", False) else 20, 4 if getattr(self, "_unified_dashboard", False) else 14, 10 if getattr(self, "_unified_dashboard", False) else 20, 4 if getattr(self, "_unified_dashboard", False) else 14)
+        layout.setSpacing(0 if getattr(self, "_unified_dashboard", False) else 4)
         main_color = "#74A9FF" if active and getattr(self, "_unified_dashboard", False) else ("#FFFFFF" if getattr(self, "_unified_dashboard", False) else "#1D1D1F")
-        lbl = QLabel(text); lbl.setStyleSheet(f"color: {main_color}; font-size: {11 if getattr(self, '_unified_dashboard', False) else 14}px; font-weight: bold; border: none; background: transparent;"); lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); layout.addWidget(lbl)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        if icon_name:
+            icon_lbl = QLabel()
+            icon_lbl.setPixmap(line_icon(icon_name, main_color, 14).pixmap(14, 14))
+            icon_lbl.setFixedSize(16, 16)
+            icon_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            row.addWidget(icon_lbl)
+        lbl = QLabel(text)
+        lbl.setMinimumWidth(0)
+        lbl.setStyleSheet(f"color: {main_color}; font-size: {11 if getattr(self, '_unified_dashboard', False) else 14}px; font-weight: bold; border: none; background: transparent;")
+        lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        row.addWidget(lbl, stretch=1)
+        layout.addLayout(row)
         if desc:
-            sub = QLabel(desc); sub.setStyleSheet("color: #7EE787; font-size: 9px; border: none; background: transparent;" if getattr(self, "_unified_dashboard", False) else "color: #6E6E73; font-size: 11px; border: none; background: transparent;"); sub.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); layout.addWidget(sub)
+            sub = QLabel(desc)
+            sub.setFixedHeight(13 if getattr(self, "_unified_dashboard", False) else 18)
+            sub.setStyleSheet("color: #7EE787; font-size: 9px; font-weight: bold; border: none; background: transparent; margin-left: 22px;" if getattr(self, "_unified_dashboard", False) else "color: #6E6E73; font-size: 11px; border: none; background: transparent;")
+            sub.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            layout.addWidget(sub)
         def _on_w_click(e):
             if e.button() == Qt.MouseButton.LeftButton:
                 self._defer_home_action(w, cmd)
@@ -411,15 +443,36 @@ class HomeUIMixin:
             layout.addWidget(btn)
         return row
 
-    def _project_info_card(self):
+    def _project_info_card(self, expanded=None, overlay=False):
         card = QWidget()
-        card.setStyleSheet("background: #1B2429; border: 1px solid #2D3942; border-radius: 7px;")
+        card.setStyleSheet(
+            "background: #1B2429; border: 1px solid #3A4650; border-radius: 7px;"
+            if overlay else
+            "background: #1B2429; border: 1px solid #2D3942; border-radius: 7px;"
+        )
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setContentsMargins(10, 8, 10, 8)
         lay.setSpacing(6)
-        title = QLabel("프로젝트 정보")
-        title.setStyleSheet(label_style("text", 11, bold=True))
-        lay.addWidget(title)
+
+        expanded = bool(getattr(self, "_project_info_expanded", False)) if expanded is None else bool(expanded)
+        header = QToolButton()
+        header.setText("프로젝트 정보")
+        header.setCheckable(True)
+        header.setChecked(expanded)
+        header.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        header.setCursor(Qt.CursorShape.PointingHandCursor)
+        header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        header.setStyleSheet(
+            "QToolButton { color: #F5F7FA; font-size: 11px; font-weight: 700; "
+            "background: transparent; border: none; padding: 2px 0; text-align: left; }"
+            "QToolButton::menu-indicator { image: none; }"
+        )
+        header.clicked.connect(self._toggle_project_info_card)
+        lay.addWidget(header)
+        if not expanded:
+            card.setMaximumHeight(36)
+            return card
 
         def add_section(name, rows):
             section = QLabel(name)
@@ -452,6 +505,26 @@ class HomeUIMixin:
         add_section("자막", [f"세그먼트: {seg_count}", f"화자: {len(speakers) if speakers else 0}", "상태: 편집 대기"])
         return card
 
+    def _show_project_info_overlay(self):
+        if not getattr(self, "_unified_dashboard", False):
+            return
+        overlay = self._project_info_card(expanded=True, overlay=True)
+        overlay.setParent(self.home_page)
+        overlay.setObjectName("ProjectInfoOverlay")
+        overlay.setMinimumWidth(max(190, self.home_page.width() - 16))
+        overlay.setMaximumWidth(max(190, self.home_page.width() - 16))
+        overlay.adjustSize()
+        h = min(max(260, overlay.sizeHint().height()), max(220, self.home_page.height() - 92))
+        y = max(66, self.home_page.height() - h - 54)
+        overlay.setGeometry(8, y, max(190, self.home_page.width() - 16), h)
+        overlay.raise_()
+        overlay.show()
+        self._project_info_overlay = overlay
+
+    def _toggle_project_info_card(self):
+        self._project_info_expanded = not bool(getattr(self, "_project_info_expanded", False))
+        self._build_home_content()
+
     def _nav_icon(self, name: str, color="#A9B0B7") -> QIcon:
         return line_icon(name, color)
 
@@ -463,9 +536,23 @@ class HomeUIMixin:
         )
 
     def _open_roughcut_helper(self):
-        self._show_development_notice("러프컷 편집 도우미", "PHASE2")
+        self._current_work_mode = "roughcut"
+        if hasattr(self, "global_menu_bar"):
+            self.global_menu_bar.refresh()
+        page = getattr(self, "_roughcut_widget", None)
+        if page is None:
+            from ui.roughcut.roughcut_widget import RoughcutWidget
+
+            page = RoughcutWidget(owner=self, parent=self)
+            self._roughcut_widget = page
+            self.stack.addWidget(page)
+        self.stack.setCurrentWidget(page)
+        page.refresh_from_editor()
 
     def _open_shortform_maker(self):
+        self._current_work_mode = "shortform"
+        if hasattr(self, "global_menu_bar"):
+            self.global_menu_bar.refresh()
         self._show_development_notice("숏폼 제작기", "PHASE3")
 
     def _dummy_action(self):

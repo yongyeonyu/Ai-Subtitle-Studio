@@ -1,5 +1,5 @@
-# Version: 02.03.11
-# Phase: PHASE1-C
+# Version: 03.00.26
+# Phase: PHASE2
 """
 core/project_manager.py
 프로젝트 JSON 파일 생성 / 저장 / 로드
@@ -17,6 +17,10 @@ import subprocess
 import uuid
 from datetime import datetime
 from typing import List, Optional
+
+from core.project.project_context import build_editor_state
+
+PROJECT_SCHEMA_VERSION = "03.00.26"
 
 
 # ─────────────────────────────────────────────
@@ -133,7 +137,8 @@ def create_project(
 
     project = {
         "app": "AI Subtitle Studio",
-        "version": "02.03.00",
+        "version": PROJECT_SCHEMA_VERSION,
+        "phase": "PHASE2",
         "project_name": name,
         "created_at": now,
         "updated_at": now,
@@ -153,6 +158,32 @@ def create_project(
             "srt_path": srt_path or "",
             "segments": segments
         },
+
+        "editor_state": build_editor_state(
+            mode="multiclip" if len(media_paths or []) > 1 else "single",
+            media_files=list(media_paths or []),
+            segments=[
+                {
+                    "start": seg.get("timeline_start", 0.0),
+                    "end": seg.get("timeline_end", 0.0),
+                    "text": seg.get("text", ""),
+                    "speaker": seg.get("speaker", "00"),
+                }
+                for seg in segments
+            ],
+            workspace={},
+            clip_boundaries=[
+                {
+                    "start": c["timeline_start"],
+                    "end": c["timeline_end"],
+                    "file": c["source_path"],
+                    "name": os.path.basename(c["source_path"]),
+                }
+                for c in clips
+            ],
+        ),
+
+        "roughcut_state": {},
 
         # ✅ [v02.01.00] 작업 환경 저장용
         "workspace": {
@@ -202,13 +233,17 @@ def save_project(
     srt_path: Optional[str] = None,
     segments: Optional[List[dict]] = None,
     user_settings: Optional[dict] = None,
-    workspace: Optional[dict] = None
+    workspace: Optional[dict] = None,
+    roughcut_state: Optional[dict] = None,
+    active_work_mode: Optional[str] = None,
 ):
     """기존 프로젝트 JSON 업데이트"""
     if not os.path.exists(filepath):
         return
 
     project = _read_json(filepath)
+    project["version"] = PROJECT_SCHEMA_VERSION
+    project["phase"] = "PHASE2"
     project["updated_at"] = datetime.now().isoformat()
 
     # ── 미디어 업데이트 ──
@@ -299,6 +334,52 @@ def save_project(
         project.setdefault("subtitles", {})
         project["subtitles"]["segments"] = new_segs
 
+        project["editor_state"] = build_editor_state(
+            mode="multiclip" if len(media_paths or project.get("media", []) or []) > 1 else "single",
+            media_files=[
+                item.get("path", "")
+                for item in sorted(project.get("media", []), key=lambda item: item.get("order", 0))
+                if item.get("path")
+            ],
+            segments=segments,
+            workspace=workspace or project.get("workspace", {}) or {},
+            clip_boundaries=[
+                {
+                    "start": c.get("timeline_start", 0.0),
+                    "end": c.get("timeline_end", 0.0),
+                    "file": c.get("source_path", ""),
+                    "name": os.path.basename(c.get("source_path", "")),
+                }
+                for c in clips
+            ],
+        )
+    elif media_paths is not None:
+        clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
+        existing_segments = [
+            {
+                "start": seg.get("timeline_start", seg.get("start", 0.0)),
+                "end": seg.get("timeline_end", seg.get("end", 0.0)),
+                "text": seg.get("text", ""),
+                "speaker": seg.get("speaker", "00"),
+            }
+            for seg in (project.get("subtitles", {}) or {}).get("segments", [])
+        ]
+        project["editor_state"] = build_editor_state(
+            mode="multiclip" if len(media_paths) > 1 else "single",
+            media_files=list(media_paths or []),
+            segments=existing_segments,
+            workspace=workspace or project.get("workspace", {}) or {},
+            clip_boundaries=[
+                {
+                    "start": c.get("timeline_start", 0.0),
+                    "end": c.get("timeline_end", 0.0),
+                    "file": c.get("source_path", ""),
+                    "name": os.path.basename(c.get("source_path", "")),
+                }
+                for c in clips
+            ],
+        )
+
     # ── 사용자 설정 ──
     if user_settings is not None:
         project["user_settings"] = user_settings
@@ -306,6 +387,20 @@ def save_project(
     # ── 작업 환경 ──
     if workspace is not None:
         project["workspace"] = workspace
+        if project.get("editor_state"):
+            project["editor_state"]["workspace"] = workspace
+
+    if active_work_mode:
+        project.setdefault("workspace", {})
+        project["workspace"]["active_work_mode"] = active_work_mode
+        if project.get("editor_state"):
+            project["editor_state"].setdefault("workspace", {})
+            project["editor_state"]["workspace"]["active_work_mode"] = active_work_mode
+
+    if roughcut_state is not None:
+        project["roughcut_state"] = dict(roughcut_state or {})
+    else:
+        project.setdefault("roughcut_state", project.get("roughcut_state", {}) or {})
 
     _write_json(filepath, project)
 
@@ -318,7 +413,11 @@ def load_project(filepath: str) -> dict | None:
     """프로젝트 JSON 로드 → dict 반환"""
     if not os.path.exists(filepath):
         return None
-    return _read_json(filepath)
+    project = _read_json(filepath)
+    project["version"] = PROJECT_SCHEMA_VERSION
+    project["phase"] = "PHASE2"
+    project.setdefault("roughcut_state", {})
+    return project
 
 
 def list_projects() -> list:
@@ -371,6 +470,8 @@ def add_media_to_project(filepath: str, new_paths: list):
         return
 
     project = _read_json(filepath)
+    project["version"] = PROJECT_SCHEMA_VERSION
+    project["phase"] = "PHASE2"
 
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
     existing_paths = {c["source_path"] for c in clips}
@@ -415,6 +516,31 @@ def add_media_to_project(filepath: str, new_paths: list):
         }
         for c in clips
     ]
+    existing_segments = [
+        {
+            "start": seg.get("timeline_start", seg.get("start", 0.0)),
+            "end": seg.get("timeline_end", seg.get("end", 0.0)),
+            "text": seg.get("text", ""),
+            "speaker": seg.get("speaker", "00"),
+        }
+        for seg in (project.get("subtitles", {}) or {}).get("segments", [])
+    ]
+    project["editor_state"] = build_editor_state(
+        mode="multiclip" if len(project["media"]) > 1 else "single",
+        media_files=[item["path"] for item in sorted(project["media"], key=lambda item: item.get("order", 0))],
+        segments=existing_segments,
+        workspace=project.get("workspace", {}) or {},
+        clip_boundaries=[
+            {
+                "start": c.get("timeline_start", 0.0),
+                "end": c.get("timeline_end", 0.0),
+                "file": c.get("source_path", ""),
+                "name": os.path.basename(c.get("source_path", "")),
+            }
+            for c in clips
+        ],
+    )
+    project.setdefault("roughcut_state", {})
 
     project["updated_at"] = datetime.now().isoformat()
     _write_json(filepath, project)
@@ -426,6 +552,8 @@ def merge_srt_to_project(filepath: str) -> int | None:
         return None
 
     project = _read_json(filepath)
+    project["version"] = PROJECT_SCHEMA_VERSION
+    project["phase"] = "PHASE2"
     clips = sorted(
         project.get("timeline", {}).get("tracks", [{}])[0].get("clips", []),
         key=lambda x: x.get("order", 0)
@@ -460,6 +588,30 @@ def merge_srt_to_project(filepath: str) -> int | None:
 
     project.setdefault("subtitles", {})
     project["subtitles"]["segments"] = all_segments
+    project["editor_state"] = build_editor_state(
+        mode="multiclip" if len(clips) > 1 else "single",
+        media_files=[clip.get("source_path", "") for clip in clips if clip.get("source_path")],
+        segments=[
+            {
+                "start": seg.get("timeline_start", 0.0),
+                "end": seg.get("timeline_end", 0.0),
+                "text": seg.get("text", ""),
+                "speaker": seg.get("speaker", "00"),
+            }
+            for seg in all_segments
+        ],
+        workspace=project.get("workspace", {}) or {},
+        clip_boundaries=[
+            {
+                "start": clip.get("timeline_start", 0.0),
+                "end": clip.get("timeline_end", 0.0),
+                "file": clip.get("source_path", ""),
+                "name": os.path.basename(clip.get("source_path", "")),
+            }
+            for clip in clips
+        ],
+    )
+    project.setdefault("roughcut_state", {})
     project["updated_at"] = datetime.now().isoformat()
     _write_json(filepath, project)
 

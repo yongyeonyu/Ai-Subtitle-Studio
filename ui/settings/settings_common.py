@@ -106,6 +106,7 @@ DEFAULT_ADV_SETTINGS = {
     "single_subtitle_end": 0.2,
     "split_length_threshold": 10,
     "sub_min_duration": 0.2,
+    "sub_max_duration": 6.0,
     "sub_max_cps": 12,
     "sub_dedup_window": 0.5,
     "sub_gap_break_sec": 1.5

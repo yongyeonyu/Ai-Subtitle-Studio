@@ -259,12 +259,14 @@ class EditorActionsMixin:
         except Exception:
             workspace['scroll_x'] = 0
         workspace['active_clip_idx'] = int(getattr(self.timeline.canvas, '_active_clip_idx', getattr(main_w, '_active_clip_idx', 0)) or 0)
+        workspace['active_work_mode'] = getattr(main_w, '_current_work_mode', 'edit') or 'edit'
         save_project(
             filepath=project_path,
             media_paths=_media_paths,
             srt_path=get_srt_path(media_path),
             segments=segs,
-            workspace=workspace
+            workspace=workspace,
+            active_work_mode=workspace['active_work_mode'],
         )
         from core.project.project_phase1b import enrich_existing_project_file
         _owner = locals().get('main_w', self.window() if hasattr(self, 'window') else self)

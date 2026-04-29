@@ -1,4 +1,4 @@
-# Version: 02.07.00
+# Version: 03.00.02
 # Phase: PHASE1-B
 """
 ui/editor_segments.py
@@ -365,17 +365,7 @@ class EditorSegmentsMixin:
     def _refresh_video_subtitle_context(self):
         if not hasattr(self, 'video_player'):
             return
-        segs = self._get_current_segments()
-        self._cached_segs = segs
-        try:
-            _mc_boxes = list(getattr(self.timeline.canvas, '_multiclip_boxes', []) or []) if hasattr(self, 'timeline') else []
-            if _mc_boxes and hasattr(self, '_resolve_active_context'):
-                _gsec = float(getattr(self.timeline.canvas, 'playhead_sec', 0.0) or 0.0)
-                ctx = self._resolve_active_context(global_sec=_gsec)
-                if ctx:
-                    segs = list(ctx.get('local_segments', []) or [])
-        except Exception:
-            pass
+        segs = self._video_subtitle_context_for_player()
         try:
             if hasattr(self.video_player, 'refresh_subtitle_context'):
                 self.video_player.refresh_subtitle_context(segs)
@@ -383,6 +373,25 @@ class EditorSegmentsMixin:
                 self.video_player.set_context_segments(segs)
         except Exception:
             pass
+
+    def _video_subtitle_context_for_player(self):
+        segs = getattr(self, '_cached_segs', None)
+        if segs is None:
+            segs = self._get_current_segments()
+            self._cached_segs = segs
+        try:
+            _mc_boxes = list(getattr(self.timeline.canvas, '_multiclip_boxes', []) or []) if hasattr(self, 'timeline') else []
+            if _mc_boxes and hasattr(self, '_resolve_active_context'):
+                _gsec = float(getattr(self.timeline.canvas, 'playhead_sec', 0.0) or 0.0)
+                ctx = self._resolve_active_context(global_sec=_gsec)
+                if ctx:
+                    return list(ctx.get('local_segments', []) or [])
+        except Exception:
+            pass
+        return [
+            s for s in list(segs or [])
+            if not s.get('is_gap') and str(s.get('text', '') or '').strip()
+        ]
 
     def _schedule_timeline(self):
         if getattr(self, '_inline_updating', False): return

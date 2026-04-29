@@ -1,5 +1,5 @@
-# Version: 02.03.03
-# Phase: PHASE1-B
+# Version: 03.00.19
+# Phase: PHASE2
 """
 media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 + Whisper 섹터 동기화)
 [특징] 
@@ -12,8 +12,8 @@ import os, subprocess, json, re, config, shutil, time, wave, threading
 from concurrent.futures import ThreadPoolExecutor
 from logger import get_logger
 
-_CHUNK_DURATION = 30     
-_OVERLAP_SEC    = 3      
+_CHUNK_DURATION = 30
+_OVERLAP_SEC = 3.0
 
 
 def _parse_worker_json_line(line: str):
@@ -172,7 +172,7 @@ class VideoProcessor:
                 with wave.open(cleaned_wav, "r") as w:
                     total_dur = w.getnframes() / float(w.getframerate())
 
-                grouped = self._build_grouped_chunks(vad_segments, total_dur)
+                grouped = self._build_grouped_chunks(vad_segments, total_dur, settings=s)
                 self._write_grouped_chunks_parallel(cleaned_wav, chunk_dir, grouped)
 
                 try:
@@ -218,14 +218,11 @@ class VideoProcessor:
                 try:
                     with wave.open(cleaned_wav, 'r') as wf:
                         total_dur = wf.getnframes() / float(wf.getframerate())
-                    chunk_sec = max(10.0, float(s.get("ff_chunk", 25)))
-                    grouped = []
-                    cur = 0.0
-                    while cur < total_dur:
-                        grouped.append({"start": cur, "end": min(total_dur, cur + chunk_sec)})
-                        cur += chunk_sec
+                    chunk_sec = max(10.0, float(s.get("ff_chunk", _CHUNK_DURATION)))
+                    overlap_sec = self._chunk_overlap_sec(s)
+                    grouped = self._split_range_with_overlap(0.0, total_dur, chunk_sec, overlap_sec)
                     self._write_grouped_chunks_parallel(cleaned_wav, chunk_dir, grouped)
-                    get_logger().log(f"    → {len(grouped)}개 청크 병렬 생성 완료 (총 {total_dur:.1f}초)")
+                    get_logger().log(f"    → {len(grouped)}개 청크 병렬 생성 완료 (overlap {overlap_sec:.1f}초, 총 {total_dur:.1f}초)")
                 except Exception as e:
                     get_logger().log(f"  ⚠️ 강제 분할 실패: {e}")
 
@@ -301,9 +298,10 @@ class VideoProcessor:
             grouped = self._build_grouped_chunks(
                 timestamps,
                 total_dur,
-                max_chunk_dur=30.0,
+                max_chunk_dur=max(10.0, float(s.get("ff_chunk", _CHUNK_DURATION))),
                 margin=1.0,
-                gap_merge_limit=3.0
+                gap_merge_limit=3.0,
+                settings=s
             )
             self._write_grouped_chunks_parallel(wav_path, chunk_dir, grouped)
 
@@ -460,6 +458,11 @@ class VideoProcessor:
                         target_end_sec=target_end_sec,
                         is_single=is_single
                     )
+                    chunk_segs = self._dedupe_overlapping_segments(
+                        chunk_segs,
+                        previous_end=prev_end,
+                        dedup_window=float(s.get("sub_dedup_window", 0.5) or 0.5),
+                    )
 
                     if chunk_segs:
                         prev_end = chunk_segs[-1]["end"]
@@ -490,6 +493,11 @@ class VideoProcessor:
                         vad_strict,
                         target_end_sec=target_end_sec,
                         is_single=is_single
+                    )
+                    chunk_segs = self._dedupe_overlapping_segments(
+                        chunk_segs,
+                        previous_end=prev_end,
+                        dedup_window=float(s.get("sub_dedup_window", 0.5) or 0.5),
                     )
 
                     if chunk_segs:
@@ -559,8 +567,39 @@ class VideoProcessor:
         )
         return result.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 0
     
+    def _chunk_overlap_sec(self, settings: dict | None = None) -> float:
+        settings = settings or {}
+        try:
+            overlap = float(settings.get("whisper_chunk_overlap_sec", _OVERLAP_SEC))
+        except (TypeError, ValueError):
+            overlap = _OVERLAP_SEC
+        return max(0.0, min(8.0, overlap))
+
+    def _split_range_with_overlap(self, start: float, end: float, max_chunk_dur: float, overlap_sec: float) -> list[dict]:
+        start = max(0.0, float(start or 0.0))
+        end = max(start, float(end or start))
+        max_chunk_dur = max(1.0, float(max_chunk_dur or _CHUNK_DURATION))
+        overlap_sec = max(0.0, min(float(overlap_sec or 0.0), max_chunk_dur / 2.0))
+        if end <= start:
+            return []
+        if end - start <= max_chunk_dur:
+            return [{"start": start, "end": end}]
+
+        grouped = []
+        cursor = start
+        step = max(0.5, max_chunk_dur - overlap_sec)
+        while cursor < end:
+            chunk_end = min(end, cursor + max_chunk_dur)
+            grouped.append({"start": round(cursor, 3), "end": round(chunk_end, 3)})
+            if chunk_end >= end:
+                break
+            cursor = min(end, cursor + step)
+        return grouped
+
     def _build_grouped_chunks(self, timestamps: list[dict], total_dur: float,
-                          max_chunk_dur: float = 30.0, margin: float = 1.0, gap_merge_limit: float = 3.0) -> list[dict]:
+                          max_chunk_dur: float = 30.0, margin: float = 1.0,
+                          gap_merge_limit: float = 3.0, settings: dict | None = None) -> list[dict]:
+        overlap_sec = self._chunk_overlap_sec(settings)
         merged_sectors = []
         for ts in timestamps:
             s = max(0.0, ts["start"] - margin)
@@ -572,15 +611,7 @@ class VideoProcessor:
 
         grouped = []
         for seg in merged_sectors:
-            dur = seg["end"] - seg["start"]
-            if dur <= max_chunk_dur:
-                grouped.append(seg)
-            else:
-                cur_start = seg["start"]
-                while cur_start < seg["end"]:
-                    cur_end = min(seg["end"], cur_start + max_chunk_dur)
-                    grouped.append({"start": cur_start, "end": cur_end})
-                    cur_start = cur_end
+            grouped.extend(self._split_range_with_overlap(seg["start"], seg["end"], max_chunk_dur, overlap_sec))
 
         return grouped
     
@@ -677,4 +708,40 @@ class VideoProcessor:
             })
 
         return chunk_segs
+
+    def _dedupe_overlapping_segments(self, chunk_segs: list[dict], previous_end: float, dedup_window: float = 0.5) -> list[dict]:
+        if not chunk_segs or previous_end <= 0.0:
+            return chunk_segs
+
+        boundary = max(0.0, float(previous_end) - min(max(float(dedup_window or 0.0), 0.0), 0.15))
+        cleaned = []
+        for seg in chunk_segs:
+            words = [
+                dict(w)
+                for w in (seg.get("words") or [])
+                if float(w.get("end", 0.0) or 0.0) > boundary
+            ]
+            if seg.get("words"):
+                if not words:
+                    continue
+                new_seg = dict(seg)
+                new_seg["words"] = words
+                new_seg["start"] = float(words[0].get("start", seg.get("start", previous_end)) or previous_end)
+                new_seg["end"] = float(words[-1].get("end", seg.get("end", previous_end)) or previous_end)
+                if words and words != seg.get("words"):
+                    text = " ".join(str(w.get("word", "") or "").strip() for w in words).strip()
+                    if text:
+                        new_seg["text"] = text
+                cleaned.append(new_seg)
+                continue
+
+            exact_end = float(seg.get("end", 0.0) or 0.0)
+            if exact_end <= boundary:
+                continue
+            new_seg = dict(seg)
+            new_seg["start"] = max(float(new_seg.get("start", 0.0) or 0.0), previous_end)
+            if new_seg["end"] > new_seg["start"]:
+                cleaned.append(new_seg)
+
+        return cleaned
     

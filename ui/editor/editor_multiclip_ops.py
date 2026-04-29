@@ -1,5 +1,5 @@
-# Version: 02.03.02
-# Phase: PHASE1-B
+# Version: 03.00.24
+# Phase: PHASE2
 """
 EditorWidget 멀티클립 파일 추가/삭제/리매핑 Mixin.
 """
@@ -142,6 +142,11 @@ class EditorMulticlipOpsMixin:
         owner = self.window()
         from ui.project.multiclip_panel import MultiClipEditor
         files = list(getattr(owner, '_multiclip_files', []) or [])
+        if not files and getattr(self, 'media_path', None):
+            files = [self.media_path]
+            owner._multiclip_files = list(files)
+            owner._multiclip_boundaries = self._recompute_multiclip_boundaries(files)
+            owner._project_boundary_times = []
         dlg = MultiClipEditor(files, owner, reorder_only=True, show_multiclip=False)
         if not dlg.exec():
             return

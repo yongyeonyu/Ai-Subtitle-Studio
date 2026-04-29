@@ -1,4 +1,4 @@
-# Version: 02.07.00
+# Version: 03.00.22
 # Phase: PHASE1-C
 """
 ui/timeline_paint.py
@@ -12,11 +12,16 @@ import config
 
 from ui.timeline.timeline_constants import (
     CANVAS_H,
+    DIAMOND_Y,
     HANDLE_R,
     ICON_SZ,
     RULER_H,
     SEG_BOT,
     SEG_TOP,
+    SPEAKER_BOT,
+    SPEAKER_TOP,
+    SUBTITLE_BOT,
+    SUBTITLE_TOP,
     WAVE_H,
     WAVE_HALF,
     WAVE_MID,
@@ -31,10 +36,10 @@ class TimelinePaintMixin:
 
         total_w = self.total_width()
         total_secs = self.total_duration + 2
-        subtitle_top = SEG_TOP + 8
-        subtitle_bot = SEG_TOP + 56
-        speaker_top = subtitle_bot + 5
-        speaker_bot = speaker_top + 22
+        subtitle_top = SUBTITLE_TOP
+        subtitle_bot = SUBTITLE_BOT
+        speaker_top = SPEAKER_TOP
+        speaker_bot = SPEAKER_BOT
         voice_mid = speaker_bot + 17
         audio_mid = voice_mid + 28
         track_bottom = CANVAS_H - 8
@@ -363,7 +368,7 @@ class TimelinePaintMixin:
         for i in range(len(self.segments) - 1):
             s1 = self.segments[i]; s2 = self.segments[i + 1]
             if abs(s1["end"] - s2["start"]) < 0.05:
-                bx = self._x(s1["end"]); r = 5; cy = speaker_bot + 13
+                bx = self._x(s1["end"]); r = 5; cy = DIAMOND_Y
                 is_hover = (getattr(self, '_hover_diamond', None) == i)
                 color = QColor("#FFFFFF") if is_hover else QColor("#AAB0B6")
                 pts = QPolygon([
@@ -464,6 +469,16 @@ class TimelinePaintMixin:
             p.setPen(QPen(QColor("#FFFFFF"), 1))
             p.drawEllipse(self._playhead_handle_rect)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+        if self.hasFocus():
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor("#FFFF00"), 2))
+            left = 1
+            right = max(1, total_w - 2)
+            bottom = max(1, CANVAS_H - 2)
+            p.drawLine(left, 1, left, bottom)
+            p.drawLine(right, 1, right, bottom)
+            p.drawLine(left, bottom, right, bottom)
 
     def _draw_handle(self, p, bx, is_left, color):
         cy = SEG_TOP + 32

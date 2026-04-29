@@ -1,5 +1,5 @@
-# Version: 02.04.00
-# Phase: PHASE1-B
+# Version: 03.00.20
+# Phase: PHASE2
 """
 ui/settings_gap.py  ─  ⏱️ 자막 간격 및 환각/앵무새 방어 정밀 시뮬레이터 (X5 Edition)
 [v01.00.10 수정사항]
@@ -119,6 +119,14 @@ class GapSettingsDialog(QDialog):
             "[+] 관대하게: 기계적인 환각(랩하듯 쏟아내는 오류)이 안 지워지고 그대로 표시됩니다.<br>"
             "[-] 엄격하게: 말이 조금만 빨라도 환각으로 간주해 억울하게 삭제될 수 있습니다."))
 
+        self.slider_max_dur = QSlider(Qt.Orientation.Horizontal); self.slider_max_dur.setRange(10, 120)
+        cur_max_dur = int(self.result.get("sub_max_duration", 6.0) * 10); self.slider_max_dur.setValue(cur_max_dur)
+        self.lbl_max_dur = QLabel(f"{cur_max_dur/10.0:.1f} 초")
+        form3.addRow("최대 자막 길이:", self._create_slider_row(self.slider_max_dur, self.lbl_max_dur, "sub_max_duration", 10.0, lambda v: f"{v:.1f} 초",
+            "<b>[설명]</b> 한 자막이 화면에 유지되는 최대 목표 시간입니다.<br><br>"
+            "[+] 길게: 호흡이 긴 문장을 한 자막에 더 오래 유지합니다.<br>"
+            "[-] 짧게: 긴 문장을 word timestamp 기준으로 더 자주 나눕니다."))
+
         self.slider_dedup = QSlider(Qt.Orientation.Horizontal); self.slider_dedup.setRange(1, 20)
         cur_dedup = int(self.result.get("sub_dedup_window", 0.5) * 10); self.slider_dedup.setValue(cur_dedup)
         self.lbl_dedup = QLabel(f"{cur_dedup/10.0:.1f} 초")
@@ -214,7 +222,7 @@ class GapSettingsDialog(QDialog):
                   self.slider_min_dur, self.slider_dedup, self.slider_min_chars, 
                   self.slider_hal_dur, self.slider_hal_chars, self.slider_skip,
                   self.slider_gap_break, self.slider_cps, self.slider_split, 
-                  self.slider_pre_merge, self.slider_enforce]:
+                  self.slider_max_dur, self.slider_pre_merge, self.slider_enforce]:
             s.valueChanged.connect(self._update_simulator)
         
         self._update_simulator()
@@ -294,6 +302,7 @@ class GapSettingsDialog(QDialog):
         self.result["single_subtitle_end"] = self.slider_single.value() / 10.0
         self.result["split_length_threshold"] = int(self.slider_split.value())
         self.result["sub_min_duration"] = self.slider_min_dur.value() / 10.0
+        self.result["sub_max_duration"] = self.slider_max_dur.value() / 10.0
         self.result["sub_max_cps"] = int(self.slider_cps.value())
         self.result["sub_dedup_window"] = self.slider_dedup.value() / 10.0
         self.result["sub_gap_break_sec"] = self.slider_gap_break.value() / 10.0

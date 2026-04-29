@@ -1,5 +1,5 @@
-# Version: 02.07.00
-# Phase: PHASE1-D
+# Version: 03.00.27
+# Phase: PHASE2
 """
 Global bottom menu bar.
 
@@ -16,35 +16,36 @@ class StatusRail(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet("background: transparent; border: none;")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout = QGridLayout(self)
         layout.setContentsMargins(0, 2, 0, 4)
-        layout.setHorizontalSpacing(4)
+        layout.setHorizontalSpacing(0)
         layout.setVerticalSpacing(4)
-        self.status_buttons = {}
-        for idx, (key, text, icon) in enumerate([
-            ("generate", "생성", "subtitle"),
-            ("editing", "편집", "edit"),
-            ("stt", "STT", "mic"),
-            ("saved", "저장", "check"),
-            ("export", "출력", "export"),
-            ("exit", "종료", "power"),
-        ]):
-            btn = QToolButton()
-            btn.setText(text)
-            btn.setIcon(line_icon(icon, "#A9B0B7", 20))
-            btn.setIconSize(QSize(15, 15))
-            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            btn.setFixedSize(60, 28)
-            btn.setCursor(Qt.CursorShape.ArrowCursor)
-            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            btn.setStyleSheet(tool_button_style("toolbar"))
-            self.status_buttons[key] = btn
-            layout.addWidget(btn, idx // 3, idx % 3)
+        self.stage_button = self._rail_button("검토", "review")
+        self.mode_button = self._rail_button("편집", "edit")
+        layout.addWidget(self.stage_button, 0, 0)
+        layout.addWidget(self.mode_button, 1, 0)
+        layout.setColumnStretch(0, 1)
+
+    def _rail_button(self, text, icon):
+        btn = QToolButton()
+        btn.setText(text)
+        btn.setIcon(line_icon(icon, "#A9B0B7", 20))
+        btn.setIconSize(QSize(15, 15))
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        btn.setMinimumHeight(28)
+        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        btn.setCursor(Qt.CursorShape.ArrowCursor)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setStyleSheet(tool_button_style("toolbar"))
+        return btn
 
     def refresh_from_editor(self, editor):
-        active_key = None
+        stage_key = "review"
+        mode_key = str(getattr(self.window(), "_current_work_mode", "edit") or "edit")
         if editor is not None:
             state = str(getattr(editor, "current_state", "") or "").lower()
+            mode = str(getattr(editor, "current_mode", "") or "").lower()
             status_text = ""
             label = getattr(editor, "status_lbl", None)
             if label is not None:
@@ -52,34 +53,47 @@ class StatusRail(QWidget):
                     status_text = str(label.text() or "")
                 except Exception:
                     status_text = ""
-            dirty = bool(getattr(editor, "_is_dirty", False))
             processing = bool(getattr(editor, "_is_ai_processing", False))
-            if processing or "생성" in status_text or "처리" in status_text or "processing" in state:
-                active_key = "generate"
-            elif "저장" in status_text or "saved" in state:
-                active_key = "saved"
-            elif "출력" in status_text or "export" in state:
-                active_key = "export"
-            elif getattr(editor, "_stt_mode_enabled", False):
-                active_key = "stt"
-            elif dirty or editor is not None:
-                active_key = "editing"
+            text_l = status_text.lower()
+            if "완료" in status_text or "saved" in state:
+                stage_key = "done"
+            elif "llm" in text_l or "교정" in status_text or "최적화" in status_text:
+                stage_key = "llm"
+            elif "whisper" in text_l or "인식" in status_text or "transcrib" in text_l:
+                stage_key = "whisper"
+            elif processing or "생성" in status_text or "처리" in status_text or "processing" in state:
+                stage_key = "generate"
+            elif "vad" in text_l or "검토" in status_text:
+                stage_key = "review"
 
-        icon_map = {
-            "generate": "subtitle",
-            "editing": "edit",
-            "stt": "mic",
-            "saved": "check",
-            "export": "export",
-            "exit": "power",
+            if getattr(editor, "_stt_mode_enabled", False):
+                mode_key = "stt"
+            elif processing or "생성" in status_text or "mode_ai" in mode or "mode_auto" in mode:
+                mode_key = "subtitle"
+            else:
+                mode_key = "edit"
+
+        stage_meta = {
+            "review": ("검토", "review", "#5AC8FA"),
+            "whisper": ("인식", "mic", "#5AC8FA"),
+            "generate": ("생성", "subtitle", "#007AFF"),
+            "llm": ("교정", "llm", "#A678F4"),
+            "done": ("완료", "check", "#34C759"),
         }
-        for key, btn in self.status_buttons.items():
-            active = key == active_key
-            color = "#34C759" if key == "saved" else "#007AFF" if active else "#A9B0B7"
-            if key == "exit":
-                color = "#FF8A80" if active else "#A9B0B7"
-            btn.setIcon(line_icon(icon_map[key], color, 20))
-            btn.setStyleSheet(tool_button_style("toolbar", checked=active))
+        mode_meta = {
+            "subtitle": ("자막생성", "subtitle", "#007AFF"),
+            "edit": ("편집", "edit", "#34C759"),
+            "stt": ("STT", "mic", "#FF453A"),
+            "roughcut": ("러프컷", "roughcut", "#FF9500"),
+            "shortform": ("숏폼", "shortform", "#A678F4"),
+        }
+        self._apply_button_state(self.stage_button, *stage_meta.get(stage_key, stage_meta["review"]))
+        self._apply_button_state(self.mode_button, *mode_meta.get(mode_key, mode_meta["edit"]))
+
+    def _apply_button_state(self, btn, text, icon, color):
+        btn.setText(text)
+        btn.setIcon(line_icon(icon, color, 20))
+        btn.setStyleSheet(tool_button_style("toolbar", checked=True))
 
 
 class GlobalMenuBar(QWidget):
@@ -90,13 +104,19 @@ class GlobalMenuBar(QWidget):
         self.status_rail = None
         self._tool_buttons = []
         self.setFixedHeight(74)
-        self.setStyleSheet("background: #151C20; border-top: none;")
+        self.setObjectName("GlobalMenuBar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(
+            "QWidget#GlobalMenuBar { background: #151C20; border-top: none; } "
+            "QWidget#MenuBarGroup { background: transparent; border: none; }"
+        )
 
         root = QHBoxLayout(self)
         root.setContentsMargins(8, 6, 8, 6)
         root.setSpacing(8)
 
         self.left_group = QWidget()
+        self.left_group.setObjectName("MenuBarGroup")
         left = QHBoxLayout(self.left_group)
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(5)
@@ -117,28 +137,32 @@ class GlobalMenuBar(QWidget):
         root.addWidget(self.left_group, stretch=1, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.center_group = QWidget()
+        self.center_group.setObjectName("MenuBarGroup")
         center = QHBoxLayout(self.center_group)
         center.setContentsMargins(0, 0, 0, 0)
         center.setSpacing(6)
-        self.btn_start = self._action_button("시작", "restart", self._click_start)
-        self.btn_undo = self._action_button("취소", "undo", self._click_undo)
-        self.btn_redo = self._action_button("복귀", "redo", self._click_redo)
+        self.btn_start = self._action_button("시작", "play", self._click_start)
+        self.btn_undo = self._action_button("Undo", "undo", self._click_undo)
+        self.btn_redo = self._action_button("Redo", "redo", self._click_redo)
         self.btn_save = self._action_button("저장", "save", self._click_save)
         for btn in (self.btn_start, self.btn_undo, self.btn_redo, self.btn_save):
             center.addWidget(btn)
         root.addWidget(self.center_group, stretch=0, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.right_group = QWidget()
+        self.right_group.setObjectName("MenuBarGroup")
         right = QHBoxLayout(self.right_group)
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(5)
         self.btn_auto_start = self._wide_button("자동", "sliders", self._toggle_auto_start)
+        self.btn_help = self._wide_button("도움말", "help", self._open_help)
         self.btn_log = self._wide_button("터미널", "terminal", self._toggle_log)
         self.btn_auto_settings = self._wide_button("자동설정", "settings", self._open_auto_settings, min_width=96)
         self.btn_cache_clear = self._wide_button("캐쉬삭제", "trash", self._clear_cache, min_width=96)
         right.addWidget(self.btn_auto_settings)
         right.addWidget(self.btn_cache_clear)
         right.addWidget(self.btn_auto_start)
+        right.addWidget(self.btn_help)
         right.addWidget(self.btn_log)
         right.addWidget(self._wide_button("종료", "power", self._quit, kind="danger"))
         root.addWidget(self.right_group, stretch=1, alignment=Qt.AlignmentFlag.AlignRight)
@@ -223,11 +247,14 @@ class GlobalMenuBar(QWidget):
         else:
             self.btn_start.setText("시작")
             self.engine_label.setText("")
+        self._sync_start_icon()
         if self.status_rail is not None:
             self.status_rail.refresh_from_editor(editor)
         stt_on = bool(getattr(editor, "_stt_mode_enabled", False)) if editor is not None else False
         if hasattr(self, "btn_stt_mode"):
-            self.btn_stt_mode.setText("STT ON" if stt_on else "STT OFF")
+            stt_color = "#FF453A" if stt_on else "#8B949E"
+            self.btn_stt_mode.setText("STT")
+            self.btn_stt_mode.setIcon(line_icon("mic", stt_color, 24))
             self.btn_stt_mode.setToolTip("STT 모드 ON" if stt_on else "STT 모드 OFF")
             self.btn_stt_mode.setStyleSheet(tool_button_style("toolbar", checked=stt_on))
         main = self.main_window
@@ -248,7 +275,7 @@ class GlobalMenuBar(QWidget):
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setMinimumSize(92, 58)
                     btn.setMaximumWidth(16777215)
-                elif btn in (self.btn_auto_start, self.btn_log, self.btn_auto_settings, self.btn_cache_clear):
+                elif btn in (self.btn_auto_start, self.btn_help, self.btn_log, self.btn_auto_settings, self.btn_cache_clear):
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setMinimumSize(int(btn.property("expandedMinWidth") or 72), 52)
                     btn.setMaximumWidth(16777215)
@@ -256,6 +283,16 @@ class GlobalMenuBar(QWidget):
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setMinimumSize(54, 52)
                     btn.setMaximumWidth(16777215)
+
+    def _sync_start_icon(self):
+        text = str(self.btn_start.text() or "")
+        if "처리" in text:
+            icon_name = "stop"
+        elif "재시작" in text:
+            icon_name = "refresh"
+        else:
+            icon_name = "play"
+        self.btn_start.setIcon(line_icon(icon_name, "#F5F7FA", 28))
 
     def _should_icon_only(self):
         win = self.window()
@@ -371,6 +408,10 @@ class GlobalMenuBar(QWidget):
     def _clear_cache(self):
         if hasattr(self.main_window, "_clear_cache"):
             self.main_window._clear_cache()
+
+    def _open_help(self):
+        if hasattr(self.main_window, "open_help_dialog"):
+            self.main_window.open_help_dialog()
 
     def _toggle_log(self):
         if hasattr(self.main_window, "_toggle_log"):

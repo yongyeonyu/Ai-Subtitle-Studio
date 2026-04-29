@@ -1,4 +1,4 @@
-# Version: 02.07.00
+# Version: 03.00.10
 # Phase: PHASE1-C
 """Editor widget and function-preserving PHASE1-C layout."""
 import re, os, sys, json, atexit, threading, shutil, time
@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QSizePolicy, QMessageBox, QMenu, QLineEdit, QComboBox,
     QToolButton
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint, QSettings, QSize
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
 from PyQt6.QtGui import QKeySequence, QShortcut, QColor, QTextCursor, QIcon
 from PyQt6.QtMultimedia import QMediaPlayer
 
@@ -273,7 +273,7 @@ class EditorWidget(
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setHandleWidth(1)
         self.splitter.setStyleSheet("QSplitter::handle { background: #0F1518; width: 1px; }")
-        editor_wrap = QWidget(); editor_wrap.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
+        editor_wrap = QWidget(); editor_wrap.setMinimumWidth(260); editor_wrap.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
         ew_layout   = QVBoxLayout(editor_wrap); ew_layout.setContentsMargins(8, 8, 8, 8); ew_layout.setSpacing(6)
 
         self.text_edit = SubtitleTextEdit()
@@ -297,25 +297,14 @@ class EditorWidget(
         ew_layout.addWidget(self.text_edit)
         self.splitter.addWidget(editor_wrap)
         self.video_player = VideoPlayerWidget()
+        if hasattr(self.video_player, "set_subtitle_provider"):
+            self.video_player.set_subtitle_provider(self._video_subtitle_context_for_player)
         self.video_player.setStyleSheet("background: #000000; border: 1px solid #2D3942; border-radius: 7px;")
         self.splitter.addWidget(self.video_player)
         self.splitter.setStretchFactor(0, 63); self.splitter.setStretchFactor(1, 37)
         self.splitter.setCollapsible(0, False); self.splitter.setCollapsible(1, False)
         root.addWidget(self.splitter, stretch=1)
-        self._video_preview_expanded = False
-        self._video_preview_min_sizes = None
-        self.btn_video_expand = QToolButton(self)
-        self.btn_video_expand.setText("◀")
-        self.btn_video_expand.setToolTip("비디오 미리보기 폭 확장 / 기본 폭")
-        self.btn_video_expand.setFixedSize(34, 38)
-        self.btn_video_expand.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_video_expand.setStyleSheet(
-            "QToolButton { background: #202A31; color: #F5F7FA; border: 1px solid #3A4650; "
-            "border-radius: 17px; font-size: 14px; font-weight: 800; } "
-            "QToolButton:hover { background: #2A363F; border-color: #007AFF; }"
-        )
-        self.btn_video_expand.clicked.connect(self._toggle_video_preview_width)
-        self.btn_video_expand.raise_()
+        self._video_width_locking = False
         QTimer.singleShot(0, self._position_video_expand_button)
         QTimer.singleShot(150, self._position_video_expand_button)
 
@@ -608,7 +597,7 @@ class EditorWidget(
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._position_video_expand_button()
+        QTimer.singleShot(0, self._position_video_expand_button)
         is_compact = self.width() < 1100
         top_font = "10px" if is_compact else "11px"
         for btn, full_t, comp_t, _ in getattr(self, '_top_btns', []):
@@ -622,64 +611,41 @@ class EditorWidget(
             self.btn_log.setText("로그" if is_compact else self._terminal_log_button_text())
 
     def _position_video_expand_button(self):
-        if not hasattr(self, "btn_video_expand") or not hasattr(self, "splitter"):
+        self._apply_fixed_video_preview_width()
+
+    def _apply_fixed_video_preview_width(self):
+        if not hasattr(self, "splitter") or not hasattr(self, "video_player"):
+            return
+        if getattr(self, "_video_width_locking", False):
             return
         try:
             sizes = self.splitter.sizes()
             if len(sizes) < 2 or self.splitter.width() <= 0:
                 QTimer.singleShot(0, self._position_video_expand_button)
                 return
-            if (
-                not getattr(self, "video_player", None)
-                or not self.video_player.isVisible()
-                or sizes[1] <= 8
-                or float(getattr(self.video_player, "total_time", 0.0) or 0.0) <= 0.0
-            ):
-                self.btn_video_expand.hide()
+            if not self.video_player.isVisible() or sizes[1] <= 8:
                 return
 
-            self.btn_video_expand.show()
-            split_origin = self.splitter.mapTo(self, QPoint(0, 0))
-            boundary_x = split_origin.x() + max(0, min(sizes[0], self.splitter.width()))
-            x = int(boundary_x - self.btn_video_expand.width() / 2)
-            y = split_origin.y() + int((self.splitter.height() - self.btn_video_expand.height()) / 2)
-            max_y = split_origin.y() + max(0, self.splitter.height() - self.btn_video_expand.height() - 8)
-            y = max(split_origin.y() + 8, min(y, max_y))
-            self.btn_video_expand.move(x, int(y))
-            self.btn_video_expand.raise_()
+            total_w = max(1, sum(sizes))
+            video_h = self._video_fixed_height()
+            target_video_w = int(video_h * (16 / 9)) + 16
+            target_video_w = max(260, min(target_video_w, total_w - 260))
+            if abs(sizes[1] - target_video_w) <= 2:
+                return
+            self._video_width_locking = True
+            self.video_player.setMinimumWidth(260)
+            self.splitter.setSizes([max(260, total_w - target_video_w), target_video_w])
+            self.splitter.update()
         except Exception:
             pass
+        finally:
+            self._video_width_locking = False
 
-    def _toggle_video_preview_width(self):
-        if not hasattr(self, "splitter") or not hasattr(self, "video_player"):
-            return
-        if self._video_preview_min_sizes is None:
-            self._video_preview_min_sizes = list(self.splitter.sizes())
-        if self._video_preview_expanded:
-            self.splitter.setSizes(self._video_preview_min_sizes)
-            self._video_preview_expanded = False
-            self.btn_video_expand.setText("◀")
-            QTimer.singleShot(0, self._position_video_expand_button)
-            return
-
-        sizes = self.splitter.sizes()
-        total_w = max(1, sum(sizes))
-        current_video_w = sizes[1] if len(sizes) > 1 else int(total_w * 0.37)
-        editor_min_w = min(760, max(520, int(total_w * 0.36)))
+    def _video_fixed_height(self):
         try:
-            video_h = max(1, self.video_player.video_container.height())
+            return max(1, self.video_player.video_container.height())
         except Exception:
-            video_h = max(1, self.video_player.height() - 78)
-        aspect = float(getattr(self, "_video_preview_aspect", 16 / 9) or 16 / 9)
-        aspect = 1.0 if aspect < 1.25 else 16 / 9
-        target_video_w = int(video_h * aspect) + 18
-        if aspect > 1.01:
-            target_video_w = max(current_video_w, target_video_w)
-        target_video_w = min(target_video_w, max(current_video_w, total_w - editor_min_w))
-        self.splitter.setSizes([max(editor_min_w, total_w - target_video_w), target_video_w])
-        self._video_preview_expanded = True
-        self.btn_video_expand.setText("▶")
-        QTimer.singleShot(0, self._position_video_expand_button)
+            return max(1, self.video_player.height() - 78)
 
     # ---------------------------------------------------------
     # Helpers
@@ -698,6 +664,7 @@ class EditorWidget(
     def set_terminal_visible_layout(self, is_visible: bool):
         if not hasattr(self, 'splitter'): return
         self.splitter.setSizes([7200, 2800] if is_visible else [6500, 3500])
+        QTimer.singleShot(0, self._position_video_expand_button)
         if hasattr(self, "btn_log"):
             self.btn_log.setText(self._terminal_log_button_text())
 

@@ -1,18 +1,18 @@
 <!--
-Document-Version: 02.07.00
-Phase: PHASE1-D
-Last-Updated: 2026-04-28
+Document-Version: 03.00.27
+Phase: PHASE2
+Last-Updated: 2026-04-29
 Updated-By: Codex with 대표님
-Previous-Content: v02.06.00 P6 멀티클립 STT/LLM 병렬 파이프라인 구조
-This-Update: v02.07.00 PHASE1-D STT 모드, 화자 세그먼트 인터랙션, 공용 메시지 박스, 전역 UI 마감 구조 반영
-Copilot-Handoff: v02.07.00 커밋 기준. STT 모드는 core/audio/stt_vad.py, core/audio/live_stt.py, ui/editor/editor_stt_mode.py를 우선 확인하세요. 화자 세그먼트 인터랙션은 ui/timeline/timeline_input.py, 공용 확인창은 ui/dialogs/message_box.py입니다.
+Previous-Content: v03.00.26 프로젝트 JSON 단일/멀티클립/러프컷 통합 저장·로드
+This-Update: v03.00.27 메인 도움말 창 추가 및 UI 아이콘 캐시 성능 보강
+Copilot-Handoff: v03.00.27 기준. `ui/help` 패키지에서 기능별 도움말 탭을 관리하고, 하단 전역 메뉴 도움말 버튼으로 창을 엽니다. 다음은 RC-D1 러프컷 상세 패널입니다.
 -->
 ================================================================================
 AI Subtitle Studio — 프로젝트 구조 및 버전 관리 문서
 생성일: 2026-04-20
-최종 수정: 2026-04-28
-Phase: PHASE1-D
-App Version: 02.07.00
+최종 수정: 2026-04-29
+Phase: PHASE2
+App Version: 03.00.27
 구조 문서 기준: File_structure.txt
 비고: STRUCTURE.txt는 삭제하고 본 문서로 단일화
 ================================================================================
@@ -20,7 +20,7 @@ App Version: 02.07.00
 ai_subtitle_studio/
 ├── main.py                         ← 프로그램 실행 진입점                    v02.03.00
 ├── main.bat                        ← Windows 실행 배치 파일
-├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v02.07.00
+├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v03.00.27
 ├── logger.py                       ← 시스템 로그 기록 및 UI 연동             v02.03.00
 ├── AGENTS.md                       ← 개발 가이드 / Copilot 핸드오프
 ├── ACTION_ITEMS.md                 ← 전체 액션아이템
@@ -29,6 +29,7 @@ ai_subtitle_studio/
 ├── RELEASE_v02.04.00.md            ← PHASE1-C Apple UI 릴리즈 노트
 ├── RELEASE_v02.06.00.md            ← P6 멀티클립 성능/안정화 릴리즈 노트
 ├── RELEASE_v02.07.00.md            ← PHASE1-D STT/UI/화자 릴리즈 노트
+├── RELEASE_v03.00.00.md            ← PHASE2 러프컷 엔진 1단계 릴리즈 노트
 ├── File_structure.txt              ← 현재 구조 문서
 │
 ├── dataset/
@@ -63,11 +64,14 @@ ai_subtitle_studio/
 │   │   └── ollama_provider.py      ← Ollama local adapter / warmup              🆕 v02.03.03
 │   │
 │   ├── engine/
-│   │   ├── subtitle_engine.py      ← 자막 최적화 / LLM 분기                    v02.03.03
+│   │   ├── subtitle_engine.py      ← 자막 최적화 / LLM 분기 / word 재분할      v03.00.21
+│   │   ├── llm_correction_guard.py ← LLM 보정 원문 무결성 검사                🆕 v03.00.21
+│   │   ├── word_resegmenter.py     ← word timestamp 기반 자막 재분할           🆕 v03.00.20
 │   │   └── srt_writer.py           ← SRT 저장 / 화자 SRT / STT 미완료 제외      v02.07.00
 │   │
 │   ├── audio/
-│   │   ├── media_processor.py      ← 오디오 추출 + VAD + Whisper              v02.03.03
+│   │   ├── media_processor.py      ← 오디오 추출 + VAD + Whisper overlap/dedupe v03.00.19
+│   │   ├── stt_quality_presets.py  ← 빠른/균형/정밀 자막 정확도 프리셋         v03.00.19
 │   │   ├── whisper_mlx.py          ← macOS Whisper MLX persistent worker      v02.03.03
 │   │   ├── whisper_faster.py       ← Windows faster-whisper client            v02.03.00
 │   │   ├── whisper_worker.py       ← Windows subprocess worker                v02.03.00
@@ -82,43 +86,161 @@ ai_subtitle_studio/
 │   │   ├── multiclip_pipeline.py   ← 멀티클립 STT/LLM 병렬 파이프라인/reuse    v02.07.00
 │   │   └── pipeline_helpers.py     ← 백업/저장/렌더/prefetch 공통             v02.07.00
 │   │
+│   ├── roughcut/                   ← PHASE2 로컬 러프컷 분석 엔진              🆕 v03.00.00
+│   │   ├── __init__.py             ← 러프컷 공개 API export
+│   │   ├── models.py               ← Subtitle/RoughCut/Storyboard/EDL 모델
+│   │   ├── gap_detector.py         ← 자막 없는 구간 탐지
+│   │   ├── transcript_packer.py    ← 자막 phrase 압축 / LLM 입력 text
+│   │   ├── scene_change_detector.py← 픽셀 차이 기반 scene cut 감지
+│   │   ├── frame_sampler.py        ← 프레임 timestamp/ffmpeg command helper
+│   │   ├── topic_detector.py       ← 키워드/topic shift 로컬 detector
+│   │   ├── semantic_chunker.py     ← phrase 기반 semantic chunk/chapter seed
+│   │   ├── story_mapper.py         ← 챕터 기/승/전/결 story role mapper        🆕 v03.00.03
+│   │   ├── edit_decision_engine.py ← cut safety + edit decision engine        🆕 v03.00.11
+│   │   ├── edl_generator.py        ← EDL JSON / 멀티클립 source 매핑          v03.00.26
+│   │   ├── guide_writer.py         ← Markdown 편집 가이드 writer              🆕 v03.00.13
+│   │   ├── pipeline.py             ← run_roughcut_pipeline 단일 진입점         🆕 v03.00.14
+│   │   ├── renderer_skeleton.py    ← ffmpeg concat/burn-in command skeleton   🆕 v03.00.17
+│   │   ├── render_executor.py      ← EDL 기반 ffmpeg 실행/dry-run helper      🆕 v03.00.17
+│   │   └── subtitle_retimer.py     ← EDL timeline 기준 자막 retime/SRT 출력   v03.00.26
+│   │
 │   └── project/
-│       ├── project_manager.py      ← 프로젝트 생성/로드/저장                 v02.07.00
-│       ├── project_phase1b.py      ← PHASE1-B/PHASE1-D 프로젝트 저장 보강     v02.07.00
-│       ├── project_snapshot.py     ← 프로젝트 snapshot schema + STT meta      v02.07.00
+│       ├── project_manager.py      ← 프로젝트 생성/로드/저장 + roughcut_state v03.00.26
+│       ├── project_context.py      ← editor/roughcut state JSON adapter       v03.00.26
+│       ├── project_phase1b.py      ← 프로젝트 저장 보강 / active mode 유지    v03.00.26
+│       ├── project_snapshot.py     ← 프로젝트 snapshot schema + state 분리     v03.00.26
 │       └── data_manager.py         ← 설정/교정 데이터 I/O                    v02.03.00
 │
 └── ui/
-    ├── home_ui.py                  ← 통합 대시보드/사이드바/상태 레일 배치     v02.07.00
-    ├── menu_bar.py                 ← 전역 메뉴바 + STT + undo/redo + 상태      v02.07.00
-    ├── style.py                    ← 공용 다크 스타일 + 재사용 line icon      v02.07.00
+    ├── home_ui.py                  ← 통합 대시보드/사이드바/프로젝트 overlay  v03.00.16
+    ├── menu_bar.py                 ← 전역 메뉴바 + STT + Undo/Redo + 도움말    v03.00.27
+    ├── style.py                    ← 공용 다크 스타일 + 캐시형 line icon      v03.00.27
     ├── queue_widget.py             ← 큐 테이블 + 헤더 + ETA                   v02.03.00
     ├── cloud_ui.py                 ← iCloud/NAS 자동처리 UI                  v02.03.03
     │
     ├── main/
-    │   ├── main_window.py          ← 메인 통합 화면 본체                      v02.07.00
+    │   ├── main_window.py          ← 메인 통합 화면 본체 + 도움말 창 연결      v03.00.27
     │   ├── main_signals.py         ← 시그널/슬롯 핸들러                       v02.03.00
     │   └── main_file_ops.py        ← 파일/폴더 열기                           v02.03.03
     │
     ├── editor/
-    │   ├── editor_widget.py        ← 에디터 UI 골격 / 검색 / 비디오 폭 토글    v02.07.00
-    │   ├── editor_lifecycle.py     ← 에디터 열기/저장/닫기                    v02.07.00
+    │   ├── editor_widget.py        ← 에디터 UI 골격 / 검색 / 비디오 16:9 고정  v03.00.10
+    │   ├── editor_lifecycle.py     ← 에디터 열기/저장/닫기                    v03.00.04
     │   ├── editor_pipeline.py      ← 자막 생성/재시작/STT 시작 라우팅          v02.07.00
     │   ├── editor_actions.py       ← 저장/undo/redo/종료/내보내기             v02.07.00
-    │   ├── editor_segments.py      ← 자막/STT 세그먼트 큐 처리                v02.07.00
+    │   ├── editor_segments.py      ← 자막/STT 세그먼트 큐 처리                v03.00.02
     │   ├── editor_timeline_video.py← 타임라인 싱크 / 자막 분할 / 자동 스크롤   v02.04.00
     │   ├── editor_video_controls.py← 비디오 제어 / 재생 단축키                v02.07.00
     │   ├── editor_multiclip_context.py← 멀티클립 context / clip 전환           🆕 v02.03.03
     │   ├── editor_multiclip_ops.py ← 멀티클립 파일 추가/삭제/리매핑           v02.07.00
     │   ├── editor_speaker_ops.py   ← 화자 메뉴 / 화자 드래그 조작             🆕 v02.03.03
     │   ├── editor_stt_mode.py      ← PHASE1-D STT 모드 상태/저장/마이크 입력  🆕 v02.07.00
-    │   ├── video_player_widget.py  ← 영상/오디오 플레이어 / subtitle overlay  v02.07.00
+    │   ├── video_player_widget.py  ← 영상/오디오 플레이어 / subtitle overlay  v03.00.26
     │   └── 기타 editor helper 파일
     │
-    ├── timeline/                   ← 타임라인 캔버스/입력/페인트/STT/화자      v02.07.00
-    ├── project/                    ← 프로젝트/멀티클립 패널                  v02.03.00
-    ├── settings/                   ← AI/화자/갭/상세/출력 설정                v02.04.00
+    ├── timeline/                   ← 타임라인 캔버스/입력/페인트/STT/화자      v03.00.23
+    ├── help/                       ← 메인 도움말 창                            🆕 v03.00.27
+    │   ├── __init__.py             ← 도움말 다이얼로그 export
+    │   ├── help_content.py         ← 기능별 탭/사용법/예시 콘텐츠
+    │   └── help_dialog.py          ← 탭형 도움말 QDialog + 스크린샷 자리
+    ├── roughcut/                   ← 중앙 러프컷 편집/프리뷰/출력 UI           v03.00.26
+    │   ├── roughcut_widget.py      ← 러프컷 화면 조립/레이아웃                v03.00.26
+    │   ├── roughcut_state.py       ← 프로젝트 roughcut_state 저장/복원        v03.00.26
+    │   ├── roughcut_table.py       ← 챕터 테이블/상태/사용자 수정             v03.00.26
+    │   ├── roughcut_preview.py     ← timeline/local time 기반 구간 프리뷰      v03.00.26
+    │   ├── roughcut_export.py      ← EDL/가이드/SRT/렌더계획 저장             v03.00.26
+    │   └── roughcut_format.py      ← 컬럼/시간 표시 공통                      v03.00.26
+    ├── project/                    ← 프로젝트/멀티클립 패널                  v03.00.26
+    ├── settings/                   ← AI/화자/갭/상세/출력 설정                v03.00.20
     └── dialogs/                    ← 폴더 선택 / 내보내기 / 공용 메시지       v02.07.00
+
+├── tests/
+│   ├── test_roughcut_engine1.py     ← PHASE2 roughcut 엔진/pipeline unittest   v03.00.26
+│   ├── test_stt_quality_presets.py  ← 자막 정확도 프리셋 unittest              v03.00.19
+│   ├── test_media_processor_overlap.py← Whisper overlap/dedupe unittest        v03.00.19
+│   ├── test_word_resegmenter.py     ← word timestamp 재분할 unittest           v03.00.20
+│   ├── test_llm_correction_guard.py ← LLM 보정 guard unittest                  v03.00.21
+│   ├── test_project_context.py      ← 프로젝트 editor/roughcut 상태 adapter    v03.00.26
+│   └── test_help_dialog.py          ← 도움말 콘텐츠/다이얼로그 unittest        v03.00.27
+
+================================================================================
+[v03.00.27 핵심 변경]
+================================================================================
+
+1. 메인 도움말 창
+   - 하단 전역 메뉴에 `도움말` 버튼 추가
+   - `ui/help/help_content.py`에 기능별 탭 콘텐츠 분리
+   - `ui/help/help_dialog.py`에서 사용 방법, 예시, 특정 상황, 스크린샷 자리 제공
+
+2. 안전한 구조/성능 정리
+   - 도움말 기능을 `ui/help` 패키지로 분리해 UI 코드 혼잡도 감소
+   - `ui/style.py`의 `line_icon` 결과 캐시로 반복 아이콘 생성 비용 감소
+
+================================================================================
+[v03.00.26 핵심 변경]
+================================================================================
+
+1. 프로젝트 JSON 통합 저장/로드
+   - `core/project/project_manager.py`의 `save_project`가 `roughcut_state`와 `active_work_mode`를 공식 저장
+   - 프로젝트 로드 시 단일클립/멀티클립은 자막이 없어도 에디터 상태로 복원
+   - 저장된 active mode가 러프컷이면 러프컷 화면으로 복귀
+
+2. 멀티클립 러프컷 EDL source 매핑
+   - EDL segment에 global timeline range와 clip-local source range를 함께 보존
+   - 멀티클립 러프컷 렌더/SRT가 첫 번째 영상 기준으로 틀어지지 않도록 source_path를 clip별로 매핑
+   - 자막 retime은 EDL의 timeline range 기준으로 동작
+
+================================================================================
+[v03.00.25 핵심 변경]
+================================================================================
+
+1. 러프컷 UI 기능 세분화
+   - `ui/roughcut/roughcut_widget.py`는 화면 조립/레이아웃만 담당
+   - `ui/roughcut/roughcut_state.py`: 에디터 연동, 현재 자막 signature, 프로젝트 roughcut_state 저장/복원
+   - `ui/roughcut/roughcut_table.py`: 챕터 테이블, 상태 표시, 사용자 수정 처리
+   - `ui/roughcut/roughcut_preview.py`: 구간 미리보기, 멀티클립 context 재생
+   - `ui/roughcut/roughcut_export.py`: EDL/가이드/SRT/렌더 계획 저장
+   - `ui/roughcut/roughcut_format.py`: 컬럼 정의와 시간 표시 공통
+
+2. 액션아이템/체크리스트 정리
+   - `ACTION_ITEMS.md`를 완료 체크리스트, 다음 구현 체크리스트, 대표님 확인 체크포인트로 재정리
+   - 완료 항목은 PHASE2 러프컷 엔진, 러프컷 UI/프로젝트 연동, STT 품질, UI/UX 보정으로 묶음
+   - 다음 구현은 러프컷 세부 기능 고도화와 R3/R4/R13, PHASE3/iPad 항목으로 정리
+
+================================================================================
+[v03.00.24 핵심 변경]
+================================================================================
+
+1. 프로젝트 editor_state / roughcut_state 분리
+   - `core/project/project_context.py` 추가
+   - 프로젝트 JSON 안에 단일/멀티클립 편집 상태와 러프컷 분석 상태를 분리 저장
+   - 프로젝트 로드 시 저장된 자막/화자 세그먼트를 에디터로 복원
+   - 단일클립에서 영상 추가 시 멀티클립 상태로 전환
+   - 러프컷 진입 시 현재 에디터 자막 signature 기준 재분석/저장
+
+================================================================================
+[v03.00.03 핵심 변경]
+================================================================================
+
+1. P2-RC6 story mapper
+   - `core/roughcut/story_mapper.py` 추가
+   - 챕터 순서를 바꾸지 않고 위치/텍스트 힌트 기반으로 기/승/전/결 분류
+   - `ChapterMetadata`에 story role, 근거, 이동 검토 메타데이터, confidence 보존
+   - `tests/test_roughcut_engine1.py`에 story mapper unittest 추가
+
+================================================================================
+[v03.00.00 핵심 변경]
+================================================================================
+
+1. PHASE2 러프컷 엔진 1~2단계
+   - `core/roughcut` 패키지 신설
+   - 러프컷 dataclass 모델, 자막 gap 탐지, transcript packing 구현
+   - 저해상도 프레임 샘플 timestamp와 ffmpeg frame command helper 추가
+   - 외부 의존성 없이 픽셀 차이 기반 scene change detector 추가
+   - 표준 라이브러리 기반 keyword/topic shift detector 추가
+   - phrase 기반 semantic chunk와 chapter metadata seed 생성 추가
+   - `tests/test_roughcut_engine1.py`로 순수 함수 최소 검증 추가
+   - 첫 화면 사이드바 메뉴 높이/아이콘과 하단 전역 메뉴 배경 깨짐 보정
 
 ================================================================================
 [v02.07.00 핵심 변경]
@@ -200,10 +322,15 @@ ai_subtitle_studio/
 [다음 주요 액션]
 ================================================================================
 
-- PHASE1-D CHECKPOINT: STT 세그먼트 저장/복원, 멀티클립 offset, 실제 마이크 입력 검증
-- PHASE1-D CHECKPOINT: 화자 세그먼트 좌클릭 변경/우클릭 학습 실사용 확인
-- R13: 전체 리팩토링 / 리네이밍 / 기능 분할 / 중복 통합 / Phase2 대응
-- Phase2 roughcut schema 및 UI 설계
+- RC-D1: 러프컷 상세 패널
+- RC-D2: 챕터별 keep/trim/remove/highlight/move 수동 변경
+- RC-D3: 컷 안전도 시각화 및 필터
+- RC-D4: 러프컷 preview 고도화
+- RC-D5: 렌더 실행 UI
+- RC-D6: 러프컷 결과 후보 버전 관리
+- R3: AI 모델 관리 시스템
+- R4: Windows 전기능 연동
+- R13: 전체 리팩토링 / 리네이밍 / 기능 분할 / 중복 통합
 
 ================================================================================
 

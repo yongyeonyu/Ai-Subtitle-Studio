@@ -1,4 +1,4 @@
-# Version: 02.07.00
+# Version: 03.00.23
 # Phase: PHASE1-C
 """
 ui/timeline_widget.py
@@ -160,6 +160,7 @@ class TimelineWidget(QWidget):
 
         if ev.type() in (QEvent.Type.FocusIn, QEvent.Type.FocusOut):
             self.update()
+            self.global_canvas.update()
         return super().eventFilter(obj, ev)
 
     def paintEvent(self, ev):
@@ -174,7 +175,13 @@ class TimelineWidget(QWidget):
 
             painter = QPainter(self)
             painter.setPen(QPen(QColor("#FFFF00"), 2))
-            painter.drawRect(1, 1, max(1, self.width() - 3), max(1, self.height() - 3))
+            left = 1
+            right = max(1, self.width() - 2)
+            bottom = max(1, self.height() - 2)
+            painter.drawLine(left, 1, left, bottom)
+            painter.drawLine(right, 1, right, bottom)
+            painter.drawLine(left, bottom, right, bottom)
+            painter.end()
 
     def _apply_selected_clip_context(self, clip_idx: int):
         boxes = getattr(self.canvas, "_multiclip_boxes", []) or []

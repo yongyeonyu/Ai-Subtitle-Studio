@@ -1,286 +1,312 @@
 <!--
-Document-Version: 02.07.00
-Phase: PHASE1-D
-Last-Updated: 2026-04-28
+Document-Version: 03.00.27
+Phase: PHASE2
+Last-Updated: 2026-04-29
 Updated-By: Codex with 대표님
-Previous-Content: v02.06.00 P6 멀티클립 STT/LLM 병렬 파이프라인 구현 상태
-This-Update: v02.07.00 PHASE1-D STT 모드, 화자 세그먼트 인터랙션, 전역 UI 마감, 메시지 박스 통일 반영
-Copilot-Handoff: v02.07.00 기준. PHASE1-D는 STT 버튼 ON/OFF, 시작 버튼의 VAD-only 빈 STT 세그먼트 생성, 마이크 one-shot 따라말하기, 프로젝트/SRT 저장 규칙을 포함합니다. 화자 학습은 자막 세그먼트가 아니라 화자 세그먼트 우클릭으로 이동했습니다.
+Previous-Content: v03.00.26 프로젝트 JSON 단일/멀티클립/러프컷 통합 저장·로드
+This-Update: v03.00.27 메인 도움말 창 추가 및 UI 아이콘 캐시 성능 보강
+Copilot-Handoff: v03.00.27 기준. 현재 앱 버전은 config.py APP_VERSION 03.00.27입니다. 메인 하단 메뉴의 도움말 버튼은 `ui/help` 탭형 도움말 창을 엽니다. 다음 우선순위는 RC-D1 러프컷 상세 패널입니다.
 -->
-# AI Subtitle Studio — 전체 액션아이템
-# 최종 수정: 2026-04-28
-# App Version: 02.07.00
+# AI Subtitle Studio — 액션아이템
+# 최종 수정: 2026-04-29
+# App Version: 03.00.27
 
 ================================================================================
-  PHASE1-B 잔여 / 체크포인트
+  현재 작업 기준
 ================================================================================
 
-[인프라 / 시스템]
+- 현재 개발 버전: v03.00.27
+- 다음 코드 수정 버전: v03.00.28
+- 현재 phase: PHASE2
+- 현재 큰 흐름: 러프컷 편집 기능 고도화 준비
+- create_all 방식 원칙 유지
+- 프로젝트 루트에 `_backup*`, `create_all*.py`, `STRUCTURE.txt`, `requirements.txt` 남기지 않기
+- requirements는 `requirements-mac.txt` / `requirements-windows.txt` 2개만 운영
+- 커밋은 대표님이 명시적으로 요청할 때만 진행
+- 문서 4개는 커밋 직전 최종 업데이트:
+  - `AGENTS.md`
+  - `ACTION_ITEMS.md`
+  - `File_structure.txt`
+  - `RELEASE_v03.00.00.md`
 
-  R3   | AI 모델 관리 시스템                                  | Windows
-       | - model_registry.json
+================================================================================
+  완료 체크리스트
+================================================================================
+
+[PHASE2 러프컷 엔진]
+
+  [x] P2-RC1  roughcut 데이터 모델
+       | - `core/roughcut/models.py`
+       | - Subtitle/RoughCut/Storyboard/EDL dataclass 기반 모델
+
+  [x] P2-RC2  gap detector
+       | - `core/roughcut/gap_detector.py`
+       | - 자막 없는 구간 탐지
+
+  [x] P2-RC3  transcript packing
+       | - `core/roughcut/transcript_packer.py`
+       | - 자막 행을 phrase 단위로 압축하고 LLM/분석 입력 문자열 생성
+
+  [x] P2-RC4  visual/scene 기반 helper
+       | - `core/roughcut/frame_sampler.py`
+       | - `core/roughcut/scene_change_detector.py`
+       | - 프레임 timestamp sampling, ffmpeg frame command, 픽셀 차이 기반 scene change 감지
+
+  [x] P2-RC5  topic/semantic chunker
+       | - `core/roughcut/topic_detector.py`
+       | - `core/roughcut/semantic_chunker.py`
+       | - 키워드/topic shift와 phrase 기반 chapter seed 생성
+
+  [x] P2-RC6  story mapper
+       | - `core/roughcut/story_mapper.py`
+       | - 챕터 순서를 바꾸지 않고 기/승/전/결 story role과 이동 검토 힌트 생성
+
+  [x] P2-RC7  cut safety / edit decision engine
+       | - `core/roughcut/edit_decision_engine.py`
+       | - gap/phrase boundary 기반 컷 안전도와 keep/trim/remove/highlight/move 판단
+
+  [x] P2-RC8  EDL JSON generator
+       | - `core/roughcut/edl_generator.py`
+       | - edit decision을 EDL segment와 JSON schema로 변환
+
+  [x] P2-RC9  Markdown guide writer
+       | - `core/roughcut/guide_writer.py`
+       | - 전체 요약, 추천 흐름, 챕터 표, 편집 판단, 위험 컷 검토 목록 생성
+
+  [x] P2-RC10 run_roughcut_pipeline 단일 진입점
+       | - `core/roughcut/pipeline.py`
+       | - pack → chunk → story role → decision → EDL → guide 순서 통합
+
+  [x] P2-RC11 renderer skeleton / executor / subtitle retimer
+       | - `core/roughcut/renderer_skeleton.py`
+       | - `core/roughcut/render_executor.py`
+       | - `core/roughcut/subtitle_retimer.py`
+       | - ffmpeg concat plan, dry-run executor, EDL 기준 retimed SRT 생성
+
+  [x] P2-RC12 roughcut unittest
+       | - `tests/test_roughcut_engine1.py`
+       | - roughcut core/pipeline 최소 검증
+
+[러프컷 UI / 프로젝트 연동]
+
+  [x] P2-U1  중앙 러프컷 화면
+       | - `ui/roughcut/roughcut_widget.py`
+       | - 왼쪽 메뉴 `러프컷 편집 도우미`에서 중앙 stack으로 전환
+
+  [x] P2-U2  러프컷 테이블/가이드/출력
+       | - 챕터 표, 상태/판단/안전/출력 시간 표시
+       | - EDL JSON, Markdown 가이드, retimed SRT, 렌더 계획 저장
+
+  [x] P2-U3  러프컷 구간 preview
+       | - 행 hover/click 기반 구간 미리보기
+       | - 멀티클립 전역 시간 → clip-local context 재생
+
+  [x] P2-PROJ1  editor_state / roughcut_state 분리
+       | - `core/project/project_context.py`
+       | - 프로젝트 JSON 안에서 단일/멀티클립 편집 상태와 러프컷 상태 분리
+       | - 단일/멀티클립 → 러프컷 이동 시 서로 상태를 덮어쓰지 않음
+
+  [x] P2-PROJ2  러프컷 최신 자막 반영
+       | - 러프컷 진입 시 현재 에디터 자막 signature 기준 재분석
+       | - 단일/멀티클립 에디터에서 자막/화자 수정 후 러프컷 재진입 시 반영
+
+  [x] P2-PROJ3  프로젝트 JSON 통합 저장/로드
+       | - 단일클립/멀티클립 editor_state와 roughcut_state를 같은 프로젝트 파일에서 저장/복원
+       | - 프로젝트 로드 시 저장된 active_work_mode가 roughcut이면 러프컷 화면으로 복귀
+       | - 멀티클립 러프컷 EDL을 원본 파일별 source_path와 clip-local time으로 매핑
+
+  [x] P2-RC-REF1  러프컷 UI 기능 세분화
+       | - `ui/roughcut/roughcut_state.py`
+       | - `ui/roughcut/roughcut_table.py`
+       | - `ui/roughcut/roughcut_preview.py`
+       | - `ui/roughcut/roughcut_export.py`
+       | - `ui/roughcut/roughcut_format.py`
+
+[자막 생성 / STT 품질]
+
+  [x] P2-STT-PRESET1  자막 정확도 프리셋
+       | - `core/audio/stt_quality_presets.py`
+       | - 빠른/균형/정밀 프리셋과 AI 설정창 연동
+
+  [x] P2-STT-OVERLAP1  Whisper chunk overlap
+       | - `core/audio/media_processor.py`
+       | - 긴 청크 overlap 생성과 word timestamp 기반 중복 제거
+
+  [x] P2-STT-WORD1  word timestamp 기반 재분할
+       | - `core/engine/word_resegmenter.py`
+       | - 최대 글자 수, duration, CPS, 문장부호, 무음 gap 기준 재분할
+
+  [x] P2-LLM-CORRECT1  LLM 보정 원칙 강화
+       | - `core/engine/llm_correction_guard.py`
+       | - 원문 대비 단어 추가/삭제, 타임코드 출력 감지 시 LLM 결과 차단
+
+[UI/UX 보정]
+
+  [x] UI-01  프로젝트 정보 패널
+       | - 기본 접힘
+       | - 펼침 시 메뉴 버튼 위 overlay 방식
+       | - 펼침/닫힘 후 편집 화면 유지
+
+  [x] UI-02  비디오 자막 overlay
+       | - 생성 직후 바로 재생해도 현재 자막 provider 동기화
+
+  [x] UI-03  상태/모드 버튼
+       | - 진행 단계: 검토/VAD, 인식/Whisper, 생성, 교정/LLM, 완료
+       | - 현재 모드: 자막생성/편집/STT/러프컷/숏폼
+
+  [x] UI-04  하단 메뉴 아이콘/텍스트
+       | - 시작/처리중/재시작 아이콘
+       | - Undo/Redo 명칭과 아이콘
+       | - STT ON/OFF 색상 표시
+       | - 전원 종료 아이콘
+
+  [x] UI-05  비디오 패널
+       | - 확대/축소 화살표 기능 제거
+       | - 현재 높이 기준 16:9 폭 고정
+
+  [x] UI-06  타임라인 핸들/선택 테두리
+       | - 다이아몬드 버튼을 자막 세그먼트 경계 하단으로 이동
+       | - 하단 미니맵 노란 선택선 표시
+       | - 상단/화살표 쪽 노란 테두리 제거
+       | - paintEvent SIGABRT 방지
+
+  [x] UI-HELP1  메인 도움말 창
+       | - 하단 전역 메뉴에 도움말 버튼 추가
+       | - `ui/help` 패키지에 도움말 콘텐츠/다이얼로그 분리
+       | - 기능별 탭, 사용 방법, 예시, 특정 상황 설명, 추후 스크린샷 공간 제공
+       | - `line_icon` 캐시로 반복 아이콘 생성 비용 절감
+
+================================================================================
+  다음 구현 체크리스트
+================================================================================
+
+[러프컷 세부 기능 고도화]
+
+  [ ] RC-D1  러프컷 상세 패널
+       | - 선택 챕터 상세 정보
+       | - 컷 근거, 위험도, story role, 사용 자막 범위 표시
+
+  [ ] RC-D2  컷 후보 세부 조정
+       | - 챕터별 keep/trim/remove/highlight/move 수동 변경
+       | - trim in/out 직접 조정
+       | - 변경 사항 `roughcut_state.user_edits`에 저장
+
+  [ ] RC-D3  컷 안전도 시각화
+       | - ideal/acceptable/risky 색상/필터
+       | - gap boundary / phrase boundary / inside phrase 이유 표시
+
+  [ ] RC-D4  러프컷 preview 고도화
+       | - 현재 챕터 반복 재생
+       | - 이전/다음 컷 후보 이동
+       | - 멀티클립 clip 전환 시 source clip 표시
+
+  [ ] RC-D5  렌더 실행 UI
+       | - 현재는 렌더 계획 JSON 저장까지 완료
+       | - 다음 단계에서 dry-run/실행/로그/실패 복구 UI 연결
+
+  [ ] RC-D6  러프컷 결과 버전 관리
+       | - 같은 프로젝트 안에 여러 roughcut candidate 저장
+       | - 후보 비교/선택 기반 마련
+
+[공통 / 인프라]
+
+  [ ] R3  AI 모델 관리 시스템
+       | - `model_registry.json`
        | - 모델 install / uninstall UI
        | - OS별 모델 필터링
        | - 첫 실행 시 필수 모델 자동 체크
 
-  R4   | Windows 전기능 연동                                  | Windows
+  [ ] R4  Windows 전기능 연동
        | - faster-whisper CUDA 연동
        | - PyQt6 DLL 충돌 없음
        | - 한글/공백 경로 파일 처리 안정화
 
-[멀티클립 / 타임라인]
-
-  CHECKPOINT-P6-PARALLEL | 멀티클립 STT/LLM 병렬 파이프라인 실사용 확인 | 대표님 확인
-       | - 구현 완료: 클립1 Whisper 완료 후 LLM 최적화가 도는 동안 클립2 Whisper 시작
-       | - append 순서는 LLM worker 단일 순서 큐로 클립1 → 클립2 → 클립3 유지
-       | - 실제 멀티클립 3개 이상에서 로그 순서와 에디터 append 순서 확인 필요
-
-  CHECKPOINT-B11 | 멀티클립 플레이헤드 동기화 실사용 확인        | 대표님 확인
-       | - 클립2/3 재생 시 비디오 current time과 타임라인 offset 동기화 확인
-       | - CLIP2 클릭 → 재생 시 플레이헤드가 CLIP2 시작 위치로 이동해야 정상
-       | - offscreen 생성/AST로는 판단 불가, 실제 멀티클립 파일에서 확인
-
-  CHECKPOINT-B12 | 멀티클립 클립 삭제 시 자막 복제 여부 확인     | 대표님 확인
-       | - CLIP [X] 삭제 시 자막이 중복 append 되는지 재검증
-       | - 클립 삭제 후 자막 개수 증가가 없어야 정상
-       | - 실제 삭제/저장/재로드 흐름에서 확인
-
-  CHECKPOINT-B13 | 멀티클립 undo/redo 포커스 의존 확인          | 대표님 확인
-       | - 자막 에디터/글로벌 캔버스/디테일 캔버스 포커스와 무관하게 Ctrl+Z 결과 통일
-       | - undo 1회 무반응 또는 2회 전체 자막 삭제가 없어야 정상
-       | - 실제 키보드 포커스 전환 상태에서 확인
-
-[자동처리 / 재시작]
-
-  CHECKPOINT-B19 | STEP 6 MOV 렌더링/iCloud 백업 중 재시작 확인 | 대표님 확인
-       | - STEP 6 진행 중 재시작 클릭 시 메인으로 나가지 않고 현재 파일/클립 재시작
-       | - 렌더링 완료 콜백이 뒤늦게 도착해도 화면 상태를 덮어쓰지 않게 처리
-       | - 장시간 렌더링/iCloud 백업 중 실제 클릭으로 확인
-
-[기존 자막 / 비디오 표시]
-
-  CHECKPOINT-B22 | 단일 편집 기존자막 로드 시 비디오 자막 표시 확인 | 대표님 확인
-       | - 기존 코드에는 append_segments 후 video_player.set_context_segments 경로 존재
-       | - 실사용 재현 시 _find_subtitle_at / seek/play 시점 context 갱신 상태 추가 확인
-       | - 실제 기존 SRT + 영상 재생으로 확인
-
-[자막 저장 규칙]
-
-  CHECKPOINT-P5 | 멀티클립 자막 저장 규칙 실사용 확인             | 대표님 확인
-       | - 개별 자막: 영상파일명.srt, 영상 파일과 동일 위치
-       | - 통합 자막: 첫번째영상파일명_통합.srt, 영상 파일과 동일 위치
-       | - _통합.srt 파일은 기존 자막 사용 대상에서 제외
-       | - 멀티클립 저장 후 파일 생성 위치/재로드 기준 확인
-
-[화자 설정]
-
-  CHECKPOINT-V6-2 | 화자 설정 [X] 버튼 동작 확인                 | 대표님 확인
-       | - 파일은 삭제하지 않음
-       | - 앱 내부에서만 해당 voice 사용/연동 해제
-       | - UI상 비활성 또는 '사용 안 함' 처리
-       | - 실제 voice_data 파일 존재 유지와 비활성 상태 확인
-
-[문서 / 릴리즈]
-
-  D1   | AGENTS.md / File_structure.txt 최신화                 | 공통
-       | - 커밋 직전 최종 업데이트 원칙 유지
-       | - STRUCTURE.txt는 만들지 않고 File_structure.txt만 사용
-
-  D2   | RELEASE_v02.03.00.md 유지                             | 공통
-       | - v02.03.xx 변경사항을 릴리즈 노트에 최종 반영
-
-[구조 개선]
-
-  R13  | 전체 프로젝트 리팩토링 / 리네이밍 / 기능 분할          | 공통
-       | - 500줄 이상 파일은 기능 분할 후보, 800줄 이상 파일은 우선 분할 대상
+  [ ] R13  전체 프로젝트 리팩토링 / 리네이밍 / 기능 분할
+       | - 500줄 이상 파일은 기능 분할 후보
+       | - 800줄 이상 파일은 우선 분할 대상
        | - SRT 저장/백업/경로 계산, LLM provider 호출, 멀티클립 context/video sync 중복 통합
-       | - 기능 검증 후 영역별로 작게 진행
-       | - 진행 시 기능 삭제 금지, 대표님 확인 필요한 UX 변경은 CHECKPOINT로 분리
+       | - 기능 삭제 금지
+       | - UX 변경은 대표님 확인 체크포인트로 분리
 
+[PHASE3 / iPad]
 
-================================================================================
-  PHASE1-C — 기능 보존형 Apple 스타일 UI 개선 체크포인트
-================================================================================
-
-[완료 요약]
-
-  v02.04.00 | Apple 스타일 통합 UI 적용 완료                       | 공통
-       | - ui/menu_bar.py 전역 메뉴바 신설, 중복 하단 메뉴 정리
-       | - 불필요해진 "이전" / "다음" 전역 액션 삭제
-       | - 화면 폭이 절반 이하로 줄면 메뉴 버튼 텍스트 숨김, 아이콘만 표시
-       | - 상태 아이콘 레일을 상단 헤더로 이동하고 생성/편집/저장/출력/종료 상태 표시
-       | - 왼쪽 사이드바에 iCloud/NAS 자동처리 상태 카드 복구
-       | - 빈 작업 화면 중앙에 파일/폴더 빠른 열기 액션 추가
-       | - 사이드바 프로젝트/영상/자막 정보 패널을 텍스트 섹션으로 재구성
-       | - 비디오 프리뷰 텍스트 박스 테두리 제거, 비디오 폭 확장 토글 위치 보정
-       | - 1:1 영상에서 비디오 폭 확장 버튼을 누르면 현재 화면에 딱 맞게 프리뷰를 축소/맞춤 처리
-       | - 비디오 로딩 전 확장 화살표 버튼이 영상 영역에 잘려 보이지 않도록 초기 위치/표시 상태 보정
-       | - 자막 overlay 재생 중 갱신, 자막 에디터 자동 스크롤 throttle 적용
-       | - 디테일 타임라인 다이아몬드 핸들을 작은 45도 다이아몬드로 재도색
-       | - 글로벌 캔버스 선택 시 노란색 선택 테두리의 왼쪽 라인이 누락되지 않도록 paint 영역 보정
-       | - 설정창 버튼 크기/공통 아이콘/시뮬레이터 다크 프로 스타일 정리
-       | - 패널 splitter/하단 메뉴 경계는 1px spacing 기준으로 정리
-       | - 상단 타이틀 바 제거, 상태 아이콘 레일은 프로젝트 바 상단 2줄 배치
-       | - 저장 상태 라벨은 프로젝트 바 하단으로 이동
-       | - 상단 공간 회수분만큼 터미널 로그 영역 확대
-       | - 전역 저장 버튼 옆 Undo/Redo 버튼 추가 및 에디터 라우팅 연결
-       | - 자동설정/캐쉬삭제 버튼은 한 줄 텍스트, 동일 높이, 확장 폭으로 정리
-       | - 파란 웨이브폼은 VAD/음성감지 블록, 초록 웨이브폼은 원본 오디오 에너지로 시각 분리
-
-  R13 | 이번 라운드 리팩토링 반영                              | 공통
-       | - 메뉴 관련 UI를 ui/menu_bar.py로 분리
-       | - 공용 라인 아이콘은 ui/style.py line_icon()에 모아 재사용
-       | - 설정 하단 버튼 아이콘은 ui/settings/settings_common.py에서 공통 적용
-       | - 기능 삭제 없이 UI 위치/스타일/동기화만 액션아이템 범위에서 수정
-
-[남은 체크포인트]
-
-  CHECKPOINT-UI-REF | 두 번째 레퍼런스 완전 동일화 육안 확인          | 대표님 확인
-       | - 실제 앱 실행 화면과 두 번째 레퍼런스를 나란히 비교
-       | - 표형 자막 행 편집, 비디오 컨트롤 세부 슬라이더, 타임라인 트랙 밀도는 실화면에서 추가 보정
-       | - 기능 삭제 없이 다음 라운드에서 차이 항목만 좁혀가기
-
-  CHECKPOINT-UI-RUNTIME | 재생/생성 중 overlay와 자동 스크롤 실사용 확인 | 대표님 확인
-       | - 자막 생성 중 비디오 재생 시 overlay가 playhead 클릭 없이 갱신되는지 확인
-       | - 재생 중 자막 에디터 현재 줄 자동 스크롤이 편집을 방해하지 않는지 확인
-       | - 단일 클립/멀티클립 활성 context 모두 실제 영상으로 확인
-
-  CHECKPOINT-UI-RESPONSIVE | 절반 화면 이하 메뉴 아이콘 모드 확인          | 대표님 확인
-       | - 창 폭을 절반 이하로 줄였을 때 하단 메뉴 텍스트가 숨고 아이콘만 남는지 확인
-       | - 버튼 겹침/잘림 없이 자동/터미널/종료까지 접근 가능한지 확인
-
-  CHECKPOINT-UI-SETTINGS | 설정창 전체 레이아웃 육안 확인                 | 대표님 확인
-       | - AI/상세/화자/간격/출력/자동설정 다이얼로그의 버튼 높이와 줄맞춤 확인
-       | - 시뮬레이터 색감/블록/슬라이더 줄맞춤을 실제 창 크기에서 확인
-
+  [ ] P3-SF1  숏폼 제작기 UI/프로젝트 구조
+  [ ] P3-SF2  하이라이트 자동 추출 및 세로 영상 구성
+  [ ] P3-SF3  숏폼 자막 스타일/템플릿 출력
+  [ ] P3-API1 앱 내장 REST API 서버
+  [ ] P3-API2 UI 버튼 인덱싱
+  [ ] P3-API3 파일/폴더 리스트 API
+  [ ] P3-API4 파이프라인 실행 API
+  [ ] P3-API5 Open-WebUI 도구 연동
+  [ ] iPad-1  자막 에디터 UI
+  [ ] iPad-2  음성 STT 입력 모드
+  [ ] iPad-3  LLM 오탈자 자동 추천
+  [ ] iPad-4  멀티클립 기능
+  [ ] iPad-5  AirDrop/iCloud 연동
+  [ ] iPad-6  프로젝트 양방향 동기화
+  [ ] iPad-7  유료 과금
 
 ================================================================================
-  PHASE1-D — 음성 따라말하기 STT 자막 작성 모드
+  대표님 확인 체크포인트 테스트
 ================================================================================
 
-  DONE-P1D | v02.07.00 구현 완료 요약                              | 공통
-       | - 전역 메뉴/사이드바 STT 버튼 ON/OFF 표시
-       | - STT ON + 시작 버튼에서 Whisper/LLM 없이 최고 민감도 VAD-only 실행
-       | - 음성 구간을 텍스트 없는 빨간 STT 세그먼트로 생성
-       | - STT 세그먼트는 프로젝트에는 저장, 완료 전 SRT에는 제외
-       | - 마이크 one-shot STT 결과를 현재 STT 세그먼트에 적용하는 경로 추가
-       | - 완료 전 STT 세그먼트가 있으면 저장 확인창 표시
-       | - 기존 자막 참고 텍스트는 회색/참고용으로 유지하고 저장 전 SRT 제외
-       | - STT/저장/기존자막 확인 메시지 박스를 공용 Apple 스타일로 통일
+  [ ] CP-01 | 첫 화면 UI
+       | - 앱 실행 후 첫 화면에서 왼쪽 메뉴 텍스트가 잘리지 않아야 함
+       | - `프로젝트 정보`는 기본 접힘 상태여야 함
+       | - `프로젝트 정보` 클릭 시 펼쳐지고 다시 클릭 시 접혀야 함
+       | - 하단 메뉴 배경이 흰색으로 깨지지 않아야 함
 
-  CHECKPOINT-P1D-V2 | VAD 민감 모드 preset                            | 대표님 확인
-       | - STT 모드 전용 VAD threshold / min_speech / min_silence preset 추가
-       | - 너무 짧은 구간 병합, 너무 긴 구간 자동 분할 규칙 추가
-       | - 멀티클립 offset을 보존해 전체 타임라인에 정확히 배치
+  [ ] CP-02 | 비디오 자막 overlay
+       | - 파일 열기 → 자막 처음부터 생성 → 바로 재생
+       | - 플레이헤드를 직접 클릭하지 않아도 비디오 위에 현재 자막이 표시되어야 함
+       | - 재생 중 자막 경계가 바뀌면 overlay도 따라 바뀌어야 함
 
-  CHECKPOINT-P1D-SAVE | STT 저장/복원 실사용 확인                    | 대표님 확인
-       | - 프로젝트 재로드 후 stt_pending/original_text/dictated_text 메타 유지 확인
-       | - 미완료 STT 세그먼트가 SRT에 포함되지 않는지 실제 저장 파일 확인
-       | - 완료된 STT 세그먼트만 일반 자막으로 SRT에 들어가는지 확인
+  [ ] CP-03 | 기존 SRT 로드
+       | - 영상과 같은 이름의 SRT가 있는 파일을 열기
+       | - 기존 자막 사용 후 재생하면 비디오 overlay에 자막이 표시되어야 함
+       | - `재시작` 시 기존 자막 백업 후 에디터/세그먼트가 초기화되어야 함
 
-  CHECKPOINT-P1D-M1 | 멀티클립 STT 모드 지원                         | 대표님 확인
-       | - 클립별 offset 유지
-       | - STT 세그먼트 색상/상태가 글로벌/디테일 캔버스 모두에서 일관되게 표시
-       | - clip 전환, clip 삭제/추가, 통합 저장 시 STT 메타 보존
+  [ ] CP-04 | 멀티클립 전환/재생/offset
+       | - 단일클립에서 영상 추가 후 멀티클립으로 전환
+       | - 클립 2 또는 클립 3 구간을 클릭 후 재생
+       | - 비디오 time과 전체 타임라인 playhead가 올바른 offset으로 동기화되어야 함
+       | - 클립 삭제 후 자막이 중복 append 되지 않아야 함
 
-[검증 체크포인트]
+  [ ] CP-05 | 멀티클립 STT/LLM 병렬 처리
+       | - 3개 이상 멀티클립으로 자막 생성
+       | - 클립1 Whisper 완료 후 클립1 LLM 처리 중 클립2 Whisper가 시작되어야 함
+       | - 에디터 append 순서는 클립1 → 클립2 → 클립3 순서가 유지되어야 함
 
-  CHECKPOINT-P1D-UX | 따라말하기 STT 모드 실사용 검증                  | 대표님 확인
-       | - Case 1: STT 모드 ON → 시작 → VAD-only 빈 STT 세그먼트 생성 → 프로젝트 저장 확인
-       | - Case 2: 생성된 STT 세그먼트에서 반복 청취 → Enter 녹음 → 적용 → Space 다음 구간
-       | - 멀티클립에서 clip2/3 offset, 저장/재로드, 통합 SRT 출력 확인
+  [ ] CP-06 | STEP 6 재시작
+       | - MOV 렌더링/iCloud 백업 중 `재시작` 클릭
+       | - 메인 화면으로 빠지지 않고 현재 파일/클립 재시작 흐름으로 남아야 함
+       | - 늦게 도착한 렌더링 완료 콜백이 화면 상태를 덮어쓰지 않아야 함
 
-[화자 세그먼트]
+  [ ] CP-07 | 멀티클립 저장 규칙
+       | - 개별 자막은 각 영상 파일명과 같은 위치에 저장되어야 함
+       | - 통합 자막은 첫 번째 영상 파일명 기준 `_통합.srt`로 저장되어야 함
+       | - `_통합.srt`는 기존 자막 사용 후보에서 제외되어야 함
 
-  DONE-P1D-SPK | 화자 세그먼트 중심 인터랙션 이동                  | 타임라인
-       | - 자막 세그먼트 우클릭의 "음성으로 화자 학습" 제거
-       | - 화자 세그먼트 왼쪽 클릭: 화자 설정에서 사용 중인 화자 목록 표시
-       | - 화자 목록은 설정 색상 아이콘을 사용하고 선택 시 해당 라인 화자 변경
-       | - 화자 세그먼트 오른쪽 클릭: 음성으로 화자 학습 실행
-       | - 미인식은 홍길동, 단일 인식은 화자1/화자2, 복수 인식은 화자1 / 화자2로 표시
+  [ ] CP-08 | STT 모드
+       | - `STT` 버튼 ON/OFF 상태가 자동모드처럼 명확히 보여야 함
+       | - STT ON 상태에서 `시작` 시 VAD-only 빨간 STT 세그먼트가 생성되어야 함
+       | - STT 세그먼트는 프로젝트 파일에는 저장되지만 완료 전 SRT에는 포함되지 않아야 함
 
-  CHECKPOINT-P1D-SPK | 화자 세그먼트 실사용 확인                       | 대표님 확인
-       | - 화자 설정에서 사용 해제한 화자가 선택 메뉴에 나오지 않는지 확인
-       | - 화자 세그먼트 우클릭 학습 파일이 voice_data에 정상 생성되는지 확인
-       | - 화자 변경 후 저장/재로드/SRT 화자색 출력까지 확인
+  [ ] CP-09 | 화자 세그먼트
+       | - 화자 세그먼트 클릭 시 사용 가능한 화자 목록과 색상이 표시되어야 함
+       | - 화자 선택 시 해당 세그먼트 화자가 변경되어야 함
+       | - 우클릭 시 `음성으로 화자 학습` 기능이 실행되어야 함
 
+  [ ] CP-10 | 설정창 UI
+       | - AI/상세/화자/간격/출력/자동설정 창 버튼 높이와 줄맞춤이 일관되어야 함
+       | - 텍스트가 잘리거나 버튼 크기가 과도하게 커지지 않아야 함
+       | - 시뮬레이터 창의 슬라이더/블록/버튼 줄맞춤이 깨지지 않아야 함
 
-================================================================================
-  PHASE2 — AI 러프컷 편집
-================================================================================
+  [ ] CP-11 | 반응형 메뉴
+       | - 창 폭을 절반 이하로 줄이면 하단 메뉴 텍스트가 숨고 아이콘만 남아야 함
+       | - 자동/터미널/종료 버튼이 잘리지 않고 접근 가능해야 함
 
-[UI / 기반]
-
-  P2-U0  | UI 레이아웃 설계
-  P2-U1  | 전체화면 비디오 프리뷰
-
-[프로젝트 / 데이터]
-
-  P2-P1  | 프로젝트 파일 확장
-  P2-P2  | 챕터 자동 생성
-  P2-P3  | 챕터 기반 summary
-  P2-P4  | 사용자 피드백 학습
-
-[AI 러프컷 핵심]
-
-  P2-A1  | 멀티 AI 러프컷 생성
-  P2-A2  | 러프컷 후보군 비교/선택
-  P2-A3  | 러프컷 길이 설정
-  P2-A4  | 컷 순서 변경/삭제
-
-[출력]
-
-  P2-O1  | 무손실 러프컷 출력
-  P2-O2  | 러프컷 자막 자동 재배치
-  P2-O3  | 러프컷 SRT + 자막 영상 출력
-  P2-O4  | FCPXML 출력
-
-[자막 스타일 학습]
-
-  P2-L1  | 교정 diff 자동 저장
-  P2-L2  | 자막학습 메뉴
-  P2-L3  | 학습 실행
-
-[화자 인식 확장]
-
-  P2-S1  | 멀티 화자 학습
-  P2-S2  | 영상 구간 선택 학습
-  P2-S3  | 학습 소스 이중화
-
-[자동화 설정]
-
-  P2-AUTO1 | 경로설정 → 자동화 설정 리네이밍
-  P2-AUTO2 | 자동화 파이프라인 설정 UI
-  P2-AUTO3 | 원스톱 순차 실행
-  P2-AUTO4 | 탭 기반 통합 설정 패널
-  P2-AUTO5 | 에디터 설정과 동기화
-  P2-AUTO6 | 자동시작 → 전체 파이프라인 연결
-
-
-================================================================================
-  PHASE3 — 숏폼 제작 / 자동 배포 / 원격 제어
-================================================================================
-
-  P3-SF1  | 숏폼 제작기 UI/프로젝트 구조
-  P3-SF2  | 하이라이트 자동 추출 및 세로 영상 구성
-  P3-SF3  | 숏폼 자막 스타일/템플릿 출력
-  P3-C1   | 프록시 자동 업로드
-  P3-L4   | LoRA 파인튜닝
-  P3-API1 | 앱 내장 REST API 서버
-  P3-API2 | UI 버튼 인덱싱
-  P3-API3 | 파일/폴더 리스트 API
-  P3-API4 | 파이프라인 실행 API
-  P3-API5 | Open-WebUI 도구 연동
-
-
-================================================================================
-  iPad 앱
-================================================================================
-
-  iPad-1 | 자막 에디터 UI
-  iPad-2 | 음성 STT 입력 모드
-  iPad-3 | LLM 오탈자 자동 추천
-  iPad-4 | 멀티클립 기능
-  iPad-5 | AirDrop/iCloud 연동
-  iPad-6 | 프로젝트 양방향 동기화
-  iPad-7 | 유료 과금
+  [ ] CP-12 | 러프컷 상태 분리/반영
+       | - 단일클립 → 러프컷 이동 시 프로젝트의 단일 편집 상태와 러프컷 상태가 분리되어야 함
+       | - 멀티클립 → 러프컷 이동 시 editor_state와 roughcut_state가 서로 덮어쓰지 않아야 함
+       | - 러프컷에서 에디터로 돌아가 자막/화자 수정 후 다시 러프컷 진입 시 수정 내용이 반영되어야 함

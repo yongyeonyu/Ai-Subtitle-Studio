@@ -1,4 +1,4 @@
-# Version: 02.07.00
+# Version: 03.00.23
 # Phase: PHASE1-D
 """
 ui/timeline_global.py
@@ -51,6 +51,29 @@ class GlobalCanvas(QWidget):
         self._clip_label = str(text or "")
         self.update()
 
+    def _timeline_has_focus(self) -> bool:
+        def _has_focus(widget) -> bool:
+            try:
+                return bool(widget is not None and hasattr(widget, "hasFocus") and widget.hasFocus())
+            except RuntimeError:
+                return False
+
+        timeline = self.parent()
+        if _has_focus(self) or _has_focus(timeline):
+            return True
+        for attr in ("canvas", "scroll", "global_canvas"):
+            child = getattr(timeline, attr, None) if timeline is not None else None
+            if _has_focus(child):
+                return True
+        return False
+
+    def _draw_focus_bottom(self, p: QPainter):
+        if not self._timeline_has_focus():
+            return
+        p.setPen(QPen(QColor("#FFFF00"), 2))
+        y = max(1, self.height() - 2)
+        p.drawLine(0, y, self.width(), y)
+
     def set_playhead(self, sec):
         if self.playhead_sec == sec:
             return
@@ -101,6 +124,7 @@ class GlobalCanvas(QWidget):
                     p.drawLine(i, mid_y - h, i, mid_y + h)
 
         if total <= 0:
+            self._draw_focus_bottom(p)
             p.end()
             return
         sc = w / total
@@ -148,6 +172,8 @@ class GlobalCanvas(QWidget):
             p.setPen(QPen(QColor("#FF4444"), 2))
             px = int(self.playhead_sec * sc)
             p.drawLine(px, 0, px, self.height())
+
+        self._draw_focus_bottom(p)
 
     def wheelEvent(self, ev):
         dy = ev.angleDelta().y()

@@ -1,5 +1,5 @@
-# Version: 02.04.00
-# Phase: PHASE1-C
+# Version: 03.00.27
+# Phase: PHASE2
 """
 Shared UI style tokens for the gradual PHASE1-C refresh.
 
@@ -8,7 +8,7 @@ behavior stay in each widget so existing signal/slot flows remain untouched.
 """
 
 from PyQt6.QtCore import Qt, QRectF
-from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
 
 import config
 
@@ -30,6 +30,8 @@ COLORS = {
     "accent": "#34C759",
     "separator": "#2D3942",
 }
+
+_LINE_ICON_CACHE = {}
 
 
 def _px(value):
@@ -169,6 +171,11 @@ def settings_dialog_stylesheet():
 def line_icon(name, color=None, size=28):
     """Small reusable line icons for the PHASE1-C dark UI."""
     color = color or COLORS["muted"]
+    cache_key = (str(name), str(color), int(size))
+    cached = _LINE_ICON_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pix)
@@ -178,7 +185,15 @@ def line_icon(name, color=None, size=28):
     painter.setBrush(Qt.BrushStyle.NoBrush)
     r = QRectF(size * 0.2, size * 0.2, size * 0.6, size * 0.6)
 
-    if name in ("settings", "ai"):
+    if name == "home":
+        painter.drawLine(int(size * 0.2), int(size * 0.48), int(size * 0.5), int(size * 0.24))
+        painter.drawLine(int(size * 0.5), int(size * 0.24), int(size * 0.8), int(size * 0.48))
+        painter.drawRoundedRect(QRectF(size * 0.3, size * 0.46, size * 0.4, size * 0.34), 3, 3)
+    elif name == "clock":
+        painter.drawEllipse(r)
+        painter.drawLine(int(size * 0.5), int(size * 0.5), int(size * 0.5), int(size * 0.32))
+        painter.drawLine(int(size * 0.5), int(size * 0.5), int(size * 0.64), int(size * 0.58))
+    elif name in ("settings", "ai"):
         painter.drawEllipse(r)
         painter.drawEllipse(QRectF(size * 0.42, size * 0.42, size * 0.16, size * 0.16))
         for dx, dy in ((0.5, 0.12), (0.5, 0.88), (0.12, 0.5), (0.88, 0.5)):
@@ -206,6 +221,12 @@ def line_icon(name, color=None, size=28):
         painter.drawLine(int(size * 0.46), int(size * 0.38), int(size * 0.64), int(size * 0.5))
         painter.drawLine(int(size * 0.64), int(size * 0.5), int(size * 0.46), int(size * 0.62))
         painter.drawLine(int(size * 0.46), int(size * 0.38), int(size * 0.46), int(size * 0.62))
+    elif name == "play":
+        painter.drawLine(int(size * 0.38), int(size * 0.28), int(size * 0.70), int(size * 0.50))
+        painter.drawLine(int(size * 0.70), int(size * 0.50), int(size * 0.38), int(size * 0.72))
+        painter.drawLine(int(size * 0.38), int(size * 0.28), int(size * 0.38), int(size * 0.72))
+    elif name == "stop":
+        painter.drawRoundedRect(QRectF(size * 0.32, size * 0.32, size * 0.36, size * 0.36), 2, 2)
     elif name in ("export", "folder"):
         painter.drawRoundedRect(QRectF(size * 0.18, size * 0.35, size * 0.64, size * 0.34), 3, 3)
         painter.drawLine(int(size * 0.28), int(size * 0.35), int(size * 0.42), int(size * 0.24))
@@ -245,9 +266,29 @@ def line_icon(name, color=None, size=28):
         painter.drawLine(int(size * 0.32), int(size * 0.43), int(size * 0.43), int(size * 0.5))
         painter.drawLine(int(size * 0.43), int(size * 0.5), int(size * 0.32), int(size * 0.57))
         painter.drawLine(int(size * 0.5), int(size * 0.6), int(size * 0.68), int(size * 0.6))
+    elif name in ("help", "question"):
+        painter.drawEllipse(r)
+        painter.setFont(QFont("Arial", max(10, int(size * 0.48)), QFont.Weight.Bold))
+        painter.drawText(QRectF(0, size * 0.12, size, size * 0.74), Qt.AlignmentFlag.AlignCenter, "?")
     elif name == "power":
-        painter.drawArc(r, 35 * 16, 290 * 16)
-        painter.drawLine(int(size * 0.5), int(size * 0.18), int(size * 0.5), int(size * 0.48))
+        painter.drawArc(QRectF(size * 0.24, size * 0.28, size * 0.52, size * 0.52), 35 * 16, 290 * 16)
+        painter.drawLine(int(size * 0.5), int(size * 0.14), int(size * 0.5), int(size * 0.48))
+    elif name == "review":
+        painter.drawEllipse(QRectF(size * 0.22, size * 0.30, size * 0.56, size * 0.38))
+        painter.drawEllipse(QRectF(size * 0.43, size * 0.43, size * 0.14, size * 0.14))
+    elif name == "llm":
+        painter.drawRoundedRect(QRectF(size * 0.24, size * 0.24, size * 0.52, size * 0.52), 5, 5)
+        painter.drawEllipse(QRectF(size * 0.36, size * 0.36, size * 0.08, size * 0.08))
+        painter.drawEllipse(QRectF(size * 0.56, size * 0.36, size * 0.08, size * 0.08))
+        painter.drawLine(int(size * 0.38), int(size * 0.60), int(size * 0.62), int(size * 0.60))
+    elif name == "roughcut":
+        painter.drawRoundedRect(QRectF(size * 0.20, size * 0.30, size * 0.60, size * 0.40), 3, 3)
+        painter.drawLine(int(size * 0.32), int(size * 0.28), int(size * 0.32), int(size * 0.72))
+        painter.drawLine(int(size * 0.50), int(size * 0.28), int(size * 0.50), int(size * 0.72))
+        painter.drawLine(int(size * 0.68), int(size * 0.28), int(size * 0.68), int(size * 0.72))
+    elif name == "shortform":
+        painter.drawRoundedRect(QRectF(size * 0.34, size * 0.18, size * 0.32, size * 0.64), 4, 4)
+        painter.drawLine(int(size * 0.43), int(size * 0.68), int(size * 0.57), int(size * 0.68))
     elif name in ("prev", "next"):
         x1, x2 = (0.65, 0.35) if name == "prev" else (0.35, 0.65)
         painter.drawLine(int(size * x1), int(size * 0.25), int(size * x2), int(size * 0.5))
@@ -287,7 +328,9 @@ def line_icon(name, color=None, size=28):
         painter.drawRoundedRect(r, 4, 4)
 
     painter.end()
-    return QIcon(pix)
+    icon = QIcon(pix)
+    _LINE_ICON_CACHE[cache_key] = icon
+    return icon
 
 
 def app_stylesheet():

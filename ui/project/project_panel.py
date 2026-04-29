@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 03.00.26
+# Phase: PHASE2
 """
 ui/project/project_panel.py
 Project UI mixin
@@ -18,6 +18,13 @@ from core.project.project_manager import (
     load_project,
     save_project,
 )
+from core.project.project_context import (
+    project_clip_boundaries,
+    project_active_work_mode,
+    project_media_files,
+    project_roughcut_state,
+    project_segments_to_editor,
+)
 from ui.project.clip_order_dialog import OrderDialog
 
 
@@ -29,11 +36,54 @@ PROJECT_FILE_FILTER = "Project Files (*.json)"
 
 class ProjectUIMixin:
     def _sorted_project_media(self, project: dict) -> list:
+        media_files = project_media_files(project)
+        if media_files:
+            return [path for path in media_files if os.path.exists(path)]
         return [
             item["path"]
             for item in sorted(project.get("media", []), key=lambda x: x.get("order", 0))
             if os.path.exists(item["path"])
         ]
+
+    def _open_project_segments_in_editor(self, filepath: str, project: dict, media: list[str], segments: list[dict]):
+        if not media:
+            return False
+
+        boundaries = project_clip_boundaries(project)
+        if len(media) > 1:
+            self._multiclip_files = list(media)
+            self._multiclip_boundaries = boundaries
+            self._project_boundary_times = [b["end"] for b in boundaries[:-1]] if len(boundaries) > 1 else []
+        else:
+            self._multiclip_files = []
+            self._multiclip_boundaries = []
+            self._project_boundary_times = []
+
+        self._current_project_path = filepath
+        self._is_auto_pipeline = False
+        self._on_save_cb = None
+        self._on_start_cb = None
+        self._on_prev_cb = None
+        self._on_exit_cb = None
+        self._init_editor(media[0], is_batch=False)
+
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None:
+            return False
+        try:
+            if hasattr(editor, "_reload_segments_from_list"):
+                editor._reload_segments_from_list(segments)
+            else:
+                editor.append_segments(segments)
+            if len(media) > 1 and hasattr(editor, "_apply_multiclip_state_from_owner"):
+                editor._apply_multiclip_state_from_owner()
+            if hasattr(editor, "_set_process_completed"):
+                editor._set_process_completed()
+            if hasattr(editor, "_redraw_timeline"):
+                editor._redraw_timeline()
+        except Exception as e:
+            get_logger().log(f"⚠️ 프로젝트 자막 복원 실패: {e}")
+        return True
 
     def _create_project(self):
         name, ok = QInputDialog.getText(self, "프로젝트 만들기", "프로젝트 이름:")
@@ -101,6 +151,7 @@ class ProjectUIMixin:
             get_logger().log("🔁 프로젝트 설정 복원 완료")
 
         media = self._sorted_project_media(project)
+        project_segments = project_segments_to_editor(project)
 
         srt_path = (
             project.get("subtitle", {}).get("path", "")
@@ -110,6 +161,15 @@ class ProjectUIMixin:
         get_logger().log(
             f"📂 프로젝트 로드: {project.get('project_name', '')} (미디어 {len(media)}개)"
         )
+
+        if media:
+            if self._open_project_segments_in_editor(filepath, project, media, project_segments):
+                if project_active_work_mode(project) == "roughcut" and project_roughcut_state(project):
+                    try:
+                        self._open_roughcut_helper()
+                    except Exception as e:
+                        get_logger().log(f"⚠️ 러프컷 화면 복원 실패: {e}")
+                return
 
         if srt_path and os.path.exists(srt_path):
             self._open_srt_in_editor(srt_path)
@@ -130,6 +190,7 @@ class ProjectUIMixin:
             filepath,
             segments=segments,
             user_settings=self._load_local_settings(),
+            active_work_mode=getattr(self, "_current_work_mode", "edit") or "edit",
         )
         get_logger().log("💾 프로젝트 저장 완료")
 
@@ -168,6 +229,22 @@ class ProjectUIMixin:
             return
 
         add_media_to_project(filepath, new_paths)
+
+        editor = getattr(self, "_editor_widget", None)
+        if editor is not None and hasattr(editor, "_remap_segments_for_multiclip_files"):
+            ordered = list(dlg.ordered_files)
+            remapped, new_bounds = editor._remap_segments_for_multiclip_files(ordered)
+            self._multiclip_files = ordered
+            self._multiclip_boundaries = new_bounds
+            self._project_boundary_times = [b["end"] for b in new_bounds[:-1]] if len(new_bounds) > 1 else []
+            editor._reload_segments_from_list(remapped)
+            editor._apply_multiclip_state_from_owner()
+            try:
+                editor._auto_save_project(editor._get_current_segments())
+            except Exception:
+                pass
+            get_logger().log(f"➕ 단일클립 프로젝트를 멀티클립으로 전환: {len(ordered)}개")
+            return
 
         new_only = [path for path in dlg.ordered_files if path not in set(existing)]
         if new_only and self.backend:

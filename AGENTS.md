@@ -1,11 +1,11 @@
 <!--
-Document-Version: 02.07.00
-Phase: PHASE1-D
-Last-Updated: 2026-04-28
+Document-Version: 03.00.27
+Phase: PHASE2
+Last-Updated: 2026-04-29
 Updated-By: Codex with 대표님
-Previous-Content: v02.06.00 P6 멀티클립 STT/LLM 병렬 파이프라인 구현 및 핸드오프
-This-Update: v02.07.00 PHASE1-D STT 모드, 화자 세그먼트 인터랙션, UI 상태 레일 이동, 공용 메시지 박스 반영
-Copilot-Handoff: v02.07.00 커밋 기준. PHASE1-D는 core/audio/stt_vad.py, core/audio/live_stt.py, ui/editor/editor_stt_mode.py에 구현되어 있습니다. 공용 확인창은 ui/dialogs/message_box.py, 전역 메뉴/상태 레일은 ui/menu_bar.py, 화자 세그먼트 클릭/우클릭은 ui/timeline/timeline_input.py와 ui/timeline/timeline_canvas.py를 먼저 확인하세요. 다음 작업은 v02.08.00부터 진행합니다.
+Previous-Content: v03.00.26 프로젝트 JSON 단일/멀티클립/러프컷 통합 저장·로드
+This-Update: v03.00.27 메인 도움말 창 추가 및 UI 아이콘 캐시 성능 보강
+Copilot-Handoff: v03.00.27 기준. 메인 하단 메뉴에 도움말 버튼이 추가되었고 `ui/help` 패키지에서 탭별 도움말/예시/스크린샷 자리 표시를 관리합니다. 다음은 RC-D1 러프컷 상세 패널입니다.
 -->
 # AGENTS.md — AI Subtitle Studio 개발 가이드
 
@@ -448,11 +448,45 @@ ai_subtitle_studio/
 
 ---
 
-## 🧠 v02.07.00 현재 작업 맥락
+## 🧠 v03.00.00 현재 작업 맥락
 
-- 현재 릴리즈 버전: **v02.07.00**
-- 다음 수정 시작 버전: **v02.08.00**
+- 현재 개발 버전: **v03.00.27**
+- Phase2 러프컷 엔진 1~2단계를 시작했습니다.
+  - `core/roughcut/models.py`: Subtitle/RoughCut/Storyboard/EDL dataclass 모델
+  - `core/roughcut/gap_detector.py`: 자막 없는 구간 탐지
+  - `core/roughcut/transcript_packer.py`: LLM 입력용 phrase packing
+  - `core/roughcut/scene_change_detector.py`: 의존성 없는 픽셀 차이 기반 컷 감지
+  - `core/roughcut/frame_sampler.py`: 프레임 timestamp 및 ffmpeg command helper
+  - `core/roughcut/topic_detector.py`: 로컬 keyword/topic shift detector
+  - `core/roughcut/semantic_chunker.py`: phrase 기반 semantic chunk/chapter seed
+  - `core/roughcut/story_mapper.py`: 챕터 위치/텍스트 힌트 기반 기/승/전/결 mapper
+  - `core/roughcut/edit_decision_engine.py`: cut safety 분류 + edit decision 생성
+  - `core/roughcut/edl_generator.py`: EDL segment/JSON 생성
+  - `core/roughcut/guide_writer.py`: Markdown 편집 가이드 생성
+  - `core/roughcut/pipeline.py`: run_roughcut_pipeline 단일 진입점
+  - `core/roughcut/renderer_skeleton.py`: ffmpeg concat command skeleton
+  - `core/roughcut/render_executor.py`: EDL 기반 ffmpeg 실행/dry-run helper
+  - `core/roughcut/subtitle_retimer.py`: EDL 기준 자막 retime/SRT 출력
+  - `core/audio/stt_quality_presets.py`: 빠른/균형/정밀 자막 정확도 프리셋
+  - `core/audio/media_processor.py`: Whisper 청크 overlap 생성 및 word timestamp dedupe
+  - `core/engine/word_resegmenter.py`: 최대 글자 수/duration/CPS/문장부호/무음 기준 word timestamp 재분할
+  - `core/engine/llm_correction_guard.py`: LLM 보정 결과의 단어 추가/삭제/타임코드 출력 차단
+  - `tests/test_roughcut_engine1.py`: unittest 기반 최소 검증
+- 다음 우선순위:
+  1. RC-D1 러프컷 상세 패널
 - PHASE1-C Apple 스타일 UI 개선은 기능 보존 원칙으로 반영되었습니다.
+- v03.00.17에서 중앙 러프컷 테이블 편집, 구간 프리뷰, EDL/가이드/SRT/렌더 계획 저장을 추가했습니다.
+- v03.00.18에서 AI 설정창에 자막 정확도 프리셋을 추가했습니다.
+- v03.00.19에서 Whisper 청크 overlap과 word timestamp 기반 dedupe를 실제 반영했습니다.
+- v03.00.20에서 Word timestamp 기반 재분할과 최대 자막 길이 설정을 추가했습니다.
+- v03.00.21에서 LLM 보정 원칙과 원문 무결성 guard를 강화했습니다.
+- v03.00.22에서 타임라인 선택 테두리의 상단 선을 제거하고 하단 미니맵 선택선을 보이도록 보정했습니다.
+- v03.00.23에서 타임라인 paintEvent 포커스 탐색 예외로 인한 PyQt SIGABRT 크래시를 방지했습니다.
+- v03.00.24에서 프로젝트 JSON의 단일/멀티클립 편집 상태와 러프컷 상태를 분리하고 상호 이동 시 최신 자막 반영을 보강했습니다.
+- v03.00.25에서 러프컷 UI 기능을 state/table/preview/export/format 모듈로 세분화했습니다.
+- v03.00.26에서 프로젝트 JSON을 기준으로 단일클립, 멀티클립, 러프컷 상태를 통합 저장/로드하고 멀티클립 EDL을 원본 파일별 local time으로 매핑했습니다.
+- v03.00.27에서 메인 하단 메뉴에 도움말 버튼을 추가하고, `ui/help` 패키지에 기능별 탭/사용 예시/스크린샷 자리 표시를 분리했습니다.
+- v03.00.27에서 반복 생성되는 `line_icon` 결과를 캐시해 전역 메뉴와 설정창 아이콘 생성 비용을 줄였습니다.
 - PHASE1-D STT 모드가 시작되었습니다.
   - 전역 메뉴/사이드바 STT 버튼은 ON/OFF 상태를 표시합니다.
   - STT ON 상태에서 시작 버튼을 누르면 Whisper/LLM 없이 최고 민감도 VAD-only 탐지를 실행합니다.

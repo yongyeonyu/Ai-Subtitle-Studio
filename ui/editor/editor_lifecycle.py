@@ -1,5 +1,5 @@
-# Version: 02.03.03
-# Phase: PHASE1-B
+# Version: 03.00.16
+# Phase: PHASE2
 """
 ui/editor_lifecycle.py
 MainWindow 에디터 열기/저장/닫기 Mixin
@@ -54,6 +54,7 @@ class EditorLifecycleMixin:
         from core.srt_parser import parse_srt
         from core.subtitle_existing import backup_existing_srt, find_media_for_srt, validate_srt_duration
         from ui.editor.editor_widget import EditorWidget
+        self._current_work_mode = "edit"
         self._remove_old_editor()
         media_path = find_media_for_srt(srt_path) or srt_path
         ok, reason = validate_srt_duration(srt_path, media_path)
@@ -95,6 +96,7 @@ class EditorLifecycleMixin:
 
     def _init_editor(self, target_file, is_batch=False):
         from ui.editor.editor_widget import EditorWidget
+        self._current_work_mode = "subtitle" if is_batch else "edit"
         vname = os.path.basename(target_file); self._remove_old_editor()
         editor = EditorWidget(video_name=vname, segments=[], media_path=target_file, parent=self)
         editor.is_auto_start = is_batch; self._editor_widget = editor
@@ -246,8 +248,15 @@ class EditorLifecycleMixin:
             apply_project_ui_state(self, editor, self._current_project_path)
 
     def _remove_old_editor(self):
-        old = self.stack.widget(1)
+        old = getattr(self, "_editor_widget", None)
         if not old:
+            return
+        try:
+            if self.stack.indexOf(old) < 0:
+                self._editor_widget = None
+                return
+        except RuntimeError:
+            self._editor_widget = None
             return
         if hasattr(old, '_cleanup'):
             try: old._cleanup()

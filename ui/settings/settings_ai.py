@@ -1,5 +1,5 @@
-# Version: 02.04.00
-# Phase: PHASE1-B
+# Version: 03.00.18
+# Phase: PHASE2
 """
 ui/settings_ai.py  ─  ⚙️ AI 엔진 설정 다이얼로그
 """
@@ -17,6 +17,7 @@ from ui.style import button_style, label_style, settings_dialog_stylesheet
 from core.llm.provider_registry import cloud_model_items
 from core.llm.secure_keys import get_api_key, set_api_key
 from core.audio.audio_presets import load_audio_presets, apply_audio_preset
+from core.audio.stt_quality_presets import apply_stt_quality_preset, load_stt_quality_presets, normalize_stt_quality_key
 
 
 class SettingsDialog(QDialog):
@@ -27,11 +28,22 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(700) 
         self.setStyleSheet(settings_dialog_stylesheet())
         self.result_settings = dict(settings)
+        self.stt_quality_presets = load_stt_quality_presets()
         self.audio_presets = load_audio_presets()
 
         layout = QVBoxLayout(self)
         form   = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        stt_preset_row = QHBoxLayout()
+        self.combo_stt_quality_preset = QComboBox()
+        for key, preset in self.stt_quality_presets.items():
+            desc = preset.get("description", "")
+            label = preset.get("label", key)
+            self.combo_stt_quality_preset.addItem(f"{label} - {desc}" if desc else label, key)
+        self.combo_stt_quality_preset.setMinimumWidth(350)
+        stt_preset_row.addWidget(self.combo_stt_quality_preset)
+        form.addRow("자막 정확도 프리셋:", stt_preset_row)
 
         preset_row = QHBoxLayout()
         self.combo_audio_preset = QComboBox()
@@ -198,7 +210,9 @@ class SettingsDialog(QDialog):
             if v == curr_vad: self.combo_vad.setCurrentText(k); break
         self.combo_vad.setMinimumWidth(350)
         form.addRow("음성 구간 탐지(VAD):", self.combo_vad)
+        self._sync_stt_quality_preset_combo(settings.get("stt_quality_preset", "balanced"))
         self._sync_audio_preset_combo(settings.get("audio_preset", ""))
+        self.combo_stt_quality_preset.currentIndexChanged.connect(self._on_stt_quality_preset_changed)
         self.combo_audio_preset.currentIndexChanged.connect(self._on_audio_preset_changed)
 
         layout.addLayout(form)
@@ -280,6 +294,15 @@ class SettingsDialog(QDialog):
                 break
         self.combo_audio_preset.blockSignals(False)
 
+    def _sync_stt_quality_preset_combo(self, preset_key: str):
+        key = normalize_stt_quality_key(preset_key)
+        self.combo_stt_quality_preset.blockSignals(True)
+        for i in range(self.combo_stt_quality_preset.count()):
+            if self.combo_stt_quality_preset.itemData(i) == key:
+                self.combo_stt_quality_preset.setCurrentIndex(i)
+                break
+        self.combo_stt_quality_preset.blockSignals(False)
+
     def _set_combo_by_data_value(self, combo, value: str, mapping: dict | None = None):
         if value is None:
             return False
@@ -322,6 +345,13 @@ class SettingsDialog(QDialog):
         self.result_settings = apply_audio_preset(self.result_settings, preset_name)
         self._set_combo_by_data_value(self.combo_audio, self.result_settings.get("selected_audio_ai"), self.audio_map)
         self._set_combo_by_data_value(self.combo_vad, self.result_settings.get("selected_vad"), self.vad_map)
+        self._set_combo_by_data_value(self.combo_whisper, self.result_settings.get("selected_whisper_model"))
+        self._set_llm_combo_by_name(self.result_settings.get("selected_model", ""))
+        self._update_model_info()
+
+    def _on_stt_quality_preset_changed(self, *args):
+        preset_key = self.combo_stt_quality_preset.currentData() or "balanced"
+        self.result_settings = apply_stt_quality_preset(self.result_settings, preset_key)
         self._set_combo_by_data_value(self.combo_whisper, self.result_settings.get("selected_whisper_model"))
         self._set_llm_combo_by_name(self.result_settings.get("selected_model", ""))
         self._update_model_info()
@@ -401,7 +431,8 @@ class SettingsDialog(QDialog):
             "openai_api_key_saved": bool(openai_key_saved),
             "chunk_time_limit": 99999 if self.chk_chunk_all.isChecked() else self.slider_chunk.value(),
             "llm_cost_filter": self.llm_filter,
-            "audio_preset": self.combo_audio_preset.currentData() or ""
+            "audio_preset": self.combo_audio_preset.currentData() or "",
+            "stt_quality_preset": self.combo_stt_quality_preset.currentData() or "balanced"
         })
         res.pop("google_api_key", None)
         res.pop("openai_api_key", None)

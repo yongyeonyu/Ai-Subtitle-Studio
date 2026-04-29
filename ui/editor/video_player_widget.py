@@ -1,4 +1,4 @@
-# Version: 02.07.00
+# Version: 03.00.26
 # Phase: PHASE1-D
 """
 ui/video_player_widget.py - PyQt6 비디오 플레이어
@@ -10,15 +10,17 @@ import hashlib
 import shutil
 import subprocess
 import tempfile
+import time
 from bisect import bisect_right
 
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QPushButton, QSizePolicy, QStackedWidget, QComboBox)
-from PyQt6.QtCore import Qt, QTimer, QRectF, QUrl
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+                             QPushButton, QSizePolicy, QStackedWidget, QComboBox,
+                             QGraphicsView, QGraphicsScene)
+from PyQt6.QtCore import Qt, QTimer, QRectF, QUrl, QSizeF
 from PyQt6.QtGui import QFont, QColor, QPainter, QFontMetrics, QBrush, QPainterPath, QPen, QPixmap
 
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PyQt6.QtMultimediaWidgets import QVideoWidget
+from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 
 import config
 
@@ -46,6 +48,28 @@ class ThumbnailLabel(QLabel):
             painter.drawPixmap(x, y, scaled)
         else:
             super().paintEvent(event)
+
+
+class VideoSurfaceView(QGraphicsView):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._scene = QGraphicsScene(self)
+        self.video_item = QGraphicsVideoItem()
+        self.video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+        self._scene.addItem(self.video_item)
+        self.setScene(self._scene)
+        self.setFrameShape(QGraphicsView.Shape.NoFrame)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setStyleSheet("background: #000000; border: none;")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        rect = QRectF(0, 0, self.viewport().width(), self.viewport().height())
+        self._scene.setSceneRect(rect)
+        self.video_item.setSize(QSizeF(rect.width(), rect.height()))
 
 class SubtitleLabel(QLabel):
     """비디오 프리뷰 위에 출력 설정을 반영해 그리는 자막 overlay."""
@@ -228,7 +252,7 @@ class VideoPlayerWidget(QWidget):
         super().__init__(parent)
         self.setStyleSheet(f"background: {config.BG2};")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setMinimumSize(400, 300)
+        self.setMinimumSize(260, 260)
 
         self.segments: list[dict] = []
         self.current_time: float  = 0.0
@@ -246,6 +270,9 @@ class VideoPlayerWidget(QWidget):
         self._subtitle_starts: list[float] = []
         self._subtitle_cache_idx: int = -1
         self._last_time_label_ms: int = -250
+        self._last_provider_refresh_at: float = 0.0
+        self._subtitle_provider = None
+        self._subtitle_provider_signature = ""
         self._last_btn_state = None
         self._proxy_proc: subprocess.Popen | None = None
         self._proxy_original_path: str = ""
@@ -358,22 +385,21 @@ class VideoPlayerWidget(QWidget):
         self.video_stack = QStackedWidget()
         self.video_stack.setParent(self.video_container)
         
-        self.video_widget = QVideoWidget()
+        self.video_widget = VideoSurfaceView()
         self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.media_player.setVideoOutput(self.video_widget)
+        self.media_player.setVideoOutput(self.video_widget.video_item)
         self.video_stack.addWidget(self.video_widget)
         
         self.thumb_label = ThumbnailLabel()
         self.video_stack.addWidget(self.thumb_label)
 
-        self.sub_label = SubtitleLabel()
-        self.sub_label.setParent(self.video_container)
+        self.sub_label = SubtitleLabel(self.video_widget.viewport())
         self.sub_label.raise_()
 
         layout.addWidget(self.video_container, stretch=1)
 
         ctrl = QWidget()
-        ctrl.setFixedHeight(42)
+        ctrl.setFixedHeight(48)
         ctrl.setStyleSheet("background: transparent; border: none;")
         ctrl_layout = QHBoxLayout(ctrl)
         ctrl_layout.setContentsMargins(0, 0, 0, 0)
@@ -399,6 +425,8 @@ class VideoPlayerWidget(QWidget):
         ctrl_layout.addStretch()
 
         self.info_label = QLabel("영상을 불러오는 중...")
+        self.info_label.setWordWrap(True)
+        self.info_label.setMaximumHeight(34)
         self.info_label.setStyleSheet("color: #A9B0B7; font-size: 10px; background: transparent; border: none;")
         ctrl_layout.addWidget(self.info_label)
 
@@ -410,7 +438,12 @@ class VideoPlayerWidget(QWidget):
             return
         rect = self.video_container.rect()
         self.video_stack.setGeometry(rect)
-        self.sub_label.setGeometry(rect)
+        try:
+            self.sub_label.setParent(self.video_widget.viewport())
+            self.sub_label.setGeometry(self.video_widget.viewport().rect())
+        except Exception:
+            self.sub_label.setParent(self.video_container)
+            self.sub_label.setGeometry(rect)
         self.sub_label.raise_()
 
     def resizeEvent(self, event):
@@ -662,6 +695,49 @@ class VideoPlayerWidget(QWidget):
         self._subtitle_starts = [s["start"] for s in self.segments]
         self._subtitle_cache_idx = -1
 
+    def set_subtitle_provider(self, provider):
+        self._subtitle_provider = provider
+        self._refresh_provider_segments(force=True)
+
+    def _refresh_provider_segments(self, force: bool = False):
+        provider = getattr(self, "_subtitle_provider", None)
+        if not callable(provider):
+            return
+        now = time.monotonic()
+        if not force and (now - float(getattr(self, "_last_provider_refresh_at", 0.0) or 0.0)) < 0.50:
+            return
+        self._last_provider_refresh_at = now
+        try:
+            segments = provider()
+        except Exception:
+            return
+        if segments is None:
+            return
+        cleaned = list(segments or [])
+        signature = self._segments_signature(cleaned)
+        if signature and signature == getattr(self, "_subtitle_provider_signature", ""):
+            return
+        self._subtitle_provider_signature = signature
+        self._set_segments(cleaned)
+        self._refresh_subtitle_now()
+
+    def _segments_signature(self, segments: list[dict]) -> str:
+        compact = []
+        for seg in segments or []:
+            try:
+                compact.append(
+                    {
+                        "start": round(float(seg.get("start", 0.0) or 0.0), 3),
+                        "end": round(float(seg.get("end", 0.0) or 0.0), 3),
+                        "text": str(seg.get("text", "") or ""),
+                        "speaker": str(seg.get("speaker", seg.get("spk", "")) or ""),
+                    }
+                )
+            except Exception:
+                continue
+        payload = json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
     def _find_subtitle_at(self, now: float) -> str:
         idx = int(getattr(self, "_subtitle_cache_idx", -1))
         if 0 <= idx < len(self.segments):
@@ -746,6 +822,7 @@ class VideoPlayerWidget(QWidget):
             if getattr(self, 'has_vocal_track', False):
                 self.vocal_player.pause()
         else:
+            self._refresh_provider_segments(force=True)
             if self._deferred_proxy_switch:
                 proxy_path = self._deferred_proxy_switch
                 self._deferred_proxy_switch = None
@@ -779,6 +856,7 @@ class VideoPlayerWidget(QWidget):
             return
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.current_time = self.media_player.position() / 1000.0
+            self._refresh_provider_segments(force=False)
 
         def format_time(sec):
             m, s = divmod(int(sec), 60)
