@@ -1,4 +1,4 @@
-# Version: 02.07.00
+# Version: 03.00.32
 # Phase: PHASE1-D
 """
 ui/editor_actions.py
@@ -79,6 +79,13 @@ class EditorActionsMixin:
                     self.sm.is_dirty = False
                 else:
                     self.sm.complete_save()
+        except Exception:
+            pass
+
+        try:
+            main_w = self.window()
+            if hasattr(main_w, "_refresh_saved_status_label"):
+                main_w._refresh_saved_status_label(is_dirty=False, touch_saved_time=True)
         except Exception:
             pass
 

@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 03.00.34
 # Phase: PHASE1-B
 """
 ui/queue_widget.py
@@ -27,6 +27,8 @@ class QueueMixin:
 
     def init_queue_list(self, files):
         import os
+        if hasattr(self, "_show_bottom_queue_table"):
+            self._show_bottom_queue_table()
         self._current_file_idx = 1
         self._total_files = len(files)
         self._expected_seconds = {}
@@ -57,6 +59,8 @@ class QueueMixin:
         self._live_timer.start(1000)
 
     def update_queue_status(self, idx, status, time_txt="", info_txt="", len_txt=""):
+        if hasattr(self, "_show_bottom_queue_table") and status:
+            self._show_bottom_queue_table()
         if idx < self.queue_table.rowCount():
             def mk(text):
                 it = QTableWidgetItem(text)
@@ -161,6 +165,8 @@ class QueueMixin:
                     tc.setText(f"{fmt(ef)} / {fmt(xf) if xf > 0 else '학습 중'}")
 
     def update_queue_header(self, current, total, pct, eta_str=""):
+        if hasattr(self, "_show_bottom_queue_table"):
+            self._show_bottom_queue_table()
         self._current_file_idx = current
         self._total_files = total
         self._real_pct = pct  # ✅ 이 줄 추가

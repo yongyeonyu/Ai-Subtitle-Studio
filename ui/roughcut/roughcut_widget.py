@@ -1,4 +1,4 @@
-# Version: 03.00.26
+# Version: 03.00.34
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -57,9 +57,7 @@ class RoughcutWidget(
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
-        root.addWidget(self._build_toolbar())
-        root.addWidget(self._build_metrics())
-        root.addWidget(self._build_preview())
+        self.bottom_panel = self._build_bottom_panel()
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.setChildrenCollapsible(False)
@@ -79,6 +77,17 @@ class RoughcutWidget(
         splitter.setSizes([520, 260])
 
         self._set_empty_state()
+
+    def _build_bottom_panel(self) -> QWidget:
+        panel = QWidget()
+        panel.setStyleSheet("background: transparent; border: none;")
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        lay.addWidget(self._build_toolbar())
+        lay.addWidget(self._build_metrics())
+        lay.addWidget(self._build_preview())
+        return panel
 
     def _build_toolbar(self) -> QWidget:
         top = QWidget()

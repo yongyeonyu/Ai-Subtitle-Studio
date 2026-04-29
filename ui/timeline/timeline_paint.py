@@ -1,4 +1,4 @@
-# Version: 03.00.22
+# Version: 03.00.40
 # Phase: PHASE1-C
 """
 ui/timeline_paint.py
@@ -384,6 +384,7 @@ class TimelinePaintMixin:
 
         self._clip_delete_rects = []
         self._clip_add_rect = QRect()
+        self._clip_add_placeholder = None
         if self._multiclip_boxes:
             for box in self._multiclip_boxes:
                 bx1 = self._x(box["start"])
@@ -422,23 +423,29 @@ class TimelinePaintMixin:
                 p.setPen(QColor('#FF8080'))
                 p.drawText(delete_rect, Qt.AlignmentFlag.AlignCenter, delete_label)
 
+        add_anchor_sec = None
         if self._multiclip_boxes:
-            placeholder_dur = 30.0
-            last_box = self._multiclip_boxes[-1]
-            px1 = self._x(last_box['end'])
-            px2 = self._x(last_box['end'] + placeholder_dur)
-            pw = px2 - px1
-            p.setPen(QPen(QColor('#555555'), 1, Qt.PenStyle.DashLine))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRect(int(px1), 0, int(pw), CANVAS_H)
-            self._clip_add_placeholder = {'start': last_box['end'], 'end': last_box['end'] + placeholder_dur}
-            self._clip_add_rect = QRect(int(px1 + (pw // 2) - 14), int((CANVAS_H // 2) - 14), 28, 28)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor('#112233'))
-            p.drawRoundedRect(self._clip_add_rect, 4, 4)
-            p.setPen(QColor('#4AFF80'))
-            p.setFont(QFont(config.FONT, 18, QFont.Weight.Bold))
-            p.drawText(self._clip_add_rect, Qt.AlignmentFlag.AlignCenter, '+')
+            add_anchor_sec = float(self._multiclip_boxes[-1].get("end", 0.0) or 0.0)
+        elif self.total_duration > 0:
+            add_anchor_sec = float(self.total_duration)
+        elif self.segments:
+            add_anchor_sec = max(float(seg.get("end", 0.0) or 0.0) for seg in self.segments)
+
+        if add_anchor_sec is not None:
+            add_x = self._x(add_anchor_sec) + 8
+            add_w = 50
+            add_h = max(24, subtitle_bot - subtitle_top)
+            self._clip_add_rect = QRect(int(add_x), int(subtitle_top), add_w, add_h)
+            self._clip_add_placeholder = {
+                "start": add_anchor_sec,
+                "end": add_anchor_sec + (add_w / max(1.0, float(self.pps))),
+            }
+            p.setPen(QPen(QColor("#4AFF80"), 1, Qt.PenStyle.DashLine))
+            p.setBrush(QColor(17, 34, 51, 180))
+            p.drawRoundedRect(QRectF(self._clip_add_rect), 5, 5)
+            p.setPen(QColor("#4AFF80"))
+            p.setFont(QFont(config.FONT, 20, QFont.Weight.Bold))
+            p.drawText(self._clip_add_rect, Qt.AlignmentFlag.AlignCenter, "+")
 
         if self.boundary_times:
             pen_boundary = QPen(QColor("#4AFF80"), 1)
@@ -469,16 +476,6 @@ class TimelinePaintMixin:
             p.setPen(QPen(QColor("#FFFFFF"), 1))
             p.drawEllipse(self._playhead_handle_rect)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-
-        if self.hasFocus():
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(QColor("#FFFF00"), 2))
-            left = 1
-            right = max(1, total_w - 2)
-            bottom = max(1, CANVAS_H - 2)
-            p.drawLine(left, 1, left, bottom)
-            p.drawLine(right, 1, right, bottom)
-            p.drawLine(left, bottom, right, bottom)
 
     def _draw_handle(self, p, bx, is_left, color):
         cy = SEG_TOP + 32

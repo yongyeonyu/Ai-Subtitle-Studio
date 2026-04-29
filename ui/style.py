@@ -1,4 +1,4 @@
-# Version: 03.00.27
+# Version: 03.00.37
 # Phase: PHASE2
 """
 Shared UI style tokens for the gradual PHASE1-C refresh.
@@ -7,8 +7,8 @@ This module centralizes low-risk button and label styles first. Layout and
 behavior stay in each widget so existing signal/slot flows remain untouched.
 """
 
-from PyQt6.QtCore import Qt, QRectF
-from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
+from PyQt6.QtCore import QPointF, Qt, QRectF
+from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 
 import config
 
@@ -75,6 +75,35 @@ def button_style(kind="toolbar", *, font_size=None, padding=None):
         "min-height: 28px; min-width: 64px; "
         "} "
         f"QPushButton:hover {{ background: {COLORS['control_hover']}; }}"
+    )
+
+
+def settings_button_style(kind="toolbar", *, font_size="12px", min_width=72):
+    """Return equal-height QPushButton styles for settings dialogs."""
+    bg = COLORS["control"]
+    border = COLORS["separator"]
+    color = COLORS["text"]
+    hover = COLORS["control_hover"]
+    if kind == "primary":
+        bg = COLORS["primary"]
+        border = COLORS["primary"]
+        color = "#FFFFFF"
+        hover = COLORS["primary_hover"]
+    elif kind == "danger":
+        bg = "#2D1718"
+        border = "#5B2528"
+        color = "#FFB1AB"
+        hover = "#3A1D20"
+    return (
+        "QPushButton { "
+        f"background: {bg}; color: {color}; border: 1px solid {border}; "
+        "border-radius: 7px; padding: 0 12px; "
+        f"font-size: {_px(font_size)}; font-weight: 700; "
+        "min-height: 40px; max-height: 40px; "
+        f"min-width: {_px(min_width)}; "
+        "} "
+        f"QPushButton:hover {{ background: {hover}; border-color: #465663; }} "
+        "QPushButton:disabled { color: #6F767D; background: #151A1E; border-color: #222A31; }"
     )
 
 
@@ -185,6 +214,64 @@ def line_icon(name, color=None, size=28):
     painter.setBrush(Qt.BrushStyle.NoBrush)
     r = QRectF(size * 0.2, size * 0.2, size * 0.6, size * 0.6)
 
+    def draw_reference_curve_arrow(is_redo=False):
+        arrow_pen = QPen(
+            QColor(color),
+            max(4.0, size * 0.15),
+            Qt.PenStyle.SolidLine,
+            Qt.PenCapStyle.FlatCap,
+            Qt.PenJoinStyle.RoundJoin,
+        )
+        painter.setPen(arrow_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        path = QPainterPath()
+        if is_redo:
+            path.moveTo(QPointF(size * 0.61, size * 0.38))
+            path.cubicTo(
+                QPointF(size * 0.47, size * 0.25),
+                QPointF(size * 0.26, size * 0.30),
+                QPointF(size * 0.22, size * 0.50),
+            )
+            path.cubicTo(
+                QPointF(size * 0.19, size * 0.65),
+                QPointF(size * 0.32, size * 0.76),
+                QPointF(size * 0.50, size * 0.75),
+            )
+            head = QPolygonF(
+                [
+                    QPointF(size * 0.83, size * 0.38),
+                    QPointF(size * 0.60, size * 0.23),
+                    QPointF(size * 0.60, size * 0.55),
+                ]
+            )
+        else:
+            path.moveTo(QPointF(size * 0.39, size * 0.38))
+            path.cubicTo(
+                QPointF(size * 0.53, size * 0.25),
+                QPointF(size * 0.74, size * 0.30),
+                QPointF(size * 0.78, size * 0.50),
+            )
+            path.cubicTo(
+                QPointF(size * 0.81, size * 0.65),
+                QPointF(size * 0.68, size * 0.76),
+                QPointF(size * 0.50, size * 0.75),
+            )
+            head = QPolygonF(
+                [
+                    QPointF(size * 0.17, size * 0.38),
+                    QPointF(size * 0.40, size * 0.23),
+                    QPointF(size * 0.40, size * 0.55),
+                ]
+            )
+
+        painter.drawPath(path)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        painter.drawPolygon(head)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
     if name == "home":
         painter.drawLine(int(size * 0.2), int(size * 0.48), int(size * 0.5), int(size * 0.24))
         painter.drawLine(int(size * 0.5), int(size * 0.24), int(size * 0.8), int(size * 0.48))
@@ -249,13 +336,9 @@ def line_icon(name, color=None, size=28):
         painter.drawLine(int(size * 0.70), int(size * 0.24), int(size * 0.78), int(size * 0.42))
         painter.drawLine(int(size * 0.70), int(size * 0.24), int(size * 0.52), int(size * 0.28))
     elif name == "undo":
-        painter.drawArc(QRectF(size * 0.24, size * 0.26, size * 0.52, size * 0.48), 35 * 16, 250 * 16)
-        painter.drawLine(int(size * 0.30), int(size * 0.32), int(size * 0.18), int(size * 0.38))
-        painter.drawLine(int(size * 0.30), int(size * 0.32), int(size * 0.34), int(size * 0.48))
+        draw_reference_curve_arrow(is_redo=False)
     elif name == "redo":
-        painter.drawArc(QRectF(size * 0.24, size * 0.26, size * 0.52, size * 0.48), -105 * 16, 250 * 16)
-        painter.drawLine(int(size * 0.70), int(size * 0.32), int(size * 0.82), int(size * 0.38))
-        painter.drawLine(int(size * 0.70), int(size * 0.32), int(size * 0.66), int(size * 0.48))
+        draw_reference_curve_arrow(is_redo=True)
     elif name == "trash":
         painter.drawLine(int(size * 0.32), int(size * 0.3), int(size * 0.68), int(size * 0.3))
         painter.drawRoundedRect(QRectF(size * 0.35, size * 0.36, size * 0.3, size * 0.4), 2, 2)
@@ -271,8 +354,17 @@ def line_icon(name, color=None, size=28):
         painter.setFont(QFont("Arial", max(10, int(size * 0.48)), QFont.Weight.Bold))
         painter.drawText(QRectF(0, size * 0.12, size, size * 0.74), Qt.AlignmentFlag.AlignCenter, "?")
     elif name == "power":
-        painter.drawArc(QRectF(size * 0.24, size * 0.28, size * 0.52, size * 0.52), 35 * 16, 290 * 16)
-        painter.drawLine(int(size * 0.5), int(size * 0.14), int(size * 0.5), int(size * 0.48))
+        power_pen = QPen(
+            QColor(color),
+            max(4.2, size * 0.16),
+            Qt.PenStyle.SolidLine,
+            Qt.PenCapStyle.RoundCap,
+            Qt.PenJoinStyle.RoundJoin,
+        )
+        painter.setPen(power_pen)
+        painter.drawArc(QRectF(size * 0.24, size * 0.27, size * 0.52, size * 0.54), 130 * 16, 280 * 16)
+        painter.drawLine(int(size * 0.5), int(size * 0.15), int(size * 0.5), int(size * 0.43))
+        painter.setPen(pen)
     elif name == "review":
         painter.drawEllipse(QRectF(size * 0.22, size * 0.30, size * 0.56, size * 0.38))
         painter.drawEllipse(QRectF(size * 0.43, size * 0.43, size * 0.14, size * 0.14))

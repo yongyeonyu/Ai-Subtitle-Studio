@@ -1,4 +1,4 @@
-# Version: 03.00.16
+# Version: 03.00.38
 # Phase: PHASE2
 """
 ui/editor_lifecycle.py
@@ -80,6 +80,8 @@ class EditorLifecycleMixin:
             self._restore_workspace(editor, self._current_project_path)
             from core.project.project_phase1b import apply_project_ui_state
             apply_project_ui_state(self, editor, self._current_project_path)
+        if hasattr(self, "_refresh_work_mode_ui"):
+            QTimer.singleShot(0, self._refresh_work_mode_ui)
 
     def _finalize_reuse_completion(self, editor):
         """기존자막 reuse 완료 후 상태 전환"""
@@ -246,6 +248,8 @@ class EditorLifecycleMixin:
             self._restore_workspace(editor, self._current_project_path)
             from core.project.project_phase1b import apply_project_ui_state
             apply_project_ui_state(self, editor, self._current_project_path)
+        if hasattr(self, "_refresh_work_mode_ui"):
+            QTimer.singleShot(0, self._refresh_work_mode_ui)
 
     def _remove_old_editor(self):
         old = getattr(self, "_editor_widget", None)

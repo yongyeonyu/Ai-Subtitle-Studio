@@ -1,4 +1,4 @@
-# Version: 03.00.27
+# Version: 03.00.38
 # Phase: PHASE2
 """
 ui/main/main_window.py
@@ -142,8 +142,16 @@ class MainWindow(
         self.home_page.setStyleSheet("background: #11181C;")
         workspace_splitter.addWidget(self.home_page)
         self.status_rail = StatusRail(self.home_page)
-        self.saved_status_label = QLabel("저장됨: 오후 2:30  ●", self.home_page)
+        self.saved_status_label = QLabel("", self.home_page)
+        self.saved_status_label.setTextFormat(Qt.TextFormat.RichText)
         self.saved_status_label.setStyleSheet("color: #A9B0B7; font-size: 11px; background: transparent;")
+        if hasattr(self, "_refresh_saved_status_label"):
+            self._refresh_saved_status_label(is_dirty=False)
+        self.sidebar_settings_label = QLabel("", self.home_page)
+        self.sidebar_settings_label.setWordWrap(True)
+        self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 9px; font-weight: bold; background: transparent; border: none;")
+        if hasattr(self, "_refresh_sidebar_engine_info"):
+            self._refresh_sidebar_engine_info()
 
         self.editor_page = QWidget()
         editor_placeholder = QVBoxLayout(self.editor_page)
@@ -152,7 +160,7 @@ class MainWindow(
         title = QLabel("작업을 선택하세요")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(label_style("normal", 20, bold=True))
-        subtitle = QLabel("파일, 프로젝트, iCloud, NAS 자동처리를 왼쪽에서 시작하면 이 영역에 자막 편집 작업 화면이 열립니다.")
+        subtitle = QLabel("파일, 프로젝트, iCloud, NAS 자동처리를 왼쪽에서 시작하면 이 영역에 에디터 작업 화면이 열립니다.")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet(label_style("muted", 12))
@@ -205,7 +213,7 @@ class MainWindow(
 
         # ── 로그 컨텐츠 ──
         self._log_content = QWidget()
-        self._log_content.setFixedHeight(146)
+        self._log_content.setFixedHeight(190)
         lc_layout_main = QVBoxLayout(self._log_content)
         lc_layout_main.setContentsMargins(0, 0, 0, 0)
 
@@ -224,7 +232,36 @@ class MainWindow(
         self.log_text.setStyleSheet("background: #151C20; color: #A9B0B7; border: none; padding: 4px 8px;")
         term_layout.addWidget(self.log_text)
 
-        # 큐 테이블
+        self.bottom_right_stack = QStackedWidget()
+        self.bottom_queue_page = self._build_bottom_queue_table()
+        self.bottom_roughcut_page = self._build_bottom_roughcut_table()
+        self.bottom_right_stack.addWidget(self.bottom_queue_page)
+        self.bottom_right_stack.addWidget(self.bottom_roughcut_page)
+
+        self.log_splitter.addWidget(term_widget)
+        self.log_splitter.addWidget(self.bottom_right_stack)
+        self.log_splitter.setStretchFactor(0, 1)
+        self.log_splitter.setStretchFactor(1, 1)
+        self.log_splitter.setSizes([500, 500])
+        lc_layout_main.addWidget(self.log_splitter)
+        layout.addWidget(self._log_content)
+
+        # 초기 상태
+        settings = load_settings()
+        self._log_visible = settings.get("show_terminal_log", False)
+        self._apply_log_visible(self._log_visible)
+
+        # 큐 애니메이션
+        self._queue_anim_frames = ["📑", "📄", "📃", "📝"]
+        self._queue_anim_idx = 0
+        self._queue_anim_timer = QTimer(self)
+        self._queue_anim_timer.setInterval(250)
+        self._queue_anim_timer.timeout.connect(self._animate_queue_status)
+        self._queue_anim_timer.start()
+
+        return container
+
+    def _build_bottom_queue_table(self) -> QWidget:
         queue_widget = QWidget()
         queue_layout = QVBoxLayout(queue_widget)
         queue_layout.setContentsMargins(5, 3, 5, 5)
@@ -257,12 +294,8 @@ class MainWindow(
         )
         self.queue_table.setColumnWidth(4, 140)
         self.queue_table.verticalHeader().setVisible(False)
-        self.queue_table.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
-        self.queue_table.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
+        self.queue_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.queue_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.queue_table.setShowGrid(True)
         self.queue_table.setGridStyle(Qt.PenStyle.SolidLine)
         self.queue_table.setStyleSheet(
@@ -274,29 +307,51 @@ class MainWindow(
             "border-bottom: 1px solid #3A4650; padding: 3px 8px; }"
         )
         queue_layout.addWidget(self.queue_table)
+        return queue_widget
 
-        self.log_splitter.addWidget(term_widget)
-        self.log_splitter.addWidget(queue_widget)
-        self.log_splitter.setStretchFactor(0, 1)
-        self.log_splitter.setStretchFactor(1, 1)
-        self.log_splitter.setSizes([500, 500])
-        lc_layout_main.addWidget(self.log_splitter)
-        layout.addWidget(self._log_content)
+    def _build_bottom_roughcut_table(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(5, 3, 5, 5)
+        layout.setSpacing(4)
+        self.roughcut_bottom_header_lbl = QLabel("✂ 러프컷 테이블")
+        self.roughcut_bottom_header_lbl.setStyleSheet(label_style("normal", 9, bold=True))
+        layout.addWidget(self.roughcut_bottom_header_lbl)
 
-        # 초기 상태
-        settings = load_settings()
-        self._log_visible = settings.get("show_terminal_log", False)
-        self._apply_log_visible(self._log_visible)
+        self.roughcut_bottom_host = QWidget()
+        self.roughcut_bottom_host_layout = QVBoxLayout(self.roughcut_bottom_host)
+        self.roughcut_bottom_host_layout.setContentsMargins(0, 0, 0, 0)
+        self.roughcut_bottom_host_layout.setSpacing(0)
+        placeholder = QLabel("러프컷 화면을 열면 분석/출력/구간 재생 패널이 표시됩니다.")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder.setWordWrap(True)
+        placeholder.setStyleSheet(label_style("muted", 10))
+        self.roughcut_bottom_host_layout.addWidget(placeholder)
+        layout.addWidget(self.roughcut_bottom_host, stretch=1)
+        return page
 
-        # 큐 애니메이션
-        self._queue_anim_frames = ["📑", "📄", "📃", "📝"]
-        self._queue_anim_idx = 0
-        self._queue_anim_timer = QTimer(self)
-        self._queue_anim_timer.setInterval(250)
-        self._queue_anim_timer.timeout.connect(self._animate_queue_status)
-        self._queue_anim_timer.start()
+    def _set_roughcut_bottom_widget(self, widget: QWidget):
+        if widget is None or not hasattr(self, "roughcut_bottom_host_layout"):
+            return
+        while self.roughcut_bottom_host_layout.count():
+            item = self.roughcut_bottom_host_layout.takeAt(0)
+            old = item.widget()
+            if old is not None and old is not widget:
+                old.setParent(None)
+        self.roughcut_bottom_host_layout.addWidget(widget)
+        self._show_bottom_roughcut_table()
 
-        return container
+    def _show_bottom_queue_table(self):
+        stack = getattr(self, "bottom_right_stack", None)
+        page = getattr(self, "bottom_queue_page", None)
+        if stack is not None and page is not None:
+            stack.setCurrentWidget(page)
+
+    def _show_bottom_roughcut_table(self):
+        stack = getattr(self, "bottom_right_stack", None)
+        page = getattr(self, "bottom_roughcut_page", None)
+        if stack is not None and page is not None:
+            stack.setCurrentWidget(page)
 
     def _empty_quick_button(self, text, icon_name, slot):
         btn = QPushButton(text)
@@ -325,6 +380,8 @@ class MainWindow(
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self):
         self.stack.setCurrentIndex(0)
+        if hasattr(self, "_show_bottom_queue_table"):
+            self._show_bottom_queue_table()
         if self._editor_widget and not getattr(self, "_unified_dashboard", False):
             self._trash_bin = getattr(self, "_trash_bin", [])
             self._trash_bin.append(self._editor_widget)

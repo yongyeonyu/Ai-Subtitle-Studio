@@ -1,4 +1,4 @@
-# Version: 03.00.16
+# Version: 03.00.43
 # Phase: PHASE2
 """
 ui/home_ui.py
@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QDialog, QLineEdit, QCheckBox, QScrollArea, QComboBox, QMessageBox,
     QToolButton, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QTimer, QSize
+from PyQt6.QtCore import Qt, QTimer, QSize, QDateTime
 from PyQt6.QtGui import QIcon
 
 import config
@@ -38,7 +38,7 @@ class HomeUIMixin:
             except RuntimeError:
                 pass
             self._project_info_overlay = None
-        for attr in ("status_rail", "saved_status_label"):
+        for attr in ("status_rail", "saved_status_label", "sidebar_settings_label"):
             widget = getattr(self, attr, None)
             if widget is not None:
                 try:
@@ -49,9 +49,14 @@ class HomeUIMixin:
                         self.status_rail = StatusRail(self.home_page)
                         if hasattr(self, "global_menu_bar"):
                             self.global_menu_bar.set_status_rail(self.status_rail)
-                    else:
-                        self.saved_status_label = QLabel("저장됨: 오후 2:30  ●", self.home_page)
+                    elif attr == "saved_status_label":
+                        self.saved_status_label = QLabel("", self.home_page)
+                        self.saved_status_label.setTextFormat(Qt.TextFormat.RichText)
                         self.saved_status_label.setStyleSheet("color: #A9B0B7; font-size: 11px; background: transparent;")
+                    else:
+                        self.sidebar_settings_label = QLabel("", self.home_page)
+                        self.sidebar_settings_label.setWordWrap(True)
+                        self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 9px; font-weight: bold; background: transparent; border: none;")
         old_layout = self.home_page.layout()
         if old_layout is not None: QWidget().setLayout(old_layout)
         is_unified = bool(getattr(self, "_unified_dashboard", False))
@@ -76,11 +81,12 @@ class HomeUIMixin:
         columns.setSpacing(8)
         left_widget = QWidget(); left_col = QVBoxLayout(left_widget); left_col.setContentsMargins(0, 0, 0, 0); left_col.setSpacing(4)
         if is_unified:
-            left_col.addWidget(self._btn("홈", "", self.show_home, icon_name="home"))
-            left_col.addWidget(self._btn("자막 편집", "", self.select_files, active=True, icon_name="subtitle"))
+            sidebar_mode = self._sidebar_active_mode()
+            left_col.addWidget(self._btn("홈", "", self.show_home, active=sidebar_mode == "home", icon_name="home"))
+            left_col.addWidget(self._btn("에디터", "", self._open_editor_screen, active=sidebar_mode == "editor", icon_name="subtitle"))
             left_col.addWidget(self._btn("STT 모드", "", self._toggle_sidebar_stt_mode, icon_name="mic"))
             left_col.addWidget(self._btn("프로젝트", "", self._open_project, icon_name="folder"))
-            left_col.addWidget(self._btn("러프컷 편집 도우미", "", self._open_roughcut_helper, icon_name="timeline"))
+            left_col.addWidget(self._btn("러프컷", "", self._open_roughcut_helper, active=sidebar_mode == "roughcut", icon_name="timeline"))
             left_col.addWidget(self._btn("숏폼 제작기", "", self._open_shortform_maker, icon_name="video"))
             left_col.addSpacing(8)
             left_col.addWidget(self._btn("최근 작업", "", self._dummy_action, icon_name="clock"))
@@ -94,7 +100,7 @@ class HomeUIMixin:
             left_col.addWidget(self._btn("📁 폴더 선택", "폴더에서 영상 일괄 선택", self.select_folder))
             left_col.addWidget(self._btn("📝 프로젝트 만들기", "영상 묶어서 프로젝트 관리", self._create_project))
             left_col.addWidget(self._btn("📦 프로젝트 열기", "기존 프로젝트 불러오기", self._open_project))
-            left_col.addWidget(self._btn("✂️ 러프컷 편집 도우미", "PHASE2 핵심 기능", self._open_roughcut_helper))
+            left_col.addWidget(self._btn("✂️ 러프컷", "PHASE2 핵심 기능", self._open_roughcut_helper))
             left_col.addWidget(self._btn("📱 숏폼 제작기", "PHASE3 개발 예정", self._open_shortform_maker))
         if not is_unified:
             left_col.addStretch()
@@ -147,14 +153,13 @@ class HomeUIMixin:
             layout.addWidget(self._project_info_card(expanded=False))
             if bool(getattr(self, "_project_info_expanded", False)):
                 QTimer.singleShot(0, self._show_project_info_overlay)
-            if hasattr(self, "saved_status_label"):
-                self.saved_status_label.setText("저장됨: 오후 2:30  ●")
-                layout.addWidget(self.saved_status_label, alignment=Qt.AlignmentFlag.AlignLeft)
+            layout.addWidget(self._sidebar_status_card())
         bottom_bar = QHBoxLayout()
         from config import APP_VERSION
-        version_lbl = QLabel(f"v{APP_VERSION}")
-        version_lbl.setStyleSheet("color: #D1D1D6; font-size: 11px;")
-        bottom_bar.addWidget(version_lbl)
+        if not is_unified:
+            version_lbl = QLabel(f"v{APP_VERSION}")
+            version_lbl.setStyleSheet("color: #D1D1D6; font-size: 11px;")
+            bottom_bar.addWidget(version_lbl)
         if not is_unified:
             bottom_bar.addWidget(self._editor_shortcuts_row())
             bottom_bar.addStretch()
@@ -167,12 +172,121 @@ class HomeUIMixin:
             btn_log = QPushButton(self._terminal_log_label()); btn_log.setStyleSheet(button_style("toolbar")); btn_log.clicked.connect(self._toggle_log)
             btn_exit = QPushButton("❌ 종료"); btn_exit.setStyleSheet(button_style("danger")); btn_exit.clicked.connect(self._quick_exit)
             bottom_bar.addWidget(btn_settings); bottom_bar.addWidget(btn_auto_start); bottom_bar.addWidget(btn_clear_cache); bottom_bar.addWidget(btn_log); bottom_bar.addWidget(btn_exit)
-        layout.addLayout(bottom_bar)
+        if not is_unified:
+            layout.addLayout(bottom_bar)
         self._ensure_watchdog_timer()
 
 
     def _is_auto_start_enabled(self):
         return bool(load_settings().get("auto_start_enabled", True))
+
+    def _current_status_time_text(self) -> str:
+        text = QDateTime.currentDateTime().toString("AP h:mm")
+        return text.replace("AM", "오전").replace("PM", "오후")
+
+    def _is_workspace_dirty(self) -> bool:
+        editor = self._active_editor()
+        if editor is None:
+            return bool(getattr(self, "_is_dirty", False))
+        state_manager = getattr(editor, "sm", None)
+        if state_manager is not None:
+            return bool(getattr(state_manager, "is_dirty", False))
+        return bool(getattr(editor, "_is_dirty", False))
+
+    def _refresh_saved_status_label(self, is_dirty=None, touch_saved_time=False):
+        label = getattr(self, "saved_status_label", None)
+        if label is None:
+            return
+        dirty = self._is_workspace_dirty() if is_dirty is None else bool(is_dirty)
+        if not hasattr(self, "_last_saved_status_time"):
+            self._last_saved_status_time = self._current_status_time_text()
+        if not dirty and touch_saved_time:
+            self._last_saved_status_time = self._current_status_time_text()
+
+        dot_color = "#FF453A" if dirty else "#34C759"
+        status_text = "저장안됨" if dirty else "저장됨"
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setText(
+            f"{status_text}: {self._last_saved_status_time} "
+            f"<span style='color:{dot_color}; font-size:13px;'>●</span>"
+        )
+        label.setToolTip("저장되지 않은 변경사항이 있습니다." if dirty else "저장된 상태입니다.")
+
+    def _format_engine_info_text(self, text: str) -> str:
+        lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+        return "\n".join(lines)
+
+    def _current_engine_info_text(self) -> str:
+        editor = self._active_editor()
+        if editor is not None:
+            engine = getattr(editor, "engine_lbl", None)
+            if engine is not None:
+                try:
+                    text = self._format_engine_info_text(engine.text())
+                    if text:
+                        return text
+                except Exception:
+                    pass
+        settings = load_settings()
+        vad_model = {
+            "silero": "Silero",
+            "webrtc": "WebRTC",
+            "pyannote": "Pyannote",
+            "none": "미사용",
+        }.get(settings.get("selected_vad", "none"), "미사용")
+        audio_ai = {
+            "deepfilter": "DeepFilter",
+            "demucs": "Demucs",
+            "none": "미사용",
+        }.get(settings.get("selected_audio_ai", "none"), "미사용")
+        stt_model = str(settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "기본")) or "기본")
+        stt_model = stt_model.replace("mlx-community/", "").replace("-mlx", "")
+        llm_model = str(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "기본")) or "기본")
+        return f"[VAD] : {vad_model}\n[음성] : {audio_ai}\n[STT] : {stt_model}\n[LLM] : {llm_model}"
+
+    def _refresh_sidebar_engine_info(self, text=None):
+        label = getattr(self, "sidebar_settings_label", None)
+        if label is None:
+            return
+        formatted = self._format_engine_info_text(text) if text is not None else self._current_engine_info_text()
+        label.setText(formatted)
+        label.setToolTip(formatted)
+
+    def _sidebar_status_card(self):
+        card = QWidget()
+        card.setStyleSheet("background: #1B2429; border: 1px solid #2D3942; border-radius: 7px;")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(10, 7, 10, 7)
+        lay.setSpacing(4)
+
+        header = QLabel("상태 / 설정")
+        header.setStyleSheet("color: #F5F7FA; font-size: 11px; font-weight: 700; background: transparent; border: none;")
+        lay.addWidget(header)
+
+        if not hasattr(self, "saved_status_label"):
+            self.saved_status_label = QLabel("", self.home_page)
+            self.saved_status_label.setTextFormat(Qt.TextFormat.RichText)
+        self.saved_status_label.setStyleSheet("color: #A9B0B7; font-size: 10px; background: transparent; border: none;")
+        self._refresh_saved_status_label()
+        lay.addWidget(self.saved_status_label)
+
+        from config import APP_VERSION
+        version_lbl = QLabel(f"버전: v{APP_VERSION}")
+        version_lbl.setStyleSheet("color: #D1D1D6; font-size: 10px; background: transparent; border: none;")
+        lay.addWidget(version_lbl)
+
+        settings_title = QLabel("현재 설정")
+        settings_title.setStyleSheet("color: #7EE787; font-size: 10px; font-weight: 700; background: transparent; border: none; padding-top: 2px;")
+        lay.addWidget(settings_title)
+
+        if not hasattr(self, "sidebar_settings_label"):
+            self.sidebar_settings_label = QLabel("", self.home_page)
+        self.sidebar_settings_label.setWordWrap(True)
+        self.sidebar_settings_label.setMinimumWidth(0)
+        self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 9px; font-weight: bold; background: transparent; border: none;")
+        self._refresh_sidebar_engine_info()
+        lay.addWidget(self.sidebar_settings_label)
+        return card
 
     def _toggle_sidebar_stt_mode(self):
         self._current_work_mode = "stt"
@@ -274,6 +388,7 @@ class HomeUIMixin:
         QTimer.singleShot(100, action)
 
     def _icloud_btn(self, text, file_data, default_cmd, is_nas=False, subtitle="", comp_title=""):
+        is_unified = bool(getattr(self, "_unified_dashboard", False))
         _normal_ss = "QWidget#MenuButton { background-color: #1B2429; border: 1px solid #2D3942; border-radius: 7px; }" if getattr(self, "_unified_dashboard", False) else "QWidget#MenuButton { background-color: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 12px; }"
         _hover_ss = "QWidget#MenuButton { background-color: #26313A; border: 1px solid #3F8CFF; border-radius: 7px; }" if getattr(self, "_unified_dashboard", False) else "QWidget#MenuButton { background-color: #FFFFFF; border: 2px solid #007AFF; border-radius: 12px; }"
         w = QWidget(); w.setObjectName("MenuButton"); w.setStyleSheet(_normal_ss)
@@ -282,32 +397,57 @@ class HomeUIMixin:
         w.leaveEvent = lambda e, _w=w: _w.setStyleSheet(_w._normal_ss)
         w.setCursor(Qt.CursorShape.PointingHandCursor)
         layout = QVBoxLayout(w)
-        layout.setContentsMargins(10 if getattr(self, "_unified_dashboard", False) else 20, 8 if getattr(self, "_unified_dashboard", False) else 14, 10 if getattr(self, "_unified_dashboard", False) else 20, 8 if getattr(self, "_unified_dashboard", False) else 14)
-        layout.setSpacing(3 if getattr(self, "_unified_dashboard", False) else 6)
+        layout.setContentsMargins(10 if is_unified else 20, 7 if is_unified else 14, 10 if is_unified else 20, 7 if is_unified else 14)
+        layout.setSpacing(4 if is_unified else 6)
         active = getattr(self, '_is_nas_auto_mode', False) if is_nas else getattr(self, '_is_icloud_auto_mode', False)
-        text_color = "#FFFFFF" if getattr(self, "_unified_dashboard", False) else ("#1D1D1F" if active else "#6E6E73")
-        title_row = QHBoxLayout()
-        title_row.setSpacing(4)
-        lbl = QLabel(text)
-        lbl.setStyleSheet(f"color: {text_color}; font-size: {11 if getattr(self, '_unified_dashboard', False) else 14}px; font-weight: bold; border: none; background: transparent;")
-        lbl.setMinimumWidth(0)
-        title_row.addWidget(lbl)
+        text_color = "#FFFFFF" if is_unified else ("#1D1D1F" if active else "#6E6E73")
+        header = QLabel()
+        header.setText(text)
+        header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        header.setStyleSheet(
+            f"color: {text_color}; font-size: {11 if is_unified else 14}px; font-weight: 700; "
+            "background: transparent; border: none; padding: 0;"
+        )
+        header.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(header)
+
+        status_box = QWidget()
+        status_box.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        status_layout = QVBoxLayout(status_box)
+        status_layout.setContentsMargins(15 if is_unified else 18, 0, 0, 0)
+        status_layout.setSpacing(1 if is_unified else 2)
+
+        def add_status_label(value, color, size=None):
+            label = QLabel(value)
+            label.setWordWrap(True)
+            label.setMinimumWidth(0)
+            label.setStyleSheet(
+                f"color: {color}; font-size: {size or (9 if is_unified else 11)}px; "
+                "font-weight: bold; border: none; background: transparent;"
+            )
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            status_layout.addWidget(label)
+            return label
+
         if subtitle:
-            sub_lbl = QLabel(subtitle)
-            sub_lbl.setStyleSheet("color: #3F8CFF; font-size: 9px; font-weight: bold; border: none; background: transparent;" if getattr(self, "_unified_dashboard", False) else "color: #007AFF; font-size: 11px; font-weight: bold; border: none; background: transparent; padding-left: 10px;")
-            sub_lbl.setMinimumWidth(0)
-            title_row.addWidget(sub_lbl)
+            add_status_label(subtitle, "#3F8CFF" if is_unified else "#007AFF")
         if comp_title:
-            comp_lbl = QLabel(comp_title)
-            comp_lbl.setStyleSheet("color: #34C759; font-size: 9px; font-weight: bold; border: none; background: transparent;" if getattr(self, "_unified_dashboard", False) else "color: #34C759; font-size: 11px; font-weight: bold; border: none; background: transparent; padding-left: 15px;")
-            comp_lbl.setMinimumWidth(0)
-            title_row.addWidget(comp_lbl)
+            add_status_label(comp_title, "#34C759")
         if active and self._is_auto_start_enabled():
-            wd_lbl = QLabel()
-            wd_lbl.setStyleSheet(label_style("accent", 9 if getattr(self, "_unified_dashboard", False) else 11, bold=True) + ("padding-left: 2px;" if getattr(self, "_unified_dashboard", False) else "padding-left: 12px;"))
-            title_row.addWidget(wd_lbl)
+            wd_lbl = add_status_label("", config.ACCENT, 9 if is_unified else 11)
             self._watchdog_labels.append((wd_lbl, is_nas))
-        title_row.addStretch(); layout.addLayout(title_row)
+        if status_layout.count() > 0:
+            layout.addWidget(status_box)
+
+        def _on_w_click(e):
+            if e.button() == Qt.MouseButton.LeftButton:
+                self._defer_home_action(w, default_cmd)
+                e.accept()
+        w.mousePressEvent = _on_w_click
+
+        if is_unified:
+            return w
+
         preview_container = QWidget(); preview_layout = QVBoxLayout(preview_container); preview_layout.setContentsMargins(0, 0, 0, 0); preview_layout.setSpacing(6)
         if not file_data:
             empty_lbl = QLabel("대기 중인 항목이 없습니다."); empty_lbl.setStyleSheet(f"color: {config.FG2}; font-size: 11px; border: none;"); preview_layout.addWidget(empty_lbl)
@@ -336,15 +476,11 @@ class HomeUIMixin:
         else:
             layout.addWidget(preview_container); self._preview_containers.append(preview_container)
             preview_container.setVisible(not getattr(self, '_log_visible', False))
-        def _on_w_click(e):
-            if e.button() == Qt.MouseButton.LeftButton:
-                self._defer_home_action(w, default_cmd)
-                e.accept()
-        w.mousePressEvent = _on_w_click
         return w
 
     def _btn(self, text, desc, cmd, active=False, icon_name=None):
-        if getattr(self, "_unified_dashboard", False):
+        is_unified = getattr(self, "_unified_dashboard", False)
+        if is_unified:
             bg = "#26313A" if active else "transparent"
             border = "#3F8CFF" if active else "transparent"
             _normal_ss = f"QWidget#MenuButton {{ background-color: {bg}; border: 1px solid {border}; border-radius: 7px; }}"
@@ -357,32 +493,39 @@ class HomeUIMixin:
         w.enterEvent = lambda e, _w=w: _w.setStyleSheet(_w._hover_ss)
         w.leaveEvent = lambda e, _w=w: _w.setStyleSheet(_w._normal_ss)
         w.setCursor(Qt.CursorShape.PointingHandCursor)
-        if getattr(self, "_unified_dashboard", False):
-            w.setFixedHeight(30 if not desc else 50)
+        if is_unified:
+            w.setFixedHeight(44 if not desc else 58)
             w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout = QVBoxLayout(w)
-        layout.setContentsMargins(10 if getattr(self, "_unified_dashboard", False) else 20, 4 if getattr(self, "_unified_dashboard", False) else 14, 10 if getattr(self, "_unified_dashboard", False) else 20, 4 if getattr(self, "_unified_dashboard", False) else 14)
-        layout.setSpacing(0 if getattr(self, "_unified_dashboard", False) else 4)
-        main_color = "#74A9FF" if active and getattr(self, "_unified_dashboard", False) else ("#FFFFFF" if getattr(self, "_unified_dashboard", False) else "#1D1D1F")
+        layout.setContentsMargins(9 if is_unified else 20, 7 if is_unified else 14, 9 if is_unified else 20, 7 if is_unified else 14)
+        layout.setSpacing(2 if is_unified else 4)
+        main_color = "#74A9FF" if active and is_unified else ("#FFFFFF" if is_unified else "#1D1D1F")
+        icon_color = "#74A9FF" if active and is_unified else ("#E8EEF5" if is_unified else main_color)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(6)
+        row.setSpacing(8 if is_unified else 6)
         if icon_name:
             icon_lbl = QLabel()
-            icon_lbl.setPixmap(line_icon(icon_name, main_color, 14).pixmap(14, 14))
-            icon_lbl.setFixedSize(16, 16)
+            icon_size = 15 if is_unified else 14
+            icon_lbl.setPixmap(line_icon(icon_name, icon_color, icon_size).pixmap(icon_size, icon_size))
+            icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            if is_unified:
+                icon_lbl.setFixedSize(24, 24)
+                icon_lbl.setStyleSheet("background-color: #11181C; border: none; border-radius: 2px;")
+            else:
+                icon_lbl.setFixedSize(16, 16)
             icon_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             row.addWidget(icon_lbl)
         lbl = QLabel(text)
         lbl.setMinimumWidth(0)
-        lbl.setStyleSheet(f"color: {main_color}; font-size: {11 if getattr(self, '_unified_dashboard', False) else 14}px; font-weight: bold; border: none; background: transparent;")
+        lbl.setStyleSheet(f"color: {main_color}; font-size: {12 if is_unified else 14}px; font-weight: bold; border: none; background: transparent;")
         lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         row.addWidget(lbl, stretch=1)
         layout.addLayout(row)
         if desc:
             sub = QLabel(desc)
-            sub.setFixedHeight(13 if getattr(self, "_unified_dashboard", False) else 18)
-            sub.setStyleSheet("color: #7EE787; font-size: 9px; font-weight: bold; border: none; background: transparent; margin-left: 22px;" if getattr(self, "_unified_dashboard", False) else "color: #6E6E73; font-size: 11px; border: none; background: transparent;")
+            sub.setFixedHeight(14 if is_unified else 18)
+            sub.setStyleSheet("color: #7EE787; font-size: 9px; font-weight: bold; border: none; background: transparent; margin-left: 32px;" if is_unified else "color: #6E6E73; font-size: 11px; border: none; background: transparent;")
             sub.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             layout.addWidget(sub)
         def _on_w_click(e):
@@ -466,6 +609,8 @@ class HomeUIMixin:
         header.setStyleSheet(
             "QToolButton { color: #F5F7FA; font-size: 11px; font-weight: 700; "
             "background: transparent; border: none; padding: 2px 0; text-align: left; }"
+            "QToolButton::right-arrow { width: 11px; height: 11px; }"
+            "QToolButton::down-arrow { width: 11px; height: 11px; }"
             "QToolButton::menu-indicator { image: none; }"
         )
         header.clicked.connect(self._toggle_project_info_card)
@@ -535,6 +680,48 @@ class HomeUIMixin:
             f"{title}는 {phase}에서 제공될 예정입니다.\n현재 기능은 기존 자막 편집 흐름에 영향을 주지 않습니다."
         )
 
+    def _sidebar_active_mode(self):
+        current = None
+        try:
+            current = self.stack.currentWidget()
+        except Exception:
+            current = None
+        roughcut = getattr(self, "_roughcut_widget", None)
+        editor = self._active_editor()
+        if roughcut is not None and current is roughcut:
+            return "roughcut"
+        if editor is not None and current is editor:
+            return "editor"
+        return "home"
+
+    def _refresh_work_mode_ui(self):
+        if hasattr(self, "global_menu_bar"):
+            self.global_menu_bar.refresh()
+        try:
+            self._build_home_content()
+        except Exception:
+            pass
+
+    def _open_editor_screen(self):
+        editor = self._active_editor()
+        if editor is None:
+            self._current_work_mode = "edit"
+            if hasattr(self, "global_menu_bar"):
+                self.global_menu_bar.refresh()
+            self.select_files()
+            return
+        self._current_work_mode = "edit"
+        try:
+            self.stack.setCurrentWidget(editor)
+        except Exception:
+            try:
+                self.stack.setCurrentIndex(1)
+            except Exception:
+                pass
+        if hasattr(self, "_show_bottom_queue_table"):
+            self._show_bottom_queue_table()
+        self._refresh_work_mode_ui()
+
     def _open_roughcut_helper(self):
         self._current_work_mode = "roughcut"
         if hasattr(self, "global_menu_bar"):
@@ -546,8 +733,15 @@ class HomeUIMixin:
             page = RoughcutWidget(owner=self, parent=self)
             self._roughcut_widget = page
             self.stack.addWidget(page)
+        if hasattr(self, "_set_roughcut_bottom_widget"):
+            self._set_roughcut_bottom_widget(getattr(page, "bottom_panel", None))
+        elif hasattr(self, "_show_bottom_roughcut_table"):
+            self._show_bottom_roughcut_table()
+        if hasattr(self, "_apply_log_visible") and not getattr(self, "_log_visible", False):
+            self._apply_log_visible(True)
         self.stack.setCurrentWidget(page)
         page.refresh_from_editor()
+        self._refresh_work_mode_ui()
 
     def _open_shortform_maker(self):
         self._current_work_mode = "shortform"
@@ -580,6 +774,7 @@ class HomeUIMixin:
         editor = self._active_editor()
         if editor is None:
             return None
+        self._current_work_mode = "edit"
         try:
             self.stack.setCurrentWidget(editor)
         except Exception:
@@ -587,6 +782,9 @@ class HomeUIMixin:
                 self.stack.setCurrentIndex(1)
             except Exception:
                 pass
+        if hasattr(self, "_show_bottom_queue_table"):
+            self._show_bottom_queue_table()
+        self._refresh_work_mode_ui()
         return editor
 
     def _open_main_ai_settings(self):
@@ -684,5 +882,5 @@ class HomeUIMixin:
             set_nas_auto_detect(nas_chk.isChecked()); self._is_nas_auto_mode = nas_chk.isChecked()
             s = load_settings(); s["auto_start_mode"] = mode_combo.currentData() or "quality"; s.setdefault("auto_start_enabled", True); save_settings(s)
             self._start_configured_watchers()
-            dlg.accept(); self.show_home()
+            dlg.accept(); self._refresh_work_mode_ui()
         btn_save.clicked.connect(save_all); btn_layout.addStretch(); btn_layout.addWidget(btn_save); layout.addLayout(btn_layout); dlg.exec()

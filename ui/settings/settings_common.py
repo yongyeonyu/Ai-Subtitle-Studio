@@ -1,4 +1,4 @@
-# Version: 02.04.00
+# Version: 03.00.37
 # Phase: PHASE1-B
 """
 ui/settings_common.py
@@ -18,7 +18,7 @@ from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt, QTimer
 import requests
 import config
-from ui.style import button_style, line_icon
+from ui.style import line_icon, settings_button_style
 
 DATASET_DIR = config.DATASET_DIR
 
@@ -153,21 +153,21 @@ def _create_bottom_buttons(dialog, accept_callback, reset_callback=None,
     if reset_callback:
         btn_reset = QPushButton("전체 초기화")
         btn_reset.setIcon(line_icon("refresh", "#A9B0B7", 18))
-        btn_reset.setStyleSheet(button_style("toolbar"))
+        btn_reset.setStyleSheet(settings_button_style("toolbar", min_width=96))
         btn_reset.clicked.connect(reset_callback)
         btn_layout.addWidget(btn_reset)
 
     if save_callback:
         btn_save = QPushButton("저장")
         btn_save.setIcon(line_icon("save", "#FFFFFF", 18))
-        btn_save.setStyleSheet(button_style("primary"))
+        btn_save.setStyleSheet(settings_button_style("primary", min_width=96))
         btn_save.clicked.connect(save_callback)
         btn_layout.addWidget(btn_save)
 
     if save_def_callback:
         btn_def = QPushButton("기본값으로 저장")
         btn_def.setIcon(line_icon("save", "#A9B0B7", 18))
-        btn_def.setStyleSheet(button_style("toolbar"))
+        btn_def.setStyleSheet(settings_button_style("toolbar", min_width=118))
         btn_def.clicked.connect(save_def_callback)
         btn_layout.addWidget(btn_def)
 
@@ -177,8 +177,8 @@ def _create_bottom_buttons(dialog, accept_callback, reset_callback=None,
     btn_ok     = QPushButton("확인")
     btn_cancel.setIcon(line_icon("cancel", "#A9B0B7", 18))
     btn_ok.setIcon(line_icon("check", "#FFFFFF", 18))
-    btn_cancel.setStyleSheet(button_style("toolbar"))
-    btn_ok.setStyleSheet(button_style("primary"))
+    btn_cancel.setStyleSheet(settings_button_style("toolbar", min_width=82))
+    btn_ok.setStyleSheet(settings_button_style("primary", min_width=96))
 
     btn_cancel.clicked.connect(dialog.reject)
     btn_ok.clicked.connect(accept_callback)

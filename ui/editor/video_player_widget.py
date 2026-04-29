@@ -1,4 +1,4 @@
-# Version: 03.00.26
+# Version: 03.00.30
 # Phase: PHASE1-D
 """
 ui/video_player_widget.py - PyQt6 비디오 플레이어
@@ -14,7 +14,7 @@ import time
 from bisect import bisect_right
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                             QPushButton, QSizePolicy, QStackedWidget, QComboBox,
+                             QPushButton, QSizePolicy, QStackedWidget,
                              QGraphicsView, QGraphicsScene)
 from PyQt6.QtCore import Qt, QTimer, QRectF, QUrl, QSizeF
 from PyQt6.QtGui import QFont, QColor, QPainter, QFontMetrics, QBrush, QPainterPath, QPen, QPixmap
@@ -92,12 +92,22 @@ class SubtitleLabel(QLabel):
         except Exception:
             self._export_style = {}
 
+    def set_export_style(self, style: dict | None):
+        self._export_style = dict(style or {})
+        self.update()
+
     def setText(self, text):
         self.refresh_export_style()
         super().setText(text)
 
     def _qcolor(self, key, default):
         return QColor(str(self._export_style.get(key, default)))
+
+    def _output_metrics(self):
+        res = str(self._export_style.get("res", "FHD (1920px)") or "")
+        output_width = 3840 if ("3840" in res or "4K" in res.upper() or "UHD" in res.upper()) else 1920
+        res_scale = 4.0 if output_width >= 3840 else 2.0
+        return output_width, res_scale
 
     def paintEvent(self, event):
         text = self.text()
@@ -116,10 +126,9 @@ class SubtitleLabel(QLabel):
             base_size = int(style.get("size", 60))
         except Exception:
             base_size = 60
-        # ExportDialog renders 60px against a 1920/3840px-wide transparent strip.
-        # Preview scales that proportionally to the live video widget width.
-        preview_scale = max(0.35, min(1.3, self.width() / 1920.0))
-        font_px = max(15, int(base_size * preview_scale))
+        output_width, res_scale = self._output_metrics()
+        preview_scale = max(0.01, self.width() / max(1.0, float(output_width)))
+        font_px = max(4, int(base_size * res_scale * preview_scale))
 
         font = QFont(style.get("font", "Apple SD Gothic Neo"))
         font.setPixelSize(font_px)
@@ -135,7 +144,7 @@ class SubtitleLabel(QLabel):
             line_spacing = int(style.get("lsp", 6) or 6)
         except Exception:
             line_spacing = 6
-        lsp = max(2, int(line_spacing * preview_scale))
+        lsp = max(1, int(line_spacing * res_scale * preview_scale))
         text_h = line_h * len(lines) + lsp * max(0, len(lines) - 1)
 
         align = style.get("align", "가운데")
@@ -153,8 +162,8 @@ class SubtitleLabel(QLabel):
                 bg_c.setAlpha(int(int(style.get("bg_op", 50)) * 2.55))
             except Exception:
                 bg_c.setAlpha(128)
-            margin = max(4, int(int(style.get("bg_margin", 18)) * preview_scale))
-            radius = max(3, int(int(style.get("bg_radius", 10)) * preview_scale))
+            margin = max(1, int(int(style.get("bg_margin", 18)) * res_scale * preview_scale))
+            radius = max(1, int(int(style.get("bg_radius", 10)) * res_scale * preview_scale))
             painter.setBrush(QBrush(bg_c))
             painter.setPen(Qt.PenStyle.NoPen)
             if style.get("bg_full", False):
@@ -170,8 +179,8 @@ class SubtitleLabel(QLabel):
             shadow = self._qcolor("shd_c", "#000000")
             shadow.setAlpha(200)
             try:
-                sx = int(int(style.get("shdx", 3)) * preview_scale)
-                sy = int(int(style.get("shdy", 3)) * preview_scale)
+                sx = int(int(style.get("shdx", 3)) * res_scale * preview_scale)
+                sy = int(int(style.get("shdy", 3)) * res_scale * preview_scale)
             except Exception:
                 sx, sy = 2, 2
             painter.setPen(shadow)
@@ -184,7 +193,7 @@ class SubtitleLabel(QLabel):
 
         if not style.get("no_bdr", False):
             try:
-                border_w = max(0, int(int(style.get("bdr_w", 2)) * preview_scale))
+                border_w = max(0, int(int(style.get("bdr_w", 2)) * res_scale * preview_scale))
             except Exception:
                 border_w = 1
             if border_w > 0:
@@ -352,32 +361,8 @@ class VideoPlayerWidget(QWidget):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(8, 0, 8, 8)
         layout.setSpacing(6)
-
-        head = QWidget()
-        head.setFixedHeight(30)
-        head.setStyleSheet("background: transparent; border: none;")
-        head_lay = QHBoxLayout(head)
-        head_lay.setContentsMargins(0, 0, 0, 0)
-        title = QLabel("미리보기")
-        title.setStyleSheet("color: #F5F7FA; font-size: 12px; font-weight: 700; background: transparent; border: none;")
-        head_lay.addWidget(title)
-        head_lay.addStretch()
-        fit = QComboBox()
-        fit.addItems(["맞춤", "100%", "채움"])
-        fit.setFixedWidth(78)
-        fit.setStyleSheet("QComboBox { background: #202A31; color: #F5F7FA; border: 1px solid #2D3942; border-radius: 6px; padding: 4px 8px; font-size: 10px; }")
-        head_lay.addWidget(fit)
-        cam = QPushButton("▣")
-        cam.setFixedSize(28, 26)
-        cam.setStyleSheet("QPushButton { background: #202A31; color: #F5F7FA; border: 1px solid #2D3942; border-radius: 6px; }")
-        head_lay.addWidget(cam)
-        more = QPushButton("···")
-        more.setFixedSize(34, 26)
-        more.setStyleSheet("QPushButton { background: #202A31; color: #F5F7FA; border: 1px solid #2D3942; border-radius: 6px; }")
-        head_lay.addWidget(more)
-        layout.addWidget(head)
 
         self.video_container = QWidget()
         self.video_container.setStyleSheet("background: #000000; border-radius: 4px;")
@@ -432,6 +417,7 @@ class VideoPlayerWidget(QWidget):
 
         layout.addWidget(ctrl)
         QTimer.singleShot(0, self._layout_video_overlay)
+        QTimer.singleShot(0, self._notify_editor_video_ready)
 
     def _layout_video_overlay(self):
         if not hasattr(self, "video_container"):
@@ -698,6 +684,18 @@ class VideoPlayerWidget(QWidget):
     def set_subtitle_provider(self, provider):
         self._subtitle_provider = provider
         self._refresh_provider_segments(force=True)
+
+    def apply_export_subtitle_style(self, style: dict | None):
+        try:
+            self.sub_label.set_export_style(style or {})
+        except Exception:
+            pass
+        self._refresh_provider_segments(force=True)
+        self._refresh_subtitle_now()
+        try:
+            self.sub_label.update()
+        except Exception:
+            pass
 
     def _refresh_provider_segments(self, force: bool = False):
         provider = getattr(self, "_subtitle_provider", None)

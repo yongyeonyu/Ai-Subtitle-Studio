@@ -1,4 +1,4 @@
-# Version: 03.00.18
+# Version: 03.00.37
 # Phase: PHASE2
 """
 ui/settings_ai.py  ─  ⚙️ AI 엔진 설정 다이얼로그
@@ -13,7 +13,7 @@ from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import (
     DEFAULT_WHISPER_MODELS, _fetch_models, _create_bottom_buttons, DATASET_DIR
 )
-from ui.style import button_style, label_style, settings_dialog_stylesheet
+from ui.style import label_style, settings_button_style, settings_dialog_stylesheet
 from core.llm.provider_registry import cloud_model_items
 from core.llm.secure_keys import get_api_key, set_api_key
 from core.audio.audio_presets import load_audio_presets, apply_audio_preset
@@ -69,7 +69,7 @@ class SettingsDialog(QDialog):
         self.btn_llm_paid = QPushButton("유료")
         for btn, value in ((self.btn_llm_all, "all"), (self.btn_llm_free, "free"), (self.btn_llm_paid, "paid")):
             btn.setCheckable(True)
-            btn.setFixedSize(64, 30)
+            btn.setMinimumWidth(64)
             btn.clicked.connect(lambda _=False, v=value: self._set_llm_filter(v))
             filter_row.addWidget(btn)
         filter_row.addStretch()
@@ -80,7 +80,8 @@ class SettingsDialog(QDialog):
         self.combo_llm.setMinimumWidth(350)
         llm_model_row = QHBoxLayout()
         self.btn_ollama_delete = QPushButton("삭제")
-        self.btn_ollama_delete.setFixedSize(64, 30)
+        self.btn_ollama_delete.setMinimumWidth(64)
+        self.btn_ollama_delete.setStyleSheet(settings_button_style("toolbar", min_width=64))
         self.btn_ollama_delete.clicked.connect(self._delete_current_ollama)
         llm_model_row.addWidget(self.combo_llm)
         llm_model_row.addWidget(self.btn_ollama_delete)
@@ -91,8 +92,10 @@ class SettingsDialog(QDialog):
         self.combo_ollama_catalog.setMinimumWidth(270)
         self.btn_ollama_install = QPushButton("설치")
         self.btn_ollama_refresh = QPushButton("새로고침")
-        self.btn_ollama_install.setFixedSize(64, 30)
-        self.btn_ollama_refresh.setFixedSize(82, 30)
+        self.btn_ollama_install.setMinimumWidth(64)
+        self.btn_ollama_refresh.setMinimumWidth(82)
+        self.btn_ollama_install.setStyleSheet(settings_button_style("toolbar", min_width=64))
+        self.btn_ollama_refresh.setStyleSheet(settings_button_style("toolbar", min_width=82))
         self.btn_ollama_install.clicked.connect(self._install_selected_ollama)
         self.btn_ollama_refresh.clicked.connect(self._refresh_ollama_models)
         ollama_row.addWidget(self.combo_ollama_catalog)
@@ -127,7 +130,8 @@ class SettingsDialog(QDialog):
         # 3. 자막 묶음 단위 (슬라이더 세팅)
         chunk_layout = QHBoxLayout()
         self.btn_chunk_minus = QPushButton("-")
-        self.btn_chunk_minus.setFixedSize(28, 28)
+        self.btn_chunk_minus.setFixedWidth(54)
+        self.btn_chunk_minus.setStyleSheet(settings_button_style("toolbar", min_width=30))
         self.btn_chunk_minus.clicked.connect(self._on_chunk_minus)
         
         self.slider_chunk = QSlider(Qt.Orientation.Horizontal)
@@ -137,7 +141,8 @@ class SettingsDialog(QDialog):
         self.slider_chunk.valueChanged.connect(self._update_chunk_display)
         
         self.btn_chunk_plus = QPushButton("+")
-        self.btn_chunk_plus.setFixedSize(28, 28)
+        self.btn_chunk_plus.setFixedWidth(54)
+        self.btn_chunk_plus.setStyleSheet(settings_button_style("toolbar", min_width=30))
         self.btn_chunk_plus.clicked.connect(self._on_chunk_plus)
         
         self.lbl_chunk_time = QLabel("01분 00초")
@@ -250,7 +255,7 @@ class SettingsDialog(QDialog):
         for btn, value in ((self.btn_llm_all, "all"), (self.btn_llm_free, "free"), (self.btn_llm_paid, "paid")):
             btn.blockSignals(True)
             btn.setChecked(self.llm_filter == value)
-            btn.setStyleSheet(button_style("primary" if self.llm_filter == value else "toolbar", padding="5px 10px"))
+            btn.setStyleSheet(settings_button_style("primary" if self.llm_filter == value else "toolbar", min_width=64))
             btn.blockSignals(False)
 
     def _rebuild_llm_combo(self, preferred_name=""):

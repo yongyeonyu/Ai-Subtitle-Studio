@@ -1,4 +1,4 @@
-# Version: 03.00.02
+# Version: 03.00.32
 # Phase: PHASE1-B
 """
 ui/editor_segments.py
@@ -28,6 +28,12 @@ class EditorSegmentsMixin:
             self.sm.is_dirty = True
         else:
             self._is_dirty = True
+        try:
+            main_w = self.window()
+            if hasattr(main_w, "_refresh_saved_status_label"):
+                main_w._refresh_saved_status_label(is_dirty=True)
+        except Exception:
+            pass
 
     def _finalize_edit(self):
         self.text_edit.update_margins()

@@ -1,4 +1,4 @@
-# Version: 03.00.23
+# Version: 03.00.41
 # Phase: PHASE1-C
 """
 ui/timeline_widget.py
@@ -143,6 +143,20 @@ class TimelineWidget(QWidget):
         self._smooth_scroll_timer.timeout.connect(self._update_smooth_scroll)
         self._smooth_scroll_timer.start()
 
+        self._focus_border = QWidget(self)
+        self._focus_border.setObjectName("TimelineFocusBorder")
+        self._focus_border.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._focus_border.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._focus_border.setStyleSheet(
+            "QWidget#TimelineFocusBorder {"
+            " background: transparent;"
+            " border: 2px solid #FFFF00;"
+            " border-radius: 0px;"
+            "}"
+        )
+        self._focus_border.hide()
+        self._sync_focus_border()
+
     def _canvas_width_for_duration(self, dur: float, pps: float | None = None) -> int:
         pps = float(self.canvas.pps if pps is None else pps)
         end_padding = 96
@@ -161,26 +175,48 @@ class TimelineWidget(QWidget):
         if ev.type() in (QEvent.Type.FocusIn, QEvent.Type.FocusOut):
             self.update()
             self.global_canvas.update()
+            QTimer.singleShot(0, self._sync_focus_border)
         return super().eventFilter(obj, ev)
 
-    def paintEvent(self, ev):
-        super().paintEvent(ev)
-        if (
+    def _has_timeline_focus(self):
+        return (
             self.hasFocus()
             or self.canvas.hasFocus()
             or self.global_canvas.hasFocus()
             or self.scroll.hasFocus()
-        ):
+            or self.lock_chk.hasFocus()
+        )
+
+    def _sync_focus_border(self):
+        border = getattr(self, "_focus_border", None)
+        if border is None:
+            return
+        border.setGeometry(0, 0, max(1, self.width()), max(1, self.height()))
+        visible = self._has_timeline_focus()
+        border.setVisible(visible)
+        if visible:
+            border.raise_()
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self._sync_focus_border()
+
+    def paintEvent(self, ev):
+        super().paintEvent(ev)
+        self._sync_focus_border()
+        if self._has_timeline_focus():
             from PyQt6.QtGui import QColor, QPainter, QPen
 
             painter = QPainter(self)
             painter.setPen(QPen(QColor("#FFFF00"), 2))
             left = 1
-            right = max(1, self.width() - 2)
-            bottom = max(1, self.height() - 2)
-            painter.drawLine(left, 1, left, bottom)
-            painter.drawLine(right, 1, right, bottom)
+            top = 1
+            right = max(left, self.width() - 2)
+            bottom = max(top, self.height() - 2)
+            painter.drawLine(left, top, right, top)
             painter.drawLine(left, bottom, right, bottom)
+            painter.drawLine(left, top, left, bottom)
+            painter.drawLine(right, top, right, bottom)
             painter.end()
 
     def _apply_selected_clip_context(self, clip_idx: int):

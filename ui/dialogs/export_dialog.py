@@ -1,5 +1,5 @@
-# Version: 02.04.00
-# Phase: PHASE1-B
+# Version: 03.00.29
+# Phase: PHASE2
 """
 export_dialog.py  ─ SRT → 투명 자막 동영상 출력 (Qt 네이티브 렌더링 & 미리보기 복구본)
 [추가] 투명도 확인을 위한 회색 체커보드 미리보기 배경 적용
@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QMessageBox, QCheckBox, QColorDialog,
     QProgressDialog, QSlider, QGroupBox, QTabWidget, QWidget,
+    QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRectF, QPointF
 from PyQt6.QtGui  import QColor, QPixmap, QImage, QFont, QPainter, QPen, QBrush, QPainterPath, QFontMetrics
@@ -297,7 +298,7 @@ class ExportDialog(QDialog):
 
         # ── 탭1: 출력 ──
         t1=QWidget(); l1=QVBoxLayout(t1); tabs.addTab(t1,"📁 출력")
-        self.res_combo=QComboBox(); self.res_combo.addItems(["4K (3840px)","FHD (1920px)"]); l1.addLayout(lrow("가로 해상도:",self.res_combo))
+        self.res_combo=QComboBox(); self.res_combo.addItems(["4K (3840px)","FHD (1920px)"]); self.res_combo.currentIndexChanged.connect(lambda *_: self._refresh_preview()); l1.addLayout(lrow("가로 해상도:",self.res_combo))
         self.quality_combo=QComboBox(); self.quality_combo.addItems(["빠른 렌더링 (Proxy)","고품질 (ProRes 4444)"]); l1.addLayout(lrow("렌더링 품질:",self.quality_combo))
         
         # 💡 iCloud 자동 업로드 체크박스 추가
@@ -309,9 +310,9 @@ class ExportDialog(QDialog):
 
         # ── 탭2: 텍스트 ──
         t2=QWidget(); l2=QVBoxLayout(t2); tabs.addTab(t2,"✏️ 텍스트")
-        self.font_combo=QComboBox(); self.font_combo.addItems(sorted(self._fonts.keys())); self.font_combo.currentIndexChanged.connect(self._refresh_preview); l2.addLayout(lrow("글꼴:",self.font_combo))
+        self.font_combo=QComboBox(); self.font_combo.addItems(sorted(self._fonts.keys())); self.font_combo.currentIndexChanged.connect(lambda *_: self._refresh_preview()); l2.addLayout(lrow("글꼴:",self.font_combo))
         self.sz_combo,sz_h=_combo_pm([10,20,40,60,80,100],60); self.sz_combo.currentTextChanged.connect(self._refresh_preview); l2.addLayout(lrow("텍스트 크기:",sz_h))
-        self.align_combo=QComboBox(); self.align_combo.addItems(["가운데","왼쪽","오른쪽"]); self.align_combo.currentIndexChanged.connect(self._refresh_preview); l2.addLayout(lrow("텍스트 정렬:",self.align_combo))
+        self.align_combo=QComboBox(); self.align_combo.addItems(["가운데","왼쪽","오른쪽"]); self.align_combo.currentIndexChanged.connect(lambda *_: self._refresh_preview()); l2.addLayout(lrow("텍스트 정렬:",self.align_combo))
         self.lsp_combo,lsp_h=_combo_pm(list(range(0,51)),6); self.lsp_combo.currentTextChanged.connect(self._refresh_preview); l2.addLayout(lrow("줄 간격:",lsp_h))
         self.bold_chk=QCheckBox("굵게 (Bold)"); self.bold_chk.setChecked(True); self.bold_chk.toggled.connect(self._refresh_preview); l2.addWidget(self.bold_chk)
         self._txt_btn=QPushButton(); self._txt_btn.clicked.connect(lambda *a: self._pick("txt")); l2.addLayout(lrow("텍스트 색상:",self._txt_btn))
@@ -366,37 +367,42 @@ class ExportDialog(QDialog):
         self.prev_lbl.setMinimumHeight(120); self.prev_lbl.setStyleSheet("background:#151C20;border:1px solid #2D3942;border-radius:7px;"); gv.addWidget(self.prev_lbl)
         root.addWidget(grp)
 
-        # [ui/export_dialog.py] _build_ui 함수 맨 아래 버튼부 교체
         br = QHBoxLayout()
+        br.setContentsMargins(0, 6, 0, 0)
+        br.setSpacing(8)
 
-        # 1. 저장 버튼 (상세설정창의 Cyan 컬러 & 이모지 적용)
-        btn_save = QPushButton("💾 저장")
-        btn_save.setStyleSheet(button_style("toolbar", font_size="13px", padding="8px 16px"))
+        def footer_button(text, kind="toolbar", min_width=96):
+            btn = QPushButton(text)
+            btn.setFixedHeight(38)
+            btn.setFixedWidth(min_width)
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            btn.setStyleSheet(button_style(kind, font_size="13px", padding="8px 16px"))
+            return btn
+
+        btn_save = footer_button("💾 저장", "toolbar", 96)
         btn_save.setToolTip("설정 저장 (창 유지)")
         btn_save.clicked.connect(self._save)
         br.addWidget(btn_save)
 
-        # 💡 상세설정창처럼 왼쪽(저장)과 오른쪽(취소/확인)을 분리하는 투명한 여백 추가
         br.addStretch()
 
-        # 2. 취소 버튼 (상세설정창의 Dark Gray 컬러)
-        btn_cancel = QPushButton("취소")
-        btn_cancel.setStyleSheet(button_style("toolbar", font_size="13px", padding="8px 16px"))
+        btn_cancel = footer_button("취소", "toolbar", 96)
         btn_cancel.setToolTip("저장하지 않고 닫기")
         btn_cancel.clicked.connect(self.reject)
         br.addWidget(btn_cancel)
 
-        # 3. 확인 버튼 (상세설정창의 Bright Green 컬러)
-        btn_ok = QPushButton("확인")
-        btn_ok.setStyleSheet(button_style("primary", font_size="13px", padding="8px 16px"))
+        self.apply_btn = footer_button("적용", "toolbar", 96)
+        self.apply_btn.setToolTip("현재 설정을 비디오 플레이어 자막 오버레이에 바로 반영")
+        self.apply_btn.clicked.connect(self._apply_to_video_player)
+        br.addWidget(self.apply_btn)
+
+        btn_ok = footer_button("확인", "primary", 96)
         btn_ok.setToolTip("설정 저장 후 닫기")
         btn_ok.clicked.connect(self._ok)
         br.addWidget(btn_ok)
 
-        # 4. 렌더링 시작 버튼 (강조를 위해 높이와 여백을 살짝 더 줌)
-        self.render_btn = QPushButton("🚀 렌더링 시작")
-        self.render_btn.setFixedHeight(36)
-        self.render_btn.setStyleSheet(button_style("primary", font_size="14px", padding="8px 24px"))
+        self.render_btn = footer_button("🚀 렌더링 시작", "primary", 132)
+        self.render_btn.setStyleSheet(button_style("primary", font_size="14px", padding="8px 22px"))
         self.render_btn.clicked.connect(self._render)
         br.addWidget(self.render_btn)
 
@@ -456,6 +462,13 @@ class ExportDialog(QDialog):
             bg_rgba=bg_rgba, bg_radius=bg_radius, bg_margin=bg_margin, bg_full_width=self.bg_full_chk.isChecked()
         )
 
+    def _output_width(self) -> int:
+        res = str(self.res_combo.currentText() or "")
+        return 3840 if ("3840" in res or "4K" in res.upper() or "UHD" in res.upper()) else 1920
+
+    def _render_scale(self) -> float:
+        return 4.0 if self._output_width() >= 3840 else 2.0
+
     def _refresh_preview(self):
         try:
             pw = max(self.prev_lbl.width(), 480)
@@ -463,11 +476,12 @@ class ExportDialog(QDialog):
             try: real_fs = int(self.sz_combo.currentText())
             except: real_fs = 60
             
-            scale = min(1.0, 90 / (real_fs * 2.5))
-            ps = max(8, int(real_fs * scale))
-            ph = max(110, int(ps * 4.5))
+            preview_scale = max(0.01, pw / max(1.0, float(self._output_width())))
+            effect_scale = self._render_scale() * preview_scale
+            ps = max(6, int(real_fs * effect_scale))
+            ph = max(110, int(real_fs * self._render_scale() * 3.5 * preview_scale))
             
-            st = self._style(font_size=ps, effect_scale=scale)
+            st = self._style(font_size=ps, effect_scale=effect_scale)
             
             text_img = _make_png(None, sample, pw, ph, st)
             
@@ -512,6 +526,35 @@ class ExportDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "오류", f"설정 저장 오류:\n{e}")
 
+    def _video_player(self):
+        player = getattr(self, "_video_player_ref", None)
+        if player is not None:
+            return player
+        parent = self.parent()
+        while parent is not None:
+            player = getattr(parent, "video_player", None)
+            if player is not None:
+                return player
+            parent = parent.parent()
+        return None
+
+    def _apply_to_video_player(self):
+        """Apply output-resolution-based subtitle style to the live video overlay."""
+        try:
+            settings = self._collect()
+            _save_es(settings)
+            player = self._video_player()
+            if player is None or not hasattr(player, "apply_export_subtitle_style"):
+                QMessageBox.information(self, "알림", "현재 연결된 비디오 플레이어가 없습니다.")
+                return
+            player.apply_export_subtitle_style(settings)
+            orig = self.apply_btn.text()
+            self.apply_btn.setText("✅ 적용됨")
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(1200, lambda: self.apply_btn.setText(orig))
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"오버레이 적용 오류:\n{e}")
+
     def _ok(self):
         """설정 저장 후 창 닫기."""
         try:
@@ -549,8 +592,8 @@ class ExportDialog(QDialog):
         safe_v = re.sub(r'[\\/:*?"<>|]', '_', self.video_name)
         out_p = os.path.join(self._srt_dir, f"{safe_v}_자막소스.mov")
         
-        width=3840 if "4K" in self.res_combo.currentText() else 1920
-        fs=int(self.sz_combo.currentText()); res_scale=4.0 if width==3840 else 2.0
+        width=self._output_width()
+        fs=int(self.sz_combo.currentText()); res_scale=self._render_scale()
         scaled_fs=int(fs*res_scale); height=int(scaled_fs*3.5); height+=height%2
         st=self._style(font_size=scaled_fs, effect_scale=res_scale)
         

@@ -1,4 +1,4 @@
-# Version: 03.00.10
+# Version: 03.00.32
 # Phase: PHASE1-C
 """Editor widget and function-preserving PHASE1-C layout."""
 import re, os, sys, json, atexit, threading, shutil, time
@@ -236,6 +236,11 @@ class EditorWidget(
         main_w = self.window()
         if hasattr(main_w, "sync_menu_from_editor"):
             main_w.sync_menu_from_editor(self)
+        if hasattr(main_w, "_refresh_saved_status_label"):
+            main_w._refresh_saved_status_label(
+                is_dirty=is_dirty,
+                touch_saved_time=(not is_dirty and state == SubtitleStateManager.ST_SAVED),
+            )
         if hasattr(self, 'text_edit'):
             self.text_edit.setReadOnly(is_locked)
             self.text_edit.setStyleSheet(
@@ -645,7 +650,7 @@ class EditorWidget(
         try:
             return max(1, self.video_player.video_container.height())
         except Exception:
-            return max(1, self.video_player.height() - 78)
+            return max(1, self.video_player.height() - 56)
 
     # ---------------------------------------------------------
     # Helpers

@@ -1,4 +1,4 @@
-# Version: 03.00.27
+# Version: 03.00.38
 # Phase: PHASE2
 """
 Global bottom menu bar.
@@ -43,7 +43,7 @@ class StatusRail(QWidget):
     def refresh_from_editor(self, editor):
         stage_key = "review"
         mode_key = str(getattr(self.window(), "_current_work_mode", "edit") or "edit")
-        if editor is not None:
+        if editor is not None and mode_key not in ("roughcut", "shortform"):
             state = str(getattr(editor, "current_state", "") or "").lower()
             mode = str(getattr(editor, "current_mode", "") or "").lower()
             status_text = ""
@@ -167,11 +167,11 @@ class GlobalMenuBar(QWidget):
         right.addWidget(self._wide_button("종료", "power", self._quit, kind="danger"))
         root.addWidget(self.right_group, stretch=1, alignment=Qt.AlignmentFlag.AlignRight)
 
-        self.engine_label = QLabel("")
+        self.engine_label = QLabel("", self)
         self.engine_label.setMinimumWidth(132)
         self.engine_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         self.engine_label.setStyleSheet(label_style("muted", 10, bold=True))
-        root.addWidget(self.engine_label)
+        self.engine_label.setVisible(False)
 
         self.refresh()
 
@@ -191,7 +191,7 @@ class GlobalMenuBar(QWidget):
     def _wide_button(self, text, icon_name, slot, *, kind="toolbar", min_width=72):
         btn = QToolButton()
         btn.setText(text)
-        btn.setIcon(line_icon(icon_name, "#FF8A80" if kind == "danger" else "#A9B0B7", 24))
+        btn.setIcon(line_icon(icon_name, "#FF3B30" if kind == "danger" else "#A9B0B7", 24))
         btn.setIconSize(QSize(18, 18))
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         btn.setMinimumSize(min_width, 52)
@@ -243,10 +243,14 @@ class GlobalMenuBar(QWidget):
                 self.btn_start.setText(src.text())
                 self.btn_start.setEnabled(src.isEnabled())
             engine = getattr(editor, "engine_lbl", None)
-            self.engine_label.setText(engine.text() if engine is not None else "")
+            engine_text = engine.text() if engine is not None else ""
+            self.engine_label.setText(engine_text)
         else:
             self.btn_start.setText("시작")
+            engine_text = ""
             self.engine_label.setText("")
+        if hasattr(self.main_window, "_refresh_sidebar_engine_info"):
+            self.main_window._refresh_sidebar_engine_info(engine_text or None)
         self._sync_start_icon()
         if self.status_rail is not None:
             self.status_rail.refresh_from_editor(editor)
