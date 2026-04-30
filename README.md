@@ -206,11 +206,10 @@ PY
 
 ## 참고 문서
 
-- `AGENTS.md`: 개발 원칙, 작업 인수인계, 다음 작업 프롬프트
-- `ACTION_ITEMS.md`: 남은 구현 항목
-- `check_list.md`: 확인 체크리스트
 - `File_structure.txt`: 현재 파일 구조
 - `RELEASE_v03.00.00.md`: PHASE2 릴리즈 노트
+
+개발 진행용 내부 문서인 `AGENTS.md`, `ACTION_ITEMS.md`, `check_list.md`는 로컬에서만 관리하고 GitHub에는 공개하지 않습니다.
 
 ## 주의사항
 
