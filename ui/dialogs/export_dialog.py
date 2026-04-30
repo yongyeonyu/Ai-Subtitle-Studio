@@ -1,4 +1,4 @@
-# Version: 03.00.29
+# Version: 03.01.01
 # Phase: PHASE2
 """
 export_dialog.py  ─ SRT → 투명 자막 동영상 출력 (Qt 네이티브 렌더링 & 미리보기 복구본)
@@ -24,24 +24,29 @@ from ui.style import button_style, settings_dialog_stylesheet
 
 # ── 설정 저장 로직 ──
 _SETTINGS_PATH = os.path.join(config.DATASET_DIR, "user_settings.json")
-def _load_es()->dict:
+_EXPORT_SETTINGS_KEY = "export_dialog"
+_EXPORT_DEFAULTS_KEY = "export_dialog_defaults"
+
+def _normalize_export_settings(d: dict) -> dict:
+    d = dict(d or {})
+    if not getattr(config, "IS_MAC", False):
+        d["icloud"] = False
+    return d
+
+def _load_es(key: str = _EXPORT_SETTINGS_KEY)->dict:
     try:
         if os.path.exists(_SETTINGS_PATH):
             with open(_SETTINGS_PATH,"r",encoding="utf-8") as f:
-                d = json.load(f).get("export_dialog",{})
-                # Windows에서 iCloud 옵션 강제 비활성화
-                if not getattr(config, "IS_MAC", False):
-                    d["icloud"] = False
-                return d
+                return _normalize_export_settings(json.load(f).get(key,{}))
     except: pass
     return {}
 
-def _save_es(d:dict):
+def _save_es(d:dict, key: str = _EXPORT_SETTINGS_KEY):
     try:
         all_s={}
         if os.path.exists(_SETTINGS_PATH):
             with open(_SETTINGS_PATH,"r",encoding="utf-8") as f: all_s=json.load(f)
-        all_s["export_dialog"]=d
+        all_s[key]=_normalize_export_settings(d)
         with open(_SETTINGS_PATH,"w",encoding="utf-8") as f:
             json.dump(all_s,f,ensure_ascii=False,indent=2)
     except: pass
@@ -282,7 +287,7 @@ class ExportDialog(QDialog):
             if d and os.path.exists(d): self._srt_dir=d
         self._txt_c=QColor(config.ACCENT); self._bdr_c=QColor("#FFFFFF"); self._shd_c=QColor("#000000"); self._bg_c=QColor("#000000")
         self._fonts=_avail_fonts()
-        self.setWindowTitle("자막 동영상 출력"); self.setMinimumWidth(560); self.setStyleSheet(settings_dialog_stylesheet())
+        self.setWindowTitle("자막 동영상 출력"); self.setMinimumWidth(860); self.setStyleSheet(settings_dialog_stylesheet())
         self._build_ui(); self._load(); self._refresh_preview()
 
     def _build_ui(self):
@@ -383,6 +388,16 @@ class ExportDialog(QDialog):
         btn_save.setToolTip("설정 저장 (창 유지)")
         btn_save.clicked.connect(self._save)
         br.addWidget(btn_save)
+
+        btn_save_default = footer_button("기본값 저장", "toolbar", 112)
+        btn_save_default.setToolTip("현재 자막 출력 설정을 기본값으로 저장")
+        btn_save_default.clicked.connect(self._save_default)
+        br.addWidget(btn_save_default)
+
+        btn_load_default = footer_button("기본값 불러오기", "toolbar", 128)
+        btn_load_default.setToolTip("저장된 기본값을 현재 창에 불러오기")
+        btn_load_default.clicked.connect(self._load_default)
+        br.addWidget(btn_load_default)
 
         br.addStretch()
 
@@ -515,6 +530,27 @@ class ExportDialog(QDialog):
             icloud=self.icloud_chk.isChecked()
         )
 
+    def _apply_settings(self, s: dict) -> bool:
+        if not s:
+            return False
+        try:
+            self.res_combo.setCurrentText(s.get("res","4K (3840px)")); self.quality_combo.setCurrentText(s.get("quality","빠른 렌더링 (Proxy)"))
+            self.font_combo.setCurrentText(s.get("font","Apple SD Gothic Neo")); self.sz_combo.setCurrentText(str(s.get("size",60)))
+            self.align_combo.setCurrentText(s.get("align","가운데")); self.lsp_combo.setCurrentText(str(s.get("lsp",6)))
+            self._txt_c=QColor(s.get("txt_c","#FFFFFF")); self._cb(self._txt_btn,self._txt_c)
+            self.no_bdr_chk.setChecked(s.get("no_bdr",False)); self._bdr_c=QColor(s.get("bdr_c","#FFFFFF")); self._cb(self._bdr_btn,self._bdr_c)
+            self.bdr_w_combo.setCurrentText(str(s.get("bdr_w",2)))
+            self.shd_chk.setChecked(s.get("shadow",False)); self._shd_c=QColor(s.get("shd_c","#000000")); self._cb(self._shd_btn,self._shd_c)
+            self.shdx_combo.setCurrentText(str(s.get("shdx",3))); self.shdy_combo.setCurrentText(str(s.get("shdy",3)))
+            self.bg_chk.setChecked(s.get("bg",False)); self.bg_full_chk.setChecked(s.get("bg_full",False))
+            self._bg_c=QColor(s.get("bg_c","#000000")); self._cb(self.bg_col_btn,self._bg_c)
+            self.bg_op_sl.setValue(int(s.get("bg_op",50))); self.bg_rd_sl.setValue(int(s.get("bg_radius",10))); self.bg_mg_sl.setValue(int(s.get("bg_margin",18))); self.bold_chk.setChecked(s.get("bold",True))
+            self.icloud_chk.setChecked(bool(s.get("icloud", False)) and bool(getattr(config, "IS_MAC", False)))
+            self._refresh_preview()
+            return True
+        except Exception:
+            return False
+
     def _save(self):
         """설정을 user_settings.json에 저장 (창 유지)."""
         try:
@@ -525,6 +561,29 @@ class ExportDialog(QDialog):
             QTimer.singleShot(1500, lambda: self.render_btn.setText(orig))
         except Exception as e:
             QMessageBox.critical(self, "오류", f"설정 저장 오류:\n{e}")
+
+    def _save_default(self):
+        """현재 자막 출력 설정을 별도 기본값 슬롯에 저장."""
+        try:
+            _save_es(self._collect(), _EXPORT_DEFAULTS_KEY)
+            QMessageBox.information(self, "완료", "자막 출력 기본값으로 저장했습니다.")
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"기본값 저장 오류:\n{e}")
+
+    def _load_default(self):
+        """저장된 기본값을 현재 UI에 적용하고 일반 설정에도 저장."""
+        try:
+            defaults = _load_es(_EXPORT_DEFAULTS_KEY)
+            if not defaults:
+                QMessageBox.information(self, "알림", "저장된 자막 출력 기본값이 없습니다.")
+                return
+            if not self._apply_settings(defaults):
+                QMessageBox.warning(self, "오류", "기본값을 불러오지 못했습니다.")
+                return
+            _save_es(self._collect())
+            QMessageBox.information(self, "완료", "자막 출력 기본값을 불러왔습니다.")
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"기본값 불러오기 오류:\n{e}")
 
     def _video_player(self):
         player = getattr(self, "_video_player_ref", None)
@@ -565,21 +624,7 @@ class ExportDialog(QDialog):
 
     def _load(self):
         s=_load_es()
-        if not s: return
-        try:
-            self.res_combo.setCurrentText(s.get("res","4K (3840px)")); self.quality_combo.setCurrentText(s.get("quality","빠른 렌더링 (Proxy)"))
-            self.font_combo.setCurrentText(s.get("font","Apple SD Gothic Neo")); self.sz_combo.setCurrentText(str(s.get("size",60)))
-            self.align_combo.setCurrentText(s.get("align","가운데")); self.lsp_combo.setCurrentText(str(s.get("lsp",6)))
-            self._txt_c=QColor(s.get("txt_c","#FFFFFF")); self._cb(self._txt_btn,self._txt_c)
-            self.no_bdr_chk.setChecked(s.get("no_bdr",False)); self._bdr_c=QColor(s.get("bdr_c","#FFFFFF")); self._cb(self._bdr_btn,self._bdr_c)
-            self.bdr_w_combo.setCurrentText(str(s.get("bdr_w",2)))
-            self.shd_chk.setChecked(s.get("shadow",False)); self._shd_c=QColor(s.get("shd_c","#000000")); self._cb(self._shd_btn,self._shd_c)
-            self.shdx_combo.setCurrentText(str(s.get("shdx",3))); self.shdy_combo.setCurrentText(str(s.get("shdy",3)))
-            self.bg_chk.setChecked(s.get("bg",False)); self.bg_full_chk.setChecked(s.get("bg_full",False))
-            self._bg_c=QColor(s.get("bg_c","#000000")); self._cb(self.bg_col_btn,self._bg_c)
-            self.bg_op_sl.setValue(s.get("bg_op",50)); self.bg_rd_sl.setValue(s.get("bg_radius",10)); self.bg_mg_sl.setValue(s.get("bg_margin",18)); self.bold_chk.setChecked(s.get("bold",True))
-            self.icloud_chk.setChecked(s.get("icloud", False))
-        except: pass
+        self._apply_settings(s)
 
     def _render(self):
         tmp=tempfile.NamedTemporaryFile(suffix=".srt",delete=False,mode="w",encoding="utf-8"); tmp.close()

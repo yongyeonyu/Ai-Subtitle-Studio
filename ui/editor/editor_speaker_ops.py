@@ -1,4 +1,4 @@
-# Version: 02.03.02
+# Version: 03.01.05
 # Phase: PHASE1-B
 """
 EditorWidget 화자 메뉴 / 화자 드래그 조작 Mixin.
@@ -40,7 +40,9 @@ class EditorSpeakerOpsMixin:
             if spk == current_spk_id:
                 continue
             color_hex = spk_map.get(spk, "#FFFFFF")
-            action = menu.addAction(make_circle_icon(color_hex), f"화자 {int(spk)+1}로 변경")
+            spk_idx = int(spk) + 1 if str(spk).isdigit() else 1
+            spk_name = str(self.settings.get(f"spk{spk_idx}_name", "") or f"화자 {spk_idx}")
+            action = menu.addAction(make_circle_icon(color_hex), f"{spk_name}로 변경")
             action.triggered.connect(lambda checked, s=spk: self._change_speaker_for_line(line_num, s))
             added += 1
         if added > 0:

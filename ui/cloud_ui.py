@@ -1,4 +1,4 @@
-# Version: 02.03.03
+# Version: 03.01.00
 # Phase: PHASE1-B
 """
 ui/cloud_ui.py
@@ -25,6 +25,11 @@ class CloudUIMixin:
             return
         parent = os.path.basename(os.path.dirname(files_list[0])) if files_list else ""
         get_logger().log(f"🚀 자동 처리 큐 진입: {parent} / {len(files_list)}개 파일")
+        self._auto_processing_active = True
+        try:
+            self._tick_home_watchdog_labels()
+        except Exception:
+            pass
         self._sig_auto_start_pipeline.emit(files_list)
 
     def _do_auto_start_pipeline(self, files_list):
@@ -42,6 +47,8 @@ class CloudUIMixin:
                 self._editor_widget.update_status("🚀 AI 엔진이 시작되었습니다. (자동 감지)")
 
     def _is_app_busy(self):
+        if getattr(self, "_auto_processing_active", False):
+            return True
         if self._editor_widget is not None:
             return True
         if self.backend and getattr(self.backend, '_active', False):
@@ -55,9 +62,27 @@ class CloudUIMixin:
             self._cloud_sync_manager.mark_done(filepath)
         if hasattr(self, '_nas_sync_manager'):
             self._nas_sync_manager.mark_done(filepath)
+        managers = [
+            getattr(self, "_cloud_sync_manager", None),
+            getattr(self, "_nas_sync_manager", None),
+        ]
+        still_running = False
+        for mgr in managers:
+            try:
+                still_running = still_running or bool(getattr(mgr, "_in_flight", None))
+                still_running = still_running or bool(getattr(mgr, "_folder_jobs", None))
+            except Exception:
+                pass
+        if not still_running:
+            self._auto_processing_active = False
+            try:
+                self._tick_home_watchdog_labels()
+            except Exception:
+                pass
 
     def start_icloud_sync(self):
         self._is_auto_pipeline = True
+        self._auto_processing_active = True
         self.backend.start_pipeline([], is_icloud=True)
 
     def _get_icloud_files(self):
@@ -152,11 +177,17 @@ class CloudUIMixin:
             set_nas_excluded_folders(sorted(dlg.excluded_folders))
             self._add_recent_folder(local_path)
             if getattr(dlg, "saved_only", False):
-                self.show_home()
+                if hasattr(self, "_restore_current_work_mode"):
+                    self._restore_current_work_mode()
+                else:
+                    self.show_home()
                 return
             if dlg.selected_files:
                 if len(dlg.selected_files) == 1 and self.backend:
                     self.backend.start_pipeline(dlg.selected_files, folder=local_path)
                 elif len(dlg.selected_files) > 1:
                     self._show_multiclip_then_batch(dlg.selected_files, folder=local_path, show_multiclip=False)
-            self.show_home()
+            elif hasattr(self, "_restore_current_work_mode"):
+                self._restore_current_work_mode()
+            else:
+                self.show_home()

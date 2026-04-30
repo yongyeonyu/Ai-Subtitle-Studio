@@ -1,4 +1,4 @@
-# Version: 03.00.26
+# Version: 03.01.14
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -7,15 +7,36 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
+
 from core.roughcut import (
     build_concat_render_plan,
     build_ffmpeg_subtitle_burnin_command,
     edl_to_dict,
     retime_subtitles_for_edl,
+    run_render_plan,
     save_edl_json,
     save_markdown_guide,
     save_retimed_srt,
 )
+
+
+class _RoughcutRenderWorker(QObject):
+    finished = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, plan, dry_run: bool):
+        super().__init__()
+        self.plan = plan
+        self.dry_run = bool(dry_run)
+
+    def run(self) -> None:
+        try:
+            result = run_render_plan(self.plan, dry_run=self.dry_run)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(result)
 
 
 class RoughcutExportMixin:
@@ -36,8 +57,10 @@ class RoughcutExportMixin:
             self.preview_summary_lbl.setText("저장할 EDL 결과가 없습니다.")
             return
         path = self._default_output_path("_roughcut_edl.json")
-        save_edl_json(path, self._result.edl_segments, metadata={"source": self._media_path()})
+        result = self._result_with_user_edits(self._result)
+        save_edl_json(path, result.edl_segments, metadata={"source": self._media_path()})
         self.preview_summary_lbl.setText(f"EDL 저장: {path}")
+        self.render_status_lbl.setText("EDL 저장")
 
     def _save_guide(self):
         if self._result is None:
@@ -46,36 +69,155 @@ class RoughcutExportMixin:
             self.preview_summary_lbl.setText("저장할 가이드가 없습니다.")
             return
         path = self._default_output_path("_roughcut_guide.md")
-        save_markdown_guide(path, self._result.guide_markdown)
+        result = self._result_with_user_edits(self._result)
+        save_markdown_guide(path, result.guide_markdown)
         self.preview_summary_lbl.setText(f"가이드 저장: {path}")
+        self.render_status_lbl.setText("가이드 저장")
 
     def _save_srt(self):
         if not self._ensure_result():
             self.preview_summary_lbl.setText("저장할 SRT 결과가 없습니다.")
             return
-        retimed = retime_subtitles_for_edl(self._editor_segments(), self._result.edl_segments)
+        result = self._result_with_user_edits(self._result)
+        retimed = retime_subtitles_for_edl(self._editor_segments(), result.edl_segments)
         path = self._default_output_path("_roughcut.srt")
         save_retimed_srt(path, retimed)
         self.preview_summary_lbl.setText(f"SRT 저장: {path}")
+        self.render_status_lbl.setText("SRT 저장")
 
     def _save_render_plan(self):
+        plan = self._build_render_plan_for_ui()
+        if plan is None:
+            return
+        result = self._result_with_user_edits(self._result)
+        plan_path = self._default_output_path("_roughcut_render_plan.json")
+        plan_path.write_text(json.dumps(self._render_plan_payload(plan, result), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self.preview_summary_lbl.setText(f"렌더 계획 저장: {plan_path}")
+        self.render_status_lbl.setText("계획 저장")
+        self._append_render_log(f"렌더 계획 저장: {plan_path}")
+
+    def _build_render_plan_for_ui(self):
         if not self._ensure_result():
             self.preview_summary_lbl.setText("저장할 렌더 계획이 없습니다.")
-            return
+            self.render_status_lbl.setText("계획 없음")
+            return None
         media_path = self._media_path()
         if not media_path:
             self.preview_summary_lbl.setText("렌더 계획에는 원본 영상 경로가 필요합니다.")
-            return
+            self.render_status_lbl.setText("원본 없음")
+            return None
+        output_path = self._default_output_path("_roughcut.mp4")
+        temp_dir = Path(tempfile.gettempdir()) / "ai_subtitle_studio_roughcut"
+        result = self._result_with_user_edits(self._result)
+        try:
+            plan = build_concat_render_plan(result.edl_segments, output_path, temp_dir)
+        except Exception as exc:
+            self.preview_summary_lbl.setText(f"렌더 계획 생성 실패: {exc}")
+            self.render_status_lbl.setText("계획 실패")
+            self._append_render_log(f"렌더 계획 생성 실패: {exc}")
+            return None
+        self._last_render_plan = plan
+        return plan
+
+    def _render_plan_payload(self, plan, result) -> dict:
+        media_path = self._media_path()
         output_path = self._default_output_path("_roughcut.mp4")
         srt_path = self._default_output_path("_roughcut.srt")
         subtitled_path = self._default_output_path("_roughcut_subtitled.mp4")
-        temp_dir = Path(tempfile.gettempdir()) / "ai_subtitle_studio_roughcut"
-        plan = build_concat_render_plan(self._result.edl_segments, output_path, temp_dir)
-        plan_path = self._default_output_path("_roughcut_render_plan.json")
-        payload = {
-            "edl": edl_to_dict(self._result.edl_segments, metadata={"source": media_path}),
+        return {
+            "edl": edl_to_dict(result.edl_segments, metadata={"source": media_path}),
             "render_plan": asdict(plan),
             "subtitle_burnin_command": build_ffmpeg_subtitle_burnin_command(output_path, srt_path, subtitled_path),
         }
-        plan_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        self.preview_summary_lbl.setText(f"렌더 계획 저장: {plan_path}")
+
+    def _dry_run_render_plan(self):
+        plan = self._build_render_plan_for_ui()
+        if plan is not None:
+            self._start_render_worker(plan, dry_run=True)
+
+    def _execute_render_plan(self):
+        plan = self._build_render_plan_for_ui()
+        if plan is not None:
+            self._start_render_worker(plan, dry_run=False)
+
+    def _retry_failed_render(self):
+        plan = getattr(self, "_last_failed_render_plan", None)
+        if plan is None:
+            plan = getattr(self, "_last_render_plan", None)
+        if plan is None:
+            self.preview_summary_lbl.setText("복구할 렌더 계획이 없습니다.")
+            self.render_status_lbl.setText("복구 없음")
+            return
+        self._start_render_worker(plan, dry_run=False, retry=True)
+
+    def _start_render_worker(self, plan, dry_run: bool = False, retry: bool = False) -> None:
+        if getattr(self, "_render_thread", None) is not None:
+            self.preview_summary_lbl.setText("렌더 작업이 이미 실행 중입니다.")
+            return
+        self._last_render_plan = plan
+        self._set_render_buttons_enabled(False)
+        mode = "검증" if dry_run else ("복구" if retry else "렌더")
+        self.render_status_lbl.setText(f"{mode} 중")
+        self.preview_summary_lbl.setText(f"러프컷 {mode} 실행 중")
+        self._append_render_log(f"{mode} 시작: {len(plan.extract_commands)}개 추출 + concat")
+        for warning in getattr(plan, "warnings", ()) or ():
+            self._append_render_log(f"주의: {warning}")
+
+        thread = QThread(self)
+        worker = _RoughcutRenderWorker(plan, dry_run=dry_run)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(lambda result: self._on_render_finished(result, dry_run))
+        worker.failed.connect(lambda message: self._on_render_failed(message, plan))
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(lambda: self._clear_render_worker(thread))
+        thread.finished.connect(thread.deleteLater)
+        self._render_thread = thread
+        self._render_worker = worker
+        thread.start()
+
+    def _on_render_finished(self, result, dry_run: bool) -> None:
+        status = "검증 완료" if dry_run else "렌더 완료"
+        self.render_status_lbl.setText(status)
+        self.preview_summary_lbl.setText(f"{status}: {result.output_path}")
+        self._append_render_log(f"{status}: {result.output_path}")
+        self._append_render_log(f"실행 명령: {len(result.executed_commands)}개 / return codes: {list(result.return_codes)}")
+        if hasattr(self, "btn_render_retry"):
+            self.btn_render_retry.setEnabled(False)
+        self._last_failed_render_plan = None
+
+    def _on_render_failed(self, message: str, plan) -> None:
+        self._last_failed_render_plan = plan
+        self.render_status_lbl.setText("렌더 실패")
+        self.preview_summary_lbl.setText(f"렌더 실패: {message}")
+        self._append_render_log(f"렌더 실패: {message}")
+        if hasattr(self, "btn_render_retry"):
+            self.btn_render_retry.setEnabled(True)
+
+    def _clear_render_worker(self, thread) -> None:
+        if getattr(self, "_render_thread", None) is thread:
+            self._render_thread = None
+            self._render_worker = None
+        self._set_render_buttons_enabled(True)
+
+    def _set_render_buttons_enabled(self, enabled: bool) -> None:
+        for name in ("btn_render_dry_run", "btn_render_execute"):
+            button = getattr(self, name, None)
+            if button is not None:
+                button.setEnabled(bool(enabled))
+        retry = getattr(self, "btn_render_retry", None)
+        if retry is not None:
+            retry.setEnabled(bool(enabled) and getattr(self, "_last_failed_render_plan", None) is not None)
+
+    def _append_render_log(self, message: str) -> None:
+        line = str(message or "").strip()
+        if not line:
+            return
+        lines = list(getattr(self, "_render_log_lines", []) or [])
+        lines.append(line)
+        self._render_log_lines = lines[-80:]
+        if hasattr(self, "guide_text"):
+            self.guide_text.setPlainText("러프컷 렌더 로그\n\n" + "\n".join(self._render_log_lines))

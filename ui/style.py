@@ -1,4 +1,4 @@
-# Version: 03.00.37
+# Version: 03.01.08
 # Phase: PHASE2
 """
 Shared UI style tokens for the gradual PHASE1-C refresh.
@@ -7,8 +7,14 @@ This module centralizes low-risk button and label styles first. Layout and
 behavior stay in each widget so existing signal/slot flows remain untouched.
 """
 
+from pathlib import Path
+
 from PyQt6.QtCore import QPointF, Qt, QRectF
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+try:
+    from PyQt6.QtSvg import QSvgRenderer
+except Exception:
+    QSvgRenderer = None
 
 import config
 
@@ -32,6 +38,48 @@ COLORS = {
 }
 
 _LINE_ICON_CACHE = {}
+_ICON_ASSET_DIR = Path(__file__).resolve().parents[1] / "assets" / "icons" / "ui"
+_ICON_ALIASES = {
+    "briefcase": "project",
+    "document": "file",
+    "done": "check",
+    "gap": "sliders",
+    "question": "help",
+    "reload": "refresh",
+    "restart": "refresh",
+    "stt": "mic",
+    "voice": "speaker",
+    "write": "edit",
+    "x": "cancel",
+}
+
+
+def _canonical_icon_name(name):
+    icon_name = str(name)
+    return _ICON_ALIASES.get(icon_name, icon_name)
+
+
+def _svg_icon_from_asset(name, color, size):
+    if QSvgRenderer is None:
+        return None
+    svg_path = _ICON_ASSET_DIR / f"{_canonical_icon_name(name)}.svg"
+    if not svg_path.exists():
+        return None
+    try:
+        svg_text = svg_path.read_text(encoding="utf-8").replace("currentColor", str(color))
+        renderer = QSvgRenderer(svg_text.encode("utf-8"))
+    except Exception:
+        return None
+    if not renderer.isValid():
+        return None
+
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    renderer.render(painter, QRectF(0, 0, size, size))
+    painter.end()
+    return QIcon(pix)
 
 
 def _px(value):
@@ -150,6 +198,17 @@ def panel_style(kind="surface"):
     )
 
 
+def named_panel_style(object_name, kind="surface", *, radius=7):
+    """Return an object-name scoped panel style so child widgets keep their own styles."""
+    bg = COLORS["surface"] if kind == "surface" else COLORS.get(kind, COLORS["surface_alt"])
+    return (
+        f"#{object_name} {{ "
+        f"background: {bg}; border: 1px solid {COLORS['separator']}; "
+        f"border-radius: {int(radius)}px; "
+        "} "
+    )
+
+
 def settings_dialog_stylesheet():
     return (
         f"QDialog {{ background: {COLORS['bg']}; color: {COLORS['text']}; font-size: 13px; }}"
@@ -204,6 +263,11 @@ def line_icon(name, color=None, size=28):
     cached = _LINE_ICON_CACHE.get(cache_key)
     if cached is not None:
         return cached
+
+    svg_icon = _svg_icon_from_asset(name, color, size)
+    if svg_icon is not None:
+        _LINE_ICON_CACHE[cache_key] = svg_icon
+        return svg_icon
 
     pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)
@@ -299,6 +363,13 @@ def line_icon(name, color=None, size=28):
         for y, x in ((0.32, 0.38), (0.5, 0.62), (0.68, 0.48)):
             painter.drawLine(int(size * 0.18), int(size * y), int(size * 0.82), int(size * y))
             painter.drawEllipse(QRectF(size * x - 3, size * y - 3, 6, 6))
+    elif name == "auto":
+        painter.drawEllipse(QRectF(size * 0.22, size * 0.22, size * 0.56, size * 0.56))
+        painter.drawLine(int(size * 0.50), int(size * 0.15), int(size * 0.50), int(size * 0.30))
+        painter.drawLine(int(size * 0.50), int(size * 0.70), int(size * 0.50), int(size * 0.85))
+        painter.drawLine(int(size * 0.15), int(size * 0.50), int(size * 0.30), int(size * 0.50))
+        painter.drawLine(int(size * 0.70), int(size * 0.50), int(size * 0.85), int(size * 0.50))
+        painter.drawEllipse(QRectF(size * 0.42, size * 0.42, size * 0.16, size * 0.16))
     elif name in ("timeline", "subtitle"):
         painter.drawRoundedRect(QRectF(size * 0.18, size * 0.28, size * 0.64, size * 0.44), 3, 3)
         painter.drawLine(int(size * 0.3), int(size * 0.42), int(size * 0.7), int(size * 0.42))

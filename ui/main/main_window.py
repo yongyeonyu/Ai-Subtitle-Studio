@@ -1,4 +1,4 @@
-# Version: 03.00.38
+# Version: 03.01.07
 # Phase: PHASE2
 """
 ui/main/main_window.py
@@ -8,19 +8,21 @@ Mixin 상속: HomeUI · EditorLifecycle · Workspace · Queue · Project · Clou
 import os
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QStackedWidget, QTextEdit, QSplitter, QPushButton,
-    QTableWidget, QHeaderView,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QSplitter, QPushButton,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QIcon
 
 from ui.queue_widget import QueueMixin
 from ui.cloud_ui import CloudUIMixin
 from ui.home_ui import HomeUIMixin
 from ui.menu_bar import GlobalMenuBar, StatusRail
 from ui.editor.editor_lifecycle import EditorLifecycleMixin
-from ui.style import app_stylesheet, button_style, label_style, line_icon
+from ui.main.bottom_work_panel import BottomWorkPanel
+from ui.main.workspace_stack import MainWorkspaceStack
+from ui.sidebar.project_sidebar_widget import ProjectSidebarWidget
+from ui.style import button_style, label_style, line_icon
 
 from ui.project.project_panel import ProjectUIMixin
 from ui.project.workspace_restore import WorkspaceMixin
@@ -82,6 +84,7 @@ class MainWindow(
         self._current_file_idx = 1
         self._total_files = 1
         self._is_auto_pipeline = False
+        self._auto_processing_active = False
         self._current_project_path = None
         self._project_boundary_times = []
         self._dashboard_mode = "dashboard"
@@ -93,6 +96,8 @@ class MainWindow(
         self._on_prev_cb = None
         self._on_exit_cb = None
         self._local_llm_models = []
+        self._post_completion_idle_enabled = False
+        self._post_completion_idle_ms = 600_000
 
         settings = load_settings()
         self._auto_start_on = settings.get("auto_start_enabled", True)
@@ -101,9 +106,15 @@ class MainWindow(
 
         self._live_timer = QTimer()
         self._live_timer.timeout.connect(self._update_live_queue_header)
+        self._post_completion_idle_timer = QTimer(self)
+        self._post_completion_idle_timer.setSingleShot(True)
+        self._post_completion_idle_timer.timeout.connect(self._on_post_completion_idle_timeout)
 
         self._build_ui()
         self._connect_signals()
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
         QTimer.singleShot(0, self._warmup_local_llm_models)
 
         self._cloud_sync_manager = CloudSyncManager(
@@ -126,20 +137,17 @@ class MainWindow(
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(1)
-        self.stack = QStackedWidget()
-        self.stack.setStyleSheet(app_stylesheet())
+        main_layout.setContentsMargins(2, 2, 2, 2)
+        main_layout.setSpacing(2)
+        self.stack = MainWorkspaceStack()
 
         workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
         workspace_splitter.setChildrenCollapsible(False)
-        workspace_splitter.setStyleSheet("QSplitter::handle { background: #0F1518; width: 1px; }")
+        workspace_splitter.setHandleWidth(2)
+        workspace_splitter.setStyleSheet("QSplitter::handle { background: #0F1518; width: 2px; }")
         main_layout.addWidget(workspace_splitter, stretch=1)
 
-        self.home_page = QWidget()
-        self.home_page.setMinimumWidth(204)
-        self.home_page.setMaximumWidth(218)
-        self.home_page.setStyleSheet("background: #11181C;")
+        self.home_page = ProjectSidebarWidget()
         workspace_splitter.addWidget(self.home_page)
         self.status_rail = StatusRail(self.home_page)
         self.saved_status_label = QLabel("", self.home_page)
@@ -160,7 +168,7 @@ class MainWindow(
         title = QLabel("작업을 선택하세요")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(label_style("normal", 20, bold=True))
-        subtitle = QLabel("파일, 프로젝트, iCloud, NAS 자동처리를 왼쪽에서 시작하면 이 영역에 에디터 작업 화면이 열립니다.")
+        subtitle = QLabel("새 작업은 파일, 폴더, 프로젝트 중 하나를 선택해서 시작합니다.")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet(label_style("muted", 12))
@@ -168,9 +176,11 @@ class MainWindow(
         quick_row.setSpacing(10)
         btn_file = self._empty_quick_button("파일", "file", self.select_files)
         btn_folder = self._empty_quick_button("폴더", "folder", self.select_folder)
+        btn_project = self._empty_quick_button("프로젝트", "project", self._open_project)
         quick_row.addStretch()
         quick_row.addWidget(btn_file)
         quick_row.addWidget(btn_folder)
+        quick_row.addWidget(btn_project)
         quick_row.addStretch()
         editor_placeholder.addStretch()
         editor_placeholder.addWidget(title)
@@ -186,70 +196,27 @@ class MainWindow(
         self.global_menu_bar.set_status_rail(self.status_rail)
         main_layout.addWidget(self.global_menu_bar)
 
-        log_panel = self._build_log_panel()
-        main_layout.addWidget(log_panel)
+        self.bottom_work_panel = self._build_log_panel()
+        main_layout.addWidget(self.bottom_work_panel)
         self.show_home()
 
     def _build_log_panel(self):
-        container = QWidget()
-        container.setStyleSheet("background: #151C20;")
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        panel = BottomWorkPanel(self)
 
-        # ── 토글 바 ──
-        toggle_bar = QWidget()
-        toggle_bar.setFixedHeight(24)
-        toggle_bar.setStyleSheet("background: #1B2429; border-top: 1px solid #2D3942;")
-        toggle_bar.setCursor(Qt.CursorShape.PointingHandCursor)
-        tb_layout = QHBoxLayout(toggle_bar)
-        tb_layout.setContentsMargins(16, 0, 0, 0)
-        self._log_toggle_btn = QLabel("▲ 터미널 로그 보기")
-        self._log_toggle_btn.setStyleSheet(label_style("muted", 10, bold=True))
-        tb_layout.addWidget(self._log_toggle_btn)
-        tb_layout.addStretch()
-        layout.addWidget(toggle_bar)
-        toggle_bar.mousePressEvent = lambda e: self._toggle_log()
+        self._log_content = panel.log_content
+        self._log_toggle_btn = panel.log_toggle_btn
+        self.log_splitter = panel.log_splitter
+        self.log_text = panel.log_text
+        self.bottom_right_stack = panel.bottom_right_stack
+        self.bottom_queue_page = panel.queue_panel
+        self.bottom_roughcut_page = panel.roughcut_panel
+        self.queue_header_lbl = panel.queue_header_lbl
+        self.queue_table = panel.queue_table
+        self.roughcut_bottom_header_lbl = panel.roughcut_bottom_header_lbl
+        self.roughcut_bottom_host = panel.roughcut_bottom_host
+        self.roughcut_bottom_host_layout = panel.roughcut_bottom_host_layout
 
-        # ── 로그 컨텐츠 ──
-        self._log_content = QWidget()
-        self._log_content.setFixedHeight(190)
-        lc_layout_main = QVBoxLayout(self._log_content)
-        lc_layout_main.setContentsMargins(0, 0, 0, 0)
-
-        self.log_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.log_splitter.setStyleSheet(
-            "QSplitter::handle { background: #2D3942; width: 2px; }"
-        )
-
-        # 터미널
-        term_widget = QWidget()
-        term_layout = QVBoxLayout(term_widget)
-        term_layout.setContentsMargins(0, 0, 0, 0)
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setFont(QFont("Menlo", 8))
-        self.log_text.setStyleSheet("background: #151C20; color: #A9B0B7; border: none; padding: 4px 8px;")
-        term_layout.addWidget(self.log_text)
-
-        self.bottom_right_stack = QStackedWidget()
-        self.bottom_queue_page = self._build_bottom_queue_table()
-        self.bottom_roughcut_page = self._build_bottom_roughcut_table()
-        self.bottom_right_stack.addWidget(self.bottom_queue_page)
-        self.bottom_right_stack.addWidget(self.bottom_roughcut_page)
-
-        self.log_splitter.addWidget(term_widget)
-        self.log_splitter.addWidget(self.bottom_right_stack)
-        self.log_splitter.setStretchFactor(0, 1)
-        self.log_splitter.setStretchFactor(1, 1)
-        self.log_splitter.setSizes([500, 500])
-        lc_layout_main.addWidget(self.log_splitter)
-        layout.addWidget(self._log_content)
-
-        # 초기 상태
-        settings = load_settings()
-        self._log_visible = settings.get("show_terminal_log", False)
-        self._apply_log_visible(self._log_visible)
+        self._log_visible = panel.log_visible
 
         # 큐 애니메이션
         self._queue_anim_frames = ["📑", "📄", "📃", "📝"]
@@ -259,99 +226,23 @@ class MainWindow(
         self._queue_anim_timer.timeout.connect(self._animate_queue_status)
         self._queue_anim_timer.start()
 
-        return container
-
-    def _build_bottom_queue_table(self) -> QWidget:
-        queue_widget = QWidget()
-        queue_layout = QVBoxLayout(queue_widget)
-        queue_layout.setContentsMargins(5, 3, 5, 5)
-        self.queue_header_lbl = QLabel("📋 처리할 파일 리스트")
-        self.queue_header_lbl.setStyleSheet(label_style("normal", 9, bold=True))
-        queue_layout.addWidget(self.queue_header_lbl)
-
-        self.queue_table = QTableWidget(0, 5)
-        self.queue_table.setHorizontalHeaderLabels(
-            ["  상태  ", "  파일명  ", "  영상정보  ", "  영상길이  ", "  예상시간  "]
-        )
-        self.queue_table.setWordWrap(True)
-        self.queue_table.verticalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.queue_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.queue_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
-        )
-        self.queue_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.queue_table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.queue_table.horizontalHeader().setSectionResizeMode(
-            4, QHeaderView.ResizeMode.Fixed
-        )
-        self.queue_table.setColumnWidth(4, 140)
-        self.queue_table.verticalHeader().setVisible(False)
-        self.queue_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.queue_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.queue_table.setShowGrid(True)
-        self.queue_table.setGridStyle(Qt.PenStyle.SolidLine)
-        self.queue_table.setStyleSheet(
-            "QTableWidget { background: #151C20; color: #F5F7FA; "
-            "border: none; font-size: 11px; gridline-color: #3A4650; } "
-            "QTableWidget::item { padding: 2px 8px; } "
-            "QHeaderView::section { background: #1B2429; color: #A9B0B7; "
-            "border: none; border-right: 1px solid #3A4650; "
-            "border-bottom: 1px solid #3A4650; padding: 3px 8px; }"
-        )
-        queue_layout.addWidget(self.queue_table)
-        return queue_widget
-
-    def _build_bottom_roughcut_table(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(5, 3, 5, 5)
-        layout.setSpacing(4)
-        self.roughcut_bottom_header_lbl = QLabel("✂ 러프컷 테이블")
-        self.roughcut_bottom_header_lbl.setStyleSheet(label_style("normal", 9, bold=True))
-        layout.addWidget(self.roughcut_bottom_header_lbl)
-
-        self.roughcut_bottom_host = QWidget()
-        self.roughcut_bottom_host_layout = QVBoxLayout(self.roughcut_bottom_host)
-        self.roughcut_bottom_host_layout.setContentsMargins(0, 0, 0, 0)
-        self.roughcut_bottom_host_layout.setSpacing(0)
-        placeholder = QLabel("러프컷 화면을 열면 분석/출력/구간 재생 패널이 표시됩니다.")
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setWordWrap(True)
-        placeholder.setStyleSheet(label_style("muted", 10))
-        self.roughcut_bottom_host_layout.addWidget(placeholder)
-        layout.addWidget(self.roughcut_bottom_host, stretch=1)
-        return page
+        return panel
 
     def _set_roughcut_bottom_widget(self, widget: QWidget):
-        if widget is None or not hasattr(self, "roughcut_bottom_host_layout"):
+        panel = getattr(self, "bottom_work_panel", None)
+        if widget is None or panel is None:
             return
-        while self.roughcut_bottom_host_layout.count():
-            item = self.roughcut_bottom_host_layout.takeAt(0)
-            old = item.widget()
-            if old is not None and old is not widget:
-                old.setParent(None)
-        self.roughcut_bottom_host_layout.addWidget(widget)
-        self._show_bottom_roughcut_table()
+        panel.set_roughcut_widget(widget)
 
     def _show_bottom_queue_table(self):
-        stack = getattr(self, "bottom_right_stack", None)
-        page = getattr(self, "bottom_queue_page", None)
-        if stack is not None and page is not None:
-            stack.setCurrentWidget(page)
+        panel = getattr(self, "bottom_work_panel", None)
+        if panel is not None:
+            panel.show_queue_table()
 
     def _show_bottom_roughcut_table(self):
-        stack = getattr(self, "bottom_right_stack", None)
-        page = getattr(self, "bottom_roughcut_page", None)
-        if stack is not None and page is not None:
-            stack.setCurrentWidget(page)
+        panel = getattr(self, "bottom_work_panel", None)
+        if panel is not None:
+            panel.show_roughcut_table()
 
     def _empty_quick_button(self, text, icon_name, slot):
         btn = QPushButton(text)
@@ -379,6 +270,8 @@ class MainWindow(
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self):
+        self._stop_post_completion_idle_timer()
+        self._reset_transient_multiclip_state()
         self.stack.setCurrentIndex(0)
         if hasattr(self, "_show_bottom_queue_table"):
             self._show_bottom_queue_table()
@@ -390,15 +283,76 @@ class MainWindow(
             self._editor_widget = None
         self._build_home_content()
 
+    def _reset_transient_multiclip_state(self):
+        for attr, value in (
+            ("_multiclip_files", []),
+            ("_multiclip_boundaries", []),
+            ("_accumulated_vad", []),
+            ("_project_boundary_times", []),
+            ("_reuse_clip_indices", set()),
+        ):
+            try:
+                setattr(self, attr, value.copy() if hasattr(value, "copy") else value)
+            except Exception:
+                pass
+
+    def eventFilter(self, obj, event):
+        try:
+            if self._is_user_activity_event(event):
+                self._reset_post_completion_idle_timer()
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+    def _is_user_activity_event(self, event) -> bool:
+        if not getattr(self, "_post_completion_idle_enabled", False):
+            return False
+        return event.type() in {
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.MouseButtonDblClick,
+            QEvent.Type.MouseMove,
+            QEvent.Type.Wheel,
+            QEvent.Type.KeyPress,
+            QEvent.Type.KeyRelease,
+            QEvent.Type.TouchBegin,
+            QEvent.Type.TouchUpdate,
+            QEvent.Type.TouchEnd,
+        }
+
+    def _start_post_completion_idle_timer(self):
+        self._post_completion_idle_enabled = True
+        self._post_completion_idle_timer.start(self._post_completion_idle_ms)
+
+    def _reset_post_completion_idle_timer(self):
+        if getattr(self, "_post_completion_idle_enabled", False):
+            self._post_completion_idle_timer.start(self._post_completion_idle_ms)
+
+    def _stop_post_completion_idle_timer(self):
+        self._post_completion_idle_enabled = False
+        try:
+            self._post_completion_idle_timer.stop()
+        except Exception:
+            pass
+
+    def _on_post_completion_idle_timeout(self):
+        self._post_completion_idle_enabled = False
+        backend = getattr(self, "backend", None)
+        if backend is not None and hasattr(backend, "_action_state") and hasattr(backend, "_edit_event"):
+            try:
+                backend._action_state[0] = "exit"
+                backend._edit_event.set()
+                return
+            except Exception:
+                pass
+        self.show_home()
+
     # ── 로그 토글 ────────────────────────────────────────
     def _apply_log_visible(self, visible: bool):
         self._log_visible = bool(visible)
-        if self._log_visible:
-            self._log_content.show()
-            self._log_toggle_btn.setText("▼ 터미널 로그 숨기기")
-        else:
-            self._log_content.hide()
-            self._log_toggle_btn.setText("▲ 터미널 로그 보기")
+        panel = getattr(self, "bottom_work_panel", None)
+        if panel is not None:
+            panel.set_log_visible(self._log_visible)
         if self._editor_widget and hasattr(self._editor_widget, "set_terminal_visible_layout"):
             self._editor_widget.set_terminal_visible_layout(self._log_visible)
         if hasattr(self, "global_menu_bar"):

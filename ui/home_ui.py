@@ -1,4 +1,4 @@
-# Version: 03.00.43
+# Version: 03.01.07
 # Phase: PHASE2
 """
 ui/home_ui.py
@@ -84,10 +84,8 @@ class HomeUIMixin:
             sidebar_mode = self._sidebar_active_mode()
             left_col.addWidget(self._btn("홈", "", self.show_home, active=sidebar_mode == "home", icon_name="home"))
             left_col.addWidget(self._btn("에디터", "", self._open_editor_screen, active=sidebar_mode == "editor", icon_name="subtitle"))
-            left_col.addWidget(self._btn("STT 모드", "", self._toggle_sidebar_stt_mode, icon_name="mic"))
-            left_col.addWidget(self._btn("프로젝트", "", self._open_project, icon_name="folder"))
-            left_col.addWidget(self._btn("러프컷", "", self._open_roughcut_helper, active=sidebar_mode == "roughcut", icon_name="timeline"))
-            left_col.addWidget(self._btn("숏폼 제작기", "", self._open_shortform_maker, icon_name="video"))
+            left_col.addWidget(self._btn("러프컷", "", self._open_roughcut_helper, active=sidebar_mode == "roughcut", icon_name="roughcut"))
+            left_col.addWidget(self._btn("숏폼", "", self._open_shortform_maker, icon_name="shortform"))
             left_col.addSpacing(8)
             left_col.addWidget(self._btn("최근 작업", "", self._dummy_action, icon_name="clock"))
             icloud_files, count_str, comp_str = self._get_icloud_files()
@@ -206,9 +204,10 @@ class HomeUIMixin:
         dot_color = "#FF453A" if dirty else "#34C759"
         status_text = "저장안됨" if dirty else "저장됨"
         label.setTextFormat(Qt.TextFormat.RichText)
+        from config import APP_VERSION
         label.setText(
-            f"{status_text}: {self._last_saved_status_time} "
-            f"<span style='color:{dot_color}; font-size:13px;'>●</span>"
+            f"<span style='color:{dot_color}; font-size:13px;'>●</span> "
+            f"<span style='color:#D1D1D6;'>v{APP_VERSION}</span>"
         )
         label.setToolTip("저장되지 않은 변경사항이 있습니다." if dirty else "저장된 상태입니다.")
 
@@ -259,25 +258,12 @@ class HomeUIMixin:
         lay.setContentsMargins(10, 7, 10, 7)
         lay.setSpacing(4)
 
-        header = QLabel("상태 / 설정")
-        header.setStyleSheet("color: #F5F7FA; font-size: 11px; font-weight: 700; background: transparent; border: none;")
-        lay.addWidget(header)
-
         if not hasattr(self, "saved_status_label"):
             self.saved_status_label = QLabel("", self.home_page)
             self.saved_status_label.setTextFormat(Qt.TextFormat.RichText)
         self.saved_status_label.setStyleSheet("color: #A9B0B7; font-size: 10px; background: transparent; border: none;")
         self._refresh_saved_status_label()
         lay.addWidget(self.saved_status_label)
-
-        from config import APP_VERSION
-        version_lbl = QLabel(f"버전: v{APP_VERSION}")
-        version_lbl.setStyleSheet("color: #D1D1D6; font-size: 10px; background: transparent; border: none;")
-        lay.addWidget(version_lbl)
-
-        settings_title = QLabel("현재 설정")
-        settings_title.setStyleSheet("color: #7EE787; font-size: 10px; font-weight: 700; background: transparent; border: none; padding-top: 2px;")
-        lay.addWidget(settings_title)
 
         if not hasattr(self, "sidebar_settings_label"):
             self.sidebar_settings_label = QLabel("", self.home_page)
@@ -328,6 +314,10 @@ class HomeUIMixin:
         if not getattr(self, "_watchdog_labels", None):
             return
         for label, is_nas in list(self._watchdog_labels):
+            if bool(getattr(self, "_auto_processing_active", False)):
+                label.setText("Watchdog 대기중")
+                label.setVisible(self._is_auto_start_enabled())
+                continue
             interval = self._watchdog_interval_for(is_nas)
             key = "_nas_watchdog_left" if is_nas else "_icloud_watchdog_left"
             left = int(getattr(self, key, interval) or interval)

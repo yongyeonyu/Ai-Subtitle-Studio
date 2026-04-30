@@ -1,4 +1,4 @@
-# Version: 03.00.41
+# Version: 03.01.00
 # Phase: PHASE1-C
 """
 ui/timeline_widget.py
@@ -8,6 +8,7 @@ from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -18,6 +19,7 @@ from ui.timeline.timeline_constants import CANVAS_H
 from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_global import GlobalCanvas
 from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker
+from ui.style import button_style
 
 
 class TimelineWidget(QWidget):
@@ -78,6 +80,17 @@ class TimelineWidget(QWidget):
         lock_row.setContentsMargins(0, 0, 0, 0)
         lock_row.addWidget(self.lock_chk)
         lock_row.addStretch()
+        for text, tip, slot in (
+            ("+", "캔버스 확대", self.zoom_in),
+            ("-", "캔버스 축소", self.zoom_out),
+            ("ㅁ", "캔버스 화면 너비에 맞춤", self.fit_to_view),
+        ):
+            btn = QPushButton(text)
+            btn.setFixedSize(28, 24)
+            btn.setToolTip(tip)
+            btn.setStyleSheet(button_style("toolbar", font_size="11px", padding="2px 6px"))
+            btn.clicked.connect(slot)
+            lock_row.addWidget(btn)
         lay.addLayout(lock_row)
 
         self.canvas = TimelineCanvas()
@@ -509,3 +522,28 @@ class TimelineWidget(QWidget):
         self.scroll.horizontalScrollBar().setValue(0)
         self._target_scroll_x = 0.0
         self._current_scroll_x = 0.0
+
+    def zoom_in(self):
+        self._zoom_canvas(1.15)
+
+    def zoom_out(self):
+        self._zoom_canvas(1 / 1.15)
+
+    def _zoom_canvas(self, factor: float):
+        dur = self.canvas.total_duration
+        if dur <= 0:
+            return
+        old_pps = float(self.canvas.pps)
+        new_pps = max(5.0, min(500.0, old_pps * float(factor)))
+        if abs(new_pps - old_pps) < 0.01:
+            return
+        sb = self.scroll.horizontalScrollBar()
+        center_sec = (sb.value() + self.scroll.viewport().width() / 2) / max(0.001, old_pps)
+        self.canvas.pps = new_pps
+        self.canvas.setFixedWidth(self._canvas_width_for_duration(dur, new_pps))
+        self.canvas.update()
+        new_scroll = int(center_sec * new_pps - self.scroll.viewport().width() / 2)
+        new_scroll = self._clamp_scroll_x(new_scroll)
+        sb.setValue(new_scroll)
+        self._target_scroll_x = float(new_scroll)
+        self._current_scroll_x = float(new_scroll)

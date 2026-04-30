@@ -1,11 +1,11 @@
 <!--
-Document-Version: 03.00.43
+Document-Version: 03.01.14
 Phase: PHASE2
 Last-Updated: 2026-04-30
 Updated-By: Codex with 대표님
-Previous-Content: v03.00.43 자동설정 저장 후 작업 화면 유지
-This-Update: v03.00.43 삭제 작업 릴리즈 노트 기록 원칙 추가
-Copilot-Handoff: v03.00.43 기준. 기능, def 함수, class 등을 삭제하는 경우 반드시 RELEASE_v03.00.00.md에 삭제 사유와 영향 범위를 기록하도록 개발 원칙을 추가했습니다.
+Previous-Content: v03.01.13 RC-D4 러프컷 preview 고도화
+This-Update: v03.01.14 RC-D5 렌더 실행 UI
+Copilot-Handoff: v03.01.14 기준. 러프컷 렌더 dry-run 검증, QThread 기반 실행, 실패 복구 재시도, 렌더 로그 표시를 연결했습니다. 다음 우선순위는 RC-D6 러프컷 결과 버전 관리입니다.
 -->
 # AGENTS.md — AI Subtitle Studio 개발 가이드
 
@@ -461,7 +461,7 @@ ai_subtitle_studio/
 
 ## 🧠 v03.00.00 현재 작업 맥락
 
-- 현재 개발 버전: **v03.00.43**
+- 현재 개발 버전: **v03.01.14**
 - Phase2 러프컷 엔진 1~2단계를 시작했습니다.
   - `core/roughcut/models.py`: Subtitle/RoughCut/Storyboard/EDL dataclass 모델
   - `core/roughcut/gap_detector.py`: 자막 없는 구간 탐지
@@ -484,7 +484,7 @@ ai_subtitle_studio/
   - `core/engine/llm_correction_guard.py`: LLM 보정 결과의 단어 추가/삭제/타임코드 출력 차단
   - `tests/test_roughcut_engine1.py`: unittest 기반 최소 검증
 - 다음 우선순위:
-  1. RC-D1 러프컷 상세 패널
+  1. RC-D6 러프컷 결과 버전 관리
 - PHASE1-C Apple 스타일 UI 개선은 기능 보존 원칙으로 반영되었습니다.
 - v03.00.17에서 중앙 러프컷 테이블 편집, 구간 프리뷰, EDL/가이드/SRT/렌더 계획 저장을 추가했습니다.
 - v03.00.18에서 AI 설정창에 자막 정확도 프리셋을 추가했습니다.
@@ -513,7 +513,22 @@ ai_subtitle_studio/
 - v03.00.40에서 자막 트랙 끝의 클립 추가 `+` 세그먼트를 복구하고 STT 모드에서도 클립 추가 signal 경로를 유지했습니다.
 - v03.00.41에서 타임라인 포커스 노란 테두리를 상/하/좌/우 4선 사각형으로 다시 보이게 보정했습니다.
 - v03.00.42에서 iCloud/NAS 자동처리 카드의 화살표 접기/펼치기 기능을 제거하고 프로젝트 정보 화살표 크기를 20% 줄였습니다.
-- v03.00.43에서 편집 모드 자동설정 저장 후 홈 화면으로 돌아가지 않고 현재 에디터 화면을 유지하도록 보정했습니다.
+- v03.01.00에서 편집 모드 자동설정 저장 후 홈 화면으로 돌아가지 않고 현재 에디터 화면을 유지하도록 보정했습니다.
+- v03.01.01에서 자막 동영상 출력 창에 기본값 저장/불러오기 기능을 추가했습니다.
+- v03.01.02에서 자막 생성 완료 이후부터 600초 idle 타이머를 시작하고 사용자 입력이 있으면 리셋되도록 보정했습니다.
+- v03.01.03에서 사이드바, 메인 작업영역, 하단 메뉴, 터미널/큐 패널을 2px 간격과 둥근 테두리 패널 기준으로 정렬했습니다.
+- v03.01.04에서 사이드바 shell, 메인 workspace stack, 하단 터미널/큐/러프컷 패널을 독립 QWidget 파일로 분리했습니다.
+- v03.01.05에서 왼쪽 상단 상태 rail을 대기/파일열기/VAD검토/Whisper/LLM교정/세그먼트/저장중/저장완료/렌더중/러프컷검토 등으로 세분화했습니다.
+- v03.01.05에서 화자 설정 UI를 compact 행으로 정리하고, 화자명 변경이 학습 데이터 파일명/메인 화자 위젯/타임라인 화자 표시로 이어지도록 연결했습니다.
+- v03.01.06에서 하단 오디오 파형 트랙을 분석/컷 안전도 트랙으로 전환하고, 글로벌 미니맵에도 동일한 분석 요약 색상 overlay를 추가했습니다.
+- v03.01.07에서 왼쪽 사이드바의 프로젝트 열기 버튼을 중앙 메인 위젯으로 이동하고, 빈 작업 화면 quick action을 `파일 / 폴더 / 프로젝트`로 정리했습니다.
+- v03.01.08에서 공용 UI 아이콘을 `assets/icons/ui/*.svg` 자산으로 분리하고, `line_icon()`은 SVG 우선 렌더링 + 기존 QPainter fallback 구조로 변경했습니다.
+- v03.01.09에서 러프컷 테이블 상단 패널을 압축해 요약 지표, 출력 버튼, 선택 구간 판단/안전/Trim/Role/근거, 이전/다음/구간 재생 컨트롤을 한 화면 안에 정리했습니다.
+- v03.01.10에서 러프컷 선택 챕터 상세 패널을 분리 추가해 챕터 ID, 사용 자막 범위, story role/신뢰도, 위험도, 출력 범위, 컷 근거를 표시합니다.
+- v03.01.11에서 러프컷 선택 챕터의 action과 trim in/out을 직접 조정해 `user_edits`, decision, EDL, guide 저장 흐름에 반영되도록 연결했습니다.
+- v03.01.12에서 러프컷 컷 안전도(ideal/acceptable/risky)를 색상과 필터로 확인하고, gap boundary/phrase boundary/inside phrase 근거를 프리뷰/상세 패널에 표시하도록 연결했습니다.
+- v03.01.13에서 러프컷 프리뷰에 현재 챕터 반복 재생, 필터 기준 이전/다음 후보 이동 후 즉시 재생, 멀티클립 source clip 표시를 연결했습니다.
+- v03.01.14에서 러프컷 렌더 검증(dry-run), QThread 기반 렌더 실행, 실패 복구 재시도, 렌더 로그 표시를 하단 러프컷 패널에 연결했습니다.
 - PHASE1-D STT 모드가 시작되었습니다.
   - 전역 메뉴/사이드바 STT 버튼은 ON/OFF 상태를 표시합니다.
   - STT ON 상태에서 시작 버튼을 누르면 Whisper/LLM 없이 최고 민감도 VAD-only 탐지를 실행합니다.
@@ -527,13 +542,13 @@ ai_subtitle_studio/
   - append 순서는 LLM worker 단일 순서 큐로 클립1 → 클립2 → 클립3을 유지합니다.
   - 실제 멀티클립 장시간 파일에서는 `ACTION_ITEMS.md`의 `CHECKPOINT-P6-PARALLEL`을 확인하세요.
 - 전역 메뉴:
-  - `ui/menu_bar.py`가 전역 실행 메뉴와 프로젝트 바 상단 2줄 상태 레일을 관리합니다.
+  - `ui/menu_bar.py`가 전역 실행 메뉴와 프로젝트 바 상단 1줄 상태 레일을 관리합니다.
   - 불필요해진 전역 `이전` / `다음` 액션은 제거했습니다.
   - 창 폭이 화면 절반 이하가 되면 메뉴 버튼 텍스트는 숨고 아이콘만 남습니다.
   - 저장 버튼 옆 Undo/Redo 아이콘은 에디터 undo/redo 라우팅으로 연결합니다.
 - 통합 화면:
   - `ui/main/main_window.py`와 `ui/home_ui.py`가 대시보드 중심 화면을 구성합니다.
-  - 왼쪽 사이드바에는 홈/에디터/프로젝트/러프컷/숏폼/최근 작업, iCloud/NAS 상태, 프로젝트/영상/자막 정보가 있습니다.
+  - 왼쪽 사이드바에는 홈/에디터/러프컷/숏폼/최근 작업, iCloud/NAS 상태, 프로젝트/영상/자막 정보가 있습니다.
   - 저장 상태 라벨은 왼쪽 프로젝트 바 하단으로 이동했습니다.
   - 중앙 상단 `AI Subtitle Studio` 제목 라벨은 제거했습니다.
 - 에디터/비디오:
@@ -558,6 +573,56 @@ ai_subtitle_studio/
   - 모델 preload / 오디오 prefetch / UI update throttling 우선
   - 배터리 절약보다 STT 속도 우선
 
+## 다음 채팅 시작 프롬프트
+
+다음 채팅에서 작업을 바로 이어갈 때는 아래 프롬프트를 그대로 사용합니다.
+
+```text
+너는 Codex고, 존댓말로 답해라.
+
+프로젝트 위치:
+/Users/u_mo_c/Downloads/ai_subtitle_studio
+
+현재 기준:
+- 현재 앱/문서 버전: v03.01.14
+- config.py APP_VERSION: 03.01.14
+- 현재 phase: PHASE2
+- 커밋 기준: v03.01.14 roughcut render UI
+
+반드시 먼저 참고할 파일:
+- AGENTS.md
+- ACTION_ITEMS.md
+- check_list.md
+- File_structure.txt
+- RELEASE_v03.00.00.md
+
+다음 우선순위:
+1. ACTION_ITEMS.md의 다음 미완료 항목부터 진행
+2. 현재 다음 항목은 RC-D6 러프컷 결과 버전 관리
+3. PHASE3 / iPad 항목은 "전체 실행" 요청에서도 제외
+
+작업 원칙:
+- 기존 기능 삭제 금지
+- 완료한 ACTION_ITEMS.md 항목은 삭제하고 check_list.md에는 완료 체크
+- 코드 수정이 발생하면 v03.01.15로 버전 증가
+- config.py APP_VERSION도 함께 증가
+- 기능, def, class, 공용 helper, UI action, signal/slot 등을 삭제하면 RELEASE_v03.00.00.md에 삭제 사유와 영향 범위 기록
+- 대표님이 명시적으로 요청할 때만 커밋
+- dataset/video_preview_cache/는 기존 미추적 캐시이므로 건드리지 않기
+- 프로젝트 루트에 create_all, _backup, STRUCTURE.txt, requirements.txt 남기지 않기
+- requirements는 requirements-mac.txt / requirements-windows.txt만 운영
+
+검증 명령:
+- venv/bin/python -m unittest discover -s tests
+- python3 AST 검사
+- QT_QPA_PLATFORM=offscreen venv/bin/python 으로 MainWindow 생성
+- QT_QPA_PLATFORM=offscreen venv/bin/python 으로 SettingsDialog 생성
+- git diff --check -- . ':(exclude)dataset/video_preview_cache'
+- find . -maxdepth 1 \( -name '_backup*' -o -name 'create_all*.py' -o -name 'STRUCTURE.txt' -o -name 'requirements.txt' \) -print
+
+이제 ACTION_ITEMS.md를 확인하고 다음 액션 아이템부터 진행해줘.
+```
+
 ## 📌 v02.07.00 즉시 주의할 항목
 
 1. 멀티클립에서 기존자막 사용 질문에 **아니요** 선택 시:
@@ -568,7 +633,7 @@ ai_subtitle_studio/
 3. 대규모 리팩토링은 `ACTION_ITEMS.md`의 R13 기준으로 영역별 진행합니다.
 4. PHASE1-C 완료 항목은 `ACTION_ITEMS.md`에서 삭제했고, 실사용 확인이 필요한 항목만 CHECKPOINT로 남겼습니다.
 5. PHASE1-D 완료 항목은 요약했고, 실제 영상/마이크로 확인해야 하는 STT 저장/복원/멀티클립/화자 학습은 CHECKPOINT로 남겼습니다.
-6. 다음 채팅에서는 `ACTION_ITEMS.md`의 CHECKPOINT와 Phase2/Phase3 항목을 기준으로 이어가면 됩니다.
+6. 다음 채팅에서는 이 문서의 `다음 채팅 시작 프롬프트`와 `ACTION_ITEMS.md`의 다음 미완료 항목을 기준으로 이어가면 됩니다.
 
 ### LLM / Ollama / 성능 규칙 (v02.07.00)
 - LLM 모델 UI는 `전체/무료/유료` 필터를 제공합니다. 무료는 Ollama 로컬 및 무료/제한 API, 유료는 과금 API 모델입니다.

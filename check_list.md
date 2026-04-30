@@ -1,44 +1,52 @@
 # AI Subtitle Studio — 체크리스트
 # 기준 문서: ACTION_ITEMS.md
 # 최종 수정: 2026-04-30
-# App Version: 03.00.43
+# App Version: 03.01.14
 
 ## 다음 구현 체크리스트
 
 ### 버그 / UX 안정화
 
-- [ ] BUG-STT1  생성 중 STT Mode 전환 확인/재시작
+- [x] BUG-WD1  자동 자막생성 중 Watchdog 대기 처리
+  - Watchdog 자동 감지로 자막 생성이 실행되면 해당 작업이 완료/종료될 때까지 Watchdog이 다시 동작하면 안 됨
+  - 자동모드로 자막 생성 중일 때 프로젝트 사이드바의 `watchdog 58s` 같은 카운트다운 표시는 `watchdog 대기중`으로 변경
+  - 현재 처리 중인 파일/큐가 완료, 실패, 취소, 종료될 때만 Watchdog 감시/카운트다운을 재개
+  - 수동 자막 생성과 자동 감지 자막 생성의 상태 플래그가 서로 섞이지 않아야 함
+  - 봐야 할 파일: `core/cloud_sync.py`, `core/auto_tracker.py`, `ui/home_ui.py`, `ui/main/main_window.py`, `ui/queue_widget.py`, `ui/editor/editor_lifecycle.py`
+  - 봐야 할 함수/클래스 후보: `CloudSyncManager`, `AutoTracker`, `HomeUIMixin`, `MainWindow`, `QueueMixin`, 자동 감지 start/complete callback, sidebar status update 함수
+
+- [x] BUG-STT1  생성 중 STT Mode 전환 확인/재시작
   - 자막 생성 중 `STT Mode`를 누르면 `STT모드를 시작하시겠습니까` 확인창을 표시
   - 사용자가 `예`를 누르면 현재 진행 중인 Whisper/LLM/렌더/큐 작업을 안전하게 취소
   - 기존 생성 흐름을 정리한 뒤 같은 파일/클립 기준으로 STT Mode를 켜고 재시작
   - 사용자가 `아니오`를 누르면 기존 자막 생성 작업을 그대로 유지
 
-- [ ] BUG-SUB1  플레이헤드 이동 시 비디오 자막 overlay 즉시 갱신
+- [x] BUG-SUB1  플레이헤드 이동 시 비디오 자막 overlay 즉시 갱신
   - 타임라인 플레이헤드를 클릭하거나 드래그로 이동하면 재생을 누르지 않아도 현재 시간의 자막 overlay가 즉시 표시되어야 함
   - 플레이헤드를 여러 구간으로 옮길 때마다 현재 시간에 맞는 자막/화자/스타일이 바로 반영되어야 함
   - 자막이 없는 구간으로 이동하면 overlay를 즉시 숨기고, 다시 자막 구간으로 이동하면 즉시 표시
   - 단일클립/멀티클립/기존 SRT 로드/생성 직후 상태에서 동일하게 동작해야 함
 
-- [ ] BUG-SUB2  자막 overlay preview를 실제 영상 너비/FHD·UHD 출력 기준으로 스케일
+- [x] BUG-SUB2  자막 overlay preview를 실제 영상 너비/FHD·UHD 출력 기준으로 스케일
   - `자막` 설정에서 바꾼 스타일은 비디오 플레이어 전체 폭이 아니라 실제 표시 중인 영상 rect의 너비 기준으로 반영
   - FHD/UHD 출력 해상도에서 영상 가로폭에 맞췄을 때의 글자 크기, 줄바꿈, 배경 박스 폭을 preview에서 동일 비율로 표시
   - 비디오 플레이어가 확대되어도 자막은 검은 여백 포함 플레이어 폭이 아니라 영상 콘텐츠 너비에 맞춰 스케일
   - 세로/1:1/가로 영상 모두 letterbox/pillarbox 영역을 제외한 실제 영상 표시 영역 기준으로 overlay 위치와 최대 폭 계산
 
-- [ ] BUG-IDLE1  자동 홈 복귀 600초 타이머 기준 보정
+- [x] BUG-IDLE1  자동 홈 복귀 600초 타이머 기준 보정
   - 자막 생성 중 경과 시간은 자동 홈 복귀 600초 기준에 포함하지 않음
   - `자막 생성 완료` 이후부터 사용자 입력이 없을 때만 600초 타이머 시작
   - 마우스 이동/클릭, 키보드 입력, 비디오 화면 조정, 플레이헤드 이동 등 사용자 동작이 있으면 편집 중으로 판단하고 타이머를 리셋
   - 저장 완료/후처리 로그가 늦게 도착해도 사용자가 조작 중이면 홈 화면으로 자동 복귀하지 않아야 함
 
-- [ ] BUG-NAV1  팝업/설정/캐시삭제 후 현재 편집기 모드 유지
+- [x] BUG-NAV1  팝업/설정/캐시삭제 후 현재 편집기 모드 유지
   - 캐시삭제에서 `예`를 눌러도 홈 화면으로 나가지 않고 현재 화면을 유지
   - 설정창, 캐시삭제, 출력, 도움말, 자동설정 등 모든 팝업창을 닫거나 적용한 뒤 현재 편집기 모드로 복귀
   - 편집기 모드는 `에디터` / `러프컷` / `숏폼` 3가지로 정의
   - 팝업을 열기 전 active editor mode를 저장하고, 팝업 종료 후 해당 mode와 stack 화면을 복원
   - 프로젝트가 로딩되지 않은 상태에서는 기존 홈/파일 열기 흐름 유지
 
-- [ ] BUG-EXIT1  빠르고 안전한 종료/백업
+- [x] BUG-EXIT1  빠르고 안전한 종료/백업
   - 종료 버튼을 누르면 오래 기다리지 않고 가능한 빠르게 종료 흐름에 진입
   - 종료 직전 현재까지 작업한 자막/세그먼트/화자/타임라인 상태를 저장
   - 기존 자막 파일은 자막 백업 위치로 안전하게 이동/보존
@@ -46,19 +54,19 @@
   - 진행 중인 worker/큐/렌더/타이머는 저장 완료 후 안전하게 중단하고 늦게 도착한 콜백이 종료를 지연시키지 않도록 정리
   - 백업 실패 시 최소한 오류 로그를 남기고 원본을 삭제하지 않아야 함
 
-- [ ] BUG-MC1  홈 복귀 시 멀티클립 임시 상태 초기화
+- [x] BUG-MC1  홈 복귀 시 멀티클립 임시 상태 초기화
   - 멀티클립을 선택/구성한 뒤 홈으로 이동하면 이전 클립 테이블 기록이 초기화되어야 함
   - 홈에서 단일 파일을 새로 열고 타임라인 `+` 세그먼트로 클립 추가 시 이전 멀티클립 항목이 남지 않아야 함
   - 단일클립 새 작업 시작 시 `multi_clip_manager`, 클립 테이블, timeline clip context, project/editor 상태가 서로 섞이지 않아야 함
 
-- [ ] BUG-UI1  상단 상태/모드 버튼 hover 동작 방지
+- [x] BUG-UI1  상단 상태/모드 버튼 hover 동작 방지
   - 왼쪽 상단 상태/모드 버튼은 마우스 hover만으로 상태나 동작이 바뀌면 안 됨
   - 실제 진행 단계 또는 현재 모드가 변경되는 경우에만 시각 피드백을 표시
   - 동작이 바뀌는 순간 해당 버튼을 200ms 간격으로 3회 깜빡이도록 구현
 
 ### UI/UX 자산
 
-- [ ] UI-LAYOUT1  앱 전체 구역 정렬 / 위젯 패널화
+- [x] UI-LAYOUT1  앱 전체 구역 정렬 / 위젯 패널화
   - 앱 전체 구성을 사이드바, 에디터/테이블, 비디오 미리보기, 글로벌 캔버스, 하단 메뉴, 터미널 로그, 큐/러프컷 테이블 구역으로 명확히 분리
   - 대표님이 빨간 박스로 표시한 각 위젯 영역은 둥근 모서리 패널로 표시
   - 테두리 색상/두께는 현재 다크 UI 스타일을 유지
@@ -69,29 +77,41 @@
   - 봐야 할 파일: `ui/home_ui.py`, `ui/main/main_window.py`, `ui/editor/editor_widget.py`, `ui/editor/video_player_widget.py`, `ui/timeline/timeline_widget.py`, `ui/menu_bar.py`, `ui/queue_widget.py`, `ui/roughcut/roughcut_widget.py`, `ui/style.py`
   - 봐야 할 함수/클래스 후보: `HomeUI`, `MainWindow`, `EditorWidget`, `VideoPlayerWidget`, `TimelineWidget`, `BottomMenuBar`, `QueueWidget`, `RoughCutWidget`, layout 구성/resize 관련 함수
 
-- [ ] UI-SIDE1  사이드바 하단 상태/설정 카드 표시 정리
+- [x] UI-ARCH1  빨간 박스 구역별 위젯 파일 분리
+  - 대표님이 빨간 박스로 표시한 모든 구역을 하나하나 별도 QWidget 파일/클래스로 분리해 관리
+  - 예: 프로젝트 사이드바는 `ProjectSidebarWidget`처럼 독립 파일/클래스로 분리
+  - MainWindow/HomeUI는 각 구역의 세부 UI를 직접 만들지 않고 독립 위젯을 조립/연결하는 역할로 축소
+  - 분리 대상 후보: 프로젝트 사이드바, 에디터 자막 테이블, 비디오 미리보기, 글로벌 캔버스/타임라인, 하단 전역 메뉴, 터미널 로그, 큐 테이블, 러프컷 테이블 패널
+  - 각 위젯은 자체 layout/style/update 메서드를 갖고, 외부에는 필요한 signal/slot/API만 노출
+  - 기능/동작/UX는 유지하고 파일 구조와 책임만 분리
+  - def/class 삭제가 발생하면 `RELEASE_v03.00.00.md`에 삭제 대상/사유/영향 범위를 반드시 기록
+  - 봐야 할 파일: `ui/home_ui.py`, `ui/main/main_window.py`, `ui/editor/editor_widget.py`, `ui/editor/editor_segments.py`, `ui/editor/video_player_widget.py`, `ui/timeline/timeline_widget.py`, `ui/timeline/timeline_paint.py`, `ui/menu_bar.py`, `ui/queue_widget.py`, `ui/roughcut/roughcut_widget.py`, `ui/style.py`
+  - 새 파일 후보: `ui/sidebar/project_sidebar_widget.py`, `ui/editor/subtitle_table_widget.py`, `ui/editor/video_preview_panel.py`, `ui/timeline/global_timeline_widget.py`, `ui/menu/bottom_menu_widget.py`, `ui/log/terminal_log_widget.py`, `ui/queue/queue_panel_widget.py`, `ui/roughcut/roughcut_table_panel.py`
+  - 봐야 할 함수/클래스 후보: `HomeUIMixin`, `MainWindow`, `EditorWidget`, `EditorSegmentsMixin`, `VideoPlayerWidget`, `TimelineWidget`, `GlobalMenuBar`, `QueueMixin`, `QueueWidget`, `RoughCutWidget`, `StatusRail`
+
+- [x] UI-SIDE1  사이드바 하단 상태/설정 카드 표시 정리
   - 사이드바 하단 카드에서 `상태 / 설정` 제목 삭제
   - `현재 설정` 문구 삭제
   - `저장됨: 시간` / `저장안됨: 시간` 문구와 시간 표시 삭제
   - 기존 `버전:` 라벨 삭제
-  - 저장 상태 원을 버전 텍스트 앞에 배치해 `초록/빨강 원 + v03.00.43` 형태로 표시
+  - 저장 상태 원을 버전 텍스트 앞에 배치해 `초록/빨강 원 + v03.01.02` 형태로 표시
   - 초록 원은 저장됨, 빨간 원은 저장안됨(is_dirty=True) 상태를 유지
 
-- [ ] UI-STATE1  왼쪽 상단 상태 표시를 위젯/상태 1줄 요약으로 변경
+- [x] UI-STATE1  왼쪽 상단 상태 표시를 위젯/상태 1줄 요약으로 변경
   - 현재 두 줄/두 버튼 형태의 상태 표시를 `위젯 | 상태` 1줄 형태로 변경
   - 예: `러프컷 | 검토`, `에디터 | 편집`, `STT | 인식`, `자막생성 | 생성`
   - 위젯명은 현재 화면/작업 위젯 기준으로 표시
   - 상태명은 검토(vad) / 인식(whisper) / 생성 / 교정(LLM) / 완료 기준으로 표시
   - 기존 hover 동작 방지 및 실제 상태 변경 시 3회 깜빡임 요구사항과 충돌 없이 적용
 
-- [ ] UI-STATE2  편집기 상태 단계 세분화 표시
+- [x] UI-STATE2  편집기 상태 단계 세분화 표시
   - 왼쪽 상단 `편집기 | 상태` 표시의 상태 단계를 현재 처리 흐름에 맞게 더 세분화
   - 예: 대기, 파일열기, 자막로드, VAD검토, Whisper인식, LLM교정, 세그먼트생성, 저장중, 저장완료, 렌더중, 러프컷분석, 러프컷검토, 완료
   - 상태명은 너무 길어 버튼/사이드바 폭을 깨지 않도록 짧은 한글 라벨로 정리
   - 에디터/러프컷/숏폼 각각의 주요 작업 단계가 구분되어야 함
   - 상태 변경 시 기존 200ms 간격 3회 깜빡임 피드백과 연동
 
-- [ ] UI-SIDE2  사이드바 메뉴 순서/이름 정리
+- [x] UI-SIDE2  사이드바 메뉴 순서/이름 정리
   - 사이드바 메뉴 순서를 `홈` → `프로젝트` → `에디터` → `러프컷` → `숏폼` → `최근작업` → `iCloud` → `NAS`로 변경
   - 기존 `자막 편집`은 `에디터`로 표시
   - 기존 `러프컷 편집 도우미`는 `러프컷`으로 표시
@@ -99,19 +119,19 @@
   - 기존 iCloud/NAS 자동 처리 카드는 사이드바 메뉴 항목처럼 정리하되 상태 텍스트는 유지
   - `STT 모드`는 하단 메뉴에 이미 있으므로 사이드바에서는 삭제
 
-- [ ] UI-TERM1  터미널 로그 텍스트 토글 제거 / 메인 화면 확장
+- [x] UI-TERM1  터미널 로그 텍스트 토글 제거 / 메인 화면 확장
   - `터미널 로그 숨기기/보이기` 텍스트 토글은 하단 `터미널` 버튼과 기능이 중복되므로 삭제
   - 터미널 열기/닫기 기능은 하단 `터미널` 버튼으로만 제어
   - 텍스트 토글이 차지하던 높이와 빈 공간만큼 메인 작업 화면을 확장
   - 터미널 표시/숨김 상태 전환 시 에디터/러프컷/숏폼 레이아웃이 깨지지 않아야 함
 
-- [ ] UI-AUTO1  하단 자동 버튼 ON/OFF 색상 및 아이콘 변경
+- [x] UI-AUTO1  하단 자동 버튼 ON/OFF 색상 및 아이콘 변경
   - 오른쪽 하단 `자동` 버튼 아이콘은 ON일 때 초록색, OFF일 때 회색으로 표시
   - 버튼 텍스트와 기능은 유지하되 아이콘은 기존과 다른 느낌의 자동화/프로세스 계열 디자인으로 변경
   - 상태 변경 시 즉시 아이콘 색상이 갱신되어야 함
   - 전체 아이콘 SVG 자산화 작업(UI-ICON1)과 충돌하지 않도록 추후 SVG 파일 기준으로 교체 가능하게 구성
 
-- [ ] UI-SPK1  화자 설정 UI compact / 화자명 변경 연동
+- [x] UI-SPK1  화자 설정 UI compact / 화자명 변경 연동
   - 화자 설정 UI를 현재 스타일은 유지하되 더 작고 깔끔한 compact 레이아웃으로 정리
   - `화자1` / `화자2` / `화자3` 텍스트와 컨트롤의 세로/가로 얼라인을 맞춤
   - `화자 1` 텍스트를 클릭 가능한 박스 형태로 변경
@@ -120,7 +140,7 @@
   - 파일명 변경 시 기존 학습 데이터 유실 방지, 중복 이름/금지 문자 처리, 실패 시 원본 보존
   - 변경된 화자명은 메인 화면 화자 위젯과 화자 세그먼트 표시에도 동일하게 반영
 
-- [ ] UI-CANVAS1  글로벌 캔버스 줌 컨트롤 추가
+- [x] UI-CANVAS1  글로벌 캔버스 줌 컨트롤 추가
   - 글로벌 캔버스 우측 상단 빈 영역에 `+`, `-`, `ㅁ` 버튼 추가
   - `+` 버튼: 캔버스 확대
   - `-` 버튼: 캔버스 축소
@@ -129,7 +149,7 @@
   - 확대/축소/맞춤 후 playhead, 미니맵 선택 영역, 자막/화자/오디오 트랙 위치가 동기화되어야 함
   - 에디터/러프컷/STT 모드에서 동일하게 동작
 
-- [ ] UI-TL1  하단 오디오 파형 트랙을 분석/컷 안전도 트랙으로 전환
+- [x] UI-TL1  하단 오디오 파형 트랙을 분석/컷 안전도 트랙으로 전환
   - 하단 단순 오디오 파형 트랙은 정보 대비 공간을 많이 차지하므로 분석/컷 안전도 트랙으로 재활용
   - 에디터 모드에서는 VAD, 무음, 자막 밀도, 싱크 위험, 말 빠름(CPS) 등을 색상/블록으로 표시
   - 러프컷 모드에서는 keep/trim/remove/highlight/move 판단과 컷 안전도(ideal/acceptable/risky)를 표시
@@ -137,7 +157,7 @@
   - playhead, 미니맵 선택 영역, 자막/화자 트랙과 시간축이 정확히 동기화되어야 함
   - 색상 규칙은 기존 다크 UI와 충돌하지 않도록 초록/노랑/빨강 중심으로 정리
 
-- [ ] UI-ICON1  전체 아이콘 SVG 자산화
+- [x] UI-ICON1  전체 아이콘 SVG 자산화
   - 앱 전체 아이콘을 직접 수정 가능한 `.svg` 파일로 디자인하고 저장
   - 하단 메뉴, 사이드바, 상태/모드 버튼, 설정창, 러프컷, 타임라인 아이콘을 SVG 자산 기준으로 통일
   - 대표님이 나중에 직접 수정할 수 있도록 파일명, 폴더, 색상, 크기 규칙을 정리
@@ -145,7 +165,7 @@
 
 ### 러프컷 세부 기능 고도화
 
-- [ ] RC-UI1  러프컷 테이블 상단 패널 재구성
+- [x] RC-UI1  러프컷 테이블 상단 패널 재구성
   - 현재 러프컷 테이블 상단 카드/버튼 구성이 산만하므로 남은 러프컷 액션아이템 기준으로 재설계
   - RC-D1 상세 패널, RC-D2 컷 조정, RC-D3 안전도, RC-D4 preview, RC-D5 렌더 실행, RC-D6 버전 관리에 필요한 표시/제어를 우선 배치
   - 챕터 수, EDL 수, 하이라이트, 검토 필요, 출력 길이 등 요약 정보는 더 깔끔한 한 줄/그룹 구조로 정리
@@ -153,25 +173,25 @@
   - 상단 버튼 중 `에디터` 버튼은 필요 없으므로 삭제
   - UI 변경 시 기존 러프컷 분석/EDL/가이드/SRT/렌더계획 저장 기능은 유지
 
-- [ ] RC-D1  러프컷 상세 패널
+- [x] RC-D1  러프컷 상세 패널
   - 선택 챕터 상세 정보
   - 컷 근거, 위험도, story role, 사용 자막 범위 표시
 
-- [ ] RC-D2  컷 후보 세부 조정
+- [x] RC-D2  컷 후보 세부 조정
   - 챕터별 keep/trim/remove/highlight/move 수동 변경
   - trim in/out 직접 조정
   - 변경 사항 `roughcut_state.user_edits`에 저장
 
-- [ ] RC-D3  컷 안전도 시각화
+- [x] RC-D3  컷 안전도 시각화
   - ideal/acceptable/risky 색상/필터
   - gap boundary / phrase boundary / inside phrase 이유 표시
 
-- [ ] RC-D4  러프컷 preview 고도화
+- [x] RC-D4  러프컷 preview 고도화
   - 현재 챕터 반복 재생
   - 이전/다음 컷 후보 이동
   - 멀티클립 clip 전환 시 source clip 표시
 
-- [ ] RC-D5  렌더 실행 UI
+- [x] RC-D5  렌더 실행 UI
   - 현재는 렌더 계획 JSON 저장까지 완료
   - 다음 단계에서 dry-run/실행/로그/실패 복구 UI 연결
 

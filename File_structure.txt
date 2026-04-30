@@ -1,18 +1,18 @@
 <!--
-Document-Version: 03.00.43
+Document-Version: 03.01.14
 Phase: PHASE2
 Last-Updated: 2026-04-29
 Updated-By: Codex with 대표님
-Previous-Content: v03.00.42 사이드바 자동처리 카드 화살표 제거
-This-Update: v03.00.43 자동설정 저장 후 작업 화면 유지
-Copilot-Handoff: v03.00.43 기준. 편집 모드에서 자동설정 저장 후 홈 화면으로 돌아가지 않고 현재 에디터 화면을 유지하도록 보정했습니다. 다음은 RC-D1 러프컷 상세 패널입니다.
+Previous-Content: v03.01.13 RC-D4 러프컷 preview 고도화
+This-Update: v03.01.14 RC-D5 렌더 실행 UI
+Copilot-Handoff: v03.01.14 기준. `ui/roughcut/roughcut_export.py`는 렌더 계획 저장, dry-run 검증, worker 실행, 실패 복구, 렌더 로그 표시를 담당합니다.
 -->
 ================================================================================
 AI Subtitle Studio — 프로젝트 구조 및 버전 관리 문서
 생성일: 2026-04-20
 최종 수정: 2026-04-30
 Phase: PHASE2
-App Version: 03.00.43
+App Version: 03.01.14
 구조 문서 기준: File_structure.txt
 비고: STRUCTURE.txt는 삭제하고 본 문서로 단일화
 ================================================================================
@@ -20,7 +20,7 @@ App Version: 03.00.43
 ai_subtitle_studio/
 ├── main.py                         ← 프로그램 실행 진입점                    v02.03.00
 ├── main.bat                        ← Windows 실행 배치 파일
-├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v03.00.43
+├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v03.01.14
 ├── logger.py                       ← 시스템 로그 기록 및 UI 연동             v02.03.00
 ├── AGENTS.md                       ← 개발 가이드 / Copilot 핸드오프
 ├── ACTION_ITEMS.md                 ← 전체 액션아이템
@@ -41,6 +41,12 @@ ai_subtitle_studio/
 ├── voice_data/                     ← 화자 학습 음성 저장 폴더
 ├── projects/                       ← 프로젝트 저장소 [gitignore]
 ├── output/                         ← 오디오 추출 / VAD 캐시 / 중간 결과물 [gitignore]
+│
+├── assets/
+│   └── icons/
+│       ├── README.md               ← SVG 아이콘 자산 규칙 / 수정 가이드       v03.01.08
+│       ├── app_icon.svg            ← 앱 아이콘 후보 SVG 자산                 v03.01.08
+│       └── ui/*.svg                ← line_icon() 공용 UI SVG 아이콘          v03.01.08
 │
 ├── core/
 │   ├── settings.py                 ← 설정 로딩/저장/model_key 통합            v02.03.00
@@ -79,12 +85,12 @@ ai_subtitle_studio/
 │   │   ├── worker_threads.py       ← 백그라운드 worker                         v02.03.00
 │   │   ├── live_stt.py             ← 마이크 one-shot STT 유틸                  🆕 v02.07.00
 │   │   ├── stt_vad.py              ← STT 모드용 최고 민감도 VAD-only 탐지       🆕 v02.07.00
-│   │   └── diarize.py              ← 화자 분리 및 매핑                        v02.03.00
+│   │   └── diarize.py              ← 화자 분리 및 매핑/화자명 voice ref       v03.01.05
 │   │
 │   ├── pipeline/
 │   │   ├── backend_core.py         ← 단일/공통 파이프라인 진입                v02.03.00
-│   │   ├── single_pipeline.py      ← 단일 파일 자막 생성/STT timeout 로그      v02.07.00
-│   │   ├── multiclip_pipeline.py   ← 멀티클립 STT/LLM 병렬 파이프라인/reuse    v02.07.00
+│   │   ├── single_pipeline.py      ← 단일 파일 자막 생성/STT 시작 대기 안정화  v03.01.00
+│   │   ├── multiclip_pipeline.py   ← 멀티클립 STT/LLM 병렬 파이프라인/reuse    v03.01.00
 │   │   └── pipeline_helpers.py     ← 백업/저장/렌더/prefetch 공통             v02.07.00
 │   │
 │   ├── roughcut/                   ← PHASE2 로컬 러프컷 분석 엔진              🆕 v03.00.00
@@ -113,47 +119,68 @@ ai_subtitle_studio/
 │       └── data_manager.py         ← 설정/교정 데이터 I/O                    v02.03.00
 │
 └── ui/
-    ├── home_ui.py                  ← 통합 대시보드/자동처리/러프컷 전환       v03.00.43
-    ├── menu_bar.py                 ← 전역 메뉴바 + STT + Undo/Redo + 도움말    v03.00.38
-    ├── style.py                    ← 공용 다크 스타일 + 캐시형 line icon      v03.00.37
+    ├── home_ui.py                  ← 통합 대시보드/자동처리/러프컷 전환       v03.01.07
+    ├── menu_bar.py                 ← 전역 메뉴바 + 상태 rail 세분화            v03.01.05
+    ├── style.py                    ← 공용 다크 스타일 + SVG icon fallback     v03.01.08
     ├── queue_widget.py             ← 큐 테이블 + 하단 패널 전환               v03.00.34
-    ├── cloud_ui.py                 ← iCloud/NAS 자동처리 UI                  v02.03.03
+    ├── cloud_ui.py                 ← iCloud/NAS 자동처리 UI/Watchdog 대기     v03.01.00
+    │
+    ├── sidebar/
+    │   ├── __init__.py             ← 사이드바 위젯 패키지                     v03.01.04
+    │   └── project_sidebar_widget.py← 왼쪽 프로젝트 사이드바 shell             v03.01.04
+    │
+    ├── log/
+    │   ├── __init__.py             ← 로그 위젯 패키지                         v03.01.04
+    │   └── terminal_log_widget.py  ← 하단 터미널 로그 QTextEdit 패널           v03.01.04
+    │
+    ├── queue/
+    │   ├── __init__.py             ← 큐 패널 위젯 패키지                      v03.01.04
+    │   └── queue_panel_widget.py   ← 하단 큐 테이블/헤더 패널                  v03.01.04
     │
     ├── main/
-    │   ├── main_window.py          ← 메인 통합 화면 본체 + 하단 패널 스택      v03.00.38
+    │   ├── main_window.py          ← 메인 통합 화면 본체 + quick action       v03.01.07
+    │   ├── bottom_work_panel.py    ← 하단 터미널/큐/러프컷 패널 조립           v03.01.04
+    │   ├── workspace_stack.py      ← 중앙 workspace stack shell               v03.01.04
     │   ├── main_signals.py         ← 시그널/슬롯 핸들러                       v02.03.00
-    │   └── main_file_ops.py        ← 파일/폴더 열기                           v02.03.03
+    │   └── main_file_ops.py        ← 파일/폴더/캐시/종료 백업 처리            v03.01.00
     │
     ├── editor/
-    │   ├── editor_widget.py        ← 에디터 UI 골격 / 검색 / 저장상태 연동     v03.00.32
+    │   ├── editor_widget.py        ← 에디터 UI 골격 / 화자명 위젯 갱신         v03.01.05
     │   ├── editor_lifecycle.py     ← 에디터 열기/저장/닫기                    v03.00.38
-    │   ├── editor_pipeline.py      ← 자막 생성/재시작/STT 시작 라우팅          v02.07.00
-    │   ├── editor_actions.py       ← 저장/undo/redo/종료/내보내기             v03.00.32
+    │   ├── editor_pipeline.py      ← 자막 생성/완료/idle 타이머 라우팅         v03.01.02
+    │   ├── editor_actions.py       ← 저장/undo/redo/화자 설정 refresh         v03.01.05
     │   ├── editor_segments.py      ← 자막/STT 세그먼트 큐 처리/dirty 갱신      v03.00.32
     │   ├── editor_timeline_video.py← 타임라인 싱크 / 자막 분할 / 자동 스크롤   v02.04.00
     │   ├── editor_video_controls.py← 비디오 제어 / 재생 단축키                v02.07.00
     │   ├── editor_multiclip_context.py← 멀티클립 context / clip 전환           🆕 v02.03.03
     │   ├── editor_multiclip_ops.py ← 멀티클립 파일 추가/삭제/리매핑           v02.07.00
-    │   ├── editor_speaker_ops.py   ← 화자 메뉴 / 화자 드래그 조작             🆕 v02.03.03
-    │   ├── editor_stt_mode.py      ← PHASE1-D STT 모드 상태/저장/마이크 입력  🆕 v02.07.00
-    │   ├── video_player_widget.py  ← 영상/오디오 플레이어 / 헤더 제거 overlay v03.00.30
+    │   ├── editor_speaker_ops.py   ← 화자 메뉴 / 화자명 표시 / 드래그 조작     v03.01.05
+    │   ├── editor_stt_mode.py      ← STT 모드 확인/재시작/마이크 입력         v03.01.00
+    │   ├── video_player_widget.py  ← 영상/오디오 플레이어 / 실제 영상 rect overlay v03.01.00
     │   └── 기타 editor helper 파일
     │
-    ├── timeline/                   ← 타임라인 캔버스/입력/페인트/STT/화자      v03.00.41
+    ├── timeline/                   ← 타임라인 캔버스/분석 트랙/STT/화자명      v03.01.06
+    │   ├── timeline_analysis.py    ← VAD/무음/CPS/러프컷 safety marker helper 🆕 v03.01.06
+    │   ├── timeline_paint.py       ← 디테일 캔버스 분석 트랙 렌더링            v03.01.06
+    │   ├── timeline_global.py      ← 글로벌 미니맵 분석 overlay               v03.01.06
+    │   └── timeline_canvas.py      ← 타임라인 캔버스 상태/입력/렌더 mixin       v03.01.06
     ├── help/                       ← 메인 도움말 창                            🆕 v03.00.27
     │   ├── __init__.py             ← 도움말 다이얼로그 export
     │   ├── help_content.py         ← 기능별 탭/사용법/예시 콘텐츠
     │   └── help_dialog.py          ← 탭형 도움말 QDialog + 스크린샷 자리
     ├── roughcut/                   ← 중앙 러프컷 편집/프리뷰/출력 UI           v03.00.26
-    │   ├── roughcut_widget.py      ← 러프컷 화면 조립/하단 패널 분리          v03.00.34
-    │   ├── roughcut_state.py       ← 프로젝트 roughcut_state 저장/복원        v03.00.26
-    │   ├── roughcut_table.py       ← 챕터 테이블/상태/사용자 수정             v03.00.26
-    │   ├── roughcut_preview.py     ← timeline/local time 기반 구간 프리뷰      v03.00.26
-    │   ├── roughcut_export.py      ← EDL/가이드/SRT/렌더계획 저장             v03.00.26
+    │   ├── roughcut_widget.py      ← 러프컷 패널/요약/선택구간/렌더 컨트롤     v03.01.14
+    │   ├── roughcut_table_panel.py ← 하단 러프컷 테이블 host 패널              v03.01.05
+    │   ├── roughcut_state.py       ← roughcut_state 저장/복원 + EDL 재계산     v03.01.11
+    │   ├── roughcut_table.py       ← 챕터 테이블/상태/안전도 필터/선택 상세    v03.01.13
+    │   ├── roughcut_detail.py      ← 선택 챕터 상세/컷 조정/안전도 근거 패널   v03.01.12
+    │   ├── roughcut_preview.py     ← timeline/local time 기반 반복 구간 프리뷰 v03.01.13
+    │   ├── roughcut_export.py      ← EDL/가이드/SRT/렌더 실행/복구/로그        v03.01.14
     │   └── roughcut_format.py      ← 컬럼/시간 표시 공통                      v03.00.26
     ├── project/                    ← 프로젝트/멀티클립 패널                  v03.00.26
-    ├── settings/                   ← AI/화자/갭/상세/출력 설정                v03.00.37
-    └── dialogs/                    ← 폴더 선택 / 내보내기 / 공용 메시지       v03.00.29
+    ├── settings/                   ← AI/화자 compact/갭/상세/출력 설정        v03.01.05
+    └── dialogs/                    ← 폴더 선택 / 내보내기 / 공용 메시지       v03.01.01
+        └── export_dialog.py        ← 자막 동영상 출력 / 기본값 저장·불러오기  v03.01.01
 
 ├── tests/
 │   ├── test_roughcut_engine1.py     ← PHASE2 roughcut 엔진/pipeline unittest   v03.00.26
@@ -165,7 +192,7 @@ ai_subtitle_studio/
 │   └── test_help_dialog.py          ← 도움말 콘텐츠/다이얼로그 unittest        v03.00.27
 
 ================================================================================
-[v03.00.43 핵심 변경]
+[v03.01.00 핵심 변경]
 ================================================================================
 
 1. 자동설정 저장 후 작업 화면 유지
@@ -472,9 +499,6 @@ ai_subtitle_studio/
 
 - RC-D1: 러프컷 상세 패널
 - RC-D2: 챕터별 keep/trim/remove/highlight/move 수동 변경
-- RC-D3: 컷 안전도 시각화 및 필터
-- RC-D4: 러프컷 preview 고도화
-- RC-D5: 렌더 실행 UI
 - RC-D6: 러프컷 결과 후보 버전 관리
 - R3: AI 모델 관리 시스템
 - R4: Windows 전기능 연동

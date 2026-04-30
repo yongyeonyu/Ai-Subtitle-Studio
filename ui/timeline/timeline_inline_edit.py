@@ -1,4 +1,4 @@
-# Version: 02.07.00
+# Version: 03.01.05
 # Phase: PHASE1-B
 """
 ui/timeline_inline_edit.py
@@ -334,7 +334,15 @@ class TimelineInlineEditMixin:
             get_logger().log("voice learn skipped: segment too short")
             return
 
-        default_name = f"spk{spk_idx}_voice"
+        owner_settings = {}
+        owner_for_settings = self.parent()
+        while owner_for_settings and not hasattr(owner_for_settings, "settings"):
+            owner_for_settings = owner_for_settings.parent()
+        if owner_for_settings is not None:
+            owner_settings = getattr(owner_for_settings, "settings", {}) or {}
+        speaker_name = str(owner_settings.get(f"spk{spk_idx}_name", "") or f"화자_{spk_idx}")
+        safe_name = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in speaker_name).strip("_") or f"speaker_{spk_idx}"
+        default_name = f"spk{spk_idx}_{safe_name}"
         name, ok = QInputDialog.getText(
             self,
             "화자 음성 저장",

@@ -1,4 +1,4 @@
-# Version: 02.03.03
+# Version: 03.01.00
 # Phase: PHASE1-B
 """
 ui/main/main_file_ops.py
@@ -224,11 +224,52 @@ class FileOpsMixin:
                     mgr._size_cache.clear()
                     mgr._in_flight.clear()
                 QMessageBox.information(self, "완료", "캐쉬 삭제 완료")
-                self.show_home()
+                self._restore_current_work_mode()
             except Exception as e:
                 QMessageBox.warning(self, "오류", f"삭제 중 오류: {e}")
 
     def _quick_exit(self):
+        self._backup_before_quick_exit()
         if self.backend:
             self.backend.stop()
         QApplication.quit()
+
+    def _restore_current_work_mode(self):
+        mode = str(getattr(self, "_current_work_mode", "edit") or "edit")
+        if mode == "roughcut" and hasattr(self, "_open_roughcut_helper"):
+            self._open_roughcut_helper()
+        elif mode == "shortform" and hasattr(self, "_open_shortform_maker"):
+            self._open_shortform_maker()
+        elif mode == "edit" and hasattr(self, "_open_editor_screen") and getattr(self, "_editor_widget", None) is not None:
+            self._open_editor_screen()
+
+    def _backup_before_quick_exit(self):
+        import datetime
+        import shutil
+
+        editor = getattr(self, "_editor_widget", None)
+        if editor is not None:
+            try:
+                if hasattr(editor, "_on_save"):
+                    editor._on_save(skip_auto_next=True)
+            except Exception as exc:
+                try:
+                    from logger import get_logger
+                    get_logger().log(f"⚠️ 종료 전 자막 저장 실패: {exc}")
+                except Exception:
+                    pass
+
+        project_path = str(getattr(self, "_current_project_path", "") or "")
+        if project_path and os.path.exists(project_path):
+            try:
+                backup_dir = os.path.join(os.path.dirname(project_path), "프로젝트백업")
+                os.makedirs(backup_dir, exist_ok=True)
+                stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                base, ext = os.path.splitext(os.path.basename(project_path))
+                shutil.copy2(project_path, os.path.join(backup_dir, f"{base}_{stamp}{ext or '.json'}"))
+            except Exception as exc:
+                try:
+                    from logger import get_logger
+                    get_logger().log(f"⚠️ 종료 전 프로젝트 백업 실패: {exc}")
+                except Exception:
+                    pass

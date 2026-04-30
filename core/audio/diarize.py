@@ -1,4 +1,4 @@
-# Version: 02.03.02
+# Version: 03.01.05
 # Phase: PHASE1-B
 """
 diarize.py - AI 화자 분리 (SpeechBrain 엔진 적용 완료)
@@ -133,7 +133,18 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
         ref_emb = None
         try:
             from core.settings import load_settings
-            ref_disabled = bool(load_settings().get("spk1_voice_disabled", False))
+            settings = load_settings()
+            ref_disabled = bool(settings.get("spk1_voice_disabled", False))
+            configured = str(settings.get("spk1_voice_file", "") or "").strip()
+            if configured:
+                candidate = os.path.join(_project_root, "voice_data", configured)
+                if os.path.exists(candidate):
+                    ref_file = candidate
+            elif not os.path.exists(ref_file):
+                import glob
+                candidates = sorted(glob.glob(os.path.join(_project_root, "voice_data", "spk1_*.wav")))
+                if candidates:
+                    ref_file = candidates[0]
         except Exception:
             ref_disabled = False
         if ref_disabled:

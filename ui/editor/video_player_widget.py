@@ -1,4 +1,4 @@
-# Version: 03.00.30
+# Version: 03.01.00
 # Phase: PHASE1-D
 """
 ui/video_player_widget.py - PyQt6 비디오 플레이어
@@ -287,6 +287,7 @@ class VideoPlayerWidget(QWidget):
         self._proxy_original_path: str = ""
         self._proxy_playback_path: str = ""
         self._deferred_proxy_switch: str | None = None
+        self._source_aspect: float = 16 / 9
 
         self.media_player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -378,7 +379,7 @@ class VideoPlayerWidget(QWidget):
         self.thumb_label = ThumbnailLabel()
         self.video_stack.addWidget(self.thumb_label)
 
-        self.sub_label = SubtitleLabel(self.video_widget.viewport())
+        self.sub_label = SubtitleLabel(self.video_container)
         self.sub_label.raise_()
 
         layout.addWidget(self.video_container, stretch=1)
@@ -425,12 +426,29 @@ class VideoPlayerWidget(QWidget):
         rect = self.video_container.rect()
         self.video_stack.setGeometry(rect)
         try:
-            self.sub_label.setParent(self.video_widget.viewport())
-            self.sub_label.setGeometry(self.video_widget.viewport().rect())
+            self.sub_label.setParent(self.video_container)
+            self.sub_label.setGeometry(self._displayed_video_rect(rect))
         except Exception:
             self.sub_label.setParent(self.video_container)
             self.sub_label.setGeometry(rect)
         self.sub_label.raise_()
+
+    def _displayed_video_rect(self, bounds):
+        aspect = max(0.01, float(getattr(self, "_source_aspect", 16 / 9) or (16 / 9)))
+        bw = max(1, int(bounds.width()))
+        bh = max(1, int(bounds.height()))
+        box_aspect = bw / max(1, bh)
+        if box_aspect > aspect:
+            h = bh
+            w = int(h * aspect)
+            x = int((bw - w) / 2)
+            y = 0
+        else:
+            w = bw
+            h = int(w / aspect)
+            x = 0
+            y = int((bh - h) / 2)
+        return QRectF(x, y, max(1, w), max(1, h)).toRect()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -578,6 +596,14 @@ class VideoPlayerWidget(QWidget):
             self._pending_segments = list(self.segments)
         if os.path.exists(path):
             self._current_source_path = path
+            try:
+                from core.media_info import probe_media
+                info = probe_media(path)
+                w = float(info.get("width", 0) or 0)
+                h = float(info.get("height", 0) or 0)
+                self._source_aspect = (w / h) if w > 0 and h > 0 else (16 / 9)
+            except Exception:
+                self._source_aspect = 16 / 9
             playback_path = self._playback_path_for(path)
             self._pending_seek_sec = self._pending_seek_sec if self._pending_seek_sec is not None else 0.0
             self._source_ready = False
@@ -797,6 +823,7 @@ class VideoPlayerWidget(QWidget):
         self.media_player.setPosition(int(sec * 1000))
         if getattr(self, 'has_vocal_track', False):
             self.vocal_player.setPosition(int(sec * 1000))
+        self._refresh_provider_segments(force=True)
         self._refresh_subtitle_now()
 
     def seek(self, sec: float):
@@ -807,6 +834,7 @@ class VideoPlayerWidget(QWidget):
         self.media_player.setPosition(int(sec * 1000))
         if getattr(self, 'has_vocal_track', False):
             self.vocal_player.setPosition(int(sec * 1000))
+        self._refresh_provider_segments(force=True)
         self._refresh_subtitle_now()
 
 

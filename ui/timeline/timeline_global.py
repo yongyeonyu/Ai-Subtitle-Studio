@@ -1,4 +1,4 @@
-# Version: 03.00.23
+# Version: 03.01.06
 # Phase: PHASE1-D
 """
 ui/timeline_global.py
@@ -10,6 +10,7 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 import config
+from ui.timeline.timeline_analysis import analysis_markers_for_widget
 
 
 class GlobalCanvas(QWidget):
@@ -94,11 +95,32 @@ class GlobalCanvas(QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor("#111111"))
+        p.fillRect(self.rect(), QColor("#0B1115"))
 
         w = self.width()
         mid_y = self.height() // 2
         total = self.total_duration
+
+        markers = analysis_markers_for_widget(
+            self,
+            list(getattr(self, "segments", []) or []),
+            list(getattr(self, "vad_segments", []) or []),
+            [],
+            float(total or 0.0),
+        )
+
+        if total > 0 and markers:
+            sc = w / max(0.001, total)
+            p.setPen(Qt.PenStyle.NoPen)
+            for marker in sorted(markers, key=lambda item: int(item.get("priority", 0) or 0)):
+                start = max(0.0, float(marker.get("start", 0.0) or 0.0))
+                end = max(start, float(marker.get("end", start) or start))
+                x = int(start * sc)
+                sw = max(1, int((end - start) * sc))
+                color = QColor(str(marker.get("color", "#8B949E")))
+                color.setAlpha(110 if int(marker.get("priority", 0) or 0) < 80 else 155)
+                p.setBrush(color)
+                p.drawRect(QRect(x, 3, sw, self.height() - 6))
 
         if self._waveform is not None and len(self._waveform) > 0:
             wf_len = len(self._waveform)
@@ -118,9 +140,9 @@ class GlobalCanvas(QWidget):
                     amp = float(self._waveform[idx])
                     h = max(1, int(amp * 14))
                     if speech_mask[idx]:
-                        p.setPen(QPen(QColor(100, 220, 255), 1))   # 파란색 (음성)
+                        p.setPen(QPen(QColor(130, 205, 235, 150), 1))
                     else:
-                        p.setPen(QPen(QColor("#555555"), 1))        # 회색 (무음)
+                        p.setPen(QPen(QColor(85, 92, 98, 105), 1))
                     p.drawLine(i, mid_y - h, i, mid_y + h)
 
         if total <= 0:
@@ -128,15 +150,6 @@ class GlobalCanvas(QWidget):
             p.end()
             return
         sc = w / total
-
-        # ✅ VAD 그린존 오버레이
-        if self.vad_segments:
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(74, 255, 128, 40))
-            for vs in self.vad_segments:
-                vx = int(vs["start"] * sc)
-                vw = max(1, int((vs["end"] - vs["start"]) * sc))
-                p.drawRect(vx, 0, vw, self.height())
 
         # ✅ Whisper 옐로우존
         whisper_sec = getattr(self, '_whisper_progress_sec', 0.0)

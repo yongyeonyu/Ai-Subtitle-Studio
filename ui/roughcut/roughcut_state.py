@@ -1,4 +1,4 @@
-# Version: 03.00.26
+# Version: 03.01.11
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -6,9 +6,16 @@ import json
 import os
 from dataclasses import asdict, replace
 
-from core.project.project_context import project_media_files, project_mode, project_segments_to_editor, segment_signature
+from core.project.project_context import (
+    project_clip_boundaries,
+    project_media_files,
+    project_mode,
+    project_segments_to_editor,
+    segment_signature,
+)
 from core.project.project_manager import save_project
 from core.roughcut import (
+    build_edl_segments,
     build_markdown_guide,
     map_edl_segments_to_clip_sources,
     roughcut_result_from_dict,
@@ -104,6 +111,7 @@ class RoughcutStateMixin:
 
     def _roughcut_state_payload(self) -> dict:
         result = self._result
+        result = self._result_with_user_edits(result)
         return {
             "schema": "ai_subtitle_studio.roughcut_state.v1",
             "source_signature": self._source_signature,
@@ -162,6 +170,15 @@ class RoughcutStateMixin:
         boundaries = list(getattr(owner, "_multiclip_boundaries", []) or []) if owner is not None else []
         if boundaries:
             return boundaries
+        project_path = self._project_path()
+        if project_path and os.path.exists(project_path):
+            try:
+                with open(project_path, "r", encoding="utf-8") as f:
+                    boundaries = project_clip_boundaries(json.load(f))
+                if boundaries:
+                    return boundaries
+            except Exception:
+                pass
         media_path = self._media_path()
         if not media_path:
             return []
@@ -179,6 +196,60 @@ class RoughcutStateMixin:
             return result
         guide = build_markdown_guide(result.chapters, result.edit_decisions, mapped)
         return replace(result, edl_segments=tuple(mapped), guide_markdown=guide)
+
+    def _result_with_user_edits(self, result=None):
+        result = result or self._result
+        if result is None or not self._user_edits:
+            return result
+        chapters = []
+        for chapter in result.chapters:
+            edit = self._user_edits.get(chapter.chapter_id, {})
+            title = str(edit.get("title") or chapter.title)
+            tags_text = str(edit.get("tags") or "")
+            tags = tuple(part.strip() for part in tags_text.split(",") if part.strip()) if tags_text else chapter.tags
+            chapters.append(replace(chapter, title=title, tags=tags))
+        decisions = []
+        for decision in result.edit_decisions:
+            edit = self._user_edits.get(decision.segment_id, {})
+            if not edit:
+                decisions.append(decision)
+                continue
+            action = str(edit.get("action") or decision.action)
+            source_start = self._edit_float(edit.get("trim_start"), decision.source_start)
+            source_end = self._edit_float(edit.get("trim_end"), decision.source_end)
+            if source_start is not None and source_end is not None and source_end <= source_start:
+                source_end = source_start + 0.05
+            reason = str(decision.reason or "")
+            edit_reason = str(edit.get("reason") or "")
+            if edit_reason and edit_reason not in reason:
+                reason = f"{reason}; {edit_reason}" if reason else edit_reason
+            decisions.append(
+                replace(
+                    decision,
+                    action=action if action in {"keep", "trim", "remove", "highlight", "move"} else decision.action,
+                    source_start=source_start,
+                    source_end=source_end,
+                    reason=reason,
+                )
+            )
+        base_edl = build_edl_segments(self._media_path(), decisions, chapters)
+        mapped_edl = map_edl_segments_to_clip_sources(base_edl, self._clip_boundaries()) or base_edl
+        guide = build_markdown_guide(chapters, decisions, mapped_edl)
+        return replace(
+            result,
+            chapters=tuple(chapters),
+            edit_decisions=tuple(decisions),
+            edl_segments=tuple(mapped_edl),
+            guide_markdown=guide,
+        )
+
+    def _edit_float(self, value, fallback):
+        try:
+            if value is None or value == "":
+                return fallback
+            return float(value)
+        except (TypeError, ValueError):
+            return fallback
 
     def refresh_from_editor(self, force_reanalyze: bool = False):
         segments = self._editor_segments()
@@ -213,7 +284,7 @@ class RoughcutStateMixin:
             media_duration=media_duration,
             source_path=media_path,
         )
-        self._result = self._with_project_edl_mapping(result, media_duration)
+        self._result = self._result_with_user_edits(self._with_project_edl_mapping(result, media_duration))
         self.source_lbl.setText(self._media_label())
         self._populate_result()
         self._persist_roughcut_state()

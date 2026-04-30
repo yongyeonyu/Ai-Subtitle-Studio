@@ -1,4 +1,4 @@
-# Version: 02.07.00
+# Version: 03.01.02
 # Phase: PHASE1-D
 """
 ui/editor_pipeline.py
@@ -83,14 +83,19 @@ class EditorPipelineMixin:
         except RuntimeError: pass
 
     def _stop_pipeline(self):
+        main_w = self.window()
+        if hasattr(main_w, "_stop_post_completion_idle_timer"):
+            main_w._stop_post_completion_idle_timer()
         self.sm.stop_processing("작업이 중지되었습니다.")
         if hasattr(self, '_spinner_timer'): self._spinner_timer.stop()
-        main_w = self.window()
         if hasattr(main_w, "backend") and main_w.backend:
             main_w.backend.stop()
         QTimer.singleShot(1000, self._safe_enable_start_btn)
 
     def _start_pipeline(self, is_restart=False):
+        main_w = self.window()
+        if hasattr(main_w, "_stop_post_completion_idle_timer"):
+            main_w._stop_post_completion_idle_timer()
         self._completion_handled = False
         if getattr(self, 'is_auto_start', False):
             self.sm.start_auto_mode()
@@ -107,6 +112,9 @@ class EditorPipelineMixin:
             self.sm.complete_ai()
         if hasattr(self, '_spinner_timer'): self._spinner_timer.stop()
         get_logger().log("✅ 자막 생성 완료 (EditorPipeline 확정)")
+        main_w = self.window()
+        if hasattr(main_w, "_start_post_completion_idle_timer"):
+            main_w._start_post_completion_idle_timer()
         # E fix: 자막 생성 완료 후 타임라인/캔버스 재동기화
         QTimer.singleShot(200, self._post_completion_sync)
 

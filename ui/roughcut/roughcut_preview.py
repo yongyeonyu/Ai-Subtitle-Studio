@@ -1,4 +1,4 @@
-# Version: 03.00.26
+# Version: 03.01.13
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -74,7 +74,18 @@ class RoughcutPreviewMixin:
             self._play_preview(self._preview_row, muted=True, hover=True)
             return
         if self._preview_deadline_ms <= 0 or current >= self._preview_end:
+            if self._preview_should_loop():
+                self._play_preview(self._preview_row, muted=False, hover=False)
+                return
             self._stop_preview()
+
+    def _preview_should_loop(self) -> bool:
+        if bool(getattr(self, "_preview_is_hover", False)):
+            return False
+        button = getattr(self, "btn_preview_loop", None)
+        if button is not None and hasattr(button, "isChecked"):
+            return bool(button.isChecked())
+        return bool(getattr(self, "_preview_loop_enabled", False))
 
     def _restore_player_volume(self):
         if self._restore_volume is None:

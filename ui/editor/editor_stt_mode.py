@@ -1,4 +1,4 @@
-# Version: 02.07.00
+# Version: 03.01.00
 # Phase: PHASE1-D
 """
 Editor STT follow-along mode.
@@ -25,6 +25,24 @@ class EditorSTTModeMixin:
     def _toggle_stt_mode(self):
         if getattr(self, "_stt_mode_enabled", False):
             self._set_stt_mode_enabled(False)
+            return
+        if getattr(self, "_is_ai_processing", False):
+            reply = QMessageBox.question(
+                self,
+                "STT 모드",
+                "STT모드를 시작하시겠습니까?\n현재 진행 중인 자막 생성 작업은 취소됩니다.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                if hasattr(self, "_stop_pipeline"):
+                    self._stop_pipeline()
+            except Exception as exc:
+                get_logger().log(f"⚠️ STT 전환 중 기존 작업 취소 실패: {exc}")
+            self._set_stt_mode_enabled(True)
+            QTimer.singleShot(300, self._start_stt_vad_detection)
             return
         self._set_stt_mode_enabled(True)
 

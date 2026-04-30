@@ -1,4 +1,4 @@
-# Version: 03.00.40
+# Version: 03.01.06
 # Phase: PHASE1-C
 """
 ui/timeline_paint.py
@@ -26,6 +26,7 @@ from ui.timeline.timeline_constants import (
     WAVE_HALF,
     WAVE_MID,
 )
+from ui.timeline.timeline_analysis import analysis_markers_for_widget
 
 
 class TimelinePaintMixin:
@@ -44,14 +45,22 @@ class TimelinePaintMixin:
         audio_mid = voice_mid + 28
         track_bottom = CANVAS_H - 8
 
+        def _speaker_settings():
+            owner = self.parent()
+            while owner and not hasattr(owner, "settings"):
+                owner = owner.parent()
+            return getattr(owner, "settings", {}) if owner is not None else {}
+
+        speaker_settings = _speaker_settings()
+
         def _speaker_color(seg):
             spk = str(seg.get("speaker", seg.get("spk_id", "")) or "")
             if spk.startswith("SPEAKER_"):
                 spk = spk.replace("SPEAKER_", "")
             palette = {
-                "00": "#579DFF",
-                "01": "#75C76B",
-                "02": "#FF9F2F",
+                str(speaker_settings.get("spk1_id", "00")): str(speaker_settings.get("spk1_color", "#579DFF")),
+                str(speaker_settings.get("spk2_id", "01")): str(speaker_settings.get("spk2_color", "#75C76B")),
+                str(speaker_settings.get("spk3_id", "02")): str(speaker_settings.get("spk3_color", "#FF9F2F")),
             }
             return QColor(palette.get(spk, "#8E8E93"))
 
@@ -60,8 +69,13 @@ class TimelinePaintMixin:
                 spk = str(raw or "")
                 if spk.startswith("SPEAKER_"):
                     spk = spk.replace("SPEAKER_", "")
-                if spk in ("00", "01", "02"):
-                    return f"화자{int(spk) + 1}"
+                mapping = {
+                    str(speaker_settings.get("spk1_id", "00")): str(speaker_settings.get("spk1_name", "") or "화자 1"),
+                    str(speaker_settings.get("spk2_id", "01")): str(speaker_settings.get("spk2_name", "") or "화자 2"),
+                    str(speaker_settings.get("spk3_id", "02")): str(speaker_settings.get("spk3_name", "") or "화자 3"),
+                }
+                if spk in mapping:
+                    return mapping[spk]
                 return fallback
 
             spk_list = list(seg.get("speaker_list", []) or [])
@@ -128,6 +142,47 @@ class TimelinePaintMixin:
                     p.drawLine(x, mid_y - h, x, mid_y + h)
             p.setPen(QPen(QColor(87, 157, 255, 80), 1))
             p.drawLine(max(0, clip.left()), mid_y, min(total_w, clip.right() + 1), mid_y)
+
+        def _draw_analysis_lane(mid_y):
+            lane_top = mid_y - 12
+            lane_h = 24
+            clip = event.rect()
+            x_start = max(0, clip.left())
+            x_end = min(total_w, clip.right() + 1)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor("#0B1418"))
+            p.drawRect(QRect(x_start, lane_top, max(1, x_end - x_start), lane_h))
+            p.setPen(QPen(QColor("#2D3942"), 1))
+            p.drawLine(x_start, mid_y, x_end, mid_y)
+
+            markers = analysis_markers_for_widget(
+                self,
+                list(getattr(self, "segments", []) or []),
+                list(getattr(self, "vad_segments", []) or []),
+                list(getattr(self, "gap_segments", []) or []),
+                float(getattr(self, "total_duration", 0.0) or 0.0),
+            )
+            markers.sort(key=lambda item: int(item.get("priority", 0) or 0))
+            for marker in markers:
+                start = max(0.0, float(marker.get("start", 0.0) or 0.0))
+                end = max(start, float(marker.get("end", start) or start))
+                x1 = self._x(start)
+                x2 = self._x(end)
+                if x2 < clip.left() or x1 > clip.right():
+                    continue
+                w = max(2, x2 - x1)
+                color = QColor(str(marker.get("color", "#8B949E")))
+                color.setAlpha(int(marker.get("alpha", 120) or 120))
+                border = QColor(str(marker.get("color", "#8B949E")))
+                border.setAlpha(220)
+                rect = QRectF(x1, lane_top + 3, w, lane_h - 6)
+                p.setBrush(color)
+                p.setPen(QPen(border, 1))
+                p.drawRoundedRect(rect, 3, 3)
+                if w >= 42:
+                    p.setPen(QColor("#F5F7FA"))
+                    p.setFont(QFont(config.FONT, 8, QFont.Weight.Bold))
+                    p.drawText(QRect(int(x1) + 4, lane_top + 2, int(w) - 8, lane_h - 4), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, str(marker.get("label", "")))
 
         p.fillRect(QRect(0, 0, total_w, CANVAS_H), QColor("#0F1518"))
 
@@ -257,7 +312,7 @@ class TimelinePaintMixin:
 
         label_font = QFont(config.FONT, 9, QFont.Weight.Bold)
         p.setFont(label_font)
-        for text, y in (("자막", subtitle_top + 20), ("화자", speaker_top + 15), ("음성 감지", voice_mid + 4), ("오디오", audio_mid + 4)):
+        for text, y in (("자막", subtitle_top + 20), ("화자", speaker_top + 15), ("음성 감지", voice_mid + 4), ("분석", audio_mid + 4)):
             p.setPen(QColor("#A9B0B7"))
             p.drawText(8, y, text)
 
@@ -363,7 +418,7 @@ class TimelinePaintMixin:
             for sx in self._snap_lines: p.drawLine(sx, SEG_TOP, sx, SEG_BOT)
 
         _draw_vad_voice_lane(voice_mid)
-        _draw_lane_wave(audio_mid, "#7BD88F", "#2F8F46", gain=0.85, alpha=165)
+        _draw_analysis_lane(audio_mid)
 
         for i in range(len(self.segments) - 1):
             s1 = self.segments[i]; s2 = self.segments[i + 1]

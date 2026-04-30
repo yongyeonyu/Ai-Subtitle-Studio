@@ -1,4 +1,4 @@
-# Version: 02.03.02
+# Version: 03.01.00
 # Phase: PHASE1-B
 """
 core/pipeline/single_pipeline.py
@@ -51,8 +51,10 @@ class SinglePipelineMixin:
         finally:
             self._active = False
             try:
-                if hasattr(self.ui, "request_show_home"):
-                    self.ui.request_show_home()
+                if hasattr(self.ui, "_auto_processing_active"):
+                    self.ui._auto_processing_active = False
+                if hasattr(self.ui, "_tick_home_watchdog_labels"):
+                    self.ui._tick_home_watchdog_labels()
             except Exception:
                 pass
 
@@ -108,9 +110,7 @@ class SinglePipelineMixin:
         if is_auto_mode:
             threading.Timer(0.05, on_start).start()
 
-        if not start_event.wait(timeout=600):
-            get_logger().log("⏱️ 시작 이벤트 대기 시간이 초과되었습니다 (600초) --> 새 동작이 없어 메인으로 복귀합니다.")
-            return
+        start_event.wait()
         if action_state[0] == "prev":
             self.ui.request_show_home()
             raise Exception("USER_PREV")

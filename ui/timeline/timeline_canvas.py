@@ -1,4 +1,4 @@
-# Version: 03.00.07
+# Version: 03.01.06
 # Phase: PHASE1-C
 """
 ui/timeline_canvas.py

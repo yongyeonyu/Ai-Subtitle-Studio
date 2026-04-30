@@ -1,4 +1,4 @@
-# Version: 03.00.32
+# Version: 03.01.05
 # Phase: PHASE1-D
 """
 ui/editor_actions.py
@@ -416,6 +416,8 @@ class EditorActionsMixin:
             _dm_save_settings(self.settings)
             if hasattr(self, '_update_highlighter_colors'):
                 self._update_highlighter_colors()
+            if hasattr(self, '_refresh_speaker_strip'):
+                self._refresh_speaker_strip()
 
     def _show_gap_settings(self):
         from ui.settings.settings_dialog import GapSettingsDialog

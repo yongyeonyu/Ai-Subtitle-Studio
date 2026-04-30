@@ -1,4 +1,4 @@
-# Version: 03.00.32
+# Version: 03.01.05
 # Phase: PHASE1-C
 """Editor widget and function-preserving PHASE1-C layout."""
 import re, os, sys, json, atexit, threading, shutil, time
@@ -191,7 +191,7 @@ class EditorWidget(
 
         self.save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
         self.save_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
-        self.save_shortcut.activated.connect(self._on_save)
+        self.save_shortcut.activated.connect(lambda: self._on_save(skip_auto_next=True))
 
         self.split_shortcut = QShortcut(QKeySequence("Ctrl+X"), self)
         self.split_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
@@ -273,11 +273,11 @@ class EditorWidget(
     # UI 빌드
     # ---------------------------------------------------------
     def _build_ui(self):
-        root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
+        root = QVBoxLayout(self); root.setContentsMargins(2, 2, 2, 2); root.setSpacing(2)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.splitter.setHandleWidth(1)
-        self.splitter.setStyleSheet("QSplitter::handle { background: #0F1518; width: 1px; }")
+        self.splitter.setHandleWidth(2)
+        self.splitter.setStyleSheet("QSplitter::handle { background: #0F1518; width: 2px; }")
         editor_wrap = QWidget(); editor_wrap.setMinimumWidth(260); editor_wrap.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
         ew_layout   = QVBoxLayout(editor_wrap); ew_layout.setContentsMargins(8, 8, 8, 8); ew_layout.setSpacing(6)
 
@@ -500,16 +500,28 @@ class EditorWidget(
 
     def _build_speaker_strip(self) -> QWidget:
         strip = QWidget()
+        self._speaker_strip = strip
         strip.setStyleSheet("background: #1B2429; border: 1px solid #2D3942; border-radius: 10px;")
         row = QHBoxLayout(strip)
+        self._speaker_strip_layout = row
         row.setContentsMargins(8, 5, 8, 5)
         row.setSpacing(6)
+        self._populate_speaker_strip(row)
+        return strip
+
+    def _populate_speaker_strip(self, row: QHBoxLayout):
+        while row.count():
+            item = row.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
         colors = ["#007AFF", "#34C759", "#FF9500"]
         max_spk = max(1, min(3, int(self.settings.get("max_speakers", 1) or 1)))
         for idx in range(1, max_spk + 1):
             color = self.settings.get(f"spk{idx}_color", colors[idx - 1])
-            btn = QPushButton(f"● 화자 {idx}")
-            btn.setToolTip(f"화자 {idx} 설정")
+            name = str(self.settings.get(f"spk{idx}_name", "") or f"화자 {idx}")
+            btn = QPushButton(f"● {name}")
+            btn.setToolTip(f"{name} 설정")
             btn.setStyleSheet(
                 "QPushButton { "
                 f"color: {color}; background: #0F1518; border: 1px solid #2D3942; "
@@ -523,7 +535,13 @@ class EditorWidget(
         add_btn.setStyleSheet(button_style("toolbar", font_size="12px", padding="5px 9px"))
         add_btn.clicked.connect(self._show_speaker_settings)
         row.addWidget(add_btn)
-        return strip
+
+    def _refresh_speaker_strip(self):
+        row = getattr(self, "_speaker_strip_layout", None)
+        if row is not None:
+            self._populate_speaker_strip(row)
+        if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
+            self.timeline.canvas.update()
 
     def _build_buttons(self) -> QWidget:
         w = QWidget(); w.setFixedHeight(72); w.setStyleSheet("background: #151C20; border-top: 1px solid #2D3942;")
@@ -561,7 +579,7 @@ class EditorWidget(
         self.btn_exp   = self._make_action_toolbutton("자막출력", "export")
         self._bot_btns = [
             (self.btn_start, "🧠 시작",    "시작", self._on_start_clicked),
-            (self.btn_save,  "💾 저장",    "저장", self._on_save),
+            (self.btn_save,  "💾 저장",    "저장", lambda: self._on_save(skip_auto_next=True)),
             (self.btn_exp,   "🎥 자막출력", "출력", self._show_export_dialog),
         ]
         for btn, _, _, slot in self._bot_btns:

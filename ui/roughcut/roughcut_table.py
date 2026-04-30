@@ -1,6 +1,8 @@
-# Version: 03.00.26
+# Version: 03.01.13
 # Phase: PHASE2
 from __future__ import annotations
+
+import os
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTableWidgetItem
@@ -54,10 +56,13 @@ class RoughcutTableMixin:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 if col == 5:
                     self._style_status_item(item, status)
+                elif col == 7 and decision is not None:
+                    self._style_safety_item(item, decision.safety)
                 self.table.setItem(row, col, item)
         self._updating_table = False
         self.table.resizeRowsToContents()
         self.guide_text.setPlainText(result.guide_markdown)
+        self._apply_safety_filter()
         if result.chapters:
             self.table.selectRow(0)
             self._preview_row_data(0)
@@ -86,6 +91,17 @@ class RoughcutTableMixin:
         else:
             item.setForeground(Qt.GlobalColor.green)
 
+    def _style_safety_item(self, item: QTableWidgetItem, safety: str) -> None:
+        if safety == "risky":
+            item.setForeground(Qt.GlobalColor.red)
+            item.setToolTip("risky: inside phrase 또는 안전한 boundary 없음")
+        elif safety == "ideal":
+            item.setForeground(Qt.GlobalColor.green)
+            item.setToolTip("ideal: 충분한 gap boundary")
+        else:
+            item.setForeground(Qt.GlobalColor.yellow)
+            item.setToolTip("acceptable: phrase boundary 또는 짧은 gap/edge")
+
     def _set_empty_state(self):
         self._updating_table = True
         for label in self.metric_labels:
@@ -99,6 +115,16 @@ class RoughcutTableMixin:
         self.preview_title_lbl.setText("세그먼트 선택 대기")
         self.preview_time_lbl.setText("-")
         self.preview_summary_lbl.setText("러프컷 분석 결과 없음")
+        self.preview_action_lbl.setText("판단: -")
+        self.preview_safety_lbl.setText("안전: -")
+        self.preview_trim_lbl.setText("Trim: -")
+        self.preview_role_lbl.setText("Role: -")
+        self.preview_source_lbl.setText("Clip: -")
+        self.preview_reason_lbl.setText("컷 근거 대기")
+        self.render_status_lbl.setText("렌더 대기")
+        self._set_detail_empty()
+        if hasattr(self, "safety_filter_combo"):
+            self.safety_filter_combo.setCurrentText("전체")
 
     def _activate_editor(self):
         owner = self.owner
@@ -122,6 +148,12 @@ class RoughcutTableMixin:
             self._style_status_item(status_item, "사용자 수정됨")
             self._updating_table = False
         self._preview_row_data(row)
+        try:
+            edited_result = self._result_with_user_edits(self._result)
+            if edited_result is not None:
+                self.guide_text.setPlainText(edited_result.guide_markdown)
+        except Exception:
+            pass
         self._persist_roughcut_state()
 
     def _on_table_item_entered(self, item: QTableWidgetItem):
@@ -155,15 +187,97 @@ class RoughcutTableMixin:
                 return segment
         return None
 
+    def _decision_for_row(self, row: int):
+        if self._result is None or row < 0 or row >= len(self._row_chapter_ids):
+            return None
+        chapter_id = self._row_chapter_ids[row]
+        for decision in self._result.edit_decisions:
+            if decision.segment_id == chapter_id:
+                return decision
+        return None
+
     def _preview_row_data(self, row: int):
         chapter = self._chapter_for_row(row)
         if chapter is None:
             return
         self._preview_row = row
         edit = self._user_edits.get(chapter.chapter_id, {})
+        decision = self._decision_for_row(row)
+        edl_segment = self._edl_for_row(row)
         title = edit.get("title") or chapter.title or chapter.chapter_id
         midpoint = (chapter.start + chapter.end) / 2.0
         self.preview_thumb_lbl.setText(f"{fmt_time(midpoint)}")
         self.preview_title_lbl.setText(title)
         self.preview_time_lbl.setText(f"{fmt_time(chapter.start)} - {fmt_time(chapter.end)}")
         self.preview_summary_lbl.setText(chapter.summary or "요약 없음")
+        action = decision.action if decision else "-"
+        safety = decision.safety if decision else "-"
+        role = chapter.story_role or "-"
+        if decision is not None and decision.source_start is not None and decision.source_end is not None:
+            trim = f"{fmt_time(decision.source_start)}-{fmt_time(decision.source_end)}"
+        elif edl_segment is not None:
+            trim = f"{fmt_time(edl_segment.source_start)}-{fmt_time(edl_segment.source_end)}"
+        else:
+            trim = "-"
+        reason = decision.reason if decision and decision.reason else chapter.story_reason or "컷 근거 없음"
+        output = (
+            f" / 출력 {fmt_time(edl_segment.output_start)}-{fmt_time(edl_segment.output_end)}"
+            if edl_segment is not None
+            else ""
+        )
+        self.preview_action_lbl.setText(f"판단: {action}")
+        self.preview_safety_lbl.setText(f"안전: {safety}")
+        self.preview_trim_lbl.setText(f"Trim: {trim}")
+        self.preview_role_lbl.setText(f"Role: {role}")
+        self.preview_source_lbl.setText(f"Clip: {self._source_label_for_edl(edl_segment)}")
+        self.preview_safety_lbl.setStyleSheet(self._safety_badge_style(safety))
+        self.preview_reason_lbl.setText(f"{self._format_safety_reason(reason)}{output}")
+        self._update_detail_panel(row, chapter, decision, edl_segment)
+
+    def _source_label_for_edl(self, edl_segment) -> str:
+        if edl_segment is None:
+            return "-"
+        name = os.path.basename(str(getattr(edl_segment, "source_path", "") or ""))
+        clip_index = getattr(edl_segment, "clip_index", None)
+        if clip_index is not None:
+            clip_no = int(clip_index) + 1
+            return f"{clip_no} / {name or 'clip'}"
+        return name or "단일"
+
+    def _apply_safety_filter(self) -> None:
+        if self._result is None or not hasattr(self, "table"):
+            return
+        selected = "전체"
+        if hasattr(self, "safety_filter_combo"):
+            selected = self.safety_filter_combo.currentText() or "전체"
+        decisions = {decision.segment_id: decision for decision in self._result.edit_decisions}
+        first_visible = -1
+        for row, chapter_id in enumerate(self._row_chapter_ids):
+            decision = decisions.get(chapter_id)
+            safety = decision.safety if decision is not None else ""
+            hidden = selected != "전체" and safety != selected
+            self.table.setRowHidden(row, hidden)
+            if not hidden and first_visible < 0:
+                first_visible = row
+        current_row = self.table.currentRow()
+        if first_visible >= 0 and (current_row < 0 or self.table.isRowHidden(current_row)):
+            self.table.selectRow(first_visible)
+            self._preview_row_data(first_visible)
+
+    def _safety_badge_style(self, safety: str) -> str:
+        color = "#DCE3EA"
+        border = "#2D3942"
+        if safety == "risky":
+            color = "#FFB1AB"
+            border = "#5B2528"
+        elif safety == "ideal":
+            color = "#9AF0B0"
+            border = "#2B5A3A"
+        elif safety == "acceptable":
+            color = "#FFD68A"
+            border = "#6A4B18"
+        return (
+            "QLabel { background: #10161A; "
+            f"color: {color}; border: 1px solid {border}; "
+            "border-radius: 6px; padding: 4px 6px; font-size: 10px; font-weight: 800; }"
+        )

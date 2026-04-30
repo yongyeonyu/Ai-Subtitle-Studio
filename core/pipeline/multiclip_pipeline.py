@@ -1,4 +1,4 @@
-# Version: 02.06.00
+# Version: 03.01.00
 # Phase: PHASE1-B
 """
 core/pipeline/multiclip_pipeline.py
@@ -456,10 +456,9 @@ class MulticlipPipelineMixin:
             if hasattr(self.ui, "_sig_load_multiclip_waveform"):
                 self.ui._sig_load_multiclip_waveform.emit(clip_boundaries)
 
-            # 시작 버튼 대기
-            if not start_event.wait(timeout=600):
-                get_logger().log("⏱️ 시작 이벤트 대기 시간이 초과되었습니다 (600초) --> 새 동작이 없어 메인으로 복귀합니다.")
-                return
+            # 시작 버튼 대기: 편집 중 마우스/키보드 조작이나 프리뷰 확인만으로 홈으로
+            # 이동하지 않도록 시작 전 대기는 시간 제한을 두지 않는다.
+            start_event.wait()
 
             if action_state[0] in ("prev", "exit"):
                 self.ui.request_show_home()
