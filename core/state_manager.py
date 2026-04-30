@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 03.01.33
 # Phase: PHASE1-B
 """
 core/state_manager.py
@@ -85,8 +85,19 @@ class SubtitleStateManager(QObject):
     def update_progress(self, current, total, percent, custom_msg=""):
         if self.state != self.ST_PROC:
             return
-        self._status_msg = custom_msg if custom_msg else f"처리중 ({current:02d}/{total:02d}) / {percent}%"
+        if custom_msg:
+            self._status_msg = custom_msg
+        elif not self._is_stage_status_active():
+            self._status_msg = f"처리중 ({current:02d}/{total:02d}) / {percent}%"
         self._emit()
+
+    def _is_stage_status_active(self):
+        text = str(self._status_msg or "")
+        text_l = text.lower()
+        return any(
+            key in text_l or key in text
+            for key in ("vad", "whisper", "llm", "오디오", "추출", "인식", "자막 생성", "최적화")
+        )
 
     def complete_ai(self):
         self.state = self.ST_COMP

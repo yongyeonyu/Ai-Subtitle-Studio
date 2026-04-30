@@ -1,4 +1,4 @@
-# Version: 03.01.25
+# Version: 03.01.33
 # Phase: PHASE2
 """Editor widget and function-preserving PHASE1-C layout."""
 import re, os, sys, json, atexit, threading, shutil, time
@@ -96,7 +96,7 @@ class EditorWidget(
 
         self._auto_save_timer = QTimer(self)
         self._auto_save_timer.timeout.connect(self._on_auto_save)
-        self._auto_save_timer.start(30000)
+        self._auto_save_timer.start(60000)
 
         self._status_anim_idx = 0
         self._status_frames = {
@@ -267,9 +267,16 @@ class EditorWidget(
     def _on_auto_save(self):
         if self.sm.is_locked: return
         if self.sm.is_dirty:
-            self.sig_auto_save.emit(self._get_current_segments())
+            segs = self._get_current_segments()
+            if not segs:
+                return
             self.sm.start_autosave()
-            QTimer.singleShot(2000, self.sm.complete_save)
+            try:
+                self.sig_auto_save.emit(segs)
+            except Exception as e:
+                get_logger().log(f"⚠️ 자동 저장 실패: {e}")
+                return
+            self._on_save(skip_auto_next=True)
 
     # ---------------------------------------------------------
     # UI 빌드

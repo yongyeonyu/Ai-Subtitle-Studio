@@ -1,5 +1,5 @@
 <!--
-Document-Version: 03.01.25
+Document-Version: 03.02.00
 Phase: PHASE2
 Last-Updated: 2026-04-30
 Updated-By: Codex with 대표님
@@ -10,15 +10,15 @@ AI Subtitle Studio — 프로젝트 구조 및 버전 관리 문서
 생성일: 2026-04-20
 최종 수정: 2026-04-30
 Phase: PHASE2
-App Version: 03.01.25
+App Version: 03.02.00
 구조 문서 기준: File_structure.txt
 비고: STRUCTURE.txt는 삭제하고 본 문서로 단일화. 본 문서는 구조 색인만 유지
 ================================================================================
 
 ai_subtitle_studio/
-├── main.py                         ← 프로그램 실행 진입점                    v02.03.00
+├── main.py                         ← 프로그램 실행 진입점 / Qt cache tuning  v03.01.37
 ├── main.bat                        ← Windows 실행 배치 파일
-├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v03.01.25
+├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION/roughcut 기본 설정 v03.02.00
 ├── logger.py                       ← 시스템 로그 기록 및 UI 연동             v02.03.00
 ├── README.md                       ← GitHub 한글 프로젝트 소개 / 설치·실행 가이드
 ├── AGENTS.md                       ← 로컬 전용 개발 가이드 / GitHub 제외
@@ -29,7 +29,7 @@ ai_subtitle_studio/
 ├── RELEASE_v02.04.00.md            ← PHASE1-C Apple UI 릴리즈 노트
 ├── RELEASE_v02.06.00.md            ← P6 멀티클립 성능/안정화 릴리즈 노트
 ├── RELEASE_v02.07.00.md            ← PHASE1-D STT/UI/화자 릴리즈 노트
-├── RELEASE_v03.00.00.md            ← PHASE2 러프컷 엔진 1단계 릴리즈 노트
+├── RELEASE_v03.00.00.md            ← PHASE2 v03.x 릴리즈 노트 / 최신 v03.02.00
 ├── File_structure.txt              ← 현재 구조 문서
 │
 ├── dataset/
@@ -49,8 +49,9 @@ ai_subtitle_studio/
 │
 ├── core/
 │   ├── settings.py                 ← 설정 로딩/저장/model_key 통합            v02.03.00
-│   ├── media_info.py               ← ffprobe 미디어 정보 유틸                 v03.01.19
-│   ├── state_manager.py            ← FSM 상태 머신                            v02.03.00
+│   ├── media_info.py               ← ffprobe 미디어 정보 유틸 + 메모리/디스크 cache v03.01.37
+│   ├── performance.py              ← hardware profile/worker bound/cache tuning helper v03.01.37
+│   ├── state_manager.py            ← FSM 상태 머신 / 단계 상태 보존            v03.01.33
 │   ├── work_mode.py                ← 에디터/러프컷/숏폼 화면 모드 정규화       v03.01.15
 │   ├── model_manager.py            ← ModelManager + 모델 설치/삭제/검증/OS 필터/LLM 스캔 v03.01.18
 │   ├── platform_compat.py          ← Windows-safe subprocess/ffmpeg 실행 helper v03.01.19
@@ -78,7 +79,7 @@ ai_subtitle_studio/
 │   │   └── srt_writer.py           ← SRT 저장 / 화자 SRT / STT 미완료 제외      v02.07.00
 │   │
 │   ├── audio/
-│   │   ├── media_processor.py      ← 오디오 추출 + VAD + Whisper overlap/dedupe v03.00.19
+│   │   ├── media_processor.py      ← 오디오 추출 + VAD + Whisper overlap/dedupe/adaptive workers v03.01.37
 │   │   ├── stt_quality_presets.py  ← 빠른/균형/정밀 자막 정확도 프리셋         v03.00.19
 │   │   ├── whisper_mlx.py          ← macOS Whisper MLX persistent worker      v02.03.03
 │   │   ├── whisper_faster.py       ← Windows faster-whisper client            v02.03.00
@@ -89,28 +90,38 @@ ai_subtitle_studio/
 │   │   └── diarize.py              ← 화자 분리 및 매핑/화자명 voice ref       v03.01.05
 │   │
 │   ├── pipeline/
-│   │   ├── backend_core.py         ← 단일/공통 파이프라인 진입                v02.03.00
+│   │   ├── backend_core.py         ← 단일/공통 파이프라인 진입 + 병렬 ETA probe v03.01.37
 │   │   ├── single_pipeline.py      ← 단일 파일 자막 생성/STT 시작 대기 안정화  v03.01.00
-│   │   ├── multiclip_pipeline.py   ← 멀티클립 STT/LLM 병렬 파이프라인/reuse    v03.01.00
+│   │   ├── multiclip_pipeline.py   ← 멀티클립 STT/LLM 병렬 파이프라인/reuse/clip 순서 append/병렬 probe v03.01.37
 │   │   └── pipeline_helpers.py     ← 백업/저장/렌더/prefetch 공통             v02.07.00
 │   │
-│   ├── roughcut/                   ← PHASE2 로컬 러프컷 분석 엔진              🆕 v03.00.00
-│   │   ├── __init__.py             ← 러프컷 공개 API export
-│   │   ├── models.py               ← Subtitle/RoughCut/Storyboard/EDL 모델
+│   ├── roughcut/                   ← PHASE2 로컬 러프컷 분석 엔진              v03.01.32
+│   │   ├── __init__.py             ← 러프컷 공개 API export                  v03.01.31
+│   │   ├── models.py               ← Subtitle/RoughCut v2/TitleSuggestion/EDL 모델 v03.01.30
 │   │   ├── gap_detector.py         ← 자막 없는 구간 탐지
 │   │   ├── transcript_packer.py    ← 자막 phrase 압축 / LLM 입력 text
 │   │   ├── scene_change_detector.py← 픽셀 차이 기반 scene cut 감지
 │   │   ├── frame_sampler.py        ← 프레임 timestamp/ffmpeg command helper
-│   │   ├── topic_detector.py       ← 키워드/topic shift 로컬 detector
+│   │   ├── topic_detector.py       ← 키워드/topic shift 로컬 detector/API alias v03.01.26
 │   │   ├── semantic_chunker.py     ← phrase 기반 semantic chunk/chapter seed
-│   │   ├── story_mapper.py         ← 챕터 기/승/전/결 story role mapper        🆕 v03.00.03
-│   │   ├── edit_decision_engine.py ← cut safety + edit decision engine        🆕 v03.00.11
-│   │   ├── edl_generator.py        ← EDL JSON / 멀티클립 source 매핑          v03.00.26
-│   │   ├── guide_writer.py         ← Markdown 편집 가이드 writer              🆕 v03.00.13
-│   │   ├── pipeline.py             ← run_roughcut_pipeline 단일 진입점         🆕 v03.00.14
-│   │   ├── renderer_skeleton.py    ← ffmpeg concat/burn-in command skeleton   🆕 v03.00.17
-│   │   ├── render_executor.py      ← EDL 기반 ffmpeg 실행/dry-run helper      🆕 v03.00.17
-│   │   └── subtitle_retimer.py     ← EDL timeline 기준 자막 retime/SRT 출력   v03.00.26
+│   │   ├── chapter_segmenter.py    ← build_chapters 분할/병합/중요도 정책 wrapper v03.01.27
+│   │   ├── story_mapper.py         ← 챕터 기/승/전/결 story role mapper/API alias v03.01.26
+│   │   ├── edit_decision_engine.py ← cut safety + CutPoint/edit decision engine v03.01.26
+│   │   ├── edl_generator.py        ← EDL JSON / v2 metadata / 멀티클립 source 매핑 v03.01.32
+│   │   ├── guide_writer.py         ← Markdown guide 컷 포인트/중분류 표 writer v03.01.32
+│   │   ├── pipeline.py             ← run_roughcut_pipeline major/boundary/title/v2 산출물 v03.01.30
+│   │   ├── roughcut_pipeline.py    ← 첨부 문서 pipeline import 호환 wrapper    v03.01.26
+│   │   ├── roughcut_settings.py    ← PAGE 3-B roughcut 설정 기본값 merge helper v03.01.28
+│   │   ├── roughcut_prompts.py     ← roughcut LLM action prompt/schema helper v03.01.28
+│   │   ├── roughcut_llm.py         ← roughcut LLM action runner/fallback contract v03.01.28
+│   │   ├── title_suggester.py      ← 추천 제목 LLM action/local fallback helper v03.01.30
+│   │   ├── thumbnail_cache.py      ← project/temp 기반 roughcut thumbnail cache helper v03.01.31
+│   │   ├── major_segmenter.py      ← PAGE 3-B 중분류/소분류 코드 생성 helper  v03.01.29
+│   │   ├── boundary_refiner.py     ← gap/scene/phrase 기반 경계 검증 helper   v03.01.29
+│   │   ├── renderer.py             ← render_from_edl 공개 wrapper             v03.01.26
+│   │   ├── renderer_skeleton.py    ← ffmpeg concat/burn-in command + segment manifest v03.01.32
+│   │   ├── render_executor.py      ← EDL 기반 Windows-safe ffmpeg 실행/dry-run manifest v03.01.32
+│   │   └── subtitle_retimer.py     ← EDL timeline 기준 자막 retime/SRT/v2 metadata 출력 v03.01.32
 │   │
 │   ├── subtitle_quality/           ← 자막 품질 검사/자동 교정 기반 패키지      v03.01.25
 │   │   ├── __init__.py             ← 자막 품질 공개 API export
@@ -128,17 +139,17 @@ ai_subtitle_studio/
 │   │   └── quality_pipeline.py     ← 검사/자동교정/후보 summary pipeline
 │   │
 │   └── project/
-│       ├── project_manager.py      ← 프로젝트 생성/로드/저장 + roughcut_state v03.00.26
+│       ├── project_manager.py      ← 프로젝트 생성/로드/저장 + cached media duration v03.01.37
 │       ├── project_context.py      ← editor/roughcut/quality state JSON adapter v03.01.25
-│       ├── project_phase1b.py      ← 프로젝트 저장 보강 / active mode 유지    v03.00.26
+│       ├── project_phase1b.py      ← 프로젝트 저장 보강 / active mode 유지 / missing zoom 화면 맞춤 v03.01.35
 │       ├── project_snapshot.py     ← 프로젝트 snapshot schema + state 분리     v03.00.26
 │       └── data_manager.py         ← 설정/교정/memory 데이터 I/O             v03.01.25
 │
 └── ui/
-    ├── home_ui.py                  ← 통합 대시보드/자동처리/러프컷 전환       v03.01.07
-    ├── menu_bar.py                 ← 전역 메뉴바 + 상태 rail 세분화            v03.01.05
+    ├── home_ui.py                  ← 통합 대시보드/저장 상태 원 blink/countdown/자동처리 전환 v03.01.35
+    ├── menu_bar.py                 ← 전역 메뉴바 + roughcut routing/초록 상태 rail v03.01.33
     ├── style.py                    ← 공용 다크 스타일 + SVG icon fallback     v03.01.08
-    ├── queue_widget.py             ← 큐 테이블 + 하단 패널 전환               v03.00.34
+    ├── queue_widget.py             ← 큐 테이블 + 하단 패널 전환/상태 rail 동기화 v03.01.33
     ├── cloud_ui.py                 ← iCloud/NAS 자동처리 UI/Watchdog 대기     v03.01.00
     │
     ├── sidebar/
@@ -154,26 +165,27 @@ ai_subtitle_studio/
     │   └── queue_panel_widget.py   ← 하단 큐 테이블/헤더 패널                  v03.01.04
     │
     ├── main/
-    │   ├── main_window.py          ← 메인 통합 화면 본체 + quick action/필수 모델 체크 v03.01.18
+    │   ├── main_window.py          ← 메인 통합 화면 본체 + post-completion idle countdown v03.01.35
     │   ├── bottom_work_panel.py    ← 하단 터미널/큐/러프컷 패널 조립           v03.01.04
     │   ├── workspace_stack.py      ← 중앙 workspace stack shell               v03.01.04
     │   ├── main_signals.py         ← 시그널/슬롯 핸들러 + 모델/LLM 시작 확인   v03.01.18
     │   └── main_file_ops.py        ← 파일/폴더/캐시/종료 백업 처리            v03.01.00
     │
     ├── editor/
-    │   ├── editor_widget.py        ← 에디터 UI / 품질 검사 버튼·요약·후보 연결 v03.01.25
+    │   ├── editor_widget.py        ← 에디터 UI / 자동저장 1분·저장 상태 동기화 v03.01.33
     │   ├── editor_lifecycle.py     ← 에디터 열기/저장/닫기                    v03.00.38
-    │   ├── editor_pipeline.py      ← 자막 생성/완료/idle 타이머 라우팅         v03.01.02
-    │   ├── editor_actions.py       ← 저장/undo/redo/화자 설정 refresh         v03.01.05
-    │   ├── editor_segments.py      ← 자막/STT/품질 metadata 큐 처리·dirty 갱신 v03.01.25
+    │   ├── editor_pipeline.py      ← 자막 생성/완료/status rail/idle 타이머 라우팅 v03.01.33
+    │   ├── editor_actions.py       ← 저장/출력 전 저장 확인/is_dirty/멀티클립 저장 매핑 v03.01.36
+    │   ├── editor_segments.py      ← 자막/STT/품질/clip metadata 큐 처리·dirty 갱신 v03.01.36
     │   ├── quality_candidate_dialog.py← 자막 품질 후보 비교/적용 dialog       v03.01.25
     │   ├── editor_timeline_video.py← 타임라인 싱크 / 자막 분할 / 자동 스크롤   v02.04.00
     │   ├── editor_video_controls.py← 비디오 제어 / 재생 단축키                v02.07.00
     │   ├── editor_multiclip_context.py← 멀티클립 context / clip 전환           🆕 v02.03.03
-    │   ├── editor_multiclip_ops.py ← 멀티클립 파일 추가/삭제/리매핑           v02.07.00
+    │   ├── editor_multiclip_ops.py ← 멀티클립 파일 추가/삭제/리매핑/SRT offset 정규화 v03.01.36
     │   ├── editor_speaker_ops.py   ← 화자 메뉴 / 화자명 표시 / 드래그 조작     v03.01.05
     │   ├── editor_stt_mode.py      ← STT 모드 확인/재시작/마이크 입력         v03.01.00
-    │   ├── video_player_widget.py  ← 영상/오디오 플레이어 / 실제 영상 rect overlay v03.01.00
+    │   ├── video_player_widget.py  ← 영상/오디오 플레이어 / 실제 영상 rect overlay wrapping v03.01.34
+    │   ├── subtitle_text_edit.py   ← 자막 블록 data/clip metadata 보존 helper v03.01.36
     │   └── 기타 editor helper 파일
     │
     ├── timeline/                   ← 타임라인 캔버스/분석 트랙/STT/화자명      v03.01.06
@@ -185,22 +197,41 @@ ai_subtitle_studio/
     │   ├── __init__.py             ← 도움말 다이얼로그 export
     │   ├── help_content.py         ← 기능별 탭/사용법/예시 콘텐츠
     │   └── help_dialog.py          ← 탭형 도움말 QDialog + 스크린샷 자리
-    ├── roughcut/                   ← 중앙 러프컷 편집/프리뷰/출력 UI           v03.00.26
-    │   ├── roughcut_widget.py      ← 러프컷 후보 선택/요약/선택구간/렌더 컨트롤 v03.01.17
+    ├── roughcut/                   ← 중앙 러프컷 편집/프리뷰/출력 UI           v03.01.31
+    │   ├── roughcut_widget.py      ← 중분류/하단 tab/로그/제목/style 패널 조립 v03.01.31
     │   ├── roughcut_table_panel.py ← 하단 러프컷 테이블 host 패널              v03.01.05
-    │   ├── roughcut_state.py       ← 후보 candidates 저장/복원 + EDL 재계산    v03.01.17
-    │   ├── roughcut_table.py       ← 챕터 테이블/상태/안전도 필터/선택 상세    v03.01.13
+    │   ├── roughcut_state.py       ← 후보 candidates v2 저장/복원 + EDL/title/style/v2 output 재계산 v03.01.32
+    │   ├── roughcut_table.py       ← legacy 챕터 테이블/패널 동기화/선택 상세  v03.01.31
+    │   ├── roughcut_major_panel.py ← PAGE 3-B 중분류 카드/소분류 row/hover preview 패널 v03.01.31
+    │   ├── roughcut_bottom_panel.py← 자막/글로벌/웨이브폼/EDL/스토리보드/가이드 tab v03.01.31
+    │   ├── roughcut_style_panel.py ← 러프컷 프로젝트 export style 저장 패널    v03.01.31
+    │   ├── roughcut_log_panel.py   ← 러프컷 실시간 분석 로그/진행 상태 패널     v03.01.30
+    │   ├── roughcut_title_panel.py ← 추천 유튜브 제목 표시/복사 패널           v03.01.30
     │   ├── roughcut_detail.py      ← 선택 챕터 상세/컷 조정/안전도 근거 패널   v03.01.12
-    │   ├── roughcut_preview.py     ← timeline/local time 기반 반복 구간 프리뷰 v03.01.13
-    │   ├── roughcut_export.py      ← EDL/가이드/SRT/렌더 실행/복구/로그        v03.01.14
+    │   ├── roughcut_preview.py     ← timeline/local time 기반 반복/hover 프리뷰 v03.01.31
+    │   ├── roughcut_export.py      ← EDL/가이드/SRT/렌더 실행/복구/v2 metadata v03.01.32
     │   └── roughcut_format.py      ← 컬럼/시간 표시 공통                      v03.00.26
-    ├── project/                    ← 프로젝트/멀티클립 패널                  v03.00.26
+    ├── project/                    ← 프로젝트/멀티클립 패널                  v03.01.37
+    │   ├── multiclip_panel.py      ← 멀티클립 정렬 카드 + cached info/Windows-safe thumb v03.01.37
+    │   └── workspace_restore.py    ← workspace 복원 / missing zoom 화면 맞춤  v03.01.35
     ├── settings/                   ← AI/화자 compact/갭/상세/출력 설정        v03.01.05
     └── dialogs/                    ← 폴더 선택 / 내보내기 / 공용 메시지       v03.01.01
-        └── export_dialog.py        ← 자막 동영상 출력 / 기본값 저장·불러오기  v03.01.01
+        └── export_dialog.py        ← 자막 동영상 출력 / 저장+preview / 버튼 정렬 v03.01.34
 
 ├── tests/
 │   ├── test_roughcut_engine1.py     ← PHASE2 roughcut 엔진/pipeline unittest   v03.00.26
+│   ├── test_roughcut_contract.py    ← roughcut 공개 API/chapter/guide contract unittest v03.01.27
+│   ├── test_roughcut_models_v2.py   ← roughcut v2 schema/settings/LLM fallback unittest v03.01.28
+│   ├── test_roughcut_major_boundary.py← roughcut major/boundary refiner unittest v03.01.29
+│   ├── test_roughcut_title_suggester.py← roughcut title suggestion unittest   v03.01.30
+│   ├── test_roughcut_ui_v2.py       ← roughcut 중분류/로그/제목/style/tab UI smoke unittest v03.01.31
+│   ├── test_roughcut_thumbnail_cache.py← roughcut thumbnail cache unittest    v03.01.31
+│   ├── test_roughcut_v2_output_compat.py← roughcut v2 EDL/guide/SRT/render output unittest v03.01.32
+│   ├── test_cp03_cp04_status_ui.py ← 저장 상태/상단 상태 rail UI unittest     v03.01.33
+│   ├── test_export_dialog_controls.py← 출력 설정창 저장/preview/버튼 unittest v03.01.34
+│   ├── test_cp08_cp10_home_timeline.py← 자동 홈 복귀/자동 토글/기본 zoom unittest v03.01.35
+│   ├── test_cp11_multiclip_offset.py← 멀티클립 기존 SRT offset/저장 매핑 unittest v03.01.36
+│   ├── test_performance_media_cache.py← media probe cache/worker bound unittest v03.01.37
 │   ├── test_stt_quality_presets.py  ← 자막 정확도 프리셋 unittest              v03.00.19
 │   ├── test_media_processor_overlap.py← Whisper overlap/dedupe/quality metadata unittest v03.01.22
 │   ├── test_word_resegmenter.py     ← word timestamp 재분할/regrouping unittest v03.01.23

@@ -36,6 +36,7 @@ projects/
 models/
 _backup_*/
 create_all*.py
+.codex_work/
 
 # ── IDE ──
 .vscode/

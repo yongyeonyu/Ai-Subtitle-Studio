@@ -1,4 +1,4 @@
-# Version: 03.01.14
+# Version: 03.01.32
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -58,7 +58,13 @@ class RoughcutExportMixin:
             return
         path = self._default_output_path("_roughcut_edl.json")
         result = self._result_with_user_edits(self._result)
-        save_edl_json(path, result.edl_segments, metadata={"source": self._media_path()})
+        save_edl_json(
+            path,
+            result.edl_segments,
+            metadata={"source": self._media_path()},
+            chapters=result.chapters,
+            major_segments=result.segments,
+        )
         self.preview_summary_lbl.setText(f"EDL 저장: {path}")
         self.render_status_lbl.setText("EDL 저장")
 
@@ -79,7 +85,7 @@ class RoughcutExportMixin:
             self.preview_summary_lbl.setText("저장할 SRT 결과가 없습니다.")
             return
         result = self._result_with_user_edits(self._result)
-        retimed = retime_subtitles_for_edl(self._editor_segments(), result.edl_segments)
+        retimed = retime_subtitles_for_edl(self._editor_segments(), result.edl_segments, chapters=result.chapters)
         path = self._default_output_path("_roughcut.srt")
         save_retimed_srt(path, retimed)
         self.preview_summary_lbl.setText(f"SRT 저장: {path}")
@@ -125,9 +131,15 @@ class RoughcutExportMixin:
         srt_path = self._default_output_path("_roughcut.srt")
         subtitled_path = self._default_output_path("_roughcut_subtitled.mp4")
         return {
-            "edl": edl_to_dict(result.edl_segments, metadata={"source": media_path}),
+            "edl": edl_to_dict(
+                result.edl_segments,
+                metadata={"source": media_path},
+                chapters=result.chapters,
+                major_segments=result.segments,
+            ),
             "render_plan": asdict(plan),
             "subtitle_burnin_command": build_ffmpeg_subtitle_burnin_command(output_path, srt_path, subtitled_path),
+            "roughcut_export_style": dict(getattr(self, "_roughcut_export_style", {}) or {}),
         }
 
     def _dry_run_render_plan(self):

@@ -286,7 +286,7 @@ class RoughCutEngine1Tests(unittest.TestCase):
         self.assertIn("# 테스트 가이드", markdown)
         self.assertIn("## 전체 요약", markdown)
         self.assertIn("## 챕터 표", markdown)
-        self.assertIn("| 챕터 | 시간 | 역할 | 판단 | 안전도 | 출력 | 요약 |", markdown)
+        self.assertIn("| 챕터 | 중분류 | 소분류 | 시간 | 역할 | 판단 | 안전도 | 출력 | 요약 |", markdown)
         self.assertIn("chapter_0002", markdown)
         self.assertIn("## 검토 필요 컷", markdown)
 

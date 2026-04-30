@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 03.01.37
 # Phase: PHASE1-B
 import sys
 import os
@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import Qt
 
 import config
+from core.performance import configure_qt_runtime
 from logger import get_logger
 
 _instance_socket = None
@@ -42,6 +43,7 @@ from core.path_manager import get_recent_folders, add_recent_folder
 
 def main():
     app = QApplication(sys.argv)
+    configure_qt_runtime()
 
     app.setStyleSheet(f"""
         QWidget {{

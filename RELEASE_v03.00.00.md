@@ -1,11 +1,11 @@
 <!--
-Document-Version: 03.01.25
+Document-Version: 03.02.00
 Phase: PHASE2
 Last-Updated: 2026-04-30
 Updated-By: Codex with 대표님
-Previous-Content: v03.01.24 SQ-10~SQ-11 segment confidence scoring / overall quality summary
-This-Update: v03.01.25 SQ-12~SQ-24 subtitle quality UI / auto correction / memory / persistence
-Codex-Handoff: v03.01.25 개발 기준 릴리즈 노트입니다. 자막 품질 검사 UI, 자동 교정 후보, memory 저장, 프로젝트 품질 metadata 보존, 테스트를 반영했습니다. 다음 우선순위는 ACTION_ITEMS.md의 첫 번째 미완료 항목입니다.
+Previous-Content: v03.01.37 PERF-01 미디어 probe cache / worker bound / Qt cache tuning
+This-Update: v03.02.00 릴리즈 / main 브랜치 GitHub 동기화
+Codex-Handoff: v03.02.00 릴리즈 기준 노트입니다. ACTION_ITEMS.md의 즉시 작업은 현재 `now: null`이고, 다음 코드 수정 버전은 v03.02.01입니다.
 -->
 # RELEASE v03.00.00
 
@@ -150,6 +150,119 @@ Codex-Handoff: v03.01.25 개발 기준 릴리즈 노트입니다. 자막 품질 
 - 렌더 진행/성공/실패 상태는 기존 `render_status_lbl`에 표시하고, 명령 수/return code/오류 메시지는 러프컷 로그로 표시합니다.
 
 ## 문서 / 액션아이템 정리
+- v03.02.00 릴리즈를 생성했습니다.
+- 이번 릴리즈는 CP-03~CP-11 저장/상태/출력/자동 홈 복귀/멀티클립 안정화, PAGE 3-B 러프컷 v2 UI/엔진 확장, PERF-01 성능/안정성 1차 개선을 포함합니다.
+- `README.md`는 v03.02.00 최신 릴리즈 요약만 표시하고, 전체 이력은 `RELEASE_v03.00.00.md` 링크로 연결합니다.
+- `config.py APP_VERSION`을 `03.02.00`으로 갱신했고, 다음 코드 수정 버전은 `03.02.01`입니다.
+- `requirements-mac.txt`와 `requirements-windows.txt`는 새 의존성 추가가 없어 변경하지 않았습니다.
+- 릴리즈 검증은 전체 unittest, AST, offscreen UI smoke, `git diff --check`, 루트 금지 파일 검사 기준으로 진행했습니다.
+- v03.01.37에서 PERF-01 성능/안정성 1차 개선을 반영했습니다.
+- `core/performance.py`를 추가해 Apple Silicon/Windows 공통 hardware profile, bounded worker count, media probe cache 경로, Qt pixmap cache tuning helper를 제공합니다.
+- `core/media_info.py`는 ffprobe 결과를 파일 절대경로/크기/mtime 기준으로 메모리와 `output/.media_probe_cache/`에 캐시합니다. 같은 파일을 반복해서 여는 홈/에디터/멀티클립/프로젝트 생성 흐름에서 ffprobe 재실행을 줄입니다.
+- `probe_media_many(...)`를 추가하고 단일/멀티클립 ETA/clip boundary 계산에서 병렬 ffprobe를 사용해 여러 클립 프로젝트의 초기 대기 시간을 줄입니다.
+- `VideoProcessor`의 `io_workers`는 설정값을 존중하되 현재 machine profile 기준으로 안전하게 clamp해 과도한 병렬 ffmpeg trimming이 메모리/디스크 I/O를 압박하지 않도록 했습니다.
+- `main.py` 시작 시 Qt 전역 `QPixmapCache` 한도를 메모리 크기에 맞춰 올려 반복 icon/pixmap 생성 비용을 줄입니다.
+- 멀티클립 정렬 카드와 프로젝트 duration 계산은 공용 cached probe 경로와 Windows-safe ffmpeg/ffprobe helper를 사용합니다.
+- `tests/test_performance_media_cache.py`를 추가해 media probe cache 재사용, 병렬 probe 순서 보존, worker bound를 검증합니다.
+- 오픈소스 참고는 CTranslate2/faster-whisper/FFmpeg/Qt 공식 문서와 GitHub benchmark 아이디어만 사용했고, 외부 코드는 복사하지 않았습니다.
+- 삭제된 기능/함수/class는 없습니다. 기존 자막 생성, 멀티클립, 러프컷, 출력 흐름은 유지됩니다.
+- v03.01.36에서 CP-11 멀티클립 기존 SRT 시간 꼬임 보강을 반영했습니다.
+- 멀티클립에서 기존 SRT를 읽을 때 clip-local 시간을 global timeline 시간으로 한 번만 offset하고, `_clip_idx`와 `_clip_file` metadata를 보존합니다.
+- 클립별 자막 append 순서를 clip index 기준으로 버퍼링해 뒤쪽 클립 결과가 앞쪽 클립보다 먼저 화면에 붙어 시간 목록이 되돌아가는 상황을 방지했습니다.
+- 멀티클립 저장은 `_clip_idx`를 우선 사용해 개별 SRT는 clip-local 시간, `_통합.srt`는 global timeline 시간으로 저장합니다.
+- `tests/test_cp11_multiclip_offset.py`를 추가해 기존 SRT offset, metadata 보존, 개별/통합 저장 시간 매핑을 검증합니다.
+- 완료된 CP-11 항목은 `ACTION_ITEMS.md`에서 제거했고, 대표님 확인이 필요한 UX 항목은 `check_list.md`에 유지했습니다.
+- 삭제된 기능/함수/class는 없습니다. 기존 멀티클립 STT/LLM, 기존 SRT 재사용, 개별/통합 저장 흐름은 유지됩니다.
+- `AGENTS.md`를 다른 AI가 적은 토큰으로 이어받을 수 있도록 영어 기반의 짧은 운영/인수인계 문서로 전환했습니다.
+- 과거 버전별 장문 히스토리는 `AGENTS.md`에서 제거하고, 릴리즈/변경 이력의 기준 문서를 `RELEASE_v03.00.00.md`로 통일했습니다.
+- `AGENTS.md`에는 현재 버전, 즉시 작업 없음 상태, 필수 규칙, 검증 명령, handoff prompt만 유지합니다.
+- v03.01.35에서 CP-08 자동 홈 복귀 600초, CP-09 자동 ON/OFF 화면 유지, CP-10 글로벌 캔버스 기본 화면 맞춤 보강을 반영했습니다.
+- 자막 생성 완료 후부터 자동 홈 복귀 600초 countdown을 시작하고, 저장 상태/버전 표시 오른쪽에 `홈 MM:SS` 형태로 남은 시간을 표시합니다.
+- 자막 생성 중에는 자동 홈 복귀 시간이 차감되지 않으며, 해당 상태는 `홈 대기`로 표시됩니다.
+- 마우스/키보드/플레이헤드 등 사용자 입력은 자동 홈 복귀 countdown을 리셋하고, 편집 중 상태에서는 timeout이 발생해도 홈으로 이동하지 않도록 막았습니다.
+- 왼쪽 사이드바 `자동` ON/OFF 전환은 현재 에디터/러프컷/숏폼 화면을 유지하고, 사이드바/메뉴/감시 타이머 상태만 갱신합니다.
+- 프로젝트에 이전 timeline `zoom_pps` 값이 없거나 새 프로젝트 기본값인 `0.0`인 경우 글로벌 캔버스는 `화면 맞춤`을 기본으로 적용합니다.
+- `tests/test_cp08_cp10_home_timeline.py`를 추가해 countdown 표시, 편집 중 timeout 차단, 자동 토글 화면 유지, missing zoom 화면 맞춤 복원을 검증합니다.
+- 완료된 CP-08/CP-09/CP-10 항목은 `ACTION_ITEMS.md`에서 제거했고, 대표님 확인이 필요한 UX 항목은 `check_list.md`에 유지했습니다.
+- 삭제된 기능/함수/class는 없습니다. 기존 자동 홈 복귀, 자동처리 토글, 프로젝트 workspace 복원 흐름은 유지됩니다.
+- v03.01.34에서 CP-05 자막 동영상 출력 팝업 적용/저장 버튼 통합, CP-06 자막 overlay 스타일/출력 해상도 preview, CP-07 자막 출력 설정창 버튼 정렬 보강을 반영했습니다.
+- 자막 동영상 출력 팝업의 별도 `적용` 버튼은 UI에서 제거하고, `저장` 버튼이 설정 저장과 비디오 플레이어 overlay preview 반영을 함께 수행하도록 연결했습니다.
+- 출력 해상도와 실제 영상 rect 너비를 기준으로 자막 preview 폭과 줄바꿈을 계산하도록 보강했습니다.
+- 비디오 플레이어 자막 overlay도 실제 영상 rect 너비 기준으로 줄바꿈을 계산해 검은 여백 폭에 끌려가지 않도록 했습니다.
+- 출력 설정창 하단 버튼과 탭 버튼 높이를 고정해 macOS/Windows 폰트 metric 차이에서도 줄맞춤이 흔들리지 않게 했습니다.
+- `tests/test_export_dialog_controls.py`를 추가해 적용 버튼 제거, 하단 버튼 높이 통일, 긴 자막 preview wrapping 경로를 검증합니다.
+- 완료된 CP-05/CP-06/CP-07 항목은 `ACTION_ITEMS.md`에서 제거했습니다.
+- 삭제된 기능/함수/class는 없습니다. 기존 overlay preview 즉시 반영 기능은 `저장` 버튼 경로로 유지됩니다.
+- v03.01.33에서 CP-03 저장 상태 / 버전 표시와 CP-04 상단 상태 표시 보강을 반영했습니다.
+- 사이드바 하단 저장 상태는 금지 문구 없이 `초록/빨강 원 + v03.01.33` 형태만 표시하며, 자막 생성 중에는 빨간 원이 1초 간격으로 깜빡입니다.
+- 수동 저장, 자막 출력 전 저장 확인 팝업, 자동저장 성공 시 `SubtitleStateManager.is_dirty`와 저장 상태 원을 함께 동기화합니다. 저장 실패/취소/실제 저장 경로 없음 상태에서는 dirty를 임의로 False 처리하지 않습니다.
+- 자동저장 주기를 1분으로 변경했습니다.
+- 상단 상태 rail의 실제 상태 전환 blink를 파란색에서 초록색으로 바꾸고, VAD/Whisper/LLM/저장/렌더/완료 단계를 짧은 한글 라벨로 표시합니다.
+- 큐 상태 변화와 자막 생성 완료 흐름이 상단 상태 rail refresh로 이어지도록 연결해 완료 후 이전 단계에 머무르지 않게 했습니다.
+- progress tick이 `LLM 최적화 중` 같은 주요 단계 메시지를 즉시 덮어쓰지 않도록 상태 머신의 진행률 갱신을 보강했습니다.
+- `tests/test_cp03_cp04_status_ui.py`를 추가해 저장 상태 라벨, 생성 중 blink timer, 초록 status rail blink, 짧은 단계명을 검증합니다.
+- 완료된 CP-03/CP-04 항목은 `ACTION_ITEMS.md`에서 제거했습니다.
+- 삭제된 기능/함수/class는 없습니다. 기존 저장 버튼, 자동저장 signal, 자막 출력 dialog, status rail hover 정책은 유지됩니다.
+- v03.01.32에서 RC2D v2 output compatibility와 회귀 테스트 묶음을 반영했습니다.
+- `edl_to_dict(...)`와 `save_edl_json(...)`은 기존 EDL schema/필수 필드를 유지하면서 `metadata.roughcut_v2`와 segment별 `metadata`에 major/minor 정보를 선택적으로 포함합니다.
+- Markdown guide의 챕터 표에 중분류/소분류 열을 추가하고, 별도 `## 중분류 / 소분류` 표를 추가했습니다.
+- `retime_subtitles_for_edl(...)`은 기존 SRT 출력 포맷을 유지하면서 내부 segment dict에 `roughcut_metadata`를 선택적으로 남깁니다.
+- render plan과 dry-run 결과에는 `segment_manifest`를 추가해 검증/렌더 경로에서 chapter/action/source/timeline/clip metadata를 확인할 수 있게 했습니다.
+- `tests/test_roughcut_v2_output_compat.py`를 추가해 EDL v1 필드 유지, v2 metadata 추가, guide/SRT/render manifest 호환을 검증합니다.
+- 완료된 RC2D-14/15 항목은 `ACTION_ITEMS.md`에서 제거했습니다.
+- 삭제된 기능/함수/class는 없습니다. 기존 EDL JSON 필수 필드, Markdown 기본 섹션, retimed SRT text/timing, render dry-run 동작은 유지됩니다.
+- v03.01.31에서 RC2D 하단 tab, roughcut export style, thumbnail hover preview 묶음을 반영했습니다.
+- `ui/roughcut/roughcut_bottom_panel.py`를 추가해 자막 세그먼트, 글로벌 세그먼트, 웨이브폼/세그먼트 바, EDL, 스토리보드, 기존 가이드 tab을 한 패널에 표시합니다.
+- `ui/roughcut/roughcut_style_panel.py`를 추가해 러프컷 프로젝트 전용 전환, 지속 시간, 폰트, 크기, 위치 설정을 저장할 수 있게 했습니다.
+- `roughcut_state` 후보 payload와 render plan payload에 `roughcut_export_style` metadata를 보존합니다. 실제 burn-in style 적용은 기존 출력 설정과 충돌하지 않도록 metadata 저장 단계로 제한했습니다.
+- `core/roughcut/thumbnail_cache.py`를 추가해 thumbnail cache 경로를 project-local `.roughcut_thumbnail_cache` 또는 temp 폴더로 분리했습니다.
+- 중분류 카드 hover preview는 기존 preview/playback 흐름을 재사용하되 hover 시 table selection을 바꾸지 않도록 `update_preview_data` 옵션을 추가했습니다.
+- `dataset/video_preview_cache/`는 사용하거나 정리하지 않았습니다.
+- `tests/test_roughcut_thumbnail_cache.py`를 추가하고 `tests/test_roughcut_ui_v2.py`를 확장했습니다.
+- 완료된 RC2D-11/12/13 항목은 `ACTION_ITEMS.md`에서 제거했습니다.
+- 삭제된 기능/함수/class는 없습니다. 기존 가이드 text는 하단 `가이드` tab으로 유지됩니다.
+- v03.01.30에서 RC2D 중앙 중분류 UI, 실시간 분석 로그, 추천 유튜브 제목 패널 묶음을 반영했습니다.
+- `ui/roughcut/roughcut_major_panel.py`를 추가해 A/B/C 중분류 카드와 A1/A2 소분류 row를 표시하고, 기존 러프컷 프리뷰/선택 경로와 연결했습니다.
+- 기존 `QTableWidget` 기반 러프컷 테이블은 삭제하지 않고 `기존 테이블` tab으로 유지했습니다.
+- `ui/roughcut/roughcut_log_panel.py`를 추가해 분석 읽기/진행/복원/완료 로그와 warning을 오른쪽 패널에 표시합니다.
+- `ui/roughcut/roughcut_title_panel.py`와 `core/roughcut/title_suggester.py`를 추가해 추천 제목 후보를 표시/복사하고, LLM title action 실패 시 local fallback을 제공합니다.
+- `RoughCutTitleSuggestion`에 `expected_reach`, `copied`, `applied` 상태 필드를 추가하고, pipeline/result/state payload가 `title_suggestions`를 보존하도록 연결했습니다.
+- `tests/test_roughcut_title_suggester.py`, `tests/test_roughcut_ui_v2.py`를 추가해 제목 후보 생성/복원과 중분류 UI smoke를 검증합니다.
+- 완료된 RC2D-08/09/10 항목은 `ACTION_ITEMS.md`에서 제거했습니다.
+- 삭제된 기능/함수/class는 없습니다. 기존 EDL/가이드/SRT/렌더 계획/검증/렌더 기능과 기존 table fallback은 유지됩니다.
+- v03.01.29에서 RC2D 중분류/소분류 생성과 경계 검증 묶음을 반영했습니다.
+- `core/roughcut/major_segmenter.py`를 추가해 A/B/C 중분류와 A1/A2 소분류 코드를 생성하고, `RoughCutSegment.minor_groups`와 `ChapterMetadata.major_id/minor_code`에 연결했습니다.
+- `core/roughcut/boundary_refiner.py`를 추가해 무음 gap, scene cut, phrase boundary 기준으로 경계를 검증하고 `confirmed/provisional/needs_review` 상태와 confidence를 남깁니다.
+- 러프컷 pipeline은 `roughcut_boundary_verification_enabled`, `roughcut_major_*` 설정값을 읽어 경계 보정과 major/minor 산출물을 생성합니다.
+- `dataset/video_preview_cache/`는 사용하거나 정리하지 않았고, 기존 scene/gap helper만 재사용했습니다.
+- `tests/test_roughcut_major_boundary.py`를 추가해 major/minor code, gap/scene boundary 우선순위, pipeline v2 metadata를 검증합니다.
+- 완료된 RC2D-05/06/07 항목은 `ACTION_ITEMS.md`에서 제거했습니다.
+- 삭제된 기능/함수/class는 없습니다.
+- v03.01.28에서 RC2D PAGE 3-B 러프컷 v2 기반 묶음을 반영했습니다.
+- `config.DEFAULT_ROUGHCUT_SETTINGS`와 `core/roughcut/roughcut_settings.py`를 추가해 PAGE 3-B 설정 기본값을 optional/default 방식으로 관리합니다.
+- `core/roughcut/roughcut_prompts.py`, `roughcut_llm.py`를 추가해 `propose_major_segment`, `verify_boundary`, `title_suggestions` action prompt/response contract와 LLM 실패 시 local fallback 경로를 준비했습니다.
+- `RoughCutMinorGroup`, `RoughCutTitleSuggestion`, `RoughCutDraftState` 및 `RoughCutResult.schema_version`을 추가하고, `roughcut_result_from_dict(...)`는 v1/v2 payload를 모두 복원합니다.
+- `roughcut_state` 저장 schema는 v2로 올렸지만 기존 v1 candidate 복원 경로는 유지했습니다.
+- 러프컷 화면에서 전역 `시작` 버튼은 자막 재생성이 아니라 러프컷 분석으로 routing하고, 러프컷 화면 진입 시 저장된 결과가 없으면 자동 분석하지 않고 대기 상태로 둡니다.
+- 완료된 RC2D-00/01/02/03/04 항목은 `ACTION_ITEMS.md`에서 제거했습니다.
+- 삭제된 기능/함수/class는 없습니다.
+- v03.01.27에서 RC2C chapter segmentation 정책과 Markdown guide 컷 검토 섹션을 보강했습니다.
+- `build_chapters(...)`는 너무 긴 chapter를 `max_chapter_duration` 기준으로 분할하고, 짧은 chunk는 이웃과 병합하되 `story_reason`/summary에 사유를 남깁니다.
+- chapter `importance_score`는 duration, keyword entropy, topic shift, story hint를 반영해 고정 0.5에서 벗어나도록 개선했습니다.
+- 러프컷 pipeline은 `build_chapters(...)` wrapper를 사용해 중간 산출물과 guide가 같은 chapter 정책을 따르도록 연결했습니다.
+- Markdown guide에 `## 컷 포인트`, `## 위험 컷 / 검토 필요 구간`, `## 수동 검토 추천 지점` 섹션을 추가했습니다.
+- 기존 `## 검토 필요 컷` 섹션은 하위 호환을 위해 유지했습니다.
+- 완료된 RC2C-04/05 항목은 `ACTION_ITEMS.md`에서 제거했습니다.
+- 삭제된 기능/함수/class는 없습니다.
+- v03.01.26에서 RC2C 러프컷 공개 API 호환 기반 묶음을 반영했습니다.
+- `core/roughcut/chapter_segmenter.py`, `roughcut_pipeline.py`, `renderer.py` wrapper를 추가해 첨부 문서의 import 경로를 지원합니다.
+- `CutPoint` dataclass와 `generate_cut_points(...)`, `EditDecision.confidence`를 추가해 컷 포인트를 독립 산출물로 확인할 수 있게 했습니다.
+- `RoughCutResult`는 `video_summary`, `packed_phrases`, `chunks`, `cut_points`, `edl`, `markdown_guide` 호환 접근을 제공합니다.
+- `render_from_edl(...)` wrapper는 기존 concat render plan과 실행 helper를 사용하며, ffmpeg 경로는 `core/platform_compat.py`의 cross-platform helper를 따릅니다.
+- `render_executor.py`는 Windows 콘솔 숨김/UTF-8 환경 helper를 사용해 ffmpeg subprocess를 실행합니다.
+- `tests/test_roughcut_contract.py`를 추가해 공개 shim import, 중간 산출물, CutPoint, EDL, renderer dry-run 계약을 검증합니다.
+- 완료된 RC2C-01/02/03/06/07/08 항목은 `ACTION_ITEMS.md`에서 제거했습니다.
+- 삭제된 기능/함수/class는 없습니다. 기존 `semantic_chunker.py`, `pipeline.py`, `renderer_skeleton.py`, `render_executor.py` 경로는 유지됩니다.
 - v03.01.25에서 SQ-12~SQ-24 자막 품질 UI/자동 교정/사용자 학습/프로젝트 저장/테스트 묶음을 반영했습니다.
 - 에디터 상단 모드 바에 `검사` 버튼, `자동 교정` 토글, 품질 필터, 후보 비교 버튼, compact 품질 summary label을 추가했습니다.
 - 검사 결과는 자막 block metadata의 `quality`, `quality_history`, `quality_candidates`로 보존되고, 텍스트 에디터 하이라이트와 타임라인 분석 트랙에 red/yellow/green/gray 상태로 표시됩니다.

@@ -1,4 +1,4 @@
-# Version: 02.03.01
+# Version: 03.01.37
 # Phase: PHASE1-B
 """
 core/pipeline/backend_core.py
@@ -14,7 +14,7 @@ from logger import get_logger
 from core.audio.media_processor import VideoProcessor
 from core.time_history import get_expected_time
 from core.settings import load_settings, get_model_key
-from core.media_info import probe_media
+from core.media_info import probe_media_many
 
 from core.pipeline.pipeline_helpers import PipelineHelpersMixin
 from core.pipeline.single_pipeline import SinglePipelineMixin
@@ -122,9 +122,10 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         s = load_settings()
         model_key = "QUALITY:" + get_model_key(s)
 
+        media_infos = probe_media_many(self.files_to_process)
         for i, target_file in enumerate(self.files_to_process):
             try:
-                info = probe_media(target_file)
+                info = media_infos[i] if i < len(media_infos) else {}
                 duration_sec = info["duration"]
                 info_txt = info["info_txt"]
                 len_txt = info["len_txt"]

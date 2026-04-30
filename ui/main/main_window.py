@@ -1,4 +1,4 @@
-# Version: 03.01.18
+# Version: 03.01.35
 # Phase: PHASE2
 """
 ui/main/main_window.py
@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QSplitter, QPushButton,
 )
-from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QDateTime, QEvent, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon
 
 from ui.queue_widget import QueueMixin
@@ -110,6 +110,10 @@ class MainWindow(
         self._post_completion_idle_timer = QTimer(self)
         self._post_completion_idle_timer.setSingleShot(True)
         self._post_completion_idle_timer.timeout.connect(self._on_post_completion_idle_timeout)
+        self._post_completion_idle_deadline_ms = 0
+        self._post_completion_idle_countdown_timer = QTimer(self)
+        self._post_completion_idle_countdown_timer.setInterval(1000)
+        self._post_completion_idle_countdown_timer.timeout.connect(self._refresh_post_completion_idle_status)
 
         self._build_ui()
         self._connect_signals()
@@ -324,21 +328,70 @@ class MainWindow(
 
     def _start_post_completion_idle_timer(self):
         self._post_completion_idle_enabled = True
+        self._post_completion_idle_deadline_ms = QDateTime.currentMSecsSinceEpoch() + int(self._post_completion_idle_ms)
         self._post_completion_idle_timer.start(self._post_completion_idle_ms)
+        self._post_completion_idle_countdown_timer.start()
+        self._refresh_post_completion_idle_status()
 
     def _reset_post_completion_idle_timer(self):
         if getattr(self, "_post_completion_idle_enabled", False):
+            self._post_completion_idle_deadline_ms = QDateTime.currentMSecsSinceEpoch() + int(self._post_completion_idle_ms)
             self._post_completion_idle_timer.start(self._post_completion_idle_ms)
+            self._refresh_post_completion_idle_status()
 
     def _stop_post_completion_idle_timer(self):
         self._post_completion_idle_enabled = False
+        self._post_completion_idle_deadline_ms = 0
         try:
             self._post_completion_idle_timer.stop()
         except Exception:
             pass
+        try:
+            self._post_completion_idle_countdown_timer.stop()
+        except Exception:
+            pass
+        self._refresh_post_completion_idle_status()
+
+    def _post_completion_idle_remaining_ms(self) -> int:
+        if not getattr(self, "_post_completion_idle_enabled", False):
+            return 0
+        deadline = int(getattr(self, "_post_completion_idle_deadline_ms", 0) or 0)
+        if deadline <= 0:
+            return 0
+        return max(0, deadline - QDateTime.currentMSecsSinceEpoch())
+
+    def _refresh_post_completion_idle_status(self):
+        if hasattr(self, "_refresh_saved_status_label"):
+            self._refresh_saved_status_label()
+
+    def _is_editor_actively_editing(self) -> bool:
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None:
+            return False
+        state_manager = getattr(editor, "sm", None)
+        if state_manager is not None:
+            state = str(getattr(state_manager, "state", "") or "")
+            if state in {"ST_EDITING", "ST_AUTOSAVE"}:
+                return True
+        timeline = getattr(editor, "timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        if canvas is not None:
+            if bool(getattr(canvas, "_edit_active", False)):
+                return True
+            if getattr(canvas, "_drag_seg", None) is not None:
+                return True
+        return False
 
     def _on_post_completion_idle_timeout(self):
+        if self._is_editor_actively_editing():
+            self._reset_post_completion_idle_timer()
+            return
         self._post_completion_idle_enabled = False
+        self._post_completion_idle_deadline_ms = 0
+        try:
+            self._post_completion_idle_countdown_timer.stop()
+        except Exception:
+            pass
         backend = getattr(self, "backend", None)
         if backend is not None and hasattr(backend, "_action_state") and hasattr(backend, "_edit_event"):
             try:

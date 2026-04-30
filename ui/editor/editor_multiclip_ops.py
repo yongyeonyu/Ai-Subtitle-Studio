@@ -1,4 +1,4 @@
-# Version: 03.00.24
+# Version: 03.01.36
 # Phase: PHASE2
 """
 EditorWidget 멀티클립 파일 추가/삭제/리매핑 Mixin.
@@ -7,7 +7,19 @@ import os
 
 
 class EditorMulticlipOpsMixin:
-    def _collect_existing_clip_segments(self, file_path, offset):
+    def _normalize_multiclip_segment_order(self, segs):
+        ordered = sorted(
+            (dict(seg) for seg in (segs or [])),
+            key=lambda s: (
+                float(s.get('start', 0.0) or 0.0),
+                float(s.get('end', 0.0) or 0.0),
+            ),
+        )
+        for i, seg in enumerate(ordered):
+            seg['line'] = i
+        return ordered
+
+    def _collect_existing_clip_segments(self, file_path, offset, clip_idx=None):
         segs = []
         base = os.path.splitext(file_path)[0]
         srt_path = base + '.srt'
@@ -15,16 +27,19 @@ class EditorMulticlipOpsMixin:
             try:
                 from core.srt_parser import parse_srt
                 for seg in parse_srt(srt_path):
-                    segs.append({
+                    item = {
                         'start': float(seg.get('start', 0.0)) + offset,
                         'end': float(seg.get('end', 0.0)) + offset,
                         'text': seg.get('text', ''),
                         'speaker': seg.get('speaker', '00'),
                         '_clip_file': file_path,
-                    })
+                    }
+                    if clip_idx is not None:
+                        item['_clip_idx'] = int(clip_idx)
+                    segs.append(item)
             except Exception:
                 pass
-        return segs
+        return self._normalize_multiclip_segment_order(segs)
 
     def _recompute_multiclip_boundaries(self, files):
         from core.media_info import probe_media
@@ -64,9 +79,7 @@ class EditorMulticlipOpsMixin:
             shifted['end'] = round(float(seg.get('end', 0.0)) - old_off + new_off, 3)
             shifted['_clip_file'] = file_path
             remapped.append(shifted)
-        remapped.sort(key=lambda s: (s.get('start', 0.0), s.get('end', 0.0)))
-        for i, seg in enumerate(remapped):
-            seg['line'] = i
+        remapped = self._normalize_multiclip_segment_order(remapped)
         return remapped, new_bounds
 
     def _apply_multiclip_state_from_owner(self):
@@ -109,6 +122,7 @@ class EditorMulticlipOpsMixin:
             pass
 
     def _reload_segments_from_list(self, segs):
+        segs = self._normalize_multiclip_segment_order(segs)
         self.text_edit.clear()
         self.append_segments(segs)
         self._cached_segs = segs
@@ -169,8 +183,9 @@ class EditorMulticlipOpsMixin:
             for f in added_files:
                 bd = next((b for b in new_bounds if b.get('file') == f), None)
                 if bd:
-                    remapped.extend(self._collect_existing_clip_segments(f, float(bd['start'])))
-        remapped.sort(key=lambda s: (s.get('start', 0.0), s.get('end', 0.0)))
+                    clip_idx = next((i for i, b in enumerate(new_bounds) if b.get('file') == f), None)
+                    remapped.extend(self._collect_existing_clip_segments(f, float(bd['start']), clip_idx))
+        remapped = self._normalize_multiclip_segment_order(remapped)
         self._reload_segments_from_list(remapped)
         self._apply_multiclip_state_from_owner()
         try:

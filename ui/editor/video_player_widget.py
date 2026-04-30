@@ -1,4 +1,4 @@
-# Version: 03.01.00
+# Version: 03.01.34
 # Phase: PHASE1-D
 """
 ui/video_player_widget.py - PyQt6 비디오 플레이어
@@ -109,6 +109,42 @@ class SubtitleLabel(QLabel):
         res_scale = 4.0 if output_width >= 3840 else 2.0
         return output_width, res_scale
 
+    def _wrap_text_lines(self, text: str, fm: QFontMetrics, max_width: int) -> list[str]:
+        max_width = max(24, int(max_width))
+        wrapped: list[str] = []
+        for raw_line in str(text or "").replace("\u2028", "\n").split("\n"):
+            line = raw_line.strip()
+            if not line:
+                wrapped.append("")
+                continue
+            words = line.split()
+            if not words:
+                words = list(line)
+            current = ""
+            for word in words:
+                candidate = word if not current else f"{current} {word}"
+                if fm.horizontalAdvance(candidate) <= max_width:
+                    current = candidate
+                    continue
+                if current:
+                    wrapped.append(current)
+                    current = ""
+                if fm.horizontalAdvance(word) <= max_width:
+                    current = word
+                    continue
+                chunk = ""
+                for ch in word:
+                    candidate = f"{chunk}{ch}"
+                    if chunk and fm.horizontalAdvance(candidate) > max_width:
+                        wrapped.append(chunk)
+                        chunk = ch
+                    else:
+                        chunk = candidate
+                current = chunk
+            if current:
+                wrapped.append(current)
+        return wrapped or [""]
+
     def paintEvent(self, event):
         text = self.text()
         if not text:
@@ -137,7 +173,8 @@ class SubtitleLabel(QLabel):
         painter.setFont(font)
         fm = QFontMetrics(font)
 
-        lines  = text.split('\n')
+        max_text_w = int(self.width() * float(style.get("max_text_width_ratio", 0.92) or 0.92))
+        lines = self._wrap_text_lines(text, fm, max_text_w)
         line_h = fm.height()
         text_w = max((fm.horizontalAdvance(ln) for ln in lines), default=0)
         try:

@@ -1,4 +1,4 @@
-# Version: 03.01.17
+# Version: 03.01.32
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from core.project.project_context import (
     segment_signature,
 )
 from core.project.project_manager import save_project
+from core.settings import load_settings
 from core.roughcut import (
     build_edl_segments,
     build_concat_render_plan,
@@ -28,7 +29,11 @@ from core.roughcut import (
     retime_subtitles_for_edl,
     roughcut_result_from_dict,
     run_roughcut_pipeline,
+    merge_roughcut_settings,
 )
+
+ROUGHCUT_STATE_SCHEMA = "ai_subtitle_studio.roughcut_state.v2"
+ROUGHCUT_CANDIDATE_SCHEMA = "ai_subtitle_studio.roughcut_candidate.v2"
 
 
 class RoughcutStateMixin:
@@ -122,7 +127,10 @@ class RoughcutStateMixin:
         candidates = self._merged_candidates(current)
         payload = dict(current)
         payload.update({
-            "schema": "ai_subtitle_studio.roughcut_state.v1",
+            "schema": ROUGHCUT_STATE_SCHEMA,
+            "schema_version": "roughcut_state.v2",
+            "legacy_read_compatible": ("ai_subtitle_studio.roughcut_state.v1",),
+            "settings": self._roughcut_settings_payload(),
             "candidates": candidates,
             "selected_candidate_id": self._selected_candidate_id,
             "candidate_count": len(candidates),
@@ -201,7 +209,8 @@ class RoughcutStateMixin:
             "name": self._current_candidate_name(candidate_id),
             "created_at": str(existing.get("created_at") or datetime.now().isoformat(timespec="seconds")),
             "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "schema": "ai_subtitle_studio.roughcut_candidate.v1",
+            "schema": ROUGHCUT_CANDIDATE_SCHEMA,
+            "schema_version": "roughcut_candidate.v2",
             "source_signature": self._source_signature,
             "source_media": self._media_label(),
             "editor_mode": self._project_editor_mode(),
@@ -213,22 +222,43 @@ class RoughcutStateMixin:
             "chapters": [asdict(chapter) for chapter in result.chapters],
             "edit_decisions": [asdict(decision) for decision in result.edit_decisions],
             "edl_segments": [asdict(segment) for segment in result.edl_segments],
+            "edl": [asdict(segment) for segment in result.edl_segments],
             "guide_markdown": result.guide_markdown,
+            "markdown_guide": result.guide_markdown,
+            "video_summary": getattr(result, "video_summary", ""),
+            "packed_phrases": [asdict(phrase) for phrase in getattr(result, "packed_phrases", ())],
+            "chunks": [asdict(chunk) for chunk in getattr(result, "chunks", ())],
+            "cut_points": [asdict(point) for point in getattr(result, "cut_points", ())],
+            "title_suggestions": [asdict(item) for item in getattr(result, "title_suggestions", ())],
+            "draft_state": asdict(result.draft_state) if getattr(result, "draft_state", None) is not None else None,
+            "roughcut_export_style": dict(getattr(self, "_roughcut_export_style", {}) or {}),
+            "result_schema_version": getattr(result, "schema_version", "roughcut_result.v1"),
             "warnings": list(result.warnings),
         }
         payload["outputs"] = self._candidate_outputs_payload(result)
         return payload
 
+    def _roughcut_settings_payload(self) -> dict:
+        try:
+            return merge_roughcut_settings(load_settings())
+        except Exception:
+            return merge_roughcut_settings({})
+
     def _candidate_outputs_payload(self, result) -> dict:
         outputs = {
             "guide_markdown": str(getattr(result, "guide_markdown", "") or ""),
-            "edl": edl_to_dict(result.edl_segments, metadata={"source": self._media_path()}),
+            "edl": edl_to_dict(
+                result.edl_segments,
+                metadata={"source": self._media_path()},
+                chapters=result.chapters,
+                major_segments=result.segments,
+            ),
             "retimed_srt": "",
             "render_plan": None,
             "subtitle_burnin_command": (),
         }
         try:
-            retimed = retime_subtitles_for_edl(self._editor_segments(), result.edl_segments)
+            retimed = retime_subtitles_for_edl(self._editor_segments(), result.edl_segments, chapters=result.chapters)
             outputs["retimed_srt"] = format_srt(retimed)
         except Exception:
             outputs["retimed_srt"] = ""
@@ -274,6 +304,11 @@ class RoughcutStateMixin:
         restored = roughcut_result_from_dict(candidate)
         if restored.chapters and restored.edl_segments:
             self._result = restored
+        style = candidate.get("roughcut_export_style", {})
+        if isinstance(style, dict):
+            self._roughcut_export_style = dict(style)
+            if hasattr(self, "style_panel"):
+                self.style_panel.set_style(style)
         if hasattr(self, "source_lbl"):
             self.source_lbl.setText(str(candidate.get("source_media") or self._media_label()))
         if persist:
@@ -443,7 +478,7 @@ class RoughcutStateMixin:
         except (TypeError, ValueError):
             return fallback
 
-    def refresh_from_editor(self, force_reanalyze: bool = False):
+    def refresh_from_editor(self, force_reanalyze: bool = False, analyze_if_missing: bool = True):
         segments = self._editor_segments()
         media_path = self._media_path()
         if not segments:
@@ -469,20 +504,46 @@ class RoughcutStateMixin:
         if stored is not None and not force_reanalyze:
             self._result = stored
             self.source_lbl.setText(self._media_label())
+            if hasattr(self, "_set_roughcut_status"):
+                self._set_roughcut_status("후보 복원", 100)
+            if hasattr(self, "_append_roughcut_log"):
+                self._append_roughcut_log("저장된 러프컷 후보를 복원했습니다.", "done")
             self._populate_result()
             self._persist_roughcut_state()
+            return
+
+        if not analyze_if_missing and not force_reanalyze:
+            self._result = None
+            self._set_empty_state()
+            self.source_lbl.setText(f"{self._media_label()} · 분석 대기")
+            self.preview_summary_lbl.setText("상단 시작 또는 분석 버튼을 누르면 러프컷 분석을 시작합니다.")
+            if hasattr(self, "_set_roughcut_status"):
+                self._set_roughcut_status("분석 대기")
             return
 
         media_duration = max((float(seg.get("end", 0.0) or 0.0) for seg in segments), default=0.0)
         editor = self._active_editor()
         if editor is not None and hasattr(editor, "video_player"):
             media_duration = max(media_duration, float(getattr(editor.video_player, "total_time", 0.0) or 0.0))
+        if hasattr(self, "_set_roughcut_status"):
+            self._set_roughcut_status("분석 중", 45)
+        if hasattr(self, "log_panel"):
+            self.log_panel.set_reading_rows(len(segments))
         result = run_roughcut_pipeline(
             segments,
             media_duration=media_duration,
             source_path=media_path,
+            use_llm=bool(self._roughcut_settings_payload().get("roughcut_llm_enabled", False)),
+            settings=self._roughcut_settings_payload(),
         )
         self._result = self._result_with_user_edits(self._with_project_edl_mapping(result, media_duration))
         self.source_lbl.setText(self._media_label())
+        if hasattr(self, "_set_roughcut_status"):
+            self._set_roughcut_status("결과 구성", 85)
+        if hasattr(self, "_append_roughcut_log"):
+            self._append_roughcut_log(
+                f"중분류 {len(getattr(self._result, 'segments', ()) or ())}개와 제목 후보 {len(getattr(self._result, 'title_suggestions', ()) or ())}개를 구성했습니다.",
+                "done",
+            )
         self._populate_result()
         self._persist_roughcut_state()

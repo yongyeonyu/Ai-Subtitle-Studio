@@ -1,4 +1,4 @@
-# Version: 03.01.13
+# Version: 03.01.31
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -25,6 +25,14 @@ class RoughcutTableMixin:
         values = [len(result.chapters), len(result.edl_segments), highlights, risky, fmt_time(output_duration)]
         for label, value in zip(self.metric_labels, values):
             label.setText(str(value))
+        if hasattr(self, "major_panel"):
+            self.major_panel.set_result(result)
+        if hasattr(self, "title_panel"):
+            self.title_panel.set_suggestions(getattr(result, "title_suggestions", ()) or ())
+        if hasattr(self, "log_panel"):
+            self.log_panel.set_result(result)
+        if hasattr(self, "bottom_tabs"):
+            self.bottom_tabs.set_result(result, self._editor_segments())
 
         self._updating_table = True
         self._row_chapter_ids = []
@@ -111,6 +119,14 @@ class RoughcutTableMixin:
         self.table.setRowCount(0)
         self._updating_table = False
         self.guide_text.setPlainText("러프컷 분석 결과 없음")
+        if hasattr(self, "major_panel"):
+            self.major_panel.clear()
+        if hasattr(self, "title_panel"):
+            self.title_panel.clear()
+        if hasattr(self, "log_panel"):
+            self.log_panel.clear()
+        if hasattr(self, "bottom_tabs"):
+            self.bottom_tabs.clear()
         self.preview_thumb_lbl.setText("대표\n프레임")
         self.preview_title_lbl.setText("세그먼트 선택 대기")
         self.preview_time_lbl.setText("-")
@@ -233,6 +249,8 @@ class RoughcutTableMixin:
         self.preview_safety_lbl.setStyleSheet(self._safety_badge_style(safety))
         self.preview_reason_lbl.setText(f"{self._format_safety_reason(reason)}{output}")
         self._update_detail_panel(row, chapter, decision, edl_segment)
+        if hasattr(self, "major_panel"):
+            self.major_panel.set_selected_chapter(chapter.chapter_id)
 
     def _source_label_for_edl(self, edl_segment) -> str:
         if edl_segment is None:

@@ -1,4 +1,4 @@
-# Version: 03.01.15
+# Version: 03.01.36
 # Phase: PHASE1-D
 """
 ui/editor_actions.py
@@ -48,36 +48,13 @@ class EditorActionsMixin:
     # ---------------------------------------------------------
     # 저장
     # ---------------------------------------------------------
-    def _on_save(self, *args, skip_auto_next=False):
-        segs = self._get_current_segments()
-        if not segs:
-            return
-        if hasattr(self, "_warn_pending_stt_before_save") and not self._warn_pending_stt_before_save(segs):
-            get_logger().log("💾 저장 취소: STT 미완료 세그먼트 확인 필요")
-            return
-
-        try:
-            main_w = self.window()
-            multiclip_files = list(getattr(main_w, '_multiclip_files', []) or [])
-            if len(multiclip_files) > 1:
-                self._save_multiclip_srts(segs, multiclip_files)
-            elif getattr(self, 'media_path', None):
-                srt_path = get_srt_path(self.media_path)
-                save_srt(segs, srt_path)
-                get_logger().log(f"💾 저장 완료: {os.path.basename(srt_path)}")
-        except Exception as e:
-            get_logger().log(f"⚠️ 저장 실패: {e}")
-            return
-
-        try:
-            self.sig_save.emit(segs)
-        except Exception:
-            pass
-
+    def _mark_save_completed(self, touch_saved_time: bool = True) -> bool:
         try:
             if hasattr(self, "sm"):
                 if getattr(self.sm, "is_locked", False):
                     self.sm.is_dirty = False
+                    if hasattr(self.sm, "_broadcast"):
+                        self.sm._broadcast()
                 else:
                     self.sm.complete_save()
         except Exception:
@@ -86,16 +63,56 @@ class EditorActionsMixin:
         try:
             main_w = self.window()
             if hasattr(main_w, "_refresh_saved_status_label"):
-                main_w._refresh_saved_status_label(is_dirty=False, touch_saved_time=True)
+                main_w._refresh_saved_status_label(is_dirty=False, touch_saved_time=touch_saved_time)
+        except Exception:
+            pass
+        return True
+
+    def _on_save(self, *args, skip_auto_next=False):
+        segs = self._get_current_segments()
+        if not segs:
+            get_logger().log("💾 저장 취소: 저장할 자막 세그먼트가 없습니다.")
+            return False
+        if hasattr(self, "_warn_pending_stt_before_save") and not self._warn_pending_stt_before_save(segs):
+            get_logger().log("💾 저장 취소: STT 미완료 세그먼트 확인 필요")
+            return False
+
+        try:
+            main_w = self.window()
+            multiclip_files = list(getattr(main_w, '_multiclip_files', []) or [])
+            saved_any = False
+            if len(multiclip_files) > 1:
+                saved_any = self._save_multiclip_srts(segs, multiclip_files)
+            elif getattr(self, 'media_path', None):
+                srt_path = get_srt_path(self.media_path)
+                save_srt(segs, srt_path)
+                get_logger().log(f"💾 저장 완료: {os.path.basename(srt_path)}")
+                saved_any = True
+            else:
+                get_logger().log("⚠️ 저장 실패: media_path가 없어 SRT 저장 경로를 만들 수 없습니다.")
+                return False
+            if not saved_any:
+                get_logger().log("⚠️ 저장 실패: 실제로 저장된 자막 파일이 없습니다.")
+                return False
+        except Exception as e:
+            get_logger().log(f"⚠️ 저장 실패: {e}")
+            return False
+
+        try:
+            self.sig_save.emit(segs)
         except Exception:
             pass
 
-        self._skip_prev_confirm_once = True
+        self._mark_save_completed(touch_saved_time=True)
+
+        if not skip_auto_next:
+            self._skip_prev_confirm_once = True
 
         try:
             self._auto_save_project(segs)
         except Exception as e:
             get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {e}")
+        return True
 
     # ---------------------------------------------------------
     # 멀티클립 SRT 저장 (개별 + 통합)
@@ -127,7 +144,8 @@ class EditorActionsMixin:
                 non_gap = [s for s in segs if not s.get("is_gap") and s.get("text", "").strip()]
                 save_srt(non_gap, srt_path)
                 get_logger().log(f"💾 저장 완료: {os.path.basename(srt_path)}")
-            return
+                return True
+            return False
 
         def _clip_idx_for(start_sec):
             """세그먼트 시작 시간으로 클립 인덱스 판별"""
@@ -139,12 +157,23 @@ class EditorActionsMixin:
                 return len(boundaries) - 1
             return 0
 
+        def _seg_clip_idx(seg):
+            try:
+                idx = seg.get("_clip_idx")
+                if idx is not None:
+                    idx = int(idx)
+                    if 0 <= idx < len(boundaries):
+                        return idx
+            except Exception:
+                pass
+            return _clip_idx_for(float(seg.get("start", 0.0)))
+
         # 세그먼트를 clip_idx별로 분류 (boundaries 기반)
         clip_segs = {}
         for seg in segs:
             if seg.get("is_gap") or not seg.get("text", "").strip():
                 continue
-            cidx = _clip_idx_for(float(seg.get("start", 0.0)))
+            cidx = _seg_clip_idx(seg)
             clip_segs.setdefault(cidx, []).append(seg)
 
         saved_count = 0
@@ -189,15 +218,17 @@ class EditorActionsMixin:
         for seg in segs:
             if seg.get("is_gap") or not seg.get("text", "").strip():
                 continue
-            cidx = _clip_idx_for(float(seg.get("start", 0.0)))
+            cidx = _seg_clip_idx(seg)
             if cidx in reuse_indices:
                 continue
             combined_segs.append(seg)
 
         combined_segs.sort(key=lambda s: float(s.get("start", 0.0)))
 
+        combined_saved = False
         if combined_segs:
             save_srt(combined_segs, combined_srt_path)
+            combined_saved = True
             get_logger().log(
                 f"💾 통합 저장: {os.path.basename(combined_srt_path)} "
                 f"({len(combined_segs)}개, 기존자막 {len(reuse_indices)}클립 제외)"
@@ -205,12 +236,14 @@ class EditorActionsMixin:
         elif segs:
             non_gap = [s for s in segs if not s.get("is_gap") and s.get("text", "").strip()]
             save_srt(non_gap, combined_srt_path)
+            combined_saved = True
             get_logger().log(
                 f"💾 통합 저장: {os.path.basename(combined_srt_path)} "
                 f"({len(non_gap)}개, 전체 포함)"
             )
 
         get_logger().log(f"✅ 멀티클립 저장 완료: 개별 {saved_count}개 + 통합 1개")
+        return bool(saved_count or combined_saved)
 
     # ---------------------------------------------------------
     # 프로젝트 자동 저장
@@ -316,7 +349,8 @@ class EditorActionsMixin:
         if reply == QMessageBox.StandardButton.Cancel:
             return
         if reply == QMessageBox.StandardButton.Yes:
-            self._on_save()
+            if not self._on_save():
+                return
 
         self._go_home()
 
@@ -351,7 +385,8 @@ class EditorActionsMixin:
         if reply == QMessageBox.StandardButton.Cancel:
             return
         if reply == QMessageBox.StandardButton.Yes:
-            self._on_save()
+            if not self._on_save():
+                return
 
         self.sig_exit.emit()
 
@@ -380,7 +415,12 @@ class EditorActionsMixin:
             if reply == QMessageBox.StandardButton.Cancel:
                 return
             if reply == QMessageBox.StandardButton.Yes:
-                self._on_save()
+                if not self._on_save(skip_auto_next=True):
+                    return
+                try:
+                    is_dirty = bool(getattr(self.sm, "is_dirty", False))
+                except Exception:
+                    is_dirty = False
 
         from ui.dialogs.export_dialog import ExportDialog
         segs = self._get_current_segments()

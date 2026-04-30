@@ -1,4 +1,4 @@
-# Version: 03.01.25
+# Version: 03.01.36
 # Phase: PHASE2
 """
 ui/editor_segments.py
@@ -215,6 +215,15 @@ class EditorSegmentsMixin:
                 "original_text": str(seg.get("original_text", "") or ""),
                 "dictated_text": str(seg.get("dictated_text", "") or ""),
             }
+            clip_idx = seg.get("_clip_idx")
+            try:
+                clip_idx = int(clip_idx) if clip_idx is not None else None
+            except Exception:
+                clip_idx = None
+            clip_kwargs = {
+                "clip_idx": clip_idx,
+                "clip_file": str(seg.get("_clip_file", "") or ""),
+            }
             quality_kwargs = self._quality_kwargs_from_segment(seg, signature=self._segment_quality_signature({
                 "start": start_sec,
                 "end": seg.get("end", start_sec),
@@ -222,7 +231,7 @@ class EditorSegmentsMixin:
                 "speaker": current_spk,
             }))
             cur.insertText(parts[0])
-            cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, **stt_kwargs, **quality_kwargs))
+            cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs))
             
             # 💡 두 번째 줄부터의 처리 (- 기호 유무로 완벽 통제)
             for p_idx in range(1, len(parts)):
@@ -232,7 +241,7 @@ class EditorSegmentsMixin:
                     # 🚨 '-' 기호가 있으면: 진짜 엔터(\n)를 쳐서 블록을 나누고 화자를 교체합니다.
                     current_spk = spk2_id if current_spk == spk1_id else spk1_id
                     cur.insertText("\n" + line_text)
-                    cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, **stt_kwargs, **quality_kwargs))
+                    cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs))
                 else:
                     # 🚨 '-' 기호가 없으면: 화자를 유지하고 소프트 줄바꿈(\u2028)만 삽입하여 1개의 블록으로 묶습니다.
                     cur.insertText("\u2028" + line_text)
@@ -314,6 +323,10 @@ class EditorSegmentsMixin:
                         "original_text": getattr(data, 'original_text', '') or '',
                         "dictated_text": getattr(data, 'dictated_text', '') or '',
                     }
+                    if getattr(data, "clip_idx", None) is not None:
+                        item["_clip_idx"] = int(getattr(data, "clip_idx"))
+                    if getattr(data, "clip_file", ""):
+                        item["_clip_file"] = str(getattr(data, "clip_file", "") or "")
                     if getattr(data, "quality", None):
                         item["quality"] = dict(getattr(data, "quality", {}) or {})
                         item["quality_history"] = list(getattr(data, "quality_history", []) or [])

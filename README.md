@@ -4,7 +4,7 @@
 
 AI 기반 자막 생성, 자막 편집, 화자 분리, 멀티클립 처리, 러프컷 분석을 하나의 데스크톱 작업 흐름으로 연결하는 영상 자막 제작 도구입니다.
 
-[![Version](https://img.shields.io/badge/version-v03.01.25-0A84FF?style=for-the-badge)](#)
+[![Version](https://img.shields.io/badge/version-v03.02.00-0A84FF?style=for-the-badge)](#)
 [![Phase](https://img.shields.io/badge/phase-PHASE2-30D158?style=for-the-badge)](#)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
@@ -26,7 +26,7 @@ AI Subtitle Studio는 긴 영상 작업에서 반복되는 자막 생성, 보정
 
 | 항목 | 내용 |
 | --- | --- |
-| 현재 버전 | `v03.01.25` |
+| 현재 버전 | `v03.02.00` |
 | 개발 단계 | `PHASE2` |
 | 기본 브랜치 | `main` |
 | 지원 목표 | macOS, Windows |
@@ -248,15 +248,12 @@ PY
 
 전체 릴리즈 노트는 [`RELEASE_v03.00.00.md`](RELEASE_v03.00.00.md)를 참고하세요.
 
-### 최신 릴리즈: v03.01.25
+### 최신 릴리즈: v03.02.00
 
-- 자막 품질 검사 UI, 자동 교정 후보, 사용자 교정 memory, 프로젝트 품질 metadata 보존을 반영했습니다.
-- 에디터 상단에 `검사` 버튼, `자동 교정` 토글, 품질 필터, 후보 비교 버튼, 품질 요약 label을 추가했습니다.
-- 검사 결과는 `quality`, `quality_history`, `quality_candidates` metadata로 보존됩니다.
-- red/yellow/green/gray 품질 상태를 텍스트 에디터 하이라이트와 타임라인 분석 트랙에 표시합니다.
-- correction memory와 wrong-answer memory를 저장/검색하고, 안전 조건을 통과한 후보만 자동 적용합니다.
-- 상세 설정창에 `자막 품질` 탭을 추가했습니다. 기본값은 검사 OFF / 자동 교정 OFF입니다.
-- 관련 단위 테스트를 추가하고 전체 테스트를 통과했습니다.
+- CP-03~CP-11 저장 상태, 상단 상태, 출력 팝업, 자동 홈 복귀, 멀티클립 기존 SRT 시간 흐름을 안정화했습니다.
+- PAGE 3-B 러프컷 UI/엔진 기반, 중분류/소분류, 제목 추천, 하단 tab, 렌더 검증/복구 흐름을 확장했습니다.
+- ffprobe cache, bounded parallel probe, worker clamp, Qt pixmap cache tuning으로 반복 로드와 멀티클립 초기 대기 시간을 줄였습니다.
+- PHASE2 기준 회귀 테스트와 오프스크린 UI smoke 검증을 통과한 릴리즈입니다.
 
 ## 보안
 

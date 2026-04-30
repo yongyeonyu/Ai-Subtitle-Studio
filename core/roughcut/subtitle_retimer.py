@@ -1,11 +1,11 @@
-# Version: 03.00.26
+# Version: 03.01.32
 # Phase: PHASE2
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Iterable
 
-from .models import EDLSegment
+from .models import ChapterMetadata, EDLSegment
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -35,11 +35,21 @@ def retime_subtitles_for_edl(
     subtitle_segments: Iterable[dict[str, Any]],
     edl_segments: Iterable[EDLSegment],
     min_duration: float = 0.03,
+    chapters: Iterable[ChapterMetadata] | None = None,
 ) -> list[dict[str, Any]]:
     """Clip subtitle segments to EDL ranges and remap them onto roughcut output time."""
     subtitles = [dict(segment) for segment in subtitle_segments if not segment.get("is_gap")]
     minimum = max(0.0, float(min_duration))
     retimed: list[dict[str, Any]] = []
+    chapter_meta = {
+        chapter.chapter_id: {
+            "major_id": chapter.major_id,
+            "minor_code": chapter.minor_code,
+            "boundary_status": chapter.boundary_status,
+            "confidence": chapter.confidence,
+        }
+        for chapter in chapters or ()
+    }
 
     for edl in edl_segments:
         edl_timeline_start = _as_float(edl.timeline_start, edl.source_start)
@@ -55,20 +65,22 @@ def retime_subtitles_for_edl(
             output_end = edl.output_start + (clip_end - edl_timeline_start)
             if output_end - output_start < minimum:
                 continue
-            retimed.append(
-                {
-                    "id": len(retimed) + 1,
-                    "source_id": _segment_id(index, subtitle),
-                    "source_start": round(clip_start, 3),
-                    "source_end": round(clip_end, 3),
-                    "start": round(output_start, 3),
-                    "end": round(output_end, 3),
-                    "text": str(subtitle.get("text", "") or "").strip(),
-                    "speaker": subtitle.get("speaker"),
-                    "edl_segment_id": edl.segment_id,
-                    "chapter_id": edl.chapter_id,
-                }
-            )
+            item = {
+                "id": len(retimed) + 1,
+                "source_id": _segment_id(index, subtitle),
+                "source_start": round(clip_start, 3),
+                "source_end": round(clip_end, 3),
+                "start": round(output_start, 3),
+                "end": round(output_end, 3),
+                "text": str(subtitle.get("text", "") or "").strip(),
+                "speaker": subtitle.get("speaker"),
+                "edl_segment_id": edl.segment_id,
+                "chapter_id": edl.chapter_id,
+            }
+            meta = chapter_meta.get(str(edl.chapter_id or edl.segment_id))
+            if meta:
+                item["roughcut_metadata"] = meta
+            retimed.append(item)
 
     return retimed
 

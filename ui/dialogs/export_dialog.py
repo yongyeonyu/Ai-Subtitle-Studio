@@ -1,4 +1,4 @@
-# Version: 03.01.01
+# Version: 03.01.34
 # Phase: PHASE2
 """
 export_dialog.py  ─ SRT → 투명 자막 동영상 출력 (Qt 네이티브 렌더링 & 미리보기 복구본)
@@ -20,7 +20,7 @@ from PyQt6.QtGui  import QColor, QPixmap, QImage, QFont, QPainter, QPen, QBrush,
 import config
 from core.engine.subtitle_engine import save_srt
 from logger import get_logger
-from ui.style import button_style, settings_dialog_stylesheet
+from ui.style import button_style, settings_button_style, settings_dialog_stylesheet
 
 # ── 설정 저장 로직 ──
 _SETTINGS_PATH = os.path.join(config.DATASET_DIR, "user_settings.json")
@@ -105,6 +105,43 @@ def _parse_srt(path:str)->list:
     except: return []
 
 # ── PNG 렌더링 (네이티브 Qt 렌더링) ──
+def _wrap_text_lines(text: str, fm: QFontMetrics, max_width: int) -> list[str]:
+    max_width = max(24, int(max_width))
+    wrapped: list[str] = []
+    for raw_line in str(text or "").replace("\u2028", "\n").split("\n"):
+        line = raw_line.strip()
+        if not line:
+            wrapped.append("")
+            continue
+        words = line.split()
+        if not words:
+            words = list(line)
+        current = ""
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            if fm.horizontalAdvance(candidate) <= max_width:
+                current = candidate
+                continue
+            if current:
+                wrapped.append(current)
+                current = ""
+            if fm.horizontalAdvance(word) <= max_width:
+                current = word
+                continue
+            chunk = ""
+            for ch in word:
+                candidate = f"{chunk}{ch}"
+                if chunk and fm.horizontalAdvance(candidate) > max_width:
+                    wrapped.append(chunk)
+                    chunk = ch
+                else:
+                    chunk = candidate
+            current = chunk
+        if current:
+            wrapped.append(current)
+    return wrapped or [""]
+
+
 def _make_png(dest, text:str, width:int, height:int, style:dict):
     img = QImage(width, height, QImage.Format.Format_ARGB32)
     img.fill(Qt.GlobalColor.transparent) 
@@ -125,7 +162,8 @@ def _make_png(dest, text:str, width:int, height:int, style:dict):
     fm = QFontMetrics(font)
     
     lsp = style.get("line_spacing", 6)
-    lines = text.split('\n')
+    max_text_w = int(width * float(style.get("max_text_width_ratio", 0.92) or 0.92))
+    lines = _wrap_text_lines(text, fm, max_text_w)
     text_w = max((fm.horizontalAdvance(line) for line in lines), default=0)
     line_h = fm.height()
     text_h = (line_h * len(lines)) + (lsp * (len(lines) - 1))
@@ -293,6 +331,9 @@ class ExportDialog(QDialog):
     def _build_ui(self):
         root=QVBoxLayout(self); root.setSpacing(8)
         tabs=QTabWidget()
+        tabs.setStyleSheet(
+            "QTabBar::tab { min-height: 34px; max-height: 34px; padding: 0 14px; }"
+        )
         root.addWidget(tabs)
 
         def lrow(lbl,w,lw=130):
@@ -378,23 +419,26 @@ class ExportDialog(QDialog):
 
         def footer_button(text, kind="toolbar", min_width=96):
             btn = QPushButton(text)
-            btn.setFixedHeight(38)
-            btn.setFixedWidth(min_width)
+            btn.setFixedHeight(40)
+            btn.setMinimumWidth(min_width)
             btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-            btn.setStyleSheet(button_style(kind, font_size="13px", padding="8px 16px"))
+            btn.setStyleSheet(settings_button_style(kind, font_size="13px", min_width=min_width))
             return btn
 
-        btn_save = footer_button("💾 저장", "toolbar", 96)
-        btn_save.setToolTip("설정 저장 (창 유지)")
-        btn_save.clicked.connect(self._save)
-        br.addWidget(btn_save)
+        self.save_btn = footer_button("💾 저장", "toolbar", 96)
+        self.save_btn.setObjectName("exportSaveButton")
+        self.save_btn.setToolTip("현재 설정 저장 및 비디오 플레이어 자막 오버레이 반영")
+        self.save_btn.clicked.connect(self._save)
+        br.addWidget(self.save_btn)
 
         btn_save_default = footer_button("기본값 저장", "toolbar", 112)
+        btn_save_default.setObjectName("exportSaveDefaultButton")
         btn_save_default.setToolTip("현재 자막 출력 설정을 기본값으로 저장")
         btn_save_default.clicked.connect(self._save_default)
         br.addWidget(btn_save_default)
 
         btn_load_default = footer_button("기본값 불러오기", "toolbar", 128)
+        btn_load_default.setObjectName("exportLoadDefaultButton")
         btn_load_default.setToolTip("저장된 기본값을 현재 창에 불러오기")
         btn_load_default.clicked.connect(self._load_default)
         br.addWidget(btn_load_default)
@@ -402,22 +446,19 @@ class ExportDialog(QDialog):
         br.addStretch()
 
         btn_cancel = footer_button("취소", "toolbar", 96)
+        btn_cancel.setObjectName("exportCancelButton")
         btn_cancel.setToolTip("저장하지 않고 닫기")
         btn_cancel.clicked.connect(self.reject)
         br.addWidget(btn_cancel)
 
-        self.apply_btn = footer_button("적용", "toolbar", 96)
-        self.apply_btn.setToolTip("현재 설정을 비디오 플레이어 자막 오버레이에 바로 반영")
-        self.apply_btn.clicked.connect(self._apply_to_video_player)
-        br.addWidget(self.apply_btn)
-
         btn_ok = footer_button("확인", "primary", 96)
+        btn_ok.setObjectName("exportOkButton")
         btn_ok.setToolTip("설정 저장 후 닫기")
         btn_ok.clicked.connect(self._ok)
         br.addWidget(btn_ok)
 
         self.render_btn = footer_button("🚀 렌더링 시작", "primary", 132)
-        self.render_btn.setStyleSheet(button_style("primary", font_size="14px", padding="8px 22px"))
+        self.render_btn.setObjectName("exportRenderButton")
         self.render_btn.clicked.connect(self._render)
         br.addWidget(self.render_btn)
 
@@ -484,9 +525,19 @@ class ExportDialog(QDialog):
     def _render_scale(self) -> float:
         return 4.0 if self._output_width() >= 3840 else 2.0
 
+    def _preview_width(self) -> int:
+        player = self._video_player()
+        sub_label = getattr(player, "sub_label", None) if player is not None else None
+        try:
+            rect_width = int(sub_label.width())
+        except Exception:
+            rect_width = 0
+        label_width = max(self.prev_lbl.width(), 480)
+        return max(320, min(label_width, rect_width if rect_width > 0 else label_width))
+
     def _refresh_preview(self):
         try:
-            pw = max(self.prev_lbl.width(), 480)
+            pw = self._preview_width()
             sample = "소설가유모씨 채널 ABC 123\n이것은 2줄 자막 미리보기입니다" if self.prev_2_btn.isChecked() else "소설가유모씨 채널 ABC 123 자막 미리보기"
             try: real_fs = int(self.sz_combo.currentText())
             except: real_fs = 60
@@ -497,6 +548,7 @@ class ExportDialog(QDialog):
             ph = max(110, int(real_fs * self._render_scale() * 3.5 * preview_scale))
             
             st = self._style(font_size=ps, effect_scale=effect_scale)
+            st["max_text_width_ratio"] = 0.92
             
             text_img = _make_png(None, sample, pw, ph, st)
             
@@ -552,13 +604,15 @@ class ExportDialog(QDialog):
             return False
 
     def _save(self):
-        """설정을 user_settings.json에 저장 (창 유지)."""
+        """설정을 저장하고 연결된 비디오 플레이어 overlay에도 즉시 반영합니다."""
         try:
-            _save_es(self._collect())
-            orig = self.render_btn.text()
-            self.render_btn.setText("✅ 저장됨")
+            settings = self._collect()
+            _save_es(settings)
+            self._apply_to_video_player(settings, silent=True)
+            orig = self.save_btn.text()
+            self.save_btn.setText("✅ 저장됨")
             from PyQt6.QtCore import QTimer
-            QTimer.singleShot(1500, lambda: self.render_btn.setText(orig))
+            QTimer.singleShot(1500, lambda: self.save_btn.setText(orig))
         except Exception as e:
             QMessageBox.critical(self, "오류", f"설정 저장 오류:\n{e}")
 
@@ -597,27 +651,28 @@ class ExportDialog(QDialog):
             parent = parent.parent()
         return None
 
-    def _apply_to_video_player(self):
+    def _apply_to_video_player(self, settings: dict | None = None, silent: bool = False):
         """Apply output-resolution-based subtitle style to the live video overlay."""
         try:
-            settings = self._collect()
+            settings = dict(settings or self._collect())
             _save_es(settings)
             player = self._video_player()
             if player is None or not hasattr(player, "apply_export_subtitle_style"):
-                QMessageBox.information(self, "알림", "현재 연결된 비디오 플레이어가 없습니다.")
+                if not silent:
+                    QMessageBox.information(self, "알림", "현재 연결된 비디오 플레이어가 없습니다.")
                 return
             player.apply_export_subtitle_style(settings)
-            orig = self.apply_btn.text()
-            self.apply_btn.setText("✅ 적용됨")
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(1200, lambda: self.apply_btn.setText(orig))
+            self._refresh_preview()
         except Exception as e:
-            QMessageBox.critical(self, "오류", f"오버레이 적용 오류:\n{e}")
+            if not silent:
+                QMessageBox.critical(self, "오류", f"오버레이 적용 오류:\n{e}")
 
     def _ok(self):
         """설정 저장 후 창 닫기."""
         try:
-            _save_es(self._collect())
+            settings = self._collect()
+            _save_es(settings)
+            self._apply_to_video_player(settings, silent=True)
         except Exception as e:
             QMessageBox.critical(self, "오류", f"설정 저장 오류:\n{e}")
         self.accept()
@@ -641,6 +696,7 @@ class ExportDialog(QDialog):
         fs=int(self.sz_combo.currentText()); res_scale=self._render_scale()
         scaled_fs=int(fs*res_scale); height=int(scaled_fs*3.5); height+=height%2
         st=self._style(font_size=scaled_fs, effect_scale=res_scale)
+        st["max_text_width_ratio"] = 0.92
         
         self._prog=QProgressDialog("렌더링 중...",None,0,100,self); self._prog.show()
         self._worker=_RenderWorker(dict(segs=segs,width=width,height=height,style=st,output=out_p,total_dur=max(s["end"] for s in segs)+0.5,fast="빠른" in self.quality_combo.currentText()))

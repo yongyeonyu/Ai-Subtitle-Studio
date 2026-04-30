@@ -1,4 +1,4 @@
-# Version: 03.00.11
+# Version: 03.01.26
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Iterable, Literal
 
 from .gap_detector import TimelineGap
-from .models import ChapterMetadata, EditDecision, PackedPhrase, RoughCutSegment
+from .models import ChapterMetadata, CutPoint, EditDecision, PackedPhrase, RoughCutSegment
 
 CutSafety = Literal["ideal", "acceptable", "risky"]
 
@@ -135,6 +135,10 @@ def _worst_safety(*values: CutSafety) -> CutSafety:
     return max(values, key=lambda value: rank[value])
 
 
+def _confidence_for_safety(safety: CutSafety) -> float:
+    return {"ideal": 0.96, "acceptable": 0.78, "risky": 0.38}.get(safety, 0.5)
+
+
 def _item_id(item: ChapterMetadata | RoughCutSegment) -> str:
     return getattr(item, "segment_id", "") or getattr(item, "chapter_id", "")
 
@@ -230,7 +234,37 @@ def build_edit_decisions(
                 source_end=padded_end,
                 output_order=output_order,
                 safety=safety,
+                confidence=_confidence_for_safety(safety),
             )
         )
 
     return decisions
+
+
+def generate_cut_points(
+    decisions: Iterable[EditDecision],
+    phrases: Iterable[PackedPhrase] | None = None,
+    gaps: Iterable[TimelineGap] | None = None,
+) -> list[CutPoint]:
+    """Expose start/end cut points as a standalone contract object."""
+    phrase_items = _ordered_phrases(phrases)
+    gap_items = _ordered_gaps(gaps)
+    cut_points: list[CutPoint] = []
+    for decision in decisions or ():
+        for boundary, value in (("start", decision.source_start), ("end", decision.source_end)):
+            if value is None:
+                continue
+            safety = classify_cut_safety(value, phrase_items, gap_items)
+            cut_points.append(
+                CutPoint(
+                    segment_id=decision.segment_id,
+                    cut_time=value,
+                    boundary=boundary,
+                    action=decision.action,
+                    safety=safety.safety,
+                    reason=safety.reason,
+                    adjusted_time=safety.adjusted_time,
+                    confidence=_confidence_for_safety(safety.safety),
+                )
+            )
+    return cut_points

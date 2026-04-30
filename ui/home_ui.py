@@ -1,4 +1,4 @@
-# Version: 03.01.15
+# Version: 03.01.35
 # Phase: PHASE2
 """
 ui/home_ui.py
@@ -192,25 +192,98 @@ class HomeUIMixin:
             return bool(getattr(state_manager, "is_dirty", False))
         return bool(getattr(editor, "_is_dirty", False))
 
+    def _is_subtitle_generation_running(self) -> bool:
+        editor = self._active_editor()
+        if editor is not None:
+            state_manager = getattr(editor, "sm", None)
+            if state_manager is not None:
+                if str(getattr(state_manager, "state", "") or "") == "ST_PROC":
+                    return True
+                if bool(getattr(state_manager, "is_locked", False)):
+                    return True
+            if bool(getattr(editor, "_is_ai_processing", False)):
+                return True
+        backend = getattr(self, "backend", None)
+        for attr in ("_active", "is_running", "running"):
+            value = getattr(backend, attr, False)
+            if callable(value):
+                try:
+                    value = value()
+                except Exception:
+                    value = False
+            if bool(value):
+                return True
+        return bool(getattr(self, "_auto_processing_active", False))
+
+    def _ensure_saved_status_blink_timer(self):
+        if hasattr(self, "_saved_status_blink_timer"):
+            return
+        self._saved_status_blink_on = True
+        self._saved_status_blink_timer = QTimer(self)
+        self._saved_status_blink_timer.setInterval(1000)
+        self._saved_status_blink_timer.timeout.connect(self._tick_saved_status_blink)
+
+    def _tick_saved_status_blink(self):
+        self._saved_status_blink_on = not bool(getattr(self, "_saved_status_blink_on", True))
+        self._refresh_saved_status_label(is_dirty=getattr(self, "_last_saved_status_dirty", None))
+
+    def _sync_saved_status_blink_timer(self, active: bool):
+        self._ensure_saved_status_blink_timer()
+        timer = self._saved_status_blink_timer
+        if active:
+            if not timer.isActive():
+                self._saved_status_blink_on = True
+                timer.start()
+        else:
+            if timer.isActive():
+                timer.stop()
+            self._saved_status_blink_on = True
+
     def _refresh_saved_status_label(self, is_dirty=None, touch_saved_time=False):
         label = getattr(self, "saved_status_label", None)
         if label is None:
             return
         dirty = self._is_workspace_dirty() if is_dirty is None else bool(is_dirty)
+        self._last_saved_status_dirty = dirty
         if not hasattr(self, "_last_saved_status_time"):
             self._last_saved_status_time = self._current_status_time_text()
         if not dirty and touch_saved_time:
             self._last_saved_status_time = self._current_status_time_text()
 
-        dot_color = "#FF453A" if dirty else "#34C759"
-        status_text = "저장안됨" if dirty else "저장됨"
+        generating = self._is_subtitle_generation_running()
+        self._sync_saved_status_blink_timer(generating)
+        if generating:
+            dot_color = "#FF453A" if bool(getattr(self, "_saved_status_blink_on", True)) else "#5A1F24"
+            tooltip = "자막 생성 중입니다."
+        else:
+            dot_color = "#FF453A" if dirty else "#34C759"
+            tooltip = "저장되지 않은 변경사항이 있습니다." if dirty else "저장된 상태입니다."
         label.setTextFormat(Qt.TextFormat.RichText)
         from config import APP_VERSION
+        idle_text = self._post_completion_idle_status_text()
+        idle_html = (
+            f" <span style='color:#7F8C96; font-size:10px;'>· {idle_text}</span>"
+            if idle_text else ""
+        )
         label.setText(
             f"<span style='color:{dot_color}; font-size:13px;'>●</span> "
             f"<span style='color:#D1D1D6;'>v{APP_VERSION}</span>"
+            f"{idle_html}"
         )
-        label.setToolTip("저장되지 않은 변경사항이 있습니다." if dirty else "저장된 상태입니다.")
+        label.setToolTip(tooltip)
+
+    def _post_completion_idle_status_text(self) -> str:
+        remaining_getter = getattr(self, "_post_completion_idle_remaining_ms", None)
+        if not callable(remaining_getter):
+            return ""
+        if self._is_subtitle_generation_running() and not bool(getattr(self, "_post_completion_idle_enabled", False)):
+            return "홈 대기"
+        if not bool(getattr(self, "_post_completion_idle_enabled", False)):
+            return ""
+        remaining = max(0, int(remaining_getter()))
+        total_sec = (remaining + 999) // 1000
+        minute, second = divmod(total_sec, 60)
+        return f"홈 {minute:02d}:{second:02d}"
 
     def _format_engine_info_text(self, text: str) -> str:
         lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
@@ -342,9 +415,23 @@ class HomeUIMixin:
                 self._cloud_sync_manager.stop()
             if hasattr(self, "_nas_sync_manager"):
                 self._nas_sync_manager.stop()
-        self.show_home()
+        self._refresh_after_auto_start_toggle()
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.refresh()
+
+    def _refresh_after_auto_start_toggle(self):
+        try:
+            self._build_home_content()
+        except Exception:
+            pass
+        try:
+            self._ensure_watchdog_timer()
+        except Exception:
+            pass
+        try:
+            self._refresh_saved_status_label()
+        except Exception:
+            pass
 
     def _start_configured_watchers(self):
         if not self._is_auto_start_enabled():
@@ -731,7 +818,7 @@ class HomeUIMixin:
         if hasattr(self, "_apply_log_visible") and not getattr(self, "_log_visible", False):
             self._apply_log_visible(True)
         self.stack.setCurrentWidget(page)
-        page.refresh_from_editor()
+        page.refresh_from_editor(analyze_if_missing=False)
         self._refresh_work_mode_ui()
 
     def _open_shortform_maker(self):

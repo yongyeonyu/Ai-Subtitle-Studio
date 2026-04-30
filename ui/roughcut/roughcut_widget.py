@@ -1,6 +1,8 @@
-# Version: 03.01.17
+# Version: 03.01.31
 # Phase: PHASE2
 from __future__ import annotations
+
+from dataclasses import replace
 
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
@@ -13,18 +15,25 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QTabWidget,
     QTableWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from core.roughcut import build_title_suggestions, default_thumbnail_cache_dir, ensure_thumbnail
+from ui.roughcut.roughcut_bottom_panel import RoughcutBottomPanel
 from ui.roughcut.roughcut_export import RoughcutExportMixin
 from ui.roughcut.roughcut_format import TABLE_COLUMNS
 from ui.roughcut.roughcut_detail import RoughcutDetailMixin
+from ui.roughcut.roughcut_log_panel import RoughcutLogPanel
+from ui.roughcut.roughcut_major_panel import RoughcutMajorPanel
 from ui.roughcut.roughcut_preview import RoughcutPreviewMixin
 from ui.roughcut.roughcut_state import RoughcutStateMixin
+from ui.roughcut.roughcut_style_panel import DEFAULT_ROUGHCUT_EXPORT_STYLE, RoughcutStylePanel
 from ui.roughcut.roughcut_table import RoughcutTableMixin
+from ui.roughcut.roughcut_title_panel import RoughcutTitlePanel
 from ui.style import COLORS, button_style, label_style, line_icon, panel_style
 
 
@@ -57,12 +66,39 @@ class RoughcutWidget(
         self._render_worker = None
         self._last_render_plan = None
         self._last_failed_render_plan = None
+        self._roughcut_export_style = dict(DEFAULT_ROUGHCUT_EXPORT_STYLE)
         self._render_log_lines: list[str] = []
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(120)
         self._preview_timer.timeout.connect(self._preview_tick)
         self.setStyleSheet(f"background: {COLORS['bg']}; color: {COLORS['text']};")
         self._build_ui()
+
+    def run_main_action(self) -> None:
+        """Route the global Start button to roughcut analysis while this page is active."""
+        if self._subtitle_generation_active():
+            self._set_roughcut_status("자막 생성 중")
+            self.preview_summary_lbl.setText("자막 생성이 끝난 뒤 러프컷 분석을 시작할 수 있습니다.")
+            return
+        self._set_roughcut_status("읽는 중", 15)
+        self._append_roughcut_log("에디터 자막을 러프컷 분석 입력으로 읽습니다.")
+        self.refresh_from_editor(force_reanalyze=True, analyze_if_missing=True)
+        self._set_roughcut_status("분석 완료" if self._result is not None else "분석 대기", 100 if self._result is not None else None)
+
+    def _subtitle_generation_active(self) -> bool:
+        owner = self.owner
+        backend = getattr(owner, "backend", None) if owner is not None else None
+        if bool(getattr(backend, "_active", False)):
+            return True
+        editor = self._active_editor()
+        if editor is None:
+            return False
+        try:
+            from core.state_manager import SubtitleStateManager
+
+            return getattr(getattr(editor, "sm", None), "state", None) == SubtitleStateManager.ST_PROC
+        except Exception:
+            return bool(getattr(editor, "_is_ai_processing", False))
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -76,8 +112,42 @@ class RoughcutWidget(
         splitter.setStyleSheet("QSplitter::handle { background: #0F1518; height: 2px; }")
         root.addWidget(splitter, stretch=1)
 
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_splitter.setChildrenCollapsible(False)
+        main_splitter.setStyleSheet("QSplitter::handle { background: #0F1518; width: 2px; }")
+
+        self.main_tabs = QTabWidget()
+        self.main_tabs.setStyleSheet(
+            "QTabWidget::pane { border: 1px solid #2D3942; border-radius: 7px; background: #11181C; } "
+            "QTabBar::tab { background: #202A31; color: #A9B0B7; border: 1px solid #2D3942; "
+            "border-bottom: none; padding: 7px 12px; min-height: 24px; min-width: 78px; "
+            "border-top-left-radius: 7px; border-top-right-radius: 7px; } "
+            "QTabBar::tab:selected { background: #151C20; color: #F5F7FA; border-color: #34C759; }"
+        )
+        self.major_panel = RoughcutMajorPanel()
+        self.major_panel.minorSelected.connect(self._select_chapter_id_from_major_panel)
+        self.major_panel.previewRequested.connect(self._preview_chapter_id_from_major_panel)
+        self.main_tabs.addTab(self.major_panel, "중분류")
         self.table = self._build_table()
-        splitter.addWidget(self.table)
+        self.main_tabs.addTab(self.table, "기존 테이블")
+        main_splitter.addWidget(self.main_tabs)
+
+        side = QWidget()
+        side.setStyleSheet("background: transparent; border: none;")
+        side_lay = QVBoxLayout(side)
+        side_lay.setContentsMargins(0, 0, 0, 0)
+        side_lay.setSpacing(8)
+        self.log_panel = RoughcutLogPanel()
+        self.title_panel = RoughcutTitlePanel()
+        self.style_panel = RoughcutStylePanel()
+        self.title_panel.refreshRequested.connect(self._refresh_title_suggestions)
+        self.style_panel.styleSaved.connect(self._save_roughcut_export_style)
+        side_lay.addWidget(self.log_panel, stretch=1)
+        side_lay.addWidget(self.title_panel, stretch=1)
+        side_lay.addWidget(self.style_panel, stretch=1)
+        main_splitter.addWidget(side)
+        main_splitter.setSizes([880, 320])
+        splitter.addWidget(main_splitter)
 
         self.guide_text = QTextEdit()
         self.guide_text.setReadOnly(True)
@@ -85,10 +155,78 @@ class RoughcutWidget(
             "QTextEdit { background: #11181C; color: #DCE3EA; border: 1px solid #2D3942; "
             "border-radius: 7px; padding: 10px; font-size: 11px; }"
         )
-        splitter.addWidget(self.guide_text)
-        splitter.setSizes([520, 260])
+        self.bottom_tabs = RoughcutBottomPanel(self.bottom_panel)
+        self.bottom_tabs.tabs.addTab(self.guide_text, "가이드")
+        splitter.addWidget(self.bottom_tabs)
+        splitter.setSizes([520, 300])
 
         self._set_empty_state()
+
+    def _set_roughcut_status(self, text: str, progress: int | None = None) -> None:
+        if hasattr(self, "render_status_lbl"):
+            self.render_status_lbl.setText(str(text or "분석 대기"))
+        if hasattr(self, "log_panel"):
+            self.log_panel.set_status(str(text or "분석 대기"), progress)
+
+    def _append_roughcut_log(self, text: str, level: str = "info") -> None:
+        if hasattr(self, "log_panel"):
+            self.log_panel.append_log(text, level)
+
+    def _select_chapter_id_from_major_panel(self, chapter_id: str) -> None:
+        chapter_id = str(chapter_id or "")
+        if not chapter_id or chapter_id not in self._row_chapter_ids:
+            return
+        row = self._row_chapter_ids.index(chapter_id)
+        self.table.selectRow(row)
+        self._preview_row_data(row)
+        self._play_preview(row, muted=False)
+
+    def _preview_chapter_id_from_major_panel(self, chapter_id: str, hover: bool) -> None:
+        chapter_id = str(chapter_id or "")
+        if not chapter_id or chapter_id not in self._row_chapter_ids:
+            return
+        row = self._row_chapter_ids.index(chapter_id)
+        if hover:
+            self._prepare_thumbnail_for_row(row)
+            self._play_preview(row, muted=True, hover=True, update_preview_data=False)
+            return
+        self._select_chapter_id_from_major_panel(chapter_id)
+
+    def _prepare_thumbnail_for_row(self, row: int) -> None:
+        if row < 0:
+            return
+        chapter = self._chapter_for_row(row)
+        media_path = self._media_path()
+        if chapter is None or not media_path:
+            return
+        midpoint = (float(chapter.start) + float(chapter.end)) / 2.0
+        cache_dir = default_thumbnail_cache_dir(self._project_path())
+        result = ensure_thumbnail(media_path, midpoint, cache_dir=cache_dir, width=360)
+        if result.status in {"created", "cached"} and result.path:
+            self.preview_thumb_lbl.setText(f"썸네일\n{midpoint:.1f}s")
+        elif result.status not in {"missing_source", "missing"}:
+            self._append_roughcut_log(f"썸네일 fallback: {result.reason}", "warning")
+
+    def _save_roughcut_export_style(self, payload: dict) -> None:
+        self._roughcut_export_style = dict(DEFAULT_ROUGHCUT_EXPORT_STYLE)
+        self._roughcut_export_style.update(payload or {})
+        self._append_roughcut_log("러프컷 export style을 프로젝트 상태에 저장했습니다.", "done")
+        self._persist_roughcut_state()
+
+    def _refresh_title_suggestions(self) -> None:
+        if self._result is None:
+            self._set_roughcut_status("분석 대기")
+            return
+        self._set_roughcut_status("제목 생성", 70)
+        self._append_roughcut_log("러프컷 제목 후보를 새로 구성합니다.")
+        suggestions = build_title_suggestions(
+            self._result,
+            settings=self._roughcut_settings_payload(),
+        )
+        self._result = replace(self._result, title_suggestions=tuple(suggestions))
+        self.title_panel.set_suggestions(suggestions)
+        self._persist_roughcut_state()
+        self._set_roughcut_status("분석 완료", 100)
 
     def _build_bottom_panel(self) -> QWidget:
         panel = QWidget()
@@ -166,7 +304,7 @@ class RoughcutWidget(
         top_lay.addWidget(self.safety_filter_combo)
 
         self.btn_refresh = self._panel_button("분석", "refresh", kind="primary")
-        self.btn_refresh.clicked.connect(lambda: self.refresh_from_editor(force_reanalyze=True))
+        self.btn_refresh.clicked.connect(self.run_main_action)
         top_lay.addWidget(self.btn_refresh)
 
         for text, icon_name, handler in (

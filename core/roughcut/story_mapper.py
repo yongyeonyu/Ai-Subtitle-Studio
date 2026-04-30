@@ -1,4 +1,4 @@
-# Version: 03.00.03
+# Version: 03.01.26
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -144,3 +144,13 @@ def map_story_roles(chapters: Iterable[ChapterMetadata]) -> list[ChapterMetadata
         )
 
     return mapped
+
+
+def classify_story_role(chapter: ChapterMetadata, index: int = 0, total: int = 1) -> tuple[str, str, str, float]:
+    """Public compatibility wrapper for story role classification."""
+    return _classify_story_role(chapter, index, max(1, total))
+
+
+def remap_story_flow(chapters: Iterable[ChapterMetadata]) -> list[ChapterMetadata]:
+    """Compatibility alias; current policy assigns roles without reordering."""
+    return map_story_roles(chapters)

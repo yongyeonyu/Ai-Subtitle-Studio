@@ -1,4 +1,4 @@
-# Version: 03.01.21
+# Version: 03.01.37
 # Phase: PHASE2
 """
 core/pipeline/multiclip_pipeline.py
@@ -14,7 +14,7 @@ import config
 from logger import get_logger
 from core.settings import load_settings, get_model_key
 from core.time_history import get_expected_time
-from core.media_info import probe_media
+from core.media_info import probe_media_many
 
 
 class MulticlipPipelineMixin:
@@ -106,11 +106,13 @@ class MulticlipPipelineMixin:
         if hasattr(self.ui, "_sig_update_queue"):
             self.ui._sig_update_queue.emit(idx, status, expected, info_txt, len_txt)
 
-    def _offset_multiclip_segments(self, segments, offset, clip_idx):
+    def _offset_multiclip_segments(self, segments, offset, clip_idx, clip_file=None):
         for seg in segments:
             seg["start"] = float(seg.get("start", 0.0)) + offset
             seg["end"] = float(seg.get("end", 0.0)) + offset
             seg["_clip_idx"] = clip_idx
+            if clip_file:
+                seg["_clip_file"] = clip_file
             if "speaker" not in seg:
                 seg["speaker"] = seg.get("spk_id", "00")
             for word in seg.get("words", []) or []:
@@ -128,7 +130,7 @@ class MulticlipPipelineMixin:
                         word["end"] = float(word.get("end", 0.0)) + offset
         return segments
 
-    def _sanitize_multiclip_segments(self, segments, clip_idx):
+    def _sanitize_multiclip_segments(self, segments, clip_idx, clip_file=None):
         clean = []
         for seg in segments or []:
             try:
@@ -141,6 +143,8 @@ class MulticlipPipelineMixin:
             seg["start"] = start
             seg["end"] = end
             seg["_clip_idx"] = clip_idx
+            if clip_file:
+                seg["_clip_file"] = clip_file
             asr_meta = seg.get("asr_metadata")
             if isinstance(asr_meta, dict):
                 asr_meta["_clip_idx"] = clip_idx
@@ -169,7 +173,7 @@ class MulticlipPipelineMixin:
             get_logger().log(f"  ⚠️ 기존 자막 파일이 비어있음: {vname}")
             return None
 
-        self._offset_multiclip_segments(segments, offset, clip_idx)
+        self._offset_multiclip_segments(segments, offset, clip_idx, target_file)
         self._reuse_clip_indices.add(clip_idx)
         try:
             self.ui._reuse_clip_indices = set(self._reuse_clip_indices)
@@ -216,6 +220,7 @@ class MulticlipPipelineMixin:
                             {
                                 "idx": i,
                                 "name": vname,
+                                "file": target_file,
                                 "segments": existing,
                                 "skip_optimize": True,
                             }
@@ -235,6 +240,15 @@ class MulticlipPipelineMixin:
                     if not res:
                         get_logger().log(f"  ❌ 오디오 추출 실패: {vname}")
                         self._emit_multiclip_queue_status(i, "❌ 오류", "", "", "")
+                        stt_queue.put(
+                            {
+                                "idx": i,
+                                "name": vname,
+                                "file": target_file,
+                                "segments": [],
+                                "skip_optimize": True,
+                            }
+                        )
                         continue
 
                     chunk_dir, vad_segs = res
@@ -263,7 +277,7 @@ class MulticlipPipelineMixin:
                     if not self._active:
                         break
 
-                    self._offset_multiclip_segments(clip_segments, offset, i)
+                    self._offset_multiclip_segments(clip_segments, offset, i, target_file)
                     get_logger().log(
                         f"    📊 Whisper 완료: {len(clip_segments)}개 세그먼트 → LLM 큐 전달"
                     )
@@ -272,6 +286,7 @@ class MulticlipPipelineMixin:
                         {
                             "idx": i,
                             "name": vname,
+                            "file": target_file,
                             "segments": clip_segments,
                             "skip_optimize": False,
                         }
@@ -293,10 +308,11 @@ class MulticlipPipelineMixin:
 
                 idx = item["idx"]
                 vname = item["name"]
+                clip_file = item.get("file")
                 segments = item["segments"]
 
                 if item.get("skip_optimize"):
-                    optimized = self._sanitize_multiclip_segments(segments, idx)
+                    optimized = self._sanitize_multiclip_segments(segments, idx, clip_file)
                 else:
                     self._emit_multiclip_queue_status(idx, "⏳ LLM 최적화 중", "", "", "")
                     get_logger().log(
@@ -309,12 +325,13 @@ class MulticlipPipelineMixin:
                             f"  ⚠️ LLM 최적화 실패, Whisper 결과 유지: {vname} / {e}"
                         )
                         optimized = segments
-                    optimized = self._sanitize_multiclip_segments(optimized, idx)
+                    optimized = self._sanitize_multiclip_segments(optimized, idx, clip_file)
 
                 out_queue.put(
                     {
                         "idx": idx,
                         "name": vname,
+                        "file": clip_file,
                         "segments": optimized,
                         "skip_optimize": item.get("skip_optimize", False),
                     }
@@ -332,28 +349,40 @@ class MulticlipPipelineMixin:
         llm_thread.start()
 
         processed_count = 0
+        next_emit_idx = 0
+        pending_outputs = {}
+
+        def _emit_ready_outputs():
+            nonlocal next_emit_idx, processed_count
+            while next_emit_idx in pending_outputs:
+                ready = pending_outputs.pop(next_emit_idx)
+                idx = ready["idx"]
+                optimized = ready["segments"]
+                if hasattr(self.ui, "_sig_append_segments"):
+                    self.ui._sig_append_segments.emit(optimized)
+                self._emit_multiclip_queue_status(
+                    idx,
+                    "✅기존자막" if ready.get("skip_optimize") else "✅ 완료",
+                    "",
+                    "",
+                    "",
+                )
+                processed_count += 1
+                get_logger().log(
+                    f"  ✅ 클립 {idx + 1} 자막 완료 ({len(optimized)}개 세그먼트)"
+                )
+                next_emit_idx += 1
+
         while True:
             item = out_queue.get()
             if item is sentinel:
+                _emit_ready_outputs()
                 break
             if item.get("fatal"):
                 raise item["error"]
 
-            idx = item["idx"]
-            optimized = item["segments"]
-            if hasattr(self.ui, "_sig_append_segments"):
-                self.ui._sig_append_segments.emit(optimized)
-            self._emit_multiclip_queue_status(
-                idx,
-                "✅기존자막" if item.get("skip_optimize") else "✅ 완료",
-                "",
-                "",
-                "",
-            )
-            processed_count += 1
-            get_logger().log(
-                f"  ✅ 클립 {idx + 1} 자막 완료 ({len(optimized)}개 세그먼트)"
-            )
+            pending_outputs[int(item["idx"])] = item
+            _emit_ready_outputs()
 
         stt_thread.join(timeout=2.0)
         llm_thread.join(timeout=2.0)
@@ -377,10 +406,11 @@ class MulticlipPipelineMixin:
             model_key = get_model_key(s)
             total_expected = 0.0
 
+            media_infos = probe_media_many(self.files_to_process)
             for i, target_file in enumerate(self.files_to_process):
                 vname = os.path.basename(target_file)
                 try:
-                    info = probe_media(target_file)
+                    info = media_infos[i] if i < len(media_infos) else {}
                     clip_dur = info["duration"]
                     info_txt = info["info_txt"]
                     len_txt = info["len_txt"]

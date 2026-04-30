@@ -1,4 +1,4 @@
-# Version: 03.00.26
+# Version: 03.01.32
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -99,6 +99,16 @@ def build_edl_segments(
     return edl
 
 
+def generate_edl(
+    source_path: str,
+    decisions: Iterable[EditDecision],
+    items: Iterable[ChapterMetadata | RoughCutSegment] | None = None,
+    min_duration: float = 0.05,
+) -> list[EDLSegment]:
+    """Compatibility wrapper for the public roughcut EDL contract."""
+    return build_edl_segments(source_path, decisions, items=items, min_duration=min_duration)
+
+
 def _boundary_items(clip_boundaries: Iterable[dict[str, Any]] | None) -> list[dict[str, Any]]:
     items = []
     for idx, item in enumerate(clip_boundaries or ()):
@@ -195,25 +205,98 @@ def _jsonable(value: Any) -> Any:
 def edl_to_dict(
     edl_segments: Iterable[EDLSegment],
     metadata: dict[str, Any] | None = None,
+    chapters: Iterable[ChapterMetadata] | None = None,
+    major_segments: Iterable[RoughCutSegment] | None = None,
 ) -> dict[str, Any]:
     segments = list(edl_segments)
     duration = segments[-1].output_end if segments else 0.0
+    chapter_meta = _chapter_metadata_lookup(chapters)
+    major_meta = _major_metadata_lookup(major_segments)
     return {
         "schema": "ai_subtitle_studio.roughcut.edl.v1",
-        "version": "03.00.26",
-        "metadata": _jsonable(metadata or {}),
+        "version": "03.01.32",
+        "metadata": _jsonable(_edl_metadata(metadata or {}, chapters, major_segments)),
         "duration": round(duration, 3),
-        "segments": [_jsonable(segment) for segment in segments],
+        "segments": [
+            _jsonable(_edl_segment_payload(segment, chapter_meta=chapter_meta, major_meta=major_meta))
+            for segment in segments
+        ],
     }
+
+
+def _edl_metadata(
+    metadata: dict[str, Any],
+    chapters: Iterable[ChapterMetadata] | None,
+    major_segments: Iterable[RoughCutSegment] | None,
+) -> dict[str, Any]:
+    payload = dict(metadata or {})
+    chapter_items = list(chapters or ())
+    major_items = list(major_segments or ())
+    if chapter_items or major_items:
+        payload["roughcut_v2"] = {
+            "chapter_count": len(chapter_items),
+            "major_segment_count": len(major_items),
+            "has_major_minor": any(getattr(chapter, "major_id", "") or getattr(chapter, "minor_code", "") for chapter in chapter_items),
+        }
+    return payload
+
+
+def _chapter_metadata_lookup(chapters: Iterable[ChapterMetadata] | None) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    for chapter in chapters or ():
+        lookup[chapter.chapter_id] = {
+            "major_id": chapter.major_id,
+            "minor_code": chapter.minor_code,
+            "boundary_status": chapter.boundary_status,
+            "confidence": chapter.confidence,
+            "tags": chapter.tags,
+        }
+    return lookup
+
+
+def _major_metadata_lookup(segments: Iterable[RoughCutSegment] | None) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    for segment in segments or ():
+        major_id = getattr(segment, "major_id", "") or getattr(segment, "segment_id", "")
+        if not major_id:
+            continue
+        lookup[major_id] = {
+            "major_id": major_id,
+            "title": segment.title,
+            "summary": segment.summary or segment.llm_summary,
+            "status": segment.status,
+            "safety": segment.safety,
+            "importance": segment.importance or segment.importance_score,
+            "tags": segment.tags,
+        }
+    return lookup
+
+
+def _edl_segment_payload(
+    segment: EDLSegment,
+    *,
+    chapter_meta: dict[str, dict[str, Any]],
+    major_meta: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    payload = asdict(segment)
+    meta = dict(chapter_meta.get(str(segment.chapter_id or segment.segment_id), {}))
+    major_id = str(meta.get("major_id") or "")
+    if major_id and major_id in major_meta:
+        meta["major"] = major_meta[major_id]
+    if meta:
+        payload["metadata"] = meta
+    return payload
 
 
 def save_edl_json(
     path: str | Path,
     edl_segments: Iterable[EDLSegment],
     metadata: dict[str, Any] | None = None,
+    chapters: Iterable[ChapterMetadata] | None = None,
+    major_segments: Iterable[RoughCutSegment] | None = None,
 ) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    payload = edl_to_dict(edl_segments, metadata=metadata)
+    payload = edl_to_dict(edl_segments, metadata=metadata, chapters=chapters, major_segments=major_segments)
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return target

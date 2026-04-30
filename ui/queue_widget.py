@@ -1,4 +1,4 @@
-# Version: 03.00.34
+# Version: 03.01.33
 # Phase: PHASE1-B
 """
 ui/queue_widget.py
@@ -61,6 +61,8 @@ class QueueMixin:
     def update_queue_status(self, idx, status, time_txt="", info_txt="", len_txt=""):
         if hasattr(self, "_show_bottom_queue_table") and status:
             self._show_bottom_queue_table()
+        if status:
+            self._sync_editor_stage_from_queue_status(status)
         if idx < self.queue_table.rowCount():
             def mk(text):
                 it = QTableWidgetItem(text)
@@ -102,6 +104,22 @@ class QueueMixin:
                 except (ValueError, TypeError):
                     if idx not in self._file_complete_times:
                         self.queue_table.setItem(idx, 4, mk(time_txt))
+
+    def _sync_editor_stage_from_queue_status(self, status: str):
+        editor = getattr(self, "_editor_widget", None)
+        state_manager = getattr(editor, "sm", None) if editor is not None else None
+        if state_manager is None:
+            return
+        if str(getattr(state_manager, "state", "") or "") != "ST_PROC":
+            return
+        if "완료" in str(status or ""):
+            return
+        try:
+            state_manager.set_custom_status(str(status or ""))
+        except Exception:
+            return
+        if hasattr(self, "sync_menu_from_editor"):
+            self.sync_menu_from_editor(editor)
 
     def _update_live_queue_header(self):
         active_backend = None

@@ -1,4 +1,4 @@
-# Version: 03.01.02
+# Version: 03.01.33
 # Phase: PHASE1-D
 """
 ui/editor_pipeline.py
@@ -113,6 +113,10 @@ class EditorPipelineMixin:
         if hasattr(self, '_spinner_timer'): self._spinner_timer.stop()
         get_logger().log("✅ 자막 생성 완료 (EditorPipeline 확정)")
         main_w = self.window()
+        if hasattr(main_w, "sync_menu_from_editor"):
+            main_w.sync_menu_from_editor(self)
+        if hasattr(main_w, "_refresh_saved_status_label"):
+            main_w._refresh_saved_status_label(is_dirty=True)
         if hasattr(main_w, "_start_post_completion_idle_timer"):
             main_w._start_post_completion_idle_timer()
         # E fix: 자막 생성 완료 후 타임라인/캔버스 재동기화

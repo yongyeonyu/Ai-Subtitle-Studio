@@ -1,4 +1,4 @@
-# Version: 03.01.15
+# Version: 03.01.33
 # Phase: PHASE2
 """
 Global bottom menu bar.
@@ -80,43 +80,45 @@ class StatusRail(QWidget):
             return self._stt_stage_text(editor, status_text)
 
         if "렌더" in status_text or "출력" in status_text:
-            return "렌더중"
+            return "렌더"
         if "저장" in status_text and ("중" in status_text or "자동" in status_text):
-            return "저장중"
+            return "저장"
         if "저장" in status_text and "완료" in status_text:
-            return "저장완료"
+            return "저장"
         if "saved" in state:
-            return "저장완료"
+            return "저장"
         if "완료" in status_text:
             return "완료"
         if "llm" in status_l or "교정" in status_text or "최적화" in status_text:
-            return "LLM교정"
-        if "whisper" in status_l or "인식" in status_text or "transcrib" in status_l:
-            return "Whisper"
-        if "vad" in status_l or "음성 구간" in status_text or "검토" in status_text:
-            return "VAD검토"
+            return "보정"
+        if "whisper" in status_l or "인식" in status_text or "transcrib" in status_l or "자막 생성" in status_text:
+            return "인식"
+        if "vad" in status_l or "음성 구간" in status_text or "오디오" in status_text or "추출" in status_text:
+            return "VAD"
+        if "검토" in status_text:
+            return "검토"
         if "세그먼트" in status_text or "분할" in status_text:
-            return "세그먼트"
+            return "분할"
         if processing or "생성" in status_text or "처리" in status_text or "processing" in state:
-            return "생성중"
+            return "생성"
         if self._editor_has_segments(editor):
-            return "편집중" if bool(getattr(editor, "_is_dirty", False)) else "자막로드"
+            return "편집" if bool(getattr(editor, "_is_dirty", False)) else "검토"
         if "mode_ai" in mode or "mode_auto" in mode:
-            return "생성대기"
+            return "대기"
         return "대기"
 
     def _stt_stage_text(self, editor, status_text: str) -> str:
         if bool(getattr(editor, "_stt_recording", False)):
-            return "STT녹음"
+            return "녹음"
         if bool(getattr(editor, "_stt_vad_running", False)):
-            return "STT VAD"
+            return "VAD"
         if "적용 완료" in status_text:
-            return "STT완료"
+            return "완료"
         if "결과 없음" in status_text:
-            return "STT확인"
+            return "확인"
         if "세그먼트" in status_text:
-            return "STT분할"
-        return "STT대기"
+            return "분할"
+        return "대기"
 
     def _editor_status_text(self, editor) -> str:
         label = getattr(editor, "status_lbl", None)
@@ -147,16 +149,23 @@ class StatusRail(QWidget):
             panel = getattr(main, "bottom_roughcut_page", None)
             widget = getattr(panel, "_roughcut_widget", None)
         if widget is None:
-            return "분석대기"
+            return "대기"
+        status_label = getattr(widget, "render_status_lbl", None)
+        try:
+            status_text = str(status_label.text() or "")
+        except Exception:
+            status_text = ""
+        if "렌더" in status_text or "출력" in status_text:
+            return "렌더"
         try:
             preview_row = int(getattr(widget, "_preview_row", -1) or -1)
         except Exception:
             preview_row = -1
         if preview_row >= 0:
-            return "구간재생"
+            return "검토"
         result = getattr(widget, "_result", None)
         if result is None:
-            return "분석대기"
+            return "대기"
         review_count = 0
         try:
             for chapter in getattr(result, "chapters", []) or []:
@@ -165,8 +174,8 @@ class StatusRail(QWidget):
         except Exception:
             review_count = 0
         if review_count:
-            return "러프컷검토"
-        return "러프컷완료"
+            return "검토"
+        return "완료"
 
     def _apply_button_state(self, btn, text, icon, color):
         btn.setText(text)
@@ -174,15 +183,15 @@ class StatusRail(QWidget):
         btn.setStyleSheet(self._state_style(self._flash_on))
 
     def _state_style(self, flash=False):
-        bg = "#27486C" if flash else "#1F3A56"
+        bg = "#173D28" if flash else "#15331F"
         return (
             "QToolButton { "
-            f"background: {bg}; color: #D7EBFF; border: 1px solid #007AFF; "
+            f"background: {bg}; color: #D9FFE3; border: 1px solid #34C759; "
             "border-radius: 7px; padding: 6px 8px; font-size: 12px; font-weight: 700; "
             "text-align: left; "
             "} "
             "QToolButton:hover { "
-            f"background: {bg}; color: #D7EBFF; border: 1px solid #007AFF; "
+            f"background: {bg}; color: #D9FFE3; border: 1px solid #34C759; "
             "} "
             "QToolButton::menu-indicator { image: none; }"
         )
@@ -344,9 +353,18 @@ class GlobalMenuBar(QWidget):
     def refresh(self):
         editor = self._active_editor()
         has_editor = editor is not None
+        mode = normalize_work_mode(getattr(self.main_window, "_current_work_mode", EDITOR_MODE))
         for btn in (self.btn_start, self.btn_undo, self.btn_redo, self.btn_save):
             btn.setEnabled(has_editor)
-        if has_editor:
+        if mode == ROUGHCUT_MODE:
+            roughcut = getattr(self.main_window, "_roughcut_widget", None)
+            self.btn_start.setText("분석")
+            self.btn_start.setEnabled(has_editor and roughcut is not None)
+            engine_text = ""
+            if roughcut is not None:
+                engine_text = str(getattr(getattr(roughcut, "source_lbl", None), "text", lambda: "")() or "")
+            self.engine_label.setText(engine_text)
+        elif has_editor:
             src = getattr(editor, "btn_start", None)
             if src is not None:
                 self.btn_start.setText(src.text())
@@ -402,7 +420,10 @@ class GlobalMenuBar(QWidget):
 
     def _sync_start_icon(self):
         text = str(self.btn_start.text() or "")
-        if "처리" in text:
+        mode = normalize_work_mode(getattr(self.main_window, "_current_work_mode", EDITOR_MODE))
+        if mode == ROUGHCUT_MODE:
+            icon_name = "refresh"
+        elif "처리" in text:
             icon_name = "stop"
         elif "재시작" in text:
             icon_name = "refresh"
@@ -495,6 +516,12 @@ class GlobalMenuBar(QWidget):
             self.main_window._dummy_action()
 
     def _click_start(self):
+        if normalize_work_mode(getattr(self.main_window, "_current_work_mode", EDITOR_MODE)) == ROUGHCUT_MODE:
+            roughcut = getattr(self.main_window, "_roughcut_widget", None)
+            if roughcut is not None and hasattr(roughcut, "run_main_action"):
+                roughcut.run_main_action()
+            self.refresh()
+            return
         self._click_editor_button("btn_start")
 
     def _click_undo(self):

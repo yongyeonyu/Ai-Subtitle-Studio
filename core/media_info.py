@@ -1,22 +1,87 @@
-# Version: 03.01.19
+# Version: 03.01.37
 # Phase: PHASE2
 """
 core/media_info.py
-ffprobe 기반 미디어 정보 조회 유틸
+ffprobe 기반 미디어 정보 조회 유틸 + metadata cache
 """
-import json, subprocess
+from __future__ import annotations
 
+import hashlib
+import json
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+from core.performance import atomic_write_json, ffprobe_worker_count, media_probe_cache_dir
 from core.platform_compat import ffprobe_binary, hidden_subprocess_kwargs
 
+_CACHE_SCHEMA = 1
+_MEM_CACHE: dict[str, dict] = {}
 
-def probe_media(filepath: str) -> dict:
-    """
-    Returns: {duration, width, height, fps, info_txt, len_txt}
-    """
-    result = {
+
+def _default_result() -> dict:
+    return {
         "duration": 0.0, "width": 0, "height": 0, "fps": 0.0,
         "info_txt": "오디오 파일", "len_txt": "-"
     }
+
+
+def _copy_result(info: dict) -> dict:
+    return dict(info or _default_result())
+
+
+def _fingerprint(filepath: str) -> tuple[str, Path] | tuple[None, None]:
+    try:
+        path = Path(filepath).expanduser()
+        stat = path.stat()
+        raw = "|".join([
+            str(path.resolve()),
+            str(stat.st_size),
+            str(stat.st_mtime_ns),
+        ])
+        digest = hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+        return digest, media_probe_cache_dir() / f"{digest}.json"
+    except Exception:
+        return None, None
+
+
+def _read_cache(cache_key: str, cache_path: Path) -> dict | None:
+    cached = _MEM_CACHE.get(cache_key)
+    if cached is not None:
+        return _copy_result(cached)
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if payload.get("schema") != _CACHE_SCHEMA or payload.get("key") != cache_key:
+        return None
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return None
+    _MEM_CACHE[cache_key] = _copy_result(result)
+    return _copy_result(result)
+
+
+def _write_cache(cache_key: str, cache_path: Path, result: dict) -> None:
+    try:
+        payload = {"schema": _CACHE_SCHEMA, "key": cache_key, "result": _copy_result(result)}
+        atomic_write_json(cache_path, payload)
+        _MEM_CACHE[cache_key] = _copy_result(result)
+    except Exception:
+        pass
+
+
+def probe_media(filepath: str, *, use_cache: bool = True) -> dict:
+    """
+    Returns: {duration, width, height, fps, info_txt, len_txt}
+    """
+    result = _default_result()
+    cache_key, cache_path = _fingerprint(filepath) if use_cache else (None, None)
+    if cache_key and cache_path:
+        cached = _read_cache(cache_key, cache_path)
+        if cached is not None:
+            return cached
+
     try:
         cmd = [
             ffprobe_binary(), "-v", "error", "-select_streams", "v:0",
@@ -58,4 +123,22 @@ def probe_media(filepath: str) -> dict:
             )
     except Exception:
         pass
-    return result
+    if cache_key and cache_path and result.get("duration", 0.0) > 0:
+        _write_cache(cache_key, cache_path, result)
+    return _copy_result(result)
+
+
+def probe_media_many(filepaths: list[str], *, max_workers: int | None = None) -> list[dict]:
+    """Probe several media files in input order with bounded parallelism."""
+    files = list(filepaths or [])
+    if not files:
+        return []
+    workers = ffprobe_worker_count(len(files)) if max_workers is None else max(1, min(len(files), int(max_workers)))
+    if workers <= 1 or len(files) <= 1:
+        return [probe_media(path) for path in files]
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ffprobe-cache") as executor:
+        return list(executor.map(probe_media, files))
+
+
+def clear_media_probe_cache_memory() -> None:
+    _MEM_CACHE.clear()

@@ -1,4 +1,4 @@
-# Version: 03.01.15
+# Version: 03.01.37
 # Phase: PHASE2
 """
 core/project_manager.py
@@ -13,12 +13,12 @@ core/project_manager.py
 
 import os
 import json
-import subprocess
 import uuid
 from datetime import datetime
 from typing import List, Optional
 
 from core.project.project_context import build_editor_state
+from core.media_info import probe_media
 from core.work_mode import normalize_work_mode
 
 PROJECT_SCHEMA_VERSION = "03.00.26"
@@ -51,20 +51,9 @@ def _make_seg_id() -> str:
 
 
 def _get_media_duration(filepath: str) -> float:
-    """ffprobe로 미디어 길이(초) 반환"""
+    """Return media duration using the shared cached probe path."""
     try:
-        r = subprocess.run(
-            [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                filepath
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        return float(r.stdout.strip())
+        return float(probe_media(filepath).get("duration", 0.0) or 0.0)
     except Exception:
         return 0.0
 
@@ -190,7 +179,7 @@ def create_project(
         "workspace": {
             "last_playhead": 0.0,
             "last_cursor_block": 0,
-            "zoom_pps": 500.0,
+            "zoom_pps": 0.0,
             "scroll_position": 0.0,
             "splitter_sizes": [],
             "terminal_visible": False,

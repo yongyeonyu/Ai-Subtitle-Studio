@@ -1,4 +1,4 @@
-# Version: 03.00.17
+# Version: 03.01.32
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ class RenderCommandPlan:
     concat_command: tuple[str, ...]
     output_path: str
     warnings: tuple[str, ...] = ()
+    segment_manifest: tuple[dict, ...] = ()
 
 
 def ffmpeg_available(binary: str = "ffmpeg") -> bool:
@@ -137,4 +138,23 @@ def build_concat_render_plan(
         concat_command=build_ffmpeg_concat_command(concat_file, output, ffmpeg_binary=ffmpeg_binary),
         output_path=output,
         warnings=tuple(warnings),
+        segment_manifest=tuple(_render_segment_manifest(segments)),
     )
+
+
+def _render_segment_manifest(segments: Iterable[EDLSegment]) -> list[dict]:
+    return [
+        {
+            "segment_id": segment.segment_id,
+            "chapter_id": segment.chapter_id,
+            "action": segment.action,
+            "story_role": segment.story_role,
+            "source_path": segment.source_path,
+            "source_start": segment.source_start,
+            "source_end": segment.source_end,
+            "timeline_start": segment.timeline_start,
+            "timeline_end": segment.timeline_end,
+            "clip_index": segment.clip_index,
+        }
+        for segment in segments
+    ]

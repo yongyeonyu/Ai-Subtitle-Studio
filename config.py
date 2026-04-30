@@ -1,4 +1,4 @@
-# Version: 03.01.25
+# Version: 03.02.00
 # Phase: PHASE2
 
 
@@ -9,7 +9,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.01.25"
+APP_VERSION = "03.02.00"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -119,6 +119,24 @@ DEFAULT_ADV_SETTINGS = {
     "score_weight_context": 0.10,
     "score_weight_memory": 0.05,
     "score_weight_hallucination_penalty": 0.30
+}
+
+DEFAULT_ROUGHCUT_SETTINGS = {
+    "roughcut_major_segment_ui_enabled": True,
+    "roughcut_llm_enabled": False,
+    "roughcut_llm_model": "",
+    "roughcut_llm_prompt_id": "roughcut_page3b_v1",
+    "roughcut_llm_token_budget": 4096,
+    "roughcut_boundary_verification_enabled": True,
+    "roughcut_scene_cut_refine_enabled": True,
+    "roughcut_title_suggestions_enabled": True,
+    "roughcut_thumbnail_cache_enabled": True,
+    "roughcut_draft_autosave_enabled": True,
+    "roughcut_major_min_duration_sec": 0.0,
+    "roughcut_major_max_duration_sec": 0.0,
+    "roughcut_major_max_subtitle_count": 0,
+    "roughcut_boundary_refine_window_sec": 1.5,
+    "roughcut_scene_cut_threshold": 18.0,
 }
 
 # ── 🔔 ntfy 푸시 알람 설정 ──

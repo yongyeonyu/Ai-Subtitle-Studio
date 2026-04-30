@@ -1,10 +1,12 @@
-# Version: 03.00.17
+# Version: 03.01.32
 # Phase: PHASE2
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from core.platform_compat import hidden_subprocess_kwargs
 
 from .renderer_skeleton import RenderCommandPlan
 
@@ -16,6 +18,7 @@ class RenderExecutionResult:
     executed_commands: tuple[tuple[str, ...], ...]
     return_codes: tuple[int, ...]
     dry_run: bool = False
+    segment_manifest: tuple[dict, ...] = ()
 
 
 def write_concat_file(plan: RenderCommandPlan) -> Path:
@@ -47,16 +50,17 @@ def run_render_plan(
             executed_commands=commands,
             return_codes=tuple(0 for _ in commands),
             dry_run=True,
+            segment_manifest=tuple(getattr(plan, "segment_manifest", ()) or ()),
         )
 
     return_codes: list[int] = []
     try:
         for command in plan.extract_commands:
-            completed = subprocess.run(command, check=False)
+            completed = subprocess.run(command, check=False, **hidden_subprocess_kwargs(strip_qt=True))
             return_codes.append(completed.returncode)
             if completed.returncode != 0:
                 raise RuntimeError(f"ffmpeg extract failed: {completed.returncode}")
-        completed = subprocess.run(plan.concat_command, check=False)
+        completed = subprocess.run(plan.concat_command, check=False, **hidden_subprocess_kwargs(strip_qt=True))
         return_codes.append(completed.returncode)
         if completed.returncode != 0:
             raise RuntimeError(f"ffmpeg concat failed: {completed.returncode}")
@@ -74,4 +78,5 @@ def run_render_plan(
         executed_commands=commands,
         return_codes=tuple(return_codes),
         dry_run=False,
+        segment_manifest=tuple(getattr(plan, "segment_manifest", ()) or ()),
     )

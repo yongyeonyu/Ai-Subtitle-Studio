@@ -1,4 +1,4 @@
-# Version: 03.01.13
+# Version: 03.01.31
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -8,11 +8,12 @@ class RoughcutPreviewMixin:
         editor = self._active_editor()
         return getattr(editor, "video_player", None) if editor is not None else None
 
-    def _play_preview(self, row: int, muted: bool = False, hover: bool = False):
+    def _play_preview(self, row: int, muted: bool = False, hover: bool = False, update_preview_data: bool = True):
         chapter = self._chapter_for_row(row)
         if chapter is None:
             return
-        self._preview_row_data(row)
+        if update_preview_data:
+            self._preview_row_data(row)
         player = self._video_player()
         if player is None or not hasattr(player, "media_player"):
             return

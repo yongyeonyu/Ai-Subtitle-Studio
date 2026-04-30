@@ -1,4 +1,4 @@
-# Version: 03.00.00
+# Version: 03.01.26
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -87,6 +87,11 @@ def topic_shift_score(previous_text: str, current_text: str) -> float:
     boost = _shift_phrase_boost(current_text)
     score = novelty + boost
     return round(max(0.0, min(1.0, score)), 4)
+
+
+def detect_topic_shift(previous_text: str, current_text: str) -> float:
+    """Compatibility alias for older roughcut action-item contracts."""
+    return topic_shift_score(previous_text, current_text)
 
 
 def detect_topic_shifts(

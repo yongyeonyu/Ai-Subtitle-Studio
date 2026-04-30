@@ -1,10 +1,9 @@
-# Version: 02.03.00
+# Version: 03.01.37
 # Phase: PHASE1-B
 """
 ui/project/multiclip_panel.py
 Multi-clip sorting editor
 """
-import json
 import os
 import subprocess
 import tempfile
@@ -26,7 +25,9 @@ from PyQt6.QtWidgets import (
 )
 
 import config
+from core.media_info import probe_media
 from core.path_manager import get_last_folder
+from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 
 
 MEDIA_FILTER = "Media Files (*.mp4 *.mov *.MOV *.MP4 *.wav *.m4a *.m2a *.mp3 *.aac *.lrf)"
@@ -53,23 +54,8 @@ class ClipCard(QFrame):
 
     def _extract_info(self):
         try:
-            result = subprocess.run(
-                [
-                    "ffprobe",
-                    "-v",
-                    "quiet",
-                    "-print_format",
-                    "json",
-                    "-show_format",
-                    self.file_path,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                encoding="utf-8",
-            )
-            info = json.loads(result.stdout)
-            duration = float(info.get("format", {}).get("duration", 0))
+            info = probe_media(self.file_path)
+            duration = float(info.get("duration", 0.0) or 0.0)
             mins, secs = divmod(int(duration), 60)
             hours, mins = divmod(mins, 60)
             self.duration_str = f"{hours}:{mins:02d}:{secs:02d}" if hours else f"{mins}:{secs:02d}"
@@ -90,7 +76,7 @@ class ClipCard(QFrame):
             )
             subprocess.run(
                 [
-                    "ffmpeg",
+                    ffmpeg_binary(),
                     "-y",
                     "-nostdin",
                     "-loglevel",
@@ -105,6 +91,7 @@ class ClipCard(QFrame):
                 ],
                 capture_output=True,
                 timeout=10,
+                **hidden_subprocess_kwargs(),
             )
             if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
                 pixmap = QPixmap(tmp)

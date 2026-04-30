@@ -1,4 +1,4 @@
-# Version: 03.01.22
+# Version: 03.01.37
 # Phase: PHASE2
 """
 media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 + Whisper 섹터 동기화)
@@ -10,6 +10,7 @@ media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 
 import sys
 import os, subprocess, json, re, config, shutil, time, wave, threading
 from concurrent.futures import ThreadPoolExecutor
+from core.performance import bounded_worker_count
 from core.platform_compat import demucs_binary, ffmpeg_binary, hidden_subprocess_kwargs
 from core.subtitle_quality.candidate_ranker import rank_overlap_candidates
 from core.subtitle_quality.hallucination_detector import annotate_segment_hallucination_risk
@@ -45,7 +46,7 @@ class VideoProcessor:
         self.whisper_model = getattr(config, "WHISPER_MODEL", "mlx-community/whisper-large-v3-mlx")
         self.audio_ai = "demucs"
         self.vad_model = "silero"
-        self.io_workers = max(6, min(12, (os.cpu_count() or 8)))
+        self.io_workers = bounded_worker_count(kind="io")
 
         settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
         if os.path.exists(settings_path):
@@ -55,7 +56,7 @@ class VideoProcessor:
                     self.whisper_model = s.get("selected_whisper_model", self.whisper_model)
                     self.audio_ai = s.get("selected_audio_ai", "demucs")
                     self.vad_model = s.get("selected_vad", "silero")
-                    self.io_workers = max(1, int(s.get("io_workers", self.io_workers)))
+                    self.io_workers = bounded_worker_count(s.get("io_workers", self.io_workers), kind="io")
             except Exception:
                 pass
 

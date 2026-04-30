@@ -1,4 +1,4 @@
-# Version: 02.03.11
+# Version: 03.01.35
 # Phase: PHASE1-C
 """
 ui/workspace_mixin.py
@@ -94,13 +94,16 @@ class WorkspaceMixin:
 
             workspace = project_data.get("workspace", {})
             if not workspace:
+                self._fit_timeline_if_missing_zoom(editor)
                 return
 
             def _apply():
                 try:
-                    pps = workspace.get("zoom_pps", 0)
+                    pps = float(workspace.get("zoom_pps", 0) or 0)
                     if pps > 0 and hasattr(editor, "timeline") and hasattr(editor.timeline, "canvas"):
                         editor.timeline.canvas.pps = pps
+                    elif hasattr(editor, "timeline") and hasattr(editor.timeline, "fit_to_view"):
+                        editor.timeline.fit_to_view()
 
                     splitter_sizes = workspace.get("splitter_sizes", [])
                     if splitter_sizes and hasattr(editor, "splitter"):
@@ -140,3 +143,8 @@ class WorkspaceMixin:
             QTimer.singleShot(500, _apply)
         except Exception:
             pass
+
+    def _fit_timeline_if_missing_zoom(self, editor):
+        timeline = getattr(editor, "timeline", None)
+        if timeline is not None and hasattr(timeline, "fit_to_view"):
+            QTimer.singleShot(500, timeline.fit_to_view)

@@ -1,4 +1,4 @@
-# Version: 03.01.15
+# Version: 03.01.35
 # Phase: PHASE2
 """
 core/project/project_phase1b.py
@@ -177,6 +177,8 @@ def apply_project_ui_state(owner, editor, project_path: str) -> None:
         if canvas is not None and pps > 0:
             canvas.pps = pps
             canvas.update()
+        elif timeline is not None and hasattr(timeline, 'fit_to_view'):
+            timeline.fit_to_view()
     except Exception:
         pass
     try:

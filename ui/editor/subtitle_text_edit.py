@@ -1,4 +1,4 @@
-# Version: 03.01.25
+# Version: 03.01.36
 # Phase: PHASE2
 
 import re
@@ -28,6 +28,8 @@ class SubtitleBlockData(QTextBlockUserData):
         quality_history: list | None = None,
         quality_candidates: list | None = None,
         quality_signature: str = "",
+        clip_idx: int | None = None,
+        clip_file: str = "",
     ):
         super().__init__()
         self.spk_id = spk_id
@@ -41,6 +43,8 @@ class SubtitleBlockData(QTextBlockUserData):
         self.quality_history = list(quality_history or [])
         self.quality_candidates = list(quality_candidates or [])
         self.quality_signature = str(quality_signature or "")
+        self.clip_idx = clip_idx
+        self.clip_file = str(clip_file or "")
 
 class SubtitleHighlighter(QSyntaxHighlighter):
     def __init__(self, document: QTextDocument):
