@@ -1,4 +1,4 @@
-# Version: 03.00.19
+# Version: 03.01.22
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
                 "selected_whisper_model": _fast_model(),
                 "selected_model": "사용 안함 (Whisper 단독 진행)",
                 "ff_chunk": 30,
-                "whisper_chunk_overlap_sec": 0.8,
+                "whisper_chunk_overlap_sec": 0.5,
                 "stt_parallel_level": 4,
                 **_decoder_settings(0.86, -1.0, 1.6, 0.0, 3, 1.0),
             },
@@ -69,7 +69,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
                 "selected_whisper_model": _quality_model(),
                 "selected_model": "exaone3.5:7.8b",
                 "ff_chunk": 20,
-                "whisper_chunk_overlap_sec": 2.5,
+                "whisper_chunk_overlap_sec": 3.0,
                 "stt_parallel_level": 2,
                 **_decoder_settings(0.42, -2.6, 2.4, 0.6, 8, 1.35),
             },

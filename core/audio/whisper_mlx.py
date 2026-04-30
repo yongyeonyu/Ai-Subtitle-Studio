@@ -1,5 +1,5 @@
-# Version: 02.03.03
-# Phase: PHASE1-B
+# Version: 03.01.23
+# Phase: PHASE2
 """
 core/whisper_mlx.py
 macOS (Apple Silicon) 전용 Whisper 백엔드
@@ -43,6 +43,7 @@ for raw in sys.stdin:
 
     task_id = msg.get("task_id", "")
     model = msg.get("model", "")
+    fallback_model = msg.get("fallback_model", "")
     language = msg.get("language", "")
     temperature_values = msg.get("temperature_values") or [0.0]
     temperature = tuple(float(x) for x in temperature_values)
@@ -60,17 +61,50 @@ for raw in sys.stdin:
                     condition_on_previous_text=False,
                     verbose=False,
                 )
+            loaded_model = model
             print(json.dumps({
+                "backend": "mlx-whisper",
                 "task_id": task_id,
                 "index": idx,
                 "result": result,
+                "loaded_model": loaded_model,
+                "language_probability": result.get("language_probability"),
             }, ensure_ascii=False), flush=True)
         except Exception as e:
-            print(json.dumps({
-                "task_id": task_id,
-                "index": idx,
-                "error": str(e),
-            }, ensure_ascii=False), flush=True)
+            if fallback_model and fallback_model != model:
+                try:
+                    with contextlib.redirect_stdout(sys.stderr):
+                        result = mlx_whisper.transcribe(
+                            p,
+                            path_or_hf_repo=fallback_model,
+                            language=language,
+                            word_timestamps=True,
+                            temperature=temperature,
+                            condition_on_previous_text=False,
+                            verbose=False,
+                        )
+                    print(json.dumps({
+                        "backend": "mlx-whisper",
+                        "task_id": task_id,
+                        "index": idx,
+                        "result": result,
+                        "loaded_model": fallback_model,
+                        "fallback_from": model,
+                        "language_probability": result.get("language_probability"),
+                    }, ensure_ascii=False), flush=True)
+                except Exception as fallback_e:
+                    print(json.dumps({
+                        "task_id": task_id,
+                        "index": idx,
+                        "error": str(fallback_e),
+                        "fallback_from": model,
+                    }, ensure_ascii=False), flush=True)
+            else:
+                print(json.dumps({
+                    "task_id": task_id,
+                    "index": idx,
+                    "error": str(e),
+                }, ensure_ascii=False), flush=True)
 
     print(json.dumps({
         "task_id": task_id,
@@ -129,6 +163,13 @@ def ensure_worker(proc=None):
     get_logger().log("🍎 MLX Whisper persistent worker 시작")
     return new_proc
 
+def _fallback_model_name(model: str) -> str:
+    requested = str(model or "")
+    if "ghost613" in requested.lower():
+        return "mlx-community/whisper-large-v3-mlx"
+    return ""
+
+
 def submit_task(proc, chunk_paths: list, model: str, language: str, temperature_values: list[float]):
     if proc is None or proc.poll() is not None:
         raise RuntimeError("MLX Whisper worker가 실행 중이 아닙니다.")
@@ -139,6 +180,7 @@ def submit_task(proc, chunk_paths: list, model: str, language: str, temperature_
         "task_id": task_id,
         "chunk_paths": list(chunk_paths),
         "model": model,
+        "fallback_model": _fallback_model_name(model),
         "language": language,
         "temperature_values": list(temperature_values),
     }
@@ -200,9 +242,29 @@ for p in {safe_paths}:
                 temperature={temperature_tuple},
                 condition_on_previous_text=False
             )
+        r["backend"] = "mlx-whisper"
         print(json.dumps(r, ensure_ascii=False), flush=True)
     except Exception as e:
-        print(json.dumps({{"error": str(e)}}, ensure_ascii=False), flush=True)
+        fallback_model = "mlx-community/whisper-large-v3-mlx" if "ghost613" in {safe_model}.lower() else ""
+        if fallback_model:
+            try:
+                with contextlib.redirect_stdout(sys.stderr):
+                    r = mlx_whisper.transcribe(
+                        p,
+                        path_or_hf_repo=fallback_model,
+                        language='{language}',
+                        word_timestamps=True,
+                        temperature={temperature_tuple},
+                        condition_on_previous_text=False
+                    )
+                r["backend"] = "mlx-whisper"
+                r["loaded_model"] = fallback_model
+                r["fallback_from"] = {safe_model}
+                print(json.dumps(r, ensure_ascii=False), flush=True)
+            except Exception as fallback_e:
+                print(json.dumps({{"error": str(fallback_e), "fallback_from": {safe_model}}}, ensure_ascii=False), flush=True)
+        else:
+            print(json.dumps({{"error": str(e)}}, ensure_ascii=False), flush=True)
 os._exit(0)
 """
 

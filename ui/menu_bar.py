@@ -1,4 +1,4 @@
-# Version: 03.01.05
+# Version: 03.01.15
 # Phase: PHASE2
 """
 Global bottom menu bar.
@@ -9,6 +9,7 @@ existing button/state-machine objects alive behind the scenes.
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QWidget
 
+from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
 from ui.style import label_style, line_icon, tool_button_style
 
 
@@ -45,26 +46,14 @@ class StatusRail(QWidget):
         return btn
 
     def refresh_from_editor(self, editor):
-        mode_key = str(getattr(self.window(), "_current_work_mode", "edit") or "edit")
-        if editor is not None and mode_key not in ("roughcut", "shortform"):
-            mode = str(getattr(editor, "current_mode", "") or "").lower()
-            status_text = self._editor_status_text(editor)
-            processing = bool(getattr(editor, "_is_ai_processing", False))
-            if getattr(editor, "_stt_mode_enabled", False):
-                mode_key = "stt"
-            elif processing or "생성" in status_text or "mode_ai" in mode or "mode_auto" in mode:
-                mode_key = "subtitle"
-            else:
-                mode_key = "edit"
+        mode_key = normalize_work_mode(getattr(self.window(), "_current_work_mode", EDITOR_MODE))
 
         mode_meta = {
-            "subtitle": ("자막생성", "subtitle", "#007AFF"),
-            "edit": ("편집", "edit", "#34C759"),
-            "stt": ("STT", "mic", "#FF453A"),
-            "roughcut": ("러프컷", "roughcut", "#FF9500"),
-            "shortform": ("숏폼", "shortform", "#A678F4"),
+            EDITOR_MODE: ("에디터", "edit", "#34C759"),
+            ROUGHCUT_MODE: ("러프컷", "roughcut", "#FF9500"),
+            SHORTFORM_MODE: ("숏폼", "shortform", "#A678F4"),
         }
-        mode_text, mode_icon, mode_color = mode_meta.get(mode_key, mode_meta["edit"])
+        mode_text, mode_icon, mode_color = mode_meta.get(mode_key, mode_meta[EDITOR_MODE])
         stage_text = self._stage_text(mode_key, editor)
         text = f"{mode_text} | {stage_text}"
         self._apply_button_state(self.state_button, text, mode_icon, mode_color)
@@ -73,12 +62,13 @@ class StatusRail(QWidget):
             self._start_flash()
 
     def _stage_text(self, mode_key: str, editor) -> str:
-        if mode_key == "roughcut":
+        mode_key = normalize_work_mode(mode_key)
+        if mode_key == ROUGHCUT_MODE:
             return self._roughcut_stage_text()
-        if mode_key == "shortform":
+        if mode_key == SHORTFORM_MODE:
             return "준비"
         if editor is None:
-            return "파일열기" if mode_key in ("edit", "subtitle", "stt") else "대기"
+            return "파일열기" if mode_key == EDITOR_MODE else "대기"
 
         status_text = self._editor_status_text(editor)
         status_l = status_text.lower()
@@ -86,18 +76,8 @@ class StatusRail(QWidget):
         mode = str(getattr(editor, "current_mode", "") or "").lower()
         processing = bool(getattr(editor, "_is_ai_processing", False))
 
-        if mode_key == "stt":
-            if bool(getattr(editor, "_stt_recording", False)):
-                return "녹음중"
-            if bool(getattr(editor, "_stt_vad_running", False)):
-                return "VAD생성"
-            if "적용 완료" in status_text:
-                return "STT완료"
-            if "결과 없음" in status_text:
-                return "STT확인"
-            if "세그먼트" in status_text:
-                return "STT분할"
-            return "STT대기"
+        if bool(getattr(editor, "_stt_mode_enabled", False)):
+            return self._stt_stage_text(editor, status_text)
 
         if "렌더" in status_text or "출력" in status_text:
             return "렌더중"
@@ -124,6 +104,19 @@ class StatusRail(QWidget):
         if "mode_ai" in mode or "mode_auto" in mode:
             return "생성대기"
         return "대기"
+
+    def _stt_stage_text(self, editor, status_text: str) -> str:
+        if bool(getattr(editor, "_stt_recording", False)):
+            return "STT녹음"
+        if bool(getattr(editor, "_stt_vad_running", False)):
+            return "STT VAD"
+        if "적용 완료" in status_text:
+            return "STT완료"
+        if "결과 없음" in status_text:
+            return "STT확인"
+        if "세그먼트" in status_text:
+            return "STT분할"
+        return "STT대기"
 
     def _editor_status_text(self, editor) -> str:
         label = getattr(editor, "status_lbl", None)

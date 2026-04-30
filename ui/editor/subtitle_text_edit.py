@@ -1,5 +1,5 @@
-# Version: 02.07.00
-# Phase: PHASE1-C
+# Version: 03.01.25
+# Phase: PHASE2
 
 import re
 import time
@@ -24,6 +24,10 @@ class SubtitleBlockData(QTextBlockUserData):
         stt_pending: bool = False,
         original_text: str = "",
         dictated_text: str = "",
+        quality: dict | None = None,
+        quality_history: list | None = None,
+        quality_candidates: list | None = None,
+        quality_signature: str = "",
     ):
         super().__init__()
         self.spk_id = spk_id
@@ -33,6 +37,10 @@ class SubtitleBlockData(QTextBlockUserData):
         self.stt_pending = bool(stt_pending)
         self.original_text = original_text
         self.dictated_text = dictated_text
+        self.quality = dict(quality or {})
+        self.quality_history = list(quality_history or [])
+        self.quality_candidates = list(quality_candidates or [])
+        self.quality_signature = str(quality_signature or "")
 
 class SubtitleHighlighter(QSyntaxHighlighter):
     def __init__(self, document: QTextDocument):
@@ -40,6 +48,8 @@ class SubtitleHighlighter(QSyntaxHighlighter):
         self._edited_lines: set[int] = set()
         self._current_line: int = -1
         self.speaker_colors = {} 
+        self.quality_by_line: dict[int, dict] = {}
+        self.quality_filter = "all"
 
     def mark_edited(self, line: int): 
         self._edited_lines.add(line); self.rehighlight()
@@ -48,8 +58,51 @@ class SubtitleHighlighter(QSyntaxHighlighter):
         if self._current_line != line: 
             self._current_line = line; self.rehighlight()
 
+    def set_quality_map(self, quality_by_line: dict[int, dict] | None):
+        self.quality_by_line = dict(quality_by_line or {})
+        self.rehighlight()
+
+    def set_quality_filter(self, key: str):
+        self.quality_filter = str(key or "all")
+        self.rehighlight()
+
+    def _quality_color(self, label: str) -> QColor | None:
+        colors = {
+            "green": QColor(31, 88, 55, 84),
+            "yellow": QColor(112, 86, 16, 90),
+            "red": QColor(120, 34, 34, 106),
+            "gray": QColor(80, 86, 94, 80),
+        }
+        return colors.get(str(label or ""))
+
+    def _matches_filter(self, quality: dict) -> bool:
+        key = str(self.quality_filter or "all")
+        if key == "all":
+            return True
+        label = str(quality.get("confidence_label") or "gray")
+        flags = set(quality.get("flags") or ())
+        if key == "needs_review":
+            return label in {"red", "gray"} or bool(flags.intersection({"non_speech_hallucination_risk", "high_no_speech_prob", "outside_vad_speech"}))
+        if key == "auto_corrected":
+            return "auto_corrected" in flags
+        return label == key
+
     def highlightBlock(self, text: str):
         block_num = self.currentBlock().blockNumber()
+        quality = dict(self.quality_by_line.get(block_num) or {})
+        if quality and len(text) > 0:
+            label = str(quality.get("confidence_label") or "gray")
+            bg = self._quality_color(label)
+            if bg is not None:
+                fmt = QTextCharFormat()
+                fmt.setBackground(bg)
+                self.setFormat(0, len(text), fmt)
+            if not self._matches_filter(quality):
+                muted = QTextCharFormat()
+                muted.setForeground(QColor("#69727A"))
+                muted.setBackground(QColor(20, 24, 27, 120))
+                self.setFormat(0, len(text), muted)
+
         if block_num in self._edited_lines:
             fmt = QTextCharFormat(); fmt.setBackground(QColor("#1E4D2B"))
             self.setFormat(0, len(text), fmt)

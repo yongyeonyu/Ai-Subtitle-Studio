@@ -1,11 +1,11 @@
-# Version: 03.00.32
-# Phase: PHASE1-B
+# Version: 03.01.25
+# Phase: PHASE2
 """
 ui/editor_segments.py
 EditorWidget의 자막 에디터 조작, 큐 처리, 세그먼트 I/O 메서드 모음.
 [수정] core 폴더 이동에 따른 데이터 매니저 경로 및 상대 경로 최적화 완료
 """
-import re, os, threading
+import hashlib, json, re, os, threading
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QTextCursor
 
@@ -40,6 +40,40 @@ class EditorSegmentsMixin:
         if hasattr(self.text_edit, 'timestampArea'):
             self.text_edit.timestampArea.update()
         self._schedule_timeline()
+
+    def _segment_quality_signature(self, seg: dict) -> str:
+        payload = {
+            "start": round(float(seg.get("start", 0.0) or 0.0), 3),
+            "end": round(float(seg.get("end", seg.get("start", 0.0)) or 0.0), 3),
+            "text": str(seg.get("text", "") or ""),
+            "speaker": str(seg.get("speaker", seg.get("spk", "")) or ""),
+        }
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _quality_kwargs_from_segment(self, seg: dict, *, signature: str | None = None) -> dict:
+        quality = dict(seg.get("quality") or {})
+        history = list(seg.get("quality_history") or [])
+        candidates = list(seg.get("quality_candidates") or [])
+        return {
+            "quality": quality,
+            "quality_history": history,
+            "quality_candidates": candidates,
+            "quality_signature": signature or str(seg.get("quality_signature", "") or ""),
+        }
+
+    def _quality_tooltip(self, seg: dict) -> str:
+        quality = dict(seg.get("quality") or {})
+        if not quality:
+            return ""
+        score = quality.get("confidence_score")
+        label = str(quality.get("confidence_label") or "gray")
+        reason = str(quality.get("confidence_reason") or "")
+        flags = ", ".join(str(flag) for flag in (quality.get("flags") or ())[:6])
+        candidates = len(seg.get("quality_candidates") or [])
+        stale = " / stale" if seg.get("quality_stale") else ""
+        score_text = "-" if score is None else f"{float(score):.1f}"
+        return f"품질 {label}{stale} · {score_text}점\n사유: {reason or flags or 'ok'}\n후보: {candidates}개"
 
     # ---------------------------------------------------------
     # Segment Queue
@@ -181,8 +215,14 @@ class EditorSegmentsMixin:
                 "original_text": str(seg.get("original_text", "") or ""),
                 "dictated_text": str(seg.get("dictated_text", "") or ""),
             }
+            quality_kwargs = self._quality_kwargs_from_segment(seg, signature=self._segment_quality_signature({
+                "start": start_sec,
+                "end": seg.get("end", start_sec),
+                "text": parts[0],
+                "speaker": current_spk,
+            }))
             cur.insertText(parts[0])
-            cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, **stt_kwargs))
+            cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, **stt_kwargs, **quality_kwargs))
             
             # 💡 두 번째 줄부터의 처리 (- 기호 유무로 완벽 통제)
             for p_idx in range(1, len(parts)):
@@ -192,7 +232,7 @@ class EditorSegmentsMixin:
                     # 🚨 '-' 기호가 있으면: 진짜 엔터(\n)를 쳐서 블록을 나누고 화자를 교체합니다.
                     current_spk = spk2_id if current_spk == spk1_id else spk1_id
                     cur.insertText("\n" + line_text)
-                    cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, **stt_kwargs))
+                    cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, **stt_kwargs, **quality_kwargs))
                 else:
                     # 🚨 '-' 기호가 없으면: 화자를 유지하고 소프트 줄바꿈(\u2028)만 삽입하여 1개의 블록으로 묶습니다.
                     cur.insertText("\u2028" + line_text)
@@ -235,6 +275,8 @@ class EditorSegmentsMixin:
                 self.timeline.set_playhead(added_end); self.timeline.center_to_sec(added_end, smooth=True)
             if hasattr(self, 'video_player'):
                 self.video_player.seek(added_end)
+            if self.settings.get("subtitle_quality_auto_check_after_generate") and hasattr(self, "_run_quality_review"):
+                QTimer.singleShot(300, lambda: self._run_quality_review(auto_correct=bool(self.settings.get("subtitle_quality_auto_correct_enabled", False))))
 
     # ---------------------------------------------------------
     # Segment I/O
@@ -260,7 +302,7 @@ class EditorSegmentsMixin:
                     and abs(segments[-1]["start"] - data.start_sec) < 0.05):
                     segments[-1]["text"] += "\n" + text
                 else:
-                    segments.append({
+                    item = {
                         "line": line_idx,
                         "start": data.start_sec,
                         "end": getattr(data, 'end_sec', None),
@@ -271,7 +313,26 @@ class EditorSegmentsMixin:
                         "stt_pending": bool(getattr(data, 'stt_pending', False)),
                         "original_text": getattr(data, 'original_text', '') or '',
                         "dictated_text": getattr(data, 'dictated_text', '') or '',
-                    })
+                    }
+                    if getattr(data, "quality", None):
+                        item["quality"] = dict(getattr(data, "quality", {}) or {})
+                        item["quality_history"] = list(getattr(data, "quality_history", []) or [])
+                        item["quality_candidates"] = list(getattr(data, "quality_candidates", []) or [])
+                        signature = self._segment_quality_signature({
+                            "start": item["start"],
+                            "end": item.get("end") if item.get("end") is not None else item["start"],
+                            "text": item["text"],
+                            "speaker": item["spk"],
+                        })
+                        if getattr(data, "quality_signature", "") and signature != getattr(data, "quality_signature", ""):
+                            item["quality_stale"] = True
+                            quality = dict(item["quality"])
+                            flags = list(quality.get("flags") or [])
+                            if "quality_stale" not in flags:
+                                flags.append("quality_stale")
+                            quality["flags"] = flags
+                            item["quality"] = quality
+                    segments.append(item)
             
             block = block.next()
             line_idx += 1
@@ -293,6 +354,8 @@ class EditorSegmentsMixin:
                 seg["end"] = c_end
             else:
                 seg["end"] = next_start
+            if seg.get("quality") and not seg.get("quality_signature"):
+                seg["quality_signature"] = self._segment_quality_signature(seg)
                 
         return segments
 
@@ -308,6 +371,16 @@ class EditorSegmentsMixin:
 
     def _save_correction(self, old_word, new_word):
         _dm_save_correction(self.corrections, old_word, new_word)
+        try:
+            from core.subtitle_quality.correction_memory import add_correction_memory_item
+            add_correction_memory_item(
+                old_word,
+                new_word,
+                source="manual_popup",
+                context=self.text_edit.textCursor().block().text()[:500],
+            )
+        except Exception as exc:
+            get_logger().log(f"⚠️ 교정 memory 저장 실패: {exc}")
         get_logger().log(f"🔄 교정 사전 등록 및 저장: {old_word} -> {new_word}")
 
     def _on_enter_pressed(self, last_word: str, line_num: int):
@@ -335,6 +408,11 @@ class EditorSegmentsMixin:
                     self.timeline.set_active(seg["start"])
                     self.timeline.center_to_sec((seg["start"] + seg["end"]) / 2, smooth=True)
                     self._highlighter.set_current_line(line_num)
+                    tip = self._quality_tooltip(seg)
+                    if tip:
+                        self.text_edit.setToolTip(tip)
+                    else:
+                        self.text_edit.setToolTip("")
                     if hasattr(self, 'video_player'): self.video_player.seek(seg["start"])
                 break
 
@@ -347,6 +425,13 @@ class EditorSegmentsMixin:
     def _redraw_timeline(self):
         segs = self._get_current_segments()
         self._cached_segs = segs  # [크PD] 캐시 저장
+        if hasattr(self, "_highlighter"):
+            quality_map = {
+                int(seg.get("line", -1)): dict(seg.get("quality") or {})
+                for seg in segs
+                if seg.get("quality") and int(seg.get("line", -1)) >= 0
+            }
+            self._highlighter.set_quality_map(quality_map)
         total_dur = segs[-1]["end"] if segs else 0.0
         if hasattr(self, 'video_player') and self.video_player.total_time > 0.0:
             total_dur = max(total_dur, self.video_player.total_time)

@@ -1,4 +1,4 @@
-# Version: 03.01.05
+# Version: 03.01.15
 # Phase: PHASE1-D
 """
 ui/editor_actions.py
@@ -14,6 +14,7 @@ from logger import get_logger
 from core.project.data_manager import save_settings as _dm_save_settings
 from core.engine.subtitle_engine import save_srt
 from core.path_manager import get_srt_path
+from core.work_mode import EDITOR_MODE, normalize_work_mode
 from ui.dialogs.message_box import confirm_save_changes
 
 
@@ -266,7 +267,7 @@ class EditorActionsMixin:
         except Exception:
             workspace['scroll_x'] = 0
         workspace['active_clip_idx'] = int(getattr(self.timeline.canvas, '_active_clip_idx', getattr(main_w, '_active_clip_idx', 0)) or 0)
-        workspace['active_work_mode'] = getattr(main_w, '_current_work_mode', 'edit') or 'edit'
+        workspace['active_work_mode'] = normalize_work_mode(getattr(main_w, '_current_work_mode', EDITOR_MODE))
         save_project(
             filepath=project_path,
             media_paths=_media_paths,

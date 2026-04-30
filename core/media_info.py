@@ -1,10 +1,12 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 03.01.19
+# Phase: PHASE2
 """
 core/media_info.py
 ffprobe 기반 미디어 정보 조회 유틸
 """
 import json, subprocess
+
+from core.platform_compat import ffprobe_binary, hidden_subprocess_kwargs
 
 
 def probe_media(filepath: str) -> dict:
@@ -17,13 +19,14 @@ def probe_media(filepath: str) -> dict:
     }
     try:
         cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            ffprobe_binary(), "-v", "error", "-select_streams", "v:0",
             "-show_entries", "stream=width,height,r_frame_rate:format=duration",
             "-of", "json", filepath,
         ]
         proc = subprocess.run(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, timeout=5
+            text=True, encoding="utf-8", errors="replace", timeout=5,
+            **hidden_subprocess_kwargs(),
         )
         probe = json.loads(proc.stdout)
         fmt = probe.get("format", {})

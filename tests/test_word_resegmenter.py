@@ -1,8 +1,9 @@
-# Version: 03.00.20
+# Version: 03.01.23
 # Phase: PHASE2
 import unittest
 
 from core.engine.word_resegmenter import resegment_by_word_timestamps
+from core.subtitle_quality.timestamp_regrouper import regroup_by_word_timestamps
 
 
 class WordResegmenterTests(unittest.TestCase):
@@ -90,6 +91,65 @@ class WordResegmenterTests(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertTrue(all(item.get("words") for item in result))
+
+    def test_timestamp_regrouper_merges_tiny_same_boundary_segments(self):
+        result = regroup_by_word_timestamps(
+            [
+                {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "아",
+                    "speaker": "SPEAKER_00",
+                    "words": [{"word": "아", "start": 0.0, "end": 0.2, "speaker": "SPEAKER_00"}],
+                    "asr_metadata": {"_clip_idx": 0},
+                },
+                {
+                    "start": 0.35,
+                    "end": 1.0,
+                    "text": "맞아요",
+                    "speaker": "SPEAKER_00",
+                    "words": [{"word": "맞아요", "start": 0.35, "end": 0.9, "speaker": "SPEAKER_00"}],
+                    "asr_metadata": {"_clip_idx": 0},
+                },
+            ],
+            max_chars=10,
+            max_duration=4.0,
+            max_cps=20,
+            min_duration=0.5,
+            gap_break_sec=1.5,
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["text"], "아 맞아요")
+
+    def test_timestamp_regrouper_does_not_merge_across_clip_boundary(self):
+        result = regroup_by_word_timestamps(
+            [
+                {
+                    "start": 0.0,
+                    "end": 0.2,
+                    "text": "아",
+                    "speaker": "SPEAKER_00",
+                    "words": [{"word": "아", "start": 0.0, "end": 0.2, "speaker": "SPEAKER_00"}],
+                    "asr_metadata": {"_clip_idx": 0},
+                },
+                {
+                    "start": 0.35,
+                    "end": 0.9,
+                    "text": "맞아요",
+                    "speaker": "SPEAKER_00",
+                    "words": [{"word": "맞아요", "start": 0.35, "end": 0.9, "speaker": "SPEAKER_00"}],
+                    "asr_metadata": {"_clip_idx": 1},
+                },
+            ],
+            max_chars=10,
+            max_duration=4.0,
+            max_cps=20,
+            min_duration=0.5,
+            gap_break_sec=1.5,
+        )
+
+        self.assertEqual([item["text"] for item in result], ["아", "맞아요"])
 
 
 if __name__ == "__main__":

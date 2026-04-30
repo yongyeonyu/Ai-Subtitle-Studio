@@ -1,4 +1,4 @@
-# Version: 03.00.26
+# Version: 03.01.15
 # Phase: PHASE2
 """
 ui/project/project_panel.py
@@ -25,6 +25,7 @@ from core.project.project_context import (
     project_roughcut_state,
     project_segments_to_editor,
 )
+from core.work_mode import EDITOR_MODE, normalize_work_mode
 from ui.project.clip_order_dialog import OrderDialog
 
 
@@ -190,7 +191,7 @@ class ProjectUIMixin:
             filepath,
             segments=segments,
             user_settings=self._load_local_settings(),
-            active_work_mode=getattr(self, "_current_work_mode", "edit") or "edit",
+            active_work_mode=normalize_work_mode(getattr(self, "_current_work_mode", EDITOR_MODE)),
         )
         get_logger().log("💾 프로젝트 저장 완료")
 

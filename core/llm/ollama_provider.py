@@ -1,16 +1,19 @@
-# Version: 02.03.02
+# Version: 03.01.16
 # Phase: PHASE1-B
 """Ollama adapter for local subtitle text splitting."""
 from __future__ import annotations
 
 import json
 import re
+import socket
 import threading
+import urllib.error
 import urllib.request
 
 
 _WARMED: set[str] = set()
 _WARM_LOCK = threading.Lock()
+_WARMUP_TIMEOUT_SEC = 8.0
 
 
 def _parse_chunks(out_text: str) -> list[str]:
@@ -56,7 +59,14 @@ def split_text(model: str, prompt: str, timeout: int = 120) -> list[str] | None:
     return chunks or None
 
 
-def warmup_model(model: str, logger=None) -> None:
+def _is_timeout_error(exc: BaseException) -> bool:
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    reason = getattr(exc, "reason", None)
+    return isinstance(reason, (TimeoutError, socket.timeout))
+
+
+def warmup_model(model: str, logger=None, timeout: float = _WARMUP_TIMEOUT_SEC) -> None:
     if not model or "사용 안함" in model:
         return
 
@@ -85,12 +95,25 @@ def warmup_model(model: str, logger=None) -> None:
                 },
             )
 
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 resp.read()
 
             _WARMED.add(model)
             if logger:
                 logger.log(f"🔥 Ollama 워밍업 완료: {model}")
         except Exception as e:
+            if _is_timeout_error(e):
+                _WARMED.add(model)
+                if logger:
+                    logger.log(
+                        f"⏭️ Ollama 워밍업 건너뜀: {model} 모델 로딩이 {timeout:.0f}초를 넘어 "
+                        "실제 LLM 요청에서 이어 처리합니다."
+                    )
+                return
+            if isinstance(e, urllib.error.URLError):
+                _WARMED.add(model)
+                if logger:
+                    logger.log(f"⚠️ Ollama 워밍업 건너뜀: 서버 연결 확인 필요 ({e})")
+                return
             if logger:
                 logger.log(f"⚠️ Ollama 워밍업 실패: {e}")

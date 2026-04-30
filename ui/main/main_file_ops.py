@@ -1,4 +1,4 @@
-# Version: 03.01.00
+# Version: 03.01.15
 # Phase: PHASE1-B
 """
 ui/main/main_file_ops.py
@@ -15,6 +15,7 @@ from core.path_manager import (
     ensure_nas_mounted, get_recent_folders, add_recent_folder,
 )
 from core.settings import load_settings, save_settings
+from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
 
 
 class FileOpsMixin:
@@ -235,12 +236,13 @@ class FileOpsMixin:
         QApplication.quit()
 
     def _restore_current_work_mode(self):
-        mode = str(getattr(self, "_current_work_mode", "edit") or "edit")
-        if mode == "roughcut" and hasattr(self, "_open_roughcut_helper"):
+        mode = normalize_work_mode(getattr(self, "_current_work_mode", EDITOR_MODE))
+        self._current_work_mode = mode
+        if mode == ROUGHCUT_MODE and hasattr(self, "_open_roughcut_helper"):
             self._open_roughcut_helper()
-        elif mode == "shortform" and hasattr(self, "_open_shortform_maker"):
+        elif mode == SHORTFORM_MODE and hasattr(self, "_open_shortform_maker"):
             self._open_shortform_maker()
-        elif mode == "edit" and hasattr(self, "_open_editor_screen") and getattr(self, "_editor_widget", None) is not None:
+        elif mode == EDITOR_MODE and hasattr(self, "_open_editor_screen") and getattr(self, "_editor_widget", None) is not None:
             self._open_editor_screen()
 
     def _backup_before_quick_exit(self):

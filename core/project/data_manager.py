@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 03.01.25
+# Phase: PHASE2
 """
 editor_data_manager.py
 ─────────────────────────────────────────────
@@ -35,6 +35,8 @@ CORRECTION_FILE      = os.path.join(DATASET_DIR, "dataset_correction.json")
 SUBTITLE_RULE_FILE   = os.path.join(DATASET_DIR, "subtitle_rule.json")
 SETTINGS_FILE        = os.path.join(DATASET_DIR, "user_settings.json")
 CUSTOM_DEFAULTS_FILE = os.path.join(DATASET_DIR, "custom_defaults.json")
+CORRECTION_MEMORY_FILE = os.path.join(DATASET_DIR, "correction_memory.json")
+WRONG_ANSWER_MEMORY_FILE = os.path.join(DATASET_DIR, "wrong_answer_memory.json")
 
 
 # ── 설정 로드 ──────────────────────────────────────────────────────────────
@@ -102,6 +104,26 @@ def save_correction(corrections: dict, original: str, corrected: str) -> dict:
     with open(CORRECTION_FILE, 'w', encoding='utf-8') as f:
         json.dump(corrections, f, ensure_ascii=False, indent=4)
     return corrections
+
+
+def load_correction_memory() -> dict:
+    from core.subtitle_quality.correction_memory import load_correction_memory as _load
+    return _load(CORRECTION_MEMORY_FILE)
+
+
+def add_correction_memory_item(original: str, corrected: str, **kwargs) -> dict:
+    from core.subtitle_quality.correction_memory import add_correction_memory_item as _add
+    return _add(original, corrected, path=CORRECTION_MEMORY_FILE, **kwargs)
+
+
+def load_wrong_answer_memory() -> dict:
+    from core.subtitle_quality.wrong_answer_memory import load_wrong_answer_memory as _load
+    return _load(WRONG_ANSWER_MEMORY_FILE)
+
+
+def add_wrong_answer_memory_item(phrase: str, **kwargs) -> dict:
+    from core.subtitle_quality.wrong_answer_memory import add_wrong_answer_memory_item as _add
+    return _add(phrase, path=WRONG_ANSWER_MEMORY_FILE, **kwargs)
 
 
 # ── subtitle_rule ─────────────────────────────────────────────────────────

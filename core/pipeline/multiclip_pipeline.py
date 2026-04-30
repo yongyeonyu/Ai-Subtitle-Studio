@@ -1,5 +1,5 @@
-# Version: 03.01.00
-# Phase: PHASE1-B
+# Version: 03.01.21
+# Phase: PHASE2
 """
 core/pipeline/multiclip_pipeline.py
 MulticlipPipelineMixin — 멀티클립 품질모드 파이프라인 (start_multiclip_pipeline, _run_multiclip)
@@ -116,6 +116,16 @@ class MulticlipPipelineMixin:
             for word in seg.get("words", []) or []:
                 word["start"] = float(word.get("start", 0.0)) + offset
                 word["end"] = float(word.get("end", 0.0)) + offset
+            asr_meta = seg.get("asr_metadata")
+            if isinstance(asr_meta, dict):
+                asr_meta["_clip_idx"] = clip_idx
+                for word in asr_meta.get("words") or []:
+                    if not isinstance(word, dict):
+                        continue
+                    if word.get("start") is not None:
+                        word["start"] = float(word.get("start", 0.0)) + offset
+                    if word.get("end") is not None:
+                        word["end"] = float(word.get("end", 0.0)) + offset
         return segments
 
     def _sanitize_multiclip_segments(self, segments, clip_idx):
@@ -131,6 +141,9 @@ class MulticlipPipelineMixin:
             seg["start"] = start
             seg["end"] = end
             seg["_clip_idx"] = clip_idx
+            asr_meta = seg.get("asr_metadata")
+            if isinstance(asr_meta, dict):
+                asr_meta["_clip_idx"] = clip_idx
             if "speaker" not in seg:
                 seg["speaker"] = seg.get("spk_id", "00")
             clean.append(seg)

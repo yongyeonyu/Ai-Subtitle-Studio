@@ -1,4 +1,4 @@
-# Version: 03.00.19
+# Version: 03.01.22
 # Phase: PHASE2
 """
 media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 + Whisper 섹터 동기화)
@@ -10,6 +10,16 @@ media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 
 import sys
 import os, subprocess, json, re, config, shutil, time, wave, threading
 from concurrent.futures import ThreadPoolExecutor
+from core.platform_compat import demucs_binary, ffmpeg_binary, hidden_subprocess_kwargs
+from core.subtitle_quality.candidate_ranker import rank_overlap_candidates
+from core.subtitle_quality.hallucination_detector import annotate_segment_hallucination_risk
+from core.subtitle_quality.models import attach_asr_metadata
+from core.subtitle_quality.vad_alignment_checker import (
+    annotate_segment_vad_alignment,
+    apply_review_vad_settings,
+    review_vad_config,
+    review_vad_enabled,
+)
 from logger import get_logger
 
 _CHUNK_DURATION = 30
@@ -60,6 +70,30 @@ class VideoProcessor:
         self._vad_loaded = False
         self._vad_model = None
         self._vad_utils = None
+
+    def _run_media_command(self, cmd: list[str], *, label: str, timeout: float | None = None) -> bool:
+        try:
+            result = subprocess.run(
+                [str(x) for x in cmd],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                **hidden_subprocess_kwargs(),
+            )
+        except FileNotFoundError as e:
+            get_logger().log(f"  ❌ {label} 실행 파일을 찾을 수 없습니다: {e}")
+            return False
+        except Exception as e:
+            get_logger().log(f"  ❌ {label} 실행 오류: {e}")
+            return False
+
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            get_logger().log(f"  ❌ {label} 실패: {err[:300]}")
+            return False
+        return True
 
     # 💡 파라미터에 target_start_sec와 target_end_sec 추가
     # 💡 1. 메인 파이프라인 (불필요한 중복 로직 싹 걷어내고 아주 깔끔해졌습니다)
@@ -126,17 +160,31 @@ class VideoProcessor:
             get_logger().log("  └ ♻️ [초고속 모드] 정상적으로 분리된 오디오 캐시를 발견하여 추출을 건너뜜")
         else:
             get_logger().log("  └ 📥 세부 공정 1: 오디오 추출 및 필터 적용 중...")
-            subprocess.run(["ffmpeg", "-y", "-nostdin", "-loglevel", "error", "-i", video_path, "-vn", "-ac", "1", "-ar", "48000", "-af", master_filter, "-acodec", "pcm_s16le", raw_wav] if use_basic else ["ffmpeg", "-y", "-nostdin", "-loglevel", "error", "-i", video_path, "-vn", "-ac", "1", "-ar", "48000", "-acodec", "pcm_s16le", raw_wav], capture_output=True)
+            ffmpeg = ffmpeg_binary()
+            extract_cmd = [ffmpeg, "-y", "-nostdin", "-loglevel", "error", "-i", video_path, "-vn", "-ac", "1", "-ar", "48000"]
+            if use_basic:
+                extract_cmd.extend(["-af", master_filter])
+            extract_cmd.extend(["-acodec", "pcm_s16le", raw_wav])
+            if not self._run_media_command(extract_cmd, label="ffmpeg 오디오 추출"):
+                return chunk_dir, []
                 
             ai_wav = raw_wav
             if audio_ai == "demucs":
                 get_logger().log("  └ 🤖 세부 공정 2: Demucs 보컬 정밀 분리 중...")
-                subprocess.run(["demucs", "--two-stems=vocals", raw_wav, "-o", config.OUTPUT_DIR], capture_output=True)
+                demucs = demucs_binary()
+                self._run_media_command(
+                    [demucs, "--two-stems=vocals", raw_wav, "-o", config.OUTPUT_DIR],
+                    label="Demucs 보컬 분리",
+                )
                 demucs_out = os.path.join(config.OUTPUT_DIR, "htdemucs", f"{base_name}_raw", "vocals.wav")
                 if os.path.exists(demucs_out): ai_wav = demucs_out
 
             get_logger().log("  └ 🔊 세부 공정 3: 음량 평탄화 및 포맷 변환 중...")
-            subprocess.run(["ffmpeg", "-y", "-nostdin", "-loglevel", "error", "-i", ai_wav, "-ac", "1", "-ar", "16000", "-af", active_filter, "-acodec", "pcm_s16le", cleaned_wav], capture_output=True)
+            if not self._run_media_command(
+                [ffmpeg, "-y", "-nostdin", "-loglevel", "error", "-i", ai_wav, "-ac", "1", "-ar", "16000", "-af", active_filter, "-acodec", "pcm_s16le", cleaned_wav],
+                label="ffmpeg 음량 평탄화",
+            ):
+                return chunk_dir, []
             if os.path.exists(raw_wav): os.remove(raw_wav)
 
         vad_segments = []
@@ -153,12 +201,13 @@ class VideoProcessor:
             cache_valid = False
             if os.path.exists(vad_cache_path) and os.path.exists(cleaned_wav):
                 try:
-                    with open(vad_cache_path, "r") as f:
+                    with open(vad_cache_path, "r", encoding="utf-8") as f:
                         cache_data = json.load(f)
                     wav_stat = os.stat(cleaned_wav)
                     if (cache_data.get("wav_mtime") == wav_stat.st_mtime
                             and cache_data.get("wav_size") == wav_stat.st_size
                             and cache_data.get("vad_model") == vad_model
+                            and cache_data.get("review_vad_config") == review_vad_config(s)
                             and not is_partial):
                         cache_valid = True
                 except Exception:
@@ -176,7 +225,7 @@ class VideoProcessor:
                 self._write_grouped_chunks_parallel(cleaned_wav, chunk_dir, grouped)
 
                 try:
-                    with open(os.path.join(chunk_dir, "vad_strict.json"), "w") as f:
+                    with open(os.path.join(chunk_dir, "vad_strict.json"), "w", encoding="utf-8") as f:
                         json.dump(vad_segments, f)
                 except Exception:
                     pass
@@ -199,9 +248,10 @@ class VideoProcessor:
                             "wav_mtime": wav_stat.st_mtime,
                             "wav_size": wav_stat.st_size,
                             "vad_model": vad_model,
+                            "review_vad_config": review_vad_config(s),
                             "timestamps": vad_segments
                         }
-                        with open(vad_cache_path, "w") as f:
+                        with open(vad_cache_path, "w", encoding="utf-8") as f:
                             json.dump(cache_obj, f)
                     except Exception:
                         pass
@@ -233,6 +283,14 @@ class VideoProcessor:
     def _split_with_vad(self, wav_path: str, chunk_dir: str, vad_model: str, s: dict, target_start_sec=0.0, target_end_sec=None, is_single_segment=False):
         try:
             import torch
+            effective_s = apply_review_vad_settings(s)
+            vad_cfg = review_vad_config(s)
+            if vad_cfg["review_vad_before_stt_enabled"] and vad_cfg["review_vad_strict_mode"]:
+                get_logger().log(
+                    "  └ 🧪 자막 품질 검수 VAD: "
+                    f"pad {vad_cfg['review_vad_speech_pad_sec']:.2f}s / "
+                    f"min silence {vad_cfg['review_vad_min_silence_sec']:.2f}s"
+                )
             if not self._vad_loaded:
                 self._vad_model, self._vad_utils = torch.hub.load(
                     repo_or_dir="snakers4/silero-vad",
@@ -246,10 +304,10 @@ class VideoProcessor:
             utils = self._vad_utils
             (get_speech_timestamps, _, read_audio, _, _) = utils
             
-            v_thresh = float(s.get("vad_threshold", 0.5))
-            v_min_sp = int(float(s.get("vad_min_speech", 0.25)) * 1000)
-            v_min_sil = int(float(s.get("vad_min_silence", 2.0)) * 1000)
-            v_pad_ms = int(float(s.get("vad_speech_pad", 0.2)) * 1000) 
+            v_thresh = float(effective_s.get("vad_threshold", 0.5))
+            v_min_sp = int(float(effective_s.get("vad_min_speech", 0.25)) * 1000)
+            v_min_sil = int(float(effective_s.get("vad_min_silence", 2.0)) * 1000)
+            v_pad_ms = int(float(effective_s.get("vad_speech_pad", 0.2)) * 1000)
             
             audio_data = read_audio(wav_path)
             raw_ts = get_speech_timestamps(
@@ -257,7 +315,17 @@ class VideoProcessor:
                 min_speech_duration_ms=v_min_sp, min_silence_duration_ms=v_min_sil,
                 speech_pad_ms=v_pad_ms, window_size_samples=512
             )
-            timestamps = [{"start": t["start"]/16000.0, "end": t["end"]/16000.0} for t in raw_ts]
+            timestamps = [
+                {
+                    "start": t["start"] / 16000.0,
+                    "end": t["end"] / 16000.0,
+                    "source": vad_model,
+                    "review_vad": bool(vad_cfg["review_vad_before_stt_enabled"]),
+                    "speech_pad_sec": round(v_pad_ms / 1000.0, 3),
+                    "min_silence_sec": round(v_min_sil / 1000.0, 3),
+                }
+                for t in raw_ts
+            ]
             
             # 구간 필터링 및 단일 세그먼트 보호 로직
             if target_start_sec > 0.0 or target_end_sec is not None:
@@ -306,7 +374,7 @@ class VideoProcessor:
             self._write_grouped_chunks_parallel(wav_path, chunk_dir, grouped)
 
             try:
-                with open(os.path.join(chunk_dir, "vad_strict.json"), "w") as f:
+                with open(os.path.join(chunk_dir, "vad_strict.json"), "w", encoding="utf-8") as f:
                     json.dump(timestamps, f)
             except: pass
 
@@ -324,18 +392,19 @@ class VideoProcessor:
         """user_settings.json 로드 (오류 시 로그 남김). fast-mode override 지원."""
         settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
 
+        data = dict(getattr(config, "DEFAULT_ADV_SETTINGS", {}) or {})
         if not os.path.exists(settings_path):
-            data = {}
+            pass
         else:
             try:
                 with open(settings_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if not isinstance(data, dict):
+                    loaded = json.load(f)
+                if not isinstance(loaded, dict):
                     get_logger().log("⚠️ user_settings.json 형식 오류: dict 아님")
-                    data = {}
+                    loaded = {}
+                data.update(loaded)
             except Exception as e:
                 get_logger().log(f"⚠️ user_settings.json 로드 실패: {e}")
-                data = {}
 
         # 빠른모드 오버라이드: _fast_mode_overrides가 있으면 적용
         overrides = getattr(self, '_fast_mode_overrides', None)
@@ -357,7 +426,7 @@ class VideoProcessor:
         vad_json = os.path.join(chunk_dir, "vad_strict.json")
         if os.path.exists(vad_json):
             try:
-                with open(vad_json, "r") as f:
+                with open(vad_json, "r", encoding="utf-8") as f:
                     vad_strict = json.load(f)
             except Exception:
                 pass
@@ -451,6 +520,10 @@ class VideoProcessor:
                     idx = int(data.get("index", received))
                     item = q[idx]
                     payload = data.get("result") if "result" in data else {"error": data.get("error", "")}
+                    if isinstance(payload, dict):
+                        payload.setdefault("backend", data.get("backend", "mlx-whisper"))
+                        payload.setdefault("language_probability", data.get("language_probability"))
+                        payload.setdefault("chunk_path", item.get("input_path"))
                     chunk_segs = self._parse_whisper_payload(
                         payload,
                         item,
@@ -462,6 +535,7 @@ class VideoProcessor:
                         chunk_segs,
                         previous_end=prev_end,
                         dedup_window=float(s.get("sub_dedup_window", 0.5) or 0.5),
+                        vad_segments=vad_strict,
                     )
 
                     if chunk_segs:
@@ -487,6 +561,13 @@ class VideoProcessor:
                     if data is None:
                         continue
 
+                    if data.get("fatal_error") or data.get("error"):
+                        had_error = True
+                        msg = data.get("fatal_error") or data.get("error") or "unknown whisper worker error"
+                        stage = data.get("stage", "worker")
+                        get_logger().log(f"  [FAIL] Whisper worker error ({stage}): {msg}")
+                        raise RuntimeError(f"whisper_worker_error[{stage}]: {msg}")
+
                     chunk_segs = self._parse_whisper_payload(
                         data,
                         item,
@@ -498,6 +579,7 @@ class VideoProcessor:
                         chunk_segs,
                         previous_end=prev_end,
                         dedup_window=float(s.get("sub_dedup_window", 0.5) or 0.5),
+                        vad_segments=vad_strict,
                     )
 
                     if chunk_segs:
@@ -556,14 +638,15 @@ class VideoProcessor:
     def _ffmpeg_trim_to_wav(self, src_wav: str, out_wav: str, start_sec: float, duration_sec: float) -> bool:
         result = subprocess.run(
             [
-                "ffmpeg", "-y", "-nostdin", "-loglevel", "error",
+                ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error",
                 "-ss", str(start_sec),
                 "-t", str(duration_sec),
                 "-i", src_wav,
                 "-acodec", "pcm_s16le",
                 out_wav,
             ],
-            capture_output=True
+            capture_output=True,
+            **hidden_subprocess_kwargs(),
         )
         return result.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 0
     
@@ -573,6 +656,8 @@ class VideoProcessor:
             overlap = float(settings.get("whisper_chunk_overlap_sec", _OVERLAP_SEC))
         except (TypeError, ValueError):
             overlap = _OVERLAP_SEC
+        if settings.get("subtitle_quality_enabled") or settings.get("subtitle_quality_auto_check_after_generate"):
+            overlap = max(overlap, 3.0)
         return max(0.0, min(8.0, overlap))
 
     def _split_range_with_overlap(self, start: float, end: float, max_chunk_dur: float, overlap_sec: float) -> list[dict]:
@@ -600,6 +685,10 @@ class VideoProcessor:
                           max_chunk_dur: float = 30.0, margin: float = 1.0,
                           gap_merge_limit: float = 3.0, settings: dict | None = None) -> list[dict]:
         overlap_sec = self._chunk_overlap_sec(settings)
+        if review_vad_enabled(settings):
+            cfg = review_vad_config(settings)
+            margin = min(float(margin), max(0.0, float(cfg["review_vad_speech_pad_sec"])))
+            gap_merge_limit = min(float(gap_merge_limit), max(0.1, float(cfg["review_vad_min_silence_sec"])))
         merged_sectors = []
         for ts in timestamps:
             s = max(0.0, ts["start"] - margin)
@@ -700,16 +789,42 @@ class VideoProcessor:
                 if exact_end > target_end_sec:
                     exact_end = target_end_sec
 
-            chunk_segs.append({
+            segment = {
                 "start": exact_start,
                 "end": exact_end,
                 "text": seg.get("text", "").strip(),
                 "words": offset_words,
-            })
+            }
+            for key in (
+                "avg_logprob",
+                "compression_ratio",
+                "no_speech_prob",
+                "temperature",
+                "tokens",
+                "word_confidence",
+            ):
+                if key in seg:
+                    segment[key] = seg.get(key)
+            segment = attach_asr_metadata(
+                segment,
+                backend=data.get("backend"),
+                language_probability=data.get("language_probability"),
+                chunk_path=data.get("chunk_path") or item.get("input_path"),
+            )
+            if vad_strict:
+                segment = annotate_segment_vad_alignment(segment, vad_strict)
+            segment = annotate_segment_hallucination_risk(segment, vad_segments=vad_strict)
+            chunk_segs.append(segment)
 
         return chunk_segs
 
-    def _dedupe_overlapping_segments(self, chunk_segs: list[dict], previous_end: float, dedup_window: float = 0.5) -> list[dict]:
+    def _dedupe_overlapping_segments(
+        self,
+        chunk_segs: list[dict],
+        previous_end: float,
+        dedup_window: float = 0.5,
+        vad_segments: list[dict] | None = None,
+    ) -> list[dict]:
         if not chunk_segs or previous_end <= 0.0:
             return chunk_segs
 
@@ -724,15 +839,45 @@ class VideoProcessor:
             if seg.get("words"):
                 if not words:
                     continue
-                new_seg = dict(seg)
-                new_seg["words"] = words
-                new_seg["start"] = float(words[0].get("start", seg.get("start", previous_end)) or previous_end)
-                new_seg["end"] = float(words[-1].get("end", seg.get("end", previous_end)) or previous_end)
+                trimmed = dict(seg)
+                trimmed["words"] = words
+                trimmed["start"] = float(words[0].get("start", seg.get("start", previous_end)) or previous_end)
+                trimmed["end"] = float(words[-1].get("end", seg.get("end", previous_end)) or previous_end)
                 if words and words != seg.get("words"):
                     text = " ".join(str(w.get("word", "") or "").strip() for w in words).strip()
                     if text:
-                        new_seg["text"] = text
-                cleaned.append(new_seg)
+                        trimmed["text"] = text
+                    trimmed = attach_asr_metadata(trimmed, backend=(trimmed.get("asr_metadata") or {}).get("backend"))
+                    if vad_segments:
+                        trimmed = annotate_segment_vad_alignment(trimmed, vad_segments)
+                    trimmed = annotate_segment_hallucination_risk(trimmed, vad_segments=vad_segments or [])
+
+                ranked = rank_overlap_candidates(
+                    [
+                        {"candidate_id": "original", "segment": seg},
+                        {"candidate_id": "trimmed", "segment": trimmed, "score_bonus": 2.0},
+                    ],
+                    vad_segments=vad_segments or [],
+                    previous_end=previous_end,
+                )
+                selected_id = str(ranked[0].get("candidate_id") or "trimmed")
+                selected_score = ranked[0].get("score")
+                selected = dict(ranked[0].get("segment") or trimmed)
+                if selected.get("start", 0.0) < previous_end and trimmed.get("end", 0.0) > trimmed.get("start", 0.0):
+                    selected = trimmed
+                    selected_id = "trimmed"
+                    for item in ranked:
+                        if item.get("candidate_id") == "trimmed":
+                            selected_score = item.get("score")
+                            break
+                asr_metadata = dict(selected.get("asr_metadata") or {})
+                asr_metadata["overlap_candidate"] = {
+                    "selected": selected_id,
+                    "score": selected_score,
+                    "boundary": round(boundary, 6),
+                }
+                selected["asr_metadata"] = asr_metadata
+                cleaned.append(selected)
                 continue
 
             exact_end = float(seg.get("end", 0.0) or 0.0)
@@ -741,6 +886,9 @@ class VideoProcessor:
             new_seg = dict(seg)
             new_seg["start"] = max(float(new_seg.get("start", 0.0) or 0.0), previous_end)
             if new_seg["end"] > new_seg["start"]:
+                if vad_segments:
+                    new_seg = annotate_segment_vad_alignment(new_seg, vad_segments)
+                new_seg = annotate_segment_hallucination_risk(new_seg, vad_segments=vad_segments or [])
                 cleaned.append(new_seg)
 
         return cleaned

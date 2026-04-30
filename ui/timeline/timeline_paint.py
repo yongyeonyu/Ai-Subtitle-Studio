@@ -1,4 +1,4 @@
-# Version: 03.01.06
+# Version: 03.01.25
 # Phase: PHASE1-C
 """
 ui/timeline_paint.py
@@ -338,8 +338,31 @@ class TimelinePaintMixin:
             is_active = (self.active_seg_start is not None and abs(seg["start"] - self.active_seg_start) < 0.5)
             is_hover = self._hover_line == seg.get("line")
             is_stt_pending = bool(seg.get("stt_pending"))
-            fill = QColor("#4A1F24") if is_stt_pending else (QColor("#1D3D76") if is_active else (QColor("#222A31") if is_hover else QColor("#242A30")))
-            border = QColor("#FF453A") if is_stt_pending else (QColor("#8AB8FF") if is_active else QColor("#3A4650"))
+            quality = dict(seg.get("quality") or {})
+            q_label = str(quality.get("confidence_label") or "")
+            q_flags = set(quality.get("flags") or ())
+            q_filter = str(getattr(self, "quality_filter", "all") or "all")
+            q_colors = {
+                "green": ("#203A2A", "#34C759"),
+                "yellow": ("#3B341D", "#FFCC00"),
+                "red": ("#4A1F24", "#FF453A"),
+                "gray": ("#2F343A", "#8E8E93"),
+            }
+            q_matches = (
+                q_filter == "all"
+                or q_filter == q_label
+                or (q_filter == "needs_review" and (q_label in {"red", "gray"} or bool(q_flags.intersection({"non_speech_hallucination_risk", "high_no_speech_prob", "outside_vad_speech"}))))
+                or (q_filter == "auto_corrected" and "auto_corrected" in q_flags)
+            )
+            if quality and q_label in q_colors:
+                fill = QColor(q_colors[q_label][0])
+                border = QColor(q_colors[q_label][1])
+            else:
+                fill = QColor("#4A1F24") if is_stt_pending else (QColor("#1D3D76") if is_active else (QColor("#222A31") if is_hover else QColor("#242A30")))
+                border = QColor("#FF453A") if is_stt_pending else (QColor("#8AB8FF") if is_active else QColor("#3A4650"))
+            if quality and not q_matches:
+                fill = QColor("#1A2025")
+                border = QColor("#2D3942")
             bw = 2 if is_active else (2 if is_hover else 1)
 
             grad = QLinearGradient(float(rect.left()), float(rect.top()), float(rect.left()), float(rect.bottom()))

@@ -6,6 +6,8 @@
       "category": "STT",
       "os": ["mac"],
       "pip_packages": ["mlx-whisper"],
+      "import_names": ["mlx_whisper"],
+      "hf_repo": "mlx-community/whisper-large-v3-mlx",
       "model_path": "",
       "required": true,
       "hidden": false
@@ -16,9 +18,39 @@
       "category": "STT",
       "os": ["windows"],
       "pip_packages": ["faster-whisper"],
+      "import_names": ["faster_whisper"],
+      "hf_repo": "Systran/faster-whisper-large-v3",
       "model_path": "models/faster-whisper-large-v3",
+      "model_files": ["model.bin", "config.json", "pytorch_model.bin", "model.safetensors"],
       "required": true,
       "hidden": false
+    },
+    {
+      "id": "whisper-korean-ghost613-mlx",
+      "name": "Whisper Korean Turbo (MLX, 실험)",
+      "category": "STT",
+      "os": ["mac"],
+      "pip_packages": ["mlx-whisper"],
+      "import_names": ["mlx_whisper"],
+      "hf_repo": "youngouk/ghost613-turbo-korean-4bit-mlx",
+      "model_path": "",
+      "required": false,
+      "hidden": false,
+      "experimental": true
+    },
+    {
+      "id": "whisper-korean-ghost613-faster",
+      "name": "Whisper Korean Turbo (CUDA, 실험)",
+      "category": "STT",
+      "os": ["windows"],
+      "pip_packages": ["faster-whisper"],
+      "import_names": ["faster_whisper"],
+      "hf_repo": "ghost613/faster-whisper-large-v3-turbo-korean",
+      "model_path": "models/faster-whisper-large-v3-turbo-korean",
+      "model_files": ["model.bin", "config.json", "pytorch_model.bin", "model.safetensors"],
+      "required": false,
+      "hidden": false,
+      "experimental": true
     },
     {
       "id": "whisper-medium-mlx",
@@ -26,6 +58,8 @@
       "category": "STT",
       "os": ["mac"],
       "pip_packages": ["mlx-whisper"],
+      "import_names": ["mlx_whisper"],
+      "hf_repo": "mlx-community/whisper-medium-mlx",
       "model_path": "",
       "required": false,
       "hidden": false
@@ -36,7 +70,10 @@
       "category": "STT",
       "os": ["windows"],
       "pip_packages": ["faster-whisper"],
+      "import_names": ["faster_whisper"],
+      "hf_repo": "Systran/faster-whisper-medium",
       "model_path": "models/faster-whisper-medium",
+      "model_files": ["model.bin", "config.json", "pytorch_model.bin", "model.safetensors"],
       "required": false,
       "hidden": false
     },
@@ -46,6 +83,7 @@
       "category": "VAD",
       "os": ["mac", "windows"],
       "pip_packages": ["silero-vad"],
+      "import_names": ["silero_vad"],
       "model_path": "",
       "required": true,
       "hidden": false
@@ -56,6 +94,7 @@
       "category": "Audio",
       "os": ["mac", "windows"],
       "pip_packages": ["deepfilternet"],
+      "import_names": ["df"],
       "model_path": "",
       "required": false,
       "hidden": false
@@ -66,6 +105,7 @@
       "category": "Audio",
       "os": ["mac", "windows"],
       "pip_packages": ["demucs"],
+      "import_names": ["demucs"],
       "model_path": "",
       "required": false,
       "hidden": false
@@ -76,6 +116,7 @@
       "category": "Diarize",
       "os": ["mac", "windows"],
       "pip_packages": ["speechbrain"],
+      "import_names": ["speechbrain"],
       "model_path": "",
       "required": false,
       "hidden": false
@@ -88,6 +129,7 @@
       "pip_packages": [],
       "model_path": "",
       "install_cmd": "https://ollama.com/download",
+      "binary_check": "ollama",
       "required": false,
       "hidden": false
     }

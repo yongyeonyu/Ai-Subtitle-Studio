@@ -1,10 +1,13 @@
-# Version: 03.01.11
+# Version: 03.01.17
 # Phase: PHASE2
 from __future__ import annotations
 
 import json
 import os
+import tempfile
 from dataclasses import asdict, replace
+from datetime import datetime
+from pathlib import Path
 
 from core.project.project_context import (
     project_clip_boundaries,
@@ -16,8 +19,13 @@ from core.project.project_context import (
 from core.project.project_manager import save_project
 from core.roughcut import (
     build_edl_segments,
+    build_concat_render_plan,
+    build_ffmpeg_subtitle_burnin_command,
     build_markdown_guide,
+    edl_to_dict,
+    format_srt,
     map_edl_segments_to_clip_sources,
+    retime_subtitles_for_edl,
     roughcut_result_from_dict,
     run_roughcut_pipeline,
 )
@@ -76,15 +84,13 @@ class RoughcutStateMixin:
         except Exception:
             return None
         state = data.get("roughcut_state", {}) or {}
-        if state.get("source_signature") == signature:
-            edits = state.get("user_edits", {})
-            if isinstance(edits, dict):
-                self._user_edits = {
-                    str(key): dict(value)
-                    for key, value in edits.items()
-                    if isinstance(value, dict)
-                }
-            restored = roughcut_result_from_dict(state)
+        self._roughcut_candidates = self._normalize_roughcut_candidates(state)
+        self._selected_candidate_id = str(state.get("selected_candidate_id") or "")
+        candidate = self._selected_candidate_for_signature(signature)
+        self._refresh_candidate_combo()
+        if candidate is not None:
+            self._apply_candidate_payload(candidate, persist=False)
+            restored = roughcut_result_from_dict(candidate)
             if restored.chapters and restored.edl_segments:
                 self._stored_roughcut_result = restored
                 return restored
@@ -112,13 +118,96 @@ class RoughcutStateMixin:
     def _roughcut_state_payload(self) -> dict:
         result = self._result
         result = self._result_with_user_edits(result)
-        return {
+        current = self._current_candidate_payload(result)
+        candidates = self._merged_candidates(current)
+        payload = dict(current)
+        payload.update({
             "schema": "ai_subtitle_studio.roughcut_state.v1",
+            "candidates": candidates,
+            "selected_candidate_id": self._selected_candidate_id,
+            "candidate_count": len(candidates),
+        })
+        self._roughcut_candidates = candidates
+        self._refresh_candidate_combo()
+        return payload
+
+    def _normalize_roughcut_candidates(self, state: dict) -> list[dict]:
+        raw = state.get("candidates", [])
+        candidates: list[dict] = []
+        if isinstance(raw, list):
+            for index, item in enumerate(raw, start=1):
+                if not isinstance(item, dict):
+                    continue
+                candidate = dict(item)
+                candidate.setdefault("candidate_id", f"roughcut_candidate_{index:03d}")
+                candidate.setdefault("name", f"후보 {index}")
+                candidate.setdefault("created_at", "")
+                candidates.append(candidate)
+        if not candidates and (state.get("chapters") or state.get("edl_segments")):
+            legacy = dict(state)
+            legacy.setdefault("candidate_id", "roughcut_candidate_legacy")
+            legacy.setdefault("name", "기존 후보")
+            legacy.setdefault("created_at", "")
+            candidates.append(legacy)
+        return candidates
+
+    def _selected_candidate_for_signature(self, signature: str) -> dict | None:
+        candidates = list(getattr(self, "_roughcut_candidates", []) or [])
+        selected_id = str(getattr(self, "_selected_candidate_id", "") or "")
+        selected = self._candidate_by_id(selected_id)
+        if selected is not None and selected.get("source_signature") == signature:
+            return selected
+        for candidate in candidates:
+            if candidate.get("source_signature") == signature:
+                self._selected_candidate_id = str(candidate.get("candidate_id") or "")
+                return candidate
+        return None
+
+    def _candidate_by_id(self, candidate_id: str) -> dict | None:
+        candidate_id = str(candidate_id or "")
+        for candidate in list(getattr(self, "_roughcut_candidates", []) or []):
+            if str(candidate.get("candidate_id") or "") == candidate_id:
+                return candidate
+        return None
+
+    def _new_candidate_id(self) -> str:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = f"roughcut_{stamp}"
+        existing = {str(item.get("candidate_id") or "") for item in getattr(self, "_roughcut_candidates", []) or []}
+        if base not in existing:
+            return base
+        index = 2
+        while f"{base}_{index}" in existing:
+            index += 1
+        return f"{base}_{index}"
+
+    def _current_candidate_name(self, candidate_id: str) -> str:
+        existing = self._candidate_by_id(candidate_id)
+        if existing is not None and existing.get("name"):
+            return str(existing.get("name"))
+        count = len(getattr(self, "_roughcut_candidates", []) or []) + 1
+        return f"후보 {count} · {datetime.now().strftime('%H:%M')}"
+
+    def _current_candidate_payload(self, result) -> dict:
+        if result is None:
+            return {}
+        candidate_id = str(getattr(self, "_selected_candidate_id", "") or "")
+        if not candidate_id:
+            candidate_id = self._new_candidate_id()
+            self._selected_candidate_id = candidate_id
+        existing = self._candidate_by_id(candidate_id) or {}
+        payload = {
+            "candidate_id": candidate_id,
+            "name": self._current_candidate_name(candidate_id),
+            "created_at": str(existing.get("created_at") or datetime.now().isoformat(timespec="seconds")),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "schema": "ai_subtitle_studio.roughcut_candidate.v1",
             "source_signature": self._source_signature,
             "source_media": self._media_label(),
             "editor_mode": self._project_editor_mode(),
             "media_files": self._project_media_files(),
             "clip_boundaries": self._clip_boundaries(),
+            "subtitle_segment_count": len(self._editor_segments()),
             "user_edits": self._user_edits,
             "segments": [asdict(segment) for segment in result.segments],
             "chapters": [asdict(chapter) for chapter in result.chapters],
@@ -127,6 +216,109 @@ class RoughcutStateMixin:
             "guide_markdown": result.guide_markdown,
             "warnings": list(result.warnings),
         }
+        payload["outputs"] = self._candidate_outputs_payload(result)
+        return payload
+
+    def _candidate_outputs_payload(self, result) -> dict:
+        outputs = {
+            "guide_markdown": str(getattr(result, "guide_markdown", "") or ""),
+            "edl": edl_to_dict(result.edl_segments, metadata={"source": self._media_path()}),
+            "retimed_srt": "",
+            "render_plan": None,
+            "subtitle_burnin_command": (),
+        }
+        try:
+            retimed = retime_subtitles_for_edl(self._editor_segments(), result.edl_segments)
+            outputs["retimed_srt"] = format_srt(retimed)
+        except Exception:
+            outputs["retimed_srt"] = ""
+        try:
+            output_path = self._default_output_path("_roughcut.mp4")
+            temp_dir = Path(tempfile.gettempdir()) / "ai_subtitle_studio_roughcut"
+            plan = build_concat_render_plan(result.edl_segments, output_path, temp_dir)
+            srt_path = self._default_output_path("_roughcut.srt")
+            subtitled_path = self._default_output_path("_roughcut_subtitled.mp4")
+            outputs["render_plan"] = asdict(plan)
+            outputs["subtitle_burnin_command"] = build_ffmpeg_subtitle_burnin_command(output_path, srt_path, subtitled_path)
+        except Exception:
+            outputs["render_plan"] = None
+        return outputs
+
+    def _merged_candidates(self, current: dict) -> list[dict]:
+        candidates = []
+        seen = set()
+        current_id = str(current.get("candidate_id") or "")
+        for item in list(getattr(self, "_roughcut_candidates", []) or []):
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("candidate_id") or "")
+            if current_id and item_id == current_id:
+                candidates.append(dict(current))
+                seen.add(current_id)
+            elif item_id and item_id not in seen:
+                candidates.append(dict(item))
+                seen.add(item_id)
+        if current_id and current_id not in seen:
+            candidates.append(dict(current))
+        return candidates
+
+    def _apply_candidate_payload(self, candidate: dict, persist: bool = True) -> None:
+        self._selected_candidate_id = str(candidate.get("candidate_id") or "")
+        self._source_signature = str(candidate.get("source_signature") or self._source_signature)
+        edits = candidate.get("user_edits", {})
+        self._user_edits = {
+            str(key): dict(value)
+            for key, value in edits.items()
+            if isinstance(value, dict)
+        } if isinstance(edits, dict) else {}
+        restored = roughcut_result_from_dict(candidate)
+        if restored.chapters and restored.edl_segments:
+            self._result = restored
+        if hasattr(self, "source_lbl"):
+            self.source_lbl.setText(str(candidate.get("source_media") or self._media_label()))
+        if persist:
+            self._populate_result()
+            self.render_status_lbl.setText("후보 선택")
+            if candidate.get("source_signature") != segment_signature(self._editor_segments()):
+                self.preview_summary_lbl.setText("선택한 후보의 기준 자막 상태가 현재 자막과 다릅니다.")
+            self._persist_roughcut_state()
+
+    def _refresh_candidate_combo(self) -> None:
+        combo = getattr(self, "candidate_combo", None)
+        if combo is None:
+            return
+        self._refreshing_candidate_combo = True
+        combo.blockSignals(True)
+        combo.clear()
+        candidates = list(getattr(self, "_roughcut_candidates", []) or [])
+        if not candidates:
+            combo.addItem("후보 없음", "")
+        else:
+            current_sig = str(getattr(self, "_source_signature", "") or "")
+            for index, candidate in enumerate(candidates, start=1):
+                name = str(candidate.get("name") or f"후보 {index}")
+                suffix = "현재" if candidate.get("source_signature") == current_sig else "이전 자막"
+                combo.addItem(f"{name} · {suffix}", str(candidate.get("candidate_id") or ""))
+            selected = str(getattr(self, "_selected_candidate_id", "") or "")
+            if selected:
+                idx = combo.findData(selected)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+        self._refreshing_candidate_combo = False
+
+    def _on_candidate_combo_changed(self, index: int) -> None:
+        if getattr(self, "_refreshing_candidate_combo", False):
+            return
+        combo = getattr(self, "candidate_combo", None)
+        if combo is None or index < 0:
+            return
+        candidate_id = str(combo.itemData(index) or "")
+        if not candidate_id or candidate_id == getattr(self, "_selected_candidate_id", ""):
+            return
+        candidate = self._candidate_by_id(candidate_id)
+        if candidate is not None:
+            self._apply_candidate_payload(candidate, persist=True)
 
     def _media_path(self) -> str:
         editor = self._active_editor()
@@ -267,7 +459,13 @@ class RoughcutStateMixin:
             return
 
         self._source_signature = segment_signature(segments)
+        if force_reanalyze:
+            self._selected_candidate_id = ""
+            self._user_edits = {}
         stored = self._load_project_roughcut_state(self._source_signature)
+        if force_reanalyze:
+            self._selected_candidate_id = ""
+            self._user_edits = {}
         if stored is not None and not force_reanalyze:
             self._result = stored
             self.source_lbl.setText(self._media_label())

@@ -1,4 +1,4 @@
-# Version: 03.00.26
+# Version: 03.01.15
 # Phase: PHASE2
 """
 core/project/project_phase1b.py
@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any
 
 from core.project.project_context import build_editor_state
+from core.work_mode import EDITOR_MODE, normalize_work_mode
 
 PROJECT_SCHEMA_VERSION = '03.00.26'
 
@@ -47,7 +48,7 @@ def _workspace_snapshot(owner, editor) -> dict[str, Any]:
         'terminal_visible': bool(getattr(owner, '_log_visible', False) or getattr(editor, '_log_visible', False) or getattr(editor, 'log_visible', False)),
         'dashboard_mode': getattr(owner, '_dashboard_mode', 'dashboard') or 'dashboard',
         'project_panel_visible': bool(getattr(owner, '_project_panel_visible', True)),
-        'active_work_mode': getattr(owner, '_current_work_mode', 'edit') or 'edit',
+        'active_work_mode': normalize_work_mode(getattr(owner, '_current_work_mode', EDITOR_MODE)),
         'last_cursor_block': _selected_segment_line(editor),
         'selected_segment_line': _selected_segment_line(editor),
         'edit_lock': bool(lock_chk.isChecked()) if lock_chk is not None else False,

@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 03.01.23
+# Phase: PHASE2
 """
 core/model_manager.py
 AI 모델 설치/삭제/검증/OS필터 관리
@@ -8,83 +8,257 @@ import os
 import json
 import subprocess
 import sys
-import importlib
+import importlib.util
 import shutil
+from copy import deepcopy
+from pathlib import Path
 
 import config
 from logger import get_logger
 
-REGISTRY_PATH = os.path.join(config.DATASET_DIR, "model_registry.json")
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REGISTRY_PATH = Path(config.DATASET_DIR) / "model_registry.json"
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _derive_import_name(pkg: str) -> str:
+    return (pkg or "").replace("-", "_").replace(".", "_").strip()
+
+
+def _resolve_project_path(project_root: Path, raw_path: str) -> Path:
+    path = Path(os.path.expandvars(os.path.expanduser(raw_path)))
+    if not path.is_absolute():
+        path = project_root / path
+    return path
+
+
+class ModelManager:
+    """Registry-backed AI model install/delete/status manager."""
+
+    def __init__(
+        self,
+        registry_path: str | os.PathLike | None = None,
+        project_root: str | os.PathLike | None = None,
+        current_os: str | None = None,
+    ):
+        self.registry_path = Path(registry_path) if registry_path else REGISTRY_PATH
+        self.project_root = Path(project_root) if project_root else _PROJECT_ROOT
+        self.current_os = (current_os or get_current_os()).lower()
+
+    def load_registry(self) -> list[dict]:
+        try:
+            with self.registry_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            return [self._normalize_model(row) for row in data.get("models", [])]
+        except Exception as e:
+            get_logger().log(f"⚠️ 모델 레지스트리 로드 실패: {e}")
+            return []
+
+    def save_registry(self, models: list[dict]):
+        self.registry_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.registry_path.open("w", encoding="utf-8") as f:
+            json.dump({"models": models}, f, ensure_ascii=False, indent=2)
+
+    def available_models(self, include_hidden=False) -> list[dict]:
+        result = []
+        for model in self.load_registry():
+            supported_os = [str(v).lower() for v in model.get("os", [])]
+            if supported_os and self.current_os not in supported_os:
+                continue
+            if not include_hidden and model.get("hidden", False):
+                continue
+            row = deepcopy(model)
+            row["installed"] = self.check_installed(row)
+            result.append(row)
+        return result
+
+    def required_models(self) -> list[dict]:
+        return [
+            model for model in self.available_models()
+            if model.get("required") and not model.get("installed")
+        ]
+
+    def check_installed(self, model: dict) -> bool:
+        if model.get("binary_check") == "ollama" or model.get("id") == "ollama":
+            return is_ollama_available()
+
+        import_names = model.get("import_names")
+        if import_names is None:
+            import_names = [_derive_import_name(pkg) for pkg in model.get("pip_packages", [])]
+        for import_name in import_names:
+            import_name = (import_name or "").strip()
+            try:
+                if import_name and importlib.util.find_spec(import_name) is None:
+                    return False
+            except (ImportError, ValueError):
+                return False
+
+        model_path = (model.get("model_path") or "").strip()
+        if model_path:
+            full_path = _resolve_project_path(self.project_root, model_path)
+            if not full_path.exists():
+                return False
+            model_files = model.get("model_files") or [
+                "model.bin", "config.json", "pytorch_model.bin", "model.safetensors"
+            ]
+            if not any((full_path / f).exists() for f in model_files):
+                return False
+
+        return True
+
+    def install_model(self, model: dict, progress_callback=None) -> bool:
+        model_id = model.get("id", "unknown")
+        get_logger().log(f"📦 모델 설치 시작: {model.get('name', model_id)}")
+
+        if model.get("binary_check") == "ollama" or model.get("id") == "ollama":
+            get_logger().log("💡 Ollama는 외부 앱 설치가 필요합니다: https://ollama.com/download")
+            return is_ollama_available()
+
+        pip_pkgs = model.get("pip_packages", [])
+        for i, pkg in enumerate(pip_pkgs):
+            if progress_callback:
+                pct = int((i / max(len(pip_pkgs), 1)) * 50)
+                progress_callback(f"pip install {pkg}...", pct)
+
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", pkg],
+                    capture_output=True, text=True, encoding="utf-8", timeout=300
+                )
+                if result.returncode != 0:
+                    get_logger().log(f"  ❌ pip install {pkg} 실패: {result.stderr[:200]}")
+                    return False
+                get_logger().log(f"  ✅ pip install {pkg} 완료")
+            except subprocess.TimeoutExpired:
+                get_logger().log(f"  ❌ pip install {pkg} 타임아웃")
+                return False
+            except Exception as e:
+                get_logger().log(f"  ❌ pip install {pkg} 오류: {e}")
+                return False
+
+        model_path = (model.get("model_path") or "").strip()
+        if model_path:
+            full_path = _resolve_project_path(self.project_root, model_path)
+            model_files = model.get("model_files") or ["model.bin", "config.json"]
+            needs_download = not full_path.exists() or not any((full_path / f).exists() for f in model_files)
+            if needs_download:
+                if progress_callback:
+                    progress_callback("모델 파일 다운로드 중...", 60)
+                hf_repo = model.get("hf_repo") or _model_id_to_hf_repo(model_id)
+                if hf_repo:
+                    try:
+                        from huggingface_hub import snapshot_download
+                        full_path.mkdir(parents=True, exist_ok=True)
+                        snapshot_download(hf_repo, local_dir=str(full_path))
+                        get_logger().log(f"  ✅ 모델 다운로드 완료: {full_path}")
+                    except Exception as e:
+                        get_logger().log(f"  ❌ 모델 다운로드 실패: {e}")
+                        get_logger().log(f"  💡 수동 다운로드: https://huggingface.co/{hf_repo}")
+                        return False
+
+        if progress_callback:
+            progress_callback("설치 완료", 100)
+
+        get_logger().log(f"✅ 모델 설치 완료: {model.get('name', model_id)}")
+        return True
+
+    def uninstall_model(self, model: dict) -> bool:
+        model_id = model.get("id", "unknown")
+
+        if model.get("binary_check") == "ollama" or model.get("id") == "ollama":
+            get_logger().log("💡 Ollama 앱 삭제는 운영체제 앱 관리에서 진행하세요.")
+            return True
+
+        for pkg in model.get("pip_packages", []):
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "uninstall", pkg, "-y"],
+                    capture_output=True, text=True, encoding="utf-8", timeout=60
+                )
+                get_logger().log(f"  🗑️ pip uninstall {pkg}")
+            except Exception as e:
+                get_logger().log(f"  ⚠️ pip uninstall {pkg} 실패: {e}")
+
+        model_path = (model.get("model_path") or "").strip()
+        if model_path:
+            full_path = _resolve_project_path(self.project_root, model_path)
+            if full_path.exists():
+                shutil.rmtree(full_path, ignore_errors=True)
+                get_logger().log(f"  🗑️ 모델 폴더 삭제: {full_path}")
+
+        get_logger().log(f"✅ 모델 삭제 완료: {model.get('name', model_id)}")
+        return True
+
+    def hide_model(self, model_id: str):
+        models = self.load_registry()
+        for model in models:
+            if model.get("id") == model_id:
+                model["hidden"] = True
+                break
+        self.save_registry(models)
+
+    def install_summary(self) -> dict:
+        models = self.available_models(include_hidden=True)
+        installed = {}
+        pip_list = set()
+        for model in models:
+            if model.get("installed"):
+                installed[model["id"]] = {
+                    "name": model["name"],
+                    "category": model["category"],
+                }
+                for pkg in model.get("pip_packages", []):
+                    pip_list.add(pkg)
+        return {
+            "installed_models": installed,
+            "installed_pip_packages": sorted(pip_list),
+        }
+
+    def _normalize_model(self, model: dict) -> dict:
+        row = dict(model or {})
+        row.setdefault("id", "")
+        row.setdefault("name", row.get("id", "unknown"))
+        row.setdefault("category", "Other")
+        row.setdefault("os", ["mac", "windows"])
+        row.setdefault("pip_packages", [])
+        row.setdefault("model_path", "")
+        row.setdefault("required", False)
+        row.setdefault("hidden", False)
+        if row.get("import_names") is None and row.get("pip_packages"):
+            row["import_names"] = [_derive_import_name(pkg) for pkg in row.get("pip_packages", [])]
+        return row
 
 
 def _load_registry() -> list:
-    try:
-        with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data.get("models", [])
-    except Exception:
-        return []
+    return ModelManager().load_registry()
 
 
 def _save_registry(models: list):
-    os.makedirs(os.path.dirname(REGISTRY_PATH), exist_ok=True)
-    with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
-        json.dump({"models": models}, f, ensure_ascii=False, indent=2)
+    ModelManager().save_registry(models)
 
 
 def get_current_os() -> str:
     if config.IS_MAC:
         return "mac"
+    if getattr(config, "IS_WINDOWS", False):
+        return "windows"
+    if getattr(config, "IS_LINUX", False):
+        return "linux"
     return "windows"
 
 
 def get_available_models(include_hidden=False) -> list:
     """현재 OS에서 사용 가능한 모델 목록 반환"""
-    models = _load_registry()
-    current_os = get_current_os()
-    result = []
-    for m in models:
-        if current_os not in m.get("os", []):
-            continue
-        if not include_hidden and m.get("hidden", False):
-            continue
-        m["installed"] = check_installed(m)
-        result.append(m)
-    return result
+    return ModelManager().available_models(include_hidden=include_hidden)
 
 
 def get_required_models() -> list:
     """현재 OS에서 필수인데 미설치된 모델 목록"""
-    models = get_available_models()
-    return [m for m in models if m.get("required") and not m.get("installed")]
+    return ModelManager().required_models()
 
 
 def check_installed(model: dict) -> bool:
     """모델이 설치되어 있는지 확인"""
-    # 1) pip 패키지 체크
-    for pkg in model.get("pip_packages", []):
-        pkg_import = pkg.replace("-", "_").replace(".", "_")
-        try:
-            importlib.import_module(pkg_import)
-        except ImportError:
-            return False
-
-    # 2) 로컬 모델 파일 체크 (model_path가 있으면)
-    model_path = model.get("model_path", "")
-    if model_path:
-        full_path = os.path.join(_PROJECT_ROOT, model_path)
-        if not os.path.exists(full_path):
-            return False
-        # model.bin 또는 주요 파일 존재 확인
-        has_model_file = any(
-            os.path.exists(os.path.join(full_path, f))
-            for f in ["model.bin", "config.json", "pytorch_model.bin"]
-        )
-        if not has_model_file:
-            return False
-
-    return True
+    return ModelManager().check_installed(model)
 
 
 def install_model(model: dict, progress_callback=None) -> bool:
@@ -92,98 +266,17 @@ def install_model(model: dict, progress_callback=None) -> bool:
     모델 설치 (pip 패키지 + 모델 파일)
     progress_callback(status_text, percent) 호출
     """
-    model_id = model.get("id", "unknown")
-    get_logger().log(f"📦 모델 설치 시작: {model.get('name', model_id)}")
-
-    # 1) pip 패키지 설치
-    pip_pkgs = model.get("pip_packages", [])
-    for i, pkg in enumerate(pip_pkgs):
-        if progress_callback:
-            pct = int((i / max(len(pip_pkgs), 1)) * 50)
-            progress_callback(f"pip install {pkg}...", pct)
-
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", pkg],
-                capture_output=True, text=True, timeout=300
-            )
-            if result.returncode != 0:
-                get_logger().log(f"  ❌ pip install {pkg} 실패: {result.stderr[:200]}")
-                return False
-            get_logger().log(f"  ✅ pip install {pkg} 완료")
-        except subprocess.TimeoutExpired:
-            get_logger().log(f"  ❌ pip install {pkg} 타임아웃")
-            return False
-        except Exception as e:
-            get_logger().log(f"  ❌ pip install {pkg} 오류: {e}")
-            return False
-
-    # 2) HuggingFace 모델 다운로드 (model_path가 있으면)
-    model_path = model.get("model_path", "")
-    if model_path:
-        full_path = os.path.join(_PROJECT_ROOT, model_path)
-        if not os.path.exists(full_path) or not any(
-            os.path.exists(os.path.join(full_path, f))
-            for f in ["model.bin", "config.json"]
-        ):
-            if progress_callback:
-                progress_callback("모델 파일 다운로드 중...", 60)
-
-            hf_repo = _model_id_to_hf_repo(model_id)
-            if hf_repo:
-                try:
-                    from huggingface_hub import snapshot_download
-                    os.makedirs(full_path, exist_ok=True)
-                    snapshot_download(hf_repo, local_dir=full_path)
-                    get_logger().log(f"  ✅ 모델 다운로드 완료: {full_path}")
-                except Exception as e:
-                    get_logger().log(f"  ❌ 모델 다운로드 실패: {e}")
-                    get_logger().log(f"  💡 수동 다운로드: https://huggingface.co/{hf_repo}")
-                    return False
-
-    if progress_callback:
-        progress_callback("설치 완료", 100)
-
-    get_logger().log(f"✅ 모델 설치 완료: {model.get('name', model_id)}")
-    return True
+    return ModelManager().install_model(model, progress_callback=progress_callback)
 
 
 def uninstall_model(model: dict) -> bool:
     """모델 삭제 (pip 패키지 제거 + 로컬 파일 삭제)"""
-    import shutil
-    model_id = model.get("id", "unknown")
-
-    # pip 패키지 제거
-    for pkg in model.get("pip_packages", []):
-        try:
-            subprocess.run(
-                [sys.executable, "-m", "pip", "uninstall", pkg, "-y"],
-                capture_output=True, text=True, timeout=60
-            )
-            get_logger().log(f"  🗑️ pip uninstall {pkg}")
-        except Exception:
-            pass
-
-    # 로컬 모델 파일 삭제
-    model_path = model.get("model_path", "")
-    if model_path:
-        full_path = os.path.join(_PROJECT_ROOT, model_path)
-        if os.path.exists(full_path):
-            shutil.rmtree(full_path, ignore_errors=True)
-            get_logger().log(f"  🗑️ 모델 폴더 삭제: {full_path}")
-
-    get_logger().log(f"✅ 모델 삭제 완료: {model.get('name', model_id)}")
-    return True
+    return ModelManager().uninstall_model(model)
 
 
 def hide_model(model_id: str):
     """설치 불가 모델 영구 숨김"""
-    models = _load_registry()
-    for m in models:
-        if m["id"] == model_id:
-            m["hidden"] = True
-            break
-    _save_registry(models)
+    ModelManager().hide_model(model_id)
 
 
 def _model_id_to_hf_repo(model_id: str) -> str:
@@ -193,24 +286,15 @@ def _model_id_to_hf_repo(model_id: str) -> str:
         "whisper-medium-faster": "Systran/faster-whisper-medium",
         "whisper-large-v3-mlx": "mlx-community/whisper-large-v3-mlx",
         "whisper-medium-mlx": "mlx-community/whisper-medium-mlx",
+        "whisper-korean-ghost613-mlx": "youngouk/ghost613-turbo-korean-4bit-mlx",
+        "whisper-korean-ghost613-faster": "ghost613/faster-whisper-large-v3-turbo-korean",
     }
     return mapping.get(model_id, "")
 
 
 def get_install_summary() -> dict:
     """user_settings 저장용 설치 요약"""
-    models = get_available_models(include_hidden=True)
-    installed = {}
-    pip_list = set()
-    for m in models:
-        if m.get("installed"):
-            installed[m["id"]] = {"name": m["name"], "category": m["category"]}
-            for pkg in m.get("pip_packages", []):
-                pip_list.add(pkg)
-    return {
-        "installed_models": installed,
-        "installed_pip_packages": sorted(list(pip_list))
-    }
+    return ModelManager().install_summary()
 
 def _iter_ollama_bins() -> list:
     candidates = [

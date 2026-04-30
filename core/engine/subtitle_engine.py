@@ -1,4 +1,4 @@
-# Version: 03.00.21
+# Version: 03.01.23
 # Phase: PHASE2
 """
 core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장 
@@ -19,7 +19,8 @@ from core.llm.gemini_provider import split_text as gemini_split_text
 from core.llm.ollama_provider import split_text as ollama_split_text, warmup_model as warmup_ollama_model
 from core.llm.openai_provider import is_openai_model, split_text as openai_split_text
 from core.engine.llm_correction_guard import safe_llm_chunks, validate_llm_chunks
-from core.engine.word_resegmenter import resegment_by_word_timestamps
+from core.subtitle_quality.llm_guarded_corrector import build_conservative_prompt
+from core.subtitle_quality.timestamp_regrouper import regroup_by_word_timestamps
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -322,7 +323,16 @@ def is_natural_break(word: str, next_word: str, rules: dict) -> bool:
         return True
     return False
 
-def ask_exaone_to_split(text: str, threshold: int, rules: dict, model: str, user_prompt: str) -> list[str] | None:
+def _quality_conservative_enabled(settings: dict | None) -> bool:
+    settings = settings or {}
+    return bool(
+        settings.get("subtitle_quality_enabled")
+        or settings.get("subtitle_quality_auto_check_after_generate")
+        or settings.get("subtitle_quality_auto_correct_enabled")
+    )
+
+
+def ask_exaone_to_split(text: str, threshold: int, rules: dict, model: str, user_prompt: str, conservative: bool = False) -> list[str] | None:
     if "사용 안함" in model:
         return None
 
@@ -334,13 +344,10 @@ def ask_exaone_to_split(text: str, threshold: int, rules: dict, model: str, user
     else:
         combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
 
-    prompt = (
-        combined_prompt
-        .replace("{threshold}", str(threshold))
-        .replace("{end_words}", end_words)
-        .replace("{start_words}", start_words)
-        .replace("{text}", text)
-    )
+    if conservative:
+        combined_prompt = build_conservative_prompt(combined_prompt)
+
+    prompt = combined_prompt.replace("{threshold}", str(threshold)).replace("{end_words}", end_words).replace("{start_words}", start_words).replace("{text}", text)
 
     try:
         chunks = ollama_split_text(model, prompt) or []
@@ -362,13 +369,15 @@ def ask_exaone_to_split(text: str, threshold: int, rules: dict, model: str, user
         get_logger().log(f"[LLM 연결/파싱 실패] {e}")
         return None
 
-def _build_llm_prompt(text: str, threshold: int, rules: dict, user_prompt: str) -> str:
+def _build_llm_prompt(text: str, threshold: int, rules: dict, user_prompt: str, conservative: bool = False) -> str:
     end_words = ", ".join(rules.get("end_words", []))
     start_words = ", ".join(rules.get("start_words", []))
     if user_prompt.strip():
         combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n[사용자 추가 지시문]\n{user_prompt.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
     else:
         combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
+    if conservative:
+        combined_prompt = build_conservative_prompt(combined_prompt)
     return (
         combined_prompt
         .replace("{threshold}", str(threshold))
@@ -378,12 +387,12 @@ def _build_llm_prompt(text: str, threshold: int, rules: dict, user_prompt: str) 
     )
 
 
-def ask_openai_to_split(text: str, threshold: int, rules: dict, model_name: str, user_prompt: str, api_key: str) -> list[str] | None:
+def ask_openai_to_split(text: str, threshold: int, rules: dict, model_name: str, user_prompt: str, api_key: str, conservative: bool = False) -> list[str] | None:
     if not api_key:
         get_logger().log("❌ API 키가 없습니다. 환경설정에서 OpenAI API Key를 입력해주세요.")
         return None
     try:
-        chunks = openai_split_text(api_key, model_name, _build_llm_prompt(text, threshold, rules, user_prompt))
+        chunks = openai_split_text(api_key, model_name, _build_llm_prompt(text, threshold, rules, user_prompt, conservative=conservative))
     except Exception as e:
         get_logger().log(f"[OpenAI 연결/파싱 실패] {e}")
         return None
@@ -402,12 +411,15 @@ def ask_openai_to_split(text: str, threshold: int, rules: dict, model_name: str,
 
 
 def _process_one(args: tuple) -> list[dict]:
-    # 전달받은 인자 개수가 7개면 api_key까지 받고, 아니면 빈 문자열로 처리합니다.
-    if len(args) == 7:
+    if len(args) == 8:
+        seg, rules, threshold, corrections, model, user_prompt, api_key, conservative = args
+    elif len(args) == 7:
         seg, rules, threshold, corrections, model, user_prompt, api_key = args
+        conservative = False
     else:
         seg, rules, threshold, corrections, model, user_prompt = args
         api_key = ""
+        conservative = False
 
     spk  = seg.get("speaker", "SPEAKER_00")
     text = seg.get("text", "").strip()
@@ -439,11 +451,11 @@ def _process_one(args: tuple) -> list[dict]:
         return [{**seg, "text": _clean(text, corrections)}]
     # [수정] LLM 호출 분기 부분
     if "Gemini" in model:
-        chunks = ask_gemini_to_split(text, threshold, rules, model, user_prompt, api_key)
+        chunks = ask_gemini_to_split(text, threshold, rules, model, user_prompt, api_key, conservative=conservative)
     elif is_openai_model(model):
-        chunks = ask_openai_to_split(text, threshold, rules, model, user_prompt, api_key)
+        chunks = ask_openai_to_split(text, threshold, rules, model, user_prompt, api_key, conservative=conservative)
     else:
-        chunks = ask_exaone_to_split(text, threshold, rules, model, user_prompt)
+        chunks = ask_exaone_to_split(text, threshold, rules, model, user_prompt, conservative=conservative)
 
 
     if chunks:
@@ -586,12 +598,14 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
     threshold = 10
     user_prompt = ""
     api_key = ""
+    loaded_settings = {}
 
     settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
     if os.path.exists(settings_path):
         try:
             with open(settings_path, "r", encoding="utf-8") as f:
                 s = json.load(f)
+                loaded_settings = dict(s)
                 threshold = int(s.get("split_length_threshold", 10))
                 _EXAONE_WORKERS = int(s.get("llm_workers", 6))
                 _GAP_BREAK_SEC = float(s.get("sub_gap_break_sec", 1.5))
@@ -637,7 +651,11 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
     segments = _global_dedup(segments)
     segments = _pre_merge(segments, threshold)
 
-    args = [(seg, rules, threshold, corrections, model, user_prompt, api_key) for seg in segments]
+    conservative = _quality_conservative_enabled(loaded_settings)
+    if conservative:
+        get_logger().log("[LLM-보수Profile] 자막 품질 검사/자동교정 보호 규칙을 적용합니다.")
+
+    args = [(seg, rules, threshold, corrections, model, user_prompt, api_key, conservative) for seg in segments]
     optimized: list[dict] = []
 
     if "사용 안함" in model:
@@ -689,7 +707,7 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
 
     optimized = _absorb_tiny(optimized, threshold)
     optimized = _enforce_len(optimized, threshold, rules)
-    optimized = resegment_by_word_timestamps(
+    optimized = regroup_by_word_timestamps(
         optimized,
         max_chars=threshold,
         max_duration=_MAX_DURATION,
@@ -709,13 +727,13 @@ def save_srt(segments: list[dict], srt_path: str, apply_offset: bool = True):
     from core.engine.srt_writer import save_srt as _save_srt
     return _save_srt(segments, srt_path, apply_offset=apply_offset, adjust_timing_func=adjust_timing)
 
-def ask_gemini_to_split(text: str, threshold: int, rules: dict, model_name: str, user_prompt: str, api_key: str) -> list[str] | None:
+def ask_gemini_to_split(text: str, threshold: int, rules: dict, model_name: str, user_prompt: str, api_key: str, conservative: bool = False) -> list[str] | None:
     if not api_key:
         get_logger().log("❌ API 키가 없습니다. 환경설정에서 Google API Key를 입력해주세요.")
         return None
 
     try:
-        chunks = gemini_split_text(api_key, model_name, _build_llm_prompt(text, threshold, rules, user_prompt))
+        chunks = gemini_split_text(api_key, model_name, _build_llm_prompt(text, threshold, rules, user_prompt, conservative=conservative))
     except Exception:
         return [text]
 

@@ -1,4 +1,4 @@
-# Version: 03.01.06
+# Version: 03.01.25
 # Phase: PHASE2
 """Timeline analysis and cut-safety marker helpers."""
 
@@ -19,6 +19,13 @@ ACTION_COLORS = {
     "remove": "#FF453A",
     "highlight": "#5AC8FA",
     "move": "#A678F4",
+}
+
+QUALITY_COLORS = {
+    "green": "#34C759",
+    "yellow": "#FFCC00",
+    "red": "#FF453A",
+    "gray": "#8E8E93",
 }
 
 
@@ -119,6 +126,24 @@ def editor_analysis_markers(
         end = _as_float(seg.get("end"))
         if start is None or end is None or end <= start:
             continue
+        quality = dict(seg.get("quality") or {})
+        if quality:
+            label_key = str(quality.get("confidence_label") or "gray")
+            flags = set(quality.get("flags") or ())
+            score = quality.get("confidence_score")
+            score_text = "-" if score is None else f"{float(score):.0f}"
+            needs_review = label_key in {"red", "gray"} or bool(flags.intersection({"non_speech_hallucination_risk", "high_no_speech_prob", "outside_vad_speech"}))
+            markers.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "kind": f"subtitle_quality:{label_key}",
+                    "label": "확인" if needs_review else f"Q{score_text}",
+                    "color": QUALITY_COLORS.get(label_key, "#8E8E93"),
+                    "priority": 95 if needs_review else 35,
+                    "alpha": 162 if needs_review else 104,
+                }
+            )
         duration = max(0.001, end - start)
         text = str(seg.get("text") or "")
         chars = len("".join(text.split()))

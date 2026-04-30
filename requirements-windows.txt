@@ -2,6 +2,7 @@
 ## Python 3.11
 ## 설치: python -m pip install -r requirements-windows.txt
 ## CUDA 사용 시: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+## ffmpeg/ffprobe는 PATH 또는 tools/ffmpeg/bin/ 아래에 배치
 
 PyQt6>=6.6.0
 opencv-python>=4.9.0

@@ -1,9 +1,11 @@
-# Version: 03.00.20
+# Version: 03.01.21
 # Phase: PHASE2
 from __future__ import annotations
 
 import re
 from typing import Any
+
+from core.subtitle_quality.models import attach_asr_metadata
 
 
 _PUNCT_ENDINGS = tuple(",?!;:~…")
@@ -70,7 +72,11 @@ def _is_punctuation_break(word: str) -> bool:
     return bool(value) and value.endswith(_PUNCT_ENDINGS)
 
 
-def _build_segment(words: list[dict[str, Any]], fallback_speaker: str | None) -> dict[str, Any] | None:
+def _build_segment(
+    words: list[dict[str, Any]],
+    fallback_speaker: str | None,
+    source_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     if not words:
         return None
     text = " ".join(_word_text(word) for word in words).strip()
@@ -78,13 +84,16 @@ def _build_segment(words: list[dict[str, Any]], fallback_speaker: str | None) ->
         return None
     start = _as_float(words[0].get("start"))
     end = max(start + 0.05, _as_float(words[-1].get("end"), start + 0.05))
-    return {
+    built = {
         "start": round(start, 3),
         "end": round(end, 3),
         "text": text,
         "speaker": words[0].get("speaker") or fallback_speaker,
         "words": words,
     }
+    if source_metadata:
+        built["asr_metadata"] = dict(source_metadata)
+    return attach_asr_metadata(built, backend=(built.get("asr_metadata") or {}).get("backend"))
 
 
 def _should_flush(
@@ -156,6 +165,7 @@ def resegment_by_word_timestamps(
         if not words:
             continue
         fallback_speaker = segment.get("speaker")
+        source_metadata = dict(segment.get("asr_metadata") or {})
         buf: list[dict[str, Any]] = []
         for index, word in enumerate(words):
             buf.append(word)
@@ -171,13 +181,13 @@ def resegment_by_word_timestamps(
                 rules=rules,
             ):
                 continue
-            built = _build_segment(buf, fallback_speaker)
+            built = _build_segment(buf, fallback_speaker, source_metadata)
             if built is not None:
                 result.append(built)
             buf = []
 
         if buf:
-            built = _build_segment(buf, fallback_speaker)
+            built = _build_segment(buf, fallback_speaker, source_metadata)
             if built is not None:
                 result.append(built)
 

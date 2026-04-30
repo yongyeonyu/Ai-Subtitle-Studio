@@ -1,5 +1,5 @@
-# Version: 02.07.00
-# Phase: PHASE1-D
+# Version: 03.01.19
+# Phase: PHASE2
 """
 core/audio/live_stt.py
 마이크 직접 입력용 고성능 STT 유틸.
@@ -21,6 +21,7 @@ import time
 from dataclasses import dataclass
 
 import config
+from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.settings import load_settings
 from logger import get_logger
 
@@ -108,7 +109,7 @@ def _prepare_live_wav(raw_wav: str, clean_wav: str) -> str:
     try:
         proc = subprocess.run(
             [
-                "ffmpeg", "-y", "-nostdin", "-loglevel", "error",
+                ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error",
                 "-i", raw_wav,
                 "-ac", "1",
                 "-ar", "16000",
@@ -118,6 +119,7 @@ def _prepare_live_wav(raw_wav: str, clean_wav: str) -> str:
             ],
             capture_output=True,
             timeout=15,
+            **hidden_subprocess_kwargs(),
         )
         if proc.returncode == 0 and os.path.exists(clean_wav) and os.path.getsize(clean_wav) > 0:
             return clean_wav
@@ -199,6 +201,8 @@ def _transcribe_faster(wav_path: str, model: str) -> str:
     data = _parse_json_line(line)
     if not data:
         raise RuntimeError("empty faster-whisper result")
+    if data.get("fatal_error"):
+        raise RuntimeError(data.get("fatal_error"))
     if data.get("error"):
         raise RuntimeError(data.get("error"))
     return _extract_text(data)

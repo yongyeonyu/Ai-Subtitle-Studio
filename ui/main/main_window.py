@@ -1,4 +1,4 @@
-# Version: 03.01.07
+# Version: 03.01.18
 # Phase: PHASE2
 """
 ui/main/main_window.py
@@ -88,7 +88,7 @@ class MainWindow(
         self._current_project_path = None
         self._project_boundary_times = []
         self._dashboard_mode = "dashboard"
-        self._current_work_mode = "edit"
+        self._current_work_mode = "editor"
         self._project_panel_visible = True
         self._unified_dashboard = True
         self._on_save_cb = None
@@ -96,6 +96,7 @@ class MainWindow(
         self._on_prev_cb = None
         self._on_exit_cb = None
         self._local_llm_models = []
+        self._required_model_check_done = False
         self._post_completion_idle_enabled = False
         self._post_completion_idle_ms = 600_000
 
@@ -116,6 +117,7 @@ class MainWindow(
         if app is not None:
             app.installEventFilter(self)
         QTimer.singleShot(0, self._warmup_local_llm_models)
+        QTimer.singleShot(900, self._check_required_models_on_startup)
 
         self._cloud_sync_manager = CloudSyncManager(
             get_icloud_path(), self._on_files_detected, self._is_app_busy

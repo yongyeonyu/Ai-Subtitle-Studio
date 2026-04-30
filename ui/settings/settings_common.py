@@ -1,4 +1,4 @@
-# Version: 03.00.37
+# Version: 03.01.25
 # Phase: PHASE1-B
 """
 ui/settings_common.py
@@ -27,6 +27,7 @@ if config.IS_MAC:
     DEFAULT_WHISPER_MODELS = [
         "mlx-community/whisper-large-v3-mlx",
         "mlx-community/whisper-large-v3-turbo",
+        "youngouk/ghost613-turbo-korean-4bit-mlx",
         "mlx-community/whisper-medium-mlx",
         "mlx-community/whisper-small-mlx",
         "mlx-community/whisper-base-mlx"
@@ -35,6 +36,7 @@ else:
     DEFAULT_WHISPER_MODELS = [
         "large-v3",
         "large-v3-turbo",
+        "ghost613/faster-whisper-large-v3-turbo-korean",
         "medium",
         "small",
         "base",
@@ -109,7 +111,31 @@ DEFAULT_ADV_SETTINGS = {
     "sub_max_duration": 6.0,
     "sub_max_cps": 12,
     "sub_dedup_window": 0.5,
-    "sub_gap_break_sec": 1.5
+    "sub_gap_break_sec": 1.5,
+
+    # Subtitle quality review defaults. Runtime behavior stays opt-in.
+    "subtitle_quality_enabled": False,
+    "subtitle_quality_auto_check_after_generate": False,
+    "subtitle_quality_auto_correct_enabled": False,
+    "review_vad_before_stt_enabled": True,
+    "review_vad_strict_mode": True,
+    "review_vad_speech_pad_sec": 0.35,
+    "review_vad_min_silence_sec": 0.8,
+    "review_min_segment_score_to_keep": 55,
+    "review_auto_correct_apply_threshold": 92,
+    "review_auto_correct_min_improvement": 10,
+    "review_recheck_buffer_sec": 1.2,
+    "review_auto_correct_require_user_confirm": True,
+    "correction_memory_enabled": True,
+    "wrong_answer_memory_enabled": True,
+    "score_weight_asr_metadata": 0.25,
+    "score_weight_vad_alignment": 0.20,
+    "score_weight_word_timestamp": 0.15,
+    "score_weight_timing": 0.10,
+    "score_weight_repetition": 0.10,
+    "score_weight_context": 0.10,
+    "score_weight_memory": 0.05,
+    "score_weight_hallucination_penalty": 0.30
 }
 
 CUSTOM_DEFAULTS_FILE = os.path.join(DATASET_DIR, "custom_defaults.json")

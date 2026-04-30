@@ -1,4 +1,4 @@
-# Version: 03.01.07
+# Version: 03.01.15
 # Phase: PHASE2
 """
 ui/home_ui.py
@@ -22,6 +22,7 @@ from core.path_manager import (
     get_nas_excluded_folders
 )
 from core.settings import load_settings, save_settings
+from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE
 from ui.style import button_style, label_style, line_icon, tool_button_style, settings_dialog_stylesheet
 
 
@@ -275,7 +276,7 @@ class HomeUIMixin:
         return card
 
     def _toggle_sidebar_stt_mode(self):
-        self._current_work_mode = "stt"
+        self._current_work_mode = EDITOR_MODE
         editor = getattr(self, "_editor_widget", None)
         if editor is not None and hasattr(editor, "_toggle_stt_mode"):
             editor._toggle_stt_mode()
@@ -679,9 +680,9 @@ class HomeUIMixin:
         roughcut = getattr(self, "_roughcut_widget", None)
         editor = self._active_editor()
         if roughcut is not None and current is roughcut:
-            return "roughcut"
+            return ROUGHCUT_MODE
         if editor is not None and current is editor:
-            return "editor"
+            return EDITOR_MODE
         return "home"
 
     def _refresh_work_mode_ui(self):
@@ -695,12 +696,12 @@ class HomeUIMixin:
     def _open_editor_screen(self):
         editor = self._active_editor()
         if editor is None:
-            self._current_work_mode = "edit"
+            self._current_work_mode = EDITOR_MODE
             if hasattr(self, "global_menu_bar"):
                 self.global_menu_bar.refresh()
             self.select_files()
             return
-        self._current_work_mode = "edit"
+        self._current_work_mode = EDITOR_MODE
         try:
             self.stack.setCurrentWidget(editor)
         except Exception:
@@ -713,7 +714,7 @@ class HomeUIMixin:
         self._refresh_work_mode_ui()
 
     def _open_roughcut_helper(self):
-        self._current_work_mode = "roughcut"
+        self._current_work_mode = ROUGHCUT_MODE
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.refresh()
         page = getattr(self, "_roughcut_widget", None)
@@ -734,7 +735,7 @@ class HomeUIMixin:
         self._refresh_work_mode_ui()
 
     def _open_shortform_maker(self):
-        self._current_work_mode = "shortform"
+        self._current_work_mode = SHORTFORM_MODE
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.refresh()
         self._show_development_notice("숏폼 제작기", "PHASE3")
@@ -764,7 +765,7 @@ class HomeUIMixin:
         editor = self._active_editor()
         if editor is None:
             return None
-        self._current_work_mode = "edit"
+        self._current_work_mode = EDITOR_MODE
         try:
             self.stack.setCurrentWidget(editor)
         except Exception:

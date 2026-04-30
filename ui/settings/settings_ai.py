@@ -1,4 +1,4 @@
-# Version: 03.00.37
+# Version: 03.01.23
 # Phase: PHASE2
 """
 ui/settings_ai.py  ─  ⚙️ AI 엔진 설정 다이얼로그
@@ -103,7 +103,36 @@ class SettingsDialog(QDialog):
         ollama_row.addWidget(self.btn_ollama_refresh)
         form.addRow("미설치 LLM 모델:", ollama_row)
 
+        registry_row = QHBoxLayout()
+        self.combo_registry_model = QComboBox()
+        self.combo_registry_model.setMinimumWidth(270)
+        self.btn_registry_install = QPushButton("설치")
+        self.btn_registry_delete = QPushButton("삭제")
+        self.btn_registry_required = QPushButton("필수 확인")
+        for btn, min_width in (
+            (self.btn_registry_install, 64),
+            (self.btn_registry_delete, 64),
+            (self.btn_registry_required, 82),
+        ):
+            btn.setMinimumWidth(min_width)
+            btn.setStyleSheet(settings_button_style("toolbar", min_width=min_width))
+        self.btn_registry_install.clicked.connect(self._install_registry_model)
+        self.btn_registry_delete.clicked.connect(self._delete_registry_model)
+        self.btn_registry_required.clicked.connect(self._check_required_registry_models)
+        self.combo_registry_model.currentIndexChanged.connect(self._update_registry_model_status)
+        registry_row.addWidget(self.combo_registry_model)
+        registry_row.addWidget(self.btn_registry_install)
+        registry_row.addWidget(self.btn_registry_delete)
+        registry_row.addWidget(self.btn_registry_required)
+        form.addRow("모델 관리:", registry_row)
+
+        self.lbl_registry_model_status = QLabel("")
+        self.lbl_registry_model_status.setWordWrap(True)
+        self.lbl_registry_model_status.setStyleSheet(label_style("muted", 10) + "padding: 0 5px 8px 5px;")
+        form.addRow("", self.lbl_registry_model_status)
+
         self._reload_ollama_catalog()
+        self._reload_registry_models()
         self._rebuild_llm_combo(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b")))
 
         # 💡 [레이아웃 조정] LLM 메뉴 바로 밑에 4가지 정보를 한 줄로 표시
@@ -181,6 +210,9 @@ class SettingsDialog(QDialog):
         self.combo_whisper.setUpdatesEnabled(False)
         self.combo_whisper.blockSignals(True)
         self.combo_whisper.addItems(w_models)
+        for idx, model_name in enumerate(w_models):
+            if "ghost613" in model_name:
+                self.combo_whisper.setItemText(idx, f"{model_name} (실험)")
         self.combo_whisper.setMinimumWidth(350)
         curr_w = settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", w_models[0] if w_models else ""))
         # ── OS에 맞지 않는 저장값이면 기본값으로 교체 ──
@@ -188,8 +220,13 @@ class SettingsDialog(QDialog):
             curr_w = "large-v3"
         elif config.IS_MAC and curr_w in ("large-v3", "large-v3-turbo", "medium", "small", "base", "tiny"):
             curr_w = "mlx-community/whisper-large-v3-mlx"
-        if curr_w in w_models:
+        display_values = [self.combo_whisper.itemText(i).replace(" (실험)", "") for i in range(self.combo_whisper.count())]
+        if curr_w in display_values:
             self.combo_whisper.setCurrentText(curr_w)
+            for i, value in enumerate(display_values):
+                if value == curr_w:
+                    self.combo_whisper.setCurrentIndex(i)
+                    break
         else:
             self.combo_whisper.setCurrentIndex(0)
         self.combo_whisper.blockSignals(False)
@@ -245,6 +282,94 @@ class SettingsDialog(QDialog):
             items.append(item)
         items.extend(cloud_model_items())
         return items
+
+    def _reload_registry_models(self, preferred_id: str = ""):
+        self.combo_registry_model.blockSignals(True)
+        self.combo_registry_model.clear()
+        try:
+            from core.model_manager import get_available_models
+            self._registry_models = get_available_models(include_hidden=True)
+        except Exception as e:
+            self._registry_models = []
+            self.combo_registry_model.addItem(f"모델 목록 로드 실패: {e}", {})
+        for model in self._registry_models:
+            status = "설치됨" if model.get("installed") else "미설치"
+            required = "필수" if model.get("required") else "선택"
+            label = f"[{model.get('category', '-')}] {model.get('name', model.get('id', ''))} · {status} · {required}"
+            self.combo_registry_model.addItem(label, model)
+        if self.combo_registry_model.count() == 0:
+            self.combo_registry_model.addItem("현재 OS에서 관리할 모델 없음", {})
+        for i in range(self.combo_registry_model.count()):
+            data = self.combo_registry_model.itemData(i) or {}
+            if preferred_id and data.get("id") == preferred_id:
+                self.combo_registry_model.setCurrentIndex(i)
+                break
+        self.combo_registry_model.blockSignals(False)
+        self._update_registry_model_status()
+
+    def _current_registry_model(self) -> dict:
+        return dict(self.combo_registry_model.currentData() or {})
+
+    def _update_registry_model_status(self):
+        model = self._current_registry_model()
+        if not model:
+            self.lbl_registry_model_status.setText("현재 OS에서 사용할 모델 항목이 없습니다.")
+            self.btn_registry_install.setEnabled(False)
+            self.btn_registry_delete.setEnabled(False)
+            return
+
+        installed = bool(model.get("installed"))
+        required = "필수 모델" if model.get("required") else "선택 모델"
+        os_label = ", ".join(model.get("os", []))
+        pip_label = ", ".join(model.get("pip_packages", [])) or "외부 앱/파일"
+        path_label = model.get("model_path") or "내장/캐시"
+        self.lbl_registry_model_status.setText(
+            f"{'✅ 설치됨' if installed else '⚠️ 미설치'} · {required} · OS: {os_label} · 패키지: {pip_label} · 경로: {path_label}"
+        )
+        self.btn_registry_install.setEnabled(not installed)
+        self.btn_registry_delete.setEnabled(installed and model.get("id") != "ollama")
+
+    def _install_registry_model(self):
+        model = self._current_registry_model()
+        if not model:
+            return
+        if model.get("id") == "ollama":
+            QMessageBox.information(self, "모델 관리", "Ollama는 외부 앱 설치가 필요합니다.\nhttps://ollama.com/download")
+            return
+        if QMessageBox.question(self, "모델 설치", f"{model.get('name', model.get('id'))} 모델을 설치할까요?") != QMessageBox.StandardButton.Yes:
+            return
+        from core.model_manager import install_model
+        ok = install_model(model)
+        QMessageBox.information(self, "모델 관리", "설치 완료" if ok else "설치 실패. 터미널 로그를 확인하세요.")
+        self._reload_registry_models(model.get("id", ""))
+
+    def _delete_registry_model(self):
+        model = self._current_registry_model()
+        if not model:
+            return
+        if QMessageBox.question(self, "모델 삭제", f"{model.get('name', model.get('id'))} 모델을 삭제할까요?") != QMessageBox.StandardButton.Yes:
+            return
+        from core.model_manager import uninstall_model
+        ok = uninstall_model(model)
+        QMessageBox.information(self, "모델 관리", "삭제 완료" if ok else "삭제 실패. 터미널 로그를 확인하세요.")
+        self._reload_registry_models(model.get("id", ""))
+
+    def _check_required_registry_models(self):
+        try:
+            from core.model_manager import get_required_models
+            missing = get_required_models()
+        except Exception as e:
+            QMessageBox.warning(self, "필수 모델 확인", f"필수 모델 확인 실패:\n{e}")
+            return
+        if not missing:
+            QMessageBox.information(self, "필수 모델 확인", "현재 OS의 필수 모델이 모두 준비되어 있습니다.")
+            return
+        lines = [f"- {m.get('name', m.get('id', 'unknown'))}" for m in missing]
+        QMessageBox.warning(
+            self,
+            "필수 모델 확인",
+            "현재 OS에서 필요한 모델이 아직 설치되지 않았습니다.\n\n" + "\n".join(lines)
+        )
 
     def _set_llm_filter(self, value):
         self.llm_filter = value
@@ -429,7 +554,7 @@ class SettingsDialog(QDialog):
         res.update({
             "selected_model": m_data.get('name') or self.combo_llm.currentText(),
             "selected_llm_provider": provider,
-            "selected_whisper_model": self.combo_whisper.currentText(),
+            "selected_whisper_model": self.combo_whisper.currentText().replace(" (실험)", ""),
             "selected_audio_ai": self.audio_map[self.combo_audio.currentText()],
             "selected_vad": self.vad_map[self.combo_vad.currentText()],
             "google_api_key_saved": bool(google_key_saved),

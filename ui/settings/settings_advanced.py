@@ -1,5 +1,5 @@
-# Version: 02.04.00
-# Phase: PHASE1-B
+# Version: 03.01.25
+# Phase: PHASE2
 """
 ui/settings_advanced.py  ─  🛠️ 오디오 & Whisper 엔진 상세 튜닝 다이얼로그
 """
@@ -243,7 +243,60 @@ class AdvancedSettingsDialog(QDialog):
         
         self.tabs.addTab(tab_llm, "LLM 프롬프트")
 
-        # 탭 7: 시스템
+        # 탭 7: 자막 품질 검사
+        tab_quality = QWidget(); form_quality = QFormLayout(tab_quality)
+        self.chk_subtitle_quality_enabled = QCheckBox("검사 기능 사용")
+        self.chk_subtitle_quality_enabled.setChecked(bool(self.result.get("subtitle_quality_enabled", False)))
+        self.chk_subtitle_quality_enabled.setStyleSheet(label_style("text", 12))
+        form_quality.addRow("자막 품질 검사:", self.chk_subtitle_quality_enabled)
+
+        self.chk_subtitle_quality_auto_check = QCheckBox("자막 생성 후 자동 검사")
+        self.chk_subtitle_quality_auto_check.setChecked(bool(self.result.get("subtitle_quality_auto_check_after_generate", False)))
+        self.chk_subtitle_quality_auto_check.setStyleSheet(label_style("text", 12))
+        form_quality.addRow("자동 검사:", self.chk_subtitle_quality_auto_check)
+
+        self.chk_subtitle_quality_auto_correct = QCheckBox("자동 교정 허용")
+        self.chk_subtitle_quality_auto_correct.setChecked(bool(self.result.get("subtitle_quality_auto_correct_enabled", False)))
+        self.chk_subtitle_quality_auto_correct.setStyleSheet(label_style("text", 12))
+        form_quality.addRow("자동 교정:", self.chk_subtitle_quality_auto_correct)
+
+        self.chk_correction_memory_enabled = QCheckBox("사용자 교정 memory 사용")
+        self.chk_correction_memory_enabled.setChecked(bool(self.result.get("correction_memory_enabled", True)))
+        self.chk_correction_memory_enabled.setStyleSheet(label_style("text", 12))
+        form_quality.addRow("교정 memory:", self.chk_correction_memory_enabled)
+
+        self.chk_wrong_answer_memory_enabled = QCheckBox("오답 memory 사용")
+        self.chk_wrong_answer_memory_enabled.setChecked(bool(self.result.get("wrong_answer_memory_enabled", True)))
+        self.chk_wrong_answer_memory_enabled.setStyleSheet(label_style("text", 12))
+        form_quality.addRow("오답 memory:", self.chk_wrong_answer_memory_enabled)
+
+        self._add_slider(
+            form_quality,
+            "review_auto_correct_apply_threshold",
+            "자동 적용 최소 점수:",
+            "<nobr>💡 자동 교정 후보가 이 점수 이상일 때만 적용합니다. 기본값: {default}</nobr>",
+            70,
+            100,
+            DEFAULT_ADV_SETTINGS["review_auto_correct_apply_threshold"],
+            1,
+            "{} 점",
+            show_disable=False,
+        )
+        self._add_slider(
+            form_quality,
+            "review_recheck_buffer_sec",
+            "재검사 앞뒤 버퍼:",
+            "<nobr>💡 낮은 점수 구간 재검사 후보를 만들 때 앞뒤로 포함할 시간입니다. 기본값: {default}</nobr>",
+            5,
+            30,
+            DEFAULT_ADV_SETTINGS.get("review_recheck_buffer_sec", 1.2),
+            10,
+            "{:.1f} 초",
+            show_disable=False,
+        )
+        self.tabs.addTab(tab_quality, "자막 품질")
+
+        # 탭 8: 시스템
         tab_sys = QWidget(); form_sys = QFormLayout(tab_sys)
 
         self._add_slider(form_sys, "io_workers", "오디오 파일 복사 병렬 워커:", 
@@ -417,6 +470,7 @@ class AdvancedSettingsDialog(QDialog):
                 self.result[f"{key}_disabled"] = chk_disable.isChecked()
         self.result["user_prompt"] = self.edit_user_prompt.toPlainText()
         self.result["audio_preset"] = self.combo_audio_preset.currentData() or ""
+        self._collect_quality_settings()
         if "hf_token" in self.result: del self.result["hf_token"]
         if "llm_prompt" in self.result: del self.result["llm_prompt"]
         save_settings(self.result)
@@ -426,6 +480,7 @@ class AdvancedSettingsDialog(QDialog):
         # 💡 [완성] 프롬프트까지 포함하여 전체 설정을 기본값으로 저장합니다.
         self.result["user_prompt"] = self.edit_user_prompt.toPlainText()
         self.result["audio_preset"] = self.combo_audio_preset.currentData() or ""
+        self._collect_quality_settings()
         
         # 찌꺼기 데이터 정리
         if "hf_token" in self.result: del self.result["hf_token"]
@@ -436,6 +491,7 @@ class AdvancedSettingsDialog(QDialog):
     def _on_ok(self):
         self.result["user_prompt"] = self.edit_user_prompt.toPlainText()
         self.result["audio_preset"] = self.combo_audio_preset.currentData() or ""
+        self._collect_quality_settings()
         
         if "hf_token" in self.result:
             del self.result["hf_token"]
@@ -443,3 +499,10 @@ class AdvancedSettingsDialog(QDialog):
         if "llm_prompt" in self.result:
             del self.result["llm_prompt"]
         self.accept()
+
+    def _collect_quality_settings(self):
+        self.result["subtitle_quality_enabled"] = bool(self.chk_subtitle_quality_enabled.isChecked())
+        self.result["subtitle_quality_auto_check_after_generate"] = bool(self.chk_subtitle_quality_auto_check.isChecked())
+        self.result["subtitle_quality_auto_correct_enabled"] = bool(self.chk_subtitle_quality_auto_correct.isChecked())
+        self.result["correction_memory_enabled"] = bool(self.chk_correction_memory_enabled.isChecked())
+        self.result["wrong_answer_memory_enabled"] = bool(self.chk_wrong_answer_memory_enabled.isChecked())

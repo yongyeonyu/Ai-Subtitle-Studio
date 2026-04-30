@@ -1,5 +1,5 @@
-# Version: 03.01.05
-# Phase: PHASE1-C
+# Version: 03.01.25
+# Phase: PHASE2
 """Editor widget and function-preserving PHASE1-C layout."""
 import re, os, sys, json, atexit, threading, shutil, time
 from ui.editor.undo_manager import UndoManager
@@ -13,7 +13,7 @@ atexit.register(_mac_safe_exit)
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
     QPushButton, QLabel, QSizePolicy, QMessageBox, QMenu, QLineEdit, QComboBox,
-    QToolButton
+    QToolButton, QCheckBox
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
 from PyQt6.QtGui import QKeySequence, QShortcut, QColor, QTextCursor, QIcon
@@ -86,6 +86,8 @@ class EditorWidget(
         self.corrections    = _dm_load_corrections()
         self.subtitle_rules = _dm_load_rules()
         self.settings       = _dm_load_settings()
+        self._quality_filter_key = "all"
+        self._quality_summary = None
         self.selected_model = self.settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
 
         self.sm = SubtitleStateManager()
@@ -456,7 +458,43 @@ class EditorWidget(
                 "} QPushButton:hover { background: #252D33; color: #FFFFFF; }"
             )
             row.addWidget(btn)
+        self.btn_quality_review = QPushButton("검사")
+        self.btn_quality_review.setToolTip("현재 자막 품질 검사")
+        self.btn_quality_review.setIcon(self._make_line_icon("check", "#D7EBFF", 18))
+        self.btn_quality_review.setStyleSheet(button_style("primary", font_size="11px", padding="5px 10px"))
+        self.btn_quality_review.clicked.connect(lambda: self._run_quality_review(auto_correct=False))
+        row.addWidget(self.btn_quality_review)
+        self.chk_quality_auto = QCheckBox("자동 교정")
+        self.chk_quality_auto.setToolTip("낮은 점수 구간만 안전 후보를 자동 적용")
+        self.chk_quality_auto.setChecked(bool(self.settings.get("subtitle_quality_auto_correct_enabled", False)))
+        self.chk_quality_auto.setStyleSheet(
+            "QCheckBox { color: #A9B0B7; font-size: 11px; background: transparent; spacing: 5px; } "
+            "QCheckBox::indicator { width: 14px; height: 14px; }"
+        )
+        row.addWidget(self.chk_quality_auto)
+        self.quality_filter_combo = QComboBox()
+        self.quality_filter_combo.setToolTip("품질 표시 필터")
+        self.quality_filter_combo.addItem("전체", "all")
+        self.quality_filter_combo.addItem("확인 필요", "needs_review")
+        self.quality_filter_combo.addItem("red", "red")
+        self.quality_filter_combo.addItem("gray", "gray")
+        self.quality_filter_combo.addItem("자동 교정됨", "auto_corrected")
+        self.quality_filter_combo.currentIndexChanged.connect(self._on_quality_filter_changed)
+        self.quality_filter_combo.setStyleSheet(
+            "QComboBox { background: #11181C; color: #F5F7FA; border: 1px solid #303A42; "
+            "border-radius: 6px; padding: 4px 8px; font-size: 11px; }"
+        )
+        row.addWidget(self.quality_filter_combo)
+        self.btn_quality_candidates = QPushButton("후보")
+        self.btn_quality_candidates.setToolTip("현재 자막의 품질 후보 비교")
+        self.btn_quality_candidates.setStyleSheet(button_style("toolbar", font_size="11px", padding="5px 9px"))
+        self.btn_quality_candidates.clicked.connect(self._show_quality_candidates_for_current_line)
+        row.addWidget(self.btn_quality_candidates)
         row.addStretch()
+        self.quality_summary_lbl = QLabel("품질 미검사")
+        self.quality_summary_lbl.setToolTip("전체 품질 요약")
+        self.quality_summary_lbl.setStyleSheet(label_style("muted", 11, bold=True))
+        row.addWidget(self.quality_summary_lbl)
         sort_lbl = QLabel("정렬")
         sort_lbl.setStyleSheet(label_style("muted", 11, bold=True))
         row.addWidget(sort_lbl)
@@ -483,6 +521,218 @@ class EditorWidget(
         more.setStyleSheet(button_style("toolbar", font_size="11px", padding="5px 8px"))
         row.addWidget(more)
         return bar
+
+    def _quality_vad_segments(self) -> list[dict]:
+        try:
+            return list(getattr(self.timeline.canvas, "vad_segments", []) or [])
+        except Exception:
+            return []
+
+    def _set_quality_running(self, running: bool):
+        if hasattr(self, "btn_quality_review"):
+            self.btn_quality_review.setEnabled(not running)
+            self.btn_quality_review.setText("검사 중" if running else "검사")
+        if hasattr(self, "status_lbl"):
+            self.status_lbl.setText("에디터 | 검사 중" if running else "에디터 | 검사 완료")
+
+    def _run_quality_review(self, auto_correct: bool | None = None):
+        from core.subtitle_quality.quality_pipeline import run_subtitle_quality_pipeline
+
+        auto = bool(self.chk_quality_auto.isChecked()) if auto_correct is None else bool(auto_correct)
+        if auto:
+            self.settings["subtitle_quality_auto_correct_enabled"] = True
+        self.settings["subtitle_quality_enabled"] = True
+        segs = [seg for seg in self._get_current_segments() if not seg.get("is_gap")]
+        if not segs:
+            QMessageBox.information(self, "품질 검사", "검사할 자막이 없습니다.")
+            return
+        self._set_quality_running(True)
+        try:
+            result = run_subtitle_quality_pipeline(
+                segs,
+                vad_segments=self._quality_vad_segments(),
+                settings=self.settings,
+                auto_correct=auto,
+                context={
+                    "clip_boundaries": list(getattr(self.timeline.canvas, "_multiclip_boxes", []) or []),
+                },
+            )
+            self._apply_quality_result(result, auto_correct=auto)
+            summary = result.summary
+            score = "-" if summary.overall_score is None else f"{summary.overall_score:.1f}"
+            get_logger().log(
+                f"[자막 품질] 검사 완료: 전체 {score}점, 확인 필요 {summary.needs_review_count}개, 자동 교정 {summary.auto_corrected_count}개"
+            )
+        except Exception as exc:
+            get_logger().log(f"⚠️ 자막 품질 검사 오류: {exc}")
+            QMessageBox.warning(self, "품질 검사 오류", str(exc))
+        finally:
+            self._set_quality_running(False)
+
+    def _apply_quality_result(self, result, *, auto_correct: bool = False):
+        self._quality_summary = getattr(result, "summary", None)
+        result_by_line = {}
+        for idx, seg in enumerate(getattr(result, "segments", []) or []):
+            line = int(seg.get("line", idx) if seg.get("line") is not None else idx)
+            result_by_line[line] = dict(seg)
+
+        if auto_correct and hasattr(self, "_undo_mgr"):
+            self._undo_mgr.push_immediate()
+
+        doc = self.text_edit.document()
+        cursor = QTextCursor(doc)
+        cursor.beginEditBlock()
+        quality_map: dict[int, dict] = {}
+        for line, seg in result_by_line.items():
+            block = doc.findBlockByNumber(int(line))
+            if not block.isValid():
+                continue
+            data = block.userData()
+            if not isinstance(data, SubtitleBlockData) or data.is_gap:
+                continue
+            new_text = str(seg.get("text", "") or "")
+            if auto_correct and new_text and new_text != block.text():
+                cursor.setPosition(block.position())
+                cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+                cursor.insertText(new_text)
+                block = cursor.block()
+            quality = dict(seg.get("quality") or {})
+            quality_map[int(line)] = quality
+            seg_for_sig = {
+                "start": data.start_sec,
+                "end": seg.get("end", data.start_sec),
+                "text": block.text(),
+                "speaker": data.spk_id,
+            }
+            block.setUserData(
+                SubtitleBlockData(
+                    data.spk_id,
+                    data.start_sec,
+                    data.is_gap,
+                    stt_mode=getattr(data, "stt_mode", False),
+                    stt_pending=getattr(data, "stt_pending", False),
+                    original_text=getattr(data, "original_text", ""),
+                    dictated_text=getattr(data, "dictated_text", ""),
+                    quality=quality,
+                    quality_history=list(seg.get("quality_history") or []),
+                    quality_candidates=list(seg.get("quality_candidates") or []),
+                    quality_signature=self._segment_quality_signature(seg_for_sig),
+                )
+            )
+        cursor.endEditBlock()
+
+        if hasattr(self, "_highlighter"):
+            self._highlighter.set_quality_map(quality_map)
+            self._highlighter.set_quality_filter(self._quality_filter_key)
+        self._update_quality_summary_label()
+        self._schedule_timeline()
+        self._refresh_video_subtitle_context()
+        if auto_correct:
+            self._mark_dirty()
+
+    def _update_quality_summary_label(self):
+        summary = self._quality_summary
+        if not hasattr(self, "quality_summary_lbl"):
+            return
+        if summary is None:
+            self.quality_summary_lbl.setText("품질 미검사")
+            return
+        score = "-" if summary.overall_score is None else f"{summary.overall_score:.1f}"
+        before_after = ""
+        if summary.before_score is not None and summary.after_score is not None and summary.before_score != summary.after_score:
+            delta = summary.after_score - summary.before_score
+            before_after = f" · {summary.before_score:.1f}→{summary.after_score:.1f} ({delta:+.1f})"
+        self.quality_summary_lbl.setText(
+            f"품질 {score}점{before_after} · 확인 {summary.needs_review_count} · 교정 {summary.auto_corrected_count}"
+        )
+
+    def _on_quality_filter_changed(self, *_args):
+        combo = getattr(self, "quality_filter_combo", None)
+        self._quality_filter_key = str(combo.currentData() if combo else "all") or "all"
+        if hasattr(self, "_highlighter"):
+            self._highlighter.set_quality_filter(self._quality_filter_key)
+        if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
+            self.timeline.canvas.quality_filter = self._quality_filter_key
+            self.timeline.canvas.update()
+
+    def _segment_for_line(self, line: int) -> dict | None:
+        for seg in self._get_current_segments():
+            if int(seg.get("line", -1) or -1) == int(line):
+                return seg
+        return None
+
+    def _show_quality_candidates_for_current_line(self):
+        from ui.editor.quality_candidate_dialog import QualityCandidateDialog
+
+        line = self.text_edit.textCursor().blockNumber()
+        seg = self._segment_for_line(line)
+        if not seg or not seg.get("quality"):
+            QMessageBox.information(self, "후보 비교", "현재 줄에 품질 검사 결과가 없습니다.")
+            return
+        dialog = QualityCandidateDialog(seg, self)
+        if dialog.exec() != 1 or not dialog.selected_candidate:
+            return
+        candidate = dict(dialog.selected_candidate)
+        text = str(candidate.get("text", "") or "")
+        if not text:
+            return
+        old_seg = self._segment_for_line(line) or {}
+        self._replace_segment_text_by_line(line, text, candidate)
+        try:
+            from core.subtitle_quality.correction_memory import add_correction_memory_item
+            add_correction_memory_item(
+                str(old_seg.get("text", "") or ""),
+                text,
+                source="quality_candidate",
+                context=str(candidate.get("reason", "") or ""),
+            )
+        except Exception:
+            pass
+
+    def _replace_segment_text_by_line(self, line: int, text: str, candidate: dict | None = None):
+        block = self.text_edit.document().findBlockByNumber(int(line))
+        if not block.isValid():
+            return
+        data = block.userData()
+        if not isinstance(data, SubtitleBlockData) or data.is_gap:
+            return
+        current_seg = self._segment_for_line(line) or {}
+        if hasattr(self, "_undo_mgr"):
+            self._undo_mgr.push_immediate()
+        cur = QTextCursor(block)
+        cur.beginEditBlock()
+        cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+        cur.insertText(text)
+        quality = dict(getattr(data, "quality", {}) or {})
+        flags = list(quality.get("flags") or [])
+        if "candidate_applied" not in flags:
+            flags.append("candidate_applied")
+        quality["flags"] = flags
+        quality["candidate_applied_reason"] = str((candidate or {}).get("reason", "") or "")
+        cur.block().setUserData(
+            SubtitleBlockData(
+                data.spk_id,
+                data.start_sec,
+                data.is_gap,
+                stt_mode=getattr(data, "stt_mode", False),
+                stt_pending=getattr(data, "stt_pending", False),
+                original_text=getattr(data, "original_text", ""),
+                dictated_text=getattr(data, "dictated_text", ""),
+                quality=quality,
+                quality_history=list(getattr(data, "quality_history", []) or []),
+                quality_candidates=list(getattr(data, "quality_candidates", []) or []),
+                quality_signature=self._segment_quality_signature({
+                    "start": data.start_sec,
+                    "end": current_seg.get("end", data.start_sec),
+                    "text": text,
+                    "speaker": data.spk_id,
+                }),
+            )
+        )
+        cur.endEditBlock()
+        self._mark_dirty()
+        self._finalize_edit()
 
     def _search_subtitle_text(self, query: str):
         query = (query or "").strip()
@@ -599,8 +849,8 @@ class EditorWidget(
         grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 0); grid.setColumnStretch(2, 1)
         return w
 
-    def _make_line_icon(self, name: str, color="#F5F7FA") -> QIcon:
-        return line_icon(name, color)
+    def _make_line_icon(self, name: str, color="#F5F7FA", size=28) -> QIcon:
+        return line_icon(name, color, size)
 
     def _make_action_toolbutton(self, text: str, icon_name: str) -> QToolButton:
         btn = QToolButton()

@@ -1,4 +1,4 @@
-# Version: 03.00.26
+# Version: 03.01.15
 # Phase: PHASE2
 """
 core/project_manager.py
@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from core.project.project_context import build_editor_state
+from core.work_mode import normalize_work_mode
 
 PROJECT_SCHEMA_VERSION = "03.00.26"
 
@@ -311,7 +312,7 @@ def save_project(
                     cl_end = t_end - c["timeline_start"]
                     break
 
-            new_segs.append({
+            new_seg = {
                 "id": seg.get("id", _make_seg_id()),
                 "index": i + 1,
                 "timeline_start": t_start,
@@ -329,7 +330,11 @@ def save_project(
                 "stt_pending": bool(seg.get("stt_pending", False)),
                 "original_text": seg.get("original_text", ""),
                 "dictated_text": seg.get("dictated_text", ""),
-            })
+            }
+            for key in ("quality", "quality_history", "quality_candidates", "quality_stale"):
+                if key in seg:
+                    new_seg[key] = seg.get(key)
+            new_segs.append(new_seg)
 
         project.setdefault("subtitles", {})
         project["subtitles"]["segments"] = new_segs
@@ -361,6 +366,9 @@ def save_project(
                 "end": seg.get("timeline_end", seg.get("end", 0.0)),
                 "text": seg.get("text", ""),
                 "speaker": seg.get("speaker", "00"),
+                "quality": seg.get("quality", {}),
+                "quality_history": seg.get("quality_history", []),
+                "quality_candidates": seg.get("quality_candidates", []),
             }
             for seg in (project.get("subtitles", {}) or {}).get("segments", [])
         ]
@@ -391,6 +399,7 @@ def save_project(
             project["editor_state"]["workspace"] = workspace
 
     if active_work_mode:
+        active_work_mode = normalize_work_mode(active_work_mode)
         project.setdefault("workspace", {})
         project["workspace"]["active_work_mode"] = active_work_mode
         if project.get("editor_state"):

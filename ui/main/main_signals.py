@@ -1,9 +1,13 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 03.01.22
+# Phase: PHASE2
 """
 ui/main/main_signals.py
 SignalHandlersMixin — Qt 시그널 핸들러 (세그먼트 전달 · VAD · recog zone · LLM 웜업)
 """
+import os
+
+from PyQt6.QtWidgets import QMessageBox
+
 import config
 from logger import get_logger
 
@@ -112,7 +116,7 @@ class SignalHandlersMixin:
             if ci < len(self._multiclip_boundaries):
                 offset = self._multiclip_boundaries[ci]["start"]
                 vad_segs = [
-                    {"start": v["start"] + offset, "end": v["end"] + offset}
+                    {**v, "start": v["start"] + offset, "end": v["end"] + offset}
                     for v in vad_segs
                 ]
             if not hasattr(self, "_accumulated_vad"):
@@ -168,3 +172,30 @@ class SignalHandlersMixin:
                 }]
                 get_logger().log(f"⚠️ 로컬 LLM 자동 스캔 실패: {e}")
         threading.Thread(target=_scan, daemon=True, name="llm-warmup").start()
+
+    def _check_required_models_on_startup(self):
+        if getattr(self, "_required_model_check_done", False):
+            return
+        self._required_model_check_done = True
+        try:
+            from core.model_manager import get_current_os, get_required_models
+            missing = get_required_models()
+        except Exception as e:
+            get_logger().log(f"⚠️ 필수 AI 모델 확인 실패: {e}")
+            return
+        if not missing:
+            get_logger().log("✅ 필수 AI 모델 확인 완료")
+            return
+
+        names = [m.get("name", m.get("id", "unknown")) for m in missing]
+        get_logger().log("⚠️ 필수 AI 모델 미설치: " + ", ".join(names))
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return
+
+        QMessageBox.warning(
+            self,
+            "필수 AI 모델 확인",
+            f"현재 OS({get_current_os()})에서 필요한 AI 모델이 아직 준비되지 않았습니다.\n\n"
+            + "\n".join(f"- {name}" for name in names)
+            + "\n\n설정 > AI 엔진 설정 > 모델 관리에서 설치 상태를 확인하세요."
+        )

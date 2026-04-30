@@ -1,4 +1,4 @@
-# Version: 03.00.26
+# Version: 03.01.25
 # Phase: PHASE2
 """
 core/project/project_context.py
@@ -10,6 +10,8 @@ import hashlib
 import json
 import os
 from typing import Any
+
+from core.work_mode import EDITOR_MODE, normalize_work_mode
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -84,7 +86,7 @@ def project_workspace(project: dict[str, Any]) -> dict[str, Any]:
 
 def project_active_work_mode(project: dict[str, Any]) -> str:
     mode = str(project_workspace(project).get("active_work_mode", "") or "")
-    return mode if mode in {"subtitle", "edit", "stt", "roughcut", "shortform"} else "edit"
+    return normalize_work_mode(mode, EDITOR_MODE)
 
 
 def project_roughcut_state(project: dict[str, Any]) -> dict[str, Any]:
@@ -146,6 +148,11 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
             item["_clip_file"] = clip_file
         if seg.get("words"):
             item["words"] = list(seg.get("words") or [])
+        for key in ("quality", "quality_history", "quality_candidates", "quality_stale"):
+            if key in seg:
+                value = seg.get(key)
+                if isinstance(value, (dict, list, bool)):
+                    item[key] = value
         out.append(item)
     return out
 
@@ -217,7 +224,7 @@ def _normalize_editor_segments(segments: list[dict[str, Any]]) -> list[dict[str,
             "original_text": str(seg.get("original_text", "") or ""),
             "dictated_text": str(seg.get("dictated_text", "") or ""),
         }
-        for key in ("_clip_idx", "_clip_file", "words"):
+        for key in ("_clip_idx", "_clip_file", "words", "quality", "quality_history", "quality_candidates", "quality_stale"):
             if key in seg:
                 item[key] = seg.get(key)
         out.append(item)

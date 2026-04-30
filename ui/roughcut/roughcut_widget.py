@@ -1,4 +1,4 @@
-# Version: 03.01.14
+# Version: 03.01.17
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -41,6 +41,9 @@ class RoughcutWidget(
         self.owner = owner
         self._result = None
         self._source_signature = ""
+        self._roughcut_candidates: list[dict] = []
+        self._selected_candidate_id = ""
+        self._refreshing_candidate_combo = False
         self._row_chapter_ids: list[str] = []
         self._user_edits: dict[str, dict[str, str]] = {}
         self._updating_table = False
@@ -124,6 +127,18 @@ class RoughcutWidget(
         title_box.addWidget(self.title_lbl)
         title_box.addWidget(self.source_lbl)
         top_lay.addLayout(title_box, stretch=1)
+
+        self.candidate_combo = QComboBox()
+        self.candidate_combo.setMinimumWidth(170)
+        self.candidate_combo.setFixedHeight(32)
+        self.candidate_combo.setToolTip("프로젝트에 저장된 러프컷 후보")
+        self.candidate_combo.setStyleSheet(
+            "QComboBox { background: #10161A; color: #F5F7FA; border: 1px solid #2D3942; "
+            "border-radius: 6px; padding: 4px 8px; font-size: 10px; font-weight: 700; }"
+            "QComboBox::drop-down { border: none; width: 18px; }"
+        )
+        self.candidate_combo.currentIndexChanged.connect(self._on_candidate_combo_changed)
+        top_lay.addWidget(self.candidate_combo)
 
         self.metric_labels = []
         for label in ("챕터", "EDL", "하이라이트", "검토", "출력"):

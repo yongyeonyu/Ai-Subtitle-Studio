@@ -1,4 +1,4 @@
-# Version: 03.00.26
+# Version: 03.01.17
 # Phase: PHASE2
 import unittest
 import json
@@ -66,6 +66,28 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(segments[0]["_clip_idx"], 1)
         self.assertEqual(segments[0]["speaker"], "03")
 
+    def test_editor_state_preserves_quality_metadata(self):
+        state = build_editor_state(
+            mode="single",
+            media_files=["/tmp/movie.mp4"],
+            segments=[
+                {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "품질",
+                    "speaker": "00",
+                    "quality": {"confidence_label": "red", "confidence_score": 40},
+                    "quality_history": [{"confidence_label": "gray"}],
+                    "quality_candidates": [{"candidate_id": "c1", "text": "품질"}],
+                }
+            ],
+        )
+
+        segment = state["subtitles"]["segments"][0]
+        self.assertEqual(segment["quality"]["confidence_label"], "red")
+        self.assertEqual(segment["quality_history"][0]["confidence_label"], "gray")
+        self.assertEqual(segment["quality_candidates"][0]["candidate_id"], "c1")
+
     def test_segment_signature_changes_when_subtitle_text_changes(self):
         before = segment_signature([{"start": 0.0, "end": 1.0, "text": "원본", "speaker": "00"}])
         after = segment_signature([{"start": 0.0, "end": 1.0, "text": "수정", "speaker": "00"}])
@@ -116,7 +138,13 @@ class ProjectContextTests(unittest.TestCase):
             save_project(
                 str(path),
                 segments=[{"start": 1.0, "end": 2.0, "text": "저장", "speaker": "01"}],
-                roughcut_state={"source_signature": "sig", "chapters": [], "edl_segments": []},
+                roughcut_state={
+                    "source_signature": "sig",
+                    "chapters": [],
+                    "edl_segments": [],
+                    "selected_candidate_id": "candidate_a",
+                    "candidates": [{"candidate_id": "candidate_a", "source_signature": "sig", "chapters": [], "edl_segments": []}],
+                },
                 active_work_mode="roughcut",
             )
             loaded = load_project(str(path))
@@ -124,6 +152,8 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(loaded["version"], "03.00.26")
         self.assertEqual(project_active_work_mode(loaded), "roughcut")
         self.assertEqual(project_roughcut_state(loaded)["source_signature"], "sig")
+        self.assertEqual(project_roughcut_state(loaded)["selected_candidate_id"], "candidate_a")
+        self.assertEqual(len(project_roughcut_state(loaded)["candidates"]), 1)
         self.assertEqual(project_segments_to_editor(loaded)[0]["text"], "저장")
 
 

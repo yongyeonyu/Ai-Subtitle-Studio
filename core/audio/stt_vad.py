@@ -1,5 +1,5 @@
-# Version: 02.07.00
-# Phase: PHASE1-D
+# Version: 03.01.19
+# Phase: PHASE2
 """
 VAD-only detector for manual STT mode.
 
@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 
 import config
+from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from logger import get_logger
 
 
@@ -37,7 +38,7 @@ def _extract_stt_vad_wav(media_path: str, wav_path: str) -> None:
         ]
     )
     cmd = [
-        "ffmpeg",
+        ffmpeg_binary(),
         "-y",
         "-nostdin",
         "-loglevel",
@@ -55,7 +56,7 @@ def _extract_stt_vad_wav(media_path: str, wav_path: str) -> None:
         "pcm_s16le",
         wav_path,
     ]
-    subprocess.run(cmd, check=True, timeout=180)
+    subprocess.run(cmd, check=True, timeout=180, **hidden_subprocess_kwargs())
     if not os.path.exists(wav_path) or os.path.getsize(wav_path) <= 1024:
         raise RuntimeError("STT VAD wav extraction failed")
 
