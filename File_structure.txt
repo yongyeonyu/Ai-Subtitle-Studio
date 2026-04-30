@@ -23,6 +23,7 @@ ai_subtitle_studio/
 ├── config.py                       ← 전역 환경 변수 + OS 감지 + APP_VERSION  v03.01.14
 ├── logger.py                       ← 시스템 로그 기록 및 UI 연동             v02.03.00
 ├── AGENTS.md                       ← 개발 가이드 / Copilot 핸드오프
+├── README.md                       ← GitHub 한글 프로젝트 소개 / 설치·실행 가이드
 ├── ACTION_ITEMS.md                 ← 전체 액션아이템
 ├── check_list.md                    ← 미완료 체크리스트 / 대표님 확인 체크포인트
 ├── RELEASE_v02.02.00.md            ← 이전 릴리즈 노트
