@@ -55,6 +55,13 @@ Previous-Release: v03.02.00
 - 리팩토링은 대표님이 명시 요청할 때만 실행하며, 사용하지 않는 것으로 의심되는 파일은 삭제 전 `.codex_work/`로 이동해 보관하는 규칙을 추가했습니다.
 - `File_structure.txt`의 설명 공백을 넓혀 가독성을 개선했습니다.
 
+## v03.03.01 리팩토링
+- 기능 동작 변경 없이 에디터 러프컷 초안 모듈의 private helper 이름을 역할 중심으로 정리했습니다.
+- `build_editor_roughcut_draft_prompt()`의 자막 row 생성과 `build_editor_roughcut_candidate_payload()`의 EDL/output payload 조립을 작은 private helper로 분리했습니다.
+- 정적 참조가 없고 루트 `dataset/`로 통합된 legacy `core/dataset/` JSON 3개를 삭제하지 않고 `.codex_work/refactor_unused_2026-05-01/core_dataset/`로 보관 이동했습니다.
+- public Python compatibility module인 `core/audio/worker_threads.py`, `core/project/project_snapshot.py`는 외부 import 가능성을 고려해 유지했습니다.
+- 삭제한 public `def`, `class`, UI action, signal, slot은 없습니다.
+
 ## 검증
 - `QT_QPA_PLATFORM=offscreen venv/bin/python -m unittest discover -s tests` 통과: 153개
 - Python AST 검사 통과: 213개 파일

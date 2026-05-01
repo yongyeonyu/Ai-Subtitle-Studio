@@ -1,4 +1,4 @@
-# Version: 03.02.15
+# Version: 03.03.01
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -60,21 +60,6 @@ def build_editor_roughcut_draft_prompt(
 ) -> str:
     merged = merge_roughcut_settings(settings or {})
     prompt = str(merged.get("editor_roughcut_draft_prompt") or "").strip() or DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT
-    rows = []
-    for idx, seg in enumerate(segments or []):
-        if seg.get("is_gap"):
-            continue
-        text = str(seg.get("text", "") or "").strip()
-        if not text:
-            continue
-        rows.append(
-            {
-                "subtitle_id": int(seg.get("subtitle_id", idx) if seg.get("subtitle_id") is not None else idx),
-                "start": round(_as_float(seg.get("start")), 3),
-                "end": round(_as_float(seg.get("end"), seg.get("start", 0.0)), 3),
-                "text": text[:500],
-            }
-        )
     body = {
         "prompt_id": "editor_realtime_roughcut_draft_v1",
         "language": "ko",
@@ -96,7 +81,7 @@ def build_editor_roughcut_draft_prompt(
                 ]
             },
         },
-        "subtitle_rows": rows,
+        "subtitle_rows": _subtitle_prompt_rows(segments),
     }
     return json.dumps(body, ensure_ascii=False, indent=2)
 
@@ -145,9 +130,9 @@ def build_editor_roughcut_draft_result(
             schema_version="roughcut_result.v2",
         )
 
-    groups = _groups_from_llm_payload(llm_payload, subtitles)
+    groups = _major_groups_from_llm_payload(llm_payload, subtitles)
     if not groups:
-        groups = _local_major_groups(subtitles, settings=settings)
+        groups = _local_major_groups_from_subtitles(subtitles, settings=settings)
 
     chapters: list[ChapterMetadata] = []
     majors: list[RoughCutSegment] = []
@@ -284,30 +269,11 @@ def build_editor_roughcut_candidate_payload(
     editor_mode: str = "single",
 ) -> dict[str, Any]:
     settings = settings or {}
-    media_files = list(media_files or ([source_path] if source_path else []))
+    media_files = _candidate_media_files(media_files, source_path)
     clip_boundaries = list(clip_boundaries or [])
-    mapped_edl = map_edl_segments_to_clip_sources(result.edl_segments, clip_boundaries) if clip_boundaries else list(result.edl_segments)
-    if mapped_edl:
-        result_edl = tuple(mapped_edl)
-    else:
-        result_edl = tuple(result.edl_segments)
+    result_edl = _candidate_edl_segments(result, clip_boundaries)
     now = datetime.now().isoformat(timespec="seconds")
-    outputs = {
-        "guide_markdown": result.guide_markdown,
-        "edl": edl_to_dict(
-            result_edl,
-            metadata={"source": source_path, "source_kind": "editor_realtime_draft"},
-            chapters=result.chapters,
-            major_segments=result.segments,
-        ),
-        "retimed_srt": "",
-        "render_plan": None,
-        "subtitle_burnin_command": (),
-    }
-    try:
-        outputs["retimed_srt"] = format_srt(retime_subtitles_for_edl(source_segments, result_edl, chapters=result.chapters))
-    except Exception:
-        outputs["retimed_srt"] = ""
+    outputs = _candidate_outputs(result, source_segments, result_edl, source_path)
     return {
         "candidate_id": EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID,
         "name": "에디터 실시간 초안",
@@ -341,7 +307,7 @@ def build_editor_roughcut_candidate_payload(
         "result_schema_version": result.schema_version,
         "warnings": list(result.warnings),
         "outputs": outputs,
-        "settings": _settings_payload(settings),
+        "settings": _roughcut_settings_payload(settings),
     }
 
 
@@ -368,7 +334,7 @@ def merge_editor_roughcut_draft_state(existing_state: dict[str, Any] | None, can
             "selected_candidate_id": EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID,
             "candidates": candidates,
             "candidate_count": len(candidates),
-            "settings": _settings_payload(candidate.get("settings", {})),
+            "settings": _roughcut_settings_payload(candidate.get("settings", {})),
             "shared_between": ["editor", "roughcut"],
             "updated_from": "editor_realtime_draft",
         }
@@ -384,7 +350,7 @@ def apply_roughcut_order_to_subtitles(
 ) -> list[dict[str, Any]]:
     if not segments or not roughcut_state:
         return list(segments or [])
-    candidate = _selected_candidate(roughcut_state)
+    candidate = _selected_roughcut_candidate(roughcut_state)
     if not candidate:
         return list(segments or [])
     if not force and not bool(candidate.get("editor_save_order_enabled") or roughcut_state.get("editor_save_order_enabled")):
@@ -408,7 +374,27 @@ def _normalize_subtitles(items: Iterable[dict[str, Any]] | Iterable[SubtitleSegm
     return list(subtitles_from_dicts(tuple(item for item in source if isinstance(item, dict))))
 
 
-def _local_major_groups(subtitles: list[SubtitleSegment], *, settings: dict[str, Any]) -> list[dict[str, Any]]:
+def _subtitle_prompt_rows(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = []
+    for idx, segment in enumerate(segments or []):
+        if segment.get("is_gap"):
+            continue
+        text = str(segment.get("text", "") or "").strip()
+        if not text:
+            continue
+        subtitle_id = segment.get("subtitle_id", idx)
+        rows.append(
+            {
+                "subtitle_id": int(subtitle_id if subtitle_id is not None else idx),
+                "start": round(_as_float(segment.get("start")), 3),
+                "end": round(_as_float(segment.get("end"), segment.get("start", 0.0)), 3),
+                "text": text[:500],
+            }
+        )
+    return rows
+
+
+def _local_major_groups_from_subtitles(subtitles: list[SubtitleSegment], *, settings: dict[str, Any]) -> list[dict[str, Any]]:
     min_count = max(1, int(settings.get("roughcut_major_min_subtitle_count", 5) or 5))
     max_count = max(min_count, int(settings.get("editor_roughcut_draft_max_subtitle_count", max(8, min_count * 2)) or max(8, min_count * 2)))
     silence_gap = max(0.0, float(settings.get("roughcut_silence_gap_prefer_sec", 1.0) or 1.0))
@@ -451,7 +437,7 @@ def _local_major_groups(subtitles: list[SubtitleSegment], *, settings: dict[str,
     return groups
 
 
-def _groups_from_llm_payload(payload: dict[str, Any] | None, subtitles: list[SubtitleSegment]) -> list[dict[str, Any]]:
+def _major_groups_from_llm_payload(payload: dict[str, Any] | None, subtitles: list[SubtitleSegment]) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
     rows = payload.get("major_segments")
@@ -500,7 +486,7 @@ def _groups_from_llm_payload(payload: dict[str, Any] | None, subtitles: list[Sub
     return groups
 
 
-def _selected_candidate(state: dict[str, Any]) -> dict[str, Any] | None:
+def _selected_roughcut_candidate(state: dict[str, Any]) -> dict[str, Any] | None:
     selected = str(state.get("selected_candidate_id") or "")
     candidates = [item for item in state.get("candidates", []) or [] if isinstance(item, dict)]
     for item in candidates:
@@ -511,7 +497,7 @@ def _selected_candidate(state: dict[str, Any]) -> dict[str, Any] | None:
     return candidates[0] if candidates else None
 
 
-def _settings_payload(settings: dict[str, Any] | None) -> dict[str, Any]:
+def _roughcut_settings_payload(settings: dict[str, Any] | None) -> dict[str, Any]:
     merged = merge_roughcut_settings(settings or {})
     keys = (
         "editor_roughcut_draft_enabled",
@@ -521,6 +507,40 @@ def _settings_payload(settings: dict[str, Any] | None) -> dict[str, Any]:
         "roughcut_llm_enabled",
     )
     return {key: merged.get(key) for key in keys if key in merged}
+
+
+def _candidate_media_files(media_files: list[str] | None, source_path: str) -> list[str]:
+    return list(media_files or ([source_path] if source_path else []))
+
+
+def _candidate_edl_segments(result: RoughCutResult, clip_boundaries: list[dict[str, Any]]) -> tuple:
+    mapped = map_edl_segments_to_clip_sources(result.edl_segments, clip_boundaries) if clip_boundaries else list(result.edl_segments)
+    return tuple(mapped or result.edl_segments)
+
+
+def _candidate_outputs(
+    result: RoughCutResult,
+    source_segments: list[dict[str, Any]],
+    result_edl: tuple,
+    source_path: str,
+) -> dict[str, Any]:
+    outputs = {
+        "guide_markdown": result.guide_markdown,
+        "edl": edl_to_dict(
+            result_edl,
+            metadata={"source": source_path, "source_kind": "editor_realtime_draft"},
+            chapters=result.chapters,
+            major_segments=result.segments,
+        ),
+        "retimed_srt": "",
+        "render_plan": None,
+        "subtitle_burnin_command": (),
+    }
+    try:
+        outputs["retimed_srt"] = format_srt(retime_subtitles_for_edl(source_segments, result_edl, chapters=result.chapters))
+    except Exception:
+        outputs["retimed_srt"] = ""
+    return outputs
 
 
 def _call_ollama_json(model: str, prompt: str, *, timeout: int) -> dict[str, Any] | None:
