@@ -622,6 +622,25 @@
       "hidden": false
     },
     {
+      "id": "ten-vad",
+      "name": "TEN VAD (저지연 VAD, 실험)",
+      "category": "VAD",
+      "os": [
+        "mac",
+        "windows"
+      ],
+      "pip_packages": [
+        "ten-vad"
+      ],
+      "import_names": [
+        "ten_vad"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false,
+      "experimental": true
+    },
+    {
       "id": "deepfilter",
       "name": "DeepFilterNet (노이즈 제거)",
       "category": "Audio",
@@ -638,6 +657,44 @@
       "model_path": "",
       "required": false,
       "hidden": false
+    },
+    {
+      "id": "resemble-enhance",
+      "name": "Resemble Enhance (음성 향상, 실험)",
+      "category": "Audio",
+      "os": [
+        "mac",
+        "windows"
+      ],
+      "pip_packages": [
+        "resemble-enhance"
+      ],
+      "import_names": [
+        "resemble_enhance"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false,
+      "experimental": true
+    },
+    {
+      "id": "clearvoice",
+      "name": "ClearVoice MossFormer2 (음성 향상, 실험)",
+      "category": "Audio",
+      "os": [
+        "mac",
+        "windows"
+      ],
+      "pip_packages": [
+        "clearvoice"
+      ],
+      "import_names": [
+        "clearvoice"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false,
+      "experimental": true
     },
     {
       "id": "rnnoise",

@@ -95,11 +95,15 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
                         pass
             self.assertNotIn("러프컷 분석에서 LLM 사용", widget_texts)
             self.assertFalse(any("API Key / 온도" in text for text in label_texts))
+            self.assertTrue(any("Hugging Face Token:" in text for text in label_texts))
             self.assertIsNotNone(getattr(window, "sidebar_preset_panel", None))
             audio_values = set(dialog.audio_map.values())
             self.assertIn("rnnoise", audio_values)
             self.assertIn("deepfilter", audio_values)
+            self.assertIn("resemble_enhance", audio_values)
+            self.assertIn("clearvoice", audio_values)
             self.assertNotIn("demucs", audio_values)
+            self.assertIn("ten_vad", set(dialog.vad_map.values()))
 
             base = {
                 "stt_quality_preset": "balanced",

@@ -1,4 +1,4 @@
-# Version: 03.05.00
+# Version: 03.06.00
 # Phase: PHASE2
 
 
@@ -9,7 +9,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.05.00"
+APP_VERSION = "03.06.00"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -120,6 +120,8 @@ DEFAULT_ADV_SETTINGS = {
     "review_auto_correct_min_improvement": 10,
     "review_recheck_buffer_sec": 1.2,
     "review_auto_correct_require_user_confirm": True,
+    "ten_vad_threshold": 0.5,
+    "ten_vad_hop_size": 256,
     "correction_memory_enabled": True,
     "wrong_answer_memory_enabled": True,
     "score_weight_asr_metadata": 0.25,

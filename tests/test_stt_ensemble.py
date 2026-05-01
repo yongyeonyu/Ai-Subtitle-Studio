@@ -43,6 +43,92 @@ class STTEnsembleTests(unittest.TestCase):
         self.assertEqual(merged[0]["stt_ensemble_source"], "STT1")
         self.assertEqual(merged[0]["text"], "망고 보여 봐")
 
+    def test_low_confidence_primary_can_be_replaced_by_secondary(self):
+        merged = merge_stt_outputs(
+            [{
+                "start": 0.0,
+                "end": 1.6,
+                "text": "망고 보여 봐",
+                "avg_logprob": -1.2,
+                "no_speech_prob": 0.08,
+                "compression_ratio": 1.1,
+            }],
+            [{
+                "start": 0.02,
+                "end": 1.55,
+                "text": "방금 보여 봐",
+                "avg_logprob": -0.2,
+                "no_speech_prob": 0.01,
+                "compression_ratio": 1.0,
+            }],
+        )
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["stt_ensemble_source"], "STT2")
+        self.assertEqual(merged[0]["text"], "방금 보여 봐")
+        self.assertTrue(merged[0]["stt_ensemble_needs_llm_review"])
+
+    def test_word_level_rover_replaces_only_weak_primary_word(self):
+        merged = merge_stt_outputs(
+            [{
+                "start": 0.0,
+                "end": 1.8,
+                "text": "망고 보여 봐",
+                "avg_logprob": -0.95,
+                "no_speech_prob": 0.02,
+                "words": [
+                    {"word": "망고", "start": 0.0, "end": 0.5, "confidence": 0.21},
+                    {"word": "보여", "start": 0.55, "end": 1.0, "confidence": 0.82},
+                    {"word": "봐", "start": 1.05, "end": 1.35, "confidence": 0.87},
+                ],
+            }],
+            [{
+                "start": 0.02,
+                "end": 1.75,
+                "text": "방금 보여 봐",
+                "avg_logprob": -0.2,
+                "no_speech_prob": 0.01,
+                "words": [
+                    {"word": "방금", "start": 0.02, "end": 0.52, "confidence": 0.91},
+                    {"word": "보여", "start": 0.56, "end": 1.02, "confidence": 0.8},
+                    {"word": "봐", "start": 1.06, "end": 1.34, "confidence": 0.79},
+                ],
+            }],
+        )
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["stt_ensemble_source"], "ROVER")
+        self.assertEqual(merged[0]["text"], "방금 보여 봐")
+        self.assertEqual(merged[0]["stt_ensemble_word_rover"]["replaced"], 1)
+        self.assertEqual([w["stt_word_source"] for w in merged[0]["words"]], ["STT2", "STT1", "STT1"])
+
+    def test_word_level_rover_keeps_protected_number_from_primary(self):
+        merged = merge_stt_outputs(
+            [{
+                "start": 0.0,
+                "end": 1.2,
+                "text": "3번 카메라",
+                "avg_logprob": -0.95,
+                "words": [
+                    {"word": "3번", "start": 0.0, "end": 0.45, "confidence": 0.25},
+                    {"word": "카메라", "start": 0.5, "end": 1.1, "confidence": 0.8},
+                ],
+            }],
+            [{
+                "start": 0.0,
+                "end": 1.2,
+                "text": "이번 카메라",
+                "avg_logprob": -0.1,
+                "words": [
+                    {"word": "이번", "start": 0.0, "end": 0.45, "confidence": 0.95},
+                    {"word": "카메라", "start": 0.5, "end": 1.1, "confidence": 0.86},
+                ],
+            }],
+        )
+
+        self.assertEqual(merged[0]["text"], "3번 카메라")
+        self.assertEqual(merged[0]["stt_ensemble_source"], "STT1")
+
     def test_secondary_overlap_never_trims_primary_segment(self):
         merged = merge_stt_outputs(
             [{"start": 0.0, "end": 4.0, "text": "STT1 기준 문장"}],

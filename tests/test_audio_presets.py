@@ -1,7 +1,11 @@
 # Version: 03.04.01
 # Phase: PHASE2
+import os
+import tempfile
 import unittest
+from unittest import mock
 
+import config
 from core.audio.audio_presets import (
     apply_audio_preset,
     load_audio_presets,
@@ -93,6 +97,108 @@ class AudioPresetTests(unittest.TestCase):
         self.assertIn("speechnorm", cleanup)
         self.assertIn("volume=4.8", cleanup)
         self.assertNotIn("demucs", cleanup.lower())
+
+    def test_experimental_enhancers_use_light_cleanup_chain(self):
+        processor = VideoProcessor()
+        settings = apply_audio_preset({}, "야외")
+
+        for audio_ai in ("resemble_enhance", "clearvoice"):
+            cleanup = processor._build_audio_cleanup_filter(audio_ai, settings)
+            self.assertIn("highpass=f=170", cleanup)
+            self.assertIn("lowpass=f=5200", cleanup)
+            self.assertIn("speechnorm", cleanup)
+            self.assertIn("loudnorm", cleanup)
+            self.assertNotIn("afftdn", cleanup)
+
+    def test_rnnoise_fallback_cleanup_label_uses_ffmpeg(self):
+        self.assertEqual(VideoProcessor._audio_cleanup_label("rnnoise", False), "FFMPEG")
+        self.assertEqual(VideoProcessor._audio_cleanup_label("rnnoise", True), "RNNoise")
+        self.assertEqual(VideoProcessor._audio_cleanup_label("resemble_enhance", False), "FFMPEG")
+        self.assertEqual(VideoProcessor._audio_cleanup_label("resemble_enhance", True), "Resemble Enhance")
+        self.assertEqual(VideoProcessor._audio_cleanup_label("clearvoice", True), "ClearVoice")
+        self.assertEqual(VideoProcessor._audio_cleanup_label("deepfilter", False), "DeepFilter")
+
+    def test_ten_vad_flags_merge_into_speech_segments(self):
+        processor = VideoProcessor()
+
+        segments = processor._vad_flags_to_segments(
+            [0, 1, 1, 0, 0, 1, 1, 0],
+            hop_sec=0.1,
+            min_speech_sec=0.1,
+            min_silence_sec=0.25,
+            speech_pad_sec=0.05,
+            source="ten_vad",
+            for_post_stt_align=True,
+        )
+
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0]["source"], "ten_vad")
+        self.assertTrue(segments[0]["post_stt_align"])
+        self.assertAlmostEqual(segments[0]["start"], 0.05)
+        self.assertAlmostEqual(segments[0]["end"], 0.75)
+
+    def test_resemble_enhance_cli_can_resolve_isolated_local_tool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli_dir = os.path.join(tmp, ".codex_work", "resemble_enhance", "bin")
+            os.makedirs(cli_dir)
+            cli_path = os.path.join(cli_dir, "resemble-enhance")
+            with open(cli_path, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\n")
+
+            with (
+                mock.patch.object(config, "BASE_DIR", tmp),
+                mock.patch("core.audio.media_processor.shutil.which", return_value=None),
+                mock.patch("core.audio.media_processor.sys.executable", ""),
+            ):
+                self.assertEqual(VideoProcessor()._resolve_python_cli("resemble-enhance"), cli_path)
+
+    def test_resemble_enhance_command_uses_env_binary_and_explicit_device(self):
+        processor = VideoProcessor()
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env_cli = os.path.join(tmp, "resemble-enhance")
+            with open(env_cli, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\n")
+            source = os.path.join(tmp, "source.wav")
+            target = os.path.join(tmp, "target.wav")
+            with open(source, "wb") as f:
+                f.write(b"RIFF")
+
+            with (
+                mock.patch.dict(os.environ, {"RESEMBLE_ENHANCE_BINARY": env_cli}, clear=False),
+                mock.patch.object(processor, "_run_media_command", side_effect=fake_run),
+                mock.patch.object(processor, "_copy_first_wav_from_dir", return_value=True),
+                mock.patch.object(processor, "_resemble_enhance_device", return_value="mps"),
+            ):
+                self.assertTrue(processor._apply_resemble_enhance(source, target))
+
+        self.assertEqual(calls[0][0][0], env_cli)
+        self.assertIn("--denoise_only", calls[0][0])
+        self.assertIn("--device", calls[0][0])
+        self.assertEqual(calls[0][0][-1], "mps")
+        self.assertEqual(calls[0][1]["label"], "Resemble Enhance 음성 향상")
+
+    def test_resemble_enhance_command_wraps_isolated_cli_with_project_runner(self):
+        processor = VideoProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = os.path.join(tmp, "resemble_enhance", "bin")
+            os.makedirs(bin_dir)
+            cli = os.path.join(bin_dir, "resemble-enhance")
+            python = os.path.join(bin_dir, "python")
+            for path in (cli, python):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("#!/bin/sh\n")
+            with mock.patch.object(config, "BASE_DIR", os.path.dirname(os.path.dirname(__file__))):
+                cmd = processor._resemble_enhance_command(cli, "/in", "/out", "mps")
+
+        self.assertEqual(cmd[0], python)
+        self.assertTrue(cmd[1].endswith("core/audio/resemble_enhance_runner.py"))
+        self.assertEqual(cmd[-1], "mps")
 
 
 if __name__ == "__main__":

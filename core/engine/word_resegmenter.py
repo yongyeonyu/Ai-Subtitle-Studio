@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from core.subtitle_quality.models import attach_asr_metadata
+from core.subtitle_quality.vad_alignment_checker import normalize_vad_segments
 
 
 _PUNCT_ENDINGS = tuple(",?!;:~…")
@@ -105,6 +106,8 @@ def _should_flush(
     max_cps: float,
     min_duration: float,
     gap_break_sec: float,
+    word_gap_break_sec: float,
+    vad_segments: list[dict[str, Any]] | None,
     rules: dict[str, Any] | None,
 ) -> bool:
     if not buf:
@@ -115,8 +118,6 @@ def _should_flush(
     start = _as_float(buf[0].get("start"))
     end = _as_float(buf[-1].get("end"), start)
     duration = max(0.05, end - start)
-    if duration < min_duration:
-        return False
 
     text = " ".join(_word_text(word) for word in buf)
     chars = _char_count(text)
@@ -125,6 +126,14 @@ def _should_flush(
     gap = _as_float(next_word.get("start"), end) - end
     cps = chars / duration if duration > 0 else chars
     natural = _is_punctuation_break(current_word) or _is_rule_break(current_word, following_word, rules)
+
+    vad_break = _is_vad_boundary_between_words(buf[-1], next_word, vad_segments)
+    word_gap_break = gap >= word_gap_break_sec
+    if (vad_break or word_gap_break) and duration >= 0.08:
+        return True
+
+    if duration < min_duration:
+        return False
 
     if gap >= gap_break_sec:
         return True
@@ -139,6 +148,46 @@ def _should_flush(
     return False
 
 
+def _word_center(word: dict[str, Any]) -> float:
+    start = _as_float(word.get("start"))
+    end = _as_float(word.get("end"), start)
+    return (start + max(start, end)) / 2.0
+
+
+def _vad_index_for_word(word: dict[str, Any], vad_segments: list[dict[str, Any]] | None) -> int | None:
+    if not vad_segments:
+        return None
+    center = _word_center(word)
+    start = _as_float(word.get("start"), center)
+    end = _as_float(word.get("end"), center)
+    best_idx = None
+    best_overlap = 0.0
+    for idx, vad in enumerate(vad_segments):
+        vad_start = _as_float(vad.get("start"))
+        vad_end = _as_float(vad.get("end"), vad_start)
+        overlap = max(0.0, min(end, vad_end) - max(start, vad_start))
+        if vad_start <= center <= vad_end:
+            return idx
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_idx = idx
+    return best_idx if best_overlap > 0.0 else None
+
+
+def _is_vad_boundary_between_words(
+    current_word: dict[str, Any],
+    next_word: dict[str, Any],
+    vad_segments: list[dict[str, Any]] | None,
+) -> bool:
+    if not vad_segments:
+        return False
+    left_idx = _vad_index_for_word(current_word, vad_segments)
+    right_idx = _vad_index_for_word(next_word, vad_segments)
+    if left_idx is None or right_idx is None:
+        return False
+    return left_idx != right_idx
+
+
 def resegment_by_word_timestamps(
     segments: list[dict[str, Any]],
     *,
@@ -147,6 +196,8 @@ def resegment_by_word_timestamps(
     max_cps: float,
     min_duration: float,
     gap_break_sec: float,
+    word_gap_break_sec: float | None = None,
+    vad_segments: list[dict[str, Any]] | None = None,
     rules: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Re-split subtitles using word timestamps after STT/LLM cleanup."""
@@ -158,6 +209,8 @@ def resegment_by_word_timestamps(
     max_cps = max(3.0, float(max_cps or 12.0))
     min_duration = max(0.0, float(min_duration or 0.0))
     gap_break_sec = max(0.05, float(gap_break_sec or 1.5))
+    word_gap_break_sec = max(0.08, float(word_gap_break_sec if word_gap_break_sec is not None else 0.65))
+    vad_segments = normalize_vad_segments(vad_segments or [])
 
     result: list[dict[str, Any]] = []
     for segment in sorted((dict(item) for item in segments), key=lambda item: _as_float(item.get("start"))):
@@ -178,6 +231,8 @@ def resegment_by_word_timestamps(
                 max_cps=max_cps,
                 min_duration=min_duration,
                 gap_break_sec=gap_break_sec,
+                word_gap_break_sec=word_gap_break_sec,
+                vad_segments=vad_segments,
                 rules=rules,
             ):
                 continue

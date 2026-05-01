@@ -1,9 +1,11 @@
 # Version: 03.01.23
 # Phase: PHASE2
 import unittest
+from unittest import mock
 
+from core.engine import subtitle_engine
 from core.engine.word_resegmenter import resegment_by_word_timestamps
-from core.subtitle_quality.timestamp_regrouper import regroup_by_word_timestamps
+from core.subtitle_quality.timestamp_regrouper import regroup_by_word_timestamps, snap_segments_to_word_vad_boundaries
 
 
 class WordResegmenterTests(unittest.TestCase):
@@ -150,6 +152,104 @@ class WordResegmenterTests(unittest.TestCase):
         )
 
         self.assertEqual([item["text"] for item in result], ["아", "맞아요"])
+
+    def test_timestamp_regrouper_prefers_word_gap_over_large_gap_setting(self):
+        result = regroup_by_word_timestamps(
+            [
+                {
+                    "start": 0.0,
+                    "end": 5.0,
+                    "text": "첫말 다음말",
+                    "words": [
+                        {"word": "첫말", "start": 0.2, "end": 0.6},
+                        {"word": "다음말", "start": 1.35, "end": 1.9},
+                    ],
+                }
+            ],
+            max_chars=30,
+            max_duration=8.0,
+            max_cps=20,
+            min_duration=0.1,
+            gap_break_sec=5.0,
+            word_gap_break_sec=0.65,
+        )
+
+        self.assertEqual([item["text"] for item in result], ["첫말", "다음말"])
+        self.assertAlmostEqual(result[0]["start"], 0.2)
+        self.assertAlmostEqual(result[0]["end"], 0.6)
+        self.assertAlmostEqual(result[1]["start"], 1.35)
+        self.assertAlmostEqual(result[1]["end"], 1.9)
+
+    def test_timestamp_regrouper_prefers_vad_boundary_over_gap_setting(self):
+        result = regroup_by_word_timestamps(
+            [
+                {
+                    "start": 0.0,
+                    "end": 2.5,
+                    "text": "하나 둘",
+                    "words": [
+                        {"word": "하나", "start": 0.2, "end": 0.55},
+                        {"word": "둘", "start": 0.72, "end": 1.05},
+                    ],
+                }
+            ],
+            max_chars=30,
+            max_duration=8.0,
+            max_cps=20,
+            min_duration=0.5,
+            gap_break_sec=5.0,
+            word_gap_break_sec=0.65,
+            vad_segments=[
+                {"start": 0.18, "end": 0.58},
+                {"start": 0.70, "end": 1.08},
+            ],
+        )
+
+        self.assertEqual([item["text"] for item in result], ["하나", "둘"])
+        self.assertLess(result[0]["end"], result[1]["start"])
+
+    def test_snap_segments_to_word_vad_boundaries_uses_word_edges_then_nearby_vad(self):
+        result = snap_segments_to_word_vad_boundaries(
+            [
+                {
+                    "start": 0.0,
+                    "end": 5.0,
+                    "text": "정확한 시간",
+                    "words": [
+                        {"word": "정확한", "start": 1.0, "end": 1.4},
+                        {"word": "시간", "start": 1.5, "end": 2.0},
+                    ],
+                }
+            ],
+            vad_segments=[{"start": 0.96, "end": 2.04}],
+            edge_pad_sec=0.04,
+            max_edge_shift_sec=0.12,
+        )
+
+        self.assertAlmostEqual(result[0]["start"], 0.92)
+        self.assertAlmostEqual(result[0]["end"], 2.08)
+        self.assertEqual(result[0]["asr_metadata"]["word_vad_timing"]["source"], "whisper_words+vad")
+
+    def test_llm_split_preserves_matched_word_timestamps(self):
+        segment = {
+            "start": 0.0,
+            "end": 3.0,
+            "text": "첫말 둘 셋",
+            "words": [
+                {"word": "첫말", "start": 0.1, "end": 0.6},
+                {"word": "둘", "start": 1.0, "end": 1.3},
+                {"word": "셋", "start": 1.4, "end": 1.8},
+            ],
+        }
+
+        with mock.patch.object(subtitle_engine, "ask_exaone_to_split", return_value=["첫말", "둘 셋"]):
+            result = subtitle_engine._process_one((segment, {}, 3, {}, "exaone3.5:7.8b", "", "", False))
+
+        self.assertEqual([item["text"] for item in result], ["첫말", "둘 셋"])
+        self.assertEqual([word["word"] for word in result[0]["words"]], ["첫말"])
+        self.assertEqual([word["word"] for word in result[1]["words"]], ["둘", "셋"])
+        self.assertAlmostEqual(result[1]["start"], 1.0)
+        self.assertAlmostEqual(result[1]["end"], 1.8)
 
 
 if __name__ == "__main__":

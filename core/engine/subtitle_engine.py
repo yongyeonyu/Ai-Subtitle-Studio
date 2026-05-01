@@ -557,6 +557,7 @@ def _process_one(args: tuple) -> list[dict]:
             t_start = None
             t_end   = None
             matched = 0
+            chunk_words = []
             while w_idx < len(words) and matched < len(chunk_clean):
                 w = words[w_idx]
                 wc = re.sub(r"\s+|\.", "", w["word"])
@@ -564,6 +565,7 @@ def _process_one(args: tuple) -> list[dict]:
                     t_start = w["start"]
                 t_end   = w["end"]
                 matched += len(wc)
+                chunk_words.append(w)
                 w_idx   += 1
             if t_start is None:
                 t_start = cur_start
@@ -581,7 +583,7 @@ def _process_one(args: tuple) -> list[dict]:
                     "end":     t_end,
                     "text":    final_text,
                     "speaker": spk,
-                    "words":   [],
+                    "words":   chunk_words,
                 })
             cur_start = t_end
             
@@ -674,7 +676,7 @@ def adjust_timing(segments: list[dict]) -> list[dict]:
             cur["end"] = cur["start"] + 0.3
     return adj
 
-def optimize_segments(segments: list[dict]) -> list[dict]:
+def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = None) -> list[dict]:
     if not segments:
         return segments
 
@@ -802,9 +804,12 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
         max_cps=_MAX_CPS,
         min_duration=_MIN_DURATION,
         gap_break_sec=_GAP_BREAK_SEC,
+        word_gap_break_sec=float(loaded_settings.get("word_timing_gap_break_sec", 0.65) or 0.65),
+        vad_segments=vad_segments or [],
         rules=rules,
     )
-    optimized = _absorb_tiny(optimized, threshold)
+    if not any(seg.get("words") for seg in optimized):
+        optimized = _absorb_tiny(optimized, threshold)
     optimized = adjust_timing(optimized)
     optimized = _global_dedup(optimized)
 

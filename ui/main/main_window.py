@@ -8,6 +8,7 @@ Mixin 상속: HomeUI · EditorLifecycle · Workspace · Queue · Project · Clou
 import os
 import datetime
 import time
+import threading
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -350,6 +351,41 @@ class MainWindow(
         editor = editor or getattr(self, "_editor_widget", None)
         if editor is None:
             return
+        def _clear_canvas(canvas, *, keep_duration=True):
+            if canvas is None:
+                return
+            try:
+                if keep_duration:
+                    canvas.total_duration = float(getattr(canvas, "total_duration", 0.0) or 0.0)
+                else:
+                    canvas.total_duration = 0.0
+                canvas.segments = []
+                canvas.gap_segments = []
+                canvas.vad_segments = []
+                canvas.active_seg_start = None
+                canvas.playhead_sec = 0.0
+                canvas._last_playhead_px = None
+                canvas.re_recog_zone = None
+                canvas.re_recog_progress = None
+                canvas._hover_line = None
+                canvas._hover_handle = None
+                canvas._drag_seg = None
+                canvas._drag_edge = None
+                canvas._drag_adj_l = None
+                canvas._drag_adj_r = None
+                canvas._snap_lines = []
+                canvas._edit_active = False
+                canvas._edit_line = -1
+                canvas._edit_text = ""
+                canvas._edit_orig = ""
+                canvas._speech_mask = None
+                if hasattr(canvas, "_invalidate_marker_caches"):
+                    canvas._invalidate_marker_caches()
+                if hasattr(canvas, "_invalidate_static_cache"):
+                    canvas._invalidate_static_cache()
+                canvas.update()
+            except Exception:
+                pass
         try:
             for timer_name in ("_queue_timer", "_roughcut_draft_timer"):
                 timer = getattr(editor, timer_name, None)
@@ -362,8 +398,14 @@ class MainWindow(
                 blocked = editor.text_edit.blockSignals(True)
                 try:
                     editor.text_edit.clear()
+                    try:
+                        editor.text_edit.document().clearUndoRedoStacks()
+                    except Exception:
+                        pass
                 finally:
                     editor.text_edit.blockSignals(blocked)
+                if hasattr(editor.text_edit, "update_margins"):
+                    editor.text_edit.update_margins()
         except Exception:
             pass
         try:
@@ -374,6 +416,12 @@ class MainWindow(
             editor._completion_handled = False
             editor._roughcut_draft_pending = False
             editor._is_dirty = False
+            for attr in ("_partial_insert_pos", "_pending_roughcut_draft", "_last_draft_segments_signature"):
+                if hasattr(editor, attr):
+                    try:
+                        delattr(editor, attr)
+                    except Exception:
+                        pass
         except Exception:
             pass
         try:
@@ -382,18 +430,20 @@ class MainWindow(
                 total = float(getattr(getattr(timeline, "canvas", None), "total_duration", 0.0) or 0.0)
                 timeline.update_segments([], 0.0, total)
                 timeline.set_playhead(0.0)
-                if hasattr(timeline, "canvas"):
-                    timeline.canvas.segments = []
-                    timeline.canvas.update()
-                if hasattr(timeline, "global_canvas"):
-                    timeline.global_canvas.segments = []
-                    timeline.global_canvas.update()
+                if hasattr(timeline, "set_vad_segments"):
+                    timeline.set_vad_segments([])
+                _clear_canvas(getattr(timeline, "canvas", None), keep_duration=True)
+                _clear_canvas(getattr(timeline, "global_canvas", None), keep_duration=True)
         except Exception:
             pass
         try:
             video_player = getattr(editor, "video_player", None)
             if video_player is not None:
                 video_player.set_context_segments([])
+                video_player.segments = []
+                video_player._pending_segments = []
+                video_player._subtitle_starts = []
+                video_player._last_segments_signature = ""
                 video_player.seek(0.0)
         except Exception:
             pass
@@ -554,6 +604,7 @@ class MainWindow(
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self):
+        self._stop_active_ai_for_home()
         self._stop_post_completion_idle_timer()
         self._reset_transient_multiclip_state()
         self._dock_global_menu_to_workspace()
@@ -567,6 +618,79 @@ class MainWindow(
                 self._trash_bin.pop(0)
             self._editor_widget = None
         self._build_home_content()
+
+    def _stop_active_ai_for_home(self):
+        if getattr(self, "_home_stop_in_progress", False):
+            return
+        self._home_stop_in_progress = True
+        try:
+            stopped_any = False
+            should_stop_llm_models = False
+            editor = getattr(self, "_editor_widget", None)
+            if editor is not None:
+                try:
+                    timer = getattr(editor, "_roughcut_draft_timer", None)
+                    if timer is not None:
+                        timer.stop()
+                    editor._roughcut_draft_pending = False
+                    editor._roughcut_draft_generation = int(getattr(editor, "_roughcut_draft_generation", 0) or 0) + 1
+                    if hasattr(editor, "_set_roughcut_draft_status"):
+                        editor._set_roughcut_draft_status("idle")
+                    draft_thread = getattr(editor, "_roughcut_draft_thread", None)
+                    if draft_thread is not None and getattr(draft_thread, "is_alive", lambda: False)():
+                        should_stop_llm_models = True
+                except Exception:
+                    pass
+                try:
+                    state_manager = getattr(editor, "sm", None)
+                    is_processing = bool(getattr(editor, "_is_ai_processing", False))
+                    if state_manager is not None:
+                        is_processing = is_processing or bool(getattr(state_manager, "is_locked", False))
+                    if is_processing and hasattr(editor, "_stop_pipeline"):
+                        editor._stop_pipeline()
+                        stopped_any = True
+                        should_stop_llm_models = True
+                except RuntimeError:
+                    pass
+                except Exception as exc:
+                    get_logger().log(f"⚠️ 홈 이동 중 에디터 작업 중단 실패: {exc}")
+
+            for backend_name in ("backend", "backend_fast"):
+                backend = getattr(self, backend_name, None)
+                if backend is None:
+                    continue
+                try:
+                    if bool(getattr(backend, "_active", False)) and hasattr(backend, "stop"):
+                        backend.stop()
+                        stopped_any = True
+                        should_stop_llm_models = True
+                    else:
+                        processor = getattr(backend, "video_processor", None)
+                        if processor is not None and hasattr(processor, "stop_transcribe"):
+                            processor.stop_transcribe()
+                except Exception as exc:
+                    get_logger().log(f"⚠️ 홈 이동 중 {backend_name} 중단 실패: {exc}")
+
+            def _stop_llm_models():
+                try:
+                    settings = load_settings()
+                    models = [
+                        settings.get("selected_model", ""),
+                        settings.get("roughcut_llm_model", ""),
+                        settings.get("selected_roughcut_llm_model", ""),
+                    ]
+                    from core.llm.ollama_provider import stop_local_llm_models
+
+                    stop_local_llm_models(models, logger=get_logger())
+                except Exception as exc:
+                    get_logger().log(f"⚠️ 홈 이동 중 LLM 모델 종료 실패: {exc}")
+
+            if should_stop_llm_models:
+                threading.Thread(target=_stop_llm_models, daemon=True, name="home-stop-llm-models").start()
+            if stopped_any:
+                get_logger().log("🛑 홈 이동: 진행 중인 STT/LLM 작업 중단을 요청했습니다.")
+        finally:
+            self._home_stop_in_progress = False
 
     def _reset_transient_multiclip_state(self):
         for attr, value in (

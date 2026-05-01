@@ -1,4 +1,4 @@
-# Version: 03.04.01
+# Version: 03.05.04
 # Phase: PHASE2
 """STT ensemble helpers for merging two Whisper transcripts."""
 from __future__ import annotations
@@ -86,6 +86,218 @@ def candidate_score(segment: dict) -> float:
     )
 
 
+def _word_text(word: dict) -> str:
+    return normalize_text(word.get("word") or word.get("text") or "")
+
+
+def _word_confidence(word: dict, fallback: float = 0.0) -> float:
+    for key in ("confidence", "probability", "score"):
+        if word.get(key) is not None:
+            return max(0.0, min(1.0, _as_float(word.get(key))))
+    return fallback
+
+
+def _segment_quality_flags(segment: dict) -> set[str]:
+    flags: set[str] = set()
+    avg_logprob = segment.get("avg_logprob")
+    if avg_logprob is not None and _as_float(avg_logprob) <= -0.85:
+        flags.add("low_avg_logprob")
+    no_speech = segment.get("no_speech_prob")
+    if no_speech is not None and _as_float(no_speech) >= 0.35:
+        flags.add("high_no_speech_prob")
+    compression = segment.get("compression_ratio")
+    if compression is not None and _as_float(compression) >= 2.35:
+        flags.add("high_compression_ratio")
+    text = compact_text(segment.get("text", ""))
+    duration = max(0.05, _as_float(segment.get("end")) - _as_float(segment.get("start")))
+    if text and len(text) / duration > 20.0:
+        flags.add("too_fast_text")
+    if candidate_score(segment) < 0.45:
+        flags.add("low_candidate_score")
+    return flags
+
+
+def _segment_is_low_confidence(segment: dict) -> bool:
+    flags = _segment_quality_flags(segment)
+    return bool(flags.intersection({"low_avg_logprob", "high_no_speech_prob", "high_compression_ratio", "too_fast_text"})) or len(flags) >= 2
+
+
+def _protected_word(text: str) -> bool:
+    compact = compact_text(text)
+    if not compact:
+        return True
+    if any(ch.isdigit() for ch in compact):
+        return True
+    if len(compact) <= 1:
+        return True
+    if re.search(r"[A-Z]{2,}", str(text or "")):
+        return True
+    return False
+
+
+def _words_from_segment(segment: dict) -> list[dict]:
+    words: list[dict] = []
+    raw_words = segment.get("words") or []
+    for raw in raw_words:
+        if not isinstance(raw, dict):
+            continue
+        text = _word_text(raw)
+        if not text:
+            continue
+        start = _as_float(raw.get("start"), _as_float(segment.get("start")))
+        end = _as_float(raw.get("end"), start)
+        if end < start:
+            end = start
+        item = dict(raw)
+        item["word"] = text
+        item["start"] = round(start, 3)
+        item["end"] = round(end, 3)
+        words.append(item)
+    if words:
+        return words
+
+    text_words = [w for w in re.split(r"\s+", normalize_text(segment.get("text", ""))) if w]
+    if not text_words:
+        return []
+    start = _as_float(segment.get("start"))
+    end = max(start + 0.05, _as_float(segment.get("end"), start + 0.05))
+    step = (end - start) / max(1, len(text_words))
+    for idx, text in enumerate(text_words):
+        words.append({
+            "word": text,
+            "start": round(start + step * idx, 3),
+            "end": round(start + step * (idx + 1), 3),
+            "synthetic": True,
+        })
+    return words
+
+
+def _word_time_score(left: dict, right: dict) -> float:
+    start = max(_as_float(left.get("start")), _as_float(right.get("start")))
+    end = min(_as_float(left.get("end")), _as_float(right.get("end")))
+    overlap = max(0.0, end - start)
+    span = max(
+        _as_float(left.get("end")) - _as_float(left.get("start")),
+        _as_float(right.get("end")) - _as_float(right.get("start")),
+        0.05,
+    )
+    overlap_score = overlap / span
+    l_mid = (_as_float(left.get("start")) + _as_float(left.get("end"))) / 2.0
+    r_mid = (_as_float(right.get("start")) + _as_float(right.get("end"))) / 2.0
+    midpoint_score = max(0.0, 1.0 - abs(l_mid - r_mid) / 0.75)
+    return max(overlap_score, midpoint_score * 0.75)
+
+
+def _word_score(word: dict, parent: dict, *, source: str, parent_low_confidence: bool) -> float:
+    score = _word_confidence(word, 0.45 if word.get("synthetic") else 0.55)
+    parent_score = max(-1.0, min(2.5, candidate_score(parent))) / 3.5 + 0.3
+    score += parent_score * 0.25
+    if source == "STT1" and not parent_low_confidence:
+        score += 0.08
+    if source == "STT2" and parent_low_confidence:
+        score += 0.10
+    if word.get("synthetic"):
+        score -= 0.12
+    return score
+
+
+def _find_matching_word(primary_word: dict, secondary_words: list[dict], used: set[int]) -> tuple[int | None, float]:
+    best_idx = None
+    best_score = 0.0
+    for idx, secondary_word in enumerate(secondary_words):
+        if idx in used:
+            continue
+        temporal = _word_time_score(primary_word, secondary_word)
+        textual = text_similarity(_word_text(primary_word), _word_text(secondary_word))
+        score = temporal * 0.58 + textual * 0.42
+        if score > best_score:
+            best_idx = idx
+            best_score = score
+    if best_score < 0.36:
+        return None, best_score
+    return best_idx, best_score
+
+
+def _join_words(words: list[dict]) -> str:
+    return normalize_text(" ".join(_word_text(w) for w in words if _word_text(w)))
+
+
+def _has_protected_primary_mismatch(primary: dict, secondary: dict) -> bool:
+    primary_words = _words_from_segment(primary)
+    secondary_words = _words_from_segment(secondary)
+    if not primary_words or not secondary_words:
+        return False
+    used: set[int] = set()
+    for primary_word in primary_words:
+        p_text = _word_text(primary_word)
+        if not _protected_word(p_text):
+            continue
+        match_idx, match_score = _find_matching_word(primary_word, secondary_words, used)
+        if match_idx is None:
+            continue
+        used.add(match_idx)
+        s_text = _word_text(secondary_words[match_idx])
+        if match_score >= 0.36 and text_similarity(p_text, s_text) < 0.72:
+            return True
+    return False
+
+
+def _word_level_rover(primary: dict, secondary: dict) -> tuple[str, list[dict], dict]:
+    primary_words = _words_from_segment(primary)
+    secondary_words = _words_from_segment(secondary)
+    if not primary_words or not secondary_words:
+        return normalize_text(primary.get("text", "")), primary_words, {
+            "enabled": False,
+            "reason": "word_timestamps_missing",
+            "replaced": 0,
+            "aligned": 0,
+        }
+
+    primary_low = _segment_is_low_confidence(primary)
+    secondary_low = _segment_is_low_confidence(secondary)
+    used_secondary: set[int] = set()
+    selected: list[dict] = []
+    replacements = 0
+    aligned = 0
+    for primary_word in primary_words:
+        match_idx, match_score = _find_matching_word(primary_word, secondary_words, used_secondary)
+        chosen = dict(primary_word)
+        chosen["stt_word_source"] = "STT1"
+        if match_idx is not None:
+            aligned += 1
+            secondary_word = secondary_words[match_idx]
+            used_secondary.add(match_idx)
+            p_text = _word_text(primary_word)
+            s_text = _word_text(secondary_word)
+            p_score = _word_score(primary_word, primary, source="STT1", parent_low_confidence=primary_low)
+            s_score = _word_score(secondary_word, secondary, source="STT2", parent_low_confidence=primary_low)
+            protected = _protected_word(p_text)
+            similar = text_similarity(p_text, s_text)
+            replace_allowed = (
+                not secondary_low
+                and s_text
+                and similar < 0.98
+                and match_score >= 0.42
+                and (s_score >= p_score + (0.06 if primary_low else 0.18))
+                and (not protected or similar >= 0.72)
+            )
+            if replace_allowed:
+                chosen = dict(secondary_word)
+                chosen["stt_word_source"] = "STT2"
+                chosen["stt_word_replaced_from"] = p_text
+                replacements += 1
+        selected.append(chosen)
+
+    text = _join_words(selected) or normalize_text(primary.get("text", ""))
+    return text, selected, {
+        "enabled": True,
+        "replaced": replacements,
+        "aligned": aligned,
+        "primary_words": len(primary_words),
+        "secondary_words": len(secondary_words),
+    }
+
+
 def _candidate_payload(source: str, segment: dict) -> dict:
     return {
         "source": source,
@@ -121,13 +333,54 @@ def _merge_group(candidates: list[tuple[str, dict]]) -> dict:
 
 def _merge_primary_group(primary_item: tuple[str, dict], candidates: list[tuple[str, dict]]) -> dict:
     _source, primary = primary_item
-    merged = dict(primary)
-    merged["start"] = round(_as_float(primary.get("start")), 3)
-    merged["end"] = round(_as_float(primary.get("end")), 3)
-    merged["text"] = normalize_text(primary.get("text", ""))
-    merged["stt_ensemble_source"] = "STT1"
-    merged["stt_ensemble_primary_locked"] = True
+    selected_source = "STT1"
+    selected_segment = primary
+    rover_meta: dict[str, Any] = {"enabled": False, "replaced": 0, "aligned": 0}
+    if len(candidates) >= 2:
+        secondary = candidates[1][1]
+        primary_score = candidate_score(primary)
+        secondary_score = candidate_score(secondary)
+        similarity = text_similarity(primary.get("text", ""), secondary.get("text", ""))
+        primary_low = _segment_is_low_confidence(primary)
+        secondary_low = _segment_is_low_confidence(secondary)
+        primary_words = _words_from_segment(primary)
+        secondary_words = _words_from_segment(secondary)
+        has_real_word_timestamps = bool(primary.get("words")) and bool(secondary.get("words"))
+        protected_mismatch = _has_protected_primary_mismatch(primary, secondary)
+        if has_real_word_timestamps and primary_words and secondary_words and similarity >= 0.20:
+            rover_text, rover_words, rover_meta = _word_level_rover(primary, secondary)
+            if rover_meta.get("enabled") and rover_meta.get("replaced", 0) > 0:
+                selected_source = "ROVER"
+                selected_segment = dict(primary)
+                selected_segment["text"] = rover_text
+                selected_segment["words"] = rover_words
+        if (
+            selected_source == "STT1"
+            and primary_low
+            and not secondary_low
+            and not protected_mismatch
+            and secondary_score >= primary_score + 0.22
+            and similarity >= 0.12
+            and (not primary_words or not secondary_words or similarity >= 0.42)
+        ):
+            selected_source = "STT2"
+            selected_segment = secondary
+
+    merged = dict(selected_segment)
+    merged["start"] = round(_as_float(selected_segment.get("start")), 3)
+    merged["end"] = round(_as_float(selected_segment.get("end")), 3)
+    merged["text"] = normalize_text(selected_segment.get("text", ""))
+    merged["stt_ensemble_source"] = selected_source
+    merged["stt_ensemble_primary_region"] = True
+    merged["stt_ensemble_primary_locked"] = selected_source == "STT1"
+    if selected_source != "STT1":
+        merged["stt_ensemble_needs_llm_review"] = True
     merged["stt_candidates"] = [_candidate_payload(src, seg) for src, seg in candidates]
+    merged["stt_ensemble_quality_flags"] = {
+        src: sorted(_segment_quality_flags(seg)) for src, seg in candidates
+    }
+    if rover_meta.get("enabled"):
+        merged["stt_ensemble_word_rover"] = rover_meta
     merged["stt_ensemble_similarity"] = (
         text_similarity(candidates[0][1].get("text", ""), candidates[1][1].get("text", ""))
         if len(candidates) == 2 else 1.0
@@ -208,7 +461,11 @@ def _resolve_overlaps_preserving_primary(segments: list[dict], primary_items: li
     resolved: list[dict] = []
     primary_refs = primary_items
     for segment in sorted(segments, key=lambda seg: (_as_float(seg.get("start")), _as_float(seg.get("end")))):
-        is_primary = bool(segment.get("stt_ensemble_primary_locked")) or segment.get("stt_ensemble_source") == "STT1"
+        is_primary = (
+            bool(segment.get("stt_ensemble_primary_region"))
+            or bool(segment.get("stt_ensemble_primary_locked"))
+            or segment.get("stt_ensemble_source") == "STT1"
+        )
         item = dict(segment)
         if not is_primary:
             clipped = _clip_secondary_to_primary_gaps(item, primary_refs)
@@ -217,7 +474,11 @@ def _resolve_overlaps_preserving_primary(segments: list[dict], primary_items: li
             item = clipped
         if resolved and _as_float(resolved[-1].get("end")) > _as_float(item.get("start")):
             prev = resolved[-1]
-            prev_is_primary = bool(prev.get("stt_ensemble_primary_locked")) or prev.get("stt_ensemble_source") == "STT1"
+            prev_is_primary = (
+                bool(prev.get("stt_ensemble_primary_region"))
+                or bool(prev.get("stt_ensemble_primary_locked"))
+                or prev.get("stt_ensemble_source") == "STT1"
+            )
             if prev_is_primary and is_primary:
                 item["start"] = max(_as_float(item.get("start")), _as_float(prev.get("end")) + 0.01)
             elif prev_is_primary:
@@ -240,11 +501,12 @@ def _resolve_overlaps_preserving_primary(segments: list[dict], primary_items: li
 
 
 def merge_stt_outputs(primary: list[dict], secondary: list[dict]) -> list[dict]:
-    """Merge STT outputs with STT1 as the authoritative transcript.
+    """Merge STT outputs with STT1 as the default, not absolute, transcript.
 
-    STT2 is kept as a candidate for overlapping STT1 segments, but it does not
-    replace STT1 text/timing. Only STT2-only regions that STT1 appears to have
-    missed are inserted as additional subtitles.
+    Overlapping STT1/STT2 segments are scored by quality metadata. When both
+    sides provide word timestamps, a conservative ROVER-like pass can replace
+    low-confidence STT1 words with stronger STT2 words. STT2-only regions that
+    STT1 appears to have missed are still inserted as additional subtitles.
     """
     primary_items = [("STT1", dict(seg)) for seg in primary if normalize_text(seg.get("text", ""))]
     secondary_items = [("STT2", dict(seg)) for seg in secondary if normalize_text(seg.get("text", ""))]

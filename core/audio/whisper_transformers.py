@@ -7,9 +7,12 @@ Hugging Face Transformers Whisper backend for experimental Korean fine-tuned mod
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import threading
+
+from core.llm.secure_keys import get_api_key
 
 
 TRANSFORMERS_KOREAN_WHISPER_MODELS = {
@@ -25,6 +28,7 @@ def is_transformers_whisper_model(model: str) -> bool:
 
 def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple: str = "(0.0,)"):
     """Run a Transformers ASR worker and stream one JSON line per chunk."""
+    env = _huggingface_env()
     proc = subprocess.Popen(
         [sys.executable, "-u", "-c", _build_worker_script()],
         stdin=subprocess.PIPE,
@@ -33,6 +37,7 @@ def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple:
         encoding="utf-8",
         errors="replace",
         bufsize=1,
+        env=env,
     )
     task = {
         "chunk_paths": list(chunk_paths or []),
@@ -48,6 +53,15 @@ def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple:
         return None
     _attach_stderr_logger(proc)
     return proc
+
+
+def _huggingface_env() -> dict:
+    env = dict(os.environ)
+    token = env.get("HF_TOKEN") or env.get("HUGGINGFACE_HUB_TOKEN") or get_api_key("huggingface")
+    if token:
+        env.setdefault("HF_TOKEN", token)
+        env.setdefault("HUGGINGFACE_HUB_TOKEN", token)
+    return env
 
 
 def _attach_stderr_logger(proc):
@@ -110,7 +124,7 @@ try:
     asr = pipeline(
         "automatic-speech-recognition",
         model=model_id,
-        torch_dtype=torch_dtype,
+        dtype=torch_dtype,
         device=device,
     )
     sys.stderr.write("  [HF] model load complete\n")

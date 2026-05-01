@@ -232,10 +232,36 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             def __init__(self):
                 self.total_duration = 4.0
                 self.segments = [{"start": 0.0, "end": 1.0, "text": "old"}]
+                self.gap_segments = [{"start": 1.0, "end": 2.0, "is_gap": True}]
+                self.vad_segments = [{"start": 0.0, "end": 1.2}]
+                self.active_seg_start = 1.0
+                self.playhead_sec = 1.0
+                self.re_recog_zone = (0.0, 1.0)
+                self.re_recog_progress = 0.5
+                self._hover_line = 1
+                self._hover_handle = (self.segments[0], "right")
+                self._drag_seg = self.segments[0]
+                self._drag_edge = "right"
+                self._drag_adj_l = {"start": 0.0}
+                self._drag_adj_r = {"end": 2.0}
+                self._snap_lines = [1.0]
+                self._edit_active = True
+                self._edit_line = 1
+                self._edit_text = "old"
+                self._edit_orig = "old"
+                self._speech_mask = object()
+                self.invalidated_markers = False
+                self.invalidated_static = False
                 self.updated = False
 
             def update(self):
                 self.updated = True
+
+            def _invalidate_marker_caches(self):
+                self.invalidated_markers = True
+
+            def _invalidate_static_cache(self):
+                self.invalidated_static = True
 
         class _Timeline:
             def __init__(self):
@@ -243,6 +269,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.global_canvas = _Canvas()
                 self.updated_segments = None
                 self.playhead = None
+                self.vad = None
 
             def update_segments(self, segments, start, total):
                 self.updated_segments = (segments, start, total)
@@ -250,10 +277,19 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             def set_playhead(self, sec):
                 self.playhead = sec
 
+            def set_vad_segments(self, segments):
+                self.vad = segments
+                self.canvas.vad_segments = segments
+                self.global_canvas.vad_segments = segments
+
         class _VideoPlayer:
             def __init__(self):
                 self.context_segments = None
                 self.seek_sec = None
+                self.segments = [{"start": 0.0, "end": 1.0, "text": "old"}]
+                self._pending_segments = [{"start": 0.0, "end": 1.0, "text": "old"}]
+                self._subtitle_starts = [0.0]
+                self._last_segments_signature = "old"
 
             def set_context_segments(self, segments):
                 self.context_segments = segments
@@ -345,7 +381,31 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.assertEqual(editor._cached_segs, [])
                 self.assertEqual(editor.timeline.updated_segments[0], [])
                 self.assertEqual(editor.timeline.playhead, 0.0)
+                self.assertEqual(editor.timeline.vad, [])
+                self.assertEqual(editor.timeline.canvas.segments, [])
+                self.assertEqual(editor.timeline.canvas.gap_segments, [])
+                self.assertEqual(editor.timeline.canvas.vad_segments, [])
+                self.assertIsNone(editor.timeline.canvas.active_seg_start)
+                self.assertEqual(editor.timeline.canvas.playhead_sec, 0.0)
+                self.assertIsNone(editor.timeline.canvas.re_recog_zone)
+                self.assertIsNone(editor.timeline.canvas.re_recog_progress)
+                self.assertIsNone(editor.timeline.canvas._hover_line)
+                self.assertIsNone(editor.timeline.canvas._hover_handle)
+                self.assertIsNone(editor.timeline.canvas._drag_seg)
+                self.assertIsNone(editor.timeline.canvas._drag_edge)
+                self.assertEqual(editor.timeline.canvas._snap_lines, [])
+                self.assertFalse(editor.timeline.canvas._edit_active)
+                self.assertIsNone(editor.timeline.canvas._speech_mask)
+                self.assertTrue(editor.timeline.canvas.invalidated_markers)
+                self.assertTrue(editor.timeline.canvas.invalidated_static)
+                self.assertEqual(editor.timeline.global_canvas.segments, [])
+                self.assertEqual(editor.timeline.global_canvas.gap_segments, [])
+                self.assertEqual(editor.timeline.global_canvas.vad_segments, [])
                 self.assertEqual(editor.video_player.context_segments, [])
+                self.assertEqual(editor.video_player.segments, [])
+                self.assertEqual(editor.video_player._pending_segments, [])
+                self.assertEqual(editor.video_player._subtitle_starts, [])
+                self.assertEqual(editor.video_player._last_segments_signature, "")
                 self.assertEqual(editor.video_player.seek_sec, 0.0)
                 self.assertEqual(remembered[-1], [])
                 self.assertIsNone(window._editor_roughcut_result)

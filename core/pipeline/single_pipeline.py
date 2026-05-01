@@ -387,12 +387,15 @@ class SinglePipelineMixin:
                                         }
                                     )
                             else:
-                                opt = optimize_segments(chunk_segs)
+                                opt = optimize_segments(chunk_segs, vad_segments=vad_segs)
                         else:
-                            opt = optimize_segments(chunk_segs)
+                            opt = optimize_segments(chunk_segs, vad_segments=vad_segs)
                     except Exception as e:
                         get_logger().log(f"  ❌ 최적화 오류: {e}")
                         opt = chunk_segs
+
+                    if not self._active or not self._ui_is_alive():
+                        return
 
                     for seg in opt:
                         if seg["start"] < 0.0:
@@ -453,6 +456,9 @@ class SinglePipelineMixin:
                         opt = grouped_opt
 
                     auto_collected_segs.extend(opt)
+
+                    if not self._active or not self._ui_is_alive():
+                        return
 
                     try:
                         self._ui_emit("_sig_append_segments", opt)

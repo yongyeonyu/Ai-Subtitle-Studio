@@ -1096,9 +1096,11 @@ class EditorWidget(
         audio_ai = {
             "deepfilter": "DeepFilter",
             "rnnoise": "RNNoise",
+            "resemble_enhance": "Resemble",
+            "clearvoice": "ClearVoice",
             "none": "미사용",
         }.get(self.settings.get("selected_audio_ai", "deepfilter"), "DeepFilter")
-        vad_model = {"silero": "Silero", "webrtc": "WebRTC", "pyannote": "Pyannote", "none": "미사용"}.get(self.settings.get("selected_vad", "none"), "미사용")
+        vad_model = {"silero": "Silero", "ten_vad": "TEN VAD", "webrtc": "WebRTC", "pyannote": "Pyannote", "none": "미사용"}.get(self.settings.get("selected_vad", "none"), "미사용")
         if not self.settings.get("vad_pre_split_enabled", False):
             vad_model = "검수용" if vad_model != "미사용" else "미사용"
         llm_model = self.selected_model

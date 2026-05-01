@@ -104,6 +104,19 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
             get_logger().log(f"⚠️ stop_transcribe 실패: {e}")
 
         try:
+            settings = load_settings()
+            llm_models = [
+                settings.get("selected_model", ""),
+                settings.get("roughcut_llm_model", ""),
+                settings.get("selected_roughcut_llm_model", ""),
+            ]
+            from core.llm.ollama_provider import stop_local_llm_models_async
+
+            stop_local_llm_models_async(llm_models, logger=get_logger())
+        except Exception as e:
+            get_logger().log(f"⚠️ LLM 모델 종료 요청 실패: {e}")
+
+        try:
             with self._prefetch_lock:
                 self._prefetch_generation += 1
                 self._prefetch_cache.clear()

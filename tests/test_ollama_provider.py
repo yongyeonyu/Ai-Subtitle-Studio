@@ -29,6 +29,32 @@ class OllamaWarmupTest(unittest.TestCase):
         self.assertIn("워밍업 건너뜀", joined)
         self.assertNotIn("워밍업 실패", joined)
 
+    def test_stop_local_llm_models_unloads_candidates_and_running_models(self):
+        logger = _Logger()
+
+        def fake_post(path, payload, timeout=2.0):
+            return {}
+
+        with mock.patch("core.llm.ollama_provider._get_ollama_running_models", return_value={"gemma4:e4b"}), \
+             mock.patch("core.llm.ollama_provider._post_ollama_json", side_effect=fake_post) as post_mock, \
+             mock.patch("core.llm.ollama_provider.shutil.which", return_value=None):
+            stopped = ollama_provider.stop_local_llm_models(["exaone3.5:7.8b", "사용 안함"], logger=logger)
+
+        self.assertEqual(stopped, ["exaone3.5:7.8b", "gemma4:e4b"])
+        payloads = [call.args[1] for call in post_mock.call_args_list]
+        self.assertIn({"model": "exaone3.5:7.8b", "prompt": "", "keep_alive": 0}, payloads)
+        self.assertIn({"model": "gemma4:e4b", "prompt": "", "keep_alive": 0}, payloads)
+        self.assertIn("Ollama 모델 종료/언로드 완료", "\n".join(logger.lines))
+
+    def test_stop_local_llm_models_skips_cloud_model_names(self):
+        with mock.patch("core.llm.ollama_provider._get_ollama_running_models", return_value=set()), \
+             mock.patch("core.llm.ollama_provider._post_ollama_json") as post_mock, \
+             mock.patch("core.llm.ollama_provider.shutil.which", return_value=None):
+            stopped = ollama_provider.stop_local_llm_models(["Gemini 2.5 Pro (API)", "OpenAI GPT-5.2"])
+
+        self.assertEqual(stopped, [])
+        post_mock.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

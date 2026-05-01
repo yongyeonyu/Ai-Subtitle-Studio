@@ -241,8 +241,11 @@ class HomeUIMixin:
                 status_item = table.item(row, 0)
                 file_item = table.item(row, 1)
                 eta_item = table.item(row, 4)
+                status = self._plain_queue_status(str(status_item.text() if status_item else "-"))
                 items.append({
-                    "status": self._plain_queue_status(str(status_item.text() if status_item else "-")),
+                    "order": str(row + 1),
+                    "status": status,
+                    "done": "완료" in status,
                     "file": str(file_item.text() if file_item else "-"),
                     "eta": str(eta_item.text() if eta_item else "-"),
                 })
@@ -550,12 +553,15 @@ class HomeUIMixin:
         return {
             "deepfilter": "DeepFilter",
             "rnnoise": "RNNoise",
+            "resemble_enhance": "Resemble",
+            "clearvoice": "ClearVoice",
             "none": "미사용",
         }.get(settings.get("selected_audio_ai", "none"), "미사용")
 
     def _vad_model_name(self, settings: dict) -> tuple[str, str]:
         vad_model = {
             "silero": "Silero",
+            "ten_vad": "TEN VAD",
             "webrtc": "WebRTC",
             "pyannote": "Pyannote",
             "none": "미사용",
@@ -632,7 +638,7 @@ class HomeUIMixin:
         blob = self._pipeline_status_blob()
         if any(token in blob for token in ("[전처리]", "오디오 추출", "ffmpeg 오디오", "전처리")):
             return {"preprocess"}
-        if any(token in blob for token in ("[음성]", "음량", "필터", "deepfilter", "rnnoise", "노이즈", "보컬")):
+        if any(token in blob for token in ("[음성]", "음량", "필터", "deepfilter", "rnnoise", "resemble", "clearvoice", "노이즈", "보컬")):
             return {"audio"}
         if "[stt+자막 llm]" in blob:
             keys = {"stt1", "subtitle_llm"}
@@ -910,6 +916,8 @@ class HomeUIMixin:
             choices = [
                 ("DeepFilter", "deepfilter"),
                 ("RNNoise", "rnnoise"),
+                ("Resemble Enhance", "resemble_enhance"),
+                ("ClearVoice", "clearvoice"),
                 ("미사용", "none"),
             ]
             current = settings.get("selected_audio_ai", "none")
@@ -922,7 +930,7 @@ class HomeUIMixin:
                 )
 
         elif key == "vad":
-            choices = [("Silero", "silero"), ("미사용", "none")]
+            choices = [("Silero", "silero"), ("TEN VAD", "ten_vad"), ("미사용", "none")]
             current = settings.get("selected_vad", "silero")
             for label, value in choices:
                 self._add_action(

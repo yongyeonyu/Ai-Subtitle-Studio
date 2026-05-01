@@ -5,6 +5,7 @@
 import os
 
 from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
@@ -46,13 +47,13 @@ class SidebarQueuePanel(QWidget):
         layout.addWidget(self._header_lbl)
 
         self._table = QTableWidget(0, 3)
-        self._table.setHorizontalHeaderLabels(["상태", "파일명", "예상시간"])
+        self._table.setHorizontalHeaderLabels(["순서", "파일명", "예상시간"])
         self._table.verticalHeader().setVisible(False)
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self._table.setColumnWidth(0, 58)
-        self._table.setColumnWidth(2, 62)
+        self._table.setColumnWidth(0, 36)
+        self._table.setColumnWidth(2, 68)
         self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setShowGrid(False)
@@ -106,9 +107,12 @@ class SidebarQueuePanel(QWidget):
         self._table.setRowCount(0)
         for row, item in enumerate(self._items):
             self._table.insertRow(row)
-            for col, key in enumerate(("status", "file", "eta")):
+            done = bool(item.get("done")) or "완료" in str(item.get("status", "") or "")
+            row_color = "#34C759" if done else "#FFCC44"
+            for col, key in enumerate(("order", "file", "eta")):
                 cell = QTableWidgetItem(str(item.get(key, "") or "-"))
-                cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter if col != 1 else Qt.AlignmentFlag.AlignVCenter)
+                cell.setForeground(QColor(row_color))
+                cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter if col == 0 else Qt.AlignmentFlag.AlignVCenter)
                 self._table.setItem(row, col, cell)
             self._table.setRowHeight(row, 36)
         self._table.setUpdatesEnabled(True)

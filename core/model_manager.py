@@ -14,6 +14,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import config
+from core.llm.secure_keys import get_api_key
 from logger import get_logger
 
 REGISTRY_PATH = Path(config.DATASET_DIR) / "model_registry.json"
@@ -153,7 +154,8 @@ class ModelManager:
                     try:
                         from huggingface_hub import snapshot_download
                         full_path.mkdir(parents=True, exist_ok=True)
-                        snapshot_download(hf_repo, local_dir=str(full_path))
+                        token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or get_api_key("huggingface")
+                        snapshot_download(hf_repo, local_dir=str(full_path), token=token or None)
                         get_logger().log(f"  ✅ 모델 다운로드 완료: {full_path}")
                     except Exception as e:
                         get_logger().log(f"  ❌ 모델 다운로드 실패: {e}")

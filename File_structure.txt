@@ -1,16 +1,16 @@
 <!--
-Document-Version: 03.05.00
+Document-Version: 03.06.00
 Phase: PHASE2
 Last-Updated: 2026-05-02
 Updated-By: Codex with 대표님
-Scope: 파일/폴더 구조와 각 파일의 역할/현재 버전만 기록. 변경 이력/작업 요약/다음 우선순위는 RELEASE_v03.05.00.md, ACTION_ITEMS.md, AGENTS.md에 분리
+Scope: 파일/폴더 구조와 각 파일의 역할/현재 버전만 기록. 변경 이력/작업 요약/다음 우선순위는 RELEASE_v03.06.00.md, ACTION_ITEMS.md, AGENTS.md에 분리
 -->
 ================================================================================
 AI Subtitle Studio — 프로젝트 구조 및 버전 관리 문서
 생성일: 2026-04-20
 최종 수정: 2026-05-02
 Phase: PHASE2
-App Version: 03.05.00
+App Version: 03.06.00
 구조 문서 기준: File_structure.txt
 비고: STRUCTURE.txt는 삭제하고 본 문서로 단일화. 본 문서는 구조 색인만 유지
 ================================================================================
@@ -18,7 +18,7 @@ App Version: 03.05.00
 ai_subtitle_studio/
 ├── main.py                         ←		프로그램 실행 진입점 / Qt GPU surface + log/cache tuning v03.05.00
 ├── main.bat                        ←		Windows 실행 배치 파일
-├── config.py                       ←		전역 환경 변수 + OS 감지 + APP_VERSION/editor roughcut draft 기본 설정 v03.05.00
+├── config.py                       ←		전역 환경 변수 + OS 감지 + APP_VERSION/HF Token 연동 기본 설정 v03.06.00
 ├── logger.py                       ←		시스템 로그 기록 및 UI 연동             v02.03.00
 ├── README.md                       ←		GitHub 한글 프로젝트 소개 / 설치·실행 가이드
 ├── .gitignore                      ←		로컬 런타임/캐시/교정 memory 제외 규칙 v03.03.00
@@ -33,12 +33,13 @@ ai_subtitle_studio/
 ├── RELEASE_v03.00.00.md            ←		PHASE2 v03.x 누적 개발 노트
 ├── RELEASE_v03.03.00.md            ←		이전 PHASE2 릴리즈 노트 / v03.03.00
 ├── RELEASE_v03.04.00.md            ←		이전 PHASE2 릴리즈 노트 / v03.04.00
-├── RELEASE_v03.05.00.md            ←		최신 릴리즈 노트 / v03.05.00
+├── RELEASE_v03.05.00.md            ←		이전 PHASE2 릴리즈 노트 / v03.05.00
+├── RELEASE_v03.06.00.md            ←		최신 릴리즈 노트 / v03.06.00
 ├── File_structure.txt              ←		현재 구조 문서
 │
 ├── dataset/
-│   ├── custom_defaults.json        ←		기본 설정 preset / Whisper 전체 모델+roughcut major 기본 v03.05.00
-│   ├── model_registry.json         ←		OS별 AI 모델 레지스트리/Whisper 전체 모델 설치 메타데이터 v03.05.00
+│   ├── custom_defaults.json        ←		기본 설정 preset / Whisper 전체 모델+audio/VAD 후보 기본 v03.06.00
+│   ├── model_registry.json         ←		OS별 AI 모델 레지스트리/Whisper·audio/VAD 후보 설치 메타데이터 v03.06.00
 │   └── dataset_correction.json     ←		교정 데이터
 │
 ├── voice_data/                     ←		화자 학습 음성 저장 폴더
@@ -68,7 +69,7 @@ ai_subtitle_studio/
 │   ├── performance.py              ←		hardware profile/worker bound/Qt GPU+cache tuning helper v03.05.00
 │   ├── state_manager.py            ←		FSM 상태 머신 / 단계 상태 보존            v03.01.33
 │   ├── work_mode.py                ←		에디터/러프컷/숏폼 화면 모드 정규화       v03.01.15
-│   ├── model_manager.py            ←		ModelManager + 모델 설치/삭제/검증/OS 필터/LLM 스캔 v03.01.18
+│   ├── model_manager.py            ←		ModelManager + 모델 설치/삭제/검증/OS 필터/HF Token 다운로드 v03.06.00
 │   ├── platform_compat.py          ←		Windows-safe subprocess/ffmpeg 실행 helper v03.01.19
 │   ├── path_manager.py             ←		경로 관리                                v02.03.00
 │   ├── cloud_sync.py               ←		iCloud/NAS 드롭존 감시                   v02.03.00
@@ -81,35 +82,36 @@ ai_subtitle_studio/
 │   ├── utils.py                    ←		시간 변환 / 규칙 유틸                    v02.03.00
 │   │
 │   ├── llm/                        ←		LLM provider 계층                         🆕 v02.03.00
-│   │   ├── secure_keys.py          ←		macOS Keychain / keyring API Key 저장
+│   │   ├── secure_keys.py          ←		macOS Keychain / keyring API Key/HF Token 저장 v03.06.00
 │   │   ├── provider_registry.py    ←		Ollama/Gemini/OpenAI 모델 표시 메타
 │   │   ├── openai_provider.py      ←		OpenAI Responses API adapter
 │   │   ├── gemini_provider.py      ←		Gemini API adapter                         🆕 v02.03.03
-│   │   └── ollama_provider.py      ←		Ollama local adapter / warmup timeout 처리 v03.01.16
+│   │   └── ollama_provider.py      ←		Ollama local adapter / warmup timeout + 홈 이동 모델 언로드 v03.06.00
 │   │
 │   ├── engine/
-│   │   ├── subtitle_engine.py      ←		자막 최적화 / 설정값 안전 파싱 / word 재분할 v03.02.03
+│   │   ├── subtitle_engine.py      ←		자막 최적화 / LLM 분할 word timestamp 보존 v03.06.00
 │   │   ├── llm_correction_guard.py ←		LLM 보정 원문 무결성 검사                🆕 v03.00.21
-│   │   ├── word_resegmenter.py     ←		word timestamp 기반 자막 재분할           🆕 v03.00.20
+│   │   ├── word_resegmenter.py     ←		word/VAD boundary 우선 자막 재분할 v03.06.00
 │   │   └── srt_writer.py           ←		SRT 저장 / 화자 SRT / STT 미완료 제외      v02.07.00
 │   │
 │   ├── audio/
-│   │   ├── media_processor.py      ←		오디오 추출 + VAD + Whisper/Transformers backend routing v03.05.00
-│   │   ├── stt_ensemble.py         ←		STT1/STT2 Whisper 후보 병합/점수화        🆕 v03.05.00
+│   │   ├── media_processor.py      ←		오디오 추출 + ClearVoice/RNNoise/Resemble runner + TEN/Silero VAD + Whisper routing v03.06.00
+│   │   ├── resemble_enhance_runner.py←	Resemble Enhance torchaudio Path 호환 runner v03.06.00
+│   │   ├── stt_ensemble.py         ←		STT1/STT2 단어 단위 ROVER/저신뢰 교체/후보 점수화 v03.06.00
 │   │   ├── stt_quality_presets.py  ←		빠른/균형/정밀 자막 정확도 프리셋         v03.00.19
 │   │   ├── whisper_mlx.py          ←		macOS Whisper MLX persistent worker      v02.03.03
 │   │   ├── whisper_faster.py       ←		Windows faster-whisper client / 전체 모델명 변환 v03.05.00
 │   │   ├── whisper_worker.py       ←		Windows subprocess worker                v02.03.00
-│   │   ├── whisper_transformers.py ←		한국어 fine-tuned Transformers Whisper worker v03.05.00
+│   │   ├── whisper_transformers.py ←		한국어 fine-tuned Transformers Whisper worker + HF_TOKEN env v03.06.00
 │   │   ├── worker_threads.py       ←		백그라운드 worker                         v02.03.00
 │   │   ├── live_stt.py             ←		마이크 one-shot STT 유틸 / Transformers 모델 route v03.05.00
 │   │   ├── stt_vad.py              ←		STT 모드용 최고 민감도 VAD-only 탐지       🆕 v02.07.00
 │   │   └── diarize.py              ←		화자 분리 및 매핑/화자명 voice ref       v03.01.05
 │   │
 │   ├── pipeline/
-│   │   ├── backend_core.py         ←		단일/공통 파이프라인 진입 + 병렬 ETA probe v03.01.37
-│   │   ├── single_pipeline.py      ←		단일 파일 자막 생성/optimizer deleted MainWindow UI guard v03.02.18
-│   │   ├── multiclip_pipeline.py   ←		멀티클립 STT/LLM 병렬 파이프라인/reuse/clip 순서 append/병렬 probe v03.01.37
+│   │   ├── backend_core.py         ←		단일/공통 파이프라인 진입 + stop 시 STT/LLM 종료 요청 v03.06.00
+│   │   ├── single_pipeline.py      ←		단일 파일 자막 생성/word+VAD timing optimize 전달 v03.06.00
+│   │   ├── multiclip_pipeline.py   ←		멀티클립 STT/LLM 병렬 파이프라인/word+VAD timing 전달 v03.06.00
 │   │   └── pipeline_helpers.py     ←		백업/저장/렌더/prefetch 공통             v02.07.00
 │   │
 │   ├── roughcut/                   ←		PHASE2 로컬 러프컷 분석 엔진              v03.02.15
@@ -147,7 +149,7 @@ ai_subtitle_studio/
 │   │   ├── models.py               ←		품질 metrics/summary/candidate/result + ASR metadata 정규화
 │   │   ├── vad_alignment_checker.py←		VAD review 설정/overlap/segment annotation helper
 │   │   ├── hallucination_detector.py←		no_speech/VAD/반복/환각 phrase risk helper
-│   │   ├── timestamp_regrouper.py  ←		word timestamp regrouping 확장 wrapper
+│   │   ├── timestamp_regrouper.py  ←		word timestamp regrouping + VAD boundary snap v03.06.00
 │   │   ├── confidence_checker.py   ←		segment confidence score/label/flag 계산
 │   │   ├── correction_memory.py    ←		correction memory 저장/검색 API
 │   │   ├── wrong_answer_memory.py  ←		wrong-answer memory 저장/검색 API
@@ -165,12 +167,12 @@ ai_subtitle_studio/
 │       └── data_manager.py         ←		설정/교정/memory 데이터 I/O             v03.01.25
 │
 └── ui/
-    ├── home_ui.py                  ←		통합 대시보드/사이드바 터미널/저장 상태 원 v03.02.10
+    ├── home_ui.py                  ←		통합 대시보드/사이드바 터미널/저장 상태 원 v03.06.00
     ├── menu_bar.py                 ←		오른쪽 작업영역 하단 메뉴바 + 사이드바 토글/상태 rail v03.02.10
     ├── style.py                    ←		공용 다크 스타일 + SVG icon fallback     v03.01.08
     ├── gpu_rendering.py            ←		선택적 OpenGL widget/base/paint flag helper v03.05.00
     ├── qml/project_info_overlay.qml←		사이드바 프로젝트 정보 Qt Quick overlay v03.05.00
-    ├── qml/sidebar_queue_panel.qml←		사이드바 큐 리스트 Qt Quick/Scene Graph 패널 v03.05.00
+    ├── qml/sidebar_queue_panel.qml←		사이드바 큐 리스트 Qt Quick/Scene Graph 패널 v03.06.00
     ├── qml/timeline_playhead_overlay.qml←	타임라인 플레이헤드 Qt Quick/Scene Graph 오버레이 v03.05.00
     ├── queue_widget.py             ←		큐 테이블 + 하단 패널 전환/상태 rail 동기화 v03.01.33
     ├── cloud_ui.py                 ←		iCloud/NAS 자동처리 영상·음성 상태 카운트 v03.02.05
@@ -186,17 +188,17 @@ ai_subtitle_studio/
     ├── queue/
     │   ├── __init__.py             ←		큐 패널 위젯 패키지                      v03.01.04
     │   ├── queue_panel_widget.py   ←		큐 상태 backing 테이블/헤더 패널          v03.05.00
-    │   └── sidebar_queue_panel.py  ←		사이드바 큐 리스트 Qt Quick host/fallback v03.05.00
+    │   └── sidebar_queue_panel.py  ←		사이드바 큐 리스트 Qt Quick host/fallback v03.06.00
     │
     ├── main/
-    │   ├── main_window.py          ←		사이드바+오른쪽 작업영역 shell / idle event filter lazy attach v03.05.00
+    │   ├── main_window.py          ←		사이드바+오른쪽 작업영역 shell / 홈 이동 시 STT·LLM 중단 v03.06.00
     │   ├── bottom_work_panel.py    ←		오른쪽 작업영역 하단 러프컷/큐 backing 패널 v03.05.00
     │   ├── workspace_stack.py      ←		중앙 workspace stack shell               v03.01.04
     │   ├── main_signals.py         ←		시그널/슬롯 핸들러 + 모델/LLM 시작 확인   v03.01.18
     │   └── main_file_ops.py        ←		파일/폴더/캐시/종료 백업 처리            v03.01.00
     │
     ├── editor/
-    │   ├── editor_widget.py        ←		에디터 UI / post-generation roughcut draft signal/timer v03.05.00
+    │   ├── editor_widget.py        ←		에디터 UI / 재시작 캔버스/세그먼트 초기화 + roughcut draft signal v03.06.00
     │   ├── editor_lifecycle.py     ←		에디터 열기/저장/닫기 + 전역 event filter 정리 v03.05.00
     │   ├── editor_pipeline.py      ←		자막 생성 완료 후 러프컷 초안 1회 예약 v03.05.00
     │   ├── editor_actions.py       ←		저장/출력 전 저장 확인/is_dirty/roughcut order SRT hook v03.02.15
@@ -241,7 +243,7 @@ ai_subtitle_studio/
     ├── project/                    ←		프로젝트/멀티클립 패널                  v03.01.37
     │   ├── multiclip_panel.py      ←		멀티클립 정렬 카드 + cached info/Windows-safe thumb v03.01.37
     │   └── workspace_restore.py    ←		workspace 복원 / missing zoom 화면 맞춤  v03.01.35
-    ├── settings/                   ←		AI 탭 정리/Whisper 전체 모델 목록/러프컷 옵션/화자/갭 v03.05.00
+    ├── settings/                   ←		AI 탭 정리/Whisper 전체 모델 목록/HF Token/러프컷 옵션/화자/갭 v03.06.00
     └── dialogs/                    ←		폴더 선택 / 내보내기 / 공용 메시지       v03.01.01
         └── export_dialog.py        ←		자막 동영상 출력 / 저장+preview / 버튼 정렬 v03.01.34
 
@@ -255,16 +257,16 @@ ai_subtitle_studio/
 │   ├── test_editor_roughcut_draft.py←		자막 생성 후 러프컷 초안/state/order/A-Z marker unittest v03.05.00
 │   ├── test_roughcut_thumbnail_cache.py←		roughcut thumbnail cache unittest    v03.01.31
 │   ├── test_roughcut_v2_output_compat.py←		roughcut v2 EDL/guide/SRT/render output unittest v03.01.32
-│   ├── test_cp03_cp04_status_ui.py ←		저장 상태/상단 상태 rail UI unittest     v03.01.33
+│   ├── test_cp03_cp04_status_ui.py ←		저장 상태/상단 상태 rail/재시작 초기화 unittest v03.05.06
 │   ├── test_export_dialog_controls.py←		출력 설정창 저장/preview/버튼 unittest v03.01.34
 │   ├── test_cp08_cp10_home_timeline.py←		자동 홈 복귀/자동 토글/기본 zoom unittest v03.01.35
 │   ├── test_cp11_multiclip_offset.py←		멀티클립 기존 SRT offset/저장 매핑 unittest v03.01.36
 │   ├── test_performance_media_cache.py←		media probe cache/worker bound unittest v03.01.37
 │   ├── test_stt_quality_presets.py  ←		자막 정확도 프리셋 unittest              v03.00.19
 │   ├── test_media_processor_overlap.py←		Whisper overlap/dedupe/quality metadata unittest v03.01.22
-│   ├── test_word_resegmenter.py     ←		word timestamp 재분할/regrouping unittest v03.01.23
+│   ├── test_word_resegmenter.py     ←		word/VAD 우선 자막 시간 확정 unittest v03.06.00
 │   ├── test_auto_status_labels.py  ←		iCloud/NAS 자동처리 대기/완료 문구 unittest v03.02.05
-│   ├── test_ai_settings_runtime_apply.py←	AI 설정 저장 즉시 에디터/사이드바 모델 반영 unittest v03.05.00
+│   ├── test_ai_settings_runtime_apply.py←	AI 설정 저장 즉시 에디터/사이드바 모델/HF Token 반영 unittest v03.06.00
 │   ├── test_timeline_playhead_fit.py←		자막 선택 playhead sync/긴 타임라인 fit unittest v03.02.06
 │   ├── test_timeline_segment_colors.py←	음성/무음 세그먼트 색상 구분 unittest v03.02.07
 │   ├── test_timeline_layout_constants.py←	타임라인 높이 유지/하단 여백 제거 unittest v03.02.09
@@ -281,5 +283,6 @@ ai_subtitle_studio/
 │   ├── test_project_context.py      ←		프로젝트 editor/roughcut 상태 adapter    v03.00.26
 │   ├── test_help_dialog.py          ←		도움말 콘텐츠/다이얼로그 unittest        v03.00.27
 │   ├── test_subtitle_quality_models.py←		자막 품질 모델/VAD/risk unittest      v03.01.22
-│   ├── test_model_manager.py        ←		모델 레지스트리 OS 필터/한국어 Whisper 모델 unittest v03.05.00
+│   ├── test_model_manager.py        ←		모델 레지스트리 OS 필터/한국어 Whisper 모델 unittest v03.06.00
+│   ├── test_huggingface_token.py    ←		HF_TOKEN 보안 저장/Transformers worker env unittest v03.06.00
 │   └── test_windows_platform_compat.py←		Windows subprocess/Whisper 모델 변환 unittest v03.05.00

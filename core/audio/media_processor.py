@@ -8,6 +8,7 @@ media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 
 3. Whisper는 기본적으로 고정 오버랩 청크를 인식하고, VAD는 검수/선택 선분할 신호로만 사용
 """
 import sys
+import importlib.util
 import os, subprocess, json, re, config, shutil, time, wave, threading, math
 from concurrent.futures import ThreadPoolExecutor
 from core.audio.audio_presets import apply_audio_preset
@@ -22,6 +23,7 @@ from core.subtitle_quality.vad_alignment_checker import (
     review_vad_config,
     review_vad_enabled,
 )
+from core.llm.secure_keys import get_api_key
 from logger import get_logger
 
 _CHUNK_DURATION = 30
@@ -84,8 +86,11 @@ class VideoProcessor:
         except Exception:
             pass
 
-    def _run_media_command(self, cmd: list[str], *, label: str, timeout: float | None = None) -> bool:
+    def _run_media_command(self, cmd: list[str], *, label: str, timeout: float | None = None, env: dict | None = None) -> bool:
         try:
+            subprocess_kwargs = hidden_subprocess_kwargs()
+            if env is not None:
+                subprocess_kwargs["env"] = env
             result = subprocess.run(
                 [str(x) for x in cmd],
                 capture_output=True,
@@ -93,7 +98,7 @@ class VideoProcessor:
                 encoding="utf-8",
                 errors="replace",
                 timeout=timeout,
-                **hidden_subprocess_kwargs(),
+                **subprocess_kwargs,
             )
         except FileNotFoundError as e:
             get_logger().log(f"  ❌ {label} 실행 파일을 찾을 수 없습니다: {e}")
@@ -104,9 +109,60 @@ class VideoProcessor:
 
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "").strip()
-            get_logger().log(f"  ❌ {label} 실패: {err[:300]}")
+            lines = [line.strip() for line in err.splitlines() if line.strip()]
+            summary = "\n".join(lines[-10:]) if lines else err
+            get_logger().log(f"  ❌ {label} 실패: {summary[:1200]}")
             return False
         return True
+
+    def _huggingface_env(self) -> dict:
+        env = dict(os.environ)
+        token = env.get("HF_TOKEN") or env.get("HUGGINGFACE_HUB_TOKEN") or get_api_key("huggingface")
+        if token:
+            env.setdefault("HF_TOKEN", token)
+            env.setdefault("HUGGINGFACE_HUB_TOKEN", token)
+        return env
+
+    def _resolve_python_cli(self, name: str, env_var: str | None = None) -> str:
+        exe_name = f"{name}.exe" if getattr(config, "IS_WINDOWS", False) and not name.endswith(".exe") else name
+        isolated_tool_path = ""
+        if name == "resemble-enhance":
+            scripts_dir = "Scripts" if getattr(config, "IS_WINDOWS", False) else "bin"
+            isolated_tool_path = os.path.join(config.BASE_DIR, ".codex_work", "resemble_enhance", scripts_dir, exe_name)
+        candidates = [
+            os.environ.get(env_var, "") if env_var else "",
+            shutil.which(name),
+            os.path.join(os.path.dirname(sys.executable), exe_name) if sys.executable else "",
+            os.path.join(config.BASE_DIR, "bin", exe_name),
+            os.path.join(config.BASE_DIR, "tools", exe_name),
+            isolated_tool_path,
+        ]
+        for candidate in candidates:
+            if candidate and os.path.exists(candidate):
+                return candidate
+        return exe_name
+
+    @staticmethod
+    def _resemble_enhance_device() -> str:
+        try:
+            import torch
+
+            if getattr(getattr(torch, "backends", None), "mps", None) and torch.backends.mps.is_available():
+                return "mps"
+            if torch.cuda.is_available():
+                return "cuda"
+        except Exception:
+            pass
+        return "cpu"
+
+    def _resemble_enhance_command(self, cli: str, in_dir: str, out_dir: str, device: str) -> list[str]:
+        runner = os.path.join(config.BASE_DIR, "core", "audio", "resemble_enhance_runner.py")
+        cli_dir = os.path.dirname(os.path.abspath(cli or ""))
+        python_name = "python.exe" if getattr(config, "IS_WINDOWS", False) else "python"
+        isolated_python = os.path.join(cli_dir, python_name)
+        if os.path.exists(runner) and os.path.exists(isolated_python):
+            return [isolated_python, runner, in_dir, out_dir, "--denoise_only", "--device", device]
+        return [cli, in_dir, out_dir, "--denoise_only", "--device", device]
 
     def _apply_rnnoise(self, source_wav: str, target_wav: str) -> bool:
         ffmpeg = ffmpeg_binary()
@@ -145,6 +201,58 @@ class VideoProcessor:
                         os.remove(path)
                 except Exception:
                     pass
+
+    def _copy_first_wav_from_dir(self, source_dir: str, target_wav: str) -> bool:
+        for root, _dirs, files in os.walk(source_dir):
+            for name in files:
+                if name.lower().endswith(".wav"):
+                    shutil.copy2(os.path.join(root, name), target_wav)
+                    return os.path.exists(target_wav)
+        return False
+
+    def _apply_resemble_enhance(self, source_wav: str, target_wav: str) -> bool:
+        cli = self._resolve_python_cli("resemble-enhance", env_var="RESEMBLE_ENHANCE_BINARY")
+        device = self._resemble_enhance_device()
+        work_dir = f"{target_wav}.resemble_tmp"
+        in_dir = os.path.join(work_dir, "input")
+        out_dir = os.path.join(work_dir, "output")
+        try:
+            os.makedirs(in_dir, exist_ok=True)
+            os.makedirs(out_dir, exist_ok=True)
+            shutil.copy2(source_wav, os.path.join(in_dir, "input.wav"))
+            if not self._run_media_command(
+                self._resemble_enhance_command(cli, in_dir, out_dir, device),
+                label="Resemble Enhance 음성 향상",
+                timeout=900,
+                env=self._huggingface_env(),
+            ):
+                get_logger().log("  ⚠️ Resemble Enhance 실행 실패 또는 미설치: FFMPEG 정제로 계속 진행합니다")
+                return False
+            return self._copy_first_wav_from_dir(out_dir, target_wav)
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    def _apply_clearvoice(self, source_wav: str, target_wav: str) -> bool:
+        if importlib.util.find_spec("clearvoice") is None:
+            get_logger().log("  ⚠️ ClearVoice 패키지가 설치되어 있지 않습니다: python3.11 -m pip install clearvoice")
+            return False
+        script = (
+            "import sys\n"
+            "from clearvoice import ClearVoice\n"
+            "source, target = sys.argv[1], sys.argv[2]\n"
+            "engine = ClearVoice(task='speech_enhancement', model_names=['MossFormer2_SE_48K'])\n"
+            "audio = engine(input_path=source, online_write=False)\n"
+            "engine.write(audio, output_path=target)\n"
+        )
+        if not self._run_media_command(
+            [sys.executable, "-c", script, source_wav, target_wav],
+            label="ClearVoice 음성 향상",
+            timeout=900,
+            env=self._huggingface_env(),
+        ):
+            get_logger().log("  ⚠️ ClearVoice 실행 실패 또는 미설치: FFMPEG 정제로 계속 진행합니다")
+            return False
+        return os.path.exists(target_wav)
 
     @staticmethod
     def _float_setting(settings: dict, key: str, default: float, min_value: float | None = None, max_value: float | None = None) -> float:
@@ -225,10 +333,33 @@ class VideoProcessor:
                 "loudnorm=I=-14:LRA=11:tp=-1.0"
             )
 
+        if audio_ai in {"resemble_enhance", "clearvoice"}:
+            hp = int(self._float_setting(settings, "df_hp", 100, 0, 500))
+            lp = int(self._float_setting(settings, "df_lp", 8000, 1000, 8000))
+            comp_th = self._float_setting(settings, "df_comp_th", -28, -60, 0)
+            return (
+                f"highpass=f={hp},lowpass=f={lp},"
+                f"acompressor=threshold={self._fmt_filter_num(comp_th)}dB:ratio=2.5:attack=6:release=70,"
+                "speechnorm=e=8:r=0.0001:l=1,"
+                "loudnorm=I=-14:LRA=11:tp=-1.0"
+            )
+
         if audio_ai == "none":
             return "anull"
 
         return "anull"
+
+    @staticmethod
+    def _audio_cleanup_label(audio_ai: str, filter_applied: bool = False) -> str:
+        if audio_ai in {"rnnoise", "resemble_enhance", "clearvoice"} and not filter_applied:
+            return "FFMPEG"
+        return {
+            "deepfilter": "DeepFilter",
+            "rnnoise": "RNNoise",
+            "resemble_enhance": "Resemble Enhance",
+            "clearvoice": "ClearVoice",
+            "none": "미사용",
+        }.get(audio_ai, str(audio_ai or "미사용"))
 
     def _vad_cache_config(self, settings: dict) -> dict:
         effective_s = apply_review_vad_settings(settings)
@@ -298,18 +429,30 @@ class VideoProcessor:
                 return chunk_dir, []
                 
             ai_wav = raw_wav
+            audio_filter_applied = False
             if audio_ai == "rnnoise":
                 self._notify_stage("⏳ [음성] RNNoise 빠른 노이즈 제거 중")
                 get_logger().log("  └ [음성] RNNoise 빠른 노이즈 제거 중...")
                 rnnoise_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_rnnoise.wav")
                 if self._apply_rnnoise(raw_wav, rnnoise_wav) and os.path.exists(rnnoise_wav):
                     ai_wav = rnnoise_wav
+                    audio_filter_applied = True
+            elif audio_ai == "resemble_enhance":
+                self._notify_stage("⏳ [음성] Resemble Enhance 음성 향상 중")
+                get_logger().log("  └ [음성] Resemble Enhance 음성 향상 중...")
+                resemble_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_resemble.wav")
+                if self._apply_resemble_enhance(raw_wav, resemble_wav) and os.path.exists(resemble_wav):
+                    ai_wav = resemble_wav
+                    audio_filter_applied = True
+            elif audio_ai == "clearvoice":
+                self._notify_stage("⏳ [음성] ClearVoice 음성 향상 중")
+                get_logger().log("  └ [음성] ClearVoice 음성 향상 중...")
+                clearvoice_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_clearvoice.wav")
+                if self._apply_clearvoice(raw_wav, clearvoice_wav) and os.path.exists(clearvoice_wav):
+                    ai_wav = clearvoice_wav
+                    audio_filter_applied = True
 
-            audio_label = {
-                "deepfilter": "DeepFilter",
-                "rnnoise": "RNNoise",
-                "none": "미사용",
-            }.get(audio_ai, str(audio_ai or "미사용"))
+            audio_label = self._audio_cleanup_label(audio_ai, audio_filter_applied)
             if audio_ai == "none":
                 self._notify_stage("⏳ [음성] 미사용: FFMPEG 16k 포맷 변환 중")
                 get_logger().log("  └ [음성] 미사용: FFMPEG 16k 포맷 변환 중...")
@@ -569,6 +712,139 @@ class VideoProcessor:
             return False
         return True
 
+    def _vad_flags_to_segments(
+        self,
+        flags: list[int],
+        *,
+        hop_sec: float,
+        min_speech_sec: float,
+        min_silence_sec: float,
+        speech_pad_sec: float,
+        source: str,
+        for_post_stt_align: bool = False,
+    ) -> list[dict]:
+        raw: list[tuple[float, float]] = []
+        start_idx = None
+        for idx, flag in enumerate(flags):
+            if flag and start_idx is None:
+                start_idx = idx
+            elif not flag and start_idx is not None:
+                raw.append((start_idx * hop_sec, idx * hop_sec))
+                start_idx = None
+        if start_idx is not None:
+            raw.append((start_idx * hop_sec, len(flags) * hop_sec))
+
+        min_speech = max(0.0, float(min_speech_sec or 0.0))
+        min_silence = max(0.0, float(min_silence_sec or 0.0))
+        pad = max(0.0, float(speech_pad_sec or 0.0))
+        merged: list[list[float]] = []
+        for start, end in raw:
+            if end - start < min_speech:
+                continue
+            start = max(0.0, start - pad)
+            end = end + pad
+            if merged and start - merged[-1][1] <= min_silence:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+
+        return [
+            {
+                "start": round(start, 3),
+                "end": round(max(start, end), 3),
+                "source": source,
+                "post_stt_align": bool(for_post_stt_align),
+                "vad_word_filter": not bool(for_post_stt_align),
+                "speech_pad_sec": round(pad, 3),
+                "min_silence_sec": round(min_silence, 3),
+            }
+            for start, end in merged
+            if end > start
+        ]
+
+    def _detect_ten_vad_timestamps(
+        self,
+        wav_path: str,
+        vad_model: str,
+        s: dict,
+        *,
+        for_post_stt_align: bool = False,
+    ) -> list[dict]:
+        try:
+            import numpy as np
+            from ten_vad import TenVad
+
+            effective_s = apply_review_vad_settings(s)
+            hop_size = int(effective_s.get("ten_vad_hop_size", 256) or 256)
+            threshold = float(effective_s.get("ten_vad_threshold", effective_s.get("vad_threshold", 0.5)) or 0.5)
+            min_speech = float(effective_s.get("vad_min_speech", 0.25) or 0.25)
+            min_silence = float(effective_s.get("vad_min_silence", 2.0) or 2.0)
+            speech_pad = float(effective_s.get("vad_speech_pad", 0.2) or 0.2)
+
+            with wave.open(wav_path, "rb") as wav:
+                sample_rate = wav.getframerate()
+                channels = wav.getnchannels()
+                sample_width = wav.getsampwidth()
+                frames = wav.readframes(wav.getnframes())
+            if sample_rate != 16000 or channels != 1 or sample_width != 2:
+                get_logger().log(
+                    "  ⚠️ TEN VAD는 16kHz mono int16 WAV만 지원합니다. Silero VAD로 계속 진행합니다"
+                )
+                return []
+
+            audio = np.frombuffer(frames, dtype=np.int16)
+            frame_count = len(audio) // hop_size
+            if frame_count <= 0:
+                return []
+
+            detector = TenVad(hop_size, threshold)
+            flags: list[int] = []
+            for idx in range(frame_count):
+                frame = np.ascontiguousarray(audio[idx * hop_size:(idx + 1) * hop_size])
+                _probability, flag = detector.process(frame)
+                flags.append(int(flag))
+            return self._vad_flags_to_segments(
+                flags,
+                hop_sec=hop_size / 16000.0,
+                min_speech_sec=min_speech,
+                min_silence_sec=min_silence,
+                speech_pad_sec=speech_pad,
+                source=vad_model,
+                for_post_stt_align=for_post_stt_align,
+            )
+        except Exception as e:
+            get_logger().log(f"  ⚠️ TEN VAD 실행 실패 또는 미설치: {e}")
+            return []
+
+    @staticmethod
+    def _filter_vad_timestamps_for_range(
+        timestamps: list[dict],
+        target_start_sec=0.0,
+        target_end_sec=None,
+        is_single_segment=False,
+    ) -> list[dict]:
+        out = list(timestamps or [])
+        if target_start_sec > 0.0 or target_end_sec is not None:
+            filtered = []
+            end_limit = target_end_sec if target_end_sec is not None else 99999.0
+            for item in out:
+                t = dict(item)
+                if t["start"] >= end_limit:
+                    continue
+                if t["end"] <= target_start_sec:
+                    continue
+                if is_single_segment:
+                    t["start"] = max(target_start_sec, t["start"])
+                    t["end"] = min(end_limit, t["end"])
+                else:
+                    t["start"] = max(target_start_sec, t["start"])
+                if t["end"] > t["start"]:
+                    filtered.append(t)
+            out = filtered
+        if out and out[0]["start"] < 3.0:
+            out[0]["start"] = 0.0
+        return out
+
     def _detect_vad_timestamps(
         self,
         wav_path: str,
@@ -581,6 +857,23 @@ class VideoProcessor:
         for_post_stt_align: bool = False,
     ) -> list[dict]:
         try:
+            if vad_model == "ten_vad":
+                timestamps = self._detect_ten_vad_timestamps(
+                    wav_path,
+                    vad_model,
+                    s,
+                    for_post_stt_align=for_post_stt_align,
+                )
+                if timestamps:
+                    return self._filter_vad_timestamps_for_range(
+                        timestamps,
+                        target_start_sec,
+                        target_end_sec,
+                        is_single_segment,
+                    )
+                get_logger().log("  ⚠️ TEN VAD 결과가 없어 Silero VAD로 재시도합니다")
+                vad_model = "silero"
+
             import torch
 
             effective_s = apply_review_vad_settings(s)
@@ -695,7 +988,6 @@ class VideoProcessor:
     # [core/media_processor.py] _split_with_vad 함수 전체 교체
     def _split_with_vad(self, wav_path: str, chunk_dir: str, vad_model: str, s: dict, target_start_sec=0.0, target_end_sec=None, is_single_segment=False):
         try:
-            import torch
             effective_s = apply_review_vad_settings(s)
             vad_cfg = review_vad_config(s)
             if vad_cfg["review_vad_before_stt_enabled"] and vad_cfg["review_vad_strict_mode"]:
@@ -704,6 +996,43 @@ class VideoProcessor:
                     f"pad {vad_cfg['review_vad_speech_pad_sec']:.2f}s / "
                     f"min silence {vad_cfg['review_vad_min_silence_sec']:.2f}s"
                 )
+            if vad_model == "ten_vad":
+                timestamps = self._detect_ten_vad_timestamps(wav_path, vad_model, s)
+                if timestamps:
+                    timestamps = self._filter_vad_timestamps_for_range(
+                        timestamps,
+                        target_start_sec,
+                        target_end_sec,
+                        is_single_segment,
+                    )
+                    if not timestamps:
+                        get_logger().log("⚠️ 해당 구간에서 유효한 TEN VAD 음성 신호를 찾지 못했습니다.")
+                        return False, []
+                    with wave.open(wav_path, "r") as w:
+                        total_dur = w.getnframes() / float(w.getframerate())
+                    get_logger().log("📢 [TEN VAD 선분할] 음성 섹터 분리가 완료되었습니다.")
+                    for i, ts in enumerate(timestamps):
+                        sm, ss = divmod(ts["start"], 60)
+                        get_logger().log(f"  [{int(sm):02d}:{ss:05.2f}] 음성섹터{i+1} 확보 완료")
+                    grouped = self._build_grouped_chunks(
+                        timestamps,
+                        total_dur,
+                        max_chunk_dur=max(10.0, float(s.get("ff_chunk", _CHUNK_DURATION))),
+                        margin=1.0,
+                        gap_merge_limit=3.0,
+                        settings=s,
+                    )
+                    self._write_grouped_chunks_parallel(wav_path, chunk_dir, grouped)
+                    try:
+                        with open(os.path.join(chunk_dir, "vad_strict.json"), "w", encoding="utf-8") as f:
+                            json.dump(timestamps, f)
+                    except Exception:
+                        pass
+                    return True, timestamps
+                get_logger().log("  ⚠️ TEN VAD 결과가 없어 Silero VAD로 재시도합니다")
+                vad_model = "silero"
+
+            import torch
             if not self._vad_loaded:
                 self._vad_model, self._vad_utils = torch.hub.load(
                     repo_or_dir="snakers4/silero-vad",
@@ -996,7 +1325,7 @@ class VideoProcessor:
             get_logger().log(
                 "  ✅ [STT 앙상블] 후보 병합 완료 "
                 f"(STT1 {len(results['STT1'])}개 / STT2 {len(results['STT2'])}개 → {len(merged)}개, "
-                "STT1 원문 보호 · STT2는 빈 구간 보강)"
+                "단어 단위 ROVER · 저신뢰 STT1 구간 STT2 보강)"
             )
             yield merged, 1, 1
         finally:
@@ -1395,11 +1724,15 @@ class VideoProcessor:
                     exact_start = valid_words[0]["start"] + offset
                     exact_end = valid_words[-1]["end"] + offset
                     for w in valid_words:
-                        offset_words.append({
+                        word_item = {
                             "word": w.get("word", ""),
                             "start": w["start"] + offset,
                             "end": w["end"] + offset
-                        })
+                        }
+                        for conf_key in ("confidence", "probability", "score"):
+                            if conf_key in w:
+                                word_item[conf_key] = w.get(conf_key)
+                        offset_words.append(word_item)
 
             if words and not offset_words:
                 continue

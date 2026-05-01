@@ -12,7 +12,7 @@ import subprocess
 
 
 SERVICE = "AI Subtitle Studio"
-_PROVIDERS = {"google", "openai"}
+_PROVIDERS = {"google", "openai", "huggingface"}
 
 
 def _account(provider: str) -> str:

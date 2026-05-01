@@ -32,17 +32,17 @@ Item {
 
         Row {
             width: parent.width
-            spacing: 4
+            spacing: 3
             Text {
-                width: 50
-                text: "상태"
+                width: 34
+                text: "순서"
                 color: "#8E98A3"
                 font.pixelSize: 9
                 font.bold: true
                 elide: Text.ElideRight
             }
             Text {
-                width: Math.max(40, parent.width - 112)
+                width: Math.max(40, parent.width - 107)
                 text: "파일명"
                 color: "#8E98A3"
                 font.pixelSize: 9
@@ -50,12 +50,12 @@ Item {
                 elide: Text.ElideRight
             }
             Text {
-                width: 58
+                width: 64
                 text: "예상시간"
                 color: "#8E98A3"
                 font.pixelSize: 9
                 font.bold: true
-                horizontalAlignment: Text.AlignRight
+                horizontalAlignment: Text.AlignLeft
                 elide: Text.ElideRight
             }
         }
@@ -87,25 +87,26 @@ Item {
                 Row {
                     anchors.fill: parent
                     anchors.leftMargin: 5
-                    anchors.rightMargin: 5
-                    spacing: 4
+                    anchors.rightMargin: 3
+                    spacing: 3
 
                     Text {
-                        width: 50
+                        width: 34
                         height: parent.height
-                        text: modelData.status || "-"
-                        color: (modelData.status || "").indexOf("완료") >= 0 ? "#34C759" : "#DCE3EA"
-                        font.pixelSize: 8
+                        text: modelData.order || (index + 1)
+                        color: modelData.done || (modelData.status || "").indexOf("완료") >= 0 ? "#34C759" : "#FFCC44"
+                        font.pixelSize: 9
                         font.bold: true
                         verticalAlignment: Text.AlignVCenter
+                        horizontalAlignment: Text.AlignHCenter
                         elide: Text.ElideRight
                         maximumLineCount: 1
                     }
                     Text {
-                        width: Math.max(40, parent.width - 112)
+                        width: Math.max(40, parent.width - 107)
                         height: parent.height
                         text: modelData.file || "-"
-                        color: "#F5F7FA"
+                        color: modelData.done || (modelData.status || "").indexOf("완료") >= 0 ? "#34C759" : "#FFCC44"
                         font.pixelSize: 8
                         verticalAlignment: Text.AlignVCenter
                         elide: Text.ElideMiddle
@@ -113,13 +114,13 @@ Item {
                         maximumLineCount: 2
                     }
                     Text {
-                        width: 58
+                        width: 64
                         height: parent.height
                         text: modelData.eta || "-"
-                        color: "#A9B0B7"
+                        color: modelData.done || (modelData.status || "").indexOf("완료") >= 0 ? "#34C759" : "#FFCC44"
                         font.pixelSize: 8
                         verticalAlignment: Text.AlignVCenter
-                        horizontalAlignment: Text.AlignRight
+                        horizontalAlignment: Text.AlignLeft
                         elide: Text.ElideRight
                     }
                 }

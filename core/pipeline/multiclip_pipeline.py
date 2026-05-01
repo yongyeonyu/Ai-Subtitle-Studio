@@ -333,7 +333,7 @@ class MulticlipPipelineMixin:
                         f"  🧠 LLM 최적화 중: [{idx + 1}/{total_files}] {vname}"
                     )
                     try:
-                        optimized = optimize_segments(segments)
+                        optimized = optimize_segments(segments, vad_segments=item.get("vad_segments") or [])
                     except Exception as e:
                         get_logger().log(
                             f"  ⚠️ LLM 최적화 실패, Whisper 결과 유지: {vname} / {e}"

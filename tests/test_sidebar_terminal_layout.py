@@ -2,9 +2,12 @@
 # Phase: PHASE2
 import os
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QTableWidgetItem, QWidget
 
 from ui.main.main_window import MainWindow
@@ -210,13 +213,16 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.queue_table.setItem(0, 1, QTableWidgetItem("DJI_20260217224203_0075_D.MP4"))
             window.queue_table.setItem(0, 4, QTableWidgetItem("01:37 / ?"))
             items = window._sidebar_queue_items()
+            self.assertEqual(items[0]["order"], "1")
             self.assertEqual(items[0]["status"], "자막 생성 완료")
+            self.assertTrue(items[0]["done"])
             self.assertNotIn("✅", items[0]["status"])
 
             panel = window._ensure_sidebar_queue_panel()
             panel.set_queue("큐 리스트 : (1/1) - 100% 완료", items)
+            self.assertEqual(panel._table.horizontalHeaderItem(0).text(), "순서")
             self.assertEqual(panel._table.horizontalHeaderItem(2).text(), "예상시간")
-            self.assertEqual(panel._table.item(0, 0).text(), "자막 생성 완료")
+            self.assertEqual(panel._table.item(0, 0).text(), "1")
         finally:
             window.close()
             window.deleteLater()
@@ -377,6 +383,71 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 self.assertEqual(menu_button.height(), MENU_BUTTON_HEIGHT)
                 self.assertLessEqual(menu_button.iconSize().height(), 18)
         finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_home_stops_running_backend_and_llm_models(self):
+        window = MainWindow()
+
+        class _Editor(QWidget):
+            def __init__(self, parent):
+                super().__init__(parent)
+                self.sm = SimpleNamespace(is_locked=True, state="ST_PROC")
+                self._is_ai_processing = True
+                self._roughcut_draft_timer = QTimer(self)
+                self._roughcut_draft_timer.start(10_000)
+                self._roughcut_draft_pending = True
+                self._roughcut_draft_generation = 3
+                self.statuses = []
+                self.stopped = False
+
+            def _stop_pipeline(self):
+                self.stopped = True
+                self._is_ai_processing = False
+                self.sm.is_locked = False
+
+            def _set_roughcut_draft_status(self, status):
+                self.statuses.append(status)
+
+        class _Backend:
+            def __init__(self):
+                self._active = True
+                self.stopped = False
+
+            def stop(self):
+                self.stopped = True
+                self._active = False
+
+        class _ImmediateThread:
+            def __init__(self, target, *args, **kwargs):
+                self._target = target
+
+            def start(self):
+                self._target()
+
+        editor = _Editor(window)
+        backend = _Backend()
+        stopped_models = []
+        try:
+            window._editor_widget = editor
+            window.backend = backend
+
+            with mock.patch("ui.main.main_window.threading.Thread", _ImmediateThread), \
+                 mock.patch("ui.main.main_window.load_settings", return_value={"selected_model": "gemma4:e4b"}), \
+                 mock.patch("core.llm.ollama_provider.stop_local_llm_models", side_effect=lambda models, logger=None: stopped_models.extend(models)):
+                window.show_home()
+
+            self.assertTrue(editor.stopped)
+            self.assertFalse(editor._roughcut_draft_timer.isActive())
+            self.assertFalse(editor._roughcut_draft_pending)
+            self.assertEqual(editor._roughcut_draft_generation, 4)
+            self.assertIn("idle", editor.statuses)
+            self.assertTrue(backend.stopped)
+            self.assertIn("gemma4:e4b", stopped_models)
+        finally:
+            editor.close()
+            editor.deleteLater()
             window.close()
             window.deleteLater()
             self.app.processEvents()

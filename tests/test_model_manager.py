@@ -142,6 +142,49 @@ class ModelManagerTest(unittest.TestCase):
             models = manager.available_models()
         self.assertTrue(models[0]["installed"])
 
+    def test_audio_filter_candidate_models_are_optional(self):
+        rows = [
+            {
+                "id": "ten-vad",
+                "name": "TEN VAD",
+                "category": "VAD",
+                "os": ["mac", "windows"],
+                "required": False,
+                "experimental": True,
+                "pip_packages": ["ten-vad"],
+                "import_names": ["ten_vad"],
+            },
+            {
+                "id": "resemble-enhance",
+                "name": "Resemble Enhance",
+                "category": "Audio",
+                "os": ["mac", "windows"],
+                "required": False,
+                "experimental": True,
+                "pip_packages": ["resemble-enhance"],
+                "import_names": ["resemble_enhance"],
+            },
+            {
+                "id": "clearvoice",
+                "name": "ClearVoice",
+                "category": "Audio",
+                "os": ["mac", "windows"],
+                "required": False,
+                "experimental": True,
+                "pip_packages": ["clearvoice"],
+                "import_names": ["clearvoice"],
+            },
+        ]
+        registry_path, root = self._registry(rows)
+        manager = ModelManager(registry_path=registry_path, project_root=root, current_os="mac")
+
+        models = manager.available_models()
+        required = manager.required_models()
+
+        self.assertEqual([model["id"] for model in models], ["ten-vad", "resemble-enhance", "clearvoice"])
+        self.assertTrue(all(model.get("experimental") for model in models))
+        self.assertEqual(required, [])
+
 
 if __name__ == "__main__":
     unittest.main()

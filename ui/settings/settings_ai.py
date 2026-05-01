@@ -179,6 +179,12 @@ class SettingsDialog(QDialog):
         self.input_openai_api_key.setText(get_api_key("openai"))
         editor_form.addRow("OpenAI API Key:", self.input_openai_api_key)
 
+        self.input_huggingface_token = QLineEdit()
+        self.input_huggingface_token.setPlaceholderText("Hugging Face HF_TOKEN 입력")
+        self.input_huggingface_token.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
+        self.input_huggingface_token.setText(get_api_key("huggingface"))
+        editor_form.addRow("Hugging Face Token:", self.input_huggingface_token)
+
         self._build_editor_llm_prompt_section(editor_form, settings)
         self._build_editor_roughcut_draft_section(editor_form, settings)
 
@@ -325,6 +331,8 @@ class SettingsDialog(QDialog):
         self.audio_map = {
             "DeepFilterNet (AI 노이즈 제거)": "deepfilter",
             "RNNoise (빠른 노이즈 제거/실험)": "rnnoise",
+            "Resemble Enhance (음성 향상/실험)": "resemble_enhance",
+            "ClearVoice MossFormer2 (음성 향상/실험)": "clearvoice",
             "사용 안함": "none",
         }
         for k in self.audio_map: self.combo_audio.addItem(k)
@@ -336,7 +344,7 @@ class SettingsDialog(QDialog):
 
         # 6. VAD
         self.combo_vad = QComboBox()
-        self.vad_map = {"Silero (검수용)": "silero", "사용 안 함": "none"}
+        self.vad_map = {"Silero (검수용)": "silero", "TEN VAD (저지연/실험)": "ten_vad", "사용 안 함": "none"}
         for k in self.vad_map: self.combo_vad.addItem(k)
         curr_vad = settings.get("selected_vad", "silero")
         for k, v in self.vad_map.items():
@@ -906,6 +914,7 @@ class SettingsDialog(QDialog):
         provider = (m_data.get('details', {}) or {}).get('provider', 'ollama')
         google_key_saved = set_api_key("google", self.input_api_key.text().strip())
         openai_key_saved = set_api_key("openai", self.input_openai_api_key.text().strip())
+        huggingface_token_saved = set_api_key("huggingface", self.input_huggingface_token.text().strip())
         res.update({
             "selected_model": m_data.get('name') or self.combo_llm.currentText(),
             "selected_llm_provider": provider,
@@ -918,6 +927,7 @@ class SettingsDialog(QDialog):
             "vad_post_stt_align_enabled": bool(self.chk_vad_post_align.isChecked()),
             "google_api_key_saved": bool(google_key_saved),
             "openai_api_key_saved": bool(openai_key_saved),
+            "huggingface_token_saved": bool(huggingface_token_saved),
             "chunk_time_limit": 99999 if self.chk_chunk_all.isChecked() else self.slider_chunk.value(),
             "llm_cost_filter": self.llm_filter,
             "user_prompt": self.edit_user_prompt.toPlainText().strip(),

@@ -4,7 +4,7 @@
 
 AI 기반 자막 생성, 자막 편집, 화자 분리, 멀티클립 처리, 러프컷 분석을 하나의 데스크톱 작업 흐름으로 연결하는 영상 자막 제작 도구입니다.
 
-[![Version](https://img.shields.io/badge/version-v03.05.00-0A84FF?style=for-the-badge)](#)
+[![Version](https://img.shields.io/badge/version-v03.06.00-0A84FF?style=for-the-badge)](#)
 [![Phase](https://img.shields.io/badge/phase-PHASE2-30D158?style=for-the-badge)](#)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
@@ -26,7 +26,7 @@ AI Subtitle Studio는 긴 영상 작업에서 반복되는 자막 생성, 보정
 
 | 항목 | 내용 |
 | --- | --- |
-| 현재 버전 | `v03.05.00` |
+| 현재 버전 | `v03.06.00` |
 | 개발 단계 | `PHASE2` |
 | 기본 브랜치 | `main` |
 | 지원 목표 | macOS, Windows |
@@ -239,7 +239,8 @@ PY
 | 문서 | 설명 |
 | --- | --- |
 | `File_structure.txt` | 현재 파일 구조 |
-| [`RELEASE_v03.05.00.md`](RELEASE_v03.05.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.06.00.md`](RELEASE_v03.06.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.05.00.md`](RELEASE_v03.05.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.04.00.md`](RELEASE_v03.04.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.03.00.md`](RELEASE_v03.03.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.00.00.md`](RELEASE_v03.00.00.md) | PHASE2 누적 개발 노트 |
@@ -249,15 +250,15 @@ PY
 
 ## 릴리즈 노트
 
-전체 최신 릴리즈 노트는 [`RELEASE_v03.05.00.md`](RELEASE_v03.05.00.md)를 참고하세요.
+전체 최신 릴리즈 노트는 [`RELEASE_v03.06.00.md`](RELEASE_v03.06.00.md)를 참고하세요.
 
-### 최신 릴리즈: v03.05.00
+### 최신 릴리즈: v03.06.00
 
-- STT1/STT2 이중 인식과 STT1 우선 앙상블 보강 흐름을 추가했습니다.
-- FFmpeg/음성 필터가 오디오 preset을 공유하고, VAD는 생성 후 음성 구간 보정 역할로 정리했습니다.
-- 러프컷 초안을 자막 생성 완료 후 실행하도록 바꾸고, 중분류를 A~Z/공백 없음/보통 10개 이하 흐름으로 제한했습니다.
-- 타임라인과 글로벌 캔버스 렌더링을 가시 영역, OpenGL/QML 보조 UI, partial repaint 중심으로 경량화했습니다.
-- 사이드바 모델 선택, 큐 리스트, 단계 상태, 프로젝트 정보, 하단 메뉴 레이아웃을 정리했습니다.
+- RNNoise, Resemble Enhance, ClearVoice, TEN VAD 후보를 앱 설정과 실행 경로에 연결했습니다.
+- Hugging Face Token을 보안 저장소에 저장하고 Transformers/HF Hub 요청에 주입하도록 했습니다.
+- STT1/STT2 앙상블을 단어 단위 ROVER 계열 병합과 저신뢰 교체 정책으로 강화했습니다.
+- 자막 시간은 Whisper 단어 timestamp와 VAD 음성 섬을 우선해 확정하고, `간격` 설정은 보조 조건으로 사용합니다.
+- 재시작/홈 이동 시 캔버스 잔상, 진행 중 STT/LLM, Ollama 로컬 모델을 정리하도록 안정화했습니다.
 
 ## 보안
 

@@ -3,17 +3,20 @@
 ## 설치: python -m pip install -r requirements-windows.txt
 ## CUDA 사용 시: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 ## ffmpeg/ffprobe는 PATH 또는 tools/ffmpeg/bin/ 아래에 배치
+## 선택: RNNoise 필터는 pip 패키지가 아니라 rnnoise_demo.exe 실행 파일 또는 RNNOISE_BINARY 환경변수가 필요
+## 선택: Resemble Enhance는 앱의 모델 관리에서 별도 설치
 
 PyQt6>=6.6.0
 opencv-python>=4.9.0
 Pillow>=10.0.0
-numpy>=1.26.0
+numpy>=1.26.0,<2.0
 requests>=2.31.0
 watchdog>=3.0.0
 python-dotenv>=1.0.0
-packaging>=23.0
+packaging>=23.0,<24.0
 soundfile>=0.12.1
 silero-vad>=6.2.1
+ten-vad>=1.0.6.8
 SpeechRecognition>=3.10.0
 pyaudio>=0.2.14
 google-genai>=1.0.0
@@ -28,3 +31,4 @@ torchaudio
 faster-whisper>=1.0.0
 ctranslate2>=4.4.0
 deepfilternet>=0.5.6
+clearvoice>=0.1.2
