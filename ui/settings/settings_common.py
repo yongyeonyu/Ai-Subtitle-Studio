@@ -23,25 +23,47 @@ from ui.style import line_icon, settings_button_style
 DATASET_DIR = config.DATASET_DIR
 
 # ── OS별 Whisper 모델 목록 ──
-if config.IS_MAC:
-    DEFAULT_WHISPER_MODELS = [
-        "mlx-community/whisper-large-v3-mlx",
-        "mlx-community/whisper-large-v3-turbo",
-        "youngouk/ghost613-turbo-korean-4bit-mlx",
-        "mlx-community/whisper-medium-mlx",
-        "mlx-community/whisper-small-mlx",
-        "mlx-community/whisper-base-mlx"
-    ]
-else:
-    DEFAULT_WHISPER_MODELS = [
-        "large-v3",
-        "large-v3-turbo",
-        "ghost613/faster-whisper-large-v3-turbo-korean",
-        "medium",
-        "small",
-        "base",
-        "tiny"
-    ]
+MAC_WHISPER_MODELS = [
+    "mlx-community/whisper-large-v3-mlx",
+    "mlx-community/whisper-large-v3-turbo",
+    "youngouk/ghost613-turbo-korean-4bit-mlx",
+    "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2",
+    "mlx-community/whisper-large-v2-mlx",
+    "mlx-community/whisper-medium-mlx",
+    "mlx-community/whisper-medium.en-mlx",
+    "mlx-community/whisper-small-mlx",
+    "mlx-community/whisper-small.en-mlx",
+    "mlx-community/whisper-base-mlx",
+    "mlx-community/whisper-base.en-mlx",
+    "mlx-community/whisper-tiny-mlx",
+    "mlx-community/whisper-tiny.en-mlx",
+    "mlx-community/distil-whisper-large-v3",
+]
+
+WINDOWS_WHISPER_MODELS = [
+    "large-v3",
+    "large-v3-turbo",
+    "turbo",
+    "ghost613/faster-whisper-large-v3-turbo-korean",
+    "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2",
+    "large-v2",
+    "large-v1",
+    "large",
+    "medium",
+    "medium.en",
+    "small",
+    "small.en",
+    "base",
+    "base.en",
+    "tiny",
+    "tiny.en",
+    "distil-large-v3",
+    "distil-large-v2",
+    "distil-medium.en",
+    "distil-small.en",
+]
+
+DEFAULT_WHISPER_MODELS = MAC_WHISPER_MODELS if config.IS_MAC else WINDOWS_WHISPER_MODELS
 
 DEFAULT_ADV_SETTINGS = {
     # Silero
@@ -50,16 +72,6 @@ DEFAULT_ADV_SETTINGS = {
     "vad_min_silence": 2.0,
     "vad_speech_pad": 0.1,
     "vad_window_size": 512,
-
-    # Demucs
-    "dm_vol": 3.5,
-    "dm_shifts": 2,
-    "dm_overlap": 0.25,
-    "dm_segments": 45,
-    "w_dm_no_speech": 0.6,
-    "w_dm_logprob": -1.5,
-    "w_dm_comp": 2.4,
-    "w_dm_temp_max": 0.6,
 
     # DeepFilter
     "df_hp": 100,
@@ -114,10 +126,21 @@ DEFAULT_ADV_SETTINGS = {
     "sub_gap_break_sec": 1.5,
 
     # Subtitle quality review defaults. Runtime behavior stays opt-in.
+    "stt_ensemble_enabled": False,
+    "selected_whisper_model_secondary": (
+        "youngouk/ghost613-turbo-korean-4bit-mlx"
+        if config.IS_MAC else
+        "ghost613/faster-whisper-large-v3-turbo-korean"
+    ),
+    "stt_ensemble_llm_judge_enabled": True,
+    "vad_post_stt_align_enabled": True,
+    "vad_post_stt_max_shift_sec": 0.7,
+    "vad_post_stt_edge_pad_sec": 0.04,
     "subtitle_quality_enabled": False,
     "subtitle_quality_auto_check_after_generate": False,
     "subtitle_quality_auto_correct_enabled": False,
-    "review_vad_before_stt_enabled": True,
+    "vad_pre_split_enabled": False,
+    "review_vad_before_stt_enabled": False,
     "review_vad_strict_mode": True,
     "review_vad_speech_pad_sec": 0.35,
     "review_vad_min_silence_sec": 0.8,

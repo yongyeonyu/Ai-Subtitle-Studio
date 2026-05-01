@@ -28,6 +28,35 @@ QUALITY_COLORS = {
     "gray": "#8E8E93",
 }
 
+MAJOR_SEGMENT_COLORS = (
+    "#00E676",  # A
+    "#FF453A",  # B
+    "#FFD60A",  # C
+    "#76FF03",  # D
+    "#00B8D4",  # E
+    "#FF9F0A",  # F
+    "#BF5AF2",  # G
+    "#64D2FF",  # H
+    "#FF2D55",  # I
+    "#30D158",  # J
+    "#0A84FF",  # K
+    "#FF6B00",  # L
+    "#D0FF00",  # M
+    "#5E5CE6",  # N
+    "#00F5D4",  # O
+    "#FFB3C7",  # P
+    "#9DFF00",  # Q
+    "#FF375F",  # R
+    "#40C8E0",  # S
+    "#FFCC66",  # T
+    "#32D74B",  # U
+    "#DA8FFF",  # V
+    "#66D4CF",  # W
+    "#FF7A90",  # X
+    "#A1A1FF",  # Y
+    "#C6FF3D",  # Z
+)
+
 
 def find_roughcut_result(widget: Any):
     """Find the active roughcut result from a timeline child widget."""
@@ -64,7 +93,7 @@ def roughcut_markers(result: Any) -> list[dict]:
             continue
         action = str(getattr(decision, "action", "") or "keep")
         safety = str(getattr(decision, "safety", "") or "acceptable")
-        color = ACTION_COLORS.get(action, SAFETY_COLORS.get(safety, "#8B949E"))
+        color = _roughcut_marker_color(action, safety)
         markers.append(
             {
                 "start": start,
@@ -72,6 +101,9 @@ def roughcut_markers(result: Any) -> list[dict]:
                 "kind": f"roughcut:{action}",
                 "label": _roughcut_label(action, safety),
                 "color": color,
+                "action": action,
+                "safety": safety,
+                "reason": str(getattr(decision, "reason", "") or ""),
                 "priority": 90 if safety == "risky" or action in {"remove", "move"} else 70,
                 "alpha": 150 if safety == "risky" else 118,
             }
@@ -82,7 +114,6 @@ def roughcut_markers(result: Any) -> list[dict]:
 def roughcut_major_markers(result: Any) -> list[dict]:
     markers: list[dict] = []
     segments = getattr(result, "segments", None) or []
-    palette = ("#34C759", "#FF453A", "#FFFF00", "#A6FF00", "#00E676", "#30D5C8", "#5AC8FA", "#A678F4")
     for index, segment in enumerate(segments):
         start = _as_float(getattr(segment, "start", None))
         end = _as_float(getattr(segment, "end", None))
@@ -91,7 +122,7 @@ def roughcut_major_markers(result: Any) -> list[dict]:
         major_id = str(getattr(segment, "major_id", "") or getattr(segment, "segment_id", "") or chr(65 + (index % 26)))
         title = str(getattr(segment, "title", "") or "")
         status = str(getattr(segment, "status", "") or "provisional")
-        color = palette[index % len(palette)]
+        color = roughcut_major_color(major_id, index)
         markers.append(
             {
                 "start": start,
@@ -106,6 +137,13 @@ def roughcut_major_markers(result: Any) -> list[dict]:
             }
         )
     return markers
+
+
+def roughcut_major_color(major_id: str, fallback_index: int = 0) -> str:
+    code = str(major_id or "").strip().upper()
+    if code and "A" <= code[0] <= "Z":
+        return MAJOR_SEGMENT_COLORS[ord(code[0]) - ord("A")]
+    return MAJOR_SEGMENT_COLORS[int(fallback_index or 0) % len(MAJOR_SEGMENT_COLORS)]
 
 
 def roughcut_major_markers_for_widget(widget: Any) -> list[dict]:
@@ -244,10 +282,18 @@ def _roughcut_label(action: str, safety: str) -> str:
     if action == "move":
         return "이동"
     if safety == "ideal":
-        return "안전"
+        return "정상"
     if safety == "risky":
         return "위험"
     return "주의"
+
+
+def _roughcut_marker_color(action: str, safety: str) -> str:
+    if safety == "risky":
+        return SAFETY_COLORS["risky"]
+    if action == "keep":
+        return SAFETY_COLORS.get(safety, "#8B949E")
+    return ACTION_COLORS.get(action, SAFETY_COLORS.get(safety, "#8B949E"))
 
 
 def _as_float(value: Any) -> float | None:

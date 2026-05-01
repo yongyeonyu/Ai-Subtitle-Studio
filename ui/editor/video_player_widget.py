@@ -17,37 +17,64 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QSizePolicy, QStackedWidget,
                              QGraphicsView, QGraphicsScene)
 from PyQt6.QtCore import Qt, QTimer, QRectF, QUrl, QSizeF
-from PyQt6.QtGui import QFont, QColor, QPainter, QFontMetrics, QBrush, QPainterPath, QPen, QPixmap
+from PyQt6.QtGui import QFont, QColor, QPainter, QFontMetrics, QBrush, QPainterPath, QPen, QPixmap, QFontDatabase
 
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 
 import config
+from ui.gpu_rendering import gpu_widgets_enabled
+
+
+def _available_font_family(preferred: str, fallback: str = "Apple SD Gothic Neo") -> str:
+    preferred = str(preferred or "").strip()
+    families = set(QFontDatabase.families())
+    if preferred in families:
+        return preferred
+    if preferred.startswith("Pretendard"):
+        for candidate in ("Pretendard", "Pretendard Regular", fallback):
+            if candidate in families:
+                return candidate
+    return fallback if fallback in families else (preferred or fallback)
+
 
 class ThumbnailLabel(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pixmap = None
+        self._scaled_cache = None
+        self._scaled_cache_size = None
         self.setStyleSheet("background: #000000;")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
     def set_pixmap(self, pixmap: QPixmap):
         self._pixmap = pixmap
+        self._scaled_cache = None
+        self._scaled_cache_size = None
         self.update() 
         
     def paintEvent(self, event):
         if self._pixmap and not self._pixmap.isNull():
             painter = QPainter(self)
-            scaled = self._pixmap.scaled(
-                self.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
+            cache_size = (self.width(), self.height(), self._pixmap.cacheKey())
+            if self._scaled_cache is None or self._scaled_cache_size != cache_size:
+                self._scaled_cache = self._pixmap.scaled(
+                    self.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                self._scaled_cache_size = cache_size
+            scaled = self._scaled_cache
             x = (self.width() - scaled.width()) // 2
             y = (self.height() - scaled.height()) // 2
             painter.drawPixmap(x, y, scaled)
         else:
             super().paintEvent(event)
+
+    def resizeEvent(self, event):
+        self._scaled_cache = None
+        self._scaled_cache_size = None
+        super().resizeEvent(event)
 
 
 class VideoSurfaceView(QGraphicsView):
@@ -62,6 +89,17 @@ class VideoSurfaceView(QGraphicsView):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        if gpu_widgets_enabled():
+            try:
+                from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+
+                self.setViewport(QOpenGLWidget(self))
+                self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.MinimalViewportUpdate)
+            except Exception:
+                pass
+        self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontSavePainterState, True)
+        self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing, True)
+        self.setCacheMode(QGraphicsView.CacheModeFlag.CacheBackground)
         self.setStyleSheet("background: #000000; border: none;")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -166,7 +204,7 @@ class SubtitleLabel(QLabel):
         preview_scale = max(0.01, self.width() / max(1.0, float(output_width)))
         font_px = max(4, int(base_size * res_scale * preview_scale))
 
-        font = QFont(style.get("font", "Apple SD Gothic Neo"))
+        font = QFont(_available_font_family(style.get("font", "Apple SD Gothic Neo")))
         font.setPixelSize(font_px)
         if style.get("bold", True):
             font.setWeight(QFont.Weight.Bold)
@@ -357,6 +395,9 @@ class VideoPlayerWidget(QWidget):
         self.total_time = duration / 1000.0
         if duration <= 0:
             return
+        self._apply_loaded_media_state()
+
+    def _apply_loaded_media_state(self):
         self._source_ready = True
         if self._pending_segments is not None:
             self._set_segments(self._pending_segments)
@@ -392,6 +433,8 @@ class VideoPlayerWidget(QWidget):
     def _on_media_status_changed(self, status):
         """EndOfMedia -> next clip callback"""
         from PyQt6.QtMultimedia import QMediaPlayer as _QMP
+        if status in (_QMP.MediaStatus.LoadedMedia, _QMP.MediaStatus.BufferedMedia):
+            self._apply_loaded_media_state()
         if status == _QMP.MediaStatus.EndOfMedia:
             cb = getattr(self, '_end_of_media_callback', None)
             if callable(cb):
@@ -502,20 +545,27 @@ class VideoPlayerWidget(QWidget):
         return 33
 
     def _get_audio_ai_setting(self) -> str:
-        """user_settings.json에서 selected_audio_ai를 읽어 반환. 실패 시 'demucs' 기본값."""
+        """user_settings.json에서 selected_audio_ai를 읽어 반환합니다."""
         try:
             settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
             if os.path.exists(settings_path):
                 with open(settings_path, "r", encoding="utf-8") as f:
-                    return json.load(f).get("selected_audio_ai", "demucs")
+                    return json.load(f).get("selected_audio_ai", "deepfilter")
         except Exception:
             pass
-        return "demucs"
+        return "deepfilter"
 
     def _is_video_file(self, path: str) -> bool:
         return os.path.splitext(path)[1].lower() in {
             ".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm", ".mts", ".m2ts"
         }
+
+    def _set_media_source_if_needed(self, player, path: str):
+        current = player.source().toLocalFile() if hasattr(player, "source") else ""
+        if os.path.normpath(current or "") == os.path.normpath(path or ""):
+            return False
+        player.setSource(QUrl.fromLocalFile(path))
+        return True
 
     def _preview_proxy_enabled(self) -> bool:
         try:
@@ -622,7 +672,7 @@ class VideoPlayerWidget(QWidget):
         if not proxy_path or not os.path.exists(proxy_path):
             return
         pos = max(0, self.media_player.position())
-        self.media_player.setSource(QUrl.fromLocalFile(proxy_path))
+        self._set_media_source_if_needed(self.media_player, proxy_path)
         self.media_player.setPosition(pos)
         self.info_label.setText(f"저화질 프리뷰 | {os.path.basename(self._proxy_original_path or proxy_path)}")
 
@@ -643,28 +693,25 @@ class VideoPlayerWidget(QWidget):
                 self._source_aspect = 16 / 9
             playback_path = self._playback_path_for(path)
             self._pending_seek_sec = self._pending_seek_sec if self._pending_seek_sec is not None else 0.0
-            self._source_ready = False
-            self.media_player.setSource(QUrl.fromLocalFile(playback_path))
-            file_dir = os.path.dirname(path)
-            base_name = os.path.splitext(os.path.basename(path))[0]
-            vocal_path = os.path.join(file_dir, f"{base_name}_vocals.wav")
-            selected_audio_ai = self._get_audio_ai_setting()
-            if os.path.exists(vocal_path) and selected_audio_ai == "demucs":
-                self.vocal_player.setSource(QUrl.fromLocalFile(vocal_path))
-                self.audio_output.setVolume(0.0)
-                self.vocal_audio_output.setVolume(1.0)
-                self.has_vocal_track = True
-                self.info_label.setText(f"🎙️ AI 보컬 모드 | {os.path.basename(path)}")
-            else:
-                self.audio_output.setVolume(1.0)
-                self.has_vocal_track = False
-                prefix = "저화질 프리뷰" if os.path.normpath(playback_path) != os.path.normpath(path) else "원본 프리뷰"
-                self.info_label.setText(f"{prefix} | {os.path.basename(path)}")
-            if self._pending_thumb_path is None:
+            source_changed = self._set_media_source_if_needed(self.media_player, playback_path)
+            self._source_ready = not source_changed
+            if self.has_vocal_track:
+                self.vocal_player.stop()
+            self.audio_output.setVolume(1.0)
+            self.has_vocal_track = False
+            prefix = "저화질 프리뷰" if os.path.normpath(playback_path) != os.path.normpath(path) else "원본 프리뷰"
+            self.info_label.setText(f"{prefix} | {os.path.basename(path)}")
+            if self._is_video_file(path) and self._pending_thumb_path is None:
                 self._extract_and_show_thumbnail(path)
+            elif not self._is_video_file(path):
+                self.video_stack.setCurrentIndex(0)
+            if not source_changed:
+                self._apply_loaded_media_state()
 
 
     def _extract_and_show_thumbnail_at(self, path, sec=0.0):
+        if not self._is_video_file(path):
+            return
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             return
         self.video_stack.setCurrentIndex(1)
@@ -693,6 +740,8 @@ class VideoPlayerWidget(QWidget):
             pass
 
     def _extract_and_show_thumbnail(self, path: str):
+        if not self._is_video_file(path):
+            return
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             return
         self.video_stack.setCurrentIndex(1)
@@ -845,7 +894,7 @@ class VideoPlayerWidget(QWidget):
         self._pending_segments = segments
         self._pending_seek_sec = seek_sec
         self._pending_autoplay = bool(autoplay)
-        self._pending_thumb_path = path if show_thumbnail else None
+        self._pending_thumb_path = path if show_thumbnail and self._is_video_file(path) else None
         self._pending_thumb_sec = seek_sec if show_thumbnail else 0.0
         self.load(path, segments)
 

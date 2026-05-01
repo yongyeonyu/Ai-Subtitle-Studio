@@ -26,6 +26,7 @@ from ui.timeline.timeline_constants import (
 from ui.timeline.timeline_paint import TimelinePaintMixin
 from ui.timeline.timeline_input import TimelineInputMixin
 from ui.timeline.timeline_inline_edit import TimelineInlineEditMixin
+from ui.gpu_rendering import configure_lightweight_paint
 
 
 class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintMixin, QWidget):
@@ -60,6 +61,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        configure_lightweight_paint(self, opaque=True)
         self.focus_mode = "segment"
         self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
         self._ime_preedit = ""
@@ -73,6 +75,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.total_duration: float = 0.0
         self.active_seg_start: float | None = None
         self.playhead_sec: float = 0.0
+        self._last_playhead_px: int | None = None
         self._waveform = None
         self.boundary_times: list[float] = []
         self._multiclip_boxes: list[dict] = []   # 
@@ -111,6 +114,10 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
         self._speech_mask: np.ndarray | None = None
         self._speech_mask_wf_len: int = 0
+        self._analysis_markers_cache_key = None
+        self._analysis_markers_cache: list[dict] = []
+        self._roughcut_major_cache_key = None
+        self._roughcut_major_cache: list[dict] = []
 
     # ---------------------------------------------------------
     # State / Utility
@@ -118,6 +125,57 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     def set_zoom(self, new_pps):
         self.pps = max(5.0, min(500.0, new_pps))
         self.update()
+
+    def _invalidate_marker_caches(self):
+        self._analysis_markers_cache_key = None
+        self._analysis_markers_cache = []
+        self._roughcut_major_cache_key = None
+        self._roughcut_major_cache = []
+
+    def analysis_markers_cached(self) -> list[dict]:
+        from ui.timeline.timeline_analysis import analysis_markers_for_widget
+
+        key = (
+            len(self.segments),
+            len(self.vad_segments),
+            len(self.gap_segments),
+            round(float(self.total_duration or 0.0), 3),
+            tuple((round(float(s.get("start", 0.0) or 0.0), 3), round(float(s.get("end", 0.0) or 0.0), 3), str(s.get("text", "") or ""), str(s.get("quality", "") or "")) for s in self.segments),
+        )
+        if self._analysis_markers_cache_key != key:
+            self._analysis_markers_cache = analysis_markers_for_widget(
+                self,
+                list(getattr(self, "segments", []) or []),
+                list(getattr(self, "vad_segments", []) or []),
+                list(getattr(self, "gap_segments", []) or []),
+                float(getattr(self, "total_duration", 0.0) or 0.0),
+            )
+            self._analysis_markers_cache_key = key
+        return list(self._analysis_markers_cache)
+
+    def roughcut_major_markers_cached(self) -> list[dict]:
+        from ui.timeline.timeline_analysis import find_roughcut_result, roughcut_major_markers
+
+        result = find_roughcut_result(self)
+        result_segments = tuple(getattr(result, "segments", ()) or ()) if result is not None else ()
+        key = (
+            id(result),
+            tuple(
+                (
+                    str(getattr(seg, "id", "") or getattr(seg, "segment_id", "") or ""),
+                    str(getattr(seg, "major_id", "") or ""),
+                    round(float(getattr(seg, "start", 0.0) or 0.0), 3),
+                    round(float(getattr(seg, "end", 0.0) or 0.0), 3),
+                    str(getattr(seg, "title", "") or ""),
+                    str(getattr(seg, "status", "") or ""),
+                )
+                for seg in result_segments
+            ),
+        )
+        if self._roughcut_major_cache_key != key:
+            self._roughcut_major_cache = roughcut_major_markers(result) if result is not None else []
+            self._roughcut_major_cache_key = key
+        return list(self._roughcut_major_cache)
 
     def update_segments(self, segs, active_sec, total_dur):
         self.segments = [s for s in segs if not s.get("is_gap")]
@@ -135,6 +193,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
                 gap["active"] = True
 
         self.gap_segments = new_gaps
+        self._invalidate_marker_caches()
 
         if active_sec is not None:
             self.active_seg_start = active_sec
@@ -144,6 +203,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     def set_vad_segments(self, vad_segs):
         self.vad_segments = vad_segs
         self._speech_mask = None      # 마스크 재계산 트리거
+        self._invalidate_marker_caches()
         self.update()
 
     def set_active(self, sec):
@@ -151,10 +211,18 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.update()
 
     def set_playhead(self, sec):
-        if self.playhead_sec == sec:
+        px = self._x(float(sec or 0.0))
+        if self.playhead_sec == sec or self._last_playhead_px == px:
             return
+        old_px = self._last_playhead_px
         self.playhead_sec = sec
-        self.update()
+        self._last_playhead_px = px
+        if old_px is None:
+            self.update(QRect(max(0, px - 12), 0, 24, CANVAS_H))
+        else:
+            left = max(0, min(old_px, px) - 12)
+            right = min(self.width(), max(old_px, px) + 13)
+            self.update(QRect(left, 0, max(1, right - left), CANVAS_H))
 
     def set_waveform(self, wf):
         self._waveform = wf

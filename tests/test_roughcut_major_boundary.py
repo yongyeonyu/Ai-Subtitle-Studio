@@ -87,6 +87,40 @@ class RoughCutMajorBoundaryTests(unittest.TestCase):
         self.assertTrue(result.chapters[0].major_id)
         self.assertTrue(result.chapters[0].minor_code)
 
+    def test_major_segmenter_caps_major_codes_at_a_to_z(self):
+        chapters = [
+            ChapterMetadata(f"chapter_{idx:04d}", f"챕터 {idx}", float(idx), float(idx) + 0.5)
+            for idx in range(30)
+        ]
+
+        majors, minors = build_major_roughcut_segments(
+            chapters,
+            max_major_duration=0.1,
+            max_major_segment_count=26,
+        )
+
+        self.assertEqual(len(majors), 26)
+        self.assertEqual([segment.major_id for segment in majors], list("ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+        self.assertEqual({chapter.major_id for chapter in minors} - set("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), set())
+
+    def test_major_segmenter_covers_full_media_without_major_gaps(self):
+        chapters = [
+            ChapterMetadata("chapter_0001", "시작", 1.0, 2.0),
+            ChapterMetadata("chapter_0002", "중간", 5.0, 6.0),
+            ChapterMetadata("chapter_0003", "끝", 10.0, 11.0),
+        ]
+
+        majors, _ = build_major_roughcut_segments(
+            chapters,
+            media_duration=14.0,
+            max_major_duration=2.0,
+        )
+
+        self.assertEqual(majors[0].start, 0.0)
+        self.assertEqual(majors[-1].end, 14.0)
+        for previous, current in zip(majors, majors[1:]):
+            self.assertAlmostEqual(previous.end, current.start)
+
 
 if __name__ == "__main__":
     unittest.main()

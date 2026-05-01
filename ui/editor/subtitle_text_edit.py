@@ -142,8 +142,12 @@ class SubtitleTextEdit(QTextEdit):
         super().__init__(parent)
         self.setFont(QFont(config.FONT, 13))
         self.setStyleSheet(
-            "QTextEdit { background: #11181C; color: #DDE3EA; border: 1px solid #2D3942; "
-            "border-radius: 7px; padding: 10px 12px; line-height: 1.35; }"
+            "QTextEdit { background: #11181C; color: #DDE3EA; border: none; "
+            "border-radius: 0px; padding: 10px 12px; line-height: 1.35; }"
+            "QScrollBar:vertical { background: #11181C; border: none; width: 8px; margin: 0px; }"
+            "QScrollBar::handle:vertical { background: #465663; border: none; border-radius: 0px; min-height: 24px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; border: none; background: transparent; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; border: none; }"
         )
         self.setUndoRedoEnabled(True)
         self.setAcceptRichText(False)

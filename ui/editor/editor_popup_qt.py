@@ -141,4 +141,4 @@ class EditorPopup(QWidget):
                 self.close_popup(refocus=True)
                 return True
                 
-        return super().eventFilter(obj, event)
+        return False

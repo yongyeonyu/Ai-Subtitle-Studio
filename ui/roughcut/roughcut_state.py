@@ -114,6 +114,7 @@ class RoughcutStateMixin:
             save_project(
                 project_path,
                 segments=segments,
+                user_settings=load_settings(),
                 roughcut_state=self._roughcut_state_payload(),
                 active_work_mode="roughcut",
             )

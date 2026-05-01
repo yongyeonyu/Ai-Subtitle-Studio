@@ -21,7 +21,7 @@ class QueuePanelWidget(QWidget):
         layout.setContentsMargins(6, 4, 6, 6)
         layout.setSpacing(4)
 
-        self.queue_header_lbl = QLabel("📋 처리할 파일 리스트")
+        self.queue_header_lbl = QLabel("큐 리스트 : (0/0) - 0% 완료")
         self.queue_header_lbl.setStyleSheet(label_style("normal", 9, bold=True))
         layout.addWidget(self.queue_header_lbl)
 

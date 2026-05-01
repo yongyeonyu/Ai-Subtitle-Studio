@@ -5,13 +5,14 @@ media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 
 [특징] 
 1. VAD가 설정된 무음 간격(기본 2.0초)을 기준으로 통짜 음성 섹터를 구성
 2. 무음 세그먼트와 음성 섹터를 앱 로그에 완벽하게 분리하여 출력
-3. 후발대(Whisper)는 무조건 선발대가 지정한 음성 섹터의 시작점부터 인식 시작 (30초 청크 유지)
+3. Whisper는 기본적으로 고정 오버랩 청크를 인식하고, VAD는 검수/선택 선분할 신호로만 사용
 """
 import sys
-import os, subprocess, json, re, config, shutil, time, wave, threading
+import os, subprocess, json, re, config, shutil, time, wave, threading, math
 from concurrent.futures import ThreadPoolExecutor
+from core.audio.audio_presets import apply_audio_preset
 from core.performance import bounded_worker_count
-from core.platform_compat import demucs_binary, ffmpeg_binary, hidden_subprocess_kwargs
+from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs, rnnoise_binary
 from core.subtitle_quality.candidate_ranker import rank_overlap_candidates
 from core.subtitle_quality.hallucination_detector import annotate_segment_hallucination_risk
 from core.subtitle_quality.models import attach_asr_metadata
@@ -25,6 +26,7 @@ from logger import get_logger
 
 _CHUNK_DURATION = 30
 _OVERLAP_SEC = 3.0
+_VAD_CACHE_VERSION = 3
 
 
 def _parse_worker_json_line(line: str):
@@ -44,7 +46,7 @@ class VideoProcessor:
     
     def __init__(self):
         self.whisper_model = getattr(config, "WHISPER_MODEL", "mlx-community/whisper-large-v3-mlx")
-        self.audio_ai = "demucs"
+        self.audio_ai = "deepfilter"
         self.vad_model = "silero"
         self.io_workers = bounded_worker_count(kind="io")
 
@@ -54,7 +56,7 @@ class VideoProcessor:
                 with open(settings_path, "r", encoding="utf-8") as f:
                     s = json.load(f)
                     self.whisper_model = s.get("selected_whisper_model", self.whisper_model)
-                    self.audio_ai = s.get("selected_audio_ai", "demucs")
+                    self.audio_ai = s.get("selected_audio_ai", "deepfilter")
                     self.vad_model = s.get("selected_vad", "silero")
                     self.io_workers = bounded_worker_count(s.get("io_workers", self.io_workers), kind="io")
             except Exception:
@@ -71,6 +73,16 @@ class VideoProcessor:
         self._vad_loaded = False
         self._vad_model = None
         self._vad_utils = None
+        self.stage_callback = None
+
+    def _notify_stage(self, status: str):
+        callback = getattr(self, "stage_callback", None)
+        if not callable(callback):
+            return
+        try:
+            callback(str(status or ""))
+        except Exception:
+            pass
 
     def _run_media_command(self, cmd: list[str], *, label: str, timeout: float | None = None) -> bool:
         try:
@@ -96,6 +108,140 @@ class VideoProcessor:
             return False
         return True
 
+    def _apply_rnnoise(self, source_wav: str, target_wav: str) -> bool:
+        ffmpeg = ffmpeg_binary()
+        rnnoise = rnnoise_binary()
+        raw_in = f"{target_wav}.rnnoise.in.raw"
+        raw_out = f"{target_wav}.rnnoise.out.raw"
+        try:
+            if not self._run_media_command(
+                [
+                    ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+                    "-i", source_wav,
+                    "-ac", "1", "-ar", "48000",
+                    "-f", "s16le",
+                    raw_in,
+                ],
+                label="RNNoise 입력 변환",
+            ):
+                return False
+            if not self._run_media_command([rnnoise, raw_in, raw_out], label="RNNoise 노이즈 제거"):
+                get_logger().log("  ⚠️ RNNoise 실행 실패 또는 미설치: FFMPEG 정제로 계속 진행합니다")
+                return False
+            return self._run_media_command(
+                [
+                    ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+                    "-f", "s16le", "-ar", "48000", "-ac", "1",
+                    "-i", raw_out,
+                    "-acodec", "pcm_s16le",
+                    target_wav,
+                ],
+                label="RNNoise WAV 변환",
+            )
+        finally:
+            for path in (raw_in, raw_out):
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _float_setting(settings: dict, key: str, default: float, min_value: float | None = None, max_value: float | None = None) -> float:
+        try:
+            value = float(settings.get(key, default))
+        except (TypeError, ValueError):
+            value = float(default)
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+
+    @staticmethod
+    def _fmt_filter_num(value: float) -> str:
+        return f"{value:g}"
+
+    def _build_ffmpeg_preprocess_filter(self, settings: dict) -> str:
+        hp = int(self._float_setting(settings, "ff_hp", settings.get("none_hp", 90), 0, 500))
+        lp = int(self._float_setting(settings, "ff_lp", settings.get("none_lp", 3200), 0, 8000))
+        nf = self._float_setting(settings, "ff_nf", settings.get("none_nf", -32), -80, 0)
+        dyn_m = self._float_setting(settings, "ff_dynaudnorm_m", 10.0, 1.0, 50.0)
+        dyn_p = self._float_setting(settings, "ff_dynaudnorm_p", 0.95, 0.5, 1.0)
+        treble = self._float_setting(settings, "ff_treble_boost", 0.0, -10.0, 20.0)
+        target = self._float_setting(settings, "none_target", -14.0, -40.0, 0.0)
+
+        filters = []
+        if hp > 0:
+            filters.append(f"highpass=f={hp}")
+        if lp > 0:
+            filters.append(f"lowpass=f={lp}")
+        filters.append(f"afftdn=nf={self._fmt_filter_num(nf)}")
+        filters.append(
+            "dynaudnorm=f=150:g=9:"
+            f"m={self._fmt_filter_num(dyn_m)}:"
+            f"p={self._fmt_filter_num(dyn_p)}"
+        )
+        if abs(treble) >= 0.01:
+            filters.append(
+                "equalizer=f=3200:width_type=h:width=2200:"
+                f"g={self._fmt_filter_num(treble)}"
+            )
+        filters.append(f"loudnorm=I={self._fmt_filter_num(target)}")
+        return ",".join(filters) if filters else "anull"
+
+    def _build_audio_cleanup_filter(self, audio_ai: str, settings: dict) -> str:
+        df_vol = self._float_setting(settings, "df_vol", 3.5, 0.5, 8.0)
+
+        if audio_ai == "deepfilter":
+            hp = int(self._float_setting(settings, "df_hp", 100, 0, 500))
+            lp = int(self._float_setting(settings, "df_lp", 8000, 1000, 8000))
+            nf = self._float_setting(settings, "df_nf", settings.get("ff_nf", -32), -80, 0)
+            eq_gain = self._float_setting(settings, "df_eq_g", 8, -10, 20)
+            comp_th = self._float_setting(settings, "df_comp_th", -28, -60, 0)
+            return (
+                f"highpass=f={hp},lowpass=f={lp},"
+                f"afftdn=nf={self._fmt_filter_num(nf)},"
+                "equalizer=f=3000:width_type=h:width=2000:"
+                f"g={self._fmt_filter_num(eq_gain)},"
+                f"acompressor=threshold={self._fmt_filter_num(comp_th)}dB:ratio=4:attack=5:release=50,"
+                "speechnorm=e=12:r=0.0001:l=1,"
+                f"volume={self._fmt_filter_num(df_vol)},"
+                "loudnorm=I=-14:LRA=11:tp=-1.0"
+            )
+
+        if audio_ai == "rnnoise":
+            hp = int(self._float_setting(settings, "df_hp", 100, 0, 500))
+            lp = int(self._float_setting(settings, "df_lp", 8000, 1000, 8000))
+            eq_gain = self._float_setting(settings, "df_eq_g", 8, -10, 20)
+            comp_th = self._float_setting(settings, "df_comp_th", -28, -60, 0)
+            return (
+                f"highpass=f={hp},lowpass=f={lp},"
+                "equalizer=f=3000:width_type=h:width=2000:"
+                f"g={self._fmt_filter_num(eq_gain)},"
+                f"acompressor=threshold={self._fmt_filter_num(comp_th)}dB:ratio=3:attack=5:release=60,"
+                "speechnorm=e=10:r=0.0001:l=1,"
+                f"volume={self._fmt_filter_num(df_vol)},"
+                "loudnorm=I=-14:LRA=11:tp=-1.0"
+            )
+
+        if audio_ai == "none":
+            return "anull"
+
+        return "anull"
+
+    def _vad_cache_config(self, settings: dict) -> dict:
+        effective_s = apply_review_vad_settings(settings)
+        return {
+            "version": _VAD_CACHE_VERSION,
+            "review_vad_config": review_vad_config(settings),
+            "vad_threshold": float(effective_s.get("vad_threshold", 0.5)),
+            "vad_min_speech": float(effective_s.get("vad_min_speech", 0.25)),
+            "vad_min_silence": float(effective_s.get("vad_min_silence", 2.0)),
+            "vad_speech_pad": float(effective_s.get("vad_speech_pad", 0.2)),
+            "vad_window_size": int(effective_s.get("vad_window_size", 512) or 512),
+        }
+
     # 💡 파라미터에 target_start_sec와 target_end_sec 추가
     # 💡 1. 메인 파이프라인 (불필요한 중복 로직 싹 걷어내고 아주 깔끔해졌습니다)
     # 💡 [STEP 1] 메인 파이프라인 (is_single_segment 파라미터 추가)
@@ -112,36 +258,16 @@ class VideoProcessor:
         for chunk_segs, idx, total in self.transcribe(chunk_dir, is_fast_mode=False, target_end_sec=target_end_sec, is_single=is_single_segment):
             yield chunk_segs, idx, total
 
-    # 💡 [STEP 2] 오디오 추출 엔진 (is_single_segment 파라미터 추가)
+    # 💡 오디오 추출/정제 엔진 (is_single_segment 파라미터 추가)
     def extract_audio(self, video_path: str, target_start_sec=0.0, target_end_sec=None, is_single_segment=False):
         os.makedirs(config.OUTPUT_DIR, exist_ok=True)
         s = self._load_all_settings()
-        audio_ai = s.get("selected_audio_ai", "demucs")
+        audio_ai = s.get("selected_audio_ai", "deepfilter")
         use_basic = s.get("use_basic_filter", True)
         vad_model = s.get("selected_vad", "silero")
 
-        master_filter = f"highpass=f={s.get('none_hp',200)},lowpass=f={s.get('none_lp',3000)},afftdn=nf={s.get('none_nf',-25)},loudnorm=I={s.get('none_target',-14)}"
-
-        dm_vol = s.get("dm_vol", s.get("none_vol", 3.5))
-        df_vol = s.get("df_vol", 3.5)
-
-        _FILTERS = {
-            "demucs": (
-                f"speechnorm=e=12:r=0.0001:l=1,"
-                f"volume={dm_vol},"
-                f"loudnorm=I=-14:LRA=11:tp=-1.0"
-            ),
-            "deepfilter": (
-                f"highpass=f={s.get('df_hp',100)},lowpass=f=8000,"
-                f"equalizer=f=3000:width_type=h:width=2000:g={s.get('df_eq_g',8)},"
-                f"acompressor=threshold={s.get('df_comp_th',-28)}dB:ratio=4:attack=5:release=50,"
-                f"speechnorm=e=12:r=0.0001:l=1,"
-                f"volume={df_vol},"
-                f"loudnorm=I=-14:LRA=11:tp=-1.0"
-            ),
-            "none": "anull",
-        }
-        active_filter = _FILTERS.get(audio_ai, "anull")
+        master_filter = self._build_ffmpeg_preprocess_filter(s)
+        active_filter = self._build_audio_cleanup_filter(audio_ai, s)
 
         base_name = os.path.splitext(os.path.basename(video_path))[0]
         chunk_dir = os.path.join(config.OUTPUT_DIR, f"{base_name}_chunks")
@@ -158,9 +284,11 @@ class VideoProcessor:
             is_valid_cache = True
 
         if is_partial and is_valid_cache:
+            self._notify_stage("♻️ [전처리] FFMPEG 오디오 캐시 재사용")
             get_logger().log("  └ ♻️ [초고속 모드] 정상적으로 분리된 오디오 캐시를 발견하여 추출을 건너뜜")
         else:
-            get_logger().log("  └ 📥 세부 공정 1: 오디오 추출 및 필터 적용 중...")
+            self._notify_stage("⏳ [전처리] FFMPEG 오디오 추출 및 기본 필터 적용 중")
+            get_logger().log("  └ [전처리] FFMPEG 오디오 추출 및 기본 필터 적용 중...")
             ffmpeg = ffmpeg_binary()
             extract_cmd = [ffmpeg, "-y", "-nostdin", "-loglevel", "error", "-i", video_path, "-vn", "-ac", "1", "-ar", "48000"]
             if use_basic:
@@ -170,17 +298,24 @@ class VideoProcessor:
                 return chunk_dir, []
                 
             ai_wav = raw_wav
-            if audio_ai == "demucs":
-                get_logger().log("  └ 🤖 세부 공정 2: Demucs 보컬 정밀 분리 중...")
-                demucs = demucs_binary()
-                self._run_media_command(
-                    [demucs, "--two-stems=vocals", raw_wav, "-o", config.OUTPUT_DIR],
-                    label="Demucs 보컬 분리",
-                )
-                demucs_out = os.path.join(config.OUTPUT_DIR, "htdemucs", f"{base_name}_raw", "vocals.wav")
-                if os.path.exists(demucs_out): ai_wav = demucs_out
+            if audio_ai == "rnnoise":
+                self._notify_stage("⏳ [음성] RNNoise 빠른 노이즈 제거 중")
+                get_logger().log("  └ [음성] RNNoise 빠른 노이즈 제거 중...")
+                rnnoise_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_rnnoise.wav")
+                if self._apply_rnnoise(raw_wav, rnnoise_wav) and os.path.exists(rnnoise_wav):
+                    ai_wav = rnnoise_wav
 
-            get_logger().log("  └ 🔊 세부 공정 3: 음량 평탄화 및 포맷 변환 중...")
+            audio_label = {
+                "deepfilter": "DeepFilter",
+                "rnnoise": "RNNoise",
+                "none": "미사용",
+            }.get(audio_ai, str(audio_ai or "미사용"))
+            if audio_ai == "none":
+                self._notify_stage("⏳ [음성] 미사용: FFMPEG 16k 포맷 변환 중")
+                get_logger().log("  └ [음성] 미사용: FFMPEG 16k 포맷 변환 중...")
+            else:
+                self._notify_stage(f"⏳ [음성] {audio_label} 정제 및 FFMPEG 16k 변환 중")
+                get_logger().log(f"  └ [음성] {audio_label} 정제 및 FFMPEG 16k 변환 중...")
             if not self._run_media_command(
                 [ffmpeg, "-y", "-nostdin", "-loglevel", "error", "-i", ai_wav, "-ac", "1", "-ar", "16000", "-af", active_filter, "-acodec", "pcm_s16le", cleaned_wav],
                 label="ffmpeg 음량 평탄화",
@@ -189,6 +324,41 @@ class VideoProcessor:
             if os.path.exists(raw_wav): os.remove(raw_wav)
 
         vad_segments = []
+        vad_pre_split_enabled = bool(s.get("vad_pre_split_enabled", False))
+        vad_post_align_enabled = bool(s.get("vad_post_stt_align_enabled", True))
+        vad_requested = vad_model != "none" and vad_pre_split_enabled
+        vad_empty_or_failed = False
+        if vad_model != "none" and not vad_pre_split_enabled:
+            if vad_post_align_enabled and os.path.exists(cleaned_wav):
+                self._notify_stage(f"⏳ [VAD] {vad_model.upper()} 음성 위치 재계산 준비 중")
+                get_logger().log(
+                    f"  └ [VAD 후처리] {vad_model.upper()} 음성 위치 재계산 중 "
+                    "(STT 선분할에는 사용하지 않음)"
+                )
+                vad_segments = self._detect_vad_timestamps(
+                    cleaned_wav,
+                    vad_model,
+                    s,
+                    target_start_sec=target_start_sec,
+                    target_end_sec=target_end_sec,
+                    is_single_segment=is_single_segment,
+                    for_post_stt_align=True,
+                )
+                if vad_segments:
+                    try:
+                        with open(os.path.join(chunk_dir, "vad_strict.json"), "w", encoding="utf-8") as f:
+                            json.dump(vad_segments, f)
+                    except Exception:
+                        pass
+                    get_logger().log(f"  └ [VAD 후처리] 음성 위치 {len(vad_segments)}개 확보")
+                else:
+                    get_logger().log("  └ [VAD 후처리] 유효한 음성 위치를 찾지 못해 타이밍 보정을 건너뜁니다")
+            else:
+                get_logger().log(
+                    f"  └ [VAD] {vad_model.upper()} 후처리 비활성: STT 선분할에는 사용하지 않습니다"
+                )
+            vad_model = "none"
+
         if vad_model != "none":
             import hashlib
 
@@ -205,16 +375,18 @@ class VideoProcessor:
                     with open(vad_cache_path, "r", encoding="utf-8") as f:
                         cache_data = json.load(f)
                     wav_stat = os.stat(cleaned_wav)
+                    cache_config = self._vad_cache_config(s)
                     if (cache_data.get("wav_mtime") == wav_stat.st_mtime
                             and cache_data.get("wav_size") == wav_stat.st_size
                             and cache_data.get("vad_model") == vad_model
-                            and cache_data.get("review_vad_config") == review_vad_config(s)
+                            and cache_data.get("vad_cache_config") == cache_config
                             and not is_partial):
                         cache_valid = True
                 except Exception:
                     pass
 
             if cache_valid:
+                self._notify_stage(f"♻️ [VAD] {vad_model.upper()} 캐시 재사용")
                 get_logger().log(f"  └ ♻️ [VAD 캐시] 이전 분석 결과를 재사용합니다.")
                 vad_segments = cache_data.get("timestamps", [])
 
@@ -235,7 +407,8 @@ class VideoProcessor:
                 
             else:
                 # ✅ VAD 새로 실행
-                get_logger().log(f"  └ 🔍 세부 공정 4: {vad_model.upper()} 음성 섹터 스캔 중...")
+                self._notify_stage(f"⏳ [VAD] {vad_model.upper()} 음성 섹터 스캔 중")
+                get_logger().log(f"  └ [VAD 선분할] {vad_model.upper()} 음성 섹터 스캔 중...")
                 vad_success, vad_segments = self._split_with_vad(
                     cleaned_wav, chunk_dir, vad_model, s,
                     target_start_sec, target_end_sec, is_single_segment
@@ -249,7 +422,7 @@ class VideoProcessor:
                             "wav_mtime": wav_stat.st_mtime,
                             "wav_size": wav_stat.st_size,
                             "vad_model": vad_model,
-                            "review_vad_config": review_vad_config(s),
+                            "vad_cache_config": self._vad_cache_config(s),
                             "timestamps": vad_segments
                         }
                         with open(vad_cache_path, "w", encoding="utf-8") as f:
@@ -258,6 +431,7 @@ class VideoProcessor:
                         pass
 
             if not vad_success:
+                vad_empty_or_failed = True
                 vad_model = "none"
 
         # VAD=none 또는 VAD 실패 시: 30초 단위 강제 분할
@@ -265,7 +439,20 @@ class VideoProcessor:
             import wave
             existing_chunks = [f for f in os.listdir(chunk_dir) if f.endswith('.wav')]
             if not existing_chunks and os.path.exists(cleaned_wav):
-                get_logger().log("  └ 🔪 VAD 없음: 30초 단위 강제 분할...")
+                if vad_requested and vad_empty_or_failed and not s.get("allow_force_split_on_empty_vad", False):
+                    stats = self._wav_activity_stats(cleaned_wav)
+                    if not self._has_force_split_activity(stats, s):
+                        get_logger().log(
+                            "  └ [STT 준비] VAD 선분할 결과가 없고 오디오 에너지도 낮아 Whisper 청크 생성을 건너뜁니다 "
+                            f"(peak {stats['peak']:.4f}, rms {stats['rms']:.4f}, 총 {stats['duration']:.1f}초)"
+                        )
+                        return chunk_dir, []
+                    get_logger().log(
+                        "  └ [STT 준비] VAD 선분할 결과는 없지만 오디오 에너지가 있어 고정 오버랩 청크를 생성합니다 "
+                        f"(peak {stats['peak']:.4f}, rms {stats['rms']:.4f}, 총 {stats['duration']:.1f}초)"
+                    )
+                self._notify_stage("⏳ [STT 준비] Whisper 고정 오버랩 청크 분할 중")
+                get_logger().log("  └ [STT 준비] Whisper 고정 오버랩 청크 분할 중...")
                 try:
                     with wave.open(cleaned_wav, 'r') as wf:
                         total_dur = wf.getnframes() / float(wf.getframerate())
@@ -273,11 +460,236 @@ class VideoProcessor:
                     overlap_sec = self._chunk_overlap_sec(s)
                     grouped = self._split_range_with_overlap(0.0, total_dur, chunk_sec, overlap_sec)
                     self._write_grouped_chunks_parallel(cleaned_wav, chunk_dir, grouped)
-                    get_logger().log(f"    → {len(grouped)}개 청크 병렬 생성 완료 (overlap {overlap_sec:.1f}초, 총 {total_dur:.1f}초)")
+                    get_logger().log(f"    → Whisper 청크 {len(grouped)}개 생성 완료 (overlap {overlap_sec:.1f}초, 총 {total_dur:.1f}초)")
                 except Exception as e:
-                    get_logger().log(f"  ⚠️ 강제 분할 실패: {e}")
+                    get_logger().log(f"  ⚠️ STT 청크 분할 실패: {e}")
 
         return chunk_dir, vad_segments
+
+    def _has_force_split_activity(self, stats: dict, settings: dict | None = None) -> bool:
+        settings = settings or {}
+        try:
+            min_peak = float(settings.get("empty_vad_force_split_min_peak", 0.04))
+        except (TypeError, ValueError):
+            min_peak = 0.04
+        try:
+            min_rms = float(settings.get("empty_vad_force_split_min_rms", 0.008))
+        except (TypeError, ValueError):
+            min_rms = 0.008
+        peak = float(stats.get("peak", 0.0) or 0.0)
+        rms = float(stats.get("rms", 0.0) or 0.0)
+        return peak >= max(0.0, min_peak) or rms >= max(0.0, min_rms)
+
+    def _wav_activity_stats(self, wav_path: str) -> dict:
+        stats = {"duration": 0.0, "peak": 0.0, "rms": 0.0}
+        try:
+            from array import array
+            with wave.open(wav_path, "rb") as wf:
+                sample_width = wf.getsampwidth()
+                frame_rate = max(1, int(wf.getframerate() or 1))
+                channels = max(1, int(wf.getnchannels() or 1))
+                total_frames = max(0, int(wf.getnframes() or 0))
+                stats["duration"] = total_frames / float(frame_rate)
+                if total_frames <= 0 or sample_width <= 0:
+                    return stats
+
+                max_sample = float((1 << (8 * sample_width - 1)) - 1) if sample_width > 1 else 128.0
+                max_sample = max(max_sample, 1.0)
+                total_samples = 0
+                square_sum = 0.0
+                peak = 0.0
+                frames_per_read = max(1024, min(frame_rate, 65536))
+
+                while True:
+                    raw = wf.readframes(frames_per_read)
+                    if not raw:
+                        break
+                    samples = []
+                    if sample_width == 2:
+                        usable = len(raw) - (len(raw) % 2)
+                        values = array("h")
+                        values.frombytes(raw[:usable])
+                        if sys.byteorder != "little":
+                            values.byteswap()
+                        samples = values
+                    else:
+                        usable = len(raw) - (len(raw) % sample_width)
+                        signed = sample_width > 1
+                        for offset in range(0, usable, sample_width):
+                            value = int.from_bytes(raw[offset:offset + sample_width], "little", signed=signed)
+                            if sample_width == 1:
+                                value -= 128
+                            samples.append(value)
+                    if not samples:
+                        continue
+                    total_samples += len(samples)
+                    chunk_peak = max(abs(int(v)) for v in samples) / max_sample
+                    peak = max(peak, chunk_peak)
+                    square_sum += sum(float(v) * float(v) for v in samples) / (max_sample * max_sample)
+
+                if total_samples > 0:
+                    stats["rms"] = math.sqrt(square_sum / total_samples)
+                stats["peak"] = peak
+                if channels > 1:
+                    stats["channels"] = channels
+        except Exception as e:
+            get_logger().log(f"  ⚠️ WAV 활동량 분석 실패: {e}")
+        return stats
+
+    def _vad_retry_timestamps_are_usable(self, raw_ts: list, sample_rate: int, total_dur: float) -> bool:
+        if not raw_ts:
+            return False
+        duration = max(0.001, float(total_dur or 0.0))
+        spans = []
+        for ts in raw_ts:
+            try:
+                start = max(0.0, float(ts.get("start", 0)) / float(sample_rate))
+                end = max(start, float(ts.get("end", 0)) / float(sample_rate))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if end > start:
+                spans.append((start, end))
+        if not spans:
+            return False
+
+        total_voice = sum(end - start for start, end in spans)
+        avg_voice = total_voice / max(1, len(spans))
+        coverage = total_voice / duration
+        min_total_voice = min(2.0, max(0.35, duration * 0.01))
+        too_many_fragments = len(spans) > max(20, int(duration / 1.5))
+        mostly_micro_fragments = avg_voice < 0.18
+
+        if total_voice < min_total_voice:
+            return False
+        if mostly_micro_fragments:
+            return False
+        if too_many_fragments and avg_voice < 0.45:
+            return False
+        if coverage > 0.96 and len(spans) > 1:
+            return False
+        return True
+
+    def _detect_vad_timestamps(
+        self,
+        wav_path: str,
+        vad_model: str,
+        s: dict,
+        target_start_sec=0.0,
+        target_end_sec=None,
+        is_single_segment=False,
+        *,
+        for_post_stt_align: bool = False,
+    ) -> list[dict]:
+        try:
+            import torch
+
+            effective_s = apply_review_vad_settings(s)
+            if not self._vad_loaded:
+                self._vad_model, self._vad_utils = torch.hub.load(
+                    repo_or_dir="snakers4/silero-vad",
+                    model="silero_vad",
+                    force_reload=False,
+                    onnx=False,
+                )
+                self._vad_loaded = True
+
+            model = self._vad_model
+            utils = self._vad_utils
+            (get_speech_timestamps, _, read_audio, _, _) = utils
+            v_thresh = float(effective_s.get("vad_threshold", 0.5))
+            v_min_sp = int(float(effective_s.get("vad_min_speech", 0.25)) * 1000)
+            v_min_sil = int(float(effective_s.get("vad_min_silence", 2.0)) * 1000)
+            v_pad_ms = int(float(effective_s.get("vad_speech_pad", 0.2)) * 1000)
+            v_window = int(effective_s.get("vad_window_size", 512) or 512)
+
+            audio_data = read_audio(wav_path)
+            raw_ts = get_speech_timestamps(
+                audio_data,
+                model,
+                sampling_rate=16000,
+                threshold=v_thresh,
+                min_speech_duration_ms=v_min_sp,
+                min_silence_duration_ms=v_min_sil,
+                speech_pad_ms=v_pad_ms,
+                window_size_samples=v_window,
+            )
+            stats = None
+            if not raw_ts:
+                stats = self._wav_activity_stats(wav_path)
+                if self._has_force_split_activity(stats, s):
+                    retry_profiles = [
+                        (
+                            max(0.30, min(0.40, v_thresh - 0.12 if v_thresh > 0.45 else v_thresh * 0.82)),
+                            max(120, min(v_min_sp, 160)),
+                            max(450, min(v_min_sil, 600)),
+                            max(v_pad_ms, 200),
+                        ),
+                        (
+                            max(0.24, min(0.34, v_thresh * 0.62)),
+                            max(100, min(v_min_sp, 130)),
+                            max(320, min(v_min_sil, 450)),
+                            max(v_pad_ms, 250),
+                        ),
+                        (
+                            max(0.20, min(0.28, v_thresh * 0.50)),
+                            max(90, min(v_min_sp, 110)),
+                            max(240, min(v_min_sil, 340)),
+                            max(v_pad_ms, 300),
+                        ),
+                    ]
+                    for retry_idx, (retry_thresh, retry_min_sp, retry_min_sil, retry_pad_ms) in enumerate(retry_profiles, 1):
+                        raw_ts = get_speech_timestamps(
+                            audio_data,
+                            model,
+                            sampling_rate=16000,
+                            threshold=retry_thresh,
+                            min_speech_duration_ms=retry_min_sp,
+                            min_silence_duration_ms=retry_min_sil,
+                            speech_pad_ms=retry_pad_ms,
+                            window_size_samples=v_window,
+                        )
+                        if raw_ts and self._vad_retry_timestamps_are_usable(raw_ts, 16000, stats.get("duration", 0.0)):
+                            get_logger().log(f"  └ [VAD 후처리] 재시도 {retry_idx}회차로 음성 위치 확보")
+                            break
+                        raw_ts = []
+
+            timestamps = [
+                {
+                    "start": t["start"] / 16000.0,
+                    "end": t["end"] / 16000.0,
+                    "source": vad_model,
+                    "post_stt_align": bool(for_post_stt_align),
+                    "vad_word_filter": not bool(for_post_stt_align),
+                    "speech_pad_sec": round(v_pad_ms / 1000.0, 3),
+                    "min_silence_sec": round(v_min_sil / 1000.0, 3),
+                }
+                for t in raw_ts
+            ]
+
+            if target_start_sec > 0.0 or target_end_sec is not None:
+                filtered = []
+                end_limit = target_end_sec if target_end_sec is not None else 99999.0
+                for t in timestamps:
+                    if t["start"] >= end_limit:
+                        continue
+                    if t["end"] <= target_start_sec:
+                        continue
+                    t = dict(t)
+                    if is_single_segment:
+                        t["start"] = max(target_start_sec, t["start"])
+                        t["end"] = min(end_limit, t["end"])
+                    else:
+                        t["start"] = max(target_start_sec, t["start"])
+                    if t["end"] > t["start"]:
+                        filtered.append(t)
+                timestamps = filtered
+
+            if timestamps and timestamps[0]["start"] < 3.0:
+                timestamps[0]["start"] = 0.0
+            return timestamps
+        except Exception as e:
+            get_logger().log(f"⚠️ VAD 후처리 분석 오류: {e}")
+            return []
 
     # 💡 [STEP 3] VAD 분할기 (들여쓰기 및 8개 인자 완벽 교정)
     # [core/media_processor.py] _split_with_vad 함수 전체 교체
@@ -309,13 +721,67 @@ class VideoProcessor:
             v_min_sp = int(float(effective_s.get("vad_min_speech", 0.25)) * 1000)
             v_min_sil = int(float(effective_s.get("vad_min_silence", 2.0)) * 1000)
             v_pad_ms = int(float(effective_s.get("vad_speech_pad", 0.2)) * 1000)
+            v_window = int(effective_s.get("vad_window_size", 512) or 512)
             
             audio_data = read_audio(wav_path)
             raw_ts = get_speech_timestamps(
                 audio_data, model, sampling_rate=16000, threshold=v_thresh, 
                 min_speech_duration_ms=v_min_sp, min_silence_duration_ms=v_min_sil,
-                speech_pad_ms=v_pad_ms, window_size_samples=512
+                speech_pad_ms=v_pad_ms, window_size_samples=v_window
             )
+            stats = None
+            if not raw_ts:
+                stats = self._wav_activity_stats(wav_path)
+                if self._has_force_split_activity(stats, s):
+                    retry_profiles = [
+                        (
+                            max(0.30, min(0.40, v_thresh - 0.12 if v_thresh > 0.45 else v_thresh * 0.82)),
+                            max(120, min(v_min_sp, 160)),
+                            max(450, min(v_min_sil, 600)),
+                            max(v_pad_ms, 200),
+                        ),
+                        (
+                            max(0.24, min(0.34, v_thresh * 0.62)),
+                            max(100, min(v_min_sp, 130)),
+                            max(320, min(v_min_sil, 450)),
+                            max(v_pad_ms, 250),
+                        ),
+                        (
+                            max(0.20, min(0.28, v_thresh * 0.50)),
+                            max(90, min(v_min_sp, 110)),
+                            max(240, min(v_min_sil, 340)),
+                            max(v_pad_ms, 300),
+                        ),
+                    ]
+                    prev_thresh, prev_min_sp, prev_min_sil = v_thresh, v_min_sp, v_min_sil
+                    for retry_idx, (retry_thresh, retry_min_sp, retry_min_sil, retry_pad_ms) in enumerate(retry_profiles, 1):
+                        get_logger().log(
+                            f"  └ 🔁 VAD {retry_idx}차 무검출: 오디오 에너지가 있어 민감도 낮춰 재시도 "
+                            f"(threshold {prev_thresh:.2f}→{retry_thresh:.2f}, "
+                            f"min speech {prev_min_sp}→{retry_min_sp}ms, "
+                            f"min silence {prev_min_sil}→{retry_min_sil}ms, "
+                            f"peak {stats['peak']:.4f}, rms {stats['rms']:.4f})"
+                        )
+                        raw_ts = get_speech_timestamps(
+                            audio_data, model, sampling_rate=16000, threshold=retry_thresh,
+                            min_speech_duration_ms=retry_min_sp, min_silence_duration_ms=retry_min_sil,
+                            speech_pad_ms=retry_pad_ms, window_size_samples=v_window
+                        )
+                        if raw_ts:
+                            if self._vad_retry_timestamps_are_usable(raw_ts, 16000, stats.get("duration", 0.0)):
+                                get_logger().log(f"  └ ✅ VAD 재시도 {retry_idx}회차로 음성 섹터 {len(raw_ts)}개 확보")
+                                break
+                            get_logger().log(
+                                f"  └ ⚠️ VAD 재시도 {retry_idx}회차 결과가 너무 잘게 잡혀 폐기합니다 "
+                                f"({len(raw_ts)}개 섹터)"
+                            )
+                            raw_ts = []
+                        prev_thresh, prev_min_sp, prev_min_sil = retry_thresh, retry_min_sp, retry_min_sil
+                else:
+                    get_logger().log(
+                        "  └ 🔇 VAD 1차 무검출: 오디오 에너지도 낮아 민감도 재시도를 생략합니다 "
+                        f"(threshold {v_thresh:.2f}, peak {stats['peak']:.4f}, rms {stats['rms']:.4f})"
+                    )
             timestamps = [
                 {
                     "start": t["start"] / 16000.0,
@@ -358,7 +824,7 @@ class VideoProcessor:
             if timestamps and timestamps[0]["start"] < 3.0: 
                 timestamps[0]["start"] = 0.0
 
-            get_logger().log("📢 선발대가 요청하신 구간의 음성 섹터를 완벽하게 분리했습니다!")
+            get_logger().log("📢 [VAD 선분할] 음성 섹터 분리가 완료되었습니다.")
             for i, ts in enumerate(timestamps):
                 sm, ss = divmod(ts["start"], 60)
                 em, es = divmod(ts["end"], 60)
@@ -407,6 +873,12 @@ class VideoProcessor:
             except Exception as e:
                 get_logger().log(f"⚠️ user_settings.json 로드 실패: {e}")
 
+        preset_name = str(data.get("audio_preset", "") or "")
+        if preset_name:
+            try:
+                data = apply_audio_preset(data, preset_name)
+            except Exception as e:
+                get_logger().log(f"⚠️ 오디오 프리셋 적용 실패({preset_name}): {e}")
         # 빠른모드 오버라이드: _fast_mode_overrides가 있으면 적용
         overrides = getattr(self, '_fast_mode_overrides', None)
         if overrides and isinstance(overrides, dict):
@@ -417,7 +889,129 @@ class VideoProcessor:
         """빠른모드 오버라이드 제거 — 품질모드/멀티클립 진입 시 호출"""
         self._fast_mode_overrides = None
 
-    def transcribe(self, chunk_dir: str, is_fast_mode: bool = False, target_end_sec: float = None, is_single: bool = False):
+    def _collect_transcribe_result(
+        self,
+        chunk_dir: str,
+        model: str,
+        target_end_sec: float = None,
+        is_single: bool = False,
+        label: str = "STT",
+    ) -> list[dict]:
+        worker = VideoProcessor()
+        worker.language = self.language
+        children = getattr(self, "_ensemble_child_processors", None)
+        if not isinstance(children, list):
+            children = []
+            self._ensemble_child_processors = children
+        children.append(worker)
+        result: list[dict] = []
+        try:
+            for chunk_segs, _idx, _total in worker.transcribe(
+                chunk_dir,
+                is_fast_mode=False,
+                target_end_sec=target_end_sec,
+                is_single=is_single,
+                model_override=model,
+                cleanup_chunk_dir=False,
+                log_label=label,
+            ):
+                result.extend(chunk_segs or [])
+        finally:
+            worker.stop_transcribe()
+            try:
+                children.remove(worker)
+            except ValueError:
+                pass
+        return result
+
+    def transcribe_ensemble(self, chunk_dir: str, target_end_sec: float = None, is_single: bool = False):
+        s = self._load_all_settings()
+        primary_model = s.get("selected_whisper_model", self.whisper_model)
+        secondary_model = s.get("selected_whisper_model_secondary", "")
+        if not secondary_model or secondary_model == primary_model:
+            yield from self.transcribe(
+                chunk_dir,
+                is_fast_mode=False,
+                target_end_sec=target_end_sec,
+                is_single=is_single,
+                model_override=primary_model,
+                cleanup_chunk_dir=True,
+                log_label="STT1",
+            )
+            return
+
+        get_logger().log(
+            "\n🎧 [STT 앙상블] STT1/STT2 병렬 인식 시작 "
+            f"(STT1: {primary_model.split(chr(47))[-1]}, STT2: {secondary_model.split(chr(47))[-1]})"
+        )
+        self._notify_stage("⏳ [STT] STT1/STT2 병렬 인식 중")
+        results: dict[str, list[dict]] = {"STT1": [], "STT2": []}
+        errors: dict[str, BaseException] = {}
+
+        def _run(label: str, model: str):
+            try:
+                results[label] = self._collect_transcribe_result(
+                    chunk_dir,
+                    model,
+                    target_end_sec=target_end_sec,
+                    is_single=is_single,
+                    label=label,
+                )
+            except BaseException as exc:
+                errors[label] = exc
+
+        t1 = threading.Thread(target=_run, args=("STT1", primary_model), daemon=True, name="stt-ensemble-1")
+        t2 = threading.Thread(target=_run, args=("STT2", secondary_model), daemon=True, name="stt-ensemble-2")
+        try:
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
+            for label, exc in errors.items():
+                get_logger().log(f"  ⚠️ [STT 앙상블] {label} 인식 실패: {exc}")
+            if not results["STT1"] and not results["STT2"]:
+                raise RuntimeError("STT 앙상블 결과가 비어 있습니다")
+            from core.audio.stt_ensemble import merge_stt_outputs
+
+            merged = merge_stt_outputs(results["STT1"], results["STT2"])
+            vad_strict = []
+            vad_json = os.path.join(chunk_dir, "vad_strict.json")
+            if os.path.exists(vad_json):
+                try:
+                    with open(vad_json, "r", encoding="utf-8") as f:
+                        vad_strict = json.load(f)
+                except Exception:
+                    vad_strict = []
+            if vad_strict and bool(s.get("vad_post_stt_align_enabled", True)):
+                from core.subtitle_quality.vad_alignment_checker import adjust_segments_to_vad_boundaries
+
+                self._notify_stage("⏳ [VAD] 앙상블 자막 위치 재계산 중")
+                merged, adjusted_count = adjust_segments_to_vad_boundaries(
+                    merged,
+                    vad_strict,
+                    max_shift_sec=float(s.get("vad_post_stt_max_shift_sec", 0.7) or 0.7),
+                    edge_pad_sec=float(s.get("vad_post_stt_edge_pad_sec", 0.04) or 0.04),
+                )
+                get_logger().log(f"  🎯 [VAD 후처리] 앙상블 자막 위치 {adjusted_count}개 보정")
+            get_logger().log(
+                "  ✅ [STT 앙상블] 후보 병합 완료 "
+                f"(STT1 {len(results['STT1'])}개 / STT2 {len(results['STT2'])}개 → {len(merged)}개, "
+                "STT1 원문 보호 · STT2는 빈 구간 보강)"
+            )
+            yield merged, 1, 1
+        finally:
+            shutil.rmtree(chunk_dir, ignore_errors=True)
+
+    def transcribe(
+        self,
+        chunk_dir: str,
+        is_fast_mode: bool = False,
+        target_end_sec: float = None,
+        is_single: bool = False,
+        model_override: str | None = None,
+        cleanup_chunk_dir: bool = True,
+        log_label: str = "STT",
+    ):
         chunks = sorted([f for f in os.listdir(chunk_dir) if f.endswith(".wav")])
         if not chunks:
             yield [], 0, 0
@@ -434,8 +1028,12 @@ class VideoProcessor:
 
         total = len(chunks)
         _s = self._load_all_settings()
-        target_model = _s.get("selected_whisper_model", self.whisper_model)
-        get_logger().log(f"\n🎯 Whisper 인식 시작 (총 {total}블록, 모델: {target_model.split(chr(47))[-1]})")
+        if model_override is None and bool(_s.get("stt_ensemble_enabled", False)):
+            yield from self.transcribe_ensemble(chunk_dir, target_end_sec=target_end_sec, is_single=is_single)
+            return
+        target_model = model_override or _s.get("selected_whisper_model", self.whisper_model)
+        self._notify_stage(f"⏳ [{log_label}] Whisper 인식 중")
+        get_logger().log(f"\n🎯 [{log_label}] Whisper 인식 시작 (총 {total}블록, 모델: {target_model.split(chr(47))[-1]})")
 
         t_sec = 1.0
         q = []
@@ -464,7 +1062,21 @@ class VideoProcessor:
         import config as _cfg
 
         mac_task_id = None
-        if _cfg.IS_MAC:
+        from core.audio.whisper_transformers import is_transformers_whisper_model
+
+        use_transformers_whisper = is_transformers_whisper_model(target_model)
+        if use_transformers_whisper:
+            from core.audio.whisper_transformers import run_whisper
+            proc = run_whisper(
+                chunk_paths=safe_paths,
+                model=target_model,
+                language=self.language,
+                temperature_tuple=temperature_tuple,
+            )
+            if proc is None:
+                get_logger().log("❌ Transformers Whisper 백엔드를 실행할 수 없습니다.")
+                return
+        elif _cfg.IS_MAC:
             from core.audio.whisper_mlx import ensure_worker, submit_task
 
             with self._whisper_lock:
@@ -495,7 +1107,7 @@ class VideoProcessor:
         processed_count = 0
 
         try:
-            if _cfg.IS_MAC:
+            if _cfg.IS_MAC and not use_transformers_whisper:
                 received = 0
                 while received < total:
                     line = proc.stdout.readline()
@@ -604,14 +1216,21 @@ class VideoProcessor:
 
         finally:
             self._whisper_proc = None
-            shutil.rmtree(chunk_dir, ignore_errors=True)
+            if cleanup_chunk_dir:
+                shutil.rmtree(chunk_dir, ignore_errors=True)
             if had_error:
-                get_logger().log("[WARN] Whisper transcription aborted due to worker failure")
+                get_logger().log(f"[WARN] {log_label} Whisper transcription aborted due to worker failure")
             else:
-                get_logger().log("[DONE] Whisper transcription completed")
+                get_logger().log(f"[DONE] {log_label} Whisper transcription completed")
 
     def stop_transcribe(self):
         try:
+            for child in list(getattr(self, "_ensemble_child_processors", []) or []):
+                try:
+                    child.stop_transcribe()
+                except Exception:
+                    pass
+
             import config as _cfg
 
             if _cfg.IS_MAC:
@@ -757,13 +1376,14 @@ class VideoProcessor:
                     if "start" in w and "end" in w and w.get("word", "").strip()
                 ]
 
-                if vad_strict:
+                word_filter_vad = [v for v in vad_strict if v.get("vad_word_filter", True)]
+                if word_filter_vad:
                     temp_words = []
                     for w in valid_words:
                         w_start = w["start"] + offset
                         w_end = w["end"] + offset
                         is_valid = False
-                        for v in vad_strict:
+                        for v in word_filter_vad:
                             if w_start <= v["end"] + 0.5 and w_end >= v["start"] - 0.5:
                                 is_valid = True
                                 break

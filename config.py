@@ -1,4 +1,4 @@
-# Version: 03.04.00
+# Version: 03.05.00
 # Phase: PHASE2
 
 
@@ -9,7 +9,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.04.00"
+APP_VERSION = "03.05.00"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -97,10 +97,21 @@ DEFAULT_ADV_SETTINGS = {
     "sub_min_duration":   0.2,
     "sub_max_cps":        12,
     "sub_dedup_window":   0.5,
+    "stt_ensemble_enabled": False,
+    "selected_whisper_model_secondary": (
+        "youngouk/ghost613-turbo-korean-4bit-mlx"
+        if IS_MAC else
+        "ghost613/faster-whisper-large-v3-turbo-korean"
+    ),
+    "stt_ensemble_llm_judge_enabled": True,
+    "vad_post_stt_align_enabled": True,
+    "vad_post_stt_max_shift_sec": 0.7,
+    "vad_post_stt_edge_pad_sec": 0.04,
     "subtitle_quality_enabled": False,
     "subtitle_quality_auto_check_after_generate": False,
     "subtitle_quality_auto_correct_enabled": False,
-    "review_vad_before_stt_enabled": True,
+    "vad_pre_split_enabled": False,
+    "review_vad_before_stt_enabled": False,
     "review_vad_strict_mode": True,
     "review_vad_speech_pad_sec": 0.35,
     "review_vad_min_silence_sec": 0.8,
@@ -125,6 +136,7 @@ DEFAULT_ROUGHCUT_SETTINGS = {
     "editor_roughcut_draft_enabled": False,
     "editor_roughcut_draft_prompt": "",
     "editor_roughcut_draft_max_subtitle_count": 12,
+    "editor_roughcut_draft_max_major_segments": 10,
     "roughcut_major_segment_ui_enabled": True,
     "roughcut_legacy_table_fallback": True,
     "roughcut_run_after_subtitle_generation": False,
@@ -167,6 +179,7 @@ DEFAULT_ROUGHCUT_SETTINGS = {
     "roughcut_major_min_duration_sec": 0.0,
     "roughcut_major_max_duration_sec": 0.0,
     "roughcut_major_max_subtitle_count": 0,
+    "roughcut_major_max_segment_count": 10,
     "roughcut_boundary_refine_window_sec": 1.5,
     "roughcut_scene_cut_threshold": 18.0,
 }

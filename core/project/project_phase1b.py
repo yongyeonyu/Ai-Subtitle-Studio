@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any
 
 from core.project.project_context import build_editor_state
+from core.project.project_manager import build_model_settings_snapshot
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 
 PROJECT_SCHEMA_VERSION = '03.00.26'
@@ -131,6 +132,10 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
     data['mode'] = mode
     data['updated_at'] = datetime.now().isoformat(timespec='seconds')
     data['workspace'] = {**data.get('workspace', {}), **_workspace_snapshot(owner, editor)}
+    editor_settings = dict(getattr(editor, 'settings', {}) or {})
+    if editor_settings:
+        data['user_settings'] = editor_settings
+        data['model_settings'] = build_model_settings_snapshot(editor_settings)
     data['project_meta'] = _project_meta(owner)
     subtitles = dict(data.get('subtitles', {}) or {})
     subtitles['srt_path'] = _safe_abs(srt_path) or subtitles.get('srt_path')

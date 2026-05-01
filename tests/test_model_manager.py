@@ -100,6 +100,48 @@ class ModelManagerTest(unittest.TestCase):
         self.assertTrue(models[0]["experimental"])
         self.assertEqual(required, [])
 
+    def test_korean_transformers_model_is_visible_on_mac_and_windows(self):
+        row = {
+            "id": "whisper-korean-zeroth-ko-v2-transformers",
+            "name": "Whisper Korean Zeroth KO v2 (Transformers, 실험)",
+            "os": ["mac", "windows"],
+            "required": False,
+            "experimental": True,
+            "pip_packages": ["transformers", "accelerate"],
+            "import_names": ["transformers", "accelerate", "torch"],
+        }
+        registry_path, root = self._registry([row])
+
+        with patch("core.model_manager.importlib.util.find_spec", return_value=object()):
+            mac_models = ModelManager(registry_path=registry_path, project_root=root, current_os="mac").available_models()
+            win_models = ModelManager(registry_path=registry_path, project_root=root, current_os="windows").available_models()
+
+        self.assertEqual(mac_models[0]["id"], "whisper-korean-zeroth-ko-v2-transformers")
+        self.assertEqual(win_models[0]["id"], "whisper-korean-zeroth-ko-v2-transformers")
+        self.assertTrue(mac_models[0]["installed"])
+
+    def test_rnnoise_model_uses_binary_check(self):
+        registry_path, root = self._registry([
+            {
+                "id": "rnnoise",
+                "name": "RNNoise",
+                "category": "Audio",
+                "os": ["mac"],
+                "binary_check": "rnnoise",
+            }
+        ])
+        manager = ModelManager(registry_path=registry_path, project_root=root, current_os="mac")
+
+        with patch("core.platform_compat.rnnoise_binary", return_value="rnnoise_demo"), \
+                patch("core.model_manager.shutil.which", return_value=None):
+            models = manager.available_models()
+        self.assertFalse(models[0]["installed"])
+
+        with patch("core.platform_compat.rnnoise_binary", return_value="rnnoise_demo"), \
+                patch("core.model_manager.shutil.which", return_value="/usr/local/bin/rnnoise_demo"):
+            models = manager.available_models()
+        self.assertTrue(models[0]["installed"])
+
 
 if __name__ == "__main__":
     unittest.main()

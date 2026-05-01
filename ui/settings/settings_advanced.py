@@ -73,35 +73,7 @@ class AdvancedSettingsDialog(QDialog):
                          256, 2048, DEFAULT_ADV_SETTINGS['vad_window_size'], 1, "{} 샘플")
         self.tabs.addTab(tab_silero, "Silero")
 
-        # 탭 2: Demucs
-        tab_dm = QWidget(); form_dm = QFormLayout(tab_dm)
-        self._add_slider(form_dm, "dm_vol", "전체 볼륨 펌핑 (배수):", 
-                         "<nobr>💡 Demucs 추출 후 깨끗해진 목소리의 최종 볼륨을 증폭합니다.<br>➕ : 숨소리까지 커지지만 너무 높으면 소리가 깨질 수 있음 (기본값: {default})<br>➖ : 전체 소리가 작아짐</nobr>", 
-                         10, 50, DEFAULT_ADV_SETTINGS['dm_vol'], 10, "{:.1f} 배")
-        self._add_slider(form_dm, "dm_shifts", "음원 분리 정밀도 (Shifts):", 
-                         "<nobr>💡 오프셋을 주어 여러 번 분리 후 평균을 냅니다.<br>➕ : 품질이 향상되나 시간이 크게 늘어남 (기본값: {default})<br>➖ : 빠르나 노이즈가 남을 수 있음</nobr>", 
-                         0, 10, DEFAULT_ADV_SETTINGS['dm_shifts'], 1, "{} 회")
-        self._add_slider(form_dm, "dm_overlap", "분할 구간 겹침 (Overlap):", 
-                         "<nobr>💡 오디오를 자를 때 겹치는 비율입니다.<br>➕ : 경계선이 자연스러워지나 속도 저하 (기본값: {default})<br>➖ : 빠르지만 경계선 틱 노이즈 발생 가능</nobr>", 
-                         10, 90, DEFAULT_ADV_SETTINGS['dm_overlap'], 100, "{:.2f}")
-        self._add_slider(form_dm, "dm_segments", "분할 처리 단위 (Segment 초):", 
-                         "<nobr>💡 한 번에 메모리에 올릴 오디오 길이입니다.<br>➕ : 메모리를 많이 먹지만 분리 품질 상승 (기본값: {default})<br>➖ : 메모리 절약, 품질 소폭 하락</nobr>", 
-                         10, 100, DEFAULT_ADV_SETTINGS['dm_segments'], 1, "{} 초")
-        self._add_slider(form_dm, "w_dm_no_speech", "무음 건너뛰기 문턱:", 
-                         "<nobr>💡 Whisper가 무음(잡음)으로 판단하여 번역을 포기하는 기준점입니다.<br>➕ : 발음이 살짝만 흐려도 통째로 건너뛰어 대사가 증발함 (기본값: {default})<br>➖ : 아주 작은 소음도 억지로 번역하려 들어 환각이 늘어남</nobr>", 
-                         0, 100, DEFAULT_ADV_SETTINGS['w_dm_no_speech'], 100, "{:.2f}")
-        self._add_slider(form_dm, "w_dm_logprob", "자신감 문턱 (Logprob):", 
-                         "<nobr>💡 AI가 자신의 번역에 확신이 없을 때 출력할지 결정합니다.<br>➕ : 확실한 말만 출력해 듬성듬성 공백이 생김 (기본값: {default})<br>➖ : 틀린 말이라도 일단 다 뱉어냄</nobr>", 
-                         -30, 0, DEFAULT_ADV_SETTINGS['w_dm_logprob'], 10, "{:.1f}")
-        self._add_slider(form_dm, "w_dm_comp", "반복 환각 차단 수치:", 
-                         "<nobr>💡 무의미한 글자 반복을 허용하는 수치입니다.<br>➕ : 반복을 관대하게 허용하여 텍스트가 잘려나가지 않음 (기본값: {default})<br>➖ : 조금만 반복돼도 환각으로 보고 통째로 삭제함</nobr>", 
-                         10, 30, DEFAULT_ADV_SETTINGS['w_dm_comp'], 10, "{:.1f}")
-        self._add_slider(form_dm, "w_dm_temp_max", "창의성/유추 (Max Temp):", 
-                         "<nobr>💡 소음 때문에 발음이 뭉개졌을 때 앞뒤 문맥으로 때려맞추는 상상력입니다.<br>➕ : 그럴듯한 문장으로 지어내어 맥락을 이어감 (기본값: {default})<br>➖ : 들리는 대로만 정직하게 적어 오타가 늘어남</nobr>", 
-                         0, 10, DEFAULT_ADV_SETTINGS['w_dm_temp_max'], 10, "{:.1f}")
-        self.tabs.addTab(tab_dm, "Demucs")
-
-        # 탭 3: DeepFilter
+        # 탭 2: DeepFilter
         tab_df = QWidget(); form_df = QFormLayout(tab_df)
         self._add_slider(form_df, "df_hp", "하이패스 (저음 컷 Hz):", 
                          "<nobr>💡 지정된 주파수(Hz) 미만의 저음을 물리적으로 잘라냅니다.<br>➕ : 저음이 다 잘려 목소리가 앵앵거리게(전화기처럼) 얇아짐 (기본값: {default})<br>➖ : 웅웅거리는 노면/바람 소리가 그대로 남음</nobr>", 

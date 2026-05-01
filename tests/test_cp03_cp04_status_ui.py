@@ -1,15 +1,17 @@
 # Version: 03.02.13
 # Phase: PHASE2
 import os
+import json
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QObject, Qt
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import QApplication, QLabel
+from PyQt6.QtWidgets import QApplication, QLabel, QTextEdit
 
 import config
 from core.state_manager import SubtitleStateManager
@@ -44,7 +46,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         text = home.saved_status_label.text()
         self.assertIn(f"v{config.APP_VERSION}", text)
         self.assertIn("#34C759", text)
-        for forbidden in ("상태 / 설정", "현재 설정", "저장됨:", "버전:"):
+        for forbidden in ("상태 / 설정", "현재 설정", "저장됨:", "버전:", "자막:", "러프컷:"):
             self.assertNotIn(forbidden, text)
 
         state_manager.state = "ST_PROC"
@@ -89,6 +91,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 "Whisper 중": "인식",
                 "LLM 최적화 중": "보정",
                 "💾 자동 저장 중...": "저장",
+                "저장 완료": "완료",
                 "✨ 자막 생성 완료": "완료",
             }
             for status, expected in cases.items():
@@ -201,6 +204,220 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.assertTrue(exited)
             finally:
                 editor.close()
+
+    def test_restart_from_completed_state_backs_up_clears_and_resets_queue(self):
+        from ui.main.main_window import MainWindow
+
+        class _Backend:
+            def __init__(self, files):
+                self.files_to_process = files
+                self.current_folder = os.path.dirname(files[0])
+                self._reuse_existing_single_subtitle = True
+                self._reuse_existing_multiclip_subtitles = True
+                self._reuse_clip_indices = {0}
+                self._force_no_reuse_once = False
+                self._speaker_map = ["00"]
+                self.pipeline_start_time = 0.0
+                self.is_first_start = True
+                self._active = False
+                self.restarted = False
+
+            def restart_current_file(self):
+                self.restarted = True
+
+            def stop(self):
+                self._active = False
+
+        class _Canvas:
+            def __init__(self):
+                self.total_duration = 4.0
+                self.segments = [{"start": 0.0, "end": 1.0, "text": "old"}]
+                self.updated = False
+
+            def update(self):
+                self.updated = True
+
+        class _Timeline:
+            def __init__(self):
+                self.canvas = _Canvas()
+                self.global_canvas = _Canvas()
+                self.updated_segments = None
+                self.playhead = None
+
+            def update_segments(self, segments, start, total):
+                self.updated_segments = (segments, start, total)
+
+            def set_playhead(self, sec):
+                self.playhead = sec
+
+        class _VideoPlayer:
+            def __init__(self):
+                self.context_segments = None
+                self.seek_sec = None
+
+            def set_context_segments(self, segments):
+                self.context_segments = segments
+
+            def seek(self, sec):
+                self.seek_sec = sec
+
+        class _Roughcut:
+            def __init__(self):
+                self._result = object()
+                self._stored_roughcut_result = object()
+                self._source_signature = "sig"
+                self._selected_candidate_id = "candidate_a"
+                self._roughcut_candidates = [{"candidate_id": "candidate_a"}]
+                self._user_edits = {"chapter_1": {"title": "old"}}
+                self.refreshed = False
+                self.empty = False
+
+            def _refresh_candidate_combo(self):
+                self.refreshed = True
+
+            def _set_empty_state(self):
+                self.empty = True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = os.path.join(tmp, "sample.mp4")
+            open(media_path, "wb").close()
+            project_path = os.path.join(tmp, "sample.assp")
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "version": "03.04.01",
+                        "phase": "PHASE2",
+                        "media": [{"order": 0, "path": media_path, "type": "video", "duration": 4.0, "offset": 0.0}],
+                        "timeline": {
+                            "tracks": [{
+                                "clips": [{
+                                    "id": "clip_1",
+                                    "source_path": media_path,
+                                    "timeline_start": 0.0,
+                                    "timeline_end": 4.0,
+                                    "order": 0,
+                                }]
+                            }]
+                        },
+                        "subtitles": {"segments": [{"start": 0.0, "end": 1.0, "text": "old"}]},
+                        "roughcut_state": {"source_signature": "sig", "candidates": [{"candidate_id": "candidate_a"}]},
+                    },
+                    f,
+                    ensure_ascii=False,
+                )
+            window = MainWindow()
+            try:
+                editor = SimpleNamespace(
+                    media_path=media_path,
+                    text_edit=QTextEdit(),
+                    _segment_queue=[{"start": 0.0, "end": 1.0, "text": "old"}],
+                    _cached_segs=[{"start": 0.0, "end": 1.0, "text": "old"}],
+                    _active_seg_start=1.0,
+                    _completion_handled=True,
+                    _roughcut_draft_pending=True,
+                    _is_dirty=True,
+                    timeline=_Timeline(),
+                    video_player=_VideoPlayer(),
+                    _get_current_segments=lambda: [
+                        {"start": 0.0, "end": 1.25, "text": "백업 자막", "speaker": "00"}
+                    ],
+                )
+                remembered = []
+                editor._remember_saved_segments = lambda segs: remembered.append(list(segs))
+                window._editor_widget = editor
+                window.backend = _Backend([media_path])
+                window._current_project_path = project_path
+                window._editor_roughcut_result = object()
+                window._roughcut_widget = _Roughcut()
+
+                self.assertTrue(window._restart_current_pipeline_from_beginning(editor))
+
+                self.assertTrue(window.backend.restarted)
+                self.assertTrue(window.backend._active)
+                self.assertFalse(window.backend._reuse_existing_single_subtitle)
+                self.assertFalse(window.backend._reuse_existing_multiclip_subtitles)
+                self.assertEqual(window.backend._reuse_clip_indices, set())
+                self.assertTrue(window.backend._force_no_reuse_once)
+                self.assertFalse(window.backend.is_first_start)
+                self.assertGreater(window.backend.pipeline_start_time, 0.0)
+                self.assertEqual(editor.text_edit.toPlainText(), "")
+                self.assertEqual(editor._segment_queue, [])
+                self.assertEqual(editor._cached_segs, [])
+                self.assertEqual(editor.timeline.updated_segments[0], [])
+                self.assertEqual(editor.timeline.playhead, 0.0)
+                self.assertEqual(editor.video_player.context_segments, [])
+                self.assertEqual(editor.video_player.seek_sec, 0.0)
+                self.assertEqual(remembered[-1], [])
+                self.assertIsNone(window._editor_roughcut_result)
+                self.assertIsNone(window._roughcut_widget._result)
+                self.assertEqual(window._roughcut_widget._roughcut_candidates, [])
+                self.assertEqual(window._roughcut_widget._selected_candidate_id, "")
+                self.assertTrue(window._roughcut_widget.refreshed)
+                self.assertTrue(window._roughcut_widget.empty)
+                with open(project_path, "r", encoding="utf-8") as f:
+                    saved_project = json.load(f)
+                self.assertEqual(saved_project.get("roughcut_state"), {})
+                self.assertEqual(saved_project.get("subtitles", {}).get("segments"), [])
+                self.assertIn("대기", window.queue_table.item(0, 0).text())
+                self.assertIn("(1/1)", window.queue_header_lbl.text())
+                backup_dir = os.path.join(tmp, "자막백업")
+                self.assertTrue(
+                    any("restart_segments" in name for name in os.listdir(backup_dir))
+                )
+            finally:
+                window.close()
+
+    def test_forced_multiclip_restart_moves_existing_srts_to_backup(self):
+        from core.pipeline import multiclip_pipeline
+        from core.pipeline.multiclip_pipeline import MulticlipPipelineMixin
+
+        class _Thread:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def start(self):
+                pass
+
+        class _Ui:
+            def __init__(self):
+                self._reuse_existing_multiclip_subtitles = True
+                self._reuse_clip_indices = {0}
+                self.init_files = None
+
+            def init_queue_list(self, files):
+                self.init_files = list(files)
+
+        class _Backend(MulticlipPipelineMixin):
+            def __init__(self, ui):
+                import threading
+
+                self.ui = ui
+                self._prefetch_lock = threading.Lock()
+                self._prefetch_generation = 0
+                self._prefetch_cache = {}
+                self._prefetch_threads = {}
+                self._force_no_reuse_once = True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            media_paths = []
+            for idx in range(2):
+                media = os.path.join(tmp, f"clip{idx}.mp4")
+                srt = os.path.splitext(media)[0] + ".srt"
+                open(media, "wb").close()
+                with open(srt, "w", encoding="utf-8") as f:
+                    f.write("1\n00:00:00,000 --> 00:00:01,000\nold\n")
+                media_paths.append(media)
+
+            ui = _Ui()
+            backend = _Backend(ui)
+            with patch.object(multiclip_pipeline.threading, "Thread", _Thread):
+                backend.start_multiclip_pipeline(media_paths, folder=tmp)
+
+            self.assertFalse(os.path.exists(os.path.join(tmp, "clip0.srt")))
+            self.assertFalse(os.path.exists(os.path.join(tmp, "clip1.srt")))
+            self.assertEqual(ui.init_files, media_paths)
+            backup_names = os.listdir(os.path.join(tmp, "자막백업"))
+            self.assertEqual(len([name for name in backup_names if name.endswith(".bak")]), 2)
 
 
 if __name__ == "__main__":

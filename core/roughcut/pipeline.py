@@ -129,9 +129,11 @@ def run_roughcut_pipeline(
     roughcut_segments, chapters = build_major_roughcut_segments(
         chapters,
         subtitles=subtitles,
+        media_duration=duration,
         min_major_duration=float(roughcut_settings.get("roughcut_major_min_duration_sec", 0.0) or 0.0),
         max_major_duration=float(roughcut_settings.get("roughcut_major_max_duration_sec", 0.0) or 0.0),
         max_subtitle_count=int(roughcut_settings.get("roughcut_major_max_subtitle_count", 0) or 0),
+        max_major_segment_count=int(roughcut_settings.get("roughcut_major_max_segment_count", 10) or 10),
     )
     decisions = build_edit_decisions(chapters, packed, gaps)
     cut_points = generate_cut_points(decisions, packed, gaps)

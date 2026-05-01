@@ -8,6 +8,7 @@ from dataclasses import replace
 from .models import ChapterMetadata, RoughCutMinorGroup, RoughCutSegment, SubtitleSegment
 
 _MAJOR_CODES = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+MAX_MAJOR_SEGMENTS = 26
 
 
 def _duration(start: float, end: float) -> float:
@@ -15,9 +16,8 @@ def _duration(start: float, end: float) -> float:
 
 
 def _major_code(index: int) -> str:
-    if index < len(_MAJOR_CODES):
-        return _MAJOR_CODES[index]
-    return f"M{index + 1}"
+    index = max(0, min(int(index or 0), MAX_MAJOR_SEGMENTS - 1))
+    return _MAJOR_CODES[index]
 
 
 def _subtitle_ids_for_range(subtitles: list[SubtitleSegment], start: float, end: float) -> tuple[int, ...]:
@@ -73,9 +73,11 @@ def build_major_roughcut_segments(
     chapters: Iterable[ChapterMetadata],
     subtitles: Iterable[SubtitleSegment] | None = None,
     *,
+    media_duration: float | None = None,
     min_major_duration: float = 0.0,
     max_major_duration: float = 0.0,
     max_subtitle_count: int = 0,
+    max_major_segment_count: int = MAX_MAJOR_SEGMENTS,
 ) -> tuple[tuple[RoughCutSegment, ...], tuple[ChapterMetadata, ...]]:
     """Assign PAGE 3-B major/minor IDs without removing the legacy chapter rows."""
     ordered = sorted(list(chapters or ()), key=lambda chapter: (chapter.start, chapter.end, chapter.chapter_id))
@@ -87,17 +89,24 @@ def build_major_roughcut_segments(
         max_subtitle_count=max(0, int(max_subtitle_count or 0)),
         subtitles=subtitle_items,
     )
+    groups = _merge_groups_to_limit(
+        groups,
+        max_count=max(1, min(MAX_MAJOR_SEGMENTS, int(max_major_segment_count or MAX_MAJOR_SEGMENTS))),
+    )
 
     major_segments: list[RoughCutSegment] = []
     minor_chapters: list[ChapterMetadata] = []
+    major_ranges = _continuous_group_ranges(groups, media_duration=media_duration)
 
     for major_index, group in enumerate(groups):
         if not group:
             continue
         major_id = _major_code(major_index)
         minors: list[RoughCutMinorGroup] = []
-        major_start = min(chapter.start for chapter in group)
-        major_end = max(chapter.end for chapter in group)
+        major_start, major_end = major_ranges[major_index] if major_index < len(major_ranges) else (
+            min(chapter.start for chapter in group),
+            max(chapter.end for chapter in group),
+        )
         major_tags: list[str] = []
         needs_review = any(chapter.needs_review for chapter in group)
         confidence_values: list[float] = []
@@ -172,6 +181,62 @@ def build_major_roughcut_segments(
         )
 
     return tuple(major_segments), tuple(minor_chapters)
+
+
+def _continuous_group_ranges(
+    groups: list[list[ChapterMetadata]],
+    *,
+    media_duration: float | None,
+) -> list[tuple[float, float]]:
+    raw_ranges: list[tuple[float, float]] = []
+    for group in groups:
+        if not group:
+            continue
+        raw_ranges.append((min(chapter.start for chapter in group), max(chapter.end for chapter in group)))
+    if not raw_ranges:
+        return []
+
+    fallback_end = raw_ranges[-1][1]
+    try:
+        duration = float(media_duration if media_duration is not None else fallback_end)
+    except (TypeError, ValueError):
+        duration = fallback_end
+    duration = max(0.0, duration, fallback_end)
+    if len(raw_ranges) == 1:
+        return [(0.0, duration)]
+
+    boundaries = [0.0]
+    for idx in range(len(raw_ranges) - 1):
+        current_start, current_end = raw_ranges[idx]
+        next_start, next_end = raw_ranges[idx + 1]
+        if next_start > current_end:
+            boundary = (current_end + next_start) / 2.0
+        else:
+            boundary = next_start
+        lower = boundaries[-1]
+        upper = duration if idx + 1 == len(raw_ranges) - 1 else max(next_end, next_start, lower)
+        boundaries.append(max(lower, min(float(boundary), upper)))
+    boundaries.append(duration)
+    return [
+        (boundaries[idx], max(boundaries[idx], boundaries[idx + 1]))
+        for idx in range(len(boundaries) - 1)
+    ]
+
+
+def _merge_groups_to_limit(groups: list[list[ChapterMetadata]], *, max_count: int) -> list[list[ChapterMetadata]]:
+    if len(groups) <= max_count:
+        return groups
+    total = len(groups)
+    merged: list[list[ChapterMetadata]] = []
+    for bucket_index in range(max_count):
+        start_idx = bucket_index * total // max_count
+        end_idx = (bucket_index + 1) * total // max_count
+        bucket: list[ChapterMetadata] = []
+        for group in groups[start_idx:end_idx]:
+            bucket.extend(group)
+        if bucket:
+            merged.append(bucket)
+    return merged
 
 
 __all__ = ["build_major_roughcut_segments"]

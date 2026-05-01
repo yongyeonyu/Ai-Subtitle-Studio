@@ -5,11 +5,19 @@ import os
 import urllib.request
 import socket
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtCore import Qt
+os.environ.setdefault(
+    "QT_LOGGING_RULES",
+    "qt.multimedia.*=false;qt.multimedia.ffmpeg.*=false;qt.qpa.fonts=false",
+)
+os.environ.setdefault("AV_LOG_LEVEL", "16")
 
 import config
-from core.performance import configure_qt_runtime
+from core.performance import configure_qt_gpu_rendering_before_app, configure_qt_runtime
+
+configure_qt_gpu_rendering_before_app()
+
+from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtCore import Qt
 from logger import get_logger
 
 _instance_socket = None
@@ -33,9 +41,6 @@ def check_single_instance():
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
-
-os.environ["QT_LOGGING_RULES"] = "qt.multimedia.*=false;qt.multimedia.ffmpeg.*=false;qt.qpa.fonts=false"
-os.environ["AV_LOG_LEVEL"] = "16"
 
 from ui.main.main_window import MainWindow
 from core.path_manager import get_recent_folders, add_recent_folder

@@ -73,6 +73,8 @@ class EditorLifecycleMixin:
         self._editor_widget = editor
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.bind_editor(editor)
+        if hasattr(self, "_attach_global_menu_to_editor"):
+            self._attach_global_menu_to_editor(editor)
         if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(True)
         if hasattr(editor, 'timeline') and self._project_boundary_times: editor.timeline.set_boundary_times(self._project_boundary_times)
         self.stack.insertWidget(1, editor); self.stack.setCurrentWidget(editor)
@@ -244,6 +246,8 @@ class EditorLifecycleMixin:
         self.stack.setCurrentWidget(editor)
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.bind_editor(editor)
+        if hasattr(self, "_attach_global_menu_to_editor"):
+            self._attach_global_menu_to_editor(editor)
         if self._current_project_path:
             self._restore_workspace(editor, self._current_project_path)
             from core.project.project_phase1b import apply_project_ui_state
@@ -255,6 +259,14 @@ class EditorLifecycleMixin:
         old = getattr(self, "_editor_widget", None)
         if not old:
             return
+        try:
+            detach = getattr(old, "detach_external_menu_bar", None)
+            if callable(detach):
+                detach()
+            if hasattr(self, "_dock_global_menu_to_workspace"):
+                self._dock_global_menu_to_workspace()
+        except RuntimeError:
+            pass
         try:
             if self.stack.indexOf(old) < 0:
                 self._editor_widget = None
@@ -335,6 +347,8 @@ class EditorLifecycleMixin:
         else:
             event.accept()
 
+        if hasattr(self, "_detach_app_event_filter"):
+            self._detach_app_event_filter()
         get_logger().clear_ui_callback()
         self.blockSignals(True)
         if self._editor_widget and hasattr(self._editor_widget, 'video_player'):

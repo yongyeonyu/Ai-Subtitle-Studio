@@ -5,7 +5,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from core.project.project_manager import load_project, save_project
+from core.project.project_manager import extract_model_settings, load_project, merge_project_model_settings, save_project
 from core.project.project_context import (
     build_editor_state,
     project_active_work_mode,
@@ -155,6 +155,53 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(project_roughcut_state(loaded)["selected_candidate_id"], "candidate_a")
         self.assertEqual(len(project_roughcut_state(loaded)["candidates"]), 1)
         self.assertEqual(project_segments_to_editor(loaded)[0]["text"], "저장")
+
+    def test_save_project_persists_model_settings_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            save_project(
+                str(path),
+                user_settings={
+                    "selected_audio_ai": "deepfilter",
+                    "selected_vad": "silero",
+                    "selected_whisper_model": "primary-ko",
+                    "stt_ensemble_enabled": True,
+                    "selected_whisper_model_secondary": "secondary-large",
+                    "selected_llm_provider": "ollama",
+                    "selected_model": "exaone3.5:7.8b",
+                    "roughcut_llm_enabled": True,
+                    "roughcut_llm_use_override": False,
+                    "roughcut_llm_model": "inherit",
+                    "non_model_ui_key": "ignored",
+                },
+            )
+            loaded = load_project(str(path))
+
+        snapshot = loaded["model_settings"]
+        self.assertEqual(snapshot["schema"], "ai_model_settings.v1")
+        self.assertEqual(snapshot["models"]["stt1"], "primary-ko")
+        self.assertEqual(snapshot["models"]["stt2"], "secondary-large")
+        self.assertEqual(snapshot["models"]["roughcut_llm"], "exaone3.5:7.8b")
+        restored = merge_project_model_settings({"selected_model": "old", "theme": "dark"}, loaded)
+        self.assertEqual(restored["selected_model"], "exaone3.5:7.8b")
+        self.assertEqual(restored["selected_whisper_model_secondary"], "secondary-large")
+        self.assertEqual(restored["theme"], "dark")
+        self.assertNotIn("non_model_ui_key", extract_model_settings(loaded))
 
 
 if __name__ == "__main__":

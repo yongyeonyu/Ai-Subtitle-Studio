@@ -5,6 +5,7 @@ ui/timeline_widget.py
 Timeline widget container
 """
 from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen, QBrush
 from PyQt6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
@@ -20,6 +21,45 @@ from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_global import GlobalCanvas
 from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker
 from ui.style import button_style
+
+
+class TimelinePlayheadOverlay(QWidget):
+    """Paint the moving playhead without invalidating the heavy timeline body."""
+
+    def __init__(self, timeline, parent=None):
+        super().__init__(parent)
+        self._timeline = timeline
+        self._sec = 0.0
+        self._scroll_x = 0
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+
+    def set_state(self, sec: float, scroll_x: int):
+        self._sec = max(0.0, float(sec or 0.0))
+        self._scroll_x = max(0, int(scroll_x or 0))
+        self.update()
+
+    def paintEvent(self, event):
+        timeline = self._timeline
+        canvas = getattr(timeline, "canvas", None)
+        if canvas is None or float(getattr(canvas, "total_duration", 0.0) or 0.0) <= 0:
+            return
+        px = int(self._sec * float(getattr(canvas, "pps", 1.0) or 1.0)) - self._scroll_x
+        if px < -16 or px > self.width() + 16:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        color = QColor("#4AFF80") if getattr(canvas, "focus_mode", "segment") == "waveform" else QColor("#FF4444")
+        painter.setPen(QPen(color, 2))
+        painter.drawLine(px, 0, px, self.height())
+        handle_r = 7
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(QBrush(QColor("#FFCC00")))
+        painter.setPen(QPen(QColor("#FFFFFF"), 1))
+        painter.drawEllipse(px - handle_r, 2, handle_r * 2, handle_r * 2)
+        painter.end()
 
 
 class TimelineWidget(QWidget):
@@ -104,6 +144,10 @@ class TimelineWidget(QWidget):
         self.scroll.setStyleSheet("QScrollArea{border:none;}")
 
         lay.addWidget(self.scroll)
+        self._playhead_overlay = self._create_playhead_overlay()
+        self._playhead_overlay.setGeometry(self.scroll.viewport().rect())
+        self._playhead_overlay.raise_()
+        self.canvas._external_playhead_overlay = True
 
         self.global_canvas = GlobalCanvas()
         lay.addWidget(self.global_canvas)
@@ -143,18 +187,19 @@ class TimelineWidget(QWidget):
         self._multiclip_fit_done = False
 
         self._vp = QTimer(self)
-        self._vp.setInterval(16)
+        self._vp.setSingleShot(True)
+        self._vp.setInterval(0)
         self._vp.timeout.connect(self._sync_vp)
-        self._vp.start()
+        self.scroll.horizontalScrollBar().valueChanged.connect(self._schedule_vp_sync)
+        self.scroll.horizontalScrollBar().valueChanged.connect(lambda *_: self._sync_playhead_overlay())
 
         self._target_scroll_x = 0.0
         self._current_scroll_x = 0.0
 
         self._smooth_scroll_timer = QTimer(self)
         self._smooth_scroll_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._smooth_scroll_timer.setInterval(10)
+        self._smooth_scroll_timer.setInterval(16)
         self._smooth_scroll_timer.timeout.connect(self._update_smooth_scroll)
-        self._smooth_scroll_timer.start()
 
         self._focus_border = QWidget(self)
         self._focus_border.setObjectName("TimelineFocusBorder")
@@ -169,6 +214,11 @@ class TimelineWidget(QWidget):
         )
         self._focus_border.hide()
         self._sync_focus_border()
+
+    def _create_playhead_overlay(self):
+        # QQuickWidget transparency can cover the QWidget viewport with black on macOS.
+        # Keep the playhead separated, but use a native transparent QWidget overlay here.
+        return TimelinePlayheadOverlay(self, self.scroll.viewport())
 
     def _canvas_width_for_duration(self, dur: float, pps: float | None = None) -> int:
         pps = float(self.canvas.pps if pps is None else pps)
@@ -185,6 +235,44 @@ class TimelineWidget(QWidget):
         sb = self.scroll.horizontalScrollBar()
         return max(0, min(int(value), sb.maximum()))
 
+    def _playhead_zoom_anchor(self, old_pps: float) -> tuple[float, float]:
+        dur = max(0.0, float(getattr(self.canvas, "total_duration", 0.0) or 0.0))
+        playhead_sec = max(0.0, min(dur, float(getattr(self.canvas, "playhead_sec", 0.0) or 0.0)))
+        viewport_w = max(1, self.scroll.viewport().width())
+        current_scroll = float(self.scroll.horizontalScrollBar().value())
+        playhead_view_x = (playhead_sec * max(0.001, old_pps)) - current_scroll
+        if 0 <= playhead_view_x <= viewport_w:
+            return playhead_sec, playhead_view_x
+        return playhead_sec, viewport_w / 2.0
+
+    def _apply_zoom(self, factor: float, *, anchor_sec: float | None = None, anchor_view_x: float | None = None):
+        dur = self.canvas.total_duration
+        if dur <= 0:
+            return
+        old_pps = float(self.canvas.pps)
+        min_pps = self._fit_pps_for_duration(dur)
+        new_pps = max(min_pps, min(500.0, old_pps * float(factor)))
+        if abs(new_pps - old_pps) < 0.01:
+            return
+        if anchor_sec is None or anchor_view_x is None:
+            anchor_sec, anchor_view_x = self._playhead_zoom_anchor(old_pps)
+
+        self.canvas.pps = new_pps
+        target_w = self._canvas_width_for_duration(dur, new_pps)
+        if self.canvas.width() != target_w:
+            self.canvas.setFixedWidth(target_w)
+        self.canvas.update()
+        self._sync_playhead_overlay()
+
+        new_scroll = int(float(anchor_sec) * new_pps - float(anchor_view_x))
+        new_scroll = self._clamp_scroll_x(new_scroll)
+        sb = self.scroll.horizontalScrollBar()
+        sb.setValue(new_scroll)
+        self._target_scroll_x = float(new_scroll)
+        self._current_scroll_x = float(new_scroll)
+        self._schedule_vp_sync()
+        self._sync_playhead_overlay()
+
     def _on_canvas_right_clicked(self, start_sec, gpos):
         self.seg_right_clicked.emit(start_sec, gpos)
 
@@ -195,7 +283,7 @@ class TimelineWidget(QWidget):
             self.update()
             self.global_canvas.update()
             QTimer.singleShot(0, self._sync_focus_border)
-        return super().eventFilter(obj, ev)
+        return False
 
     def _has_timeline_focus(self):
         return (
@@ -219,6 +307,8 @@ class TimelineWidget(QWidget):
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self._sync_focus_border()
+        self._sync_playhead_overlay()
+        self._schedule_vp_sync()
 
     def paintEvent(self, ev):
         super().paintEvent(ev)
@@ -280,7 +370,9 @@ class TimelineWidget(QWidget):
         prev_dur = getattr(self.canvas, "total_duration", 0.0)
         dur = max(prev_dur, total_dur or 0.0, seg_end)
 
-        self.canvas.setFixedWidth(self._canvas_width_for_duration(dur))
+        target_w = self._canvas_width_for_duration(dur)
+        if self.canvas.width() != target_w:
+            self.canvas.setFixedWidth(target_w)
         self.canvas.update_segments(segs, active_sec, dur)
         self.global_canvas.update_segments(segs, dur)
 
@@ -300,8 +392,24 @@ class TimelineWidget(QWidget):
             self.center_to_sec(sec, smooth=True)
 
     def set_playhead(self, sec):
-        self.canvas.set_playhead(sec)
+        self.canvas.playhead_sec = max(0.0, float(sec or 0.0))
+        self._sync_playhead_overlay()
         self.global_canvas.set_playhead(sec)
+
+    def _sync_playhead_overlay(self):
+        overlay = getattr(self, "_playhead_overlay", None)
+        if overlay is None:
+            return
+        viewport = self.scroll.viewport()
+        try:
+            overlay.setGeometry(viewport.rect())
+            overlay.raise_()
+            overlay.set_state(
+                float(getattr(self.canvas, "playhead_sec", 0.0) or 0.0),
+                int(self.scroll.horizontalScrollBar().value()),
+            )
+        except RuntimeError:
+            pass
 
     def set_boundary_times(self, times: list[float]):
         self.canvas.boundary_times = times or []
@@ -309,21 +417,29 @@ class TimelineWidget(QWidget):
 
     def _update_smooth_scroll(self):
         delta = float(self._target_scroll_x - self._current_scroll_x)
-        if abs(delta) > 2.0:
-            self._current_scroll_x = float(self._clamp_scroll_x(self._current_scroll_x + delta * 0.15))
-            self.scroll.horizontalScrollBar().setValue(int(self._current_scroll_x))
+        if abs(delta) <= 1.0:
+            final_x = float(self._clamp_scroll_x(self._target_scroll_x))
+            self._current_scroll_x = final_x
+            self.scroll.horizontalScrollBar().setValue(int(final_x))
+            self._smooth_scroll_timer.stop()
+            return
+        self._current_scroll_x = float(self._clamp_scroll_x(self._current_scroll_x + delta * 0.42))
+        self.scroll.horizontalScrollBar().setValue(int(self._current_scroll_x))
 
     def center_to_sec(self, sec, smooth=False):
         target_x = int(sec * self.canvas.pps)
         half_w = self.scroll.width() // 2
         target_val = int(self._clamp_scroll_x(max(0, target_x - half_w)))
 
-        if smooth:
-            self._target_scroll_x = float(target_val)
-        else:
-            self._target_scroll_x = float(target_val)
-            self._current_scroll_x = float(target_val)
-            self.scroll.horizontalScrollBar().setValue(int(target_val))
+        self._target_scroll_x = float(target_val)
+        if smooth and abs(float(target_val) - float(self.scroll.horizontalScrollBar().value())) > 240:
+            self._current_scroll_x = float(self.scroll.horizontalScrollBar().value())
+            if not self._smooth_scroll_timer.isActive():
+                self._smooth_scroll_timer.start()
+            return
+        self._smooth_scroll_timer.stop()
+        self._current_scroll_x = float(target_val)
+        self.scroll.horizontalScrollBar().setValue(int(target_val))
 
     def load_waveform(self, path: str, force: bool = False):
         if self._waveform_mode == "multi" and not force:
@@ -448,22 +564,7 @@ class TimelineWidget(QWidget):
                 ev.accept()
                 return
 
-            mouse_x = ev.position().x()
-            scrollbar = self.scroll.horizontalScrollBar()
-            old_scroll = scrollbar.value()
-            sec_at_cursor = (old_scroll + mouse_x) / self.canvas.pps
-
-            self.canvas.pps = new_pps
-
-            self.canvas.setFixedWidth(self._canvas_width_for_duration(dur, new_pps))
-            self.canvas.update()
-
-            new_scroll = int(sec_at_cursor * new_pps - mouse_x)
-            new_scroll = int(self._clamp_scroll_x(new_scroll))
-            scrollbar.setValue(new_scroll)
-            self._target_scroll_x = float(new_scroll)
-            self._current_scroll_x = float(new_scroll)
-
+            self._apply_zoom(new_pps / max(0.001, float(self.canvas.pps)))
             ev.accept()
             return
 
@@ -473,7 +574,13 @@ class TimelineWidget(QWidget):
         self.scroll.horizontalScrollBar().setValue(
             self.scroll.horizontalScrollBar().value() + delta // 2
         )
+        self._schedule_vp_sync()
+        self._sync_playhead_overlay()
         ev.accept()
+
+    def _schedule_vp_sync(self, *args):
+        if not self._vp.isActive():
+            self._vp.start()
 
     def _sync_vp(self):
         start_frac, end_frac = self._viewport_fracs_for_selected_clip()
@@ -517,7 +624,9 @@ class TimelineWidget(QWidget):
         new_pps = self._fit_pps_for_duration(dur)
         self.canvas.pps = new_pps
 
-        self.canvas.setFixedWidth(self._canvas_width_for_duration(dur, new_pps))
+        target_w = self._canvas_width_for_duration(dur, new_pps)
+        if self.canvas.width() != target_w:
+            self.canvas.setFixedWidth(target_w)
         self.canvas.update()
 
         self.scroll.horizontalScrollBar().setValue(0)
@@ -533,21 +642,4 @@ class TimelineWidget(QWidget):
         self._zoom_canvas(1 / 1.15)
 
     def _zoom_canvas(self, factor: float):
-        dur = self.canvas.total_duration
-        if dur <= 0:
-            return
-        old_pps = float(self.canvas.pps)
-        min_pps = self._fit_pps_for_duration(dur)
-        new_pps = max(min_pps, min(500.0, old_pps * float(factor)))
-        if abs(new_pps - old_pps) < 0.01:
-            return
-        sb = self.scroll.horizontalScrollBar()
-        center_sec = (sb.value() + self.scroll.viewport().width() / 2) / max(0.001, old_pps)
-        self.canvas.pps = new_pps
-        self.canvas.setFixedWidth(self._canvas_width_for_duration(dur, new_pps))
-        self.canvas.update()
-        new_scroll = int(center_sec * new_pps - self.scroll.viewport().width() / 2)
-        new_scroll = self._clamp_scroll_x(new_scroll)
-        sb.setValue(new_scroll)
-        self._target_scroll_x = float(new_scroll)
-        self._current_scroll_x = float(new_scroll)
+        self._apply_zoom(factor)

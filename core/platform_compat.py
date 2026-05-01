@@ -56,8 +56,14 @@ def ffprobe_binary() -> str:
     return resolve_executable("ffprobe", "FFPROBE_BINARY")
 
 
-def demucs_binary() -> str:
-    return resolve_executable("demucs", "DEMUCS_BINARY")
+def rnnoise_binary() -> str:
+    binary = os.environ.get("RNNOISE_BINARY")
+    if binary:
+        return resolve_executable(Path(binary).name, "RNNOISE_BINARY")
+    demo = resolve_executable("rnnoise_demo", "RNNOISE_BINARY")
+    if Path(demo).exists() or shutil.which(demo):
+        return demo
+    return resolve_executable("rnnoise")
 
 
 def subprocess_env(extra: dict | None = None, *, strip_qt: bool = False) -> dict:

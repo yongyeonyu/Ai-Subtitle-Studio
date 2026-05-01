@@ -18,6 +18,34 @@ from core.settings import load_settings, get_model_key
 class PipelineHelpersMixin:
     """CoreBackend 에서 사용하는 공통 헬퍼 메서드 모음."""
 
+    def _align_subtitle_segments_to_vad(self, segments, vad_segments, *, context: str = "자막") -> list[dict]:
+        """VAD 음성 경계로 자막 시작/끝을 보정한 뒤 에디터로 넘깁니다."""
+        out = [dict(seg) for seg in (segments or [])]
+        if not out or not vad_segments:
+            return out
+        try:
+            settings = load_settings()
+        except Exception:
+            settings = {}
+        if not bool(settings.get("vad_post_stt_align_enabled", True)):
+            return out
+
+        try:
+            from core.subtitle_quality.vad_alignment_checker import adjust_segments_to_vad_boundaries
+
+            adjusted, adjusted_count = adjust_segments_to_vad_boundaries(
+                out,
+                vad_segments,
+                max_shift_sec=float(settings.get("vad_post_stt_max_shift_sec", 0.7) or 0.7),
+                edge_pad_sec=float(settings.get("vad_post_stt_edge_pad_sec", 0.04) or 0.04),
+            )
+            if adjusted_count:
+                get_logger().log(f"  🎯 [VAD 후처리] {context} 자막 위치 {adjusted_count}개 보정 후 자막 메뉴로 전달")
+            return adjusted
+        except Exception as exc:
+            get_logger().log(f"  ⚠️ [VAD 후처리] {context} 자막 위치 보정 실패: {exc}")
+            return out
+
     def _ask_single_existing_subtitle(self, target_file) -> bool:
         """단일 클립에 기존 SRT가 있으면 사용 여부를 묻고, 미사용 시 백업 이동합니다."""
         try:
@@ -209,11 +237,11 @@ class PipelineHelpersMixin:
                 try:
                     if is_auto_mode:
                         self.ui._sig_update_queue.emit(
-                            queue_index, "✅ 완료 (다음파일)", "", "", ""
+                            queue_index, "완료 (다음파일)", "", "", ""
                         )
                     else:
                         self.ui._sig_update_queue.emit(
-                            queue_index, "✅ 자막생성완료", "", "", ""
+                            queue_index, "자막생성완료", "", "", ""
                         )
                 except RuntimeError:
                     pass

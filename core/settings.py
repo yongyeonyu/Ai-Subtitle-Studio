@@ -36,4 +36,8 @@ def get_model_key(settings: dict | None = None) -> str:
     s = settings or load_settings()
     max_spk = int(s.get("max_speakers", 1))
     dia_flag = "O" if max_spk > 1 else "X"
-    return f"STT:{s.get('selected_whisper_model','기본')}|LLM:{s.get('selected_model','기본')}|DIA:{dia_flag}"
+    stt = s.get("selected_whisper_model", "기본")
+    if s.get("stt_ensemble_enabled"):
+        stt2 = s.get("selected_whisper_model_secondary", "")
+        stt = f"{stt}+{stt2}"
+    return f"STT:{stt}|LLM:{s.get('selected_model','기본')}|DIA:{dia_flag}"

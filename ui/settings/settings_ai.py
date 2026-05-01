@@ -4,16 +4,18 @@
 ui/settings_ai.py  ─  ⚙️ AI 엔진 설정 다이얼로그
 """
 import os
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
+                             QGridLayout,
                              QLabel, QComboBox, QMessageBox, QLineEdit, 
                              QSlider, QPushButton, QCheckBox, QTextEdit,
                              QDoubleSpinBox, QSpinBox, QTabWidget, QWidget,
-                             QScrollArea)
+                             QScrollArea, QSizePolicy)
 from PyQt6.QtCore import Qt
 import config
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import (
-    DEFAULT_ADV_SETTINGS, DEFAULT_WHISPER_MODELS, _fetch_models, _create_bottom_buttons, DATASET_DIR
+    DEFAULT_ADV_SETTINGS, DEFAULT_WHISPER_MODELS, WINDOWS_WHISPER_MODELS,
+    _fetch_models, _create_bottom_buttons, DATASET_DIR
 )
 from ui.style import label_style, settings_button_style, settings_dialog_stylesheet
 from core.llm.provider_registry import cloud_model_items
@@ -27,8 +29,7 @@ class SettingsDialog(QDialog):
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("⚙️ AI 엔진 설정")
-        # 💡 [수정] 4가지 정보가 한 줄에 다 들어오도록 너비를 700px로 확장
-        self.setMinimumWidth(700) 
+        self.setMinimumWidth(860)
         self.setStyleSheet(settings_dialog_stylesheet())
         self.result_settings = dict(settings)
         self.stt_quality_presets = load_stt_quality_presets()
@@ -45,25 +46,19 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(roughcut_tab, "러프컷 LLM")
         self.tabs.addTab(ai_tab, "AI")
 
-        stt_preset_row = QHBoxLayout()
         self.combo_stt_quality_preset = QComboBox()
         for key, preset in self.stt_quality_presets.items():
             desc = preset.get("description", "")
             label = preset.get("label", key)
             self.combo_stt_quality_preset.addItem(f"{label} - {desc}" if desc else label, key)
         self.combo_stt_quality_preset.setMinimumWidth(350)
-        stt_preset_row.addWidget(self.combo_stt_quality_preset)
-        quick_form.addRow("자막 정확도 프리셋:", stt_preset_row)
 
-        preset_row = QHBoxLayout()
         self.combo_audio_preset = QComboBox()
         self.combo_audio_preset.addItem("직접 설정", "")
         for name, preset in self.audio_presets.items():
             desc = preset.get("description", "")
             self.combo_audio_preset.addItem(f"{name} - {desc}" if desc else name, name)
         self.combo_audio_preset.setMinimumWidth(350)
-        preset_row.addWidget(self.combo_audio_preset)
-        quick_form.addRow("오디오 프리셋:", preset_row)
 
         # 1. LLM 모델 (무료/유료 필터 + Ollama 설치/삭제)
         self.llm_filter = settings.get("llm_cost_filter", "all")
@@ -73,83 +68,101 @@ class SettingsDialog(QDialog):
         if not self.models_data:
             self.models_data = _fetch_models()
 
+        model_panel = QWidget()
+        model_grid = QGridLayout(model_panel)
+        model_grid.setContentsMargins(0, 0, 0, 4)
+        model_grid.setHorizontalSpacing(10)
+        model_grid.setVerticalSpacing(8)
+        model_grid.setColumnMinimumWidth(0, 118)
+        model_grid.setColumnStretch(1, 1)
+        model_grid.setColumnStretch(2, 0)
+
         filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(0, 0, 0, 0)
+        filter_row.setSpacing(8)
         self.btn_llm_all = QPushButton("전체")
         self.btn_llm_free = QPushButton("무료")
         self.btn_llm_paid = QPushButton("유료")
         for btn, value in ((self.btn_llm_all, "all"), (self.btn_llm_free, "free"), (self.btn_llm_paid, "paid")):
             btn.setCheckable(True)
-            btn.setMinimumWidth(64)
+            self._fit_action_button(btn, 78)
             btn.clicked.connect(lambda _=False, v=value: self._set_llm_filter(v))
             filter_row.addWidget(btn)
         filter_row.addStretch()
-        editor_form.addRow("LLM 필터:", filter_row)
+        model_grid.addWidget(self._model_grid_label("LLM 필터:"), 0, 0)
+        model_grid.addLayout(filter_row, 0, 1, 1, 2)
 
         self.combo_llm = QComboBox()
-        self.combo_llm.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.combo_llm.setMinimumWidth(350)
-        llm_model_row = QHBoxLayout()
+        self._fit_model_combo(self.combo_llm)
         self.btn_ollama_delete = QPushButton("삭제")
-        self.btn_ollama_delete.setMinimumWidth(64)
+        self._fit_action_button(self.btn_ollama_delete, 78)
         self.btn_ollama_delete.setStyleSheet(settings_button_style("toolbar", min_width=64))
         self.btn_ollama_delete.clicked.connect(self._delete_current_ollama)
-        llm_model_row.addWidget(self.combo_llm)
-        llm_model_row.addWidget(self.btn_ollama_delete)
-        editor_form.addRow("LLM 모델:", llm_model_row)
+        model_grid.addWidget(self._model_grid_label("LLM 모델:"), 1, 0)
+        model_grid.addWidget(self.combo_llm, 1, 1)
+        model_grid.addWidget(self.btn_ollama_delete, 1, 2)
 
-        ollama_row = QHBoxLayout()
+        ollama_buttons = QHBoxLayout()
+        ollama_buttons.setContentsMargins(0, 0, 0, 0)
+        ollama_buttons.setSpacing(8)
         self.combo_ollama_catalog = QComboBox()
-        self.combo_ollama_catalog.setMinimumWidth(270)
+        self._fit_model_combo(self.combo_ollama_catalog)
         self.btn_ollama_install = QPushButton("설치")
         self.btn_ollama_refresh = QPushButton("새로고침")
-        self.btn_ollama_install.setMinimumWidth(64)
-        self.btn_ollama_refresh.setMinimumWidth(82)
+        self._fit_action_button(self.btn_ollama_install, 78)
+        self._fit_action_button(self.btn_ollama_refresh, 96)
         self.btn_ollama_install.setStyleSheet(settings_button_style("toolbar", min_width=64))
         self.btn_ollama_refresh.setStyleSheet(settings_button_style("toolbar", min_width=82))
         self.btn_ollama_install.clicked.connect(self._install_selected_ollama)
         self.btn_ollama_refresh.clicked.connect(self._refresh_ollama_models)
-        ollama_row.addWidget(self.combo_ollama_catalog)
-        ollama_row.addWidget(self.btn_ollama_install)
-        ollama_row.addWidget(self.btn_ollama_refresh)
-        editor_form.addRow("미설치 LLM 모델:", ollama_row)
+        ollama_buttons.addWidget(self.btn_ollama_install)
+        ollama_buttons.addWidget(self.btn_ollama_refresh)
+        model_grid.addWidget(self._model_grid_label("미설치 LLM:"), 2, 0)
+        model_grid.addWidget(self.combo_ollama_catalog, 2, 1)
+        model_grid.addLayout(ollama_buttons, 2, 2)
 
-        registry_row = QHBoxLayout()
+        registry_buttons = QHBoxLayout()
+        registry_buttons.setContentsMargins(0, 0, 0, 0)
+        registry_buttons.setSpacing(8)
         self.combo_registry_model = QComboBox()
-        self.combo_registry_model.setMinimumWidth(270)
+        self._fit_model_combo(self.combo_registry_model)
         self.btn_registry_install = QPushButton("설치")
         self.btn_registry_delete = QPushButton("삭제")
         self.btn_registry_required = QPushButton("필수 확인")
-        for btn, min_width in (
-            (self.btn_registry_install, 64),
-            (self.btn_registry_delete, 64),
-            (self.btn_registry_required, 82),
+        for btn, width, min_width in (
+            (self.btn_registry_install, 78, 64),
+            (self.btn_registry_delete, 78, 64),
+            (self.btn_registry_required, 96, 82),
         ):
-            btn.setMinimumWidth(min_width)
+            self._fit_action_button(btn, width)
             btn.setStyleSheet(settings_button_style("toolbar", min_width=min_width))
         self.btn_registry_install.clicked.connect(self._install_registry_model)
         self.btn_registry_delete.clicked.connect(self._delete_registry_model)
         self.btn_registry_required.clicked.connect(self._check_required_registry_models)
         self.combo_registry_model.currentIndexChanged.connect(self._update_registry_model_status)
-        registry_row.addWidget(self.combo_registry_model)
-        registry_row.addWidget(self.btn_registry_install)
-        registry_row.addWidget(self.btn_registry_delete)
-        registry_row.addWidget(self.btn_registry_required)
-        editor_form.addRow("모델 관리:", registry_row)
+        registry_buttons.addWidget(self.btn_registry_install)
+        registry_buttons.addWidget(self.btn_registry_delete)
+        registry_buttons.addWidget(self.btn_registry_required)
+        model_grid.addWidget(self._model_grid_label("모델 관리:"), 3, 0)
+        model_grid.addWidget(self.combo_registry_model, 3, 1)
+        model_grid.addLayout(registry_buttons, 3, 2)
 
         self.lbl_registry_model_status = QLabel("")
         self.lbl_registry_model_status.setWordWrap(True)
-        self.lbl_registry_model_status.setStyleSheet(label_style("muted", 10) + "padding: 0 5px 8px 5px;")
-        editor_form.addRow("", self.lbl_registry_model_status)
+        self.lbl_registry_model_status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.lbl_registry_model_status.setStyleSheet(label_style("muted", 10) + "padding: 0 2px 2px 2px;")
+        model_grid.addWidget(self.lbl_registry_model_status, 4, 1, 1, 2)
 
         self._reload_ollama_catalog()
         self._reload_registry_models()
         self._rebuild_llm_combo(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b")))
 
-        # 💡 [레이아웃 조정] LLM 메뉴 바로 밑에 4가지 정보를 한 줄로 표시
         self.lbl_model_info = QLabel()
-        self.lbl_model_info.setStyleSheet(label_style("muted", 11) + "padding: 2px 5px 12px 5px;")
-        self.lbl_model_info.setWordWrap(False) # 💡 자동 줄바꿈 강제 차단!
-        editor_form.addRow("", self.lbl_model_info)
+        self.lbl_model_info.setWordWrap(True)
+        self.lbl_model_info.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.lbl_model_info.setStyleSheet(label_style("muted", 10) + "padding: 0 2px 10px 2px;")
+        model_grid.addWidget(self.lbl_model_info, 5, 1, 1, 2)
+        self._hidden_model_panel = model_panel
         self.combo_llm.currentIndexChanged.connect(self._update_model_info)
         self._update_model_info()
 
@@ -228,20 +241,33 @@ class SettingsDialog(QDialog):
                 if folder_name.startswith("models--") and "whisper" in folder_name.lower():
                     repo_name = folder_name.replace("models--", "", 1).replace("--", "/", 1)
                     if repo_name not in w_models: w_models.append(repo_name)
+        stt1_models = [
+            model for model in w_models
+            if "ghost613" not in model.lower() and "zeroth" not in model.lower()
+        ]
+        stt2_models = [
+            model for model in w_models
+            if "ghost613" in model.lower() or "zeroth" in model.lower()
+        ]
+
         self.combo_whisper.setUpdatesEnabled(False)
         self.combo_whisper.blockSignals(True)
-        self.combo_whisper.addItems(w_models)
-        for idx, model_name in enumerate(w_models):
-            if "ghost613" in model_name:
+        self.combo_whisper.addItems(stt1_models)
+        for idx, model_name in enumerate(stt1_models):
+            if "ghost613" in model_name or "Zeroth-KO" in model_name or model_name.startswith("o0dimplz0o/"):
                 self.combo_whisper.setItemText(idx, f"{model_name} (실험)")
-        self.combo_whisper.setMinimumWidth(350)
-        curr_w = settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", w_models[0] if w_models else ""))
+        self._fit_model_combo(self.combo_whisper)
+        curr_w = settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", stt1_models[0] if stt1_models else ""))
         # ── OS에 맞지 않는 저장값이면 기본값으로 교체 ──
-        if not config.IS_MAC and "mlx-community" in curr_w:
+        if not config.IS_MAC and ("mlx-community" in curr_w or curr_w.startswith("youngouk/")):
             curr_w = "large-v3"
-        elif config.IS_MAC and curr_w in ("large-v3", "large-v3-turbo", "medium", "small", "base", "tiny"):
+        elif config.IS_MAC and curr_w in WINDOWS_WHISPER_MODELS:
             curr_w = "mlx-community/whisper-large-v3-mlx"
+        if curr_w not in stt1_models and stt1_models:
+            curr_w = stt1_models[0]
         display_values = [self.combo_whisper.itemText(i).replace(" (실험)", "") for i in range(self.combo_whisper.count())]
+        for i in range(self.combo_whisper.count()):
+            self._set_combo_item_tooltip(self.combo_whisper, i, self.combo_whisper.itemText(i).replace(" (실험)", ""))
         if curr_w in display_values:
             self.combo_whisper.setCurrentText(curr_w)
             for i, value in enumerate(display_values):
@@ -252,27 +278,74 @@ class SettingsDialog(QDialog):
             self.combo_whisper.setCurrentIndex(0)
         self.combo_whisper.blockSignals(False)
         self.combo_whisper.setUpdatesEnabled(True)
-        ai_form.addRow("Whisper 모델:", self.combo_whisper)
+        self._hidden_stt1_model_combo = self.combo_whisper
+
+        self.chk_stt_ensemble = QCheckBox("STT2 병렬 인식 사용 (STT1 우선, STT2는 누락 보강용)")
+        self.chk_stt_ensemble.setChecked(bool(settings.get("stt_ensemble_enabled", False)))
+        ai_form.addRow("", self.chk_stt_ensemble)
+
+        self.combo_whisper_secondary = QComboBox()
+        self.combo_whisper_secondary.setUpdatesEnabled(False)
+        self.combo_whisper_secondary.blockSignals(True)
+        self.combo_whisper_secondary.addItems(stt2_models)
+        for idx, model_name in enumerate(stt2_models):
+            if "ghost613" in model_name or "Zeroth-KO" in model_name or model_name.startswith("o0dimplz0o/"):
+                self.combo_whisper_secondary.setItemText(idx, f"{model_name} (실험)")
+        self._fit_model_combo(self.combo_whisper_secondary)
+        curr_w2 = settings.get(
+            "selected_whisper_model_secondary",
+            "youngouk/ghost613-turbo-korean-4bit-mlx" if config.IS_MAC else "ghost613/faster-whisper-large-v3-turbo-korean",
+        )
+        if not config.IS_MAC and ("mlx-community" in curr_w2 or curr_w2.startswith("youngouk/")):
+            curr_w2 = "ghost613/faster-whisper-large-v3-turbo-korean"
+        elif config.IS_MAC and curr_w2 in WINDOWS_WHISPER_MODELS:
+            curr_w2 = "youngouk/ghost613-turbo-korean-4bit-mlx"
+        if curr_w2 not in stt2_models and stt2_models:
+            curr_w2 = stt2_models[0]
+        display_values2 = [self.combo_whisper_secondary.itemText(i).replace(" (실험)", "") for i in range(self.combo_whisper_secondary.count())]
+        for i in range(self.combo_whisper_secondary.count()):
+            self._set_combo_item_tooltip(self.combo_whisper_secondary, i, self.combo_whisper_secondary.itemText(i).replace(" (실험)", ""))
+        if curr_w2 in display_values2:
+            for i, value in enumerate(display_values2):
+                if value == curr_w2:
+                    self.combo_whisper_secondary.setCurrentIndex(i)
+                    break
+        else:
+            self.combo_whisper_secondary.setCurrentIndex(0)
+        self.combo_whisper_secondary.blockSignals(False)
+        self.combo_whisper_secondary.setUpdatesEnabled(True)
+        self._hidden_stt2_model_combo = self.combo_whisper_secondary
+
+        self.chk_stt_ensemble_llm = QCheckBox("LLM 후보 판정 사용")
+        self.chk_stt_ensemble_llm.setChecked(bool(settings.get("stt_ensemble_llm_judge_enabled", True)))
+        ai_form.addRow("", self.chk_stt_ensemble_llm)
 
         # 5. 음성 처리 AI
         self.combo_audio = QComboBox()
-        self.audio_map = {"Demucs (스튜디오급 보컬 분리)": "demucs", "DeepFilterNet (AI 노이즈 제거)": "deepfilter", "사용 안함": "none"}
+        self.audio_map = {
+            "DeepFilterNet (AI 노이즈 제거)": "deepfilter",
+            "RNNoise (빠른 노이즈 제거/실험)": "rnnoise",
+            "사용 안함": "none",
+        }
         for k in self.audio_map: self.combo_audio.addItem(k)
-        curr_audio = settings.get("selected_audio_ai", "demucs")
+        curr_audio = settings.get("selected_audio_ai", "deepfilter")
         for k, v in self.audio_map.items():
             if v == curr_audio: self.combo_audio.setCurrentText(k); break
-        self.combo_audio.setMinimumWidth(350)
-        ai_form.addRow("음성 처리 AI:", self.combo_audio)
+        self._fit_model_combo(self.combo_audio)
+        self._hidden_audio_model_combo = self.combo_audio
 
         # 6. VAD
         self.combo_vad = QComboBox()
-        self.vad_map = {"Silero (권장)": "silero", "사용 안 함": "none"}
+        self.vad_map = {"Silero (검수용)": "silero", "사용 안 함": "none"}
         for k in self.vad_map: self.combo_vad.addItem(k)
         curr_vad = settings.get("selected_vad", "silero")
         for k, v in self.vad_map.items():
             if v == curr_vad: self.combo_vad.setCurrentText(k); break
-        self.combo_vad.setMinimumWidth(350)
-        ai_form.addRow("음성 구간 탐지(VAD):", self.combo_vad)
+        self._fit_model_combo(self.combo_vad)
+        self._hidden_vad_model_combo = self.combo_vad
+        self.chk_vad_post_align = QCheckBox("VAD로 STT/앙상블 자막 위치 재계산")
+        self.chk_vad_post_align.setChecked(bool(settings.get("vad_post_stt_align_enabled", True)))
+        ai_form.addRow("", self.chk_vad_post_align)
         self._build_subtitle_quality_section(ai_form, settings)
         self._sync_stt_quality_preset_combo(settings.get("stt_quality_preset", "balanced"))
         self._sync_audio_preset_combo(settings.get("audio_preset", ""))
@@ -289,10 +362,38 @@ class SettingsDialog(QDialog):
         form = QFormLayout(content)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
         tab = QScrollArea()
         tab.setWidgetResizable(True)
         tab.setWidget(content)
         return tab, form
+
+    def _model_grid_label(self, text: str):
+        label = QLabel(text)
+        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        label.setMinimumWidth(118)
+        label.setStyleSheet(label_style("text", 11, bold=True))
+        return label
+
+    def _fit_action_button(self, button: QPushButton, width: int):
+        button.setFixedWidth(width)
+        button.setMinimumHeight(40)
+        button.setMaximumHeight(40)
+        button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def _fit_model_combo(self, combo: QComboBox, *, min_contents: int = 24):
+        combo.setMinimumContentsLength(min_contents)
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumHeight(40)
+        combo.setMaximumHeight(40)
+        combo.setMaxVisibleItems(14)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def _set_combo_item_tooltip(self, combo: QComboBox, index: int, text: str):
+        if index >= 0:
+            combo.setItemData(index, text, Qt.ItemDataRole.ToolTipRole)
 
     def _is_paid_item(self, item: dict) -> bool:
         details = dict(item.get("details", {}) or {})
@@ -325,13 +426,16 @@ class SettingsDialog(QDialog):
         except Exception as e:
             self._registry_models = []
             self.combo_registry_model.addItem(f"모델 목록 로드 실패: {e}", {})
+            self._set_combo_item_tooltip(self.combo_registry_model, self.combo_registry_model.count() - 1, str(e))
         for model in self._registry_models:
             status = "설치됨" if model.get("installed") else "미설치"
             required = "필수" if model.get("required") else "선택"
             label = f"[{model.get('category', '-')}] {model.get('name', model.get('id', ''))} · {status} · {required}"
             self.combo_registry_model.addItem(label, model)
+            self._set_combo_item_tooltip(self.combo_registry_model, self.combo_registry_model.count() - 1, label)
         if self.combo_registry_model.count() == 0:
             self.combo_registry_model.addItem("현재 OS에서 관리할 모델 없음", {})
+            self._set_combo_item_tooltip(self.combo_registry_model, 0, "현재 OS에서 관리할 모델 없음")
         for i in range(self.combo_registry_model.count()):
             data = self.combo_registry_model.itemData(i) or {}
             if preferred_id and data.get("id") == preferred_id:
@@ -426,7 +530,9 @@ class SettingsDialog(QDialog):
                 continue
             if self.llm_filter == "paid" and not paid:
                 continue
-            self.combo_llm.addItem(item.get("display_name", item.get("name", "")), item)
+            label = item.get("display_name", item.get("name", ""))
+            self.combo_llm.addItem(label, item)
+            self._set_combo_item_tooltip(self.combo_llm, self.combo_llm.count() - 1, label)
         for i in range(self.combo_llm.count()):
             data = self.combo_llm.itemData(i) or {}
             if data.get("name") == preferred_name or self.combo_llm.itemText(i) == preferred_name:
@@ -443,11 +549,15 @@ class SettingsDialog(QDialog):
             for row in get_ollama_catalog_models():
                 if row.get("installed"):
                     continue
-                self.combo_ollama_catalog.addItem(row.get('label', row['name']), row)
+                label = row.get('label', row['name'])
+                self.combo_ollama_catalog.addItem(label, row)
+                self._set_combo_item_tooltip(self.combo_ollama_catalog, self.combo_ollama_catalog.count() - 1, label)
             if self.combo_ollama_catalog.count() == 0:
                 self.combo_ollama_catalog.addItem("설치 가능한 미설치 모델 없음", {})
+                self._set_combo_item_tooltip(self.combo_ollama_catalog, 0, "설치 가능한 미설치 모델 없음")
         except Exception as e:
             self.combo_ollama_catalog.addItem(f"Ollama 확인 실패: {e}", {})
+            self._set_combo_item_tooltip(self.combo_ollama_catalog, 0, str(e))
 
     def _sync_audio_preset_combo(self, preset_name: str):
         self.combo_audio_preset.blockSignals(True)
@@ -501,30 +611,39 @@ class SettingsDialog(QDialog):
 
     def _build_roughcut_llm_section(self, form: QFormLayout, settings: dict):
         roughcut_settings = merge_roughcut_settings(settings)
-        self.chk_roughcut_llm_enabled = QCheckBox("러프컷 분석에서 LLM 사용")
-        self.chk_roughcut_llm_enabled.setChecked(bool(roughcut_settings.get("roughcut_llm_enabled", False)))
-        form.addRow("", self.chk_roughcut_llm_enabled)
+        self.chk_roughcut_llm_enabled = QCheckBox("")
+        roughcut_model = str(roughcut_settings.get("roughcut_llm_model") or "").strip()
+        roughcut_provider = str(roughcut_settings.get("roughcut_llm_provider") or "none")
+        roughcut_enabled = (
+            bool(roughcut_settings.get("roughcut_llm_enabled", False))
+            and roughcut_provider not in {"inherit", "none"}
+            and roughcut_model
+            and roughcut_model.lower() != "inherit"
+            and "사용 안함" not in roughcut_model
+        )
+        self.chk_roughcut_llm_enabled.setChecked(roughcut_enabled)
+        self._hidden_roughcut_llm_enabled = self.chk_roughcut_llm_enabled
 
-        self.chk_roughcut_llm_override = QCheckBox("기존 자막 생성 LLM 설정 대신 러프컷 전용 설정 사용")
-        self.chk_roughcut_llm_override.setChecked(bool(roughcut_settings.get("roughcut_llm_use_override", False)))
-        form.addRow("", self.chk_roughcut_llm_override)
+        self.chk_roughcut_llm_override = QCheckBox("")
+        self.chk_roughcut_llm_override.setChecked(roughcut_enabled)
+        self._hidden_roughcut_llm_override = self.chk_roughcut_llm_override
 
         provider_row = QHBoxLayout()
         self.combo_roughcut_llm_provider = QComboBox()
-        for label, value in (("상속", "inherit"), ("Ollama", "ollama"), ("OpenAI", "openai"), ("Gemini", "google"), ("사용 안 함", "none")):
+        for label, value in (("사용 안 함", "none"), ("Ollama", "ollama"), ("OpenAI", "openai"), ("Gemini", "google")):
             self.combo_roughcut_llm_provider.addItem(label, value)
-        self._set_combo_data(self.combo_roughcut_llm_provider, roughcut_settings.get("roughcut_llm_provider", "inherit"))
+        self._set_combo_data(self.combo_roughcut_llm_provider, roughcut_provider if roughcut_enabled else "none")
         provider_row.addWidget(self.combo_roughcut_llm_provider)
 
         self.input_roughcut_llm_model = QLineEdit()
-        self.input_roughcut_llm_model.setPlaceholderText("inherit 또는 러프컷 전용 모델명")
-        self.input_roughcut_llm_model.setText(str(roughcut_settings.get("roughcut_llm_model") or "inherit"))
+        self.input_roughcut_llm_model.setPlaceholderText("사이드바에서 러프컷 LLM 모델을 선택하세요")
+        self.input_roughcut_llm_model.setText(roughcut_model if roughcut_enabled else "사용 안함")
         provider_row.addWidget(self.input_roughcut_llm_model)
-        form.addRow("Provider / Model:", provider_row)
+        self._hidden_roughcut_provider_row = provider_row
 
         key_temp_row = QHBoxLayout()
         self.combo_roughcut_api_key_mode = QComboBox()
-        for label, value in (("상속", "inherit"), ("별도 저장 키", "separate")):
+        for label, value in (("공통 API 키", "inherit"), ("별도 저장 키", "separate")):
             self.combo_roughcut_api_key_mode.addItem(label, value)
         self._set_combo_data(self.combo_roughcut_api_key_mode, roughcut_settings.get("roughcut_llm_api_key_mode", "inherit"))
         key_temp_row.addWidget(self.combo_roughcut_api_key_mode)
@@ -536,7 +655,7 @@ class SettingsDialog(QDialog):
         self.spin_roughcut_temperature.setValue(float(roughcut_settings.get("roughcut_llm_temperature", 0.2) or 0.2))
         key_temp_row.addWidget(QLabel("Temperature"))
         key_temp_row.addWidget(self.spin_roughcut_temperature)
-        form.addRow("API Key / 온도:", key_temp_row)
+        self._hidden_roughcut_key_temp_row = key_temp_row
 
         rows_layout = QHBoxLayout()
         self.spin_roughcut_context_rows = QSpinBox()
@@ -602,7 +721,7 @@ class SettingsDialog(QDialog):
 
     def _build_editor_roughcut_draft_section(self, form: QFormLayout, settings: dict):
         roughcut_settings = merge_roughcut_settings(settings)
-        self.chk_editor_roughcut_draft_enabled = QCheckBox("자막 생성 중 러프컷 초안 생성")
+        self.chk_editor_roughcut_draft_enabled = QCheckBox("자막 생성 후 러프컷 초안 생성")
         self.chk_editor_roughcut_draft_enabled.setChecked(bool(roughcut_settings.get("editor_roughcut_draft_enabled", False)))
         form.addRow("러프컷 초안:", self.chk_editor_roughcut_draft_enabled)
 
@@ -753,20 +872,34 @@ class SettingsDialog(QDialog):
     def _update_model_info(self):
         m_data = self.combo_llm.currentData()
         if not m_data or m_data.get('name') == "사용 안함 (Whisper 단독 진행)":
-            self.lbl_model_info.setText("💡 <b>LLM 미사용:</b> AI 교정을 생략하고 가장 빠르게 작업합니다.")
+            text = "💡 <b>LLM 미사용:</b> AI 교정을 생략하고 가장 빠르게 작업합니다."
+            self.lbl_model_info.setText(text)
+            self.lbl_model_info.setToolTip("LLM 미사용: AI 교정을 생략하고 가장 빠르게 작업합니다.")
             return
         if 'size' not in m_data: 
             self.lbl_model_info.setText("")
+            self.lbl_model_info.setToolTip("")
             return
             
         size_gb = m_data['size'] / (1024**3)
         details = m_data.get('details', {})
-        
-        # 💡 [핵심] 줄바꿈 기호 없이 완벽하게 가로 한 줄로 하드코딩!
         billing = details.get('billing', '무료/로컬' if details.get('format') == 'ollama' else '')
-        single_line_text = f"📦 <b>용량:</b> {size_gb:.2f} GB &nbsp;&nbsp;|&nbsp;&nbsp; 🧠 <b>패밀리:</b> {details.get('family','Unknown')} &nbsp;&nbsp;|&nbsp;&nbsp; 📊 <b>파라미터:</b> {details.get('parameter_size','Unknown')} &nbsp;&nbsp;|&nbsp;&nbsp; ⚙️ <b>포맷:</b> {details.get('format','gguf').upper()} &nbsp;&nbsp;|&nbsp;&nbsp; 💳 <b>비용:</b> {billing}"
-        
-        self.lbl_model_info.setText(single_line_text)
+        parts = [
+            f"📦 <b>용량:</b> {size_gb:.2f} GB",
+            f"🧠 <b>패밀리:</b> {details.get('family', 'Unknown')}",
+            f"📊 <b>파라미터:</b> {details.get('parameter_size', 'Unknown')}",
+            f"⚙️ <b>포맷:</b> {details.get('format', 'gguf').upper()}",
+            f"💳 <b>비용:</b> {billing}",
+        ]
+        plain_parts = [
+            f"용량: {size_gb:.2f} GB",
+            f"패밀리: {details.get('family', 'Unknown')}",
+            f"파라미터: {details.get('parameter_size', 'Unknown')}",
+            f"포맷: {details.get('format', 'gguf').upper()}",
+            f"비용: {billing}",
+        ]
+        self.lbl_model_info.setText("  |  ".join(parts))
+        self.lbl_model_info.setToolTip(" / ".join(plain_parts))
     def _collect_settings(self):
         res = dict(self.result_settings)
         m_data = self.combo_llm.currentData() or {}
@@ -777,8 +910,12 @@ class SettingsDialog(QDialog):
             "selected_model": m_data.get('name') or self.combo_llm.currentText(),
             "selected_llm_provider": provider,
             "selected_whisper_model": self.combo_whisper.currentText().replace(" (실험)", ""),
+            "stt_ensemble_enabled": bool(self.chk_stt_ensemble.isChecked()),
+            "selected_whisper_model_secondary": self.combo_whisper_secondary.currentText().replace(" (실험)", ""),
+            "stt_ensemble_llm_judge_enabled": bool(self.chk_stt_ensemble_llm.isChecked()),
             "selected_audio_ai": self.audio_map[self.combo_audio.currentText()],
             "selected_vad": self.vad_map[self.combo_vad.currentText()],
+            "vad_post_stt_align_enabled": bool(self.chk_vad_post_align.isChecked()),
             "google_api_key_saved": bool(google_key_saved),
             "openai_api_key_saved": bool(openai_key_saved),
             "chunk_time_limit": 99999 if self.chk_chunk_all.isChecked() else self.slider_chunk.value(),
@@ -797,10 +934,30 @@ class SettingsDialog(QDialog):
             "wrong_answer_memory_enabled": bool(self.chk_wrong_answer_memory_enabled.isChecked()),
             "review_auto_correct_apply_threshold": int(self.spin_quality_threshold.value()),
             "review_recheck_buffer_sec": round(float(self.spin_quality_recheck_buffer.value()), 2),
-            "roughcut_llm_enabled": self.chk_roughcut_llm_enabled.isChecked(),
-            "roughcut_llm_use_override": self.chk_roughcut_llm_override.isChecked(),
-            "roughcut_llm_provider": self.combo_roughcut_llm_provider.currentData() or "inherit",
-            "roughcut_llm_model": self.input_roughcut_llm_model.text().strip() or "inherit",
+            "roughcut_llm_enabled": (
+                bool(self.chk_roughcut_llm_enabled.isChecked())
+                and (self.combo_roughcut_llm_provider.currentData() or "none") != "none"
+                and "사용 안함" not in (self.input_roughcut_llm_model.text().strip() or "")
+            ),
+            "roughcut_llm_use_override": (
+                bool(self.chk_roughcut_llm_enabled.isChecked())
+                and (self.combo_roughcut_llm_provider.currentData() or "none") != "none"
+                and "사용 안함" not in (self.input_roughcut_llm_model.text().strip() or "")
+            ),
+            "roughcut_llm_provider": (
+                self.combo_roughcut_llm_provider.currentData()
+                if bool(self.chk_roughcut_llm_enabled.isChecked())
+                and (self.combo_roughcut_llm_provider.currentData() or "none") != "none"
+                and "사용 안함" not in (self.input_roughcut_llm_model.text().strip() or "")
+                else "none"
+            ),
+            "roughcut_llm_model": (
+                self.input_roughcut_llm_model.text().strip()
+                if bool(self.chk_roughcut_llm_enabled.isChecked())
+                and (self.combo_roughcut_llm_provider.currentData() or "none") != "none"
+                and "사용 안함" not in (self.input_roughcut_llm_model.text().strip() or "")
+                else "사용 안함"
+            ),
             "roughcut_llm_api_key_mode": self.combo_roughcut_api_key_mode.currentData() or "inherit",
             "roughcut_llm_temperature": round(float(self.spin_roughcut_temperature.value()), 2),
             "roughcut_llm_max_context_rows": int(self.spin_roughcut_context_rows.value()),
@@ -813,6 +970,30 @@ class SettingsDialog(QDialog):
         res.pop("openai_api_key", None)
         return res
 
+    def _notify_runtime_settings_applied(self):
+        parent = self.parent()
+        if parent is None:
+            return
+        if hasattr(parent, "_apply_ai_settings"):
+            parent._apply_ai_settings(self.result_settings)
+            return
+        try:
+            if hasattr(parent, "settings"):
+                parent.settings = dict(self.result_settings)
+            if hasattr(parent, "selected_model"):
+                parent.selected_model = self.result_settings.get(
+                    "selected_model",
+                    getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"),
+                )
+            if hasattr(parent, "_update_engine_label_text"):
+                parent._update_engine_label_text()
+            main_w = parent.window() if hasattr(parent, "window") else None
+            if hasattr(main_w, "_refresh_sidebar_engine_info"):
+                engine_label = getattr(parent, "engine_lbl", None)
+                main_w._refresh_sidebar_engine_info(engine_label.text() if engine_label is not None else None)
+        except Exception:
+            pass
+
     def _on_ok(self): self.result_settings = self._collect_settings(); self.accept()
-    def _on_save(self): self.result_settings = self._collect_settings(); save_settings(self.result_settings); QMessageBox.information(self, "완료", "저장되었습니다.")
+    def _on_save(self): self.result_settings = self._collect_settings(); save_settings(self.result_settings); self._notify_runtime_settings_applied(); QMessageBox.information(self, "완료", "저장되었습니다.")
     def _on_save_default(self): self.result_settings = self._collect_settings(); save_default_settings(self.result_settings); QMessageBox.information(self, "완료", "기본값 저장 완료.")

@@ -101,6 +101,7 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())], ["빠른 설정", "에디터 LLM", "러프컷 LLM", "AI"])
             collected = dialog._collect_settings()
             self.assertEqual(collected["user_prompt"], "editor prompt")
+            self.assertEqual(dialog.chk_editor_roughcut_draft_enabled.text(), "자막 생성 후 러프컷 초안 생성")
             self.assertTrue(collected["editor_roughcut_draft_enabled"])
             self.assertEqual(collected["editor_roughcut_draft_prompt"], "editor roughcut draft prompt")
             self.assertEqual(collected["llm_threads"], 5)

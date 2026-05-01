@@ -4,34 +4,92 @@
       "id": "whisper-large-v3-mlx",
       "name": "Whisper Large V3 (MLX)",
       "category": "STT",
-      "os": ["mac"],
-      "pip_packages": ["mlx-whisper"],
-      "import_names": ["mlx_whisper"],
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
       "hf_repo": "mlx-community/whisper-large-v3-mlx",
       "model_path": "",
       "required": true,
       "hidden": false
     },
     {
+      "id": "whisper-large-v3-turbo-mlx",
+      "name": "Whisper Large V3 Turbo (MLX)",
+      "category": "STT",
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
+      "hf_repo": "mlx-community/whisper-large-v3-turbo",
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
       "id": "whisper-large-v3-faster",
       "name": "Whisper Large V3 (CUDA)",
       "category": "STT",
-      "os": ["windows"],
-      "pip_packages": ["faster-whisper"],
-      "import_names": ["faster_whisper"],
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
       "hf_repo": "Systran/faster-whisper-large-v3",
       "model_path": "models/faster-whisper-large-v3",
-      "model_files": ["model.bin", "config.json", "pytorch_model.bin", "model.safetensors"],
+      "model_files": [
+        "model.bin",
+        "config.json",
+        "pytorch_model.bin",
+        "model.safetensors"
+      ],
       "required": true,
+      "hidden": false
+    },
+    {
+      "id": "whisper-large-v3-turbo-faster",
+      "name": "Whisper Large V3 Turbo (CUDA)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
       "hidden": false
     },
     {
       "id": "whisper-korean-ghost613-mlx",
       "name": "Whisper Korean Turbo (MLX, 실험)",
       "category": "STT",
-      "os": ["mac"],
-      "pip_packages": ["mlx-whisper"],
-      "import_names": ["mlx_whisper"],
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
       "hf_repo": "youngouk/ghost613-turbo-korean-4bit-mlx",
       "model_path": "",
       "required": false,
@@ -42,24 +100,226 @@
       "id": "whisper-korean-ghost613-faster",
       "name": "Whisper Korean Turbo (CUDA, 실험)",
       "category": "STT",
-      "os": ["windows"],
-      "pip_packages": ["faster-whisper"],
-      "import_names": ["faster_whisper"],
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
       "hf_repo": "ghost613/faster-whisper-large-v3-turbo-korean",
       "model_path": "models/faster-whisper-large-v3-turbo-korean",
-      "model_files": ["model.bin", "config.json", "pytorch_model.bin", "model.safetensors"],
+      "model_files": [
+        "model.bin",
+        "config.json",
+        "pytorch_model.bin",
+        "model.safetensors"
+      ],
       "required": false,
       "hidden": false,
       "experimental": true
     },
     {
+      "id": "whisper-korean-zeroth-ko-v2-transformers",
+      "name": "Whisper Korean Zeroth KO v2 (Transformers, 실험)",
+      "category": "STT",
+      "os": [
+        "mac",
+        "windows"
+      ],
+      "pip_packages": [
+        "transformers",
+        "accelerate"
+      ],
+      "import_names": [
+        "transformers",
+        "accelerate",
+        "torch"
+      ],
+      "hf_repo": "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2",
+      "model_path": "",
+      "required": false,
+      "hidden": false,
+      "experimental": true
+    },
+    {
+      "id": "whisper-large-v2-mlx",
+      "name": "Whisper Large V2 (MLX)",
+      "category": "STT",
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
+      "hf_repo": "mlx-community/whisper-large-v2-mlx",
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
       "id": "whisper-medium-mlx",
       "name": "Whisper Medium (MLX, 빠른모드)",
       "category": "STT",
-      "os": ["mac"],
-      "pip_packages": ["mlx-whisper"],
-      "import_names": ["mlx_whisper"],
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
       "hf_repo": "mlx-community/whisper-medium-mlx",
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-medium-en-mlx",
+      "name": "Whisper Medium.en (MLX, 영어 전용)",
+      "category": "STT",
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
+      "hf_repo": "mlx-community/whisper-medium.en-mlx",
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-small-mlx",
+      "name": "Whisper Small (MLX)",
+      "category": "STT",
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
+      "hf_repo": "mlx-community/whisper-small-mlx",
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-small-en-mlx",
+      "name": "Whisper Small.en (MLX, 영어 전용)",
+      "category": "STT",
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
+      "hf_repo": "mlx-community/whisper-small.en-mlx",
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-base-mlx",
+      "name": "Whisper Base (MLX)",
+      "category": "STT",
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
+      "hf_repo": "mlx-community/whisper-base-mlx",
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-base-en-mlx",
+      "name": "Whisper Base.en (MLX, 영어 전용)",
+      "category": "STT",
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
+      "hf_repo": "mlx-community/whisper-base.en-mlx",
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-tiny-mlx",
+      "name": "Whisper Tiny (MLX)",
+      "category": "STT",
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
+      "hf_repo": "mlx-community/whisper-tiny-mlx",
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-tiny-en-mlx",
+      "name": "Whisper Tiny.en (MLX, 영어 전용)",
+      "category": "STT",
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
+      "hf_repo": "mlx-community/whisper-tiny.en-mlx",
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-distil-large-v3-mlx",
+      "name": "Distil-Whisper Large V3 (MLX)",
+      "category": "STT",
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
+      "hf_repo": "mlx-community/distil-whisper-large-v3",
       "model_path": "",
       "required": false,
       "hidden": false
@@ -68,12 +328,278 @@
       "id": "whisper-medium-faster",
       "name": "Whisper Medium (CUDA, 빠른모드)",
       "category": "STT",
-      "os": ["windows"],
-      "pip_packages": ["faster-whisper"],
-      "import_names": ["faster_whisper"],
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
       "hf_repo": "Systran/faster-whisper-medium",
       "model_path": "models/faster-whisper-medium",
-      "model_files": ["model.bin", "config.json", "pytorch_model.bin", "model.safetensors"],
+      "model_files": [
+        "model.bin",
+        "config.json",
+        "pytorch_model.bin",
+        "model.safetensors"
+      ],
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-medium-en-faster",
+      "name": "Whisper Medium.en (CUDA, 영어 전용)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-large-v2-faster",
+      "name": "Whisper Large V2 (CUDA)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-large-v1-faster",
+      "name": "Whisper Large V1 (CUDA)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-large-faster",
+      "name": "Whisper Large (CUDA)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-small-faster",
+      "name": "Whisper Small (CUDA)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-small-en-faster",
+      "name": "Whisper Small.en (CUDA, 영어 전용)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-base-faster",
+      "name": "Whisper Base (CUDA)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-base-en-faster",
+      "name": "Whisper Base.en (CUDA, 영어 전용)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-tiny-faster",
+      "name": "Whisper Tiny (CUDA)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-tiny-en-faster",
+      "name": "Whisper Tiny.en (CUDA, 영어 전용)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "whisper-turbo-faster",
+      "name": "Whisper Turbo (CUDA alias)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "distil-whisper-large-v3-faster",
+      "name": "Distil-Whisper Large V3 (CUDA)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "distil-whisper-large-v2-faster",
+      "name": "Distil-Whisper Large V2 (CUDA)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "distil-whisper-medium-en-faster",
+      "name": "Distil-Whisper Medium.en (CUDA, 영어 전용)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
+      "required": false,
+      "hidden": false
+    },
+    {
+      "id": "distil-whisper-small-en-faster",
+      "name": "Distil-Whisper Small.en (CUDA, 영어 전용)",
+      "category": "STT",
+      "os": [
+        "windows"
+      ],
+      "pip_packages": [
+        "faster-whisper"
+      ],
+      "import_names": [
+        "faster_whisper"
+      ],
+      "model_path": "",
       "required": false,
       "hidden": false
     },
@@ -81,9 +607,16 @@
       "id": "silero-vad",
       "name": "Silero VAD",
       "category": "VAD",
-      "os": ["mac", "windows"],
-      "pip_packages": ["silero-vad"],
-      "import_names": ["silero_vad"],
+      "os": [
+        "mac",
+        "windows"
+      ],
+      "pip_packages": [
+        "silero-vad"
+      ],
+      "import_names": [
+        "silero_vad"
+      ],
       "model_path": "",
       "required": true,
       "hidden": false
@@ -92,31 +625,49 @@
       "id": "deepfilter",
       "name": "DeepFilterNet (노이즈 제거)",
       "category": "Audio",
-      "os": ["mac", "windows"],
-      "pip_packages": ["deepfilternet"],
-      "import_names": ["df"],
+      "os": [
+        "mac",
+        "windows"
+      ],
+      "pip_packages": [
+        "deepfilternet"
+      ],
+      "import_names": [
+        "df"
+      ],
       "model_path": "",
       "required": false,
       "hidden": false
     },
     {
-      "id": "demucs",
-      "name": "Demucs (음성 분리)",
+      "id": "rnnoise",
+      "name": "RNNoise (빠른 노이즈 제거)",
       "category": "Audio",
-      "os": ["mac", "windows"],
-      "pip_packages": ["demucs"],
-      "import_names": ["demucs"],
+      "os": [
+        "mac",
+        "windows"
+      ],
+      "pip_packages": [],
+      "import_names": [],
       "model_path": "",
       "required": false,
-      "hidden": false
+      "hidden": false,
+      "binary_check": "rnnoise"
     },
     {
       "id": "speechbrain-diarize",
       "name": "SpeechBrain 화자 분리",
       "category": "Diarize",
-      "os": ["mac", "windows"],
-      "pip_packages": ["speechbrain"],
-      "import_names": ["speechbrain"],
+      "os": [
+        "mac",
+        "windows"
+      ],
+      "pip_packages": [
+        "speechbrain"
+      ],
+      "import_names": [
+        "speechbrain"
+      ],
       "model_path": "",
       "required": false,
       "hidden": false
@@ -125,7 +676,10 @@
       "id": "ollama",
       "name": "Ollama (로컬 LLM)",
       "category": "LLM",
-      "os": ["mac", "windows"],
+      "os": [
+        "mac",
+        "windows"
+      ],
       "pip_packages": [],
       "model_path": "",
       "install_cmd": "https://ollama.com/download",

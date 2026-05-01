@@ -17,4 +17,4 @@ class ProjectSidebarWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setMinimumWidth(204)
         self.setMaximumWidth(218)
-        self.setStyleSheet(named_panel_style("ProjectSidebarPanel", "sidebar", radius=7))
+        self.setStyleSheet(named_panel_style("ProjectSidebarPanel", "sidebar", radius=0))

@@ -4,8 +4,8 @@
 ui/timeline_input.py
 Timeline input mixin
 """
-from PyQt6.QtCore import QRect, Qt
-from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon, QPainter, QPixmap
+from PyQt6.QtCore import QPoint, QRect, Qt
+from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon, QPainter, QPixmap, QPolygon
 
 import config
 from ui.editor.editor_helpers import find_segment_at
@@ -16,6 +16,7 @@ from ui.timeline.timeline_constants import (
     ICON_SZ,
     SEG_BOT,
     SEG_TOP,
+    SEGMENT_HANDLE_MIN_WIDTH,
     SPEAKER_BOT,
     SPEAKER_TOP,
     _build_gaps,
@@ -132,6 +133,66 @@ class TimelineInputMixin:
                 return seg
         return None
 
+    def _handle_polygon(self, bx: int, is_left: bool) -> QPolygon:
+        cy = SEG_TOP + 32
+        w = HANDLE_R
+        hw = HANDLE_R // 2
+        hh = 12
+        th = 4
+        if is_left:
+            bx += 2
+            return QPolygon([
+                QPoint(bx, cy),
+                QPoint(bx + hw, cy - hh),
+                QPoint(bx + hw, cy - th),
+                QPoint(bx + w, cy - th),
+                QPoint(bx + w, cy + th),
+                QPoint(bx + hw, cy + th),
+                QPoint(bx + hw, cy + hh),
+            ])
+        bx -= 2
+        return QPolygon([
+            QPoint(bx, cy),
+            QPoint(bx - hw, cy - hh),
+            QPoint(bx - hw, cy - th),
+            QPoint(bx - w, cy - th),
+            QPoint(bx - w, cy + th),
+            QPoint(bx - hw, cy + th),
+            QPoint(bx - hw, cy + hh),
+        ])
+
+    def _handle_drag_at(self, x: int, y: int):
+        point = QPoint(x, y)
+        for seg in self.segments:
+            x1, x2 = self._x(seg["start"]), self._x(seg["end"])
+            if x2 - x1 < SEGMENT_HANDLE_MIN_WIDTH:
+                continue
+            if self._handle_polygon(x1, True).containsPoint(point, Qt.FillRule.OddEvenFill):
+                return seg, "square_left"
+            if self._handle_polygon(x2, False).containsPoint(point, Qt.FillRule.OddEvenFill):
+                return seg, "square_right"
+        return None
+
+    def _handle_hover_at(self, x: int, y: int):
+        hit = self._handle_drag_at(x, y)
+        if not hit:
+            return None
+        seg, edge = hit
+        return seg, "left" if edge == "square_left" else "right"
+
+    def _diamond_hit_rect(self, bx: int, *, margin: int = 5) -> QRect:
+        r = 5 + max(0, int(margin))
+        return QRect(int(bx - r), int(DIAMOND_Y - r), r * 2, r * 2)
+
+    def _diamond_index_at(self, x: int, y: int, *, margin: int = 5):
+        for i in range(len(self.segments) - 1):
+            s1 = self.segments[i]
+            s2 = self.segments[i + 1]
+            if abs(s1["end"] - s2["start"]) < 0.05:
+                if self._diamond_hit_rect(self._x(s1["end"]), margin=margin).contains(x, y):
+                    return i
+        return None
+
     def _find_owner_with_settings(self):
         owner = self.parent()
         while owner and not hasattr(owner, "settings"):
@@ -185,9 +246,14 @@ class TimelineInputMixin:
         if not menu.isEmpty():
             menu.exec(gpos)
 
+    def _playhead_handle_hit_rect(self) -> QRect:
+        handle_r = 7
+        px = self._x(float(getattr(self, "playhead_sec", 0.0) or 0.0))
+        return QRect(int(px - handle_r), 2, handle_r * 2, handle_r * 2)
+
     def mousePressEvent(self, ev):
         if ev.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
-            if hasattr(self, '_playhead_handle_rect') and self._playhead_handle_rect.contains(ev.pos()):
+            if self._playhead_handle_hit_rect().contains(ev.pos()):
                 self.playhead_menu_requested.emit(ev.globalPosition().toPoint(), self.playhead_sec); return
 
         x, y = ev.pos().x(), ev.pos().y()
@@ -278,6 +344,24 @@ class TimelineInputMixin:
             if sw > 20 and self._icon_rect(x1, x2).adjusted(-5, -5, 5, 5).contains(x, y):
                 self.seg_to_gap.emit(seg.get("line", 0)); return
 
+        if y < SEG_TOP:
+            self._is_panning = True; self._pan_last_x = ev.globalPosition().x()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor); self.scrub_sec.emit(max(0.0, x / self.pps)); return
+
+        handle_hit = self._handle_drag_at(x, y)
+        if handle_hit:
+            self._setup_drag(handle_hit[0], handle_hit[1], x)
+            return
+
+        diamond_idx = self._diamond_index_at(x, y, margin=5)
+        if diamond_idx is not None:
+            s1 = self.segments[diamond_idx]
+            self.drag_started.emit(); self._drag_edge = "diamond"; self._drag_diamond_idx = diamond_idx
+            self._drag_diamond_orig = s1["end"]; self._drag_x0 = x
+            self._clear_active_gaps_for_segment_drag()
+            self._drag_last_paint_rect = self._drag_visual_rect()
+            self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor)); return
+
         for g in self.gap_segments:
             gx1, gx2 = self._x(g["start"]), self._x(g["end"])
             if self._plus_rect(gx1, gx2).adjusted(-5, -5, 5, 5).contains(x, y):
@@ -285,37 +369,12 @@ class TimelineInputMixin:
                 else: g["active"] = True; self.update(); self.gap_activated.emit(g["start"], g["end"])
                 return
 
-        if y < SEG_TOP:
-            self._is_panning = True; self._pan_last_x = ev.globalPosition().x()
-            self.setCursor(Qt.CursorShape.ClosedHandCursor); self.scrub_sec.emit(max(0.0, x / self.pps)); return
-
         if SEG_TOP <= y <= SEG_BOT:
             for g in self.gap_segments:
                 if g.get("active"): continue
                 gx1, gx2 = self._x(g["start"]), self._x(g["end"])
                 if gx2 - gx1 >= ICON_SZ + 8 and self._plus_rect(gx1, gx2).contains(x, y):
                     g["active"] = True; self.update(); self.gap_activated.emit(g["start"], g["end"]); return
-
-        for i in range(len(self.segments) - 1):
-            s1 = self.segments[i]; s2 = self.segments[i + 1]
-            if abs(s1["end"] - s2["start"]) < 0.05:
-                bx = self._x(s1["end"]); r = max(8, HANDLE_R); cy = DIAMOND_Y
-                rect = QRect(bx - r, cy - r, r * 2, r * 2)
-                if rect.contains(x, y):
-                    self.drag_started.emit(); self._drag_edge = "diamond"; self._drag_diamond_idx = i
-                    self._drag_diamond_orig = s1["end"]; self._drag_x0 = x
-                    self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor)); return
-
-        best_dist = 25; best_click = None
-        for s in self.segments:
-            x1, x2 = self._x(s["start"]), self._x(s["end"]); mid_y = SEG_TOP + (SEG_BOT - SEG_TOP) // 2
-            hx1 = min(x1 + 2 + HANDLE_R // 2, (x1 + x2) // 2); hx2 = max(x2 - 2 - HANDLE_R // 2, (x1 + x2) // 2)
-            if abs(y - mid_y) <= 25:
-                dist_l = abs(x - hx1)
-                if dist_l < best_dist: best_dist = dist_l; best_click = (s, "square_left")
-                dist_r = abs(x - hx2)
-                if dist_r < best_dist: best_dist = dist_r; best_click = (s, "square_right")
-        if best_click: self._setup_drag(best_click[0], best_click[1], x); return
 
         for s in self.segments:
             x1, x2 = self._x(s["start"]), self._x(s["end"])
@@ -327,6 +386,15 @@ class TimelineInputMixin:
         if seg: self.seg_clicked.emit(seg.get("line", 0), seg["start"]); return
         self._is_scrubbing = True; self.scrub_sec.emit(max(0.0, x / self.pps))
 
+    def _clear_active_gaps_for_segment_drag(self):
+        changed = False
+        for gap in getattr(self, "gap_segments", []) or []:
+            if gap.get("active"):
+                gap["active"] = False
+                changed = True
+        if changed:
+            self.update()
+
     def _setup_drag(self, s, edge, x):
         self.drag_started.emit(); self._drag_seg, self._drag_edge = s, edge; self._drag_x0 = x
         self._drag_s0_start, self._drag_s0_end = s["start"], s["end"]
@@ -335,23 +403,70 @@ class TimelineInputMixin:
         self._drag_adj_orig_end_l = self._drag_adj_l["end"] if self._drag_adj_l else 0.0
         self._drag_adj_orig_start_r = self._drag_adj_r["start"] if self._drag_adj_r else 0.0
         self._drag_adj_orig_end_r = self._drag_adj_r["end"] if self._drag_adj_r else 0.0
+        self._clear_active_gaps_for_segment_drag()
+        self._drag_last_paint_rect = self._drag_visual_rect()
         if edge != "center": self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+
+    def _drag_visual_rect(self) -> QRect:
+        edge = getattr(self, "_drag_edge", None)
+        margin = 80
+        top = max(0, SEG_TOP - 12)
+        height = max(1, SEG_BOT - top + 12)
+
+        if edge == "diamond":
+            idx = getattr(self, "_drag_diamond_idx", None)
+            if idx is not None and idx + 1 < len(self.segments):
+                x = self._x(self.segments[idx]["end"])
+                rect = QRect(x - margin, top, margin * 2, height)
+            else:
+                rect = QRect(0, top, 1, height)
+        else:
+            seg = getattr(self, "_drag_seg", None)
+            if not seg:
+                rect = QRect(0, top, 1, height)
+            elif edge == "square_left":
+                x = self._x(seg["start"])
+                ox = self._x(getattr(self, "_drag_s0_start", seg["start"]))
+                left = min(x, ox) - margin
+                right = max(x, ox) + margin
+                rect = QRect(left, top, max(1, right - left), height)
+            elif edge == "square_right":
+                x = self._x(seg["end"])
+                ox = self._x(getattr(self, "_drag_s0_end", seg["end"]))
+                left = min(x, ox) - margin
+                right = max(x, ox) + margin
+                rect = QRect(left, top, max(1, right - left), height)
+            else:
+                x1 = self._x(seg["start"])
+                x2 = self._x(seg["end"])
+                rect = QRect(min(x1, x2) - 16, top, abs(x2 - x1) + 32, height)
+
+        for sx in getattr(self, "_snap_lines", []) or []:
+            rect = rect.united(QRect(int(sx) - 4, top, 8, height))
+        return rect.adjusted(-4, -4, 4, 4).intersected(QRect(0, 0, self.width(), self.height()))
+
+    def _update_drag_visual_rect(self, before: QRect):
+        after = self._drag_visual_rect()
+        dirty = before.united(after).intersected(QRect(0, 0, self.width(), self.height()))
+        if dirty.isValid() and not dirty.isEmpty():
+            self.update(dirty)
+        else:
+            self.update()
+        self._drag_last_paint_rect = after
 
     def mouseDoubleClickEvent(self, ev):
         if ev.button() != Qt.MouseButton.LeftButton: return
         if self._edit_active: self._commit_inline_edit(); return
         x, y = ev.pos().x(), ev.pos().y()
 
-        for i in range(len(self.segments) - 1):
-            s1 = self.segments[i]; s2 = self.segments[i + 1]
-            if abs(s1["end"] - s2["start"]) < 0.05:
-                bx = self._x(s1["end"]); w = max(12, int(HANDLE_R * 1.2)); h = 12; cy = DIAMOND_Y
-                rect = QRect(int(bx - w / 2), int(cy - h / 2), w, h)
-                if rect.adjusted(-5, -5, 5, 5).contains(x, y):
-                    self._drag_seg = None; self._drag_edge = None; self._drag_diamond_idx = None
-                    self._snap_lines = []; self.unsetCursor()
-                    self.drag_finished.emit()
-                    self.diamond_merge.emit(s1.get("line", 0), s2.get("line", 0)); return
+        diamond_idx = self._diamond_index_at(x, y, margin=5)
+        if diamond_idx is not None:
+            s1 = self.segments[diamond_idx]
+            s2 = self.segments[diamond_idx + 1]
+            self._drag_seg = None; self._drag_edge = None; self._drag_diamond_idx = None
+            self._snap_lines = []; self.unsetCursor()
+            self.drag_finished.emit()
+            self.diamond_merge.emit(s1.get("line", 0), s2.get("line", 0)); return
 
         if SEG_TOP <= y <= SEG_BOT:
             seg = next((s for s in self.segments if self._x(s["start"]) <= x <= self._x(s["end"])), None)
@@ -382,24 +497,33 @@ class TimelineInputMixin:
             if ev.buttons() & Qt.MouseButton.LeftButton: self._apply_drag((x - self._drag_x0) / self.pps)
             return
 
-        hover_dia = None
-        for i in range(len(self.segments) - 1):
-            s1 = self.segments[i]; s2 = self.segments[i + 1]
-            if abs(s1["end"] - s2["start"]) < 0.05:
-                bx = self._x(s1["end"]); r = max(8, HANDLE_R); cy = DIAMOND_Y
-                if abs(x - bx) <= r + 5 and abs(y - cy) <= r + 5: hover_dia = i; break
-        if getattr(self, '_hover_diamond', None) != hover_dia: self._hover_diamond = hover_dia; self.update()
-        if hover_dia is not None: self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor)); return
+        new_hh = self._handle_hover_at(x, y)
+        if new_hh is not None:
+            changed = False
+            if getattr(self, '_hover_diamond', None) is not None:
+                self._hover_diamond = None
+                changed = True
+            if self._hover_handle != new_hh:
+                self._hover_handle = new_hh
+                changed = True
+            if changed:
+                self.update()
+            self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+            return
 
-        new_hh = None; best_dist = 25
-        for s in self.segments:
-            x1, x2 = self._x(s["start"]), self._x(s["end"]); mid_y = SEG_TOP + (SEG_BOT - SEG_TOP) // 2
-            hx1 = min(x1 + 2 + HANDLE_R // 2, (x1 + x2) // 2); hx2 = max(x2 - 2 - HANDLE_R // 2, (x1 + x2) // 2)
-            if abs(y - mid_y) <= 25:
-                dist_l = abs(x - hx1)
-                if dist_l < best_dist: best_dist = dist_l; new_hh = (s, "left")
-                dist_r = abs(x - hx2)
-                if dist_r < best_dist: best_dist = dist_r; new_hh = (s, "right")
+        hover_dia = self._diamond_index_at(x, y, margin=5)
+        if hover_dia is not None:
+            changed = False
+            if self._hover_handle is not None:
+                self._hover_handle = None
+                changed = True
+            if getattr(self, '_hover_diamond', None) != hover_dia:
+                self._hover_diamond = hover_dia
+                changed = True
+            if changed:
+                self.update()
+            self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor)); return
+        if getattr(self, '_hover_diamond', None) != hover_dia: self._hover_diamond = hover_dia; self.update()
 
         hover_handle = bool(new_hh); hover_center = False
         if not hover_handle:
@@ -442,7 +566,8 @@ class TimelineInputMixin:
 
     def _apply_drag(self, delta):
         if delta == 0: return
-        edge = getattr(self, '_drag_edge', None); self._snap_lines = []; playhead_snap = 5.0 / self.pps
+        before_rect = getattr(self, "_drag_last_paint_rect", None) or self._drag_visual_rect()
+        edge = getattr(self, '_drag_edge', None); self._snap_lines = []; playhead_snap = 2.0 / max(1.0, self.pps)
 
         if edge == "diamond":
             idx = getattr(self, '_drag_diamond_idx', None)
@@ -453,7 +578,7 @@ class TimelineInputMixin:
                     nb = self._snap_to_frame(self.playhead_sec); self._snap_lines.append(self._x(nb))
                 nb = max(self._snap_to_frame(s1["start"] + 0.1), min(self._snap_to_frame(s2["end"] - 0.1), nb))
                 s1["end"] = s2["start"] = nb
-                self.gap_segments = _build_gaps(self.segments, self.total_duration); self.update()
+                self._update_drag_visual_rect(before_rect)
             return
 
         seg = self._drag_seg; MIN = self._snap_to_frame(0.1)
@@ -492,7 +617,7 @@ class TimelineInputMixin:
             if abs(seg["start"] - ll) < 0.05 or (self.playhead_sec > 0 and abs(seg["start"] - self.playhead_sec) < 0.05) or (not self._drag_adj_l and abs(seg["start"]) < 0.05): self._snap_lines.append(self._x(seg["start"]))
             if abs(seg["end"] - lr) < 0.05 or (self.playhead_sec > 0 and abs(seg["end"] - self.playhead_sec) < 0.05) or (not self._drag_adj_r and abs(seg["end"] - self.total_duration) < 0.05): self._snap_lines.append(self._x(seg["end"]))
 
-        self.gap_segments = _build_gaps(self.segments, self.total_duration); self.update()
+        self._update_drag_visual_rect(before_rect)
 
     def _snap_closest_diamond(self):
         if self.playhead_sec <= 0: return

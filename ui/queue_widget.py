@@ -21,9 +21,9 @@ class QueueMixin:
             if item:
                 txt = item.text()
                 if "자막 생성 중" in txt and "완료" not in txt:
-                    item.setText(f"{self._queue_anim_frames[self._queue_anim_idx]} 자막 생성 중")
+                    item.setText("자막 생성 중")
                 elif "자막영상출력" in txt or "영상출력" in txt:
-                    item.setText(f"{self._queue_anim_frames[self._queue_anim_idx]} 자막영상출력(mov)")
+                    item.setText("자막영상출력(mov)")
 
     def init_queue_list(self, files):
         import os
@@ -34,6 +34,7 @@ class QueueMixin:
         self._expected_seconds = {}
         self._file_start_times = {}
         self._file_complete_times = {}
+        self._real_pct = 0
         self._accumulated_vad = []   # ← 멀티클립 VAD 누적 초기화
 
         self.queue_table.setUpdatesEnabled(False)
@@ -45,7 +46,7 @@ class QueueMixin:
                 it = QTableWidgetItem(text)
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 return it
-            self.queue_table.setItem(i, 0, mk("⏳ 대기 중"))
+            self.queue_table.setItem(i, 0, mk("대기 중"))
             self.queue_table.setItem(i, 1, QTableWidgetItem(os.path.basename(f)))
             self.queue_table.setItem(i, 2, mk("분석 중.."))
             self.queue_table.setItem(i, 3, mk("-"))
@@ -53,9 +54,9 @@ class QueueMixin:
 
         self.queue_table.setUpdatesEnabled(True)
 
-        self.queue_header_lbl.setText(
-            f"📋 처리할 파일 리스트 (1 / {len(files)} 진행 중 - 0% 완료 [⏱️ 00:00 / 00:00]"
-        )
+        self.queue_header_lbl.setText(f"큐 리스트 : (1/{len(files)}) - 0% 완료")
+        if hasattr(self, "_sync_sidebar_queue_panel"):
+            self._sync_sidebar_queue_panel()
         self._live_timer.start(1000)
 
     def update_queue_status(self, idx, status, time_txt="", info_txt="", len_txt=""):
@@ -104,6 +105,8 @@ class QueueMixin:
                 except (ValueError, TypeError):
                     if idx not in self._file_complete_times:
                         self.queue_table.setItem(idx, 4, mk(time_txt))
+        if hasattr(self, "_sync_sidebar_queue_panel"):
+            self._sync_sidebar_queue_panel()
 
     def _sync_editor_stage_from_queue_status(self, status: str):
         editor = getattr(self, "_editor_widget", None)
@@ -188,9 +191,7 @@ class QueueMixin:
         
         exp_str = fmt(expected) if expected > 0 else "예상불가"
 
-        self.queue_header_lbl.setText(
-            f"📋 처리할 파일 리스트 ({c} / {t} 진행 중) - {pct}% 완료   [⏱️ {fmt(elapsed)} / {exp_str}]"
-        )
+        self.queue_header_lbl.setText(f"큐 리스트 : ({c}/{t}) - {pct}% 완료")
 
         for i in range(self.queue_table.rowCount()):
             si = self.queue_table.item(i, 0)
@@ -206,16 +207,31 @@ class QueueMixin:
                 tc = self.queue_table.item(i, 4)
                 if tc:
                     tc.setText(f"{fmt(ef)} / {fmt(xf) if xf > 0 else '학습 중'}")
+        if hasattr(self, "_sync_sidebar_queue_panel"):
+            self._sync_sidebar_queue_panel()
 
     def update_queue_header(self, current, total, pct, eta_str=""):
         if hasattr(self, "_show_bottom_queue_table"):
             self._show_bottom_queue_table()
         self._current_file_idx = current
         self._total_files = total
-        self._real_pct = pct  # ✅ 이 줄 추가
+        row_statuses = []
+        try:
+            for i in range(self.queue_table.rowCount()):
+                item = self.queue_table.item(i, 0)
+                row_statuses.append(item.text() if item else "")
+        except Exception:
+            row_statuses = []
+        if pct == 100 and row_statuses:
+            all_rows_done = all(("완료" in st or "기존자막" in st) for st in row_statuses)
+            if not all_rows_done:
+                pct = 0 if all("대기" in st for st in row_statuses) else min(99, max(0, int(pct)))
+        self._real_pct = pct
         if pct == 100:
             if hasattr(self, '_live_timer'):
                 self._live_timer.stop()
-            self.queue_header_lbl.setText(
-                f"📋 처리할 파일 리스트 ({total} / {total} 완료) - 100% 완료"
-            )
+            self.queue_header_lbl.setText(f"큐 리스트 : ({total}/{total}) - 100% 완료")
+        else:
+            self.queue_header_lbl.setText(f"큐 리스트 : ({current}/{total}) - {pct}% 완료")
+        if hasattr(self, "_sync_sidebar_queue_panel"):
+            self._sync_sidebar_queue_panel()

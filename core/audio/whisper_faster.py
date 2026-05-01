@@ -84,10 +84,16 @@ def _convert_model_name(mlx_model: str) -> str:
         "mlx-community/whisper-large-v3-mlx": "large-v3",
         "mlx-community/whisper-large-v3-turbo": "large-v3-turbo",
         "youngouk/ghost613-turbo-korean-4bit-mlx": "ghost613/faster-whisper-large-v3-turbo-korean",
+        "mlx-community/whisper-large-v2-mlx": "large-v2",
         "mlx-community/whisper-medium-mlx": "medium",
+        "mlx-community/whisper-medium.en-mlx": "medium.en",
         "mlx-community/whisper-small-mlx": "small",
+        "mlx-community/whisper-small.en-mlx": "small.en",
         "mlx-community/whisper-base-mlx": "base",
+        "mlx-community/whisper-base.en-mlx": "base.en",
         "mlx-community/whisper-tiny-mlx": "tiny",
+        "mlx-community/whisper-tiny.en-mlx": "tiny.en",
+        "mlx-community/distil-whisper-large-v3": "distil-large-v3",
     }
     if requested_raw in conversions and conversions[requested_raw] not in ("large-v3", "medium"):
         return conversions[requested_raw]
@@ -123,7 +129,10 @@ def _convert_model_name(mlx_model: str) -> str:
 
     stripped = requested_raw.replace("mlx-community/", "").replace("-mlx", "")
     valid = [
-        "tiny", "base", "small", "medium", "large", "large-v2", "large-v3", "large-v3-turbo",
+        "tiny.en", "tiny", "base.en", "base", "small.en", "small",
+        "medium.en", "medium", "large-v1", "large-v2", "large-v3",
+        "large", "distil-large-v2", "distil-medium.en", "distil-small.en",
+        "distil-large-v3", "large-v3-turbo", "turbo",
         "ghost613/faster-whisper-large-v3-turbo-korean",
     ]
     if requested_raw in valid:

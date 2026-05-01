@@ -93,6 +93,7 @@ class RoughCutModelsV2Tests(unittest.TestCase):
 
         self.assertIn("propose_major_segment", prompt)
         self.assertIn("중분류는 실제 러프컷 편집 최소 단위", prompt)
+        self.assertIn("화면 전환, 주제 전환, 장소 전환", prompt)
         self.assertFalse(result.ok)
         self.assertFalse(result.used_llm)
         self.assertEqual(result.error, "llm_disabled")
@@ -125,6 +126,7 @@ class RoughCutModelsV2Tests(unittest.TestCase):
         self.assertEqual(override.temperature, 1.0)
         self.assertEqual(override.threads, 7)
         self.assertIn("중분류 A/B/C/D", DEFAULT_ROUGHCUT_PROMPT_V1)
+        self.assertIn("단순한 말 끊김", DEFAULT_ROUGHCUT_PROMPT_V1)
 
 
 if __name__ == "__main__":

@@ -20,13 +20,14 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_idle_countdown_is_shown_next_to_version(self):
+    def test_idle_countdown_keeps_header_compact(self):
         window = MainWindow()
         try:
             window._post_completion_idle_ms = 10_000
             window._start_post_completion_idle_timer()
             text = window.saved_status_label.text()
-            self.assertIn("홈", text)
+            self.assertNotIn("홈", text)
+            self.assertIn("AI Subtitle Studio", text)
             self.assertIn("v", text)
             self.assertGreater(window._post_completion_idle_remaining_ms(), 0)
         finally:

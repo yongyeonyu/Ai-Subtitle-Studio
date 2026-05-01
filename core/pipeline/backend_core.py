@@ -138,7 +138,7 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
 
                 if hasattr(self.ui, "_sig_update_queue"):
                     self.ui._sig_update_queue.emit(
-                        i, "⏳ 대기 중", str(expected_time), info_txt, len_txt
+                        i, "대기 중", str(expected_time), info_txt, len_txt
                     )
             except Exception as e:
                 get_logger().log(
@@ -146,7 +146,7 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
                 )
                 if hasattr(self.ui, "_sig_update_queue"):
                     self.ui._sig_update_queue.emit(
-                        i, "⏳ 대기 중", "예상불가", "오류", "-"
+                        i, "대기 중", "예상불가", "오류", "-"
                     )
 
         self.total_expected_time = total_expected_time

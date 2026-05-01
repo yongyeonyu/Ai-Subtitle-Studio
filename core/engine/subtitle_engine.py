@@ -432,6 +432,66 @@ def ask_openai_to_split(text: str, threshold: int, rules: dict, model_name: str,
     return guarded if guarded else None
 
 
+def _select_stt_candidate_text(seg: dict, model: str, user_prompt: str, api_key: str) -> str | None:
+    settings = _get_user_settings()
+    if seg.get("stt_ensemble_primary_locked"):
+        return None
+    if not settings.get("stt_ensemble_llm_judge_enabled", True):
+        return None
+    if not model or "사용 안함" in model:
+        return None
+    candidates = [
+        c for c in list(seg.get("stt_candidates") or [])
+        if str(c.get("text", "") or "").strip()
+    ]
+    unique: list[dict] = []
+    seen = set()
+    for cand in candidates:
+        key = re.sub(r"\s+", "", str(cand.get("text", "") or "")).lower()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(cand)
+    if len(unique) < 2:
+        return None
+
+    unique = unique[:2]
+    labels = ["A", "B"]
+    lines = []
+    for label, cand in zip(labels, unique):
+        lines.append(
+            f"{label}. [{cand.get('source', label)} / score {cand.get('score', '-')}] "
+            f"{str(cand.get('text', '')).strip()}"
+        )
+    prompt = (
+        "당신은 한국어 영상 자막 검수자입니다.\n"
+        "아래 STT 후보 중 실제 발화로 가장 자연스럽고, 한국어 구어체로 가장 그럴듯한 후보 하나만 고르세요.\n"
+        "없는 말을 새로 만들거나 두 후보를 섞지 마세요.\n"
+        "반드시 JSON 배열로만 답하세요. 예: [\"A\"] 또는 [\"B\"]\n\n"
+        f"시간: {float(seg.get('start', 0) or 0):.2f}s ~ {float(seg.get('end', 0) or 0):.2f}s\n"
+        + "\n".join(lines)
+    )
+    if user_prompt.strip():
+        prompt += f"\n\n사용자 지시 참고: {user_prompt.strip()[:500]}"
+
+    try:
+        if "Gemini" in model:
+            chunks = gemini_split_text(api_key, model, prompt)
+        elif is_openai_model(model):
+            chunks = openai_split_text(api_key, model, prompt)
+        else:
+            chunks = ollama_split_text(model, prompt)
+    except Exception as exc:
+        get_logger().log(f"[STT앙상블-LLM판정 실패] {exc}")
+        return None
+
+    decision = " ".join(str(x) for x in (chunks or [])).upper()
+    selected_index = 1 if "B" in decision and "A" not in decision else 0
+    selected = str(unique[selected_index].get("text", "") or "").strip()
+    if selected:
+        get_logger().log(f"[STT앙상블-LLM판정] {labels[selected_index]} 선택: '{selected[:18]}...'")
+    return selected or None
+
+
 def _process_one(args: tuple) -> list[dict]:
     if len(args) == 8:
         seg, rules, threshold, corrections, model, user_prompt, api_key, conservative = args
@@ -450,6 +510,12 @@ def _process_one(args: tuple) -> list[dict]:
 
     # 💡 [추가] duration 정의
     duration = seg.get("end", 0) - seg.get("start", 0)
+
+    if seg.get("stt_candidates") and duration >= 0.35:
+        selected_text = _select_stt_candidate_text(seg, model, user_prompt, api_key)
+        if selected_text:
+            seg = {**seg, "text": selected_text}
+            text = selected_text.strip()
 
     # 💡 [환각 방지] 너무 짧은 자막은 LLM 교정을 생략합니다.
     if duration < _LLM_SKIP_DUR or len(text.replace(" ", "")) <= (threshold - 5):

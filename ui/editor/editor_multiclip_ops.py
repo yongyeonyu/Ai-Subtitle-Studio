@@ -123,6 +123,14 @@ class EditorMulticlipOpsMixin:
 
     def _reload_segments_from_list(self, segs):
         segs = self._normalize_multiclip_segment_order(segs)
+        try:
+            if getattr(self, "_queue_timer", None) is not None:
+                self._queue_timer.stop()
+        except Exception:
+            pass
+        if hasattr(self, "_segment_queue"):
+            self._segment_queue.clear()
+        self._is_initial_load = True if segs else False
         self.text_edit.clear()
         self.append_segments(segs)
         self._cached_segs = segs

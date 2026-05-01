@@ -55,20 +55,24 @@ def speaker_name_for_id(settings: dict, raw, fallback_index: int = 1) -> str:
     return str(settings.get(f"spk{fallback_index}_name", "") or f"화자 {fallback_index}")
 
 
-def speaker_label_for_segment(settings: dict, segment: dict) -> str:
+def speaker_labels_for_segment(settings: dict, segment: dict) -> list[str]:
     spk_list = list(segment.get("speaker_list", []) or [])
     if len(spk_list) > 1:
-        return " / ".join(
+        return [
             speaker_name_for_id(settings, spk, idx + 1)
             for idx, spk in enumerate(spk_list)
-        )
+        ]
 
     raw = segment.get("speaker", segment.get("spk_id", None))
     if raw not in (None, ""):
-        return speaker_name_for_id(settings, raw, 1)
+        return [speaker_name_for_id(settings, raw, 1)]
 
     explicit = str(segment.get("speaker_name", "") or "").strip()
     if explicit and explicit != "홍길동":
-        return explicit
+        return [explicit]
 
-    return speaker_name_for_id(settings, settings.get("spk1_id", "00"), 1)
+    return [speaker_name_for_id(settings, settings.get("spk1_id", "00"), 1)]
+
+
+def speaker_label_for_segment(settings: dict, segment: dict) -> str:
+    return " / ".join(speaker_labels_for_segment(settings, segment))

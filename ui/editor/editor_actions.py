@@ -12,6 +12,7 @@ import os
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore import Qt
 
+import config
 from logger import get_logger
 from core.project.data_manager import save_settings as _dm_save_settings
 from core.engine.subtitle_engine import save_srt
@@ -325,7 +326,8 @@ class EditorActionsMixin:
             project_path = create_project(
                 name=base_name,
                 media_paths=[media_path],
-                srt_path=get_srt_path(media_path)
+                srt_path=get_srt_path(media_path),
+                user_settings=dict(getattr(self, "settings", {}) or {}),
             )
             main_w._current_project_path = project_path
             get_logger().log(f"📝 프로젝트 자동 생성: {os.path.basename(project_path)}")
@@ -365,6 +367,7 @@ class EditorActionsMixin:
             media_paths=_media_paths,
             srt_path=get_srt_path(media_path),
             segments=segs,
+            user_settings=dict(getattr(self, "settings", {}) or {}),
             workspace=workspace,
             active_work_mode=workspace['active_work_mode'],
         )
@@ -505,8 +508,13 @@ class EditorActionsMixin:
         if dlg.exec():
             self.settings = dlg.result_settings
             _dm_save_settings(self.settings)
+            self.selected_model = self.settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
             if hasattr(self, '_update_engine_label_text'):
                 self._update_engine_label_text()
+            main_w = self.window()
+            if hasattr(main_w, "_refresh_sidebar_engine_info"):
+                engine_label = getattr(self, "engine_lbl", None)
+                main_w._refresh_sidebar_engine_info(engine_label.text() if engine_label is not None else None)
     def _show_adv_settings(self):
         from ui.settings.settings_dialog import AdvancedSettingsDialog
         dlg = AdvancedSettingsDialog(self.settings, self)

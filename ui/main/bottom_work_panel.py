@@ -17,11 +17,11 @@ class BottomWorkPanel(QWidget):
         super().__init__(parent)
         self.setObjectName("BottomLogPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet(named_panel_style("BottomLogPanel", "surface", radius=7))
+        self.setStyleSheet(named_panel_style("BottomLogPanel", "surface", radius=0))
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(2)
+        layout.setContentsMargins(3, 3, 3, 3)
+        layout.setSpacing(3)
 
         toggle_bar = QWidget()
         toggle_bar.setFixedHeight(0)

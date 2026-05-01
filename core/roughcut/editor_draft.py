@@ -32,15 +32,25 @@ from .roughcut_settings import merge_roughcut_settings
 from .subtitle_retimer import format_srt, retime_subtitles_for_edl
 
 
-EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID = "editor_realtime_roughcut_draft"
+LEGACY_EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID = "editor_realtime_roughcut_draft"
+EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID = "editor_post_generation_roughcut_draft"
 
-DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT = """너는 자막 생성 중 실시간 러프컷 초안을 만드는 편집 보조자다.
-자막을 시간순으로 읽고 큰 흐름이 바뀌는 지점만 중분류 A/B/C/D로 나눈다.
+DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT = """너는 자막 생성이 완료된 뒤 전체 자막을 기반으로 러프컷 초안을 만드는 편집 보조자다.
+완성된 자막 전체를 먼저 훑어보고 영상의 큰 흐름을 파악한 뒤 중분류 A/B/C/D를 나눈다.
+중분류 경계는 개별 자막 문장이 아니라 화면 전환, 주제 전환, 장소 전환, 행동 단계 전환처럼 시청자가 장면이 바뀌었다고 느끼는 지점을 우선한다.
+단순한 말 끊김, 짧은 침묵, 같은 주제 안의 문장 변화, 단어 반복, 말투 변화만으로는 새 중분류를 만들지 않는다.
+경계가 애매하면 자막 개수를 늘려도 하나의 중분류로 유지하고, 명확한 전환점이 있을 때만 나눈다.
 중분류만 만든다.
 소분류는 새로 만들지 말고 각 중분류에 포함된 자막 row가 자동으로 소분류가 된다.
 중분류는 가능하면 최소 5개 이상의 자막 row를 포함한다.
+대부분의 영상은 중분류를 10개 이하로 유지한다.
+아주 긴 영상도 중분류 id는 A부터 Z까지만 순서대로 사용하고 M56 같은 임의 id를 만들지 않는다.
+중분류 세그먼트는 서로 공백 없이 이어져야 하며 첫 중분류는 0초, 마지막 중분류는 동영상 끝까지 맞춘다.
 경계가 불확실하면 이전 중분류를 provisional로 두고 다음 입력에서 재검토한다.
 응답은 반드시 JSON object로만 반환한다."""
+
+
+MAX_EDITOR_MAJOR_SEGMENTS = 26
 
 
 def is_fast_recognition_mode(settings: dict[str, Any] | None) -> bool:
@@ -61,7 +71,7 @@ def build_editor_roughcut_draft_prompt(
     merged = merge_roughcut_settings(settings or {})
     prompt = str(merged.get("editor_roughcut_draft_prompt") or "").strip() or DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT
     body = {
-        "prompt_id": "editor_realtime_roughcut_draft_v1",
+        "prompt_id": "editor_post_generation_roughcut_draft_v1",
         "language": "ko",
         "editor_instructions": prompt,
         "output_contract": {
@@ -130,9 +140,15 @@ def build_editor_roughcut_draft_result(
             schema_version="roughcut_result.v2",
         )
 
+    duration = _draft_media_duration(media_duration, subtitles)
     groups = _major_groups_from_llm_payload(llm_payload, subtitles)
     if not groups:
         groups = _local_major_groups_from_subtitles(subtitles, settings=settings)
+    groups = _normalize_major_groups(
+        groups,
+        max_count=_editor_major_max_segment_count(settings),
+    )
+    major_ranges = _continuous_major_ranges(groups, media_duration=duration)
 
     chapters: list[ChapterMetadata] = []
     majors: list[RoughCutSegment] = []
@@ -146,8 +162,10 @@ def build_editor_roughcut_draft_result(
         title = str(group.get("title") or _title_from_subtitles(items) or f"중분류 {major_id}")
         summary = str(group.get("summary") or _summary_from_subtitles(items))
         tags = tuple(str(tag).strip() for tag in group.get("tags", ()) if str(tag).strip())[:8]
-        start = min(item.start for item in items)
-        end = max(item.end for item in items)
+        start, end = major_ranges[major_index] if major_index < len(major_ranges) else (
+            min(item.start for item in items),
+            max(item.end for item in items),
+        )
         subtitle_ids = tuple(_subtitle_id(item, idx) for idx, item in enumerate(items))
         minor_groups: list[RoughCutMinorGroup] = []
 
@@ -166,7 +184,7 @@ def build_editor_roughcut_draft_result(
                     tags=tags,
                     segment_ids=(major_id,),
                     importance_score=0.5,
-                    narrative_function="editor_realtime_subtitle",
+                    narrative_function="editor_post_generation_subtitle",
                     story_role="",
                     major_id=major_id,
                     minor_code=minor_code,
@@ -204,7 +222,7 @@ def build_editor_roughcut_draft_result(
                 summary=summary,
                 tags=tags,
                 story_role="",
-                narrative_function="editor_realtime_major",
+                narrative_function="editor_post_generation_major",
                 importance_score=0.5,
                 can_move=True,
                 can_trim=True,
@@ -225,7 +243,7 @@ def build_editor_roughcut_draft_result(
             EditDecision(
                 segment_id=major_id,
                 action="keep",
-                reason="editor_realtime_draft",
+                reason="editor_post_generation_draft",
                 source_start=start,
                 source_end=end,
                 output_order=major_index,
@@ -236,8 +254,7 @@ def build_editor_roughcut_draft_result(
 
     edl = build_edl_segments(source_path, decisions, majors)
     guide = build_markdown_guide(chapters, decisions, edl)
-    duration = media_duration if media_duration is not None else max((item.end for item in subtitles), default=0.0)
-    summary = f"에디터 실시간 초안: 중분류 {len(majors)}개, 자막 {len(subtitles)}개, 길이 {duration:.1f}초"
+    summary = f"자막 생성 후 초안: 중분류 {len(majors)}개, 자막 {len(subtitles)}개, 길이 {duration:.1f}초"
     status = "review" if any(segment.status != "confirmed" for segment in majors) else "confirmed"
     return RoughCutResult(
         segments=tuple(majors),
@@ -251,7 +268,7 @@ def build_editor_roughcut_draft_result(
             draft_id=EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID,
             status=status,
             autosave_enabled=True,
-            notes="editor_realtime_draft",
+            notes="editor_post_generation_draft",
         ),
         schema_version="roughcut_result.v2",
     )
@@ -276,12 +293,12 @@ def build_editor_roughcut_candidate_payload(
     outputs = _candidate_outputs(result, source_segments, result_edl, source_path)
     return {
         "candidate_id": EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID,
-        "name": "에디터 실시간 초안",
+        "name": "자막 생성 후 초안",
         "created_at": now,
         "updated_at": now,
         "schema": "ai_subtitle_studio.roughcut_candidate.v2",
         "schema_version": "roughcut_candidate.v2",
-        "source": "editor_realtime_draft",
+        "source": "editor_post_generation_draft",
         "source_signature": segment_signature(source_segments),
         "source_media": source_media or (os.path.basename(source_path) if source_path else "현재 에디터"),
         "editor_mode": editor_mode,
@@ -318,7 +335,10 @@ def merge_editor_roughcut_draft_state(existing_state: dict[str, Any] | None, can
     for item in existing_state.get("candidates", []) or []:
         if not isinstance(item, dict):
             continue
-        if str(item.get("candidate_id") or "") == EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID:
+        if str(item.get("candidate_id") or "") in {
+            EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID,
+            LEGACY_EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID,
+        }:
             candidates.append(dict(candidate))
             replaced = True
         else:
@@ -336,7 +356,7 @@ def merge_editor_roughcut_draft_state(existing_state: dict[str, Any] | None, can
             "candidate_count": len(candidates),
             "settings": _roughcut_settings_payload(candidate.get("settings", {})),
             "shared_between": ["editor", "roughcut"],
-            "updated_from": "editor_realtime_draft",
+            "updated_from": "editor_post_generation_draft",
         }
     )
     return payload
@@ -397,6 +417,9 @@ def _subtitle_prompt_rows(segments: list[dict[str, Any]]) -> list[dict[str, Any]
 def _local_major_groups_from_subtitles(subtitles: list[SubtitleSegment], *, settings: dict[str, Any]) -> list[dict[str, Any]]:
     min_count = max(1, int(settings.get("roughcut_major_min_subtitle_count", 5) or 5))
     max_count = max(min_count, int(settings.get("editor_roughcut_draft_max_subtitle_count", max(8, min_count * 2)) or max(8, min_count * 2)))
+    max_major_segments = _editor_major_max_segment_count(settings)
+    if subtitles:
+        max_count = max(max_count, (len(subtitles) + max_major_segments - 1) // max_major_segments)
     silence_gap = max(0.0, float(settings.get("roughcut_silence_gap_prefer_sec", 1.0) or 1.0))
     groups: list[dict[str, Any]] = []
     current: list[SubtitleSegment] = []
@@ -486,6 +509,123 @@ def _major_groups_from_llm_payload(payload: dict[str, Any] | None, subtitles: li
     return groups
 
 
+def _editor_major_max_segment_count(settings: dict[str, Any]) -> int:
+    raw = settings.get("editor_roughcut_draft_max_major_segments", MAX_EDITOR_MAJOR_SEGMENTS)
+    try:
+        value = int(raw or MAX_EDITOR_MAJOR_SEGMENTS)
+    except (TypeError, ValueError):
+        value = MAX_EDITOR_MAJOR_SEGMENTS
+    return max(1, min(MAX_EDITOR_MAJOR_SEGMENTS, value))
+
+
+def _draft_media_duration(media_duration: float | None, subtitles: list[SubtitleSegment]) -> float:
+    subtitle_end = max((item.end for item in subtitles), default=0.0)
+    try:
+        duration = float(media_duration if media_duration is not None else subtitle_end)
+    except (TypeError, ValueError):
+        duration = subtitle_end
+    return max(0.0, duration, subtitle_end)
+
+
+def _continuous_major_ranges(groups: list[dict[str, Any]], *, media_duration: float) -> list[tuple[float, float]]:
+    raw_ranges: list[tuple[float, float]] = []
+    for group in groups:
+        subtitles = list(group.get("subtitles", []) or [])
+        if not subtitles:
+            continue
+        raw_ranges.append((min(item.start for item in subtitles), max(item.end for item in subtitles)))
+    if not raw_ranges:
+        return []
+
+    duration = max(float(media_duration or 0.0), raw_ranges[-1][1])
+    if len(raw_ranges) == 1:
+        return [(0.0, duration)]
+
+    boundaries = [0.0]
+    for idx in range(len(raw_ranges) - 1):
+        current_start, current_end = raw_ranges[idx]
+        next_start, next_end = raw_ranges[idx + 1]
+        if next_start > current_end:
+            boundary = (current_end + next_start) / 2.0
+        else:
+            boundary = next_start
+        lower = boundaries[-1]
+        upper = duration if idx + 1 == len(raw_ranges) - 1 else max(next_end, next_start, lower)
+        boundaries.append(max(lower, min(float(boundary), upper)))
+    boundaries.append(duration)
+    return [
+        (boundaries[idx], max(boundaries[idx], boundaries[idx + 1]))
+        for idx in range(len(boundaries) - 1)
+    ]
+
+
+def _normalize_major_groups(groups: list[dict[str, Any]], *, max_count: int) -> list[dict[str, Any]]:
+    ordered = [
+        dict(group)
+        for group in sorted(
+            (groups or []),
+            key=lambda item: (
+                min((subtitle.start for subtitle in item.get("subtitles", []) or []), default=0.0),
+                max((subtitle.end for subtitle in item.get("subtitles", []) or []), default=0.0),
+            ),
+        )
+        if group.get("subtitles")
+    ]
+    if not ordered:
+        return []
+    max_count = max(1, int(max_count or MAX_EDITOR_MAJOR_SEGMENTS))
+    if len(ordered) > max_count:
+        ordered = _merge_major_groups_to_limit(ordered, max_count=max_count)
+    normalized: list[dict[str, Any]] = []
+    for index, group in enumerate(ordered):
+        subtitles = list(group.get("subtitles", []) or [])
+        normalized.append(
+            {
+                **group,
+                "major_id": _major_code(index),
+                "title": str(group.get("title") or _title_from_subtitles(subtitles)),
+                "summary": str(group.get("summary") or _summary_from_subtitles(subtitles)),
+                "subtitles": subtitles,
+            }
+        )
+    return normalized
+
+
+def _merge_major_groups_to_limit(groups: list[dict[str, Any]], *, max_count: int) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    total = len(groups)
+    for bucket_index in range(max_count):
+        start_idx = bucket_index * total // max_count
+        end_idx = (bucket_index + 1) * total // max_count
+        bucket = groups[start_idx:end_idx]
+        if not bucket:
+            continue
+        subtitles: list[SubtitleSegment] = []
+        tags: list[str] = []
+        statuses: list[str] = []
+        confidences: list[float] = []
+        for group in bucket:
+            subtitles.extend(list(group.get("subtitles", []) or []))
+            statuses.append(str(group.get("status") or "provisional"))
+            confidences.append(_confidence(group))
+            for tag in group.get("tags", ()) or ():
+                tag_text = str(tag).strip()
+                if tag_text and tag_text not in tags:
+                    tags.append(tag_text)
+        merged.append(
+            {
+                "major_id": _major_code(len(merged)),
+                "title": _title_from_subtitles(subtitles),
+                "summary": _summary_from_subtitles(subtitles),
+                "tags": tuple(tags[:8]),
+                "confidence": sum(confidences) / len(confidences) if confidences else 0.58,
+                "status": "needs_review" if "needs_review" in statuses else ("provisional" if "provisional" in statuses else "confirmed"),
+                "subtitles": subtitles,
+            }
+        )
+    return merged
+
+
 def _selected_roughcut_candidate(state: dict[str, Any]) -> dict[str, Any] | None:
     selected = str(state.get("selected_candidate_id") or "")
     candidates = [item for item in state.get("candidates", []) or [] if isinstance(item, dict)]
@@ -503,6 +643,7 @@ def _roughcut_settings_payload(settings: dict[str, Any] | None) -> dict[str, Any
         "editor_roughcut_draft_enabled",
         "editor_roughcut_draft_prompt",
         "roughcut_major_min_subtitle_count",
+        "editor_roughcut_draft_max_major_segments",
         "roughcut_silence_gap_prefer_sec",
         "roughcut_llm_enabled",
     )
@@ -528,7 +669,7 @@ def _candidate_outputs(
         "guide_markdown": result.guide_markdown,
         "edl": edl_to_dict(
             result_edl,
-            metadata={"source": source_path, "source_kind": "editor_realtime_draft"},
+            metadata={"source": source_path, "source_kind": "editor_post_generation_draft"},
             chapters=result.chapters,
             major_segments=result.segments,
         ),
@@ -635,9 +776,8 @@ def _subtitle_id(subtitle: SubtitleSegment, fallback: int) -> int:
 
 def _major_code(index: int) -> str:
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    if index < len(alphabet):
-        return alphabet[index]
-    return f"M{index + 1}"
+    index = max(0, min(int(index or 0), len(alphabet) - 1))
+    return alphabet[index]
 
 
 def _clean_title(text: str) -> str:

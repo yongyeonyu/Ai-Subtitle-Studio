@@ -187,7 +187,7 @@ class RoughcutMajorPanel(QWidget):
             chapter_id = str(watched.property("roughcut_chapter_id") or "")
             if chapter_id:
                 self.previewRequested.emit(chapter_id, True)
-        return super().eventFilter(watched, event)
+        return False
 
     def _first_chapter_id(self, segment) -> str:
         for minor in tuple(getattr(segment, "minor_groups", ()) or ()):

@@ -25,6 +25,7 @@ class TerminalLogWidget(QWidget):
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setFont(QFont("Menlo", 8))
+        self.log_text.document().setMaximumBlockCount(800)
         self.log_text.setStyleSheet(
             "background: #151C20; color: #A9B0B7; border: none; padding: 4px 8px;"
         )

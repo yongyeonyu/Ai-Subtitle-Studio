@@ -68,6 +68,8 @@ class MulticlipPipelineMixin:
             if getattr(self, '_force_no_reuse_once', False):
                 self._force_no_reuse_once = False
                 self._reuse_existing_multiclip_subtitles = False
+                if candidates:
+                    self._move_existing_multiclip_srts_to_backup(candidates)
             elif candidates:
                 self._reuse_existing_multiclip_subtitles = ask_yes_no(
                     self.ui,
@@ -252,6 +254,17 @@ class MulticlipPipelineMixin:
                         continue
 
                     chunk_dir, vad_segs = res
+                    timeline_vad_segs = []
+                    for vad in vad_segs or []:
+                        try:
+                            row = dict(vad)
+                            local_start = float(row.get("start", 0.0) or 0.0)
+                            local_end = float(row.get("end", local_start) or local_start)
+                            row["start"] = local_start + offset
+                            row["end"] = local_end + offset
+                            timeline_vad_segs.append(row)
+                        except Exception:
+                            continue
 
                     if hasattr(self.ui, "_current_file_idx"):
                         self.ui._current_file_idx = i + 1
@@ -288,6 +301,7 @@ class MulticlipPipelineMixin:
                             "name": vname,
                             "file": target_file,
                             "segments": clip_segments,
+                            "vad_segments": timeline_vad_segs,
                             "skip_optimize": False,
                         }
                     )
@@ -326,6 +340,11 @@ class MulticlipPipelineMixin:
                         )
                         optimized = segments
                     optimized = self._sanitize_multiclip_segments(optimized, idx, clip_file)
+                    optimized = self._align_subtitle_segments_to_vad(
+                        optimized,
+                        item.get("vad_segments") or [],
+                        context=f"멀티클립 {idx + 1}",
+                    )
 
                 out_queue.put(
                     {
@@ -362,7 +381,7 @@ class MulticlipPipelineMixin:
                     self.ui._sig_append_segments.emit(optimized)
                 self._emit_multiclip_queue_status(
                     idx,
-                    "✅기존자막" if ready.get("skip_optimize") else "✅ 완료",
+                    "기존자막" if ready.get("skip_optimize") else "완료",
                     "",
                     "",
                     "",
@@ -421,7 +440,7 @@ class MulticlipPipelineMixin:
 
                     if hasattr(self.ui, "_sig_update_queue"):
                         self.ui._sig_update_queue.emit(
-                            i, "⏳ 대기 중", str(expected), info_txt, len_txt
+                            i, "대기 중", str(expected), info_txt, len_txt
                         )
                 except Exception:
                     clip_dur = 30.0

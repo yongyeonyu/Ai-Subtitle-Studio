@@ -207,7 +207,15 @@ class SinglePipelineMixin:
             # 품질모드: 빠른모드 오버라이드가 남아있으면 제거
             if hasattr(self, 'video_processor'):
                 self.video_processor.clear_fast_mode_overrides()
-            res = self._get_audio_extract_result(target_file)
+            if hasattr(self, "video_processor"):
+                self.video_processor.stage_callback = (
+                    lambda status, qi=queue_index: self._ui_emit("_sig_update_queue", qi, status, "", "", "")
+                )
+            try:
+                res = self._get_audio_extract_result(target_file)
+            finally:
+                if hasattr(self, "video_processor"):
+                    self.video_processor.stage_callback = None
 
             try:
                 prefetch_ahead = max(1, int(load_settings().get("prefetch_ahead", 3)))
@@ -230,7 +238,7 @@ class SinglePipelineMixin:
             chunk_dir, vad_segs = res
             self._ui_emit("_sig_set_vad_segments", vad_segs)
 
-            get_logger().log("\n  [STEP 2] 🎤 Whisper 변환 + LLM 최적화 파이프라인 가동...")
+            get_logger().log("\n  [STT] Whisper 인식 → [자막 LLM] 교정/분리 파이프라인 가동...")
 
             try:
                 s = load_settings()
@@ -294,6 +302,10 @@ class SinglePipelineMixin:
 
             def do_transcribe():
                 try:
+                    if hasattr(self, "video_processor"):
+                        self.video_processor.stage_callback = (
+                            lambda status, qi=queue_index: self._ui_emit("_sig_update_queue", qi, status, "", "", "")
+                        )
                     for chunk_segs, c_idx, t_total in self.video_processor.transcribe(
                         chunk_dir, is_fast_mode=False
                     ):
@@ -301,6 +313,8 @@ class SinglePipelineMixin:
                             break
                         opt_queue.put((chunk_segs, c_idx, t_total))
                 finally:
+                    if hasattr(self, "video_processor"):
+                        self.video_processor.stage_callback = None
                     opt_queue.put(_SENTINEL)
 
             def _do_optimize_impl():
@@ -347,6 +361,7 @@ class SinglePipelineMixin:
                     seg_buffer = []
 
                     try:
+                        self._ui_emit("_sig_update_queue", queue_index, "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중", "", "", "")
                         if is_gemini and len(chunk_segs) > 1:
                             from core.engine.subtitle_engine import ask_gemini_to_split
                             from core.utils import load_subtitle_rules
@@ -384,6 +399,8 @@ class SinglePipelineMixin:
                             seg["start"] = 0.0
                         if seg["end"] <= seg["start"]:
                             seg["end"] = seg["start"] + 0.5
+
+                    opt = self._align_subtitle_segments_to_vad(opt, vad_segs, context="에디터")
 
                     if self.max_speakers > 1 and self._speaker_map:
                         from core.audio.diarize import get_speaker_for_segment
@@ -515,7 +532,7 @@ class SinglePipelineMixin:
             if not self._active:
                 return
 
-            self._ui_emit("_sig_update_queue", queue_index, "✅ 자막 생성 완료", "", "", "")
+            self._ui_emit("_sig_update_queue", queue_index, "자막 생성 완료", "", "", "")
 
             try:
                 s = load_settings()

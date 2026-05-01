@@ -149,9 +149,37 @@ def _select_live_model(settings: dict, profile: str) -> str:
 
 
 def _transcribe_local_whisper(wav_path: str, model: str) -> str:
+    from core.audio.whisper_transformers import is_transformers_whisper_model
+
+    if is_transformers_whisper_model(model):
+        return _transcribe_transformers(wav_path, model)
     if config.IS_MAC:
         return _transcribe_mlx(wav_path, model)
     return _transcribe_faster(wav_path, model)
+
+
+def _transcribe_transformers(wav_path: str, model: str) -> str:
+    from core.audio.whisper_transformers import run_whisper
+
+    proc = run_whisper(
+        chunk_paths=[wav_path],
+        model=model,
+        language=getattr(config, "LANGUAGE", "ko"),
+        temperature_tuple="(0.0,)",
+    )
+    if proc is None:
+        raise RuntimeError("transformers-whisper process not available")
+
+    line = proc.stdout.readline()
+    proc.wait(timeout=120)
+    data = _parse_json_line(line)
+    if not data:
+        raise RuntimeError("empty transformers-whisper result")
+    if data.get("fatal_error"):
+        raise RuntimeError(data.get("fatal_error"))
+    if data.get("error"):
+        raise RuntimeError(data.get("error"))
+    return _extract_text(data)
 
 
 def _transcribe_mlx(wav_path: str, model: str) -> str:

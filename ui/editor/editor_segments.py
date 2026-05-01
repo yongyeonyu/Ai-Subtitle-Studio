@@ -277,8 +277,6 @@ class EditorSegmentsMixin:
 
         self._schedule_timeline()
         self._refresh_video_subtitle_context()
-        if not is_initial:
-            self._schedule_realtime_roughcut_draft()
 
         if is_initial:
             self._is_initial_load = False
@@ -529,20 +527,37 @@ class EditorSegmentsMixin:
         except Exception:
             return False
 
-    def _schedule_realtime_roughcut_draft(self, force: bool = False):
+    def _set_roughcut_draft_status(self, status: str, count: int | None = None):
+        self._roughcut_draft_status = str(status or "idle")
+        if count is not None:
+            self._last_roughcut_draft_major_count = int(count)
+        if threading.current_thread() is not threading.main_thread():
+            return
+        try:
+            main_w = self.window()
+            if hasattr(main_w, "_refresh_saved_status_label"):
+                main_w._refresh_saved_status_label()
+        except Exception:
+            pass
+
+    def _schedule_post_generation_roughcut_draft(self, force: bool = False):
         if not self._roughcut_draft_runtime_enabled():
+            self._set_roughcut_draft_status("disabled")
             return
         timer = getattr(self, "_roughcut_draft_timer", None)
         if timer is None:
             return
         if force or not timer.isActive():
-            timer.start(80 if force else 250)
+            self._set_roughcut_draft_status("queued")
+            timer.start(120 if force else 300)
 
-    def _run_realtime_roughcut_draft(self):
+    def _run_post_generation_roughcut_draft(self):
         if not self._roughcut_draft_runtime_enabled():
+            self._set_roughcut_draft_status("disabled")
             return
         thread = getattr(self, "_roughcut_draft_thread", None)
-        llm_busy = bool(thread is not None and thread.is_alive())
+        if thread is not None and thread.is_alive():
+            return
 
         segments = [
             dict(seg)
@@ -550,7 +565,9 @@ class EditorSegmentsMixin:
             if not seg.get("is_gap") and str(seg.get("text", "") or "").strip()
         ]
         if not segments:
+            self._set_roughcut_draft_status("idle")
             return
+        self._set_roughcut_draft_status("running")
 
         settings = self._draft_settings_snapshot()
         try:
@@ -572,18 +589,19 @@ class EditorSegmentsMixin:
         source_media = f"멀티클립 {len(media_files)}개" if len(media_files) > 1 else os.path.basename(media_path or "")
         self._roughcut_draft_generation += 1
         generation = int(self._roughcut_draft_generation)
-        try:
+
+        def emit_candidate(llm_payload, refinement_source: str):
             from core.roughcut import build_editor_roughcut_candidate_payload, build_editor_roughcut_draft_result
 
-            local_result = build_editor_roughcut_draft_result(
+            result = build_editor_roughcut_draft_result(
                 segments,
                 media_duration=media_duration,
                 source_path=media_path,
                 settings=settings,
-                llm_payload=None,
+                llm_payload=llm_payload,
             )
-            local_payload = build_editor_roughcut_candidate_payload(
-                local_result,
+            payload = build_editor_roughcut_candidate_payload(
+                result,
                 source_segments=segments,
                 settings=settings,
                 source_path=media_path,
@@ -592,71 +610,90 @@ class EditorSegmentsMixin:
                 clip_boundaries=clip_boundaries,
                 editor_mode=editor_mode,
             )
-            local_payload["_generation"] = generation
-            local_payload["refinement_source"] = "local_immediate"
-            self.sig_roughcut_draft_ready.emit(local_result, segments, local_payload)
-        except Exception as exc:
-            try:
-                get_logger().log(f"⚠️ 에디터 러프컷 로컬 초안 생성 실패: {exc}")
-            except Exception:
-                pass
+            payload["_generation"] = generation
+            payload["refinement_source"] = refinement_source
+            self.sig_roughcut_draft_ready.emit(result, segments, payload)
 
-        if len(segments) < min_count:
-            return
-        if llm_busy:
-            self._roughcut_draft_pending = True
+        model = str(settings.get("selected_model", "") or "").strip()
+        if len(segments) < min_count or not model or "사용 안함" in model:
+            try:
+                emit_candidate(None, "local_after_generation")
+            except Exception as exc:
+                self._set_roughcut_draft_status("failed")
+                get_logger().log(f"⚠️ 에디터 러프컷 로컬 초안 생성 실패: {exc}")
             return
         if time.time() < float(getattr(self, "_roughcut_llm_cooldown_until", 0.0) or 0.0):
+            try:
+                emit_candidate(None, "local_after_generation")
+            except Exception as exc:
+                self._set_roughcut_draft_status("failed")
+                get_logger().log(f"⚠️ 에디터 러프컷 로컬 초안 생성 실패: {exc}")
             return
 
         def worker():
             try:
-                from core.roughcut import (
-                    build_editor_roughcut_candidate_payload,
-                    build_editor_roughcut_draft_result,
-                    run_editor_roughcut_llm_draft,
-                )
+                from core.roughcut import run_editor_roughcut_llm_draft
 
                 llm_payload = run_editor_roughcut_llm_draft(segments, settings=settings)
                 if llm_payload is None:
                     self._roughcut_llm_cooldown_until = time.time() + 10.0
-                    return
-                self._roughcut_llm_cooldown_until = 0.0
-                result = build_editor_roughcut_draft_result(
-                    segments,
-                    media_duration=media_duration,
-                    source_path=media_path,
-                    settings=settings,
-                    llm_payload=llm_payload,
-                )
-                payload = build_editor_roughcut_candidate_payload(
-                    result,
-                    source_segments=segments,
-                    settings=settings,
-                    source_path=media_path,
-                    source_media=source_media,
-                    media_files=media_files,
-                    clip_boundaries=clip_boundaries,
-                    editor_mode=editor_mode,
-                )
-                payload["_generation"] = generation
-                payload["refinement_source"] = "llm_refined"
-                self.sig_roughcut_draft_ready.emit(result, segments, payload)
+                    emit_candidate(None, "local_after_generation_fallback")
+                else:
+                    self._roughcut_llm_cooldown_until = 0.0
+                    emit_candidate(llm_payload, "llm_refined")
             except Exception as exc:
+                self.sig_roughcut_draft_ready.emit(None, [], {"_generation": generation, "refinement_source": "failed"})
                 try:
                     get_logger().log(f"⚠️ 에디터 러프컷 초안 생성 실패: {exc}")
                 except Exception:
                     pass
 
         self._roughcut_draft_pending = False
-        self._roughcut_draft_thread = threading.Thread(target=worker, daemon=True, name="editor-roughcut-draft")
+        self._roughcut_draft_thread = threading.Thread(target=worker, daemon=True, name="editor-post-generation-roughcut-draft")
         self._roughcut_draft_thread.start()
 
-    def _apply_realtime_roughcut_draft(self, result, segments: list, candidate: dict):
+    def _apply_post_generation_roughcut_draft(self, result, segments: list, candidate: dict):
         refinement_source = str(candidate.get("refinement_source") or "")
         try:
             if int(candidate.get("_generation", -1)) != int(getattr(self, "_roughcut_draft_generation", 0)):
                 return
+        except Exception:
+            pass
+        if refinement_source == "failed":
+            self._set_roughcut_draft_status("failed")
+            self._roughcut_draft_thread = None
+            return
+        self._set_roughcut_draft_status("saving")
+        try:
+            major_count = len(getattr(result, "segments", ()) or ())
+            max_major = int(self._draft_settings_snapshot().get("editor_roughcut_draft_max_major_segments", 10) or 10)
+            if major_count > max(1, min(26, max_major)):
+                from core.roughcut import build_editor_roughcut_candidate_payload, build_editor_roughcut_draft_result
+
+                settings = self._draft_settings_snapshot()
+                media_path = str(getattr(self, "media_path", "") or "")
+                main_w = self.window()
+                media_files = list(getattr(main_w, "_multiclip_files", []) or [])
+                if not media_files and media_path:
+                    media_files = [media_path]
+                result = build_editor_roughcut_draft_result(
+                    segments,
+                    media_duration=max((float(seg.get("end", 0.0) or 0.0) for seg in segments), default=0.0),
+                    source_path=media_path,
+                    settings=settings,
+                    llm_payload=None,
+                )
+                candidate = build_editor_roughcut_candidate_payload(
+                    result,
+                    source_segments=segments,
+                    settings=settings,
+                    source_path=media_path,
+                    source_media=os.path.basename(media_path or "") or "현재 에디터",
+                    media_files=media_files,
+                    clip_boundaries=list(getattr(main_w, "_multiclip_boundaries", []) or []),
+                    editor_mode="multiclip" if len(media_files) > 1 else "single",
+                )
+                candidate["refinement_source"] = refinement_source or "local_capped"
         except Exception:
             pass
         try:
@@ -666,6 +703,7 @@ class EditorSegmentsMixin:
         main_w = self.window()
         project_path = str(getattr(main_w, "_current_project_path", "") or "")
         if not project_path:
+            self._set_roughcut_draft_status("failed")
             return
         try:
             from core.project.project_manager import save_project
@@ -684,6 +722,7 @@ class EditorSegmentsMixin:
             save_project(
                 project_path,
                 segments=segments,
+                user_settings=dict(getattr(self, "settings", {}) or {}),
                 roughcut_state=roughcut_state,
                 active_work_mode=EDITOR_MODE,
             )
@@ -708,15 +747,14 @@ class EditorSegmentsMixin:
             last_count = getattr(self, "_last_roughcut_draft_major_count", None)
             if last_count != count:
                 self._last_roughcut_draft_major_count = count
-                get_logger().log(f"러프컷 초안 동기화: 중분류 {count}개")
+                get_logger().log(f"자막 생성 후 러프컷 초안 생성: 중분류 {count}개")
+            self._set_roughcut_draft_status("done", count)
         except Exception as exc:
+            self._set_roughcut_draft_status("failed")
             get_logger().log(f"⚠️ 러프컷 초안 저장 실패: {exc}")
         finally:
-            if refinement_source == "llm_refined":
+            if refinement_source in {"llm_refined", "local_after_generation_fallback"}:
                 self._roughcut_draft_thread = None
-                if getattr(self, "_roughcut_draft_pending", False):
-                    self._roughcut_draft_pending = False
-                    self._schedule_realtime_roughcut_draft(force=True)
 
     def _on_drag_started(self): 
         # 💡 드래그를 시작하기 직전의 전체 뷰 스냅샷 저장!

@@ -25,6 +25,47 @@ from ui.editor.editor_helpers import (
 class EditorTimelineVideoMixin:
     """타임라인/비디오 동기화 / 화자 관리 / 단축키 액션"""
 
+    def _reset_playhead_smoothing(self, sec: float | None = None):
+        base_sec = float(sec if sec is not None else getattr(self.timeline.canvas, "playhead_sec", 0.0) or 0.0)
+        self._playhead_display_sec = max(0.0, base_sec)
+        self._playhead_anchor_global_sec = max(0.0, base_sec)
+        self._playhead_anchor_mono = time.monotonic()
+
+    def _smooth_playhead_sec(self, raw_global_sec: float, now_mono: float, dur_sec: float) -> float:
+        raw_global_sec = max(0.0, float(raw_global_sec or 0.0))
+        dur_sec = max(0.0, float(dur_sec or 0.0))
+        display = getattr(self, "_playhead_display_sec", None)
+        anchor_sec = getattr(self, "_playhead_anchor_global_sec", None)
+        anchor_mono = getattr(self, "_playhead_anchor_mono", None)
+        if display is None or anchor_sec is None or anchor_mono is None:
+            self._reset_playhead_smoothing(raw_global_sec)
+            return raw_global_sec
+
+        predicted = float(anchor_sec) + max(0.0, now_mono - float(anchor_mono))
+        if dur_sec > 0:
+            predicted = min(predicted, dur_sec + self._multiclip_active_offset())
+
+        drift = raw_global_sec - predicted
+        if abs(drift) >= 0.35:
+            smoothed = raw_global_sec
+        elif drift >= 0.0:
+            smoothed = predicted + drift * 0.35
+        else:
+            smoothed = predicted + drift * 0.08
+
+        previous = float(display)
+        max_step = max(0.018, min(0.08, now_mono - float(getattr(self, "_last_playhead_smooth_tick", now_mono) or now_mono) + 0.018))
+        if smoothed < previous and previous - smoothed < 0.18:
+            smoothed = previous
+        elif smoothed > previous + max_step:
+            smoothed = previous + max_step
+
+        self._last_playhead_smooth_tick = now_mono
+        self._playhead_display_sec = max(0.0, smoothed)
+        self._playhead_anchor_global_sec = raw_global_sec
+        self._playhead_anchor_mono = now_mono
+        return self._playhead_display_sec
+
     def _multiclip_active_offset(self) -> float:
         owner = self.window()
         bounds = list(getattr(owner, '_multiclip_boundaries', []) or [])
@@ -54,7 +95,8 @@ class EditorTimelineVideoMixin:
             self.timeline.canvas.set_active(seg["start"])
         else:
             self.timeline.set_active(seg["start"])
-        if hasattr(self, 'timeline') and hasattr(self.timeline, 'set_playhead'):
+        if (not is_playing) and hasattr(self, 'timeline') and hasattr(self.timeline, 'set_playhead'):
+            self._reset_playhead_smoothing(seg["start"])
             self.timeline.set_playhead(seg["start"])
         line_num = seg.get("line", 0)
         self._highlighter.set_current_line(line_num)
@@ -110,15 +152,17 @@ class EditorTimelineVideoMixin:
             return
         player = self.video_player.media_player
         if player.playbackState() != player.PlaybackState.PlayingState:
+            self._reset_playhead_smoothing(getattr(self.timeline.canvas, "playhead_sec", 0.0))
             return
         pos_ms = player.position()
         dur_ms = player.duration()
         if dur_ms <= 0:
             return
 
-        current_sec = self._local_to_global_sec(pos_ms / 1000.0)
-        self.timeline.set_playhead(current_sec)
         now_mono = time.monotonic()
+        raw_sec = self._local_to_global_sec(pos_ms / 1000.0)
+        current_sec = self._smooth_playhead_sec(raw_sec, now_mono, dur_ms / 1000.0)
+        self.timeline.set_playhead(current_sec)
 
         # Context sync: skip resolve if within cached clip bounds (C fix v2)
         if hasattr(self, '_resolve_active_context') and hasattr(self, 'video_player'):
@@ -163,6 +207,7 @@ class EditorTimelineVideoMixin:
 
 
     def _on_scrub(self, sec):
+        self._reset_playhead_smoothing(sec)
         self.timeline.set_playhead(sec)
         if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
             ctx = self._resolve_active_context(global_sec=float(sec))
@@ -194,6 +239,7 @@ class EditorTimelineVideoMixin:
         seg = find_segment_at(segs, new_global, skip_gap=False)
         if seg and self._active_seg_start != seg["start"]:
             self._sync_cursor_to_seg(seg)
+        self._reset_playhead_smoothing(new_global)
         self.timeline.set_playhead(new_global)
         self.timeline.center_to_sec(new_global, smooth=False)
 

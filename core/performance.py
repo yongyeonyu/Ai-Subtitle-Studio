@@ -153,3 +153,48 @@ def configure_qt_runtime() -> None:
         QPixmapCache.setCacheLimit(max(QPixmapCache.cacheLimit(), limit_kb))
     except Exception:
         pass
+
+
+def configure_qt_gpu_rendering_before_app() -> None:
+    """Prefer hardware-backed Qt surfaces before QApplication is created."""
+    if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
+        return
+    if str(os.environ.get("AI_SUBTITLE_GPU_RENDERING", "1")).lower() in {"0", "false", "no"}:
+        return
+
+    os.environ.setdefault("QT_OPENGL", "desktop")
+    os.environ.setdefault("QSG_RHI_BACKEND", "opengl")
+
+    try:
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QSurfaceFormat
+        from PyQt6.QtWidgets import QApplication
+    except Exception:
+        return
+
+    for attr in (
+        getattr(Qt.ApplicationAttribute, "AA_ShareOpenGLContexts", None),
+        getattr(Qt.ApplicationAttribute, "AA_UseDesktopOpenGL", None),
+    ):
+        if attr is None:
+            continue
+        try:
+            QApplication.setAttribute(attr, True)
+        except Exception:
+            pass
+
+    try:
+        fmt = QSurfaceFormat()
+        fmt.setRenderableType(QSurfaceFormat.RenderableType.OpenGL)
+        fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+        if platform.system() == "Darwin":
+            fmt.setVersion(3, 2)
+        else:
+            fmt.setVersion(3, 3)
+        fmt.setDepthBufferSize(0)
+        fmt.setStencilBufferSize(0)
+        fmt.setSamples(0)
+        fmt.setSwapInterval(0)
+        QSurfaceFormat.setDefaultFormat(fmt)
+    except Exception:
+        pass

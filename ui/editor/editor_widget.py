@@ -128,11 +128,13 @@ class EditorWidget(
         self._nav_timer      = QTimer(); self._nav_timer.setSingleShot(True)
         self._roughcut_draft_timer = QTimer(self)
         self._roughcut_draft_timer.setSingleShot(True)
-        self._roughcut_draft_timer.timeout.connect(self._run_realtime_roughcut_draft)
+        self._roughcut_draft_timer.timeout.connect(self._run_post_generation_roughcut_draft)
         self._roughcut_draft_thread = None
         self._roughcut_draft_pending = False
         self._roughcut_draft_generation = 0
-        self.sig_roughcut_draft_ready.connect(self._apply_realtime_roughcut_draft)
+        self._roughcut_draft_status = "idle"
+        self._last_roughcut_draft_major_count = None
+        self.sig_roughcut_draft_ready.connect(self._apply_post_generation_roughcut_draft)
 
         self.status_lbl = QLabel("대기 중...")
         self.engine_lbl = QLabel()
@@ -192,7 +194,7 @@ class EditorWidget(
 
         self._playhead_timer = QTimer()
         self._playhead_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._playhead_timer.setInterval(33)   
+        self._playhead_timer.setInterval(16)
         self._playhead_timer.timeout.connect(self._sync_playhead)
         self._playhead_timer.start()
 
@@ -316,9 +318,9 @@ class EditorWidget(
         root = QVBoxLayout(self); root.setContentsMargins(2, 2, 2, 2); root.setSpacing(2)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.splitter.setHandleWidth(2)
-        self.splitter.setStyleSheet("QSplitter::handle { background: #0F1518; width: 2px; }")
-        editor_wrap = QWidget(); editor_wrap.setMinimumWidth(260); editor_wrap.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
+        self.splitter.setHandleWidth(3)
+        self.splitter.setStyleSheet("QSplitter::handle { background: #2D3942; width: 1px; margin: 0 1px; }")
+        editor_wrap = QWidget(); editor_wrap.setMinimumWidth(260); editor_wrap.setStyleSheet("background: #151C20; border: none; border-radius: 0px;")
         self._editor_wrap = editor_wrap
         editor_wrap.installEventFilter(self)
         ew_layout   = QVBoxLayout(editor_wrap); ew_layout.setContentsMargins(8, 8, 8, 8); ew_layout.setSpacing(6)
@@ -359,11 +361,20 @@ class EditorWidget(
         self.video_player = VideoPlayerWidget()
         if hasattr(self.video_player, "set_subtitle_provider"):
             self.video_player.set_subtitle_provider(self._video_subtitle_context_for_player)
-        self.video_player.setStyleSheet("background: #000000; border: 1px solid #2D3942; border-radius: 7px;")
+        self.video_player.setStyleSheet("background: #000000; border: none; border-radius: 0px;")
         self.splitter.addWidget(self.video_player)
         self.splitter.setStretchFactor(0, 63); self.splitter.setStretchFactor(1, 37)
         self.splitter.setCollapsible(0, False); self.splitter.setCollapsible(1, False)
         root.addWidget(self.splitter, stretch=1)
+        self.external_menu_host = QWidget()
+        self.external_menu_host.setObjectName("EditorExternalMenuHost")
+        self.external_menu_host.setStyleSheet("QWidget#EditorExternalMenuHost { background: transparent; border: none; }")
+        self.external_menu_host_layout = QVBoxLayout(self.external_menu_host)
+        self.external_menu_host_layout.setContentsMargins(0, 0, 0, 0)
+        self.external_menu_host_layout.setSpacing(0)
+        self.external_menu_host.setFixedHeight(0)
+        self.external_menu_host.hide()
+        root.addWidget(self.external_menu_host)
         self._video_width_locking = False
         QTimer.singleShot(0, self._position_video_expand_button)
         QTimer.singleShot(150, self._position_video_expand_button)
@@ -409,6 +420,42 @@ class EditorWidget(
         self._internal_button_bar.setVisible(False)
         root.addWidget(self._internal_button_bar)
 
+    def set_external_menu_bar(self, menu_widget):
+        if menu_widget is None:
+            return
+        host = getattr(self, "external_menu_host", None)
+        layout = getattr(self, "external_menu_host_layout", None)
+        if host is None or layout is None:
+            return
+        try:
+            old_parent = menu_widget.parentWidget()
+            if old_parent is host and layout.indexOf(menu_widget) >= 0:
+                host.show()
+                host.setFixedHeight(max(74, menu_widget.sizeHint().height()))
+                return
+            menu_widget.setParent(host)
+            layout.addWidget(menu_widget)
+            menu_widget.show()
+            host.show()
+            host.setFixedHeight(max(74, menu_widget.sizeHint().height()))
+        except RuntimeError:
+            return
+
+    def detach_external_menu_bar(self):
+        host = getattr(self, "external_menu_host", None)
+        layout = getattr(self, "external_menu_host_layout", None)
+        if host is None or layout is None:
+            return None
+        if layout.count() <= 0:
+            return None
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget is not None:
+            widget.setParent(None)
+        host.setFixedHeight(0)
+        host.hide()
+        return widget
+
     def _widget_is_inside_editor_panel(self, widget) -> bool:
         panel = getattr(self, "_editor_wrap", None)
         while widget is not None:
@@ -438,7 +485,7 @@ class EditorWidget(
     def eventFilter(self, obj, event):
         if obj is getattr(self, "_editor_wrap", None) and event.type() == QEvent.Type.Resize:
             QTimer.singleShot(0, self._sync_editor_focus_border)
-        return super().eventFilter(obj, event)
+        return False
 
     def _on_inline_text_changed(self, line_num: int, new_text: str):
         doc = self.text_edit.document()
@@ -1042,8 +1089,18 @@ class EditorWidget(
 
     def _update_engine_label_text(self):
         short_w = self.settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "")).replace("mlx-community/", "").replace("-mlx", "") or "기본"
-        audio_ai  = {"deepfilter": "DeepFilter", "demucs": "Demucs", "none": "미사용"}.get(self.settings.get("selected_audio_ai", "demucs"), "Demucs")
-        vad_model = {"silero": "Silero", "webrtc": "WebRTC", "pyannote": "Pyannote", "none": "미사용(30초)"}.get(self.settings.get("selected_vad", "none"), "미사용(30초)")
+        if self.settings.get("stt_ensemble_enabled"):
+            short_w2 = str(self.settings.get("selected_whisper_model_secondary", "") or "").replace("mlx-community/", "").replace("-mlx", "")
+            if short_w2 and short_w2 != short_w:
+                short_w = f"{short_w} + {short_w2}"
+        audio_ai = {
+            "deepfilter": "DeepFilter",
+            "rnnoise": "RNNoise",
+            "none": "미사용",
+        }.get(self.settings.get("selected_audio_ai", "deepfilter"), "DeepFilter")
+        vad_model = {"silero": "Silero", "webrtc": "WebRTC", "pyannote": "Pyannote", "none": "미사용"}.get(self.settings.get("selected_vad", "none"), "미사용")
+        if not self.settings.get("vad_pre_split_enabled", False):
+            vad_model = "검수용" if vad_model != "미사용" else "미사용"
         llm_model = self.selected_model
         llm_model = "미사용" if "사용 안함" in llm_model else llm_model.split(":")[0].upper()
         self.engine_lbl.setText(f"[VAD] : {vad_model}\n[음성] : {audio_ai}\n[STT] : {short_w}\n[LLM] : {llm_model}")

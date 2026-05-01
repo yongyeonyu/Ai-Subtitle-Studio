@@ -93,6 +93,75 @@ def annotate_segment_vad_alignment(
     return out
 
 
+def adjust_segments_to_vad_boundaries(
+    segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    vad_segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    max_shift_sec: float = 0.7,
+    edge_pad_sec: float = 0.04,
+) -> tuple[list[dict[str, Any]], int]:
+    """Snap subtitle edges to nearby VAD speech boundaries without stretching rows."""
+    vad = normalize_vad_segments(vad_segments)
+    if not segments or not vad:
+        return [dict(seg) for seg in (segments or [])], 0
+
+    max_shift = max(0.0, _as_float(max_shift_sec, 0.7))
+    pad = max(0.0, _as_float(edge_pad_sec, 0.04))
+    adjusted: list[dict[str, Any]] = []
+    changed = 0
+
+    for segment in segments:
+        out = dict(segment or {})
+        start = max(0.0, _as_float(out.get("start"), 0.0))
+        end = max(start, _as_float(out.get("end"), start))
+        if end <= start:
+            adjusted.append(out)
+            continue
+
+        overlaps = [v for v in vad if v["end"] >= start and v["start"] <= end]
+        nearby = [v for v in vad if v["end"] >= start - max_shift and v["start"] <= end + max_shift]
+        refs = overlaps or nearby
+        if not refs:
+            adjusted.append(out)
+            continue
+
+        new_start = start
+        new_end = end
+
+        # 시작점은 가까운 VAD 시작 경계 또는 자막이 음성보다 먼저 열린 경우에만 조정합니다.
+        first = refs[0]
+        if abs(first["start"] - start) <= max_shift or (start < first["start"] and first["start"] < end):
+            new_start = max(0.0, first["start"] - pad)
+
+        # 끝점은 가까운 VAD 끝 경계 또는 자막이 음성보다 늦게 닫힌 경우에만 조정합니다.
+        last = refs[-1]
+        if abs(last["end"] - end) <= max_shift or (start < last["end"] and end > last["end"]):
+            new_end = max(new_start + 0.05, last["end"] + pad)
+
+        if new_end <= new_start:
+            new_end = new_start + max(0.05, end - start)
+
+        if abs(new_start - start) > 0.001 or abs(new_end - end) > 0.001:
+            changed += 1
+            meta = dict(out.get("asr_metadata") or {})
+            meta["vad_timing_adjustment"] = {
+                "from": [round(start, 3), round(end, 3)],
+                "to": [round(new_start, 3), round(new_end, 3)],
+            }
+            out["asr_metadata"] = meta
+        out["start"] = round(new_start, 3)
+        out["end"] = round(new_end, 3)
+        adjusted.append(annotate_segment_vad_alignment(out, vad))
+
+    adjusted.sort(key=lambda item: (_as_float(item.get("start")), _as_float(item.get("end"))))
+    for idx in range(1, len(adjusted)):
+        prev = adjusted[idx - 1]
+        cur = adjusted[idx]
+        if _as_float(prev.get("end")) > _as_float(cur.get("start")):
+            prev["end"] = round(max(_as_float(prev.get("start")) + 0.05, _as_float(cur.get("start")) - 0.02), 3)
+    return adjusted, changed
+
+
 def review_vad_enabled(settings: dict[str, Any] | None) -> bool:
     settings = settings or {}
     return bool(settings.get("review_vad_before_stt_enabled", False))

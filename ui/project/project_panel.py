@@ -14,8 +14,10 @@ from core.project.project_manager import (
     PROJECTS_DIR,
     add_media_to_project,
     create_project,
+    extract_model_settings,
     get_boundary_times,
     load_project,
+    merge_project_model_settings,
     save_project,
 )
 from core.project.project_context import (
@@ -36,6 +38,32 @@ PROJECT_FILE_FILTER = "Project Files (*.json)"
 
 
 class ProjectUIMixin:
+    def _load_local_settings(self) -> dict:
+        try:
+            from core.project.data_manager import load_settings
+            return dict(load_settings() or {})
+        except Exception:
+            try:
+                from core.settings import load_settings
+                return dict(load_settings() or {})
+            except Exception:
+                return {}
+
+    def _save_local_settings(self, settings: dict) -> None:
+        if not isinstance(settings, dict):
+            return
+        try:
+            from core.project.data_manager import save_settings
+            save_settings(settings)
+            return
+        except Exception:
+            pass
+        try:
+            from core.settings import save_settings
+            save_settings(settings)
+        except Exception:
+            pass
+
     def _sorted_project_media(self, project: dict) -> list:
         media_files = project_media_files(project)
         if media_files:
@@ -146,10 +174,16 @@ class ProjectUIMixin:
         self._is_auto_pipeline = False
         self._project_boundary_times = get_boundary_times(project)
 
-        saved_settings = project.get("user_settings", {})
-        if saved_settings:
+        model_settings = extract_model_settings(project)
+        saved_settings = merge_project_model_settings(
+            self._load_local_settings(),
+            project,
+        )
+        if model_settings:
             self._save_local_settings(saved_settings)
-            get_logger().log("🔁 프로젝트 설정 복원 완료")
+            if hasattr(self, "_refresh_sidebar_engine_info"):
+                self._refresh_sidebar_engine_info(settings=saved_settings)
+            get_logger().log("🔁 프로젝트 AI 모델 설정 복원 완료")
 
         media = self._sorted_project_media(project)
         project_segments = project_segments_to_editor(project)

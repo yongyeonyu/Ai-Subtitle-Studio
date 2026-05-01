@@ -5,25 +5,55 @@ ui/home_ui.py
 MainWindow 홈 화면 빌드 Mixin
 """
 import os
+import re
+from html import escape
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDialog, QLineEdit, QCheckBox, QScrollArea, QComboBox, QMessageBox,
-    QToolButton, QSizePolicy
+    QToolButton, QSizePolicy, QMenu
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QDateTime
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QColor, QCursor
 
 import config
 from core.path_manager import (
-    get_icloud_path, get_recent_folders,
+    get_icloud_path,
     get_icloud_auto_detect, get_nas_auto_detect,
     set_icloud_path, set_nas_path, get_nas_path, get_local_path,
     set_icloud_auto_detect, set_nas_auto_detect, ensure_nas_mounted,
     get_nas_excluded_folders
 )
 from core.settings import load_settings, save_settings
+from core.audio.audio_presets import apply_audio_preset, load_audio_presets
+from core.audio.stt_quality_presets import (
+    apply_stt_quality_preset,
+    load_stt_quality_presets,
+    normalize_stt_quality_key,
+)
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE
 from ui.style import button_style, label_style, line_icon, tool_button_style, settings_dialog_stylesheet
+
+
+ROUGHCUT_LLM_MIN_PARAMETERS_B = 7.0
+ROUGHCUT_LLM_MIN_SIZE_BYTES = 3_500_000_000
+ROUGHCUT_CAPABLE_CLOUD_TOKENS = (
+    "gemini 2.5 pro",
+    "gpt-5.2",
+    "gpt-5.5",
+)
+ROUGHCUT_BLOCKED_CLOUD_TOKENS = (
+    "flash",
+    "nano",
+    "mini",
+)
+ROUGHCUT_CAPABLE_LOCAL_LATEST = (
+    "exaone3.5:latest",
+    "gemma2:latest",
+    "llama3:latest",
+    "llama3.1:latest",
+    "mistral:latest",
+    "qwen2.5:latest",
+)
 
 
 class HomeUIMixin:
@@ -39,7 +69,7 @@ class HomeUIMixin:
             except RuntimeError:
                 pass
             self._project_info_overlay = None
-        for attr in ("status_rail", "saved_status_label", "sidebar_settings_label", "sidebar_terminal_panel"):
+        for attr in ("status_rail", "saved_status_label", "sidebar_settings_label", "sidebar_terminal_panel", "sidebar_preset_panel"):
             widget = getattr(self, attr, None)
             if widget is not None:
                 try:
@@ -69,17 +99,21 @@ class HomeUIMixin:
         layout.setSpacing(5)
         if not is_unified:
             layout.addSpacing(40)
-        title = QLabel("AI Subtitle Studio")
-        title.setAlignment(Qt.AlignmentFlag.AlignLeft if is_unified else Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet(f"color: #FFFFFF; font-size: {14 if is_unified else 24}px; font-weight: bold;")
-        layout.addWidget(title)
         if is_unified:
-            sub_title = QLabel("Dashboard")
-            sub_title.setStyleSheet("color: #8E8E93; font-size: 10px; font-weight: bold; border: none; background: transparent;")
-            layout.addWidget(sub_title)
+            if not hasattr(self, "saved_status_label"):
+                self.saved_status_label = QLabel("", self.home_page)
+                self.saved_status_label.setTextFormat(Qt.TextFormat.RichText)
+            self.saved_status_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            self.saved_status_label.setStyleSheet("color: #FFFFFF; font-size: 14px; font-weight: bold; background: transparent; border: none;")
+            self._refresh_saved_status_label()
+            layout.addWidget(self.saved_status_label)
             if hasattr(self, "status_rail"):
                 layout.addWidget(self.status_rail)
         else:
+            title = QLabel("AI Subtitle Studio")
+            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold;")
+            layout.addWidget(title)
             layout.addSpacing(6)
         columns = QVBoxLayout() if is_unified else QHBoxLayout()
         columns.setSpacing(8)
@@ -91,12 +125,11 @@ class HomeUIMixin:
             left_col.addWidget(self._btn("러프컷", "", self._open_roughcut_helper, active=sidebar_mode == "roughcut", icon_name="roughcut"))
             left_col.addWidget(self._btn("숏폼", "", self._open_shortform_maker, icon_name="shortform"))
             left_col.addSpacing(8)
-            left_col.addWidget(self._btn("최근 작업", "", self._dummy_action, icon_name="clock"))
             icloud_files, count_str, comp_str = self._get_icloud_files()
             nas_folders, nas_count, nas_comp = self._get_nas_folders()
-            left_col.addSpacing(6)
             left_col.addWidget(self._icloud_btn("☁ iCloud 자동 처리", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
             left_col.addWidget(self._icloud_btn("▣ NAS 자동 처리", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
+            left_col.addWidget(self._ensure_sidebar_queue_panel())
         else:
             left_col.addWidget(self._btn("📂 파일 선택", "영상/음성/srt 직접 선택", self.select_files))
             left_col.addWidget(self._btn("📁 폴더 선택", "폴더에서 영상 일괄 선택", self.select_folder))
@@ -113,37 +146,6 @@ class HomeUIMixin:
         nas_folders, nas_count, nas_comp = self._get_nas_folders()
         if not is_unified:
             right_col.addWidget(self._icloud_btn("🗄️ NAS 자동 처리", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
-        valid_folders = [f for f in get_recent_folders() if f and f.strip()]
-        
-        # ✅ 중복 제거 (순서 유지)
-        seen = set()
-        unique_folders = []
-        for f in valid_folders:
-            norm = os.path.normpath(f)
-            if norm not in seen:
-                seen.add(norm)
-                unique_folders.append(f)
-        valid_folders = unique_folders[:10]
-
-        if valid_folders and not is_unified:
-            recent_container = QWidget(); recent_container.setObjectName("MenuButton")
-            recent_container.setStyleSheet("QWidget#MenuButton { background-color: #1B2429; border: 1px solid #2D3942; border-radius: 7px; }")
-            recent_layout = QVBoxLayout(recent_container); recent_layout.setContentsMargins(10, 8, 10, 8); recent_layout.setSpacing(3)
-            recent_lbl = QLabel("📂 최근 폴더"); recent_lbl.setStyleSheet("color: #FFFFFF; font-size: 12px; font-weight: bold; border: none; background: transparent;"); recent_layout.addWidget(recent_lbl)
-            self._recent_buttons = []
-            max_visible = 3 if getattr(self, '_log_visible', False) else 10
-            for i, folder in enumerate(valid_folders[:10]):
-                display_name = os.path.basename(folder.rstrip('\\/')) or folder
-                file_lbl = QLabel(f"📁 {display_name}"); file_lbl.setStyleSheet("QLabel { color: #D1D1D6; font-size: 10px; border: none; padding: 2px 4px; background: transparent; } QLabel:hover { color: #FFFFFF; background: #26313A; border-radius: 4px; }"); file_lbl.setCursor(Qt.CursorShape.PointingHandCursor); file_lbl.setToolTip(folder)
-                def _on_recent_click(e, f=folder, lbl=file_lbl):
-                    if e.button() == Qt.MouseButton.LeftButton:
-                        self._defer_home_action(lbl, lambda: self._open_recent(f))
-                        e.accept()
-                file_lbl.mousePressEvent = _on_recent_click
-                if i >= max_visible: file_lbl.setVisible(False)
-                recent_layout.addWidget(file_lbl); self._recent_buttons.append(file_lbl)
-            right_col.addWidget(recent_container)
-        else: self._recent_buttons = []
         if not is_unified:
             right_col.addStretch()
         columns.addWidget(left_widget, stretch=1)
@@ -152,9 +154,7 @@ class HomeUIMixin:
         layout.addLayout(columns)
         layout.addStretch()
         if is_unified:
-            layout.addWidget(self._project_info_card(expanded=False))
-            if bool(getattr(self, "_project_info_expanded", False)):
-                QTimer.singleShot(0, self._show_project_info_overlay)
+            layout.addWidget(self._ensure_sidebar_preset_panel())
             layout.addWidget(self._sidebar_status_card())
             terminal_panel = (
                 self._ensure_sidebar_terminal_panel()
@@ -164,6 +164,9 @@ class HomeUIMixin:
             if terminal_panel is not None:
                 terminal_panel.setVisible(bool(getattr(self, "_log_visible", True)))
                 layout.addWidget(terminal_panel, stretch=1)
+            layout.addWidget(self._project_info_card(expanded=False))
+            if bool(getattr(self, "_project_info_expanded", False)):
+                QTimer.singleShot(0, self._show_project_info_overlay)
         bottom_bar = QHBoxLayout()
         from config import APP_VERSION
         if not is_unified:
@@ -193,6 +196,215 @@ class HomeUIMixin:
     def _current_status_time_text(self) -> str:
         text = QDateTime.currentDateTime().toString("AP h:mm")
         return text.replace("AM", "오전").replace("PM", "오후")
+
+    def _ensure_sidebar_queue_panel(self):
+        from ui.queue.sidebar_queue_panel import SidebarQueuePanel
+
+        panel = getattr(self, "sidebar_queue_panel", None)
+        if panel is not None:
+            try:
+                if panel.parent() is None:
+                    panel.setParent(self.home_page)
+                self._sync_sidebar_queue_panel()
+                return panel
+            except RuntimeError:
+                pass
+        panel = SidebarQueuePanel(self.home_page)
+        self.sidebar_queue_panel = panel
+        self._sync_sidebar_queue_panel()
+        return panel
+
+    def _queue_sidebar_header_text(self) -> str:
+        label = getattr(self, "queue_header_lbl", None)
+        raw = ""
+        if label is not None:
+            try:
+                raw = str(label.text() or "")
+            except RuntimeError:
+                raw = ""
+        if raw:
+            raw = raw.replace("📋 처리할 파일 리스트", "큐 리스트").replace("진행 중", "").strip()
+            raw = raw.replace("  ", " ")
+            return raw
+        total = int(getattr(self, "_total_files", 0) or 0)
+        current = int(getattr(self, "_current_file_idx", 0) or 0)
+        pct = int(getattr(self, "_real_pct", 0) or 0)
+        return f"큐 리스트 : ({current}/{total}) - {pct}% 완료"
+
+    def _sidebar_queue_items(self) -> list[dict]:
+        table = getattr(self, "queue_table", None)
+        if table is None:
+            return []
+        items = []
+        try:
+            for row in range(table.rowCount()):
+                status_item = table.item(row, 0)
+                file_item = table.item(row, 1)
+                eta_item = table.item(row, 4)
+                items.append({
+                    "status": self._plain_queue_status(str(status_item.text() if status_item else "-")),
+                    "file": str(file_item.text() if file_item else "-"),
+                    "eta": str(eta_item.text() if eta_item else "-"),
+                })
+        except RuntimeError:
+            return []
+        return items
+
+    def _plain_queue_status(self, status: str) -> str:
+        text = str(status or "").strip()
+        text = re.sub(r"^[^\w가-힣\[]+\s*", "", text)
+        text = re.sub(r"[\u2600-\u27BF\U0001F300-\U0001FAFF]", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text or "-"
+
+    def _sync_sidebar_queue_panel(self):
+        panel = getattr(self, "sidebar_queue_panel", None)
+        if panel is None:
+            return
+        try:
+            panel.set_queue(self._queue_sidebar_header_text(), self._sidebar_queue_items())
+        except RuntimeError:
+            self.sidebar_queue_panel = None
+
+    def _sidebar_preset_combo_style(self) -> str:
+        return (
+            "QComboBox { background:#11181C; color:#F5F7FA; border:1px solid #2D3942; "
+            "border-radius:5px; padding:2px 7px; font-size:9px; font-weight:700; "
+            "min-height:22px; max-height:22px; } "
+            "QComboBox:hover { border-color:#465663; background:#151C20; } "
+            "QComboBox::drop-down { width:18px; border:none; } "
+            "QComboBox QAbstractItemView { background:#151C20; color:#F5F7FA; "
+            "selection-background-color:#0B84FF; border:1px solid #2D3942; }"
+        )
+
+    def _ensure_sidebar_preset_panel(self):
+        panel = getattr(self, "sidebar_preset_panel", None)
+        if panel is not None:
+            try:
+                if panel.parent() is None:
+                    panel.setParent(self.home_page)
+                self._sync_sidebar_preset_panel()
+                return panel
+            except RuntimeError:
+                pass
+
+        panel = QWidget(self.home_page)
+        panel.setObjectName("SidebarPresetPanel")
+        panel.setStyleSheet(
+            "QWidget#SidebarPresetPanel { background:#151C20; border:1px solid #2D3942; border-radius:7px; }"
+        )
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(9, 7, 9, 7)
+        lay.setSpacing(5)
+
+        title = QLabel("인식 프리셋")
+        title.setStyleSheet("color:#F5F7FA; font-size:10px; font-weight:800; border:none; background:transparent;")
+        lay.addWidget(title)
+
+        self.sidebar_stt_quality_combo = QComboBox(panel)
+        for key, preset in load_stt_quality_presets().items():
+            label = str(preset.get("label") or key)
+            self.sidebar_stt_quality_combo.addItem(label, key)
+            desc = str(preset.get("description") or "")
+            if desc:
+                self.sidebar_stt_quality_combo.setItemData(
+                    self.sidebar_stt_quality_combo.count() - 1,
+                    desc,
+                    Qt.ItemDataRole.ToolTipRole,
+                )
+        self.sidebar_stt_quality_combo.setStyleSheet(self._sidebar_preset_combo_style())
+        self.sidebar_stt_quality_combo.currentIndexChanged.connect(self._on_sidebar_stt_quality_changed)
+        lay.addWidget(self._sidebar_preset_row("정밀인식", self.sidebar_stt_quality_combo))
+
+        self.sidebar_audio_preset_combo = QComboBox(panel)
+        self.sidebar_audio_preset_combo.addItem("직접 설정", "")
+        for name, preset in load_audio_presets().items():
+            self.sidebar_audio_preset_combo.addItem(name, name)
+            desc = str(preset.get("description") or "")
+            if desc:
+                self.sidebar_audio_preset_combo.setItemData(
+                    self.sidebar_audio_preset_combo.count() - 1,
+                    desc,
+                    Qt.ItemDataRole.ToolTipRole,
+                )
+        self.sidebar_audio_preset_combo.setStyleSheet(self._sidebar_preset_combo_style())
+        self.sidebar_audio_preset_combo.currentIndexChanged.connect(self._on_sidebar_audio_preset_changed)
+        lay.addWidget(self._sidebar_preset_row("오디오", self.sidebar_audio_preset_combo))
+
+        panel.setMaximumHeight(104)
+        self.sidebar_preset_panel = panel
+        self._sync_sidebar_preset_panel()
+        return panel
+
+    def _sidebar_preset_row(self, label_text: str, combo: QComboBox) -> QWidget:
+        row = QWidget()
+        row.setStyleSheet("background:transparent; border:none;")
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        label = QLabel(label_text)
+        label.setFixedWidth(48)
+        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        label.setStyleSheet("color:#A9B0B7; font-size:9px; font-weight:800; border:none; background:transparent;")
+        lay.addWidget(label)
+        lay.addWidget(combo, stretch=1)
+        return row
+
+    def _set_combo_data_silent(self, combo: QComboBox | None, value: str) -> None:
+        if combo is None:
+            return
+        combo.blockSignals(True)
+        try:
+            for i in range(combo.count()):
+                if combo.itemData(i) == value:
+                    combo.setCurrentIndex(i)
+                    return
+        finally:
+            combo.blockSignals(False)
+
+    def _sync_sidebar_preset_panel(self, settings: dict | None = None):
+        settings = dict(settings or load_settings())
+        self._set_combo_data_silent(
+            getattr(self, "sidebar_stt_quality_combo", None),
+            normalize_stt_quality_key(settings.get("stt_quality_preset", "balanced")),
+        )
+        self._set_combo_data_silent(
+            getattr(self, "sidebar_audio_preset_combo", None),
+            str(settings.get("audio_preset", "") or ""),
+        )
+
+    def _apply_sidebar_settings_update(self, updates: dict | None = None, preset_applier=None):
+        settings = dict(load_settings())
+        if callable(preset_applier):
+            settings = dict(preset_applier(settings))
+        if updates:
+            settings.update(updates)
+        self._apply_ai_settings(settings)
+        self._sync_sidebar_preset_panel(settings)
+        return settings
+
+    def _on_sidebar_stt_quality_changed(self, *args):
+        combo = getattr(self, "sidebar_stt_quality_combo", None)
+        if combo is None:
+            return
+        self._apply_sidebar_settings_update(
+            preset_applier=lambda settings: apply_stt_quality_preset(
+                settings,
+                combo.currentData() or "balanced",
+            )
+        )
+
+    def _on_sidebar_audio_preset_changed(self, *args):
+        combo = getattr(self, "sidebar_audio_preset_combo", None)
+        if combo is None:
+            return
+        preset_name = combo.currentData() or ""
+        if preset_name:
+            self._apply_sidebar_settings_update(
+                preset_applier=lambda settings: apply_audio_preset(settings, preset_name)
+            )
+        else:
+            self._apply_sidebar_settings_update({"audio_preset": ""})
 
     def _is_workspace_dirty(self) -> bool:
         editor = self._active_editor()
@@ -232,6 +444,39 @@ class HomeUIMixin:
                 return True
         return bool(getattr(self, "_auto_processing_active", False))
 
+    def _subtitle_status_text(self) -> str:
+        if self._is_subtitle_generation_running():
+            return "생성 중"
+        editor = self._active_editor()
+        if editor is not None:
+            state_manager = getattr(editor, "sm", None)
+            state = str(getattr(state_manager, "state", "") or "")
+            if state in {"ST_COMP", "ST_SAVED"}:
+                return "완료"
+        return "대기"
+
+    def _roughcut_status_text(self) -> str:
+        editor = self._active_editor()
+        if editor is None:
+            return "대기"
+        if not bool(getattr(editor, "_roughcut_draft_runtime_enabled", lambda: False)()):
+            return "비활성"
+        status = str(getattr(editor, "_roughcut_draft_status", "") or "")
+        count = getattr(editor, "_last_roughcut_draft_major_count", None)
+        if status == "queued":
+            return "예약"
+        if status == "running":
+            return "생성 중"
+        if status == "saving":
+            return "저장 중"
+        if status == "failed":
+            return "실패"
+        if status == "done":
+            return f"완료 {count}개" if count is not None else "완료"
+        if count is not None:
+            return f"완료 {count}개"
+        return "대기"
+
     def _ensure_saved_status_blink_timer(self):
         if hasattr(self, "_saved_status_blink_timer"):
             return
@@ -243,6 +488,8 @@ class HomeUIMixin:
     def _tick_saved_status_blink(self):
         self._saved_status_blink_on = not bool(getattr(self, "_saved_status_blink_on", True))
         self._refresh_saved_status_label(is_dirty=getattr(self, "_last_saved_status_dirty", None))
+        if getattr(self, "sidebar_settings_label", None) is not None:
+            self._refresh_sidebar_engine_info()
 
     def _sync_saved_status_blink_timer(self, active: bool):
         self._ensure_saved_status_blink_timer()
@@ -277,70 +524,483 @@ class HomeUIMixin:
             tooltip = "저장되지 않은 변경사항이 있습니다." if dirty else "저장된 상태입니다."
         label.setTextFormat(Qt.TextFormat.RichText)
         from config import APP_VERSION
-        idle_text = self._post_completion_idle_status_text()
-        idle_html = (
-            f" <span style='color:#7F8C96; font-size:10px;'>· {idle_text}</span>"
-            if idle_text else ""
-        )
         label.setText(
             f"<span style='color:{dot_color}; font-size:13px;'>●</span> "
-            f"<span style='color:#D1D1D6;'>v{APP_VERSION}</span>"
-            f"{idle_html}"
+            f"<span style='color:#FFFFFF; font-size:14px; font-weight:700;'>AI Subtitle Studio</span> "
+            f"<span style='color:#D1D1D6; font-size:11px; font-weight:600;'>v{APP_VERSION}</span>"
         )
         label.setToolTip(tooltip)
-
-    def _post_completion_idle_status_text(self) -> str:
-        remaining_getter = getattr(self, "_post_completion_idle_remaining_ms", None)
-        if not callable(remaining_getter):
-            return ""
-        if self._is_subtitle_generation_running() and not bool(getattr(self, "_post_completion_idle_enabled", False)):
-            return "홈 대기"
-        if not bool(getattr(self, "_post_completion_idle_enabled", False)):
-            return ""
-        remaining = max(0, int(remaining_getter()))
-        total_sec = (remaining + 999) // 1000
-        minute, second = divmod(total_sec, 60)
-        return f"홈 {minute:02d}:{second:02d}"
 
     def _format_engine_info_text(self, text: str) -> str:
         lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
         return "\n".join(lines)
 
-    def _current_engine_info_text(self) -> str:
-        editor = self._active_editor()
-        if editor is not None:
-            engine = getattr(editor, "engine_lbl", None)
-            if engine is not None:
-                try:
-                    text = self._format_engine_info_text(engine.text())
-                    if text:
-                        return text
-                except Exception:
-                    pass
-        settings = load_settings()
+    def _short_model_name(self, model: str) -> str:
+        text = str(model or "").strip()
+        if not text:
+            return "미사용"
+        if "사용 안함" in text:
+            return "미사용"
+        for prefix in ("mlx-community/", "Systran/", "youngouk/", "ghost613/", "o0dimplz0o/"):
+            text = text.replace(prefix, "")
+        text = text.replace("-mlx", "")
+        return text
+
+    def _audio_model_name(self, settings: dict) -> str:
+        return {
+            "deepfilter": "DeepFilter",
+            "rnnoise": "RNNoise",
+            "none": "미사용",
+        }.get(settings.get("selected_audio_ai", "none"), "미사용")
+
+    def _vad_model_name(self, settings: dict) -> tuple[str, str]:
         vad_model = {
             "silero": "Silero",
             "webrtc": "WebRTC",
             "pyannote": "Pyannote",
             "none": "미사용",
         }.get(settings.get("selected_vad", "none"), "미사용")
-        audio_ai = {
-            "deepfilter": "DeepFilter",
-            "demucs": "Demucs",
-            "none": "미사용",
-        }.get(settings.get("selected_audio_ai", "none"), "미사용")
-        stt_model = str(settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "기본")) or "기본")
-        stt_model = stt_model.replace("mlx-community/", "").replace("-mlx", "")
-        llm_model = str(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "기본")) or "기본")
-        return f"[VAD] : {vad_model}\n[음성] : {audio_ai}\n[STT] : {stt_model}\n[LLM] : {llm_model}"
+        if vad_model == "미사용":
+            return vad_model, "검수 안 함"
+        if settings.get("vad_pre_split_enabled", False):
+            return vad_model, "STT 선분할"
+        if settings.get("vad_post_stt_align_enabled", True):
+            return vad_model, "자막 위치 재계산"
+        return vad_model, "자막/음성 겹침 검수"
 
-    def _refresh_sidebar_engine_info(self, text=None):
+    def _roughcut_llm_name(self, settings: dict, subtitle_llm: str) -> tuple[str, str]:
+        if not bool(settings.get("roughcut_llm_enabled", False)):
+            return "미사용", "러프컷 규칙 기반"
+        model = str(settings.get("roughcut_llm_model", "") or "").strip()
+        if not model or model.lower() == "inherit" or "사용 안함" in model:
+            return "미사용", "러프컷 규칙 기반"
+        return self._short_model_name(model), "러프컷 전용"
+
+    def _pipeline_rows(self, settings: dict) -> list[tuple[str, str, str]]:
+        subtitle_llm = str(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "기본")) or "기본")
+        vad_model, _vad_role = self._vad_model_name(settings)
+        roughcut_llm, _roughcut_role = self._roughcut_llm_name(settings, subtitle_llm)
+        stt1_model = self._short_model_name(settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "기본")))
+        stt2_model = "미사용"
+        if settings.get("stt_ensemble_enabled"):
+            stt2_model = self._short_model_name(settings.get("selected_whisper_model_secondary", ""))
+        return [
+            ("preprocess", "전처리", "FFMPEG"),
+            ("audio", "음성", self._audio_model_name(settings)),
+            ("stt1", "STT 1", stt1_model),
+            ("stt2", "STT 2", stt2_model),
+            ("vad", "VAD", vad_model),
+            ("subtitle_llm", "자막 LLM", self._short_model_name(subtitle_llm)),
+            ("roughcut_llm", "러프컷 LLM", roughcut_llm),
+        ]
+
+    def _pipeline_status_blob(self) -> str:
+        parts = []
+        for attr in ("queue_header_lbl", "saved_status_label"):
+            label = getattr(self, attr, None)
+            if label is None:
+                continue
+            try:
+                parts.append(str(label.text() or ""))
+            except RuntimeError:
+                pass
+        table = getattr(self, "queue_table", None)
+        if table is not None:
+            try:
+                if table.rowCount() > 0:
+                    for col in (0, 2, 4):
+                        item = table.item(0, col)
+                        if item is not None:
+                            parts.append(str(item.text() or ""))
+            except RuntimeError:
+                pass
+        return " ".join(parts).lower()
+
+    def _roughcut_draft_status_value(self) -> str:
+        editor = self._active_editor()
+        if editor is None:
+            return ""
+        return str(getattr(editor, "_roughcut_draft_status", "") or "")
+
+    def _pipeline_current_stage_keys(self, settings: dict) -> set[str]:
+        roughcut_status = self._roughcut_draft_status_value()
+        if roughcut_status in {"queued", "running", "saving"}:
+            return {"roughcut_llm"}
+        if not self._is_subtitle_generation_running():
+            return set()
+
+        blob = self._pipeline_status_blob()
+        if any(token in blob for token in ("[전처리]", "오디오 추출", "ffmpeg 오디오", "전처리")):
+            return {"preprocess"}
+        if any(token in blob for token in ("[음성]", "음량", "필터", "deepfilter", "rnnoise", "노이즈", "보컬")):
+            return {"audio"}
+        if "[stt+자막 llm]" in blob:
+            keys = {"stt1", "subtitle_llm"}
+            if settings.get("stt_ensemble_enabled"):
+                keys.add("stt2")
+            return keys
+        if any(token in blob for token in ("[자막 llm]", "llm", "최적화", "교정", "분리")):
+            return {"subtitle_llm"}
+        if any(token in blob for token in ("[vad]", "silero", "검수", "위치 재계산", "음성 섹터")):
+            return {"vad"}
+        if any(token in blob for token in ("[stt", "whisper", "stt", "자막 생성")):
+            keys = {"stt1"}
+            if settings.get("stt_ensemble_enabled"):
+                keys.add("stt2")
+            return keys
+        keys = {"stt1"}
+        if settings.get("stt_ensemble_enabled"):
+            keys.add("stt2")
+        return keys
+
+    def _pipeline_completed_stage_keys(self, settings: dict, current_keys: set[str]) -> set[str]:
+        rows = self._pipeline_rows(settings)
+        order = [key for key, _stage, _model in rows]
+        completed: set[str] = set()
+        blob = self._pipeline_status_blob()
+        editor = self._active_editor()
+        state_manager = getattr(editor, "sm", None) if editor is not None else None
+        editor_state = str(getattr(state_manager, "state", "") or "")
+        generation_running = self._is_subtitle_generation_running()
+        generation_done = (
+            not generation_running
+            and (editor_state in {"ST_COMP", "ST_SAVED"} or "자막 생성 완료" in blob)
+        )
+
+        if generation_done:
+            completed.update(key for key in order if key != "roughcut_llm")
+        elif current_keys:
+            current_indexes = [order.index(key) for key in current_keys if key in order]
+            if current_indexes:
+                completed.update(order[:min(current_indexes)])
+            if current_keys == {"vad"} and any(token in blob for token in ("준비", "스캔", "캐시")):
+                completed.difference_update({"stt1", "stt2", "subtitle_llm"})
+
+        roughcut_status = self._roughcut_draft_status_value()
+        editor_count = getattr(editor, "_last_roughcut_draft_major_count", None) if editor is not None else None
+        if roughcut_status == "done" or editor_count is not None:
+            completed.add("roughcut_llm")
+        if self._roughcut_status_text().startswith("완료"):
+            completed.add("roughcut_llm")
+
+        if not settings.get("stt_ensemble_enabled", False):
+            completed.discard("stt2")
+        if settings.get("selected_vad", "none") == "none":
+            completed.discard("vad")
+        return completed
+
+    def _pipeline_model_link(self, key: str, text: str, *, current: bool = False, completed: bool = False) -> str:
+        color = "#00D46A" if completed else ("#FFD60A" if current else "#F5F7FA")
+        dropdown_icon = " ▾" if key in {"audio", "stt1", "stt2", "vad", "subtitle_llm", "roughcut_llm"} else ""
+        return (
+            f"<a href='model:{escape(key)}' "
+            f"style='color:{color}; text-decoration:none; font-family:Menlo, Monaco, Consolas, monospace; font-weight:400;'>"
+            f"{escape(text)}<span style='color:#8EA4B8; font-weight:400;'>{dropdown_icon}</span></a>"
+        )
+
+    def _pipeline_info_html(self, settings: dict) -> str:
+        rows = []
+        model_links = {
+            "음성": "audio",
+            "STT 1": "stt1",
+            "STT 2": "stt2",
+            "VAD": "vad",
+            "자막 LLM": "subtitle_llm",
+            "러프컷 LLM": "roughcut_llm",
+        }
+        current_keys = self._pipeline_current_stage_keys(settings)
+        completed_keys = self._pipeline_completed_stage_keys(settings, current_keys)
+        for idx, (key, stage, model) in enumerate(self._pipeline_rows(settings), 1):
+            current = key in current_keys
+            completed = key in completed_keys
+            bg_style = " background-color:#12362A;" if current else ""
+            num_color = "#00D46A" if completed else ("#FFD60A" if current else "#6F7A83")
+            stage_color = num_color if (completed or current) else "#DCE3EA"
+            model_color = num_color if (completed or current) else "#F5F7FA"
+            model_html = (
+                self._pipeline_model_link(model_links[stage], model, current=current, completed=completed)
+                if stage in model_links
+                else escape(model)
+            )
+            rows.append(
+                "<tr>"
+                f"<td style='color:{num_color}; padding:1px 6px 1px 0; font-weight:800;{bg_style}'>{idx}</td>"
+                f"<td style='color:{stage_color}; padding:1px 10px 1px 0; font-weight:800;{bg_style}'>{escape(stage)}</td>"
+                f"<td style='color:{model_color}; padding:1px 0; font-family:Menlo, Monaco, Consolas, monospace; font-weight:400;{bg_style}'>{model_html}</td>"
+                "</tr>"
+            )
+        return (
+            "<table cellspacing='0' cellpadding='0' style='font-size:9px;'>"
+            "<tr>"
+            "<td></td>"
+            "<td style='color:#00D46A; padding:0 10px 2px 0; font-weight:800;'>단계</td>"
+            "<td style='color:#00D46A; padding:0 0 2px 0; font-family:Menlo, Monaco, Consolas, monospace; font-weight:400;'>모델</td>"
+            "</tr>"
+            + "".join(rows)
+            + "</table>"
+        )
+
+    def _pipeline_info_plain(self, settings: dict) -> str:
+        return "\n".join(
+            f"{idx}. [{stage}] {model}"
+            for idx, (_key, stage, model) in enumerate(self._pipeline_rows(settings), 1)
+        )
+
+    def _current_engine_info_text(self) -> str:
+        settings = load_settings()
+        return self._pipeline_info_html(settings)
+
+    def _refresh_sidebar_engine_info(self, text=None, settings: dict | None = None):
         label = getattr(self, "sidebar_settings_label", None)
         if label is None:
             return
-        formatted = self._format_engine_info_text(text) if text is not None else self._current_engine_info_text()
+        settings = dict(settings or load_settings())
+        formatted = self._pipeline_info_html(settings)
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        label.setOpenExternalLinks(False)
+        try:
+            label.linkActivated.disconnect()
+        except Exception:
+            pass
+        label.linkActivated.connect(self._on_sidebar_model_link)
         label.setText(formatted)
-        label.setToolTip(formatted)
+        label.setToolTip(self._pipeline_info_plain(settings))
+        self._sync_sidebar_preset_panel(settings)
+
+    def _apply_ai_settings(self, settings: dict):
+        save_settings(settings)
+        editor = self._active_editor()
+        if editor is not None:
+            try:
+                editor.settings = dict(settings)
+                editor.selected_model = settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
+                if hasattr(editor, "_update_engine_label_text"):
+                    editor._update_engine_label_text()
+                    engine_label = getattr(editor, "engine_lbl", None)
+                    if engine_label is not None:
+                        self._refresh_sidebar_engine_info(engine_label.text(), settings=settings)
+                        return
+            except Exception:
+                pass
+        self._refresh_sidebar_engine_info()
+
+    def _whisper_model_items(self) -> list[str]:
+        try:
+            from ui.settings.settings_common import DEFAULT_WHISPER_MODELS
+            models = list(DEFAULT_WHISPER_MODELS)
+        except Exception:
+            models = [getattr(config, "WHISPER_MODEL", "large-v3")]
+        hf_cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+        if os.path.exists(hf_cache_dir):
+            try:
+                for folder_name in os.listdir(hf_cache_dir):
+                    if folder_name.startswith("models--") and "whisper" in folder_name.lower():
+                        repo_name = folder_name.replace("models--", "", 1).replace("--", "/", 1)
+                        if repo_name not in models:
+                            models.append(repo_name)
+            except Exception:
+                pass
+        return models
+
+    def _stt1_model_items(self) -> list[str]:
+        blocked = ("ghost613", "zeroth")
+        return [
+            model for model in self._whisper_model_items()
+            if not any(token in str(model).lower() for token in blocked)
+        ]
+
+    def _stt2_model_items(self) -> list[str]:
+        picked = []
+        for model in self._whisper_model_items():
+            model_l = str(model).lower()
+            if "ghost613" not in model_l and "zeroth" not in model_l:
+                continue
+            if model not in picked:
+                picked.append(model)
+        return picked
+
+    def _llm_model_items(self) -> list[dict]:
+        items = [
+            {
+                "name": "사용 안함 (Whisper 단독 진행)",
+                "display_name": "사용 안함 (Whisper 단독 진행)",
+                "details": {"provider": "none"},
+            }
+        ]
+        try:
+            from ui.settings.settings_common import _fetch_models
+            for item in _fetch_models():
+                row = dict(item)
+                details = dict(row.get("details", {}) or {})
+                details.setdefault("provider", "ollama")
+                row["details"] = details
+                row.setdefault("display_name", row.get("name", ""))
+                items.append(row)
+        except Exception:
+            pass
+        try:
+            from core.llm.provider_registry import cloud_model_items
+            items.extend(cloud_model_items())
+        except Exception:
+            pass
+        return items
+
+    def _roughcut_llm_parameter_b(self, item: dict) -> float | None:
+        details = item.get("details", {}) or {}
+        parts = [
+            str(item.get("name") or ""),
+            str(item.get("display_name") or ""),
+            str(details.get("parameter_size") or ""),
+            str(details.get("family") or ""),
+        ]
+        for text in parts:
+            for match in re.finditer(r"(?<!\d)(\d+(?:\.\d+)?)\s*b\b", text.lower()):
+                try:
+                    return float(match.group(1))
+                except ValueError:
+                    continue
+        return None
+
+    def _roughcut_llm_is_capable(self, item: dict) -> bool:
+        details = item.get("details", {}) or {}
+        provider = str(details.get("provider") or "ollama").lower()
+        name = str(item.get("name") or "")
+        display_name = str(item.get("display_name") or name)
+        label_l = f"{name} {display_name}".lower()
+        if provider == "none" or "사용 안함" in label_l:
+            return False
+
+        if provider in {"google", "openai"}:
+            if any(re.search(rf"\b{re.escape(token)}\b", label_l) for token in ROUGHCUT_BLOCKED_CLOUD_TOKENS):
+                return False
+            return any(token in label_l for token in ROUGHCUT_CAPABLE_CLOUD_TOKENS) or "gpt-5" in label_l
+
+        params_b = self._roughcut_llm_parameter_b(item)
+        if params_b is not None:
+            return params_b >= ROUGHCUT_LLM_MIN_PARAMETERS_B
+
+        if any(token in label_l for token in ROUGHCUT_CAPABLE_LOCAL_LATEST):
+            return True
+
+        try:
+            return int(item.get("size") or 0) >= ROUGHCUT_LLM_MIN_SIZE_BYTES
+        except (TypeError, ValueError):
+            return False
+
+    def _roughcut_llm_items(self) -> list[dict]:
+        return [item for item in self._llm_model_items() if self._roughcut_llm_is_capable(item)]
+
+    def _apply_sidebar_model_selection(self, updates: dict):
+        self._apply_sidebar_settings_update(updates)
+
+    def _add_action(self, menu: QMenu, label: str, callback, *, checked: bool = False):
+        action = menu.addAction(label)
+        action.setCheckable(True)
+        action.setChecked(bool(checked))
+        action.triggered.connect(callback)
+        return action
+
+    def _on_sidebar_model_link(self, href: str):
+        key = str(href or "").replace("model:", "", 1)
+        settings = load_settings()
+        menu = QMenu(getattr(self, "home_page", None))
+
+        if key == "audio":
+            choices = [
+                ("DeepFilter", "deepfilter"),
+                ("RNNoise", "rnnoise"),
+                ("미사용", "none"),
+            ]
+            current = settings.get("selected_audio_ai", "none")
+            for label, value in choices:
+                self._add_action(
+                    menu,
+                    label,
+                    lambda _=False, v=value: self._apply_sidebar_model_selection({"selected_audio_ai": v}),
+                    checked=value == current,
+                )
+
+        elif key == "vad":
+            choices = [("Silero", "silero"), ("미사용", "none")]
+            current = settings.get("selected_vad", "silero")
+            for label, value in choices:
+                self._add_action(
+                    menu,
+                    label,
+                    lambda _=False, v=value: self._apply_sidebar_model_selection({"selected_vad": v}),
+                    checked=value == current,
+                )
+
+        elif key in {"stt", "stt1", "stt2"}:
+            ensemble = bool(settings.get("stt_ensemble_enabled", False))
+            current1 = settings.get("selected_whisper_model", "")
+            current2 = settings.get("selected_whisper_model_secondary", "")
+            if key == "stt2":
+                self._add_action(
+                    menu,
+                    "STT2 앙상블 사용",
+                    lambda checked=False: self._apply_sidebar_model_selection({"stt_ensemble_enabled": bool(checked)}),
+                    checked=ensemble,
+                )
+                menu.addSeparator()
+            models = self._stt1_model_items() if key in {"stt", "stt1"} else self._stt2_model_items()
+            for model in models:
+                label = self._short_model_name(model)
+                if key in {"stt", "stt1"}:
+                    self._add_action(
+                        menu,
+                        label,
+                        lambda _=False, m=model: self._apply_sidebar_model_selection({"selected_whisper_model": m}),
+                        checked=model == current1,
+                    )
+                    continue
+                self._add_action(
+                    menu,
+                    label,
+                    lambda _=False, m=model: self._apply_sidebar_model_selection({"selected_whisper_model_secondary": m, "stt_ensemble_enabled": True}),
+                    checked=model == current2,
+                )
+
+        elif key in {"subtitle_llm", "roughcut_llm"}:
+            if key == "roughcut_llm":
+                self._add_action(
+                    menu,
+                    "사용 안함",
+                    lambda _=False: self._apply_sidebar_model_selection({
+                        "roughcut_llm_enabled": False,
+                        "roughcut_llm_use_override": True,
+                        "roughcut_llm_provider": "none",
+                        "roughcut_llm_model": "사용 안함",
+                    }),
+                    checked=not bool(settings.get("roughcut_llm_enabled", False)),
+                )
+                menu.addSeparator()
+
+            current = settings.get("selected_model", "") if key == "subtitle_llm" else settings.get("roughcut_llm_model", "")
+            model_items = self._roughcut_llm_items() if key == "roughcut_llm" else self._llm_model_items()
+            for item in model_items:
+                name = str(item.get("name") or "")
+                label = str(item.get("display_name") or name)
+                provider = str((item.get("details", {}) or {}).get("provider") or "ollama")
+                if key == "subtitle_llm":
+                    updates = {"selected_model": name, "selected_llm_provider": provider}
+                else:
+                    updates = {
+                        "roughcut_llm_enabled": True,
+                        "roughcut_llm_use_override": True,
+                        "roughcut_llm_provider": provider,
+                        "roughcut_llm_model": name,
+                    }
+                self._add_action(
+                    menu,
+                    label,
+                    lambda _=False, u=updates: self._apply_sidebar_model_selection(u),
+                    checked=name == current,
+                )
+
+        if menu.actions():
+            menu.exec(QCursor.pos())
 
     def _sidebar_status_card(self):
         card = QWidget()
@@ -352,14 +1012,11 @@ class HomeUIMixin:
         if not hasattr(self, "saved_status_label"):
             self.saved_status_label = QLabel("", self.home_page)
             self.saved_status_label.setTextFormat(Qt.TextFormat.RichText)
-        self.saved_status_label.setStyleSheet("color: #A9B0B7; font-size: 10px; background: transparent; border: none;")
-        self._refresh_saved_status_label()
-        lay.addWidget(self.saved_status_label)
-
         if not hasattr(self, "sidebar_settings_label"):
             self.sidebar_settings_label = QLabel("", self.home_page)
         self.sidebar_settings_label.setWordWrap(True)
         self.sidebar_settings_label.setMinimumWidth(0)
+        self.sidebar_settings_label.setTextFormat(Qt.TextFormat.RichText)
         self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 9px; font-weight: bold; background: transparent; border: none;")
         self._refresh_sidebar_engine_info()
         lay.addWidget(self.sidebar_settings_label)
@@ -406,7 +1063,7 @@ class HomeUIMixin:
             return
         for label, is_nas in list(self._watchdog_labels):
             if bool(getattr(self, "_auto_processing_active", False)):
-                label.setText("Watchdog 대기중")
+                label.setText("대기중")
                 label.setVisible(self._is_auto_start_enabled())
                 continue
             interval = self._watchdog_interval_for(is_nas)
@@ -414,7 +1071,7 @@ class HomeUIMixin:
             left = int(getattr(self, key, interval) or interval)
             left = interval if left <= 1 else left - 1
             setattr(self, key, left)
-            label.setText(f"Watchdog {left:02d}s")
+            label.setText(f"WD {left:02d}s")
             label.setVisible(self._is_auto_start_enabled())
 
     def _toggle_auto_start_enabled(self):
@@ -496,6 +1153,9 @@ class HomeUIMixin:
         layout.setSpacing(4 if is_unified else 6)
         active = getattr(self, '_is_nas_auto_mode', False) if is_nas else getattr(self, '_is_icloud_auto_mode', False)
         text_color = "#FFFFFF" if is_unified else ("#1D1D1F" if active else "#6E6E73")
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(6)
         header = QLabel()
         header.setText(text)
         header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -504,7 +1164,21 @@ class HomeUIMixin:
             "background: transparent; border: none; padding: 0;"
         )
         header.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        layout.addWidget(header)
+        header_row.addWidget(header, stretch=1)
+        wd_lbl = QLabel("")
+        wd_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        wd_lbl.setFixedSize(76 if is_unified else 92, 18 if is_unified else 22)
+        wd_lbl.setStyleSheet(
+            "color: #E6EDF3; font-size: 9px; font-weight: 800; "
+            "background: #59636B; border: none; border-radius: 9px; padding: 0 6px;"
+            if is_unified else
+            "color: #FFFFFF; font-size: 10px; font-weight: 800; "
+            "background: #8E8E93; border: none; border-radius: 11px; padding: 0 8px;"
+        )
+        wd_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        wd_lbl.setVisible(False)
+        header_row.addWidget(wd_lbl)
+        layout.addLayout(header_row)
 
         status_box = QWidget()
         status_box.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -528,8 +1202,7 @@ class HomeUIMixin:
             add_status_label(subtitle, "#3F8CFF" if is_unified else "#007AFF")
         if comp_title:
             add_status_label(comp_title, "#34C759")
-        if active and self._is_auto_start_enabled():
-            wd_lbl = add_status_label("", config.ACCENT, 9 if is_unified else 11)
+        if active:
             self._watchdog_labels.append((wd_lbl, is_nas))
         if status_layout.count() > 0:
             layout.addWidget(status_box)
@@ -682,6 +1355,37 @@ class HomeUIMixin:
         return row
 
     def _project_info_card(self, expanded=None, overlay=False):
+        if expanded is None:
+            expanded = bool(getattr(self, "_project_info_expanded", False))
+        else:
+            expanded = bool(expanded)
+        if not expanded and not overlay:
+            try:
+                from ui.menu_bar import MENU_BUTTON_HEIGHT
+            except Exception:
+                MENU_BUTTON_HEIGHT = 44
+            btn = QToolButton()
+            btn.setText("프로젝트 정보")
+            btn.setIcon(line_icon("project", "#E8EEF5", 15))
+            btn.setIconSize(QSize(15, 15))
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            btn.setFixedHeight(MENU_BUTTON_HEIGHT)
+            btn.setStyleSheet(
+                "QToolButton { "
+                "background: #1B2429; color: #F5F7FA; "
+                "border: 1px solid #2D3942; border-radius: 7px; "
+                "padding: 0 10px; font-size: 12px; font-weight: 700; "
+                "text-align: left; "
+                "} "
+                "QToolButton:hover { background: #202A31; border-color: #465663; }"
+                "QToolButton::menu-indicator { image: none; }"
+            )
+            btn.clicked.connect(self._toggle_project_info_card)
+            self._project_info_button_card = btn
+            return btn
+
         card = QWidget()
         card.setStyleSheet(
             "background: #1B2429; border: 1px solid #3A4650; border-radius: 7px;"
@@ -692,7 +1396,6 @@ class HomeUIMixin:
         lay.setContentsMargins(10, 8, 10, 8)
         lay.setSpacing(6)
 
-        expanded = bool(getattr(self, "_project_info_expanded", False)) if expanded is None else bool(expanded)
         header = QToolButton()
         header.setText("프로젝트 정보")
         header.setCheckable(True)
@@ -719,10 +1422,18 @@ class HomeUIMixin:
             section.setStyleSheet(label_style("accent", 10, bold=True))
             lay.addWidget(section)
             for text in rows:
-                lbl = QLabel(text)
+                lbl = QLabel(str(text))
                 lbl.setWordWrap(True)
                 lbl.setStyleSheet(label_style("muted", 9))
                 lay.addWidget(lbl)
+
+        for section in self._project_info_sections():
+            add_section(section["title"], section["rows"])
+        return card
+
+    def _project_info_sections(self) -> list[dict]:
+        def add_section(name, rows):
+            return {"title": str(name), "rows": [str(row) for row in rows]}
 
         editor = self._active_editor()
         project_name = os.path.basename(str(getattr(self, "_current_project_path", "") or "인터뷰_홍길동.assp"))
@@ -740,30 +1451,105 @@ class HomeUIMixin:
             except Exception:
                 seg_count = 0
 
-        add_section("프로젝트", [project_name, project_path])
-        add_section("영상", [f"파일: {media_name}", f"길이: {duration:0.1f}s" if duration else "길이: -", "해상도/프레임: 로드 후 표시"])
-        add_section("자막", [f"세그먼트: {seg_count}", f"화자: {len(speakers) if speakers else 0}", "상태: 편집 대기"])
-        return card
+        return [
+            add_section("프로젝트", [project_name, project_path]),
+            add_section("영상", [f"파일: {media_name}", f"길이: {duration:0.1f}s" if duration else "길이: -", "해상도/프레임: 로드 후 표시"]),
+            add_section("자막", [f"세그먼트: {seg_count}", f"화자: {len(speakers) if speakers else 0}", "상태: 편집 대기"]),
+        ]
+
+    def _on_project_info_button_click(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._toggle_project_info_card()
+            event.accept()
 
     def _show_project_info_overlay(self):
         if not getattr(self, "_unified_dashboard", False):
             return
-        overlay = self._project_info_card(expanded=True, overlay=True)
-        overlay.setParent(self.home_page)
+        old_overlay = getattr(self, "_project_info_overlay", None)
+        if old_overlay is not None:
+            try:
+                old_overlay.setParent(None)
+                old_overlay.deleteLater()
+            except RuntimeError:
+                pass
+            self._project_info_overlay = None
+        overlay = self._create_project_info_quick_overlay()
+        if overlay is None:
+            overlay = self._project_info_card(expanded=True, overlay=True)
+            overlay.setParent(self.home_page)
         overlay.setObjectName("ProjectInfoOverlay")
-        overlay.setMinimumWidth(max(190, self.home_page.width() - 16))
-        overlay.setMaximumWidth(max(190, self.home_page.width() - 16))
-        overlay.adjustSize()
-        h = min(max(260, overlay.sizeHint().height()), max(220, self.home_page.height() - 92))
-        y = max(66, self.home_page.height() - h - 54)
-        overlay.setGeometry(8, y, max(190, self.home_page.width() - 16), h)
+        x, y, w, h = self._project_info_overlay_geometry(overlay)
+        overlay.setMinimumWidth(w)
+        overlay.setMaximumWidth(w)
+        overlay.setGeometry(x, y, w, h)
         overlay.raise_()
         overlay.show()
         self._project_info_overlay = overlay
 
+    def _create_project_info_quick_overlay(self):
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return None
+        try:
+            from PyQt6.QtCore import QUrl
+            from PyQt6.QtQuickWidgets import QQuickWidget
+        except Exception:
+            return None
+        qml_path = os.path.join(os.path.dirname(__file__), "qml", "project_info_overlay.qml")
+        if not os.path.exists(qml_path):
+            return None
+        try:
+            overlay = QQuickWidget(self.home_page)
+            overlay.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            overlay.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+            overlay.setAutoFillBackground(False)
+            overlay.setClearColor(QColor(Qt.GlobalColor.transparent))
+            overlay.setStyleSheet("background: transparent; border: none;")
+            overlay.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+            overlay.rootContext().setContextProperty("projectInfoSections", self._project_info_sections())
+            overlay.setSource(QUrl.fromLocalFile(qml_path))
+            if overlay.status() == QQuickWidget.Status.Error:
+                overlay.deleteLater()
+                return None
+            return overlay
+        except Exception:
+            return None
+
+    def _project_info_overlay_geometry(self, overlay):
+        width = max(190, self.home_page.width() - 16)
+        try:
+            overlay.adjustSize()
+        except Exception:
+            pass
+        hint_h = 260
+        try:
+            hint_h = max(220, int(overlay.sizeHint().height()))
+        except Exception:
+            pass
+        height = min(max(260, hint_h), max(220, self.home_page.height() - 92))
+        button = getattr(self, "_project_info_button_card", None)
+        button_y = self.home_page.height() - 54
+        if button is not None:
+            try:
+                button_y = button.y()
+            except RuntimeError:
+                button_y = self.home_page.height() - 54
+        y = max(66, button_y - height - 8)
+        return 8, y, width, height
+
     def _toggle_project_info_card(self):
-        self._project_info_expanded = not bool(getattr(self, "_project_info_expanded", False))
-        self._build_home_content()
+        expanded = bool(getattr(self, "_project_info_expanded", False))
+        self._project_info_expanded = not expanded
+        if expanded:
+            overlay = getattr(self, "_project_info_overlay", None)
+            if overlay is not None:
+                try:
+                    overlay.setParent(None)
+                    overlay.deleteLater()
+                except RuntimeError:
+                    pass
+            self._project_info_overlay = None
+            return
+        self._show_project_info_overlay()
 
     def _nav_icon(self, name: str, color="#A9B0B7") -> QIcon:
         return line_icon(name, color)
@@ -813,12 +1599,16 @@ class HomeUIMixin:
                 self.stack.setCurrentIndex(1)
             except Exception:
                 pass
+        if hasattr(self, "_attach_global_menu_to_editor"):
+            self._attach_global_menu_to_editor(editor)
         if hasattr(self, "_show_bottom_queue_table"):
             self._show_bottom_queue_table()
         self._refresh_work_mode_ui()
 
     def _open_roughcut_helper(self):
         self._current_work_mode = ROUGHCUT_MODE
+        if hasattr(self, "_dock_global_menu_to_workspace"):
+            self._dock_global_menu_to_workspace()
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.refresh()
         page = getattr(self, "_roughcut_widget", None)
@@ -889,7 +1679,7 @@ class HomeUIMixin:
         settings = load_settings()
         dlg = SettingsDialog(settings, self)
         if dlg.exec():
-            save_settings(dlg.result_settings)
+            self._apply_ai_settings(dlg.result_settings)
 
     def _open_main_adv_settings(self):
         editor = self._active_editor()
@@ -961,7 +1751,7 @@ class HomeUIMixin:
         def open_ai_settings():
             from ui.settings.settings_dialog import SettingsDialog
             s = load_settings(); d = SettingsDialog(s, self)
-            if d.exec(): save_settings(d.result_settings)
+            if d.exec(): self._apply_ai_settings(d.result_settings)
         def open_advanced_settings():
             from ui.settings.settings_dialog import AdvancedSettingsDialog
             s = load_settings(); d = AdvancedSettingsDialog(s, self)

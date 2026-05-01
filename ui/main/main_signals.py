@@ -35,6 +35,9 @@ class SignalHandlersMixin:
             self._editor_widget.append_segments(segments)
 
     def _do_clear_editor(self):
+        if hasattr(self, "_clear_editor_for_full_restart"):
+            self._clear_editor_for_full_restart()
+            return
         ed = getattr(self, '_editor_widget', None)
         if not ed:
             return

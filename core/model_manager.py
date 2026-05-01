@@ -80,6 +80,11 @@ class ModelManager:
     def check_installed(self, model: dict) -> bool:
         if model.get("binary_check") == "ollama" or model.get("id") == "ollama":
             return is_ollama_available()
+        if model.get("binary_check") == "rnnoise":
+            from core.platform_compat import rnnoise_binary
+
+            binary = rnnoise_binary()
+            return Path(binary).exists() or shutil.which(binary) is not None
 
         import_names = model.get("import_names")
         if import_names is None:

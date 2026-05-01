@@ -169,6 +169,8 @@ class CoreBackendFast(CoreBackend):
                     if seg["end"] <= seg["start"]:
                         seg["end"] = seg["start"] + 0.5
 
+                opt = self._align_subtitle_segments_to_vad(opt, vad_segs, context="빠른모드")
+
                 all_segments.extend(opt)
 
                 if hasattr(self.ui, "_sig_append_segments"):

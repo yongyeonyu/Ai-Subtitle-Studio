@@ -71,6 +71,7 @@ class WorkspaceMixin:
                         name=base_name,
                         media_paths=[media_path],
                         srt_path=srt_path,
+                        user_settings=dict(getattr(editor, "settings", {}) or {}),
                     )
 
                 self._current_project_path = project_path
@@ -81,6 +82,7 @@ class WorkspaceMixin:
                 filepath=project_path,
                 srt_path=srt_path,
                 segments=segments,
+                user_settings=dict(getattr(editor, "settings", {}) or {}),
                 workspace=workspace,
             )
         except Exception as e:

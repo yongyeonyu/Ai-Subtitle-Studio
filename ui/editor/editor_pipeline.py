@@ -128,8 +128,8 @@ class EditorPipelineMixin:
             main_w._refresh_saved_status_label(is_dirty=True)
         if hasattr(main_w, "_start_post_completion_idle_timer"):
             main_w._start_post_completion_idle_timer()
-        if hasattr(self, "_schedule_realtime_roughcut_draft"):
-            self._schedule_realtime_roughcut_draft(force=True)
+        if hasattr(self, "_schedule_post_generation_roughcut_draft"):
+            QTimer.singleShot(350, lambda: self._schedule_post_generation_roughcut_draft(force=True))
         # E fix: 자막 생성 완료 후 타임라인/캔버스 재동기화
         QTimer.singleShot(200, self._post_completion_sync)
 
@@ -184,52 +184,15 @@ class EditorPipelineMixin:
         if self.sm.state == SubtitleStateManager.ST_PROC:
             self._stop_pipeline()
         elif self.sm.state in [SubtitleStateManager.ST_COMP, SubtitleStateManager.ST_SAVED]:
-            # 멀티클립 재시작 지원
             main_w = self.window()
-            if hasattr(main_w, "backend") and main_w.backend:
-                backend = main_w.backend
-                if hasattr(backend, "_start_event") and hasattr(backend, "_action_state"):
-                    # 재시작 전 자막 에디터/세그먼트 클리어
-                    try:
-                        if hasattr(main_w, '_sig_clear_editor'):
-                            main_w._sig_clear_editor.emit()
-                        else:
-                            self.text_edit.clear()
-                            self._segment_queue.clear()
-                            self._redraw_timeline()
-                    except Exception:
-                        pass
-                    # 큐헤더/타이머 리셋
-                    try:
-                        import time as _time
-                        backend.pipeline_start_time = _time.time()
-                        backend.is_first_start = False
-                        mw = self.window()
-                        if hasattr(mw, '_live_timer'):
-                            mw._live_timer.start()
-                        if hasattr(mw, '_sig_update_queue_header'):
-                            total = len(getattr(backend, 'files_to_process', []))
-                            mw._sig_update_queue_header.emit(1, total, 0, '')
-                    except Exception:
-                        pass
-                    files = list(getattr(backend, 'files_to_process', []) or [])
-                    is_multiclip = len(files) > 1
-                    backend._action_state[0] = "start" if is_multiclip else "restart"
-                    backend._active = True
-                    backend._reuse_existing_multiclip_subtitles = False
-                    backend._reuse_clip_indices = set()
-                    # main_window의 stale reuse flag도 클리어
-                    try:
-                        main_w._reuse_existing_multiclip_subtitles = False
-                    except Exception:
-                        pass
-                    backend._start_event.set()
-                    if hasattr(backend, "_edit_event"):
-                        backend._edit_event.set()
-                    self.sm.start_processing()
-                    if hasattr(self, "_spinner_timer"):
-                        self._spinner_timer.start()
-                    return
+            restarted = False
+            if hasattr(main_w, "_restart_current_pipeline_from_beginning"):
+                restarted = main_w._restart_current_pipeline_from_beginning(self)
+            if restarted:
+                self.sm.start_processing()
+                if hasattr(self, "_spinner_timer"):
+                    self._spinner_timer.start()
+                return
             self._start_pipeline(is_restart=True)
         else:
             self._start_pipeline(is_restart=False)
@@ -302,9 +265,9 @@ class EditorPipelineMixin:
                     target_start_sec=start_sec, target_end_sec=end_sec,
                     is_single_segment=is_single
                 ):
-                    if idx == 1: sig.status.emit("STATUS_VAD_SCANNING", f"선발대 탐색 중 ({start_sec:.1f}s~)")
+                    if idx == 1: sig.status.emit("STATUS_STT_CHUNKING", f"STT 청크 준비 중 ({start_sec:.1f}s~)")
                     if chunk:
-                        sig.status.emit("STATUS_TRANSCRIBING", f"후발대 자막 생성 중 ({idx}/{total})")
+                        sig.status.emit("STATUS_TRANSCRIBING", f"Whisper 자막 인식 중 ({idx}/{total})")
                         sig.chunk_time.emit(chunk[-1]["end"])
                         chunks.extend(chunk)
                     sig.progress.emit(idx, total)
