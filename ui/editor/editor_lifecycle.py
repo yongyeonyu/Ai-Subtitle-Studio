@@ -1,4 +1,4 @@
-# Version: 03.01.15
+# Version: 03.02.16
 # Phase: PHASE2
 """
 ui/editor_lifecycle.py
@@ -73,7 +73,7 @@ class EditorLifecycleMixin:
         self._editor_widget = editor
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.bind_editor(editor)
-        if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(self._log_visible)
+        if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(True)
         if hasattr(editor, 'timeline') and self._project_boundary_times: editor.timeline.set_boundary_times(self._project_boundary_times)
         self.stack.insertWidget(1, editor); self.stack.setCurrentWidget(editor)
         if self._current_project_path:
@@ -114,7 +114,7 @@ class EditorLifecycleMixin:
 
         if is_batch: editor.sm.init_auto_state()
         else: editor.sm.init_state()
-        if hasattr(editor, 'btn_start'): editor.btn_start.setText("🧠 시작")
+        if hasattr(editor, 'btn_start'): editor.btn_start.setText("시작")
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.bind_editor(editor)
         
@@ -238,7 +238,7 @@ class EditorLifecycleMixin:
         srt_save_path = get_srt_path(target_file)
         editor.sig_save.connect(lambda segs, p=srt_save_path: _save_srt_impl(p, segs))
         editor.sig_auto_save.connect(lambda segs, p=srt_save_path: _save_srt_impl(p, segs))
-        if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(self._log_visible)
+        if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(True)
         self.stack.insertWidget(1, editor)
         if hasattr(editor, 'timeline'): editor.timeline.set_boundary_times(self._project_boundary_times or [])
         self.stack.setCurrentWidget(editor)
@@ -310,7 +310,10 @@ class EditorLifecycleMixin:
             else:
                 is_dirty = False
                 try:
-                    if hasattr(self._editor_widget, 'sm'):
+                    dirty_checker = getattr(self._editor_widget, "_has_unsaved_changes", None)
+                    if callable(dirty_checker):
+                        is_dirty = bool(dirty_checker())
+                    elif hasattr(self._editor_widget, 'sm'):
                         is_dirty = bool(self._editor_widget.sm.is_dirty)
                 except Exception:
                     pass

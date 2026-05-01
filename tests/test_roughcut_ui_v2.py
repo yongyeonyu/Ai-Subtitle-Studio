@@ -1,4 +1,4 @@
-# Version: 03.01.31
+# Version: 03.02.15
 # Phase: PHASE2
 import os
 import unittest
@@ -17,6 +17,8 @@ from core.roughcut.models import (
     RoughCutTitleSuggestion,
 )
 from ui.roughcut.roughcut_widget import RoughcutWidget
+from ui.settings.settings_advanced import AdvancedSettingsDialog
+from ui.settings.settings_ai import SettingsDialog
 
 
 class RoughcutUiV2Tests(unittest.TestCase):
@@ -77,6 +79,73 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(payload["roughcut_export_style"]["font_size"], 50)
         finally:
             widget.close()
+
+    def test_settings_dialog_collects_roughcut_llm_without_plain_api_keys(self):
+        dialog = SettingsDialog({
+            "selected_model": "base-model",
+            "selected_llm_provider": "ollama",
+            "user_prompt": "editor prompt",
+            "editor_roughcut_draft_enabled": True,
+            "editor_roughcut_draft_prompt": "editor roughcut draft prompt",
+            "llm_threads": 5,
+            "subtitle_quality_enabled": True,
+            "review_auto_correct_apply_threshold": 94,
+            "roughcut_llm_enabled": True,
+            "roughcut_llm_use_override": True,
+            "roughcut_llm_provider": "openai",
+            "roughcut_llm_model": "gpt-roughcut",
+            "roughcut_llm_prompt": "roughcut prompt",
+            "roughcut_llm_threads": 3,
+        })
+        try:
+            self.assertEqual([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())], ["빠른 설정", "에디터 LLM", "러프컷 LLM", "AI"])
+            collected = dialog._collect_settings()
+            self.assertEqual(collected["user_prompt"], "editor prompt")
+            self.assertTrue(collected["editor_roughcut_draft_enabled"])
+            self.assertEqual(collected["editor_roughcut_draft_prompt"], "editor roughcut draft prompt")
+            self.assertEqual(collected["llm_threads"], 5)
+            self.assertEqual(collected["llm_workers"], 5)
+            self.assertTrue(collected["subtitle_quality_enabled"])
+            self.assertEqual(collected["review_auto_correct_apply_threshold"], 94)
+            self.assertTrue(collected["roughcut_llm_enabled"])
+            self.assertTrue(collected["roughcut_llm_use_override"])
+            self.assertEqual(collected["roughcut_llm_provider"], "openai")
+            self.assertEqual(collected["roughcut_llm_model"], "gpt-roughcut")
+            self.assertEqual(collected["roughcut_llm_prompt"], "roughcut prompt")
+            self.assertEqual(collected["roughcut_llm_threads"], 3)
+            self.assertNotIn("google_api_key", collected)
+            self.assertNotIn("openai_api_key", collected)
+        finally:
+            dialog.close()
+
+    def test_settings_dialog_reads_legacy_llm_workers_for_editor_threads(self):
+        dialog = SettingsDialog({"llm_workers": 6})
+        try:
+            self.assertEqual(dialog.spin_editor_llm_threads.value(), 6)
+        finally:
+            dialog.close()
+
+    def test_fast_preset_disables_editor_roughcut_draft_option(self):
+        dialog = SettingsDialog({"editor_roughcut_draft_enabled": True, "stt_quality_preset": "fast"})
+        try:
+            self.assertFalse(dialog.chk_editor_roughcut_draft_enabled.isEnabled())
+            self.assertFalse(dialog.chk_editor_roughcut_draft_enabled.isChecked())
+            collected = dialog._collect_settings()
+            self.assertFalse(collected["editor_roughcut_draft_enabled"])
+        finally:
+            dialog.close()
+
+    def test_advanced_settings_no_longer_shows_llm_prompt_or_quality_tabs(self):
+        dialog = AdvancedSettingsDialog({})
+        try:
+            tab_names = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
+            self.assertIn("시스템", tab_names)
+            self.assertNotIn("LLM 프롬프트", tab_names)
+            self.assertNotIn("자막 품질", tab_names)
+            self.assertFalse(hasattr(dialog, "edit_user_prompt"))
+            self.assertFalse(hasattr(dialog, "chk_subtitle_quality_enabled"))
+        finally:
+            dialog.close()
 
 
 if __name__ == "__main__":

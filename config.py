@@ -1,4 +1,4 @@
-# Version: 03.02.00
+# Version: 03.03.00
 # Phase: PHASE2
 
 
@@ -9,7 +9,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.02.00"
+APP_VERSION = "03.03.00"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -122,16 +122,48 @@ DEFAULT_ADV_SETTINGS = {
 }
 
 DEFAULT_ROUGHCUT_SETTINGS = {
+    "editor_roughcut_draft_enabled": False,
+    "editor_roughcut_draft_prompt": "",
+    "editor_roughcut_draft_max_subtitle_count": 12,
     "roughcut_major_segment_ui_enabled": True,
+    "roughcut_legacy_table_fallback": True,
+    "roughcut_run_after_subtitle_generation": False,
+    "roughcut_auto_load_subtitles_on_enter": True,
+    "roughcut_start_button_mode_routing": True,
     "roughcut_llm_enabled": False,
+    "roughcut_llm_use_override": False,
+    "roughcut_llm_provider": "inherit",
     "roughcut_llm_model": "",
+    "roughcut_llm_api_key_mode": "inherit",
+    "roughcut_llm_temperature": 0.2,
+    "roughcut_llm_max_context_rows": 80,
+    "roughcut_llm_chunk_rows": 12,
+    "roughcut_llm_lookahead_rows": 8,
+    "roughcut_llm_threads": 4,
+    "roughcut_llm_prompt": "",
     "roughcut_llm_prompt_id": "roughcut_page3b_v1",
     "roughcut_llm_token_budget": 4096,
     "roughcut_boundary_verification_enabled": True,
+    "roughcut_boundary_rollback_window_rows": 12,
+    "roughcut_boundary_rollback_window_sec": 60.0,
     "roughcut_scene_cut_refine_enabled": True,
+    "roughcut_scene_cut_strong_threshold": 28.0,
+    "roughcut_scene_cut_default_threshold": 18.0,
+    "roughcut_scene_cut_apply_subtitle_reassignment": True,
+    "roughcut_silence_gap_prefer_sec": 1.0,
     "roughcut_title_suggestions_enabled": True,
+    "roughcut_title_suggestions_count": 3,
     "roughcut_thumbnail_cache_enabled": True,
+    "roughcut_thumbnail_fixed_width": 180,
+    "roughcut_thumbnail_fixed_height": 120,
+    "roughcut_hover_preview_step_sec": 1.0,
+    "roughcut_hover_preview_max_sec": 3.0,
+    "roughcut_hover_preview_enabled": True,
     "roughcut_draft_autosave_enabled": True,
+    "roughcut_show_expanded_subtitles": True,
+    "roughcut_show_minor_code_per_row": True,
+    "roughcut_major_min_subtitle_count": 5,
+    "roughcut_minor_min_subtitle_count": 1,
     "roughcut_major_min_duration_sec": 0.0,
     "roughcut_major_max_duration_sec": 0.0,
     "roughcut_major_max_subtitle_count": 0,

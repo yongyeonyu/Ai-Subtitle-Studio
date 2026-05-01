@@ -4,7 +4,7 @@
 
 AI 기반 자막 생성, 자막 편집, 화자 분리, 멀티클립 처리, 러프컷 분석을 하나의 데스크톱 작업 흐름으로 연결하는 영상 자막 제작 도구입니다.
 
-[![Version](https://img.shields.io/badge/version-v03.02.00-0A84FF?style=for-the-badge)](#)
+[![Version](https://img.shields.io/badge/version-v03.03.00-0A84FF?style=for-the-badge)](#)
 [![Phase](https://img.shields.io/badge/phase-PHASE2-30D158?style=for-the-badge)](#)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
@@ -26,7 +26,7 @@ AI Subtitle Studio는 긴 영상 작업에서 반복되는 자막 생성, 보정
 
 | 항목 | 내용 |
 | --- | --- |
-| 현재 버전 | `v03.02.00` |
+| 현재 버전 | `v03.03.00` |
 | 개발 단계 | `PHASE2` |
 | 기본 브랜치 | `main` |
 | 지원 목표 | macOS, Windows |
@@ -239,21 +239,22 @@ PY
 | 문서 | 설명 |
 | --- | --- |
 | `File_structure.txt` | 현재 파일 구조 |
-| [`RELEASE_v03.00.00.md`](RELEASE_v03.00.00.md) | PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.03.00.md`](RELEASE_v03.03.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.00.00.md`](RELEASE_v03.00.00.md) | PHASE2 누적 개발 노트 |
 | `assets/icons/README.md` | SVG 아이콘 자산 규칙 |
 
 개발 진행용 내부 문서인 `AGENTS.md`, `ACTION_ITEMS.md`, `check_list.md`는 로컬에서만 관리하고 GitHub에는 공개하지 않습니다.
 
 ## 릴리즈 노트
 
-전체 릴리즈 노트는 [`RELEASE_v03.00.00.md`](RELEASE_v03.00.00.md)를 참고하세요.
+전체 최신 릴리즈 노트는 [`RELEASE_v03.03.00.md`](RELEASE_v03.03.00.md)를 참고하세요.
 
-### 최신 릴리즈: v03.02.00
+### 최신 릴리즈: v03.03.00
 
-- CP-03~CP-11 저장 상태, 상단 상태, 출력 팝업, 자동 홈 복귀, 멀티클립 기존 SRT 시간 흐름을 안정화했습니다.
-- PAGE 3-B 러프컷 UI/엔진 기반, 중분류/소분류, 제목 추천, 하단 tab, 렌더 검증/복구 흐름을 확장했습니다.
-- ffprobe cache, bounded parallel probe, worker clamp, Qt pixmap cache tuning으로 반복 로드와 멀티클립 초기 대기 시간을 줄였습니다.
-- PHASE2 기준 회귀 테스트와 오프스크린 UI smoke 검증을 통과한 릴리즈입니다.
+- AI 설정을 빠른 설정, 에디터 LLM, 러프컷 LLM, AI 품질 탭으로 정리했습니다.
+- 에디터 자막 생성 중 러프컷 A/B/C 중분류 초안을 로컬로 즉시 표시하고 LLM 결과로 후속 refinement합니다.
+- 사이드바/터미널 통합, 타임라인 선택/화면 맞춤/색상/하단 정렬, 저장 상태 동기화를 보강했습니다.
+- 백그라운드 자막 생성 종료 시 삭제된 MainWindow 접근을 guard해 치명 오류를 줄였습니다.
 
 ## 보안
 

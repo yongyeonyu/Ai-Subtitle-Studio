@@ -1,4 +1,4 @@
-# Version: 03.01.33
+# Version: 03.02.12
 # Phase: PHASE2
 """
 Global bottom menu bar.
@@ -87,6 +87,8 @@ class StatusRail(QWidget):
             return "저장"
         if "saved" in state:
             return "저장"
+        if "comp" in state:
+            return "완료"
         if "완료" in status_text:
             return "완료"
         if "llm" in status_l or "교정" in status_text or "최적화" in status_text:
@@ -274,7 +276,7 @@ class GlobalMenuBar(QWidget):
         right.setSpacing(5)
         self.btn_auto_start = self._wide_button("자동", "sliders", self._toggle_auto_start)
         self.btn_help = self._wide_button("도움말", "help", self._open_help)
-        self.btn_log = self._wide_button("터미널", "terminal", self._toggle_log)
+        self.btn_log = self._wide_button("사이드바", "terminal", self._toggle_log)
         self.btn_auto_settings = self._wide_button("자동설정", "settings", self._open_auto_settings, min_width=96)
         self.btn_cache_clear = self._wide_button("캐쉬삭제", "trash", self._clear_cache, min_width=96)
         right.addWidget(self.btn_auto_settings)
@@ -395,25 +397,29 @@ class GlobalMenuBar(QWidget):
         self.btn_auto_start.setIcon(line_icon("auto", auto_color, 24))
         self.btn_auto_start.setStyleSheet(tool_button_style("toolbar", checked=auto_on))
         self.btn_auto_start.setToolTip("자동시작 ON" if auto_on else "자동시작 OFF")
-        log_visible = bool(getattr(main, "_log_visible", False))
-        self.btn_log.setText("터미널")
-        self.btn_log.setToolTip("터미널 로그 숨기기" if log_visible else "터미널 로그 켜기")
+        log_visible = bool(getattr(main, "_log_visible", True))
+        self.btn_log.setText("사이드바")
+        self.btn_log.setToolTip("사이드바 숨기기" if log_visible else "사이드바 보기")
 
         compact = self._should_icon_only()
         for btn in self._tool_buttons:
             if compact:
                 btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-                btn.setFixedWidth(max(38, btn.iconSize().width() + 18))
+                btn.setIconSize(QSize(18, 18))
+                btn.setFixedWidth(max(36, btn.iconSize().width() + 16))
             else:
                 if btn in (self.btn_start, self.btn_undo, self.btn_redo, self.btn_save):
+                    btn.setIconSize(QSize(24, 24))
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setMinimumSize(92, 58)
                     btn.setMaximumWidth(16777215)
                 elif btn in (self.btn_auto_start, self.btn_help, self.btn_log, self.btn_auto_settings, self.btn_cache_clear):
+                    btn.setIconSize(QSize(18, 18))
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setMinimumSize(int(btn.property("expandedMinWidth") or 72), 52)
                     btn.setMaximumWidth(16777215)
                 else:
+                    btn.setIconSize(QSize(20, 20))
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setMinimumSize(54, 52)
                     btn.setMaximumWidth(16777215)
@@ -435,9 +441,9 @@ class GlobalMenuBar(QWidget):
         win = self.window()
         try:
             screen_w = win.screen().availableGeometry().width()
-            return win.width() <= int(screen_w * 0.55)
+            return self.width() <= 760 or win.width() <= int(screen_w * 0.55)
         except Exception:
-            return self.width() <= 1000
+            return self.width() <= 760
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

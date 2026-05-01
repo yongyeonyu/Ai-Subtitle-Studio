@@ -1,4 +1,4 @@
-# Version: 03.01.35
+# Version: 03.02.14
 # Phase: PHASE2
 """
 ui/main/main_window.py
@@ -22,6 +22,7 @@ from ui.editor.editor_lifecycle import EditorLifecycleMixin
 from ui.main.bottom_work_panel import BottomWorkPanel
 from ui.main.workspace_stack import MainWorkspaceStack
 from ui.sidebar.project_sidebar_widget import ProjectSidebarWidget
+from ui.log.terminal_log_widget import TerminalLogWidget
 from ui.style import button_style, label_style, line_icon
 
 from ui.project.project_panel import ProjectUIMixin
@@ -155,6 +156,7 @@ class MainWindow(
 
         self.home_page = ProjectSidebarWidget()
         workspace_splitter.addWidget(self.home_page)
+        self._create_sidebar_terminal_panel()
         self.status_rail = StatusRail(self.home_page)
         self.saved_status_label = QLabel("", self.home_page)
         self.saved_status_label.setTextFormat(Qt.TextFormat.RichText)
@@ -194,17 +196,51 @@ class MainWindow(
         editor_placeholder.addLayout(quick_row)
         editor_placeholder.addStretch()
         self.stack.addWidget(self.editor_page)
-        workspace_splitter.addWidget(self.stack)
-        workspace_splitter.setSizes([210, 1465])
-        self.workspace_splitter = workspace_splitter
+
+        right_workspace = QWidget()
+        right_workspace.setObjectName("RightWorkspace")
+        right_workspace.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        right_workspace.setStyleSheet("QWidget#RightWorkspace { background: transparent; border: none; }")
+        right_layout = QVBoxLayout(right_workspace)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(2)
+        right_layout.addWidget(self.stack, stretch=1)
 
         self.global_menu_bar = GlobalMenuBar(self)
         self.global_menu_bar.set_status_rail(self.status_rail)
-        main_layout.addWidget(self.global_menu_bar)
+        right_layout.addWidget(self.global_menu_bar)
 
         self.bottom_work_panel = self._build_log_panel()
-        main_layout.addWidget(self.bottom_work_panel)
+        right_layout.addWidget(self.bottom_work_panel)
+        workspace_splitter.addWidget(right_workspace)
+        workspace_splitter.setSizes([210, 1465])
+        self.workspace_splitter = workspace_splitter
+        self.right_workspace = right_workspace
+        self._apply_log_visible(self._log_visible, persist=False)
         self.show_home()
+
+    def _create_sidebar_terminal_panel(self):
+        panel = TerminalLogWidget(self.home_page)
+        panel.setMinimumHeight(150)
+        panel.setMaximumHeight(260)
+        panel.setStyleSheet(
+            "QWidget#TerminalLogPanel { background: #11181C; border: 1px solid #2D3942; border-radius: 7px; }"
+        )
+        self.sidebar_terminal_panel = panel
+        self.log_text = panel.log_text
+        return panel
+
+    def _ensure_sidebar_terminal_panel(self):
+        panel = getattr(self, "sidebar_terminal_panel", None)
+        if panel is not None:
+            try:
+                panel.log_text
+                if panel.parent() is None:
+                    panel.setParent(self.home_page)
+                return panel
+            except RuntimeError:
+                pass
+        return self._create_sidebar_terminal_panel()
 
     def _build_log_panel(self):
         panel = BottomWorkPanel(self)
@@ -212,7 +248,6 @@ class MainWindow(
         self._log_content = panel.log_content
         self._log_toggle_btn = panel.log_toggle_btn
         self.log_splitter = panel.log_splitter
-        self.log_text = panel.log_text
         self.bottom_right_stack = panel.bottom_right_stack
         self.bottom_queue_page = panel.queue_panel
         self.bottom_roughcut_page = panel.roughcut_panel
@@ -222,7 +257,9 @@ class MainWindow(
         self.roughcut_bottom_host = panel.roughcut_bottom_host
         self.roughcut_bottom_host_layout = panel.roughcut_bottom_host_layout
 
-        self._log_visible = panel.log_visible
+        settings = load_settings()
+        self._log_visible = bool(settings.get("sidebar_visible", True))
+        self._project_panel_visible = self._log_visible
 
         # 큐 애니메이션
         self._queue_anim_frames = ["📑", "📄", "📃", "📝"]
@@ -403,13 +440,26 @@ class MainWindow(
         self.show_home()
 
     # ── 로그 토글 ────────────────────────────────────────
-    def _apply_log_visible(self, visible: bool):
+    def _apply_log_visible(self, visible: bool, *, persist: bool = True):
         self._log_visible = bool(visible)
+        self._project_panel_visible = self._log_visible
+        sidebar = getattr(self, "home_page", None)
+        splitter = getattr(self, "workspace_splitter", None)
+        if sidebar is not None:
+            sidebar.setVisible(self._log_visible)
+        if splitter is not None:
+            total = max(1, sum(splitter.sizes()) or splitter.width() or 1600)
+            if self._log_visible:
+                sidebar_w = min(218, max(204, int(total * 0.14)))
+                splitter.setSizes([sidebar_w, max(1, total - sidebar_w)])
+            else:
+                splitter.setSizes([0, total])
         panel = getattr(self, "bottom_work_panel", None)
         if panel is not None:
-            panel.set_log_visible(self._log_visible)
-        if self._editor_widget and hasattr(self._editor_widget, "set_terminal_visible_layout"):
-            self._editor_widget.set_terminal_visible_layout(self._log_visible)
+            panel.set_log_visible(True)
+        terminal = self._ensure_sidebar_terminal_panel() if hasattr(self, "_ensure_sidebar_terminal_panel") else getattr(self, "sidebar_terminal_panel", None)
+        if terminal is not None:
+            terminal.setVisible(self._log_visible)
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.refresh()
 
@@ -430,9 +480,10 @@ class MainWindow(
         try:
             settings = load_settings()
             settings["show_terminal_log"] = self._log_visible
+            settings["sidebar_visible"] = self._log_visible
             save_settings(settings)
         except Exception as e:
-            get_logger().log(f"⚠️ 터미널 로그 표시 설정 저장 실패: {e}")
+            get_logger().log(f"⚠️ 사이드바 표시 설정 저장 실패: {e}")
         QTimer.singleShot(10, self._refresh_video)
 
     def sync_menu_from_editor(self, editor=None):

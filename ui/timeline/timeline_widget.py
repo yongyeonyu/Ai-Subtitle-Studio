@@ -1,4 +1,4 @@
-# Version: 03.01.00
+# Version: 03.02.11
 # Phase: PHASE1-C
 """
 ui/timeline_widget.py
@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ui.timeline.timeline_constants import CANVAS_H
+from ui.timeline.timeline_constants import CANVAS_H, FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
 from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_global import GlobalCanvas
 from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker
@@ -163,7 +163,7 @@ class TimelineWidget(QWidget):
         self._focus_border.setStyleSheet(
             "QWidget#TimelineFocusBorder {"
             " background: transparent;"
-            " border: 2px solid #FFFF00;"
+            f" border: {FOCUS_BORDER_WIDTH}px solid {FOCUS_BORDER_COLOR};"
             " border-radius: 0px;"
             "}"
         )
@@ -174,6 +174,12 @@ class TimelineWidget(QWidget):
         pps = float(self.canvas.pps if pps is None else pps)
         end_padding = 96
         return max(int(float(dur) * pps) + end_padding, self.scroll.width())
+
+    def _fit_pps_for_duration(self, dur: float) -> float:
+        if dur <= 0:
+            return float(self.canvas.pps)
+        visible_w = max(1, self.scroll.viewport().width() - 20)
+        return max(0.001, min(500.0, visible_w / max(0.001, float(dur))))
 
     def _clamp_scroll_x(self, value: float) -> int:
         sb = self.scroll.horizontalScrollBar()
@@ -221,11 +227,12 @@ class TimelineWidget(QWidget):
             from PyQt6.QtGui import QColor, QPainter, QPen
 
             painter = QPainter(self)
-            painter.setPen(QPen(QColor("#FFFF00"), 2))
-            left = 1
-            top = 1
-            right = max(left, self.width() - 2)
-            bottom = max(top, self.height() - 2)
+            painter.setPen(QPen(QColor(FOCUS_BORDER_COLOR), FOCUS_BORDER_WIDTH))
+            inset = max(1, FOCUS_BORDER_WIDTH // 2)
+            left = inset
+            top = inset
+            right = max(left, self.width() - FOCUS_BORDER_WIDTH)
+            bottom = max(top, self.height() - FOCUS_BORDER_WIDTH)
             painter.drawLine(left, top, right, top)
             painter.drawLine(left, bottom, right, bottom)
             painter.drawLine(left, top, left, bottom)
@@ -431,9 +438,7 @@ class TimelineWidget(QWidget):
                 return
 
             dur = self.canvas.total_duration
-            min_pps = 5.0
-            if dur > 0:
-                min_pps = (self.scroll.width() - 20) / dur
+            min_pps = self._fit_pps_for_duration(dur)
             max_pps = 500.0
 
             factor = 1.08 if dy > 0 else 1.0 / 1.08
@@ -509,11 +514,7 @@ class TimelineWidget(QWidget):
         if dur <= 0:
             return
 
-        visible_w = self.scroll.viewport().width() - 20
-        if visible_w <= 0:
-            return
-
-        new_pps = max(5.0, min(500.0, visible_w / dur))
+        new_pps = self._fit_pps_for_duration(dur)
         self.canvas.pps = new_pps
 
         self.canvas.setFixedWidth(self._canvas_width_for_duration(dur, new_pps))
@@ -522,6 +523,8 @@ class TimelineWidget(QWidget):
         self.scroll.horizontalScrollBar().setValue(0)
         self._target_scroll_x = 0.0
         self._current_scroll_x = 0.0
+        self.global_canvas.update_viewport(0.0, 1.0)
+        self.global_canvas.update()
 
     def zoom_in(self):
         self._zoom_canvas(1.15)
@@ -534,7 +537,8 @@ class TimelineWidget(QWidget):
         if dur <= 0:
             return
         old_pps = float(self.canvas.pps)
-        new_pps = max(5.0, min(500.0, old_pps * float(factor)))
+        min_pps = self._fit_pps_for_duration(dur)
+        new_pps = max(min_pps, min(500.0, old_pps * float(factor)))
         if abs(new_pps - old_pps) < 0.01:
             return
         sb = self.scroll.horizontalScrollBar()

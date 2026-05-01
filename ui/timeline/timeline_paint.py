@@ -1,4 +1,4 @@
-# Version: 03.01.25
+# Version: 03.02.17
 # Phase: PHASE1-C
 """
 ui/timeline_paint.py
@@ -26,7 +26,34 @@ from ui.timeline.timeline_constants import (
     WAVE_HALF,
     WAVE_MID,
 )
-from ui.timeline.timeline_analysis import analysis_markers_for_widget
+from ui.timeline.timeline_analysis import analysis_markers_for_widget, roughcut_major_markers_for_widget
+from ui.timeline.speaker_labels import (
+    current_speaker_settings,
+    normalize_speaker_id,
+    speaker_label_for_segment,
+)
+
+SEGMENT_TEXT_KIND_STYLES = {
+    "speech": {
+        "fill": "#123A24",
+        "border": "#34C759",
+        "text": "#E8FFF0",
+    },
+    "silence": {
+        "fill": "#3B2A13",
+        "border": "#FF9500",
+        "text": "#FFF1D6",
+    },
+}
+
+
+def segment_text_kind(text: str) -> str:
+    normalized = "".join(str(text or "").split())
+    if normalized == "음성":
+        return "speech"
+    if normalized == "무음":
+        return "silence"
+    return ""
 
 
 class TimelinePaintMixin:
@@ -43,20 +70,18 @@ class TimelinePaintMixin:
         speaker_bot = SPEAKER_BOT
         voice_mid = speaker_bot + 17
         audio_mid = voice_mid + 28
-        track_bottom = CANVAS_H - 8
+        track_bottom = SEG_BOT
 
-        def _speaker_settings():
+        def _owner_speaker_settings():
             owner = self.parent()
             while owner and not hasattr(owner, "settings"):
                 owner = owner.parent()
             return getattr(owner, "settings", {}) if owner is not None else {}
 
-        speaker_settings = _speaker_settings()
+        speaker_settings = current_speaker_settings(_owner_speaker_settings())
 
         def _speaker_color(seg):
-            spk = str(seg.get("speaker", seg.get("spk_id", "")) or "")
-            if spk.startswith("SPEAKER_"):
-                spk = spk.replace("SPEAKER_", "")
+            spk = normalize_speaker_id(seg.get("speaker", seg.get("spk_id", "")))
             palette = {
                 str(speaker_settings.get("spk1_id", "00")): str(speaker_settings.get("spk1_color", "#579DFF")),
                 str(speaker_settings.get("spk2_id", "01")): str(speaker_settings.get("spk2_color", "#75C76B")),
@@ -65,27 +90,7 @@ class TimelinePaintMixin:
             return QColor(palette.get(spk, "#8E8E93"))
 
         def _speaker_name(seg):
-            def label_for(raw, fallback="홍길동"):
-                spk = str(raw or "")
-                if spk.startswith("SPEAKER_"):
-                    spk = spk.replace("SPEAKER_", "")
-                mapping = {
-                    str(speaker_settings.get("spk1_id", "00")): str(speaker_settings.get("spk1_name", "") or "화자 1"),
-                    str(speaker_settings.get("spk2_id", "01")): str(speaker_settings.get("spk2_name", "") or "화자 2"),
-                    str(speaker_settings.get("spk3_id", "02")): str(speaker_settings.get("spk3_name", "") or "화자 3"),
-                }
-                if spk in mapping:
-                    return mapping[spk]
-                return fallback
-
-            spk_list = list(seg.get("speaker_list", []) or [])
-            if len(spk_list) > 1:
-                return " / ".join(label_for(spk, f"화자{i + 1}") for i, spk in enumerate(spk_list))
-            if seg.get("speaker_name"):
-                return str(seg.get("speaker_name"))
-            if "speaker" in seg or "spk_id" in seg:
-                return label_for(seg.get("speaker", seg.get("spk_id")), "화자1")
-            return "홍길동"
+            return speaker_label_for_segment(speaker_settings, seg)
 
         def _draw_lane_wave(mid_y, color_top, color_bot, gain=1.0, alpha=210):
             if self._waveform is None:
@@ -183,6 +188,43 @@ class TimelinePaintMixin:
                     p.setPen(QColor("#F5F7FA"))
                     p.setFont(QFont(config.FONT, 8, QFont.Weight.Bold))
                     p.drawText(QRect(int(x1) + 4, lane_top + 2, int(w) - 8, lane_h - 4), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, str(marker.get("label", "")))
+
+        def _draw_roughcut_major_lane():
+            markers = roughcut_major_markers_for_widget(self)
+            if not markers:
+                return
+            clip = event.rect()
+            lane_top = RULER_H + WAVE_H + 5
+            lane_h = max(18, SEG_TOP - lane_top - 7)
+            x_start = max(0, clip.left())
+            x_end = min(total_w, clip.right() + 1)
+            p.setPen(QPen(QColor("#2D3942"), 1))
+            p.setBrush(QColor("#0B1418"))
+            p.drawRect(QRect(x_start, lane_top, max(1, x_end - x_start), lane_h))
+            p.setFont(QFont(config.FONT, 9, QFont.Weight.Bold))
+            for marker in markers:
+                start = max(0.0, float(marker.get("start", 0.0) or 0.0))
+                end = max(start, float(marker.get("end", start) or start))
+                x1 = self._x(start)
+                x2 = self._x(end)
+                if x2 < clip.left() or x1 > clip.right():
+                    continue
+                w = max(2, x2 - x1)
+                color = QColor(str(marker.get("color", "#34C759")))
+                fill = QColor(color)
+                fill.setAlpha(int(marker.get("alpha", 48) or 48))
+                border = QColor(color)
+                border.setAlpha(230)
+                rect = QRectF(x1 + 1, lane_top + 2, max(2, w - 2), lane_h - 4)
+                p.setBrush(fill)
+                p.setPen(QPen(border, 1))
+                p.drawRoundedRect(rect, 5, 5)
+                label = str(marker.get("label", "") or "")
+                title = str(marker.get("title", "") or "").strip()
+                text = label if w < 118 or not title else f"{label}  {title[:18]}"
+                if w >= 28 and text:
+                    p.setPen(border.lighter(145))
+                    p.drawText(QRect(int(x1) + 6, lane_top, int(w) - 12, lane_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignCenter, text)
 
         p.fillRect(QRect(0, 0, total_w, CANVAS_H), QColor("#0F1518"))
 
@@ -305,6 +347,8 @@ class TimelinePaintMixin:
             if gx2 > gx1:
                 p.fillRect(QRect(gx1, RULER_H, gx2 - gx1, WAVE_H), QColor(0, 255, 0, 70))
 
+        _draw_roughcut_major_lane()
+
         p.fillRect(QRect(0, SEG_TOP, total_w, SEG_BOT - SEG_TOP), QColor("#11181C"))
         p.setPen(QPen(QColor("#2D3942"), 1))
         for y in (subtitle_top - 5, speaker_top - 3, voice_mid - 14, audio_mid - 14, track_bottom):
@@ -354,7 +398,12 @@ class TimelinePaintMixin:
                 or (q_filter == "needs_review" and (q_label in {"red", "gray"} or bool(q_flags.intersection({"non_speech_hallucination_risk", "high_no_speech_prob", "outside_vad_speech"}))))
                 or (q_filter == "auto_corrected" and "auto_corrected" in q_flags)
             )
-            if quality and q_label in q_colors:
+            text_kind = segment_text_kind(seg.get("text", ""))
+            kind_style = SEGMENT_TEXT_KIND_STYLES.get(text_kind, {})
+            if kind_style:
+                fill = QColor(kind_style["fill"])
+                border = QColor(kind_style["border"])
+            elif quality and q_label in q_colors:
                 fill = QColor(q_colors[q_label][0])
                 border = QColor(q_colors[q_label][1])
             else:
@@ -410,7 +459,8 @@ class TimelinePaintMixin:
                         p.drawLine(cx, cursor_top, cx, cursor_bot)
                     curr_y += line_h + 4
             else:
-                p.setPen(QColor("#8A8F98") if is_stt_pending else QColor("#DCE3EA"))
+                text_color = kind_style.get("text", "")
+                p.setPen(QColor(text_color) if text_color else (QColor("#8A8F98") if is_stt_pending else QColor("#DCE3EA")))
                 p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, seg.get("text", ""))
 
             ir = self._icon_rect(x1, x2)

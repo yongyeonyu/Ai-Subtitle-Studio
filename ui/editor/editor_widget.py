@@ -1,4 +1,4 @@
-# Version: 03.01.33
+# Version: 03.02.16
 # Phase: PHASE2
 """Editor widget and function-preserving PHASE1-C layout."""
 import re, os, sys, json, atexit, threading, shutil, time
@@ -13,9 +13,9 @@ atexit.register(_mac_safe_exit)
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
     QPushButton, QLabel, QSizePolicy, QMessageBox, QMenu, QLineEdit, QComboBox,
-    QToolButton, QCheckBox
+    QToolButton, QCheckBox, QApplication
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QEvent
 from PyQt6.QtGui import QKeySequence, QShortcut, QColor, QTextCursor, QIcon
 from PyQt6.QtMultimedia import QMediaPlayer
 
@@ -28,6 +28,8 @@ from core.project.data_manager import (
 )
 from core.state_manager import SubtitleStateManager
 from ui.timeline.timeline_widget import TimelineWidget
+from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
+from ui.timeline.speaker_labels import current_speaker_settings
 from ui.style import button_style, label_style, line_icon, panel_style, tool_button_style
 from ui.editor.editor_popup_qt import EditorPopup
 from ui.editor.video_player_widget import VideoPlayerWidget
@@ -66,6 +68,7 @@ class EditorWidget(
     sig_next      = pyqtSignal(list)
     sig_live_stt_result = pyqtSignal(str)
     sig_stt_vad_segments = pyqtSignal(list)
+    sig_roughcut_draft_ready = pyqtSignal(object, list, dict)
 
     _JUNK_TS_RE               = re.compile(r'[\[{(<\[【（《]\s*\d{1,3}[:.]\d{1,2}(?:[:.]\d+)?\s*[\]})>\]】）》]\s*')
     _JUNK_NO_BRACKET_3PART    = re.compile(r'(?<!\S)\d{1,3}[:\.]\d{2}[:\.]\d{2,3}(?!\S)')
@@ -123,6 +126,13 @@ class EditorWidget(
         self._queue_timer    = QTimer(); self._queue_timer.setSingleShot(True);    self._queue_timer.timeout.connect(self._flush_queue)
         self._timeline_timer = QTimer(); self._timeline_timer.setSingleShot(True); self._timeline_timer.timeout.connect(self._redraw_timeline)
         self._nav_timer      = QTimer(); self._nav_timer.setSingleShot(True)
+        self._roughcut_draft_timer = QTimer(self)
+        self._roughcut_draft_timer.setSingleShot(True)
+        self._roughcut_draft_timer.timeout.connect(self._run_realtime_roughcut_draft)
+        self._roughcut_draft_thread = None
+        self._roughcut_draft_pending = False
+        self._roughcut_draft_generation = 0
+        self.sig_roughcut_draft_ready.connect(self._apply_realtime_roughcut_draft)
 
         self.status_lbl = QLabel("대기 중...")
         self.engine_lbl = QLabel()
@@ -134,7 +144,10 @@ class EditorWidget(
 
         self.editor_popup = EditorPopup(self)
         
-        self._build_ui()   
+        self._build_ui()
+        app = QApplication.instance()
+        if app is not None:
+            app.focusChanged.connect(self._on_app_focus_changed)
         QTimer.singleShot(0, self._hook_multiclip_clip_signals)
         
         self._undo_mgr = UndoManager(self)
@@ -172,6 +185,7 @@ class EditorWidget(
             if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
                 self.timeline.canvas.segments = [dict(s) for s in segments]
             self.append_segments(segments)
+            QTimer.singleShot(350, self._mark_initial_segments_saved)
 
         if media_path:
             QTimer.singleShot(200, lambda: self._load_video(media_path))
@@ -262,7 +276,24 @@ class EditorWidget(
         if self.sm.is_locked: return
         if not hasattr(self, '_app_start_time'): self._app_start_time = time.time()
         if time.time() - self._app_start_time < 1.0: return
+        if hasattr(self, "_has_unsaved_changes") and not self._has_unsaved_changes():
+            if getattr(self.sm, "is_dirty", False) and hasattr(self, "_mark_save_completed"):
+                self._mark_save_completed(touch_saved_time=False)
+            return
         self.sm.start_editing()
+
+    def _mark_initial_segments_saved(self):
+        if getattr(self, "_segment_queue", None):
+            QTimer.singleShot(150, self._mark_initial_segments_saved)
+            return
+        if not hasattr(self, "_remember_saved_segments"):
+            return
+        try:
+            self._remember_saved_segments(self._get_current_segments())
+            if hasattr(self, "sm") and self.sm.state != SubtitleStateManager.ST_PROC:
+                self.sm.complete_save()
+        except Exception:
+            pass
 
     def _on_auto_save(self):
         if self.sm.is_locked: return
@@ -288,6 +319,8 @@ class EditorWidget(
         self.splitter.setHandleWidth(2)
         self.splitter.setStyleSheet("QSplitter::handle { background: #0F1518; width: 2px; }")
         editor_wrap = QWidget(); editor_wrap.setMinimumWidth(260); editor_wrap.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
+        self._editor_wrap = editor_wrap
+        editor_wrap.installEventFilter(self)
         ew_layout   = QVBoxLayout(editor_wrap); ew_layout.setContentsMargins(8, 8, 8, 8); ew_layout.setSpacing(6)
 
         self.text_edit = SubtitleTextEdit()
@@ -309,6 +342,19 @@ class EditorWidget(
         ew_layout.addWidget(self._build_editor_mode_bar())
         ew_layout.addWidget(self._build_table_header())
         ew_layout.addWidget(self.text_edit)
+        self._editor_focus_border = QWidget(editor_wrap)
+        self._editor_focus_border.setObjectName("EditorFocusBorder")
+        self._editor_focus_border.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._editor_focus_border.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._editor_focus_border.setStyleSheet(
+            "QWidget#EditorFocusBorder {"
+            " background: transparent;"
+            f" border: {FOCUS_BORDER_WIDTH}px solid {FOCUS_BORDER_COLOR};"
+            " border-radius: 0px;"
+            "}"
+        )
+        self._editor_focus_border.hide()
+        self._sync_editor_focus_border()
         self.splitter.addWidget(editor_wrap)
         self.video_player = VideoPlayerWidget()
         if hasattr(self.video_player, "set_subtitle_provider"):
@@ -362,6 +408,37 @@ class EditorWidget(
         self._internal_button_bar.setFixedHeight(0)
         self._internal_button_bar.setVisible(False)
         root.addWidget(self._internal_button_bar)
+
+    def _widget_is_inside_editor_panel(self, widget) -> bool:
+        panel = getattr(self, "_editor_wrap", None)
+        while widget is not None:
+            if widget is panel:
+                return True
+            widget = widget.parentWidget() if hasattr(widget, "parentWidget") else None
+        return False
+
+    def _editor_panel_has_focus(self) -> bool:
+        return self._widget_is_inside_editor_panel(QApplication.focusWidget())
+
+    def _sync_editor_focus_border(self):
+        border = getattr(self, "_editor_focus_border", None)
+        panel = getattr(self, "_editor_wrap", None)
+        if border is None or panel is None:
+            return
+        border.setGeometry(0, 0, max(1, panel.width()), max(1, panel.height()))
+        visible = self._editor_panel_has_focus()
+        border.setVisible(visible)
+        if visible:
+            border.raise_()
+
+    def _on_app_focus_changed(self, old, now):
+        if self._widget_is_inside_editor_panel(old) or self._widget_is_inside_editor_panel(now):
+            QTimer.singleShot(0, self._sync_editor_focus_border)
+
+    def eventFilter(self, obj, event):
+        if obj is getattr(self, "_editor_wrap", None) and event.type() == QEvent.Type.Resize:
+            QTimer.singleShot(0, self._sync_editor_focus_border)
+        return super().eventFilter(obj, event)
 
     def _on_inline_text_changed(self, line_num: int, new_text: str):
         doc = self.text_edit.document()
@@ -773,10 +850,11 @@ class EditorWidget(
             if widget is not None:
                 widget.deleteLater()
         colors = ["#007AFF", "#34C759", "#FF9500"]
-        max_spk = max(1, min(3, int(self.settings.get("max_speakers", 1) or 1)))
+        speaker_settings = current_speaker_settings(self.settings)
+        max_spk = max(1, min(3, int(speaker_settings.get("max_speakers", self.settings.get("max_speakers", 1)) or 1)))
         for idx in range(1, max_spk + 1):
-            color = self.settings.get(f"spk{idx}_color", colors[idx - 1])
-            name = str(self.settings.get(f"spk{idx}_name", "") or f"화자 {idx}")
+            color = speaker_settings.get(f"spk{idx}_color", colors[idx - 1])
+            name = str(speaker_settings.get(f"spk{idx}_name", "") or f"화자 {idx}")
             btn = QPushButton(f"● {name}")
             btn.setToolTip(f"{name} 설정")
             btn.setStyleSheet(
@@ -835,7 +913,7 @@ class EditorWidget(
         self.btn_save  = self._make_action_toolbutton("저장", "save")
         self.btn_exp   = self._make_action_toolbutton("자막출력", "export")
         self._bot_btns = [
-            (self.btn_start, "🧠 시작",    "시작", self._on_start_clicked),
+            (self.btn_start, "시작",       "시작", self._on_start_clicked),
             (self.btn_save,  "💾 저장",    "저장", lambda: self._on_save(skip_auto_next=True)),
             (self.btn_exp,   "🎥 자막출력", "출력", self._show_export_dialog),
         ]
@@ -878,6 +956,7 @@ class EditorWidget(
     def resizeEvent(self, event):
         super().resizeEvent(event)
         QTimer.singleShot(0, self._position_video_expand_button)
+        QTimer.singleShot(0, self._sync_editor_focus_border)
         is_compact = self.width() < 1100
         top_font = "10px" if is_compact else "11px"
         for btn, full_t, comp_t, _ in getattr(self, '_top_btns', []):
@@ -952,8 +1031,8 @@ class EditorWidget(
 
     def _terminal_log_button_text(self):
         main_w = self.window()
-        visible = bool(getattr(main_w, "_log_visible", False))
-        return "터미널 로그 숨기기" if visible else "터미널 로그"
+        visible = bool(getattr(main_w, "_log_visible", True))
+        return "사이드바 숨기기" if visible else "사이드바"
 
     def _toggle_terminal_log(self):
         main_w = self.window()

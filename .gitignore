@@ -25,6 +25,8 @@ dataset/folder_settings.json
 dataset/time_history.json
 dataset/user_settings.json
 dataset/subtitle_rule.json
+dataset/correction_memory.json
+dataset/wrong_answer_memory.json
 
 # ── 출력 파일 (음성/영상) ──
 output/

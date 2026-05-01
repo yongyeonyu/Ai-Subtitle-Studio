@@ -1,4 +1,4 @@
-# Version: 03.01.33
+# Version: 03.02.13
 # Phase: PHASE1-B
 """
 ui/queue_widget.py
@@ -110,12 +110,37 @@ class QueueMixin:
         state_manager = getattr(editor, "sm", None) if editor is not None else None
         if state_manager is None:
             return
+        status_text = str(status or "")
+        if "완료" in status_text:
+            current_state = str(getattr(state_manager, "state", "") or "")
+            if current_state not in {"ST_COMP", "ST_SAVED"}:
+                completed = getattr(editor, "_set_process_completed", None)
+                if callable(completed):
+                    try:
+                        completed()
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        state_manager.complete_auto_mode() if bool(getattr(editor, "is_auto_start", False)) else state_manager.complete_ai()
+                    except Exception:
+                        pass
+            if hasattr(self, "sync_menu_from_editor"):
+                self.sync_menu_from_editor(editor)
+            if hasattr(self, "_refresh_saved_status_label"):
+                dirty_checker = getattr(editor, "_has_unsaved_changes", None)
+                if callable(dirty_checker):
+                    try:
+                        self._refresh_saved_status_label(is_dirty=bool(dirty_checker()))
+                    except Exception:
+                        self._refresh_saved_status_label()
+                else:
+                    self._refresh_saved_status_label()
+            return
         if str(getattr(state_manager, "state", "") or "") != "ST_PROC":
             return
-        if "완료" in str(status or ""):
-            return
         try:
-            state_manager.set_custom_status(str(status or ""))
+            state_manager.set_custom_status(status_text)
         except Exception:
             return
         if hasattr(self, "sync_menu_from_editor"):

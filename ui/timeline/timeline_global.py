@@ -1,4 +1,4 @@
-# Version: 03.01.06
+# Version: 03.02.11
 # Phase: PHASE1-D
 """
 ui/timeline_global.py
@@ -10,6 +10,7 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 import config
+from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
 from ui.timeline.timeline_analysis import analysis_markers_for_widget
 
 
@@ -71,8 +72,8 @@ class GlobalCanvas(QWidget):
     def _draw_focus_bottom(self, p: QPainter):
         if not self._timeline_has_focus():
             return
-        p.setPen(QPen(QColor("#FFFF00"), 2))
-        y = max(1, self.height() - 2)
+        p.setPen(QPen(QColor(FOCUS_BORDER_COLOR), FOCUS_BORDER_WIDTH))
+        y = max(1, self.height() - FOCUS_BORDER_WIDTH)
         p.drawLine(0, y, self.width(), y)
 
     def set_playhead(self, sec):

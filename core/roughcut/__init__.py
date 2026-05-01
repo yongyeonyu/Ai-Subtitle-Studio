@@ -1,4 +1,4 @@
-# Version: 03.01.31
+# Version: 03.02.15
 # Phase: PHASE2
 """Local rough-cut engine helpers.
 
@@ -12,6 +12,18 @@ from .boundary_refiner import BoundaryVerification, refine_major_boundaries, ver
 from .chapter_segmenter import build_chapters
 from .edit_decision_engine import CutSafetyResult, build_edit_decisions, classify_cut_safety, generate_cut_points
 from .edl_generator import build_edl_segments, edl_to_dict, generate_edl, map_edl_segments_to_clip_sources, save_edl_json
+from .editor_draft import (
+    DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT,
+    EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID,
+    apply_roughcut_order_to_subtitles,
+    build_editor_roughcut_candidate_payload,
+    build_editor_roughcut_draft_prompt,
+    build_editor_roughcut_draft_result,
+    editor_roughcut_draft_enabled,
+    is_fast_recognition_mode,
+    merge_editor_roughcut_draft_state,
+    run_editor_roughcut_llm_draft,
+)
 from .guide_writer import build_markdown_guide, save_markdown_guide, write_markdown_guide
 from .pipeline import run_roughcut_pipeline
 from .renderer import render_from_edl
@@ -50,6 +62,8 @@ from .models import (
     roughcut_result_from_dict,
 )
 from .roughcut_llm import RoughCutLLMActionResult, run_roughcut_llm_action
+from .roughcut_llm_config import RoughCutLLMConfig, resolve_roughcut_llm_config
+from .roughcut_prompts import DEFAULT_ROUGHCUT_PROMPT_V1
 from .roughcut_prompts import build_roughcut_prompt, validate_roughcut_action_response
 from .roughcut_settings import default_roughcut_settings, merge_roughcut_settings, roughcut_llm_enabled
 from .title_suggester import build_title_suggestions
@@ -70,6 +84,10 @@ __all__ = [
     "PackedPhrase",
     "RoughCutDraftState",
     "RoughCutLLMActionResult",
+    "RoughCutLLMConfig",
+    "DEFAULT_ROUGHCUT_PROMPT_V1",
+    "DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT",
+    "EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID",
     "RoughCutMinorGroup",
     "RoughCutResult",
     "RoughCutSegment",
@@ -87,7 +105,11 @@ __all__ = [
     "TimelineGap",
     "ThumbnailCacheResult",
     "VisualSceneNote",
+    "apply_roughcut_order_to_subtitles",
     "build_chapters",
+    "build_editor_roughcut_candidate_payload",
+    "build_editor_roughcut_draft_prompt",
+    "build_editor_roughcut_draft_result",
     "build_major_roughcut_segments",
     "build_semantic_chunks",
     "build_edit_decisions",
@@ -109,6 +131,7 @@ __all__ = [
     "default_roughcut_settings",
     "default_thumbnail_cache_dir",
     "edl_to_dict",
+    "editor_roughcut_draft_enabled",
     "ensure_thumbnail",
     "extract_keywords",
     "ffmpeg_available",
@@ -116,7 +139,9 @@ __all__ = [
     "format_packed_transcript",
     "generate_cut_points",
     "generate_edl",
+    "is_fast_recognition_mode",
     "merge_close_gaps",
+    "merge_editor_roughcut_draft_state",
     "merge_roughcut_settings",
     "map_story_roles",
     "remap_story_flow",
@@ -126,7 +151,9 @@ __all__ = [
     "refine_major_boundaries",
     "run_roughcut_pipeline",
     "run_render_plan",
+    "run_editor_roughcut_llm_draft",
     "run_roughcut_llm_action",
+    "resolve_roughcut_llm_config",
     "save_edl_json",
     "save_markdown_guide",
     "save_retimed_srt",

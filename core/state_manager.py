@@ -1,5 +1,5 @@
-# Version: 03.01.33
-# Phase: PHASE1-B
+# Version: 03.02.16
+# Phase: PHASE2
 """
 core/state_manager.py
 [v01.00.06] 모드/상태 정의 문서 1:1 반영
@@ -43,7 +43,7 @@ class SubtitleStateManager(QObject):
         self.is_locked = False
         self.is_dirty = False
         self._status_msg = "💤 대기중"
-        self._button_text = "🧠 시작"
+        self._button_text = "시작"
         self._button_enabled = True
         self.current_file = ""
 

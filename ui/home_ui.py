@@ -1,4 +1,4 @@
-# Version: 03.01.35
+# Version: 03.02.14
 # Phase: PHASE2
 """
 ui/home_ui.py
@@ -39,7 +39,7 @@ class HomeUIMixin:
             except RuntimeError:
                 pass
             self._project_info_overlay = None
-        for attr in ("status_rail", "saved_status_label", "sidebar_settings_label"):
+        for attr in ("status_rail", "saved_status_label", "sidebar_settings_label", "sidebar_terminal_panel"):
             widget = getattr(self, attr, None)
             if widget is not None:
                 try:
@@ -55,9 +55,12 @@ class HomeUIMixin:
                         self.saved_status_label.setTextFormat(Qt.TextFormat.RichText)
                         self.saved_status_label.setStyleSheet("color: #A9B0B7; font-size: 11px; background: transparent;")
                     else:
-                        self.sidebar_settings_label = QLabel("", self.home_page)
-                        self.sidebar_settings_label.setWordWrap(True)
-                        self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 9px; font-weight: bold; background: transparent; border: none;")
+                        if attr == "sidebar_settings_label":
+                            self.sidebar_settings_label = QLabel("", self.home_page)
+                            self.sidebar_settings_label.setWordWrap(True)
+                            self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 9px; font-weight: bold; background: transparent; border: none;")
+                        elif attr == "sidebar_terminal_panel" and hasattr(self, "_create_sidebar_terminal_panel"):
+                            self._create_sidebar_terminal_panel()
         old_layout = self.home_page.layout()
         if old_layout is not None: QWidget().setLayout(old_layout)
         is_unified = bool(getattr(self, "_unified_dashboard", False))
@@ -153,6 +156,14 @@ class HomeUIMixin:
             if bool(getattr(self, "_project_info_expanded", False)):
                 QTimer.singleShot(0, self._show_project_info_overlay)
             layout.addWidget(self._sidebar_status_card())
+            terminal_panel = (
+                self._ensure_sidebar_terminal_panel()
+                if hasattr(self, "_ensure_sidebar_terminal_panel")
+                else getattr(self, "sidebar_terminal_panel", None)
+            )
+            if terminal_panel is not None:
+                terminal_panel.setVisible(bool(getattr(self, "_log_visible", True)))
+                layout.addWidget(terminal_panel, stretch=1)
         bottom_bar = QHBoxLayout()
         from config import APP_VERSION
         if not is_unified:
@@ -187,6 +198,12 @@ class HomeUIMixin:
         editor = self._active_editor()
         if editor is None:
             return bool(getattr(self, "_is_dirty", False))
+        dirty_checker = getattr(editor, "_has_unsaved_changes", None)
+        if callable(dirty_checker):
+            try:
+                return bool(dirty_checker())
+            except Exception:
+                pass
         state_manager = getattr(editor, "sm", None)
         if state_manager is not None:
             return bool(getattr(state_manager, "is_dirty", False))
@@ -360,7 +377,7 @@ class HomeUIMixin:
         return "자동시작 ON" if self._is_auto_start_enabled() else "자동시작 OFF"
 
     def _terminal_log_label(self):
-        return "터미널 로그 숨기기" if getattr(self, "_log_visible", False) else "터미널 로그 보기"
+        return "사이드바 숨기기" if getattr(self, "_log_visible", True) else "사이드바 보기"
 
     def _auto_start_style(self):
         if self._is_auto_start_enabled():
@@ -815,8 +832,6 @@ class HomeUIMixin:
             self._set_roughcut_bottom_widget(getattr(page, "bottom_panel", None))
         elif hasattr(self, "_show_bottom_roughcut_table"):
             self._show_bottom_roughcut_table()
-        if hasattr(self, "_apply_log_visible") and not getattr(self, "_log_visible", False):
-            self._apply_log_visible(True)
         self.stack.setCurrentWidget(page)
         page.refresh_from_editor(analyze_if_missing=False)
         self._refresh_work_mode_ui()

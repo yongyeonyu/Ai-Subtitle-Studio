@@ -1,4 +1,4 @@
-# Version: 03.01.25
+# Version: 03.02.17
 # Phase: PHASE2
 """Timeline analysis and cut-safety marker helpers."""
 
@@ -48,6 +48,9 @@ def find_roughcut_result(widget: Any):
         result = getattr(roughcut, "_result", None)
         if result is not None:
             return result
+        result = getattr(window, "_editor_roughcut_result", None)
+        if result is not None:
+            return result
     return None
 
 
@@ -76,6 +79,40 @@ def roughcut_markers(result: Any) -> list[dict]:
     return markers
 
 
+def roughcut_major_markers(result: Any) -> list[dict]:
+    markers: list[dict] = []
+    segments = getattr(result, "segments", None) or []
+    palette = ("#34C759", "#FF453A", "#FFFF00", "#A6FF00", "#00E676", "#30D5C8", "#5AC8FA", "#A678F4")
+    for index, segment in enumerate(segments):
+        start = _as_float(getattr(segment, "start", None))
+        end = _as_float(getattr(segment, "end", None))
+        if start is None or end is None or end <= start:
+            continue
+        major_id = str(getattr(segment, "major_id", "") or getattr(segment, "segment_id", "") or chr(65 + (index % 26)))
+        title = str(getattr(segment, "title", "") or "")
+        status = str(getattr(segment, "status", "") or "provisional")
+        color = palette[index % len(palette)]
+        markers.append(
+            {
+                "start": start,
+                "end": end,
+                "kind": "roughcut_major",
+                "label": major_id,
+                "title": title,
+                "status": status,
+                "color": color,
+                "priority": 100,
+                "alpha": 72 if status == "confirmed" else 42,
+            }
+        )
+    return markers
+
+
+def roughcut_major_markers_for_widget(widget: Any) -> list[dict]:
+    result = find_roughcut_result(widget)
+    return roughcut_major_markers(result) if result is not None else []
+
+
 def editor_analysis_markers(
     segments: list[dict],
     vad_segments: list[dict],
@@ -96,7 +133,7 @@ def editor_analysis_markers(
                 "end": end,
                 "kind": "vad",
                 "label": "음성",
-                "color": "#2E8BFF",
+                "color": "#34C759",
                 "priority": 10,
                 "alpha": 62,
             }
@@ -115,7 +152,7 @@ def editor_analysis_markers(
                 "end": end,
                 "kind": "silence",
                 "label": "무음",
-                "color": "#4D5B66",
+                "color": "#FF9500",
                 "priority": 20,
                 "alpha": 118,
             }

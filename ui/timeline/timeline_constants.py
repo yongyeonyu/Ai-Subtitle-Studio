@@ -1,4 +1,4 @@
-# Version: 03.00.07
+# Version: 03.02.11
 # Phase: PHASE1-C
 """
 ui/timeline_constants.py
@@ -7,14 +7,15 @@ Timeline constants and shared utilities
 
 RULER_H = 30
 WAVE_H = 34
-SEG_H = 160
 
-SEG_TOP = RULER_H + WAVE_H
-SEG_BOT = SEG_TOP + SEG_H
-CANVAS_H = SEG_BOT + 6
+CANVAS_H = 230
+SEG_TOP_GAP = 34
+SEG_TOP = RULER_H + WAVE_H + SEG_TOP_GAP
+SEG_BOT = CANVAS_H
+SEG_H = SEG_BOT - SEG_TOP
 
 SUBTITLE_TOP = SEG_TOP + 8
-SUBTITLE_BOT = SEG_TOP + 56
+SUBTITLE_BOT = SEG_TOP + 48
 SPEAKER_TOP = SUBTITLE_BOT + 5
 SPEAKER_BOT = SPEAKER_TOP + 22
 DIAMOND_Y = SUBTITLE_BOT + 2
@@ -25,6 +26,9 @@ WAVE_HALF = (WAVE_H // 2) - 3
 ICON_SZ = 20
 HANDLE_R = 16
 EDGE_HIT = 15
+
+FOCUS_BORDER_COLOR = "#FFFF00"
+FOCUS_BORDER_WIDTH = 2
 
 
 def _build_gaps(segs: list[dict], total_dur: float) -> list[dict]:

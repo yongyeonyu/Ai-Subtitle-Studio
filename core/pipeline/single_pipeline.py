@@ -1,4 +1,4 @@
-# Version: 03.01.00
+# Version: 03.02.18
 # Phase: PHASE1-B
 """
 core/pipeline/single_pipeline.py
@@ -18,8 +18,69 @@ from core.time_history import get_expected_time, add_history
 _SENTINEL = object()
 
 
+def _is_deleted_qt_error(exc: BaseException) -> bool:
+    return "wrapped C/C++ object" in str(exc) and "has been deleted" in str(exc)
+
+
 class SinglePipelineMixin:
     """단일 / 배치 품질모드 파이프라인."""
+
+    def _ui_is_alive(self) -> bool:
+        try:
+            ui = getattr(self, "ui", None)
+            if ui is None:
+                return False
+            try:
+                from PyQt6 import sip
+                if sip.isdeleted(ui):
+                    return False
+            except Exception:
+                pass
+            return True
+        except RuntimeError:
+            return False
+
+    def _ui_attr(self, name: str, default=None):
+        if not self._ui_is_alive():
+            self._active = False
+            return default
+        try:
+            return getattr(self.ui, name, default)
+        except RuntimeError:
+            self._active = False
+            return default
+
+    def _ui_object(self):
+        if not self._ui_is_alive():
+            self._active = False
+            return None
+        try:
+            return self.ui
+        except RuntimeError:
+            self._active = False
+            return None
+
+    def _ui_emit(self, signal_name: str, *args) -> bool:
+        signal = self._ui_attr(signal_name)
+        if signal is None:
+            return False
+        try:
+            signal.emit(*args)
+            return True
+        except RuntimeError:
+            self._active = False
+            return False
+
+    def _ui_call(self, method_name: str, *args, **kwargs):
+        method = self._ui_attr(method_name)
+        if not callable(method):
+            return False
+        try:
+            method(*args, **kwargs)
+            return True
+        except RuntimeError:
+            self._active = False
+            return False
 
     def _run_all(self):
         total_files = len(self.files_to_process)
@@ -29,14 +90,12 @@ class SinglePipelineMixin:
                 if not self._active:
                     return
 
-                if hasattr(self.ui, "_sig_update_queue"):
-                    self.ui._sig_update_queue.emit(i, "⏳ 오디오 추출 중", "", "", "")
-                if hasattr(self.ui, "_sig_update_queue_header"):
-                    self.ui._sig_update_queue_header.emit(i + 1, total_files, 0, "")
+                self._ui_emit("_sig_update_queue", i, "⏳ 오디오 추출 중", "", "", "")
+                self._ui_emit("_sig_update_queue_header", i + 1, total_files, 0, "")
 
                 self._process_one(target_file, i)
 
-            if getattr(self.ui, "_is_auto_pipeline", False):
+            if bool(self._ui_attr("_is_auto_pipeline", False)):
                 self._send_ntfy_notification(
                     title=f"🏆 {config.APP_NAME} 작업 종료",
                     message=f"🎉 {total_files}개 파일 처리 완료!\n아이패드에서 확인해 보세요, 대표님.",
@@ -44,17 +103,19 @@ class SinglePipelineMixin:
                 )
 
         except Exception as e:
-            if str(e) not in ("USER_PREV", "USER_EXIT"):
+            if _is_deleted_qt_error(e):
+                self._active = False
+            elif str(e) not in ("USER_PREV", "USER_EXIT"):
                 get_logger().log(f"\n❌ 치명적 에러: {e}")
                 get_logger().log(traceback.format_exc())
 
         finally:
             self._active = False
             try:
-                if hasattr(self.ui, "_auto_processing_active"):
-                    self.ui._auto_processing_active = False
-                if hasattr(self.ui, "_tick_home_watchdog_labels"):
-                    self.ui._tick_home_watchdog_labels()
+                ui = self._ui_object()
+                if ui is not None and hasattr(ui, "_auto_processing_active"):
+                    ui._auto_processing_active = False
+                self._ui_call("_tick_home_watchdog_labels")
             except Exception:
                 pass
 
@@ -103,19 +164,21 @@ class SinglePipelineMixin:
             queue_index > 0 and len(self.files_to_process) > 1
         )
 
-        self.ui.open_editor_for_file(
+        if not self._ui_call(
+            "open_editor_for_file",
             target_file, on_save, on_start, on_prev, on_exit, is_batch=is_auto_mode
-        )
+        ):
+            raise Exception("USER_EXIT")
 
         if is_auto_mode:
             threading.Timer(0.05, on_start).start()
 
         start_event.wait()
         if action_state[0] == "prev":
-            self.ui.request_show_home()
+            self._ui_call("request_show_home")
             raise Exception("USER_PREV")
         if action_state[0] == "exit":
-            self.ui.request_show_home()
+            self._ui_call("request_show_home")
             raise Exception("USER_EXIT")
         if action_state[0] == "next":
             return
@@ -155,11 +218,7 @@ class SinglePipelineMixin:
 
             if not res:
                 get_logger().log("❌ 오디오 추출 실패")
-                if hasattr(self.ui, "_sig_update_queue"):
-                    try:
-                        self.ui._sig_update_queue.emit(queue_index, "❌ 오류", "", "", "")
-                    except RuntimeError:
-                        pass
+                self._ui_emit("_sig_update_queue", queue_index, "❌ 오류", "", "", "")
 
                 if action_state[0] == "restart":
                     get_logger().log("\n🔄 재시작합니다...")
@@ -169,8 +228,7 @@ class SinglePipelineMixin:
                 return
 
             chunk_dir, vad_segs = res
-            if hasattr(self.ui, "_sig_set_vad_segments"):
-                self.ui._sig_set_vad_segments.emit(vad_segs)
+            self._ui_emit("_sig_set_vad_segments", vad_segs)
 
             get_logger().log("\n  [STEP 2] 🎤 Whisper 변환 + LLM 최적화 파이프라인 가동...")
 
@@ -185,15 +243,16 @@ class SinglePipelineMixin:
                     video_duration_sec = len(chunks) * 30.0
 
                 expected_time = get_expected_time(model_key, video_duration_sec)
-                if hasattr(self.ui, "_sig_update_queue"):
-                    if expected_time > 0:
-                        self.ui._sig_update_queue.emit(
-                            queue_index, "자막 생성 중", str(expected_time), "", ""
-                        )
-                    else:
-                        self.ui._sig_update_queue.emit(
-                            queue_index, "자막 생성 중", "예상불가 (학습 중)", "", ""
-                        )
+                if expected_time > 0:
+                    self._ui_emit(
+                        "_sig_update_queue",
+                        queue_index, "자막 생성 중", str(expected_time), "", "",
+                    )
+                else:
+                    self._ui_emit(
+                        "_sig_update_queue",
+                        queue_index, "자막 생성 중", "예상불가 (학습 중)", "", "",
+                    )
                 process_start_time = time.time()
             except Exception:
                 process_start_time = time.time()
@@ -244,7 +303,7 @@ class SinglePipelineMixin:
                 finally:
                     opt_queue.put(_SENTINEL)
 
-            def do_optimize():
+            def _do_optimize_impl():
                 from core.engine.subtitle_engine import optimize_segments
 
                 total_files = len(self.files_to_process)
@@ -379,15 +438,16 @@ class SinglePipelineMixin:
                     auto_collected_segs.extend(opt)
 
                     try:
-                        if hasattr(self.ui, "_sig_append_segments"):
-                            self.ui._sig_append_segments.emit(opt)
-                        if hasattr(self.ui, "_sig_update_status"):
-                            self.ui._sig_update_status.emit(last_c_idx, last_t_total)
-                    except RuntimeError:
+                        self._ui_emit("_sig_append_segments", opt)
+                        self._ui_emit("_sig_update_status", last_c_idx, last_t_total)
+                    except Exception:
                         pass
 
                 while self._active:
                     item = opt_queue.get()
+                    if not self._ui_is_alive():
+                        self._active = False
+                        break
                     if item is _SENTINEL:
                         _flush_buffer()
                         break
@@ -403,22 +463,20 @@ class SinglePipelineMixin:
                     else:
                         overall_pct = int((queue_index / total_files) * 100)
 
-                    if hasattr(self.ui, "_sig_update_status"):
-                        self.ui._sig_update_status.emit(c_idx, t_total)
+                    self._ui_emit("_sig_update_status", c_idx, t_total)
 
                     try:
-                        if hasattr(self.ui, "_sig_update_queue_header"):
-                            self.ui._sig_update_queue_header.emit(
-                                queue_index + 1, total_files, overall_pct, ""
-                            )
-                    except RuntimeError:
+                        self._ui_emit(
+                            "_sig_update_queue_header",
+                            queue_index + 1, total_files, overall_pct, "",
+                        )
+                    except Exception:
                         pass
 
                     if not chunk_segs:
                         try:
-                            if hasattr(self.ui, "_sig_update_status"):
-                                self.ui._sig_update_status.emit(c_idx, t_total)
-                        except RuntimeError:
+                            self._ui_emit("_sig_update_status", c_idx, t_total)
+                        except Exception:
                             pass
                         continue
 
@@ -430,8 +488,19 @@ class SinglePipelineMixin:
                     if current_duration >= chunk_time_limit:
                         _flush_buffer()
 
-                if hasattr(self.ui, "_sig_update_status"):
-                    self.ui._sig_update_status.emit(last_t_total, last_t_total)
+                self._ui_emit("_sig_update_status", last_t_total, last_t_total)
+
+            def do_optimize():
+                try:
+                    _do_optimize_impl()
+                except Exception as e:
+                    if _is_deleted_qt_error(e):
+                        self._active = False
+                        return
+                    get_logger().log(
+                        "  ❌ optimizer 스레드 오류: "
+                        f"{e}\n{traceback.format_exc()}"
+                    )
 
             t_trans = threading.Thread(
                 target=do_transcribe, daemon=True, name="transcriber"
@@ -443,13 +512,10 @@ class SinglePipelineMixin:
             t_opt.join()
 
             # ✅ STT 완료 → 큐 즉시 업데이트
-            if hasattr(self.ui, "_sig_update_queue"):
-                try:
-                    self.ui._sig_update_queue.emit(
-                        queue_index, "✅ 자막 생성 완료", "", "", ""
-                    )
-                except RuntimeError:
-                    pass
+            if not self._active:
+                return
+
+            self._ui_emit("_sig_update_queue", queue_index, "✅ 자막 생성 완료", "", "", "")
 
             try:
                 s = load_settings()
@@ -480,13 +546,16 @@ class SinglePipelineMixin:
             if not self._active:
                 return
             if action_state[0] == "prev":
-                self.ui.request_show_home()
+                self._ui_call("request_show_home")
                 raise Exception("USER_PREV")
             if action_state[0] == "exit":
-                self.ui.request_show_home()
+                self._ui_call("request_show_home")
                 raise Exception("USER_EXIT")
 
             # ── STEP 5~6: 저장 + 내보내기 ──
+            if not self._ui_is_alive():
+                self._active = False
+                return
             self._save_and_export(target_file, queue_index, final_segments, is_auto_mode)
 
             if action_state[0] == "restart":
@@ -497,8 +566,8 @@ class SinglePipelineMixin:
 
         if action_state[0] == "exit" or not getattr(self, "_active", True):
             try:
-                if hasattr(self, "ui") and self.ui:
-                    self.ui.request_show_home()
-            except RuntimeError:
+                if self._ui_is_alive():
+                    self._ui_call("request_show_home")
+            except Exception:
                 pass
             raise Exception("USER_EXIT")

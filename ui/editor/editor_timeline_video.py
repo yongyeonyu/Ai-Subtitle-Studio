@@ -1,4 +1,4 @@
-# Version: 02.03.02
+# Version: 03.02.06
 # Phase: PHASE1-B
 """
 ui/editor_timeline_video.py
@@ -54,6 +54,8 @@ class EditorTimelineVideoMixin:
             self.timeline.canvas.set_active(seg["start"])
         else:
             self.timeline.set_active(seg["start"])
+        if hasattr(self, 'timeline') and hasattr(self.timeline, 'set_playhead'):
+            self.timeline.set_playhead(seg["start"])
         line_num = seg.get("line", 0)
         self._highlighter.set_current_line(line_num)
         if not move_cursor:

@@ -1,4 +1,4 @@
-# Version: 03.01.28
+# Version: 03.02.01
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .roughcut_prompts import build_roughcut_prompt, validate_roughcut_action_response
+from .roughcut_llm_config import resolve_roughcut_llm_config
 from .roughcut_settings import merge_roughcut_settings
 
 
@@ -37,13 +38,15 @@ def run_roughcut_llm_action(
 ) -> RoughCutLLMActionResult:
     """Run a PAGE 3-B roughcut LLM action, falling back to local pipeline data."""
     roughcut_settings = merge_roughcut_settings(settings)
+    llm_config = resolve_roughcut_llm_config(settings)
     prompt = build_roughcut_prompt(
         action,
         payload,
         prompt_id=str(roughcut_settings.get("roughcut_llm_prompt_id") or ""),
         token_budget=int(roughcut_settings.get("roughcut_llm_token_budget", 4096) or 4096),
+        user_prompt=llm_config.prompt,
     )
-    if not bool(roughcut_settings.get("roughcut_llm_enabled", False)):
+    if not llm_config.enabled:
         return RoughCutLLMActionResult(action=action, ok=False, used_llm=False, prompt=prompt, error="llm_disabled")
     if llm_client is None:
         return RoughCutLLMActionResult(action=action, ok=False, used_llm=False, prompt=prompt, error="llm_client_missing")

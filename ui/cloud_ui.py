@@ -1,4 +1,4 @@
-# Version: 03.01.00
+# Version: 03.02.05
 # Phase: PHASE1-B
 """
 ui/cloud_ui.py
@@ -19,6 +19,23 @@ from ui.dialogs.folder_dialog import FolderDialog
 
 class CloudUIMixin:
     """iCloud / NAS 자동 처리"""
+
+    _AUTO_VIDEO_EXTS = {'.mov', '.mp4', '.m4v', '.lrf'}
+    _AUTO_AUDIO_EXTS = {'.wav', '.m4a', '.mp3', '.aac', '.m2a'}
+
+    def _auto_media_kind(self, path_or_name: str) -> str:
+        ext = os.path.splitext(path_or_name)[1].lower()
+        if ext in self._AUTO_VIDEO_EXTS:
+            return "video"
+        if ext in self._AUTO_AUDIO_EXTS:
+            return "audio"
+        return ""
+
+    def _auto_status_text(self, pending_v: int, pending_a: int, completed_v: int, completed_a: int) -> tuple[str, str]:
+        return (
+            f"대기 : 영상 {pending_v:02d}개 / 음성 {pending_a:02d}개",
+            f"완료 : 영상 {completed_v:02d}개 / 음성 {completed_a:02d}개",
+        )
 
     def _on_files_detected(self, files_list):
         if not files_list:
@@ -91,8 +108,6 @@ class CloudUIMixin:
             path = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT")
             if not os.path.exists(path):
                 return [], "경로 없음", ""
-        v_exts = {'.mov', '.mp4', '.m4v', '.MOV', '.MP4', '.M4V', '.lrf', '.LRF'}
-        a_exts = {'.wav', '.m4a', '.mp3', '.aac', '.m2a'}
         v_count = a_count = comp_v_count = comp_a_count = 0
         files = []
         try:
@@ -105,23 +120,25 @@ class CloudUIMixin:
                 if f.startswith('.') or "_자막소스.mov" in f:
                     continue
                 ext = os.path.splitext(f)[1].lower()
+                kind = self._auto_media_kind(f)
                 file_path = os.path.join(path, f)
                 status = tracker.get_status(file_path) if tracker else None
                 if status == "완료":
-                    if ext in v_exts:
+                    if kind == "video":
                         comp_v_count += 1
-                    elif ext in a_exts:
+                    elif kind == "audio":
                         comp_a_count += 1
                     continue
-                if ext in v_exts:
+                if kind == "video":
                     v_count += 1
                     files.append((f, file_path))
-                elif ext in a_exts:
+                elif kind == "audio":
                     a_count += 1
                     files.append((f, file_path))
                 elif ext == '.srt':
                     files.append((f, file_path))
-            return sorted(files), f"대기 : 영상 {v_count:02d}개 / 음성 {a_count:02d}개", f"✅ 작업완료 : 영상 {comp_v_count:02d}개 / 음성 {comp_a_count:02d}개"
+            pending, completed = self._auto_status_text(v_count, a_count, comp_v_count, comp_a_count)
+            return sorted(files), pending, completed
         except Exception:
             return [], "오류", ""
 
@@ -133,7 +150,7 @@ class CloudUIMixin:
         if not os.path.exists(local_path):
             return [], "경로 없음", ""
         folders = []
-        pending = completed = excluded_count = 0
+        pending_v = pending_a = completed_v = completed_a = 0
         excluded = {os.path.normpath(p) for p in get_nas_excluded_folders()}
         try:
             from core.auto_tracker import AutoTracker
@@ -145,20 +162,33 @@ class CloudUIMixin:
                 dirs[:] = sorted([d for d in dirs if not d.startswith('.')])
                 norm = os.path.normpath(current)
                 if any(norm == ex or norm.startswith(ex + os.sep) for ex in excluded):
-                    excluded_count += 1
                     dirs[:] = []
                     continue
                 if current == local_path:
                     continue
-                has_media = any((not f.startswith('.')) and os.path.splitext(f)[1].lower() in {'.mov', '.mp4', '.m4a', '.wav', '.mp3', '.aac', '.m2a'} for f in files)
-                if has_media:
-                    status = tracker.get_status(current) if tracker else None
-                    if status == "완료":
-                        completed += 1
-                    else:
-                        pending += 1
+                folder_status = tracker.get_status(current) if tracker else None
+                for f in files:
+                    if f.startswith('.'):
+                        continue
+                    kind = self._auto_media_kind(f)
+                    if not kind:
+                        continue
+                    file_path = os.path.join(current, f)
+                    status = tracker.get_status(file_path) if tracker else None
+                    is_done = status == "완료" or folder_status == "완료"
+                    if kind == "video":
+                        if is_done:
+                            completed_v += 1
+                        else:
+                            pending_v += 1
+                    elif kind == "audio":
+                        if is_done:
+                            completed_a += 1
+                        else:
+                            pending_a += 1
                 folders.append((os.path.relpath(current, local_path), current))
-            return sorted(folders, key=lambda x: x[0].lower()), f"대기 : 폴더 {pending:02d}개", f"✅ 작업완료 : 폴더 {completed:02d}개 / 제외 {excluded_count:02d}개"
+            pending, completed = self._auto_status_text(pending_v, pending_a, completed_v, completed_a)
+            return sorted(folders, key=lambda x: x[0].lower()), pending, completed
         except Exception:
             return [], "오류", ""
 

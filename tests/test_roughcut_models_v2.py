@@ -3,12 +3,14 @@
 import unittest
 
 from core.roughcut import (
+    DEFAULT_ROUGHCUT_PROMPT_V1,
     RoughCutDraftState,
     RoughCutMinorGroup,
     RoughCutTitleSuggestion,
     build_roughcut_prompt,
     merge_roughcut_settings,
     roughcut_result_from_dict,
+    resolve_roughcut_llm_config,
     run_roughcut_llm_action,
 )
 
@@ -90,9 +92,39 @@ class RoughCutModelsV2Tests(unittest.TestCase):
         result = run_roughcut_llm_action("propose_major_segment", {"chunks": []}, settings=settings)
 
         self.assertIn("propose_major_segment", prompt)
+        self.assertIn("중분류는 실제 러프컷 편집 최소 단위", prompt)
         self.assertFalse(result.ok)
         self.assertFalse(result.used_llm)
         self.assertEqual(result.error, "llm_disabled")
+
+    def test_roughcut_llm_config_inherits_or_overrides_subtitle_model(self):
+        inherited = resolve_roughcut_llm_config({
+            "selected_llm_provider": "openai",
+            "selected_model": "gpt-test",
+            "roughcut_llm_enabled": True,
+            "roughcut_llm_use_override": False,
+        })
+        self.assertTrue(inherited.enabled)
+        self.assertEqual(inherited.provider, "openai")
+        self.assertEqual(inherited.model, "gpt-test")
+        self.assertIn("응답은 반드시 JSON", inherited.prompt)
+
+        override = resolve_roughcut_llm_config({
+            "selected_llm_provider": "openai",
+            "selected_model": "gpt-test",
+            "roughcut_llm_use_override": True,
+            "roughcut_llm_provider": "ollama",
+            "roughcut_llm_model": "exaone-test",
+            "roughcut_llm_prompt": "custom roughcut prompt",
+            "roughcut_llm_temperature": 1.5,
+            "roughcut_llm_threads": 7,
+        })
+        self.assertEqual(override.provider, "ollama")
+        self.assertEqual(override.model, "exaone-test")
+        self.assertEqual(override.prompt, "custom roughcut prompt")
+        self.assertEqual(override.temperature, 1.0)
+        self.assertEqual(override.threads, 7)
+        self.assertIn("중분류 A/B/C/D", DEFAULT_ROUGHCUT_PROMPT_V1)
 
 
 if __name__ == "__main__":

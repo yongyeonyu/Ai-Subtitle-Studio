@@ -1,4 +1,4 @@
-# Version: 03.01.33
+# Version: 03.02.15
 # Phase: PHASE1-D
 """
 ui/editor_pipeline.py
@@ -96,6 +96,15 @@ class EditorPipelineMixin:
         main_w = self.window()
         if hasattr(main_w, "_stop_post_completion_idle_timer"):
             main_w._stop_post_completion_idle_timer()
+        try:
+            from core.settings import load_settings
+            latest_settings = load_settings()
+            if latest_settings:
+                self.settings.update(latest_settings)
+                if hasattr(self, "_refresh_speaker_strip"):
+                    self._refresh_speaker_strip()
+        except Exception:
+            pass
         self._completion_handled = False
         if getattr(self, 'is_auto_start', False):
             self.sm.start_auto_mode()
@@ -119,6 +128,8 @@ class EditorPipelineMixin:
             main_w._refresh_saved_status_label(is_dirty=True)
         if hasattr(main_w, "_start_post_completion_idle_timer"):
             main_w._start_post_completion_idle_timer()
+        if hasattr(self, "_schedule_realtime_roughcut_draft"):
+            self._schedule_realtime_roughcut_draft(force=True)
         # E fix: 자막 생성 완료 후 타임라인/캔버스 재동기화
         QTimer.singleShot(200, self._post_completion_sync)
 

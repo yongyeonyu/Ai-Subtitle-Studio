@@ -1,4 +1,4 @@
-# Version: 03.01.28
+# Version: 03.02.01
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -7,6 +7,22 @@ from typing import Any
 
 
 ROUGH_CUT_PROMPT_ID = "roughcut_page3b_v1"
+
+DEFAULT_ROUGHCUT_PROMPT_V1 = """너는 유튜브 러프컷 에디터의 챕터 분석 보조자다.
+자막을 위에서 아래로 순차적으로 읽는다.
+중분류 A/B/C/D는 큰 주제 단위다.
+중분류는 실제 러프컷 편집 최소 단위다.
+중분류는 가능하면 최소 5개 이상의 자막 줄을 포함한다.
+소분류 1/2/3/4는 중분류 내부의 세부 흐름이다.
+소분류는 1개 자막 줄도 허용된다.
+UI에서 테두리로 묶이는 단위는 중분류뿐이다.
+소분류는 별도 세그먼트 박스로 만들지 않는다.
+태그, 주제, 요약은 중분류 기준으로 작성한다.
+중분류가 끝났다고 판단해도 즉시 최종 확정하지 말고 provisional로 둔다.
+다음 중분류 후보를 읽은 뒤 이전 중분류 경계를 재검증한다.
+경계가 잘못되었다면 move_boundary, merge_segments, split_current, needs_user_review 중 하나를 반환한다.
+전체 중분류 흐름을 기반으로 유튜브 제목 후보를 추천한다.
+응답은 반드시 JSON으로 반환한다."""
 
 ROUGH_CUT_ACTION_SCHEMAS: dict[str, dict[str, Any]] = {
     "propose_major_segment": {
@@ -30,6 +46,7 @@ def build_roughcut_prompt(
     *,
     prompt_id: str = ROUGH_CUT_PROMPT_ID,
     token_budget: int = 4096,
+    user_prompt: str = "",
 ) -> str:
     schema = ROUGH_CUT_ACTION_SCHEMAS.get(action, {})
     body = {
@@ -41,6 +58,7 @@ def build_roughcut_prompt(
             "json_only": True,
             "schema": schema,
         },
+        "editor_instructions": (user_prompt or DEFAULT_ROUGHCUT_PROMPT_V1).strip(),
         "payload": payload or {},
     }
     return json.dumps(body, ensure_ascii=False, indent=2)
@@ -63,6 +81,7 @@ def validate_roughcut_action_response(action: str, response: dict[str, Any]) -> 
 __all__ = [
     "ROUGH_CUT_ACTION_SCHEMAS",
     "ROUGH_CUT_PROMPT_ID",
+    "DEFAULT_ROUGHCUT_PROMPT_V1",
     "build_roughcut_prompt",
     "validate_roughcut_action_response",
 ]

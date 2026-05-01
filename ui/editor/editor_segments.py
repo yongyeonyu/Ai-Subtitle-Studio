@@ -1,11 +1,11 @@
-# Version: 03.01.36
+# Version: 03.02.17
 # Phase: PHASE2
 """
 ui/editor_segments.py
 EditorWidget의 자막 에디터 조작, 큐 처리, 세그먼트 I/O 메서드 모음.
 [수정] core 폴더 이동에 따른 데이터 매니저 경로 및 상대 경로 최적화 완료
 """
-import hashlib, json, re, os, threading
+import hashlib, json, re, os, threading, time
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QTextCursor
 
@@ -24,8 +24,13 @@ class EditorSegmentsMixin:
     # Common Helpers (여러 Mixin에서 공용)
     # ---------------------------------------------------------
     def _mark_dirty(self):
+        if hasattr(self, "_has_unsaved_changes") and not self._has_unsaved_changes():
+            return
         if hasattr(self, "sm"):
-            self.sm.is_dirty = True
+            if hasattr(self.sm, "start_editing") and not getattr(self.sm, "is_locked", False):
+                self.sm.start_editing()
+            else:
+                self.sm.is_dirty = True
         else:
             self._is_dirty = True
         try:
@@ -272,6 +277,8 @@ class EditorSegmentsMixin:
 
         self._schedule_timeline()
         self._refresh_video_subtitle_context()
+        if not is_initial:
+            self._schedule_realtime_roughcut_draft()
 
         if is_initial:
             self._is_initial_load = False
@@ -379,8 +386,10 @@ class EditorSegmentsMixin:
         self.editor_popup.trigger(word, anchor, end_c, gpos)
 
     def _on_selection_changed(self):
-        if not self.text_edit.textCursor().hasSelection():
-            if self.editor_popup.is_visible(): self.editor_popup.close_popup()
+        if self.text_edit.textCursor().hasSelection():
+            self._on_cursor_moved()
+        elif self.editor_popup.is_visible():
+            self.editor_popup.close_popup()
 
     def _save_correction(self, old_word, new_word):
         _dm_save_correction(self.corrections, old_word, new_word)
@@ -419,6 +428,7 @@ class EditorSegmentsMixin:
                     if hasattr(self, 'video_player'): self.video_player.pause_video()
                     self._active_seg_start = seg["start"]
                     self.timeline.set_active(seg["start"])
+                    self.timeline.set_playhead(seg["start"])
                     self.timeline.center_to_sec((seg["start"] + seg["end"]) / 2, smooth=True)
                     self._highlighter.set_current_line(line_num)
                     tip = self._quality_tooltip(seg)
@@ -500,6 +510,213 @@ class EditorSegmentsMixin:
     def _schedule_timeline(self):
         if getattr(self, '_inline_updating', False): return
         if not self._timeline_timer.isActive(): self._timeline_timer.start(150)  # [크PD] 300→150ms 실시간성 개선
+
+    def _draft_settings_snapshot(self) -> dict:
+        settings = dict(getattr(self, "settings", {}) or {})
+        try:
+            from core.settings import load_settings
+
+            settings.update(load_settings())
+        except Exception:
+            pass
+        return settings
+
+    def _roughcut_draft_runtime_enabled(self) -> bool:
+        try:
+            from core.roughcut import editor_roughcut_draft_enabled
+
+            return editor_roughcut_draft_enabled(self._draft_settings_snapshot())
+        except Exception:
+            return False
+
+    def _schedule_realtime_roughcut_draft(self, force: bool = False):
+        if not self._roughcut_draft_runtime_enabled():
+            return
+        timer = getattr(self, "_roughcut_draft_timer", None)
+        if timer is None:
+            return
+        if force or not timer.isActive():
+            timer.start(80 if force else 250)
+
+    def _run_realtime_roughcut_draft(self):
+        if not self._roughcut_draft_runtime_enabled():
+            return
+        thread = getattr(self, "_roughcut_draft_thread", None)
+        llm_busy = bool(thread is not None and thread.is_alive())
+
+        segments = [
+            dict(seg)
+            for seg in self._get_current_segments()
+            if not seg.get("is_gap") and str(seg.get("text", "") or "").strip()
+        ]
+        if not segments:
+            return
+
+        settings = self._draft_settings_snapshot()
+        try:
+            min_count = max(1, int(settings.get("roughcut_major_min_subtitle_count", 5) or 5))
+        except Exception:
+            min_count = 5
+        main_w = self.window()
+        media_path = str(getattr(self, "media_path", "") or "")
+        media_files = list(getattr(main_w, "_multiclip_files", []) or [])
+        if not media_files and media_path:
+            media_files = [media_path]
+        clip_boundaries = list(getattr(main_w, "_multiclip_boundaries", []) or [])
+        editor_mode = "multiclip" if len(media_files) > 1 else "single"
+        media_duration = max((float(seg.get("end", 0.0) or 0.0) for seg in segments), default=0.0)
+        try:
+            media_duration = max(media_duration, float(getattr(getattr(self, "video_player", None), "total_time", 0.0) or 0.0))
+        except Exception:
+            pass
+        source_media = f"멀티클립 {len(media_files)}개" if len(media_files) > 1 else os.path.basename(media_path or "")
+        self._roughcut_draft_generation += 1
+        generation = int(self._roughcut_draft_generation)
+        try:
+            from core.roughcut import build_editor_roughcut_candidate_payload, build_editor_roughcut_draft_result
+
+            local_result = build_editor_roughcut_draft_result(
+                segments,
+                media_duration=media_duration,
+                source_path=media_path,
+                settings=settings,
+                llm_payload=None,
+            )
+            local_payload = build_editor_roughcut_candidate_payload(
+                local_result,
+                source_segments=segments,
+                settings=settings,
+                source_path=media_path,
+                source_media=source_media,
+                media_files=media_files,
+                clip_boundaries=clip_boundaries,
+                editor_mode=editor_mode,
+            )
+            local_payload["_generation"] = generation
+            local_payload["refinement_source"] = "local_immediate"
+            self.sig_roughcut_draft_ready.emit(local_result, segments, local_payload)
+        except Exception as exc:
+            try:
+                get_logger().log(f"⚠️ 에디터 러프컷 로컬 초안 생성 실패: {exc}")
+            except Exception:
+                pass
+
+        if len(segments) < min_count:
+            return
+        if llm_busy:
+            self._roughcut_draft_pending = True
+            return
+        if time.time() < float(getattr(self, "_roughcut_llm_cooldown_until", 0.0) or 0.0):
+            return
+
+        def worker():
+            try:
+                from core.roughcut import (
+                    build_editor_roughcut_candidate_payload,
+                    build_editor_roughcut_draft_result,
+                    run_editor_roughcut_llm_draft,
+                )
+
+                llm_payload = run_editor_roughcut_llm_draft(segments, settings=settings)
+                if llm_payload is None:
+                    self._roughcut_llm_cooldown_until = time.time() + 10.0
+                    return
+                self._roughcut_llm_cooldown_until = 0.0
+                result = build_editor_roughcut_draft_result(
+                    segments,
+                    media_duration=media_duration,
+                    source_path=media_path,
+                    settings=settings,
+                    llm_payload=llm_payload,
+                )
+                payload = build_editor_roughcut_candidate_payload(
+                    result,
+                    source_segments=segments,
+                    settings=settings,
+                    source_path=media_path,
+                    source_media=source_media,
+                    media_files=media_files,
+                    clip_boundaries=clip_boundaries,
+                    editor_mode=editor_mode,
+                )
+                payload["_generation"] = generation
+                payload["refinement_source"] = "llm_refined"
+                self.sig_roughcut_draft_ready.emit(result, segments, payload)
+            except Exception as exc:
+                try:
+                    get_logger().log(f"⚠️ 에디터 러프컷 초안 생성 실패: {exc}")
+                except Exception:
+                    pass
+
+        self._roughcut_draft_pending = False
+        self._roughcut_draft_thread = threading.Thread(target=worker, daemon=True, name="editor-roughcut-draft")
+        self._roughcut_draft_thread.start()
+
+    def _apply_realtime_roughcut_draft(self, result, segments: list, candidate: dict):
+        refinement_source = str(candidate.get("refinement_source") or "")
+        try:
+            if int(candidate.get("_generation", -1)) != int(getattr(self, "_roughcut_draft_generation", 0)):
+                return
+        except Exception:
+            pass
+        try:
+            self._auto_save_project(segments)
+        except Exception as exc:
+            get_logger().log(f"⚠️ 러프컷 초안 프로젝트 선저장 실패: {exc}")
+        main_w = self.window()
+        project_path = str(getattr(main_w, "_current_project_path", "") or "")
+        if not project_path:
+            return
+        try:
+            from core.project.project_manager import save_project
+            from core.roughcut import EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID, merge_editor_roughcut_draft_state
+            from core.work_mode import EDITOR_MODE
+
+            existing_state = {}
+            if os.path.exists(project_path):
+                try:
+                    with open(project_path, "r", encoding="utf-8") as f:
+                        existing_state = json.load(f).get("roughcut_state", {}) or {}
+                except Exception:
+                    existing_state = {}
+            candidate.pop("_generation", None)
+            roughcut_state = merge_editor_roughcut_draft_state(existing_state, candidate)
+            save_project(
+                project_path,
+                segments=segments,
+                roughcut_state=roughcut_state,
+                active_work_mode=EDITOR_MODE,
+            )
+            setattr(main_w, "_editor_roughcut_result", result)
+            roughcut = getattr(main_w, "_roughcut_widget", None)
+            if roughcut is not None:
+                try:
+                    roughcut._result = result
+                    roughcut._source_signature = str(candidate.get("source_signature") or "")
+                    roughcut._selected_candidate_id = EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID
+                    roughcut._roughcut_candidates = list(roughcut_state.get("candidates", []) or [])
+                    if hasattr(roughcut, "_refresh_candidate_combo"):
+                        roughcut._refresh_candidate_combo()
+                    if hasattr(roughcut, "_populate_result"):
+                        roughcut._populate_result()
+                except RuntimeError:
+                    pass
+                except Exception:
+                    pass
+            self._redraw_timeline()
+            count = len(getattr(result, "segments", ()) or ())
+            last_count = getattr(self, "_last_roughcut_draft_major_count", None)
+            if last_count != count:
+                self._last_roughcut_draft_major_count = count
+                get_logger().log(f"러프컷 초안 동기화: 중분류 {count}개")
+        except Exception as exc:
+            get_logger().log(f"⚠️ 러프컷 초안 저장 실패: {exc}")
+        finally:
+            if refinement_source == "llm_refined":
+                self._roughcut_draft_thread = None
+                if getattr(self, "_roughcut_draft_pending", False):
+                    self._roughcut_draft_pending = False
+                    self._schedule_realtime_roughcut_draft(force=True)
 
     def _on_drag_started(self): 
         # 💡 드래그를 시작하기 직전의 전체 뷰 스냅샷 저장!

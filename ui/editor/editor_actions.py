@@ -1,4 +1,4 @@
-# Version: 03.01.36
+# Version: 03.02.15
 # Phase: PHASE1-D
 """
 ui/editor_actions.py
@@ -6,6 +6,8 @@ ui/editor_actions.py
 - editor_pipeline.py에서 분리
 """
 
+import hashlib
+import json
 import os
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore import Qt
@@ -48,6 +50,43 @@ class EditorActionsMixin:
     # ---------------------------------------------------------
     # 저장
     # ---------------------------------------------------------
+    def _segments_dirty_signature(self, segs: list | None = None) -> str:
+        if segs is None:
+            segs = self._get_current_segments()
+        normalized = []
+        for seg in list(segs or []):
+            normalized.append(
+                {
+                    "start": round(float(seg.get("start", 0.0) or 0.0), 3),
+                    "end": round(float(seg.get("end", seg.get("start", 0.0)) or 0.0), 3),
+                    "text": str(seg.get("text", "") or ""),
+                    "speaker": str(seg.get("speaker", seg.get("spk", "")) or ""),
+                    "is_gap": bool(seg.get("is_gap", False)),
+                    "stt_pending": bool(seg.get("stt_pending", False)),
+                    "stt_mode": bool(seg.get("stt_mode", False)),
+                }
+            )
+        payload = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _remember_saved_segments(self, segs: list | None = None):
+        try:
+            self._saved_segments_signature = self._segments_dirty_signature(segs)
+        except Exception:
+            self._saved_segments_signature = ""
+
+    def _has_unsaved_changes(self) -> bool:
+        saved_sig = getattr(self, "_saved_segments_signature", None)
+        if saved_sig:
+            try:
+                return self._segments_dirty_signature() != saved_sig
+            except Exception:
+                pass
+        try:
+            return bool(getattr(self.sm, "is_dirty", False))
+        except Exception:
+            return bool(getattr(self, "_is_dirty", False))
+
     def _mark_save_completed(self, touch_saved_time: bool = True) -> bool:
         try:
             if hasattr(self, "sm"):
@@ -68,6 +107,24 @@ class EditorActionsMixin:
             pass
         return True
 
+    def _segments_for_srt_output(self, segs: list[dict]) -> list[dict]:
+        """Return SRT output order; currently changes only when roughcut explicitly enables it."""
+        try:
+            main_w = self.window()
+            project_path = str(getattr(main_w, "_current_project_path", "") or "")
+            if not project_path or not os.path.exists(project_path):
+                return list(segs or [])
+            from core.project.project_manager import load_project
+            from core.roughcut import apply_roughcut_order_to_subtitles
+
+            project = load_project(project_path) or {}
+            ordered = apply_roughcut_order_to_subtitles(list(segs or []), project.get("roughcut_state", {}) or {})
+            if ordered != list(segs or []):
+                get_logger().log("러프컷 편집 순서를 SRT 저장 순서에 반영했습니다.")
+            return ordered
+        except Exception:
+            return list(segs or [])
+
     def _on_save(self, *args, skip_auto_next=False):
         segs = self._get_current_segments()
         if not segs:
@@ -80,12 +137,13 @@ class EditorActionsMixin:
         try:
             main_w = self.window()
             multiclip_files = list(getattr(main_w, '_multiclip_files', []) or [])
+            srt_output_segs = self._segments_for_srt_output(segs)
             saved_any = False
             if len(multiclip_files) > 1:
-                saved_any = self._save_multiclip_srts(segs, multiclip_files)
+                saved_any = self._save_multiclip_srts(srt_output_segs, multiclip_files)
             elif getattr(self, 'media_path', None):
                 srt_path = get_srt_path(self.media_path)
-                save_srt(segs, srt_path)
+                save_srt(srt_output_segs, srt_path)
                 get_logger().log(f"💾 저장 완료: {os.path.basename(srt_path)}")
                 saved_any = True
             else:
@@ -103,6 +161,7 @@ class EditorActionsMixin:
         except Exception:
             pass
 
+        self._remember_saved_segments(segs)
         self._mark_save_completed(touch_saved_time=True)
 
         if not skip_auto_next:
@@ -334,7 +393,7 @@ class EditorActionsMixin:
 
         is_dirty = False
         try:
-            is_dirty = bool(getattr(self.sm, "is_dirty", False))
+            is_dirty = self._has_unsaved_changes()
         except Exception:
             pass
 
@@ -360,22 +419,28 @@ class EditorActionsMixin:
     def _on_exit(self):
         from core.state_manager import SubtitleStateManager
 
+        def _emit_exit():
+            try:
+                self.sig_exit.emit(self._get_current_segments())
+            except Exception:
+                self.sig_exit.emit([])
+
         if self.sm.state == SubtitleStateManager.ST_PROC:
             self._stop_pipeline()
 
         if getattr(self, "_skip_prev_confirm_once", False):
             self._skip_prev_confirm_once = False
-            self.sig_exit.emit()
+            _emit_exit()
             return
 
         is_dirty = False
         try:
-            is_dirty = bool(getattr(self.sm, "is_dirty", False))
+            is_dirty = self._has_unsaved_changes()
         except Exception:
             pass
 
         if not is_dirty:
-            self.sig_exit.emit()
+            _emit_exit()
             return
 
         reply = self._show_confirm_dialog(
@@ -388,7 +453,7 @@ class EditorActionsMixin:
             if not self._on_save():
                 return
 
-        self.sig_exit.emit()
+        _emit_exit()
 
     # ---------------------------------------------------------
     # 다음
@@ -403,7 +468,7 @@ class EditorActionsMixin:
         is_dirty = False
         try:
             if hasattr(self, "sm"):
-                is_dirty = bool(getattr(self.sm, "is_dirty", False))
+                is_dirty = self._has_unsaved_changes()
         except Exception:
             pass
 
@@ -418,7 +483,7 @@ class EditorActionsMixin:
                 if not self._on_save(skip_auto_next=True):
                     return
                 try:
-                    is_dirty = bool(getattr(self.sm, "is_dirty", False))
+                    is_dirty = self._has_unsaved_changes()
                 except Exception:
                     is_dirty = False
 

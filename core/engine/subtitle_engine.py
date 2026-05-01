@@ -1,4 +1,4 @@
-# Version: 03.01.23
+# Version: 03.02.03
 # Phase: PHASE2
 """
 core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장 
@@ -40,13 +40,35 @@ def _get_user_settings():
 
 _S = _get_user_settings() # 설정 데이터 스냅샷 로드
 
+def _setting_int(settings: dict, key: str, default: int, fallback_key: str | None = None) -> int:
+    value = settings.get(key, None)
+    if value in (None, "") and fallback_key:
+        value = settings.get(fallback_key, None)
+    if value in (None, ""):
+        value = default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _setting_float(settings: dict, key: str, default: float) -> float:
+    value = settings.get(key, default)
+    if value in (None, ""):
+        value = default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # ━━━ 📋 [UI 설정 연동 변수] 숫자를 직접 적지 않고 설정값에서 실시간으로 가져옵니다 ━━━
-_EXAONE_WORKERS  = int(_S.get("llm_workers", 6))        # (상세설정 -> LLM 처리 스레드)
-_GAP_BREAK_SEC   = float(_S.get("sub_gap_break_sec", 1.5)) # (간격 -> 문장 분리 간격)
-_MIN_DURATION    = float(_S.get("sub_min_duration", 0.3))  # (간격 -> 최소 자막 유지 시간)
-_MAX_DURATION    = float(_S.get("sub_max_duration", 6.0))  # (간격 -> 최대 자막 유지 시간)
-_MAX_CPS         = int(_S.get("sub_max_cps", 12))          # (간격 -> 최대 발음 속도 CPS)
-_DEDUP_WINDOW    = float(_S.get("sub_dedup_window", 0.5))  # (간격 -> 중복 자막 방어 범위)
+_EXAONE_WORKERS  = _setting_int(_S, "llm_threads", 6, fallback_key="llm_workers")  # (AI -> 에디터 LLM 처리 스레드)
+_GAP_BREAK_SEC   = _setting_float(_S, "sub_gap_break_sec", 1.5) # (간격 -> 문장 분리 간격)
+_MIN_DURATION    = _setting_float(_S, "sub_min_duration", 0.3)  # (간격 -> 최소 자막 유지 시간)
+_MAX_DURATION    = _setting_float(_S, "sub_max_duration", 6.0)  # (간격 -> 최대 자막 유지 시간)
+_MAX_CPS         = _setting_int(_S, "sub_max_cps", 12)          # (간격 -> 최대 발음 속도 CPS)
+_DEDUP_WINDOW    = _setting_float(_S, "sub_dedup_window", 0.5)  # (간격 -> 중복 자막 방어 범위)
 
 # ━━━ 🛠️ [시스템 고정 상수] ━━━
 _MIN_CHARS       = 5     
@@ -606,13 +628,13 @@ def optimize_segments(segments: list[dict]) -> list[dict]:
             with open(settings_path, "r", encoding="utf-8") as f:
                 s = json.load(f)
                 loaded_settings = dict(s)
-                threshold = int(s.get("split_length_threshold", 10))
-                _EXAONE_WORKERS = int(s.get("llm_workers", 6))
-                _GAP_BREAK_SEC = float(s.get("sub_gap_break_sec", 1.5))
-                _MIN_DURATION = float(s.get("sub_min_duration", 0.2))
-                _MAX_DURATION = float(s.get("sub_max_duration", 6.0))
-                _MAX_CPS = int(s.get("sub_max_cps", 12))
-                _DEDUP_WINDOW = float(s.get("sub_dedup_window", 0.5))
+                threshold = _setting_int(s, "split_length_threshold", 10)
+                _EXAONE_WORKERS = _setting_int(s, "llm_threads", 6, fallback_key="llm_workers")
+                _GAP_BREAK_SEC = _setting_float(s, "sub_gap_break_sec", 1.5)
+                _MIN_DURATION = _setting_float(s, "sub_min_duration", 0.2)
+                _MAX_DURATION = _setting_float(s, "sub_max_duration", 6.0)
+                _MAX_CPS = _setting_int(s, "sub_max_cps", 12)
+                _DEDUP_WINDOW = _setting_float(s, "sub_dedup_window", 0.5)
 
                 if "user_prompt" in s:
                     user_prompt = s["user_prompt"]

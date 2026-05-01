@@ -1,4 +1,4 @@
-# Version: 03.01.00
+# Version: 03.02.06
 # Phase: PHASE1-D
 """
 Editor STT follow-along mode.
@@ -285,6 +285,7 @@ class EditorSTTModeMixin:
         self._active_seg_start = float(getattr(block.userData(), "start_sec", 0.0) or 0.0)
         try:
             self.timeline.set_active(self._active_seg_start)
+            self.timeline.set_playhead(self._active_seg_start)
             self.timeline.center_to_sec(self._active_seg_start, smooth=True)
         except Exception:
             pass
