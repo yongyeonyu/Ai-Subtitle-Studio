@@ -357,6 +357,8 @@ class EditorWidget(
             self.video_player.set_subtitle_provider(self._video_subtitle_context_for_player)
         if hasattr(self.video_player, "frame_step_requested"):
             self.video_player.frame_step_requested.connect(self._on_step_frame)
+        if hasattr(self.video_player, "scan_cut_requested"):
+            self.video_player.scan_cut_requested.connect(self._on_scan_cut_requested)
         self.video_player.setStyleSheet("background: #000000; border: none; border-radius: 0px;")
         self.splitter.addWidget(self.video_player)
         self.splitter.setStretchFactor(0, 63); self.splitter.setStretchFactor(1, 37)

@@ -293,12 +293,12 @@ class HomeUIMixin:
                 return panel
             except RuntimeError:
                 pass
+            self.sidebar_preset_panel = None
 
         panel = QWidget(self.home_page)
         panel.setObjectName("SidebarPresetPanel")
-        panel.setStyleSheet(
-            "QWidget#SidebarPresetPanel { background:#151C20; border:1px solid #2D3942; border-radius:7px; }"
-        )
+        panel.setStyleSheet("QWidget#SidebarPresetPanel { background:#151C20; border:1px solid #2D3942; border-radius:7px; }")
+
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(9, 7, 9, 7)
         lay.setSpacing(5)
@@ -313,11 +313,7 @@ class HomeUIMixin:
             self.sidebar_stt_quality_combo.addItem(label, key)
             desc = str(preset.get("description") or "")
             if desc:
-                self.sidebar_stt_quality_combo.setItemData(
-                    self.sidebar_stt_quality_combo.count() - 1,
-                    desc,
-                    Qt.ItemDataRole.ToolTipRole,
-                )
+                self.sidebar_stt_quality_combo.setItemData(self.sidebar_stt_quality_combo.count() - 1, desc, Qt.ItemDataRole.ToolTipRole)
         self.sidebar_stt_quality_combo.setStyleSheet(self._sidebar_preset_combo_style())
         self.sidebar_stt_quality_combo.currentIndexChanged.connect(self._on_sidebar_stt_quality_changed)
         lay.addWidget(self._sidebar_preset_row("정밀인식", self.sidebar_stt_quality_combo))
@@ -328,20 +324,16 @@ class HomeUIMixin:
             self.sidebar_audio_preset_combo.addItem(name, name)
             desc = str(preset.get("description") or "")
             if desc:
-                self.sidebar_audio_preset_combo.setItemData(
-                    self.sidebar_audio_preset_combo.count() - 1,
-                    desc,
-                    Qt.ItemDataRole.ToolTipRole,
-                )
+                self.sidebar_audio_preset_combo.setItemData(self.sidebar_audio_preset_combo.count() - 1, desc, Qt.ItemDataRole.ToolTipRole)
         self.sidebar_audio_preset_combo.setStyleSheet(self._sidebar_preset_combo_style())
         self.sidebar_audio_preset_combo.currentIndexChanged.connect(self._on_sidebar_audio_preset_changed)
         lay.addWidget(self._sidebar_preset_row("오디오", self.sidebar_audio_preset_combo))
 
         panel.setMaximumHeight(104)
+
         self.sidebar_preset_panel = panel
         self._sync_sidebar_preset_panel()
         return panel
-
     def _sidebar_preset_row(self, label_text: str, combo: QComboBox) -> QWidget:
         row = QWidget()
         row.setStyleSheet("background:transparent; border:none;")
@@ -359,15 +351,15 @@ class HomeUIMixin:
     def _set_combo_data_silent(self, combo: QComboBox | None, value: str) -> None:
         if combo is None:
             return
-        combo.blockSignals(True)
         try:
+            combo.blockSignals(True)
             for i in range(combo.count()):
                 if combo.itemData(i) == value:
                     combo.setCurrentIndex(i)
-                    return
-        finally:
+                    break
             combo.blockSignals(False)
-
+        except RuntimeError:
+            pass
     def _sync_sidebar_preset_panel(self, settings: dict | None = None):
         settings = dict(settings or load_settings())
         self._set_combo_data_silent(
@@ -379,6 +371,16 @@ class HomeUIMixin:
             str(settings.get("audio_preset", "") or ""),
         )
 
+        combo = getattr(self, "sidebar_cut_boundary_combo", None)
+        if combo is not None:
+            try:
+                combo.blockSignals(True)
+                enabled = bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True)))
+                combo.setCurrentIndex(0 if enabled else 1)
+                combo.blockSignals(False)
+            except RuntimeError:
+                # 콤보박스가 C++ 메모리에서 삭제된 상태면 쿨하게 포기하고 유령 객체 제거
+                self.sidebar_cut_boundary_combo = None
     def _apply_sidebar_settings_update(self, updates: dict | None = None, preset_applier=None):
         settings = dict(load_settings())
         if callable(preset_applier):
@@ -587,22 +589,25 @@ class HomeUIMixin:
 
     def _pipeline_rows(self, settings: dict) -> list[tuple[str, str, str]]:
         subtitle_llm = str(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "기본")) or "기본")
-        vad_model, _vad_role = self._vad_model_name(settings)
-        roughcut_llm, _roughcut_role = self._roughcut_llm_name(settings, subtitle_llm)
-        stt1_model = self._short_model_name(settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "기본")))
+        vad_model, _vad_role = getattr(self, "_vad_model_name", lambda s: ("기본", ""))(settings)
+        roughcut_llm, _roughcut_role = getattr(self, "_roughcut_llm_name", lambda s, l: ("기본", ""))(settings, subtitle_llm)
+        stt1_model = getattr(self, "_short_model_name", lambda s: s)(settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "기본")))
         stt2_model = "미사용"
         if settings.get("stt_ensemble_enabled"):
-            stt2_model = self._short_model_name(settings.get("selected_whisper_model_secondary", ""))
+            stt2_model = getattr(self, "_short_model_name", lambda s: s)(settings.get("selected_whisper_model_secondary", ""))
+
+        cut_enabled = bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True)))
+
         return [
+            ("cut_boundary", "컷 경계", "사용" if cut_enabled else "미사용"),
             ("preprocess", "전처리", "FFMPEG"),
-            ("audio", "음성", self._audio_model_name(settings)),
+            ("audio", "음성", getattr(self, "_audio_model_name", lambda s: "기본")(settings)),
             ("stt1", "STT 1", stt1_model),
             ("stt2", "STT 2", stt2_model),
             ("vad", "VAD", vad_model),
-            ("subtitle_llm", "자막 LLM", self._short_model_name(subtitle_llm)),
+            ("subtitle_llm", "자막 LLM", getattr(self, "_short_model_name", lambda s: s)(subtitle_llm)),
             ("roughcut_llm", "러프컷 LLM", roughcut_llm),
         ]
-
     def _pipeline_status_blob(self) -> str:
         parts = []
         for attr in ("queue_header_lbl", "saved_status_label"):
@@ -678,7 +683,7 @@ class HomeUIMixin:
 
     def _pipeline_model_link(self, key: str, text: str, *, current: bool = False, completed: bool = False) -> str:
         color = "#00D46A" if completed else ("#FFD60A" if current else "#F5F7FA")
-        dropdown_icon = " ▾" if key in {"audio", "stt1", "stt2", "vad", "subtitle_llm", "roughcut_llm"} else ""
+        dropdown_icon = " ▾" if key in {"cut_boundary", "audio", "stt1", "stt2", "vad", "subtitle_llm", "roughcut_llm"} else ""
         return (
             f"<a href='model:{escape(key)}' "
             f"style='color:{color}; text-decoration:none; font-family:Menlo, Monaco, Consolas, monospace; font-weight:400;'>"
@@ -688,6 +693,7 @@ class HomeUIMixin:
     def _pipeline_info_html(self, settings: dict) -> str:
         rows = []
         model_links = {
+            "컷 경계": "cut_boundary",
             "음성": "audio",
             "STT 1": "stt1",
             "STT 2": "stt2",
@@ -893,7 +899,18 @@ class HomeUIMixin:
         settings = load_settings()
         menu = QMenu(getattr(self, "home_page", None))
 
-        if key == "audio":
+        if key == "cut_boundary":
+            choices = [("사용", True), ("미사용", False)]
+            current = bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True)))
+            for label, value in choices:
+                self._add_action(
+                    menu,
+                    label,
+                    lambda _=False, v=value: self._apply_sidebar_model_selection({"cut_boundary_detection_enabled": v, "scan_cut_enabled": v}),
+                    checked=value == current,
+                )
+
+        elif key == "audio":
             choices = [
                 ("DeepFilter", "deepfilter"),
                 ("RNNoise", "rnnoise"),
@@ -1010,7 +1027,6 @@ class HomeUIMixin:
         self._refresh_sidebar_engine_info()
         lay.addWidget(self.sidebar_settings_label)
         return card
-
     def _toggle_sidebar_stt_mode(self):
         self._current_work_mode = EDITOR_MODE
         editor = getattr(self, "_editor_widget", None)

@@ -66,9 +66,30 @@ class RoughcutMajorPanel(QWidget):
         for key, button in self._minor_buttons.items():
             button.setStyleSheet(self._minor_button_style(selected=key == self._selected_chapter_id))
 
+
+    def _is_topicless_cut_placeholder(self, segment) -> bool:
+        title = str(getattr(segment, "title", "") or "")
+        summary = str(getattr(segment, "summary", "") or "")
+        status = str(getattr(segment, "status", "") or "")
+        tags = tuple(getattr(segment, "tags", ()) or ())
+        return (
+            title == "주제없음"
+            or "주제없음" in summary
+            or "주제없음" in tags
+            or (status == "provisional" and "컷경계" in tags)
+        )
+
+    def _topicless_card_style(self) -> str:
+        return (
+            "QFrame { background:#15181C; border:1px solid #4A4F55; border-radius:9px; } "
+            "QLabel { background:transparent; }"
+        )
+
+
     def _build_major_card(self, index: int, segment, chapters_by_id: dict) -> QFrame:
         card = QFrame()
-        card.setStyleSheet(panel_style("surface"))
+        is_topicless_placeholder = self._is_topicless_cut_placeholder(segment)
+        card.setStyleSheet(self._topicless_card_style() if is_topicless_placeholder else panel_style("surface"))
         lay = QVBoxLayout(card)
         lay.setContentsMargins(10, 9, 10, 9)
         lay.setSpacing(7)
@@ -79,7 +100,11 @@ class RoughcutMajorPanel(QWidget):
         major_id = getattr(segment, "major_id", "") or f"{chr(64 + min(index, 26))}"
         title = getattr(segment, "title", "") or f"중분류 {major_id}"
         title_lbl = QLabel(f"{major_id} | {title}")
-        title_lbl.setStyleSheet(label_style("text", 13, bold=True))
+        title_lbl.setStyleSheet(
+            "color:#D1D5DB; font-size:13px; font-weight:800; background:transparent;"
+            if is_topicless_placeholder
+            else label_style("text", 13, bold=True)
+        )
         title_lbl.setWordWrap(True)
         time_lbl = QLabel(f"{fmt_time(segment.start)} - {fmt_time(segment.end)}")
         time_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -94,7 +119,11 @@ class RoughcutMajorPanel(QWidget):
 
         summary = QLabel(str(getattr(segment, "summary", "") or getattr(segment, "llm_summary", "") or "요약 대기"))
         summary.setWordWrap(True)
-        summary.setStyleSheet(label_style("muted", 10))
+        summary.setStyleSheet(
+            "color:#9CA3AF; font-size:10px; background:transparent;"
+            if is_topicless_placeholder
+            else label_style("muted", 10)
+        )
         lay.addWidget(summary)
 
         tags = ", ".join(getattr(segment, "tags", ()) or ())

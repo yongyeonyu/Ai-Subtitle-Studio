@@ -479,6 +479,286 @@ class RoughcutStateMixin:
         except (TypeError, ValueError):
             return fallback
 
+
+    def _cut_boundary_placeholder_enabled(self) -> bool:
+        """
+        컷 경계 기반 '주제없음' 중분류 placeholder 사용 여부.
+        """
+        try:
+            settings = load_settings()
+        except Exception:
+            settings = {}
+        return bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True)))
+
+    def _load_project_cut_boundaries(self) -> list[dict]:
+        """
+        프로젝트 JSON의 analysis.cut_boundaries를 읽는다.
+        """
+        project_path = self._project_path()
+        if not project_path or not os.path.exists(project_path):
+            return []
+        try:
+            with open(project_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return []
+
+        analysis = data.get("analysis", {}) or {}
+        raw = analysis.get("cut_boundaries", []) or []
+        boundaries = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                sec = float(item.get("timeline_sec", item.get("time", 0.0)) or 0.0)
+            except Exception:
+                continue
+            if sec <= 0:
+                continue
+            row = dict(item)
+            row["_sec"] = sec
+            boundaries.append(row)
+
+        boundaries.sort(key=lambda item: float(item.get("_sec", 0.0) or 0.0))
+        return boundaries
+
+    def _cut_boundary_placeholder_duration(self, segments: list[dict]) -> float:
+        """
+        placeholder 생성을 위한 총 길이 추정.
+        """
+        duration = 0.0
+        try:
+            duration = max(duration, max((float(seg.get("end", seg.get("timeline_end", 0.0)) or 0.0) for seg in segments), default=0.0))
+        except Exception:
+            pass
+
+        try:
+            editor = self._active_editor()
+            if editor is not None and hasattr(editor, "video_player"):
+                duration = max(duration, float(getattr(editor.video_player, "total_time", 0.0) or 0.0))
+        except Exception:
+            pass
+
+        try:
+            for boundary in self._clip_boundaries(duration):
+                duration = max(duration, float(boundary.get("end", 0.0) or 0.0))
+        except Exception:
+            pass
+
+        return max(0.0, duration)
+
+    def _cut_boundary_major_id(self, index: int) -> str:
+        """
+        1 -> A, 2 -> B ... 26 -> Z, 27 -> AA.
+        """
+        index = max(1, int(index))
+        letters = ""
+        while index:
+            index, rem = divmod(index - 1, 26)
+            letters = chr(65 + rem) + letters
+        return letters
+
+    def _subtitle_ids_for_interval(self, segments: list[dict], start: float, end: float) -> tuple[int, ...]:
+        ids = []
+        for idx, seg in enumerate(segments, start=1):
+            try:
+                s = float(seg.get("start", seg.get("timeline_start", 0.0)) or 0.0)
+                e = float(seg.get("end", seg.get("timeline_end", s)) or s)
+            except Exception:
+                continue
+            if max(s, start) < min(e, end):
+                try:
+                    ids.append(int(seg.get("index", seg.get("line", idx)) or idx))
+                except Exception:
+                    ids.append(idx)
+        return tuple(sorted(set(ids)))
+
+    def _build_cut_boundary_topicless_result(self, segments: list[dict]):
+        """
+        컷 경계 기반 회색 '주제없음' 중분류 결과를 만든다.
+
+        LLM이 아직 중분류 주제/요약을 만들기 전의 임시 상태다.
+        """
+        if not self._cut_boundary_placeholder_enabled():
+            return None
+
+        boundaries = self._load_project_cut_boundaries()
+        if not boundaries:
+            return None
+
+        duration = self._cut_boundary_placeholder_duration(segments)
+        if duration <= 0:
+            return None
+
+        from core.roughcut.models import (
+            RoughCutResult,
+            RoughCutSegment,
+            RoughCutMinorGroup,
+            ChapterMetadata,
+            EditDecision,
+            EDLSegment,
+            RoughCutDraftState,
+        )
+
+        points = [0.0]
+        for item in boundaries:
+            sec = float(item.get("_sec", 0.0) or 0.0)
+            if 0.05 < sec < duration - 0.05:
+                points.append(sec)
+        points.append(duration)
+
+        # 중복/근접 boundary 정리
+        cleaned = []
+        for sec in sorted(points):
+            if not cleaned or abs(sec - cleaned[-1]) >= 0.05:
+                cleaned.append(sec)
+
+        if len(cleaned) < 2:
+            return None
+
+        rough_segments = []
+        chapters = []
+        decisions = []
+        edl_segments = []
+
+        source_path = self._media_path()
+        output_cursor = 0.0
+
+        for idx, (start, end) in enumerate(zip(cleaned, cleaned[1:]), start=1):
+            start = max(0.0, float(start))
+            end = max(start, float(end))
+            if end <= start + 0.05:
+                continue
+
+            major_id = self._cut_boundary_major_id(idx)
+            segment_id = f"cut_boundary_major_{major_id}"
+            chapter_id = f"cut_boundary_chapter_{major_id}1"
+            minor_id = f"cut_boundary_minor_{major_id}1"
+            subtitle_ids = self._subtitle_ids_for_interval(segments, start, end)
+
+            minor = RoughCutMinorGroup(
+                minor_id=minor_id,
+                major_id=major_id,
+                code=f"{major_id}1",
+                title="주제없음",
+                start=start,
+                end=end,
+                subtitle_ids=subtitle_ids,
+                chapter_ids=(chapter_id,),
+                summary="컷 경계 기반 임시 소분류입니다.",
+                tags=("컷경계", "주제없음"),
+                status="provisional",
+                safety="acceptable",
+                confidence=0.0,
+                needs_review=True,
+            )
+
+            rough_segments.append(
+                RoughCutSegment(
+                    segment_id=segment_id,
+                    start=start,
+                    end=end,
+                    subtitle_ids=subtitle_ids,
+                    title="주제없음",
+                    summary="컷 경계 기반 임시 중분류입니다. LLM 분석 전 상태입니다.",
+                    tags=("컷경계", "주제없음", "임시"),
+                    story_role="",
+                    narrative_function="",
+                    importance_score=0.0,
+                    can_move=True,
+                    can_trim=True,
+                    can_remove=True,
+                    move_risk="medium",
+                    needs_review=True,
+                    boundary_confidence=0.0,
+                    major_id=major_id,
+                    minor_groups=(minor,),
+                    status="provisional",
+                    safety="acceptable",
+                    importance=0.0,
+                    llm_summary="주제없음",
+                )
+            )
+
+            chapters.append(
+                ChapterMetadata(
+                    chapter_id=chapter_id,
+                    title="주제없음",
+                    start=start,
+                    end=end,
+                    summary="컷 경계 기반 임시 챕터입니다. LLM 중분류 결과로 대체 예정입니다.",
+                    tags=("컷경계", "주제없음"),
+                    segment_ids=(segment_id,),
+                    importance_score=0.0,
+                    narrative_function="",
+                    story_role="",
+                    needs_review=True,
+                    major_id=major_id,
+                    minor_code=f"{major_id}1",
+                    confidence=0.0,
+                    boundary_status="provisional",
+                )
+            )
+
+            decisions.append(
+                EditDecision(
+                    segment_id=segment_id,
+                    action="keep",
+                    reason="컷 경계 기반 주제없음 임시 중분류",
+                    source_start=start,
+                    source_end=end,
+                    output_order=idx,
+                    safety="acceptable",
+                    confidence=0.0,
+                )
+            )
+
+            output_start = output_cursor
+            output_end = output_start + (end - start)
+            output_cursor = output_end
+
+            edl_segments.append(
+                EDLSegment(
+                    source_path=source_path,
+                    segment_id=segment_id,
+                    source_start=start,
+                    source_end=end,
+                    output_start=output_start,
+                    output_end=output_end,
+                    action="keep",
+                    chapter_id=chapter_id,
+                    story_role="",
+                    reason="컷 경계 기반 주제없음 임시 중분류",
+                    timeline_start=start,
+                    timeline_end=end,
+                    clip_index=None,
+                )
+            )
+
+        if not rough_segments:
+            return None
+
+        return RoughCutResult(
+            segments=tuple(rough_segments),
+            chapters=tuple(chapters),
+            edit_decisions=tuple(decisions),
+            edl_segments=tuple(edl_segments),
+            guide_markdown="컷 경계 기반 '주제없음' 임시 중분류입니다. LLM 분석 결과로 대체 예정입니다.",
+            warnings=("cut_boundary_topicless_placeholder",),
+            video_summary="컷 경계 기반 주제없음 임시 중분류",
+            draft_state=RoughCutDraftState(
+                draft_id="cut_boundary_topicless",
+                status="review",
+                selected_major_id=rough_segments[0].major_id if rough_segments else "",
+                selected_minor_code=f"{rough_segments[0].major_id}1" if rough_segments else "",
+                autosave_enabled=True,
+                last_saved_at=datetime.now().isoformat(timespec="seconds"),
+                notes="컷 경계 기반 주제없음 placeholder",
+            ),
+            schema_version="roughcut_result.cut_boundary_placeholder.v1",
+        )
+
+
     def refresh_from_editor(self, force_reanalyze: bool = False, analyze_if_missing: bool = True):
         segments = self._editor_segments()
         media_path = self._media_path()
@@ -512,6 +792,25 @@ class RoughcutStateMixin:
             self._populate_result()
             self._persist_roughcut_state()
             return
+
+        # CUT_BOUNDARY_TOPICLESS_PLACEHOLDER
+        # 컷 경계가 사용 중이고 프로젝트에 cut_boundaries가 있으면,
+        # LLM 중분류 전 단계로 회색 '주제없음' 중분류를 먼저 구성한다.
+        if not force_reanalyze:
+            placeholder_result = self._build_cut_boundary_topicless_result(segments)
+            if placeholder_result is not None:
+                self._result = placeholder_result
+                self.source_lbl.setText(f"{self._media_label()} · 컷 경계 주제없음")
+                if hasattr(self, "_set_roughcut_status"):
+                    self._set_roughcut_status("컷 경계 기반 주제없음", 100)
+                if hasattr(self, "_append_roughcut_log"):
+                    self._append_roughcut_log(
+                        f"컷 경계 기반 주제없음 중분류 {len(placeholder_result.segments)}개를 구성했습니다.",
+                        "done",
+                    )
+                self._populate_result()
+                self._persist_roughcut_state()
+                return
 
         if not analyze_if_missing and not force_reanalyze:
             self._result = None

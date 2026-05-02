@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QSizePolicy, QStackedWidget,
                              QGraphicsView, QGraphicsScene, QGraphicsItem)
 from PyQt6.QtCore import Qt, QTimer, QRectF, QUrl, QSizeF, pyqtSignal
-from PyQt6.QtGui import QFont, QColor, QPainter, QFontMetrics, QBrush, QPainterPath, QPen, QPixmap, QFontDatabase
+from PyQt6.QtGui import QFont, QColor, QPainter, QFontMetrics, QBrush, QPainterPath, QPen, QPixmap, QFontDatabase, QImage
 
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
@@ -555,6 +555,7 @@ class _WorkerProxy:
 
 class VideoPlayerWidget(QWidget):
     frame_step_requested = pyqtSignal(int)
+    scan_cut_requested = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -617,6 +618,18 @@ class VideoPlayerWidget(QWidget):
         self._ui_timer.setInterval(int(self._get_video_ui_interval_ms()))
         self._ui_timer.timeout.connect(self._ui_tick)
         self._ui_timer.start()
+
+        # v03.11.02: < / > frame-step hold repeat
+        self._frame_step_hold_timer = QTimer(self)
+        self._frame_step_hold_timer.setInterval(self._frame_step_hold_interval_ms())
+        self._frame_step_hold_timer.timeout.connect(self._emit_frame_step_hold)
+        self._frame_step_hold_start_timer = QTimer(self)
+        self._frame_step_hold_start_timer.setSingleShot(True)
+        self._frame_step_hold_start_timer.setInterval(self._frame_step_hold_delay_ms())
+        self._frame_step_hold_start_timer.timeout.connect(self._activate_frame_step_hold)
+        self._frame_step_hold_direction = 0
+        self._frame_step_hold_active = False
+        self._frame_step_hold_ignore_next_click = False
 
 
     def _on_duration_changed(self, duration):
@@ -714,6 +727,13 @@ class VideoPlayerWidget(QWidget):
         ctrl_layout.setContentsMargins(0, 0, 0, 0)
         ctrl_layout.setSpacing(8)
 
+        self.btn_scan_prev_cut = QPushButton("<<")
+        self.btn_scan_prev_cut.setToolTip("이전 컷 경계까지 빠르게 탐색")
+        self.btn_scan_prev_cut.setFixedWidth(42)
+        self.btn_scan_prev_cut.setStyleSheet(self._control_button_style(font_size=13, padding="6px 8px"))
+        self.btn_scan_prev_cut.clicked.connect(lambda: self.request_scan_cut(-1))
+        ctrl_layout.addWidget(self.btn_scan_prev_cut)
+
         self.btn_prev_frame = QPushButton("<")
         self.btn_prev_frame.setToolTip("이전 프레임")
         self.btn_prev_frame.setFixedWidth(34)
@@ -734,6 +754,13 @@ class VideoPlayerWidget(QWidget):
         self.btn_next_frame.clicked.connect(lambda: self.request_frame_step(1))
         ctrl_layout.addWidget(self.btn_next_frame)
 
+        self.btn_scan_next_cut = QPushButton(">>")
+        self.btn_scan_next_cut.setToolTip("다음 컷 경계까지 빠르게 탐색")
+        self.btn_scan_next_cut.setFixedWidth(42)
+        self.btn_scan_next_cut.setStyleSheet(self._control_button_style(font_size=13, padding="6px 8px"))
+        self.btn_scan_next_cut.clicked.connect(lambda: self.request_scan_cut(1))
+        ctrl_layout.addWidget(self.btn_scan_next_cut)
+
         self.time_label = QLabel("00:00 / 00:00")
         self.time_label.setStyleSheet("color: #A9B0B7; font-size: 11px; font-weight: 500; background: transparent; border: none;")
         ctrl_layout.addWidget(self.time_label)
@@ -749,6 +776,113 @@ class VideoPlayerWidget(QWidget):
         layout.addWidget(ctrl)
         QTimer.singleShot(0, self._layout_video_overlay)
         QTimer.singleShot(0, self._notify_editor_video_ready)
+
+
+    # ---------------------------------------------------------
+    # Frame-step hold / scene guard support
+    # ---------------------------------------------------------
+    def _frame_step_hold_interval_ms(self) -> int:
+        try:
+            return max(45, int(os.environ.get("AI_SUBTITLE_FRAME_STEP_HOLD_INTERVAL_MS", "90")))
+        except Exception:
+            return 90
+
+    def _frame_step_hold_delay_ms(self) -> int:
+        try:
+            return max(120, int(os.environ.get("AI_SUBTITLE_FRAME_STEP_HOLD_DELAY_MS", "280")))
+        except Exception:
+            return 280
+
+    def _frame_step_button_clicked(self, direction: int):
+        if bool(getattr(self, "_frame_step_hold_ignore_next_click", False)):
+            self._frame_step_hold_ignore_next_click = False
+            return
+        self.request_frame_step(direction)
+
+    def _start_frame_step_hold(self, direction: int):
+        try:
+            direction = 1 if int(direction) > 0 else -1
+        except Exception:
+            direction = 1
+        self._frame_step_hold_direction = direction
+        self._frame_step_hold_active = False
+        self._frame_step_hold_ignore_next_click = False
+        if hasattr(self, "_frame_step_hold_timer"):
+            self._frame_step_hold_timer.stop()
+        if hasattr(self, "_frame_step_hold_start_timer"):
+            self._frame_step_hold_start_timer.start(self._frame_step_hold_delay_ms())
+
+    def _activate_frame_step_hold(self):
+        direction = int(getattr(self, "_frame_step_hold_direction", 0) or 0)
+        if direction == 0:
+            return
+        self._frame_step_hold_active = True
+        self._frame_step_hold_ignore_next_click = True
+        self.request_frame_step(direction)
+        if hasattr(self, "_frame_step_hold_timer"):
+            self._frame_step_hold_timer.setInterval(self._frame_step_hold_interval_ms())
+            self._frame_step_hold_timer.start()
+
+    def _emit_frame_step_hold(self):
+        direction = int(getattr(self, "_frame_step_hold_direction", 0) or 0)
+        if direction == 0:
+            self.stop_frame_step_hold()
+            return
+        self.request_frame_step(direction)
+
+    def stop_frame_step_hold(self):
+        if hasattr(self, "_frame_step_hold_start_timer"):
+            self._frame_step_hold_start_timer.stop()
+        if hasattr(self, "_frame_step_hold_timer"):
+            self._frame_step_hold_timer.stop()
+        self._frame_step_hold_direction = 0
+        self._frame_step_hold_active = False
+
+    def capture_frame_step_guard_image(self, max_width: int = 96, max_height: int = 54):
+        try:
+            widget = getattr(self, "video_widget", None) or getattr(self, "video_container", None)
+            if widget is None:
+                return None
+            pixmap = widget.grab()
+            if pixmap is None or pixmap.isNull():
+                return None
+            image = pixmap.toImage().convertToFormat(QImage.Format.Format_RGB32)
+            if image.isNull():
+                return None
+            return image.scaled(
+                int(max_width),
+                int(max_height),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.FastTransformation,
+            )
+        except Exception:
+            return None
+
+    def set_scan_cut_active(self, direction: int):
+        """Highlight << / >> while scan-cut is running. direction: -1, 0, 1."""
+        try:
+            direction = int(direction or 0)
+        except Exception:
+            direction = 0
+
+        inactive = self._control_button_style(font_size=13, padding="6px 8px")
+        active = (
+            "QPushButton { "
+            "background: #1F8F4D; color: #FFFFFF; "
+            "border: 1px solid #30D158; border-radius: 6px; "
+            "padding: 6px 8px; font-size: 13px; font-weight: 800; "
+            "} "
+            "QPushButton:hover { background: #25A85A; color: #FFFFFF; } "
+            "QPushButton:pressed { background: #187A40; }"
+        )
+
+        prev_btn = getattr(self, "btn_scan_prev_cut", None)
+        next_btn = getattr(self, "btn_scan_next_cut", None)
+
+        if prev_btn is not None:
+            prev_btn.setStyleSheet(active if direction < 0 else inactive)
+        if next_btn is not None:
+            next_btn.setStyleSheet(active if direction > 0 else inactive)
 
     def _control_button_style(self, *, font_size=12, padding="6px 12px") -> str:
         return f"""
@@ -1196,17 +1330,31 @@ class VideoPlayerWidget(QWidget):
         self._refresh_subtitle_now()
 
     def frame_step_seek(self, sec: float):
-        sec = self.snap_sec_to_frame(sec)
-        self._hide_thumbnail()
+        """Frame-exact manual seek used by < / > and scan buttons."""
+        try:
+            sec = max(0.0, float(sec or 0.0))
+        except Exception:
+            sec = 0.0
+
+        if self.total_time > 0.0:
+            sec = min(sec, max(0.0, self.total_time))
+
+        sec = snap_sec_to_frame(sec, self.frame_rate)
         self.current_time = sec
-        self.current_frame = self.frame_for_sec(sec)
-        self.set_subtitle_display_time(sec, refresh=False)
+        try:
+            self.current_frame = self.frame_time_map.frame_for_sec(sec)
+        except Exception:
+            self.current_frame = int(round(sec * max(1.0, float(self.frame_rate or 30.0))))
+
         self._pending_seek_sec = None
-        self.media_player.setPosition(int(sec * 1000))
+        self.set_subtitle_display_time(sec, refresh=False)
+        self.media_player.setPosition(int(round(sec * 1000.0)))
         if getattr(self, 'has_vocal_track', False):
-            self.vocal_player.setPosition(int(sec * 1000))
+            self.vocal_player.setPosition(int(round(sec * 1000.0)))
+        self._hide_thumbnail()
         self._refresh_subtitle_now()
-        self._last_time_label_ms = -250
+        if hasattr(self, '_ui_tick'):
+            self._ui_tick()
 
     def seek(self, sec: float):
         sec = self.snap_sec_to_frame(sec)
@@ -1222,6 +1370,13 @@ class VideoPlayerWidget(QWidget):
         self._refresh_provider_segments(force=True)
         self._refresh_subtitle_now()
 
+
+    def request_scan_cut(self, direction: int):
+        try:
+            direction = 1 if int(direction) > 0 else -1
+        except Exception:
+            direction = 1
+        self.scan_cut_requested.emit(direction)
 
     def request_frame_step(self, direction: int):
         step = -1 if int(direction or 0) < 0 else 1

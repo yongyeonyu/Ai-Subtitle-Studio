@@ -26,6 +26,8 @@ PROJECT_SCHEMA_VERSION = "03.00.26"
 
 MODEL_SETTINGS_SCHEMA_VERSION = "ai_model_settings.v1"
 MODEL_SETTING_KEYS = (
+    "cut_boundary_detection_enabled",
+    "scan_cut_enabled",
     "selected_audio_ai",
     "selected_vad",
     "vad_pre_split_enabled",
@@ -525,6 +527,15 @@ def create_project(
         ),
 
         "roughcut_state": {},
+
+        "analysis": {
+            "cut_boundary_schema": "cut_boundaries.v1",
+            "cut_boundaries": [],
+            "cut_boundary_settings": {
+                "enabled": bool((user_settings or {}).get("cut_boundary_detection_enabled", (user_settings or {}).get("scan_cut_enabled", True))),
+                "detector": "opencv-gray-pyramid60"
+            }
+        },
 
         # ✅ [v02.01.00] 작업 환경 저장용
         "workspace": {
