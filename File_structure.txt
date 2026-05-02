@@ -1,5 +1,5 @@
 <!--
-Document-Version: 03.10.00
+Document-Version: 03.11.00
 Phase: PHASE2
 Last-Updated: 2026-05-02
 Updated-By: Codex with 대표님
@@ -11,159 +11,160 @@ AI Subtitle Studio — 프로젝트 구조 및 버전 관리 문서
 생성일: 2026-04-20
 최종 수정: 2026-05-02
 Phase: PHASE2
-App Version: 03.10.00
+App Version: 03.11.00
 구조 문서 기준: File_structure.txt
 비고: STRUCTURE.txt는 삭제하고 본 문서로 단일화. 본 문서는 구조 색인만 유지
 ================================================================================
 
 ai_subtitle_studio/
-├── main.py		←		Application entrypoint with Qt tuning, Ollama auto-start, and shutdown runtime cleanup v03.09.02
-├── main.bat		←		Windows 실행 배치 파일
-├── config.py		←		Global runtime config, OS detection, APP_VERSION, and HF token/settings defaults v03.10.00
-├── logger.py		←		시스템 로그 기록 및 UI 연동             v02.03.00
-├── README.md		←		Korean project overview, install guide, AI settings entry points, and latest release summary v03.10.00
-├── .gitignore		←		로컬 런타임/캐시/교정 memory 제외 규칙 v03.03.00
-├── AGENTS.md		←		로컬 전용 개발 가이드 / GitHub 제외
-├── ACTION_ITEMS.md		←		로컬 전용 액션아이템 / GitHub 제외
-├── check_list.md		←		로컬 전용 체크리스트 / GitHub 제외
-├── RELEASE_v02.02.00.md		←		이전 릴리즈 노트
-├── RELEASE_v02.03.00.md		←		이전 작업 릴리즈 노트
-├── RELEASE_v02.04.00.md		←		PHASE1-C Apple UI 릴리즈 노트
-├── RELEASE_v02.06.00.md		←		P6 멀티클립 성능/안정화 릴리즈 노트
-├── RELEASE_v02.07.00.md		←		PHASE1-D STT/UI/화자 릴리즈 노트
-├── RELEASE_v03.00.00.md		←		PHASE2 v03.x 누적 개발 노트
-├── RELEASE_v03.03.00.md		←		이전 PHASE2 릴리즈 노트 / v03.03.00
-├── RELEASE_v03.04.00.md		←		이전 PHASE2 릴리즈 노트 / v03.04.00
-├── RELEASE_v03.05.00.md		←		이전 PHASE2 릴리즈 노트 / v03.05.00
-├── RELEASE_v03.06.00.md		←		이전 PHASE2 릴리즈 노트 / v03.06.00
-├── RELEASE_v03.07.00.md		←		Previous PHASE2 release note / v03.07.00
-├── RELEASE_v03.08.00.md		←		Previous PHASE2 release note / v03.08.00
-├── RELEASE_v03.09.00.md		←		Previous PHASE2 release note / v03.09.00
-├── RELEASE_v03.10.00.md		←		Latest PHASE2 release note / v03.10.00
-├── File_structure.txt		←		Project file map and role/version index v03.10.00
+├── main.py		                        ←		Application entrypoint with Qt tuning, Ollama auto-start, and shutdown runtime cleanup v03.09.02
+├── main.bat		                    ←		Windows 실행 배치 파일
+├── config.py		                    ←		Global runtime config, OS detection, APP_VERSION, and HF token/settings defaults v03.10.00
+├── logger.py		                    ←		시스템 로그 기록 및 UI 연동             v02.03.00
+├── README.md		                    ←		Korean project overview, install guide, AI settings entry points, and latest release summary v03.10.00
+├── .gitignore		                    ←		로컬 런타임/캐시/교정 memory 제외 규칙 v03.03.00
+├── AGENTS.md		                    ←		로컬 전용 개발 가이드 / GitHub 제외
+├── ACTION_ITEMS.md		                ←		로컬 전용 액션아이템 / GitHub 제외
+├── check_list.md		                ←		로컬 전용 체크리스트 / GitHub 제외
+├── RELEASE_v02.02.00.md		        ←		이전 릴리즈 노트
+├── RELEASE_v02.03.00.md		        ←		이전 작업 릴리즈 노트
+├── RELEASE_v02.04.00.md		        ←		PHASE1-C Apple UI 릴리즈 노트
+├── RELEASE_v02.06.00.md		        ←		P6 멀티클립 성능/안정화 릴리즈 노트
+├── RELEASE_v02.07.00.md		        ←		PHASE1-D STT/UI/화자 릴리즈 노트
+├── RELEASE_v03.00.00.md		        ←		PHASE2 v03.x 누적 개발 노트
+├── RELEASE_v03.03.00.md		        ←		이전 PHASE2 릴리즈 노트 / v03.03.00
+├── RELEASE_v03.04.00.md		        ←		이전 PHASE2 릴리즈 노트 / v03.04.00
+├── RELEASE_v03.05.00.md		        ←		이전 PHASE2 릴리즈 노트 / v03.05.00
+├── RELEASE_v03.06.00.md		        ←		이전 PHASE2 릴리즈 노트 / v03.06.00
+├── RELEASE_v03.07.00.md		        ←		Previous PHASE2 release note / v03.07.00
+├── RELEASE_v03.08.00.md		        ←		Previous PHASE2 release note / v03.08.00
+├── RELEASE_v03.09.00.md		        ←		Previous PHASE2 release note / v03.09.00
+├── RELEASE_v03.10.00.md	        ←		Previous PHASE2 release note / v03.10.00
+├── RELEASE_v03.11.00.md	        ←		Latest PHASE2 release note / v03.11.00		        ←		Latest PHASE2 release note / v03.10.00
+├── File_structure.txt		            ←		Project file map and role/version index v03.10.00
 │
 ├── dataset/
-│   ├── custom_defaults.json		←		Default settings preset with curated Whisper, audio, VAD, and local Ollama worker cap v03.09.25
-│   ├── model_registry.json		←		OS-specific AI model registry without unused Whisper/Core ML install targets v03.09.25
-│   └── dataset_correction.json		←		교정 데이터
+│   ├── custom_defaults.json		    ←		Default settings preset with curated Whisper, audio, VAD, and local Ollama worker cap v03.09.25
+│   ├── model_registry.json		        ←		OS-specific AI model registry without unused Whisper/Core ML install targets v03.09.25
+│   └── dataset_correction.json		    ←		교정 데이터
 │
-├── voice_data/		←		화자 학습 음성 저장 폴더
-├── projects/		←		프로젝트 저장소 [gitignore]
-├── output/		←		오디오 추출 / VAD 캐시 / 중간 결과물 [gitignore]
+├── voice_data/		                    ←		화자 학습 음성 저장 폴더
+├── projects/		                    ←		프로젝트 저장소 [gitignore]
+├── output/		                        ←		오디오 추출 / VAD 캐시 / 중간 결과물 [gitignore]
 │
 ├── 파일 정리 검토 메모 (2026-04-30)
 │   ├── .codex_work/refactor_unused_2026-05-01/core_dataset/		← core/dataset legacy JSON 보관 이동. 정적 참조 없음, 루트 dataset/ 통합 후 사용 중단 후보
-│   ├── core/audio/worker_threads.py		←		정적 참조 없음 / legacy PyQt QThread worker 후보. 리팩토링 명시 요청 시 삭제 검토
+│   ├── core/audio/worker_threads.py		    ←		정적 참조 없음 / legacy PyQt QThread worker 후보. 리팩토링 명시 요청 시 삭제 검토
 │   ├── core/project/project_snapshot.py		←		Legacy project snapshot helper that excludes persisted timeline zoom and scroll UI state v03.09.28
 │   ├── core/roughcut/roughcut_pipeline.py		←		앱 직접 참조는 적지만 공개 호환 wrapper/test 대상이므로 유지
-│   ├── core/audio/whisper_worker.py		←		import 참조는 없지만 Windows faster-whisper subprocess entry이므로 유지
-│   ├── core/audio/whisper_transformers.py		←	Korean fine-tuned Transformers Whisper subprocess entry with cleaned worker env v03.08.10
-│   ├── output/		←		gitignore 런타임 산출물. 용량 정리 후보이나 사용자 작업 결과 포함 가능
-│   ├── .codex_work/		←		Codex 로컬 작업 메모. 제품 소스 아님, 커밋 제외
-│   └── dataset/video_preview_cache/		←		기존 미추적 비디오 preview cache. no-touch 규칙에 따라 정리 제외
+│   ├── core/audio/whisper_worker.py		    ←		import 참조는 없지만 Windows faster-whisper subprocess entry이므로 유지
+│   ├── core/audio/whisper_transformers.py		←	    Korean fine-tuned Transformers Whisper subprocess entry with cleaned worker env v03.08.10
+│   ├── output/		                            ←		gitignore 런타임 산출물. 용량 정리 후보이나 사용자 작업 결과 포함 가능
+│   ├── .codex_work/		                    ←		Codex 로컬 작업 메모. 제품 소스 아님, 커밋 제외
+│   └── dataset/video_preview_cache/		    ←		기존 미추적 비디오 preview cache. no-touch 규칙에 따라 정리 제외
 │
 ├── assets/
 │   └── icons/
-│       ├── README.md		←		SVG 아이콘 자산 규칙 / 수정 가이드       v03.01.08
-│       ├── app_icon.svg		←		앱 아이콘 후보 SVG 자산                 v03.01.08
-│       └── ui/*.svg		←		line_icon() 공용 UI SVG 아이콘          v03.01.08
+│       ├── README.md		            ←		SVG 아이콘 자산 규칙 / 수정 가이드       v03.01.08
+│       ├── app_icon.svg		        ←		앱 아이콘 후보 SVG 자산                 v03.01.08
+│       └── ui/*.svg		            ←		line_icon() 공용 UI SVG 아이콘          v03.01.08
 │
 ├── core/
-│   ├── settings.py		←		설정 로딩/저장/model_key 통합            v02.03.00
-│   ├── media_info.py		←		ffprobe 미디어 정보 유틸 + 메모리/디스크 cache v03.01.37
-│   ├── frame_time.py		←		영상 FPS 기반 프레임/초 변환, 프레임맵, 프레임 스냅 helper v03.06.16
-│   ├── pipeline_status.py		←		Shared subtitle generation mode/stage normalization helper v03.07.04
-│   ├── performance.py		←		Hardware profile, worker bounds, Qt cache tuning, and opt-in Qt OpenGL setup v03.07.01
-│   ├── state_manager.py		←		FSM state manager with shared stage parser preservation v03.07.04
-│   ├── work_mode.py		←		에디터/러프컷/숏폼 화면 모드 정규화       v03.01.15
-│   ├── model_manager.py		←		ModelManager + 모델 설치/삭제/검증/OS 필터/HF Token 다운로드 v03.06.00
-│   ├── platform_compat.py		←		Cross-platform subprocess/ffmpeg helper with Qt/macOS env cleanup and shutdown runtime guard v03.09.00
-│   ├── path_manager.py		←		경로 관리                                v02.03.00
-│   ├── cloud_sync.py		←		iCloud/NAS 드롭존 감시                   v02.03.00
-│   ├── time_history.py		←		ETA 학습                                 v02.03.00
-│   ├── auto_tracker.py		←		파일 처리 상태 추적기                    v02.03.00
-│   ├── notifier.py		←		ntfy 푸시 알림                           v02.03.00
-│   ├── srt_parser.py		←		SRT 파싱 유틸                            v02.03.00
-│   ├── backend_fast.py		←		Fast-mode batch pipeline applying final subtitle gap timing pass v03.09.30
-│   ├── renderer.py		←		MOV 렌더링                               v02.03.00
-│   ├── utils.py		←		시간 변환 / 규칙 유틸                    v02.03.00
+│   ├── settings.py		                ←		설정 로딩/저장/model_key 통합            v02.03.00
+│   ├── media_info.py		            ←		ffprobe 미디어 정보 유틸 + 메모리/디스크 cache v03.01.37
+│   ├── frame_time.py		            ←		영상 FPS 기반 프레임/초 변환, 프레임맵, 프레임 스냅 helper v03.06.16
+│   ├── pipeline_status.py		        ←		Shared subtitle generation mode/stage normalization helper v03.07.04
+│   ├── performance.py		        ←		Hardware profile, worker bounds, Qt cache tuning, and opt-in Qt OpenGL setup v03.07.01
+│   ├── state_manager.py		    ←		FSM state manager with shared stage parser preservation v03.07.04
+│   ├── work_mode.py		        ←		에디터/러프컷/숏폼 화면 모드 정규화       v03.01.15
+│   ├── model_manager.py		    ←		ModelManager + 모델 설치/삭제/검증/OS 필터/HF Token 다운로드 v03.06.00
+│   ├── platform_compat.py		    ←		Cross-platform subprocess/ffmpeg helper with Qt/macOS env cleanup and shutdown runtime guard v03.09.00
+│   ├── path_manager.py		        ←		경로 관리                                v02.03.00
+│   ├── cloud_sync.py		        ←		iCloud/NAS 드롭존 감시                   v02.03.00
+│   ├── time_history.py		        ←  		ETA 학습                                 v02.03.00
+│   ├── auto_tracker.py		        ←		파일 처리 상태 추적기                    v02.03.00
+│   ├── notifier.py		            ←		ntfy 푸시 알림                           v02.03.00
+│   ├── srt_parser.py		        ←		SRT 파싱 유틸                            v02.03.00
+│   ├── backend_fast.py		        ←		Fast-mode batch pipeline applying final subtitle gap timing pass v03.09.30
+│   ├── renderer.py		            ←		MOV 렌더링                               v02.03.00
+│   ├── utils.py		            ←		시간 변환 / 규칙 유틸                    v02.03.00
 │   │
-│   ├── llm/		←		LLM provider 계층                         🆕 v02.03.00
-│   │   ├── secure_keys.py		←		macOS Keychain / keyring API Key/HF Token 저장 v03.06.00
-│   │   ├── provider_registry.py		←		Ollama/Gemini/OpenAI 모델 표시 메타
+│   ├── llm/		                ←		LLM provider 계층                         🆕 v02.03.00
+│   │   ├── secure_keys.py		    ←		macOS Keychain / keyring API Key/HF Token 저장 v03.06.00
+│   │   ├── provider_registry.py	←		Ollama/Gemini/OpenAI 모델 표시 메타
 │   │   ├── openai_provider.py		←		OpenAI Responses API adapter
 │   │   ├── gemini_provider.py		←		Gemini API adapter                         🆕 v02.03.03
 │   │   └── ollama_provider.py		←		Ollama local adapter with startup/on-demand health check, auto-start, warmup timeout, and runtime unload v03.09.02
 │   │
 │   ├── engine/
 │   │   ├── subtitle_engine.py		←		Subtitle optimization with word timestamps, STT1/STT2 LLM picking, ensemble fallback, and final gap timing pass v03.09.30
-│   │   ├── llm_correction_guard.py		←		LLM 보정 원문 무결성 검사                🆕 v03.00.21
+│   │   ├── llm_correction_guard.py	←		LLM 보정 원문 무결성 검사                🆕 v03.00.21
 │   │   ├── word_resegmenter.py		←		word/VAD boundary 우선 자막 재분할 v03.06.00
-│   │   └── srt_writer.py		←		SRT 저장 / 화자 SRT / STT 미완료 제외      v02.07.00
+│   │   └── srt_writer.py		    		SRT 저장 / 화자 SRT / STT 미완료 제외      v02.07.00
 │   │
 │   ├── audio/
 │   │   ├── media_processor.py		←		Audio extraction, preprocessing/VAD/STT-labeled progress, ClearVoice/Resemble heartbeat logs, independent STT1/STT2 ensemble threads, preview callbacks, cache, and runtime release helper v03.09.14
 │   │   ├── resemble_enhance_runner.py		←	Resemble Enhance torchaudio Path 호환 runner v03.06.00
-│   │   ├── stt_ensemble.py		←		STT1/STT2 단어 단위 ROVER/저신뢰 교체/후보 점수화 v03.06.00
-│   │   ├── stt_quality_presets.py		←		빠른/균형/정밀 자막 정확도 프리셋         v03.00.19
-│   │   ├── whisper_mlx.py		←		macOS Whisper MLX persistent worker      v02.03.03
+│   │   ├── stt_ensemble.py		    ←		STT1/STT2 단어 단위 ROVER/저신뢰 교체/후보 점수화 v03.06.00
+│   │   ├── stt_quality_presets.py	←		빠른/균형/정밀 자막 정확도 프리셋         v03.00.19
+│   │   ├── whisper_mlx.py		    ←		macOS Whisper MLX persistent worker      v02.03.03
 │   │   ├── whisper_coreml.py		←		Optional macOS WhisperKit/Core ML subprocess backend with MLX fallback and cleaned worker env v03.08.10
 │   │   ├── whisper_faster.py		←		Windows faster-whisper subprocess client with STT-labeled stderr logs v03.08.04
 │   │   ├── whisper_worker.py		←		Windows subprocess worker                v02.03.00
 │   │   ├── whisper_transformers.py		←		Transformers Whisper subprocess worker with HF_TOKEN, cleaned env, and STT-labeled stderr logs v03.08.10
 │   │   ├── worker_threads.py		←		백그라운드 worker                         v02.03.00
-│   │   ├── live_stt.py		←		Microphone one-shot STT utility with Transformers/Core ML backend routing v03.08.07
-│   │   ├── stt_vad.py		←		STT 모드용 최고 민감도 VAD-only 탐지       🆕 v02.07.00
-│   │   └── diarize.py		←		화자 분리 및 매핑/화자명 voice ref       v03.01.05
+│   │   ├── live_stt.py		        ←		Microphone one-shot STT utility with Transformers/Core ML backend routing v03.08.07
+│   │   ├── stt_vad.py		        ←		STT 모드용 최고 민감도 VAD-only 탐지       🆕 v02.07.00
+│   │   └── diarize.py		        ←		화자 분리 및 매핑/화자명 voice ref       v03.01.05
 │   │
 │   ├── pipeline/
-│   │   ├── backend_core.py		←		단일/공통 파이프라인 진입 + stop 시 STT/LLM 종료 요청 v03.06.00
+│   │   ├── backend_core.py		    ←		단일/공통 파이프라인 진입 + stop 시 STT/LLM 종료 요청 v03.06.00
 │   │   ├── single_pipeline.py		←		Single-file subtitle pipeline with STT previews, ensemble final append, and final gap timing pass v03.09.30
-│   │   ├── multiclip_pipeline.py		←		Multiclip STT/LLM pipeline with offset-aware previews, metadata, and clip-scoped final gap timing v03.09.30
-│   │   ├── stt_preview_optimizer.py		←		STT preview candidate optimizer applying subtitle rules/LLM while preserving lane and clip metadata v03.09.27
+│   │   ├── multiclip_pipeline.py	←		Multiclip STT/LLM pipeline with offset-aware previews, metadata, and clip-scoped final gap timing v03.09.30
+│   │   ├── stt_preview_optimizer.py	←		STT preview candidate optimizer applying subtitle rules/LLM while preserving lane and clip metadata v03.09.27
 │   │   └── pipeline_helpers.py		←		백업/저장/렌더/prefetch 공통             v02.07.00
 │   │
-│   ├── roughcut/		←		PHASE2 로컬 러프컷 분석 엔진              v03.02.15
-│   │   ├── __init__.py		←		러프컷 공개 API export + editor draft API v03.02.15
-│   │   ├── models.py		←		Subtitle/RoughCut v2/TitleSuggestion/EDL 모델 v03.01.30
-│   │   ├── gap_detector.py		←		자막 없는 구간 탐지
-│   │   ├── transcript_packer.py		←		자막 phrase 압축 / LLM 입력 text
-│   │   ├── scene_change_detector.py		←		픽셀 차이 기반 scene cut 감지
+│   ├── roughcut/		            ←		PHASE2 로컬 러프컷 분석 엔진              v03.02.15
+│   │   ├── __init__.py		        ←		러프컷 공개 API export + editor draft API v03.02.15
+│   │   ├── models.py		        ←		Subtitle/RoughCut v2/TitleSuggestion/EDL 모델 v03.01.30
+│   │   ├── gap_detector.py		    ←		자막 없는 구간 탐지
+│   │   ├── transcript_packer.py	←		자막 phrase 압축 / LLM 입력 text
+│   │   ├── scene_change_detector.py	        ←		픽셀 차이 기반 scene cut 감지
 │   │   ├── frame_sampler.py		←		프레임 timestamp/ffmpeg command helper
 │   │   ├── topic_detector.py		←		키워드/topic shift 로컬 detector/API alias v03.01.26
 │   │   ├── semantic_chunker.py		←		phrase 기반 semantic chunk/chapter seed
-│   │   ├── chapter_segmenter.py		←		build_chapters 분할/병합/중요도 정책 wrapper v03.01.27
-│   │   ├── story_mapper.py		←		챕터 기/승/전/결 story role mapper/API alias v03.01.26
-│   │   ├── edit_decision_engine.py		←		cut safety + CutPoint/edit decision engine v03.01.26
+│   │   ├── chapter_segmenter.py	←		build_chapters 분할/병합/중요도 정책 wrapper v03.01.27
+│   │   ├── story_mapper.py		    ←		챕터 기/승/전/결 story role mapper/API alias v03.01.26
+│   │   ├── edit_decision_engine.py	←		cut safety + CutPoint/edit decision engine v03.01.26
 │   │   ├── edl_generator.py		←		EDL JSON / v2 metadata / 멀티클립 source 매핑 v03.01.32
-│   │   ├── guide_writer.py		←		Markdown guide 컷 포인트/중분류 표 writer v03.01.32
-│   │   ├── editor_draft.py		←		Editor post-generation roughcut local/LLM draft builder with long-video LLM context guard v03.09.24
-│   │   ├── pipeline.py		←		run_roughcut_pipeline major/boundary/title/v2 산출물 v03.01.30
-│   │   ├── roughcut_pipeline.py		←		첨부 문서 pipeline import 호환 wrapper    v03.01.26
-│   │   ├── roughcut_settings.py		←		PAGE 3-B roughcut 설정 기본값 merge helper v03.01.28
-│   │   ├── roughcut_llm_config.py		←		roughcut 전용 LLM 설정 상속/override/thread resolver v03.02.02
+│   │   ├── guide_writer.py		    ←		Markdown guide 컷 포인트/중분류 표 writer v03.01.32
+│   │   ├── editor_draft.py		    ←		Editor post-generation roughcut local/LLM draft builder with long-video LLM context guard v03.09.24
+│   │   ├── pipeline.py		        ←		run_roughcut_pipeline major/boundary/title/v2 산출물 v03.01.30
+│   │   ├── roughcut_pipeline.py	←		첨부 문서 pipeline import 호환 wrapper    v03.01.26
+│   │   ├── roughcut_settings.py	←		PAGE 3-B roughcut 설정 기본값 merge helper v03.01.28
+│   │   ├── roughcut_llm_config.py	←		roughcut 전용 LLM 설정 상속/override/thread resolver v03.02.02
 │   │   ├── roughcut_prompts.py		←		roughcut LLM action prompt/schema/default editor prompt helper v03.02.01
-│   │   ├── roughcut_llm.py		←		roughcut LLM action runner/fallback contract v03.02.01
+│   │   ├── roughcut_llm.py		    ←		roughcut LLM action runner/fallback contract v03.02.01
 │   │   ├── title_suggester.py		←		추천 제목 LLM action/local fallback helper v03.01.30
 │   │   ├── thumbnail_cache.py		←		project/temp 기반 roughcut thumbnail cache helper v03.01.31
 │   │   ├── major_segmenter.py		←		PAGE 3-B 중분류/소분류 코드 생성 helper / A-Z 제한 v03.05.00
 │   │   ├── boundary_refiner.py		←		gap/scene/phrase 기반 경계 검증 helper   v03.01.29
-│   │   ├── renderer.py		←		render_from_edl 공개 wrapper             v03.01.26
-│   │   ├── renderer_skeleton.py		←		ffmpeg concat/burn-in command + segment manifest v03.01.32
+│   │   ├── renderer.py		        ←		render_from_edl 공개 wrapper             v03.01.26
+│   │   ├── renderer_skeleton.py	←		ffmpeg concat/burn-in command + segment manifest v03.01.32
 │   │   ├── render_executor.py		←		EDL 기반 Windows-safe ffmpeg 실행/dry-run manifest v03.01.32
 │   │   └── subtitle_retimer.py		←		EDL timeline 기준 자막 retime/SRT/v2 metadata 출력 v03.01.32
 │   │
-│   ├── subtitle_quality/		←		자막 품질 검사/자동 교정 기반 패키지      v03.01.25
-│   │   ├── __init__.py		←		자막 품질 공개 API export
-│   │   ├── models.py		←		품질 metrics/summary/candidate/result + ASR metadata 정규화
-│   │   ├── vad_alignment_checker.py		←		VAD review 설정/overlap/segment annotation helper
-│   │   ├── hallucination_detector.py		←		no_speech/VAD/반복/환각 phrase risk helper
-│   │   ├── timestamp_regrouper.py		←		word timestamp regrouping + VAD boundary snap v03.06.00
-│   │   ├── confidence_checker.py		←		segment confidence score/label/flag 계산
-│   │   ├── correction_memory.py		←		correction memory 저장/검색 API
-│   │   ├── wrong_answer_memory.py		←		wrong-answer memory 저장/검색 API
-│   │   ├── candidate_generator.py		←		품질 교정 후보 생성
-│   │   ├── llm_guarded_corrector.py		←		LLM 보수 profile / guard wrapper
+│   ├── subtitle_quality/		    ←		자막 품질 검사/자동 교정 기반 패키지      v03.01.25
+│   │   ├── __init__.py		        ←		자막 품질 공개 API export
+│   │   ├── models.py		        ←		품질 metrics/summary/candidate/result + ASR metadata 정규화
+│   │   ├── vad_alignment_checker.py		    ←		VAD review 설정/overlap/segment annotation helper
+│   │   ├── hallucination_detector.py		    ←		no_speech/VAD/반복/환각 phrase risk helper
+│   │   ├── timestamp_regrouper.py		        ←		word timestamp regrouping + VAD boundary snap v03.06.00
+│   │   ├── confidence_checker.py		        ←		segment confidence score/label/flag 계산
+│   │   ├── correction_memory.py		        ←		correction memory 저장/검색 API
+│   │   ├── wrong_answer_memory.py		        ←		wrong-answer memory 저장/검색 API
+│   │   ├── candidate_generator.py		        ←		품질 교정 후보 생성
+│   │   ├── llm_guarded_corrector.py		    ←		LLM 보수 profile / guard wrapper
 │   │   ├── candidate_ranker.py		←		품질 후보 점수화/자동 적용 안전 기준
 │   │   ├── recheck_engine.py		←		low-confidence 재검사 대상/window 선정
 │   │   └── quality_pipeline.py		←		검사/자동교정/후보 summary pipeline
@@ -173,18 +174,18 @@ ai_subtitle_studio/
 │       ├── project_context.py		←		Project JSON adapter restoring editor, roughcut, quality, STT candidate, frame-based subtitle detection, and sanitized workspace state v03.09.29
 │       ├── project_phase1b.py		←		Project save/load enrichment that fits timeline on open and skips persisted zoom/scroll state v03.09.28
 │       ├── project_snapshot.py		←		Project snapshot schema helper without persisted timeline zoom/scroll state v03.09.28
-│       └── data_manager.py		←		설정/교정/memory 데이터 I/O             v03.01.25
+│       └── data_manager.py		    ←		설정/교정/memory 데이터 I/O             v03.01.25
 │
 └── ui/
-    ├── home_ui.py		←		Unified dashboard, compact sidebar navigation, shared stage-parser pipeline table, and sidebar queue status rows v03.09.08
-    ├── menu_bar.py		←		Right workspace bottom menu and shared mode/stage-parser status rail v03.07.04
-    ├── style.py		←		공용 다크 스타일 + SVG icon fallback     v03.01.08
-    ├── gpu_rendering.py		←		Optional OpenGL widget/base/viewport/backend helper; custom OpenGL widgets default off v03.07.01
-    ├── qml/project_info_overlay.qml		←		사이드바 프로젝트 정보 Qt Quick overlay v03.05.00
-    ├── qml/sidebar_queue_panel.qml		←		Sidebar queue list Qt Quick/Scene Graph panel with visible row status column v03.09.08
+    ├── home_ui.py		            ←		Unified dashboard, compact sidebar navigation, shared stage-parser pipeline table, and sidebar queue status rows v03.09.08
+    ├── menu_bar.py		            ←		Right workspace bottom menu and shared mode/stage-parser status rail v03.07.04
+    ├── style.py		            ←		공용 다크 스타일 + SVG icon fallback     v03.01.08
+    ├── gpu_rendering.py		    ←		Optional OpenGL widget/base/viewport/backend helper; custom OpenGL widgets default off v03.07.01
+    ├── qml/project_info_overlay.qml		    ←		사이드바 프로젝트 정보 Qt Quick overlay v03.05.00
+    ├── qml/sidebar_queue_panel.qml		        ←		Sidebar queue list Qt Quick/Scene Graph panel with visible row status column v03.09.08
     ├── qml/timeline_playhead_overlay.qml		←	타임라인 플레이헤드 Qt Quick/Scene Graph 오버레이 v03.05.00
-    ├── queue_widget.py		←		큐 테이블 + 하단 패널 전환/상태 rail 동기화 v03.01.33
-    ├── cloud_ui.py		←		iCloud/NAS 자동처리 영상·음성 상태 카운트 v03.02.05
+    ├── queue_widget.py		        ←		큐 테이블 + 하단 패널 전환/상태 rail 동기화 v03.01.33
+    ├── cloud_ui.py		            ←		iCloud/NAS 자동처리 영상·음성 상태 카운트 v03.02.05
     │
     ├── sidebar/
     │   ├── __init__.py		←		사이드바 위젯 패키지                     v03.01.04

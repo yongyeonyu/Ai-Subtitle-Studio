@@ -1,4 +1,4 @@
-# Version: 03.08.10
+# Version: 03.10.03
 # Phase: PHASE2
 """
 core/audio/whisper_transformers.py
@@ -70,9 +70,20 @@ def _format_stderr_log(line: str, log_label: str = "STT") -> str:
     text = str(line or "").rstrip()
     if not text:
         return ""
+    if _suppress_stderr_line(text):
+        return ""
     if text.lstrip().startswith(f"[{label}]"):
         return text
     return f"[{label}] {text}"
+
+
+def _suppress_stderr_line(text: str) -> bool:
+    noise = (
+        "A custom logits processor of type",
+        "Ignoring clean_up_tokenization_spaces=True for BPE tokenizer WhisperTokenizer",
+        "MallocStackLogging: can't turn off malloc stack logging",
+    )
+    return any(fragment in str(text or "") for fragment in noise)
 
 
 def _attach_stderr_logger(proc, log_label: str = "STT"):

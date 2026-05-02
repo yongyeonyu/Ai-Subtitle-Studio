@@ -1,4 +1,4 @@
-# Version: 03.09.24
+# Version: 03.10.02
 # Phase: PHASE2
 """
 ui/editor_segments.py
@@ -256,9 +256,16 @@ class EditorSegmentsMixin:
             return
         if not candidate:
             return
-        final_candidate = self._final_segment_from_stt_candidate(candidate)
-        if not final_candidate.get("text"):
-            return
+
+        # ---------------------------------------------------------
+        # 1. 튕김 방지: 현재 스크롤 및 플레이헤드 위치 캡처
+        # ---------------------------------------------------------
+        saved_sec = None
+        saved_v_scroll = 0
+        if hasattr(self, "timeline") and hasattr(self.timeline, "get_current_sec"):
+            saved_sec = self.timeline.get_current_sec()
+        if hasattr(self, "text_edit"):
+            saved_v_scroll = self.text_edit.verticalScrollBar().value()
 
         try:
             if hasattr(self, "_undo_mgr"):
@@ -267,27 +274,69 @@ class EditorSegmentsMixin:
             pass
 
         current = [dict(seg) for seg in self._get_current_segments() if not seg.get("is_gap")]
-        current = self._trim_final_segments_around_candidate(current, final_candidate)
+        
+        # ---------------------------------------------------------
+        # 2. 클릭한 후보 정보 추출
+        # ---------------------------------------------------------
+        cand_text = str(candidate.get("text", "")).strip()
+        cand_start = float(candidate.get("start", 0.0) or 0.0)
+        cand_end = float(candidate.get("end", 0.0) or 0.0)
+        
+        cand_source = ""
+        if hasattr(self, "_stt_candidate_source"):
+            cand_source = self._stt_candidate_source(candidate)
+        else:
+            cand_source = str(candidate.get("stt_preview_source") or candidate.get("stt_source") or candidate.get("stt_ensemble_source") or "").strip().upper()
 
-        if not any(
-            abs(float(seg.get("start", 0.0) or 0.0) - final_candidate["start"]) < 0.02
-            and abs(float(seg.get("end", 0.0) or 0.0) - final_candidate["end"]) < 0.02
-            and str(seg.get("text", "") or "") == final_candidate["text"]
-            for seg in current
-        ):
-            current.append(final_candidate)
+        if not cand_text or not cand_source:
+            return
 
-        current.sort(key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
+        # ---------------------------------------------------------
+        # 3. 겹치는 최종 자막 찾기 (시간 이동 없이 텍스트만 빼오기 위함)
+        # ---------------------------------------------------------
+        best_seg = None
+        max_overlap = -1
+        for seg in current:
+            s_start = float(seg.get("start", 0.0) or 0.0)
+            s_end = float(seg.get("end", 0.0) or 0.0)
+            # 겹치는 구간(초) 계산
+            overlap = max(0, min(cand_end, s_end) - max(cand_start, s_start))
+            if overlap > max_overlap:
+                max_overlap = overlap
+                best_seg = seg
+                
+        # 가장 많이 겹치는 최종 자막을 찾았다면?
+        if best_seg and max_overlap > 0:
+            if best_seg.get("stt_selected_source") == cand_source:
+                # [선택 취소 Toggle] 이미 선택된 상태에서 다시 누르면 배지 제거
+                best_seg["stt_selected_source"] = ""
+            else:
+                # [선택 추가 Toggle] 시작/종료 시간은 절대 건드리지 않고 텍스트와 출처만 교체!
+                best_seg["text"] = cand_text
+                best_seg["stt_selected_source"] = cand_source
+
+        # ---------------------------------------------------------
+        # 4. 화면 반영 및 위치 복원
+        # ---------------------------------------------------------
         for line, seg in enumerate(current):
             seg["line"] = line
+
+        if hasattr(self, "text_edit"):
+            self.text_edit.blockSignals(True)
 
         if hasattr(self, "_reload_segments_from_list"):
             self._reload_segments_from_list(current)
             self._update_timeline_with_confirmed_and_preview(current)
         else:
             self._cached_segs = current
-            self.append_segments([final_candidate])
+            if hasattr(self, "reload_segments"):
+                self.reload_segments()
 
+        if hasattr(self, "text_edit"):
+            self.text_edit.blockSignals(False)
+            self.text_edit.verticalScrollBar().setValue(saved_v_scroll)
+        if hasattr(self, "timeline") and hasattr(self.timeline, "set_current_sec") and saved_sec is not None:
+            self.timeline.set_current_sec(saved_sec)
     def _update_timeline_with_confirmed_and_preview(self, confirmed_segments: list[dict]):
         if not hasattr(self, "timeline"):
             return
@@ -649,6 +698,12 @@ class EditorSegmentsMixin:
         self.editor_popup.trigger(word, anchor, end_c, gpos)
 
     def _on_selection_changed(self):
+        if hasattr(self, "_timeline_lock_edit_enabled") and self._timeline_lock_edit_enabled():
+            cur = self.text_edit.textCursor()
+            if cur.hasSelection():
+                cur.clearSelection()
+                self.text_edit.setTextCursor(cur)
+            return
         if self.text_edit.textCursor().hasSelection():
             self._on_cursor_moved()
         elif self.editor_popup.is_visible():
@@ -682,6 +737,8 @@ class EditorSegmentsMixin:
 
     def _on_cursor_moved(self):
         if self._sync_lock: return
+        if hasattr(self, "_timeline_lock_edit_enabled") and self._timeline_lock_edit_enabled():
+            return
         line_num = self.text_edit.textCursor().blockNumber()
         # [크PD] 캐시 사용 — 커서 이동마다 전체 문서 재파싱 방지
         segs = getattr(self, '_cached_segs', None) or self._get_current_segments()

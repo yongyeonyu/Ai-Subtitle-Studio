@@ -161,9 +161,20 @@ class EditorPipelineMixin:
         return bool(getattr(self, "_roughcut_draft_pending", False))
 
     def _release_ai_models_after_roughcut_draft(self):
-        if self._roughcut_draft_cleanup_pending():
+        import threading
+        is_busy = self._roughcut_draft_cleanup_pending()
+        
+        # 백그라운드 STT/앙상블/옵티마이저 스레드가 아직 일하고 있는지 추가 확인!
+        if not is_busy:
+            for t in threading.enumerate():
+                if t.is_alive() and any(x in t.name.lower() for x in ["stt", "ensemble", "optimizer", "preview"]):
+                    is_busy = True
+                    break
+                    
+        if is_busy:
             QTimer.singleShot(500, self._release_ai_models_after_roughcut_draft)
             return
+            
         try:
             main_w = self.window()
         except RuntimeError:

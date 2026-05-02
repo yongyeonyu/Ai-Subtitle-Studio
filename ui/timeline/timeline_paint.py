@@ -1,4 +1,4 @@
-# Version: 03.09.29
+# Version: 03.10.01
 # Phase: PHASE2
 """
 ui/timeline_paint.py
@@ -17,6 +17,7 @@ from ui.timeline.timeline_constants import (
     DIAMOND_Y,
     HANDLE_R,
     ICON_SZ,
+    LANE_LABEL_GUTTER_W,
     RULER_H,
     SEG_BOT,
     SEG_TOP,
@@ -391,6 +392,37 @@ class TimelinePaintMixin:
                     p.setPen(border.lighter(145))
                     p.drawText(QRect(int(x1) + 6, lane_top, int(w) - 12, lane_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignCenter, text)
 
+        def _draw_lane_labels():
+            gutter_x = max(0, int(clip_left))
+            gutter_w = min(int(LANE_LABEL_GUTTER_W), max(0, int(clip_right - gutter_x)))
+            if gutter_w <= 0:
+                return
+            # p.fillRect(QRect(gutter_x, SEG_TOP, gutter_w, SEG_BOT - SEG_TOP), QColor("#11181C"))
+            p.setPen(QPen(QColor("#2D3942"), 1))
+            for y in (
+                subtitle_top - 5,
+                STT1_TOP - 3,
+                STT2_TOP - 3,
+                speaker_top - 3,
+                voice_mid - 14,
+                audio_mid - 14,
+                track_bottom,
+            ):
+                p.drawLine(gutter_x, y, gutter_x + gutter_w, y)
+            p.setFont(QFont(config.FONT, 9, QFont.Weight.Bold))
+            for text, y in (
+                ("자막", subtitle_top + 20),
+                ("STT1", STT1_TOP + 20),
+                ("STT2", STT2_TOP + 20),
+                ("화자", speaker_top + 15),
+                ("자막감지", voice_mid + 4),
+                ("분석대기", audio_mid + 4),
+            ):
+                if overview_mode and text in {"자막감지", "분석대기"}:
+                    continue
+                p.setPen(QColor("#A9B0B7"))
+                p.drawText(QRect(gutter_x + 8, y - 16, max(12, gutter_w - 14), 22), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+
         p.fillRect(paint_clip, QColor("#0F1518"))
 
         def _fmt_ruler(sec):
@@ -526,16 +558,6 @@ class TimelinePaintMixin:
         p.setPen(QPen(QColor("#2D3942"), 1))
         for y in (subtitle_top - 5, STT1_TOP - 3, STT2_TOP - 3, speaker_top - 3, voice_mid - 14, audio_mid - 14, track_bottom):
             p.drawLine(clip_left, y, clip_right, y)
-
-        label_font = QFont(config.FONT, 9, QFont.Weight.Bold)
-        p.setFont(label_font)
-        for text, y in (("자막", subtitle_top + 20), ("STT1", STT1_TOP + 20), ("STT2", STT2_TOP + 20), ("화자", speaker_top + 15), ("자막감지", voice_mid + 4), ("분석", audio_mid + 4)):
-            if not text:
-                continue
-            if overview_mode and text in {"자막감지", "분석"}:
-                continue
-            p.setPen(QColor("#A9B0B7"))
-            p.drawText(8, y, text)
 
         for g in self.gap_segments:
             x1, x2 = self._x(g["start"]), self._x(g["end"]); sw = max(4, x2 - x1)
@@ -709,6 +731,8 @@ class TimelinePaintMixin:
         if not overview_mode:
             _draw_subtitle_detection_lane(voice_mid)
             _draw_analysis_lane(audio_mid)
+
+        _draw_lane_labels()
 
         if self.pps >= 8:
             for i in range(len(self.segments) - 1):

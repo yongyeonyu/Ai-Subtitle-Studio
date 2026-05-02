@@ -1,4 +1,4 @@
-# Version: 03.09.03
+# Version: 03.10.02
 # Phase: PHASE2
 """
 ui/editor_timeline_video.py
@@ -26,6 +26,13 @@ from ui.editor.editor_helpers import (
 
 class EditorTimelineVideoMixin:
     """타임라인/비디오 동기화 / 화자 관리 / 단축키 액션"""
+
+    def _timeline_lock_edit_enabled(self) -> bool:
+        lock_box = getattr(getattr(self, "timeline", None), "lock_chk", None)
+        try:
+            return bool(lock_box is not None and lock_box.isChecked())
+        except RuntimeError:
+            return False
 
     def _current_frame_fps(self) -> float:
         return normalize_fps(getattr(self, "video_fps", 30.0) or 30.0)
@@ -140,8 +147,16 @@ class EditorTimelineVideoMixin:
     def _on_timeline_seg_clicked(self, line_num, start_sec):
         segs = self._get_current_segments()
         seg = next((s for s in segs if s["line"] == line_num), None)
+        lock_edit = self._timeline_lock_edit_enabled()
         if seg:
-            self._sync_cursor_to_seg(seg)
+            if lock_edit:
+                self._active_seg_start = seg["start"]
+                self.timeline.set_active(seg["start"])
+                if hasattr(self.timeline, "set_playhead"):
+                    self._reset_playhead_smoothing(seg["start"])
+                    self.timeline.set_playhead(seg["start"])
+            else:
+                self._sync_cursor_to_seg(seg)
             self.timeline.center_to_sec((seg["start"] + seg["end"]) / 2, smooth=True)
             if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
                 ctx = self._resolve_active_context(global_sec=float(start_sec))
@@ -149,13 +164,14 @@ class EditorTimelineVideoMixin:
             elif hasattr(self, 'video_player'):
                 self.video_player.pause_video()
                 self.video_player.seek_direct(float(start_sec))
-        self.text_edit.setFocus()
+        if lock_edit:
+            if hasattr(self.timeline, "canvas"):
+                self.timeline.canvas.setFocus()
+        else:
+            self.text_edit.setFocus()
 
 
     def _on_timeline_seg_double_clicked(self, line_num, start_sec):
-        lock_box = getattr(self.timeline, 'lock_chk', getattr(self.timeline, 'lock_cb', None))
-        if lock_box and lock_box.isChecked():
-            return
         self._active_seg_start = start_sec
         self.timeline.set_active(start_sec)
         if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
@@ -257,42 +273,110 @@ class EditorTimelineVideoMixin:
     def _on_step_frame(self, direction):
         if not hasattr(self, 'video_player'):
             return
+
+        try:
+            direction = 1 if int(direction) > 0 else -1
+        except Exception:
+            direction = 1
+
         fps = self._current_frame_fps()
-        frame_sec = 1.0 / fps
+
+        # v03.10.01
+        # 초 단위 float 덧셈 대신 정수 frame index 기준으로 정확히 ±1 frame 이동
         current_global = float(getattr(self.timeline.canvas, 'playhead_sec', 0.0) or 0.0)
-        new_global = self._snap_to_frame(max(0.0, current_global + (direction * frame_sec)))
+        current_frame = int(round(current_global * fps))
+        target_frame = max(0, current_frame + direction)
+        new_global = self._snap_to_frame(target_frame / fps)
+
         if hasattr(self.video_player, 'pause_video'):
             self.video_player.pause_video()
+
         if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
             ctx = self._resolve_active_context(global_sec=new_global)
             clip_file = str(ctx.get('clip_file', '') or '')
             current_path = str(getattr(self.video_player, '_current_source_path', '') or '')
             same_source = bool(clip_file and current_path) and os.path.normpath(clip_file) == os.path.normpath(current_path)
+
             if same_source:
                 if hasattr(self.timeline, 'canvas'):
                     self.timeline.canvas._active_clip_idx = int(ctx.get('clip_idx', 0) or 0)
+
+                local_sec = float(ctx.get('local_sec', new_global) or 0.0)
                 if hasattr(self.video_player, 'frame_step_seek'):
-                    self.video_player.frame_step_seek(float(ctx.get('local_sec', new_global) or 0.0))
+                    self.video_player.frame_step_seek(local_sec)
                 else:
-                    self.video_player.seek_direct(float(ctx.get('local_sec', new_global) or 0.0))
+                    self.video_player.seek_direct(local_sec)
             else:
-                self._apply_active_context(ctx, autoplay=False, show_thumbnail=False)
+                # 프레임 이동 버튼/화살표로는 다른 클립으로 자동 진입하지 않음
+                return
         else:
             if hasattr(self.video_player, 'frame_step_seek'):
                 self.video_player.frame_step_seek(new_global)
             else:
                 self.video_player.seek_direct(new_global)
+
         segs = self._get_current_segments()
         seg = find_segment_at(segs, new_global, skip_gap=False)
-        if seg and self._active_seg_start != seg["start"]:
+        if seg and getattr(self, "_active_seg_start", None) != seg.get("start"):
             self._sync_cursor_to_seg(seg)
+
         self._reset_playhead_smoothing(new_global)
         self.timeline.set_playhead(new_global)
         self.timeline.center_to_sec(new_global, smooth=False)
+    def _snapshot_timeline_view_for_resize(self) -> dict:
+        """자막 세그먼트 리사이즈 전 타임라인 뷰포트 상태 저장."""
+        timeline = getattr(self, "timeline", None)
+        if timeline is None or not hasattr(timeline, "scroll"):
+            return {}
+        try:
+            sb = timeline.scroll.horizontalScrollBar()
+            return {
+                "scroll_x": int(sb.value()),
+                "target_x": float(getattr(timeline, "_target_scroll_x", sb.value())),
+                "current_x": float(getattr(timeline, "_current_scroll_x", sb.value())),
+            }
+        except Exception:
+            return {}
+
+    def _restore_timeline_view_for_resize(self, state: dict) -> None:
+        """자막 세그먼트 리사이즈 후 타임라인 위치 복원."""
+        if not state:
+            return
+        timeline = getattr(self, "timeline", None)
+        if timeline is None or not hasattr(timeline, "scroll"):
+            return
+        try:
+            sb = timeline.scroll.horizontalScrollBar()
+            x = int(state.get("scroll_x", sb.value()))
+            if hasattr(timeline, "_clamp_scroll_x"):
+                x = int(timeline._clamp_scroll_x(x))
+            if hasattr(timeline, "_smooth_scroll_timer") and timeline._smooth_scroll_timer.isActive():
+                timeline._smooth_scroll_timer.stop()
+            sb.setValue(x)
+            timeline._target_scroll_x = float(x)
+            timeline._current_scroll_x = float(x)
+            if hasattr(timeline, "_schedule_vp_sync"):
+                timeline._schedule_vp_sync()
+            if hasattr(timeline, "_sync_playhead_overlay"):
+                timeline._sync_playhead_overlay()
+        except Exception:
+            pass
+
+    def _redraw_timeline_preserve_resize_view(self, state: dict) -> None:
+        """타임라인 redraw를 수행하되, 리사이즈 전 화면 위치를 유지."""
+        self._redraw_timeline()
+        self._restore_timeline_view_for_resize(state)
+        QTimer.singleShot(0, lambda s=dict(state): self._restore_timeline_view_for_resize(s))
+        QTimer.singleShot(80, lambda s=dict(state): self._restore_timeline_view_for_resize(s))
+        QTimer.singleShot(240, lambda s=dict(state): self._restore_timeline_view_for_resize(s))
 
     def _on_seg_time_changed(self, line_num: int, new_start: float, new_end: float, edge_type: str = ""):
         new_start = self._snap_to_frame(new_start)
         new_end = self._snap_to_frame(new_end)
+        _timeline_resize_view_state = self._snapshot_timeline_view_for_resize()
+        timeline = getattr(self, "timeline", None)
+        if timeline is not None and hasattr(timeline, "_begin_subtitle_resize_keep_view"):
+            timeline._begin_subtitle_resize_keep_view()
         doc = self.text_edit.document()
         cur = QTextCursor(doc)
         cur.beginEditBlock()
@@ -357,7 +441,10 @@ class EditorTimelineVideoMixin:
         cur.endEditBlock()
         if hasattr(self.text_edit, 'timestampArea'):
             self.text_edit.timestampArea.update()
-        QTimer.singleShot(0, self._redraw_timeline)
+        QTimer.singleShot(0, lambda s=dict(_timeline_resize_view_state): self._redraw_timeline_preserve_resize_view(s))
+        timeline = getattr(self, "timeline", None)
+        if timeline is not None and hasattr(timeline, "_finish_subtitle_resize_keep_view"):
+            timeline._finish_subtitle_resize_keep_view()
 
     def _on_seg_to_gap(self, line_num: int):
         """자막 세그먼트 → 무음구간(Gap)으로 변환"""

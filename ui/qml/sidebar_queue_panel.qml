@@ -34,7 +34,7 @@ Item {
             width: parent.width
             spacing: 3
             Text {
-                width: 34
+                width: 26
                 text: "순서"
                 color: "#8E98A3"
                 font.pixelSize: 9
@@ -42,7 +42,7 @@ Item {
                 elide: Text.ElideRight
             }
             Text {
-                width: Math.max(40, parent.width - 151)
+                width: Math.max(40, parent.width - 135)
                 text: "파일명"
                 color: "#8E98A3"
                 font.pixelSize: 9
@@ -50,17 +50,8 @@ Item {
                 elide: Text.ElideRight
             }
             Text {
-                width: 40
-                text: "상태"
-                color: "#8E98A3"
-                font.pixelSize: 9
-                font.bold: true
-                horizontalAlignment: Text.AlignLeft
-                elide: Text.ElideRight
-            }
-            Text {
-                width: 58
-                text: "예상시간"
+                width: 100
+                text: "소요시간 / 예상시간"
                 color: "#8E98A3"
                 font.pixelSize: 9
                 font.bold: true
@@ -98,51 +89,6 @@ Item {
                     anchors.leftMargin: 5
                     anchors.rightMargin: 3
                     spacing: 3
-
-                    Text {
-                        width: 34
-                        height: parent.height
-                        text: modelData.order || (index + 1)
-                        color: modelData.done || (modelData.status || "").indexOf("완료") >= 0 ? "#34C759" : "#FFCC44"
-                        font.pixelSize: 9
-                        font.bold: true
-                        verticalAlignment: Text.AlignVCenter
-                        horizontalAlignment: Text.AlignHCenter
-                        elide: Text.ElideRight
-                        maximumLineCount: 1
-                    }
-                    Text {
-                        width: Math.max(40, parent.width - 151)
-                        height: parent.height
-                        text: modelData.file || "-"
-                        color: modelData.done || (modelData.status || "").indexOf("완료") >= 0 ? "#34C759" : "#FFCC44"
-                        font.pixelSize: 8
-                        verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideMiddle
-                        wrapMode: Text.WrapAnywhere
-                        maximumLineCount: 2
-                    }
-                    Text {
-                        width: 40
-                        height: parent.height
-                        text: modelData.statusDisplay || modelData.status || "-"
-                        color: modelData.done || (modelData.status || "").indexOf("완료") >= 0 ? "#34C759" : "#FFCC44"
-                        font.pixelSize: 8
-                        font.bold: modelData.done || (modelData.status || "").indexOf("완료") >= 0
-                        verticalAlignment: Text.AlignVCenter
-                        horizontalAlignment: Text.AlignLeft
-                        elide: Text.ElideRight
-                    }
-                    Text {
-                        width: 58
-                        height: parent.height
-                        text: modelData.eta || "-"
-                        color: modelData.done || (modelData.status || "").indexOf("완료") >= 0 ? "#34C759" : "#FFCC44"
-                        font.pixelSize: 8
-                        verticalAlignment: Text.AlignVCenter
-                        horizontalAlignment: Text.AlignLeft
-                        elide: Text.ElideRight
-                    }
                 }
             }
 

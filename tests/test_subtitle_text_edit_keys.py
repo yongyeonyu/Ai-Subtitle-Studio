@@ -1,4 +1,4 @@
-# Version: 03.06.05
+# Version: 03.10.02
 # Phase: PHASE2
 import os
 import unittest
@@ -53,6 +53,25 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
             edit.keyPressEvent(self._key_event(Qt.Key.Key_Right))
 
             self.assertEqual(edit.textCursor().position(), 4)
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
+    def test_selection_lock_blocks_keyboard_cursor_movement(self):
+        edit = SubtitleTextEdit()
+        try:
+            edit.setPlainText("abcdef")
+            cursor = edit.textCursor()
+            cursor.setPosition(2)
+            edit.setTextCursor(cursor)
+            edit.set_selection_locked(True)
+
+            edit.keyPressEvent(self._key_event(Qt.Key.Key_Right))
+
+            self.assertEqual(edit.textCursor().position(), 2)
+            self.assertTrue(edit.isReadOnly())
+            self.assertEqual(edit.focusPolicy(), Qt.FocusPolicy.NoFocus)
         finally:
             edit.close()
             edit.deleteLater()

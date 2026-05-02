@@ -1,4 +1,4 @@
-# Version: 03.09.23
+# Version: 03.10.02
 # Phase: PHASE2
 
 import re
@@ -164,7 +164,7 @@ class SubtitleTextEdit(QTextEdit):
             self.setViewport(accelerated_viewport)
         self.render_backend = gpu_backend_name()
         self.setFont(QFont(config.FONT, 13))
-        self.setStyleSheet(
+        self._base_stylesheet = (
             "QTextEdit { background: #11181C; color: #DDE3EA; border: none; "
             "border-radius: 0px; padding: 10px 12px; line-height: 1.35; }"
             "QScrollBar:vertical { background: #11181C; border: none; width: 8px; margin: 0px; }"
@@ -172,6 +172,16 @@ class SubtitleTextEdit(QTextEdit):
             "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; border: none; background: transparent; }"
             "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; border: none; }"
         )
+        self._locked_stylesheet = (
+            "QTextEdit { background: #1C1C1E; color: #8E8E93; border: none; "
+            "border-radius: 0px; padding: 10px 12px; line-height: 1.35; }"
+            "QScrollBar:vertical { background: #11181C; border: none; width: 8px; margin: 0px; }"
+            "QScrollBar::handle:vertical { background: #465663; border: none; border-radius: 0px; min-height: 24px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; border: none; background: transparent; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; border: none; }"
+        )
+        self.setStyleSheet(self._base_stylesheet)
+        self._selection_locked = False
         self.setUndoRedoEnabled(True)
         self.setAcceptRichText(False)
         self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
@@ -187,6 +197,13 @@ class SubtitleTextEdit(QTextEdit):
         self._update_margin()
 
     def focusInEvent(self, event):
+        if self._selection_locked:
+            event.ignore()
+            parent = getattr(self, "_parent_widget", None)
+            canvas = getattr(getattr(parent, "timeline", None), "canvas", None)
+            if canvas is not None:
+                canvas.setFocus()
+            return
         # 💡 [클릭 오지랖 완벽 삭제] 창이 켜지면서 커서가 잡힐 때 상태가 바뀌는 것을 원천 차단!
         # ✅ 수정
         parent = self.parent()
@@ -200,6 +217,29 @@ class SubtitleTextEdit(QTextEdit):
         parent = getattr(self, "_parent_widget", None)
         if parent and hasattr(parent, "space_shortcut"):
             parent.space_shortcut.setEnabled(True)
+
+    def set_selection_locked(self, locked: bool):
+        self._selection_locked = bool(locked)
+        if locked:
+            cur = self.textCursor()
+            if cur.hasSelection():
+                cur.clearSelection()
+                self.setTextCursor(cur)
+            self.setReadOnly(True)
+            self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+            self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+            self.setStyleSheet(self._locked_stylesheet)
+            self.clearFocus()
+        else:
+            self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            self.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
+            self.setReadOnly(False)
+            self.viewport().unsetCursor()
+            self.setStyleSheet(self._base_stylesheet)
+
+    def is_selection_locked(self) -> bool:
+        return bool(self._selection_locked)
 
     def update_margins(self):
         doc = self.document()
@@ -266,6 +306,9 @@ class SubtitleTextEdit(QTextEdit):
             self.insertPlainText(text)
 
     def mouseMoveEvent(self, event):
+        if self._selection_locked:
+            event.accept()
+            return
         super().mouseMoveEvent(event)
         if event.buttons() & Qt.MouseButton.LeftButton:
             self._clear_hover(); return
@@ -296,14 +339,24 @@ class SubtitleTextEdit(QTextEdit):
         super().leaveEvent(event); self._clear_hover()
 
     def mousePressEvent(self, event):
+        if self._selection_locked:
+            self._clear_hover()
+            event.accept()
+            return
         self._clear_hover(); super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self._selection_locked:
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
         # 💡 [수정] 왼쪽 버튼 드래그 후 마우스를 뗄 때 팝업을 띄우던 로직을 완전히 제거했습니다.
         # 이제 드래그만 해서는 아무 일도 일어나지 않습니다.
 
     def contextMenuEvent(self, event):
+        if self._selection_locked:
+            event.accept()
+            return
         # 현재 에디터의 메인 커서(드래그된 선택 영역 포함)를 가져옵니다.
         main_cur = self.textCursor()
         click_pos = self.cursorForPosition(event.pos()).position()
@@ -333,6 +386,9 @@ class SubtitleTextEdit(QTextEdit):
         super().keyReleaseEvent(e)
 
     def keyPressEvent(self, e: QKeyEvent):
+        if self._selection_locked:
+            e.accept()
+            return
         key = e.key()
         mod = e.modifiers()
         cur = self.textCursor()

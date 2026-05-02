@@ -1,4 +1,4 @@
-# Version: 03.09.18
+# Version: 03.10.02
 # Phase: PHASE2
 """Editor widget and function-preserving PHASE1-C layout."""
 import re, os, sys, json, atexit, threading, shutil, time
@@ -259,11 +259,7 @@ class EditorWidget(
                 is_dirty=is_dirty,
                 touch_saved_time=(not is_dirty and state == SubtitleStateManager.ST_SAVED),
             )
-        if hasattr(self, 'text_edit'):
-            self.text_edit.setReadOnly(is_locked)
-            self.text_edit.setStyleSheet(
-                "QTextEdit { background-color: #1a1a1a; color: #888888; }" if is_locked else ""
-            )
+        self._apply_text_editor_lock_state()
 
     def _animate_status(self):
         if self.sm.is_locked: return
@@ -476,7 +472,7 @@ class EditorWidget(
         if border is None or panel is None:
             return
         border.setGeometry(0, 0, max(1, panel.width()), max(1, panel.height()))
-        visible = self._editor_panel_has_focus()
+        visible = self._editor_panel_has_focus() and not self._timeline_lock_edit_enabled()
         border.setVisible(visible)
         if visible:
             border.raise_()
@@ -535,8 +531,31 @@ class EditorWidget(
         self._refresh_video_subtitle_context()
 
     def _on_lock_changed(self, locked: bool):
-        self.text_edit.setReadOnly(locked)
-        self.text_edit.setStyleSheet("QTextEdit { background: #1C1C1E; color: #8E8E93; border: none; padding: 16px; }" if locked else "")
+        self._apply_text_editor_lock_state()
+        if locked and hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
+            self.timeline.canvas.setFocus()
+        self._sync_editor_focus_border()
+
+    def _timeline_lock_edit_enabled(self) -> bool:
+        lock_box = getattr(getattr(self, "timeline", None), "lock_chk", None)
+        try:
+            return bool(lock_box is not None and lock_box.isChecked())
+        except RuntimeError:
+            return False
+
+    def _apply_text_editor_lock_state(self):
+        text_edit = getattr(self, "text_edit", None)
+        if text_edit is None:
+            return
+        timeline_locked = self._timeline_lock_edit_enabled()
+        processing_locked = bool(getattr(getattr(self, "sm", None), "is_locked", False))
+        if hasattr(text_edit, "set_selection_locked"):
+            text_edit.set_selection_locked(timeline_locked)
+        else:
+            text_edit.setReadOnly(timeline_locked or processing_locked)
+        if not timeline_locked and processing_locked:
+            text_edit.setReadOnly(True)
+            text_edit.setStyleSheet("QTextEdit { background-color: #1a1a1a; color: #888888; }")
 
     def _build_editor_header(self) -> QWidget:
         header = QWidget()

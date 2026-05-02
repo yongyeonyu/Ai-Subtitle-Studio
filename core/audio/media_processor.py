@@ -1,4 +1,4 @@
-# Version: 03.09.14
+# Version: 03.10.03
 # Phase: PHASE2
 """
 media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 + Whisper 섹터 동기화)
@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from core.audio.audio_presets import apply_audio_preset
 from core.media_info import probe_media
 from core.performance import bounded_worker_count
-from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs, rnnoise_binary
+from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs, rnnoise_binary, subprocess_env
 from core.subtitle_quality.candidate_ranker import rank_overlap_candidates
 from core.subtitle_quality.hallucination_detector import annotate_segment_hallucination_risk
 from core.subtitle_quality.models import attach_asr_metadata
@@ -341,7 +341,7 @@ class VideoProcessor:
         return True
 
     def _huggingface_env(self) -> dict:
-        env = dict(os.environ)
+        env = subprocess_env()
         token = env.get("HF_TOKEN") or env.get("HUGGINGFACE_HUB_TOKEN") or get_api_key("huggingface")
         if token:
             env.setdefault("HF_TOKEN", token)

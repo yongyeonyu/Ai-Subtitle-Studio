@@ -1,5 +1,5 @@
-# Version: 02.04.00
-# Phase: PHASE1-B
+# Version: 03.10.02
+# Phase: PHASE2
 
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import QSize, Qt, QRect, QPoint
@@ -33,6 +33,9 @@ class TimestampArea(QWidget):
         return top, height
 
     def mousePressEvent(self, event):
+        if hasattr(self.editor, "is_selection_locked") and self.editor.is_selection_locked():
+            event.accept()
+            return
         y, x = event.pos().y(), event.pos().x()
         block = self.editor.document().begin()
         while block.isValid():
@@ -72,6 +75,10 @@ class TimestampArea(QWidget):
             block = block.next()
 
     def mouseMoveEvent(self, event):
+        if hasattr(self.editor, "is_selection_locked") and self.editor.is_selection_locked():
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
         y, x = event.pos().y(), event.pos().x()
         
         if event.buttons() & Qt.MouseButton.LeftButton and self._drag_start_line >= 0:
@@ -104,6 +111,9 @@ class TimestampArea(QWidget):
             self._hovered_line, self._hovered_delete_line = h_line, h_del_line; self.update()
 
     def mouseReleaseEvent(self, event):
+        if hasattr(self.editor, "is_selection_locked") and self.editor.is_selection_locked():
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._drag_start_line >= 0:
             y = event.pos().y(); drop_line = -1
             block = self.editor.document().begin()

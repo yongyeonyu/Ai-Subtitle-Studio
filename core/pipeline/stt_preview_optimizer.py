@@ -1,6 +1,6 @@
-# Version: 03.09.27
+# Version: 03.10.03
 # Phase: PHASE2
-"""Apply subtitle rules/LLM optimization to STT preview candidate lanes."""
+"""Apply subtitle split and Gap rules to STT preview candidate lanes."""
 from __future__ import annotations
 
 from logger import get_logger
@@ -25,13 +25,15 @@ def optimize_stt_preview_segments(
         return []
 
     try:
-        from core.engine.subtitle_engine import optimize_segments
+        from core.engine.subtitle_engine import optimize_stt_candidate_segments
 
-        optimized = optimize_segments(raw, vad_segments=vad_segments or [])
+        optimized = optimize_stt_candidate_segments(raw, vad_segments=vad_segments or [])
         if optimized:
-            get_logger().log(f"  ✅ [{label}] 후보 자막 규칙/LLM 적용 완료 ({len(raw)}개 → {len(optimized)}개)")
+            get_logger().log(f"  ✅ [{label}] 후보 자막 분리/간격 규칙 적용 완료 ({len(raw)}개 → {len(optimized)}개)")
+        else:
+            get_logger().log(f"  ℹ️ [{label}] 후보 자막 분리/간격 규칙 적용 완료 ({len(raw)}개 → 0개)")
     except Exception as exc:
-        get_logger().log(f"  ⚠️ [{label}] 후보 자막 규칙/LLM 적용 실패, 원본 후보 유지: {exc}")
+        get_logger().log(f"  ⚠️ [{label}] 후보 자막 분리/간격 규칙 적용 실패, 원본 후보 유지: {exc}")
         optimized = raw
 
     offset = float(clip_offset or 0.0)
@@ -53,7 +55,7 @@ def optimize_stt_preview_segments(
         row["stt_pending"] = True
         row["_live_stt_preview"] = True
         row["stt_preview_optimized"] = True
-        row["stt_preview_optimizer"] = "subtitle_rules_llm"
+        row["stt_preview_optimizer"] = "subtitle_split_gap_rules"
         if clip_idx is not None:
             row["_clip_idx"] = clip_idx
         if clip_path:

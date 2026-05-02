@@ -1,4 +1,4 @@
-# Version: 03.09.30
+# Version: 03.10.03
 # Phase: PHASE2
 import unittest
 import importlib
@@ -110,6 +110,28 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
 
         self.assertEqual(mode, "local")
         self.assertEqual(workers, 2)
+
+    def test_stt_candidate_optimizer_does_not_call_llm(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 4.0,
+                "text": "오늘은 비엠더블유 행사장에 왔습니다",
+                "words": [
+                    {"word": "오늘은", "start": 0.0, "end": 0.5},
+                    {"word": "비엠더블유", "start": 0.55, "end": 1.2},
+                    {"word": "행사장에", "start": 1.25, "end": 2.0},
+                    {"word": "왔습니다", "start": 2.05, "end": 2.8},
+                ],
+            }
+        ]
+
+        with unittest.mock.patch("core.engine.subtitle_engine.ask_exaone_to_split") as ask_llm:
+            result = subtitle_engine.optimize_stt_candidate_segments(segments)
+
+        ask_llm.assert_not_called()
+        self.assertTrue(result)
+        self.assertTrue(all(seg.get("_final_gap_settings_applied") for seg in result))
 
     def test_api_models_use_single_worker(self):
         workers, mode = subtitle_engine._effective_llm_workers(

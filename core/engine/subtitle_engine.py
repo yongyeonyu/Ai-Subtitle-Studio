@@ -1,4 +1,4 @@
-# Version: 03.09.30
+# Version: 03.10.03
 # Phase: PHASE2
 """
 core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장 
@@ -623,7 +623,9 @@ def _process_one(args: tuple) -> list[dict]:
     if duration < 1.0 or len(text.replace(" ", "")) <= threshold - 5:
         return [{**seg, "text": _clean(text, corrections)}]
     # [수정] LLM 호출 분기 부분
-    if "Gemini" in model:
+    if "사용 안함" in str(model or ""):
+        chunks = None
+    elif "Gemini" in model:
         chunks = ask_gemini_to_split(text, threshold, rules, model, user_prompt, api_key, conservative=conservative)
     elif is_openai_model(model):
         chunks = ask_openai_to_split(text, threshold, rules, model, user_prompt, api_key, conservative=conservative)
@@ -712,6 +714,104 @@ def _process_one(args: tuple) -> list[dict]:
     if len(result) > 1:
         get_logger().log(f"[분할-내장알고리즘] '{text[:15]}...' -> {len(result)}조각 안전 분리")
     return result
+
+
+def _process_one_llm_only(args: tuple) -> list[dict]:
+    seg, rules, threshold, corrections, model, user_prompt, api_key, conservative = args
+    spk = seg.get("speaker", "SPEAKER_00")
+    text = str(seg.get("text", "") or "").strip()
+    if not text:
+        return []
+
+    duration = float(seg.get("end", 0.0) or 0.0) - float(seg.get("start", 0.0) or 0.0)
+    if seg.get("stt_candidates") and duration >= 0.35:
+        selected_decision = _select_stt_candidate_text(seg, model, user_prompt, api_key)
+        if selected_decision:
+            text = str(selected_decision.get("text", "") or "").strip()
+            seg = {
+                **seg,
+                "text": text,
+                "stt_ensemble_llm_selected_source": str(selected_decision.get("source", "") or "").strip().upper(),
+                "stt_ensemble_llm_selected_label": str(selected_decision.get("label", "") or ""),
+            }
+
+    cleaned_text = _clean(text, corrections)
+    if not cleaned_text:
+        return []
+    if "사용 안함" in str(model or ""):
+        return [{**seg, "text": cleaned_text}]
+    if duration < _LLM_SKIP_DUR or len(cleaned_text.replace(" ", "")) <= (threshold - 5):
+        return [{**seg, "text": cleaned_text}]
+
+    words = seg.get("words", [])
+    if not words:
+        tokens = cleaned_text.split()
+        dur = max(0.1, float(seg.get("end", 1.0) or 1.0) - float(seg.get("start", 0.0) or 0.0))
+        step = dur / max(1, len(tokens))
+        words = [
+            {
+                "word": token,
+                "start": float(seg["start"]) + i * step,
+                "end": float(seg["start"]) + (i + 1) * step,
+                "speaker": spk,
+            }
+            for i, token in enumerate(tokens)
+        ]
+    else:
+        for word in words:
+            word.setdefault("speaker", spk)
+
+    if "Gemini" in model:
+        chunks = ask_gemini_to_split(cleaned_text, threshold, rules, model, user_prompt, api_key, conservative=conservative)
+    elif is_openai_model(model):
+        chunks = ask_openai_to_split(cleaned_text, threshold, rules, model, user_prompt, api_key, conservative=conservative)
+    else:
+        chunks = ask_exaone_to_split(cleaned_text, threshold, rules, model, user_prompt, conservative=conservative)
+
+    if not chunks:
+        return [{**seg, "text": cleaned_text}]
+
+    result = []
+    w_idx = 0
+    cur_start = float(seg.get("start", 0.0) or 0.0)
+    for chunk in chunks:
+        chunk_clean = re.sub(r"\s+", "", str(chunk or ""))
+        if not chunk_clean:
+            continue
+        t_start = None
+        t_end = None
+        matched = 0
+        chunk_words = []
+        while w_idx < len(words) and matched < len(chunk_clean):
+            word = words[w_idx]
+            wc = re.sub(r"\s+|\.", "", str(word.get("word", "") or ""))
+            if t_start is None:
+                t_start = float(word.get("start", cur_start) or cur_start)
+            t_end = float(word.get("end", t_start or cur_start) or (t_start or cur_start))
+            matched += len(wc)
+            chunk_words.append(word)
+            w_idx += 1
+        if t_start is None:
+            t_start = cur_start
+        t_start = max(float(t_start), cur_start)
+        if t_end is None or float(t_end) <= t_start:
+            t_end = t_start + 0.1
+        final_text = _clean(str(chunk), corrections)
+        if final_text:
+            result.append({
+                **_stt_selection_metadata(seg),
+                "start": t_start,
+                "end": t_end,
+                "text": final_text,
+                "speaker": spk,
+                "words": chunk_words,
+            })
+        cur_start = float(t_end)
+
+    if len(result) > 1:
+        get_logger().log(f"[분할-LLM] '{cleaned_text[:15]}...' -> {len(result)}조각 분리")
+    return result or [{**seg, "text": cleaned_text}]
+
 
 def _enforce_len(segments: list[dict], threshold: int, rules: dict) -> list[dict]:
     limit  = int(threshold * _ENFORCE_RATIO)
@@ -899,15 +999,10 @@ def adjust_timing(segments: list[dict]) -> list[dict]:
             cur["end"] = cur["start"] + 0.3
     return adj
 
-def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = None) -> list[dict]:
-    if not segments:
-        return segments
-    original_segments = [dict(seg) for seg in segments if isinstance(seg, dict)]
-
+def _optimizer_context() -> tuple[dict, list[dict], str, dict, int, str, str, dict, dict]:
     global _EXAONE_WORKERS, _LOCAL_OLLAMA_WORKER_CAP, _GAP_BREAK_SEC, _MIN_DURATION, _MAX_DURATION, _MAX_CPS, _DEDUP_WINDOW
 
     model = get_selected_llm()
-    short_m = model.split(":")[0].upper()
     rules = load_subtitle_rules()
     threshold = 10
     user_prompt = ""
@@ -943,12 +1038,6 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
         except Exception:
             pass
 
-    get_logger().log(f"\n━━━ 자막 최적화 시작 ({len(segments)}개 세그먼트) ━━━")
-    get_logger().log(
-        f"설정 적용: 분할({threshold}자), 최대길이({_MAX_DURATION}초), "
-        f"CPS({_MAX_CPS}), 차단({_MIN_DURATION}초), 앵무새방어({_DEDUP_WINDOW}초)"
-    )
-
     raw_corr = get_local_dataset_corrections()
     corrections: dict = {}
     if raw_corr:
@@ -959,13 +1048,60 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
                 reverse=True,
             )
         )
+    return loaded_settings, rules, model, corrections, threshold, user_prompt, api_key, raw_corr, loaded_settings
 
-    segments = _sanitize(segments, corrections)
-    segments = _annotate_stt_candidate_context(segments)
-    segments = _dedup_close(segments)
-    segments = _absorb_tiny(segments, threshold)
-    segments = _global_dedup(segments)
-    segments = _pre_merge(segments, threshold)
+
+def optimize_stt_candidate_segments(segments: list[dict], vad_segments: list[dict] | None = None) -> list[dict]:
+    """Apply STT candidate-only split rules and final Gap settings without LLM."""
+    if not segments:
+        return segments
+    loaded_settings, rules, _model, corrections, threshold, user_prompt, _api_key, _raw_corr, _settings = _optimizer_context()
+    get_logger().log(f"\n━━━ STT 후보 규칙 적용 시작 ({len(segments)}개 세그먼트) ━━━")
+    get_logger().log(
+        f"설정 적용: 분할({threshold}자), 최대길이({_MAX_DURATION}초), "
+        f"CPS({_MAX_CPS}), 간격({_GAP_BREAK_SEC}초), LLM(미적용)"
+    )
+    args = [
+        (dict(seg), rules, threshold, corrections, "사용 안함 (STT 후보 규칙 전용)", user_prompt, "", False)
+        for seg in segments
+        if isinstance(seg, dict)
+    ]
+    optimized: list[dict] = []
+    for idx, arg in enumerate(args):
+        try:
+            optimized.extend(_process_one(arg))
+        except Exception as exc:
+            get_logger().log(f"STT 후보 규칙 처리 오류: {exc}")
+            optimized.append(dict(segments[idx]))
+    optimized = _enforce_len(optimized, threshold, rules)
+    optimized = regroup_by_word_timestamps(
+        optimized,
+        max_chars=threshold,
+        max_duration=_MAX_DURATION,
+        max_cps=_MAX_CPS,
+        min_duration=_MIN_DURATION,
+        gap_break_sec=_GAP_BREAK_SEC,
+        word_gap_break_sec=float(loaded_settings.get("word_timing_gap_break_sec", 0.65) or 0.65),
+        vad_segments=vad_segments or [],
+        rules=rules,
+    )
+    optimized = adjust_timing(optimized)
+    optimized = apply_final_gap_settings(optimized, force=True)
+    get_logger().log(f"━━━ STT 후보 규칙 적용 완료: {len(optimized)}개 ━━━\n")
+    return optimized
+
+
+def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = None) -> list[dict]:
+    if not segments:
+        return segments
+    original_segments = [dict(seg) for seg in segments if isinstance(seg, dict)]
+    loaded_settings, rules, model, corrections, threshold, user_prompt, api_key, _raw_corr, _settings = _optimizer_context()
+    short_m = model.split(":")[0].upper()
+    get_logger().log(f"\n━━━ 자막 최적화 시작 ({len(segments)}개 세그먼트) ━━━")
+    get_logger().log(
+        f"설정 적용: LLM({model}), 간격 설정은 최종 패스에서 적용"
+    )
+    segments = _annotate_stt_candidate_context([dict(seg) for seg in original_segments])
 
     conservative = _quality_conservative_enabled(loaded_settings)
     if conservative:
@@ -975,10 +1111,10 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
     optimized: list[dict] = []
 
     if "사용 안함" in model:
-        get_logger().log("⏩ LLM 미사용: 스레드풀 없이 파이썬 내장 알고리즘만 즉시 적용합니다...")
+        get_logger().log("⏩ LLM 미사용: 최종 자막은 원본 STT 텍스트를 유지하고 간격 패스만 적용합니다...")
         for idx, a in enumerate(args):
             try:
-                optimized.extend(_process_one(a))
+                optimized.extend(_process_one_llm_only(a))
             except Exception as e:
                 get_logger().log(f"LLM 처리 오류: {e}")
                 optimized.append(segments[idx])
@@ -1001,14 +1137,14 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
         if max_workers == 1:
             for idx, a in enumerate(args):
                 try:
-                    optimized.extend(_process_one(a))
+                    optimized.extend(_process_one_llm_only(a))
                 except Exception as e:
                     get_logger().log(f"LLM 처리 오류: {e}")
                     optimized.append(segments[idx])
         else:
             try:
                 with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="llm") as ex:
-                    futures = {ex.submit(_process_one, a): i for i, a in enumerate(args)}
+                    futures = {ex.submit(_process_one_llm_only, a): i for i, a in enumerate(args)}
                     result_map: dict[int, list] = {}
 
                     for fut in as_completed(futures):
@@ -1026,29 +1162,13 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
                 get_logger().log(f"LLM 처리 오류: {e}")
                 optimized = segments
 
-    optimized = _absorb_tiny(optimized, threshold)
-    optimized = _enforce_len(optimized, threshold, rules)
-    optimized = regroup_by_word_timestamps(
-        optimized,
-        max_chars=threshold,
-        max_duration=_MAX_DURATION,
-        max_cps=_MAX_CPS,
-        min_duration=_MIN_DURATION,
-        gap_break_sec=_GAP_BREAK_SEC,
-        word_gap_break_sec=float(loaded_settings.get("word_timing_gap_break_sec", 0.65) or 0.65),
-        vad_segments=vad_segments or [],
-        rules=rules,
-    )
-    if not any(seg.get("words") for seg in optimized):
-        optimized = _absorb_tiny(optimized, threshold)
     optimized = adjust_timing(optimized)
-    optimized = _global_dedup(optimized)
     if not optimized and any(seg.get("stt_candidates") for seg in original_segments):
         get_logger().log("[STT앙상블-보호] 후보 병합 결과가 모두 제거되어 원본 앙상블 세그먼트로 최종 자막을 복구합니다.")
         fallback = []
         for seg in _annotate_stt_candidate_context(original_segments):
             try:
-                processed = _process_one((seg, rules, threshold, corrections, model, user_prompt, api_key, conservative))
+                processed = _process_one_llm_only((seg, rules, threshold, corrections, model, user_prompt, api_key, conservative))
             except Exception:
                 processed = [{**seg, "text": _clean(str(seg.get("text", "") or ""), corrections)}]
             for item in processed or []:

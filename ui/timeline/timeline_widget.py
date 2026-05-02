@@ -179,6 +179,12 @@ class TimelineWidget(QWidget):
         self.canvas.scrub_sec.connect(self.scrub_sec)
         self.canvas.drag_started.connect(self.drag_started)
         self.canvas.drag_finished.connect(self.drag_finished)
+        # 자막 세그먼트 좌우 화살표 리사이즈 중에는 타임라인 뷰포트가 따라 이동하지 않게 고정한다.
+        self.canvas.drag_started.connect(self._begin_subtitle_resize_keep_view)
+        self.canvas.drag_finished.connect(self._finish_subtitle_resize_keep_view)
+        # Keep the timeline viewport fixed while subtitle segment edges are resized.
+        self.canvas.drag_started.connect(self._begin_segment_drag_view_freeze)
+        self.canvas.drag_finished.connect(self._finish_segment_drag_view_freeze)
         self.canvas.sig_clip_selected.connect(self._on_clip_selected)
         self.canvas.sig_inline_text_changed.connect(self.sig_inline_text_changed.emit)
         self.canvas.sig_editing_mode.connect(self.sig_editing_mode.emit)
@@ -415,7 +421,77 @@ class TimelineWidget(QWidget):
 
         return max(0.0, min(1.0, global_start / dur)), max(0.0, min(1.0, global_end / dur))
 
+
+    def _segment_drag_view_freeze_active(self) -> bool:
+        try:
+            return bool(getattr(self, "_segment_drag_view_freeze", False)) or time.monotonic() < float(getattr(self, "_segment_drag_view_freeze_until", 0.0) or 0.0)
+        except Exception:
+            return bool(getattr(self, "_segment_drag_view_freeze", False))
+
+    def _snapshot_segment_drag_view(self) -> None:
+        try:
+            sb = self.scroll.horizontalScrollBar()
+            current = int(sb.value())
+            self._segment_drag_scroll_x = current
+            self._segment_drag_target_x = float(getattr(self, "_target_scroll_x", current))
+            self._segment_drag_current_x = float(getattr(self, "_current_scroll_x", current))
+        except Exception:
+            pass
+
+    def _restore_segment_drag_view(self) -> None:
+        try:
+            sb = self.scroll.horizontalScrollBar()
+            target = int(getattr(self, "_segment_drag_scroll_x", sb.value()))
+            target = int(self._clamp_scroll_x(target))
+            if self._smooth_scroll_timer.isActive():
+                self._smooth_scroll_timer.stop()
+            sb.setValue(target)
+            self._target_scroll_x = float(target)
+            self._current_scroll_x = float(target)
+            self._schedule_vp_sync()
+            self._sync_playhead_overlay()
+        except Exception:
+            pass
+
+    def _begin_segment_drag_view_freeze(self) -> None:
+        self._segment_drag_view_freeze = True
+        self._segment_drag_view_freeze_until = 0.0
+        self._snapshot_segment_drag_view()
+        try:
+            if self._smooth_scroll_timer.isActive():
+                self._smooth_scroll_timer.stop()
+        except Exception:
+            pass
+        try:
+            self.set_playback_center_lock(False)
+        except Exception:
+            pass
+
+    def _finish_segment_drag_view_freeze(self) -> None:
+        # seg_time_changed -> editor redraw is usually scheduled with QTimer(0).
+        # Keep a short grace window so the viewport is restored after that redraw too.
+        self._segment_drag_view_freeze = False
+        self._segment_drag_view_freeze_until = time.monotonic() + 0.8
+        self._restore_segment_drag_view()
+        QTimer.singleShot(0, self._restore_segment_drag_view)
+        QTimer.singleShot(80, self._restore_segment_drag_view)
+        QTimer.singleShot(240, self._restore_segment_drag_view)
+
     def update_segments(self, segs, active_sec=None, total_dur=0.0, fit_view=False):
+        _keep_view_x = None
+        _preserve_scroll_x = None
+        try:
+            if hasattr(self, "_subtitle_resize_keep_view_active") and self._subtitle_resize_keep_view_active():
+                _keep_view_x = int(getattr(self, "_subtitle_resize_scroll_x", self.scroll.horizontalScrollBar().value()))
+        except Exception:
+            _keep_view_x = None
+            
+        try:
+            if hasattr(self, "_segment_drag_view_freeze_active") and self._segment_drag_view_freeze_active():
+                _preserve_scroll_x = int(getattr(self, "_segment_drag_scroll_x", self.scroll.horizontalScrollBar().value()))
+        except Exception:
+            _preserve_scroll_x = None
+
         seg_end = segs[-1]["end"] if segs else 0.0
         prev_dur = getattr(self.canvas, "total_duration", 0.0)
         dur = max(prev_dur, total_dur or 0.0, seg_end)
@@ -425,12 +501,75 @@ class TimelineWidget(QWidget):
             self.canvas.setFixedWidth(target_w)
         self.canvas.update_segments(segs, active_sec, dur)
         self.global_canvas.update_segments(segs, dur)
-
+        if _keep_view_x is not None and not fit_view:
+            self._restore_subtitle_resize_view()
+        if _preserve_scroll_x is not None and not fit_view:
+            self._restore_segment_drag_view()
         if fit_view:
             self.fit_to_view()
         elif self._waveform_mode == "multi":
             # 멀티클립에서는 현재 줌(pps) 유지. 최초 전체 로드에서만 fit_to_view 허용.
             pass
+
+
+    def _subtitle_resize_keep_view_active(self) -> bool:
+        """자막 세그먼트 경계 리사이즈 직후 타임라인 위치를 고정해야 하는지 확인."""
+        try:
+            until = float(getattr(self, "_subtitle_resize_keep_view_until", 0.0) or 0.0)
+        except Exception:
+            until = 0.0
+        return bool(getattr(self, "_subtitle_resize_keep_view", False)) or time.monotonic() < until
+
+    def _snapshot_subtitle_resize_view(self) -> None:
+        """현재 타임라인 가로 스크롤 위치를 저장."""
+        try:
+            sb = self.scroll.horizontalScrollBar()
+            x = int(sb.value())
+            self._subtitle_resize_scroll_x = x
+            self._target_scroll_x = float(x)
+            self._current_scroll_x = float(x)
+        except Exception:
+            pass
+
+    def _restore_subtitle_resize_view(self) -> None:
+        """세그먼트 시간 변경 후에도 사용자가 보던 타임라인 위치를 복원."""
+        try:
+            sb = self.scroll.horizontalScrollBar()
+            x = int(getattr(self, "_subtitle_resize_scroll_x", sb.value()))
+            x = int(self._clamp_scroll_x(x))
+            if self._smooth_scroll_timer.isActive():
+                self._smooth_scroll_timer.stop()
+            sb.setValue(x)
+            self._target_scroll_x = float(x)
+            self._current_scroll_x = float(x)
+            self._schedule_vp_sync()
+            self._sync_playhead_overlay()
+        except Exception:
+            pass
+
+    def _begin_subtitle_resize_keep_view(self) -> None:
+        """타임라인 캔버스 드래그 시작 시 현재 화면 위치 고정."""
+        self._subtitle_resize_keep_view = True
+        self._subtitle_resize_keep_view_until = 0.0
+        self._snapshot_subtitle_resize_view()
+        try:
+            if self._smooth_scroll_timer.isActive():
+                self._smooth_scroll_timer.stop()
+        except Exception:
+            pass
+        try:
+            self.set_playback_center_lock(False)
+        except Exception:
+            pass
+
+    def _finish_subtitle_resize_keep_view(self) -> None:
+        """드래그 종료 직후 redraw/set_active가 들어와도 짧은 시간 화면 위치 유지."""
+        self._subtitle_resize_keep_view = False
+        self._subtitle_resize_keep_view_until = time.monotonic() + 0.8
+        self._restore_subtitle_resize_view()
+        QTimer.singleShot(0, self._restore_subtitle_resize_view)
+        QTimer.singleShot(80, self._restore_subtitle_resize_view)
+        QTimer.singleShot(240, self._restore_subtitle_resize_view)
 
     def set_vad_segments(self, vad_segs: list):
         self.canvas.set_vad_segments(vad_segs)
@@ -443,9 +582,8 @@ class TimelineWidget(QWidget):
     def set_active(self, sec):
         sec = self.snap_sec_to_frame(sec)
         self.canvas.set_active(sec)
-        if sec is not None:
+        if sec is not None and not self._segment_drag_view_freeze_active():
             self.center_to_sec(sec, smooth=True)
-
     def set_playhead(self, sec, *, preserve_center_lock: bool = False):
         sec = self.snap_sec_to_frame(sec)
         if not preserve_center_lock:
@@ -527,6 +665,13 @@ class TimelineWidget(QWidget):
         canvas = getattr(self, "canvas", None)
         if canvas is None:
             return
+        if self._subtitle_resize_keep_view_active():
+            self._restore_subtitle_resize_view()
+            return
+        # _scroll_canvas_to_sec suppressed while segment edge drag is stabilizing.
+        if self._segment_drag_view_freeze_active():
+            self._restore_segment_drag_view()
+            return
         viewport = self.scroll.viewport()
         viewport_w = viewport.width() if viewport is not None else self.scroll.width()
         target_x = max(0, int(float(sec or 0.0) * float(canvas.pps or 0.0)) - (max(1, viewport_w) // 2))
@@ -580,6 +725,14 @@ class TimelineWidget(QWidget):
 
     def center_to_sec(self, sec, smooth=False):
         sec = self.snap_sec_to_frame(sec)
+        if hasattr(self, "_subtitle_resize_keep_view_active") and self._subtitle_resize_keep_view_active():
+            if hasattr(self, "_restore_subtitle_resize_view"):
+                self._restore_subtitle_resize_view()
+            return
+        # center_to_sec suppressed while segment edge drag is stabilizing.
+        if self._segment_drag_view_freeze_active():
+            self._restore_segment_drag_view()
+            return
         self.set_playback_center_lock(False)
         target_x = int(sec * self.canvas.pps)
         half_w = self.scroll.width() // 2

@@ -1,4 +1,4 @@
-# Version: 03.09.19
+# Version: 03.10.02
 # Phase: PHASE2
 import os
 import unittest
@@ -141,6 +141,64 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             editor._redraw_timeline.assert_not_called()
         finally:
             editor.text_edit.close()
+
+    def test_timeline_click_with_lock_edit_does_not_focus_or_move_editor_cursor(self):
+        editor = _ClickEditor()
+        editor._segments = [
+            {"line": 0, "start": 1.0, "end": 2.0, "text": "첫 줄"},
+            {"line": 1, "start": 3.0, "end": 4.0, "text": "둘째 줄"},
+        ]
+        editor._active_seg_start = None
+        editor.applied_contexts = []
+        editor._highlighter = SimpleNamespace(set_current_line=Mock())
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("첫 줄\n둘째 줄")
+        editor.text_edit.setFocus = Mock()
+        editor.timeline = SimpleNamespace(
+            set_active=Mock(),
+            set_playhead=Mock(),
+            center_to_sec=Mock(),
+            lock_chk=SimpleNamespace(isChecked=Mock(return_value=True)),
+            canvas=SimpleNamespace(playhead_sec=0.0, setFocus=Mock()),
+        )
+        editor.video_player = SimpleNamespace(
+            pause_video=Mock(),
+            seek_direct=Mock(),
+            media_player=SimpleNamespace(
+                PlaybackState=SimpleNamespace(PlayingState=object()),
+                playbackState=Mock(return_value=None),
+            ),
+        )
+
+        try:
+            editor._on_timeline_seg_clicked(1, 3.0)
+
+            self.assertEqual(editor.text_edit.textCursor().blockNumber(), 0)
+            editor.text_edit.setFocus.assert_not_called()
+            editor.timeline.canvas.setFocus.assert_called_once()
+            editor.timeline.set_active.assert_called_once_with(3.0)
+        finally:
+            editor.text_edit.close()
+
+    def test_lock_edit_allows_canvas_inline_edit(self):
+        editor = _ClickEditor()
+        editor._segments = [{"line": 0, "start": 3.0, "end": 4.0, "text": "클릭"}]
+        editor._active_seg_start = None
+        editor.applied_contexts = []
+        editor._undo_mgr = SimpleNamespace(push_immediate=Mock())
+        editor.timeline = SimpleNamespace(
+            set_active=Mock(),
+            lock_chk=SimpleNamespace(isChecked=Mock(return_value=True)),
+            canvas=SimpleNamespace(start_inline_edit=Mock()),
+        )
+        editor.video_player = SimpleNamespace(
+            pause_video=Mock(),
+            seek_direct=Mock(),
+        )
+
+        editor._on_timeline_seg_double_clicked(0, 3.0)
+
+        editor.timeline.canvas.start_inline_edit.assert_called_once_with(0, 3.0)
 
     def test_live_canvas_inline_edit_skips_editor_document_rewrite(self):
         editor = _InlineEditEditor()

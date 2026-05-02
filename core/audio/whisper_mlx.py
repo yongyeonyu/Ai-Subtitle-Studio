@@ -1,4 +1,4 @@
-# Version: 03.01.23
+# Version: 03.10.03
 # Phase: PHASE2
 """
 core/whisper_mlx.py
@@ -14,6 +14,8 @@ import json
 import threading
 import uuid
 from logger import get_logger
+from core.llm.secure_keys import get_api_key
+from core.platform_compat import subprocess_env
 
 
 def _build_worker_script() -> str:
@@ -143,11 +145,7 @@ def ensure_worker(proc=None):
     if proc and proc.poll() is None:
         return proc
 
-    env = os.environ.copy()
-    env["PYTHONWARNINGS"] = _merged_pythonwarnings(
-        env.get("PYTHONWARNINGS"),
-        "ignore:resource_tracker:UserWarning:multiprocessing.resource_tracker",
-    )
+    env = _worker_env()
 
     new_proc = subprocess.Popen(
         [sys.executable, "-u", "-c", _build_worker_script()],
@@ -193,6 +191,18 @@ def _merged_pythonwarnings(current: str | None, rule: str) -> str:
     if rule not in parts:
         parts.append(rule)
     return ",".join(parts)
+
+def _worker_env() -> dict:
+    env = subprocess_env()
+    token = env.get("HF_TOKEN") or env.get("HUGGINGFACE_HUB_TOKEN") or get_api_key("huggingface")
+    if token:
+        env.setdefault("HF_TOKEN", token)
+        env.setdefault("HUGGINGFACE_HUB_TOKEN", token)
+    env["PYTHONWARNINGS"] = _merged_pythonwarnings(
+        env.get("PYTHONWARNINGS"),
+        "ignore:resource_tracker:UserWarning:multiprocessing.resource_tracker",
+    )
+    return env
 
 def stop_worker(proc):
     if not proc:
@@ -268,11 +278,7 @@ for p in {safe_paths}:
 os._exit(0)
 """
 
-    env = os.environ.copy()
-    env["PYTHONWARNINGS"] = _merged_pythonwarnings(
-        env.get("PYTHONWARNINGS"),
-        "ignore:resource_tracker:UserWarning:multiprocessing.resource_tracker",
-    )
+    env = _worker_env()
 
     proc = subprocess.Popen(
         [sys.executable, "-c", script],
