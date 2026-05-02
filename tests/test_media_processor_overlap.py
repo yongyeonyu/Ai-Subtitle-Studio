@@ -1,4 +1,4 @@
-# Version: 03.01.22
+# Version: 03.07.08
 # Phase: PHASE2
 import os
 import struct
@@ -274,6 +274,164 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 self.assertEqual(vad_segments, [])
                 self.assertTrue(os.path.isdir(chunk_dir))
                 self.assertEqual(written, [{"start": 0.0, "end": 4.0}])
+            finally:
+                config.OUTPUT_DIR = old_output_dir
+
+    def test_internal_ffmpeg_preprocess_uses_single_pass_and_reuses_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_output_dir = config.OUTPUT_DIR
+            config.OUTPUT_DIR = tmp
+            try:
+                video_path = os.path.join(tmp, "large.mp4")
+                with open(video_path, "wb") as f:
+                    f.write(b"video")
+
+                def write_active_wav(path: str, seconds: float = 4.0):
+                    frames = int(16000 * seconds)
+                    with wave.open(path, "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(16000)
+                        wf.writeframes(b"\x01\x00" * frames)
+
+                calls = []
+
+                def fake_run(cmd, *, label, timeout=None, env=None):
+                    calls.append((label, list(cmd)))
+                    write_active_wav(cmd[-1])
+                    return True
+
+                self.processor._load_all_settings = lambda: {
+                    "selected_audio_ai": "none",
+                    "selected_vad": "none",
+                    "use_basic_filter": False,
+                    "ff_chunk": 10,
+                    "reuse_preprocessed_audio_cache": True,
+                    "ffmpeg_filter_threads": 4,
+                }
+                self.processor._run_media_command = fake_run
+                self.processor._write_grouped_chunks_parallel = lambda *_args, **_kwargs: None
+
+                self.processor.extract_audio(video_path)
+                self.processor.extract_audio(video_path)
+
+                self.assertEqual([label for label, _cmd in calls], ["ffmpeg 음량 평탄화"])
+                cmd = calls[0][1]
+                self.assertIn("-filter_threads", cmd)
+                self.assertIn("-threads", cmd)
+                self.assertIn("-map", cmd)
+                self.assertIn("0:a:0", cmd)
+                self.assertIn("-vn", cmd)
+                self.assertIn("-sn", cmd)
+                self.assertIn("-dn", cmd)
+                self.assertIn("-ar", cmd)
+                self.assertIn("16000", cmd)
+            finally:
+                config.OUTPUT_DIR = old_output_dir
+
+    def test_ffmpeg_progress_pipe_emits_percent_stage_updates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source.wav")
+            target = os.path.join(tmp, "target.wav")
+            with wave.open(source, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000 * 10)
+
+            class FakeProcess:
+                def __init__(self):
+                    self.stdout = iter([
+                        "out_time_ms=0\n",
+                        "out_time_ms=5000000\n",
+                        "out_time_ms=10000000\n",
+                    ])
+                    self.returncode = 0
+
+                def communicate(self, timeout=None):
+                    return "", ""
+
+                def wait(self, timeout=None):
+                    return self.returncode
+
+            popen_calls = []
+
+            def fake_popen(cmd, **kwargs):
+                popen_calls.append((cmd, kwargs))
+                return FakeProcess()
+
+            stages = []
+            self.processor.stage_callback = stages.append
+
+            with patch("core.audio.media_processor.subprocess.Popen", side_effect=fake_popen):
+                ok = self.processor._run_media_command(
+                    ["ffmpeg", "-y", "-nostdin", "-loglevel", "error", "-i", source, "-acodec", "pcm_s16le", target],
+                    label="ffmpeg 음량 평탄화",
+                )
+
+            self.assertTrue(ok)
+            self.assertIn("-progress", popen_calls[0][0])
+            self.assertIn("pipe:1", popen_calls[0][0])
+            self.assertTrue(any("0%" in stage for stage in stages))
+            self.assertTrue(any("50%" in stage for stage in stages))
+            self.assertTrue(any("100%" in stage for stage in stages))
+
+    def test_long_no_vad_preprocess_extracts_stt_chunks_directly_from_media(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_output_dir = config.OUTPUT_DIR
+            config.OUTPUT_DIR = tmp
+            try:
+                video_path = os.path.join(tmp, "long.mp4")
+                with open(video_path, "wb") as f:
+                    f.write(b"video")
+
+                calls = []
+
+                def write_silent_wav(path: str, seconds: float = 1.0):
+                    frames = int(16000 * seconds)
+                    with wave.open(path, "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(16000)
+                        wf.writeframes(b"\x00\x00" * frames)
+
+                def fake_no_progress(cmd, *, label, timeout=None, env=None):
+                    calls.append((label, list(cmd)))
+                    write_silent_wav(cmd[-1])
+                    return True
+
+                self.processor._load_all_settings = lambda: {
+                    "selected_audio_ai": "none",
+                    "selected_vad": "none",
+                    "vad_post_stt_align_enabled": False,
+                    "use_basic_filter": False,
+                    "max_speakers": 1,
+                    "ff_chunk": 30,
+                    "whisper_chunk_overlap_sec": 0.0,
+                    "direct_ffmpeg_chunk_extract": True,
+                    "direct_ffmpeg_chunk_min_sec": 10,
+                }
+                self.processor._media_duration_for_progress = lambda _path: 65.0
+                self.processor._run_media_command_no_progress = fake_no_progress
+                self.processor._run_media_command = (
+                    lambda *_args, **_kwargs: self.fail("direct chunk path must not build full cleaned wav")
+                )
+
+                chunk_dir, vad_segments = self.processor.extract_audio(video_path)
+
+                self.assertEqual(vad_segments, [])
+                chunks = sorted(f for f in os.listdir(chunk_dir) if f.endswith(".wav"))
+                self.assertEqual(len(chunks), 3)
+                self.assertFalse(os.path.exists(os.path.join(tmp, "long_cleaned.wav")))
+                self.assertEqual([label for label, _cmd in calls], ["ffmpeg 직접 청크 추출"] * 3)
+                first_cmd = calls[0][1]
+                self.assertIn("-ss", first_cmd)
+                self.assertIn("-t", first_cmd)
+                self.assertIn(video_path, first_cmd)
+                self.assertIn("-map", first_cmd)
+                self.assertIn("0:a:0", first_cmd)
+                self.assertIn("-ar", first_cmd)
+                self.assertIn("16000", first_cmd)
             finally:
                 config.OUTPUT_DIR = old_output_dir
 

@@ -1,4 +1,4 @@
-# Version: 03.02.16
+# Version: 03.07.04
 # Phase: PHASE2
 """
 core/state_manager.py
@@ -8,6 +8,8 @@ core/state_manager.py
 - 하위 호환 별칭 포함
 """
 from PyQt6.QtCore import QObject, pyqtSignal
+
+from core.pipeline_status import is_generation_stage_status
 
 
 class SubtitleStateManager(QObject):
@@ -92,12 +94,7 @@ class SubtitleStateManager(QObject):
         self._emit()
 
     def _is_stage_status_active(self):
-        text = str(self._status_msg or "")
-        text_l = text.lower()
-        return any(
-            key in text_l or key in text
-            for key in ("vad", "whisper", "llm", "오디오", "추출", "인식", "자막 생성", "최적화")
-        )
+        return is_generation_stage_status(self._status_msg)
 
     def complete_ai(self):
         self.state = self.ST_COMP

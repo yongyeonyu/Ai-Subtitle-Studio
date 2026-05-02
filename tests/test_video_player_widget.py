@@ -89,46 +89,32 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
-    def test_preview_proxy_uses_720p_scale_and_preserves_fps(self):
+    def test_preview_uses_original_source_without_encoding_proxy(self):
         widget = VideoPlayerWidget()
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 src = os.path.join(tmp, "sample.mp4")
-                dst = os.path.join(tmp, "sample_preview_720p.mp4")
                 with open(src, "wb") as f:
                     f.write(b"video")
 
                 with patch("ui.editor.video_player_widget.subprocess.Popen") as popen:
-                    popen.return_value.poll.return_value = None
-                    widget._start_proxy_build(src, dst)
+                    playback_path = widget._playback_path_for(src)
 
-                cmd = popen.call_args.args[0]
-                self.assertIn("scale='trunc(iw*min(1,720/ih)/2)*2':'trunc(ih*min(1,720/ih)/2)*2'", cmd)
-                self.assertIn("-fps_mode", cmd)
-                self.assertIn("passthrough", cmd)
-                self.assertIn("-crf", cmd)
-                self.assertIn("24", cmd)
-                self.assertIn("-b:a", cmd)
-                self.assertIn("128k", cmd)
+                self.assertEqual(playback_path, src)
+                self.assertEqual(widget._proxy_playback_path, src)
+                popen.assert_not_called()
         finally:
-            try:
-                timer = getattr(widget, "_proxy_timer", None)
-                if timer is not None:
-                    timer.stop()
-            except Exception:
-                pass
             widget.close()
             widget.deleteLater()
             self.app.processEvents()
 
-    def test_preview_proxy_cache_name_is_720p_specific(self):
+    def test_preview_display_rect_is_capped_to_720p(self):
         widget = VideoPlayerWidget()
         try:
-            with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
-                f.write(b"video")
-                f.flush()
-                path = widget._proxy_path_for(f.name)
-            self.assertTrue(path.endswith("_preview_720p.mp4"))
+            widget._source_aspect = 16 / 9
+            rect = widget._displayed_video_rect(SimpleNamespace(width=lambda: 1920, height=lambda: 1080))
+            self.assertLessEqual(rect.height(), 720)
+            self.assertLessEqual(rect.width(), 1280)
         finally:
             widget.close()
             widget.deleteLater()

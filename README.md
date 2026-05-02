@@ -4,7 +4,7 @@
 
 AI 기반 자막 생성, 자막 편집, 화자 분리, 멀티클립 처리, 러프컷 분석을 하나의 데스크톱 작업 흐름으로 연결하는 영상 자막 제작 도구입니다.
 
-[![Version](https://img.shields.io/badge/version-v03.07.00-0A84FF?style=for-the-badge)](#)
+[![Version](https://img.shields.io/badge/version-v03.08.00-0A84FF?style=for-the-badge)](#)
 [![Phase](https://img.shields.io/badge/phase-PHASE2-30D158?style=for-the-badge)](#)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
@@ -26,7 +26,7 @@ AI Subtitle Studio는 긴 영상 작업에서 반복되는 자막 생성, 보정
 
 | 항목 | 내용 |
 | --- | --- |
-| 현재 버전 | `v03.07.00` |
+| 현재 버전 | `v03.08.00` |
 | 개발 단계 | `PHASE2` |
 | 기본 브랜치 | `main` |
 | 지원 목표 | macOS, Windows |
@@ -239,7 +239,8 @@ PY
 | 문서 | 설명 |
 | --- | --- |
 | `File_structure.txt` | 현재 파일 구조 |
-| [`RELEASE_v03.07.00.md`](RELEASE_v03.07.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.08.00.md`](RELEASE_v03.08.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.07.00.md`](RELEASE_v03.07.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.06.00.md`](RELEASE_v03.06.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.05.00.md`](RELEASE_v03.05.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.04.00.md`](RELEASE_v03.04.00.md) | 이전 PHASE2 릴리즈 노트 |
@@ -251,15 +252,15 @@ PY
 
 ## 릴리즈 노트
 
-전체 최신 릴리즈 노트는 [`RELEASE_v03.07.00.md`](RELEASE_v03.07.00.md)를 참고하세요.
+전체 최신 릴리즈 노트는 [`RELEASE_v03.08.00.md`](RELEASE_v03.08.00.md)를 참고하세요.
 
-### 최신 릴리즈: v03.07.00
+### 최신 릴리즈: v03.08.00
 
-- 자막 편집/재생 기준을 프로젝트 프레임 번호 중심으로 정리하고, 프로젝트 JSON에 frame timebase metadata를 저장합니다.
-- 비디오, 플레이헤드, 자막 에디터, 타임라인 세그먼트가 동일한 프레임 맵 기준으로 동기화되도록 보강했습니다.
-- 타임라인/글로벌 캔버스, 자막 에디터 viewport, 비디오 자막 overlay가 GPU/OpenGL-backed surface를 사용하도록 렌더링 경로를 재구성했습니다.
-- 비디오 재생 중 자막 overlay와 provider 갱신을 최소화해 재생 끊김을 줄였습니다.
-- 재시작, 홈 이동, 에디터 모드 전환, waveform worker 종료 등 백그라운드 정리 경로를 안정화했습니다.
+- macOS 실행 안정성을 위해 공격적인 OpenGL 위젯 경로는 명시적 opt-in으로 돌리고, 기본 실행은 안전한 QWidget 경로를 사용합니다.
+- 자막 생성 상태 표시와 사이드바 단계표가 같은 공용 parser를 사용해 `전처리`, `VAD`, `STT`, `자막 LLM` 단계를 일관되게 표시합니다.
+- 대용량 영상 전처리는 첫 오디오 스트림만 읽고, FFMPEG 진행률 표시, 단일 패스 정제, 검증된 cache 재사용, 직접 STT chunk 추출 경로를 지원합니다.
+- 자막 에디터 상단 toolbar를 제거해 표 헤더가 바로 보이게 하고, 품질 검사 호출은 toolbar 유무와 무관하게 안전하게 동작합니다.
+- 사이드바 네비게이션 버튼을 줄이고 큐 리스트 패널이 남은 세로 공간을 확장해서 사용하도록 정리했습니다.
 
 ## 보안
 

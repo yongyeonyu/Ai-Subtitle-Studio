@@ -1,4 +1,4 @@
-# Version: 03.02.12
+# Version: 03.07.04
 # Phase: PHASE2
 """
 Global bottom menu bar.
@@ -9,6 +9,7 @@ existing button/state-machine objects alive behind the scenes.
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QWidget
 
+from core.pipeline_status import generation_stage_label, process_mode_label
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
 from ui.style import label_style, line_icon, tool_button_style
 
@@ -56,18 +57,36 @@ class StatusRail(QWidget):
     def refresh_from_editor(self, editor):
         mode_key = normalize_work_mode(getattr(self.window(), "_current_work_mode", EDITOR_MODE))
 
-        mode_meta = {
-            EDITOR_MODE: ("에디터", "edit", "#34C759"),
-            ROUGHCUT_MODE: ("러프컷", "roughcut", "#FF9500"),
-            SHORTFORM_MODE: ("숏폼", "shortform", "#A678F4"),
-        }
-        mode_text, mode_icon, mode_color = mode_meta.get(mode_key, mode_meta[EDITOR_MODE])
+        mode_text, mode_icon, mode_color = self._mode_meta(mode_key, editor)
         stage_text = self._stage_text(mode_key, editor)
         text = f"{mode_text} | {stage_text}"
         self._apply_button_state(self.state_button, text, mode_icon, mode_color)
         if text != self._last_state_text:
             self._last_state_text = text
             self._start_flash()
+
+    def _mode_meta(self, mode_key: str, editor) -> tuple[str, str, str]:
+        mode_key = normalize_work_mode(mode_key)
+        status_text = self._editor_status_text(editor) if editor is not None else ""
+        label = process_mode_label(
+            screen_mode=mode_key,
+            process_mode=getattr(editor, "current_mode", "") if editor is not None else "",
+            state=getattr(editor, "current_state", "") if editor is not None else "",
+            status_text=status_text,
+            processing=bool(getattr(editor, "_is_ai_processing", False)) if editor is not None else False,
+            stt_mode_enabled=bool(getattr(editor, "_stt_mode_enabled", False)) if editor is not None else False,
+        )
+        meta = {
+            "에디터": ("에디터", "edit", "#34C759"),
+            "러프컷": ("러프컷", "roughcut", "#FF9500"),
+            "숏폼": ("숏폼", "shortform", "#A678F4"),
+            "STT": ("STT", "mic", "#FF453A"),
+            "자동 처리": ("자동 처리", "ai", "#34C759"),
+            "구간 생성": ("구간 생성", "timeline", "#579DFF"),
+            "이후 생성": ("이후 생성", "timeline", "#579DFF"),
+            "자막 생성": ("자막 생성", "ai", "#34C759"),
+        }
+        return meta.get(label, meta["에디터"])
 
     def _stage_text(self, mode_key: str, editor) -> str:
         mode_key = normalize_work_mode(mode_key)
@@ -79,10 +98,10 @@ class StatusRail(QWidget):
             return "파일열기" if mode_key == EDITOR_MODE else "대기"
 
         status_text = self._editor_status_text(editor)
-        status_l = status_text.lower()
         state = str(getattr(editor, "current_state", "") or "").lower()
         mode = str(getattr(editor, "current_mode", "") or "").lower()
         processing = bool(getattr(editor, "_is_ai_processing", False))
+        stt_ensemble_enabled = bool(getattr(editor, "settings", {}) and getattr(editor, "settings", {}).get("stt_ensemble_enabled", False))
 
         if bool(getattr(editor, "_stt_mode_enabled", False)):
             return self._stt_stage_text(editor, status_text)
@@ -99,12 +118,9 @@ class StatusRail(QWidget):
             return "완료"
         if "완료" in status_text:
             return "완료"
-        if "llm" in status_l or "교정" in status_text or "최적화" in status_text:
-            return "보정"
-        if "whisper" in status_l or "인식" in status_text or "transcrib" in status_l or "자막 생성" in status_text:
-            return "인식"
-        if "vad" in status_l or "음성 구간" in status_text or "오디오" in status_text or "추출" in status_text:
-            return "VAD"
+        stage_label = generation_stage_label(status_text, stt_ensemble_enabled=stt_ensemble_enabled)
+        if stage_label:
+            return stage_label
         if "검토" in status_text:
             return "검토"
         if "세그먼트" in status_text or "분할" in status_text:

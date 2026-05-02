@@ -1,4 +1,4 @@
-# Version: 03.04.01
+# Version: 03.07.10
 # Phase: PHASE2
 """Sidebar queue summary panel with a Qt Quick front-end and QWidget fallback."""
 
@@ -22,8 +22,7 @@ class SidebarQueuePanel(QWidget):
         super().__init__(parent)
         self.setObjectName("SidebarQueuePanel")
         self.setMinimumHeight(134)
-        self.setMaximumHeight(190)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._quick = None
         self._header = "큐 리스트 : (0/0) - 0% 완료"
         self._items = []

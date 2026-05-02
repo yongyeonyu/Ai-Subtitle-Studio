@@ -1,4 +1,4 @@
-# Version: 03.02.14
+# Version: 03.07.10
 # Phase: PHASE2
 import os
 import unittest
@@ -8,7 +8,7 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QApplication, QTableWidgetItem, QWidget
+from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QTableWidgetItem, QWidget
 
 from ui.main.main_window import MainWindow
 
@@ -128,6 +128,18 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIsNotNone(queue_panel)
             self.assertIsNotNone(queue_panel.parentWidget())
             self.assertGreaterEqual(queue_panel.minimumHeight(), 134)
+            self.assertEqual(queue_panel.sizePolicy().verticalPolicy(), QSizePolicy.Policy.Expanding)
+            self.assertGreater(queue_panel.maximumHeight(), 10000)
+            left_layout = queue_panel.parentWidget().layout()
+            self.assertEqual(left_layout.stretch(left_layout.indexOf(queue_panel)), 1)
+            nav_buttons = []
+            for label in window.home_page.findChildren(QLabel):
+                if label.text() in {"홈", "에디터", "러프컷", "숏폼"}:
+                    parent = label.parentWidget()
+                    if parent is not None and parent.objectName() == "MenuButton":
+                        nav_buttons.append(parent)
+            self.assertEqual(len(nav_buttons), 4)
+            self.assertTrue(all(btn.maximumHeight() == 36 for btn in nav_buttons))
             preset_panel = getattr(window, "sidebar_preset_panel", None)
             self.assertIsNotNone(preset_panel)
             self.assertLessEqual(window.sidebar_terminal_panel.maximumHeight(), 132)

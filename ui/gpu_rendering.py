@@ -1,8 +1,11 @@
-# Version: 03.06.21
+# Version: 03.07.01
 # Phase: PHASE2
-"""
-ui/gpu_rendering.py
-Small helpers for optional GPU-backed Qt widgets.
+"""Small helpers for optional GPU-backed Qt widgets.
+
+The default path intentionally stays on QWidget/QPainter. On macOS, replacing
+timeline, text-edit, and video viewports with several QOpenGLWidget instances
+can crash the process before Python can raise an exception. The experimental
+OpenGL widget path remains available through an explicit environment variable.
 """
 from __future__ import annotations
 
@@ -12,10 +15,24 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QWidget
 
 
-def gpu_widgets_enabled() -> bool:
+_FALSE_VALUES = {"0", "false", "no", "off"}
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_enabled(name: str, default: str = "0") -> bool:
+    return str(os.environ.get(name, default)).strip().lower() in _TRUE_VALUES
+
+
+def gpu_runtime_enabled() -> bool:
     if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
         return False
-    return str(os.environ.get("AI_SUBTITLE_GPU_RENDERING", "1")).lower() not in {"0", "false", "no"}
+    return str(os.environ.get("AI_SUBTITLE_GPU_RENDERING", "1")).strip().lower() not in _FALSE_VALUES
+
+
+def gpu_widgets_enabled() -> bool:
+    if not gpu_runtime_enabled():
+        return False
+    return _env_enabled("AI_SUBTITLE_EXPERIMENTAL_OPENGL_WIDGETS", "0")
 
 
 def accelerated_widget_base():
@@ -29,7 +46,7 @@ def accelerated_widget_base():
 
 
 def gpu_backend_name() -> str:
-    return "opengl" if accelerated_widget_base() is not QWidget else "qwidget"
+    return "opengl-widget" if gpu_widgets_enabled() else "qwidget"
 
 
 def configure_lightweight_paint(widget: QWidget, *, opaque: bool = True) -> None:

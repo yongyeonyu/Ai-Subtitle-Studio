@@ -1,4 +1,4 @@
-# Version: 03.01.37
+# Version: 03.07.08
 # Phase: PHASE2
 """
 media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 + Whisper 섹터 동기화)
@@ -12,6 +12,7 @@ import importlib.util
 import os, subprocess, json, re, config, shutil, time, wave, threading, math
 from concurrent.futures import ThreadPoolExecutor
 from core.audio.audio_presets import apply_audio_preset
+from core.media_info import probe_media
 from core.performance import bounded_worker_count
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs, rnnoise_binary
 from core.subtitle_quality.candidate_ranker import rank_overlap_candidates
@@ -29,6 +30,7 @@ from logger import get_logger
 _CHUNK_DURATION = 30
 _OVERLAP_SEC = 3.0
 _VAD_CACHE_VERSION = 3
+_AUDIO_CACHE_VERSION = 2
 
 
 def _parse_worker_json_line(line: str):
@@ -87,6 +89,158 @@ class VideoProcessor:
             pass
 
     def _run_media_command(self, cmd: list[str], *, label: str, timeout: float | None = None, env: dict | None = None) -> bool:
+        if self._should_run_ffmpeg_with_progress(cmd):
+            return self._run_ffmpeg_with_progress(cmd, label=label, timeout=timeout, env=env)
+
+        try:
+            subprocess_kwargs = hidden_subprocess_kwargs()
+            if env is not None:
+                subprocess_kwargs["env"] = env
+            result = subprocess.run(
+                [str(x) for x in cmd],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                **subprocess_kwargs,
+            )
+        except FileNotFoundError as e:
+            get_logger().log(f"  ❌ {label} 실행 파일을 찾을 수 없습니다: {e}")
+            return False
+        except Exception as e:
+            get_logger().log(f"  ❌ {label} 실행 오류: {e}")
+            return False
+
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            lines = [line.strip() for line in err.splitlines() if line.strip()]
+            summary = "\n".join(lines[-10:]) if lines else err
+            get_logger().log(f"  ❌ {label} 실패: {summary[:1200]}")
+            return False
+        return True
+
+    @staticmethod
+    def _should_run_ffmpeg_with_progress(cmd: list[str]) -> bool:
+        if not cmd:
+            return False
+        binary = os.path.basename(str(cmd[0] or "")).lower()
+        return binary.startswith("ffmpeg") and "-progress" not in [str(x) for x in cmd]
+
+    @staticmethod
+    def _first_ffmpeg_input(cmd: list[str]) -> str:
+        items = [str(x) for x in cmd]
+        for idx, item in enumerate(items[:-1]):
+            if item == "-i":
+                return items[idx + 1]
+        return ""
+
+    @staticmethod
+    def _ffmpeg_progress_command(cmd: list[str]) -> list[str]:
+        items = [str(x) for x in cmd]
+        insert_at = 1
+        for marker in ("-nostdin", "-loglevel"):
+            if marker in items:
+                idx = items.index(marker)
+                insert_at = max(insert_at, idx + (2 if marker == "-loglevel" and idx + 1 < len(items) else 1))
+        return items[:insert_at] + ["-progress", "pipe:1", "-nostats"] + items[insert_at:]
+
+    def _media_duration_for_progress(self, path: str) -> float:
+        if not path:
+            return 0.0
+        try:
+            if path.lower().endswith(".wav"):
+                with wave.open(path, "rb") as wf:
+                    rate = float(wf.getframerate() or 0)
+                    return (wf.getnframes() / rate) if rate > 0 else 0.0
+        except Exception:
+            pass
+        try:
+            info = probe_media(path)
+            return float(info.get("duration") or 0.0)
+        except Exception:
+            return 0.0
+
+    def _emit_ffmpeg_progress(self, label: str, ratio: float, *, force: bool = False) -> int:
+        pct = max(0, min(100 if force else 99, int(round(ratio * 100))))
+        now = time.monotonic()
+        state = getattr(self, "_ffmpeg_progress_state", {})
+        key = str(label or "ffmpeg")
+        last_pct, last_ts = state.get(key, (-1, 0.0))
+        if not force and pct < 99 and pct - last_pct < 5 and now - last_ts < 2.5:
+            return last_pct
+        state[key] = (pct, now)
+        self._ffmpeg_progress_state = state
+        text = f"⏳ [전처리] {label} 진행 중 {pct}%"
+        self._notify_stage(text)
+        get_logger().log(f"  └ [전처리] {label} 진행률 {pct}%")
+        return pct
+
+    def _run_ffmpeg_with_progress(self, cmd: list[str], *, label: str, timeout: float | None = None, env: dict | None = None) -> bool:
+        duration = self._media_duration_for_progress(self._first_ffmpeg_input(cmd))
+        if duration <= 0:
+            return self._run_media_command_no_progress(cmd, label=label, timeout=timeout, env=env)
+
+        progress_cmd = self._ffmpeg_progress_command(cmd)
+        stderr_lines = []
+        started_at = time.monotonic()
+        last_pct = -1
+        try:
+            subprocess_kwargs = hidden_subprocess_kwargs()
+            if env is not None:
+                subprocess_kwargs["env"] = env
+            proc = subprocess.Popen(
+                progress_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                **subprocess_kwargs,
+            )
+            self._emit_ffmpeg_progress(label, 0.0, force=True)
+            assert proc.stdout is not None
+            for raw_line in proc.stdout:
+                if timeout and time.monotonic() - started_at > timeout:
+                    proc.kill()
+                    get_logger().log(f"  ❌ {label} 실행 오류: timeout")
+                    return False
+                line = raw_line.strip()
+                if not line.startswith("out_time_ms="):
+                    if line and not line.startswith(("frame=", "fps=", "stream_", "progress=", "bitrate=", "total_size=", "out_time=")):
+                        stderr_lines.append(line)
+                        stderr_lines = stderr_lines[-12:]
+                    continue
+                try:
+                    out_sec = float(line.split("=", 1)[1]) / 1_000_000.0
+                except Exception:
+                    continue
+                last_pct = self._emit_ffmpeg_progress(label, out_sec / duration)
+            proc.wait(timeout=1)
+        except FileNotFoundError as e:
+            get_logger().log(f"  ❌ {label} 실행 파일을 찾을 수 없습니다: {e}")
+            return False
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            get_logger().log(f"  ❌ {label} 실행 오류: timeout")
+            return False
+        except Exception as e:
+            get_logger().log(f"  ❌ {label} 실행 오류: {e}")
+            return False
+
+        if proc.returncode != 0:
+            summary = "\n".join(stderr_lines[-10:])
+            get_logger().log(f"  ❌ {label} 실패: {summary[:1200]}")
+            return False
+        if last_pct < 100:
+            self._emit_ffmpeg_progress(label, 1.0, force=True)
+        get_logger().log(f"  └ [전처리] {label} 완료")
+        return True
+
+    def _run_media_command_no_progress(self, cmd: list[str], *, label: str, timeout: float | None = None, env: dict | None = None) -> bool:
         try:
             subprocess_kwargs = hidden_subprocess_kwargs()
             if env is not None:
@@ -361,6 +515,123 @@ class VideoProcessor:
             "none": "미사용",
         }.get(audio_ai, str(audio_ai or "미사용"))
 
+    def _ffmpeg_parallel_args(self, settings: dict) -> list[str]:
+        workers = bounded_worker_count(settings.get("ffmpeg_filter_threads", self.io_workers), kind="cpu")
+        # `-threads 0` lets codecs choose an efficient default, while
+        # `-filter_threads` gives heavier audio filters several cores.
+        return ["-threads", "0", "-filter_threads", str(max(1, workers))]
+
+    @staticmethod
+    def _ffmpeg_audio_stream_args() -> list[str]:
+        # Keep preprocessing on the first audio stream only. GPU video decode does
+        # not speed up audio extraction, so avoid touching video/subtitle/data streams.
+        return ["-map", "0:a:0", "-vn", "-sn", "-dn"]
+
+    @staticmethod
+    def _can_fuse_ffmpeg_preprocess(audio_ai: str) -> bool:
+        return str(audio_ai or "none").lower() in {"none", "deepfilter"}
+
+    @staticmethod
+    def _combine_audio_filters(*filters: str) -> str:
+        chain = []
+        for value in filters:
+            text = str(value or "").strip()
+            if not text or text == "anull":
+                continue
+            chain.append(text)
+        return ",".join(chain) if chain else "anull"
+
+    def _audio_cache_config(
+        self,
+        video_path: str,
+        settings: dict,
+        *,
+        audio_ai: str,
+        use_basic: bool,
+        master_filter: str,
+        active_filter: str,
+    ) -> dict:
+        try:
+            source = os.path.abspath(video_path)
+            stat = os.stat(video_path)
+            source_size = int(stat.st_size)
+            source_mtime_ns = int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
+        except Exception:
+            source = os.path.abspath(video_path or "")
+            source_size = 0
+            source_mtime_ns = 0
+        return {
+            "version": _AUDIO_CACHE_VERSION,
+            "source": source,
+            "source_size": source_size,
+            "source_mtime_ns": source_mtime_ns,
+            "audio_ai": str(audio_ai or "none"),
+            "use_basic_filter": bool(use_basic),
+            "master_filter": str(master_filter or "anull"),
+            "active_filter": str(active_filter or "anull"),
+            "sample_rate": 16000,
+            "channels": 1,
+            "pcm": "s16le",
+            "ffmpeg_filter_threads": int(max(1, bounded_worker_count(settings.get("ffmpeg_filter_threads", self.io_workers), kind="cpu"))),
+        }
+
+    def _direct_chunk_span(self, video_path: str, target_start_sec=0.0, target_end_sec=None) -> tuple[float, float]:
+        total_dur = self._media_duration_for_progress(video_path)
+        start = max(0.0, float(target_start_sec or 0.0))
+        if target_end_sec is None:
+            end = float(total_dur or 0.0)
+        else:
+            end = max(start, float(target_end_sec or start))
+            if total_dur > 0:
+                end = min(end, total_dur)
+        return start, max(start, end)
+
+    def _can_direct_extract_stt_chunks(
+        self,
+        settings: dict,
+        *,
+        audio_ai: str,
+        vad_model: str,
+        vad_pre_split_enabled: bool,
+        vad_post_align_enabled: bool,
+        span_sec: float,
+        is_partial: bool,
+    ) -> bool:
+        if not bool(settings.get("direct_ffmpeg_chunk_extract", True)):
+            return False
+        if not self._can_fuse_ffmpeg_preprocess(audio_ai):
+            return False
+        if vad_pre_split_enabled:
+            return False
+        if str(vad_model or "none").lower() != "none" and vad_post_align_enabled:
+            return False
+        try:
+            if int(settings.get("max_speakers", 1) or 1) > 1:
+                return False
+        except Exception:
+            return False
+        if span_sec <= 0:
+            return False
+        min_sec = float(settings.get("direct_ffmpeg_chunk_min_sec", 600.0) or 0.0)
+        return bool(is_partial or span_sec >= max(0.0, min_sec))
+
+    def _cleaned_audio_cache_valid(self, cleaned_wav: str, meta_path: str, cache_config: dict) -> bool:
+        if not os.path.exists(cleaned_wav) or os.path.getsize(cleaned_wav) <= 1024 * 100:
+            return False
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception:
+            return False
+        return payload == cache_config
+
+    def _write_cleaned_audio_cache_meta(self, meta_path: str, cache_config: dict) -> None:
+        try:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(cache_config, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
     def _vad_cache_config(self, settings: dict) -> dict:
         effective_s = apply_review_vad_settings(settings)
         return {
@@ -404,71 +675,148 @@ class VideoProcessor:
         chunk_dir = os.path.join(config.OUTPUT_DIR, f"{base_name}_chunks")
         raw_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_raw.wav")
         cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
+        cleaned_meta = f"{cleaned_wav}.meta.json"
         
         is_partial = target_start_sec > 0.0 or target_end_sec is not None
+        cache_config = self._audio_cache_config(
+            video_path,
+            s,
+            audio_ai=audio_ai,
+            use_basic=use_basic,
+            master_filter=master_filter,
+            active_filter=active_filter,
+        )
         
         shutil.rmtree(chunk_dir, ignore_errors=True)
         os.makedirs(chunk_dir, exist_ok=True)
 
-        is_valid_cache = False
-        if os.path.exists(cleaned_wav) and os.path.getsize(cleaned_wav) > 1024 * 100:
-            is_valid_cache = True
+        vad_pre_split_enabled = bool(s.get("vad_pre_split_enabled", False))
+        vad_post_align_enabled = bool(s.get("vad_post_stt_align_enabled", True))
+        direct_start, direct_end = self._direct_chunk_span(video_path, target_start_sec, target_end_sec)
+        direct_span = max(0.0, direct_end - direct_start)
+        if self._can_direct_extract_stt_chunks(
+            s,
+            audio_ai=audio_ai,
+            vad_model=vad_model,
+            vad_pre_split_enabled=vad_pre_split_enabled,
+            vad_post_align_enabled=vad_post_align_enabled,
+            span_sec=direct_span,
+            is_partial=is_partial,
+        ):
+            chunk_sec = max(10.0, float(s.get("ff_chunk", _CHUNK_DURATION)))
+            overlap_sec = self._chunk_overlap_sec(s)
+            grouped = self._split_range_with_overlap(direct_start, direct_end, chunk_sec, overlap_sec)
+            fused_filter = self._combine_audio_filters(master_filter if use_basic else "anull", active_filter)
+            self._notify_stage("⏳ [전처리] FFMPEG 직접 청크 추출 중")
+            get_logger().log(
+                "  └ [전처리] 전체 WAV 생성을 건너뛰고 원본에서 STT 청크를 직접 추출합니다 "
+                f"(청크 {len(grouped)}개, {direct_span:.1f}초)"
+            )
+            ok = self._write_grouped_chunks_from_media_parallel(video_path, chunk_dir, grouped, fused_filter, s)
+            if ok:
+                get_logger().log(f"    → Whisper 청크 {len(grouped)}개 직접 생성 완료 (overlap {overlap_sec:.1f}초)")
+                return chunk_dir, []
+            get_logger().log("  ⚠️ 직접 청크 추출 실패: 기존 cleaned.wav 전처리 경로로 재시도합니다")
+            shutil.rmtree(chunk_dir, ignore_errors=True)
+            os.makedirs(chunk_dir, exist_ok=True)
 
-        if is_partial and is_valid_cache:
+        reuse_audio_cache = bool(s.get("reuse_preprocessed_audio_cache", True))
+        is_valid_cache = reuse_audio_cache and self._cleaned_audio_cache_valid(cleaned_wav, cleaned_meta, cache_config)
+
+        if is_valid_cache:
             self._notify_stage("♻️ [전처리] FFMPEG 오디오 캐시 재사용")
-            get_logger().log("  └ ♻️ [초고속 모드] 정상적으로 분리된 오디오 캐시를 발견하여 추출을 건너뜜")
+            get_logger().log("  └ ♻️ [전처리] 원본/설정이 같은 오디오 캐시를 재사용합니다")
         else:
             self._notify_stage("⏳ [전처리] FFMPEG 오디오 추출 및 기본 필터 적용 중")
             get_logger().log("  └ [전처리] FFMPEG 오디오 추출 및 기본 필터 적용 중...")
             ffmpeg = ffmpeg_binary()
-            extract_cmd = [ffmpeg, "-y", "-nostdin", "-loglevel", "error", "-i", video_path, "-vn", "-ac", "1", "-ar", "48000"]
-            if use_basic:
-                extract_cmd.extend(["-af", master_filter])
-            extract_cmd.extend(["-acodec", "pcm_s16le", raw_wav])
-            if not self._run_media_command(extract_cmd, label="ffmpeg 오디오 추출"):
-                return chunk_dir, []
-                
-            ai_wav = raw_wav
-            audio_filter_applied = False
-            if audio_ai == "rnnoise":
-                self._notify_stage("⏳ [음성] RNNoise 빠른 노이즈 제거 중")
-                get_logger().log("  └ [음성] RNNoise 빠른 노이즈 제거 중...")
-                rnnoise_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_rnnoise.wav")
-                if self._apply_rnnoise(raw_wav, rnnoise_wav) and os.path.exists(rnnoise_wav):
-                    ai_wav = rnnoise_wav
-                    audio_filter_applied = True
-            elif audio_ai == "resemble_enhance":
-                self._notify_stage("⏳ [음성] Resemble Enhance 음성 향상 중")
-                get_logger().log("  └ [음성] Resemble Enhance 음성 향상 중...")
-                resemble_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_resemble.wav")
-                if self._apply_resemble_enhance(raw_wav, resemble_wav) and os.path.exists(resemble_wav):
-                    ai_wav = resemble_wav
-                    audio_filter_applied = True
-            elif audio_ai == "clearvoice":
-                self._notify_stage("⏳ [음성] ClearVoice 음성 향상 중")
-                get_logger().log("  └ [음성] ClearVoice 음성 향상 중...")
-                clearvoice_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_clearvoice.wav")
-                if self._apply_clearvoice(raw_wav, clearvoice_wav) and os.path.exists(clearvoice_wav):
-                    ai_wav = clearvoice_wav
-                    audio_filter_applied = True
 
-            audio_label = self._audio_cleanup_label(audio_ai, audio_filter_applied)
-            if audio_ai == "none":
-                self._notify_stage("⏳ [음성] 미사용: FFMPEG 16k 포맷 변환 중")
-                get_logger().log("  └ [음성] 미사용: FFMPEG 16k 포맷 변환 중...")
+            if self._can_fuse_ffmpeg_preprocess(audio_ai):
+                fused_filter = self._combine_audio_filters(master_filter if use_basic else "anull", active_filter)
+                self._notify_stage("⏳ [전처리] FFMPEG 단일 패스 오디오 추출/정제 중")
+                get_logger().log("  └ [전처리] FFMPEG 단일 패스로 오디오 추출/정제를 처리합니다")
+                extract_cmd = [
+                    ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+                    *self._ffmpeg_parallel_args(s),
+                    "-i", video_path,
+                    *self._ffmpeg_audio_stream_args(),
+                    "-ac", "1", "-ar", "16000",
+                    "-af", fused_filter,
+                    "-acodec", "pcm_s16le",
+                    cleaned_wav,
+                ]
+                if not self._run_media_command(extract_cmd, label="ffmpeg 음량 평탄화"):
+                    return chunk_dir, []
+                self._write_cleaned_audio_cache_meta(cleaned_meta, cache_config)
+                if os.path.exists(raw_wav):
+                    try:
+                        os.remove(raw_wav)
+                    except Exception:
+                        pass
+                ai_wav = cleaned_wav
+                audio_filter_applied = False
             else:
-                self._notify_stage(f"⏳ [음성] {audio_label} 정제 및 FFMPEG 16k 변환 중")
-                get_logger().log(f"  └ [음성] {audio_label} 정제 및 FFMPEG 16k 변환 중...")
-            if not self._run_media_command(
-                [ffmpeg, "-y", "-nostdin", "-loglevel", "error", "-i", ai_wav, "-ac", "1", "-ar", "16000", "-af", active_filter, "-acodec", "pcm_s16le", cleaned_wav],
-                label="ffmpeg 음량 평탄화",
-            ):
-                return chunk_dir, []
-            if os.path.exists(raw_wav): os.remove(raw_wav)
+                extract_cmd = [
+                    ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+                    *self._ffmpeg_parallel_args(s),
+                    "-i", video_path,
+                    *self._ffmpeg_audio_stream_args(),
+                    "-ac", "1", "-ar", "48000",
+                ]
+                if use_basic:
+                    extract_cmd.extend(["-af", master_filter])
+                extract_cmd.extend(["-acodec", "pcm_s16le", raw_wav])
+                if not self._run_media_command(extract_cmd, label="ffmpeg 오디오 추출"):
+                    return chunk_dir, []
+
+                ai_wav = raw_wav
+                audio_filter_applied = False
+                if audio_ai == "rnnoise":
+                    self._notify_stage("⏳ [음성] RNNoise 빠른 노이즈 제거 중")
+                    get_logger().log("  └ [음성] RNNoise 빠른 노이즈 제거 중...")
+                    rnnoise_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_rnnoise.wav")
+                    if self._apply_rnnoise(raw_wav, rnnoise_wav) and os.path.exists(rnnoise_wav):
+                        ai_wav = rnnoise_wav
+                        audio_filter_applied = True
+                elif audio_ai == "resemble_enhance":
+                    self._notify_stage("⏳ [음성] Resemble Enhance 음성 향상 중")
+                    get_logger().log("  └ [음성] Resemble Enhance 음성 향상 중...")
+                    resemble_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_resemble.wav")
+                    if self._apply_resemble_enhance(raw_wav, resemble_wav) and os.path.exists(resemble_wav):
+                        ai_wav = resemble_wav
+                        audio_filter_applied = True
+                elif audio_ai == "clearvoice":
+                    self._notify_stage("⏳ [음성] ClearVoice 음성 향상 중")
+                    get_logger().log("  └ [음성] ClearVoice 음성 향상 중...")
+                    clearvoice_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_clearvoice.wav")
+                    if self._apply_clearvoice(raw_wav, clearvoice_wav) and os.path.exists(clearvoice_wav):
+                        ai_wav = clearvoice_wav
+                        audio_filter_applied = True
+
+                audio_label = self._audio_cleanup_label(audio_ai, audio_filter_applied)
+                if audio_ai == "none":
+                    self._notify_stage("⏳ [음성] 미사용: FFMPEG 16k 포맷 변환 중")
+                    get_logger().log("  └ [음성] 미사용: FFMPEG 16k 포맷 변환 중...")
+                else:
+                    self._notify_stage(f"⏳ [음성] {audio_label} 정제 및 FFMPEG 16k 변환 중")
+                    get_logger().log(f"  └ [음성] {audio_label} 정제 및 FFMPEG 16k 변환 중...")
+                if not self._run_media_command(
+                    [
+                        ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+                        *self._ffmpeg_parallel_args(s),
+                        "-i", ai_wav,
+                        "-ac", "1", "-ar", "16000",
+                        "-af", active_filter,
+                        "-acodec", "pcm_s16le",
+                        cleaned_wav,
+                    ],
+                    label="ffmpeg 음량 평탄화",
+                ):
+                    return chunk_dir, []
+                self._write_cleaned_audio_cache_meta(cleaned_meta, cache_config)
+                if os.path.exists(raw_wav): os.remove(raw_wav)
 
         vad_segments = []
-        vad_pre_split_enabled = bool(s.get("vad_pre_split_enabled", False))
-        vad_post_align_enabled = bool(s.get("vad_post_stt_align_enabled", True))
         vad_requested = vad_model != "none" and vad_pre_split_enabled
         vad_empty_or_failed = False
         if vad_model != "none" and not vad_pre_split_enabled:
@@ -503,8 +851,6 @@ class VideoProcessor:
             vad_model = "none"
 
         if vad_model != "none":
-            import hashlib
-
             # ✅ VAD 캐시 경로
             vad_cache_path = os.path.join(
                 config.OUTPUT_DIR,
@@ -1716,6 +2062,74 @@ class VideoProcessor:
                     fut.result()
                 except Exception as e:
                     get_logger().log(f"⚠️ 청크 생성 실패: {e}")
+
+    def _write_grouped_chunks_from_media_parallel(
+        self,
+        media_path: str,
+        chunk_dir: str,
+        grouped: list[dict],
+        audio_filter: str,
+        settings: dict,
+    ) -> bool:
+        if not grouped:
+            return False
+
+        ffmpeg = ffmpeg_binary()
+        max_workers = max(1, min(self.io_workers, len(grouped)))
+        progress_lock = threading.Lock()
+        done_count = 0
+        next_log_pct = 0
+
+        def _one(idx_seg):
+            idx, seg = idx_seg
+            start = max(0.0, float(seg.get("start", 0.0) or 0.0))
+            end = max(start, float(seg.get("end", start) or start))
+            out = os.path.join(chunk_dir, f"vad_{idx:03d}_{start:.3f}.wav")
+            cmd = [
+                ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+                *self._ffmpeg_parallel_args(settings),
+                "-ss", str(start),
+                "-t", str(max(0.001, end - start)),
+                "-i", media_path,
+                *self._ffmpeg_audio_stream_args(),
+                "-ac", "1", "-ar", "16000",
+                "-af", audio_filter or "anull",
+                "-acodec", "pcm_s16le",
+                out,
+            ]
+            ok = self._run_media_command_no_progress(cmd, label="ffmpeg 직접 청크 추출")
+            return ok and os.path.exists(out) and os.path.getsize(out) > 0
+
+        def _mark_progress():
+            nonlocal done_count, next_log_pct
+            with progress_lock:
+                done_count += 1
+                pct = min(100, int(round((done_count / len(grouped)) * 100)))
+                if pct >= next_log_pct or done_count == len(grouped):
+                    next_log_pct = min(100, pct + 10)
+                    msg = f"⏳ [전처리] FFMPEG 직접 청크 추출 중 {pct}%"
+                    self._notify_stage(msg)
+                    get_logger().log(f"  └ [전처리] 직접 청크 추출 진행률 {pct}% ({done_count}/{len(grouped)})")
+
+        failures = 0
+        if max_workers == 1:
+            for item in enumerate(grouped):
+                if not _one(item):
+                    failures += 1
+                _mark_progress()
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="direct-chunk-writer") as ex:
+                futures = [ex.submit(_one, item) for item in enumerate(grouped)]
+                for fut in futures:
+                    try:
+                        if not fut.result():
+                            failures += 1
+                    except Exception as e:
+                        failures += 1
+                        get_logger().log(f"⚠️ 직접 청크 생성 실패: {e}")
+                    finally:
+                        _mark_progress()
+        return failures == 0
 
     def _parse_whisper_payload(self, data: dict, item: dict, vad_strict: list,
                            target_end_sec: float = None, is_single: bool = False) -> list[dict]:

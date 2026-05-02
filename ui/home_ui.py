@@ -1,4 +1,4 @@
-# Version: 03.02.14
+# Version: 03.07.10
 # Phase: PHASE2
 """
 ui/home_ui.py
@@ -24,6 +24,7 @@ from core.path_manager import (
     get_nas_excluded_folders
 )
 from core.settings import load_settings, save_settings
+from core.pipeline_status import generation_stage_keys
 from core.audio.audio_presets import apply_audio_preset, load_audio_presets
 from core.audio.stt_quality_presets import (
     apply_stt_quality_preset,
@@ -129,7 +130,7 @@ class HomeUIMixin:
             nas_folders, nas_count, nas_comp = self._get_nas_folders()
             left_col.addWidget(self._icloud_btn("☁ iCloud 자동 처리", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
             left_col.addWidget(self._icloud_btn("▣ NAS 자동 처리", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
-            left_col.addWidget(self._ensure_sidebar_queue_panel())
+            left_col.addWidget(self._ensure_sidebar_queue_panel(), stretch=1)
         else:
             left_col.addWidget(self._btn("📂 파일 선택", "영상/음성/srt 직접 선택", self.select_files))
             left_col.addWidget(self._btn("📁 폴더 선택", "폴더에서 영상 일괄 선택", self.select_folder))
@@ -635,26 +636,10 @@ class HomeUIMixin:
         if not self._is_subtitle_generation_running():
             return set()
 
-        blob = self._pipeline_status_blob()
-        if any(token in blob for token in ("[전처리]", "오디오 추출", "ffmpeg 오디오", "전처리")):
-            return {"preprocess"}
-        if any(token in blob for token in ("[음성]", "음량", "필터", "deepfilter", "rnnoise", "resemble", "clearvoice", "노이즈", "보컬")):
-            return {"audio"}
-        if "[stt+자막 llm]" in blob:
-            keys = {"stt1", "subtitle_llm"}
-            if settings.get("stt_ensemble_enabled"):
-                keys.add("stt2")
-            return keys
-        if any(token in blob for token in ("[자막 llm]", "llm", "최적화", "교정", "분리")):
-            return {"subtitle_llm"}
-        if any(token in blob for token in ("[vad]", "silero", "검수", "위치 재계산", "음성 섹터")):
-            return {"vad"}
-        if any(token in blob for token in ("[stt", "whisper", "stt", "자막 생성")):
-            keys = {"stt1"}
-            if settings.get("stt_ensemble_enabled"):
-                keys.add("stt2")
-            return keys
-        return set()
+        return generation_stage_keys(
+            self._pipeline_status_blob(),
+            stt_ensemble_enabled=bool(settings.get("stt_ensemble_enabled", False)),
+        )
 
     def _pipeline_completed_stage_keys(self, settings: dict, current_keys: set[str]) -> set[str]:
         rows = self._pipeline_rows(settings)
@@ -1264,11 +1249,11 @@ class HomeUIMixin:
         w.leaveEvent = lambda e, _w=w: _w.setStyleSheet(_w._normal_ss)
         w.setCursor(Qt.CursorShape.PointingHandCursor)
         if is_unified:
-            w.setFixedHeight(44 if not desc else 58)
+            w.setFixedHeight(36 if not desc else 48)
             w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout = QVBoxLayout(w)
-        layout.setContentsMargins(9 if is_unified else 20, 7 if is_unified else 14, 9 if is_unified else 20, 7 if is_unified else 14)
-        layout.setSpacing(2 if is_unified else 4)
+        layout.setContentsMargins(9 if is_unified else 20, 5 if is_unified else 14, 9 if is_unified else 20, 5 if is_unified else 14)
+        layout.setSpacing(1 if is_unified else 4)
         main_color = "#74A9FF" if active and is_unified else ("#FFFFFF" if is_unified else "#1D1D1F")
         icon_color = "#74A9FF" if active and is_unified else ("#E8EEF5" if is_unified else main_color)
         row = QHBoxLayout()
@@ -1280,7 +1265,7 @@ class HomeUIMixin:
             icon_lbl.setPixmap(line_icon(icon_name, icon_color, icon_size).pixmap(icon_size, icon_size))
             icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             if is_unified:
-                icon_lbl.setFixedSize(24, 24)
+                icon_lbl.setFixedSize(20, 20)
                 icon_lbl.setStyleSheet("background-color: #11181C; border: none; border-radius: 2px;")
             else:
                 icon_lbl.setFixedSize(16, 16)
@@ -1288,7 +1273,7 @@ class HomeUIMixin:
             row.addWidget(icon_lbl)
         lbl = QLabel(text)
         lbl.setMinimumWidth(0)
-        lbl.setStyleSheet(f"color: {main_color}; font-size: {12 if is_unified else 14}px; font-weight: bold; border: none; background: transparent;")
+        lbl.setStyleSheet(f"color: {main_color}; font-size: {11 if is_unified else 14}px; font-weight: bold; border: none; background: transparent;")
         lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         row.addWidget(lbl, stretch=1)
         layout.addLayout(row)

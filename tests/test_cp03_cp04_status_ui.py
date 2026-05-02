@@ -1,4 +1,4 @@
-# Version: 03.02.13
+# Version: 03.07.09
 # Phase: PHASE2
 import os
 import json
@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QObject, Qt
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import QApplication, QLabel, QTextEdit
+from PyQt6.QtWidgets import QApplication, QLabel, QTextEdit, QWidget
 
 import config
 from core.state_manager import SubtitleStateManager
@@ -87,9 +87,9 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 )
 
             cases = {
-                "오디오 추출 중": "VAD",
-                "Whisper 중": "인식",
-                "LLM 최적화 중": "보정",
+                "⏳ [전처리] FFMPEG 오디오 추출 중": "전처리",
+                "⏳ [STT] Whisper 중": "STT 1",
+                "⏳ [자막 LLM] 최적화 중": "자막 LLM",
                 "💾 자동 저장 중...": "저장",
                 "저장 완료": "완료",
                 "✨ 자막 생성 완료": "완료",
@@ -107,6 +107,32 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 _get_current_segments=lambda: [{"start": 0.0, "end": 1.0, "text": "테스트"}],
             )
             self.assertEqual(rail._stage_text(EDITOR_MODE, completed_editor), "완료")
+        finally:
+            rail.close()
+
+    def test_status_rail_shows_generation_mode_while_processing(self):
+        rail = StatusRail()
+        try:
+            label = QLabel("⏳ [전처리] FFMPEG 오디오 추출 및 기본 필터 적용 중...")
+            editor = SimpleNamespace(
+                status_lbl=label,
+                current_state="ST_PROC",
+                current_mode="MODE_AI_ALL",
+                _is_ai_processing=True,
+                _is_dirty=True,
+                _stt_mode_enabled=False,
+                _get_current_segments=lambda: [],
+            )
+
+            mode_text, _icon, _color = rail._mode_meta(EDITOR_MODE, editor)
+            self.assertEqual(mode_text, "자막 생성")
+            self.assertEqual(rail._stage_text(EDITOR_MODE, editor), "전처리")
+
+            editor.current_state = "ST_EDITING"
+            editor._is_ai_processing = False
+            editor.status_lbl.setText("✏ 편집 중")
+            mode_text, _icon, _color = rail._mode_meta(EDITOR_MODE, editor)
+            self.assertEqual(mode_text, "에디터")
         finally:
             rail.close()
 
@@ -204,6 +230,23 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.assertTrue(exited)
             finally:
                 editor.close()
+
+    def test_editor_top_mode_toolbar_is_removed(self):
+        from ui.editor.editor_widget import EditorWidget
+
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = os.path.join(tmp, "sample.m4a")
+            open(media_path, "wb").close()
+            editor = EditorWidget("sample.m4a", [], media_path=media_path)
+            try:
+                layout = editor._editor_wrap.layout()
+                first = layout.itemAt(0).widget()
+                self.assertEqual(first.objectName(), "subtitleTableHeader")
+                self.assertIsNone(editor._editor_wrap.findChild(QWidget, "subtitleEditorModeBar"))
+            finally:
+                editor.close()
+                editor.deleteLater()
+                self.app.processEvents()
 
     def test_restart_from_completed_state_backs_up_clears_and_resets_queue(self):
         from ui.main.main_window import MainWindow

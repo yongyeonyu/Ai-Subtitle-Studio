@@ -1,4 +1,4 @@
-# Version: 03.06.22
+# Version: 03.07.03
 # Phase: PHASE2
 """
 ui/video_player_widget.py - PyQt6 비디오 플레이어
@@ -7,7 +7,6 @@ ui/video_player_widget.py - PyQt6 비디오 플레이어
 import os
 import json
 import hashlib
-import shutil
 import subprocess
 import tempfile
 import time
@@ -305,11 +304,16 @@ class VideoSurfaceView(QGraphicsView):
         self.setStyleSheet("background: #000000; border: none;")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
+    def set_video_display_rect(self, rect):
+        rect = QRectF(rect)
+        self.video_item.setPos(rect.left(), rect.top())
+        self.video_item.setSize(QSizeF(max(1.0, rect.width()), max(1.0, rect.height())))
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         rect = QRectF(0, 0, self.viewport().width(), self.viewport().height())
         self._scene.setSceneRect(rect)
-        self.video_item.setSize(QSizeF(rect.width(), rect.height()))
+        self.set_video_display_rect(rect)
 
 class SubtitleLabel(QLabel):
     """비디오 프리뷰 위에 출력 설정을 반영해 그리는 자막 overlay."""
@@ -565,11 +569,11 @@ class VideoPlayerWidget(QWidget):
         self._subtitle_provider = None
         self._subtitle_provider_signature = ""
         self._last_btn_state = None
-        self._proxy_proc: subprocess.Popen | None = None
         self._proxy_original_path: str = ""
         self._proxy_playback_path: str = ""
-        self._deferred_proxy_switch: str | None = None
         self._source_aspect: float = 16 / 9
+        self._preview_max_height: int = 720
+        self._preview_max_width: int = 1280
 
         self.media_player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -756,6 +760,10 @@ class VideoPlayerWidget(QWidget):
         item = self._scene_subtitle_item()
         if item is not None:
             item.set_rect(QRectF(video_rect))
+        try:
+            self.video_widget.set_video_display_rect(QRectF(video_rect))
+        except Exception:
+            pass
 
     def _scene_subtitle_item(self):
         return getattr(getattr(self, "video_widget", None), "subtitle_item", None)
@@ -788,6 +796,30 @@ class VideoPlayerWidget(QWidget):
             item.set_export_style(style or {})
 
     def _displayed_video_rect(self, bounds):
+        aspect = max(0.01, float(getattr(self, "_source_aspect", 16 / 9) or (16 / 9)))
+        bw = max(1, int(bounds.width()))
+        bh = max(1, int(bounds.height()))
+        max_h = max(1, int(getattr(self, "_preview_max_height", 720) or 720))
+        max_w = max(1, int(getattr(self, "_preview_max_width", 1280) or 1280))
+        if aspect >= 1.0:
+            target_w = min(bw, max_w)
+            target_h = int(target_w / aspect)
+            if target_h > min(bh, max_h):
+                target_h = min(bh, max_h)
+                target_w = int(target_h * aspect)
+        else:
+            target_h = min(bh, max_h)
+            target_w = int(target_h * aspect)
+            if target_w > min(bw, max_w):
+                target_w = min(bw, max_w)
+                target_h = int(target_w / aspect)
+        target_w = max(1, min(bw, target_w))
+        target_h = max(1, min(bh, target_h))
+        x = int((bw - target_w) / 2)
+        y = int((bh - target_h) / 2)
+        return QRectF(x, y, target_w, target_h).toRect()
+
+    def _source_video_rect(self, bounds):
         aspect = max(0.01, float(getattr(self, "_source_aspect", 16 / 9) or (16 / 9)))
         bw = max(1, int(bounds.width()))
         bh = max(1, int(bounds.height()))
@@ -842,6 +874,26 @@ class VideoPlayerWidget(QWidget):
         return True
 
     def _preview_proxy_enabled(self) -> bool:
+        return False
+
+    def _proxy_path_for(self, path: str) -> str:
+        return ""
+
+    def _playback_path_for(self, path: str) -> str:
+        self._proxy_original_path = path
+        self._proxy_playback_path = path
+        return path
+
+    def _start_proxy_build(self, src: str, dst: str):
+        return
+
+    def _poll_proxy_build(self, src: str, tmp_dst: str, dst: str):
+        return
+
+    def _switch_to_proxy(self, proxy_path: str):
+        return
+
+    def _legacy_preview_proxy_enabled(self) -> bool:
         try:
             settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
             if os.path.exists(settings_path):
@@ -850,107 +902,6 @@ class VideoPlayerWidget(QWidget):
         except Exception:
             pass
         return True
-
-    def _proxy_path_for(self, path: str) -> str:
-        st = os.stat(path)
-        key = f"{os.path.abspath(path)}|{int(st.st_mtime)}|{int(st.st_size)}"
-        digest = hashlib.sha1(key.encode("utf-8", errors="ignore")).hexdigest()[:20]
-        cache_dir = os.path.join(config.DATASET_DIR, "video_preview_cache")
-        os.makedirs(cache_dir, exist_ok=True)
-        return os.path.join(cache_dir, f"{digest}_preview_720p.mp4")
-
-    def _playback_path_for(self, path: str) -> str:
-        self._proxy_original_path = path
-        self._proxy_playback_path = path
-        if not self._preview_proxy_enabled() or not self._is_video_file(path):
-            return path
-        if not shutil.which("ffmpeg"):
-            return path
-        try:
-            proxy_path = self._proxy_path_for(path)
-        except Exception:
-            return path
-        if os.path.exists(proxy_path) and os.path.getsize(proxy_path) > 1024:
-            self._proxy_playback_path = proxy_path
-            return proxy_path
-        self._start_proxy_build(path, proxy_path)
-        return path
-
-    def _start_proxy_build(self, src: str, dst: str):
-        if self._proxy_proc and self._proxy_proc.poll() is None:
-            return
-        tmp_dst = f"{dst}.tmp.mp4"
-        try:
-            if os.path.exists(tmp_dst):
-                os.remove(tmp_dst)
-        except Exception:
-            pass
-        cmd = [
-            "ffmpeg", "-y", "-nostdin", "-loglevel", "error",
-            "-i", src,
-            "-map", "0:v:0", "-map", "0:a?",
-            "-vf", "scale='trunc(iw*min(1,720/ih)/2)*2':'trunc(ih*min(1,720/ih)/2)*2'",
-            "-fps_mode", "passthrough",
-            "-threads", "1",
-            "-c:v", "libx264", "-preset", "veryfast", "-tune", "fastdecode",
-            "-profile:v", "main", "-level", "3.1", "-crf", "24",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000",
-            "-movflags", "+faststart",
-            tmp_dst,
-        ]
-        kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-        if os.name == "nt":
-            kwargs["creationflags"] = 0x08000000
-        try:
-            self.info_label.setText(f"저화질 프리뷰 준비 중 | {os.path.basename(src)}")
-            self._proxy_proc = subprocess.Popen(cmd, **kwargs)
-            self._proxy_target_tmp = tmp_dst
-            self._proxy_target_final = dst
-            self._proxy_timer = QTimer(self)
-            self._proxy_timer.setInterval(1000)
-            self._proxy_timer.timeout.connect(lambda: self._poll_proxy_build(src, tmp_dst, dst))
-            self._proxy_timer.start()
-        except Exception:
-            self._proxy_proc = None
-
-    def _poll_proxy_build(self, src: str, tmp_dst: str, dst: str):
-        proc = getattr(self, "_proxy_proc", None)
-        if proc is None or proc.poll() is None:
-            return
-        try:
-            self._proxy_timer.stop()
-        except Exception:
-            pass
-        ok = proc.returncode == 0 and os.path.exists(tmp_dst) and os.path.getsize(tmp_dst) > 1024
-        self._proxy_proc = None
-        if not ok:
-            try:
-                if os.path.exists(tmp_dst):
-                    os.remove(tmp_dst)
-            except Exception:
-                pass
-            return
-        try:
-            os.replace(tmp_dst, dst)
-        except Exception:
-            return
-        if os.path.normpath(src) != os.path.normpath(getattr(self, "_current_source_path", "") or ""):
-            return
-        self._proxy_playback_path = dst
-        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self._deferred_proxy_switch = dst
-            self.info_label.setText("저화질 프리뷰 준비 완료")
-            return
-        self._switch_to_proxy(dst)
-
-    def _switch_to_proxy(self, proxy_path: str):
-        if not proxy_path or not os.path.exists(proxy_path):
-            return
-        pos = max(0, self.media_player.position())
-        self._set_media_source_if_needed(self.media_player, proxy_path)
-        self.media_player.setPosition(pos)
-        self.info_label.setText(f"저화질 프리뷰 | {os.path.basename(self._proxy_original_path or proxy_path)}")
 
 
     def load(self, path, segments=None):
@@ -979,8 +930,7 @@ class VideoPlayerWidget(QWidget):
                 self.vocal_player.stop()
             self.audio_output.setVolume(1.0)
             self.has_vocal_track = False
-            prefix = "저화질 프리뷰" if os.path.normpath(playback_path) != os.path.normpath(path) else "원본 프리뷰"
-            self.info_label.setText(f"{prefix} | {os.path.basename(path)}")
+            self.info_label.setText(f"720p 표시 프리뷰 | {os.path.basename(path)}")
             if self._is_video_file(path) and self._pending_thumb_path is None:
                 self._extract_and_show_thumbnail(path)
             elif not self._is_video_file(path):
@@ -1273,10 +1223,6 @@ class VideoPlayerWidget(QWidget):
                 self.vocal_player.pause()
         else:
             self._refresh_provider_segments(force=True)
-            if self._deferred_proxy_switch:
-                proxy_path = self._deferred_proxy_switch
-                self._deferred_proxy_switch = None
-                self._switch_to_proxy(proxy_path)
             if self.current_time > 0.05:
                 self.media_player.setPosition(int(self.current_time * 1000))
             if getattr(self, 'has_vocal_track', False):

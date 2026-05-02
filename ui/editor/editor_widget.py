@@ -1,4 +1,4 @@
-# Version: 03.06.17
+# Version: 03.07.09
 # Phase: PHASE2
 """Editor widget and function-preserving PHASE1-C layout."""
 import re, os, sys, json, atexit, threading, shutil, time
@@ -341,7 +341,6 @@ class EditorWidget(
         self.text_edit.speaker_circle_clicked.connect(self._show_speaker_circle_menu)
         self.text_edit.speaker_circle_dropped.connect(self._on_speaker_circle_dropped)
 
-        ew_layout.addWidget(self._build_editor_mode_bar())
         ew_layout.addWidget(self._build_table_header())
         ew_layout.addWidget(self.text_edit)
         self._editor_focus_border = QWidget(editor_wrap)
@@ -576,6 +575,7 @@ class EditorWidget(
 
     def _build_table_header(self) -> QWidget:
         header = QWidget()
+        header.setObjectName("subtitleTableHeader")
         header.setFixedHeight(30)
         header.setStyleSheet("background: #1B2429; border: 1px solid #2D3942; border-radius: 6px;")
         row = QHBoxLayout(header)
@@ -601,6 +601,9 @@ class EditorWidget(
 
     def _build_editor_mode_bar(self) -> QWidget:
         bar = QWidget()
+        bar.setObjectName("subtitleEditorModeBar")
+        bar.setVisible(False)
+        bar.setFixedHeight(0)
         bar.setStyleSheet("background: #151C20; border: 1px solid #2D3942; border-radius: 7px;")
         row = QHBoxLayout(bar)
         row.setContentsMargins(8, 5, 8, 5)
@@ -696,7 +699,8 @@ class EditorWidget(
     def _run_quality_review(self, auto_correct: bool | None = None):
         from core.subtitle_quality.quality_pipeline import run_subtitle_quality_pipeline
 
-        auto = bool(self.chk_quality_auto.isChecked()) if auto_correct is None else bool(auto_correct)
+        auto_checkbox = getattr(self, "chk_quality_auto", None)
+        auto = bool(auto_checkbox.isChecked()) if auto_correct is None and auto_checkbox is not None else bool(auto_correct)
         if auto:
             self.settings["subtitle_quality_auto_correct_enabled"] = True
         self.settings["subtitle_quality_enabled"] = True
