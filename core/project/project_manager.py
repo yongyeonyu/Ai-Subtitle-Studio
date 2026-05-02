@@ -17,6 +17,12 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
+from core.cut_boundary import (
+    cut_boundary_enabled,
+    project_cut_boundaries,
+    split_segments_by_cut_boundaries,
+    sync_project_cut_boundaries,
+)
 from core.project.project_context import STT_SEGMENT_METADATA_KEYS, build_editor_state, sanitize_workspace_state
 from core.media_info import probe_media
 from core.frame_time import frame_count, frame_duration, frame_to_sec, normalize_fps, sec_to_frame
@@ -523,6 +529,7 @@ def create_project(
                 }
                 for c in clips
             ],
+            cut_boundaries=[],
             primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
         ),
 
@@ -571,6 +578,11 @@ def create_project(
         counter += 1
 
     _sanitize_project_workspace_fields(project)
+    sync_project_cut_boundaries(
+        project,
+        settings=user_settings or {},
+        primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
+    )
     _augment_project_frame_metadata(project)
     _write_json(filepath, project)
     return filepath
@@ -651,9 +663,24 @@ def save_project(
 
     # ── 세그먼트 ──
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
+    timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or {}
+    primary_fps = normalize_fps(timebase.get("primary_fps") or (clips[0].get("fps") if clips else 30.0))
+    existing_cut_boundaries = project_cut_boundaries(project, primary_fps=primary_fps)
+    cut_enabled = cut_boundary_enabled(user_settings if user_settings is not None else project.get("user_settings", {}))
+    if stt_preview_segments is not None:
+        stt_preview_segments = split_segments_by_cut_boundaries(
+            stt_preview_segments,
+            existing_cut_boundaries,
+            enabled=cut_enabled,
+            primary_fps=primary_fps,
+        )
     if segments is not None:
-        timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or {}
-        primary_fps = normalize_fps(timebase.get("primary_fps") or (clips[0].get("fps") if clips else 30.0))
+        segments = split_segments_by_cut_boundaries(
+            segments,
+            existing_cut_boundaries,
+            enabled=cut_enabled,
+            primary_fps=primary_fps,
+        )
         new_segs = []
 
         for i, seg in enumerate(segments):
@@ -749,6 +776,7 @@ def save_project(
                 for c in clips
             ],
             stt_preview_segments=stt_preview_segments,
+            cut_boundaries=existing_cut_boundaries,
             primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
         )
     elif media_paths is not None:
@@ -781,6 +809,7 @@ def save_project(
                 for c in clips
             ],
             stt_preview_segments=stt_preview_segments,
+            cut_boundaries=existing_cut_boundaries,
             primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
         )
     elif stt_preview_segments is not None:
@@ -812,6 +841,7 @@ def save_project(
                 for c in clips
             ],
             stt_preview_segments=stt_preview_segments,
+            cut_boundaries=existing_cut_boundaries,
             primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
         )
 
@@ -843,6 +873,11 @@ def save_project(
         project.setdefault("roughcut_state", project.get("roughcut_state", {}) or {})
 
     _sanitize_project_workspace_fields(project)
+    sync_project_cut_boundaries(
+        project,
+        settings=user_settings if user_settings is not None else project.get("user_settings", {}),
+        primary_fps=primary_fps,
+    )
     _augment_project_frame_metadata(project)
     _write_json(filepath, project)
 
@@ -1004,11 +1039,13 @@ def add_media_to_project(filepath: str, new_paths: list):
             }
             for c in clips
         ],
+        cut_boundaries=project_cut_boundaries(project),
     )
     project.setdefault("roughcut_state", {})
 
     project["updated_at"] = datetime.now().isoformat()
     _sanitize_project_workspace_fields(project)
+    sync_project_cut_boundaries(project, settings=project.get("user_settings", {}))
     _augment_project_frame_metadata(project)
     _write_json(filepath, project)
 
@@ -1077,10 +1114,12 @@ def merge_srt_to_project(filepath: str) -> int | None:
             }
             for clip in clips
         ],
+        cut_boundaries=project_cut_boundaries(project),
     )
     project.setdefault("roughcut_state", {})
     project["updated_at"] = datetime.now().isoformat()
     _sanitize_project_workspace_fields(project)
+    sync_project_cut_boundaries(project, settings=project.get("user_settings", {}))
     _augment_project_frame_metadata(project)
     _write_json(filepath, project)
 

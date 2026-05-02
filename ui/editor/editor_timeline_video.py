@@ -19,6 +19,7 @@ from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QApplication
 
 from core.frame_time import normalize_fps, snap_sec_to_frame
+from core.cut_boundary import sync_project_cut_boundaries
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_helpers import (
     find_segment_at, get_sub_block_indices,
@@ -480,7 +481,7 @@ class EditorTimelineVideoMixin:
             return 3
 
     def _scan_cut_is_running(self) -> bool:
-        return bool(getattr(self, "_scan_cut_state", None))
+        return bool(getattr(self, "_scan_cut_state", None) or getattr(self, "_auto_cut_boundary_scan_active", False))
 
     def _scan_should_block_user_timeline_input(self) -> bool:
         return self._scan_cut_is_running()
@@ -492,6 +493,38 @@ class EditorTimelineVideoMixin:
             if canvas is not None:
                 canvas._scan_cut_input_locked = bool(locked)
                 canvas.setProperty("scan_cut_input_locked", bool(locked))
+        except Exception:
+            pass
+
+    def _set_auto_cut_boundary_scan_active(self, active: bool) -> None:
+        self._auto_cut_boundary_scan_active = bool(active)
+        self._scan_set_timeline_input_locked(bool(active))
+        try:
+            if hasattr(self, "timeline") and hasattr(self.timeline, "set_playback_center_lock"):
+                self.timeline.set_playback_center_lock(bool(active))
+        except Exception:
+            pass
+        if not active:
+            try:
+                vp = getattr(self, "video_player", None)
+                if vp is not None and hasattr(vp, "info_label"):
+                    vp.info_label.setText("")
+            except Exception:
+                pass
+
+    def _preview_auto_cut_boundary_scan(self, current_sec: float, next_sec: float = 0.0) -> None:
+        self._set_auto_cut_boundary_scan_active(True)
+        self._scan_preview_global_sec(float(current_sec or 0.0))
+        try:
+            source_path, _, _ctx = self._scan_source_and_local_sec(float(next_sec or current_sec or 0.0))
+            vp = getattr(self, "video_player", None)
+            if vp is not None and source_path and hasattr(vp, "prefetch_thumbnail_at"):
+                target_sec = float(next_sec or current_sec or 0.0)
+                try:
+                    local_sec = float((_ctx or {}).get("local_sec", target_sec) or target_sec)
+                except Exception:
+                    local_sec = target_sec
+                vp.prefetch_thumbnail_at(source_path, local_sec, width=self._scan_preview_thumbnail_size()[0])
         except Exception:
             pass
 
@@ -657,18 +690,30 @@ class EditorTimelineVideoMixin:
 
         try:
             if hasattr(self, "timeline"):
-                self.timeline.set_playhead(global_sec)
+                self.timeline.follow_playhead_centered(global_sec, smooth=False)
         except Exception:
             pass
 
-        # 2) 제일 빠른 경로: OpenCV 썸네일을 video 화면에 표시
+        # 2) 캐시 썸네일 우선: 같은 시점을 반복 방문해도 ffmpeg/OpenCV 비용이 덜 든다.
+        try:
+            source_path, local_sec, _ctx = self._scan_source_and_local_sec(global_sec)
+            vp = getattr(self, "video_player", None)
+            if vp is not None and source_path and hasattr(vp, "show_cached_thumbnail_at"):
+                if vp.show_cached_thumbnail_at(source_path, local_sec, width=self._scan_preview_thumbnail_size()[0]):
+                    if hasattr(vp, "info_label"):
+                        vp.info_label.setText(f"컷 경계 탐색 중 · {float(global_sec):.3f}s")
+                    return
+        except Exception:
+            pass
+
+        # 3) 제일 빠른 실시간 경로: OpenCV 썸네일을 video 화면에 표시
         try:
             if self._scan_show_fast_thumbnail_at_global(global_sec):
                 return
         except Exception:
             pass
 
-        # 3) fallback: 기존 비디오 플레이어 seek
+        # 4) fallback: 기존 비디오 플레이어 seek
         try:
             if hasattr(self, "_resolve_active_context"):
                 ctx = self._resolve_active_context(global_sec=global_sec)
@@ -1171,7 +1216,18 @@ class EditorTimelineVideoMixin:
             "enabled": True,
             "detector": "opencv-gray-pyramid60",
             "count": len(boundaries),
+            "absolute": True,
+            "locked": True,
         }
+
+        try:
+            sync_project_cut_boundaries(
+                project,
+                settings=getattr(self, "settings", {}) or {},
+                primary_fps=fps,
+            )
+        except Exception as exc:
+            print(f"⚠️ [scan-cut] 컷 경계 editor_state 동기화 실패: {exc}", flush=True)
 
         project["updated_at"] = datetime.now().isoformat()
 

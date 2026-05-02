@@ -321,5 +321,9 @@
   "scan_cut_strong_window_threshold": 75.0,
   "scan_cut_strong_window_regions_required": 4,
   "scan_cut_resume_skip_seconds": 1.5,
-  "scan_cut_duplicate_found_window_frames": 18
+  "scan_cut_duplicate_found_window_frames": 18,
+  "scan_cut_boundary_level": "medium",
+  "cut_boundary_level": "medium",
+  "scan_cut_grid_mask": "cross5",
+  "scan_cut_boundary_label": "중간 - 9개 중 꽉찬 십자가 5개"
 }

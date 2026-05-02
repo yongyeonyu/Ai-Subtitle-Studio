@@ -374,9 +374,34 @@ class HomeUIMixin:
         combo = getattr(self, "sidebar_cut_boundary_combo", None)
         if combo is not None:
             try:
-                combo.blockSignals(True)
+                from core.cut_boundary import cut_boundary_level
+                current_level = cut_boundary_level(settings)
+            except Exception:
                 enabled = bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True)))
-                combo.setCurrentIndex(0 if enabled else 1)
+                current_level = "medium" if enabled else "off"
+
+            try:
+                combo.blockSignals(True)
+
+                # 혹시 기존 사용/미사용 항목만 남아 있으면 4단계 항목으로 재구성
+                existing_data = [combo.itemData(i) for i in range(combo.count())]
+                if not all(x in existing_data for x in ("off", "low", "medium", "high")):
+                    combo.clear()
+                    combo.addItem("사용안함", "off")
+                    combo.addItem("낮음", "low")
+                    combo.addItem("중간", "medium")
+                    combo.addItem("높음", "high")
+
+                found = False
+                for i in range(combo.count()):
+                    if combo.itemData(i) == current_level:
+                        combo.setCurrentIndex(i)
+                        found = True
+                        break
+
+                if not found:
+                    combo.setCurrentIndex(2 if combo.count() >= 3 else 0)
+
                 combo.blockSignals(False)
             except RuntimeError:
                 # 콤보박스가 C++ 메모리에서 삭제된 상태면 쿨하게 포기하고 유령 객체 제거
@@ -587,6 +612,27 @@ class HomeUIMixin:
             return "미사용", "러프컷 규칙 기반"
         return self._short_model_name(model), "러프컷 전용"
 
+    def _cut_boundary_sidebar_label(self, settings: dict) -> str:
+        """Return sidebar display label for cut-boundary level."""
+        try:
+            from core.cut_boundary import cut_boundary_level
+            level = cut_boundary_level(settings or {})
+        except Exception:
+            enabled = bool(
+                (settings or {}).get(
+                    "cut_boundary_detection_enabled",
+                    (settings or {}).get("scan_cut_enabled", True),
+                )
+            )
+            level = "medium" if enabled else "off"
+
+        return {
+            "off": "사용안함",
+            "low": "낮음",
+            "medium": "중간",
+            "high": "높음",
+        }.get(str(level or "medium"), "중간")
+
     def _pipeline_rows(self, settings: dict) -> list[tuple[str, str, str]]:
         subtitle_llm = str(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "기본")) or "기본")
         vad_model, _vad_role = getattr(self, "_vad_model_name", lambda s: ("기본", ""))(settings)
@@ -596,10 +642,10 @@ class HomeUIMixin:
         if settings.get("stt_ensemble_enabled"):
             stt2_model = getattr(self, "_short_model_name", lambda s: s)(settings.get("selected_whisper_model_secondary", ""))
 
-        cut_enabled = bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True)))
+        cut_label = self._cut_boundary_sidebar_label(settings)
 
         return [
-            ("cut_boundary", "컷 경계", "사용" if cut_enabled else "미사용"),
+            ("cut_boundary", "컷 경계", cut_label),
             ("preprocess", "전처리", "FFMPEG"),
             ("audio", "음성", getattr(self, "_audio_model_name", lambda s: "기본")(settings)),
             ("stt1", "STT 1", stt1_model),
@@ -900,13 +946,56 @@ class HomeUIMixin:
         menu = QMenu(getattr(self, "home_page", None))
 
         if key == "cut_boundary":
-            choices = [("사용", True), ("미사용", False)]
-            current = bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True)))
+            try:
+                from core.cut_boundary import cut_boundary_level
+                current = cut_boundary_level(settings)
+            except Exception:
+                current = "medium" if bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True))) else "off"
+
+            choices = [
+                ("사용안함", "off"),
+                ("낮음", "low"),
+                ("중간", "medium"),
+                ("높음", "high"),
+            ]
+
+            labels = {
+                "off": "사용안함",
+                "low": "낮음 - 9개 중 십자가 4개",
+                "medium": "중간 - 9개 중 꽉찬 십자가 5개",
+                "high": "높음 - 9개 중 O모양 8개",
+            }
+            masks = {
+                "off": "off",
+                "low": "cross4",
+                "medium": "cross5",
+                "high": "o8",
+            }
+
+            def _cut_boundary_updates(level: str) -> dict:
+                level = str(level or "medium")
+                enabled = level != "off"
+                return {
+                    "scan_cut_boundary_level": level,
+                    "cut_boundary_level": level,
+                    "scan_cut_level": level,
+
+                    # 기존 boolean 설정과 호환
+                    "cut_boundary_detection_enabled": enabled,
+                    "scan_cut_enabled": enabled,
+                    "scan_cut_auto_enabled": enabled,
+                    "cut_boundary_enabled": enabled,
+
+                    # detector profile 보조 저장
+                    "scan_cut_boundary_label": labels.get(level, labels["medium"]),
+                    "scan_cut_grid_mask": masks.get(level, "cross5"),
+                }
+
             for label, value in choices:
                 self._add_action(
                     menu,
                     label,
-                    lambda _=False, v=value: self._apply_sidebar_model_selection({"cut_boundary_detection_enabled": v, "scan_cut_enabled": v}),
+                    lambda _=False, v=value: self._apply_sidebar_model_selection(_cut_boundary_updates(v)),
                     checked=value == current,
                 )
 
