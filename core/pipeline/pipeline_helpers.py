@@ -612,7 +612,7 @@ class PipelineHelpersMixin:
             try:
                 get_logger().log(
                     f"  🎚️ [컷 경계] 단계: {scan_profile.get('label')} "
-                    f"(mask={scan_profile.get('mask')}, cells={len(scan_profile.get('positions', []) or [])}/9)"
+                    f"(mask={scan_profile.get('mask')}, cells={len(scan_profile.get('positions', []) or [])}/25)"
                 )
             except Exception:
                 pass

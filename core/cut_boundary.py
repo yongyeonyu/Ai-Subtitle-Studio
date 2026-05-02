@@ -510,7 +510,7 @@ CUT_BOUNDARY_LEVEL_CHOICES = (
     ("off", "사용안함"),
     ("low", "낮음 - 9개 중 십자가 4개"),
     ("medium", "중간 - 9개 중 꽉찬 십자가 5개"),
-    ("high", "높음 - 9개 중 O모양 8개"),
+    ("high", "높음 - 9개 전체"),
 )
 
 CUT_BOUNDARY_GRID_PROFILES = {
@@ -543,11 +543,11 @@ CUT_BOUNDARY_GRID_PROFILES = {
     },
     "high": {
         "level": "high",
-        "label": "높음 - 9개 중 O모양 8개",
-        "mask": "o8",
-        # O모양 8개: 중앙 제외 외곽 전체
-        "positions": (0, 1, 2, 3, 5, 6, 7, 8),
-        "cell_count": 8,
+        "label": "높음 - 9개 전체",
+        "mask": "grid9",
+        # 9개 전체: 3x3 전체
+        "positions": (0, 1, 2, 3, 4, 5, 6, 7, 8),
+        "cell_count": 9,
     },
 }
 
@@ -743,7 +743,7 @@ def detect_media_cut_boundaries(
         if get_logger:
             get_logger().log(
                 f"🔎 [scan-cut-grid] level={level} label={label} "
-                f"mask={mask} cells={len(positions)}/9 threshold={threshold:.2f} effective={effective_threshold:.2f} min_gap={cooldown_sec:.1f}s "
+                f"mask={mask} cells={len(positions)}/25 threshold={threshold:.2f} effective={effective_threshold:.2f} min_gap={cooldown_sec:.1f}s "
                 f"step={step:.2f}s source={os.path.basename(str(media_path))}"
             )
 
@@ -1081,7 +1081,7 @@ def detect_media_cut_boundaries(
         if get_logger:
             get_logger().log(
                 f"🔎 [scan-cut-grid-v3] level={level} label={label} "
-                f"mask={mask} cells={len(positions)}/9 "
+                f"mask={mask} cells={len(positions)}/25 "
                 f"interval={scan_interval_sec:.3f}s pyramid={pyramid_steps} "
                 f"threshold={threshold:.2f} effective={effective_threshold:.2f} "
                 f"min_gap={min_gap_sec:.1f}s source={os.path.basename(str(media_path))}"
@@ -1270,10 +1270,10 @@ CUT_BOUNDARY_GRID_PROFILES = {
     },
     "high": {
         "level": "high",
-        "label": "높음 - 9개 중 O모양 8개",
-        "mask": "o8",
-        "positions": (0, 1, 2, 3, 5, 6, 7, 8),
-        "cell_count": 8,
+        "label": "높음 - 9개 전체",
+        "mask": "grid9",
+        "positions": (0, 1, 2, 3, 4, 5, 6, 7, 8),
+        "cell_count": 9,
     },
 }
 
@@ -1340,820 +1340,8 @@ def cut_boundary_enabled(settings: dict | None = None) -> bool:
     return cut_boundary_level(settings or {}) != "off"
 
 
-# === AUTO GRID V3 VERIFY WRAPPER START ===
 
-def _auto_verify_cross5_cells(width: int, height: int):
-    xs = [0, int(width / 3), int(width * 2 / 3), width]
-    ys = [0, int(height / 3), int(height * 2 / 3), height]
-    return [
-        (xs[1], ys[0], xs[2], ys[1]),  # top
-        (xs[0], ys[1], xs[1], ys[2]),  # left
-        (xs[1], ys[1], xs[2], ys[2]),  # center
-        (xs[2], ys[1], xs[3], ys[2]),  # right
-        (xs[1], ys[2], xs[2], ys[3]),  # bottom
-    ]
 
-
-def _auto_verify_gray_thumb_from_frame(frame, cv2_mod, *, scale_w: int, scale_h: int):
-    try:
-        h, w = frame.shape[:2]
-    except Exception:
-        return None
-    if w <= 0 or h <= 0:
-        return None
-
-    out = []
-    for x1, y1, x2, y2 in _auto_verify_cross5_cells(w, h):
-        roi = frame[y1:y2, x1:x2]
-        if roi is None or roi.size == 0:
-            return None
-        gray = cv2_mod.cvtColor(roi, cv2_mod.COLOR_BGR2GRAY)
-        small = cv2_mod.resize(gray, (int(scale_w), int(scale_h)), interpolation=cv2_mod.INTER_AREA)
-        out.append(small.tobytes())
-    return tuple(out)
-
-
-def _auto_verify_color_thumb_from_frame(frame, cv2_mod, *, scale_w: int, scale_h: int, color_space: str = "ycrcb"):
-    """
-    최종 color verify용 thumbnail.
-    ycrcb 기본:
-      Y  = luma
-      Cr/Cb = chroma
-    """
-    try:
-        h, w = frame.shape[:2]
-    except Exception:
-        return None
-    if w <= 0 or h <= 0:
-        return None
-
-    out = []
-    color_space = str(color_space or "ycrcb").lower()
-
-    for x1, y1, x2, y2 in _auto_verify_cross5_cells(w, h):
-        roi = frame[y1:y2, x1:x2]
-        if roi is None or roi.size == 0:
-            return None
-
-        if color_space == "hsv":
-            img = cv2_mod.cvtColor(roi, cv2_mod.COLOR_BGR2HSV)
-        elif color_space == "lab":
-            img = cv2_mod.cvtColor(roi, cv2_mod.COLOR_BGR2LAB)
-        else:
-            img = cv2_mod.cvtColor(roi, cv2_mod.COLOR_BGR2YCrCb)
-
-        small = cv2_mod.resize(img, (int(scale_w), int(scale_h)), interpolation=cv2_mod.INTER_AREA)
-        out.append(small)
-    return tuple(out)
-
-
-def _auto_verify_delta_bytes(a: bytes, b: bytes, *, target_samples: int = 64) -> float:
-    if not a or not b:
-        return 0.0
-    n = min(len(a), len(b))
-    if n <= 0:
-        return 0.0
-    target_samples = max(16, min(256, int(target_samples or 64)))
-    step = max(1, n // target_samples)
-    total = 0
-    count = 0
-    for i in range(0, n, step):
-        total += abs(a[i] - b[i])
-        count += 1
-    return total / float(count or 1)
-
-
-def _auto_verify_gray_delta(prev_thumb, next_thumb, *, region_threshold: float, target_samples: int):
-    if not prev_thumb or not next_thumb:
-        return 0.0, 0, []
-    n = min(len(prev_thumb), len(next_thumb))
-    deltas = [
-        _auto_verify_delta_bytes(prev_thumb[i], next_thumb[i], target_samples=target_samples)
-        for i in range(n)
-    ]
-    hits = sum(1 for d in deltas if d >= region_threshold)
-    ranked = sorted(deltas, reverse=True)
-    top_n = ranked[: min(3, len(ranked))]
-    score = sum(top_n) / float(len(top_n) or 1)
-    return float(score), int(hits), deltas
-
-
-def _auto_verify_color_delta(
-    prev_thumb,
-    next_thumb,
-    *,
-    cv2_mod,
-    color_threshold: float,
-    weight_luma: float,
-    weight_chroma: float,
-):
-    if not prev_thumb or not next_thumb:
-        return 0.0, 0, []
-
-    n = min(len(prev_thumb), len(next_thumb))
-    deltas = []
-
-    for i in range(n):
-        a = prev_thumb[i]
-        b = next_thumb[i]
-        if a is None or b is None:
-            continue
-        try:
-            diff = cv2_mod.absdiff(a, b)
-            # channel 0 = luma/value-ish, channel 1/2 = chroma-ish
-            luma = float(diff[:, :, 0].mean())
-            chroma = float(diff[:, :, 1:].mean())
-            score = (float(weight_luma) * luma) + (float(weight_chroma) * chroma)
-            deltas.append(score)
-        except Exception:
-            continue
-
-    if not deltas:
-        return 0.0, 0, []
-
-    hits = sum(1 for d in deltas if d >= color_threshold)
-    ranked = sorted(deltas, reverse=True)
-    top_n = ranked[: min(3, len(ranked))]
-    score = sum(top_n) / float(len(top_n) or 1)
-    return float(score), int(hits), deltas
-
-
-def _auto_verify_capture_thumbs_sequential(
-    cap,
-    cv2_mod,
-    *,
-    start_frame: int,
-    end_frame: int,
-    frame_count: int,
-    scale_w: int,
-    scale_h: int,
-    include_color: bool = False,
-    color_space: str = "ycrcb",
-):
-    start_frame = max(0, int(start_frame))
-    end_frame = min(int(frame_count) - 1, int(end_frame))
-    if end_frame < start_frame:
-        return {}, {}
-
-    gray_thumbs = {}
-    color_thumbs = {}
-
-    try:
-        cap.set(cv2_mod.CAP_PROP_POS_FRAMES, start_frame)
-    except Exception:
-        return gray_thumbs, color_thumbs
-
-    f = start_frame
-    while f <= end_frame:
-        ok, frame = cap.read()
-        if not ok or frame is None:
-            break
-
-        gray_thumbs[f] = _auto_verify_gray_thumb_from_frame(
-            frame,
-            cv2_mod,
-            scale_w=scale_w,
-            scale_h=scale_h,
-        )
-
-        if include_color:
-            color_thumbs[f] = _auto_verify_color_thumb_from_frame(
-                frame,
-                cv2_mod,
-                scale_w=scale_w,
-                scale_h=scale_h,
-                color_space=color_space,
-            )
-
-        f += 1
-
-    return gray_thumbs, color_thumbs
-
-
-def _auto_grid_v3_manual_verify_fast(
-    cap,
-    cv2_mod,
-    *,
-    fps: float,
-    frame_count: int,
-    coarse_frame: int,
-    settings: dict | None = None,
-):
-    """
-    grid-v3 후보 검증.
-
-    1) gray 1f
-    2) gray 2f
-    3) gray window rollback
-    4) color window final verify
-
-    판정:
-    - gray very strong면 color weak여도 통과 가능
-    - gray ambiguous면 color strong일 때 통과
-    - 둘 다 약하면 reject
-    """
-    settings = settings or {}
-
-    try:
-        fps = float(fps or 30.0)
-        frame_count = int(frame_count or 0)
-        coarse_frame = int(coarse_frame)
-    except Exception:
-        return None
-
-    if fps <= 0.0 or frame_count <= 1:
-        return None
-
-    rollback_frames = int(settings.get("scan_cut_auto_verify_rollback_frames", round(fps * 1.0)))
-    forward_frames = int(settings.get("scan_cut_auto_verify_forward_frames", round(fps * 1.0)))
-    rollback_frames = max(2, min(240, rollback_frames))
-    forward_frames = max(2, min(240, forward_frames))
-
-    threshold_1f = float(settings.get("scan_cut_auto_verify_threshold", settings.get("scan_cut_threshold", 24.0)))
-    threshold_2f = threshold_1f * float(settings.get("scan_cut_auto_verify_two_frame_threshold_multiplier", 1.10))
-
-    gray_window_threshold = float(settings.get("scan_cut_auto_verify_window_threshold", 75.0))
-    gray_very_strong_threshold = float(settings.get("scan_cut_auto_gray_very_strong_threshold", 90.0))
-    gray_ambiguous_threshold = float(settings.get("scan_cut_auto_gray_ambiguous_threshold", 55.0))
-
-    region_threshold = float(settings.get("scan_cut_region_threshold", 18.0))
-
-    required_regions_1f = max(1, min(5, int(settings.get("scan_cut_auto_verify_regions_required", 3))))
-    required_regions_window = max(1, min(5, int(settings.get("scan_cut_auto_verify_window_regions_required", 4))))
-    required_regions_ambiguous = max(1, min(5, int(settings.get("scan_cut_auto_gray_ambiguous_regions_required", 3))))
-
-    color_enabled = bool(settings.get("scan_cut_color_verify_enabled", True))
-    color_space = str(settings.get("scan_cut_color_verify_space", "ycrcb") or "ycrcb")
-    color_threshold = float(settings.get("scan_cut_color_verify_threshold", 18.0))
-    color_strong_threshold = float(settings.get("scan_cut_color_verify_strong_threshold", 22.0))
-    color_regions_required = max(1, min(5, int(settings.get("scan_cut_color_verify_regions_required", 3))))
-    color_weight_luma = float(settings.get("scan_cut_color_verify_weight_luma", 0.25))
-    color_weight_chroma = float(settings.get("scan_cut_color_verify_weight_chroma", 0.75))
-
-    scale_w = max(8, min(48, int(settings.get("scan_cut_sample_width", 18))))
-    scale_h = max(6, min(27, int(settings.get("scan_cut_sample_height", 10))))
-    target_samples = max(16, min(256, int(settings.get("scan_cut_target_samples", 64))))
-
-    try:
-        stages_raw = settings.get("scan_cut_auto_verify_window_stages", [30, 15, 6, 3, 1])
-        if isinstance(stages_raw, str):
-            stages = [max(1, int(x.strip())) for x in stages_raw.split(",") if x.strip()]
-        else:
-            stages = [max(1, int(x)) for x in list(stages_raw or [30, 15, 6, 3, 1])]
-    except Exception:
-        stages = [30, 15, 6, 3, 1]
-
-    if 1 not in stages:
-        stages.append(1)
-
-    max_stage = max(stages or [1])
-
-    lo = max(0, coarse_frame - rollback_frames)
-    hi = min(frame_count - 2, coarse_frame + forward_frames)
-    read_hi = min(frame_count - 1, hi + max_stage + 1)
-
-    print(
-        f"↩️ [scan-cut-grid-v3] manual-verify START "
-        f"coarse={coarse_frame / fps:.3f}s range={lo}-{hi} modes=gray1f+gray2f+graywindow+color",
-        flush=True,
-    )
-
-    gray_thumbs, color_thumbs = _auto_verify_capture_thumbs_sequential(
-        cap,
-        cv2_mod,
-        start_frame=lo,
-        end_frame=read_hi,
-        frame_count=frame_count,
-        scale_w=scale_w,
-        scale_h=scale_h,
-        include_color=color_enabled,
-        color_space=color_space,
-    )
-
-    if not gray_thumbs:
-        print("⚠️ [scan-cut-grid-v3] manual-verify failed: no readable frames", flush=True)
-        return None
-
-    best_adj = {
-        "frame": None,
-        "score": -1.0,
-        "regions": 0,
-        "deltas": [],
-        "mode": "1f",
-        "threshold": threshold_1f,
-    }
-
-    def consider_adj(mode, frame_no, score, regions, deltas, threshold):
-        norm = (float(score) / float(threshold or 1.0)) + min(int(regions), required_regions_1f) * 0.03
-        old_norm = (float(best_adj["score"]) / float(best_adj["threshold"] or 1.0)) + min(int(best_adj["regions"]), required_regions_1f) * 0.03
-        if best_adj["frame"] is None or norm > old_norm:
-            best_adj.update(
-                {
-                    "frame": int(frame_no),
-                    "score": float(score),
-                    "regions": int(regions),
-                    "deltas": list(deltas or []),
-                    "mode": str(mode),
-                    "threshold": float(threshold),
-                }
-            )
-
-    # gray 1f / 2f 검증
-    for f in range(lo, hi + 1):
-        a1 = gray_thumbs.get(f)
-        b1 = gray_thumbs.get(f + 1)
-        if a1 is not None and b1 is not None:
-            score, regions, deltas = _auto_verify_gray_delta(
-                a1,
-                b1,
-                region_threshold=region_threshold,
-                target_samples=target_samples,
-            )
-            consider_adj("1f", f, score, regions, deltas, threshold_1f)
-
-        a2 = gray_thumbs.get(f)
-        b2 = gray_thumbs.get(f + 2)
-        if a2 is not None and b2 is not None:
-            score, regions, deltas = _auto_verify_gray_delta(
-                a2,
-                b2,
-                region_threshold=region_threshold,
-                target_samples=target_samples,
-            )
-            consider_adj("2f", f + 1, score, regions, deltas, threshold_2f)
-
-    # gray window rollback 검증
-    best_win = {
-        "frame": None,
-        "score": -1.0,
-        "regions": 0,
-        "deltas": [],
-        "stage": 0,
-    }
-
-    cur_lo = lo
-    cur_hi = hi
-
-    for stage in stages:
-        stage = max(1, int(stage))
-        step = max(1, stage // 2)
-
-        local_frame = None
-        local_score = -1.0
-        local_regions = 0
-        local_deltas = []
-
-        f = int(cur_lo)
-        while f <= int(cur_hi):
-            a = gray_thumbs.get(f)
-            b = gray_thumbs.get(f + stage)
-            if a is not None and b is not None:
-                score, regions, deltas = _auto_verify_gray_delta(
-                    a,
-                    b,
-                    region_threshold=region_threshold,
-                    target_samples=target_samples,
-                )
-                if score > local_score:
-                    local_frame = int(f)
-                    local_score = float(score)
-                    local_regions = int(regions)
-                    local_deltas = list(deltas or [])
-            f += step
-
-        if local_frame is None:
-            continue
-
-        if local_score > best_win["score"]:
-            best_win.update(
-                {
-                    "frame": int(local_frame),
-                    "score": float(local_score),
-                    "regions": int(local_regions),
-                    "deltas": list(local_deltas),
-                    "stage": int(stage),
-                }
-            )
-
-        cur_lo = max(lo, local_frame - stage)
-        cur_hi = min(hi, local_frame + stage)
-
-        delta_text = ",".join(f"{d:.1f}" for d in local_deltas[:5])
-        print(
-            f"🔍 [scan-cut-grid-v3] gray rollback stage={stage} "
-            f"best={local_frame / fps:.3f}s score={local_score:.2f} "
-            f"regions={local_regions} range={cur_lo}-{cur_hi} cross=[{delta_text}]",
-            flush=True,
-        )
-
-    # color final verify: gray window 후보 위치 기준
-    color_result = {
-        "enabled": color_enabled,
-        "frame": None,
-        "score": 0.0,
-        "regions": 0,
-        "deltas": [],
-        "stage": 0,
-        "passed": False,
-        "strong": False,
-    }
-
-    if color_enabled and color_thumbs and best_win["frame"] is not None:
-        color_stage = max(3, int(settings.get("scan_cut_color_verify_window_frames", best_win["stage"] or 30)))
-        color_center = int(best_win["frame"])
-        color_lo = max(lo, color_center - color_stage)
-        color_hi = min(hi, color_center + color_stage)
-
-        best_color_frame = None
-        best_color_score = -1.0
-        best_color_regions = 0
-        best_color_deltas = []
-
-        step = max(1, color_stage // 2)
-        f = color_lo
-        while f <= color_hi:
-            a = color_thumbs.get(f)
-            b = color_thumbs.get(f + color_stage)
-            if a is not None and b is not None:
-                score, regions, deltas = _auto_verify_color_delta(
-                    a,
-                    b,
-                    cv2_mod=cv2_mod,
-                    color_threshold=color_threshold,
-                    weight_luma=color_weight_luma,
-                    weight_chroma=color_weight_chroma,
-                )
-                if score > best_color_score:
-                    best_color_frame = int(f)
-                    best_color_score = float(score)
-                    best_color_regions = int(regions)
-                    best_color_deltas = list(deltas or [])
-            f += step
-
-        if best_color_frame is not None:
-            color_pass = best_color_score >= color_threshold and best_color_regions >= color_regions_required
-            color_strong = best_color_score >= color_strong_threshold and best_color_regions >= color_regions_required
-            color_result.update(
-                {
-                    "frame": int(best_color_frame),
-                    "score": float(best_color_score),
-                    "regions": int(best_color_regions),
-                    "deltas": list(best_color_deltas),
-                    "stage": int(color_stage),
-                    "passed": bool(color_pass),
-                    "strong": bool(color_strong),
-                }
-            )
-
-        c_d = ",".join(f"{d:.1f}" for d in color_result["deltas"][:5])
-        print(
-            f"{'✅' if color_result['passed'] else '⚠️'} [scan-cut-grid-v3] color-verify "
-            f"space={color_space} frame={'' if color_result.get('frame') is None else format(float(color_result.get('frame')) / float(fps or 30.0), '.3f') + 's'} "
-            f"score={color_result['score']:.2f}/{color_threshold:.2f} "
-            f"regions={color_result['regions']}/{color_regions_required} "
-            f"stage={color_result['stage']} cross=[{c_d}]",
-            flush=True,
-        )
-
-    adj_pass = (
-        best_adj["frame"] is not None
-        and best_adj["score"] >= best_adj["threshold"]
-        and best_adj["regions"] >= required_regions_1f
-    )
-
-    gray_window_pass = (
-        best_win["frame"] is not None
-        and best_win["score"] >= gray_window_threshold
-        and best_win["regions"] >= required_regions_window
-    )
-
-    gray_very_strong = (
-        best_win["frame"] is not None
-        and best_win["score"] >= gray_very_strong_threshold
-        and best_win["regions"] >= required_regions_window
-    )
-
-    gray_ambiguous = (
-        best_win["frame"] is not None
-        and best_win["score"] >= gray_ambiguous_threshold
-        and best_win["regions"] >= required_regions_ambiguous
-    )
-
-    color_pass = bool(color_result.get("passed"))
-    color_strong = bool(color_result.get("strong"))
-
-    # Decision
-    if adj_pass:
-        selected = {
-            "reason": "adjacent",
-            "mode": str(best_adj["mode"]),
-            "frame": int(best_adj["frame"]),
-            "score": float(best_adj["score"]),
-            "regions": int(best_adj["regions"]),
-            "deltas": list(best_adj["deltas"]),
-        }
-    elif gray_very_strong:
-        # gray strong + color weak면 통과 가능
-        selected = {
-            "reason": "gray_strong_color_checked",
-            "mode": f"window{best_win['stage']}",
-            "frame": int(best_win["frame"]),
-            "score": float(best_win["score"]),
-            "regions": int(best_win["regions"]),
-            "deltas": list(best_win["deltas"]),
-        }
-    elif gray_window_pass and (not color_enabled or color_pass):
-        selected = {
-            "reason": "gray_window_color_pass",
-            "mode": f"window{best_win['stage']}",
-            "frame": int(best_win["frame"]),
-            "score": float(best_win["score"]),
-            "regions": int(best_win["regions"]),
-            "deltas": list(best_win["deltas"]),
-        }
-    elif gray_ambiguous and color_strong:
-        # gray 애매 + color strong이면 통과
-        selected = {
-            "reason": "gray_ambiguous_color_strong",
-            "mode": f"color{color_result['stage']}",
-            "frame": int(color_result["frame"] if color_result["frame"] is not None else best_win["frame"]),
-            "score": float(max(best_win["score"], color_result["score"])),
-            "regions": int(max(best_win["regions"], color_result["regions"])),
-            "deltas": list(color_result["deltas"] or best_win["deltas"]),
-        }
-    else:
-        adj_d = ",".join(f"{d:.1f}" for d in list(best_adj["deltas"] or [])[:5])
-        win_d = ",".join(f"{d:.1f}" for d in list(best_win["deltas"] or [])[:5])
-        col_d = ",".join(f"{d:.1f}" for d in list(color_result["deltas"] or [])[:5])
-        print(
-            f"⚠️ [scan-cut-grid-v3] manual-verify FAIL "
-            f"adj={best_adj['score']:.2f}/{best_adj['threshold']:.2f} "
-            f"adj_regions={best_adj['regions']}/{required_regions_1f} "
-            f"gray_win={best_win['score']:.2f}/{gray_window_threshold:.2f} "
-            f"gray_regions={best_win['regions']}/{required_regions_window} "
-            f"color={color_result['score']:.2f}/{color_threshold:.2f} "
-            f"color_regions={color_result['regions']}/{color_regions_required} "
-            f"adj_cross=[{adj_d}] gray_cross=[{win_d}] color_cross=[{col_d}]",
-            flush=True,
-        )
-        return {
-            "passed": False,
-            "mode": "fail",
-            "reason": "failed",
-            "frame": int(best_adj["frame"] or best_win["frame"] or coarse_frame),
-            "sec": float((best_adj["frame"] or best_win["frame"] or coarse_frame) / fps),
-            "score": float(max(best_adj["score"], best_win["score"], color_result["score"])),
-            "regions": int(max(best_adj["regions"], best_win["regions"], color_result["regions"])),
-            "deltas": list(best_adj["deltas"] or best_win["deltas"] or color_result["deltas"] or []),
-            "color_score": float(color_result["score"]),
-            "color_regions": int(color_result["regions"]),
-        }
-
-    selected["passed"] = True
-    selected["sec"] = float(selected["frame"] / fps)
-    selected["color_score"] = float(color_result["score"])
-    selected["color_regions"] = int(color_result["regions"])
-    selected["color_passed"] = bool(color_result["passed"])
-    selected["color_strong"] = bool(color_result["strong"])
-
-    delta_text = ",".join(f"{d:.1f}" for d in selected["deltas"][:5])
-    print(
-        f"✅ [scan-cut-grid-v3] manual-verify PASS "
-        f"reason={selected['reason']} mode={selected['mode']} "
-        f"coarse={coarse_frame / fps:.3f}s refined={selected['sec']:.3f}s "
-        f"gray_score={selected['score']:.2f} gray_regions={selected['regions']} "
-        f"color_score={selected['color_score']:.2f} color_regions={selected['color_regions']} "
-        f"cross=[{delta_text}]",
-        flush=True,
-    )
-    return selected
-
-
-_auto_grid_v3_original_detect_media_cut_boundaries = detect_media_cut_boundaries
-
-
-def detect_media_cut_boundaries(
-    filepath,
-    *,
-    clip_offset: float = 0.0,
-    clip_idx: int = 0,
-    sample_step_sec: float = 1.0,
-    threshold: float = 24.0,
-    progress_callback=None,
-    found_callback=None,
-    scan_profile: dict | None = None,
-    sample_positions=None,
-    sample_mask: str | None = None,
-    **kwargs,
-):
-    settings = dict(kwargs.get("settings") or {})
-    try:
-        from core.settings import load_settings
-        loaded = dict(load_settings() or {})
-        loaded.update(settings)
-        settings = loaded
-    except Exception:
-        pass
-
-    if not bool(settings.get("scan_cut_auto_manual_verify_enabled", True)):
-        return _auto_grid_v3_original_detect_media_cut_boundaries(
-            filepath,
-            clip_offset=clip_offset,
-            clip_idx=clip_idx,
-            sample_step_sec=sample_step_sec,
-            threshold=threshold,
-            progress_callback=progress_callback,
-            found_callback=found_callback,
-            scan_profile=scan_profile,
-            sample_positions=sample_positions,
-            sample_mask=sample_mask,
-            **kwargs,
-        )
-
-    try:
-        import cv2
-    except Exception:
-        return _auto_grid_v3_original_detect_media_cut_boundaries(
-            filepath,
-            clip_offset=clip_offset,
-            clip_idx=clip_idx,
-            sample_step_sec=sample_step_sec,
-            threshold=threshold,
-            progress_callback=progress_callback,
-            found_callback=found_callback,
-            scan_profile=scan_profile,
-            sample_positions=sample_positions,
-            sample_mask=sample_mask,
-            **kwargs,
-        )
-
-    cap = cv2.VideoCapture(str(filepath))
-    if not cap.isOpened():
-        return _auto_grid_v3_original_detect_media_cut_boundaries(
-            filepath,
-            clip_offset=clip_offset,
-            clip_idx=clip_idx,
-            sample_step_sec=sample_step_sec,
-            threshold=threshold,
-            progress_callback=progress_callback,
-            found_callback=found_callback,
-            scan_profile=scan_profile,
-            sample_positions=sample_positions,
-            sample_mask=sample_mask,
-            **kwargs,
-        )
-
-    verified_rows = []
-    saw_callback = False
-
-    try:
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        if fps <= 1.0:
-            fps = 30.0
-        fps = normalize_fps(fps)
-
-        min_gap_sec = float(settings.get("scan_cut_auto_min_gap_sec", 6.0))
-        min_gap_frames = max(1, int(round(min_gap_sec * fps)))
-
-        def verified_progress_callback(payload):
-            if not callable(progress_callback):
-                return
-            try:
-                fixed = dict(payload or {})
-                fixed["detected"] = len(verified_rows)
-                fixed["verified_detected"] = len(verified_rows)
-                progress_callback(fixed)
-            except Exception:
-                pass
-
-        def row_raw_score(row):
-            for key in ("score", "delta", "window_score"):
-                try:
-                    value = row.get(key)
-                    if value is not None:
-                        return float(value)
-                except Exception:
-                    pass
-            return 0.0
-
-        def verify_row(row):
-            if not isinstance(row, dict):
-                return None
-
-            try:
-                local_sec = float(row.get("clip_local_sec", 0.0) or 0.0)
-            except Exception:
-                local_sec = 0.0
-
-            if local_sec <= 0.0:
-                try:
-                    local_sec = float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0) - float(clip_offset or 0.0)
-                except Exception:
-                    local_sec = 0.0
-
-            coarse_frame = max(0, int(round(local_sec * fps)))
-
-            verified = _auto_grid_v3_manual_verify_fast(
-                cap,
-                cv2,
-                fps=fps,
-                frame_count=frame_count,
-                coarse_frame=coarse_frame,
-                settings=settings,
-            )
-
-            if not verified or not verified.get("passed"):
-                print(
-                    f"⚠️ [scan-cut-grid-v3] candidate rejected by gray/color verify "
-                    f"coarse={local_sec:.3f}s raw_score={row_raw_score(row):.2f}",
-                    flush=True,
-                )
-                return None
-
-            refined_local_sec = float(verified.get("sec", local_sec) or local_sec)
-            timeline_sec = float(clip_offset or 0.0) + refined_local_sec
-            timeline_frame = sec_to_frame(timeline_sec, fps)
-
-            for old in verified_rows:
-                try:
-                    if abs(int(old.get("timeline_frame", -999999)) - timeline_frame) <= min_gap_frames:
-                        print(
-                            f"↪️ [scan-cut-grid-v3] verified duplicate skipped frame={timeline_frame}",
-                            flush=True,
-                        )
-                        return None
-                except Exception:
-                    pass
-
-            fixed = dict(row)
-            fixed.update(
-                {
-                    "schema": "cut_boundary.v1",
-                    "id": f"cut_{timeline_frame:08d}",
-                    "time": timeline_sec,
-                    "timeline_sec": timeline_sec,
-                    "frame": timeline_frame,
-                    "timeline_frame": timeline_frame,
-                    "fps": fps,
-                    "clip_idx": int(clip_idx or 0),
-                    "clip_local_sec": refined_local_sec,
-                    "source_path": str(filepath),
-                    "score": float(verified.get("score", fixed.get("score", 0.0)) or 0.0),
-                    "regions": int(verified.get("regions", fixed.get("regions", 0)) or 0),
-                    "color_score": float(verified.get("color_score", 0.0) or 0.0),
-                    "color_regions": int(verified.get("color_regions", 0) or 0),
-                    "reason": str(verified.get("reason") or "auto_grid_v3_gray_color_verified"),
-                    "detector": "opencv-gray-grid-v3-gray-color-verified",
-                    "source": "visual",
-                    "absolute": True,
-                    "locked": True,
-                }
-            )
-            return fixed
-
-        def verified_found_callback(row, rows):
-            nonlocal saw_callback
-            saw_callback = True
-            fixed = verify_row(row)
-            if fixed is None:
-                return
-            verified_rows.append(fixed)
-            if callable(found_callback):
-                try:
-                    found_callback(dict(fixed), list(verified_rows))
-                except Exception:
-                    pass
-
-        raw_rows = _auto_grid_v3_original_detect_media_cut_boundaries(
-            filepath,
-            clip_offset=clip_offset,
-            clip_idx=clip_idx,
-            sample_step_sec=sample_step_sec,
-            threshold=threshold,
-            progress_callback=verified_progress_callback,
-            found_callback=verified_found_callback,
-            scan_profile=scan_profile,
-            sample_positions=sample_positions,
-            sample_mask=sample_mask,
-            **kwargs,
-        )
-
-        if not saw_callback:
-            for row in raw_rows or []:
-                fixed = verify_row(row)
-                if fixed is not None:
-                    verified_rows.append(fixed)
-
-        return normalize_cut_boundaries(verified_rows, primary_fps=fps)
-
-    finally:
-        try:
-            cap.release()
-        except Exception:
-            pass
-
-# === AUTO GRID V3 VERIFY WRAPPER END ===
 
 
 # === FRAME FPS NORMALIZE PATCH START ===
@@ -2563,4 +1751,955 @@ def sync_project_cut_boundaries(
     return boundaries
 
 # === VIDEO FPS NORMALIZE OVERRIDE END ===
+
+
+# === AUTO GRID V3 VERIFY WRAPPER START ===
+
+def _auto_level_positions(scan_profile=None, sample_positions=None):
+    """
+    최종 색상 평균 검증에 사용할 grid 위치.
+    낮음: 4칸, 중간: 5칸, 높음: 8칸.
+    """
+    if sample_positions:
+        try:
+            return tuple(int(x) for x in sample_positions)
+        except Exception:
+            pass
+
+    profile = scan_profile or {}
+    positions = profile.get("positions") if isinstance(profile, dict) else None
+    if positions:
+        try:
+            return tuple(int(x) for x in positions)
+        except Exception:
+            pass
+
+    level = ""
+    if isinstance(profile, dict):
+        level = str(profile.get("level", "") or "").lower()
+
+    if level == "low":
+        return (1, 3, 5, 7)              # 4칸: 상/좌/우/하
+    if level == "high":
+        return (0, 1, 2, 3, 4, 5, 6, 7, 8) # 9칸: 3x3 전체
+
+    return (1, 3, 4, 5, 7)              # 5칸: cross5
+
+
+def _auto_grid_cells(width: int, height: int):
+    xs = [0, int(width / 3), int(width * 2 / 3), width]
+    ys = [0, int(height / 3), int(height * 2 / 3), height]
+    cells = []
+    for r in range(3):
+        for c in range(3):
+            cells.append((xs[c], ys[r], xs[c + 1], ys[r + 1]))
+    return cells
+
+
+def _auto_gray_thumb_from_frame(frame, cv2_mod, *, positions, scale_w: int, scale_h: int):
+    try:
+        h, w = frame.shape[:2]
+    except Exception:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+
+    cells = _auto_grid_cells(w, h)
+    out = []
+    for idx in positions:
+        try:
+            x1, y1, x2, y2 = cells[int(idx)]
+        except Exception:
+            continue
+        roi = frame[y1:y2, x1:x2]
+        if roi is None or roi.size == 0:
+            continue
+        gray = cv2_mod.cvtColor(roi, cv2_mod.COLOR_BGR2GRAY)
+        small = cv2_mod.resize(gray, (int(scale_w), int(scale_h)), interpolation=cv2_mod.INTER_AREA)
+        out.append(small.tobytes())
+
+    return tuple(out) if out else None
+
+
+def _auto_color_avg_from_frame(frame, cv2_mod, *, positions, color_space: str = "ycrcb"):
+    """
+    선택 grid 칸별 평균 색상 벡터를 만든다.
+    YCrCb 기준:
+      Y는 밝기, Cr/Cb는 색상 성분.
+    """
+    try:
+        h, w = frame.shape[:2]
+    except Exception:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+
+    color_space = str(color_space or "ycrcb").lower()
+    cells = _auto_grid_cells(w, h)
+    out = []
+
+    for idx in positions:
+        try:
+            x1, y1, x2, y2 = cells[int(idx)]
+        except Exception:
+            continue
+
+        roi = frame[y1:y2, x1:x2]
+        if roi is None or roi.size == 0:
+            continue
+
+        try:
+            if color_space == "hsv":
+                converted = cv2_mod.cvtColor(roi, cv2_mod.COLOR_BGR2HSV)
+            elif color_space == "lab":
+                converted = cv2_mod.cvtColor(roi, cv2_mod.COLOR_BGR2LAB)
+            else:
+                converted = cv2_mod.cvtColor(roi, cv2_mod.COLOR_BGR2YCrCb)
+
+            mean = converted.reshape(-1, 3).mean(axis=0)
+            out.append(tuple(float(x) for x in mean))
+        except Exception:
+            continue
+
+    return tuple(out) if out else None
+
+
+def _auto_delta_bytes(a: bytes, b: bytes, *, target_samples: int = 64) -> float:
+    if not a or not b:
+        return 0.0
+    n = min(len(a), len(b))
+    if n <= 0:
+        return 0.0
+
+    target_samples = max(16, min(256, int(target_samples or 64)))
+    step = max(1, n // target_samples)
+
+    total = 0
+    count = 0
+    for i in range(0, n, step):
+        total += abs(a[i] - b[i])
+        count += 1
+
+    return total / float(count or 1)
+
+
+def _auto_gray_delta(prev_thumb, next_thumb, *, region_threshold: float, target_samples: int):
+    if not prev_thumb or not next_thumb:
+        return 0.0, 0, []
+
+    n = min(len(prev_thumb), len(next_thumb))
+    deltas = [
+        _auto_delta_bytes(prev_thumb[i], next_thumb[i], target_samples=target_samples)
+        for i in range(n)
+    ]
+
+    hits = sum(1 for d in deltas if d >= region_threshold)
+    ranked = sorted(deltas, reverse=True)
+    top_n = ranked[: min(3, len(ranked))]
+    score = sum(top_n) / float(len(top_n) or 1)
+    return float(score), int(hits), deltas
+
+
+def _auto_color_avg_delta(
+    prev_avg,
+    next_avg,
+    *,
+    threshold: float,
+    weight_luma: float,
+    weight_chroma: float,
+):
+    if not prev_avg or not next_avg:
+        return 0.0, 0, []
+
+    n = min(len(prev_avg), len(next_avg))
+    deltas = []
+
+    for i in range(n):
+        try:
+            a0, a1, a2 = prev_avg[i]
+            b0, b1, b2 = next_avg[i]
+            luma = abs(float(a0) - float(b0))
+            chroma = (abs(float(a1) - float(b1)) + abs(float(a2) - float(b2))) / 2.0
+            score = float(weight_luma) * luma + float(weight_chroma) * chroma
+            deltas.append(score)
+        except Exception:
+            continue
+
+    if not deltas:
+        return 0.0, 0, []
+
+    hits = sum(1 for d in deltas if d >= threshold)
+    score = sum(deltas) / float(len(deltas))
+    return float(score), int(hits), deltas
+
+
+def _auto_capture_verify_maps(
+    cap,
+    cv2_mod,
+    *,
+    start_frame: int,
+    end_frame: int,
+    frame_count: int,
+    positions,
+    scale_w: int,
+    scale_h: int,
+    color_space: str,
+):
+    start_frame = max(0, int(start_frame))
+    end_frame = min(int(frame_count) - 1, int(end_frame))
+    if end_frame < start_frame:
+        return {}, {}
+
+    gray_map = {}
+    color_map = {}
+
+    try:
+        cap.set(cv2_mod.CAP_PROP_POS_FRAMES, start_frame)
+    except Exception:
+        return gray_map, color_map
+
+    f = start_frame
+    while f <= end_frame:
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            break
+
+        gray_map[f] = _auto_gray_thumb_from_frame(
+            frame,
+            cv2_mod,
+            positions=positions,
+            scale_w=scale_w,
+            scale_h=scale_h,
+        )
+        color_map[f] = _auto_color_avg_from_frame(
+            frame,
+            cv2_mod,
+            positions=positions,
+            color_space=color_space,
+        )
+        f += 1
+
+    return gray_map, color_map
+
+
+def _auto_grid_v3_manual_verify_strict(
+    cap,
+    cv2_mod,
+    *,
+    fps: float,
+    frame_count: int,
+    coarse_frame: int,
+    settings: dict | None = None,
+    scan_profile=None,
+    sample_positions=None,
+):
+    """
+    최종 검증:
+    1. gray 1f/2f/window로 후보 위치 확인
+    2. 선택 grid 칸의 색상 평균 변화량으로 최종 탈락/통과 결정
+    """
+    settings = settings or {}
+
+    try:
+        fps = float(fps or 30.0)
+        frame_count = int(frame_count or 0)
+        coarse_frame = int(coarse_frame)
+    except Exception:
+        return None
+
+    if fps <= 0.0 or frame_count <= 1:
+        return None
+
+    positions = _auto_level_positions(scan_profile, sample_positions)
+    selected_count = len(positions)
+
+    rollback_frames = int(settings.get("scan_cut_auto_verify_rollback_frames", round(fps * 1.0)))
+    forward_frames = int(settings.get("scan_cut_auto_verify_forward_frames", round(fps * 1.0)))
+    rollback_frames = max(2, min(240, rollback_frames))
+    forward_frames = max(2, min(240, forward_frames))
+
+    gray_1f_threshold = float(settings.get("scan_cut_auto_verify_threshold", 30.0))
+    gray_2f_threshold = gray_1f_threshold * float(settings.get("scan_cut_auto_verify_two_frame_threshold_multiplier", 1.15))
+    gray_window_threshold = float(settings.get("scan_cut_auto_verify_window_threshold", 90.0))
+    gray_region_threshold = float(settings.get("scan_cut_region_threshold", 20.0))
+
+    gray_required_regions = max(1, min(selected_count, int(settings.get("scan_cut_auto_verify_regions_required", max(3, round(selected_count * 0.6))))))
+    gray_window_required = max(1, min(selected_count, int(settings.get("scan_cut_auto_verify_window_regions_required", max(3, round(selected_count * 0.7))))))
+
+    color_space = str(settings.get("scan_cut_color_verify_space", "ycrcb") or "ycrcb")
+    color_threshold = float(settings.get("scan_cut_color_avg_threshold", 18.0))
+    color_required_regions = max(1, min(selected_count, int(settings.get("scan_cut_color_avg_regions_required", max(2, round(selected_count * 0.45))))))
+    color_weight_luma = float(settings.get("scan_cut_color_verify_weight_luma", 0.25))
+    color_weight_chroma = float(settings.get("scan_cut_color_verify_weight_chroma", 0.75))
+    color_window_frames = max(3, int(settings.get("scan_cut_color_avg_window_frames", 30)))
+
+    scale_w = max(8, min(48, int(settings.get("scan_cut_sample_width", 18))))
+    scale_h = max(6, min(27, int(settings.get("scan_cut_sample_height", 10))))
+    target_samples = max(16, min(256, int(settings.get("scan_cut_target_samples", 64))))
+
+    try:
+        stages_raw = settings.get("scan_cut_auto_verify_window_stages", [30, 15, 6, 3, 1])
+        if isinstance(stages_raw, str):
+            stages = [max(1, int(x.strip())) for x in stages_raw.split(",") if x.strip()]
+        else:
+            stages = [max(1, int(x)) for x in list(stages_raw or [30, 15, 6, 3, 1])]
+    except Exception:
+        stages = [30, 15, 6, 3, 1]
+
+    if 1 not in stages:
+        stages.append(1)
+
+    max_stage = max(max(stages or [1]), color_window_frames)
+
+    lo = max(0, coarse_frame - rollback_frames)
+    hi = min(frame_count - 2, coarse_frame + forward_frames)
+    read_hi = min(frame_count - 1, hi + max_stage + 1)
+
+    print(
+        f"↩️ [scan-cut-grid-v3] strict-verify START "
+        f"coarse={coarse_frame / fps:.3f}s range={lo}-{hi} "
+        f"grid_cells={selected_count} positions={positions} "
+        f"mode=gray+color_avg",
+        flush=True,
+    )
+
+    gray_map, color_map = _auto_capture_verify_maps(
+        cap,
+        cv2_mod,
+        start_frame=lo,
+        end_frame=read_hi,
+        frame_count=frame_count,
+        positions=positions,
+        scale_w=scale_w,
+        scale_h=scale_h,
+        color_space=color_space,
+    )
+
+    if not gray_map:
+        print("⚠️ [scan-cut-grid-v3] strict-verify failed: no readable frames", flush=True)
+        return None
+
+    # gray 1f/2f
+    best_adj = {
+        "frame": None,
+        "score": -1.0,
+        "regions": 0,
+        "deltas": [],
+        "mode": "1f",
+        "threshold": gray_1f_threshold,
+    }
+
+    def consider_adj(mode, frame_no, score, regions, deltas, threshold):
+        norm = (float(score) / float(threshold or 1.0)) + min(int(regions), gray_required_regions) * 0.03
+        old_norm = (float(best_adj["score"]) / float(best_adj["threshold"] or 1.0)) + min(int(best_adj["regions"]), gray_required_regions) * 0.03
+        if best_adj["frame"] is None or norm > old_norm:
+            best_adj.update({
+                "frame": int(frame_no),
+                "score": float(score),
+                "regions": int(regions),
+                "deltas": list(deltas or []),
+                "mode": str(mode),
+                "threshold": float(threshold),
+            })
+
+    for f in range(lo, hi + 1):
+        a1 = gray_map.get(f)
+        b1 = gray_map.get(f + 1)
+        if a1 is not None and b1 is not None:
+            score, regions, deltas = _auto_gray_delta(
+                a1,
+                b1,
+                region_threshold=gray_region_threshold,
+                target_samples=target_samples,
+            )
+            consider_adj("1f", f, score, regions, deltas, gray_1f_threshold)
+
+        a2 = gray_map.get(f)
+        b2 = gray_map.get(f + 2)
+        if a2 is not None and b2 is not None:
+            score, regions, deltas = _auto_gray_delta(
+                a2,
+                b2,
+                region_threshold=gray_region_threshold,
+                target_samples=target_samples,
+            )
+            consider_adj("2f", f + 1, score, regions, deltas, gray_2f_threshold)
+
+    # gray window rollback
+    best_win = {
+        "frame": None,
+        "score": -1.0,
+        "regions": 0,
+        "deltas": [],
+        "stage": 0,
+    }
+
+    cur_lo = lo
+    cur_hi = hi
+
+    for stage in stages:
+        stage = max(1, int(stage))
+        step = max(1, stage // 2)
+
+        local_frame = None
+        local_score = -1.0
+        local_regions = 0
+        local_deltas = []
+
+        f = int(cur_lo)
+        while f <= int(cur_hi):
+            a = gray_map.get(f)
+            b = gray_map.get(f + stage)
+            if a is not None and b is not None:
+                score, regions, deltas = _auto_gray_delta(
+                    a,
+                    b,
+                    region_threshold=gray_region_threshold,
+                    target_samples=target_samples,
+                )
+                if score > local_score:
+                    local_frame = int(f)
+                    local_score = float(score)
+                    local_regions = int(regions)
+                    local_deltas = list(deltas or [])
+            f += step
+
+        if local_frame is None:
+            continue
+
+        if local_score > best_win["score"]:
+            best_win.update({
+                "frame": int(local_frame),
+                "score": float(local_score),
+                "regions": int(local_regions),
+                "deltas": list(local_deltas),
+                "stage": int(stage),
+            })
+
+        cur_lo = max(lo, local_frame - stage)
+        cur_hi = min(hi, local_frame + stage)
+
+        delta_text = ",".join(format(d, ".1f") for d in local_deltas[:selected_count])
+        print(
+            f"🔍 [scan-cut-grid-v3] gray rollback stage={stage} "
+            f"best={local_frame / fps:.3f}s score={local_score:.2f} "
+            f"regions={local_regions}/{selected_count} range={cur_lo}-{cur_hi} "
+            f"gray=[{delta_text}]",
+            flush=True,
+        )
+
+    gray_adj_pass = (
+        best_adj["frame"] is not None
+        and best_adj["score"] >= best_adj["threshold"]
+        and best_adj["regions"] >= gray_required_regions
+    )
+
+    gray_window_pass = (
+        best_win["frame"] is not None
+        and best_win["score"] >= gray_window_threshold
+        and best_win["regions"] >= gray_window_required
+    )
+
+    # color average final gate
+    color_center = best_win["frame"] if best_win["frame"] is not None else best_adj["frame"]
+    if color_center is None:
+        color_center = coarse_frame
+
+    color_lo = max(lo, int(color_center) - color_window_frames)
+    color_hi = min(hi, int(color_center) + color_window_frames)
+
+    best_color = {
+        "frame": None,
+        "score": -1.0,
+        "regions": 0,
+        "deltas": [],
+    }
+
+    step = max(1, color_window_frames // 2)
+    f = color_lo
+    while f <= color_hi:
+        a = color_map.get(f)
+        b = color_map.get(f + color_window_frames)
+        if a is not None and b is not None:
+            score, regions, deltas = _auto_color_avg_delta(
+                a,
+                b,
+                threshold=color_threshold,
+                weight_luma=color_weight_luma,
+                weight_chroma=color_weight_chroma,
+            )
+            if score > best_color["score"]:
+                best_color.update({
+                    "frame": int(f),
+                    "score": float(score),
+                    "regions": int(regions),
+                    "deltas": list(deltas or []),
+                })
+        f += step
+
+    gray_super_strong_for_color = (
+        best_win["frame"] is not None
+        and best_win["score"] >= float(settings.get("scan_cut_auto_gray_super_strong_threshold", 110.0))
+        and best_win["regions"] >= max(1, min(selected_count, int(round(selected_count * 0.85))))
+    )
+
+    relaxed_color_required_regions = color_required_regions
+    if gray_super_strong_for_color:
+        relaxed_color_required_regions = max(1, color_required_regions - int(settings.get("scan_cut_color_avg_super_strong_relax_regions", 2)))
+
+    color_pass = (
+        best_color["frame"] is not None
+        and best_color["score"] >= color_threshold
+        and best_color["regions"] >= relaxed_color_required_regions
+    )
+
+    color_text = ",".join(format(d, ".1f") for d in list(best_color["deltas"] or [])[:selected_count])
+    color_time = ""
+    if best_color["frame"] is not None:
+        color_time = format(float(best_color["frame"]) / fps, ".3f") + "s"
+
+    print(
+        f"{'✅' if color_pass else '⚠️'} [scan-cut-grid-v3] color-avg-final "
+        f"space={color_space} frame={color_time} "
+        f"score={best_color['score']:.2f}/{color_threshold:.2f} "
+        f"regions={best_color['regions']}/{relaxed_color_required_regions} "
+        f"base_required={color_required_regions} "
+        f"gray_super={gray_super_strong_for_color} "
+        f"cells={selected_count} color=[{color_text}]",
+        flush=True,
+    )
+
+    # gray 통과 조건
+    gray_pass = gray_adj_pass or gray_window_pass
+
+    if not gray_pass:
+        adj_text = ",".join(format(d, ".1f") for d in list(best_adj["deltas"] or [])[:selected_count])
+        win_text = ",".join(format(d, ".1f") for d in list(best_win["deltas"] or [])[:selected_count])
+        print(
+            f"⚠️ [scan-cut-grid-v3] strict-verify FAIL gray "
+            f"adj={best_adj['score']:.2f}/{best_adj['threshold']:.2f} "
+            f"adj_regions={best_adj['regions']}/{gray_required_regions} "
+            f"win={best_win['score']:.2f}/{gray_window_threshold:.2f} "
+            f"win_regions={best_win['regions']}/{gray_window_required} "
+            f"adj=[{adj_text}] win=[{win_text}]",
+            flush=True,
+        )
+        return {"passed": False, "reason": "gray_failed"}
+
+    if not color_pass:
+        print(
+            f"⚠️ [scan-cut-grid-v3] strict-verify FAIL color_avg "
+            f"gray_win={best_win['score']:.2f} gray_regions={best_win['regions']} "
+            f"color={best_color['score']:.2f}/{color_threshold:.2f} "
+            f"color_regions={best_color['regions']}/{relaxed_color_required_regions} "
+            f"base_required={color_required_regions}",
+            flush=True,
+        )
+        return {"passed": False, "reason": "color_avg_failed"}
+
+    # 통과 위치 선택
+    if gray_window_pass:
+        selected_frame = int(best_win["frame"])
+        selected_score = float(best_win["score"])
+        selected_regions = int(best_win["regions"])
+        selected_mode = "gray_window_color_avg"
+        selected_deltas = list(best_win["deltas"])
+    else:
+        selected_frame = int(best_adj["frame"])
+        selected_score = float(best_adj["score"])
+        selected_regions = int(best_adj["regions"])
+        selected_mode = "gray_adj_color_avg"
+        selected_deltas = list(best_adj["deltas"])
+
+    print(
+        f"✅ [scan-cut-grid-v3] strict-verify PASS "
+        f"mode={selected_mode} refined={selected_frame / fps:.3f}s "
+        f"gray_score={selected_score:.2f} gray_regions={selected_regions} "
+        f"color_score={best_color['score']:.2f} color_regions={best_color['regions']} "
+        f"cells={selected_count}",
+        flush=True,
+    )
+
+    return {
+        "passed": True,
+        "mode": selected_mode,
+        "reason": selected_mode,
+        "frame": selected_frame,
+        "sec": float(selected_frame / fps),
+        "score": selected_score,
+        "regions": selected_regions,
+        "deltas": selected_deltas,
+        "color_score": float(best_color["score"]),
+        "color_regions": int(best_color["regions"]),
+        "color_deltas": list(best_color["deltas"]),
+        "grid_cells": selected_count,
+    }
+
+
+_auto_grid_v3_original_detect_media_cut_boundaries = detect_media_cut_boundaries
+
+
+def detect_media_cut_boundaries(
+    filepath,
+    *,
+    clip_offset: float = 0.0,
+    clip_idx: int = 0,
+    sample_step_sec: float = 1.0,
+    threshold: float = 24.0,
+    progress_callback=None,
+    found_callback=None,
+    scan_profile: dict | None = None,
+    sample_positions=None,
+    sample_mask: str | None = None,
+    **kwargs,
+):
+    settings = dict(kwargs.get("settings") or {})
+    try:
+        from core.settings import load_settings
+        loaded = dict(load_settings() or {})
+        loaded.update(settings)
+        settings = loaded
+    except Exception:
+        pass
+
+    if not bool(settings.get("scan_cut_auto_strict_color_avg_enabled", True)):
+        return _auto_grid_v3_original_detect_media_cut_boundaries(
+            filepath,
+            clip_offset=clip_offset,
+            clip_idx=clip_idx,
+            sample_step_sec=sample_step_sec,
+            threshold=threshold,
+            progress_callback=progress_callback,
+            found_callback=found_callback,
+            scan_profile=scan_profile,
+            sample_positions=sample_positions,
+            sample_mask=sample_mask,
+            **kwargs,
+        )
+
+    try:
+        import cv2
+    except Exception:
+        return _auto_grid_v3_original_detect_media_cut_boundaries(
+            filepath,
+            clip_offset=clip_offset,
+            clip_idx=clip_idx,
+            sample_step_sec=sample_step_sec,
+            threshold=threshold,
+            progress_callback=progress_callback,
+            found_callback=found_callback,
+            scan_profile=scan_profile,
+            sample_positions=sample_positions,
+            sample_mask=sample_mask,
+            **kwargs,
+        )
+
+    cap = cv2.VideoCapture(str(filepath))
+    if not cap.isOpened():
+        return _auto_grid_v3_original_detect_media_cut_boundaries(
+            filepath,
+            clip_offset=clip_offset,
+            clip_idx=clip_idx,
+            sample_step_sec=sample_step_sec,
+            threshold=threshold,
+            progress_callback=progress_callback,
+            found_callback=found_callback,
+            scan_profile=scan_profile,
+            sample_positions=sample_positions,
+            sample_mask=sample_mask,
+            **kwargs,
+        )
+
+    verified_rows = []
+    saw_callback = False
+
+    try:
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        if fps <= 1.0:
+            fps = 30.0
+        fps = normalize_fps(fps)
+
+        min_gap_sec = float(settings.get("scan_cut_auto_min_gap_sec", 8.0))
+        min_gap_frames = max(1, int(round(min_gap_sec * fps)))
+
+        def verified_progress_callback(payload):
+            if not callable(progress_callback):
+                return
+            try:
+                fixed = dict(payload or {})
+                fixed["detected"] = len(verified_rows)
+                fixed["verified_detected"] = len(verified_rows)
+                progress_callback(fixed)
+            except Exception:
+                pass
+
+        def row_raw_score(row):
+            for key in ("score", "delta", "window_score"):
+                try:
+                    value = row.get(key)
+                    if value is not None:
+                        return float(value)
+                except Exception:
+                    pass
+            return 0.0
+
+        def verify_row(row):
+            if not isinstance(row, dict):
+                return None
+
+            try:
+                local_sec = float(row.get("clip_local_sec", 0.0) or 0.0)
+            except Exception:
+                local_sec = 0.0
+
+            if local_sec <= 0.0:
+                try:
+                    local_sec = float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0) - float(clip_offset or 0.0)
+                except Exception:
+                    local_sec = 0.0
+
+            coarse_frame = max(0, int(round(local_sec * fps)))
+
+            verified = _auto_grid_v3_manual_verify_strict(
+                cap,
+                cv2,
+                fps=fps,
+                frame_count=frame_count,
+                coarse_frame=coarse_frame,
+                settings=settings,
+                scan_profile=scan_profile,
+                sample_positions=sample_positions,
+            )
+
+            if not verified or not verified.get("passed"):
+                print(
+                    f"⚠️ [scan-cut-grid-v3] candidate rejected by strict color avg "
+                    f"coarse={local_sec:.3f}s raw_score={row_raw_score(row):.2f}",
+                    flush=True,
+                )
+                return None
+
+            refined_local_sec = float(verified.get("sec", local_sec) or local_sec)
+            timeline_sec = float(clip_offset or 0.0) + refined_local_sec
+            timeline_frame = sec_to_frame(timeline_sec, fps)
+
+            for old in verified_rows:
+                try:
+                    if abs(int(old.get("timeline_frame", -999999)) - timeline_frame) <= min_gap_frames:
+                        print(
+                            f"↪️ [scan-cut-grid-v3] verified duplicate skipped frame={timeline_frame}",
+                            flush=True,
+                        )
+                        return None
+                except Exception:
+                    pass
+
+            fixed = dict(row)
+            fixed.update(
+                {
+                    "schema": "cut_boundary.v1",
+                    "id": f"cut_{timeline_frame:08d}",
+                    "time": timeline_sec,
+                    "timeline_sec": timeline_sec,
+                    "frame": timeline_frame,
+                    "timeline_frame": timeline_frame,
+                    "fps": fps,
+                    "frame_rate": fps,
+                    "timeline_frame_rate": fps,
+                    "clip_idx": int(clip_idx or 0),
+                    "clip_local_sec": refined_local_sec,
+                    "source_path": str(filepath),
+                    "score": float(verified.get("score", fixed.get("score", 0.0)) or 0.0),
+                    "regions": int(verified.get("regions", fixed.get("regions", 0)) or 0),
+                    "color_score": float(verified.get("color_score", 0.0) or 0.0),
+                    "color_regions": int(verified.get("color_regions", 0) or 0),
+                    "grid_cells": int(verified.get("grid_cells", 0) or 0),
+                    "reason": str(verified.get("reason") or "strict_color_avg"),
+                    "detector": "opencv-gray-grid-v3-strict-color-avg",
+                    "source": "visual",
+                    "absolute": True,
+                    "locked": True,
+                }
+            )
+            return fixed
+
+        def verified_found_callback(row, rows):
+            nonlocal saw_callback
+            saw_callback = True
+            fixed = verify_row(row)
+            if fixed is None:
+                return
+            verified_rows.append(fixed)
+            if callable(found_callback):
+                try:
+                    found_callback(dict(fixed), list(verified_rows))
+                except Exception:
+                    pass
+
+        raw_rows = _auto_grid_v3_original_detect_media_cut_boundaries(
+            filepath,
+            clip_offset=clip_offset,
+            clip_idx=clip_idx,
+            sample_step_sec=sample_step_sec,
+            threshold=threshold,
+            progress_callback=verified_progress_callback,
+            found_callback=verified_found_callback,
+            scan_profile=scan_profile,
+            sample_positions=sample_positions,
+            sample_mask=sample_mask,
+            **kwargs,
+        )
+
+        if not saw_callback:
+            for row in raw_rows or []:
+                fixed = verify_row(row)
+                if fixed is not None:
+                    verified_rows.append(fixed)
+
+        return normalize_cut_boundaries(verified_rows, primary_fps=fps)
+
+    finally:
+        try:
+            cap.release()
+        except Exception:
+            pass
+
+# === AUTO GRID V3 STRICT COLOR AVG VERIFY END ===
+
+
+# === CUT BOUNDARY 5X5 CUSTOM PROFILE START ===
+
+# 5×5 index:
+#  0  1  2  3  4
+#  5  6  7  8  9
+# 10 11 12 13 14
+# 15 16 17 18 19
+# 20 21 22 23 24
+
+CUT_BOUNDARY_LEVEL_CHOICES = (
+    ("off", "사용안함"),
+    ("low", "낮음 - 5×5 선택 9칸"),
+    ("medium", "중간 - 5×5 선택 13칸"),
+    ("high", "높음 - 5×5 전체 25칸"),
+)
+
+CUT_BOUNDARY_GRID_PROFILES = {
+    "off": {
+        "level": "off",
+        "label": "사용안함",
+        "grid": "5x5",
+        "grid_size": 5,
+        "mask": "off",
+        "positions": (),
+        "cell_count": 0,
+    },
+    "low": {
+        "level": "low",
+        "label": "낮음 - 5×5 선택 9칸",
+        "grid": "5x5",
+        "grid_size": 5,
+        "mask": "custom9",
+        "positions": (1, 3, 7, 10, 12, 14, 17, 21, 23),
+        "cell_count": 9,
+    },
+    "medium": {
+        "level": "medium",
+        "label": "중간 - 5×5 선택 13칸",
+        "grid": "5x5",
+        "grid_size": 5,
+        "mask": "custom13",
+        "positions": (0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24),
+        "cell_count": 13,
+    },
+    "high": {
+        "level": "high",
+        "label": "높음 - 5×5 전체 25칸",
+        "grid": "5x5",
+        "grid_size": 5,
+        "mask": "grid25",
+        "positions": tuple(range(25)),
+        "cell_count": 25,
+    },
+}
+
+
+def cut_boundary_scan_profile(settings: dict | None = None) -> dict:
+    level = cut_boundary_level(settings or {})
+    profile = dict(CUT_BOUNDARY_GRID_PROFILES.get(level, CUT_BOUNDARY_GRID_PROFILES["medium"]))
+    profile["choices"] = CUT_BOUNDARY_LEVEL_CHOICES
+    return profile
+
+
+def _grid_cell_slices(width: int, height: int):
+    """
+    5×5 grid cell slices.
+    index:
+      0  1  2  3  4
+      5  6  7  8  9
+     10 11 12 13 14
+     15 16 17 18 19
+     20 21 22 23 24
+    """
+    xs = [
+        0,
+        width // 5,
+        (width * 2) // 5,
+        (width * 3) // 5,
+        (width * 4) // 5,
+        width,
+    ]
+    ys = [
+        0,
+        height // 5,
+        (height * 2) // 5,
+        (height * 3) // 5,
+        (height * 4) // 5,
+        height,
+    ]
+
+    cells = []
+    for r in range(5):
+        for c in range(5):
+            cells.append((xs[c], ys[r], xs[c + 1], ys[r + 1]))
+    return cells
+
+
+def _auto_5x5_positions_for_level(level: str):
+    level = str(level or "medium").lower()
+    if level == "low":
+        return (1, 3, 7, 10, 12, 14, 17, 21, 23)
+    if level == "high":
+        return tuple(range(25))
+    return (0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24)
+
+
+def _auto_level_positions(scan_profile=None, sample_positions=None):
+    """
+    strict color avg 검증에서 사용할 5×5 grid 위치.
+    기존 3×3 sample_positions가 들어와도 level 기준 5×5로 재해석한다.
+    """
+    profile = scan_profile or {}
+    level = ""
+    if isinstance(profile, dict):
+        level = str(profile.get("level", "") or "").lower()
+
+    if isinstance(profile, dict) and int(profile.get("grid_size", 5) or 5) == 5:
+        positions = profile.get("positions")
+        if positions:
+            try:
+                return tuple(int(x) for x in positions)
+            except Exception:
+                pass
+
+    return _auto_5x5_positions_for_level(level or "medium")
+
+
+def _auto_grid_cells(width: int, height: int):
+    """
+    strict color avg 검증용 5×5 grid cells.
+    """
+    return _grid_cell_slices(width, height)
+
+# === CUT BOUNDARY 5X5 CUSTOM PROFILE END ===
 
