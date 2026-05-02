@@ -1,4 +1,4 @@
-# Version: 03.01.37
+# Version: 03.08.12
 # Phase: PHASE1-B
 import sys
 import os
@@ -13,6 +13,7 @@ os.environ.setdefault("AV_LOG_LEVEL", "16")
 
 import config
 from core.performance import configure_qt_gpu_rendering_before_app, configure_qt_runtime
+from core.platform_compat import cleanup_app_runtime_processes, cleanup_stale_preview_proxy_processes
 
 configure_qt_gpu_rendering_before_app()
 
@@ -49,6 +50,8 @@ from core.path_manager import get_recent_folders, add_recent_folder
 def main():
     app = QApplication(sys.argv)
     configure_qt_runtime()
+    cleaned_preview_jobs = cleanup_stale_preview_proxy_processes(timeout_sec=0.2)
+    app.aboutToQuit.connect(lambda: cleanup_app_runtime_processes(logger=get_logger(), timeout_sec=0.2))
 
     app.setStyleSheet(f"""
         QWidget {{
@@ -78,6 +81,8 @@ def main():
     """)
 
     win = MainWindow()
+    if cleaned_preview_jobs:
+        get_logger().log(f"🧹 이전 미리보기 프록시 ffmpeg {cleaned_preview_jobs}개 정리 완료")
 
     # ✅ 1순위 수정: 백엔드 먼저 연결
     from core.pipeline.backend_core import CoreBackend

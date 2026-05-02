@@ -1,5 +1,5 @@
-# Version: 03.01.16
-# Phase: PHASE1-B
+# Version: 03.08.08
+# Phase: PHASE2
 """Ollama adapter for local subtitle text splitting."""
 from __future__ import annotations
 
@@ -165,7 +165,11 @@ def _is_local_ollama_model_name(model: str) -> bool:
     return not any(token in lowered for token in blocked_tokens)
 
 
-def stop_local_llm_models(models: list[str] | tuple[str, ...] | set[str] | None = None, logger=None) -> list[str]:
+def stop_local_llm_models(
+    models: list[str] | tuple[str, ...] | set[str] | None = None,
+    logger=None,
+    log_context: str = "홈 이동",
+) -> list[str]:
     candidates = {
         str(model).strip()
         for model in (models or [])
@@ -200,14 +204,19 @@ def stop_local_llm_models(models: list[str] | tuple[str, ...] | set[str] | None 
                 stopped.append(model)
                 _WARMED.discard(model)
     if stopped and logger:
-        logger.log(f"🛑 홈 이동: Ollama 모델 종료/언로드 완료 ({', '.join(stopped)})")
+        context = str(log_context or "런타임 정리").strip() or "런타임 정리"
+        logger.log(f"🛑 {context}: Ollama 모델 종료/언로드 완료 ({', '.join(stopped)})")
     return stopped
 
 
-def stop_local_llm_models_async(models: list[str] | tuple[str, ...] | set[str] | None = None, logger=None) -> threading.Thread:
+def stop_local_llm_models_async(
+    models: list[str] | tuple[str, ...] | set[str] | None = None,
+    logger=None,
+    log_context: str = "홈 이동",
+) -> threading.Thread:
     thread = threading.Thread(
         target=stop_local_llm_models,
-        args=(list(models or []), logger),
+        args=(list(models or []), logger, log_context),
         daemon=True,
         name="ollama-stop-models",
     )

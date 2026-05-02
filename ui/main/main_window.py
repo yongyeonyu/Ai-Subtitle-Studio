@@ -1,4 +1,4 @@
-# Version: 03.06.18
+# Version: 03.08.08
 # Phase: PHASE2
 """
 ui/main/main_window.py
@@ -68,6 +68,7 @@ class MainWindow(
     _sig_load_multiclip_waveform = pyqtSignal(list)
     _sig_set_recog_zone      = pyqtSignal(float, float)
     _sig_set_recog_progress  = pyqtSignal(float)
+    _sig_preview_stt_segments = pyqtSignal(list)
     _sig_clear_editor        = pyqtSignal()
     _sig_restart_multiclip   = pyqtSignal(list, object)
 
@@ -599,6 +600,7 @@ class MainWindow(
         self._sig_load_multiclip_waveform.connect(self._do_load_multiclip_waveform)
         self._sig_set_recog_zone.connect(self._on_recog_zone)
         self._sig_set_recog_progress.connect(self._on_recog_progress)
+        self._sig_preview_stt_segments.connect(self._do_preview_stt_segments)
         self._sig_clear_editor.connect(self._do_clear_editor)
         self._sig_restart_multiclip.connect(self._do_restart_multiclip)
 
@@ -785,7 +787,7 @@ class MainWindow(
                         ]
                         from core.llm.ollama_provider import stop_local_llm_models
 
-                        if stop_local_llm_models(models, logger=get_logger()):
+                        if stop_local_llm_models(models, logger=get_logger(), log_context="에디터 모드"):
                             stopped_runtime = True
                     except Exception as exc:
                         get_logger().log(f"⚠️ 에디터 모드 LLM 모델 종료 실패: {exc}")

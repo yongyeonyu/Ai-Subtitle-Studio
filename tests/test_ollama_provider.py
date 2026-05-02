@@ -1,5 +1,5 @@
-# Version: 03.01.16
-# Phase: PHASE1-B
+# Version: 03.08.08
+# Phase: PHASE2
 import socket
 import unittest
 from unittest import mock
@@ -45,6 +45,22 @@ class OllamaWarmupTest(unittest.TestCase):
         self.assertIn({"model": "exaone3.5:7.8b", "prompt": "", "keep_alive": 0}, payloads)
         self.assertIn({"model": "gemma4:e4b", "prompt": "", "keep_alive": 0}, payloads)
         self.assertIn("Ollama 모델 종료/언로드 완료", "\n".join(logger.lines))
+
+    def test_stop_local_llm_models_uses_log_context(self):
+        logger = _Logger()
+
+        def fake_post(path, payload, timeout=2.0):
+            return {}
+
+        with mock.patch("core.llm.ollama_provider._get_ollama_running_models", return_value=set()), \
+             mock.patch("core.llm.ollama_provider._post_ollama_json", side_effect=fake_post), \
+             mock.patch("core.llm.ollama_provider.shutil.which", return_value=None):
+            stopped = ollama_provider.stop_local_llm_models(["gemma4:e4b"], logger=logger, log_context="에디터 모드")
+
+        self.assertEqual(stopped, ["gemma4:e4b"])
+        joined = "\n".join(logger.lines)
+        self.assertIn("에디터 모드: Ollama 모델 종료/언로드 완료", joined)
+        self.assertNotIn("홈 이동: Ollama 모델 종료/언로드 완료", joined)
 
     def test_stop_local_llm_models_skips_cloud_model_names(self):
         with mock.patch("core.llm.ollama_provider._get_ollama_running_models", return_value=set()), \

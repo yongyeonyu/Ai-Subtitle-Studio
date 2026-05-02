@@ -69,6 +69,7 @@
     "whisper_models": [
         "mlx-community/whisper-large-v3-mlx",
         "mlx-community/whisper-large-v3-turbo",
+        "coreml:large-v3-v20240930_626MB",
         "youngouk/ghost613-turbo-korean-4bit-mlx",
         "ghost613/faster-whisper-large-v3-turbo-korean",
         "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2",
@@ -242,6 +243,7 @@
     "spk3_name": "화자 3",
     "sub_max_duration": 6.0,
     "llm_workers": 6,
+    "local_ollama_llm_max_workers": 2,
     "roughcut_llm_enabled": true,
     "roughcut_llm_use_override": true,
     "roughcut_llm_provider": "ollama",

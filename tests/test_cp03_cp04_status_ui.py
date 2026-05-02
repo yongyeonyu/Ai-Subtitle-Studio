@@ -1,4 +1,4 @@
-# Version: 03.07.09
+# Version: 03.08.10
 # Phase: PHASE2
 import os
 import json
@@ -239,9 +239,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             open(media_path, "wb").close()
             editor = EditorWidget("sample.m4a", [], media_path=media_path)
             try:
-                layout = editor._editor_wrap.layout()
-                first = layout.itemAt(0).widget()
-                self.assertEqual(first.objectName(), "subtitleTableHeader")
+                self.assertIsNone(editor._editor_wrap.findChild(QWidget, "subtitleTableHeader"))
                 self.assertIsNone(editor._editor_wrap.findChild(QWidget, "subtitleEditorModeBar"))
             finally:
                 editor.close()

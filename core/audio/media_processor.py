@@ -1,4 +1,4 @@
-# Version: 03.07.08
+# Version: 03.08.07
 # Phase: PHASE2
 """
 media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 + Whisper 섹터 동기화)
@@ -162,19 +162,60 @@ class VideoProcessor:
             return 0.0
 
     def _emit_ffmpeg_progress(self, label: str, ratio: float, *, force: bool = False) -> int:
-        pct = max(0, min(100 if force else 99, int(round(ratio * 100))))
-        now = time.monotonic()
+        pct = max(0, min(100 if force else 99, int(ratio * 100)))
         state = getattr(self, "_ffmpeg_progress_state", {})
         key = str(label or "ffmpeg")
-        last_pct, last_ts = state.get(key, (-1, 0.0))
-        if not force and pct < 99 and pct - last_pct < 5 and now - last_ts < 2.5:
+        last_pct, _last_ts = state.get(key, (-1, 0.0))
+        if pct <= last_pct:
             return last_pct
-        state[key] = (pct, now)
+        state[key] = (pct, time.monotonic())
         self._ffmpeg_progress_state = state
         text = f"⏳ [전처리] {label} 진행 중 {pct}%"
         self._notify_stage(text)
         get_logger().log(f"  └ [전처리] {label} 진행률 {pct}%")
         return pct
+
+    def _emit_vad_progress(self, label: str, phase: str, pct: int, *, force: bool = False, step: int = 10) -> int:
+        step = max(1, int(step or 10))
+        pct = max(0, min(100, int(pct or 0)))
+        if not force and pct < 100:
+            pct = (pct // step) * step
+        state = getattr(self, "_vad_progress_state", {})
+        key = f"{label}:{phase}"
+        last_pct = state.get(key, -1)
+        if pct <= last_pct:
+            return last_pct
+        state[key] = pct
+        self._vad_progress_state = state
+        self._notify_stage(f"⏳ [VAD] {label} {phase} {pct}%")
+        get_logger().log(f"  └ [VAD 후처리] {label} {phase} 진행률 {pct}%")
+        return pct
+
+    def _start_vad_heartbeat(self, label: str, phase: str, *, interval_sec: float = 5.0):
+        stop_event = threading.Event()
+        interval = max(1.0, float(interval_sec or 5.0))
+
+        def _beat():
+            started = time.monotonic()
+            while not stop_event.wait(interval):
+                elapsed = int(time.monotonic() - started)
+                self._notify_stage(f"⏳ [VAD] {label} {phase} 중... {elapsed}초")
+                get_logger().log(f"  └ [VAD 후처리] {label} {phase} 진행 중... {elapsed}초")
+
+        thread = threading.Thread(target=_beat, name=f"vad-heartbeat-{label}-{phase}", daemon=True)
+        thread.start()
+        return stop_event, thread
+
+    @staticmethod
+    def _stop_vad_heartbeat(handle):
+        if not handle:
+            return
+        stop_event, thread = handle
+        try:
+            stop_event.set()
+            thread.join(timeout=0.2)
+        except Exception:
+            pass
 
     def _run_ffmpeg_with_progress(self, cmd: list[str], *, label: str, timeout: float | None = None, env: dict | None = None) -> bool:
         duration = self._media_duration_for_progress(self._first_ffmpeg_input(cmd))
@@ -186,6 +227,9 @@ class VideoProcessor:
         started_at = time.monotonic()
         last_pct = -1
         try:
+            state = getattr(self, "_ffmpeg_progress_state", {})
+            state.pop(str(label or "ffmpeg"), None)
+            self._ffmpeg_progress_state = state
             subprocess_kwargs = hidden_subprocess_kwargs()
             if env is not None:
                 subprocess_kwargs["env"] = env
@@ -1120,6 +1164,9 @@ class VideoProcessor:
             import numpy as np
             from ten_vad import TenVad
 
+            label = vad_model.upper()
+            self._notify_stage(f"⏳ [VAD] {label} 모델 준비 중")
+            get_logger().log(f"  └ [VAD 후처리] {label} 모델 준비 중...")
             effective_s = apply_review_vad_settings(s)
             hop_size = int(effective_s.get("ten_vad_hop_size", 256) or 256)
             threshold = float(effective_s.get("ten_vad_threshold", effective_s.get("vad_threshold", 0.5)) or 0.5)
@@ -1127,6 +1174,8 @@ class VideoProcessor:
             min_silence = float(effective_s.get("vad_min_silence", 2.0) or 2.0)
             speech_pad = float(effective_s.get("vad_speech_pad", 0.2) or 0.2)
 
+            self._notify_stage(f"⏳ [VAD] {label} 오디오 로드 중")
+            get_logger().log(f"  └ [VAD 후처리] {label} 오디오 로드 중...")
             with wave.open(wav_path, "rb") as wav:
                 sample_rate = wav.getframerate()
                 channels = wav.getnchannels()
@@ -1145,10 +1194,19 @@ class VideoProcessor:
 
             detector = TenVad(hop_size, threshold)
             flags: list[int] = []
+            state = getattr(self, "_vad_progress_state", {})
+            state.pop(f"{label}:오디오 스캔", None)
+            self._vad_progress_state = state
+            self._emit_vad_progress(label, "오디오 스캔", 0, force=True)
             for idx in range(frame_count):
                 frame = np.ascontiguousarray(audio[idx * hop_size:(idx + 1) * hop_size])
                 _probability, flag = detector.process(frame)
                 flags.append(int(flag))
+                if frame_count >= 10:
+                    self._emit_vad_progress(label, "오디오 스캔", int(((idx + 1) / frame_count) * 100), step=10)
+            self._emit_vad_progress(label, "오디오 스캔", 100, force=True)
+            self._notify_stage(f"⏳ [VAD] {label} 음성 구간 정리 중")
+            get_logger().log(f"  └ [VAD 후처리] {label} 음성 구간 정리 중...")
             return self._vad_flags_to_segments(
                 flags,
                 hop_sec=hop_size / 16000.0,
@@ -1223,14 +1281,22 @@ class VideoProcessor:
             import torch
 
             effective_s = apply_review_vad_settings(s)
+            label = vad_model.upper()
             if not self._vad_loaded:
-                self._vad_model, self._vad_utils = torch.hub.load(
-                    repo_or_dir="snakers4/silero-vad",
-                    model="silero_vad",
-                    force_reload=False,
-                    onnx=False,
-                )
+                self._notify_stage(f"⏳ [VAD] {label} 모델 준비 중")
+                get_logger().log(f"  └ [VAD 후처리] {label} 모델 준비 중...")
+                heartbeat = self._start_vad_heartbeat(label, "모델 준비")
+                try:
+                    self._vad_model, self._vad_utils = torch.hub.load(
+                        repo_or_dir="snakers4/silero-vad",
+                        model="silero_vad",
+                        force_reload=False,
+                        onnx=False,
+                    )
+                finally:
+                    self._stop_vad_heartbeat(heartbeat)
                 self._vad_loaded = True
+                get_logger().log(f"  └ [VAD 후처리] {label} 모델 준비 완료")
 
             model = self._vad_model
             utils = self._vad_utils
@@ -1241,17 +1307,26 @@ class VideoProcessor:
             v_pad_ms = int(float(effective_s.get("vad_speech_pad", 0.2)) * 1000)
             v_window = int(effective_s.get("vad_window_size", 512) or 512)
 
+            self._notify_stage(f"⏳ [VAD] {label} 오디오 로드 중")
+            get_logger().log(f"  └ [VAD 후처리] {label} 오디오 로드 중...")
             audio_data = read_audio(wav_path)
-            raw_ts = get_speech_timestamps(
-                audio_data,
-                model,
-                sampling_rate=16000,
-                threshold=v_thresh,
-                min_speech_duration_ms=v_min_sp,
-                min_silence_duration_ms=v_min_sil,
-                speech_pad_ms=v_pad_ms,
-                window_size_samples=v_window,
-            )
+            get_logger().log(f"  └ [VAD 후처리] {label} 오디오 로드 완료")
+            self._notify_stage(f"⏳ [VAD] {label} 오디오 분석 중")
+            get_logger().log(f"  └ [VAD 후처리] {label} 오디오 분석 중...")
+            heartbeat = self._start_vad_heartbeat(label, "오디오 분석")
+            try:
+                raw_ts = get_speech_timestamps(
+                    audio_data,
+                    model,
+                    sampling_rate=16000,
+                    threshold=v_thresh,
+                    min_speech_duration_ms=v_min_sp,
+                    min_silence_duration_ms=v_min_sil,
+                    speech_pad_ms=v_pad_ms,
+                    window_size_samples=v_window,
+                )
+            finally:
+                self._stop_vad_heartbeat(heartbeat)
             stats = None
             if not raw_ts:
                 stats = self._wav_activity_stats(wav_path)
@@ -1277,21 +1352,29 @@ class VideoProcessor:
                         ),
                     ]
                     for retry_idx, (retry_thresh, retry_min_sp, retry_min_sil, retry_pad_ms) in enumerate(retry_profiles, 1):
-                        raw_ts = get_speech_timestamps(
-                            audio_data,
-                            model,
-                            sampling_rate=16000,
-                            threshold=retry_thresh,
-                            min_speech_duration_ms=retry_min_sp,
-                            min_silence_duration_ms=retry_min_sil,
-                            speech_pad_ms=retry_pad_ms,
-                            window_size_samples=v_window,
-                        )
+                        self._notify_stage(f"⏳ [VAD] {label} 오디오 분석 재시도 {retry_idx}/3")
+                        get_logger().log(f"  └ [VAD 후처리] {label} 오디오 분석 재시도 {retry_idx}/3")
+                        heartbeat = self._start_vad_heartbeat(label, f"재시도 {retry_idx}/3")
+                        try:
+                            raw_ts = get_speech_timestamps(
+                                audio_data,
+                                model,
+                                sampling_rate=16000,
+                                threshold=retry_thresh,
+                                min_speech_duration_ms=retry_min_sp,
+                                min_silence_duration_ms=retry_min_sil,
+                                speech_pad_ms=retry_pad_ms,
+                                window_size_samples=v_window,
+                            )
+                        finally:
+                            self._stop_vad_heartbeat(heartbeat)
                         if raw_ts and self._vad_retry_timestamps_are_usable(raw_ts, 16000, stats.get("duration", 0.0)):
                             get_logger().log(f"  └ [VAD 후처리] 재시도 {retry_idx}회차로 음성 위치 확보")
                             break
                         raw_ts = []
 
+            self._notify_stage(f"⏳ [VAD] {label} 음성 구간 정리 중")
+            get_logger().log(f"  └ [VAD 후처리] {label} 음성 구간 정리 중...")
             timestamps = [
                 {
                     "start": t["start"] / 16000.0,
@@ -1571,6 +1654,7 @@ class VideoProcessor:
         target_end_sec: float = None,
         is_single: bool = False,
         label: str = "STT",
+        preview_callback=None,
     ) -> list[dict]:
         worker = VideoProcessor()
         worker.language = self.language
@@ -1589,6 +1673,7 @@ class VideoProcessor:
                 model_override=model,
                 cleanup_chunk_dir=False,
                 log_label=label,
+                preview_callback=preview_callback,
             ):
                 result.extend(chunk_segs or [])
         finally:
@@ -1599,7 +1684,13 @@ class VideoProcessor:
                 pass
         return result
 
-    def transcribe_ensemble(self, chunk_dir: str, target_end_sec: float = None, is_single: bool = False):
+    def transcribe_ensemble(
+        self,
+        chunk_dir: str,
+        target_end_sec: float = None,
+        is_single: bool = False,
+        preview_callback=None,
+    ):
         s = self._load_all_settings()
         primary_model = s.get("selected_whisper_model", self.whisper_model)
         secondary_model = s.get("selected_whisper_model_secondary", "")
@@ -1612,6 +1703,7 @@ class VideoProcessor:
                 model_override=primary_model,
                 cleanup_chunk_dir=True,
                 log_label="STT1",
+                preview_callback=preview_callback,
             )
             return
 
@@ -1631,6 +1723,7 @@ class VideoProcessor:
                     target_end_sec=target_end_sec,
                     is_single=is_single,
                     label=label,
+                    preview_callback=preview_callback if label == "STT1" else None,
                 )
             except BaseException as exc:
                 errors[label] = exc
@@ -1686,6 +1779,7 @@ class VideoProcessor:
         model_override: str | None = None,
         cleanup_chunk_dir: bool = True,
         log_label: str = "STT",
+        preview_callback=None,
     ):
         chunks = sorted([f for f in os.listdir(chunk_dir) if f.endswith(".wav")])
         if not chunks:
@@ -1704,7 +1798,12 @@ class VideoProcessor:
         total = len(chunks)
         _s = self._load_all_settings()
         if model_override is None and bool(_s.get("stt_ensemble_enabled", False)):
-            yield from self.transcribe_ensemble(chunk_dir, target_end_sec=target_end_sec, is_single=is_single)
+            yield from self.transcribe_ensemble(
+                chunk_dir,
+                target_end_sec=target_end_sec,
+                is_single=is_single,
+                preview_callback=preview_callback,
+            )
             return
         target_model = model_override or _s.get("selected_whisper_model", self.whisper_model)
         self._notify_stage(f"⏳ [{log_label}] Whisper 인식 중")
@@ -1737,9 +1836,25 @@ class VideoProcessor:
         import config as _cfg
 
         mac_task_id = None
+        from core.audio.whisper_coreml import is_coreml_whisper_model
         from core.audio.whisper_transformers import is_transformers_whisper_model
 
+        use_coreml_whisper = is_coreml_whisper_model(target_model)
         use_transformers_whisper = is_transformers_whisper_model(target_model)
+        if use_coreml_whisper:
+            from core.audio.whisper_coreml import run_whisper
+            proc = run_whisper(
+                chunk_paths=safe_paths,
+                model=target_model,
+                language=self.language,
+                temperature_tuple=temperature_tuple,
+                log_label=log_label,
+            )
+            if proc is None:
+                fallback_model = "mlx-community/whisper-large-v3-turbo"
+                get_logger().log(f"  ↩️ [{log_label}] Core ML STT 준비 안 됨 → MLX fallback: {fallback_model}")
+                target_model = fallback_model
+                use_coreml_whisper = False
         if use_transformers_whisper:
             from core.audio.whisper_transformers import run_whisper
             proc = run_whisper(
@@ -1747,10 +1862,13 @@ class VideoProcessor:
                 model=target_model,
                 language=self.language,
                 temperature_tuple=temperature_tuple,
+                log_label=log_label,
             )
             if proc is None:
                 get_logger().log("❌ Transformers Whisper 백엔드를 실행할 수 없습니다.")
                 return
+        elif use_coreml_whisper:
+            pass
         elif _cfg.IS_MAC:
             from core.audio.whisper_mlx import ensure_worker, submit_task
 
@@ -1770,7 +1888,8 @@ class VideoProcessor:
                 chunk_paths=safe_paths,
                 model=target_model,
                 language=self.language,
-                temperature_tuple=temperature_tuple
+                temperature_tuple=temperature_tuple,
+                log_label=log_label,
             )
             if proc is None:
                 get_logger().log("❌ Whisper 백엔드를 실행할 수 없습니다.")
@@ -1782,7 +1901,7 @@ class VideoProcessor:
         processed_count = 0
 
         try:
-            if _cfg.IS_MAC and not use_transformers_whisper:
+            if _cfg.IS_MAC and not use_coreml_whisper and not use_transformers_whisper:
                 received = 0
                 while received < total:
                     line = proc.stdout.readline()
@@ -1828,12 +1947,14 @@ class VideoProcessor:
 
                     if chunk_segs:
                         prev_end = chunk_segs[-1]["end"]
+                        if callable(preview_callback):
+                            try:
+                                preview_callback(chunk_segs, log_label)
+                            except Exception:
+                                pass
 
                     pct = min(100, int((prev_end / t_sec) * 100))
-                    get_logger().log(
-                        f"  ▶ 진행 상황: {int(prev_end // 60):02d}분 {int(prev_end % 60):02d}초 / "
-                        f"{int(t_sec // 60):02d}분 {int(t_sec % 60):02d}초 ({int(pct)}%)"
-                    )
+                    get_logger().log(self._format_transcribe_progress(log_label, prev_end, t_sec, pct))
 
                     yield chunk_segs, item["idx"] + 1, total
                     processed_count += 1
@@ -1872,12 +1993,14 @@ class VideoProcessor:
 
                     if chunk_segs:
                         prev_end = chunk_segs[-1]["end"]
+                        if callable(preview_callback):
+                            try:
+                                preview_callback(chunk_segs, log_label)
+                            except Exception:
+                                pass
 
                     pct = min(100, int((prev_end / t_sec) * 100))
-                    get_logger().log(
-                        f"  ▶ 진행 상황: {int(prev_end // 60):02d}분 {int(prev_end % 60):02d}초 / "
-                        f"{int(t_sec // 60):02d}분 {int(t_sec % 60):02d}초 ({int(pct)}%)"
-                    )
+                    get_logger().log(self._format_transcribe_progress(log_label, prev_end, t_sec, pct))
                     yield chunk_segs, item["idx"] + 1, total
                     processed_count += 1
 
@@ -1897,6 +2020,14 @@ class VideoProcessor:
                 get_logger().log(f"[WARN] {log_label} Whisper transcription aborted due to worker failure")
             else:
                 get_logger().log(f"[DONE] {log_label} Whisper transcription completed")
+
+    @staticmethod
+    def _format_transcribe_progress(log_label: str, current_sec: float, total_sec: float, pct: int) -> str:
+        label = (log_label or "STT").strip() or "STT"
+        return (
+            f"  ▶ [{label}] 진행 상황: {int(current_sec // 60):02d}분 {int(current_sec % 60):02d}초 / "
+            f"{int(total_sec // 60):02d}분 {int(total_sec % 60):02d}초 ({int(pct)}%)"
+        )
 
     def stop_transcribe(self):
         try:

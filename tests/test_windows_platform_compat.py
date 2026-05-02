@@ -1,8 +1,9 @@
-# Version: 03.01.23
+# Version: 03.08.12
 # Phase: PHASE2
 
+import signal
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from core import platform_compat
 from core.audio.whisper_faster import _convert_model_name, _fallback_model_name
@@ -30,6 +31,86 @@ class WindowsPlatformCompatTest(unittest.TestCase):
         self.assertNotIn("QT_QPA_PLATFORM_PLUGIN_PATH", env)
         self.assertNotIn("QML2_IMPORT_PATH", env)
         self.assertEqual(env["PYTHONIOENCODING"], "utf-8")
+
+    def test_worker_env_strips_macos_malloc_logging_variables(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "MallocStackLogging": "0",
+                "MallocStackLoggingNoCompact": "1",
+                "MallocScribble": "1",
+            },
+            clear=False,
+        ):
+            env = platform_compat.subprocess_env()
+
+        self.assertNotIn("MallocStackLogging", env)
+        self.assertNotIn("MallocStackLoggingNoCompact", env)
+        self.assertNotIn("MallocScribble", env)
+
+    def test_preview_proxy_match_is_limited_to_legacy_cache_encoder(self):
+        cache = str(platform_compat.PROJECT_ROOT / "dataset" / "video_preview_cache")
+        self.assertTrue(platform_compat._is_preview_proxy_ffmpeg_command(
+            f"ffmpeg -y -i sample.mp4 {cache}/abc_preview_720p.mp4.tmp.mp4"
+        ))
+        self.assertFalse(platform_compat._is_preview_proxy_ffmpeg_command(
+            "ffmpeg -y -i sample.mp4 /tmp/render_output.mp4"
+        ))
+
+    def test_cleanup_stale_preview_proxy_processes_terminates_matching_ffmpeg_only(self):
+        cache = str(platform_compat.PROJECT_ROOT / "dataset" / "video_preview_cache")
+        ps_output = "\n".join([
+            f"123 1 ffmpeg -y -i sample.mp4 {cache}/abc_preview_720p.mp4.tmp.mp4",
+            "456 1 ffmpeg -y -i sample.mp4 /tmp/render_output.mp4",
+            "789 1 python main.py",
+        ])
+
+        with patch("core.platform_compat.is_windows", return_value=False), \
+                patch("core.platform_compat.subprocess.check_output", return_value=ps_output), \
+                patch("core.platform_compat.os.kill") as kill:
+            stopped = platform_compat.cleanup_stale_preview_proxy_processes(timeout_sec=0.0)
+
+        self.assertEqual(stopped, 1)
+        kill.assert_has_calls([call(123, signal.SIGTERM)])
+        self.assertEqual(kill.call_count, 1)
+
+    def test_cleanup_app_child_processes_terminates_heavy_descendants_only(self):
+        root = 100
+        project = str(platform_compat.PROJECT_ROOT)
+        ps_output = "\n".join([
+            f"{root} 1 python main.py",
+            f"101 {root} ffmpeg -y -i input.mp4 {project}/output/tmp.wav",
+            f"102 {root} python {project}/core/audio/whisper_transformers.py",
+            f"103 {root} ffmpeg -y -i input.mp4 /tmp/other.mp4",
+            f"104 {root} /Applications/Ollama.app/Contents/Resources/ollama runner --model x",
+            "105 1 ffmpeg -y -i unrelated.mp4 /tmp/other.mp4",
+        ])
+
+        with patch("core.platform_compat.is_windows", return_value=False), \
+                patch("core.platform_compat.subprocess.check_output", return_value=ps_output), \
+                patch("core.platform_compat.os.kill") as kill:
+            stopped = platform_compat.cleanup_app_child_processes(root_pid=root, timeout_sec=0.0)
+
+        self.assertEqual(stopped, 4)
+        killed = [args.args[0] for args in kill.call_args_list]
+        self.assertEqual(killed, [101, 102, 103, 104])
+
+    def test_cleanup_ollama_runtime_processes_stops_server_and_runners(self):
+        ps_output = "\n".join([
+            "201 1 /Applications/Ollama.app/Contents/MacOS/Ollama",
+            "202 201 /Applications/Ollama.app/Contents/Resources/ollama serve",
+            "203 202 /Applications/Ollama.app/Contents/Resources/ollama runner --model gemma",
+            "204 1 python main.py",
+        ])
+
+        with patch("core.platform_compat.is_windows", return_value=False), \
+                patch("core.platform_compat.subprocess.check_output", return_value=ps_output), \
+                patch("core.platform_compat.os.kill") as kill:
+            stopped = platform_compat.cleanup_ollama_runtime_processes(timeout_sec=0.0)
+
+        self.assertEqual(stopped, 3)
+        killed = [args.args[0] for args in kill.call_args_list]
+        self.assertEqual(killed, [201, 202, 203])
 
     def test_faster_whisper_model_name_converts_mlx_to_windows_model(self):
         self.assertEqual(

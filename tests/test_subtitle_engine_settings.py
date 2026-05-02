@@ -1,4 +1,4 @@
-# Version: 03.02.03
+# Version: 03.08.09
 # Phase: PHASE2
 import unittest
 import importlib
@@ -41,6 +41,28 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
             ),
             1.5,
         )
+
+    def test_local_ollama_workers_are_capped(self):
+        workers, mode = subtitle_engine._effective_llm_workers(
+            "gemma4:e4b",
+            configured_workers=6,
+            settings={"local_ollama_llm_max_workers": 2},
+            segment_count=226,
+        )
+
+        self.assertEqual(mode, "local")
+        self.assertEqual(workers, 2)
+
+    def test_api_models_use_single_worker(self):
+        workers, mode = subtitle_engine._effective_llm_workers(
+            "OpenAI GPT-5.2",
+            configured_workers=6,
+            settings={"local_ollama_llm_max_workers": 2},
+            segment_count=226,
+        )
+
+        self.assertEqual(mode, "api")
+        self.assertEqual(workers, 1)
 
     def test_module_import_survives_invalid_numeric_settings(self):
         original_dataset_dir = config.DATASET_DIR

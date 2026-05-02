@@ -1,4 +1,4 @@
-# Version: 03.01.19
+# Version: 03.08.07
 # Phase: PHASE2
 """
 core/audio/live_stt.py
@@ -149,13 +149,41 @@ def _select_live_model(settings: dict, profile: str) -> str:
 
 
 def _transcribe_local_whisper(wav_path: str, model: str) -> str:
+    from core.audio.whisper_coreml import is_coreml_whisper_model
     from core.audio.whisper_transformers import is_transformers_whisper_model
 
+    if is_coreml_whisper_model(model):
+        return _transcribe_coreml(wav_path, model)
     if is_transformers_whisper_model(model):
         return _transcribe_transformers(wav_path, model)
     if config.IS_MAC:
         return _transcribe_mlx(wav_path, model)
     return _transcribe_faster(wav_path, model)
+
+
+def _transcribe_coreml(wav_path: str, model: str) -> str:
+    from core.audio.whisper_coreml import run_whisper
+
+    proc = run_whisper(
+        chunk_paths=[wav_path],
+        model=model,
+        language=getattr(config, "LANGUAGE", "ko"),
+        temperature_tuple="(0.0,)",
+        log_label="LIVE STT",
+    )
+    if proc is None:
+        return _transcribe_mlx(wav_path, getattr(config, "WHISPER_MODEL", "mlx-community/whisper-large-v3-mlx"))
+
+    line = proc.stdout.readline()
+    proc.wait(timeout=120)
+    data = _parse_json_line(line)
+    if not data:
+        raise RuntimeError("empty coreml-whisper result")
+    if data.get("fatal_error"):
+        raise RuntimeError(data.get("fatal_error"))
+    if data.get("error"):
+        raise RuntimeError(data.get("error"))
+    return _extract_text(data)
 
 
 def _transcribe_transformers(wav_path: str, model: str) -> str:
@@ -166,6 +194,7 @@ def _transcribe_transformers(wav_path: str, model: str) -> str:
         model=model,
         language=getattr(config, "LANGUAGE", "ko"),
         temperature_tuple="(0.0,)",
+        log_label="LIVE STT",
     )
     if proc is None:
         raise RuntimeError("transformers-whisper process not available")
@@ -236,6 +265,7 @@ def _transcribe_faster(wav_path: str, model: str) -> str:
         model=model,
         language=getattr(config, "LANGUAGE", "ko"),
         temperature_tuple="(0.0,)",
+        log_label="LIVE STT",
     )
     if proc is None:
         raise RuntimeError("faster-whisper process not available")

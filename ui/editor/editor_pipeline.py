@@ -1,5 +1,5 @@
-# Version: 03.02.15
-# Phase: PHASE1-D
+# Version: 03.08.10
+# Phase: PHASE2
 """
 ui/editor_pipeline.py
 [v01.00.16] 모드/상태 정의 문서 반영
@@ -115,6 +115,8 @@ class EditorPipelineMixin:
         self._execute_pipeline_logic(is_restart)
 
     def _set_process_completed(self):
+        if hasattr(self, "_flush_pending_segment_queue_now"):
+            self._flush_pending_segment_queue_now()
         if getattr(self, 'is_auto_start', False):
             self.sm.complete_auto_mode()
         else:

@@ -1,4 +1,4 @@
-# Version: 03.07.09
+# Version: 03.08.06
 # Phase: PHASE2
 """Editor widget and function-preserving PHASE1-C layout."""
 import re, os, sys, json, atexit, threading, shutil, time
@@ -341,7 +341,6 @@ class EditorWidget(
         self.text_edit.speaker_circle_clicked.connect(self._show_speaker_circle_menu)
         self.text_edit.speaker_circle_dropped.connect(self._on_speaker_circle_dropped)
 
-        ew_layout.addWidget(self._build_table_header())
         ew_layout.addWidget(self.text_edit)
         self._editor_focus_border = QWidget(editor_wrap)
         self._editor_focus_border.setObjectName("EditorFocusBorder")

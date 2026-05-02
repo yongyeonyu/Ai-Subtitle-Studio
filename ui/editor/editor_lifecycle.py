@@ -1,4 +1,4 @@
-# Version: 03.06.17
+# Version: 03.08.12
 # Phase: PHASE2
 """
 ui/editor_lifecycle.py
@@ -11,6 +11,7 @@ from PyQt6.QtGui import QTextCursor
 
 import config
 from logger import get_logger
+from core.platform_compat import cleanup_app_runtime_processes
 from core.path_manager import get_srt_path
 from core.project.project_manager import load_project
 from ui.dialogs.message_box import confirm_save_changes
@@ -379,4 +380,8 @@ class EditorLifecycleMixin:
             except Exception:
                 pass
         if self.backend: self.backend.stop()
+        try:
+            cleanup_app_runtime_processes(logger=get_logger(), timeout_sec=0.4)
+        except Exception:
+            pass
         QTimer.singleShot(100, lambda: os._exit(0))

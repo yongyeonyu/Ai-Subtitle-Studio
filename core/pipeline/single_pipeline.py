@@ -1,5 +1,5 @@
-# Version: 03.02.18
-# Phase: PHASE1-B
+# Version: 03.08.05
+# Phase: PHASE2
 """
 core/pipeline/single_pipeline.py
 SinglePipelineMixin — 단일 파일 / 배치 파이프라인 (_run_all, _process_one)
@@ -300,6 +300,21 @@ class SinglePipelineMixin:
 
             auto_collected_segs = []
 
+            def _preview_stt_segments(chunk_segs, _label="STT"):
+                if not chunk_segs or not self._active:
+                    return
+                preview = []
+                for seg in chunk_segs or []:
+                    try:
+                        row = dict(seg)
+                        row["stt_pending"] = True
+                        row["_live_stt_preview"] = True
+                        preview.append(row)
+                    except Exception:
+                        continue
+                if preview:
+                    self._ui_emit("_sig_preview_stt_segments", preview)
+
             def do_transcribe():
                 try:
                     if hasattr(self, "video_processor"):
@@ -307,7 +322,9 @@ class SinglePipelineMixin:
                             lambda status, qi=queue_index: self._ui_emit("_sig_update_queue", qi, status, "", "", "")
                         )
                     for chunk_segs, c_idx, t_total in self.video_processor.transcribe(
-                        chunk_dir, is_fast_mode=False
+                        chunk_dir,
+                        is_fast_mode=False,
+                        preview_callback=_preview_stt_segments,
                     ):
                         if not self._active:
                             break

@@ -1,5 +1,5 @@
-# Version: 03.02.15
-# Phase: PHASE1-D
+# Version: 03.08.10
+# Phase: PHASE2
 """
 ui/editor_actions.py
 에디터 UI 버튼 액션 (저장/이전/종료/내보내기/설정)
@@ -108,6 +108,20 @@ class EditorActionsMixin:
             pass
         return True
 
+    def _flush_pending_segment_queue_now(self):
+        try:
+            timer = getattr(self, "_queue_timer", None)
+            if timer is not None and hasattr(timer, "isActive") and timer.isActive():
+                timer.stop()
+        except Exception:
+            pass
+        try:
+            queue = list(getattr(self, "_segment_queue", []) or [])
+            if queue and hasattr(self, "_flush_queue"):
+                self._flush_queue()
+        except Exception:
+            pass
+
     def _segments_for_srt_output(self, segs: list[dict]) -> list[dict]:
         """Return SRT output order; currently changes only when roughcut explicitly enables it."""
         try:
@@ -127,6 +141,7 @@ class EditorActionsMixin:
             return list(segs or [])
 
     def _on_save(self, *args, skip_auto_next=False):
+        self._flush_pending_segment_queue_now()
         segs = self._get_current_segments()
         if not segs:
             get_logger().log("💾 저장 취소: 저장할 자막 세그먼트가 없습니다.")

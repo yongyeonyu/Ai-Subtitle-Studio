@@ -1,4 +1,4 @@
-# Version: 03.04.01
+# Version: 03.08.10
 # Phase: PHASE2
 """
 core/audio/whisper_transformers.py
@@ -13,6 +13,7 @@ import sys
 import threading
 
 from core.llm.secure_keys import get_api_key
+from core.platform_compat import subprocess_env
 
 
 TRANSFORMERS_KOREAN_WHISPER_MODELS = {
@@ -26,7 +27,7 @@ def is_transformers_whisper_model(model: str) -> bool:
     return str(model or "").strip() in TRANSFORMERS_KOREAN_WHISPER_MODELS
 
 
-def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple: str = "(0.0,)"):
+def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple: str = "(0.0,)", log_label: str = "STT"):
     """Run a Transformers ASR worker and stream one JSON line per chunk."""
     env = _huggingface_env()
     proc = subprocess.Popen(
@@ -51,12 +52,12 @@ def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple:
     except Exception:
         proc.kill()
         return None
-    _attach_stderr_logger(proc)
+    _attach_stderr_logger(proc, log_label=log_label)
     return proc
 
 
 def _huggingface_env() -> dict:
-    env = dict(os.environ)
+    env = subprocess_env()
     token = env.get("HF_TOKEN") or env.get("HUGGINGFACE_HUB_TOKEN") or get_api_key("huggingface")
     if token:
         env.setdefault("HF_TOKEN", token)
@@ -64,12 +65,22 @@ def _huggingface_env() -> dict:
     return env
 
 
-def _attach_stderr_logger(proc):
+def _format_stderr_log(line: str, log_label: str = "STT") -> str:
+    label = (log_label or "STT").strip() or "STT"
+    text = str(line or "").rstrip()
+    if not text:
+        return ""
+    if text.lstrip().startswith(f"[{label}]"):
+        return text
+    return f"[{label}] {text}"
+
+
+def _attach_stderr_logger(proc, log_label: str = "STT"):
     def _log_stderr():
         from logger import get_logger
 
         for line in proc.stderr:
-            line = line.rstrip()
+            line = _format_stderr_log(line, log_label=log_label)
             if line:
                 get_logger().log(line)
 

@@ -1,4 +1,4 @@
-# Version: 03.01.22
+# Version: 03.08.05
 # Phase: PHASE2
 """
 ui/main/main_signals.py
@@ -21,6 +21,9 @@ class SignalHandlersMixin:
     def append_segments_to_editor(self, segments):
         self._sig_append_segments.emit(segments)
 
+    def preview_stt_segments_in_editor(self, segments):
+        self._sig_preview_stt_segments.emit(segments)
+
     def update_editor_status(self, c_idx, t_total):
         self._sig_update_status.emit(c_idx, t_total)
 
@@ -33,6 +36,10 @@ class SignalHandlersMixin:
     def _do_append_segments(self, segments):
         if self._editor_widget:
             self._editor_widget.append_segments(segments)
+
+    def _do_preview_stt_segments(self, segments):
+        if self._editor_widget and hasattr(self._editor_widget, "preview_stt_segments"):
+            self._editor_widget.preview_stt_segments(segments)
 
     def _do_clear_editor(self):
         if hasattr(self, "_clear_editor_for_full_restart"):

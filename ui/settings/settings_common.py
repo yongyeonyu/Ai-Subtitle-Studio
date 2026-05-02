@@ -1,5 +1,5 @@
-# Version: 03.01.25
-# Phase: PHASE1-B
+# Version: 03.08.07
+# Phase: PHASE2
 """
 ui/settings_common.py
 settings 다이얼로그 공통 상수, 유틸 함수, 공유 데이터
@@ -26,6 +26,7 @@ DATASET_DIR = config.DATASET_DIR
 MAC_WHISPER_MODELS = [
     "mlx-community/whisper-large-v3-mlx",
     "mlx-community/whisper-large-v3-turbo",
+    "coreml:large-v3-v20240930_626MB",
     "youngouk/ghost613-turbo-korean-4bit-mlx",
     "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2",
     "mlx-community/whisper-large-v2-mlx",

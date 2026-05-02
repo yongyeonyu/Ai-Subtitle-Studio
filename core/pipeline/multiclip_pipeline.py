@@ -1,4 +1,4 @@
-# Version: 03.01.37
+# Version: 03.08.05
 # Phase: PHASE2
 """
 core/pipeline/multiclip_pipeline.py
@@ -277,8 +277,28 @@ class MulticlipPipelineMixin:
                     get_logger().log("  🎤 Whisper 변환 중...")
 
                     clip_segments = []
+                    def _preview_stt_segments(chunk_segs, _label="STT", clip_offset=offset, clip_idx=i, clip_path=target_file):
+                        if not chunk_segs or not self._active:
+                            return
+                        preview = []
+                        for seg in chunk_segs or []:
+                            try:
+                                row = dict(seg)
+                                row["start"] = float(row.get("start", 0.0) or 0.0) + clip_offset
+                                row["end"] = float(row.get("end", row["start"]) or row["start"]) + clip_offset
+                                row["_clip_idx"] = clip_idx
+                                row["_clip_file"] = clip_path
+                                row["stt_pending"] = True
+                                row["_live_stt_preview"] = True
+                                preview.append(row)
+                            except Exception:
+                                continue
+                        if preview and hasattr(self.ui, "_sig_preview_stt_segments"):
+                            self.ui._sig_preview_stt_segments.emit(preview)
+
                     for chunk_segs, _chunk_idx, _chunk_total in self.video_processor.transcribe(
-                        chunk_dir
+                        chunk_dir,
+                        preview_callback=_preview_stt_segments,
                     ):
                         if not self._active:
                             break

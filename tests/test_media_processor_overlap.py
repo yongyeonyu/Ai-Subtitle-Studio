@@ -1,4 +1,4 @@
-# Version: 03.07.08
+# Version: 03.08.04
 # Phase: PHASE2
 import os
 import struct
@@ -137,6 +137,11 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         })
 
         self.assertEqual(overlap, 3.0)
+
+    def test_transcribe_progress_log_includes_stt_label(self):
+        progress = self.processor._format_transcribe_progress("STT2", 125.0, 600.0, 20)
+
+        self.assertEqual(progress, "  ▶ [STT2] 진행 상황: 02분 05초 / 10분 00초 (20%)")
 
     def test_vad_empty_does_not_force_split_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -375,6 +380,69 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             self.assertTrue(any("0%" in stage for stage in stages))
             self.assertTrue(any("50%" in stage for stage in stages))
             self.assertTrue(any("100%" in stage for stage in stages))
+
+    def test_ffmpeg_progress_suppresses_duplicate_percent_updates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source.wav")
+            target = os.path.join(tmp, "target.wav")
+            with wave.open(source, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000 * 10)
+
+            class FakeProcess:
+                def __init__(self):
+                    self.stdout = iter([
+                        "out_time_ms=0\n",
+                        "out_time_ms=100000\n",
+                        "out_time_ms=150000\n",
+                        "out_time_ms=190000\n",
+                        "out_time_ms=200000\n",
+                        "out_time_ms=250000\n",
+                        "out_time_ms=10000000\n",
+                    ])
+                    self.returncode = 0
+
+                def wait(self, timeout=None):
+                    return self.returncode
+
+            stages = []
+            self.processor.stage_callback = stages.append
+
+            with patch("core.audio.media_processor.subprocess.Popen", return_value=FakeProcess()):
+                ok = self.processor._run_media_command(
+                    ["ffmpeg", "-y", "-i", source, "-acodec", "pcm_s16le", target],
+                    label="ffmpeg 오디오 추출",
+                )
+
+            self.assertTrue(ok)
+            progress = [
+                stage.rsplit(" ", 1)[-1]
+                for stage in stages
+                if "ffmpeg 오디오 추출 진행 중" in stage
+            ]
+            self.assertEqual(progress, ["0%", "1%", "2%", "99%", "100%"])
+            self.assertEqual(len(progress), len(set(progress)))
+
+    def test_vad_progress_suppresses_duplicate_bucket_updates(self):
+        stages = []
+        self.processor.stage_callback = stages.append
+
+        self.processor._emit_vad_progress("TEN_VAD", "오디오 스캔", 0, force=True)
+        self.processor._emit_vad_progress("TEN_VAD", "오디오 스캔", 1, step=10)
+        self.processor._emit_vad_progress("TEN_VAD", "오디오 스캔", 9, step=10)
+        self.processor._emit_vad_progress("TEN_VAD", "오디오 스캔", 10, step=10)
+        self.processor._emit_vad_progress("TEN_VAD", "오디오 스캔", 19, step=10)
+        self.processor._emit_vad_progress("TEN_VAD", "오디오 스캔", 20, step=10)
+        self.processor._emit_vad_progress("TEN_VAD", "오디오 스캔", 100, force=True)
+
+        progress = [
+            stage.rsplit(" ", 1)[-1]
+            for stage in stages
+            if "TEN_VAD 오디오 스캔" in stage
+        ]
+        self.assertEqual(progress, ["0%", "10%", "20%", "100%"])
 
     def test_long_no_vad_preprocess_extracts_stt_chunks_directly_from_media(self):
         with tempfile.TemporaryDirectory() as tmp:

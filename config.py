@@ -1,4 +1,4 @@
-# Version: 03.08.00
+# Version: 03.09.00
 # Phase: PHASE2
 
 
@@ -9,7 +9,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.08.00"
+APP_VERSION = "03.09.00"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -93,6 +93,7 @@ DEFAULT_ADV_SETTINGS = {
     "w_none_temp_max":  0.4,
     "split_length_threshold": 10,
     "llm_workers":      6,
+    "local_ollama_llm_max_workers": 2,
     "sub_gap_break_sec":  1.5,
     "sub_min_duration":   0.2,
     "sub_max_cps":        12,

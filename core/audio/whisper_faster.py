@@ -1,4 +1,4 @@
-# Version: 03.01.23
+# Version: 03.08.04
 # Phase: PHASE2
 """
 core/whisper_faster.py
@@ -16,7 +16,7 @@ from core.platform_compat import hidden_subprocess_kwargs
 from logger import get_logger
 
 
-def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple: str):
+def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple: str, log_label: str = "STT"):
     """
     faster-whisper를 별도 프로세스로 실행.
     media_processor.py 호환: Popen-like 객체 반환 (stdout.readline() 가능)
@@ -36,7 +36,8 @@ def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple:
         "language": language,
     }
 
-    get_logger().log(f"  🔧 faster-whisper subprocess 시작: {fw_model}")
+    label = (log_label or "STT").strip() or "STT"
+    get_logger().log(f"  🔧 [{label}] faster-whisper subprocess 시작: {fw_model}")
 
     proc = subprocess.Popen(
         [sys.executable, str(worker_script)],
@@ -69,7 +70,7 @@ def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple:
         for line in proc.stderr:
             line = line.rstrip()
             if line:
-                get_logger().log(line)
+                get_logger().log(f"[{label}] {line}")
 
     threading.Thread(target=_log_stderr, daemon=True, name="whisper-stderr").start()
 

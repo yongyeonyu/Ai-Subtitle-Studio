@@ -1,4 +1,4 @@
-# Version: 03.02.15
+# Version: 03.08.07
 # Phase: PHASE2
 """
 ui/settings_ai.py  ─  ⚙️ AI 엔진 설정 다이얼로그
@@ -253,14 +253,14 @@ class SettingsDialog(QDialog):
         ]
         stt2_models = [
             model for model in w_models
-            if "ghost613" in model.lower() or "zeroth" in model.lower()
+            if "ghost613" in model.lower() or "zeroth" in model.lower() or model.startswith("coreml:")
         ]
 
         self.combo_whisper.setUpdatesEnabled(False)
         self.combo_whisper.blockSignals(True)
         self.combo_whisper.addItems(stt1_models)
         for idx, model_name in enumerate(stt1_models):
-            if "ghost613" in model_name or "Zeroth-KO" in model_name or model_name.startswith("o0dimplz0o/"):
+            if "ghost613" in model_name or "Zeroth-KO" in model_name or model_name.startswith("o0dimplz0o/") or model_name.startswith("coreml:"):
                 self.combo_whisper.setItemText(idx, f"{model_name} (실험)")
         self._fit_model_combo(self.combo_whisper)
         curr_w = settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", stt1_models[0] if stt1_models else ""))
@@ -295,7 +295,7 @@ class SettingsDialog(QDialog):
         self.combo_whisper_secondary.blockSignals(True)
         self.combo_whisper_secondary.addItems(stt2_models)
         for idx, model_name in enumerate(stt2_models):
-            if "ghost613" in model_name or "Zeroth-KO" in model_name or model_name.startswith("o0dimplz0o/"):
+            if "ghost613" in model_name or "Zeroth-KO" in model_name or model_name.startswith("o0dimplz0o/") or model_name.startswith("coreml:"):
                 self.combo_whisper_secondary.setItemText(idx, f"{model_name} (실험)")
         self._fit_model_combo(self.combo_whisper_secondary)
         curr_w2 = settings.get(

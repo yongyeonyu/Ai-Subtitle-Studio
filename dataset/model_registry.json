@@ -37,6 +37,22 @@
       "hidden": false
     },
     {
+      "id": "whisper-large-v3-coreml",
+      "name": "Whisper Large V3 Core ML (WhisperKit, 실험)",
+      "category": "STT",
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [],
+      "import_names": [],
+      "hf_repo": "argmaxinc/whisperkit-coreml",
+      "model_path": "",
+      "required": false,
+      "hidden": false,
+      "experimental": true,
+      "install_note": "Optional backend. Install the CLI with: brew install whisperkit-cli"
+    },
+    {
       "id": "whisper-large-v3-faster",
       "name": "Whisper Large V3 (CUDA)",
       "category": "STT",

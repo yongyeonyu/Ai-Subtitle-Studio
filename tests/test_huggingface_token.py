@@ -1,8 +1,10 @@
+# Version: 03.08.04
+# Phase: PHASE2
 import os
 import unittest
 from unittest.mock import patch
 
-from core.audio.whisper_transformers import _huggingface_env
+from core.audio.whisper_transformers import _format_stderr_log, _huggingface_env
 from core.audio.media_processor import VideoProcessor
 from core.llm.secure_keys import get_api_key
 
@@ -29,6 +31,11 @@ class HuggingFaceTokenTests(unittest.TestCase):
 
         self.assertEqual(env["HF_TOKEN"], "hf_env_token")
         self.assertEqual(env["HUGGINGFACE_HUB_TOKEN"], "hf_env_token")
+
+    def test_transformers_stderr_log_includes_stt_label(self):
+        line = _format_stderr_log("[transformers] warning", log_label="STT2")
+
+        self.assertEqual(line, "[STT2] [transformers] warning")
 
     def test_media_processor_hf_env_injects_saved_token_for_audio_enhancers(self):
         base_env = {k: v for k, v in os.environ.items() if k not in {"HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"}}

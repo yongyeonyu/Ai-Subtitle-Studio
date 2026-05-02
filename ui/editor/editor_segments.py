@@ -1,4 +1,4 @@
-# Version: 03.02.17
+# Version: 03.08.05
 # Phase: PHASE2
 """
 ui/editor_segments.py
@@ -88,12 +88,90 @@ class EditorSegmentsMixin:
     # ---------------------------------------------------------
     # Segment Queue
     # ---------------------------------------------------------
+    def preview_stt_segments(self, segments: list[dict]):
+        try: self.status_lbl.text()
+        except RuntimeError: return
+        if threading.current_thread() is not threading.main_thread():
+            QTimer.singleShot(0, lambda s=list(segments): self.preview_stt_segments(s))
+            return
+
+        preview = []
+        for seg in segments or []:
+            try:
+                start = self._frame_time(max(0.0, float(seg.get("start", 0.0) or 0.0)))
+                end = self._frame_time(max(start + 0.05, float(seg.get("end", start + 0.5) or start + 0.5)))
+            except Exception:
+                continue
+            text = str(seg.get("text", "") or "").strip()
+            if not text:
+                continue
+            item = dict(seg)
+            item["start"] = start
+            item["end"] = end
+            item["text"] = text
+            item["stt_pending"] = True
+            item["_live_stt_preview"] = True
+            preview.append(item)
+
+        if not preview:
+            return
+
+        existing_preview = list(getattr(self, "_live_stt_preview_segments", []) or [])
+        existing_preview = self._drop_overlapping_preview(existing_preview, preview)
+        self._live_stt_preview_segments = existing_preview + preview
+        self._redraw_timeline_with_live_preview()
+
+    def _drop_overlapping_preview(self, preview: list[dict], final_segments: list[dict]) -> list[dict]:
+        if not preview or not final_segments:
+            return list(preview or [])
+        ranges = []
+        for seg in final_segments or []:
+            try:
+                ranges.append((float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
+            except Exception:
+                continue
+        if not ranges:
+            return list(preview or [])
+
+        kept = []
+        for seg in preview:
+            try:
+                start = float(seg.get("start", 0.0) or 0.0)
+                end = float(seg.get("end", start) or start)
+            except Exception:
+                continue
+            overlaps = any(start < r_end + 0.05 and end > r_start - 0.05 for r_start, r_end in ranges)
+            if not overlaps:
+                kept.append(seg)
+        return kept
+
+    def _redraw_timeline_with_live_preview(self):
+        if not hasattr(self, "timeline"):
+            return
+        try:
+            confirmed = [seg for seg in self._get_current_segments() if not seg.get("is_gap")]
+        except Exception:
+            confirmed = list(getattr(self, "_cached_segs", []) or [])
+        preview = list(getattr(self, "_live_stt_preview_segments", []) or [])
+        if not preview:
+            self._redraw_timeline()
+            return
+        combined = sorted(confirmed + preview, key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
+        total_dur = combined[-1]["end"] if combined else 0.0
+        if hasattr(self, 'video_player') and self.video_player.total_time > 0.0:
+            total_dur = max(total_dur, self.video_player.total_time)
+        self.timeline.update_segments(combined, self._active_seg_start, total_dur)
+
     def append_segments(self, segments: list[dict]):
         try: self.status_lbl.text()
         except RuntimeError: return
         if threading.current_thread() is not threading.main_thread():
             QTimer.singleShot(0, lambda s=list(segments): self.append_segments(s))
             return
+        self._live_stt_preview_segments = self._drop_overlapping_preview(
+            list(getattr(self, "_live_stt_preview_segments", []) or []),
+            segments or [],
+        )
         self._segment_queue.extend(segments)
         if not self._queue_timer.isActive():
             self._queue_timer.start(80)
@@ -451,6 +529,13 @@ class EditorSegmentsMixin:
     def _redraw_timeline(self):
         segs = self._get_current_segments()
         self._cached_segs = segs  # [크PD] 캐시 저장
+        timeline_segs = segs
+        preview = list(getattr(self, "_live_stt_preview_segments", []) or [])
+        if preview:
+            timeline_segs = sorted(
+                [seg for seg in segs if not seg.get("is_gap")] + preview,
+                key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),
+            )
         if hasattr(self, "_highlighter"):
             quality_map = {
                 int(seg.get("line", -1)): dict(seg.get("quality") or {})
@@ -458,10 +543,10 @@ class EditorSegmentsMixin:
                 if seg.get("quality") and int(seg.get("line", -1)) >= 0
             }
             self._highlighter.set_quality_map(quality_map)
-        total_dur = segs[-1]["end"] if segs else 0.0
+        total_dur = timeline_segs[-1]["end"] if timeline_segs else 0.0
         if hasattr(self, 'video_player') and self.video_player.total_time > 0.0:
             total_dur = max(total_dur, self.video_player.total_time)
-        self.timeline.update_segments(segs, self._active_seg_start, total_dur)
+        self.timeline.update_segments(timeline_segs, self._active_seg_start, total_dur)
         if hasattr(self, 'video_player'):
             _mc_boxes = list(getattr(self.timeline.canvas, '_multiclip_boxes', []) or []) if hasattr(self, 'timeline') else []
             if _mc_boxes and hasattr(self, '_resolve_active_context'):

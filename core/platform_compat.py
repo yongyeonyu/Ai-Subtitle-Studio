@@ -1,4 +1,4 @@
-# Version: 03.01.19
+# Version: 03.08.12
 # Phase: PHASE2
 """
 core/platform_compat.py
@@ -7,8 +7,10 @@ Cross-platform subprocess/path helpers for macOS and Windows.
 from __future__ import annotations
 
 import os
+import signal
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import config
@@ -70,6 +72,15 @@ def subprocess_env(extra: dict | None = None, *, strip_qt: bool = False) -> dict
     env = dict(os.environ)
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
+    for key in (
+        "MallocStackLogging",
+        "MallocStackLoggingNoCompact",
+        "MallocStackLoggingDirectory",
+        "MallocScribble",
+        "MallocPreScribble",
+        "MallocGuardEdges",
+    ):
+        env.pop(key, None)
     if strip_qt:
         for key in (
             "QT_PLUGIN_PATH",
@@ -91,3 +102,170 @@ def hidden_subprocess_kwargs(*, strip_qt: bool = False, extra_env: dict | None =
         kwargs["startupinfo"] = startupinfo
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     return kwargs
+
+
+def _is_preview_proxy_ffmpeg_command(command: str) -> bool:
+    command = str(command or "")
+    if "ffmpeg" not in command.lower():
+        return False
+    normalized_command = command.replace("\\", "/")
+    preview_cache_dir = str(PROJECT_ROOT / "dataset" / "video_preview_cache").replace("\\", "/")
+    return (
+        preview_cache_dir in normalized_command
+        and "_preview_720p.mp4.tmp.mp4" in normalized_command
+    )
+
+
+def _process_table() -> list[tuple[int, int, str]]:
+    try:
+        output = subprocess.check_output(
+            ["ps", "-axo", "pid=,ppid=,command="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return []
+
+    rows: list[tuple[int, int, str]] = []
+    for line in output.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) != 3:
+            continue
+        try:
+            rows.append((int(parts[0]), int(parts[1]), parts[2]))
+        except ValueError:
+            continue
+    return rows
+
+
+def _terminate_pids(pids: list[int], *, timeout_sec: float = 0.2) -> int:
+    current_pid = os.getpid()
+    unique_pids = sorted({int(pid) for pid in pids if int(pid) > 0 and int(pid) != current_pid})
+    stopped = 0
+    for pid in unique_pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            stopped += 1
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+    if stopped and timeout_sec > 0:
+        time.sleep(float(timeout_sec))
+        for pid in unique_pids:
+            try:
+                os.kill(pid, 0)
+            except (ProcessLookupError, PermissionError, OSError):
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+
+    return stopped
+
+
+def cleanup_stale_preview_proxy_processes(*, timeout_sec: float = 0.2) -> int:
+    """Terminate legacy preview-cache ffmpeg encoders left after app shutdown."""
+    if is_windows():
+        return 0
+
+    targets: list[int] = []
+    current_pid = os.getpid()
+    for pid, _ppid, command in _process_table():
+        if pid == current_pid:
+            continue
+        if _is_preview_proxy_ffmpeg_command(command):
+            targets.append(pid)
+
+    return _terminate_pids(targets, timeout_sec=timeout_sec)
+
+
+def _is_heavy_app_child_command(command: str) -> bool:
+    lowered = str(command or "").replace("\\", "/").lower()
+    heavy_names = (
+        "ffmpeg", "ffprobe", "rnnoise",
+        "whisper_worker.py", "whisper_transformers.py", "whisper_faster.py",
+        "whisper_coreml.py", "whisper_mlx.py", "resemble_enhance_runner.py",
+        "ollama runner",
+    )
+    return any(name in lowered for name in heavy_names)
+
+
+def cleanup_app_child_processes(*, root_pid: int | None = None, timeout_sec: float = 0.4) -> int:
+    """Terminate heavy subprocess descendants owned by the current app process."""
+    if is_windows():
+        return 0
+    root_pid = int(root_pid or os.getpid())
+    rows = _process_table()
+    children_by_parent: dict[int, list[tuple[int, str]]] = {}
+    for pid, ppid, command in rows:
+        children_by_parent.setdefault(ppid, []).append((pid, command))
+
+    targets: list[int] = []
+    stack = [root_pid]
+    seen = {root_pid}
+    while stack:
+        parent = stack.pop()
+        for pid, command in children_by_parent.get(parent, []):
+            if pid in seen:
+                continue
+            seen.add(pid)
+            stack.append(pid)
+            if _is_heavy_app_child_command(command):
+                targets.append(pid)
+
+    return _terminate_pids(targets, timeout_sec=timeout_sec)
+
+
+def _is_ollama_runtime_command(command: str) -> bool:
+    lowered = str(command or "").replace("\\", "/").lower()
+    if "ollama runner" in lowered:
+        return True
+    if "ollama serve" in lowered:
+        return True
+    return "/ollama.app/contents/macos/ollama" in lowered
+
+
+def cleanup_ollama_runtime_processes(*, timeout_sec: float = 0.4) -> int:
+    """Terminate Ollama server/app processes after unloading models."""
+    if is_windows():
+        return 0
+    targets = [
+        pid
+        for pid, _ppid, command in _process_table()
+        if _is_ollama_runtime_command(command)
+    ]
+    return _terminate_pids(targets, timeout_sec=timeout_sec)
+
+
+def cleanup_app_runtime_processes(*, logger=None, timeout_sec: float = 0.4) -> dict[str, int]:
+    """Release app-owned heavy runtimes at shutdown."""
+    result = {
+        "ollama_models": 0,
+        "ollama_processes": 0,
+        "child_processes": 0,
+        "legacy_preview_ffmpeg": 0,
+    }
+    try:
+        from core.llm.ollama_provider import stop_local_llm_models
+
+        stopped_models = stop_local_llm_models(None, logger=logger, log_context="앱 종료")
+        result["ollama_models"] = len(stopped_models)
+    except Exception:
+        pass
+
+    result["child_processes"] = cleanup_app_child_processes(timeout_sec=timeout_sec)
+    result["legacy_preview_ffmpeg"] = cleanup_stale_preview_proxy_processes(timeout_sec=timeout_sec)
+    result["ollama_processes"] = cleanup_ollama_runtime_processes(timeout_sec=timeout_sec)
+    cleaned_processes = int(result["child_processes"]) + int(result["legacy_preview_ffmpeg"])
+    if cleaned_processes and logger:
+        try:
+            logger.log(f"🧹 앱 종료: 무거운 런타임 프로세스 {cleaned_processes}개 정리 완료")
+        except Exception:
+            pass
+    if result["ollama_processes"] and logger:
+        try:
+            logger.log(f"🛑 앱 종료: Ollama 서버/러너 {result['ollama_processes']}개 종료 완료")
+        except Exception:
+            pass
+    return result

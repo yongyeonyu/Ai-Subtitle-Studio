@@ -4,7 +4,7 @@
 
 AI 기반 자막 생성, 자막 편집, 화자 분리, 멀티클립 처리, 러프컷 분석을 하나의 데스크톱 작업 흐름으로 연결하는 영상 자막 제작 도구입니다.
 
-[![Version](https://img.shields.io/badge/version-v03.08.00-0A84FF?style=for-the-badge)](#)
+[![Version](https://img.shields.io/badge/version-v03.09.00-0A84FF?style=for-the-badge)](#)
 [![Phase](https://img.shields.io/badge/phase-PHASE2-30D158?style=for-the-badge)](#)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
@@ -26,7 +26,7 @@ AI Subtitle Studio는 긴 영상 작업에서 반복되는 자막 생성, 보정
 
 | 항목 | 내용 |
 | --- | --- |
-| 현재 버전 | `v03.08.00` |
+| 현재 버전 | `v03.09.00` |
 | 개발 단계 | `PHASE2` |
 | 기본 브랜치 | `main` |
 | 지원 목표 | macOS, Windows |
@@ -124,6 +124,12 @@ Homebrew로 ffmpeg 설치:
 brew install ffmpeg
 ffmpeg -version
 ffprobe -version
+```
+
+Core ML STT 실험 백엔드는 선택 사항입니다. AI 설정에서 `coreml:large-v3-v20240930_626MB (실험)`을 선택하려면 WhisperKit CLI를 별도로 설치하세요. CLI가 없거나 worker 시작 준비에 실패하면 앱은 기존 MLX Whisper로 자동 대체합니다.
+
+```bash
+brew install whisperkit-cli
 ```
 
 앱 실행:
@@ -239,7 +245,8 @@ PY
 | 문서 | 설명 |
 | --- | --- |
 | `File_structure.txt` | 현재 파일 구조 |
-| [`RELEASE_v03.08.00.md`](RELEASE_v03.08.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.09.00.md`](RELEASE_v03.09.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.08.00.md`](RELEASE_v03.08.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.07.00.md`](RELEASE_v03.07.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.06.00.md`](RELEASE_v03.06.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.05.00.md`](RELEASE_v03.05.00.md) | 이전 PHASE2 릴리즈 노트 |
@@ -252,15 +259,15 @@ PY
 
 ## 릴리즈 노트
 
-전체 최신 릴리즈 노트는 [`RELEASE_v03.08.00.md`](RELEASE_v03.08.00.md)를 참고하세요.
+전체 최신 릴리즈 노트는 [`RELEASE_v03.09.00.md`](RELEASE_v03.09.00.md)를 참고하세요.
 
-### 최신 릴리즈: v03.08.00
+### 최신 릴리즈: v03.09.00
 
-- macOS 실행 안정성을 위해 공격적인 OpenGL 위젯 경로는 명시적 opt-in으로 돌리고, 기본 실행은 안전한 QWidget 경로를 사용합니다.
-- 자막 생성 상태 표시와 사이드바 단계표가 같은 공용 parser를 사용해 `전처리`, `VAD`, `STT`, `자막 LLM` 단계를 일관되게 표시합니다.
-- 대용량 영상 전처리는 첫 오디오 스트림만 읽고, FFMPEG 진행률 표시, 단일 패스 정제, 검증된 cache 재사용, 직접 STT chunk 추출 경로를 지원합니다.
-- 자막 에디터 상단 toolbar를 제거해 표 헤더가 바로 보이게 하고, 품질 검사 호출은 toolbar 유무와 무관하게 안전하게 동작합니다.
-- 사이드바 네비게이션 버튼을 줄이고 큐 리스트 패널이 남은 세로 공간을 확장해서 사용하도록 정리했습니다.
+- STT1/STT2 병렬 로그에 진행률과 worker 경고 라벨을 붙여 앙상블 실행 상태를 구분합니다.
+- STT 청크가 확정되는 즉시 타임라인/글로벌 캔버스에 임시 세그먼트를 표시합니다.
+- macOS Core ML/WhisperKit STT 실험 백엔드를 추가하고 MLX fallback을 유지합니다.
+- 로컬 Ollama 분할 worker를 안전하게 제한하고, 앱 종료 시 Ollama/ffmpeg/STT worker 런타임을 정리합니다.
+- 저장 직전 pending 세그먼트 큐를 flush해 완료 직후 저장 race를 줄였습니다.
 
 ## 보안
 

@@ -1,4 +1,4 @@
-# Version: 03.02.03
+# Version: 03.08.09
 # Phase: PHASE2
 """
 core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장 
@@ -62,8 +62,27 @@ def _setting_float(settings: dict, key: str, default: float) -> float:
         return default
 
 
+def _is_local_ollama_model(model: str) -> bool:
+    text = str(model or "").strip()
+    if not text or "사용 안함" in text:
+        return False
+    if "Gemini" in text or is_openai_model(text):
+        return False
+    return True
+
+
+def _effective_llm_workers(model: str, configured_workers: int, settings: dict, segment_count: int) -> tuple[int, str]:
+    configured = max(1, int(configured_workers or 1))
+    count = max(1, int(segment_count or 1))
+    if not _is_local_ollama_model(model):
+        return 1, "api"
+    local_cap = max(1, _setting_int(settings or {}, "local_ollama_llm_max_workers", _LOCAL_OLLAMA_WORKER_CAP))
+    return max(1, min(configured, local_cap, count)), "local"
+
+
 # ━━━ 📋 [UI 설정 연동 변수] 숫자를 직접 적지 않고 설정값에서 실시간으로 가져옵니다 ━━━
 _EXAONE_WORKERS  = _setting_int(_S, "llm_threads", 6, fallback_key="llm_workers")  # (AI -> 에디터 LLM 처리 스레드)
+_LOCAL_OLLAMA_WORKER_CAP = _setting_int(_S, "local_ollama_llm_max_workers", 2)
 _GAP_BREAK_SEC   = _setting_float(_S, "sub_gap_break_sec", 1.5) # (간격 -> 문장 분리 간격)
 _MIN_DURATION    = _setting_float(_S, "sub_min_duration", 0.3)  # (간격 -> 최소 자막 유지 시간)
 _MAX_DURATION    = _setting_float(_S, "sub_max_duration", 6.0)  # (간격 -> 최대 자막 유지 시간)
@@ -680,7 +699,7 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
     if not segments:
         return segments
 
-    global _EXAONE_WORKERS, _GAP_BREAK_SEC, _MIN_DURATION, _MAX_DURATION, _MAX_CPS, _DEDUP_WINDOW
+    global _EXAONE_WORKERS, _LOCAL_OLLAMA_WORKER_CAP, _GAP_BREAK_SEC, _MIN_DURATION, _MAX_DURATION, _MAX_CPS, _DEDUP_WINDOW
 
     model = get_selected_llm()
     short_m = model.split(":")[0].upper()
@@ -698,6 +717,7 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
                 loaded_settings = dict(s)
                 threshold = _setting_int(s, "split_length_threshold", 10)
                 _EXAONE_WORKERS = _setting_int(s, "llm_threads", 6, fallback_key="llm_workers")
+                _LOCAL_OLLAMA_WORKER_CAP = _setting_int(s, "local_ollama_llm_max_workers", 2)
                 _GAP_BREAK_SEC = _setting_float(s, "sub_gap_break_sec", 1.5)
                 _MIN_DURATION = _setting_float(s, "sub_min_duration", 0.2)
                 _MAX_DURATION = _setting_float(s, "sub_max_duration", 6.0)
@@ -758,14 +778,19 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
                 optimized.append(segments[idx])
 
     else:
-        if "Gemini" in model or is_openai_model(model):
-            _EXAONE_WORKERS = 1
-            get_logger().log(f"🤖 {short_m} API 안전 모드: {_EXAONE_WORKERS}개 워커 순차 처리 중...")
+        max_workers, worker_mode = _effective_llm_workers(model, _EXAONE_WORKERS, loaded_settings, len(args))
+        if worker_mode == "api":
+            get_logger().log(f"🤖 {short_m} API 안전 모드: {max_workers}개 워커 순차 처리 중...")
         else:
             warmup_ollama_model(model, logger=get_logger())
-            get_logger().log(f"{short_m} {min(_EXAONE_WORKERS, len(args))}개 워커 병렬 처리 ({len(segments)}개)...")
-
-        max_workers = max(1, min(_EXAONE_WORKERS, len(args)))
+            configured_workers = max(1, min(_EXAONE_WORKERS, len(args)))
+            if max_workers < configured_workers:
+                get_logger().log(
+                    f"{short_m} 로컬 Ollama 안전 모드: {max_workers}개 워커 병렬 처리 "
+                    f"(설정 {_EXAONE_WORKERS} → 제한 {max_workers}, {len(segments)}개)"
+                )
+            else:
+                get_logger().log(f"{short_m} {max_workers}개 워커 병렬 처리 ({len(segments)}개)...")
 
         if max_workers == 1:
             for idx, a in enumerate(args):
