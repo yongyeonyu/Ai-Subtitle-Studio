@@ -1339,3 +1339,1228 @@ def cut_boundary_scan_profile(settings: dict | None = None) -> dict:
 def cut_boundary_enabled(settings: dict | None = None) -> bool:
     return cut_boundary_level(settings or {}) != "off"
 
+
+# === AUTO GRID V3 VERIFY WRAPPER START ===
+
+def _auto_verify_cross5_cells(width: int, height: int):
+    xs = [0, int(width / 3), int(width * 2 / 3), width]
+    ys = [0, int(height / 3), int(height * 2 / 3), height]
+    return [
+        (xs[1], ys[0], xs[2], ys[1]),  # top
+        (xs[0], ys[1], xs[1], ys[2]),  # left
+        (xs[1], ys[1], xs[2], ys[2]),  # center
+        (xs[2], ys[1], xs[3], ys[2]),  # right
+        (xs[1], ys[2], xs[2], ys[3]),  # bottom
+    ]
+
+
+def _auto_verify_gray_thumb_from_frame(frame, cv2_mod, *, scale_w: int, scale_h: int):
+    try:
+        h, w = frame.shape[:2]
+    except Exception:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+
+    out = []
+    for x1, y1, x2, y2 in _auto_verify_cross5_cells(w, h):
+        roi = frame[y1:y2, x1:x2]
+        if roi is None or roi.size == 0:
+            return None
+        gray = cv2_mod.cvtColor(roi, cv2_mod.COLOR_BGR2GRAY)
+        small = cv2_mod.resize(gray, (int(scale_w), int(scale_h)), interpolation=cv2_mod.INTER_AREA)
+        out.append(small.tobytes())
+    return tuple(out)
+
+
+def _auto_verify_color_thumb_from_frame(frame, cv2_mod, *, scale_w: int, scale_h: int, color_space: str = "ycrcb"):
+    """
+    최종 color verify용 thumbnail.
+    ycrcb 기본:
+      Y  = luma
+      Cr/Cb = chroma
+    """
+    try:
+        h, w = frame.shape[:2]
+    except Exception:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+
+    out = []
+    color_space = str(color_space or "ycrcb").lower()
+
+    for x1, y1, x2, y2 in _auto_verify_cross5_cells(w, h):
+        roi = frame[y1:y2, x1:x2]
+        if roi is None or roi.size == 0:
+            return None
+
+        if color_space == "hsv":
+            img = cv2_mod.cvtColor(roi, cv2_mod.COLOR_BGR2HSV)
+        elif color_space == "lab":
+            img = cv2_mod.cvtColor(roi, cv2_mod.COLOR_BGR2LAB)
+        else:
+            img = cv2_mod.cvtColor(roi, cv2_mod.COLOR_BGR2YCrCb)
+
+        small = cv2_mod.resize(img, (int(scale_w), int(scale_h)), interpolation=cv2_mod.INTER_AREA)
+        out.append(small)
+    return tuple(out)
+
+
+def _auto_verify_delta_bytes(a: bytes, b: bytes, *, target_samples: int = 64) -> float:
+    if not a or not b:
+        return 0.0
+    n = min(len(a), len(b))
+    if n <= 0:
+        return 0.0
+    target_samples = max(16, min(256, int(target_samples or 64)))
+    step = max(1, n // target_samples)
+    total = 0
+    count = 0
+    for i in range(0, n, step):
+        total += abs(a[i] - b[i])
+        count += 1
+    return total / float(count or 1)
+
+
+def _auto_verify_gray_delta(prev_thumb, next_thumb, *, region_threshold: float, target_samples: int):
+    if not prev_thumb or not next_thumb:
+        return 0.0, 0, []
+    n = min(len(prev_thumb), len(next_thumb))
+    deltas = [
+        _auto_verify_delta_bytes(prev_thumb[i], next_thumb[i], target_samples=target_samples)
+        for i in range(n)
+    ]
+    hits = sum(1 for d in deltas if d >= region_threshold)
+    ranked = sorted(deltas, reverse=True)
+    top_n = ranked[: min(3, len(ranked))]
+    score = sum(top_n) / float(len(top_n) or 1)
+    return float(score), int(hits), deltas
+
+
+def _auto_verify_color_delta(
+    prev_thumb,
+    next_thumb,
+    *,
+    cv2_mod,
+    color_threshold: float,
+    weight_luma: float,
+    weight_chroma: float,
+):
+    if not prev_thumb or not next_thumb:
+        return 0.0, 0, []
+
+    n = min(len(prev_thumb), len(next_thumb))
+    deltas = []
+
+    for i in range(n):
+        a = prev_thumb[i]
+        b = next_thumb[i]
+        if a is None or b is None:
+            continue
+        try:
+            diff = cv2_mod.absdiff(a, b)
+            # channel 0 = luma/value-ish, channel 1/2 = chroma-ish
+            luma = float(diff[:, :, 0].mean())
+            chroma = float(diff[:, :, 1:].mean())
+            score = (float(weight_luma) * luma) + (float(weight_chroma) * chroma)
+            deltas.append(score)
+        except Exception:
+            continue
+
+    if not deltas:
+        return 0.0, 0, []
+
+    hits = sum(1 for d in deltas if d >= color_threshold)
+    ranked = sorted(deltas, reverse=True)
+    top_n = ranked[: min(3, len(ranked))]
+    score = sum(top_n) / float(len(top_n) or 1)
+    return float(score), int(hits), deltas
+
+
+def _auto_verify_capture_thumbs_sequential(
+    cap,
+    cv2_mod,
+    *,
+    start_frame: int,
+    end_frame: int,
+    frame_count: int,
+    scale_w: int,
+    scale_h: int,
+    include_color: bool = False,
+    color_space: str = "ycrcb",
+):
+    start_frame = max(0, int(start_frame))
+    end_frame = min(int(frame_count) - 1, int(end_frame))
+    if end_frame < start_frame:
+        return {}, {}
+
+    gray_thumbs = {}
+    color_thumbs = {}
+
+    try:
+        cap.set(cv2_mod.CAP_PROP_POS_FRAMES, start_frame)
+    except Exception:
+        return gray_thumbs, color_thumbs
+
+    f = start_frame
+    while f <= end_frame:
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            break
+
+        gray_thumbs[f] = _auto_verify_gray_thumb_from_frame(
+            frame,
+            cv2_mod,
+            scale_w=scale_w,
+            scale_h=scale_h,
+        )
+
+        if include_color:
+            color_thumbs[f] = _auto_verify_color_thumb_from_frame(
+                frame,
+                cv2_mod,
+                scale_w=scale_w,
+                scale_h=scale_h,
+                color_space=color_space,
+            )
+
+        f += 1
+
+    return gray_thumbs, color_thumbs
+
+
+def _auto_grid_v3_manual_verify_fast(
+    cap,
+    cv2_mod,
+    *,
+    fps: float,
+    frame_count: int,
+    coarse_frame: int,
+    settings: dict | None = None,
+):
+    """
+    grid-v3 후보 검증.
+
+    1) gray 1f
+    2) gray 2f
+    3) gray window rollback
+    4) color window final verify
+
+    판정:
+    - gray very strong면 color weak여도 통과 가능
+    - gray ambiguous면 color strong일 때 통과
+    - 둘 다 약하면 reject
+    """
+    settings = settings or {}
+
+    try:
+        fps = float(fps or 30.0)
+        frame_count = int(frame_count or 0)
+        coarse_frame = int(coarse_frame)
+    except Exception:
+        return None
+
+    if fps <= 0.0 or frame_count <= 1:
+        return None
+
+    rollback_frames = int(settings.get("scan_cut_auto_verify_rollback_frames", round(fps * 1.0)))
+    forward_frames = int(settings.get("scan_cut_auto_verify_forward_frames", round(fps * 1.0)))
+    rollback_frames = max(2, min(240, rollback_frames))
+    forward_frames = max(2, min(240, forward_frames))
+
+    threshold_1f = float(settings.get("scan_cut_auto_verify_threshold", settings.get("scan_cut_threshold", 24.0)))
+    threshold_2f = threshold_1f * float(settings.get("scan_cut_auto_verify_two_frame_threshold_multiplier", 1.10))
+
+    gray_window_threshold = float(settings.get("scan_cut_auto_verify_window_threshold", 75.0))
+    gray_very_strong_threshold = float(settings.get("scan_cut_auto_gray_very_strong_threshold", 90.0))
+    gray_ambiguous_threshold = float(settings.get("scan_cut_auto_gray_ambiguous_threshold", 55.0))
+
+    region_threshold = float(settings.get("scan_cut_region_threshold", 18.0))
+
+    required_regions_1f = max(1, min(5, int(settings.get("scan_cut_auto_verify_regions_required", 3))))
+    required_regions_window = max(1, min(5, int(settings.get("scan_cut_auto_verify_window_regions_required", 4))))
+    required_regions_ambiguous = max(1, min(5, int(settings.get("scan_cut_auto_gray_ambiguous_regions_required", 3))))
+
+    color_enabled = bool(settings.get("scan_cut_color_verify_enabled", True))
+    color_space = str(settings.get("scan_cut_color_verify_space", "ycrcb") or "ycrcb")
+    color_threshold = float(settings.get("scan_cut_color_verify_threshold", 18.0))
+    color_strong_threshold = float(settings.get("scan_cut_color_verify_strong_threshold", 22.0))
+    color_regions_required = max(1, min(5, int(settings.get("scan_cut_color_verify_regions_required", 3))))
+    color_weight_luma = float(settings.get("scan_cut_color_verify_weight_luma", 0.25))
+    color_weight_chroma = float(settings.get("scan_cut_color_verify_weight_chroma", 0.75))
+
+    scale_w = max(8, min(48, int(settings.get("scan_cut_sample_width", 18))))
+    scale_h = max(6, min(27, int(settings.get("scan_cut_sample_height", 10))))
+    target_samples = max(16, min(256, int(settings.get("scan_cut_target_samples", 64))))
+
+    try:
+        stages_raw = settings.get("scan_cut_auto_verify_window_stages", [30, 15, 6, 3, 1])
+        if isinstance(stages_raw, str):
+            stages = [max(1, int(x.strip())) for x in stages_raw.split(",") if x.strip()]
+        else:
+            stages = [max(1, int(x)) for x in list(stages_raw or [30, 15, 6, 3, 1])]
+    except Exception:
+        stages = [30, 15, 6, 3, 1]
+
+    if 1 not in stages:
+        stages.append(1)
+
+    max_stage = max(stages or [1])
+
+    lo = max(0, coarse_frame - rollback_frames)
+    hi = min(frame_count - 2, coarse_frame + forward_frames)
+    read_hi = min(frame_count - 1, hi + max_stage + 1)
+
+    print(
+        f"↩️ [scan-cut-grid-v3] manual-verify START "
+        f"coarse={coarse_frame / fps:.3f}s range={lo}-{hi} modes=gray1f+gray2f+graywindow+color",
+        flush=True,
+    )
+
+    gray_thumbs, color_thumbs = _auto_verify_capture_thumbs_sequential(
+        cap,
+        cv2_mod,
+        start_frame=lo,
+        end_frame=read_hi,
+        frame_count=frame_count,
+        scale_w=scale_w,
+        scale_h=scale_h,
+        include_color=color_enabled,
+        color_space=color_space,
+    )
+
+    if not gray_thumbs:
+        print("⚠️ [scan-cut-grid-v3] manual-verify failed: no readable frames", flush=True)
+        return None
+
+    best_adj = {
+        "frame": None,
+        "score": -1.0,
+        "regions": 0,
+        "deltas": [],
+        "mode": "1f",
+        "threshold": threshold_1f,
+    }
+
+    def consider_adj(mode, frame_no, score, regions, deltas, threshold):
+        norm = (float(score) / float(threshold or 1.0)) + min(int(regions), required_regions_1f) * 0.03
+        old_norm = (float(best_adj["score"]) / float(best_adj["threshold"] or 1.0)) + min(int(best_adj["regions"]), required_regions_1f) * 0.03
+        if best_adj["frame"] is None or norm > old_norm:
+            best_adj.update(
+                {
+                    "frame": int(frame_no),
+                    "score": float(score),
+                    "regions": int(regions),
+                    "deltas": list(deltas or []),
+                    "mode": str(mode),
+                    "threshold": float(threshold),
+                }
+            )
+
+    # gray 1f / 2f 검증
+    for f in range(lo, hi + 1):
+        a1 = gray_thumbs.get(f)
+        b1 = gray_thumbs.get(f + 1)
+        if a1 is not None and b1 is not None:
+            score, regions, deltas = _auto_verify_gray_delta(
+                a1,
+                b1,
+                region_threshold=region_threshold,
+                target_samples=target_samples,
+            )
+            consider_adj("1f", f, score, regions, deltas, threshold_1f)
+
+        a2 = gray_thumbs.get(f)
+        b2 = gray_thumbs.get(f + 2)
+        if a2 is not None and b2 is not None:
+            score, regions, deltas = _auto_verify_gray_delta(
+                a2,
+                b2,
+                region_threshold=region_threshold,
+                target_samples=target_samples,
+            )
+            consider_adj("2f", f + 1, score, regions, deltas, threshold_2f)
+
+    # gray window rollback 검증
+    best_win = {
+        "frame": None,
+        "score": -1.0,
+        "regions": 0,
+        "deltas": [],
+        "stage": 0,
+    }
+
+    cur_lo = lo
+    cur_hi = hi
+
+    for stage in stages:
+        stage = max(1, int(stage))
+        step = max(1, stage // 2)
+
+        local_frame = None
+        local_score = -1.0
+        local_regions = 0
+        local_deltas = []
+
+        f = int(cur_lo)
+        while f <= int(cur_hi):
+            a = gray_thumbs.get(f)
+            b = gray_thumbs.get(f + stage)
+            if a is not None and b is not None:
+                score, regions, deltas = _auto_verify_gray_delta(
+                    a,
+                    b,
+                    region_threshold=region_threshold,
+                    target_samples=target_samples,
+                )
+                if score > local_score:
+                    local_frame = int(f)
+                    local_score = float(score)
+                    local_regions = int(regions)
+                    local_deltas = list(deltas or [])
+            f += step
+
+        if local_frame is None:
+            continue
+
+        if local_score > best_win["score"]:
+            best_win.update(
+                {
+                    "frame": int(local_frame),
+                    "score": float(local_score),
+                    "regions": int(local_regions),
+                    "deltas": list(local_deltas),
+                    "stage": int(stage),
+                }
+            )
+
+        cur_lo = max(lo, local_frame - stage)
+        cur_hi = min(hi, local_frame + stage)
+
+        delta_text = ",".join(f"{d:.1f}" for d in local_deltas[:5])
+        print(
+            f"🔍 [scan-cut-grid-v3] gray rollback stage={stage} "
+            f"best={local_frame / fps:.3f}s score={local_score:.2f} "
+            f"regions={local_regions} range={cur_lo}-{cur_hi} cross=[{delta_text}]",
+            flush=True,
+        )
+
+    # color final verify: gray window 후보 위치 기준
+    color_result = {
+        "enabled": color_enabled,
+        "frame": None,
+        "score": 0.0,
+        "regions": 0,
+        "deltas": [],
+        "stage": 0,
+        "passed": False,
+        "strong": False,
+    }
+
+    if color_enabled and color_thumbs and best_win["frame"] is not None:
+        color_stage = max(3, int(settings.get("scan_cut_color_verify_window_frames", best_win["stage"] or 30)))
+        color_center = int(best_win["frame"])
+        color_lo = max(lo, color_center - color_stage)
+        color_hi = min(hi, color_center + color_stage)
+
+        best_color_frame = None
+        best_color_score = -1.0
+        best_color_regions = 0
+        best_color_deltas = []
+
+        step = max(1, color_stage // 2)
+        f = color_lo
+        while f <= color_hi:
+            a = color_thumbs.get(f)
+            b = color_thumbs.get(f + color_stage)
+            if a is not None and b is not None:
+                score, regions, deltas = _auto_verify_color_delta(
+                    a,
+                    b,
+                    cv2_mod=cv2_mod,
+                    color_threshold=color_threshold,
+                    weight_luma=color_weight_luma,
+                    weight_chroma=color_weight_chroma,
+                )
+                if score > best_color_score:
+                    best_color_frame = int(f)
+                    best_color_score = float(score)
+                    best_color_regions = int(regions)
+                    best_color_deltas = list(deltas or [])
+            f += step
+
+        if best_color_frame is not None:
+            color_pass = best_color_score >= color_threshold and best_color_regions >= color_regions_required
+            color_strong = best_color_score >= color_strong_threshold and best_color_regions >= color_regions_required
+            color_result.update(
+                {
+                    "frame": int(best_color_frame),
+                    "score": float(best_color_score),
+                    "regions": int(best_color_regions),
+                    "deltas": list(best_color_deltas),
+                    "stage": int(color_stage),
+                    "passed": bool(color_pass),
+                    "strong": bool(color_strong),
+                }
+            )
+
+        c_d = ",".join(f"{d:.1f}" for d in color_result["deltas"][:5])
+        print(
+            f"{'✅' if color_result['passed'] else '⚠️'} [scan-cut-grid-v3] color-verify "
+            f"space={color_space} frame={'' if color_result.get('frame') is None else format(float(color_result.get('frame')) / float(fps or 30.0), '.3f') + 's'} "
+            f"score={color_result['score']:.2f}/{color_threshold:.2f} "
+            f"regions={color_result['regions']}/{color_regions_required} "
+            f"stage={color_result['stage']} cross=[{c_d}]",
+            flush=True,
+        )
+
+    adj_pass = (
+        best_adj["frame"] is not None
+        and best_adj["score"] >= best_adj["threshold"]
+        and best_adj["regions"] >= required_regions_1f
+    )
+
+    gray_window_pass = (
+        best_win["frame"] is not None
+        and best_win["score"] >= gray_window_threshold
+        and best_win["regions"] >= required_regions_window
+    )
+
+    gray_very_strong = (
+        best_win["frame"] is not None
+        and best_win["score"] >= gray_very_strong_threshold
+        and best_win["regions"] >= required_regions_window
+    )
+
+    gray_ambiguous = (
+        best_win["frame"] is not None
+        and best_win["score"] >= gray_ambiguous_threshold
+        and best_win["regions"] >= required_regions_ambiguous
+    )
+
+    color_pass = bool(color_result.get("passed"))
+    color_strong = bool(color_result.get("strong"))
+
+    # Decision
+    if adj_pass:
+        selected = {
+            "reason": "adjacent",
+            "mode": str(best_adj["mode"]),
+            "frame": int(best_adj["frame"]),
+            "score": float(best_adj["score"]),
+            "regions": int(best_adj["regions"]),
+            "deltas": list(best_adj["deltas"]),
+        }
+    elif gray_very_strong:
+        # gray strong + color weak면 통과 가능
+        selected = {
+            "reason": "gray_strong_color_checked",
+            "mode": f"window{best_win['stage']}",
+            "frame": int(best_win["frame"]),
+            "score": float(best_win["score"]),
+            "regions": int(best_win["regions"]),
+            "deltas": list(best_win["deltas"]),
+        }
+    elif gray_window_pass and (not color_enabled or color_pass):
+        selected = {
+            "reason": "gray_window_color_pass",
+            "mode": f"window{best_win['stage']}",
+            "frame": int(best_win["frame"]),
+            "score": float(best_win["score"]),
+            "regions": int(best_win["regions"]),
+            "deltas": list(best_win["deltas"]),
+        }
+    elif gray_ambiguous and color_strong:
+        # gray 애매 + color strong이면 통과
+        selected = {
+            "reason": "gray_ambiguous_color_strong",
+            "mode": f"color{color_result['stage']}",
+            "frame": int(color_result["frame"] if color_result["frame"] is not None else best_win["frame"]),
+            "score": float(max(best_win["score"], color_result["score"])),
+            "regions": int(max(best_win["regions"], color_result["regions"])),
+            "deltas": list(color_result["deltas"] or best_win["deltas"]),
+        }
+    else:
+        adj_d = ",".join(f"{d:.1f}" for d in list(best_adj["deltas"] or [])[:5])
+        win_d = ",".join(f"{d:.1f}" for d in list(best_win["deltas"] or [])[:5])
+        col_d = ",".join(f"{d:.1f}" for d in list(color_result["deltas"] or [])[:5])
+        print(
+            f"⚠️ [scan-cut-grid-v3] manual-verify FAIL "
+            f"adj={best_adj['score']:.2f}/{best_adj['threshold']:.2f} "
+            f"adj_regions={best_adj['regions']}/{required_regions_1f} "
+            f"gray_win={best_win['score']:.2f}/{gray_window_threshold:.2f} "
+            f"gray_regions={best_win['regions']}/{required_regions_window} "
+            f"color={color_result['score']:.2f}/{color_threshold:.2f} "
+            f"color_regions={color_result['regions']}/{color_regions_required} "
+            f"adj_cross=[{adj_d}] gray_cross=[{win_d}] color_cross=[{col_d}]",
+            flush=True,
+        )
+        return {
+            "passed": False,
+            "mode": "fail",
+            "reason": "failed",
+            "frame": int(best_adj["frame"] or best_win["frame"] or coarse_frame),
+            "sec": float((best_adj["frame"] or best_win["frame"] or coarse_frame) / fps),
+            "score": float(max(best_adj["score"], best_win["score"], color_result["score"])),
+            "regions": int(max(best_adj["regions"], best_win["regions"], color_result["regions"])),
+            "deltas": list(best_adj["deltas"] or best_win["deltas"] or color_result["deltas"] or []),
+            "color_score": float(color_result["score"]),
+            "color_regions": int(color_result["regions"]),
+        }
+
+    selected["passed"] = True
+    selected["sec"] = float(selected["frame"] / fps)
+    selected["color_score"] = float(color_result["score"])
+    selected["color_regions"] = int(color_result["regions"])
+    selected["color_passed"] = bool(color_result["passed"])
+    selected["color_strong"] = bool(color_result["strong"])
+
+    delta_text = ",".join(f"{d:.1f}" for d in selected["deltas"][:5])
+    print(
+        f"✅ [scan-cut-grid-v3] manual-verify PASS "
+        f"reason={selected['reason']} mode={selected['mode']} "
+        f"coarse={coarse_frame / fps:.3f}s refined={selected['sec']:.3f}s "
+        f"gray_score={selected['score']:.2f} gray_regions={selected['regions']} "
+        f"color_score={selected['color_score']:.2f} color_regions={selected['color_regions']} "
+        f"cross=[{delta_text}]",
+        flush=True,
+    )
+    return selected
+
+
+_auto_grid_v3_original_detect_media_cut_boundaries = detect_media_cut_boundaries
+
+
+def detect_media_cut_boundaries(
+    filepath,
+    *,
+    clip_offset: float = 0.0,
+    clip_idx: int = 0,
+    sample_step_sec: float = 1.0,
+    threshold: float = 24.0,
+    progress_callback=None,
+    found_callback=None,
+    scan_profile: dict | None = None,
+    sample_positions=None,
+    sample_mask: str | None = None,
+    **kwargs,
+):
+    settings = dict(kwargs.get("settings") or {})
+    try:
+        from core.settings import load_settings
+        loaded = dict(load_settings() or {})
+        loaded.update(settings)
+        settings = loaded
+    except Exception:
+        pass
+
+    if not bool(settings.get("scan_cut_auto_manual_verify_enabled", True)):
+        return _auto_grid_v3_original_detect_media_cut_boundaries(
+            filepath,
+            clip_offset=clip_offset,
+            clip_idx=clip_idx,
+            sample_step_sec=sample_step_sec,
+            threshold=threshold,
+            progress_callback=progress_callback,
+            found_callback=found_callback,
+            scan_profile=scan_profile,
+            sample_positions=sample_positions,
+            sample_mask=sample_mask,
+            **kwargs,
+        )
+
+    try:
+        import cv2
+    except Exception:
+        return _auto_grid_v3_original_detect_media_cut_boundaries(
+            filepath,
+            clip_offset=clip_offset,
+            clip_idx=clip_idx,
+            sample_step_sec=sample_step_sec,
+            threshold=threshold,
+            progress_callback=progress_callback,
+            found_callback=found_callback,
+            scan_profile=scan_profile,
+            sample_positions=sample_positions,
+            sample_mask=sample_mask,
+            **kwargs,
+        )
+
+    cap = cv2.VideoCapture(str(filepath))
+    if not cap.isOpened():
+        return _auto_grid_v3_original_detect_media_cut_boundaries(
+            filepath,
+            clip_offset=clip_offset,
+            clip_idx=clip_idx,
+            sample_step_sec=sample_step_sec,
+            threshold=threshold,
+            progress_callback=progress_callback,
+            found_callback=found_callback,
+            scan_profile=scan_profile,
+            sample_positions=sample_positions,
+            sample_mask=sample_mask,
+            **kwargs,
+        )
+
+    verified_rows = []
+    saw_callback = False
+
+    try:
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        if fps <= 1.0:
+            fps = 30.0
+        fps = normalize_fps(fps)
+
+        min_gap_sec = float(settings.get("scan_cut_auto_min_gap_sec", 6.0))
+        min_gap_frames = max(1, int(round(min_gap_sec * fps)))
+
+        def verified_progress_callback(payload):
+            if not callable(progress_callback):
+                return
+            try:
+                fixed = dict(payload or {})
+                fixed["detected"] = len(verified_rows)
+                fixed["verified_detected"] = len(verified_rows)
+                progress_callback(fixed)
+            except Exception:
+                pass
+
+        def row_raw_score(row):
+            for key in ("score", "delta", "window_score"):
+                try:
+                    value = row.get(key)
+                    if value is not None:
+                        return float(value)
+                except Exception:
+                    pass
+            return 0.0
+
+        def verify_row(row):
+            if not isinstance(row, dict):
+                return None
+
+            try:
+                local_sec = float(row.get("clip_local_sec", 0.0) or 0.0)
+            except Exception:
+                local_sec = 0.0
+
+            if local_sec <= 0.0:
+                try:
+                    local_sec = float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0) - float(clip_offset or 0.0)
+                except Exception:
+                    local_sec = 0.0
+
+            coarse_frame = max(0, int(round(local_sec * fps)))
+
+            verified = _auto_grid_v3_manual_verify_fast(
+                cap,
+                cv2,
+                fps=fps,
+                frame_count=frame_count,
+                coarse_frame=coarse_frame,
+                settings=settings,
+            )
+
+            if not verified or not verified.get("passed"):
+                print(
+                    f"⚠️ [scan-cut-grid-v3] candidate rejected by gray/color verify "
+                    f"coarse={local_sec:.3f}s raw_score={row_raw_score(row):.2f}",
+                    flush=True,
+                )
+                return None
+
+            refined_local_sec = float(verified.get("sec", local_sec) or local_sec)
+            timeline_sec = float(clip_offset or 0.0) + refined_local_sec
+            timeline_frame = sec_to_frame(timeline_sec, fps)
+
+            for old in verified_rows:
+                try:
+                    if abs(int(old.get("timeline_frame", -999999)) - timeline_frame) <= min_gap_frames:
+                        print(
+                            f"↪️ [scan-cut-grid-v3] verified duplicate skipped frame={timeline_frame}",
+                            flush=True,
+                        )
+                        return None
+                except Exception:
+                    pass
+
+            fixed = dict(row)
+            fixed.update(
+                {
+                    "schema": "cut_boundary.v1",
+                    "id": f"cut_{timeline_frame:08d}",
+                    "time": timeline_sec,
+                    "timeline_sec": timeline_sec,
+                    "frame": timeline_frame,
+                    "timeline_frame": timeline_frame,
+                    "fps": fps,
+                    "clip_idx": int(clip_idx or 0),
+                    "clip_local_sec": refined_local_sec,
+                    "source_path": str(filepath),
+                    "score": float(verified.get("score", fixed.get("score", 0.0)) or 0.0),
+                    "regions": int(verified.get("regions", fixed.get("regions", 0)) or 0),
+                    "color_score": float(verified.get("color_score", 0.0) or 0.0),
+                    "color_regions": int(verified.get("color_regions", 0) or 0),
+                    "reason": str(verified.get("reason") or "auto_grid_v3_gray_color_verified"),
+                    "detector": "opencv-gray-grid-v3-gray-color-verified",
+                    "source": "visual",
+                    "absolute": True,
+                    "locked": True,
+                }
+            )
+            return fixed
+
+        def verified_found_callback(row, rows):
+            nonlocal saw_callback
+            saw_callback = True
+            fixed = verify_row(row)
+            if fixed is None:
+                return
+            verified_rows.append(fixed)
+            if callable(found_callback):
+                try:
+                    found_callback(dict(fixed), list(verified_rows))
+                except Exception:
+                    pass
+
+        raw_rows = _auto_grid_v3_original_detect_media_cut_boundaries(
+            filepath,
+            clip_offset=clip_offset,
+            clip_idx=clip_idx,
+            sample_step_sec=sample_step_sec,
+            threshold=threshold,
+            progress_callback=verified_progress_callback,
+            found_callback=verified_found_callback,
+            scan_profile=scan_profile,
+            sample_positions=sample_positions,
+            sample_mask=sample_mask,
+            **kwargs,
+        )
+
+        if not saw_callback:
+            for row in raw_rows or []:
+                fixed = verify_row(row)
+                if fixed is not None:
+                    verified_rows.append(fixed)
+
+        return normalize_cut_boundaries(verified_rows, primary_fps=fps)
+
+    finally:
+        try:
+            cap.release()
+        except Exception:
+            pass
+
+# === AUTO GRID V3 VERIFY WRAPPER END ===
+
+
+# === FRAME FPS NORMALIZE PATCH START ===
+
+def _cut_boundary_row_fps(row, fallback: float = 30.0) -> float:
+    """
+    컷 경계 row의 fps를 우선 사용한다.
+    중요:
+    - frame=1950, fps=59.94이면 32.532초가 맞다.
+    - frame=1950을 fallback 30fps로 계산하면 65초가 되어 시간이 2배로 밀린다.
+    """
+    try:
+        fallback = normalize_fps(float(fallback or 30.0))
+    except Exception:
+        fallback = 30.0
+
+    if isinstance(row, dict):
+        for key in ("fps", "frame_rate", "timeline_frame_rate"):
+            try:
+                value = float(row.get(key) or 0.0)
+                if value > 1.0:
+                    return normalize_fps(value)
+            except Exception:
+                pass
+
+    return fallback
+
+
+def normalize_cut_boundaries(
+    boundaries: list[dict[str, Any]] | None,
+    *,
+    primary_fps: float = 30.0,
+) -> list[dict[str, Any]]:
+    """
+    컷 경계 정규화.
+
+    Canonical rule:
+    - frame/timeline_frame이 있으면 그것이 기준이다.
+    - seconds는 frame / row_fps로만 재계산한다.
+    - row에 fps가 있으면 primary_fps보다 row fps를 우선한다.
+    """
+    try:
+        base_fps = normalize_fps(primary_fps or 30.0)
+    except Exception:
+        base_fps = 30.0
+
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[int, int]] = set()
+
+    for idx, item in enumerate(boundaries or []):
+        if not isinstance(item, dict):
+            continue
+
+        row = dict(item)
+        fps = _cut_boundary_row_fps(row, base_fps)
+
+        frame = None
+        for key in ("timeline_frame", "frame", "start_frame", "timeline_start_frame"):
+            try:
+                value = row.get(key)
+                if value is not None:
+                    frame = int(round(float(value)))
+                    break
+            except Exception:
+                pass
+
+        if frame is None:
+            sec = None
+            for key in ("timeline_sec", "time", "start", "timeline_start"):
+                try:
+                    value = row.get(key)
+                    if value is not None:
+                        sec = float(value)
+                        break
+                except Exception:
+                    pass
+            if sec is None:
+                continue
+            try:
+                frame = sec_to_frame(sec, fps)
+            except Exception:
+                continue
+
+        frame = int(frame)
+        if frame <= 0:
+            continue
+
+        try:
+            sec = frame_to_sec(frame, fps)
+        except Exception:
+            sec = frame / float(fps or 30.0)
+
+        if sec <= 0.0:
+            continue
+
+        key = (frame, int(round(float(fps) * 1000)))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        row.update(
+            {
+                "schema": "cut_boundary.v1",
+                "id": str(row.get("id") or f"cut_{frame:08d}"),
+                "time": sec,
+                "timeline_sec": sec,
+                "frame": frame,
+                "timeline_frame": frame,
+                "fps": fps,
+                "frame_rate": fps,
+                "timeline_frame_rate": fps,
+                "absolute": True,
+                "locked": True,
+                "source": str(row.get("source") or "visual"),
+            }
+        )
+        row.setdefault("detector", "opencv-gray-pyramid60")
+        row.setdefault("reason", "visual_cut_boundary")
+        row.setdefault("index", idx + 1)
+        out.append(row)
+
+    out.sort(
+        key=lambda item: (
+            int(item.get("timeline_frame", item.get("frame", 0)) or 0),
+            float(item.get("timeline_sec", 0.0) or 0.0),
+        )
+    )
+
+    for idx, item in enumerate(out, start=1):
+        item["index"] = idx
+
+    return out
+
+# === FRAME FPS NORMALIZE PATCH END ===
+
+
+# === VIDEO FPS NORMALIZE OVERRIDE START ===
+
+def _cut_boundary_video_paths_from_obj(obj) -> list[str]:
+    paths: list[str] = []
+    video_exts = (".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm")
+
+    def walk(x):
+        if isinstance(x, dict):
+            for value in x.values():
+                walk(value)
+        elif isinstance(x, list):
+            for value in x:
+                walk(value)
+        elif isinstance(x, str):
+            raw = x.strip()
+            if raw.lower().endswith(video_exts) and os.path.exists(raw):
+                paths.append(raw)
+
+    walk(obj)
+    return paths
+
+
+def _cut_boundary_probe_fps(path: str) -> float | None:
+    try:
+        if not path or not os.path.exists(path):
+            return None
+        info = probe_media(path)
+        fps = float(info.get("fps", 0.0) or 0.0)
+        if fps > 1.0:
+            return normalize_fps(fps)
+    except Exception:
+        pass
+    return None
+
+
+def _cut_boundary_fps_from_row(row, fallback: float = 30.0) -> float:
+    try:
+        fallback = normalize_fps(float(fallback or 30.0))
+    except Exception:
+        fallback = 30.0
+
+    if not isinstance(row, dict):
+        return fallback
+
+    # 1) row 자체 fps 우선
+    for key in ("fps", "frame_rate", "timeline_frame_rate", "source_fps", "video_fps"):
+        try:
+            value = float(row.get(key) or 0.0)
+            if value > 1.0:
+                return normalize_fps(value)
+        except Exception:
+            pass
+
+    # 2) row의 source_path 실제 영상 fps
+    for key in ("source_path", "clip_file", "file", "media_path", "path"):
+        try:
+            path = str(row.get(key) or "")
+        except Exception:
+            path = ""
+        fps = _cut_boundary_probe_fps(path)
+        if fps:
+            return fps
+
+    return fallback
+
+
+def _cut_boundary_infer_fps(rows=None, project=None, fallback: float = 30.0) -> float:
+    try:
+        fallback = normalize_fps(float(fallback or 30.0))
+    except Exception:
+        fallback = 30.0
+
+    rows = list(rows or [])
+
+    # 1) row fps/source_path
+    for row in rows:
+        fps = _cut_boundary_fps_from_row(row, fallback)
+        if abs(float(fps) - float(fallback)) > 0.001 or fps > 30.1:
+            return normalize_fps(fps)
+
+    # 2) project timebase
+    if isinstance(project, dict):
+        for path in (
+            ("timeline", "timebase", "primary_fps"),
+            ("frame_timebase", "primary_fps"),
+            ("timebase", "primary_fps"),
+            ("timeline", "fps"),
+            ("fps",),
+            ("video_fps",),
+        ):
+            cur = project
+            try:
+                for key in path:
+                    cur = cur.get(key, {})
+                value = float(cur or 0.0)
+                if value > 1.0:
+                    return normalize_fps(value)
+            except Exception:
+                pass
+
+        # 3) project 내부 영상 파일 probe
+        for video_path in _cut_boundary_video_paths_from_obj(project):
+            fps = _cut_boundary_probe_fps(video_path)
+            if fps:
+                return fps
+
+    return fallback
+
+
+def normalize_cut_boundaries(
+    boundaries: list[dict[str, Any]] | None,
+    *,
+    primary_fps: float = 30.0,
+) -> list[dict[str, Any]]:
+    """
+    컷 경계 정규화.
+
+    Canonical:
+    - frame/timeline_frame이 있으면 frame이 기준.
+    - seconds는 frame / fps에서 파생.
+    - fps는 row.fps 또는 실제 source_path 영상 fps를 우선.
+    """
+    try:
+        base_fps = normalize_fps(primary_fps or 30.0)
+    except Exception:
+        base_fps = 30.0
+
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[int, int]] = set()
+
+    for idx, item in enumerate(boundaries or []):
+        if not isinstance(item, dict):
+            continue
+
+        row = dict(item)
+        fps = _cut_boundary_fps_from_row(row, base_fps)
+
+        frame = None
+        for key in ("timeline_frame", "frame", "start_frame", "timeline_start_frame"):
+            try:
+                value = row.get(key)
+                if value is not None:
+                    frame = int(round(float(value)))
+                    break
+            except Exception:
+                pass
+
+        if frame is None:
+            sec = None
+            for key in ("timeline_sec", "time", "start", "timeline_start"):
+                try:
+                    value = row.get(key)
+                    if value is not None:
+                        sec = float(value)
+                        break
+                except Exception:
+                    pass
+
+            if sec is None:
+                continue
+
+            try:
+                frame = sec_to_frame(sec, fps)
+            except Exception:
+                continue
+
+        frame = int(frame)
+        if frame <= 0:
+            continue
+
+        try:
+            sec = frame_to_sec(frame, fps)
+        except Exception:
+            sec = frame / float(fps or 30.0)
+
+        if sec <= 0.0:
+            continue
+
+        seen_key = (frame, int(round(float(fps) * 1000)))
+        if seen_key in seen:
+            continue
+        seen.add(seen_key)
+
+        row.update(
+            {
+                "schema": "cut_boundary.v1",
+                "id": str(row.get("id") or f"cut_{frame:08d}"),
+                "time": sec,
+                "timeline_sec": sec,
+                "frame": frame,
+                "timeline_frame": frame,
+                "fps": fps,
+                "frame_rate": fps,
+                "timeline_frame_rate": fps,
+                "absolute": True,
+                "locked": True,
+                "source": str(row.get("source") or "visual"),
+            }
+        )
+        row.setdefault("detector", "opencv-gray-pyramid60")
+        row.setdefault("reason", "visual_cut_boundary")
+        row.setdefault("index", idx + 1)
+
+        out.append(row)
+
+    out.sort(
+        key=lambda item: (
+            int(item.get("timeline_frame", item.get("frame", 0)) or 0),
+            float(item.get("timeline_sec", 0.0) or 0.0),
+        )
+    )
+
+    for idx, item in enumerate(out, start=1):
+        item["index"] = idx
+
+    return out
+
+
+def project_cut_boundaries(project: dict[str, Any] | None, *, primary_fps: float | None = None) -> list[dict[str, Any]]:
+    if not isinstance(project, dict):
+        return []
+
+    analysis = project.get("analysis", {}) or {}
+    raw = analysis.get("cut_boundaries")
+
+    if not isinstance(raw, list):
+        raw = ((project.get("editor_state", {}) or {}).get("multiclip", {}) or {}).get("cut_boundaries")
+
+    if not isinstance(raw, list):
+        raw = []
+
+    fps = _cut_boundary_infer_fps(raw, project, primary_fps or 30.0)
+    return normalize_cut_boundaries(raw, primary_fps=fps)
+
+
+def sync_project_cut_boundaries(
+    project: dict[str, Any],
+    *,
+    settings: dict[str, Any] | None = None,
+    primary_fps: float = 30.0,
+) -> list[dict[str, Any]]:
+    if not isinstance(project, dict):
+        return []
+
+    analysis = project.setdefault("analysis", {})
+    raw = analysis.get("cut_boundaries", [])
+
+    fps = _cut_boundary_infer_fps(raw if isinstance(raw, list) else [], project, primary_fps or 30.0)
+    boundaries = project_cut_boundaries(project, primary_fps=fps)
+
+    analysis["cut_boundary_schema"] = CUT_BOUNDARY_SCHEMA
+    analysis["cut_boundaries"] = boundaries
+    analysis["cut_boundary_settings"] = {
+        "enabled": cut_boundary_enabled(settings if settings is not None else project.get("user_settings")),
+        "detector": "opencv-gray-pyramid60",
+        "count": len(boundaries),
+        "absolute": True,
+        "locked": True,
+        "fps": fps,
+    }
+
+    editor_state = project.get("editor_state")
+    if isinstance(editor_state, dict):
+        editor_state.setdefault("analysis", {})
+        editor_state["analysis"]["cut_boundary_schema"] = CUT_BOUNDARY_SCHEMA
+        editor_state["analysis"]["cut_boundaries"] = list(boundaries)
+        multiclip = editor_state.setdefault("multiclip", {})
+        multiclip["cut_boundary_schema"] = CUT_BOUNDARY_SCHEMA
+        multiclip["cut_boundaries"] = list(boundaries)
+
+    return boundaries
+
+# === VIDEO FPS NORMALIZE OVERRIDE END ===
+
