@@ -43,3 +43,11 @@ create_all*.py
 # ── IDE ──
 .vscode/
 .idea/
+
+# Local patch/backups
+*.bak
+*.bak_*
+*.fixbak_*
+checkpoints/
+dataset/video_preview_cache/
+.codex_work/
