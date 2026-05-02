@@ -51,7 +51,7 @@ def is_gap_block(block) -> bool:
 
 def make_gap_ud(start_sec: float) -> SubtitleBlockData:
     """Gap용 SubtitleBlockData 생성"""
-    return SubtitleBlockData("00", round(float(start_sec), 2), is_gap=True)
+    return SubtitleBlockData("00", round(float(start_sec), 6), is_gap=True)
 
 
 def delete_block_safely(block):

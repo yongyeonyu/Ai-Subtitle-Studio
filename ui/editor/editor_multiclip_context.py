@@ -5,8 +5,18 @@ EditorWidget 멀티클립 활성 컨텍스트 / 클립 전환 / undo routing Mix
 """
 import os
 
+from core.frame_time import normalize_fps
+
 
 class EditorMulticlipContextMixin:
+    def _fps_for_media_path(self, path: str) -> float:
+        try:
+            from core.media_info import probe_media
+
+            return normalize_fps(probe_media(path).get("fps", 0.0) or getattr(self, "video_fps", 30.0))
+        except Exception:
+            return normalize_fps(getattr(self, "video_fps", 30.0) or 30.0)
+
     def _hook_multiclip_clip_signals(self):
         try:
             canvas = self.timeline.canvas
@@ -94,6 +104,9 @@ class EditorMulticlipContextMixin:
         clip_start = float(box.get("start", 0.0))
         local_seek = max(0.0, float(global_sec) - clip_start)
         local_segs = self._build_local_segments_for_clip(clip_idx)
+        fps = self._fps_for_media_path(clip_file)
+        if hasattr(self, "_set_editor_frame_rate"):
+            self._set_editor_frame_rate(fps)
 
         if hasattr(self.timeline, 'canvas'):
             self.timeline.canvas._active_clip_idx = int(clip_idx)
@@ -125,6 +138,7 @@ class EditorMulticlipContextMixin:
                 'local_sec': float(global_sec),
                 'clip_start': 0.0,
                 'clip_end': float(getattr(self.video_player, 'total_time', 0.0) or 0.0),
+                'fps': normalize_fps(getattr(self, "video_fps", 30.0) or 30.0),
                 'local_segments': local_segs,
             }
 
@@ -142,6 +156,7 @@ class EditorMulticlipContextMixin:
         local_sec = max(0.0, float(global_sec) - clip_start)
         clip_file = box.get('file', '')
         local_segments = self._build_local_segments_for_clip(int(clip_idx)) if hasattr(self, '_build_local_segments_for_clip') else []
+        fps = self._fps_for_media_path(clip_file) if clip_file else normalize_fps(getattr(self, "video_fps", 30.0))
 
         return {
             'mode': 'multi',
@@ -151,6 +166,7 @@ class EditorMulticlipContextMixin:
             'local_sec': float(local_sec),
             'clip_start': clip_start,
             'clip_end': clip_end,
+            'fps': fps,
             'local_segments': local_segments,
         }
 
@@ -167,6 +183,9 @@ class EditorMulticlipContextMixin:
         local_segments = list(ctx.get('local_segments', []) or [])
         local_sec = float(ctx.get('local_sec', 0.0) or 0.0)
         clip_idx = int(ctx.get('clip_idx', 0) or 0)
+        fps = normalize_fps(ctx.get('fps', None) or self._fps_for_media_path(clip_file))
+        if hasattr(self, "_set_editor_frame_rate"):
+            self._set_editor_frame_rate(fps)
 
         if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
             self.timeline.canvas._active_clip_idx = clip_idx

@@ -1,4 +1,4 @@
-# Version: 03.02.14
+# Version: 03.06.18
 # Phase: PHASE2
 """
 ui/main/main_window.py
@@ -691,6 +691,112 @@ class MainWindow(
                 get_logger().log("🛑 홈 이동: 진행 중인 STT/LLM 작업 중단을 요청했습니다.")
         finally:
             self._home_stop_in_progress = False
+
+    def _is_editor_ai_busy(self, editor=None) -> bool:
+        editor = editor or getattr(self, "_editor_widget", None)
+        if editor is None:
+            return False
+        try:
+            if bool(getattr(editor, "_is_ai_processing", False)):
+                return True
+            state_manager = getattr(editor, "sm", None)
+            if state_manager is not None:
+                if bool(getattr(state_manager, "is_locked", False)):
+                    return True
+                if str(getattr(state_manager, "state", "") or "") == "ST_PROC":
+                    return True
+        except RuntimeError:
+            return False
+        except Exception:
+            pass
+        return False
+
+    def _is_backend_ai_busy(self) -> bool:
+        for backend_name in ("backend", "backend_fast"):
+            backend = getattr(self, backend_name, None)
+            if backend is None:
+                continue
+            try:
+                if bool(getattr(backend, "_active", False)):
+                    return True
+                thread = getattr(backend, "_pipeline_thread", None)
+                if thread is not None and getattr(thread, "is_alive", lambda: False)():
+                    return True
+            except RuntimeError:
+                continue
+            except Exception:
+                pass
+        return False
+
+    def _release_ai_models_for_editor_mode(self, *, force: bool = False):
+        if getattr(self, "_editor_ai_release_in_progress", False):
+            return
+        editor = getattr(self, "_editor_widget", None)
+        if not force and (self._is_editor_ai_busy(editor) or self._is_backend_ai_busy()):
+            return
+
+        self._editor_ai_release_in_progress = True
+        try:
+            try:
+                if editor is not None:
+                    timer = getattr(editor, "_roughcut_draft_timer", None)
+                    if timer is not None:
+                        timer.stop()
+                    editor._roughcut_draft_pending = False
+                    editor._roughcut_draft_generation = int(getattr(editor, "_roughcut_draft_generation", 0) or 0) + 1
+                    if hasattr(editor, "_set_roughcut_draft_status"):
+                        editor._set_roughcut_draft_status("idle")
+            except Exception:
+                pass
+
+            def _release():
+                try:
+                    if not force and (self._is_editor_ai_busy(editor) or self._is_backend_ai_busy()):
+                        return
+                    stopped_runtime = False
+                    for backend_name in ("backend", "backend_fast"):
+                        backend = getattr(self, backend_name, None)
+                        processor = getattr(backend, "video_processor", None) if backend is not None else None
+                        if processor is None:
+                            continue
+                        try:
+                            if hasattr(processor, "release_runtime_models"):
+                                processor.release_runtime_models()
+                                stopped_runtime = True
+                            elif hasattr(processor, "stop_transcribe"):
+                                processor.stop_transcribe()
+                                stopped_runtime = True
+                        except Exception as exc:
+                            get_logger().log(f"⚠️ 에디터 모드 {backend_name} STT 모델 종료 실패: {exc}")
+                    try:
+                        from core.audio.live_stt import stop_live_stt_worker
+
+                        if stop_live_stt_worker():
+                            stopped_runtime = True
+                    except Exception:
+                        pass
+                    try:
+                        settings = load_settings()
+                        models = [
+                            settings.get("selected_model", ""),
+                            settings.get("roughcut_llm_model", ""),
+                            settings.get("selected_roughcut_llm_model", ""),
+                            getattr(config, "OLLAMA_MODEL", ""),
+                        ]
+                        from core.llm.ollama_provider import stop_local_llm_models
+
+                        if stop_local_llm_models(models, logger=get_logger()):
+                            stopped_runtime = True
+                    except Exception as exc:
+                        get_logger().log(f"⚠️ 에디터 모드 LLM 모델 종료 실패: {exc}")
+                    if stopped_runtime:
+                        get_logger().log("🧹 에디터 모드: AI/STT/LLM 모델을 종료해 메모리를 확보했습니다.")
+                finally:
+                    self._editor_ai_release_in_progress = False
+
+            threading.Thread(target=_release, daemon=True, name="editor-release-ai-models").start()
+        except Exception:
+            self._editor_ai_release_in_progress = False
 
     def _reset_transient_multiclip_state(self):
         for attr, value in (

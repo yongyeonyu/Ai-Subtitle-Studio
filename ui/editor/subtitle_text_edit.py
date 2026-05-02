@@ -1,4 +1,4 @@
-# Version: 03.01.36
+# Version: 03.06.21
 # Phase: PHASE2
 
 import re
@@ -12,6 +12,7 @@ from PyQt6.QtGui import (
 )
 import config
 from ui.editor.timestamp_area import TimestampArea
+from ui.gpu_rendering import gpu_backend_name, make_accelerated_viewport
 
 class SubtitleBlockData(QTextBlockUserData):
     def __init__(
@@ -140,6 +141,10 @@ class SubtitleTextEdit(QTextEdit):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        accelerated_viewport = make_accelerated_viewport(self)
+        if accelerated_viewport is not None:
+            self.setViewport(accelerated_viewport)
+        self.render_backend = gpu_backend_name()
         self.setFont(QFont(config.FONT, 13))
         self.setStyleSheet(
             "QTextEdit { background: #11181C; color: #DDE3EA; border: none; "
@@ -324,20 +329,6 @@ class SubtitleTextEdit(QTextEdit):
                 elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter): popup.confirm(); return
                 elif key == Qt.Key.Key_Escape: popup.close_popup(refocus=True); return
 
-        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
-            import time 
-            current_time = time.time()
-            if not hasattr(self, '_last_arrow_tap'): self._last_arrow_tap = {}
-            last_time = self._last_arrow_tap.get(key, 0)
-            if current_time - last_time <= 0.13: 
-                if key == Qt.Key.Key_Left: cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                else: cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-                self.setTextCursor(cur)
-                self._last_arrow_tap[key] = 0 
-                return 
-            else:
-                self._last_arrow_tap[key] = current_time
-        
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             parent = getattr(self, "_parent_widget", None)
             if parent and getattr(parent, "_stt_mode_enabled", False) and hasattr(parent, "_handle_stt_enter"):
@@ -478,7 +469,11 @@ class SubtitleTextEdit(QTextEdit):
                 
         total_len = len(before) + len(after)
         new_sec = start_sec + (end_sec - start_sec) * (len(before) / total_len) if total_len > 0 else start_sec
-        new_sec = round(new_sec, 2)
+        parent = getattr(self, "_parent_widget", None)
+        if parent is not None and hasattr(parent, "_snap_to_frame"):
+            new_sec = parent._snap_to_frame(new_sec)
+        else:
+            new_sec = round(new_sec, 6)
         
         cur.beginEditBlock() 
         cur.select(QTextCursor.SelectionType.LineUnderCursor)
@@ -497,7 +492,6 @@ class SubtitleTextEdit(QTextEdit):
         cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
         
         # 💡 [구조 개선] 커서 이동 명령어는 밖으로 빼고, 타임라인 잠금만 parent로 감쌉니다.
-        parent = getattr(self, "_parent_widget", None)
         if parent: parent._sync_lock = True
         
         self.setTextCursor(cur)  # 👈 parent가 없어도 무조건 커서는 이동하도록 밖으로 분리!

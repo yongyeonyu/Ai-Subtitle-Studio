@@ -4,6 +4,7 @@ import unittest
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from core.project.project_manager import extract_model_settings, load_project, merge_project_model_settings, save_project
 from core.project.project_context import (
@@ -202,6 +203,176 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(restored["selected_whisper_model_secondary"], "secondary-large")
         self.assertEqual(restored["theme"], "dark")
         self.assertNotIn("non_model_ui_key", extract_model_settings(loaded))
+
+    def test_save_project_adds_frame_timebase_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"fake")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("core.project.project_manager.probe_media", return_value={"duration": 2.0, "fps": 24.0}):
+                save_project(
+                    str(path),
+                    media_paths=[str(media)],
+                    segments=[{"start": 1.0, "end": 1.5, "text": "프레임", "speaker": "00"}],
+                )
+            loaded = load_project(str(path))
+
+        timebase = loaded["timeline"]["timebase"]
+        clip = loaded["timeline"]["tracks"][0]["clips"][0]
+        segment = loaded["subtitles"]["segments"][0]
+        self.assertEqual(timebase["unit"], "frame")
+        self.assertEqual(timebase["canonical_unit"], "frame")
+        self.assertTrue(timebase["seconds_are_derived"])
+        self.assertEqual(timebase["primary_fps"], 24.0)
+        self.assertEqual(timebase["total_frames"], 48)
+        self.assertEqual(loaded["frame_timebase"]["canonical_unit"], "frame")
+        self.assertEqual(clip["source_frame_count"], 48)
+        self.assertEqual(clip["timeline_start_frame"], 0)
+        self.assertEqual(clip["timeline_end_frame"], 48)
+        self.assertEqual(clip["source_start_frame"], 0)
+        self.assertEqual(clip["source_end_frame"], 48)
+        self.assertEqual(segment["timeline_start_frame"], 24)
+        self.assertEqual(segment["timeline_end_frame"], 36)
+        self.assertEqual(segment["start_frame"], 24)
+        self.assertEqual(segment["end_frame"], 36)
+        self.assertEqual(segment["clip_local_start_frame"], 24)
+        self.assertEqual(segment["frame_range"]["unit"], "frame")
+        self.assertEqual(segment["frame_range"]["start"], 24)
+        self.assertEqual(loaded["editor_state"]["frame_timebase"]["unit"], "frame")
+        editor_segment = loaded["editor_state"]["subtitles"]["segments"][0]
+        self.assertEqual(editor_segment["start_frame"], 24)
+        self.assertEqual(editor_segment["end_frame"], 36)
+
+    def test_project_segments_to_editor_prefers_saved_frame_numbers(self):
+        project = {
+            "timeline": {
+                "timebase": {"unit": "frame", "primary_fps": 24.0},
+                "tracks": [{"clips": []}],
+            },
+            "subtitles": {
+                "segments": [
+                    {
+                        "start": 1.01,
+                        "end": 1.54,
+                        "start_frame": 24,
+                        "end_frame": 36,
+                        "text": "프레임 우선",
+                        "speaker": "00",
+                    }
+                ]
+            },
+        }
+
+        segment = project_segments_to_editor(project)[0]
+
+        self.assertAlmostEqual(segment["start"], 1.0, places=6)
+        self.assertAlmostEqual(segment["end"], 1.5, places=6)
+        self.assertEqual(segment["start_frame"], 24)
+        self.assertEqual(segment["end_frame"], 36)
+
+    def test_save_project_uses_frame_numbers_as_source_of_truth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"fake")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("core.project.project_manager.probe_media", return_value={"duration": 2.0, "fps": 24.0}):
+                save_project(
+                    str(path),
+                    media_paths=[str(media)],
+                    segments=[
+                        {
+                            "start": 1.01,
+                            "end": 1.54,
+                            "start_frame": 24,
+                            "end_frame": 36,
+                            "text": "프레임 저장",
+                            "speaker": "00",
+                        }
+                    ],
+                )
+            loaded = load_project(str(path))
+
+        segment = loaded["subtitles"]["segments"][0]
+        self.assertEqual(segment["start_frame"], 24)
+        self.assertEqual(segment["end_frame"], 36)
+        self.assertAlmostEqual(segment["start"], 1.0, places=6)
+        self.assertAlmostEqual(segment["end"], 1.5, places=6)
+
+    def test_multiclip_timeline_frames_use_primary_project_fps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media_a = Path(tmp) / "a.mp4"
+            media_b = Path(tmp) / "b.mp4"
+            media_a.write_bytes(b"a")
+            media_b.write_bytes(b"b")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            def _probe(path_str):
+                return {"duration": 2.0, "fps": 24.0} if path_str == str(media_a) else {"duration": 3.0, "fps": 30.0}
+
+            with patch("core.project.project_manager.probe_media", side_effect=_probe):
+                save_project(
+                    str(path),
+                    media_paths=[str(media_a), str(media_b)],
+                    segments=[{"start": 2.0, "end": 3.0, "text": "둘째", "speaker": "00"}],
+                )
+            loaded = load_project(str(path))
+
+        clip_a, clip_b = loaded["timeline"]["tracks"][0]["clips"]
+        self.assertEqual(loaded["timeline"]["timebase"]["primary_fps"], 24.0)
+        self.assertEqual(clip_a["timeline_start_frame"], 0)
+        self.assertEqual(clip_a["timeline_end_frame"], 48)
+        self.assertEqual(clip_b["timeline_start_frame"], 48)
+        self.assertEqual(clip_b["timeline_end_frame"], 120)
+        self.assertEqual(clip_b["source_frame_count"], 90)
+        segment = loaded["subtitles"]["segments"][0]
+        self.assertEqual(segment["start_frame"], 48)
+        self.assertEqual(segment["end_frame"], 72)
+        self.assertEqual(segment["clip_local_start_frame"], 0)
+        self.assertEqual(segment["clip_local_end_frame"], 30)
 
 
 if __name__ == "__main__":

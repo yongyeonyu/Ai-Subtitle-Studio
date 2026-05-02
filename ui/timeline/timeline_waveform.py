@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 03.06.17
+# Phase: PHASE2
 """
 ui/timeline_waveform.py
 Timeline waveform workers
@@ -19,25 +19,47 @@ class WaveformWorker(QThread):
     def __init__(self, path: str, parent=None):
         super().__init__(parent)
         self._path = path
+        self._proc = None
+
+    def stop(self):
+        self.requestInterruption()
+        proc = getattr(self, "_proc", None)
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=0.8)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+    def _run_cmd(self, cmd: list[str], *, timeout: float):
+        if self.isInterruptionRequested():
+            return None
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+        self._proc = proc
+        try:
+            out, err = proc.communicate(timeout=timeout)
+            if self.isInterruptionRequested() or proc.returncode not in (0, None):
+                return None
+            return out
+        except subprocess.TimeoutExpired:
+            self.stop()
+            return None
+        finally:
+            if self._proc is proc:
+                self._proc = None
 
     def _get_duration(self) -> float:
         try:
-            result = subprocess.run(
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-show_entries",
-                    "format=duration",
-                    "-of",
-                    "json",
-                    self._path,
-                ],
-                capture_output=True,
-                text=True,
+            out = self._run_cmd(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", self._path],
                 timeout=10,
             )
-            return float(json.loads(result.stdout).get("format", {}).get("duration", 0))
+            if not out:
+                return 0.0
+            return float(json.loads(out.decode("utf-8", errors="ignore")).get("format", {}).get("duration", 0))
         except Exception:
             return 0.0
 
@@ -45,12 +67,14 @@ class WaveformWorker(QThread):
         tmp = None
         try:
             duration = self._get_duration()
+            if self.isInterruptionRequested():
+                return
             timeout = max(60, min(600, int(duration * 0.5) + 30))
 
             fd, tmp = tempfile.mkstemp(suffix=".raw")
             os.close(fd)
 
-            subprocess.run(
+            self._run_cmd(
                 [
                     "ffmpeg",
                     "-y",
@@ -67,9 +91,10 @@ class WaveformWorker(QThread):
                     "error",
                     tmp,
                 ],
-                capture_output=True,
                 timeout=timeout,
             )
+            if self.isInterruptionRequested():
+                return
 
             if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
                 return
@@ -88,7 +113,8 @@ class WaveformWorker(QThread):
             if mx > 1e-6:
                 downs = downs / mx
 
-            self.ready.emit(downs[:total_px].astype(np.float32), float(dur))
+            if not self.isInterruptionRequested():
+                self.ready.emit(downs[:total_px].astype(np.float32), float(dur))
         except Exception:
             pass
         finally:
@@ -105,6 +131,37 @@ class MultiClipWaveformWorker(QThread):
     def __init__(self, clip_boundaries, parent=None):
         super().__init__(parent)
         self._clips = clip_boundaries
+        self._proc = None
+
+    def stop(self):
+        self.requestInterruption()
+        proc = getattr(self, "_proc", None)
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=0.8)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+    def _run_cmd(self, cmd: list[str], *, timeout: float):
+        if self.isInterruptionRequested():
+            return None
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+        self._proc = proc
+        try:
+            out, err = proc.communicate(timeout=timeout)
+            if self.isInterruptionRequested() or proc.returncode not in (0, None):
+                return None
+            return out
+        except subprocess.TimeoutExpired:
+            self.stop()
+            return None
+        finally:
+            if self._proc is proc:
+                self._proc = None
 
     def run(self):
         if not self._clips:
@@ -117,6 +174,8 @@ class MultiClipWaveformWorker(QThread):
         import config
 
         for idx, clip in enumerate(self._clips):
+            if self.isInterruptionRequested():
+                return
             tmp = None
             try:
                 clip_file = clip["file"]
@@ -130,7 +189,7 @@ class MultiClipWaveformWorker(QThread):
                 fd, tmp = tempfile.mkstemp(suffix=".raw")
                 os.close(fd)
 
-                subprocess.run(
+                self._run_cmd(
                     [
                         "ffmpeg",
                         "-y",
@@ -147,9 +206,10 @@ class MultiClipWaveformWorker(QThread):
                         "error",
                         tmp,
                     ],
-                    capture_output=True,
                     timeout=max(60, int(clip_dur * 0.5) + 30),
                 )
+                if self.isInterruptionRequested():
+                    return
 
                 if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
                     continue
@@ -171,7 +231,8 @@ class MultiClipWaveformWorker(QThread):
                 end_px = min(start_px + len(downs), total_px)
                 combined[start_px:end_px] = downs[: end_px - start_px]
 
-                self.clip_ready.emit(idx, combined.copy())
+                if not self.isInterruptionRequested():
+                    self.clip_ready.emit(idx, combined.copy())
 
             except Exception:
                 pass
@@ -182,4 +243,5 @@ class MultiClipWaveformWorker(QThread):
                     except Exception:
                         pass
 
-        self.all_ready.emit(combined, total_dur)
+        if not self.isInterruptionRequested():
+            self.all_ready.emit(combined, total_dur)

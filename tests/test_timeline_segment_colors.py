@@ -3,7 +3,11 @@
 import unittest
 from types import SimpleNamespace
 
-from ui.timeline.timeline_paint import SEGMENT_TEXT_KIND_STYLES, segment_text_kind
+from ui.timeline.timeline_paint import (
+    SEGMENT_TEXT_KIND_STYLES,
+    segment_text_kind,
+    subtitle_segment_visual_style,
+)
 from ui.timeline.timeline_analysis import (
     MAJOR_SEGMENT_COLORS,
     editor_analysis_markers,
@@ -24,6 +28,30 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertNotEqual(speech["fill"], silence["fill"])
         self.assertNotEqual(speech["border"], silence["border"])
         self.assertNotEqual(speech["text"], silence["text"])
+
+    def test_subtitle_segment_visual_style_is_zoom_stable_for_quality_colors(self):
+        seg = {
+            "start": 0.0,
+            "end": 1.0,
+            "text": "일반 자막",
+            "quality": {"confidence_label": "red"},
+        }
+
+        compact_style = subtitle_segment_visual_style(seg, active=False, hover=False, quality_filter="all")
+        expanded_style = subtitle_segment_visual_style(seg, active=False, hover=False, quality_filter="all")
+
+        self.assertEqual(compact_style["fill"], expanded_style["fill"])
+        self.assertEqual(compact_style["border"], expanded_style["border"])
+        self.assertEqual(compact_style["fill"], "#4A1F24")
+        self.assertEqual(compact_style["border"], "#FF453A")
+
+    def test_subtitle_segment_visual_style_keeps_text_kind_over_zoom(self):
+        seg = {"start": 0.0, "end": 1.0, "text": "음성"}
+
+        style = subtitle_segment_visual_style(seg, active=True, hover=True, quality_filter="all")
+
+        self.assertEqual(style["fill"], SEGMENT_TEXT_KIND_STYLES["speech"]["fill"])
+        self.assertEqual(style["border"], SEGMENT_TEXT_KIND_STYLES["speech"]["border"])
 
     def test_analysis_voice_and_silence_markers_use_distinct_colors(self):
         markers = editor_analysis_markers(

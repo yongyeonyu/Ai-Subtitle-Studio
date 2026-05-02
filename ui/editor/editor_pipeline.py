@@ -128,7 +128,9 @@ class EditorPipelineMixin:
             main_w._refresh_saved_status_label(is_dirty=True)
         if hasattr(main_w, "_start_post_completion_idle_timer"):
             main_w._start_post_completion_idle_timer()
-        if hasattr(self, "_schedule_post_generation_roughcut_draft"):
+        if hasattr(main_w, "_release_ai_models_for_editor_mode"):
+            QTimer.singleShot(0, lambda: main_w._release_ai_models_for_editor_mode(force=True))
+        elif hasattr(self, "_schedule_post_generation_roughcut_draft"):
             QTimer.singleShot(350, lambda: self._schedule_post_generation_roughcut_draft(force=True))
         # E fix: 자막 생성 완료 후 타임라인/캔버스 재동기화
         QTimer.singleShot(200, self._post_completion_sync)

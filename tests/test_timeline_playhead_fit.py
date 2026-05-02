@@ -1,4 +1,4 @@
-# Version: 03.02.06
+# Version: 03.06.16
 # Phase: PHASE2
 import os
 import unittest
@@ -11,11 +11,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QTextEdit
+from PyQt6.QtWidgets import QApplication, QTextEdit, QWidget
 
 from ui.editor.editor_segments import EditorSegmentsMixin
+from ui.editor.editor_widget import EditorWidget
+from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
 from ui.timeline.timeline_widget import TimelineWidget
+from ui.timeline.timeline_canvas import TimelineCanvasBase
+from ui.timeline.timeline_global import GlobalCanvasBase
 
 
 class _DummyEditor(EditorSegmentsMixin):
@@ -25,6 +29,41 @@ class _DummyEditor(EditorSegmentsMixin):
 class _DummyTimelineVideoEditor(EditorTimelineVideoMixin):
     def _multiclip_active_offset(self) -> float:
         return 0.0
+
+
+class _PlaybackEditor(EditorTimelineVideoMixin):
+    def _multiclip_active_offset(self) -> float:
+        return 0.0
+
+    def _get_current_segments(self):
+        return self._segments
+
+
+class _ClickEditor(EditorTimelineVideoMixin):
+    def _multiclip_active_offset(self) -> float:
+        return 0.0
+
+    def _global_to_local_sec(self, sec: float) -> float:
+        return float(sec)
+
+    def _resolve_active_context(self, global_sec=None, clip_idx=None):
+        return {
+            "clip_file": "/tmp/current.mp4",
+            "clip_idx": 0,
+            "global_sec": float(global_sec or 0.0),
+            "local_sec": float(global_sec or 0.0),
+            "local_segments": [],
+        }
+
+    def _apply_active_context(self, ctx, autoplay=False, show_thumbnail=True):
+        self.applied_contexts.append((ctx, autoplay, show_thumbnail))
+
+    def _get_current_segments(self):
+        return self._segments
+
+
+class _InlineEditEditor:
+    _on_inline_text_changed = EditorWidget._on_inline_text_changed
 
 
 class TimelinePlayheadFitTests(unittest.TestCase):
@@ -65,6 +104,69 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             editor.timeline.set_playhead.assert_called_once_with(5.0)
             editor.video_player.seek.assert_called_once_with(5.0)
+        finally:
+            editor.text_edit.close()
+
+    def test_timeline_click_does_not_force_full_redraw(self):
+        editor = _ClickEditor()
+        editor._segments = [{"line": 0, "start": 3.0, "end": 4.0, "text": "클릭"}]
+        editor._active_seg_start = None
+        editor.applied_contexts = []
+        editor._redraw_timeline = Mock()
+        editor._highlighter = SimpleNamespace(set_current_line=Mock())
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("클릭")
+        editor.text_edit.setFocus = Mock()
+        editor.timeline = SimpleNamespace(
+            set_active=Mock(),
+            set_playhead=Mock(),
+            center_to_sec=Mock(),
+            canvas=SimpleNamespace(playhead_sec=0.0),
+        )
+        editor.video_player = SimpleNamespace(
+            pause_video=Mock(),
+            seek_direct=Mock(),
+            media_player=SimpleNamespace(
+                PlaybackState=SimpleNamespace(PlayingState=object()),
+                playbackState=Mock(return_value=None),
+            ),
+        )
+
+        try:
+            editor._on_timeline_seg_clicked(0, 3.0)
+
+            editor.timeline.set_active.assert_called_once_with(3.0)
+            editor.timeline.center_to_sec.assert_called_once()
+            editor.text_edit.setFocus.assert_called_once()
+            editor._redraw_timeline.assert_not_called()
+        finally:
+            editor.text_edit.close()
+
+    def test_live_canvas_inline_edit_skips_editor_document_rewrite(self):
+        editor = _InlineEditEditor()
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("원본")
+        block = editor.text_edit.document().findBlockByNumber(0)
+        block.setUserData(SubtitleBlockData("", 0.0, False))
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(_edit_active=True, _inline_commit_in_progress=False)
+        )
+        editor._cached_segs = [{"line": 0, "start": 0.0, "end": 1.0, "text": "원본"}]
+        editor._refresh_video_subtitle_context = Mock()
+
+        try:
+            editor._on_inline_text_changed(0, "입력중")
+
+            self.assertEqual(editor.text_edit.document().findBlockByNumber(0).text(), "원본")
+            self.assertEqual(editor._cached_segs[0]["text"], "입력중")
+            editor._refresh_video_subtitle_context.assert_not_called()
+
+            editor.timeline.canvas._inline_commit_in_progress = True
+            editor._on_inline_text_changed(0, "최종")
+
+            self.assertEqual(editor.text_edit.document().findBlockByNumber(0).text(), "최종")
+            self.assertEqual(editor._cached_segs[0]["text"], "최종")
+            editor._refresh_video_subtitle_context.assert_called_once()
         finally:
             editor.text_edit.close()
 
@@ -115,6 +217,31 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
+    def test_follow_playhead_starts_smooth_scroll_when_target_moves(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.canvas.total_duration = 300.0
+            timeline.global_canvas.total_duration = 300.0
+            timeline.canvas.pps = 10.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(300.0, 10.0))
+            timeline.scroll.horizontalScrollBar().setValue(0)
+
+            timeline.follow_playhead(120.0, smooth=True, threshold_px=24.0)
+
+            self.assertEqual(timeline.canvas.playhead_sec, 120.0)
+            self.assertGreater(timeline._target_scroll_x, 0.0)
+            self.assertTrue(timeline._smooth_scroll_timer.isActive())
+
+            timeline._update_smooth_scroll()
+
+            self.assertGreater(timeline.scroll.horizontalScrollBar().value(), 0)
+        finally:
+            timeline.close()
+
     def test_playhead_handle_right_click_menu_still_emits_with_overlay(self):
         timeline = TimelineWidget()
         emitted = []
@@ -153,14 +280,126 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         editor.timeline.set_active.assert_not_called()
         editor.timeline.set_playhead.assert_not_called()
 
+    def test_playing_segment_boundary_moves_editor_immediately(self):
+        editor = _PlaybackEditor()
+        playing_state = object()
+        player = SimpleNamespace(
+            PlaybackState=SimpleNamespace(PlayingState=playing_state),
+            playbackState=Mock(return_value=playing_state),
+            position=Mock(return_value=2100),
+            duration=Mock(return_value=10000),
+        )
+        editor.video_player = SimpleNamespace(
+            media_player=player,
+            refresh_subtitle_context=Mock(),
+            set_subtitle_display_time=Mock(),
+        )
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock()),
+            follow_playhead=Mock(),
+            set_active=Mock(),
+            set_playhead=Mock(),
+        )
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("첫 줄\n둘째 줄\n셋째 줄")
+        editor._highlighter = SimpleNamespace(set_current_line=Mock())
+        editor._active_seg_start = 0.0
+        editor._segments = [
+            {"start": 2.0, "end": 3.0, "line": 1, "text": "둘째 줄"},
+        ]
+
+        try:
+            editor._sync_playhead()
+
+            self.assertEqual(editor.text_edit.textCursor().blockNumber(), 1)
+            editor._highlighter.set_current_line.assert_called_once_with(1)
+            editor.timeline.canvas.set_active.assert_called_once_with(2.0)
+            editor.video_player.set_subtitle_display_time.assert_called_once_with(2.1)
+            editor.video_player.refresh_subtitle_context.assert_not_called()
+            self.assertGreater(float(getattr(editor, "_last_editor_autoscroll_at", 0.0)), 0.0)
+        finally:
+            editor.text_edit.close()
+
+    def test_playhead_sync_uses_video_frame_time_without_lag_smoothing(self):
+        editor = _PlaybackEditor()
+        playing_state = object()
+        player = SimpleNamespace(
+            PlaybackState=SimpleNamespace(PlayingState=playing_state),
+            playbackState=Mock(return_value=playing_state),
+            position=Mock(return_value=27_000),
+            duration=Mock(return_value=60_000),
+        )
+        editor.video_player = SimpleNamespace(
+            media_player=player,
+            current_playback_frame_time=Mock(return_value=(810, 27.0)),
+            set_subtitle_display_time=Mock(),
+        )
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(playhead_sec=10.0, _edit_active=False, set_active=Mock()),
+            follow_playhead=Mock(),
+            set_active=Mock(),
+        )
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("자막")
+        editor._highlighter = SimpleNamespace(set_current_line=Mock())
+        editor._active_seg_start = None
+        editor._segments = [{"start": 27.0, "end": 28.0, "line": 0, "text": "자막"}]
+        editor._playhead_display_sec = 10.0
+        editor._playhead_anchor_global_sec = 10.0
+        editor._playhead_anchor_mono = 100.0
+
+        try:
+            editor._sync_playhead()
+
+            editor.timeline.follow_playhead.assert_called_once_with(27.0, smooth=True, threshold_px=24.0)
+            editor.video_player.set_subtitle_display_time.assert_called_once_with(27.0)
+            self.assertEqual(editor._playhead_display_sec, 27.0)
+        finally:
+            editor.text_edit.close()
+
     def test_playhead_smoothing_ignores_small_backward_jitter(self):
         editor = _DummyTimelineVideoEditor()
+        editor.video_fps = 30.0
         editor.timeline = SimpleNamespace(canvas=SimpleNamespace(playhead_sec=1.0))
         first = editor._smooth_playhead_sec(1.0, 10.0, 20.0)
         second = editor._smooth_playhead_sec(0.96, 10.016, 20.0)
 
         self.assertEqual(first, 1.0)
         self.assertGreaterEqual(second, first)
+
+    def test_timeline_playhead_snaps_to_current_video_frame(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.set_frame_rate(24.0)
+            timeline.update_segments([{"start": 0.0, "end": 2.0, "text": "테스트"}], active_sec=0.0, total_dur=2.0)
+
+            timeline.set_playhead(1.01)
+
+            self.assertAlmostEqual(timeline.canvas.playhead_sec, 1.0, places=6)
+            self.assertAlmostEqual(timeline.global_canvas.playhead_sec, 1.0, places=6)
+        finally:
+            timeline.close()
+
+    def test_timeline_canvases_do_not_share_opengl_video_surface(self):
+        self.assertIs(TimelineCanvasBase, QWidget)
+        self.assertIs(GlobalCanvasBase, QWidget)
+
+    def test_timeline_close_stops_waveform_threads(self):
+        timeline = TimelineWidget()
+        worker = SimpleNamespace(
+            stop=Mock(),
+            isRunning=Mock(return_value=True),
+            wait=Mock(return_value=True),
+        )
+        timeline._wf_worker = worker
+        try:
+            timeline.stop_waveform_workers()
+
+            worker.stop.assert_called_once()
+            worker.wait.assert_called_once()
+            self.assertIsNone(timeline._wf_worker)
+        finally:
+            timeline.close()
 
     def test_qml_playhead_overlay_asset_exists_for_gpu_path(self):
         qml_path = Path(__file__).resolve().parents[1] / "ui" / "qml" / "timeline_playhead_overlay.qml"

@@ -8,6 +8,7 @@ from PyQt6.QtGui import QTextCursor
 from PyQt6.QtMultimedia import QMediaPlayer
 
 from core.media_info import probe_media
+from core.frame_time import normalize_fps
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_helpers import insert_gap_after
 
@@ -60,7 +61,11 @@ class EditorVideoControlsMixin:
             self.timeline.load_waveform(path)
 
         info = probe_media(path)
-        self.video_fps = info.get("fps", 0.0) or 30.0
+        self.video_fps = normalize_fps(info.get("fps", 0.0) or 30.0)
+        if hasattr(self, "timeline") and hasattr(self.timeline, "set_frame_rate"):
+            self.timeline.set_frame_rate(self.video_fps)
+        if hasattr(self, "video_player") and hasattr(self.video_player, "set_frame_rate"):
+            self.video_player.set_frame_rate(self.video_fps)
         width = int(info.get("width", 0) or 0)
         height = int(info.get("height", 0) or 0)
         raw_aspect = (width / height) if width > 0 and height > 0 else 16 / 9
@@ -113,7 +118,7 @@ class EditorVideoControlsMixin:
         if cur.hasSelection():
             self.text_edit.cut()
             return
-        sec = getattr(self.video_player, 'current_time', 0.0)
+        sec = self._snap_to_frame(getattr(self.timeline.canvas, 'playhead_sec', getattr(self.video_player, 'current_time', 0.0)))
         block = cur.block()
         ud = block.userData()
         spk = ud.spk_id if isinstance(ud, SubtitleBlockData) else "00"
@@ -127,7 +132,7 @@ class EditorVideoControlsMixin:
 
     def _set_segment_start_to_playhead(self):
         self._undo_mgr.push_immediate()
-        sec = getattr(self.video_player, 'current_time', 0.0)
+        sec = self._snap_to_frame(getattr(self.timeline.canvas, 'playhead_sec', getattr(self.video_player, 'current_time', 0.0)))
         cur = self.text_edit.textCursor()
         block = cur.block()
         ud = block.userData()
@@ -168,7 +173,7 @@ class EditorVideoControlsMixin:
 
     def _set_segment_end_to_playhead(self):
         self._undo_mgr.push_immediate()
-        sec = getattr(self.video_player, 'current_time', 0.0)
+        sec = self._snap_to_frame(getattr(self.timeline.canvas, 'playhead_sec', getattr(self.video_player, 'current_time', 0.0)))
         cur = self.text_edit.textCursor()
         block = cur.block()
         ud = block.userData()

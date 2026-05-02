@@ -1,4 +1,4 @@
-# Version: 03.02.16
+# Version: 03.06.17
 # Phase: PHASE2
 """
 ui/editor_lifecycle.py
@@ -84,6 +84,8 @@ class EditorLifecycleMixin:
             apply_project_ui_state(self, editor, self._current_project_path)
         if hasattr(self, "_refresh_work_mode_ui"):
             QTimer.singleShot(0, self._refresh_work_mode_ui)
+        if hasattr(self, "_release_ai_models_for_editor_mode"):
+            QTimer.singleShot(0, self._release_ai_models_for_editor_mode)
 
     def _finalize_reuse_completion(self, editor):
         """기존자막 reuse 완료 후 상태 전환"""
@@ -254,6 +256,8 @@ class EditorLifecycleMixin:
             apply_project_ui_state(self, editor, self._current_project_path)
         if hasattr(self, "_refresh_work_mode_ui"):
             QTimer.singleShot(0, self._refresh_work_mode_ui)
+        if hasattr(self, "_release_ai_models_for_editor_mode"):
+            QTimer.singleShot(0, self._release_ai_models_for_editor_mode)
 
     def _remove_old_editor(self):
         old = getattr(self, "_editor_widget", None)
@@ -284,6 +288,13 @@ class EditorLifecycleMixin:
                 if hasattr(vp, 'audio_player'): vp.audio_player.stop()
                 if hasattr(vp, '_worker') and getattr(vp, '_worker', None): vp._worker.stop(); vp._worker.wait(200)
             except: pass
+        if hasattr(old, 'timeline'):
+            try:
+                stop_waveform = getattr(old.timeline, "stop_waveform_workers", None)
+                if callable(stop_waveform):
+                    stop_waveform()
+            except Exception:
+                pass
         try:
             self.stack.removeWidget(old)
             old.hide()
@@ -360,5 +371,12 @@ class EditorLifecycleMixin:
                     vp._worker.stop()
                     vp._worker.wait(200)
             except: pass
+        if self._editor_widget and hasattr(self._editor_widget, 'timeline'):
+            try:
+                stop_waveform = getattr(self._editor_widget.timeline, "stop_waveform_workers", None)
+                if callable(stop_waveform):
+                    stop_waveform()
+            except Exception:
+                pass
         if self.backend: self.backend.stop()
         QTimer.singleShot(100, lambda: os._exit(0))

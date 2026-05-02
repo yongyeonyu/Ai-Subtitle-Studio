@@ -1,4 +1,4 @@
-# Version: 03.04.01
+# Version: 03.06.21
 # Phase: PHASE2
 """
 ui/gpu_rendering.py
@@ -28,6 +28,10 @@ def accelerated_widget_base():
     return QOpenGLWidget
 
 
+def gpu_backend_name() -> str:
+    return "opengl" if accelerated_widget_base() is not QWidget else "qwidget"
+
+
 def configure_lightweight_paint(widget: QWidget, *, opaque: bool = True) -> None:
     try:
         widget.setAttribute(Qt.WidgetAttribute.WA_StaticContents, True)
@@ -44,5 +48,18 @@ def configure_opengl_widget(widget: QWidget) -> None:
 
         if isinstance(widget, QOpenGLWidget):
             widget.setUpdateBehavior(QOpenGLWidget.UpdateBehavior.NoPartialUpdate)
+            widget.setAutoFillBackground(False)
     except Exception:
         pass
+
+
+def make_accelerated_viewport(parent=None) -> QWidget | None:
+    if not gpu_widgets_enabled():
+        return None
+    try:
+        from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+    except Exception:
+        return None
+    viewport = QOpenGLWidget(parent)
+    configure_opengl_widget(viewport)
+    return viewport

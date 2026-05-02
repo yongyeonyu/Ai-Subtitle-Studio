@@ -1,5 +1,5 @@
-# Version: 03.00.07
-# Phase: PHASE1-B
+# Version: 03.06.17
+# Phase: PHASE2
 """
 ui/timeline_input.py
 Timeline input mixin
@@ -10,6 +10,7 @@ from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon, QPainter, Q
 import config
 from ui.editor.editor_helpers import find_segment_at
 
+from ui.timeline.speaker_labels import current_speaker_settings, speaker_labels_for_segment
 from ui.timeline.timeline_constants import (
     DIAMOND_Y,
     HANDLE_R,
@@ -81,7 +82,7 @@ class TimelineInputMixin:
         self.scrub_sec.emit(target if target is not None else self.total_duration)
 
     def _emit_smart_split_at_playhead(self):
-        sec = self.playhead_sec
+        sec = self._snap_to_frame(self.playhead_sec)
         seg = find_segment_at(self.segments, sec, skip_gap=True)
         if not seg: return
         if sec <= seg["start"] + 0.05 or sec >= seg["end"] - 0.05: return
@@ -127,10 +128,56 @@ class TimelineInputMixin:
             SPEAKER_BOT - SPEAKER_TOP,
         )
 
+    def _speaker_lane_hit_rect_for_seg(self, seg):
+        rect = self._speaker_lane_rect_for_seg(seg)
+        owner = self._find_owner_with_settings()
+        settings = current_speaker_settings(getattr(owner, "settings", {}) if owner is not None else {})
+        names = [str(name).strip() for name in speaker_labels_for_segment(settings, seg) if str(name).strip()]
+        if not names:
+            target_w = min(rect.width(), 42)
+            return QRect(rect.center().x() - target_w // 2, rect.y(), max(1, target_w), rect.height())
+
+        visible_names = names[:2]
+        multi_line = len(visible_names) > 1
+        font_size = 7 if multi_line else 8
+        fm = QFontMetrics(QFont(config.FONT, font_size, QFont.Weight.Bold))
+        line_h = fm.height()
+        gap = 0 if multi_line else 1
+        dot = 6 if multi_line else 8
+        text_gap = 5 if multi_line else 6
+        row_h = max(dot, line_h)
+        total_h = len(visible_names) * row_h + max(0, len(visible_names) - 1) * gap
+        max_row_w = max(dot + text_gap + fm.horizontalAdvance(name) for name in visible_names)
+
+        draw_y = rect.y() + max(0, (rect.height() - total_h) // 2)
+        pad_y = 5
+        ideal_w = max_row_w + 12
+        max_center_w = max(36, min(96, int(rect.width() * 0.64)))
+        target_w = max(1, min(rect.width(), ideal_w, max_center_w))
+        left = max(rect.left(), rect.center().x() - target_w // 2)
+        right = min(rect.right() + 1, left + target_w)
+        left = max(rect.left(), right - target_w)
+        top = max(rect.top(), draw_y - pad_y)
+        bottom = min(rect.bottom() + 1, draw_y + total_h + pad_y)
+        return QRect(left, top, max(1, right - left), max(1, bottom - top))
+
     def _speaker_lane_seg_at(self, x: int, y: int):
         for seg in self.segments:
-            if self._speaker_lane_rect_for_seg(seg).contains(x, y):
+            if self._speaker_lane_hit_rect_for_seg(seg).contains(x, y):
                 return seg
+        return None
+
+    def _gap_at(self, x: int, y: int):
+        if not (SEG_TOP <= y <= SEG_BOT):
+            return None
+        for gap in getattr(self, "gap_segments", []) or []:
+            try:
+                gx1 = self._x(float(gap.get("start", 0.0) or 0.0))
+                gx2 = self._x(float(gap.get("end", 0.0) or 0.0))
+            except Exception:
+                continue
+            if gx1 <= x <= gx2:
+                return gap
         return None
 
     def _handle_polygon(self, bx: int, is_left: bool) -> QPolygon:
@@ -246,6 +293,45 @@ class TimelineInputMixin:
         if not menu.isEmpty():
             menu.exec(gpos)
 
+    def _gap_menu_pivot_sec(self, gap, click_x: int) -> float:
+        start = float(gap.get("start", 0.0) or 0.0)
+        end = float(gap.get("end", start) or start)
+        playhead = self._snap_to_frame(float(getattr(self, "playhead_sec", 0.0) or 0.0))
+        if start < playhead < end:
+            return playhead
+        clicked = self._snap_to_frame(max(start, min(end, float(click_x) / max(0.001, float(self.pps)))))
+        return clicked
+
+    def _show_gap_generate_menu(self, gap, gpos, click_x: int):
+        from PyQt6.QtWidgets import QMenu
+
+        start = self._snap_to_frame(float(gap.get("start", 0.0) or 0.0))
+        end = self._snap_to_frame(float(gap.get("end", start) or start))
+        if end <= start:
+            return
+
+        pivot = self._gap_menu_pivot_sec(gap, click_x)
+        min_span = max(0.02, min(0.1, 1.0 / max(1.0, float(self._get_fps()))))
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background-color: #151C20; color: #F5F7FA; border: 1px solid #2D3942; "
+            "font-size: 13px; padding: 4px; } "
+            "QMenu::item { padding: 7px 22px 7px 10px; border-radius: 4px; } "
+            "QMenu::item:selected { background-color: #1F3A56; }"
+            "QMenu::item:disabled { color: #65717A; }"
+        )
+        act_to = menu.addAction("여기까지 생성")
+        act_from = menu.addAction("여기부터 생성")
+        act_to.setEnabled(pivot > start + min_span)
+        act_from.setEnabled(pivot < end - min_span)
+
+        chosen = menu.exec(gpos)
+        if chosen is act_to:
+            self.gap_generate_requested.emit(start, end, pivot, "to")
+        elif chosen is act_from:
+            self.gap_generate_requested.emit(start, end, pivot, "from")
+
     def _playhead_handle_hit_rect(self) -> QRect:
         handle_r = 7
         px = self._x(float(getattr(self, "playhead_sec", 0.0) or 0.0))
@@ -321,6 +407,10 @@ class TimelineInputMixin:
             if speaker_seg:
                 self._show_speaker_learn_menu(int(speaker_seg.get("line", 0)), ev.globalPosition().toPoint())
                 return
+            gap = self._gap_at(x, y)
+            if gap:
+                self._show_gap_generate_menu(gap, ev.globalPosition().toPoint(), x)
+                return
             if y < SEG_TOP: self._emit_smart_split_at_playhead(); return
             if SEG_TOP <= y <= SEG_BOT:
                 seg = self._seg_at(x)
@@ -346,7 +436,7 @@ class TimelineInputMixin:
 
         if y < SEG_TOP:
             self._is_panning = True; self._pan_last_x = ev.globalPosition().x()
-            self.setCursor(Qt.CursorShape.ClosedHandCursor); self.scrub_sec.emit(max(0.0, x / self.pps)); return
+            self.setCursor(Qt.CursorShape.ClosedHandCursor); self.scrub_sec.emit(self._snap_to_frame(max(0.0, x / self.pps))); return
 
         handle_hit = self._handle_drag_at(x, y)
         if handle_hit:
@@ -384,7 +474,7 @@ class TimelineInputMixin:
 
         seg = self._seg_at(x)
         if seg: self.seg_clicked.emit(seg.get("line", 0), seg["start"]); return
-        self._is_scrubbing = True; self.scrub_sec.emit(max(0.0, x / self.pps))
+        self._is_scrubbing = True; self.scrub_sec.emit(self._snap_to_frame(max(0.0, x / self.pps)))
 
     def _clear_active_gaps_for_segment_drag(self):
         changed = False
@@ -397,6 +487,9 @@ class TimelineInputMixin:
 
     def _setup_drag(self, s, edge, x):
         self.drag_started.emit(); self._drag_seg, self._drag_edge = s, edge; self._drag_x0 = x
+        self.active_seg_start = float(s.get("start", 0.0) or 0.0)
+        if hasattr(self, "_sync_active_segment_key"):
+            self._sync_active_segment_key(seg=s)
         self._drag_s0_start, self._drag_s0_end = s["start"], s["end"]
         self._drag_adj_l = self._get_prev_seg(s); self._drag_adj_r = self._get_next_seg(s)
         self._drag_adj_orig_start_l = self._drag_adj_l["start"] if self._drag_adj_l else 0.0
@@ -491,7 +584,7 @@ class TimelineInputMixin:
             self._pan_last_x = current_x; return
 
         if getattr(self, '_is_scrubbing', False) and (ev.buttons() & Qt.MouseButton.LeftButton):
-            self.scrub_sec.emit(max(0.0, x / self.pps)); return
+            self.scrub_sec.emit(self._snap_to_frame(max(0.0, x / self.pps))); return
 
         if self._drag_seg or getattr(self, '_drag_edge', None) == "diamond":
             if ev.buttons() & Qt.MouseButton.LeftButton: self._apply_drag((x - self._drag_x0) / self.pps)
@@ -596,6 +689,8 @@ class TimelineInputMixin:
             if self.playhead_sec > 0 and abs(ns - self.playhead_sec) <= playhead_snap: ns = self._snap_to_frame(self.playhead_sec)
             seg["start"] = min(self._snap_to_frame(seg["end"] - MIN), max(ns, limit))
             if self.active_seg_start is not None: self.active_seg_start = seg["start"]
+            if hasattr(self, "_sync_active_segment_key"):
+                self._sync_active_segment_key(seg=seg)
             if abs(seg["start"] - limit) < 0.05 or (self.playhead_sec > 0 and abs(seg["start"] - self.playhead_sec) < 0.05): self._snap_lines.append(self._x(seg["start"]))
 
         elif edge == "center":
@@ -614,6 +709,8 @@ class TimelineInputMixin:
             ns = max(ll, min(ns, self._snap_to_frame(lr - dur)))
             seg["start"] = ns; seg["end"] = self._snap_to_frame(ns + dur)
             if self.active_seg_start is not None: self.active_seg_start = seg["start"]
+            if hasattr(self, "_sync_active_segment_key"):
+                self._sync_active_segment_key(seg=seg)
             if abs(seg["start"] - ll) < 0.05 or (self.playhead_sec > 0 and abs(seg["start"] - self.playhead_sec) < 0.05) or (not self._drag_adj_l and abs(seg["start"]) < 0.05): self._snap_lines.append(self._x(seg["start"]))
             if abs(seg["end"] - lr) < 0.05 or (self.playhead_sec > 0 and abs(seg["end"] - self.playhead_sec) < 0.05) or (not self._drag_adj_r and abs(seg["end"] - self.total_duration) < 0.05): self._snap_lines.append(self._x(seg["end"]))
 

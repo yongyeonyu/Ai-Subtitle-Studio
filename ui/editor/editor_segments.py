@@ -23,6 +23,11 @@ class EditorSegmentsMixin:
     # ---------------------------------------------------------
     # Common Helpers (여러 Mixin에서 공용)
     # ---------------------------------------------------------
+    def _frame_time(self, sec: float) -> float:
+        if hasattr(self, "_snap_to_frame"):
+            return self._snap_to_frame(sec)
+        return round(float(sec), 6)
+
     def _mark_dirty(self):
         if hasattr(self, "_has_unsaved_changes") and not self._has_unsaved_changes():
             return
@@ -153,7 +158,7 @@ class EditorSegmentsMixin:
                 if self._segment_queue[0]['start'] > new_prev_end + 0.05:
                     if doc.lastBlock().text().strip(): cur.insertText("\n")
                     cur.insertText("\n")
-                    cur.block().setUserData(SubtitleBlockData("00", round(new_prev_end, 2), is_gap=True))
+                    cur.block().setUserData(SubtitleBlockData("00", self._frame_time(new_prev_end), is_gap=True))
                     cur.insertText("\n") # 다음 자막이 쓸 줄 확보
                     
             elif gap > cont_thresh:
@@ -162,7 +167,7 @@ class EditorSegmentsMixin:
                 if self._segment_queue[0]['start'] > new_prev_end + 0.05:
                     if doc.lastBlock().text().strip(): cur.insertText("\n")
                     cur.insertText("\n")
-                    cur.block().setUserData(SubtitleBlockData("00", round(new_prev_end, 2), is_gap=True))
+                    cur.block().setUserData(SubtitleBlockData("00", self._frame_time(new_prev_end), is_gap=True))
                     cur.insertText("\n")
 
         # 💡 4. 내부 청크들 간의 간격 연산
@@ -195,7 +200,7 @@ class EditorSegmentsMixin:
         spk2_id = self.settings.get("spk2_id", "01")
 
         for i in range(len(self._segment_queue)):
-            seg = self._segment_queue[i]; text = seg.get("text", "")
+            seg = self._segment_queue[i]; text = str(seg.get("text", "") or "").replace("\u2028", "\n")
             spk_list = seg.get("speaker_list", [spk1_id])
             
             text = self._JUNK_TS_RE.sub('', text)
@@ -206,11 +211,11 @@ class EditorSegmentsMixin:
             # ✅ HTML 태그 제거
             text = re.sub(r'<[^>]+>', '', text)
 
-            parts = [re.sub(r'\s+', ' ', p).strip() for p in text.split('\n')]
+            parts = [re.sub(r'[ \t\f\v]+', ' ', p).strip() for p in text.split('\n')]
             parts = [p for p in parts if p]
             if not parts: continue
             
-            start_sec = round(max(0, seg.get("start", 0)), 2)
+            start_sec = self._frame_time(max(0, seg.get("start", 0)))
             
             # 💡 첫 번째 줄 삽입
             current_spk = spk_list[0] if len(spk_list) > 0 else spk1_id
@@ -254,7 +259,7 @@ class EditorSegmentsMixin:
             if i + 1 < len(self._segment_queue):
                 nxt = self._segment_queue[i+1]
                 if seg['end'] < nxt['start'] - 0.05:
-                    gap_start = round(seg['end'], 2)
+                    gap_start = self._frame_time(seg['end'])
                     cur.insertText("\n") 
                     cur.block().setUserData(SubtitleBlockData("00", gap_start, is_gap=True))
                     # 💡 [핵심 해결] 무음 블록(빈 줄)을 확보했으니, 다음 자막이 쓸 새로운 줄을 한 번 더 만들어 줍니다!
@@ -262,7 +267,7 @@ class EditorSegmentsMixin:
                 else:
                     cur.insertText("\n")
             else:
-                gap_start = round(seg['end'], 2)
+                gap_start = self._frame_time(seg['end'])
                 cur.insertText("\n")
                 cur.block().setUserData(SubtitleBlockData("00", gap_start, is_gap=True))
 
@@ -303,7 +308,7 @@ class EditorSegmentsMixin:
         
         while block.isValid():
             data = block.userData()
-            text = block.text().strip()
+            text = block.text().replace("\u2028", "\n").strip()
             is_gap = getattr(data, 'is_gap', False) if data else False
             
             # ✅ [#1 핵심 수정] 갭 블록도 포함 — 무음구간이 End Time 계산에 반영됩니다
@@ -839,7 +844,7 @@ class EditorSegmentsMixin:
                 parts = [p.strip() for p in text.split('\n') if p.strip()]
                 if not parts: continue
                 
-                start_sec = round(seg.get("start", 0), 2)
+                start_sec = self._frame_time(seg.get("start", 0))
                 current_spk = seg.get("speaker_list", [spk1_id])[0] if seg.get("speaker_list") else spk1_id
                 
                 cur.insertText(parts[0])
@@ -857,7 +862,7 @@ class EditorSegmentsMixin:
                         cur.insertText("\u2028" + line_text) 
                 
                 # Gap 처리
-                gap_start = round(seg['end'], 2)
+                gap_start = self._frame_time(seg['end'])
                 if i + 1 < len(new_segments):
                     if seg['end'] < new_segments[i+1]['start'] - 0.05:
                         cur.insertBlock()
@@ -903,9 +908,9 @@ class EditorSegmentsMixin:
         if not isinstance(ud, SubtitleBlockData):
             return
 
-        start_sec = float(ud.start_sec)
+        start_sec = self._frame_time(ud.start_sec)
         spk_id    = ud.spk_id
-        split_sec = float(split_sec)
+        split_sec = self._frame_time(split_sec)
 
         # 범위 체크
         try:
@@ -966,7 +971,7 @@ class EditorSegmentsMixin:
         cur.removeSelectedText()
         cur.insertText(left_doc)
         cur.block().setUserData(
-            SubtitleBlockData(spk_id, round(start_sec, 2), is_gap=False)
+            SubtitleBlockData(spk_id, start_sec, is_gap=False)
         )
 
         # 새 블록 삽입 → right 파트
@@ -974,7 +979,7 @@ class EditorSegmentsMixin:
         cur.insertBlock()
         cur.insertText(right_doc)
         cur.block().setUserData(
-            SubtitleBlockData(spk_id, round(split_sec, 2), is_gap=False)
+            SubtitleBlockData(spk_id, split_sec, is_gap=False)
         )
 
         cur.endEditBlock()
@@ -984,7 +989,7 @@ class EditorSegmentsMixin:
         cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
         self.text_edit.setTextCursor(cur)
         
-        self._active_seg_start = round(split_sec, 2)
+        self._active_seg_start = split_sec
         if hasattr(self, 'timeline'):
             self.timeline.set_active(self._active_seg_start)
             # 🎯 자막의 중간이 아니라, 대표님이 우클릭한 그 시점(split_sec)을 중앙으로!

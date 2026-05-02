@@ -1,4 +1,4 @@
-# Version: 03.02.11
+# Version: 03.06.17
 # Phase: PHASE1-C
 """
 ui/timeline_widget.py
@@ -21,6 +21,7 @@ from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_global import GlobalCanvas
 from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker
 from ui.style import button_style
+from core.frame_time import normalize_fps, snap_sec_to_frame
 
 
 class TimelinePlayheadOverlay(QWidget):
@@ -72,6 +73,7 @@ class TimelineWidget(QWidget):
     seg_to_gap = pyqtSignal(int)
     gap_activated = pyqtSignal(float, float)
     gap_to_segs = pyqtSignal(float, float)
+    gap_generate_requested = pyqtSignal(float, float, float, str)
     scrub_sec = pyqtSignal(float)
     drag_started = pyqtSignal()
     drag_finished = pyqtSignal()
@@ -164,6 +166,7 @@ class TimelineWidget(QWidget):
         self.canvas.seg_to_gap.connect(self.seg_to_gap)
         self.canvas.gap_activated.connect(self.gap_activated)
         self.canvas.gap_to_segs.connect(self.gap_to_segs)
+        self.canvas.gap_generate_requested.connect(self.gap_generate_requested.emit)
         self.canvas.scrub_sec.connect(self.scrub_sec)
         self.canvas.drag_started.connect(self.drag_started)
         self.canvas.drag_finished.connect(self.drag_finished)
@@ -215,6 +218,41 @@ class TimelineWidget(QWidget):
         self._focus_border.hide()
         self._sync_focus_border()
 
+    def stop_waveform_workers(self, timeout_ms: int = 1200):
+        for attr in ("_wf_worker", "_mc_worker"):
+            worker = getattr(self, attr, None)
+            if worker is None:
+                continue
+            try:
+                if hasattr(worker, "stop"):
+                    worker.stop()
+                else:
+                    worker.requestInterruption()
+                    worker.quit()
+                if worker.isRunning() and not worker.wait(max(50, int(timeout_ms))):
+                    if hasattr(worker, "stop"):
+                        worker.stop()
+                    worker.wait(200)
+            except Exception:
+                pass
+            finally:
+                setattr(self, attr, None)
+
+    def closeEvent(self, event):
+        self.stop_waveform_workers()
+        super().closeEvent(event)
+
+    def set_frame_rate(self, fps: float):
+        fps = normalize_fps(fps)
+        self.video_fps = fps
+        if hasattr(self, "canvas"):
+            self.canvas.set_frame_rate(fps)
+        if hasattr(self, "global_canvas"):
+            setattr(self.global_canvas, "frame_rate", fps)
+
+    def snap_sec_to_frame(self, sec: float) -> float:
+        return snap_sec_to_frame(sec, getattr(self, "video_fps", getattr(self.canvas, "frame_rate", 30.0)))
+
     def _create_playhead_overlay(self):
         # QQuickWidget transparency can cover the QWidget viewport with black on macOS.
         # Keep the playhead separated, but use a native transparent QWidget overlay here.
@@ -237,7 +275,7 @@ class TimelineWidget(QWidget):
 
     def _playhead_zoom_anchor(self, old_pps: float) -> tuple[float, float]:
         dur = max(0.0, float(getattr(self.canvas, "total_duration", 0.0) or 0.0))
-        playhead_sec = max(0.0, min(dur, float(getattr(self.canvas, "playhead_sec", 0.0) or 0.0)))
+        playhead_sec = self.snap_sec_to_frame(max(0.0, min(dur, float(getattr(self.canvas, "playhead_sec", 0.0) or 0.0))))
         viewport_w = max(1, self.scroll.viewport().width())
         current_scroll = float(self.scroll.horizontalScrollBar().value())
         playhead_view_x = (playhead_sec * max(0.001, old_pps)) - current_scroll
@@ -387,14 +425,39 @@ class TimelineWidget(QWidget):
         self.global_canvas.set_vad_segments(vad_segs)
 
     def set_active(self, sec):
+        sec = self.snap_sec_to_frame(sec)
         self.canvas.set_active(sec)
         if sec is not None:
             self.center_to_sec(sec, smooth=True)
 
     def set_playhead(self, sec):
+        sec = self.snap_sec_to_frame(sec)
         self.canvas.playhead_sec = max(0.0, float(sec or 0.0))
         self._sync_playhead_overlay()
         self.global_canvas.set_playhead(sec)
+
+    def follow_playhead(self, sec, *, smooth=True, threshold_px=24.0):
+        sec = self.snap_sec_to_frame(sec)
+        self.set_playhead(sec)
+        canvas = getattr(self, "canvas", None)
+        if canvas is None:
+            return
+        viewport = self.scroll.viewport()
+        viewport_w = viewport.width() if viewport is not None else self.scroll.width()
+        target_x = max(0, int(float(sec or 0.0) * float(canvas.pps or 0.0)) - (max(1, viewport_w) // 2))
+        target_val = float(self._clamp_scroll_x(target_x))
+        current_val = float(self.scroll.horizontalScrollBar().value())
+        if abs(target_val - float(getattr(self, "_target_scroll_x", current_val))) < float(threshold_px):
+            return
+        self._target_scroll_x = target_val
+        if smooth:
+            if not self._smooth_scroll_timer.isActive():
+                self._current_scroll_x = current_val
+                self._smooth_scroll_timer.start()
+            return
+        self._smooth_scroll_timer.stop()
+        self._current_scroll_x = target_val
+        self.scroll.horizontalScrollBar().setValue(int(target_val))
 
     def _sync_playhead_overlay(self):
         overlay = getattr(self, "_playhead_overlay", None)
@@ -427,6 +490,7 @@ class TimelineWidget(QWidget):
         self.scroll.horizontalScrollBar().setValue(int(self._current_scroll_x))
 
     def center_to_sec(self, sec, smooth=False):
+        sec = self.snap_sec_to_frame(sec)
         target_x = int(sec * self.canvas.pps)
         half_w = self.scroll.width() // 2
         target_val = int(self._clamp_scroll_x(max(0, target_x - half_w)))
@@ -449,18 +513,19 @@ class TimelineWidget(QWidget):
 
         if self._mc_worker:
             try:
-                self._mc_worker.quit()
-                self._mc_worker.wait(100)
+                self._mc_worker.stop()
+                self._mc_worker.wait(1200)
             except Exception:
                 pass
             self._mc_worker = None
 
         if self._wf_worker:
             try:
-                self._wf_worker.quit()
-                self._wf_worker.wait(100)
+                self._wf_worker.stop()
+                self._wf_worker.wait(1200)
             except Exception:
                 pass
+            self._wf_worker = None
 
         self._wf_worker = WaveformWorker(path, self)
         self._wf_worker.ready.connect(self._on_waveform_ready)
@@ -480,18 +545,19 @@ class TimelineWidget(QWidget):
 
         if self._wf_worker:
             try:
-                self._wf_worker.quit()
-                self._wf_worker.wait(100)
+                self._wf_worker.stop()
+                self._wf_worker.wait(1200)
             except Exception:
                 pass
             self._wf_worker = None
 
         if self._mc_worker:
             try:
-                self._mc_worker.quit()
-                self._mc_worker.wait(100)
+                self._mc_worker.stop()
+                self._mc_worker.wait(1200)
             except Exception:
                 pass
+            self._mc_worker = None
 
         self._mc_worker = MultiClipWaveformWorker(clip_boundaries, self)
         self._mc_worker.clip_ready.connect(self._on_clip_waveform_ready)
@@ -593,6 +659,7 @@ class TimelineWidget(QWidget):
                 sec = self._selected_clip_offset + (frac * self._selected_clip_duration)
             else:
                 sec = frac * self.canvas.total_duration
+            sec = self.snap_sec_to_frame(sec)
             self.center_to_sec(sec, smooth=False)
             self.scrub_sec.emit(sec)
 

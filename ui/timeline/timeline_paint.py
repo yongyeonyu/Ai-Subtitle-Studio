@@ -1,5 +1,5 @@
-# Version: 03.02.17
-# Phase: PHASE1-C
+# Version: 03.06.17
+# Phase: PHASE2
 """
 ui/timeline_paint.py
 Timeline paint mixin
@@ -47,6 +47,13 @@ SEGMENT_TEXT_KIND_STYLES = {
     },
 }
 
+QUALITY_SEGMENT_COLORS = {
+    "green": ("#203A2A", "#34C759"),
+    "yellow": ("#3B341D", "#FFCC00"),
+    "red": ("#4A1F24", "#FF453A"),
+    "gray": ("#2F343A", "#8E8E93"),
+}
+
 
 def segment_text_kind(text: str) -> str:
     normalized = "".join(str(text or "").split())
@@ -55,6 +62,59 @@ def segment_text_kind(text: str) -> str:
     if normalized == "무음":
         return "silence"
     return ""
+
+
+def _quality_filter_matches(quality: dict, q_label: str, q_filter: str) -> bool:
+    q_flags = set(quality.get("flags") or ())
+    return (
+        q_filter == "all"
+        or q_filter == q_label
+        or (
+            q_filter == "needs_review"
+            and (
+                q_label in {"red", "gray"}
+                or bool(
+                    q_flags.intersection(
+                        {"non_speech_hallucination_risk", "high_no_speech_prob", "outside_vad_speech"}
+                    )
+                )
+            )
+        )
+        or (q_filter == "auto_corrected" and "auto_corrected" in q_flags)
+    )
+
+
+def subtitle_segment_visual_style(
+    seg: dict,
+    *,
+    active: bool = False,
+    hover: bool = False,
+    quality_filter: str = "all",
+) -> dict:
+    """Return zoom-stable subtitle segment colors."""
+    is_stt_pending = bool(seg.get("stt_pending"))
+    quality = dict(seg.get("quality") or {})
+    q_label = str(quality.get("confidence_label") or "")
+    kind_style = SEGMENT_TEXT_KIND_STYLES.get(segment_text_kind(seg.get("text", "")), {})
+    muted_by_filter = bool(quality) and not _quality_filter_matches(quality, q_label, str(quality_filter or "all"))
+
+    if kind_style:
+        fill = kind_style["fill"]
+        border = kind_style["border"]
+        text = kind_style.get("text", "")
+    elif quality and q_label in QUALITY_SEGMENT_COLORS:
+        fill, border = QUALITY_SEGMENT_COLORS[q_label]
+        text = ""
+    else:
+        fill = "#4A1F24" if is_stt_pending else ("#1D3D76" if active else ("#222A31" if hover else "#242A30"))
+        border = "#FF453A" if is_stt_pending else ("#8AB8FF" if active else "#3A4650")
+        text = ""
+
+    if muted_by_filter:
+        fill = "#1A2025"
+        border = "#2D3942"
+
+    return {"fill": fill, "border": border, "text": text, "muted": muted_by_filter}
 
 
 class TimelinePaintMixin:
@@ -402,49 +462,29 @@ class TimelinePaintMixin:
                 continue
             compact_seg = sw < 24
             rect = QRect(x1 + 1, subtitle_top, max(2, sw - 2), subtitle_bot - subtitle_top)
-            is_active = (self.active_seg_start is not None and abs(seg["start"] - self.active_seg_start) < 0.5)
+            is_active = self._is_active_segment(seg) if hasattr(self, "_is_active_segment") else (
+                self.active_seg_start is not None and abs(seg["start"] - self.active_seg_start) < 0.001
+            )
             is_hover = self._hover_line == seg.get("line")
             is_stt_pending = bool(seg.get("stt_pending"))
             spk_color = _speaker_color(seg)
+            visual_style = subtitle_segment_visual_style(
+                seg,
+                active=is_active,
+                hover=is_hover,
+                quality_filter=getattr(self, "quality_filter", "all"),
+            )
             if overview_mode and compact_seg:
-                fill = QColor("#4A1F24") if is_stt_pending else (QColor("#1D3D76") if is_active else QColor("#242A30"))
-                border = QColor("#FF453A") if is_stt_pending else (QColor("#8AB8FF") if is_active else QColor("#3A4650"))
+                fill = QColor(visual_style["fill"])
+                border = QColor(visual_style["border"])
                 p.fillRect(rect, fill)
                 p.setPen(QPen(border, 1))
                 p.drawRect(rect)
                 speaker_rect = QRect(rect.x(), speaker_top, rect.width(), speaker_bot - speaker_top)
                 p.fillRect(speaker_rect, spk_color.darker(135))
                 continue
-            quality = dict(seg.get("quality") or {})
-            q_label = str(quality.get("confidence_label") or "")
-            q_flags = set(quality.get("flags") or ())
-            q_filter = str(getattr(self, "quality_filter", "all") or "all")
-            q_colors = {
-                "green": ("#203A2A", "#34C759"),
-                "yellow": ("#3B341D", "#FFCC00"),
-                "red": ("#4A1F24", "#FF453A"),
-                "gray": ("#2F343A", "#8E8E93"),
-            }
-            q_matches = (
-                q_filter == "all"
-                or q_filter == q_label
-                or (q_filter == "needs_review" and (q_label in {"red", "gray"} or bool(q_flags.intersection({"non_speech_hallucination_risk", "high_no_speech_prob", "outside_vad_speech"}))))
-                or (q_filter == "auto_corrected" and "auto_corrected" in q_flags)
-            )
-            text_kind = segment_text_kind(seg.get("text", ""))
-            kind_style = SEGMENT_TEXT_KIND_STYLES.get(text_kind, {})
-            if kind_style:
-                fill = QColor(kind_style["fill"])
-                border = QColor(kind_style["border"])
-            elif quality and q_label in q_colors:
-                fill = QColor(q_colors[q_label][0])
-                border = QColor(q_colors[q_label][1])
-            else:
-                fill = QColor("#4A1F24") if is_stt_pending else (QColor("#1D3D76") if is_active else (QColor("#222A31") if is_hover else QColor("#242A30")))
-                border = QColor("#FF453A") if is_stt_pending else (QColor("#8AB8FF") if is_active else QColor("#3A4650"))
-            if quality and not q_matches:
-                fill = QColor("#1A2025")
-                border = QColor("#2D3942")
+            fill = QColor(visual_style["fill"])
+            border = QColor(visual_style["border"])
             bw = 2 if (is_active or is_hover) and not compact_seg else 1
 
             p.fillRect(rect, fill)
@@ -493,7 +533,7 @@ class TimelinePaintMixin:
                     curr_y += line_h + 4
             else:
                 if rect.width() >= 44:
-                    text_color = kind_style.get("text", "")
+                    text_color = visual_style.get("text", "")
                     p.setPen(QColor(text_color) if text_color else (QColor("#8A8F98") if is_stt_pending else QColor("#DCE3EA")))
                     p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, seg.get("text", ""))
 

@@ -205,6 +205,64 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_pipeline_table_stays_idle_before_first_stage_log(self):
+        window = MainWindow()
+        try:
+            settings = {
+                "selected_audio_ai": "clearvoice",
+                "selected_whisper_model": "whisper-large-v3",
+                "stt_ensemble_enabled": True,
+                "selected_whisper_model_secondary": "ghost613-turbo-korean-4bit",
+                "selected_vad": "silero",
+                "selected_model": "gemma4:e4b",
+                "roughcut_llm_enabled": True,
+                "roughcut_llm_model": "exaone3.5:7.8b",
+            }
+            window.backend = type("Backend", (), {"_active": True})()
+            window.queue_header_lbl.setText("큐 리스트 : (0/1) - 0% 완료")
+            window.queue_table.setRowCount(1)
+            window.queue_table.setItem(0, 0, QTableWidgetItem("대기"))
+            window.queue_table.setItem(0, 2, QTableWidgetItem(""))
+            window.queue_table.setItem(0, 4, QTableWidgetItem("?"))
+
+            current = window._pipeline_current_stage_keys(settings)
+            completed = window._pipeline_completed_stage_keys(settings, current)
+
+            self.assertEqual(current, set())
+            self.assertEqual(completed, set())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_saved_editor_without_generation_log_does_not_mark_pipeline_done(self):
+        window = MainWindow()
+        try:
+            editor = type("Editor", (), {})()
+            editor._roughcut_draft_status = "idle"
+            editor._last_roughcut_draft_major_count = None
+            editor.sm = type("State", (), {"state": "ST_SAVED"})()
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: False
+            settings = {
+                "selected_audio_ai": "none",
+                "selected_whisper_model": "whisper-large-v3",
+                "stt_ensemble_enabled": False,
+                "selected_vad": "silero",
+                "selected_model": "gemma4:e4b",
+                "roughcut_llm_enabled": False,
+            }
+
+            current = window._pipeline_current_stage_keys(settings)
+            completed = window._pipeline_completed_stage_keys(settings, current)
+
+            self.assertEqual(current, set())
+            self.assertEqual(completed, set())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_sidebar_queue_status_is_plain_and_eta_header_is_full_text(self):
         window = MainWindow()
         try:
@@ -446,6 +504,133 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertTrue(backend.stopped)
             self.assertIn("gemma4:e4b", stopped_models)
         finally:
+            window.backend = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_editor_mode_releases_idle_ai_models_without_stopping_backend(self):
+        window = MainWindow()
+
+        class _Editor(QWidget):
+            def __init__(self, parent):
+                super().__init__(parent)
+                self.sm = SimpleNamespace(is_locked=False, state="ST_COMP")
+                self._is_ai_processing = False
+                self._roughcut_draft_timer = QTimer(self)
+                self._roughcut_draft_timer.start(10_000)
+                self._roughcut_draft_pending = True
+                self._roughcut_draft_generation = 7
+                self.statuses = []
+
+            def _set_roughcut_draft_status(self, status):
+                self.statuses.append(status)
+
+        class _Processor:
+            def __init__(self):
+                self.stopped = False
+
+            def stop_transcribe(self):
+                self.stopped = True
+
+        class _Backend:
+            def __init__(self):
+                self._active = False
+                self.stopped = False
+                self.video_processor = _Processor()
+
+            def stop(self):
+                self.stopped = True
+
+        class _ImmediateThread:
+            def __init__(self, target, *args, **kwargs):
+                self._target = target
+
+            def start(self):
+                self._target()
+
+        editor = _Editor(window)
+        backend = _Backend()
+        stopped_models = []
+        try:
+            window._editor_widget = editor
+            window.backend = backend
+
+            with mock.patch("ui.main.main_window.threading.Thread", _ImmediateThread), \
+                 mock.patch("ui.main.main_window.load_settings", return_value={"selected_model": "gemma4:e4b"}), \
+                 mock.patch("core.llm.ollama_provider.stop_local_llm_models", side_effect=lambda models, logger=None: stopped_models.extend(models)):
+                window._release_ai_models_for_editor_mode()
+
+            self.assertFalse(backend.stopped)
+            self.assertTrue(backend.video_processor.stopped)
+            self.assertFalse(editor._roughcut_draft_timer.isActive())
+            self.assertFalse(editor._roughcut_draft_pending)
+            self.assertEqual(editor._roughcut_draft_generation, 8)
+            self.assertIn("idle", editor.statuses)
+            self.assertIn("gemma4:e4b", stopped_models)
+        finally:
+            window.backend = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_editor_mode_does_not_release_models_while_backend_active(self):
+        window = MainWindow()
+
+        class _Processor:
+            def __init__(self):
+                self.stopped = False
+
+            def stop_transcribe(self):
+                self.stopped = True
+
+        editor = QWidget(window)
+        editor.sm = SimpleNamespace(is_locked=False, state="ST_IDLE")
+        processor = _Processor()
+        window._editor_widget = editor
+        window.backend = SimpleNamespace(_active=True, video_processor=processor)
+        try:
+            with mock.patch("core.llm.ollama_provider.stop_local_llm_models") as stop_llm:
+                window._release_ai_models_for_editor_mode()
+
+            self.assertFalse(processor.stopped)
+            stop_llm.assert_not_called()
+        finally:
+            window.backend = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_editor_mode_does_not_release_models_while_processing(self):
+        window = MainWindow()
+
+        class _Processor:
+            def __init__(self):
+                self.stopped = False
+
+            def stop_transcribe(self):
+                self.stopped = True
+
+        editor = QWidget(window)
+        editor.sm = SimpleNamespace(is_locked=True, state="ST_PROC")
+        editor._is_ai_processing = True
+        processor = _Processor()
+        window._editor_widget = editor
+        window.backend = SimpleNamespace(video_processor=processor)
+        try:
+            with mock.patch("core.llm.ollama_provider.stop_local_llm_models") as stop_llm:
+                window._release_ai_models_for_editor_mode()
+
+            self.assertFalse(processor.stopped)
+            stop_llm.assert_not_called()
+        finally:
+            window.backend = None
             editor.close()
             editor.deleteLater()
             window.close()

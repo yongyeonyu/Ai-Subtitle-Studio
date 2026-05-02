@@ -1,4 +1,4 @@
-# Version: 03.02.16
+# Version: 03.06.17
 # Phase: PHASE2
 """Editor widget and function-preserving PHASE1-C layout."""
 import re, os, sys, json, atexit, threading, shutil, time
@@ -361,6 +361,8 @@ class EditorWidget(
         self.video_player = VideoPlayerWidget()
         if hasattr(self.video_player, "set_subtitle_provider"):
             self.video_player.set_subtitle_provider(self._video_subtitle_context_for_player)
+        if hasattr(self.video_player, "frame_step_requested"):
+            self.video_player.frame_step_requested.connect(self._on_step_frame)
         self.video_player.setStyleSheet("background: #000000; border: none; border-radius: 0px;")
         self.splitter.addWidget(self.video_player)
         self.splitter.setStretchFactor(0, 63); self.splitter.setStretchFactor(1, 37)
@@ -404,6 +406,7 @@ class EditorWidget(
         if hasattr(self.timeline, 'seg_to_gap'):       self.timeline.seg_to_gap.connect(self._on_seg_to_gap)
         if hasattr(self.timeline, 'gap_activated'):    self.timeline.gap_activated.connect(self._on_gap_activated)
         if hasattr(self.timeline, 'gap_to_segs'):      self.timeline.gap_to_segs.connect(self._on_gap_to_segs)
+        if hasattr(self.timeline, 'gap_generate_requested'): self.timeline.gap_generate_requested.connect(self._on_gap_generate_requested)
         if hasattr(self.timeline, 'drag_started'):     self.timeline.drag_started.connect(self._on_drag_started)
         if hasattr(self.timeline, 'drag_finished'):    self.timeline.drag_finished.connect(self._on_drag_finished)
         if hasattr(self.timeline, 'step_frame'):       self.timeline.step_frame.connect(self._on_step_frame)
@@ -493,7 +496,23 @@ class EditorWidget(
         if not block.isValid(): return
         ud = block.userData()
         if not isinstance(ud, SubtitleBlockData) or ud.is_gap: return
+        canvas = getattr(getattr(self, "timeline", None), "canvas", None)
+        live_canvas_edit = bool(
+            canvas is not None
+            and getattr(canvas, "_edit_active", False)
+            and not getattr(canvas, "_inline_commit_in_progress", False)
+        )
+        if live_canvas_edit:
+            cached = getattr(self, "_cached_segs", None)
+            visible_text = str(new_text or "").replace("\u2028", "\n")
+            if cached is not None:
+                for seg in cached:
+                    if int(seg.get("line", -999999)) == int(line_num):
+                        seg["text"] = visible_text
+                        break
+            return
         if block.text() == new_text: return
+        old_text = block.text()
         self._inline_updating = True
         cur = QTextCursor(block)
         cur.beginEditBlock()
@@ -502,10 +521,18 @@ class EditorWidget(
         cur.insertText(new_text)
         cur.block().setUserData(SubtitleBlockData(ud.spk_id, ud.start_sec, ud.is_gap))
         cur.endEditBlock()
-        self.text_edit.update_margins()
-        if hasattr(self.text_edit, 'timestampArea'): self.text_edit.timestampArea.update()
+        if old_text.count("\u2028") != str(new_text or "").count("\u2028"):
+            self.text_edit.update_margins()
+            if hasattr(self.text_edit, 'timestampArea'): self.text_edit.timestampArea.update()
         self._inline_updating = False
-        self._schedule_timeline()
+        cached = getattr(self, "_cached_segs", None)
+        if cached is not None:
+            visible_text = str(new_text or "").replace("\u2028", "\n")
+            for seg in cached:
+                if int(seg.get("line", -999999)) == int(line_num):
+                    seg["text"] = visible_text
+                    break
+        self._refresh_video_subtitle_context()
 
     def _on_lock_changed(self, locked: bool):
         self.text_edit.setReadOnly(locked)
@@ -1121,6 +1148,13 @@ class EditorWidget(
         if hasattr(self, 'video_player'): 
             try: self.video_player.pause_video()
             except Exception: pass
+        if hasattr(self, 'timeline'):
+            try:
+                stop_waveform = getattr(self.timeline, "stop_waveform_workers", None)
+                if callable(stop_waveform):
+                    stop_waveform()
+            except Exception:
+                pass
             
         self.corrections, self.subtitle_rules, self.settings = _dm_cleanup_rules(
             self.corrections, self.subtitle_rules, self.settings, self._get_current_segments

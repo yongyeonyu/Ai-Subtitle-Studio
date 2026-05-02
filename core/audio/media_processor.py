@@ -1583,6 +1583,40 @@ class VideoProcessor:
         finally:
             self._whisper_proc = None
 
+    def release_runtime_models(self):
+        self.stop_transcribe()
+        try:
+            for child in list(getattr(self, "_ensemble_child_processors", []) or []):
+                try:
+                    if hasattr(child, "release_runtime_models"):
+                        child.release_runtime_models()
+                except Exception:
+                    pass
+            self._ensemble_child_processors = []
+        except Exception:
+            pass
+        try:
+            self._vad_model = None
+            self._vad_utils = None
+            self._vad_loaded = False
+        except Exception:
+            pass
+        try:
+            import gc
+
+            gc.collect()
+        except Exception:
+            pass
+        try:
+            import torch
+
+            if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+                torch.mps.empty_cache()
+            if hasattr(torch, "cuda") and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
 
     def _ffmpeg_trim_to_wav(self, src_wav: str, out_wav: str, start_sec: float, duration_sec: float) -> bool:
         result = subprocess.run(

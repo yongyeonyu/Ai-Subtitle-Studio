@@ -654,10 +654,7 @@ class HomeUIMixin:
             if settings.get("stt_ensemble_enabled"):
                 keys.add("stt2")
             return keys
-        keys = {"stt1"}
-        if settings.get("stt_ensemble_enabled"):
-            keys.add("stt2")
-        return keys
+        return set()
 
     def _pipeline_completed_stage_keys(self, settings: dict, current_keys: set[str]) -> set[str]:
         rows = self._pipeline_rows(settings)
@@ -668,10 +665,7 @@ class HomeUIMixin:
         state_manager = getattr(editor, "sm", None) if editor is not None else None
         editor_state = str(getattr(state_manager, "state", "") or "")
         generation_running = self._is_subtitle_generation_running()
-        generation_done = (
-            not generation_running
-            and (editor_state in {"ST_COMP", "ST_SAVED"} or "자막 생성 완료" in blob)
-        )
+        generation_done = not generation_running and "자막 생성 완료" in blob
 
         if generation_done:
             completed.update(key for key in order if key != "roughcut_llm")
@@ -1611,6 +1605,8 @@ class HomeUIMixin:
             self._attach_global_menu_to_editor(editor)
         if hasattr(self, "_show_bottom_queue_table"):
             self._show_bottom_queue_table()
+        if hasattr(self, "_release_ai_models_for_editor_mode"):
+            QTimer.singleShot(0, self._release_ai_models_for_editor_mode)
         self._refresh_work_mode_ui()
 
     def _open_roughcut_helper(self):
@@ -1675,6 +1671,8 @@ class HomeUIMixin:
                 pass
         if hasattr(self, "_show_bottom_queue_table"):
             self._show_bottom_queue_table()
+        if hasattr(self, "_release_ai_models_for_editor_mode"):
+            QTimer.singleShot(0, self._release_ai_models_for_editor_mode)
         self._refresh_work_mode_ui()
         return editor
 

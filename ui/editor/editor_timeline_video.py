@@ -1,5 +1,5 @@
-# Version: 03.02.06
-# Phase: PHASE1-B
+# Version: 03.06.16
+# Phase: PHASE2
 """
 ui/editor_timeline_video.py
 [v01.01.00] 리팩토링: editor_helpers 통합 + probe_media 적용
@@ -9,10 +9,12 @@ ui/editor_timeline_video.py
 - _mark_dirty / _finalize_edit 공용 메서드 활용
 """
 
+import os
 import time
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
 
+from core.frame_time import normalize_fps, snap_sec_to_frame
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_helpers import (
     find_segment_at, get_sub_block_indices,
@@ -25,8 +27,21 @@ from ui.editor.editor_helpers import (
 class EditorTimelineVideoMixin:
     """타임라인/비디오 동기화 / 화자 관리 / 단축키 액션"""
 
+    def _current_frame_fps(self) -> float:
+        return normalize_fps(getattr(self, "video_fps", 30.0) or 30.0)
+
+    def _snap_to_frame(self, sec: float) -> float:
+        return snap_sec_to_frame(sec, self._current_frame_fps())
+
+    def _set_editor_frame_rate(self, fps: float):
+        self.video_fps = normalize_fps(fps)
+        if hasattr(self, "timeline") and hasattr(self.timeline, "set_frame_rate"):
+            self.timeline.set_frame_rate(self.video_fps)
+        if hasattr(self, "video_player") and hasattr(self.video_player, "set_frame_rate"):
+            self.video_player.set_frame_rate(self.video_fps)
+
     def _reset_playhead_smoothing(self, sec: float | None = None):
-        base_sec = float(sec if sec is not None else getattr(self.timeline.canvas, "playhead_sec", 0.0) or 0.0)
+        base_sec = self._snap_to_frame(float(sec if sec is not None else getattr(self.timeline.canvas, "playhead_sec", 0.0) or 0.0))
         self._playhead_display_sec = max(0.0, base_sec)
         self._playhead_anchor_global_sec = max(0.0, base_sec)
         self._playhead_anchor_mono = time.monotonic()
@@ -61,7 +76,7 @@ class EditorTimelineVideoMixin:
             smoothed = previous + max_step
 
         self._last_playhead_smooth_tick = now_mono
-        self._playhead_display_sec = max(0.0, smoothed)
+        self._playhead_display_sec = self._snap_to_frame(max(0.0, smoothed))
         self._playhead_anchor_global_sec = raw_global_sec
         self._playhead_anchor_mono = now_mono
         return self._playhead_display_sec
@@ -80,6 +95,13 @@ class EditorTimelineVideoMixin:
 
     def _local_to_global_sec(self, sec: float) -> float:
         return max(0.0, float(sec) + self._multiclip_active_offset())
+
+    def _current_video_local_frame_sec(self, player) -> float:
+        video_player = getattr(self, "video_player", None)
+        if video_player is not None and hasattr(video_player, "current_playback_frame_time"):
+            _frame, local_sec = video_player.current_playback_frame_time()
+            return float(local_sec)
+        return self._snap_to_frame(player.position() / 1000.0)
 
 
     # ---------------------------------------------------------
@@ -128,7 +150,6 @@ class EditorTimelineVideoMixin:
                 self.video_player.pause_video()
                 self.video_player.seek_direct(float(start_sec))
         self.text_edit.setFocus()
-        self._redraw_timeline()
 
 
     def _on_timeline_seg_double_clicked(self, line_num, start_sec):
@@ -160,9 +181,15 @@ class EditorTimelineVideoMixin:
             return
 
         now_mono = time.monotonic()
-        raw_sec = self._local_to_global_sec(pos_ms / 1000.0)
-        current_sec = self._smooth_playhead_sec(raw_sec, now_mono, dur_ms / 1000.0)
-        self.timeline.set_playhead(current_sec)
+        local_sec = self._current_video_local_frame_sec(player)
+        current_sec = self._snap_to_frame(self._local_to_global_sec(local_sec))
+        self._playhead_display_sec = current_sec
+        self._playhead_anchor_global_sec = current_sec
+        self._playhead_anchor_mono = now_mono
+        if hasattr(self.timeline, "follow_playhead"):
+            self.timeline.follow_playhead(current_sec, smooth=True, threshold_px=24.0)
+        else:
+            self.timeline.set_playhead(current_sec)
 
         # Context sync: skip resolve if within cached clip bounds (C fix v2)
         if hasattr(self, '_resolve_active_context') and hasattr(self, 'video_player'):
@@ -179,42 +206,43 @@ class EditorTimelineVideoMixin:
                         self._last_sync_clip_idx = _cidx
                         self.video_player.set_context_segments(list(ctx.get('local_segments', []) or []))
 
-        canvas = self.timeline.canvas
-        viewport_w = self.timeline.scroll.viewport().width()
-        center_x = max(0, int(current_sec * canvas.pps) - (viewport_w // 2))
-        # 재생 중 direct setValue 금지: smooth target만 갱신 + 작은 변화는 무시
-        last_scroll_at = float(getattr(self, '_last_play_scroll_sync_at', 0.0) or 0.0)
-        if (now_mono - last_scroll_at) >= 0.10 and abs(float(center_x) - float(getattr(self.timeline, '_target_scroll_x', 0.0))) >= 24.0:
-            self._last_play_scroll_sync_at = now_mono
-            self.timeline._target_scroll_x = float(center_x)
-
         segs = getattr(self, '_cached_segs', None) or self._get_current_segments()
         seg = find_segment_at(segs, current_sec, skip_gap=True)
         if seg and self._active_seg_start != seg["start"]:
-            # 재생 중에는 세그먼트 경계에서만 가볍게 하이라이트를 갱신한다.
-            last_cursor_at = float(getattr(self, '_last_play_cursor_sync_at', 0.0) or 0.0)
-            if (now_mono - last_cursor_at) >= 0.20:
-                self._last_play_cursor_sync_at = now_mono
-                self._sync_cursor_to_seg(seg, ensure_visible=False, move_cursor=False)
-        if seg:
-            last_scroll_at = float(getattr(self, '_last_editor_autoscroll_at', 0.0) or 0.0)
             editing_active = bool(getattr(self.timeline.canvas, '_edit_active', False)) if hasattr(self.timeline, 'canvas') else False
-            if (not self.text_edit.hasFocus()) and (not editing_active) and (now_mono - last_scroll_at) >= 0.85:
+            can_move_editor = (not self.text_edit.hasFocus()) and (not editing_active)
+            if can_move_editor:
+                self._last_play_cursor_sync_at = now_mono
                 self._last_editor_autoscroll_at = now_mono
                 self._sync_cursor_to_seg(seg, ensure_visible=True, move_cursor=True)
-        if hasattr(self.video_player, 'refresh_subtitle_context'):
+            else:
+                last_cursor_at = float(getattr(self, '_last_play_cursor_sync_at', 0.0) or 0.0)
+                if (now_mono - last_cursor_at) >= 0.10:
+                    self._last_play_cursor_sync_at = now_mono
+                    self._sync_cursor_to_seg(seg, ensure_visible=False, move_cursor=False)
+        elif seg:
+            last_scroll_at = float(getattr(self, '_last_editor_autoscroll_at', 0.0) or 0.0)
+            editing_active = bool(getattr(self.timeline.canvas, '_edit_active', False)) if hasattr(self.timeline, 'canvas') else False
+            if (not self.text_edit.hasFocus()) and (not editing_active) and (now_mono - last_scroll_at) >= 0.25:
+                self._last_editor_autoscroll_at = now_mono
+                self._sync_cursor_to_seg(seg, ensure_visible=True, move_cursor=True)
+        local_display_sec = self._global_to_local_sec(current_sec)
+        if hasattr(self.video_player, 'set_subtitle_display_time'):
+            self.video_player.set_subtitle_display_time(local_display_sec)
+        elif hasattr(self.video_player, 'refresh_subtitle_context'):
             self.video_player.refresh_subtitle_context()
 
 
     def _on_scrub(self, sec):
+        sec = self._snap_to_frame(sec)
         self._reset_playhead_smoothing(sec)
         self.timeline.set_playhead(sec)
         if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
-            ctx = self._resolve_active_context(global_sec=float(sec))
+            ctx = self._resolve_active_context(global_sec=sec)
             self._apply_active_context(ctx, autoplay=False, show_thumbnail=True)
         elif hasattr(self, 'video_player'):
             self.video_player.pause_video()
-            self.video_player.seek_direct(float(sec))
+            self.video_player.seek_direct(sec)
         segs = getattr(self, '_cached_segs', None) or self._get_current_segments()
         seg = find_segment_at(segs, sec, skip_gap=False)
         if seg and self._active_seg_start != seg["start"]:
@@ -225,16 +253,31 @@ class EditorTimelineVideoMixin:
     def _on_step_frame(self, direction):
         if not hasattr(self, 'video_player'):
             return
-        fps = getattr(self, 'video_fps', 30.0)
+        fps = self._current_frame_fps()
         frame_sec = 1.0 / fps
         current_global = float(getattr(self.timeline.canvas, 'playhead_sec', 0.0) or 0.0)
-        new_global = max(0.0, current_global + (direction * frame_sec))
+        new_global = self._snap_to_frame(max(0.0, current_global + (direction * frame_sec)))
+        if hasattr(self.video_player, 'pause_video'):
+            self.video_player.pause_video()
         if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
             ctx = self._resolve_active_context(global_sec=new_global)
-            self._apply_active_context(ctx, autoplay=False, show_thumbnail=True)
+            clip_file = str(ctx.get('clip_file', '') or '')
+            current_path = str(getattr(self.video_player, '_current_source_path', '') or '')
+            same_source = bool(clip_file and current_path) and os.path.normpath(clip_file) == os.path.normpath(current_path)
+            if same_source:
+                if hasattr(self.timeline, 'canvas'):
+                    self.timeline.canvas._active_clip_idx = int(ctx.get('clip_idx', 0) or 0)
+                if hasattr(self.video_player, 'frame_step_seek'):
+                    self.video_player.frame_step_seek(float(ctx.get('local_sec', new_global) or 0.0))
+                else:
+                    self.video_player.seek_direct(float(ctx.get('local_sec', new_global) or 0.0))
+            else:
+                self._apply_active_context(ctx, autoplay=False, show_thumbnail=False)
         else:
-            self.video_player.pause_video()
-            self.video_player.seek_direct(new_global)
+            if hasattr(self.video_player, 'frame_step_seek'):
+                self.video_player.frame_step_seek(new_global)
+            else:
+                self.video_player.seek_direct(new_global)
         segs = self._get_current_segments()
         seg = find_segment_at(segs, new_global, skip_gap=False)
         if seg and self._active_seg_start != seg["start"]:
@@ -244,6 +287,8 @@ class EditorTimelineVideoMixin:
         self.timeline.center_to_sec(new_global, smooth=False)
 
     def _on_seg_time_changed(self, line_num: int, new_start: float, new_end: float, edge_type: str = ""):
+        new_start = self._snap_to_frame(new_start)
+        new_end = self._snap_to_frame(new_end)
         doc = self.text_edit.document()
         cur = QTextCursor(doc)
         cur.beginEditBlock()
@@ -259,7 +304,7 @@ class EditorTimelineVideoMixin:
             return
 
         old_start = float(ud.start_sec)
-        ud.start_sec = round(float(new_start), 2)
+        ud.start_sec = new_start
 
         for idx in get_sub_block_indices(doc, line_num, old_start)[1:]:
             u = doc.findBlockByNumber(idx).userData()
@@ -300,9 +345,9 @@ class EditorTimelineVideoMixin:
                         if isinstance(nnu, SubtitleBlockData) and abs(float(new_end) - float(nnu.start_sec)) < 0.05:
                             delete_block_safely(next_block)
                         else:
-                            next_ud.start_sec = round(float(new_end), 2)
+                            next_ud.start_sec = new_end
                     else:
-                        next_ud.start_sec = round(float(new_end), 2)
+                        next_ud.start_sec = new_end
 
         self.text_edit.update_margins()
         cur.endEditBlock()
@@ -348,8 +393,8 @@ class EditorTimelineVideoMixin:
 
     def _on_gap_activated(self, gap_start: float, gap_end: float):
         self._undo_mgr.push_immediate()
-        gap_start = round(gap_start, 2)
-        gap_end = round(gap_end, 2)
+        gap_start = self._snap_to_frame(gap_start)
+        gap_end = self._snap_to_frame(gap_end)
         doc = self.text_edit.document()
         cur = QTextCursor(doc)
         cur.beginEditBlock()
@@ -407,20 +452,132 @@ class EditorTimelineVideoMixin:
 
     def _on_gap_to_segs(self, gap_start: float, gap_end: float):
         self._undo_mgr.push_immediate()
-        gap_dur = round(gap_end - gap_start, 2)
+        gap_start = self._snap_to_frame(gap_start)
+        gap_end = self._snap_to_frame(gap_end)
+        gap_dur = self._snap_to_frame(gap_end - gap_start)
         pull = float(self.settings.get("gap_pull_rate", 0.3))
         push = float(self.settings.get("gap_push_rate", 0.7))
         left = max((s for s in self.timeline.canvas.segments if s["end"] <= gap_start + 0.1), key=lambda s: s["end"], default=None)
         right = min((s for s in self.timeline.canvas.segments if s["start"] >= gap_end - 0.1), key=lambda s: s["start"], default=None)
         self.text_edit.textCursor().beginEditBlock()
         if left:
-            left["end"] = round(left["end"] + gap_dur * push, 2)
+            left["end"] = self._snap_to_frame(left["end"] + gap_dur * push)
             self._on_seg_time_changed(left.get("line", 0), left["start"], left["end"], "gap")
         if right:
-            right["start"] = round(right["start"] - gap_dur * pull, 2)
+            right["start"] = self._snap_to_frame(right["start"] - gap_dur * pull)
             self._on_seg_time_changed(right.get("line", 0), right["start"], right["end"], "gap")
 
         self.text_edit.textCursor().endEditBlock()
+        self._finalize_edit()
+
+    def _gap_part_user_data(self, kind: str, start_sec: float) -> SubtitleBlockData:
+        if kind == "gap":
+            return make_gap_ud(start_sec)
+        return SubtitleBlockData(self.settings.get("spk1_id", "00"), self._snap_to_frame(start_sec), is_gap=False)
+
+    def _find_gap_block_near(self, doc, gap_start: float):
+        for i in range(doc.blockCount()):
+            block = doc.findBlockByNumber(i)
+            ud = block.userData()
+            if isinstance(ud, SubtitleBlockData) and ud.is_gap and abs(float(ud.start_sec) - float(gap_start)) < 0.05:
+                return block
+        return None
+
+    def _find_previous_timed_block(self, doc, sec: float):
+        previous = None
+        for i in range(doc.blockCount()):
+            block = doc.findBlockByNumber(i)
+            ud = block.userData()
+            if isinstance(ud, SubtitleBlockData) and float(ud.start_sec) <= float(sec) + 0.05:
+                previous = block
+            elif isinstance(ud, SubtitleBlockData) and float(ud.start_sec) > float(sec) + 0.05:
+                break
+        return previous
+
+    def _apply_gap_generation_parts(self, gap_start: float, parts: list[tuple[str, str, float]]) -> int:
+        doc = self.text_edit.document()
+        gap_block = self._find_gap_block_near(doc, gap_start)
+        cur = QTextCursor(doc)
+
+        if gap_block is not None and gap_block.isValid():
+            first_idx = gap_block.blockNumber()
+            cur.setPosition(gap_block.position())
+            cur.select(QTextCursor.SelectionType.LineUnderCursor)
+            cur.removeSelectedText()
+            cur.insertText("\n".join(text for _, text, _ in parts))
+        else:
+            previous = self._find_previous_timed_block(doc, gap_start)
+            if previous is not None and previous.isValid():
+                cur = QTextCursor(previous)
+                cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+                first_idx = previous.blockNumber() + 1
+                for idx, (_, text, _) in enumerate(parts):
+                    cur.insertBlock()
+                    if text:
+                        cur.insertText(text)
+            else:
+                first = doc.begin()
+                first_idx = 0
+                cur.setPosition(first.position())
+                suffix = "" if (not first.isValid() or (not first.text().strip() and first.userData() is None)) else "\n"
+                cur.insertText("\n".join(text for _, text, _ in parts) + suffix)
+
+        subtitle_idx = first_idx
+        for offset, (kind, _text, start_sec) in enumerate(parts):
+            block = doc.findBlockByNumber(first_idx + offset)
+            if not block.isValid():
+                continue
+            block.setUserData(self._gap_part_user_data(kind, start_sec))
+            if kind != "gap":
+                subtitle_idx = first_idx + offset
+        return subtitle_idx
+
+    def _on_gap_generate_requested(self, gap_start: float, gap_end: float, pivot_sec: float, mode: str):
+        self._undo_mgr.push_immediate()
+        gap_start = self._snap_to_frame(gap_start)
+        gap_end = self._snap_to_frame(gap_end)
+        pivot_sec = self._snap_to_frame(pivot_sec)
+        pivot_sec = max(gap_start, min(gap_end, pivot_sec))
+        if mode == "to":
+            sub_start, sub_end = gap_start, pivot_sec
+        else:
+            sub_start, sub_end = pivot_sec, gap_end
+        if sub_end <= sub_start + max(0.02, min(0.1, 1.0 / max(1.0, self._current_frame_fps()))):
+            return
+
+        parts: list[tuple[str, str, float]] = []
+        if sub_start > gap_start + 0.02:
+            parts.append(("gap", "", gap_start))
+        parts.append(("subtitle", "새자막", sub_start))
+        if sub_end < gap_end - 0.02:
+            parts.append(("gap", "", sub_end))
+
+        cur = QTextCursor(self.text_edit.document())
+        cur.beginEditBlock()
+        subtitle_idx = self._apply_gap_generation_parts(gap_start, parts)
+        cur.endEditBlock()
+
+        block = self.text_edit.document().findBlockByNumber(subtitle_idx)
+        if block.isValid():
+            cursor = QTextCursor(block)
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+            self.text_edit.setTextCursor(cursor)
+            self._active_seg_start = sub_start
+            timeline = getattr(self, "timeline", None)
+            if timeline is not None:
+                if hasattr(timeline, "set_active"):
+                    timeline.set_active(sub_start)
+                if hasattr(timeline, "set_playhead"):
+                    timeline.set_playhead(sub_start)
+                if hasattr(timeline, "center_to_sec"):
+                    timeline.center_to_sec(sub_start, smooth=True)
+            video_player = getattr(self, "video_player", None)
+            if video_player is not None and hasattr(video_player, "seek"):
+                video_player.seek(self._global_to_local_sec(sub_start) if hasattr(self, "_global_to_local_sec") else sub_start)
+        if hasattr(self.text_edit, "update_margins"):
+            self.text_edit.update_margins()
+        if hasattr(self.text_edit, "timestampArea"):
+            self.text_edit.timestampArea.update()
         self._finalize_edit()
 
     def _on_diamond_merge(self, left_line: int, right_line: int):
@@ -476,7 +633,8 @@ class EditorTimelineVideoMixin:
 
         seg_start = float(ud.start_sec)
         spk_id = ud.spk_id
-        split_sec = float(split_sec)
+        seg_start = self._snap_to_frame(seg_start)
+        split_sec = self._snap_to_frame(split_sec)
         if split_sec <= seg_start + 0.05: return
 
         sub_indices = get_sub_block_indices(doc, block.blockNumber(), seg_start)
@@ -501,25 +659,25 @@ class EditorTimelineVideoMixin:
 
         if new_on_left:
             cur.insertText("새자막")
-            cur.block().setUserData(SubtitleBlockData(spk_id, round(seg_start, 2), is_gap=False))
+            cur.block().setUserData(SubtitleBlockData(spk_id, seg_start, is_gap=False))
             cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
             cur.insertBlock()
             cur.insertText(original_text)
-            cur.block().setUserData(SubtitleBlockData(spk_id, round(split_sec, 2), is_gap=False))
+            cur.block().setUserData(SubtitleBlockData(spk_id, split_sec, is_gap=False))
         else:
             cur.insertText(original_text)
-            cur.block().setUserData(SubtitleBlockData(spk_id, round(seg_start, 2), is_gap=False))
+            cur.block().setUserData(SubtitleBlockData(spk_id, seg_start, is_gap=False))
             cur.movePosition(QTextCursor.MoveOperation.EndOfBlock)
             cur.insertBlock()
             cur.insertText("새자막")
-            cur.block().setUserData(SubtitleBlockData(spk_id, round(split_sec, 2), is_gap=False))
+            cur.block().setUserData(SubtitleBlockData(spk_id, split_sec, is_gap=False))
 
         cur.endEditBlock()
 
         self._sync_lock = True
         cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
         self.text_edit.setTextCursor(cur)
-        self._active_seg_start = round(split_sec, 2)
+        self._active_seg_start = split_sec
         if hasattr(self, 'timeline'):
             self.timeline.set_active(self._active_seg_start)
             self.timeline.center_to_sec(split_sec, smooth=True)

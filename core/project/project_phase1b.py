@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any
 
 from core.project.project_context import build_editor_state
-from core.project.project_manager import build_model_settings_snapshot
+from core.project.project_manager import build_model_settings_snapshot, _augment_project_frame_metadata
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 
 PROJECT_SCHEMA_VERSION = '03.00.26'
@@ -154,6 +154,7 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
             {'order': i, 'path': path, 'type': 'video', 'duration': 0.0, 'offset': 0.0}
             for i, path in enumerate(media_files)
         ]
+    _augment_project_frame_metadata(data)
     with open(project_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     return project_path

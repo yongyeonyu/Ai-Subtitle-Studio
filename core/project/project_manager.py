@@ -1,4 +1,4 @@
-# Version: 03.01.37
+# Version: 03.06.19
 # Phase: PHASE2
 """
 core/project_manager.py
@@ -19,6 +19,7 @@ from typing import List, Optional
 
 from core.project.project_context import build_editor_state
 from core.media_info import probe_media
+from core.frame_time import frame_count, frame_duration, frame_to_sec, normalize_fps, sec_to_frame
 from core.work_mode import normalize_work_mode
 
 PROJECT_SCHEMA_VERSION = "03.00.26"
@@ -82,6 +83,185 @@ def _get_media_duration(filepath: str) -> float:
         return float(probe_media(filepath).get("duration", 0.0) or 0.0)
     except Exception:
         return 0.0
+
+
+def _get_media_probe(filepath: str) -> dict:
+    try:
+        return dict(probe_media(filepath) or {})
+    except Exception:
+        return {}
+
+
+def _clip_frame_fields(timeline_start: float, timeline_end: float, fps: float, timeline_fps: float) -> dict:
+    duration = max(0.0, float(timeline_end) - float(timeline_start))
+    source_fps = normalize_fps(fps)
+    timeline_fps = normalize_fps(timeline_fps)
+    timeline_start_frame = sec_to_frame(timeline_start, timeline_fps)
+    timeline_end_frame = sec_to_frame(timeline_end, timeline_fps)
+    source_frame_count = frame_count(duration, source_fps)
+    return {
+        "fps": source_fps,
+        "source_frame_rate": source_fps,
+        "timeline_frame_rate": timeline_fps,
+        "frame_duration": frame_duration(source_fps),
+        "timeline_frame_duration": frame_duration(timeline_fps),
+        "source_frame_count": source_frame_count,
+        "timeline_start_frame": timeline_start_frame,
+        "timeline_end_frame": timeline_end_frame,
+        "start_frame": timeline_start_frame,
+        "end_frame": timeline_end_frame,
+        "source_start_frame": 0,
+        "source_end_frame": source_frame_count,
+        "in_frame": 0,
+        "out_frame": source_frame_count,
+        "frame_map": {
+            "canonical_unit": "frame",
+            "timeline_start_frame": timeline_start_frame,
+            "timeline_end_frame": timeline_end_frame,
+            "source_start_frame": 0,
+            "source_end_frame": source_frame_count,
+            "timeline_frame_rate": timeline_fps,
+            "source_frame_rate": source_fps,
+        },
+    }
+
+
+def _augment_project_frame_metadata(project: dict):
+    clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", []) or []
+    first_info = {}
+    if clips:
+        first_path = str(clips[0].get("source_path", "") or "")
+        first_info = _get_media_probe(first_path) if first_path else {}
+    primary_fps = normalize_fps(clips[0].get("fps") or first_info.get("fps") if clips else 30.0)
+
+    for clip in clips:
+        path = str(clip.get("source_path", "") or "")
+        info = _get_media_probe(path) if path else {}
+        fps = normalize_fps(clip.get("fps") or info.get("fps") or 30.0)
+        start = float(clip.get("timeline_start", 0.0) or 0.0)
+        end = float(clip.get("timeline_end", start) or start)
+        clip.update(_clip_frame_fields(start, end, fps, primary_fps))
+
+    total_duration = float(project.get("timeline", {}).get("total_duration", 0.0) or 0.0)
+    total_frames = frame_count(total_duration, primary_fps)
+    project.setdefault("timeline", {})
+    project["timeline"]["timebase"] = {
+        "unit": "frame",
+        "canonical_unit": "frame",
+        "mode": "per_clip_frame",
+        "primary_fps": primary_fps,
+        "frame_duration": frame_duration(primary_fps),
+        "timeline_start_frame": 0,
+        "timeline_end_frame": total_frames,
+        "total_frames": total_frames,
+        "seconds_are_derived": True,
+        "time_fields_are_compatibility": True,
+        "frame_to_seconds": "frame / primary_fps",
+        "seconds_to_frame": "floor(seconds * primary_fps)",
+        "clips": [
+            {
+                "id": clip.get("id", ""),
+                "order": int(clip.get("order", idx) or idx),
+                "timeline_start_frame": int(clip.get("timeline_start_frame", 0) or 0),
+                "timeline_end_frame": int(clip.get("timeline_end_frame", 0) or 0),
+                "source_start_frame": int(clip.get("source_start_frame", 0) or 0),
+                "source_end_frame": int(clip.get("source_end_frame", clip.get("source_frame_count", 0)) or 0),
+                "source_frame_rate": normalize_fps(clip.get("source_frame_rate", clip.get("fps", primary_fps))),
+            }
+            for idx, clip in enumerate(clips)
+        ],
+    }
+    project["frame_timebase"] = dict(project["timeline"]["timebase"])
+
+    media = project.get("media", []) or []
+    clip_by_path = {str(c.get("source_path", "")): c for c in clips}
+    for item in media:
+        clip = clip_by_path.get(str(item.get("path", "")))
+        if not clip:
+            continue
+        fps = normalize_fps(clip.get("fps"))
+        item["fps"] = fps
+        item["frame_duration"] = frame_duration(fps)
+        item["frame_count"] = int(clip.get("source_frame_count", 0) or 0)
+        item["offset_frame"] = int(clip.get("timeline_start_frame", 0) or 0)
+        item["timeline_start_frame"] = int(clip.get("timeline_start_frame", 0) or 0)
+        item["timeline_end_frame"] = int(clip.get("timeline_end_frame", 0) or 0)
+
+    subtitles = project.get("subtitles", {}) or {}
+    for seg in subtitles.get("segments", []) or []:
+        existing_start_frame = seg.get("start_frame", seg.get("timeline_start_frame"))
+        existing_end_frame = seg.get("end_frame", seg.get("timeline_end_frame"))
+        if existing_start_frame is not None:
+            t_start = frame_to_sec(existing_start_frame, primary_fps)
+        else:
+            t_start = float(seg.get("timeline_start", seg.get("start", 0.0)) or 0.0)
+        if existing_end_frame is not None:
+            t_end = frame_to_sec(existing_end_frame, primary_fps)
+        else:
+            t_end = float(seg.get("timeline_end", seg.get("end", t_start)) or t_start)
+        clip = next(
+            (
+                c for c in clips
+                if float(c.get("timeline_start", 0.0) or 0.0) <= t_start < float(c.get("timeline_end", 0.0) or 0.0) - 0.000001
+            ),
+            clips[-1] if clips else None,
+        )
+        fps = normalize_fps(clip.get("fps") if clip else primary_fps)
+        offset = float(clip.get("timeline_start", 0.0) or 0.0) if clip else 0.0
+        seg["timeline_start_frame"] = sec_to_frame(t_start, primary_fps)
+        seg["timeline_end_frame"] = sec_to_frame(t_end, primary_fps)
+        seg["start_frame"] = seg["timeline_start_frame"]
+        seg["end_frame"] = seg["timeline_end_frame"]
+        seg["clip_local_start_frame"] = sec_to_frame(max(0.0, t_start - offset), fps)
+        seg["clip_local_end_frame"] = sec_to_frame(max(0.0, t_end - offset), fps)
+        seg["frame_rate"] = primary_fps
+        seg["timeline_frame_rate"] = primary_fps
+        seg["source_frame_rate"] = fps
+        seg["timeline_start"] = frame_to_sec(seg["start_frame"], primary_fps)
+        seg["timeline_end"] = frame_to_sec(seg["end_frame"], primary_fps)
+        seg["start"] = seg["timeline_start"]
+        seg["end"] = seg["timeline_end"]
+        seg["frame_range"] = {
+            "unit": "frame",
+            "start": seg["start_frame"],
+            "end": seg["end_frame"],
+            "clip_local_start": seg["clip_local_start_frame"],
+            "clip_local_end": seg["clip_local_end_frame"],
+            "timeline_frame_rate": primary_fps,
+            "source_frame_rate": fps,
+        }
+
+    editor_state = project.get("editor_state")
+    if isinstance(editor_state, dict):
+        editor_state["frame_timebase"] = dict(project["timeline"]["timebase"])
+        editor_subtitles = editor_state.get("subtitles", {}) or {}
+        for seg in editor_subtitles.get("segments", []) or []:
+            existing_start_frame = seg.get("start_frame", seg.get("timeline_start_frame"))
+            existing_end_frame = seg.get("end_frame", seg.get("timeline_end_frame"))
+            if existing_start_frame is not None:
+                t_start = frame_to_sec(existing_start_frame, primary_fps)
+            else:
+                t_start = float(seg.get("start", seg.get("timeline_start", 0.0)) or 0.0)
+            if existing_end_frame is not None:
+                t_end = frame_to_sec(existing_end_frame, primary_fps)
+            else:
+                t_end = float(seg.get("end", seg.get("timeline_end", t_start)) or t_start)
+            start_frame = sec_to_frame(t_start, primary_fps)
+            end_frame = sec_to_frame(t_end, primary_fps)
+            seg["start_frame"] = start_frame
+            seg["end_frame"] = end_frame
+            seg["timeline_start_frame"] = start_frame
+            seg["timeline_end_frame"] = end_frame
+            seg["frame_rate"] = primary_fps
+            seg["timeline_frame_rate"] = primary_fps
+            seg["start"] = frame_to_sec(start_frame, primary_fps)
+            seg["end"] = frame_to_sec(end_frame, primary_fps)
+            seg["frame_range"] = {
+                "unit": "frame",
+                "start": start_frame,
+                "end": end_frame,
+                "timeline_frame_rate": primary_fps,
+            }
 
 
 def build_model_settings_snapshot(settings: Optional[dict]) -> dict:
@@ -159,7 +339,9 @@ def create_project(
         for i, path in enumerate(media_paths):
             ext = os.path.splitext(path)[1].lower()
             m_type = "audio" if ext in {".wav", ".m4a", ".mp3", ".aac", ".m2a"} else "video"
-            dur = _get_media_duration(path)
+            info = _get_media_probe(path)
+            dur = float(info.get("duration", 0.0) or 0.0)
+            fps = normalize_fps(info.get("fps", 0.0) or 30.0)
 
             clips.append({
                 "id": _make_clip_id(),
@@ -170,6 +352,7 @@ def create_project(
                 "out_point": dur,
                 "timeline_start": cumulative,
                 "timeline_end": cumulative + dur,
+                "fps": fps,
                 "order": i
             })
             cumulative += dur
@@ -290,6 +473,7 @@ def create_project(
         filepath = os.path.join(PROJECTS_DIR, f"{name}_{counter}.json")
         counter += 1
 
+    _augment_project_frame_metadata(project)
     _write_json(filepath, project)
     return filepath
 
@@ -324,7 +508,9 @@ def save_project(
         for i, path in enumerate(media_paths):
             ext = os.path.splitext(path)[1].lower()
             m_type = "audio" if ext in {".wav", ".m4a", ".mp3", ".aac", ".m2a"} else "video"
-            dur = _get_media_duration(path)
+            info = _get_media_probe(path)
+            dur = float(info.get("duration", 0.0) or 0.0)
+            fps = normalize_fps(info.get("fps", 0.0) or 30.0)
             clips.append({
                 "id": _make_clip_id(),
                 "source_path": path,
@@ -334,6 +520,7 @@ def save_project(
                 "out_point": dur,
                 "timeline_start": cumulative,
                 "timeline_end": cumulative + dur,
+                "fps": fps,
                 "order": i
             })
             cumulative += dur
@@ -365,11 +552,19 @@ def save_project(
     # ── 세그먼트 ──
     if segments is not None:
         clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
+        timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or {}
+        primary_fps = normalize_fps(timebase.get("primary_fps") or (clips[0].get("fps") if clips else 30.0))
         new_segs = []
 
         for i, seg in enumerate(segments):
-            t_start = seg.get("timeline_start", seg.get("start", 0.0))
-            t_end = seg.get("timeline_end", seg.get("end", 0.0))
+            if seg.get("start_frame", seg.get("timeline_start_frame")) is not None:
+                t_start = frame_to_sec(seg.get("start_frame", seg.get("timeline_start_frame")), primary_fps)
+            else:
+                t_start = seg.get("timeline_start", seg.get("start", 0.0))
+            if seg.get("end_frame", seg.get("timeline_end_frame")) is not None:
+                t_end = frame_to_sec(seg.get("end_frame", seg.get("timeline_end_frame")), primary_fps)
+            else:
+                t_end = seg.get("timeline_end", seg.get("end", 0.0))
 
             clip_id = ""
             cl_start = t_start
@@ -402,6 +597,20 @@ def save_project(
                 "dictated_text": seg.get("dictated_text", ""),
             }
             for key in ("quality", "quality_history", "quality_candidates", "quality_stale"):
+                if key in seg:
+                    new_seg[key] = seg.get(key)
+            for key in (
+                "start_frame",
+                "end_frame",
+                "timeline_start_frame",
+                "timeline_end_frame",
+                "clip_local_start_frame",
+                "clip_local_end_frame",
+                "frame_rate",
+                "timeline_frame_rate",
+                "source_frame_rate",
+                "frame_range",
+            ):
                 if key in seg:
                     new_seg[key] = seg.get(key)
             new_segs.append(new_seg)
@@ -484,6 +693,7 @@ def save_project(
     else:
         project.setdefault("roughcut_state", project.get("roughcut_state", {}) or {})
 
+    _augment_project_frame_metadata(project)
     _write_json(filepath, project)
 
 
@@ -566,7 +776,9 @@ def add_media_to_project(filepath: str, new_paths: list):
         max_order += 1
         ext = os.path.splitext(path)[1].lower()
         m_type = "audio" if ext in {".wav", ".m4a", ".mp3", ".aac", ".m2a"} else "video"
-        dur = _get_media_duration(path)
+        info = _get_media_probe(path)
+        dur = float(info.get("duration", 0.0) or 0.0)
+        fps = normalize_fps(info.get("fps", 0.0) or 30.0)
         clips.append({
             "id": _make_clip_id(),
             "source_path": path,
@@ -576,6 +788,7 @@ def add_media_to_project(filepath: str, new_paths: list):
             "out_point": dur,
             "timeline_start": cumulative,
             "timeline_end": cumulative + dur,
+            "fps": fps,
             "order": max_order
         })
         cumulative += dur
@@ -625,6 +838,7 @@ def add_media_to_project(filepath: str, new_paths: list):
     project.setdefault("roughcut_state", {})
 
     project["updated_at"] = datetime.now().isoformat()
+    _augment_project_frame_metadata(project)
     _write_json(filepath, project)
 
 
@@ -695,6 +909,7 @@ def merge_srt_to_project(filepath: str) -> int | None:
     )
     project.setdefault("roughcut_state", {})
     project["updated_at"] = datetime.now().isoformat()
+    _augment_project_frame_metadata(project)
     _write_json(filepath, project)
 
     return len(all_segments)

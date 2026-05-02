@@ -1,5 +1,5 @@
-# Version: 03.01.05
-# Phase: PHASE1-B
+# Version: 03.06.20
+# Phase: PHASE2
 """
 ui/timeline_inline_edit.py
 Timeline inline edit mixin
@@ -13,8 +13,28 @@ import config
 from ui.timeline.timeline_constants import HANDLE_R, SEG_BOT, SEG_TOP
 
 
+NEW_SUBTITLE_PLACEHOLDER = "새자막"
+
+
 class TimelineInlineEditMixin:
+    def _inline_edit_repaint_rect(self, line_num=None) -> QRect:
+        line = self._edit_line if line_num is None else line_num
+        rect = QRect()
+        if hasattr(self, "_segment_repaint_rect_for_line"):
+            rect = self._segment_repaint_rect_for_line(int(line), margin=110)
+        if getattr(self, "_is_listening", False):
+            rect = rect.adjusted(0, 0, 180, 0)
+        return rect
+
+    def _update_inline_edit_region(self, line_num=None):
+        rect = self._inline_edit_repaint_rect(line_num)
+        if hasattr(self, "_update_dirty_rect"):
+            self._update_dirty_rect(rect)
+        else:
+            self.update()
+
     def start_inline_edit(self, line_num, start_sec):
+        old_line = getattr(self, "_edit_line", -1)
         self.active_seg_start = start_sec
 
         seg = next((s for s in self.segments if s.get("line") == line_num), None)
@@ -22,11 +42,21 @@ class TimelineInlineEditMixin:
             return
 
         text = seg.get("text", "")
+        clear_placeholder = str(text or "").strip() == NEW_SUBTITLE_PLACEHOLDER
 
         self._edit_active = True
         self._edit_line = line_num
-        self._edit_text = text
-        self._edit_orig = text
+        self._edit_text = "" if clear_placeholder else text
+        self._edit_orig = "" if clear_placeholder else text
+
+        if clear_placeholder:
+            seg["text"] = ""
+            self._inline_commit_in_progress = True
+            try:
+                self.sig_inline_text_changed.emit(line_num, "")
+            finally:
+                self._inline_commit_in_progress = False
+            text = ""
 
         click_x = getattr(self, "_last_click_x", None)
         click_y = getattr(self, "_last_click_y", None)
@@ -66,12 +96,18 @@ class TimelineInlineEditMixin:
         self._cursor_vis = True
         self._cursor_timer.start()
         self.sig_editing_mode.emit(True)
-        self.update()
+        dirty = self._inline_edit_repaint_rect(line_num)
+        if old_line >= 0:
+            dirty = dirty.united(self._inline_edit_repaint_rect(old_line))
+        if hasattr(self, "_update_dirty_rect"):
+            self._update_dirty_rect(dirty)
+        else:
+            self.update()
 
     def _blink_cursor(self):
         if self._edit_active:
             self._cursor_vis = not self._cursor_vis
-            self.update()
+            self._update_inline_edit_region()
 
     def _commit_inline_edit(self):
         if not self._edit_active:
@@ -91,7 +127,11 @@ class TimelineInlineEditMixin:
                 seg["text"] = self._edit_text
                 break
 
-        self.sig_inline_text_changed.emit(line, safe_for_editor)
+        self._inline_commit_in_progress = True
+        try:
+            self.sig_inline_text_changed.emit(line, safe_for_editor)
+        finally:
+            self._inline_commit_in_progress = False
 
         if hasattr(self, "_pending_split_sec"):
             del self._pending_split_sec
@@ -99,13 +139,14 @@ class TimelineInlineEditMixin:
         self._end_inline_edit()
 
     def _end_inline_edit(self):
+        line = self._edit_line
         self._edit_active = False
         self._edit_line = -1
         self._edit_text = ""
         self._edit_orig = ""
         self._cursor_timer.stop()
         self.sig_editing_mode.emit(False)
-        self.update()
+        self._update_inline_edit_region(line)
         self.setFocus()
 
     def _handle_edit_key(self, ev):
@@ -134,12 +175,12 @@ class TimelineInlineEditMixin:
             if key == Qt.Key.Key_Left:
                 self._edit_cursor = 0
                 self._cursor_vis = True
-                self.update()
+                self._update_inline_edit_region()
                 return
             if key == Qt.Key.Key_Right:
                 self._edit_cursor = len(self._edit_text)
                 self._cursor_vis = True
-                self.update()
+                self._update_inline_edit_region()
                 return
 
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -149,12 +190,16 @@ class TimelineInlineEditMixin:
             else:
                 if hasattr(self, "_pending_split_sec"):
                     safe_text = self._edit_text.replace("\n", "\u2028")
-                    self.sig_inline_text_changed.emit(self._edit_line, safe_text)
-                    self.sig_split_request.emit(
-                        int(self._edit_line),
-                        float(self._pending_split_sec),
-                        int(self._edit_cursor),
-                    )
+                    self._inline_commit_in_progress = True
+                    try:
+                        self.sig_inline_text_changed.emit(self._edit_line, safe_text)
+                        self.sig_split_request.emit(
+                            int(self._edit_line),
+                            float(self._pending_split_sec),
+                            int(self._edit_cursor),
+                        )
+                    finally:
+                        self._inline_commit_in_progress = False
                     del self._pending_split_sec
                     self._end_inline_edit()
                     return
@@ -224,7 +269,7 @@ class TimelineInlineEditMixin:
             self.sig_inline_text_changed.emit(self._edit_line, safe_text)
 
         self._cursor_vis = True
-        self.update()
+        self._update_inline_edit_region()
 
     def _cancel_inline_edit(self):
         if not self._edit_active:
@@ -236,7 +281,11 @@ class TimelineInlineEditMixin:
                 break
 
         safe_orig = self._edit_orig.replace("\n", "\u2028")
-        self.sig_inline_text_changed.emit(self._edit_line, safe_orig)
+        self._inline_commit_in_progress = True
+        try:
+            self.sig_inline_text_changed.emit(self._edit_line, safe_orig)
+        finally:
+            self._inline_commit_in_progress = False
 
         if hasattr(self, "_pending_split_sec"):
             del self._pending_split_sec
@@ -267,7 +316,7 @@ class TimelineInlineEditMixin:
             self.sig_inline_text_changed.emit(self._edit_line, safe_text)
 
         self._cursor_vis = True
-        self.update()
+        self._update_inline_edit_region()
 
     def inputMethodQuery(self, query):
         from PyQt6.QtCore import Qt as _Qt
@@ -411,7 +460,7 @@ class TimelineInlineEditMixin:
 
         self._is_listening = True
         self._speech_stop_requested = False
-        self.update()
+        self._update_inline_edit_region()
 
         def _listen():
             try:
@@ -438,14 +487,14 @@ class TimelineInlineEditMixin:
             finally:
                 self._is_listening = False
                 self._speech_stop_requested = False
-                QTimer.singleShot(0, self.update)
+                QTimer.singleShot(0, self._update_inline_edit_region)
 
         threading.Thread(target=_listen, daemon=True).start()
 
     def _stop_listening(self):
         self._speech_stop_requested = True
         self._is_listening = False
-        self.update()
+        self._update_inline_edit_region()
 
     def _on_speech_result(self, text):
         if not self._edit_active:
@@ -463,4 +512,4 @@ class TimelineInlineEditMixin:
         safe_text = self._edit_text.replace("\n", "\u2028")
         self.sig_inline_text_changed.emit(self._edit_line, safe_text)
         self._cursor_vis = True
-        self.update()
+        self._update_inline_edit_region()

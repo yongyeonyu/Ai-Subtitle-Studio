@@ -4,7 +4,7 @@
 
 AI 기반 자막 생성, 자막 편집, 화자 분리, 멀티클립 처리, 러프컷 분석을 하나의 데스크톱 작업 흐름으로 연결하는 영상 자막 제작 도구입니다.
 
-[![Version](https://img.shields.io/badge/version-v03.06.00-0A84FF?style=for-the-badge)](#)
+[![Version](https://img.shields.io/badge/version-v03.07.00-0A84FF?style=for-the-badge)](#)
 [![Phase](https://img.shields.io/badge/phase-PHASE2-30D158?style=for-the-badge)](#)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
@@ -26,7 +26,7 @@ AI Subtitle Studio는 긴 영상 작업에서 반복되는 자막 생성, 보정
 
 | 항목 | 내용 |
 | --- | --- |
-| 현재 버전 | `v03.06.00` |
+| 현재 버전 | `v03.07.00` |
 | 개발 단계 | `PHASE2` |
 | 기본 브랜치 | `main` |
 | 지원 목표 | macOS, Windows |
@@ -239,7 +239,8 @@ PY
 | 문서 | 설명 |
 | --- | --- |
 | `File_structure.txt` | 현재 파일 구조 |
-| [`RELEASE_v03.06.00.md`](RELEASE_v03.06.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.07.00.md`](RELEASE_v03.07.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.06.00.md`](RELEASE_v03.06.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.05.00.md`](RELEASE_v03.05.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.04.00.md`](RELEASE_v03.04.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.03.00.md`](RELEASE_v03.03.00.md) | 이전 PHASE2 릴리즈 노트 |
@@ -250,15 +251,15 @@ PY
 
 ## 릴리즈 노트
 
-전체 최신 릴리즈 노트는 [`RELEASE_v03.06.00.md`](RELEASE_v03.06.00.md)를 참고하세요.
+전체 최신 릴리즈 노트는 [`RELEASE_v03.07.00.md`](RELEASE_v03.07.00.md)를 참고하세요.
 
-### 최신 릴리즈: v03.06.00
+### 최신 릴리즈: v03.07.00
 
-- RNNoise, Resemble Enhance, ClearVoice, TEN VAD 후보를 앱 설정과 실행 경로에 연결했습니다.
-- Hugging Face Token을 보안 저장소에 저장하고 Transformers/HF Hub 요청에 주입하도록 했습니다.
-- STT1/STT2 앙상블을 단어 단위 ROVER 계열 병합과 저신뢰 교체 정책으로 강화했습니다.
-- 자막 시간은 Whisper 단어 timestamp와 VAD 음성 섬을 우선해 확정하고, `간격` 설정은 보조 조건으로 사용합니다.
-- 재시작/홈 이동 시 캔버스 잔상, 진행 중 STT/LLM, Ollama 로컬 모델을 정리하도록 안정화했습니다.
+- 자막 편집/재생 기준을 프로젝트 프레임 번호 중심으로 정리하고, 프로젝트 JSON에 frame timebase metadata를 저장합니다.
+- 비디오, 플레이헤드, 자막 에디터, 타임라인 세그먼트가 동일한 프레임 맵 기준으로 동기화되도록 보강했습니다.
+- 타임라인/글로벌 캔버스, 자막 에디터 viewport, 비디오 자막 overlay가 GPU/OpenGL-backed surface를 사용하도록 렌더링 경로를 재구성했습니다.
+- 비디오 재생 중 자막 overlay와 provider 갱신을 최소화해 재생 끊김을 줄였습니다.
+- 재시작, 홈 이동, 에디터 모드 전환, waveform worker 종료 등 백그라운드 정리 경로를 안정화했습니다.
 
 ## 보안
 

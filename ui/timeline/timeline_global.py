@@ -1,5 +1,5 @@
-# Version: 03.02.11
-# Phase: PHASE1-D
+# Version: 03.06.21
+# Phase: PHASE2
 """
 ui/timeline_global.py
 Global timeline minimap
@@ -7,16 +7,12 @@ Global timeline minimap
 import numpy as np
 from PyQt6.QtCore import QRect, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
-from PyQt6.QtWidgets import QSizePolicy, QWidget
+from PyQt6.QtWidgets import QSizePolicy
 
 import config
 from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
 from ui.timeline.timeline_analysis import analysis_markers_for_widget
-from ui.gpu_rendering import (
-    accelerated_widget_base,
-    configure_lightweight_paint,
-    configure_opengl_widget,
-)
+from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
 
 GlobalCanvasBase = accelerated_widget_base()
 
@@ -32,6 +28,7 @@ class GlobalCanvas(GlobalCanvasBase):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         configure_lightweight_paint(self, opaque=True)
         configure_opengl_widget(self)
+        self.render_backend = gpu_backend_name()
 
         self.segments = []
         self.view_start = 0.0

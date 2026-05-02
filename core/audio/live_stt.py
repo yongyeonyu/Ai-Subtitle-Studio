@@ -212,6 +212,22 @@ def _transcribe_mlx(wav_path: str, model: str) -> str:
     return ""
 
 
+def stop_live_stt_worker() -> bool:
+    global _LIVE_MLX_PROC
+    with _LIVE_MLX_LOCK:
+        proc = _LIVE_MLX_PROC
+        _LIVE_MLX_PROC = None
+        if not proc:
+            return False
+        try:
+            from core.audio.whisper_mlx import stop_worker
+
+            stop_worker(proc)
+            return True
+        except Exception:
+            return False
+
+
 def _transcribe_faster(wav_path: str, model: str) -> str:
     from core.audio.whisper_faster import run_whisper
 

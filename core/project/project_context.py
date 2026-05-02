@@ -1,4 +1,4 @@
-# Version: 03.01.25
+# Version: 03.06.19
 # Phase: PHASE2
 """
 core/project/project_context.py
@@ -11,12 +11,20 @@ import json
 import os
 from typing import Any
 
+from core.frame_time import frame_to_sec, normalize_fps
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
     except (TypeError, ValueError):
         return default
 
@@ -106,11 +114,20 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
     boundaries = project_clip_boundaries(project)
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", []) or []
     clip_by_id = {str(clip.get("id", "")): clip for clip in clips if clip.get("id")}
+    timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
+    primary_fps = normalize_fps(timebase.get("primary_fps", 30.0) or 30.0)
 
     out = []
     for idx, seg in enumerate(raw_segments or []):
         start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
         end = _safe_float(seg.get("end", seg.get("timeline_end", start)), start)
+        frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+        start_frame = seg.get("start_frame", seg.get("timeline_start_frame", frame_range.get("start")))
+        end_frame = seg.get("end_frame", seg.get("timeline_end_frame", frame_range.get("end")))
+        if start_frame is not None:
+            start = frame_to_sec(start_frame, primary_fps)
+        if end_frame is not None:
+            end = frame_to_sec(end_frame, primary_fps)
         clip_file = str(seg.get("_clip_file", "") or "")
         clip_idx = seg.get("_clip_idx")
 
@@ -141,6 +158,20 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
             "stt_pending": bool(seg.get("stt_pending", False)),
             "original_text": str(seg.get("original_text", "") or ""),
             "dictated_text": str(seg.get("dictated_text", "") or ""),
+        }
+        if start_frame is not None:
+            item["start_frame"] = _safe_int(start_frame)
+            item["timeline_start_frame"] = _safe_int(start_frame)
+        if end_frame is not None:
+            item["end_frame"] = _safe_int(end_frame)
+            item["timeline_end_frame"] = _safe_int(end_frame)
+        item["frame_rate"] = primary_fps
+        item["timeline_frame_rate"] = primary_fps
+        item["frame_range"] = {
+            "unit": "frame",
+            "start": item.get("start_frame"),
+            "end": item.get("end_frame"),
+            "timeline_frame_rate": primary_fps,
         }
         if clip_idx is not None:
             item["_clip_idx"] = int(clip_idx)
@@ -224,7 +255,25 @@ def _normalize_editor_segments(segments: list[dict[str, Any]]) -> list[dict[str,
             "original_text": str(seg.get("original_text", "") or ""),
             "dictated_text": str(seg.get("dictated_text", "") or ""),
         }
-        for key in ("_clip_idx", "_clip_file", "words", "quality", "quality_history", "quality_candidates", "quality_stale"):
+        for key in (
+            "_clip_idx",
+            "_clip_file",
+            "words",
+            "quality",
+            "quality_history",
+            "quality_candidates",
+            "quality_stale",
+            "start_frame",
+            "end_frame",
+            "timeline_start_frame",
+            "timeline_end_frame",
+            "clip_local_start_frame",
+            "clip_local_end_frame",
+            "frame_rate",
+            "timeline_frame_rate",
+            "source_frame_rate",
+            "frame_range",
+        ):
             if key in seg:
                 item[key] = seg.get(key)
         out.append(item)
