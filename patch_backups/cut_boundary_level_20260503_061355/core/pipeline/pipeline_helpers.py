@@ -82,8 +82,6 @@ class PipelineHelpersMixin:
                 "scan_cut_auto_threshold": settings.get("scan_cut_auto_threshold", settings.get("scan_cut_threshold", 24.0)),
                 "scan_cut_threshold": settings.get("scan_cut_threshold", 24.0),
                 "scan_cut_mode": settings.get("scan_cut_mode", ""),
-                "scan_cut_boundary_level": settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")),
-                "scan_cut_grid_mask": settings.get("scan_cut_grid_mask", ""),
             },
         }
 
@@ -182,8 +180,6 @@ class PipelineHelpersMixin:
                     "scan_cut_auto_threshold": settings.get("scan_cut_auto_threshold", settings.get("scan_cut_threshold", 24.0)),
                     "scan_cut_threshold": settings.get("scan_cut_threshold", 24.0),
                     "scan_cut_mode": settings.get("scan_cut_mode", ""),
-                "scan_cut_boundary_level": settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")),
-                "scan_cut_grid_mask": settings.get("scan_cut_grid_mask", ""),
                 },
                 # ✅ 핵심: 프로젝트 전체가 아니라 컷 경계 데이터만 저장
                 "analysis": {
@@ -236,296 +232,6 @@ class PipelineHelpersMixin:
             get_logger().log(f"  ⚠️ [컷 경계] STT 시작 전 대기 실패: {exc}")
 
 
-    def _cut_boundary_sec_from_row(self, row) -> float | None:
-        try:
-            if isinstance(row, dict):
-                return float(row.get("timeline_sec", row.get("time", row.get("start", 0.0))) or 0.0)
-            return float(row)
-        except Exception:
-            return None
-
-    def _cut_boundary_placeholder_duration(self, files=None) -> float:
-        try:
-            if hasattr(self, "_cut_boundary_total_duration_for_start"):
-                return float(self._cut_boundary_total_duration_for_start(list(files or [])) or 0.0)
-        except Exception:
-            pass
-        try:
-            clip_boundaries = list(getattr(self.ui, "_multiclip_boundaries", []) or [])
-            if clip_boundaries:
-                return max(float(x.get("end", 0.0) or 0.0) for x in clip_boundaries)
-        except Exception:
-            pass
-        try:
-            vp = getattr(self, "video_processor", None)
-            if vp is not None and files:
-                return float(vp._media_duration_for_progress(list(files or [])[0]) or 0.0)
-        except Exception:
-            pass
-        return 0.0
-
-    def _build_cut_boundary_topicless_rows(self, detected, *, files=None, done: bool = False) -> list[dict]:
-        """Build gray middle-level topicless rows from detected cut boundaries.
-
-        During scan:
-        - if first cut exists, immediately create 00:00~first_cut.
-
-        After full scan:
-        - also include last_cut~video_end.
-        """
-        cuts = []
-        for row in list(detected or []):
-            sec = self._cut_boundary_sec_from_row(row)
-            if sec is not None and sec > 0.0:
-                cuts.append(round(float(sec), 3))
-
-        cuts = sorted(set(cuts))
-        if not cuts:
-            return []
-
-        duration = self._cut_boundary_placeholder_duration(files)
-        boundaries = [0.0] + cuts
-
-        if done and duration > boundaries[-1]:
-            boundaries.append(round(duration, 3))
-
-        rows = []
-        for i in range(len(boundaries) - 1):
-            start = float(boundaries[i])
-            end = float(boundaries[i + 1])
-            if end <= start:
-                continue
-
-            seg_id = f"cut_topicless_middle_{i + 1:03d}"
-            rows.append({
-                "id": seg_id,
-                "segment_id": seg_id,
-                "chapter_id": seg_id,
-                "major_id": seg_id,
-
-                "start": round(start, 3),
-                "end": round(end, 3),
-
-                "title": "주제없음",
-                "name": "주제없음",
-                "summary": "컷 경계 기반으로 자동 생성된 임시 중분류 세그먼트입니다.",
-                "llm_summary": "",
-
-                "tags": ["컷경계", "주제없음"],
-                "source": "cut_boundary",
-                "story_role": "topicless_placeholder",
-                "narrative_function": "cut_boundary_placeholder",
-
-                # UI가 어느 키를 보든 회색 placeholder로 인식할 수 있게 넓게 저장
-                "level": "middle",
-                "segment_type": "middle",
-                "roughcut_level": "middle",
-                "category": "middle",
-                "is_middle_segment": True,
-
-                "is_topicless_placeholder": True,
-                "is_cut_boundary_placeholder": True,
-                "topicless": True,
-
-                "color_role": "topicless",
-                "display_color": "gray",
-                "ui_color": "gray",
-                "color": "#9CA3AF",
-
-                "needs_review": True,
-                "status": "needs_review",
-                "safety": "acceptable",
-                "importance": 0.0,
-                "importance_score": 0.0,
-                "boundary_confidence": 1.0,
-
-                "can_move": True,
-                "can_trim": True,
-                "can_remove": True,
-                "move_risk": "low",
-                "dependencies": [],
-            })
-
-        return rows
-
-    def _placeholder_rows_can_be_overwritten(self, rows) -> bool:
-        rows = list(rows or [])
-        if not rows:
-            return True
-
-        for row in rows:
-            if not isinstance(row, dict):
-                return False
-
-            title = str(row.get("title", row.get("name", "")) or "")
-            tags = row.get("tags", []) or []
-            if isinstance(tags, str):
-                tags = [tags]
-
-            if (
-                row.get("is_topicless_placeholder")
-                or row.get("is_cut_boundary_placeholder")
-                or row.get("source") == "cut_boundary"
-                or title == "주제없음"
-                or "컷경계" in tags
-            ):
-                continue
-
-            # 이미 LLM이 만든 실제 중분류가 있으면 자동 placeholder가 덮어쓰면 안 됨
-            return False
-
-        return True
-
-    def _force_cut_boundary_topicless_segments_to_project(
-        self,
-        project_path: str,
-        detected,
-        *,
-        files=None,
-        done: bool = False,
-    ) -> list[dict]:
-        """Persist gray topicless middle segments immediately.
-
-        This fixes the case where cut boundaries are detected but the gray
-        middle segment does not appear because only analysis.cut_boundaries
-        was saved.
-        """
-        try:
-            if not project_path or not os.path.exists(project_path):
-                return []
-
-            rows = self._build_cut_boundary_topicless_rows(
-                detected,
-                files=list(files or []),
-                done=bool(done),
-            )
-            if not rows:
-                return []
-
-            with open(project_path, "r", encoding="utf-8") as f:
-                project = json.load(f)
-
-            project.setdefault("analysis", {})
-            analysis = project["analysis"]
-
-            # 원본 컷 경계
-            analysis["cut_boundaries"] = list(detected or [])
-
-            # UI/러프컷 로더가 어떤 이름을 보든 찾을 수 있게 중복 저장
-            analysis["cut_boundary_topicless_middle_segments"] = list(rows)
-            analysis["topicless_middle_segments"] = list(rows)
-            analysis["roughcut_topicless_segments"] = list(rows)
-            analysis["middle_segments"] = list(rows)
-
-            # roughcut 계열 저장소에도 placeholder-only 상태면 즉시 반영
-            for key in ("roughcut", "roughcut_draft", "roughcut_result"):
-                box = project.setdefault(key, {})
-                if isinstance(box, dict) and self._placeholder_rows_can_be_overwritten(box.get("segments", [])):
-                    box["segments"] = list(rows)
-                    box["schema_version"] = "roughcut_result.v2"
-                    box["draft_state"] = {"status": "review"}
-
-            # 일부 UI가 top-level segments를 볼 수 있어 보조 저장
-            if self._placeholder_rows_can_be_overwritten(project.get("roughcut_segments", [])):
-                project["roughcut_segments"] = list(rows)
-            if self._placeholder_rows_can_be_overwritten(project.get("middle_segments", [])):
-                project["middle_segments"] = list(rows)
-
-            with open(project_path, "w", encoding="utf-8") as f:
-                json.dump(project, f, ensure_ascii=False, indent=2)
-
-            get_logger().log(
-                f"  ▒ [컷 경계] 주제없음 회색 중분류 세그먼트 저장 "
-                f"({len(rows)}개, done={bool(done)})"
-            )
-
-            # UI 새로고침 신호를 넓게 호출
-            for sig in (
-                "_sig_refresh_cut_boundary_placeholder",
-                "_sig_refresh_roughcut",
-                "_sig_reload_roughcut",
-                "_sig_refresh_timeline",
-                "_sig_redraw_timeline",
-            ):
-                try:
-                    self._ui_emit(sig)
-                except Exception:
-                    pass
-
-            return rows
-        except Exception as exc:
-            try:
-                get_logger().log(f"  ⚠️ [컷 경계] 주제없음 회색 중분류 저장 실패: {exc}")
-            except Exception:
-                pass
-            return []
-
-    def _emit_cut_boundary_count_to_sidebar(self, count: int, *, percent=None, done: bool = False):
-        """Update left queue/sidebar status with throttling.
-
-        Avoid logging/emitting the same status repeatedly from scan progress.
-        """
-        try:
-            count = int(count or 0)
-        except Exception:
-            count = 0
-
-        if done:
-            status = f"✅ {count} 컷 경계 완료"
-            state_key = ("done", count)
-        elif count > 0:
-            status = f"{count} 컷 경계"
-            state_key = ("count", count)
-        else:
-            if percent is None:
-                status = "컷 경계 확인 중"
-                state_key = ("progress", None)
-            else:
-                pct = max(0, min(100, int(percent or 0)))
-                # 5% 단위로만 갱신해서 0% 로그가 수십 번 찍히는 문제 방지
-                pct_bucket = (pct // 5) * 5
-                status = f"컷 경계 확인 중 {pct_bucket}%"
-                state_key = ("progress", pct_bucket)
-
-        last_key = getattr(self, "_cut_boundary_sidebar_last_key", None)
-        if last_key == state_key:
-            return
-
-        self._cut_boundary_sidebar_last_key = state_key
-
-        candidates = []
-        try:
-            cur = getattr(self.ui, "_current_file_idx", None)
-            if cur is not None:
-                candidates.append(max(0, int(cur) - 1))
-        except Exception:
-            pass
-
-        try:
-            qi = getattr(self, "_queue_index", None)
-            if qi is not None:
-                candidates.append(max(0, int(qi)))
-        except Exception:
-            pass
-
-        candidates.append(0)
-
-        seen = set()
-        for qi in candidates:
-            if qi in seen:
-                continue
-            seen.add(qi)
-            try:
-                self._ui_emit("_sig_update_queue", int(qi), status, "", "", "")
-            except Exception:
-                pass
-
-        try:
-            get_logger().log(f"  🟢 [컷 경계] 사이드바 상태 갱신: {status}")
-        except Exception:
-            pass
-
-
     def _auto_scan_cut_boundaries_for_start(self, project_path: str, files: list[str]) -> list[dict]:
         """Start cut-boundary prescan without blocking the Qt/UI thread.
 
@@ -571,14 +277,9 @@ class PipelineHelpersMixin:
                 detect_media_cut_boundaries,
                 normalize_cut_boundaries,
                 sync_project_cut_boundaries,
-                cut_boundary_scan_profile,
             )
 
             settings = load_settings()
-            try:
-                scan_profile = cut_boundary_scan_profile(settings)
-            except Exception:
-                scan_profile = {"level": "medium", "label": "중간 - 9개 중 꽉찬 십자가 5개", "mask": "x5", "positions": (0, 2, 4, 6, 8)}
             if not cut_boundary_enabled(settings):
                 get_logger().log("  🎬 [컷 경계] 비활성화되어 있어 분석을 건너뜁니다")
                 return []
@@ -594,13 +295,6 @@ class PipelineHelpersMixin:
             detected: list[dict] = []
             total_files = len(list(files or []))
             step_sec = max(0.25, float(settings.get("scan_cut_auto_sample_step_sec", 1.0) or 1.0))
-            try:
-                get_logger().log(
-                    f"  🎚️ [컷 경계] 단계: {scan_profile.get('label')} "
-                    f"(mask={scan_profile.get('mask')}, cells={len(scan_profile.get('positions', []) or [])}/9)"
-                )
-            except Exception:
-                pass
 
             # 자동 사전 스캔은 사용자가 다른 버튼을 누를 수 있어야 하므로
             # 전역 scan_active=True 신호를 보내지 않는다.
@@ -628,10 +322,6 @@ class PipelineHelpersMixin:
                 ts = float(info.get("timestamp", 0.0) or 0.0)
                 dur = float(info.get("duration", 0.0) or 0.0)
                 found = int(info.get("detected", 0) or 0)
-                try:
-                    self._emit_cut_boundary_count_to_sidebar(found, percent=pct, done=False)
-                except Exception:
-                    pass
                 next_ts = min(dur, ts + step_sec) if dur > 0.0 else (ts + step_sec)
                 get_logger().log(
                     f"  └ [컷 경계] 파일 {clip_no}/{total_files} 스캔 중 {pct}% "
@@ -654,39 +344,6 @@ class PipelineHelpersMixin:
                     f"{sec:.3f}s (누적 {len(detected)}개)"
                 )
                 _save_detected_now()
-                # CUT_TOPICLESS_GRAY_FIX_FOUND_V2
-                try:
-                    from core.roughcut.cut_boundary_placeholder import apply_topicless_placeholders_to_project
-                    placeholder_rows = apply_topicless_placeholders_to_project(
-                        project_path,
-                        detected,
-                        media_duration=None,
-                        include_trailing=False,
-                    )
-                    if placeholder_rows:
-                        get_logger().log(
-                            f"  ▒ [컷 경계] 주제없음 회색 중분류 저장 "
-                            f"({len(placeholder_rows)}개, done=False)"
-                        )
-                except Exception as exc:
-                    get_logger().log(f"  ⚠️ [컷 경계] 주제없음 회색 중분류 저장 실패: {exc}")
-
-                # ✅ 컷 경계 발견 즉시 회색 주제없음 중분류 세그먼트 생성
-                try:
-                    self._force_cut_boundary_topicless_segments_to_project(
-                        project_path,
-                        detected,
-                        files=list(files or []),
-                        done=False,
-                    )
-                except Exception as exc:
-                    get_logger().log(f"  ⚠️ [컷 경계] 즉시 중분류 생성 실패: {exc}")
-
-                # ✅ 왼쪽 사이드바 현재 진행 표시를 "1 컷 경계" 형태로 갱신
-                try:
-                    self._emit_cut_boundary_count_to_sidebar(len(detected), done=False)
-                except Exception:
-                    pass
 
                 # 첫 번째 컷 경계가 발견되면 즉시 00:00~첫 경계 구간의
                 # "주제없음/컷경계" 중분류 placeholder를 갱신한다.
@@ -707,7 +364,8 @@ class PipelineHelpersMixin:
                     f"  🎬 [컷 경계] 파일 {idx + 1}/{total_files} 분석 시작: {os.path.basename(path)} "
                     f"(offset {offset:.1f}s)"
                 )
-                detect_kwargs = dict(
+                rows = detect_media_cut_boundaries(
+                    path,
                     clip_offset=offset,
                     clip_idx=idx,
                     sample_step_sec=float(settings.get("scan_cut_auto_sample_step_sec", 1.0) or 1.0),
@@ -715,33 +373,12 @@ class PipelineHelpersMixin:
                     progress_callback=_progress,
                     found_callback=_found,
                 )
-                try:
-                    rows = detect_media_cut_boundaries(
-                        path,
-                        **detect_kwargs,
-                        scan_profile=scan_profile,
-                        sample_positions=scan_profile.get("positions", ()),
-                        sample_mask=scan_profile.get("mask", ""),
-                    )
-                except TypeError:
-                    get_logger().log("  ⚠️ [컷 경계] detector가 level profile 인자를 지원하지 않아 기본 호출로 재시도합니다")
-                    rows = detect_media_cut_boundaries(path, **detect_kwargs)
                 get_logger().log(
                     f"  ✅ [컷 경계] 파일 {idx + 1}/{total_files} 분석 완료: {os.path.basename(path)} "
                     f"(감지 {len(rows)}개)"
                 )
                 detected[:] = normalize_cut_boundaries(list(detected) + list(rows))
             _save_detected_now()
-            try:
-                self._force_cut_boundary_topicless_segments_to_project(
-                    project_path,
-                    detected,
-                    files=list(files or []),
-                    done=True,
-                )
-                self._emit_cut_boundary_count_to_sidebar(len(detected), done=True)
-            except Exception as exc:
-                get_logger().log(f"  ⚠️ [컷 경계] 최종 중분류 확정 실패: {exc}")
             if detected:
                 get_logger().log(f"  🎬 [컷 경계] 시작 전 자동 분석 완료 ({len(detected)}개)")
             else:

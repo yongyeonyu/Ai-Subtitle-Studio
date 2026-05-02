@@ -215,11 +215,23 @@ class MulticlipPipelineMixin:
                 if item is preview_sentinel:
                     break
                 try:
+                    offset = float(item.get("offset", 0.0) or 0.0)
+                    local_cuts = []
+                    for cut in self._project_cut_boundaries_for_pipeline():
+                        row = dict(cut)
+                        sec = float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0) - offset
+                        if sec > 0.0:
+                            row["timeline_sec"] = sec
+                            row["time"] = sec
+                            local_cuts.append(row)
+                    settings = load_settings()
                     preview = optimize_stt_preview_segments(
                         item.get("segments") or [],
                         source_label=item.get("label") or "STT",
                         vad_segments=item.get("vad_segments") or [],
-                        clip_offset=float(item.get("offset", 0.0) or 0.0),
+                        cut_boundaries=local_cuts,
+                        cut_boundary_enabled=bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True))),
+                        clip_offset=offset,
                         clip_idx=item.get("clip_idx"),
                         clip_path=item.get("clip_path"),
                     )
@@ -271,6 +283,36 @@ class MulticlipPipelineMixin:
 
                     if hasattr(self, 'video_processor'):
                         self.video_processor.clear_fast_mode_overrides()
+
+                    # ✅ 순서 고정:
+                    # 전체 컷 경계/주제없음 중분류가 먼저 확정된 뒤 클립별 STT가 시작되어야 한다.
+                    if hasattr(self, "_wait_cut_boundary_prescan_before_stt"):
+                        self._wait_cut_boundary_prescan_before_stt()
+
+                    # ✅ 멀티클립: timeline 컷 경계를 현재 클립 local 초로 변환해 주입한다.
+                    try:
+                        if hasattr(self, "video_processor"):
+                            local_hard_cuts = []
+                            clip_start = float(offset or 0.0)
+                            clip_end = float(bd.get("end", clip_start) or clip_start)
+                            for row in self._project_cut_boundaries_for_pipeline():
+                                try:
+                                    if isinstance(row, dict):
+                                        sec = float(row.get("timeline_sec", row.get("time", row.get("start", 0.0))) or 0.0)
+                                    else:
+                                        sec = float(row)
+                                    if clip_start < sec < clip_end:
+                                        local_hard_cuts.append(round(sec - clip_start, 3))
+                                except Exception:
+                                    continue
+                            self.video_processor.hard_cut_boundaries = sorted(set(local_hard_cuts))
+                            if local_hard_cuts:
+                                get_logger().log(
+                                    f"  ✂️ [컷 경계] 멀티클립 {i + 1} STT 청크 hard cut "
+                                    f"{len(local_hard_cuts)}개 적용"
+                                )
+                    except Exception as exc:
+                        get_logger().log(f"  ⚠️ [컷 경계] 멀티클립 STT 청크 hard cut 주입 실패: {exc}")
 
                     res = self._get_audio_extract_result(target_file)
                     for prefetch_file in self.files_to_process[i + 1: i + 1 + prefetch_ahead]:
@@ -406,6 +448,15 @@ class MulticlipPipelineMixin:
                         context=f"멀티클립 {idx + 1}",
                     )
                     optimized = apply_final_gap_settings(optimized, force=True)
+                    optimized = self._split_by_saved_cut_boundaries(
+                        optimized,
+                        context=f"멀티클립 {idx + 1} 최종 자막",
+                    )
+                if item.get("skip_optimize"):
+                    optimized = self._split_by_saved_cut_boundaries(
+                        optimized,
+                        context=f"멀티클립 {idx + 1} 기존 자막",
+                    )
 
                 out_queue.put(
                     {

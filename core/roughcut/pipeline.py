@@ -61,6 +61,257 @@ def _segments_from_chapters(chapters: Iterable[ChapterMetadata]) -> tuple[RoughC
     return tuple(segments)
 
 
+
+def _extract_scene_change_time(item) -> float | None:
+    if item is None:
+        return None
+
+    if isinstance(item, (int, float)):
+        return float(item)
+
+    if isinstance(item, dict):
+        for key in ("time", "sec", "seconds", "timestamp", "start", "pos"):
+            if key in item:
+                try:
+                    return float(item[key])
+                except Exception:
+                    return None
+
+    for key in ("time", "sec", "seconds", "timestamp", "start", "pos"):
+        if hasattr(item, key):
+            try:
+                return float(getattr(item, key))
+            except Exception:
+                return None
+
+    return None
+
+
+
+def _hard_cut_times_from_scene_changes(
+    scene_changes: Iterable | None,
+    media_duration: float | None = None,
+) -> tuple[float, ...]:
+    """Return sorted absolute hard cut times.
+
+    These cuts are absolute boundaries:
+    - STT/subtitle segments must not cross them.
+    - roughcut/major/middle segments must not cross them.
+    - LLM may rename/overwrite topics, but cannot merge across these cuts.
+    """
+    if not scene_changes:
+        return ()
+
+    duration = float(media_duration or 0.0)
+    times: list[float] = []
+
+    for item in scene_changes:
+        sec = _extract_scene_change_time(item)
+        if sec is None:
+            continue
+        sec = round(float(sec), 3)
+        if sec <= 0.0:
+            continue
+        if duration > 0.0 and sec >= duration:
+            continue
+        times.append(sec)
+
+    return tuple(sorted(set(times)))
+
+
+def _split_subtitles_by_hard_cuts(
+    subtitles: Iterable[SubtitleSegment],
+    hard_cuts: Iterable[float],
+) -> tuple[SubtitleSegment, ...]:
+    """Split subtitle rows so no subtitle crosses a hard visual cut.
+
+    Text is duplicated into the split pieces because the visual boundary is
+    more important than preserving a single long subtitle row.
+    """
+    cuts = tuple(sorted(float(x) for x in (hard_cuts or ()) if float(x) > 0.0))
+    if not cuts:
+        return tuple(subtitles or ())
+
+    out: list[SubtitleSegment] = []
+
+    for item in subtitles or ():
+        start = float(item.start)
+        end = float(item.end)
+        if end <= start:
+            continue
+
+        inner_cuts = [c for c in cuts if start < c < end]
+        if not inner_cuts:
+            out.append(item)
+            continue
+
+        points = [start] + inner_cuts + [end]
+        for idx in range(len(points) - 1):
+            part_start = points[idx]
+            part_end = points[idx + 1]
+            if part_end <= part_start:
+                continue
+
+            suffix = f"_cut{idx + 1}" if len(points) > 2 else ""
+            out.append(
+                SubtitleSegment(
+                    start=part_start,
+                    end=part_end,
+                    text=item.text,
+                    speaker=item.speaker,
+                    subtitle_id=f"{item.subtitle_id}{suffix}",
+                )
+            )
+
+    return tuple(out)
+
+
+def _clamp_roughcut_segments_to_hard_cuts(
+    segments: Iterable[RoughCutSegment],
+    hard_cuts: Iterable[float],
+) -> tuple[RoughCutSegment, ...]:
+    """Guarantee roughcut segments never cross hard cuts.
+
+    LLM or heuristic analysis may create more segments inside a cut range,
+    but it must not produce one segment that crosses a visual cut.
+    """
+    cuts = tuple(sorted(float(x) for x in (hard_cuts or ()) if float(x) > 0.0))
+    if not cuts:
+        return tuple(segments or ())
+
+    out: list[RoughCutSegment] = []
+
+    for seg in segments or ():
+        start = float(seg.start)
+        end = float(seg.end)
+        if end <= start:
+            continue
+
+        inner_cuts = [c for c in cuts if start < c < end]
+        if not inner_cuts:
+            out.append(seg)
+            continue
+
+        points = [start] + inner_cuts + [end]
+        for idx in range(len(points) - 1):
+            part_start = points[idx]
+            part_end = points[idx + 1]
+            if part_end <= part_start:
+                continue
+
+            part_id = f"{seg.segment_id}_hardcut_{idx + 1}"
+            out.append(
+                RoughCutSegment(
+                    segment_id=part_id,
+                    start=part_start,
+                    end=part_end,
+                    title=seg.title,
+                    summary=seg.summary,
+                    tags=tuple(sorted(set(tuple(seg.tags or ()) + ("컷경계",)))),
+                    story_role=seg.story_role,
+                    narrative_function=seg.narrative_function,
+                    importance_score=seg.importance_score,
+                    can_move=seg.can_move,
+                    can_trim=seg.can_trim,
+                    can_remove=seg.can_remove,
+                    move_risk=seg.move_risk,
+                    dependencies=seg.dependencies,
+                    needs_review=True,
+                    boundary_confidence=min(float(seg.boundary_confidence or 0.0), 1.0),
+                    major_id=part_id,
+                    status="needs_review",
+                    safety=seg.safety,
+                    importance=seg.importance,
+                    llm_summary=seg.llm_summary,
+                )
+            )
+
+    return tuple(out)
+
+
+def _build_cut_boundary_topicless_result(
+    *,
+    scene_changes: Iterable | None,
+    media_duration: float | None,
+    source_path: str = "",
+    warnings: list[str] | None = None,
+) -> RoughCutResult | None:
+    """컷 경계가 있으면 LLM/주제 분석 없이 즉시 주제없음 세그먼트 생성."""
+    if not scene_changes:
+        return None
+
+    duration = float(media_duration or 0.0)
+    if duration <= 0:
+        return None
+
+    cut_times: list[float] = []
+    for item in scene_changes:
+        sec = _extract_scene_change_time(item)
+        if sec is None:
+            continue
+        if 0.0 < sec < duration:
+            cut_times.append(sec)
+
+    cut_times = sorted(set(round(x, 3) for x in cut_times))
+    if not cut_times:
+        return None
+
+    boundaries = [0.0] + cut_times + [duration]
+
+    segments: list[RoughCutSegment] = []
+    for idx in range(len(boundaries) - 1):
+        start = boundaries[idx]
+        end = boundaries[idx + 1]
+        if end <= start:
+            continue
+
+        seg_id = f"cut_topicless_{idx + 1:03d}"
+        segments.append(
+            RoughCutSegment(
+                segment_id=seg_id,
+                start=start,
+                end=end,
+                title="주제없음",
+                summary="컷 경계 기반으로 자동 생성된 임시 세그먼트입니다.",
+                tags=("컷경계",),
+                story_role="topicless_placeholder",
+                narrative_function="cut_boundary_placeholder",
+                importance_score=0.0,
+                can_move=True,
+                can_trim=True,
+                can_remove=True,
+                move_risk="low",
+                dependencies=(),
+                needs_review=True,
+                boundary_confidence=1.0,
+                major_id=seg_id,
+                status="needs_review",
+                safety="acceptable",
+                importance=0.0,
+                llm_summary="",
+            )
+        )
+
+    if not segments:
+        return None
+
+    return RoughCutResult(
+        segments=tuple(segments),
+        chapters=(),
+        edit_decisions=(),
+        edl_segments=(),
+        guide_markdown="",
+        warnings=tuple(warnings or ()),
+        video_summary=f"컷 경계 기반 주제없음 세그먼트 {len(segments)}개",
+        packed_phrases=(),
+        chunks=(),
+        cut_points=tuple(cut_times),
+        title_suggestions=(),
+        draft_state=RoughCutDraftState(status="review"),
+        schema_version="roughcut_result.v2",
+    )
+
+
 def run_roughcut_pipeline(
     subtitle_segments: Iterable[dict] | Iterable[SubtitleSegment],
     media_duration: float | None = None,
@@ -80,8 +331,26 @@ def run_roughcut_pipeline(
         warnings.append("use_llm=True requested, roughcut LLM is disabled; local heuristics fallback.")
 
     subtitles = _normalize_subtitles(subtitle_segments)
+
+    # ✅ 컷 경계는 이제 절대 경계다.
+    # 1) 자막이 아직 없으면 00:00~첫 컷 placeholder를 먼저 반환한다.
+    # 2) 자막이 있으면 모든 자막을 hard cut 기준으로 먼저 분할한다.
+    # 3) 이후 LLM/휴리스틱 주제 분석은 이 경계를 넘어갈 수 없다.
+    hard_cuts = _hard_cut_times_from_scene_changes(scene_changes, media_duration)
+
     if not subtitles:
+        if bool(roughcut_settings.get("roughcut_cut_boundary_topicless_first", True)):
+            topicless_result = _build_cut_boundary_topicless_result(
+                scene_changes=scene_changes,
+                media_duration=media_duration,
+                source_path=source_path,
+                warnings=warnings,
+            )
+            if topicless_result is not None:
+                return topicless_result
         return RoughCutResult(warnings=tuple(warnings + ["no_subtitle_segments"]))
+
+    subtitles = _split_subtitles_by_hard_cuts(subtitles, hard_cuts)
 
     packed = pack_transcript(
         [
@@ -135,10 +404,18 @@ def run_roughcut_pipeline(
         max_subtitle_count=int(roughcut_settings.get("roughcut_major_max_subtitle_count", 0) or 0),
         max_major_segment_count=int(roughcut_settings.get("roughcut_major_max_segment_count", 10) or 10),
     )
+
+    # ✅ LLM/휴리스틱 결과가 컷 경계를 넘어가면 여기서 다시 강제 분할한다.
+    # LLM은 주제없음 placeholder를 overwrite할 수 있지만,
+    # hard cut 자체를 병합하거나 무시할 수는 없다.
+    roughcut_segments = _clamp_roughcut_segments_to_hard_cuts(roughcut_segments, hard_cuts)
     decisions = build_edit_decisions(chapters, packed, gaps)
     cut_points = generate_cut_points(decisions, packed, gaps)
     edl = build_edl_segments(source_path, decisions, chapters)
     guide = build_markdown_guide(chapters, decisions, edl)
+    if hard_cuts:
+        warnings.append(f"hard_cut_boundaries_enforced:{len(hard_cuts)}")
+
     summary = f"챕터 {len(chapters)}개, 편집 판단 {len(decisions)}개, 출력 구간 {len(edl)}개"
     interim = RoughCutResult(
         segments=roughcut_segments,

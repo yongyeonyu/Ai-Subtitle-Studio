@@ -9,6 +9,7 @@ from unittest.mock import patch
 from core.project.project_manager import extract_model_settings, load_project, merge_project_model_settings, save_project
 from core.project.project_context import (
     build_editor_state,
+    project_cut_boundary_segments,
     project_active_work_mode,
     project_workspace,
     project_clip_boundaries,
@@ -20,6 +21,7 @@ from core.project.project_context import (
     project_stt_preview_segments,
     segment_signature,
 )
+from core.cut_boundary import split_segments_by_cut_boundaries
 
 
 class ProjectContextTests(unittest.TestCase):
@@ -468,6 +470,80 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(preview["_clip_idx"], 1)
         self.assertEqual(preview["start_frame"], 240)
         self.assertEqual(preview["end_frame"], 264)
+
+    def test_cut_boundary_fit_prevents_subtitle_and_stt_preview_crossing(self):
+        boundaries = [{"timeline_sec": 3.0, "timeline_frame": 72, "fps": 24.0}]
+        segments = [
+            {
+                "start": 2.0,
+                "end": 4.0,
+                "text": "컷을 넘는 자막",
+                "speaker": "00",
+                "stt_candidates": [
+                    {"source": "STT1", "start": 2.0, "end": 4.0, "text": "후보"}
+                ],
+            }
+        ]
+
+        split = split_segments_by_cut_boundaries(segments, boundaries, primary_fps=24.0)
+
+        self.assertEqual(len(split), 1)
+        self.assertAlmostEqual(split[0]["start"], 3.0)
+        self.assertAlmostEqual(split[0]["end"], 4.0)
+        self.assertEqual(split[0]["cut_local_start"], 0.0)
+        self.assertTrue(split[0]["cut_boundary_fitted"])
+        self.assertEqual(split[0]["stt_candidates"][0]["start"], 3.0)
+
+    def test_save_project_persists_cut_boundaries_to_project_and_multiclip_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media_a = Path(tmp) / "a.mp4"
+            media_b = Path(tmp) / "b.mp4"
+            media_a.write_bytes(b"a")
+            media_b.write_bytes(b"b")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "analysis": {
+                            "cut_boundary_schema": "cut_boundaries.v1",
+                            "cut_boundaries": [
+                                {"timeline_sec": 3.0, "timeline_frame": 72, "fps": 24.0}
+                            ],
+                        },
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("core.project.project_manager.probe_media", return_value={"duration": 10.0, "fps": 24.0}):
+                save_project(
+                    str(path),
+                    media_paths=[str(media_a), str(media_b)],
+                    user_settings={"cut_boundary_detection_enabled": True},
+                    segments=[{"start": 2.0, "end": 4.0, "text": "분할", "speaker": "00"}],
+                    stt_preview_segments=[
+                        {"start": 2.5, "end": 3.5, "text": "후보", "stt_preview_source": "STT1"}
+                    ],
+                )
+            loaded = load_project(str(path))
+
+        cut_rows = project_cut_boundary_segments(loaded)
+        self.assertEqual(len(cut_rows), 1)
+        self.assertTrue(loaded["analysis"]["cut_boundary_settings"]["absolute"])
+        self.assertEqual(len(loaded["editor_state"]["multiclip"]["cut_boundaries"]), 1)
+        subtitles = project_segments_to_editor(loaded)
+        self.assertEqual(len(subtitles), 1)
+        self.assertGreaterEqual(subtitles[0]["start"], 3.0)
+        previews = project_stt_preview_segments(loaded)
+        self.assertEqual(len(previews), 1)
+        self.assertLessEqual(previews[0]["end"], 3.5)
 
     def test_project_segments_to_editor_prefers_saved_frame_numbers(self):
         project = {

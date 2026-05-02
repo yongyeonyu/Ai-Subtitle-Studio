@@ -11,6 +11,8 @@ def optimize_stt_preview_segments(
     *,
     source_label: str = "STT1",
     vad_segments: list[dict] | None = None,
+    cut_boundaries: list[dict] | None = None,
+    cut_boundary_enabled: bool = True,
     clip_offset: float = 0.0,
     clip_idx: int | None = None,
     clip_path: str | None = None,
@@ -35,6 +37,18 @@ def optimize_stt_preview_segments(
     except Exception as exc:
         get_logger().log(f"  ⚠️ [{label}] 후보 자막 분리/간격 규칙 적용 실패, 원본 후보 유지: {exc}")
         optimized = raw
+
+    if cut_boundaries:
+        try:
+            from core.cut_boundary import split_segments_by_cut_boundaries
+
+            optimized = split_segments_by_cut_boundaries(
+                optimized,
+                cut_boundaries,
+                enabled=bool(cut_boundary_enabled),
+            )
+        except Exception as exc:
+            get_logger().log(f"  ⚠️ [{label}] 컷 경계 후보 분할 실패, 기존 후보 유지: {exc}")
 
     offset = float(clip_offset or 0.0)
     preview: list[dict] = []

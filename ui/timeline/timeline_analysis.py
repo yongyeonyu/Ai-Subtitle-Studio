@@ -134,7 +134,13 @@ def roughcut_major_markers(result: Any) -> list[dict]:
         major_id = str(getattr(segment, "major_id", "") or getattr(segment, "segment_id", "") or chr(65 + (index % 26)))
         title = str(getattr(segment, "title", "") or "")
         status = str(getattr(segment, "status", "") or "provisional")
-        color = roughcut_major_color(major_id, index)
+        tags = tuple(getattr(segment, "tags", ()) or ())
+        is_topicless_placeholder = (
+            title == "주제없음"
+            or "주제없음" in tags
+            or (status == "provisional" and "컷경계" in tags)
+        )
+        color = "#8E8E93" if is_topicless_placeholder else roughcut_major_color(major_id, index)
         markers.append(
             {
                 "start": start,

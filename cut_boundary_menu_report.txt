@@ -1,0 +1,3604 @@
+==========================================================================================
+컷 경계 메뉴/사이드바 후보 파일
+==========================================================================================
+
+[077] ui/editor/editor_pipeline.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, 사용안함, QMenu, addAction, addMenu, queue
+
+[077] ui/editor/editor_pipeline.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, 사용안함, QMenu, addAction, addMenu, queue
+
+[077] ui/home_ui.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, 미사용, QMenu, QComboBox, addAction, addItem, sidebar, queue
+
+[077] ui/home_ui.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, 미사용, QMenu, QComboBox, addAction, addItem, sidebar, queue
+
+[061] core/pipeline/pipeline_helpers.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, 미사용, _sig_update_queue, sidebar, queue
+
+[061] core/pipeline/pipeline_helpers.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, 미사용, _sig_update_queue, sidebar, queue
+
+[057] .codex_work/patch_v03_11_07_fix_frame_controls_for_real_20260503_010024/ui/editor/editor_widget.py
+hits: scan_cut, 사용, 미사용, QMenu, QComboBox, addItem, addItems, queue
+
+[057] ui/editor/editor_widget.py
+hits: scan_cut, 사용, 미사용, QMenu, QComboBox, addItem, addItems, queue
+
+[057] ui/editor/editor_widget.py
+hits: scan_cut, 사용, 미사용, QMenu, QComboBox, addItem, addItems, queue
+
+[053] core/cut_boundary.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, 사용안함
+
+[053] core/cut_boundary.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, 사용안함
+
+[053] ui/editor/editor_timeline_video.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, 미사용
+
+[053] ui/editor/editor_timeline_video.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, 미사용
+
+[051] .codex_work/patch_v03_11_04_frame_buttons_rework_20260503_005421/ui/editor/video_player_widget.py
+hits: 컷 경계, scan_cut, addItem
+
+[051] .codex_work/patch_v03_11_05_fix_frame_seek_crash_20260503_005537/ui/editor/video_player_widget.py
+hits: 컷 경계, scan_cut, addItem
+
+[051] .codex_work/patch_v03_11_07_fix_frame_controls_for_real_20260503_010024/ui/editor/video_player_widget.py
+hits: 컷 경계, scan_cut, addItem
+
+[051] .codex_work/patch_v03_11_11_scan_toggle_highlight_20260503_010910/ui/editor/video_player_widget.py
+hits: 컷 경계, scan_cut, addItem
+
+[051] .codex_work/patch_v03_11_12_scan_cut_toggle_ffmpeg_20260503_011000/ui/editor/video_player_widget.py
+hits: 컷 경계, scan_cut, addItem
+
+[051] core/pipeline/multiclip_pipeline.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, _sig_update_queue, queue
+
+[051] core/pipeline/multiclip_pipeline.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, _sig_update_queue, queue
+
+[051] core/pipeline/single_pipeline.py
+hits: 컷 경계, cut_boundary, scan_cut, _sig_update_queue, queue
+
+[051] core/pipeline/single_pipeline.py
+hits: 컷 경계, cut_boundary, scan_cut, _sig_update_queue, queue
+
+[051] ui/editor/video_player_widget.py
+hits: 컷 경계, scan_cut, addItem
+
+[051] ui/editor/video_player_widget.py
+hits: 컷 경계, scan_cut, addItem
+
+[051] ui/roughcut/roughcut_state.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, addItem
+
+[051] ui/roughcut/roughcut_state.py
+hits: 컷 경계, cut_boundary, scan_cut, 사용, addItem
+
+[046] ui/main/main_signals.py
+hits: 컷 경계, cut_boundary, queue
+
+[046] ui/main/main_signals.py
+hits: 컷 경계, cut_boundary, queue
+
+[043] .codex_work/patch_v03_11_04_frame_buttons_rework_20260503_005421/ui/editor/editor_timeline_video.py
+hits: 컷 경계, scan_cut, 사용
+
+[043] .codex_work/patch_v03_11_07_fix_frame_controls_for_real_20260503_010024/ui/editor/editor_timeline_video.py
+hits: 컷 경계, scan_cut
+
+[043] .codex_work/patch_v03_11_08_scan_cut_debug_20260503_010258/ui/editor/editor_timeline_video.py
+hits: 컷 경계, scan_cut
+
+[043] .codex_work/patch_v03_11_09_scan_progress_fix_20260503_010501/ui/editor/editor_timeline_video.py
+hits: 컷 경계, scan_cut
+
+[043] .codex_work/patch_v03_11_10_scan_frame_index_fix_20260503_010628/ui/editor/editor_timeline_video.py
+hits: 컷 경계, scan_cut
+
+[043] .codex_work/patch_v03_11_11_scan_toggle_highlight_20260503_010910/ui/editor/editor_timeline_video.py
+hits: 컷 경계, scan_cut
+
+[043] .codex_work/patch_v03_11_12_scan_cut_toggle_ffmpeg_20260503_011000/ui/editor/editor_timeline_video.py
+hits: 컷 경계, scan_cut
+
+[043] .codex_work/patch_v03_11_15_fast_720_scan_and_step_fix_20260503_012212/ui/editor/editor_timeline_video.py
+hits: 컷 경계, scan_cut
+
+[043] core/roughcut/pipeline.py
+hits: 컷 경계, cut_boundary
+
+[043] core/roughcut/pipeline.py
+hits: 컷 경계, cut_boundary
+
+[039] .codex_work/patch_v03_11_04_frame_buttons_rework_20260503_005421/ui/editor/editor_widget.py
+hits: 사용, 미사용, QMenu, QComboBox, addItem, addItems, queue
+
+[039] ui/settings/settings_ai.py
+hits: 사용, 미사용, QComboBox, addItem, addItems, sidebar
+
+
+==========================================================================================
+컷 경계 / 사용 / 미사용 / 메뉴 관련 코드 주변
+==========================================================================================
+
+------------------------------------------------------------------------------------------
+ui/editor/editor_pipeline.py:36
+------------------------------------------------------------------------------------------
+0014: 
+0015: import config
+0016: from logger import get_logger
+0017: from core.project.project_manager import create_project
+0018: from core.path_manager import get_srt_path
+0019: 
+0020: 
+0021: class PartialSignals(QObject):
+0022:     status = pyqtSignal(str, str)
+0023:     progress = pyqtSignal(int, int)
+0024:     chunk_time = pyqtSignal(float)
+0025:     done = pyqtSignal(list)
+0026:     finished = pyqtSignal()
+0027: 
+0028: 
+0029: class EditorPipelineMixin:
+0030:     # ---------------------------------------------------------
+0031:     # Backend Signal Hook
+0032:     # ---------------------------------------------------------
+0033:     def _hook_backend_signals(self):
+0034:         main_w = self.window()
+0035:         try:
+0036:             if hasattr(self, "_connect_cut_boundary_placeholder_signal"):
+0037:                 self._connect_cut_boundary_placeholder_signal()
+0038:         except Exception:
+0039:             pass
+0040:         if hasattr(main_w, "backend") and main_w.backend:
+0041:             try: main_w.backend.sig_chunk_done.disconnect(self.append_segments)
+0042:             except Exception: pass
+0043:             try: main_w.backend.sig_progress.disconnect(self.update_progress)
+0044:             except Exception: pass
+0045:             try: main_w.backend.sig_chunk_done.connect(self.append_segments)
+0046:             except Exception: pass
+0047:             try: main_w.backend.sig_progress.connect(self.update_progress)
+0048:             except Exception: pass
+0049:             if getattr(self, 'is_batch_mode', False) and hasattr(main_w.backend, 'sig_batch_finished'):
+0050:                 try: main_w.backend.sig_batch_finished.disconnect()
+0051:                 except Exception: pass
+0052:                 main_w.backend.sig_batch_finished.connect(self._on_batch_finished)
+0053: 
+0054:     def _on_batch_finished(self):
+0055:         self.sm.set_custom_status("✅ 배치 작업이 모두 완료되었습니다.")
+0056:         self._send_ntfy_batch_complete()
+0057: 
+0058:     def _send_ntfy_batch_complete(self):
+
+------------------------------------------------------------------------------------------
+ui/editor/editor_pipeline.py:127
+------------------------------------------------------------------------------------------
+0105:             main_w._stop_post_completion_idle_timer()
+0106:         try:
+0107:             if hasattr(main_w, "_apply_log_visible"):
+0108:                 main_w._apply_log_visible(True, persist=False)
+0109:         except Exception:
+0110:             pass
+0111:         try:
+0112:             if hasattr(self, "set_terminal_visible_layout"):
+0113:                 self.set_terminal_visible_layout(True)
+0114:         except Exception:
+0115:             pass
+0116:         try:
+0117:             from core.settings import load_settings
+0118:             latest_settings = load_settings()
+0119:             if latest_settings:
+0120:                 self.settings.update(latest_settings)
+0121:                 if hasattr(self, "_refresh_speaker_strip"):
+0122:                     self._refresh_speaker_strip()
+0123:         except Exception:
+0124:             pass
+0125:         self._completion_handled = False
+0126: 
+0127:         # ✅ 컷 경계 기반 러프컷 선구성: STT 시작 전에 컷 경계 먼저 스캔
+0128:         try:
+0129:             self._prepare_cut_boundaries_before_start()
+0130:         except Exception as e:
+0131:             try:
+0132:                 get_logger().log(f"⚠️ 컷 경계 사전 스캔 실패: {e}")
+0133:             except Exception:
+0134:                 pass
+0135: 
+0136:         if getattr(self, 'is_auto_start', False):
+0137:             self.sm.start_auto_mode()
+0138:         else:
+0139:             self.sm.start_ai_all()
+0140:         self._process_start_time = time.time()
+0141:         self._backend_finished = False
+0142:         self._execute_pipeline_logic(is_restart)
+0143: 
+0144:     def _prepare_cut_boundaries_before_start(self):
+0145:         main_w = self.window()
+0146:         backend = getattr(main_w, "backend", None)
+0147:         media_files = list(getattr(main_w, "_multiclip_files", []) or [])
+0148:         if not media_files:
+0149:             media_path = getattr(self, "media_path", "") or ""
+
+------------------------------------------------------------------------------------------
+ui/editor/editor_pipeline.py:166
+------------------------------------------------------------------------------------------
+0144:     def _prepare_cut_boundaries_before_start(self):
+0145:         main_w = self.window()
+0146:         backend = getattr(main_w, "backend", None)
+0147:         media_files = list(getattr(main_w, "_multiclip_files", []) or [])
+0148:         if not media_files:
+0149:             media_path = getattr(self, "media_path", "") or ""
+0150:             if media_path:
+0151:                 media_files = [media_path]
+0152:         if not media_files:
+0153:             return
+0154: 
+0155:         project_path = str(getattr(main_w, "_current_project_path", "") or "")
+0156:         if not project_path:
+0157:             base_name = os.path.splitext(os.path.basename(media_files[0]))[0]
+0158:             project_path = create_project(
+0159:                 name=base_name,
+0160:                 media_paths=media_files,
+0161:                 srt_path=get_srt_path(media_files[0]),
+0162:                 user_settings=dict(getattr(self, "settings", {}) or {}),
+0163:             )
+0164:             main_w._current_project_path = project_path
+0165: 
+0166:         if backend is not None and hasattr(backend, "_auto_scan_cut_boundaries_for_start"):
+0167:             backend._auto_scan_cut_boundaries_for_start(project_path, media_files)
+0168: 
+0169:     def _set_process_completed(self):
+0170:         if hasattr(self, "_flush_pending_segment_queue_now"):
+0171:             self._flush_pending_segment_queue_now()
+0172:         if getattr(self, 'is_auto_start', False):
+0173:             self.sm.complete_auto_mode()
+0174:         else:
+0175:             self.sm.complete_ai()
+0176:         if hasattr(self, '_spinner_timer'): self._spinner_timer.stop()
+0177:         get_logger().log("✅ 자막 생성 완료 (EditorPipeline 확정)")
+0178:         main_w = self.window()
+0179:         if hasattr(main_w, "sync_menu_from_editor"):
+0180:             main_w.sync_menu_from_editor(self)
+0181:         if hasattr(main_w, "_refresh_saved_status_label"):
+0182:             main_w._refresh_saved_status_label(is_dirty=True)
+0183:         if hasattr(main_w, "_start_post_completion_idle_timer"):
+0184:             main_w._start_post_completion_idle_timer()
+0185:         if hasattr(self, "_schedule_post_generation_roughcut_draft"):
+0186:             QTimer.singleShot(350, lambda: self._schedule_post_generation_roughcut_draft(force=True))
+0187:         if hasattr(main_w, "_release_ai_models_for_editor_mode"):
+0188:             if hasattr(self, "_schedule_post_generation_roughcut_draft"):
+
+------------------------------------------------------------------------------------------
+ui/editor/editor_pipeline.py:303
+------------------------------------------------------------------------------------------
+0281:     def _on_start_clicked(self):
+0282:         from core.state_manager import SubtitleStateManager
+0283:         if getattr(self, "_stt_mode_enabled", False):
+0284:             if hasattr(self, "_start_stt_vad_detection") and self._start_stt_vad_detection():
+0285:                 return
+0286:         if self.sm.state == SubtitleStateManager.ST_PROC:
+0287:             self._stop_pipeline()
+0288:         elif self.sm.state in [SubtitleStateManager.ST_COMP, SubtitleStateManager.ST_SAVED]:
+0289:             main_w = self.window()
+0290:             restarted = False
+0291:             if hasattr(main_w, "_restart_current_pipeline_from_beginning"):
+0292:                 restarted = main_w._restart_current_pipeline_from_beginning(self)
+0293:             if restarted:
+0294:                 self.sm.start_processing()
+0295:                 if hasattr(self, "_spinner_timer"):
+0296:                     self._spinner_timer.start()
+0297:                 return
+0298:             self._start_pipeline(is_restart=True)
+0299:         else:
+0300:             self._start_pipeline(is_restart=False)
+0301: 
+0302: 
+0303:     def _connect_cut_boundary_placeholder_signal(self):
+0304:         """Connect cut-boundary placeholder refresh signal to editor UI bridge."""
+0305:         try:
+0306:             main_w = self.window()
+0307:         except Exception:
+0308:             return
+0309: 
+0310:         connected = False
+0311:         for owner in (main_w, self):
+0312:             try:
+0313:                 sig = getattr(owner, "_sig_refresh_cut_boundary_placeholder", None)
+0314:                 if sig is None or not hasattr(sig, "connect"):
+0315:                     continue
+0316:                 try:
+0317:                     sig.disconnect(self._refresh_cut_boundary_placeholder_from_project)
+0318:                 except Exception:
+0319:                     pass
+0320:                 sig.connect(self._refresh_cut_boundary_placeholder_from_project)
+0321:                 connected = True
+0322:             except Exception:
+0323:                 pass
+0324: 
+0325:         if connected:
+
+------------------------------------------------------------------------------------------
+ui/editor/editor_pipeline.py:320
+------------------------------------------------------------------------------------------
+0298:             self._start_pipeline(is_restart=True)
+0299:         else:
+0300:             self._start_pipeline(is_restart=False)
+0301: 
+0302: 
+0303:     def _connect_cut_boundary_placeholder_signal(self):
+0304:         """Connect cut-boundary placeholder refresh signal to editor UI bridge."""
+0305:         try:
+0306:             main_w = self.window()
+0307:         except Exception:
+0308:             return
+0309: 
+0310:         connected = False
+0311:         for owner in (main_w, self):
+0312:             try:
+0313:                 sig = getattr(owner, "_sig_refresh_cut_boundary_placeholder", None)
+0314:                 if sig is None or not hasattr(sig, "connect"):
+0315:                     continue
+0316:                 try:
+0317:                     sig.disconnect(self._refresh_cut_boundary_placeholder_from_project)
+0318:                 except Exception:
+0319:                     pass
+0320:                 sig.connect(self._refresh_cut_boundary_placeholder_from_project)
+0321:                 connected = True
+0322:             except Exception:
+0323:                 pass
+0324: 
+0325:         if connected:
+0326:             try:
+0327:                 QTimer.singleShot(0, self._refresh_cut_boundary_placeholder_from_project)
+0328:             except Exception:
+0329:                 pass
+0330: 
+0331:     def _refresh_cut_boundary_placeholder_from_project(self):
+0332:         """Load gray topicless middle segments from project and push them to UI objects.
+0333: 
+0334:         This must run on the Qt/main thread. Backend cut scanning only saves
+0335:         project data and emits a lightweight refresh signal.
+0336:         """
+0337:         try:
+0338:             import threading as _th
+0339:             if _th.current_thread() is not _th.main_thread():
+0340:                 QTimer.singleShot(0, self._refresh_cut_boundary_placeholder_from_project)
+0341:                 return
+0342:         except Exception:
+
+------------------------------------------------------------------------------------------
+ui/editor/editor_pipeline.py:368
+------------------------------------------------------------------------------------------
+0346:             main_w = self.window()
+0347:         except Exception:
+0348:             main_w = None
+0349: 
+0350:         try:
+0351:             project_path = ""
+0352:             if main_w is not None:
+0353:                 project_path = str(getattr(main_w, "_current_project_path", "") or "")
+0354:             if not project_path:
+0355:                 project_path = str(getattr(self, "_current_project_path", "") or "")
+0356:             if not project_path:
+0357:                 return
+0358: 
+0359:             from core.roughcut.cut_boundary_placeholder import extract_topicless_placeholders_from_project
+0360:             rows = extract_topicless_placeholders_from_project(project_path)
+0361:             if not rows:
+0362:                 return
+0363: 
+0364:             rows = [dict(row) for row in rows]
+0365: 
+0366:             # Editor 자체에 반영
+0367:             for attr in (
+0368:                 "_cut_boundary_topicless_middle_segments",
+0369:                 "_roughcut_segments",
+0370:                 "roughcut_segments",
+0371:                 "_middle_segments",
+0372:                 "middle_segments",
+0373:                 "_chapter_segments",
+0374:                 "chapter_segments",
+0375:                 "_roughcut_draft_segments",
+0376:             ):
+0377:                 try:
+0378:                     setattr(self, attr, list(rows))
+0379:                 except Exception:
+0380:                     pass
+0381: 
+0382:             # roughcut result 형태로도 반영
+0383:             result_dict = {
+0384:                 "segments": list(rows),
+0385:                 "chapters": [],
+0386:                 "edit_decisions": [],
+0387:                 "edl_segments": [],
+0388:                 "guide_markdown": "",
+0389:                 "schema_version": "roughcut_result.v2",
+0390:                 "draft_state": {"status": "review"},
+
+------------------------------------------------------------------------------------------
+ui/editor/editor_pipeline.py:408
+------------------------------------------------------------------------------------------
+0386:                 "edit_decisions": [],
+0387:                 "edl_segments": [],
+0388:                 "guide_markdown": "",
+0389:                 "schema_version": "roughcut_result.v2",
+0390:                 "draft_state": {"status": "review"},
+0391:                 "video_summary": f"컷 경계 기반 주제없음 중분류 {len(rows)}개",
+0392:             }
+0393:             for attr in ("_roughcut_result", "roughcut_result", "_roughcut_draft_result"):
+0394:                 try:
+0395:                     setattr(self, attr, dict(result_dict))
+0396:                 except Exception:
+0397:                     pass
+0398: 
+0399:             # timeline/canvas 쪽에 가능한 이름으로 주입
+0400:             timeline = getattr(self, "timeline", None)
+0401:             canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+0402:             global_canvas = getattr(timeline, "global_canvas", None) if timeline is not None else None
+0403: 
+0404:             for obj in (timeline, canvas, global_canvas):
+0405:                 if obj is None:
+0406:                     continue
+0407:                 for attr in (
+0408:                     "_cut_boundary_topicless_middle_segments",
+0409:                     "_roughcut_segments",
+0410:                     "roughcut_segments",
+0411:                     "_middle_segments",
+0412:                     "middle_segments",
+0413:                     "_chapter_segments",
+0414:                     "chapter_segments",
+0415:                     "_roughcut_draft_segments",
+0416:                 ):
+0417:                     try:
+0418:                         setattr(obj, attr, list(rows))
+0419:                     except Exception:
+0420:                         pass
+0421:                 try:
+0422:                     obj.update()
+0423:                 except Exception:
+0424:                     pass
+0425: 
+0426:             # 존재하는 refresh 계열 메서드 호출
+0427:             refresh_names = (
+0428:                 "_refresh_roughcut_panel",
+0429:                 "_refresh_roughcut_view",
+0430:                 "_reload_roughcut_view",
+
+------------------------------------------------------------------------------------------
+ui/editor/editor_pipeline.py:461
+------------------------------------------------------------------------------------------
+0439:                     continue
+0440:                 for name in refresh_names:
+0441:                     fn = getattr(owner, name, None)
+0442:                     if not callable(fn):
+0443:                         continue
+0444:                     try:
+0445:                         fn()
+0446:                     except TypeError:
+0447:                         try:
+0448:                             fn(rows)
+0449:                         except Exception:
+0450:                             pass
+0451:                     except Exception:
+0452:                         pass
+0453: 
+0454:             try:
+0455:                 if timeline is not None:
+0456:                     timeline.fit_to_view()
+0457:             except Exception:
+0458:                 pass
+0459: 
+0460:             try:
+0461:                 get_logger().log(f"  ▒ [컷 경계] UI 회색 중분류 반영 완료 ({len(rows)}개)")
+0462:             except Exception:
+0463:                 pass
+0464: 
+0465:         except Exception as exc:
+0466:             try:
+0467:                 get_logger().log(f"  ⚠️ [컷 경계] UI 회색 중분류 반영 실패: {exc}")
+0468:             except Exception:
+0469:                 pass
+0470: 
+0471: 
+0472:     # ---------------------------------------------------------
+0473:     # Partial Recognition
+0474:     # ---------------------------------------------------------
+0475: 
+0476:     def _add_cut_boundary_level_submenu(self, menu):
+0477:         try:
+0478:             from core.settings import load_settings
+0479:             try:
+0480:                 from core.settings import save_settings
+0481:             except Exception:
+0482:                 save_settings = None
+0483:             try:
+
+------------------------------------------------------------------------------------------
+ui/editor/editor_pipeline.py:484
+------------------------------------------------------------------------------------------
+0462:             except Exception:
+0463:                 pass
+0464: 
+0465:         except Exception as exc:
+0466:             try:
+0467:                 get_logger().log(f"  ⚠️ [컷 경계] UI 회색 중분류 반영 실패: {exc}")
+0468:             except Exception:
+0469:                 pass
+0470: 
+0471: 
+0472:     # ---------------------------------------------------------
+0473:     # Partial Recognition
+0474:     # ---------------------------------------------------------
+0475: 
+0476:     def _add_cut_boundary_level_submenu(self, menu):
+0477:         try:
+0478:             from core.settings import load_settings
+0479:             try:
+0480:                 from core.settings import save_settings
+0481:             except Exception:
+0482:                 save_settings = None
+0483:             try:
+0484:                 from core.cut_boundary import cut_boundary_level
+0485:             except Exception:
+0486:                 cut_boundary_level = None
+0487: 
+0488:             settings = load_settings() or {}
+0489:             current = cut_boundary_level(settings) if callable(cut_boundary_level) else str(settings.get("scan_cut_boundary_level", "medium"))
+0490: 
+0491:             sub = menu.addMenu("🎬 컷 경계 단계")
+0492:             choices = [
+0493:                 ("off", "사용안함"),
+0494:                 ("low", "낮음 - 십자가 4/9"),
+0495:                 ("medium", "중간 - X모양 5/9"),
+0496:                 ("high", "높음 - O모양 8/9"),
+0497:             ]
+0498: 
+0499:             for level, label in choices:
+0500:                 act = sub.addAction(label)
+0501:                 act.setCheckable(True)
+0502:                 act.setChecked(level == current)
+0503:                 act.triggered.connect(lambda checked=False, lv=level: self._set_cut_boundary_level_from_menu(lv))
+0504:         except Exception as exc:
+0505:             try:
+0506:                 get_logger().log(f"⚠️ 컷 경계 단계 메뉴 생성 실패: {exc}")
+
+------------------------------------------------------------------------------------------
+ui/editor/editor_pipeline.py:520
+------------------------------------------------------------------------------------------
+0498: 
+0499:             for level, label in choices:
+0500:                 act = sub.addAction(label)
+0501:                 act.setCheckable(True)
+0502:                 act.setChecked(level == current)
+0503:                 act.triggered.connect(lambda checked=False, lv=level: self._set_cut_boundary_level_from_menu(lv))
+0504:         except Exception as exc:
+0505:             try:
+0506:                 get_logger().log(f"⚠️ 컷 경계 단계 메뉴 생성 실패: {exc}")
+0507:             except Exception:
+0508:                 pass
+0509: 
+0510:     def _set_cut_boundary_level_from_menu(self, level: str):
+0511:         try:
+0512:             from core.settings import load_settings
+0513:             try:
+0514:                 from core.settings import save_settings
+0515:             except Exception:
+0516:                 save_settings = None
+0517: 
+0518:             settings = load_settings() or {}
+0519:             level = str(level or "medium")
+0520:             settings["scan_cut_boundary_level"] = level
+0521:             settings["cut_boundary_level"] = level
+0522: 
+0523:             # 기존 boolean 호환
+0524:             settings["scan_cut_enabled"] = level != "off"
+0525:             settings["scan_cut_auto_enabled"] = level != "off"
+0526:             settings["cut_boundary_enabled"] = level != "off"
+0527: 
+0528:             # profile label 보조 저장
+0529:             labels = {
+0530:                 "off": "사용안함",
+0531:                 "low": "낮음 - 9개 중 십자가 4개",
+0532:                 "medium": "중간 - 9개 중 X모양 5개",
+0533:                 "high": "높음 - 9개 중 O모양 8개",
+0534:             }
+0535:             masks = {
+0536:                 "off": "off",
+0537:                 "low": "cross4",
+0538:                 "medium": "x5",
+0539:                 "high": "o8",
+0540:             }
+0541:             settings["scan_cut_boundary_label"] = labels.get(level, labels["medium"])
+0542:             settings["scan_cut_grid_mask"] = masks.get(level, "x5")
+
+------------------------------------------------------------------------------------------
+ui/editor/editor_pipeline.py:564
+------------------------------------------------------------------------------------------
+0542:             settings["scan_cut_grid_mask"] = masks.get(level, "x5")
+0543: 
+0544:             if callable(save_settings):
+0545:                 save_settings(settings)
+0546:             else:
+0547:                 # save_settings가 없는 빌드 대비: self.settings에는 즉시 반영
+0548:                 pass
+0549: 
+0550:             if hasattr(self, "settings") and isinstance(self.settings, dict):
+0551:                 self.settings.update(settings)
+0552: 
+0553:             try:
+0554:                 self.sm.set_custom_status(f"🎬 컷 경계 단계: {settings['scan_cut_boundary_label']}")
+0555:             except Exception:
+0556:                 pass
+0557: 
+0558:             try:
+0559:                 get_logger().log(f"  🎚️ [컷 경계] 단계 변경: {settings['scan_cut_boundary_label']}")
+0560:             except Exception:
+0561:                 pass
+0562:         except Exception as exc:
+0563:             try:
+0564:                 get_logger().log(f"⚠️ 컷 경계 단계 저장 실패: {exc}")
+0565:             except Exception:
+0566:                 pass
+0567: 
+0568: 
+0569:     def _show_playhead_menu(self, gpos, sec):
+0570:         menu = QMenu(self)
+0571:         menu.setStyleSheet("QMenu { font-size: 13px; }")
+0572:         if hasattr(self, "_add_cut_boundary_level_submenu"):
+0573:             self._add_cut_boundary_level_submenu(menu)
+0574:             menu.addSeparator()
+0575:         act_cur = menu.addAction("🎯 현재 자막 세그먼트만 재인식")
+0576:         act_end = menu.addAction("🚀 현재부터 끝까지 자막 재인식")
+0577:         action = menu.exec(gpos)
+0578:         if action == act_cur: self._re_recognize_segment(sec)
+0579:         elif action == act_end: self._re_recognize_from(sec)
+0580: 
+0581:     def _re_recognize_segment(self, sec):
+0582:         segs = self._get_current_segments()
+0583:         for s in segs:
+0584:             if s["start"] <= sec < s["end"]:
+0585:                 self._run_partial_backend(s["start"], s["end"], is_single=True)
+0586:                 break
+
+------------------------------------------------------------------------------------------
+ui/home_ui.py:374
+------------------------------------------------------------------------------------------
+0352:         if combo is None:
+0353:             return
+0354:         try:
+0355:             combo.blockSignals(True)
+0356:             for i in range(combo.count()):
+0357:                 if combo.itemData(i) == value:
+0358:                     combo.setCurrentIndex(i)
+0359:                     break
+0360:             combo.blockSignals(False)
+0361:         except RuntimeError:
+0362:             pass
+0363:     def _sync_sidebar_preset_panel(self, settings: dict | None = None):
+0364:         settings = dict(settings or load_settings())
+0365:         self._set_combo_data_silent(
+0366:             getattr(self, "sidebar_stt_quality_combo", None),
+0367:             normalize_stt_quality_key(settings.get("stt_quality_preset", "balanced")),
+0368:         )
+0369:         self._set_combo_data_silent(
+0370:             getattr(self, "sidebar_audio_preset_combo", None),
+0371:             str(settings.get("audio_preset", "") or ""),
+0372:         )
+0373: 
+0374:         combo = getattr(self, "sidebar_cut_boundary_combo", None)
+0375:         if combo is not None:
+0376:             try:
+0377:                 combo.blockSignals(True)
+0378:                 enabled = bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True)))
+0379:                 combo.setCurrentIndex(0 if enabled else 1)
+0380:                 combo.blockSignals(False)
+0381:             except RuntimeError:
+0382:                 # 콤보박스가 C++ 메모리에서 삭제된 상태면 쿨하게 포기하고 유령 객체 제거
+0383:                 self.sidebar_cut_boundary_combo = None
+0384:     def _apply_sidebar_settings_update(self, updates: dict | None = None, preset_applier=None):
+0385:         settings = dict(load_settings())
+0386:         if callable(preset_applier):
+0387:             settings = dict(preset_applier(settings))
+0388:         if updates:
+0389:             settings.update(updates)
+0390:         self._apply_ai_settings(settings)
+0391:         self._sync_sidebar_preset_panel(settings)
+0392:         return settings
+0393: 
+0394:     def _on_sidebar_stt_quality_changed(self, *args):
+0395:         combo = getattr(self, "sidebar_stt_quality_combo", None)
+0396:         if combo is None:
+
+------------------------------------------------------------------------------------------
+ui/home_ui.py:549
+------------------------------------------------------------------------------------------
+0527:         if generating:
+0528:             dot_color = "#FF453A" if bool(getattr(self, "_saved_status_blink_on", True)) else "#5A1F24"
+0529:             tooltip = "자막 생성 중입니다."
+0530:         else:
+0531:             dot_color = "#FF453A" if dirty else "#34C759"
+0532:             tooltip = "저장되지 않은 변경사항이 있습니다." if dirty else "저장된 상태입니다."
+0533:         label.setTextFormat(Qt.TextFormat.RichText)
+0534:         from config import APP_VERSION
+0535:         label.setText(
+0536:             f"<span style='color:{dot_color}; font-size:13px;'>●</span> "
+0537:             f"<span style='color:#FFFFFF; font-size:14px; font-weight:700;'>AI Subtitle Studio</span> "
+0538:             f"<span style='color:#D1D1D6; font-size:11px; font-weight:600;'>v{APP_VERSION}</span>"
+0539:         )
+0540:         label.setToolTip(tooltip)
+0541: 
+0542:     def _format_engine_info_text(self, text: str) -> str:
+0543:         lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+0544:         return "\n".join(lines)
+0545: 
+0546:     def _short_model_name(self, model: str) -> str:
+0547:         text = str(model or "").strip()
+0548:         if not text:
+0549:             return "미사용"
+0550:         if "사용 안함" in text:
+0551:             return "미사용"
+0552:         for prefix in ("mlx-community/", "Systran/", "youngouk/", "ghost613/", "o0dimplz0o/"):
+0553:             text = text.replace(prefix, "")
+0554:         text = text.replace("-mlx", "")
+0555:         return text
+0556: 
+0557:     def _audio_model_name(self, settings: dict) -> str:
+0558:         return {
+0559:             "deepfilter": "DeepFilter",
+0560:             "rnnoise": "RNNoise",
+0561:             "resemble_enhance": "Resemble",
+0562:             "clearvoice": "ClearVoice",
+0563:             "none": "미사용",
+0564:         }.get(settings.get("selected_audio_ai", "none"), "미사용")
+0565: 
+0566:     def _vad_model_name(self, settings: dict) -> tuple[str, str]:
+0567:         vad_model = {
+0568:             "silero": "Silero",
+0569:             "ten_vad": "TEN VAD",
+0570:             "webrtc": "WebRTC",
+0571:             "pyannote": "Pyannote",
+
+------------------------------------------------------------------------------------------
+ui/home_ui.py:563
+------------------------------------------------------------------------------------------
+0541: 
+0542:     def _format_engine_info_text(self, text: str) -> str:
+0543:         lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+0544:         return "\n".join(lines)
+0545: 
+0546:     def _short_model_name(self, model: str) -> str:
+0547:         text = str(model or "").strip()
+0548:         if not text:
+0549:             return "미사용"
+0550:         if "사용 안함" in text:
+0551:             return "미사용"
+0552:         for prefix in ("mlx-community/", "Systran/", "youngouk/", "ghost613/", "o0dimplz0o/"):
+0553:             text = text.replace(prefix, "")
+0554:         text = text.replace("-mlx", "")
+0555:         return text
+0556: 
+0557:     def _audio_model_name(self, settings: dict) -> str:
+0558:         return {
+0559:             "deepfilter": "DeepFilter",
+0560:             "rnnoise": "RNNoise",
+0561:             "resemble_enhance": "Resemble",
+0562:             "clearvoice": "ClearVoice",
+0563:             "none": "미사용",
+0564:         }.get(settings.get("selected_audio_ai", "none"), "미사용")
+0565: 
+0566:     def _vad_model_name(self, settings: dict) -> tuple[str, str]:
+0567:         vad_model = {
+0568:             "silero": "Silero",
+0569:             "ten_vad": "TEN VAD",
+0570:             "webrtc": "WebRTC",
+0571:             "pyannote": "Pyannote",
+0572:             "none": "미사용",
+0573:         }.get(settings.get("selected_vad", "none"), "미사용")
+0574:         if vad_model == "미사용":
+0575:             return vad_model, "검수 안 함"
+0576:         if settings.get("vad_pre_split_enabled", False):
+0577:             return vad_model, "STT 선분할"
+0578:         if settings.get("vad_post_stt_align_enabled", True):
+0579:             return vad_model, "자막 위치 재계산"
+0580:         return vad_model, "자막/음성 겹침 검수"
+0581: 
+0582:     def _roughcut_llm_name(self, settings: dict, subtitle_llm: str) -> tuple[str, str]:
+0583:         if not bool(settings.get("roughcut_llm_enabled", False)):
+0584:             return "미사용", "러프컷 규칙 기반"
+0585:         model = str(settings.get("roughcut_llm_model", "") or "").strip()
+
+------------------------------------------------------------------------------------------
+ui/home_ui.py:602
+------------------------------------------------------------------------------------------
+0580:         return vad_model, "자막/음성 겹침 검수"
+0581: 
+0582:     def _roughcut_llm_name(self, settings: dict, subtitle_llm: str) -> tuple[str, str]:
+0583:         if not bool(settings.get("roughcut_llm_enabled", False)):
+0584:             return "미사용", "러프컷 규칙 기반"
+0585:         model = str(settings.get("roughcut_llm_model", "") or "").strip()
+0586:         if not model or model.lower() == "inherit" or "사용 안함" in model:
+0587:             return "미사용", "러프컷 규칙 기반"
+0588:         return self._short_model_name(model), "러프컷 전용"
+0589: 
+0590:     def _pipeline_rows(self, settings: dict) -> list[tuple[str, str, str]]:
+0591:         subtitle_llm = str(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "기본")) or "기본")
+0592:         vad_model, _vad_role = getattr(self, "_vad_model_name", lambda s: ("기본", ""))(settings)
+0593:         roughcut_llm, _roughcut_role = getattr(self, "_roughcut_llm_name", lambda s, l: ("기본", ""))(settings, subtitle_llm)
+0594:         stt1_model = getattr(self, "_short_model_name", lambda s: s)(settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "기본")))
+0595:         stt2_model = "미사용"
+0596:         if settings.get("stt_ensemble_enabled"):
+0597:             stt2_model = getattr(self, "_short_model_name", lambda s: s)(settings.get("selected_whisper_model_secondary", ""))
+0598: 
+0599:         cut_enabled = bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True)))
+0600: 
+0601:         return [
+0602:             ("cut_boundary", "컷 경계", "사용" if cut_enabled else "미사용"),
+0603:             ("preprocess", "전처리", "FFMPEG"),
+0604:             ("audio", "음성", getattr(self, "_audio_model_name", lambda s: "기본")(settings)),
+0605:             ("stt1", "STT 1", stt1_model),
+0606:             ("stt2", "STT 2", stt2_model),
+0607:             ("vad", "VAD", vad_model),
+0608:             ("subtitle_llm", "자막 LLM", getattr(self, "_short_model_name", lambda s: s)(subtitle_llm)),
+0609:             ("roughcut_llm", "러프컷 LLM", roughcut_llm),
+0610:         ]
+0611:     def _pipeline_status_blob(self) -> str:
+0612:         parts = []
+0613:         for attr in ("queue_header_lbl", "saved_status_label"):
+0614:             label = getattr(self, attr, None)
+0615:             if label is None:
+0616:                 continue
+0617:             try:
+0618:                 parts.append(str(label.text() or ""))
+0619:             except RuntimeError:
+0620:                 pass
+0621:         table = getattr(self, "queue_table", None)
+0622:         if table is not None:
+0623:             try:
+0624:                 if table.rowCount() > 0:
+
+------------------------------------------------------------------------------------------
+ui/home_ui.py:686
+------------------------------------------------------------------------------------------
+0664:         elif current_keys:
+0665:             current_indexes = [order.index(key) for key in current_keys if key in order]
+0666:             if current_indexes:
+0667:                 completed.update(order[:min(current_indexes)])
+0668:             if current_keys == {"vad"} and any(token in blob for token in ("준비", "스캔", "캐시")):
+0669:                 completed.difference_update({"stt1", "stt2", "subtitle_llm"})
+0670: 
+0671:         roughcut_status = self._roughcut_draft_status_value()
+0672:         editor_count = getattr(editor, "_last_roughcut_draft_major_count", None) if editor is not None else None
+0673:         if roughcut_status == "done" or editor_count is not None:
+0674:             completed.add("roughcut_llm")
+0675:         if self._roughcut_status_text().startswith("완료"):
+0676:             completed.add("roughcut_llm")
+0677: 
+0678:         if not settings.get("stt_ensemble_enabled", False):
+0679:             completed.discard("stt2")
+0680:         if settings.get("selected_vad", "none") == "none":
+0681:             completed.discard("vad")
+0682:         return completed
+0683: 
+0684:     def _pipeline_model_link(self, key: str, text: str, *, current: bool = False, completed: bool = False) -> str:
+0685:         color = "#00D46A" if completed else ("#FFD60A" if current else "#F5F7FA")
+0686:         dropdown_icon = " ▾" if key in {"cut_boundary", "audio", "stt1", "stt2", "vad", "subtitle_llm", "roughcut_llm"} else ""
+0687:         return (
+0688:             f"<a href='model:{escape(key)}' "
+0689:             f"style='color:{color}; text-decoration:none; font-family:Menlo, Monaco, Consolas, monospace; font-weight:400;'>"
+0690:             f"{escape(text)}<span style='color:#8EA4B8; font-weight:400;'>{dropdown_icon}</span></a>"
+0691:         )
+0692: 
+0693:     def _pipeline_info_html(self, settings: dict) -> str:
+0694:         rows = []
+0695:         model_links = {
+0696:             "컷 경계": "cut_boundary",
+0697:             "음성": "audio",
+0698:             "STT 1": "stt1",
+0699:             "STT 2": "stt2",
+0700:             "VAD": "vad",
+0701:             "자막 LLM": "subtitle_llm",
+0702:             "러프컷 LLM": "roughcut_llm",
+0703:         }
+0704:         current_keys = self._pipeline_current_stage_keys(settings)
+0705:         completed_keys = self._pipeline_completed_stage_keys(settings, current_keys)
+0706:         for idx, (key, stage, model) in enumerate(self._pipeline_rows(settings), 1):
+0707:             current = key in current_keys
+0708:             completed = key in completed_keys
+
+------------------------------------------------------------------------------------------
+ui/home_ui.py:819
+------------------------------------------------------------------------------------------
+0797:         return models
+0798: 
+0799:     def _stt1_model_items(self) -> list[str]:
+0800:         blocked = ("ghost613", "zeroth")
+0801:         return [
+0802:             model for model in self._whisper_model_items()
+0803:             if not any(token in str(model).lower() for token in blocked)
+0804:         ]
+0805: 
+0806:     def _stt2_model_items(self) -> list[str]:
+0807:         picked = []
+0808:         for model in self._whisper_model_items():
+0809:             model_l = str(model).lower()
+0810:             if "ghost613" not in model_l and "zeroth" not in model_l:
+0811:                 continue
+0812:             if model not in picked:
+0813:                 picked.append(model)
+0814:         return picked
+0815: 
+0816:     def _llm_model_items(self) -> list[dict]:
+0817:         items = [
+0818:             {
+0819:                 "name": "사용 안함 (Whisper 단독 진행)",
+0820:                 "display_name": "사용 안함 (Whisper 단독 진행)",
+0821:                 "details": {"provider": "none"},
+0822:             }
+0823:         ]
+0824:         try:
+0825:             from ui.settings.settings_common import _fetch_models
+0826:             for item in _fetch_models():
+0827:                 row = dict(item)
+0828:                 details = dict(row.get("details", {}) or {})
+0829:                 details.setdefault("provider", "ollama")
+0830:                 row["details"] = details
+0831:                 row.setdefault("display_name", row.get("name", ""))
+0832:                 items.append(row)
+0833:         except Exception:
+0834:             pass
+0835:         try:
+0836:             from core.llm.provider_registry import cloud_model_items
+0837:             items.extend(cloud_model_items())
+0838:         except Exception:
+0839:             pass
+0840:         return items
+0841: 
+
+------------------------------------------------------------------------------------------
+ui/home_ui.py:864
+------------------------------------------------------------------------------------------
+0842:     def _roughcut_llm_parameter_b(self, item: dict) -> float | None:
+0843:         details = item.get("details", {}) or {}
+0844:         parts = [
+0845:             str(item.get("name") or ""),
+0846:             str(item.get("display_name") or ""),
+0847:             str(details.get("parameter_size") or ""),
+0848:             str(details.get("family") or ""),
+0849:         ]
+0850:         for text in parts:
+0851:             for match in re.finditer(r"(?<!\d)(\d+(?:\.\d+)?)\s*b\b", text.lower()):
+0852:                 try:
+0853:                     return float(match.group(1))
+0854:                 except ValueError:
+0855:                     continue
+0856:         return None
+0857: 
+0858:     def _roughcut_llm_is_capable(self, item: dict) -> bool:
+0859:         details = item.get("details", {}) or {}
+0860:         provider = str(details.get("provider") or "ollama").lower()
+0861:         name = str(item.get("name") or "")
+0862:         display_name = str(item.get("display_name") or name)
+0863:         label_l = f"{name} {display_name}".lower()
+0864:         if provider == "none" or "사용 안함" in label_l:
+0865:             return False
+0866: 
+0867:         if provider in {"google", "openai"}:
+0868:             if any(re.search(rf"\b{re.escape(token)}\b", label_l) for token in ROUGHCUT_BLOCKED_CLOUD_TOKENS):
+0869:                 return False
+0870:             return any(token in label_l for token in ROUGHCUT_CAPABLE_CLOUD_TOKENS) or "gpt-5" in label_l
+0871: 
+0872:         params_b = self._roughcut_llm_parameter_b(item)
+0873:         if params_b is not None:
+0874:             return params_b >= ROUGHCUT_LLM_MIN_PARAMETERS_B
+0875: 
+0876:         if any(token in label_l for token in ROUGHCUT_CAPABLE_LOCAL_LATEST):
+0877:             return True
+0878: 
+0879:         try:
+0880:             return int(item.get("size") or 0) >= ROUGHCUT_LLM_MIN_SIZE_BYTES
+0881:         except (TypeError, ValueError):
+0882:             return False
+0883: 
+0884:     def _roughcut_llm_items(self) -> list[dict]:
+0885:         return [item for item in self._llm_model_items() if self._roughcut_llm_is_capable(item)]
+0886: 
+
+------------------------------------------------------------------------------------------
+ui/home_ui.py:902
+------------------------------------------------------------------------------------------
+0880:             return int(item.get("size") or 0) >= ROUGHCUT_LLM_MIN_SIZE_BYTES
+0881:         except (TypeError, ValueError):
+0882:             return False
+0883: 
+0884:     def _roughcut_llm_items(self) -> list[dict]:
+0885:         return [item for item in self._llm_model_items() if self._roughcut_llm_is_capable(item)]
+0886: 
+0887:     def _apply_sidebar_model_selection(self, updates: dict):
+0888:         self._apply_sidebar_settings_update(updates)
+0889: 
+0890:     def _add_action(self, menu: QMenu, label: str, callback, *, checked: bool = False):
+0891:         action = menu.addAction(label)
+0892:         action.setCheckable(True)
+0893:         action.setChecked(bool(checked))
+0894:         action.triggered.connect(callback)
+0895:         return action
+0896: 
+0897:     def _on_sidebar_model_link(self, href: str):
+0898:         key = str(href or "").replace("model:", "", 1)
+0899:         settings = load_settings()
+0900:         menu = QMenu(getattr(self, "home_page", None))
+0901: 
+0902:         if key == "cut_boundary":
+0903:             choices = [("사용", True), ("미사용", False)]
+0904:             current = bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True)))
+0905:             for label, value in choices:
+0906:                 self._add_action(
+0907:                     menu,
+0908:                     label,
+0909:                     lambda _=False, v=value: self._apply_sidebar_model_selection({"cut_boundary_detection_enabled": v, "scan_cut_enabled": v}),
+0910:                     checked=value == current,
+0911:                 )
+0912: 
+0913:         elif key == "audio":
+0914:             choices = [
+0915:                 ("DeepFilter", "deepfilter"),
+0916:                 ("RNNoise", "rnnoise"),
+0917:                 ("Resemble Enhance", "resemble_enhance"),
+0918:                 ("ClearVoice", "clearvoice"),
+0919:                 ("미사용", "none"),
+0920:             ]
+0921:             current = settings.get("selected_audio_ai", "none")
+0922:             for label, value in choices:
+0923:                 self._add_action(
+0924:                     menu,
+
+------------------------------------------------------------------------------------------
+ui/home_ui.py:931
+------------------------------------------------------------------------------------------
+0909:                     lambda _=False, v=value: self._apply_sidebar_model_selection({"cut_boundary_detection_enabled": v, "scan_cut_enabled": v}),
+0910:                     checked=value == current,
+0911:                 )
+0912: 
+0913:         elif key == "audio":
+0914:             choices = [
+0915:                 ("DeepFilter", "deepfilter"),
+0916:                 ("RNNoise", "rnnoise"),
+0917:                 ("Resemble Enhance", "resemble_enhance"),
+0918:                 ("ClearVoice", "clearvoice"),
+0919:                 ("미사용", "none"),
+0920:             ]
+0921:             current = settings.get("selected_audio_ai", "none")
+0922:             for label, value in choices:
+0923:                 self._add_action(
+0924:                     menu,
+0925:                     label,
+0926:                     lambda _=False, v=value: self._apply_sidebar_model_selection({"selected_audio_ai": v}),
+0927:                     checked=value == current,
+0928:                 )
+0929: 
+0930:         elif key == "vad":
+0931:             choices = [("Silero", "silero"), ("TEN VAD", "ten_vad"), ("미사용", "none")]
+0932:             current = settings.get("selected_vad", "silero")
+0933:             for label, value in choices:
+0934:                 self._add_action(
+0935:                     menu,
+0936:                     label,
+0937:                     lambda _=False, v=value: self._apply_sidebar_model_selection({"selected_vad": v}),
+0938:                     checked=value == current,
+0939:                 )
+0940: 
+0941:         elif key in {"stt", "stt1", "stt2"}:
+0942:             ensemble = bool(settings.get("stt_ensemble_enabled", False))
+0943:             current1 = settings.get("selected_whisper_model", "")
+0944:             current2 = settings.get("selected_whisper_model_secondary", "")
+0945:             if key == "stt2":
+0946:                 self._add_action(
+0947:                     menu,
+0948:                     "STT2 앙상블 사용",
+0949:                     lambda checked=False: self._apply_sidebar_model_selection({"stt_ensemble_enabled": bool(checked)}),
+0950:                     checked=ensemble,
+0951:                 )
+0952:                 menu.addSeparator()
+0953:             models = self._stt1_model_items() if key in {"stt", "stt1"} else self._stt2_model_items()
+
+------------------------------------------------------------------------------------------
+ui/home_ui.py:975
+------------------------------------------------------------------------------------------
+0953:             models = self._stt1_model_items() if key in {"stt", "stt1"} else self._stt2_model_items()
+0954:             for model in models:
+0955:                 label = self._short_model_name(model)
+0956:                 if key in {"stt", "stt1"}:
+0957:                     self._add_action(
+0958:                         menu,
+0959:                         label,
+0960:                         lambda _=False, m=model: self._apply_sidebar_model_selection({"selected_whisper_model": m}),
+0961:                         checked=model == current1,
+0962:                     )
+0963:                     continue
+0964:                 self._add_action(
+0965:                     menu,
+0966:                     label,
+0967:                     lambda _=False, m=model: self._apply_sidebar_model_selection({"selected_whisper_model_secondary": m, "stt_ensemble_enabled": True}),
+0968:                     checked=model == current2,
+0969:                 )
+0970: 
+0971:         elif key in {"subtitle_llm", "roughcut_llm"}:
+0972:             if key == "roughcut_llm":
+0973:                 self._add_action(
+0974:                     menu,
+0975:                     "사용 안함",
+0976:                     lambda _=False: self._apply_sidebar_model_selection({
+0977:                         "roughcut_llm_enabled": False,
+0978:                         "roughcut_llm_use_override": True,
+0979:                         "roughcut_llm_provider": "none",
+0980:                         "roughcut_llm_model": "사용 안함",
+0981:                     }),
+0982:                     checked=not bool(settings.get("roughcut_llm_enabled", False)),
+0983:                 )
+0984:                 menu.addSeparator()
+0985: 
+0986:             current = settings.get("selected_model", "") if key == "subtitle_llm" else settings.get("roughcut_llm_model", "")
+0987:             model_items = self._roughcut_llm_items() if key == "roughcut_llm" else self._llm_model_items()
+0988:             for item in model_items:
+0989:                 name = str(item.get("name") or "")
+0990:                 label = str(item.get("display_name") or name)
+0991:                 provider = str((item.get("details", {}) or {}).get("provider") or "ollama")
+0992:                 if key == "subtitle_llm":
+0993:                     updates = {"selected_model": name, "selected_llm_provider": provider}
+0994:                 else:
+0995:                     updates = {
+0996:                         "roughcut_llm_enabled": True,
+0997:                         "roughcut_llm_use_override": True,
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:53
+------------------------------------------------------------------------------------------
+0031:         if not bool(settings.get("vad_post_stt_align_enabled", True)):
+0032:             return out
+0033: 
+0034:         try:
+0035:             from core.subtitle_quality.vad_alignment_checker import adjust_segments_to_vad_boundaries
+0036: 
+0037:             adjusted, adjusted_count = adjust_segments_to_vad_boundaries(
+0038:                 out,
+0039:                 vad_segments,
+0040:                 max_shift_sec=float(settings.get("vad_post_stt_max_shift_sec", 0.7) or 0.7),
+0041:                 edge_pad_sec=float(settings.get("vad_post_stt_edge_pad_sec", 0.04) or 0.04),
+0042:             )
+0043:             if adjusted_count:
+0044:                 get_logger().log(f"  🎯 [VAD 후처리] {context} 자막 위치 {adjusted_count}개 보정 후 자막 메뉴로 전달")
+0045:             return adjusted
+0046:         except Exception as exc:
+0047:             get_logger().log(f"  ⚠️ [VAD 후처리] {context} 자막 위치 보정 실패: {exc}")
+0048:             return out
+0049: 
+0050:     def _project_cut_boundaries_for_pipeline(self) -> list[dict]:
+0051:         """Return saved visual cut boundaries from the current project file."""
+0052:         try:
+0053:             from core.cut_boundary import project_cut_boundaries
+0054: 
+0055:             ui = getattr(self, "ui", None)
+0056:             project_path = str(getattr(ui, "_current_project_path", "") or "")
+0057:             if not project_path or not os.path.exists(project_path):
+0058:                 return []
+0059:             import json
+0060: 
+0061:             with open(project_path, "r", encoding="utf-8") as f:
+0062:                 return project_cut_boundaries(json.load(f))
+0063:         except Exception:
+0064:             return []
+0065: 
+0066:     def _cut_boundary_cache_path_for_start(self, files: list[str], settings: dict) -> str:
+0067:         """Return reusable cut-boundary cache path for the current media/settings."""
+0068:         import hashlib
+0069:         try:
+0070:             import config
+0071:             cache_root = os.path.join(config.OUTPUT_DIR, "cut_boundary_cache")
+0072:         except Exception:
+0073:             cache_root = os.path.join("output", "cut_boundary_cache")
+0074: 
+0075:         os.makedirs(cache_root, exist_ok=True)
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:81
+------------------------------------------------------------------------------------------
+0059:             import json
+0060: 
+0061:             with open(project_path, "r", encoding="utf-8") as f:
+0062:                 return project_cut_boundaries(json.load(f))
+0063:         except Exception:
+0064:             return []
+0065: 
+0066:     def _cut_boundary_cache_path_for_start(self, files: list[str], settings: dict) -> str:
+0067:         """Return reusable cut-boundary cache path for the current media/settings."""
+0068:         import hashlib
+0069:         try:
+0070:             import config
+0071:             cache_root = os.path.join(config.OUTPUT_DIR, "cut_boundary_cache")
+0072:         except Exception:
+0073:             cache_root = os.path.join("output", "cut_boundary_cache")
+0074: 
+0075:         os.makedirs(cache_root, exist_ok=True)
+0076: 
+0077:         payload = {
+0078:             "version": 2,
+0079:             "files": [],
+0080:             "settings": {
+0081:                 "scan_cut_auto_sample_step_sec": settings.get("scan_cut_auto_sample_step_sec", 1.0),
+0082:                 "scan_cut_auto_threshold": settings.get("scan_cut_auto_threshold", settings.get("scan_cut_threshold", 24.0)),
+0083:                 "scan_cut_threshold": settings.get("scan_cut_threshold", 24.0),
+0084:                 "scan_cut_mode": settings.get("scan_cut_mode", ""),
+0085:                 "scan_cut_boundary_level": settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")),
+0086:                 "scan_cut_grid_mask": settings.get("scan_cut_grid_mask", ""),
+0087:             },
+0088:         }
+0089: 
+0090:         for p in list(files or []):
+0091:             try:
+0092:                 st = os.stat(p)
+0093:                 payload["files"].append({
+0094:                     "path": os.path.abspath(p),
+0095:                     "size": int(st.st_size),
+0096:                     "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))),
+0097:                 })
+0098:             except Exception:
+0099:                 payload["files"].append({
+0100:                     "path": os.path.abspath(str(p)),
+0101:                     "size": 0,
+0102:                     "mtime_ns": 0,
+0103:                 })
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:144
+------------------------------------------------------------------------------------------
+0122: 
+0123:             with open(cache_path, "r", encoding="utf-8") as f:
+0124:                 payload = json.load(f)
+0125: 
+0126:             analysis = payload.get("analysis", {}) if isinstance(payload, dict) else {}
+0127:             rows = analysis.get("cut_boundaries", [])
+0128: 
+0129:             # Backward compatibility with older cache format
+0130:             if not rows:
+0131:                 rows = payload.get("cut_boundaries", []) if isinstance(payload, dict) else []
+0132: 
+0133:             rows = normalize_cut_boundaries(rows or [])
+0134:             if not rows:
+0135:                 return []
+0136: 
+0137:             # ✅ 핵심: 현재 프로젝트 파일은 그대로 두고 analysis.cut_boundaries만 주입
+0138:             if project_path and os.path.exists(project_path):
+0139:                 with open(project_path, "r", encoding="utf-8") as f:
+0140:                     project = json.load(f)
+0141: 
+0142:                 project.setdefault("analysis", {})
+0143:                 project["analysis"]["cut_boundaries"] = list(rows)
+0144:                 project["analysis"]["cut_boundary_prescan_done"] = True
+0145:                 project["analysis"]["cut_boundary_cache_path"] = cache_path
+0146:                 project["analysis"]["cut_boundary_cache_type"] = "cut_boundaries_only"
+0147: 
+0148:                 sync_project_cut_boundaries(project, settings=settings)
+0149: 
+0150:                 with open(project_path, "w", encoding="utf-8") as f:
+0151:                     json.dump(project, f, ensure_ascii=False, indent=2)
+0152: 
+0153:             get_logger().log(
+0154:                 f"  ♻️ [컷 경계] 캐시 재사용: {len(rows)}개 "
+0155:                 f"(analysis.cut_boundaries only, {cache_path})"
+0156:             )
+0157:             self._ui_emit("_sig_refresh_cut_boundary_placeholder")
+0158:             return rows
+0159:         except Exception as exc:
+0160:             get_logger().log(f"  ⚠️ [컷 경계] 캐시 불러오기 실패: {exc}")
+0161:             return []
+0162: 
+0163:     def _save_cut_boundary_cache_for_start(self, files: list[str], settings: dict, rows: list[dict]) -> None:
+0164:         """Save only cut-boundary analysis data for future reuse.
+0165: 
+0166:         IMPORTANT:
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:160
+------------------------------------------------------------------------------------------
+0138:             if project_path and os.path.exists(project_path):
+0139:                 with open(project_path, "r", encoding="utf-8") as f:
+0140:                     project = json.load(f)
+0141: 
+0142:                 project.setdefault("analysis", {})
+0143:                 project["analysis"]["cut_boundaries"] = list(rows)
+0144:                 project["analysis"]["cut_boundary_prescan_done"] = True
+0145:                 project["analysis"]["cut_boundary_cache_path"] = cache_path
+0146:                 project["analysis"]["cut_boundary_cache_type"] = "cut_boundaries_only"
+0147: 
+0148:                 sync_project_cut_boundaries(project, settings=settings)
+0149: 
+0150:                 with open(project_path, "w", encoding="utf-8") as f:
+0151:                     json.dump(project, f, ensure_ascii=False, indent=2)
+0152: 
+0153:             get_logger().log(
+0154:                 f"  ♻️ [컷 경계] 캐시 재사용: {len(rows)}개 "
+0155:                 f"(analysis.cut_boundaries only, {cache_path})"
+0156:             )
+0157:             self._ui_emit("_sig_refresh_cut_boundary_placeholder")
+0158:             return rows
+0159:         except Exception as exc:
+0160:             get_logger().log(f"  ⚠️ [컷 경계] 캐시 불러오기 실패: {exc}")
+0161:             return []
+0162: 
+0163:     def _save_cut_boundary_cache_for_start(self, files: list[str], settings: dict, rows: list[dict]) -> None:
+0164:         """Save only cut-boundary analysis data for future reuse.
+0165: 
+0166:         IMPORTANT:
+0167:         - Do NOT move/copy the actual project file into cache.
+0168:         - The project file remains the source of truth for the current work.
+0169:         - Cache stores only analysis.cut_boundaries-compatible rows.
+0170:         """
+0171:         try:
+0172:             import time
+0173:             cache_path = self._cut_boundary_cache_path_for_start(files, settings)
+0174: 
+0175:             payload = {
+0176:                 "version": 2,
+0177:                 "created_at": time.time(),
+0178:                 "cache_type": "cut_boundaries_only",
+0179:                 "files": [],
+0180:                 "settings": {
+0181:                     "scan_cut_auto_sample_step_sec": settings.get("scan_cut_auto_sample_step_sec", 1.0),
+0182:                     "scan_cut_auto_threshold": settings.get("scan_cut_auto_threshold", settings.get("scan_cut_threshold", 24.0)),
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:213
+------------------------------------------------------------------------------------------
+0191:                 },
+0192:             }
+0193: 
+0194:             for p in list(files or []):
+0195:                 try:
+0196:                     st = os.stat(p)
+0197:                     payload["files"].append({
+0198:                         "path": os.path.abspath(str(p)),
+0199:                         "size": int(st.st_size),
+0200:                         "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))),
+0201:                     })
+0202:                 except Exception:
+0203:                     payload["files"].append({
+0204:                         "path": os.path.abspath(str(p)),
+0205:                         "size": 0,
+0206:                         "mtime_ns": 0,
+0207:                     })
+0208: 
+0209:             with open(cache_path, "w", encoding="utf-8") as f:
+0210:                 json.dump(payload, f, ensure_ascii=False, indent=2)
+0211: 
+0212:             get_logger().log(
+0213:                 f"  💾 [컷 경계] 캐시 저장 완료: {len(rows or [])}개 "
+0214:                 f"(analysis.cut_boundaries only, {cache_path})"
+0215:             )
+0216:         except Exception as exc:
+0217:             get_logger().log(f"  ⚠️ [컷 경계] 캐시 저장 실패: {exc}")
+0218: 
+0219:     def _wait_cut_boundary_prescan_before_stt(self):
+0220:         """Block backend pipeline thread until cut-boundary prescan is done.
+0221: 
+0222:         This does not block the Qt UI thread. It only prevents STT1/STT2 from
+0223:         starting before the absolute cut-boundary middle segments are ready.
+0224:         """
+0225:         try:
+0226:             thread = getattr(self, "_cut_boundary_prescan_thread", None)
+0227:             if thread is not None and thread.is_alive():
+0228:                 get_logger().log("  🎬 [컷 경계] STT 시작 전 자동 분석 완료 대기 중...")
+0229:                 thread.join()
+0230:                 get_logger().log("  ✅ [컷 경계] STT 시작 전 자동 분석 완료")
+0231:                 try:
+0232:                     self._ui_emit("_sig_refresh_cut_boundary_placeholder")
+0233:                 except Exception:
+0234:                     pass
+0235:         except Exception as exc:
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:247
+------------------------------------------------------------------------------------------
+0225:         try:
+0226:             thread = getattr(self, "_cut_boundary_prescan_thread", None)
+0227:             if thread is not None and thread.is_alive():
+0228:                 get_logger().log("  🎬 [컷 경계] STT 시작 전 자동 분석 완료 대기 중...")
+0229:                 thread.join()
+0230:                 get_logger().log("  ✅ [컷 경계] STT 시작 전 자동 분석 완료")
+0231:                 try:
+0232:                     self._ui_emit("_sig_refresh_cut_boundary_placeholder")
+0233:                 except Exception:
+0234:                     pass
+0235:         except Exception as exc:
+0236:             get_logger().log(f"  ⚠️ [컷 경계] STT 시작 전 대기 실패: {exc}")
+0237: 
+0238: 
+0239:     def _cut_boundary_sec_from_row(self, row) -> float | None:
+0240:         try:
+0241:             if isinstance(row, dict):
+0242:                 return float(row.get("timeline_sec", row.get("time", row.get("start", 0.0))) or 0.0)
+0243:             return float(row)
+0244:         except Exception:
+0245:             return None
+0246: 
+0247:     def _cut_boundary_placeholder_duration(self, files=None) -> float:
+0248:         try:
+0249:             if hasattr(self, "_cut_boundary_total_duration_for_start"):
+0250:                 return float(self._cut_boundary_total_duration_for_start(list(files or [])) or 0.0)
+0251:         except Exception:
+0252:             pass
+0253:         try:
+0254:             clip_boundaries = list(getattr(self.ui, "_multiclip_boundaries", []) or [])
+0255:             if clip_boundaries:
+0256:                 return max(float(x.get("end", 0.0) or 0.0) for x in clip_boundaries)
+0257:         except Exception:
+0258:             pass
+0259:         try:
+0260:             vp = getattr(self, "video_processor", None)
+0261:             if vp is not None and files:
+0262:                 return float(vp._media_duration_for_progress(list(files or [])[0]) or 0.0)
+0263:         except Exception:
+0264:             pass
+0265:         return 0.0
+0266: 
+0267:     def _build_cut_boundary_topicless_rows(self, detected, *, files=None, done: bool = False) -> list[dict]:
+0268:         """Build gray middle-level topicless rows from detected cut boundaries.
+0269: 
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:286
+------------------------------------------------------------------------------------------
+0264:             pass
+0265:         return 0.0
+0266: 
+0267:     def _build_cut_boundary_topicless_rows(self, detected, *, files=None, done: bool = False) -> list[dict]:
+0268:         """Build gray middle-level topicless rows from detected cut boundaries.
+0269: 
+0270:         During scan:
+0271:         - if first cut exists, immediately create 00:00~first_cut.
+0272: 
+0273:         After full scan:
+0274:         - also include last_cut~video_end.
+0275:         """
+0276:         cuts = []
+0277:         for row in list(detected or []):
+0278:             sec = self._cut_boundary_sec_from_row(row)
+0279:             if sec is not None and sec > 0.0:
+0280:                 cuts.append(round(float(sec), 3))
+0281: 
+0282:         cuts = sorted(set(cuts))
+0283:         if not cuts:
+0284:             return []
+0285: 
+0286:         duration = self._cut_boundary_placeholder_duration(files)
+0287:         boundaries = [0.0] + cuts
+0288: 
+0289:         if done and duration > boundaries[-1]:
+0290:             boundaries.append(round(duration, 3))
+0291: 
+0292:         rows = []
+0293:         for i in range(len(boundaries) - 1):
+0294:             start = float(boundaries[i])
+0295:             end = float(boundaries[i + 1])
+0296:             if end <= start:
+0297:                 continue
+0298: 
+0299:             seg_id = f"cut_topicless_middle_{i + 1:03d}"
+0300:             rows.append({
+0301:                 "id": seg_id,
+0302:                 "segment_id": seg_id,
+0303:                 "chapter_id": seg_id,
+0304:                 "major_id": seg_id,
+0305: 
+0306:                 "start": round(start, 3),
+0307:                 "end": round(end, 3),
+0308: 
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:327
+------------------------------------------------------------------------------------------
+0305: 
+0306:                 "start": round(start, 3),
+0307:                 "end": round(end, 3),
+0308: 
+0309:                 "title": "주제없음",
+0310:                 "name": "주제없음",
+0311:                 "summary": "컷 경계 기반으로 자동 생성된 임시 중분류 세그먼트입니다.",
+0312:                 "llm_summary": "",
+0313: 
+0314:                 "tags": ["컷경계", "주제없음"],
+0315:                 "source": "cut_boundary",
+0316:                 "story_role": "topicless_placeholder",
+0317:                 "narrative_function": "cut_boundary_placeholder",
+0318: 
+0319:                 # UI가 어느 키를 보든 회색 placeholder로 인식할 수 있게 넓게 저장
+0320:                 "level": "middle",
+0321:                 "segment_type": "middle",
+0322:                 "roughcut_level": "middle",
+0323:                 "category": "middle",
+0324:                 "is_middle_segment": True,
+0325: 
+0326:                 "is_topicless_placeholder": True,
+0327:                 "is_cut_boundary_placeholder": True,
+0328:                 "topicless": True,
+0329: 
+0330:                 "color_role": "topicless",
+0331:                 "display_color": "gray",
+0332:                 "ui_color": "gray",
+0333:                 "color": "#9CA3AF",
+0334: 
+0335:                 "needs_review": True,
+0336:                 "status": "needs_review",
+0337:                 "safety": "acceptable",
+0338:                 "importance": 0.0,
+0339:                 "importance_score": 0.0,
+0340:                 "boundary_confidence": 1.0,
+0341: 
+0342:                 "can_move": True,
+0343:                 "can_trim": True,
+0344:                 "can_remove": True,
+0345:                 "move_risk": "low",
+0346:                 "dependencies": [],
+0347:             })
+0348: 
+0349:         return rows
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:367
+------------------------------------------------------------------------------------------
+0345:                 "move_risk": "low",
+0346:                 "dependencies": [],
+0347:             })
+0348: 
+0349:         return rows
+0350: 
+0351:     def _placeholder_rows_can_be_overwritten(self, rows) -> bool:
+0352:         rows = list(rows or [])
+0353:         if not rows:
+0354:             return True
+0355: 
+0356:         for row in rows:
+0357:             if not isinstance(row, dict):
+0358:                 return False
+0359: 
+0360:             title = str(row.get("title", row.get("name", "")) or "")
+0361:             tags = row.get("tags", []) or []
+0362:             if isinstance(tags, str):
+0363:                 tags = [tags]
+0364: 
+0365:             if (
+0366:                 row.get("is_topicless_placeholder")
+0367:                 or row.get("is_cut_boundary_placeholder")
+0368:                 or row.get("source") == "cut_boundary"
+0369:                 or title == "주제없음"
+0370:                 or "컷경계" in tags
+0371:             ):
+0372:                 continue
+0373: 
+0374:             # 이미 LLM이 만든 실제 중분류가 있으면 자동 placeholder가 덮어쓰면 안 됨
+0375:             return False
+0376: 
+0377:         return True
+0378: 
+0379:     def _force_cut_boundary_topicless_segments_to_project(
+0380:         self,
+0381:         project_path: str,
+0382:         detected,
+0383:         *,
+0384:         files=None,
+0385:         done: bool = False,
+0386:     ) -> list[dict]:
+0387:         """Persist gray topicless middle segments immediately.
+0388: 
+0389:         This fixes the case where cut boundaries are detected but the gray
+
+
+==========================================================================================
+현재 컷 경계 profile / positions 정의 확인
+==========================================================================================
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:512
+------------------------------------------------------------------------------------------
+0500:     total = 0
+0501:     for index in range(length):
+0502:         total += abs(int(frame_a[index]) - int(frame_b[index]))
+0503:     return total / length
+0504: 
+0505: 
+0506: 
+0507: # === CUT_BOUNDARY_LEVEL_PROFILE_PATCH_V1 ===
+0508: 
+0509: CUT_BOUNDARY_LEVEL_CHOICES = (
+0510:     ("off", "사용안함"),
+0511:     ("low", "낮음 - 9개 중 십자가 4개"),
+0512:     ("medium", "중간 - 9개 중 X모양 5개"),
+0513:     ("high", "높음 - 9개 중 O모양 8개"),
+0514: )
+0515: 
+0516: CUT_BOUNDARY_GRID_PROFILES = {
+0517:     # 3x3 index:
+0518:     # 0 1 2
+0519:     # 3 4 5
+0520:     # 6 7 8
+0521:     "off": {
+0522:         "level": "off",
+0523:         "label": "사용안함",
+0524:         "mask": "off",
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:516
+------------------------------------------------------------------------------------------
+0504: 
+0505: 
+0506: 
+0507: # === CUT_BOUNDARY_LEVEL_PROFILE_PATCH_V1 ===
+0508: 
+0509: CUT_BOUNDARY_LEVEL_CHOICES = (
+0510:     ("off", "사용안함"),
+0511:     ("low", "낮음 - 9개 중 십자가 4개"),
+0512:     ("medium", "중간 - 9개 중 X모양 5개"),
+0513:     ("high", "높음 - 9개 중 O모양 8개"),
+0514: )
+0515: 
+0516: CUT_BOUNDARY_GRID_PROFILES = {
+0517:     # 3x3 index:
+0518:     # 0 1 2
+0519:     # 3 4 5
+0520:     # 6 7 8
+0521:     "off": {
+0522:         "level": "off",
+0523:         "label": "사용안함",
+0524:         "mask": "off",
+0525:         "positions": (),
+0526:         "cell_count": 0,
+0527:     },
+0528:     "low": {
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:525
+------------------------------------------------------------------------------------------
+0513:     ("high", "높음 - 9개 중 O모양 8개"),
+0514: )
+0515: 
+0516: CUT_BOUNDARY_GRID_PROFILES = {
+0517:     # 3x3 index:
+0518:     # 0 1 2
+0519:     # 3 4 5
+0520:     # 6 7 8
+0521:     "off": {
+0522:         "level": "off",
+0523:         "label": "사용안함",
+0524:         "mask": "off",
+0525:         "positions": (),
+0526:         "cell_count": 0,
+0527:     },
+0528:     "low": {
+0529:         "level": "low",
+0530:         "label": "낮음 - 9개 중 십자가 4개",
+0531:         "mask": "cross4",
+0532:         # 십자가 4개: 상/좌/우/하, 중앙 제외
+0533:         "positions": (1, 3, 5, 7),
+0534:         "cell_count": 4,
+0535:     },
+0536:     "medium": {
+0537:         "level": "medium",
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:533
+------------------------------------------------------------------------------------------
+0521:     "off": {
+0522:         "level": "off",
+0523:         "label": "사용안함",
+0524:         "mask": "off",
+0525:         "positions": (),
+0526:         "cell_count": 0,
+0527:     },
+0528:     "low": {
+0529:         "level": "low",
+0530:         "label": "낮음 - 9개 중 십자가 4개",
+0531:         "mask": "cross4",
+0532:         # 십자가 4개: 상/좌/우/하, 중앙 제외
+0533:         "positions": (1, 3, 5, 7),
+0534:         "cell_count": 4,
+0535:     },
+0536:     "medium": {
+0537:         "level": "medium",
+0538:         "label": "중간 - 9개 중 X모양 5개",
+0539:         "mask": "x5",
+0540:         # X모양 5개: 네 모서리 + 중앙
+0541:         "positions": (0, 2, 4, 6, 8),
+0542:         "cell_count": 5,
+0543:     },
+0544:     "high": {
+0545:         "level": "high",
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:536
+------------------------------------------------------------------------------------------
+0524:         "mask": "off",
+0525:         "positions": (),
+0526:         "cell_count": 0,
+0527:     },
+0528:     "low": {
+0529:         "level": "low",
+0530:         "label": "낮음 - 9개 중 십자가 4개",
+0531:         "mask": "cross4",
+0532:         # 십자가 4개: 상/좌/우/하, 중앙 제외
+0533:         "positions": (1, 3, 5, 7),
+0534:         "cell_count": 4,
+0535:     },
+0536:     "medium": {
+0537:         "level": "medium",
+0538:         "label": "중간 - 9개 중 X모양 5개",
+0539:         "mask": "x5",
+0540:         # X모양 5개: 네 모서리 + 중앙
+0541:         "positions": (0, 2, 4, 6, 8),
+0542:         "cell_count": 5,
+0543:     },
+0544:     "high": {
+0545:         "level": "high",
+0546:         "label": "높음 - 9개 중 O모양 8개",
+0547:         "mask": "o8",
+0548:         # O모양 8개: 중앙 제외 외곽 전체
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:537
+------------------------------------------------------------------------------------------
+0525:         "positions": (),
+0526:         "cell_count": 0,
+0527:     },
+0528:     "low": {
+0529:         "level": "low",
+0530:         "label": "낮음 - 9개 중 십자가 4개",
+0531:         "mask": "cross4",
+0532:         # 십자가 4개: 상/좌/우/하, 중앙 제외
+0533:         "positions": (1, 3, 5, 7),
+0534:         "cell_count": 4,
+0535:     },
+0536:     "medium": {
+0537:         "level": "medium",
+0538:         "label": "중간 - 9개 중 X모양 5개",
+0539:         "mask": "x5",
+0540:         # X모양 5개: 네 모서리 + 중앙
+0541:         "positions": (0, 2, 4, 6, 8),
+0542:         "cell_count": 5,
+0543:     },
+0544:     "high": {
+0545:         "level": "high",
+0546:         "label": "높음 - 9개 중 O모양 8개",
+0547:         "mask": "o8",
+0548:         # O모양 8개: 중앙 제외 외곽 전체
+0549:         "positions": (0, 1, 2, 3, 5, 6, 7, 8),
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:541
+------------------------------------------------------------------------------------------
+0529:         "level": "low",
+0530:         "label": "낮음 - 9개 중 십자가 4개",
+0531:         "mask": "cross4",
+0532:         # 십자가 4개: 상/좌/우/하, 중앙 제외
+0533:         "positions": (1, 3, 5, 7),
+0534:         "cell_count": 4,
+0535:     },
+0536:     "medium": {
+0537:         "level": "medium",
+0538:         "label": "중간 - 9개 중 X모양 5개",
+0539:         "mask": "x5",
+0540:         # X모양 5개: 네 모서리 + 중앙
+0541:         "positions": (0, 2, 4, 6, 8),
+0542:         "cell_count": 5,
+0543:     },
+0544:     "high": {
+0545:         "level": "high",
+0546:         "label": "높음 - 9개 중 O모양 8개",
+0547:         "mask": "o8",
+0548:         # O모양 8개: 중앙 제외 외곽 전체
+0549:         "positions": (0, 1, 2, 3, 5, 6, 7, 8),
+0550:         "cell_count": 8,
+0551:     },
+0552: }
+0553: 
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:549
+------------------------------------------------------------------------------------------
+0537:         "level": "medium",
+0538:         "label": "중간 - 9개 중 X모양 5개",
+0539:         "mask": "x5",
+0540:         # X모양 5개: 네 모서리 + 중앙
+0541:         "positions": (0, 2, 4, 6, 8),
+0542:         "cell_count": 5,
+0543:     },
+0544:     "high": {
+0545:         "level": "high",
+0546:         "label": "높음 - 9개 중 O모양 8개",
+0547:         "mask": "o8",
+0548:         # O모양 8개: 중앙 제외 외곽 전체
+0549:         "positions": (0, 1, 2, 3, 5, 6, 7, 8),
+0550:         "cell_count": 8,
+0551:     },
+0552: }
+0553: 
+0554: def normalize_cut_boundary_level(value) -> str:
+0555:     raw = str(value or "").strip().lower()
+0556:     aliases = {
+0557:         "false": "off",
+0558:         "0": "off",
+0559:         "none": "off",
+0560:         "disabled": "off",
+0561:         "disable": "off",
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:569
+------------------------------------------------------------------------------------------
+0557:         "false": "off",
+0558:         "0": "off",
+0559:         "none": "off",
+0560:         "disabled": "off",
+0561:         "disable": "off",
+0562:         "off": "off",
+0563:         "사용안함": "off",
+0564:         "사용 안함": "off",
+0565: 
+0566:         "low": "low",
+0567:         "낮음": "low",
+0568: 
+0569:         "mid": "medium",
+0570:         "middle": "medium",
+0571:         "medium": "medium",
+0572:         "중간": "medium",
+0573: 
+0574:         "high": "high",
+0575:         "높음": "high",
+0576: 
+0577:         "true": "medium",
+0578:         "1": "medium",
+0579:         "on": "medium",
+0580:         "enabled": "medium",
+0581:         "enable": "medium",
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:570
+------------------------------------------------------------------------------------------
+0558:         "0": "off",
+0559:         "none": "off",
+0560:         "disabled": "off",
+0561:         "disable": "off",
+0562:         "off": "off",
+0563:         "사용안함": "off",
+0564:         "사용 안함": "off",
+0565: 
+0566:         "low": "low",
+0567:         "낮음": "low",
+0568: 
+0569:         "mid": "medium",
+0570:         "middle": "medium",
+0571:         "medium": "medium",
+0572:         "중간": "medium",
+0573: 
+0574:         "high": "high",
+0575:         "높음": "high",
+0576: 
+0577:         "true": "medium",
+0578:         "1": "medium",
+0579:         "on": "medium",
+0580:         "enabled": "medium",
+0581:         "enable": "medium",
+0582:         "사용": "medium",
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:571
+------------------------------------------------------------------------------------------
+0559:         "none": "off",
+0560:         "disabled": "off",
+0561:         "disable": "off",
+0562:         "off": "off",
+0563:         "사용안함": "off",
+0564:         "사용 안함": "off",
+0565: 
+0566:         "low": "low",
+0567:         "낮음": "low",
+0568: 
+0569:         "mid": "medium",
+0570:         "middle": "medium",
+0571:         "medium": "medium",
+0572:         "중간": "medium",
+0573: 
+0574:         "high": "high",
+0575:         "높음": "high",
+0576: 
+0577:         "true": "medium",
+0578:         "1": "medium",
+0579:         "on": "medium",
+0580:         "enabled": "medium",
+0581:         "enable": "medium",
+0582:         "사용": "medium",
+0583:     }
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:572
+------------------------------------------------------------------------------------------
+0560:         "disabled": "off",
+0561:         "disable": "off",
+0562:         "off": "off",
+0563:         "사용안함": "off",
+0564:         "사용 안함": "off",
+0565: 
+0566:         "low": "low",
+0567:         "낮음": "low",
+0568: 
+0569:         "mid": "medium",
+0570:         "middle": "medium",
+0571:         "medium": "medium",
+0572:         "중간": "medium",
+0573: 
+0574:         "high": "high",
+0575:         "높음": "high",
+0576: 
+0577:         "true": "medium",
+0578:         "1": "medium",
+0579:         "on": "medium",
+0580:         "enabled": "medium",
+0581:         "enable": "medium",
+0582:         "사용": "medium",
+0583:     }
+0584:     return aliases.get(raw, "medium")
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:577
+------------------------------------------------------------------------------------------
+0565: 
+0566:         "low": "low",
+0567:         "낮음": "low",
+0568: 
+0569:         "mid": "medium",
+0570:         "middle": "medium",
+0571:         "medium": "medium",
+0572:         "중간": "medium",
+0573: 
+0574:         "high": "high",
+0575:         "높음": "high",
+0576: 
+0577:         "true": "medium",
+0578:         "1": "medium",
+0579:         "on": "medium",
+0580:         "enabled": "medium",
+0581:         "enable": "medium",
+0582:         "사용": "medium",
+0583:     }
+0584:     return aliases.get(raw, "medium")
+0585: 
+0586: def cut_boundary_level(settings: dict | None = None) -> str:
+0587:     settings = settings or {}
+0588: 
+0589:     # 새 설정 우선
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:578
+------------------------------------------------------------------------------------------
+0566:         "low": "low",
+0567:         "낮음": "low",
+0568: 
+0569:         "mid": "medium",
+0570:         "middle": "medium",
+0571:         "medium": "medium",
+0572:         "중간": "medium",
+0573: 
+0574:         "high": "high",
+0575:         "높음": "high",
+0576: 
+0577:         "true": "medium",
+0578:         "1": "medium",
+0579:         "on": "medium",
+0580:         "enabled": "medium",
+0581:         "enable": "medium",
+0582:         "사용": "medium",
+0583:     }
+0584:     return aliases.get(raw, "medium")
+0585: 
+0586: def cut_boundary_level(settings: dict | None = None) -> str:
+0587:     settings = settings or {}
+0588: 
+0589:     # 새 설정 우선
+0590:     for key in (
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:579
+------------------------------------------------------------------------------------------
+0567:         "낮음": "low",
+0568: 
+0569:         "mid": "medium",
+0570:         "middle": "medium",
+0571:         "medium": "medium",
+0572:         "중간": "medium",
+0573: 
+0574:         "high": "high",
+0575:         "높음": "high",
+0576: 
+0577:         "true": "medium",
+0578:         "1": "medium",
+0579:         "on": "medium",
+0580:         "enabled": "medium",
+0581:         "enable": "medium",
+0582:         "사용": "medium",
+0583:     }
+0584:     return aliases.get(raw, "medium")
+0585: 
+0586: def cut_boundary_level(settings: dict | None = None) -> str:
+0587:     settings = settings or {}
+0588: 
+0589:     # 새 설정 우선
+0590:     for key in (
+0591:         "scan_cut_boundary_level",
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:580
+------------------------------------------------------------------------------------------
+0568: 
+0569:         "mid": "medium",
+0570:         "middle": "medium",
+0571:         "medium": "medium",
+0572:         "중간": "medium",
+0573: 
+0574:         "high": "high",
+0575:         "높음": "high",
+0576: 
+0577:         "true": "medium",
+0578:         "1": "medium",
+0579:         "on": "medium",
+0580:         "enabled": "medium",
+0581:         "enable": "medium",
+0582:         "사용": "medium",
+0583:     }
+0584:     return aliases.get(raw, "medium")
+0585: 
+0586: def cut_boundary_level(settings: dict | None = None) -> str:
+0587:     settings = settings or {}
+0588: 
+0589:     # 새 설정 우선
+0590:     for key in (
+0591:         "scan_cut_boundary_level",
+0592:         "cut_boundary_level",
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:581
+------------------------------------------------------------------------------------------
+0569:         "mid": "medium",
+0570:         "middle": "medium",
+0571:         "medium": "medium",
+0572:         "중간": "medium",
+0573: 
+0574:         "high": "high",
+0575:         "높음": "high",
+0576: 
+0577:         "true": "medium",
+0578:         "1": "medium",
+0579:         "on": "medium",
+0580:         "enabled": "medium",
+0581:         "enable": "medium",
+0582:         "사용": "medium",
+0583:     }
+0584:     return aliases.get(raw, "medium")
+0585: 
+0586: def cut_boundary_level(settings: dict | None = None) -> str:
+0587:     settings = settings or {}
+0588: 
+0589:     # 새 설정 우선
+0590:     for key in (
+0591:         "scan_cut_boundary_level",
+0592:         "cut_boundary_level",
+0593:         "scan_cut_level",
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:582
+------------------------------------------------------------------------------------------
+0570:         "middle": "medium",
+0571:         "medium": "medium",
+0572:         "중간": "medium",
+0573: 
+0574:         "high": "high",
+0575:         "높음": "high",
+0576: 
+0577:         "true": "medium",
+0578:         "1": "medium",
+0579:         "on": "medium",
+0580:         "enabled": "medium",
+0581:         "enable": "medium",
+0582:         "사용": "medium",
+0583:     }
+0584:     return aliases.get(raw, "medium")
+0585: 
+0586: def cut_boundary_level(settings: dict | None = None) -> str:
+0587:     settings = settings or {}
+0588: 
+0589:     # 새 설정 우선
+0590:     for key in (
+0591:         "scan_cut_boundary_level",
+0592:         "cut_boundary_level",
+0593:         "scan_cut_level",
+0594:     ):
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:584
+------------------------------------------------------------------------------------------
+0572:         "중간": "medium",
+0573: 
+0574:         "high": "high",
+0575:         "높음": "high",
+0576: 
+0577:         "true": "medium",
+0578:         "1": "medium",
+0579:         "on": "medium",
+0580:         "enabled": "medium",
+0581:         "enable": "medium",
+0582:         "사용": "medium",
+0583:     }
+0584:     return aliases.get(raw, "medium")
+0585: 
+0586: def cut_boundary_level(settings: dict | None = None) -> str:
+0587:     settings = settings or {}
+0588: 
+0589:     # 새 설정 우선
+0590:     for key in (
+0591:         "scan_cut_boundary_level",
+0592:         "cut_boundary_level",
+0593:         "scan_cut_level",
+0594:     ):
+0595:         if key in settings:
+0596:             return normalize_cut_boundary_level(settings.get(key))
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:591
+------------------------------------------------------------------------------------------
+0579:         "on": "medium",
+0580:         "enabled": "medium",
+0581:         "enable": "medium",
+0582:         "사용": "medium",
+0583:     }
+0584:     return aliases.get(raw, "medium")
+0585: 
+0586: def cut_boundary_level(settings: dict | None = None) -> str:
+0587:     settings = settings or {}
+0588: 
+0589:     # 새 설정 우선
+0590:     for key in (
+0591:         "scan_cut_boundary_level",
+0592:         "cut_boundary_level",
+0593:         "scan_cut_level",
+0594:     ):
+0595:         if key in settings:
+0596:             return normalize_cut_boundary_level(settings.get(key))
+0597: 
+0598:     # 기존 boolean 호환
+0599:     for key in (
+0600:         "scan_cut_enabled",
+0601:         "scan_cut_auto_enabled",
+0602:         "cut_boundary_enabled",
+0603:     ):
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:605
+------------------------------------------------------------------------------------------
+0593:         "scan_cut_level",
+0594:     ):
+0595:         if key in settings:
+0596:             return normalize_cut_boundary_level(settings.get(key))
+0597: 
+0598:     # 기존 boolean 호환
+0599:     for key in (
+0600:         "scan_cut_enabled",
+0601:         "scan_cut_auto_enabled",
+0602:         "cut_boundary_enabled",
+0603:     ):
+0604:         if key in settings:
+0605:             return "medium" if bool(settings.get(key)) else "off"
+0606: 
+0607:     return "medium"
+0608: 
+0609: def cut_boundary_scan_profile(settings: dict | None = None) -> dict:
+0610:     level = cut_boundary_level(settings or {})
+0611:     profile = dict(CUT_BOUNDARY_GRID_PROFILES.get(level, CUT_BOUNDARY_GRID_PROFILES["medium"]))
+0612:     profile["choices"] = CUT_BOUNDARY_LEVEL_CHOICES
+0613:     return profile
+0614: 
+0615: def cut_boundary_enabled(settings: dict | None = None) -> bool:
+0616:     return cut_boundary_level(settings or {}) != "off"
+0617: 
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:607
+------------------------------------------------------------------------------------------
+0595:         if key in settings:
+0596:             return normalize_cut_boundary_level(settings.get(key))
+0597: 
+0598:     # 기존 boolean 호환
+0599:     for key in (
+0600:         "scan_cut_enabled",
+0601:         "scan_cut_auto_enabled",
+0602:         "cut_boundary_enabled",
+0603:     ):
+0604:         if key in settings:
+0605:             return "medium" if bool(settings.get(key)) else "off"
+0606: 
+0607:     return "medium"
+0608: 
+0609: def cut_boundary_scan_profile(settings: dict | None = None) -> dict:
+0610:     level = cut_boundary_level(settings or {})
+0611:     profile = dict(CUT_BOUNDARY_GRID_PROFILES.get(level, CUT_BOUNDARY_GRID_PROFILES["medium"]))
+0612:     profile["choices"] = CUT_BOUNDARY_LEVEL_CHOICES
+0613:     return profile
+0614: 
+0615: def cut_boundary_enabled(settings: dict | None = None) -> bool:
+0616:     return cut_boundary_level(settings or {}) != "off"
+0617: 
+0618: def _grid_cell_slices(width: int, height: int):
+0619:     xs = [0, width // 3, (width * 2) // 3, width]
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:611
+------------------------------------------------------------------------------------------
+0599:     for key in (
+0600:         "scan_cut_enabled",
+0601:         "scan_cut_auto_enabled",
+0602:         "cut_boundary_enabled",
+0603:     ):
+0604:         if key in settings:
+0605:             return "medium" if bool(settings.get(key)) else "off"
+0606: 
+0607:     return "medium"
+0608: 
+0609: def cut_boundary_scan_profile(settings: dict | None = None) -> dict:
+0610:     level = cut_boundary_level(settings or {})
+0611:     profile = dict(CUT_BOUNDARY_GRID_PROFILES.get(level, CUT_BOUNDARY_GRID_PROFILES["medium"]))
+0612:     profile["choices"] = CUT_BOUNDARY_LEVEL_CHOICES
+0613:     return profile
+0614: 
+0615: def cut_boundary_enabled(settings: dict | None = None) -> bool:
+0616:     return cut_boundary_level(settings or {}) != "off"
+0617: 
+0618: def _grid_cell_slices(width: int, height: int):
+0619:     xs = [0, width // 3, (width * 2) // 3, width]
+0620:     ys = [0, height // 3, (height * 2) // 3, height]
+0621:     cells = []
+0622:     for r in range(3):
+0623:         for c in range(3):
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:627
+------------------------------------------------------------------------------------------
+0615: def cut_boundary_enabled(settings: dict | None = None) -> bool:
+0616:     return cut_boundary_level(settings or {}) != "off"
+0617: 
+0618: def _grid_cell_slices(width: int, height: int):
+0619:     xs = [0, width // 3, (width * 2) // 3, width]
+0620:     ys = [0, height // 3, (height * 2) // 3, height]
+0621:     cells = []
+0622:     for r in range(3):
+0623:         for c in range(3):
+0624:             cells.append((xs[c], ys[r], xs[c + 1], ys[r + 1]))
+0625:     return cells
+0626: 
+0627: def _selected_grid_delta(prev_gray, cur_gray, positions) -> tuple[float, list[float]]:
+0628:     try:
+0629:         import cv2
+0630:         import numpy as np
+0631: 
+0632:         # 계산량을 낮추기 위해 270x270으로 통일
+0633:         prev = cv2.resize(prev_gray, (270, 270), interpolation=cv2.INTER_AREA)
+0634:         cur = cv2.resize(cur_gray, (270, 270), interpolation=cv2.INTER_AREA)
+0635: 
+0636:         cells = _grid_cell_slices(270, 270)
+0637:         deltas = []
+0638:         for idx in positions:
+0639:             x1, y1, x2, y2 = cells[int(idx)]
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:638
+------------------------------------------------------------------------------------------
+0626: 
+0627: def _selected_grid_delta(prev_gray, cur_gray, positions) -> tuple[float, list[float]]:
+0628:     try:
+0629:         import cv2
+0630:         import numpy as np
+0631: 
+0632:         # 계산량을 낮추기 위해 270x270으로 통일
+0633:         prev = cv2.resize(prev_gray, (270, 270), interpolation=cv2.INTER_AREA)
+0634:         cur = cv2.resize(cur_gray, (270, 270), interpolation=cv2.INTER_AREA)
+0635: 
+0636:         cells = _grid_cell_slices(270, 270)
+0637:         deltas = []
+0638:         for idx in positions:
+0639:             x1, y1, x2, y2 = cells[int(idx)]
+0640:             p = prev[y1:y2, x1:x2]
+0641:             c = cur[y1:y2, x1:x2]
+0642:             d = float(np.mean(cv2.absdiff(p, c)))
+0643:             deltas.append(d)
+0644: 
+0645:         if not deltas:
+0646:             return 0.0, []
+0647:         return float(sum(deltas) / len(deltas)), deltas
+0648:     except Exception:
+0649:         return 0.0, []
+0650: 
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:661
+------------------------------------------------------------------------------------------
+0649:         return 0.0, []
+0650: 
+0651: def detect_media_cut_boundaries(
+0652:     media_path,
+0653:     *,
+0654:     clip_offset: float = 0.0,
+0655:     clip_idx: int = 0,
+0656:     sample_step_sec: float = 1.0,
+0657:     threshold: float = 24.0,
+0658:     progress_callback=None,
+0659:     found_callback=None,
+0660:     scan_profile: dict | None = None,
+0661:     sample_positions=None,
+0662:     sample_mask: str | None = None,
+0663:     **kwargs,
+0664: ):
+0665:     """3x3 grid-profile cut detector.
+0666: 
+0667:     Levels:
+0668:     - off: disabled
+0669:     - low: cross4, 4/9
+0670:     - medium: x5, 5/9
+0671:     - high: o8, 8/9
+0672: 
+0673:     If OpenCV scan fails, fallback to the legacy detector.
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:692
+------------------------------------------------------------------------------------------
+0680:         try:
+0681:             from logger import get_logger
+0682:         except Exception:
+0683:             get_logger = None
+0684: 
+0685:         if scan_profile is None:
+0686:             try:
+0687:                 from core.settings import load_settings
+0688:                 scan_profile = cut_boundary_scan_profile(load_settings())
+0689:             except Exception:
+0690:                 scan_profile = cut_boundary_scan_profile({})
+0691: 
+0692:         level = str((scan_profile or {}).get("level", "medium"))
+0693:         if level == "off":
+0694:             if get_logger:
+0695:                 get_logger().log("  🎬 [컷 경계] 단계=사용안함, 분석을 건너뜁니다")
+0696:             return []
+0697: 
+0698:         positions = sample_positions
+0699:         if positions is None:
+0700:             positions = (scan_profile or {}).get("positions", ())
+0701:         positions = tuple(int(x) for x in (positions or ()))
+0702:         if not positions:
+0703:             return []
+0704: 
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:698
+------------------------------------------------------------------------------------------
+0686:             try:
+0687:                 from core.settings import load_settings
+0688:                 scan_profile = cut_boundary_scan_profile(load_settings())
+0689:             except Exception:
+0690:                 scan_profile = cut_boundary_scan_profile({})
+0691: 
+0692:         level = str((scan_profile or {}).get("level", "medium"))
+0693:         if level == "off":
+0694:             if get_logger:
+0695:                 get_logger().log("  🎬 [컷 경계] 단계=사용안함, 분석을 건너뜁니다")
+0696:             return []
+0697: 
+0698:         positions = sample_positions
+0699:         if positions is None:
+0700:             positions = (scan_profile or {}).get("positions", ())
+0701:         positions = tuple(int(x) for x in (positions or ()))
+0702:         if not positions:
+0703:             return []
+0704: 
+0705:         mask = str(sample_mask or (scan_profile or {}).get("mask", ""))
+0706:         label = str((scan_profile or {}).get("label", level))
+0707: 
+0708:         cap = cv2.VideoCapture(str(media_path))
+0709:         if not cap.isOpened():
+0710:             raise RuntimeError("video open failed")
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:699
+------------------------------------------------------------------------------------------
+0687:                 from core.settings import load_settings
+0688:                 scan_profile = cut_boundary_scan_profile(load_settings())
+0689:             except Exception:
+0690:                 scan_profile = cut_boundary_scan_profile({})
+0691: 
+0692:         level = str((scan_profile or {}).get("level", "medium"))
+0693:         if level == "off":
+0694:             if get_logger:
+0695:                 get_logger().log("  🎬 [컷 경계] 단계=사용안함, 분석을 건너뜁니다")
+0696:             return []
+0697: 
+0698:         positions = sample_positions
+0699:         if positions is None:
+0700:             positions = (scan_profile or {}).get("positions", ())
+0701:         positions = tuple(int(x) for x in (positions or ()))
+0702:         if not positions:
+0703:             return []
+0704: 
+0705:         mask = str(sample_mask or (scan_profile or {}).get("mask", ""))
+0706:         label = str((scan_profile or {}).get("label", level))
+0707: 
+0708:         cap = cv2.VideoCapture(str(media_path))
+0709:         if not cap.isOpened():
+0710:             raise RuntimeError("video open failed")
+0711: 
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:700
+------------------------------------------------------------------------------------------
+0688:                 scan_profile = cut_boundary_scan_profile(load_settings())
+0689:             except Exception:
+0690:                 scan_profile = cut_boundary_scan_profile({})
+0691: 
+0692:         level = str((scan_profile or {}).get("level", "medium"))
+0693:         if level == "off":
+0694:             if get_logger:
+0695:                 get_logger().log("  🎬 [컷 경계] 단계=사용안함, 분석을 건너뜁니다")
+0696:             return []
+0697: 
+0698:         positions = sample_positions
+0699:         if positions is None:
+0700:             positions = (scan_profile or {}).get("positions", ())
+0701:         positions = tuple(int(x) for x in (positions or ()))
+0702:         if not positions:
+0703:             return []
+0704: 
+0705:         mask = str(sample_mask or (scan_profile or {}).get("mask", ""))
+0706:         label = str((scan_profile or {}).get("label", level))
+0707: 
+0708:         cap = cv2.VideoCapture(str(media_path))
+0709:         if not cap.isOpened():
+0710:             raise RuntimeError("video open failed")
+0711: 
+0712:         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:701
+------------------------------------------------------------------------------------------
+0689:             except Exception:
+0690:                 scan_profile = cut_boundary_scan_profile({})
+0691: 
+0692:         level = str((scan_profile or {}).get("level", "medium"))
+0693:         if level == "off":
+0694:             if get_logger:
+0695:                 get_logger().log("  🎬 [컷 경계] 단계=사용안함, 분석을 건너뜁니다")
+0696:             return []
+0697: 
+0698:         positions = sample_positions
+0699:         if positions is None:
+0700:             positions = (scan_profile or {}).get("positions", ())
+0701:         positions = tuple(int(x) for x in (positions or ()))
+0702:         if not positions:
+0703:             return []
+0704: 
+0705:         mask = str(sample_mask or (scan_profile or {}).get("mask", ""))
+0706:         label = str((scan_profile or {}).get("label", level))
+0707: 
+0708:         cap = cv2.VideoCapture(str(media_path))
+0709:         if not cap.isOpened():
+0710:             raise RuntimeError("video open failed")
+0711: 
+0712:         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+0713:         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:702
+------------------------------------------------------------------------------------------
+0690:                 scan_profile = cut_boundary_scan_profile({})
+0691: 
+0692:         level = str((scan_profile or {}).get("level", "medium"))
+0693:         if level == "off":
+0694:             if get_logger:
+0695:                 get_logger().log("  🎬 [컷 경계] 단계=사용안함, 분석을 건너뜁니다")
+0696:             return []
+0697: 
+0698:         positions = sample_positions
+0699:         if positions is None:
+0700:             positions = (scan_profile or {}).get("positions", ())
+0701:         positions = tuple(int(x) for x in (positions or ()))
+0702:         if not positions:
+0703:             return []
+0704: 
+0705:         mask = str(sample_mask or (scan_profile or {}).get("mask", ""))
+0706:         label = str((scan_profile or {}).get("label", level))
+0707: 
+0708:         cap = cv2.VideoCapture(str(media_path))
+0709:         if not cap.isOpened():
+0710:             raise RuntimeError("video open failed")
+0711: 
+0712:         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+0713:         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+0714:         if fps <= 0.0 or frame_count <= 0:
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:727
+------------------------------------------------------------------------------------------
+0715:             raise RuntimeError("invalid fps/frame_count")
+0716: 
+0717:         duration = frame_count / fps
+0718:         step = max(0.2, float(sample_step_sec or 1.0))
+0719:         step_frames = max(1, int(round(fps * step)))
+0720:         threshold = float(threshold or 24.0)
+0721: 
+0722:         # ✅ grid detector 안정화:
+0723:         # 기존 threshold=24를 그대로 쓰면 카메라 움직임/노출 변화도 컷으로 잡혀
+0724:         # 2초마다 컷이 생기는 문제가 발생한다.
+0725:         level_threshold_multiplier = {
+0726:             "low": 2.40,
+0727:             "medium": 2.00,
+0728:             "high": 1.70,
+0729:         }.get(level, 2.00)
+0730:         effective_threshold = max(threshold, threshold * level_threshold_multiplier)
+0731: 
+0732:         # 낮음/중간/높음은 "검사 칸 수"뿐 아니라 최소 컷 간격도 다르게 둔다.
+0733:         # 중간 기본 8초: 2초/4초/6초 식 오탐을 막는다.
+0734:         level_min_gap_sec = {
+0735:             "low": 12.0,
+0736:             "medium": 8.0,
+0737:             "high": 5.0,
+0738:         }.get(level, 8.0)
+0739: 
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:736
+------------------------------------------------------------------------------------------
+0724:         # 2초마다 컷이 생기는 문제가 발생한다.
+0725:         level_threshold_multiplier = {
+0726:             "low": 2.40,
+0727:             "medium": 2.00,
+0728:             "high": 1.70,
+0729:         }.get(level, 2.00)
+0730:         effective_threshold = max(threshold, threshold * level_threshold_multiplier)
+0731: 
+0732:         # 낮음/중간/높음은 "검사 칸 수"뿐 아니라 최소 컷 간격도 다르게 둔다.
+0733:         # 중간 기본 8초: 2초/4초/6초 식 오탐을 막는다.
+0734:         level_min_gap_sec = {
+0735:             "low": 12.0,
+0736:             "medium": 8.0,
+0737:             "high": 5.0,
+0738:         }.get(level, 8.0)
+0739: 
+0740:         clip_offset = float(clip_offset or 0.0)
+0741:         clip_idx = int(clip_idx or 0)
+0742: 
+0743:         if get_logger:
+0744:             get_logger().log(
+0745:                 f"🔎 [scan-cut-grid] level={level} label={label} "
+0746:                 f"mask={mask} cells={len(positions)}/9 threshold={threshold:.2f} effective={effective_threshold:.2f} min_gap={cooldown_sec:.1f}s "
+0747:                 f"step={step:.2f}s source={os.path.basename(str(media_path))}"
+0748:             )
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:746
+------------------------------------------------------------------------------------------
+0734:         level_min_gap_sec = {
+0735:             "low": 12.0,
+0736:             "medium": 8.0,
+0737:             "high": 5.0,
+0738:         }.get(level, 8.0)
+0739: 
+0740:         clip_offset = float(clip_offset or 0.0)
+0741:         clip_idx = int(clip_idx or 0)
+0742: 
+0743:         if get_logger:
+0744:             get_logger().log(
+0745:                 f"🔎 [scan-cut-grid] level={level} label={label} "
+0746:                 f"mask={mask} cells={len(positions)}/9 threshold={threshold:.2f} effective={effective_threshold:.2f} min_gap={cooldown_sec:.1f}s "
+0747:                 f"step={step:.2f}s source={os.path.basename(str(media_path))}"
+0748:             )
+0749: 
+0750:         rows = []
+0751:         prev_gray = None
+0752:         prev_t = 0.0
+0753:         last_emit_t = -9999.0
+0754:         cooldown_sec = max(level_min_gap_sec, step * 2.0)
+0755: 
+0756:         total_steps = max(1, int(frame_count / step_frames))
+0757:         step_i = 0
+0758: 
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:781
+------------------------------------------------------------------------------------------
+0769:                 try:
+0770:                     progress_callback({
+0771:                         "clip_idx": clip_idx,
+0772:                         "percent": int(min(100, (step_i / max(1, total_steps)) * 100)),
+0773:                         "timestamp": t,
+0774:                         "duration": duration,
+0775:                         "detected": len(rows),
+0776:                     })
+0777:                 except Exception:
+0778:                     pass
+0779: 
+0780:             if prev_gray is not None:
+0781:                 delta, cell_deltas = _selected_grid_delta(prev_gray, gray, positions)
+0782: 
+0783:                 # 선택된 칸 평균 delta 기준.
+0784:                 # 추가로 선택 칸 중 절반 이상이 threshold의 70%를 넘으면 유효 컷으로 인정.
+0785:                 required_ratio = {
+0786:                     "low": 0.75,
+0787:                     "medium": 0.80,
+0788:                     "high": 0.70,
+0789:                 }.get(level, 0.80)
+0790: 
+0791:                 strong_cells = sum(1 for d in cell_deltas if d >= effective_threshold * 0.70)
+0792:                 required_cells = max(1, int(round(len(positions) * required_ratio)))
+0793:                 enough_cells = strong_cells >= required_cells
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:787
+------------------------------------------------------------------------------------------
+0775:                         "detected": len(rows),
+0776:                     })
+0777:                 except Exception:
+0778:                     pass
+0779: 
+0780:             if prev_gray is not None:
+0781:                 delta, cell_deltas = _selected_grid_delta(prev_gray, gray, positions)
+0782: 
+0783:                 # 선택된 칸 평균 delta 기준.
+0784:                 # 추가로 선택 칸 중 절반 이상이 threshold의 70%를 넘으면 유효 컷으로 인정.
+0785:                 required_ratio = {
+0786:                     "low": 0.75,
+0787:                     "medium": 0.80,
+0788:                     "high": 0.70,
+0789:                 }.get(level, 0.80)
+0790: 
+0791:                 strong_cells = sum(1 for d in cell_deltas if d >= effective_threshold * 0.70)
+0792:                 required_cells = max(1, int(round(len(positions) * required_ratio)))
+0793:                 enough_cells = strong_cells >= required_cells
+0794: 
+0795:                 if delta >= effective_threshold and enough_cells and (t - last_emit_t) >= cooldown_sec:
+0796:                     sec = round(t, 3)
+0797:                     row = {
+0798:                         "time": sec,
+0799:                         "timeline_sec": round(clip_offset + sec, 3),
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:792
+------------------------------------------------------------------------------------------
+0780:             if prev_gray is not None:
+0781:                 delta, cell_deltas = _selected_grid_delta(prev_gray, gray, positions)
+0782: 
+0783:                 # 선택된 칸 평균 delta 기준.
+0784:                 # 추가로 선택 칸 중 절반 이상이 threshold의 70%를 넘으면 유효 컷으로 인정.
+0785:                 required_ratio = {
+0786:                     "low": 0.75,
+0787:                     "medium": 0.80,
+0788:                     "high": 0.70,
+0789:                 }.get(level, 0.80)
+0790: 
+0791:                 strong_cells = sum(1 for d in cell_deltas if d >= effective_threshold * 0.70)
+0792:                 required_cells = max(1, int(round(len(positions) * required_ratio)))
+0793:                 enough_cells = strong_cells >= required_cells
+0794: 
+0795:                 if delta >= effective_threshold and enough_cells and (t - last_emit_t) >= cooldown_sec:
+0796:                     sec = round(t, 3)
+0797:                     row = {
+0798:                         "time": sec,
+0799:                         "timeline_sec": round(clip_offset + sec, 3),
+0800:                         "clip_idx": clip_idx,
+0801:                         "source": "grid_profile",
+0802:                         "level": level,
+0803:                         "mask": mask,
+0804:                         "cell_count": len(positions),
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:804
+------------------------------------------------------------------------------------------
+0792:                 required_cells = max(1, int(round(len(positions) * required_ratio)))
+0793:                 enough_cells = strong_cells >= required_cells
+0794: 
+0795:                 if delta >= effective_threshold and enough_cells and (t - last_emit_t) >= cooldown_sec:
+0796:                     sec = round(t, 3)
+0797:                     row = {
+0798:                         "time": sec,
+0799:                         "timeline_sec": round(clip_offset + sec, 3),
+0800:                         "clip_idx": clip_idx,
+0801:                         "source": "grid_profile",
+0802:                         "level": level,
+0803:                         "mask": mask,
+0804:                         "cell_count": len(positions),
+0805:                         "grid_positions": list(positions),
+0806:                         "delta": round(delta, 3),
+0807:                         "cell_deltas": [round(x, 3) for x in cell_deltas],
+0808:                         "threshold": threshold,
+0809:                         "prev_time": round(prev_t, 3),
+0810:                     }
+0811:                     rows.append(row)
+0812:                     last_emit_t = t
+0813: 
+0814:                     if get_logger:
+0815:                         get_logger().log(
+0816:                             f"📊 [scan-cut-grid] level={level} mask={mask} "
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:805
+------------------------------------------------------------------------------------------
+0793:                 enough_cells = strong_cells >= required_cells
+0794: 
+0795:                 if delta >= effective_threshold and enough_cells and (t - last_emit_t) >= cooldown_sec:
+0796:                     sec = round(t, 3)
+0797:                     row = {
+0798:                         "time": sec,
+0799:                         "timeline_sec": round(clip_offset + sec, 3),
+0800:                         "clip_idx": clip_idx,
+0801:                         "source": "grid_profile",
+0802:                         "level": level,
+0803:                         "mask": mask,
+0804:                         "cell_count": len(positions),
+0805:                         "grid_positions": list(positions),
+0806:                         "delta": round(delta, 3),
+0807:                         "cell_deltas": [round(x, 3) for x in cell_deltas],
+0808:                         "threshold": threshold,
+0809:                         "prev_time": round(prev_t, 3),
+0810:                     }
+0811:                     rows.append(row)
+0812:                     last_emit_t = t
+0813: 
+0814:                     if get_logger:
+0815:                         get_logger().log(
+0816:                             f"📊 [scan-cut-grid] level={level} mask={mask} "
+0817:                             f"time={sec:.3f}s delta={delta:.2f} "
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:818
+------------------------------------------------------------------------------------------
+0806:                         "delta": round(delta, 3),
+0807:                         "cell_deltas": [round(x, 3) for x in cell_deltas],
+0808:                         "threshold": threshold,
+0809:                         "prev_time": round(prev_t, 3),
+0810:                     }
+0811:                     rows.append(row)
+0812:                     last_emit_t = t
+0813: 
+0814:                     if get_logger:
+0815:                         get_logger().log(
+0816:                             f"📊 [scan-cut-grid] level={level} mask={mask} "
+0817:                             f"time={sec:.3f}s delta={delta:.2f} "
+0818:                             f"cells={strong_cells}/{len(positions)}"
+0819:                         )
+0820: 
+0821:                     if found_callback:
+0822:                         try:
+0823:                             found_callback(row, list(rows))
+0824:                         except Exception:
+0825:                             pass
+0826: 
+0827:             prev_gray = gray
+0828:             prev_t = t
+0829:             step_i += 1
+0830: 
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:887
+------------------------------------------------------------------------------------------
+0875:                 progress_callback,
+0876:                 found_callback,
+0877:             )
+0878: 
+0879: 
+0880: # === CUT_BOUNDARY_GRID_INTERVAL_FIX_V3 ===
+0881: 
+0882: def _cb_level_interval_sec(level: str) -> float:
+0883:     """Requested scan interval by cut-boundary level."""
+0884:     level = normalize_cut_boundary_level(level)
+0885:     return {
+0886:         "low": 2.0,       # 동영상 프레임 * 2
+0887:         "medium": 1.0,    # 동영상 프레임 동일
+0888:         "high": 0.5,      # 동영상 프레임 / 2
+0889:     }.get(level, 1.0)
+0890: 
+0891: 
+0892: def _cb_level_pyramid_steps(level: str) -> tuple[float, ...]:
+0893:     """Regression/refinement pyramid matched to the scan interval."""
+0894:     base = _cb_level_interval_sec(level)
+0895:     return (
+0896:         round(base, 3),
+0897:         round(base / 2.0, 3),
+0898:         round(base / 4.0, 3),
+0899:     )
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:907
+------------------------------------------------------------------------------------------
+0895:     return (
+0896:         round(base, 3),
+0897:         round(base / 2.0, 3),
+0898:         round(base / 4.0, 3),
+0899:     )
+0900: 
+0901: 
+0902: def _cb_level_effective_threshold(level: str, threshold: float) -> float:
+0903:     """Make lower levels less sensitive while preserving the user threshold."""
+0904:     level = normalize_cut_boundary_level(level)
+0905:     mul = {
+0906:         "low": 2.40,
+0907:         "medium": 2.00,
+0908:         "high": 1.65,
+0909:     }.get(level, 2.00)
+0910:     return max(float(threshold or 24.0), float(threshold or 24.0) * mul)
+0911: 
+0912: 
+0913: def _cb_level_min_gap_sec(level: str) -> float:
+0914:     """Debounce false positives.
+0915: 
+0916:     This is separate from scan interval. Scan interval controls how often we
+0917:     inspect frames; min gap controls how close accepted cuts can be.
+0918:     """
+0919:     level = normalize_cut_boundary_level(level)
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:922
+------------------------------------------------------------------------------------------
+0910:     return max(float(threshold or 24.0), float(threshold or 24.0) * mul)
+0911: 
+0912: 
+0913: def _cb_level_min_gap_sec(level: str) -> float:
+0914:     """Debounce false positives.
+0915: 
+0916:     This is separate from scan interval. Scan interval controls how often we
+0917:     inspect frames; min gap controls how close accepted cuts can be.
+0918:     """
+0919:     level = normalize_cut_boundary_level(level)
+0920:     return {
+0921:         "low": 10.0,
+0922:         "medium": 6.0,
+0923:         "high": 3.0,
+0924:     }.get(level, 6.0)
+0925: 
+0926: 
+0927: def _cb_read_gray_at(cap, frame_no: int):
+0928:     try:
+0929:         import cv2
+0930:         cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(frame_no)))
+0931:         ok, frame = cap.read()
+0932:         if not ok or frame is None:
+0933:             return None
+0934:         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:944
+------------------------------------------------------------------------------------------
+0932:         if not ok or frame is None:
+0933:             return None
+0934:         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+0935:     except Exception:
+0936:         return None
+0937: 
+0938: 
+0939: def _cb_refine_cut_time_with_pyramid(
+0940:     cap,
+0941:     *,
+0942:     fps: float,
+0943:     coarse_time: float,
+0944:     positions,
+0945:     effective_threshold: float,
+0946:     level: str,
+0947: ):
+0948:     """Refine candidate time using a backward pyramid.
+0949: 
+0950:     Example:
+0951:     - low:    2.0s -> 1.0s -> 0.5s
+0952:     - medium: 1.0s -> 0.5s -> 0.25s
+0953:     - high:   0.5s -> 0.25s -> 0.125s
+0954:     """
+0955:     try:
+0956:         import cv2
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:977
+------------------------------------------------------------------------------------------
+0965: 
+0966:         for step in steps:
+0967:             if step <= 0:
+0968:                 continue
+0969: 
+0970:             t = start_t
+0971:             prev_gray = None
+0972:             local_best = best_time
+0973: 
+0974:             while t <= end_t + 1e-6:
+0975:                 gray = _cb_read_gray_at(cap, int(round(t * fps)))
+0976:                 if gray is not None and prev_gray is not None:
+0977:                     delta, cell_deltas = _selected_grid_delta(prev_gray, gray, positions)
+0978:                     strong_cells = sum(1 for d in cell_deltas if d >= effective_threshold * 0.70)
+0979:                     required_cells = max(1, int(round(len(positions) * 0.80)))
+0980:                     if delta >= effective_threshold and strong_cells >= required_cells:
+0981:                         local_best = round(t, 3)
+0982:                         break
+0983:                 if gray is not None:
+0984:                     prev_gray = gray
+0985:                 t += step
+0986: 
+0987:             best_time = local_best
+0988: 
+0989:             # Narrow next search window around the current best.
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:979
+------------------------------------------------------------------------------------------
+0967:             if step <= 0:
+0968:                 continue
+0969: 
+0970:             t = start_t
+0971:             prev_gray = None
+0972:             local_best = best_time
+0973: 
+0974:             while t <= end_t + 1e-6:
+0975:                 gray = _cb_read_gray_at(cap, int(round(t * fps)))
+0976:                 if gray is not None and prev_gray is not None:
+0977:                     delta, cell_deltas = _selected_grid_delta(prev_gray, gray, positions)
+0978:                     strong_cells = sum(1 for d in cell_deltas if d >= effective_threshold * 0.70)
+0979:                     required_cells = max(1, int(round(len(positions) * 0.80)))
+0980:                     if delta >= effective_threshold and strong_cells >= required_cells:
+0981:                         local_best = round(t, 3)
+0982:                         break
+0983:                 if gray is not None:
+0984:                     prev_gray = gray
+0985:                 t += step
+0986: 
+0987:             best_time = local_best
+0988: 
+0989:             # Narrow next search window around the current best.
+0990:             start_t = max(0.0, best_time - step)
+0991:             end_t = min(float(coarse_time), best_time + step)
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1008
+------------------------------------------------------------------------------------------
+0996: 
+0997: 
+0998: def detect_media_cut_boundaries(
+0999:     media_path,
+1000:     *,
+1001:     clip_offset: float = 0.0,
+1002:     clip_idx: int = 0,
+1003:     sample_step_sec: float = 1.0,
+1004:     threshold: float = 24.0,
+1005:     progress_callback=None,
+1006:     found_callback=None,
+1007:     scan_profile: dict | None = None,
+1008:     sample_positions=None,
+1009:     sample_mask: str | None = None,
+1010:     **kwargs,
+1011: ):
+1012:     """Stable 3x3 grid-profile cut detector.
+1013: 
+1014:     Levels:
+1015:     - off: disabled
+1016:     - low:    cross4, 4/9, scan every 2.0s
+1017:     - medium: x5,     5/9, scan every 1.0s
+1018:     - high:   o8,     8/9, scan every 0.5s
+1019: 
+1020:     Regression pyramid follows the same interval ratio:
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1041
+------------------------------------------------------------------------------------------
+1029:         try:
+1030:             from logger import get_logger
+1031:         except Exception:
+1032:             get_logger = None
+1033: 
+1034:         if scan_profile is None:
+1035:             try:
+1036:                 from core.settings import load_settings
+1037:                 scan_profile = cut_boundary_scan_profile(load_settings())
+1038:             except Exception:
+1039:                 scan_profile = cut_boundary_scan_profile({})
+1040: 
+1041:         level = normalize_cut_boundary_level((scan_profile or {}).get("level", "medium"))
+1042: 
+1043:         if level == "off":
+1044:             if get_logger:
+1045:                 get_logger().log("  🎬 [컷 경계] 단계=사용안함, 분석을 건너뜁니다")
+1046:             return []
+1047: 
+1048:         positions = sample_positions
+1049:         if positions is None:
+1050:             positions = (scan_profile or {}).get("positions", ())
+1051:         positions = tuple(int(x) for x in (positions or ()))
+1052:         if not positions:
+1053:             return []
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1048
+------------------------------------------------------------------------------------------
+1036:                 from core.settings import load_settings
+1037:                 scan_profile = cut_boundary_scan_profile(load_settings())
+1038:             except Exception:
+1039:                 scan_profile = cut_boundary_scan_profile({})
+1040: 
+1041:         level = normalize_cut_boundary_level((scan_profile or {}).get("level", "medium"))
+1042: 
+1043:         if level == "off":
+1044:             if get_logger:
+1045:                 get_logger().log("  🎬 [컷 경계] 단계=사용안함, 분석을 건너뜁니다")
+1046:             return []
+1047: 
+1048:         positions = sample_positions
+1049:         if positions is None:
+1050:             positions = (scan_profile or {}).get("positions", ())
+1051:         positions = tuple(int(x) for x in (positions or ()))
+1052:         if not positions:
+1053:             return []
+1054: 
+1055:         mask = str(sample_mask or (scan_profile or {}).get("mask", ""))
+1056:         label = str((scan_profile or {}).get("label", level))
+1057: 
+1058:         cap = cv2.VideoCapture(str(media_path))
+1059:         if not cap.isOpened():
+1060:             raise RuntimeError("video open failed")
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1049
+------------------------------------------------------------------------------------------
+1037:                 scan_profile = cut_boundary_scan_profile(load_settings())
+1038:             except Exception:
+1039:                 scan_profile = cut_boundary_scan_profile({})
+1040: 
+1041:         level = normalize_cut_boundary_level((scan_profile or {}).get("level", "medium"))
+1042: 
+1043:         if level == "off":
+1044:             if get_logger:
+1045:                 get_logger().log("  🎬 [컷 경계] 단계=사용안함, 분석을 건너뜁니다")
+1046:             return []
+1047: 
+1048:         positions = sample_positions
+1049:         if positions is None:
+1050:             positions = (scan_profile or {}).get("positions", ())
+1051:         positions = tuple(int(x) for x in (positions or ()))
+1052:         if not positions:
+1053:             return []
+1054: 
+1055:         mask = str(sample_mask or (scan_profile or {}).get("mask", ""))
+1056:         label = str((scan_profile or {}).get("label", level))
+1057: 
+1058:         cap = cv2.VideoCapture(str(media_path))
+1059:         if not cap.isOpened():
+1060:             raise RuntimeError("video open failed")
+1061: 
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1050
+------------------------------------------------------------------------------------------
+1038:             except Exception:
+1039:                 scan_profile = cut_boundary_scan_profile({})
+1040: 
+1041:         level = normalize_cut_boundary_level((scan_profile or {}).get("level", "medium"))
+1042: 
+1043:         if level == "off":
+1044:             if get_logger:
+1045:                 get_logger().log("  🎬 [컷 경계] 단계=사용안함, 분석을 건너뜁니다")
+1046:             return []
+1047: 
+1048:         positions = sample_positions
+1049:         if positions is None:
+1050:             positions = (scan_profile or {}).get("positions", ())
+1051:         positions = tuple(int(x) for x in (positions or ()))
+1052:         if not positions:
+1053:             return []
+1054: 
+1055:         mask = str(sample_mask or (scan_profile or {}).get("mask", ""))
+1056:         label = str((scan_profile or {}).get("label", level))
+1057: 
+1058:         cap = cv2.VideoCapture(str(media_path))
+1059:         if not cap.isOpened():
+1060:             raise RuntimeError("video open failed")
+1061: 
+1062:         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1051
+------------------------------------------------------------------------------------------
+1039:                 scan_profile = cut_boundary_scan_profile({})
+1040: 
+1041:         level = normalize_cut_boundary_level((scan_profile or {}).get("level", "medium"))
+1042: 
+1043:         if level == "off":
+1044:             if get_logger:
+1045:                 get_logger().log("  🎬 [컷 경계] 단계=사용안함, 분석을 건너뜁니다")
+1046:             return []
+1047: 
+1048:         positions = sample_positions
+1049:         if positions is None:
+1050:             positions = (scan_profile or {}).get("positions", ())
+1051:         positions = tuple(int(x) for x in (positions or ()))
+1052:         if not positions:
+1053:             return []
+1054: 
+1055:         mask = str(sample_mask or (scan_profile or {}).get("mask", ""))
+1056:         label = str((scan_profile or {}).get("label", level))
+1057: 
+1058:         cap = cv2.VideoCapture(str(media_path))
+1059:         if not cap.isOpened():
+1060:             raise RuntimeError("video open failed")
+1061: 
+1062:         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+1063:         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1052
+------------------------------------------------------------------------------------------
+1040: 
+1041:         level = normalize_cut_boundary_level((scan_profile or {}).get("level", "medium"))
+1042: 
+1043:         if level == "off":
+1044:             if get_logger:
+1045:                 get_logger().log("  🎬 [컷 경계] 단계=사용안함, 분석을 건너뜁니다")
+1046:             return []
+1047: 
+1048:         positions = sample_positions
+1049:         if positions is None:
+1050:             positions = (scan_profile or {}).get("positions", ())
+1051:         positions = tuple(int(x) for x in (positions or ()))
+1052:         if not positions:
+1053:             return []
+1054: 
+1055:         mask = str(sample_mask or (scan_profile or {}).get("mask", ""))
+1056:         label = str((scan_profile or {}).get("label", level))
+1057: 
+1058:         cap = cv2.VideoCapture(str(media_path))
+1059:         if not cap.isOpened():
+1060:             raise RuntimeError("video open failed")
+1061: 
+1062:         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+1063:         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+1064:         if fps <= 0.0 or frame_count <= 0:
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1084
+------------------------------------------------------------------------------------------
+1072: 
+1073:         threshold = float(threshold or 24.0)
+1074:         effective_threshold = _cb_level_effective_threshold(level, threshold)
+1075:         min_gap_sec = _cb_level_min_gap_sec(level)
+1076:         pyramid_steps = _cb_level_pyramid_steps(level)
+1077: 
+1078:         clip_offset = float(clip_offset or 0.0)
+1079:         clip_idx = int(clip_idx or 0)
+1080: 
+1081:         if get_logger:
+1082:             get_logger().log(
+1083:                 f"🔎 [scan-cut-grid-v3] level={level} label={label} "
+1084:                 f"mask={mask} cells={len(positions)}/9 "
+1085:                 f"interval={scan_interval_sec:.3f}s pyramid={pyramid_steps} "
+1086:                 f"threshold={threshold:.2f} effective={effective_threshold:.2f} "
+1087:                 f"min_gap={min_gap_sec:.1f}s source={os.path.basename(str(media_path))}"
+1088:             )
+1089: 
+1090:         rows = []
+1091:         prev_gray = None
+1092:         prev_t = 0.0
+1093:         last_emit_t = -999999.0
+1094: 
+1095:         total_steps = max(1, int(frame_count / step_frames))
+1096:         step_i = 0
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1120
+------------------------------------------------------------------------------------------
+1108:                 try:
+1109:                     progress_callback({
+1110:                         "clip_idx": clip_idx,
+1111:                         "percent": int(min(100, (step_i / max(1, total_steps)) * 100)),
+1112:                         "timestamp": t,
+1113:                         "duration": duration,
+1114:                         "detected": len(rows),
+1115:                     })
+1116:                 except Exception:
+1117:                     pass
+1118: 
+1119:             if prev_gray is not None:
+1120:                 delta, cell_deltas = _selected_grid_delta(prev_gray, gray, positions)
+1121: 
+1122:                 required_ratio = {
+1123:                     "low": 0.85,
+1124:                     "medium": 0.80,
+1125:                     "high": 0.70,
+1126:                 }.get(level, 0.80)
+1127: 
+1128:                 strong_cells = sum(1 for d in cell_deltas if d >= effective_threshold * 0.70)
+1129:                 required_cells = max(1, int(round(len(positions) * required_ratio)))
+1130:                 enough_cells = strong_cells >= required_cells
+1131: 
+1132:                 if (
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1124
+------------------------------------------------------------------------------------------
+1112:                         "timestamp": t,
+1113:                         "duration": duration,
+1114:                         "detected": len(rows),
+1115:                     })
+1116:                 except Exception:
+1117:                     pass
+1118: 
+1119:             if prev_gray is not None:
+1120:                 delta, cell_deltas = _selected_grid_delta(prev_gray, gray, positions)
+1121: 
+1122:                 required_ratio = {
+1123:                     "low": 0.85,
+1124:                     "medium": 0.80,
+1125:                     "high": 0.70,
+1126:                 }.get(level, 0.80)
+1127: 
+1128:                 strong_cells = sum(1 for d in cell_deltas if d >= effective_threshold * 0.70)
+1129:                 required_cells = max(1, int(round(len(positions) * required_ratio)))
+1130:                 enough_cells = strong_cells >= required_cells
+1131: 
+1132:                 if (
+1133:                     delta >= effective_threshold
+1134:                     and enough_cells
+1135:                     and (t - last_emit_t) >= min_gap_sec
+1136:                 ):
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1129
+------------------------------------------------------------------------------------------
+1117:                     pass
+1118: 
+1119:             if prev_gray is not None:
+1120:                 delta, cell_deltas = _selected_grid_delta(prev_gray, gray, positions)
+1121: 
+1122:                 required_ratio = {
+1123:                     "low": 0.85,
+1124:                     "medium": 0.80,
+1125:                     "high": 0.70,
+1126:                 }.get(level, 0.80)
+1127: 
+1128:                 strong_cells = sum(1 for d in cell_deltas if d >= effective_threshold * 0.70)
+1129:                 required_cells = max(1, int(round(len(positions) * required_ratio)))
+1130:                 enough_cells = strong_cells >= required_cells
+1131: 
+1132:                 if (
+1133:                     delta >= effective_threshold
+1134:                     and enough_cells
+1135:                     and (t - last_emit_t) >= min_gap_sec
+1136:                 ):
+1137:                     refined_sec = _cb_refine_cut_time_with_pyramid(
+1138:                         cap,
+1139:                         fps=fps,
+1140:                         coarse_time=t,
+1141:                         positions=positions,
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1141
+------------------------------------------------------------------------------------------
+1129:                 required_cells = max(1, int(round(len(positions) * required_ratio)))
+1130:                 enough_cells = strong_cells >= required_cells
+1131: 
+1132:                 if (
+1133:                     delta >= effective_threshold
+1134:                     and enough_cells
+1135:                     and (t - last_emit_t) >= min_gap_sec
+1136:                 ):
+1137:                     refined_sec = _cb_refine_cut_time_with_pyramid(
+1138:                         cap,
+1139:                         fps=fps,
+1140:                         coarse_time=t,
+1141:                         positions=positions,
+1142:                         effective_threshold=effective_threshold,
+1143:                         level=level,
+1144:                     )
+1145: 
+1146:                     # refine 결과도 min_gap 안쪽이면 버림
+1147:                     if refined_sec - last_emit_t < min_gap_sec:
+1148:                         prev_gray = gray
+1149:                         prev_t = t
+1150:                         step_i += 1
+1151:                         continue
+1152: 
+1153:                     row = {
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1160
+------------------------------------------------------------------------------------------
+1148:                         prev_gray = gray
+1149:                         prev_t = t
+1150:                         step_i += 1
+1151:                         continue
+1152: 
+1153:                     row = {
+1154:                         "time": round(refined_sec, 3),
+1155:                         "timeline_sec": round(clip_offset + refined_sec, 3),
+1156:                         "clip_idx": clip_idx,
+1157:                         "source": "grid_profile_v3",
+1158:                         "level": level,
+1159:                         "mask": mask,
+1160:                         "cell_count": len(positions),
+1161:                         "grid_positions": list(positions),
+1162:                         "delta": round(delta, 3),
+1163:                         "cell_deltas": [round(x, 3) for x in cell_deltas],
+1164:                         "threshold": threshold,
+1165:                         "effective_threshold": round(effective_threshold, 3),
+1166:                         "scan_interval_sec": scan_interval_sec,
+1167:                         "pyramid_steps": list(pyramid_steps),
+1168:                         "min_gap_sec": min_gap_sec,
+1169:                         "prev_time": round(prev_t, 3),
+1170:                         "coarse_time": round(t, 3),
+1171:                     }
+1172: 
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1161
+------------------------------------------------------------------------------------------
+1149:                         prev_t = t
+1150:                         step_i += 1
+1151:                         continue
+1152: 
+1153:                     row = {
+1154:                         "time": round(refined_sec, 3),
+1155:                         "timeline_sec": round(clip_offset + refined_sec, 3),
+1156:                         "clip_idx": clip_idx,
+1157:                         "source": "grid_profile_v3",
+1158:                         "level": level,
+1159:                         "mask": mask,
+1160:                         "cell_count": len(positions),
+1161:                         "grid_positions": list(positions),
+1162:                         "delta": round(delta, 3),
+1163:                         "cell_deltas": [round(x, 3) for x in cell_deltas],
+1164:                         "threshold": threshold,
+1165:                         "effective_threshold": round(effective_threshold, 3),
+1166:                         "scan_interval_sec": scan_interval_sec,
+1167:                         "pyramid_steps": list(pyramid_steps),
+1168:                         "min_gap_sec": min_gap_sec,
+1169:                         "prev_time": round(prev_t, 3),
+1170:                         "coarse_time": round(t, 3),
+1171:                     }
+1172: 
+1173:                     rows.append(row)
+
+------------------------------------------------------------------------------------------
+core/cut_boundary.py:1180
+------------------------------------------------------------------------------------------
+1168:                         "min_gap_sec": min_gap_sec,
+1169:                         "prev_time": round(prev_t, 3),
+1170:                         "coarse_time": round(t, 3),
+1171:                     }
+1172: 
+1173:                     rows.append(row)
+1174:                     last_emit_t = refined_sec
+1175: 
+1176:                     if get_logger:
+1177:                         get_logger().log(
+1178:                             f"📊 [scan-cut-grid-v3] level={level} mask={mask} "
+1179:                             f"coarse={t:.3f}s refined={refined_sec:.3f}s "
+1180:                             f"delta={delta:.2f} cells={strong_cells}/{len(positions)}"
+1181:                         )
+1182: 
+1183:                     if found_callback:
+1184:                         try:
+1185:                             found_callback(row, list(rows))
+1186:                         except Exception:
+1187:                             pass
+1188: 
+1189:             prev_gray = gray
+1190:             prev_t = t
+1191:             step_i += 1
+1192: 
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:85
+------------------------------------------------------------------------------------------
+0073:             cache_root = os.path.join("output", "cut_boundary_cache")
+0074: 
+0075:         os.makedirs(cache_root, exist_ok=True)
+0076: 
+0077:         payload = {
+0078:             "version": 2,
+0079:             "files": [],
+0080:             "settings": {
+0081:                 "scan_cut_auto_sample_step_sec": settings.get("scan_cut_auto_sample_step_sec", 1.0),
+0082:                 "scan_cut_auto_threshold": settings.get("scan_cut_auto_threshold", settings.get("scan_cut_threshold", 24.0)),
+0083:                 "scan_cut_threshold": settings.get("scan_cut_threshold", 24.0),
+0084:                 "scan_cut_mode": settings.get("scan_cut_mode", ""),
+0085:                 "scan_cut_boundary_level": settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")),
+0086:                 "scan_cut_grid_mask": settings.get("scan_cut_grid_mask", ""),
+0087:             },
+0088:         }
+0089: 
+0090:         for p in list(files or []):
+0091:             try:
+0092:                 st = os.stat(p)
+0093:                 payload["files"].append({
+0094:                     "path": os.path.abspath(p),
+0095:                     "size": int(st.st_size),
+0096:                     "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))),
+0097:                 })
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:86
+------------------------------------------------------------------------------------------
+0074: 
+0075:         os.makedirs(cache_root, exist_ok=True)
+0076: 
+0077:         payload = {
+0078:             "version": 2,
+0079:             "files": [],
+0080:             "settings": {
+0081:                 "scan_cut_auto_sample_step_sec": settings.get("scan_cut_auto_sample_step_sec", 1.0),
+0082:                 "scan_cut_auto_threshold": settings.get("scan_cut_auto_threshold", settings.get("scan_cut_threshold", 24.0)),
+0083:                 "scan_cut_threshold": settings.get("scan_cut_threshold", 24.0),
+0084:                 "scan_cut_mode": settings.get("scan_cut_mode", ""),
+0085:                 "scan_cut_boundary_level": settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")),
+0086:                 "scan_cut_grid_mask": settings.get("scan_cut_grid_mask", ""),
+0087:             },
+0088:         }
+0089: 
+0090:         for p in list(files or []):
+0091:             try:
+0092:                 st = os.stat(p)
+0093:                 payload["files"].append({
+0094:                     "path": os.path.abspath(p),
+0095:                     "size": int(st.st_size),
+0096:                     "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))),
+0097:                 })
+0098:             except Exception:
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:185
+------------------------------------------------------------------------------------------
+0173:             cache_path = self._cut_boundary_cache_path_for_start(files, settings)
+0174: 
+0175:             payload = {
+0176:                 "version": 2,
+0177:                 "created_at": time.time(),
+0178:                 "cache_type": "cut_boundaries_only",
+0179:                 "files": [],
+0180:                 "settings": {
+0181:                     "scan_cut_auto_sample_step_sec": settings.get("scan_cut_auto_sample_step_sec", 1.0),
+0182:                     "scan_cut_auto_threshold": settings.get("scan_cut_auto_threshold", settings.get("scan_cut_threshold", 24.0)),
+0183:                     "scan_cut_threshold": settings.get("scan_cut_threshold", 24.0),
+0184:                     "scan_cut_mode": settings.get("scan_cut_mode", ""),
+0185:                 "scan_cut_boundary_level": settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")),
+0186:                 "scan_cut_grid_mask": settings.get("scan_cut_grid_mask", ""),
+0187:                 },
+0188:                 # ✅ 핵심: 프로젝트 전체가 아니라 컷 경계 데이터만 저장
+0189:                 "analysis": {
+0190:                     "cut_boundaries": list(rows or []),
+0191:                 },
+0192:             }
+0193: 
+0194:             for p in list(files or []):
+0195:                 try:
+0196:                     st = os.stat(p)
+0197:                     payload["files"].append({
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:186
+------------------------------------------------------------------------------------------
+0174: 
+0175:             payload = {
+0176:                 "version": 2,
+0177:                 "created_at": time.time(),
+0178:                 "cache_type": "cut_boundaries_only",
+0179:                 "files": [],
+0180:                 "settings": {
+0181:                     "scan_cut_auto_sample_step_sec": settings.get("scan_cut_auto_sample_step_sec", 1.0),
+0182:                     "scan_cut_auto_threshold": settings.get("scan_cut_auto_threshold", settings.get("scan_cut_threshold", 24.0)),
+0183:                     "scan_cut_threshold": settings.get("scan_cut_threshold", 24.0),
+0184:                     "scan_cut_mode": settings.get("scan_cut_mode", ""),
+0185:                 "scan_cut_boundary_level": settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")),
+0186:                 "scan_cut_grid_mask": settings.get("scan_cut_grid_mask", ""),
+0187:                 },
+0188:                 # ✅ 핵심: 프로젝트 전체가 아니라 컷 경계 데이터만 저장
+0189:                 "analysis": {
+0190:                     "cut_boundaries": list(rows or []),
+0191:                 },
+0192:             }
+0193: 
+0194:             for p in list(files or []):
+0195:                 try:
+0196:                     st = os.stat(p)
+0197:                     payload["files"].append({
+0198:                         "path": os.path.abspath(str(p)),
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:581
+------------------------------------------------------------------------------------------
+0569:             from core.cut_boundary import (
+0570:                 cut_boundary_enabled,
+0571:                 detect_media_cut_boundaries,
+0572:                 normalize_cut_boundaries,
+0573:                 sync_project_cut_boundaries,
+0574:                 cut_boundary_scan_profile,
+0575:             )
+0576: 
+0577:             settings = load_settings()
+0578:             try:
+0579:                 scan_profile = cut_boundary_scan_profile(settings)
+0580:             except Exception:
+0581:                 scan_profile = {"level": "medium", "label": "중간 - 9개 중 X모양 5개", "mask": "x5", "positions": (0, 2, 4, 6, 8)}
+0582:             if not cut_boundary_enabled(settings):
+0583:                 get_logger().log("  🎬 [컷 경계] 비활성화되어 있어 분석을 건너뜁니다")
+0584:                 return []
+0585:             if not project_path or not os.path.exists(project_path):
+0586:                 get_logger().log("  ⚠️ [컷 경계] 프로젝트 경로가 없어 분석을 건너뜁니다")
+0587:                 return []
+0588: 
+0589:             cached = self._load_cut_boundary_cache_for_start(project_path, files, settings)
+0590:             if cached:
+0591:                 return cached
+0592: 
+0593:             clip_boundaries = list(getattr(self.ui, "_multiclip_boundaries", []) or [])
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:600
+------------------------------------------------------------------------------------------
+0588: 
+0589:             cached = self._load_cut_boundary_cache_for_start(project_path, files, settings)
+0590:             if cached:
+0591:                 return cached
+0592: 
+0593:             clip_boundaries = list(getattr(self.ui, "_multiclip_boundaries", []) or [])
+0594:             detected: list[dict] = []
+0595:             total_files = len(list(files or []))
+0596:             step_sec = max(0.25, float(settings.get("scan_cut_auto_sample_step_sec", 1.0) or 1.0))
+0597:             try:
+0598:                 get_logger().log(
+0599:                     f"  🎚️ [컷 경계] 단계: {scan_profile.get('label')} "
+0600:                     f"(mask={scan_profile.get('mask')}, cells={len(scan_profile.get('positions', []) or [])}/9)"
+0601:                 )
+0602:             except Exception:
+0603:                 pass
+0604: 
+0605:             # 자동 사전 스캔은 사용자가 다른 버튼을 누를 수 있어야 하므로
+0606:             # 전역 scan_active=True 신호를 보내지 않는다.
+0607:             # 이 신호는 UI에서 버튼 비활성화/대기 커서를 유발할 수 있다.
+0608:             # self._ui_emit("_sig_set_cut_boundary_scan_active", True)
+0609: 
+0610:             def _save_detected_now():
+0611:                 try:
+0612:                     with open(project_path, "r", encoding="utf-8") as f:
+
+------------------------------------------------------------------------------------------
+core/pipeline/pipeline_helpers.py:723
+------------------------------------------------------------------------------------------
+0711:                     clip_offset=offset,
+0712:                     clip_idx=idx,
+0713:                     sample_step_sec=float(settings.get("scan_cut_auto_sample_step_sec", 1.0) or 1.0),
+0714:                     threshold=float(settings.get("scan_cut_auto_threshold", settings.get("scan_cut_threshold", 24.0)) or 24.0),
+0715:                     progress_callback=_progress,
+0716:                     found_callback=_found,
+0717:                 )
+0718:                 try:
+0719:                     rows = detect_media_cut_boundaries(
+0720:                         path,
+0721:                         **detect_kwargs,
+0722:                         scan_profile=scan_profile,
+0723:                         sample_positions=scan_profile.get("positions", ()),
+0724:                         sample_mask=scan_profile.get("mask", ""),
+0725:                     )
+0726:                 except TypeError:
+0727:                     get_logger().log("  ⚠️ [컷 경계] detector가 level profile 인자를 지원하지 않아 기본 호출로 재시도합니다")
+0728:                     rows = detect_media_cut_boundaries(path, **detect_kwargs)
+0729:                 get_logger().log(
+0730:                     f"  ✅ [컷 경계] 파일 {idx + 1}/{total_files} 분석 완료: {os.path.basename(path)} "
+0731:                     f"(감지 {len(rows)}개)"
+0732:                 )
+0733:                 detected[:] = normalize_cut_boundaries(list(detected) + list(rows))
+0734:             _save_detected_now()
+0735:             try:

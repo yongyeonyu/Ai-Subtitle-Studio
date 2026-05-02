@@ -13,6 +13,7 @@ from typing import Any
 
 from core.frame_time import frame_to_sec, normalize_fps
 from core.work_mode import EDITOR_MODE, normalize_work_mode
+from core.cut_boundary import CUT_BOUNDARY_SCHEMA, normalize_cut_boundaries
 
 STT_SEGMENT_METADATA_KEYS = (
     "stt_candidates",
@@ -190,6 +191,18 @@ def project_voice_activity_segments(project: dict[str, Any]) -> list[dict[str, A
     return out
 
 
+def project_cut_boundary_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
+    timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
+    primary_fps = normalize_fps(timebase.get("primary_fps", 30.0) or 30.0)
+    analysis = project.get("analysis", {}) or {}
+    raw = analysis.get("cut_boundaries")
+    if not isinstance(raw, list):
+        raw = ((project.get("editor_state", {}) or {}).get("multiclip", {}) or {}).get("cut_boundaries")
+    if not isinstance(raw, list):
+        return []
+    return normalize_cut_boundaries(raw, primary_fps=primary_fps)
+
+
 def project_stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
     editor_state = project.get("editor_state", {}) or {}
     stt_state = editor_state.get("stt", {}) or {}
@@ -300,6 +313,7 @@ def build_editor_state(
     workspace: dict[str, Any] | None = None,
     clip_boundaries: list[dict[str, Any]] | None = None,
     stt_preview_segments: list[dict[str, Any]] | None = None,
+    cut_boundaries: list[dict[str, Any]] | None = None,
     primary_fps: float | None = None,
 ) -> dict[str, Any]:
     mode = "multiclip" if mode == "multiclip" or len(media_files) > 1 else "single"
@@ -307,6 +321,10 @@ def build_editor_state(
     boundaries = [_normalize_boundary(item, idx) for idx, item in enumerate(clip_boundaries or [])]
     stt_preview = _normalize_stt_preview_segments(
         stt_preview_segments or [],
+        primary_fps=normalize_fps(primary_fps or 30.0),
+    )
+    cut_boundary_rows = normalize_cut_boundaries(
+        cut_boundaries or [],
         primary_fps=normalize_fps(primary_fps or 30.0),
     )
     return {
@@ -319,6 +337,8 @@ def build_editor_state(
         "multiclip": {
             "files": [os.path.abspath(path) for path in media_files if path] if mode == "multiclip" else [],
             "boundaries": boundaries if mode == "multiclip" else [],
+            "cut_boundary_schema": CUT_BOUNDARY_SCHEMA,
+            "cut_boundaries": cut_boundary_rows if mode == "multiclip" else [],
         },
         "subtitles": {
             "segments": normalized_segments,
@@ -327,6 +347,10 @@ def build_editor_state(
         "stt": {
             "schema": "stt_candidates.v1",
             "preview_segments": stt_preview,
+        },
+        "analysis": {
+            "cut_boundary_schema": CUT_BOUNDARY_SCHEMA,
+            "cut_boundaries": cut_boundary_rows,
         },
         "workspace": sanitize_workspace_state(workspace),
     }

@@ -578,7 +578,7 @@ class PipelineHelpersMixin:
             try:
                 scan_profile = cut_boundary_scan_profile(settings)
             except Exception:
-                scan_profile = {"level": "medium", "label": "중간 - 9개 중 꽉찬 십자가 5개", "mask": "x5", "positions": (0, 2, 4, 6, 8)}
+                scan_profile = {"level": "medium", "label": "중간 - 9개 중 X모양 5개", "mask": "x5", "positions": (0, 2, 4, 6, 8)}
             if not cut_boundary_enabled(settings):
                 get_logger().log("  🎬 [컷 경계] 비활성화되어 있어 분석을 건너뜁니다")
                 return []

@@ -200,6 +200,33 @@ class SinglePipelineMixin:
             self._handle_restart(target_file)
             action_state[0] = "start"
 
+        if action_state[0] == "start":
+            try:
+                ui = self._ui_object()
+                project_path = str(getattr(ui, "_current_project_path", "") or "") if ui is not None else ""
+                media_files = list(getattr(ui, "_multiclip_files", []) or []) if ui is not None else []
+                if not media_files:
+                    media_files = [target_file]
+                if not project_path and ui is not None and media_files:
+                    from core.project.project_manager import create_project
+                    from core.path_manager import get_srt_path
+
+                    base_name = os.path.splitext(os.path.basename(media_files[0]))[0]
+                    editor = getattr(ui, "_editor_widget", None)
+                    editor_settings = dict(getattr(editor, "settings", {}) or {})
+                    project_path = create_project(
+                        name=base_name,
+                        media_paths=media_files,
+                        srt_path=get_srt_path(media_files[0]),
+                        user_settings=editor_settings,
+                    )
+                    ui._current_project_path = project_path
+                get_logger().log("  🎬 [컷 경계] 시작 전 분석 단계 확인 중...")
+                self._auto_scan_cut_boundaries_for_start(project_path, media_files)
+                self._ui_emit("_sig_refresh_cut_boundary_placeholder")
+            except Exception as exc:
+                get_logger().log(f"  ⚠️ [컷 경계] 시작 전 백그라운드 준비 실패: {exc}")
+
         # ── STT 파이프라인 루프 ──
         while True:
             self._active = True
@@ -226,6 +253,32 @@ class SinglePipelineMixin:
                     lambda status, qi=queue_index: self._ui_emit("_sig_update_queue", qi, status, "", "", "")
                 )
             try:
+                # ✅ 순서 고정:
+                # 컷 경계/주제없음 중분류가 먼저 확정된 뒤 STT1/STT2가 시작되어야 한다.
+                if hasattr(self, "_wait_cut_boundary_prescan_before_stt"):
+                    self._wait_cut_boundary_prescan_before_stt()
+
+                # ✅ 컷 경계는 STT 입력 청크의 절대 경계다.
+                # media_processor가 오디오 청크를 만들기 전에 hard cut을 주입한다.
+                try:
+                    if hasattr(self, "video_processor"):
+                        hard_cuts = []
+                        for row in self._project_cut_boundaries_for_pipeline():
+                            try:
+                                if isinstance(row, dict):
+                                    sec = float(row.get("timeline_sec", row.get("time", row.get("start", 0.0))) or 0.0)
+                                else:
+                                    sec = float(row)
+                                if sec > 0.0:
+                                    hard_cuts.append(round(sec, 3))
+                            except Exception:
+                                continue
+                        self.video_processor.hard_cut_boundaries = sorted(set(hard_cuts))
+                        if hard_cuts:
+                            get_logger().log(f"  ✂️ [컷 경계] STT 청크 hard cut {len(hard_cuts)}개 적용")
+                except Exception as exc:
+                    get_logger().log(f"  ⚠️ [컷 경계] STT 청크 hard cut 주입 실패: {exc}")
+
                 res = self._get_audio_extract_result(target_file)
             finally:
                 if hasattr(self, "video_processor"):
@@ -323,6 +376,7 @@ class SinglePipelineMixin:
                     chunk_segs,
                     source_label=str(_label or "STT"),
                     vad_segments=vad_segs,
+                    cut_boundaries=self._project_cut_boundaries_for_pipeline(),
                 )
                 if preview and self._active:
                     self._ui_emit("_sig_preview_stt_segments", preview)
@@ -458,6 +512,7 @@ class SinglePipelineMixin:
                             seg["end"] = seg["start"] + 0.5
 
                     opt = self._align_subtitle_segments_to_vad(opt, vad_segs, context="에디터")
+                    opt = self._split_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
 
                     if self.max_speakers > 1 and self._speaker_map:
                         from core.audio.diarize import get_speaker_for_segment
@@ -509,8 +564,9 @@ class SinglePipelineMixin:
                                 del seg["text_list"]
                         opt = grouped_opt
 
-                    auto_collected_segs.extend([dict(seg) for seg in opt])
                     opt = apply_final_gap_settings(opt, force=True)
+                    opt = self._split_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
+                    auto_collected_segs.extend([dict(seg) for seg in opt])
 
                     if not self._active or not self._ui_is_alive():
                         return

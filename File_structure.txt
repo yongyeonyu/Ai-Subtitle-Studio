@@ -73,6 +73,7 @@ ai_subtitle_studio/
 │   ├── settings.py		                ←		설정 로딩/저장/model_key 통합            v02.03.00
 │   ├── media_info.py		            ←		ffprobe 미디어 정보 유틸 + 메모리/디스크 cache v03.01.37
 │   ├── frame_time.py		            ←		영상 FPS 기반 프레임/초 변환, 프레임맵, 프레임 스냅 helper v03.06.16
+│   ├── cut_boundary.py		        ←		Absolute visual cut-boundary normalization, project sync, and subtitle/STT split helpers v03.11.16
 │   ├── pipeline_status.py		        ←		Shared subtitle generation mode/stage normalization helper v03.07.04
 │   ├── performance.py		        ←		Hardware profile, worker bounds, Qt cache tuning, and opt-in Qt OpenGL setup v03.07.01
 │   ├── state_manager.py		    ←		FSM state manager with shared stage parser preservation v03.07.04
@@ -119,10 +120,10 @@ ai_subtitle_studio/
 │   │
 │   ├── pipeline/
 │   │   ├── backend_core.py		    ←		단일/공통 파이프라인 진입 + stop 시 STT/LLM 종료 요청 v03.06.00
-│   │   ├── single_pipeline.py		←		Single-file subtitle pipeline with STT previews, ensemble final append, and final gap timing pass v03.09.30
-│   │   ├── multiclip_pipeline.py	←		Multiclip STT/LLM pipeline with offset-aware previews, metadata, and clip-scoped final gap timing v03.09.30
-│   │   ├── stt_preview_optimizer.py	←		STT preview candidate optimizer applying subtitle rules/LLM while preserving lane and clip metadata v03.09.27
-│   │   └── pipeline_helpers.py		←		백업/저장/렌더/prefetch 공통             v02.07.00
+│   │   ├── single_pipeline.py		←		Single-file subtitle pipeline with STT previews, ensemble final append, final gap timing, and cut-boundary absolute splits v03.11.16
+│   │   ├── multiclip_pipeline.py	←		Multiclip STT/LLM pipeline with offset-aware previews, metadata, clip-scoped final gap timing, and cut-boundary absolute splits v03.11.16
+│   │   ├── stt_preview_optimizer.py	←		STT preview candidate optimizer applying subtitle rules/LLM and cut-boundary splits while preserving lane and clip metadata v03.11.16
+│   │   └── pipeline_helpers.py		←		Shared backup/save/render/prefetch plus VAD and cut-boundary post-processing helpers v03.11.16
 │   │
 │   ├── roughcut/		            ←		PHASE2 로컬 러프컷 분석 엔진              v03.02.15
 │   │   ├── __init__.py		        ←		러프컷 공개 API export + editor draft API v03.02.15

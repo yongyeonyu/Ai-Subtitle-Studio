@@ -13,6 +13,7 @@ from typing import Any
 
 from core.project.project_context import build_editor_state, sanitize_workspace_state
 from core.project.project_manager import build_model_settings_snapshot, _augment_project_frame_metadata
+from core.cut_boundary import cut_boundary_enabled, project_cut_boundaries, split_segments_by_cut_boundaries, sync_project_cut_boundaries
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 
 PROJECT_SCHEMA_VERSION = '03.00.26'
@@ -127,6 +128,13 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
     if editor_settings:
         data['user_settings'] = editor_settings
         data['model_settings'] = build_model_settings_snapshot(editor_settings)
+    cut_boundaries = project_cut_boundaries(data)
+    if segments is not None:
+        segments = split_segments_by_cut_boundaries(
+            segments,
+            cut_boundaries,
+            enabled=cut_boundary_enabled(editor_settings or data.get('user_settings', {})),
+        )
     data['project_meta'] = _project_meta(owner)
     subtitles = dict(data.get('subtitles', {}) or {})
     subtitles['srt_path'] = _safe_abs(srt_path) or subtitles.get('srt_path')
@@ -138,6 +146,7 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
         segments=segments or subtitles.get('segments') or [],
         workspace=data['workspace'],
         clip_boundaries=list(getattr(owner, '_multiclip_boundaries', []) or []),
+        cut_boundaries=cut_boundaries,
     )
     data.setdefault('roughcut_state', {})
     if media_files:
@@ -146,6 +155,7 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
             for i, path in enumerate(media_files)
         ]
     _augment_project_frame_metadata(data)
+    sync_project_cut_boundaries(data, settings=editor_settings or data.get('user_settings', {}))
     with open(project_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     return project_path

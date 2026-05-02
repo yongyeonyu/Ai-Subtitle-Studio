@@ -492,7 +492,7 @@ class EditorPipelineMixin:
             choices = [
                 ("off", "사용안함"),
                 ("low", "낮음 - 십자가 4/9"),
-                ("medium", "중간 - 꽉찬 십자가 5/9"),
+                ("medium", "중간 - X모양 5/9"),
                 ("high", "높음 - O모양 8/9"),
             ]
 
@@ -529,17 +529,17 @@ class EditorPipelineMixin:
             labels = {
                 "off": "사용안함",
                 "low": "낮음 - 9개 중 십자가 4개",
-                "medium": "중간 - 9개 중 꽉찬 십자가 5개",
+                "medium": "중간 - 9개 중 X모양 5개",
                 "high": "높음 - 9개 중 O모양 8개",
             }
             masks = {
                 "off": "off",
                 "low": "cross4",
-                "medium": "cross5",
+                "medium": "x5",
                 "high": "o8",
             }
             settings["scan_cut_boundary_label"] = labels.get(level, labels["medium"])
-            settings["scan_cut_grid_mask"] = masks.get(level, "cross5")
+            settings["scan_cut_grid_mask"] = masks.get(level, "x5")
 
             if callable(save_settings):
                 save_settings(settings)

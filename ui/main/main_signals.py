@@ -24,6 +24,15 @@ class SignalHandlersMixin:
     def preview_stt_segments_in_editor(self, segments):
         self._sig_preview_stt_segments.emit(segments)
 
+    def refresh_cut_boundary_placeholder(self):
+        self._sig_refresh_cut_boundary_placeholder.emit()
+
+    def set_cut_boundary_scan_active(self, active: bool):
+        self._sig_set_cut_boundary_scan_active.emit(bool(active))
+
+    def preview_cut_boundary_scan(self, current_sec: float, next_sec: float = 0.0):
+        self._sig_preview_cut_boundary_scan.emit(float(current_sec or 0.0), float(next_sec or 0.0))
+
     def update_editor_status(self, c_idx, t_total):
         self._sig_update_status.emit(c_idx, t_total)
 
@@ -96,6 +105,33 @@ class SignalHandlersMixin:
             pass
         self.backend.start_multiclip_pipeline(list(files or []), folder=folder)
 
+    def _do_refresh_cut_boundary_placeholder(self):
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None:
+            return
+        roughcut = getattr(self, "_roughcut_widget", None)
+        if roughcut is None:
+            try:
+                from ui.roughcut.roughcut_widget import RoughcutWidget
+
+                roughcut = RoughcutWidget(owner=self, parent=self)
+                self._roughcut_widget = roughcut
+                self.stack.addWidget(roughcut)
+            except Exception as exc:
+                get_logger().log(f"⚠️ 컷 경계 placeholder 위젯 준비 실패: {exc}")
+                return
+        try:
+            roughcut.refresh_from_editor(analyze_if_missing=False)
+            self._editor_roughcut_result = getattr(roughcut, "_result", None)
+        except Exception as exc:
+            get_logger().log(f"⚠️ 컷 경계 placeholder 갱신 실패: {exc}")
+            return
+        try:
+            if hasattr(editor, "_redraw_timeline"):
+                editor._redraw_timeline()
+        except Exception:
+            pass
+
     def open_editor_for_file(
         self, target_file, on_save, on_start, on_prev, on_exit, is_batch=False
     ):
@@ -162,6 +198,28 @@ class SignalHandlersMixin:
             return
         canvas.re_recog_progress = progress_sec
         canvas.update()
+
+    def _on_cut_boundary_scan_active(self, active: bool):
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None:
+            return
+        handler = getattr(editor, "_set_auto_cut_boundary_scan_active", None)
+        if callable(handler):
+            try:
+                handler(bool(active))
+            except Exception as exc:
+                get_logger().log(f"⚠️ 자동 컷 경계 스캔 상태 반영 실패: {exc}")
+
+    def _on_cut_boundary_scan_preview(self, current_sec: float, next_sec: float):
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None:
+            return
+        handler = getattr(editor, "_preview_auto_cut_boundary_scan", None)
+        if callable(handler):
+            try:
+                handler(float(current_sec or 0.0), float(next_sec or 0.0))
+            except Exception as exc:
+                get_logger().log(f"⚠️ 자동 컷 경계 스캔 프리뷰 실패: {exc}")
 
     def _warmup_local_llm_models(self):
         import threading

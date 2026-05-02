@@ -578,7 +578,7 @@ class PipelineHelpersMixin:
             try:
                 scan_profile = cut_boundary_scan_profile(settings)
             except Exception:
-                scan_profile = {"level": "medium", "label": "중간 - 9개 중 꽉찬 십자가 5개", "mask": "x5", "positions": (0, 2, 4, 6, 8)}
+                scan_profile = {"level": "medium", "label": "중간 - 9개 중 X모양 5개", "mask": "x5", "positions": (0, 2, 4, 6, 8)}
             if not cut_boundary_enabled(settings):
                 get_logger().log("  🎬 [컷 경계] 비활성화되어 있어 분석을 건너뜁니다")
                 return []
@@ -654,23 +654,6 @@ class PipelineHelpersMixin:
                     f"{sec:.3f}s (누적 {len(detected)}개)"
                 )
                 _save_detected_now()
-                # CUT_TOPICLESS_GRAY_FIX_FOUND_V2
-                try:
-                    from core.roughcut.cut_boundary_placeholder import apply_topicless_placeholders_to_project
-                    placeholder_rows = apply_topicless_placeholders_to_project(
-                        project_path,
-                        detected,
-                        media_duration=None,
-                        include_trailing=False,
-                    )
-                    if placeholder_rows:
-                        get_logger().log(
-                            f"  ▒ [컷 경계] 주제없음 회색 중분류 저장 "
-                            f"({len(placeholder_rows)}개, done=False)"
-                        )
-                except Exception as exc:
-                    get_logger().log(f"  ⚠️ [컷 경계] 주제없음 회색 중분류 저장 실패: {exc}")
-
                 # ✅ 컷 경계 발견 즉시 회색 주제없음 중분류 세그먼트 생성
                 try:
                     self._force_cut_boundary_topicless_segments_to_project(

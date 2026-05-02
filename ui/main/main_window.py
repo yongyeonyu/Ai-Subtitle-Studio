@@ -72,6 +72,9 @@ class MainWindow(
     _sig_preview_stt_segments = pyqtSignal(list)
     _sig_clear_editor        = pyqtSignal()
     _sig_restart_multiclip   = pyqtSignal(list, object)
+    _sig_refresh_cut_boundary_placeholder = pyqtSignal()
+    _sig_set_cut_boundary_scan_active = pyqtSignal(bool)
+    _sig_preview_cut_boundary_scan = pyqtSignal(float, float)
 
     def __init__(self):
         super().__init__()
@@ -604,6 +607,9 @@ class MainWindow(
         self._sig_preview_stt_segments.connect(self._do_preview_stt_segments)
         self._sig_clear_editor.connect(self._do_clear_editor)
         self._sig_restart_multiclip.connect(self._do_restart_multiclip)
+        self._sig_refresh_cut_boundary_placeholder.connect(self._do_refresh_cut_boundary_placeholder)
+        self._sig_set_cut_boundary_scan_active.connect(self._on_cut_boundary_scan_active)
+        self._sig_preview_cut_boundary_scan.connect(self._on_cut_boundary_scan_preview)
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self):

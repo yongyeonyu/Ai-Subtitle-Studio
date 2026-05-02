@@ -431,6 +431,9 @@ class TimelineInputMixin:
         return QRect(int(px - handle_r), 2, handle_r * 2, handle_r * 2)
 
     def mousePressEvent(self, ev):
+        if bool(getattr(self, "_scan_cut_input_locked", False)):
+            ev.accept()
+            return
         if ev.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             if self._playhead_handle_hit_rect().contains(ev.pos()):
                 self.playhead_menu_requested.emit(ev.globalPosition().toPoint(), self.playhead_sec); return

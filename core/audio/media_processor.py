@@ -665,6 +665,171 @@ class VideoProcessor:
                 end = min(end, total_dur)
         return start, max(start, end)
 
+    def _hard_cut_boundaries_for_span(self, start: float, end: float) -> tuple[float, ...]:
+        """Return hard cut times inside the requested STT span.
+
+        hard_cut_boundaries is injected by the pipeline before audio extraction.
+        These boundaries are absolute/local seconds for the current media file.
+        STT wav chunks must never cross these cuts.
+        """
+        try:
+            start = float(start or 0.0)
+            end = float(end or 0.0)
+        except Exception:
+            return ()
+
+        cuts = []
+        for item in list(getattr(self, "hard_cut_boundaries", []) or []):
+            try:
+                if isinstance(item, dict):
+                    sec = float(item.get("timeline_sec", item.get("time", item.get("start", 0.0))) or 0.0)
+                else:
+                    sec = float(item)
+            except Exception:
+                continue
+
+            if start < sec < end:
+                cuts.append(round(sec, 3))
+
+        return tuple(sorted(set(cuts)))
+
+    def _chunk_item_span(self, item):
+        """Best-effort grouped chunk span reader.
+
+        Supports dict chunks and tuple/list chunks. This is intentionally
+        defensive because grouped chunk formats differ between direct ffmpeg,
+        VAD, and force split paths.
+        """
+        if isinstance(item, dict):
+            for sk, ek in (("start", "end"), ("start_sec", "end_sec"), ("s", "e")):
+                if sk in item and ek in item:
+                    try:
+                        return float(item[sk]), float(item[ek]), sk, ek, None
+                    except Exception:
+                        pass
+            if "offset" in item and "duration" in item:
+                try:
+                    s = float(item["offset"])
+                    return s, s + float(item["duration"]), "offset", "duration", "duration"
+                except Exception:
+                    pass
+
+        if isinstance(item, (list, tuple)):
+            numeric = []
+            for idx, val in enumerate(item):
+                try:
+                    numeric.append((idx, float(val)))
+                except Exception:
+                    continue
+
+            # Common forms: (start, end), (idx, start, end), (path, start, end)
+            for a, b in ((0, 1), (1, 2)):
+                if len(item) > b:
+                    try:
+                        s = float(item[a])
+                        e = float(item[b])
+                        if e > s:
+                            return s, e, a, b, None
+                    except Exception:
+                        pass
+
+            if len(numeric) >= 2:
+                a, s = numeric[0]
+                b, e = numeric[1]
+                if e > s:
+                    return s, e, a, b, None
+
+        return None
+
+    def _replace_chunk_item_span(self, item, start: float, end: float, sk, ek, mode):
+        if isinstance(item, dict):
+            row = dict(item)
+            if mode == "duration":
+                row[sk] = round(start, 3)
+                row[ek] = round(max(0.0, end - start), 3)
+            else:
+                row[sk] = round(start, 3)
+                row[ek] = round(end, 3)
+            return row
+
+        if isinstance(item, tuple):
+            row = list(item)
+            row[sk] = round(start, 3)
+            row[ek] = round(end, 3)
+            return tuple(row)
+
+        if isinstance(item, list):
+            row = list(item)
+            row[sk] = round(start, 3)
+            row[ek] = round(end, 3)
+            return row
+
+        return item
+
+    def _split_grouped_chunks_at_hard_cuts(self, grouped, span_start: float | None = None, span_end: float | None = None):
+        """Split STT wav extraction chunks at hard visual cuts.
+
+        This is the STT-input-level hard boundary enforcement.
+        Final subtitle splitting remains as a second safety layer.
+        """
+        items = list(grouped or [])
+        if not items:
+            return grouped
+
+        detected_spans = []
+        for item in items:
+            span = self._chunk_item_span(item)
+            if span is not None:
+                detected_spans.append(span)
+
+        if not detected_spans:
+            return grouped
+
+        if span_start is None:
+            span_start = min(s for s, _, _, _, _ in detected_spans)
+        if span_end is None:
+            span_end = max(e for _, e, _, _, _ in detected_spans)
+
+        hard_cuts = self._hard_cut_boundaries_for_span(float(span_start), float(span_end))
+        if not hard_cuts:
+            return grouped
+
+        out = []
+        changed = False
+
+        for item in items:
+            span = self._chunk_item_span(item)
+            if span is None:
+                out.append(item)
+                continue
+
+            start, end, sk, ek, mode = span
+            inner = [c for c in hard_cuts if start < c < end]
+            if not inner:
+                out.append(item)
+                continue
+
+            points = [start] + inner + [end]
+            for idx in range(len(points) - 1):
+                a = points[idx]
+                b = points[idx + 1]
+                if b <= a or (b - a) < 0.05:
+                    continue
+                out.append(self._replace_chunk_item_span(item, a, b, sk, ek, mode))
+            changed = True
+
+        if changed:
+            try:
+                get_logger().log(
+                    f"  ✂️ [컷 경계] STT 오디오 청크 {len(items)}개 → {len(out)}개 hard split "
+                    f"(경계 {len(hard_cuts)}개)"
+                )
+            except Exception:
+                pass
+
+        return out
+
+
     def _can_direct_extract_stt_chunks(
         self,
         settings: dict,
@@ -785,6 +950,7 @@ class VideoProcessor:
             chunk_sec = max(10.0, float(s.get("ff_chunk", _CHUNK_DURATION)))
             overlap_sec = self._chunk_overlap_sec(s)
             grouped = self._split_range_with_overlap(direct_start, direct_end, chunk_sec, overlap_sec)
+            grouped = self._split_grouped_chunks_at_hard_cuts(grouped, direct_start, direct_end)
             fused_filter = self._combine_audio_filters(master_filter if use_basic else "anull", active_filter)
             self._notify_stage("⏳ [전처리] FFMPEG 직접 청크 추출 중")
             get_logger().log(
@@ -963,6 +1129,7 @@ class VideoProcessor:
                     total_dur = w.getnframes() / float(w.getframerate())
 
                 grouped = self._build_grouped_chunks(vad_segments, total_dur, settings=s)
+                grouped = self._split_grouped_chunks_at_hard_cuts(grouped, target_start_sec, target_end_sec)
                 self._write_grouped_chunks_parallel(cleaned_wav, chunk_dir, grouped)
 
                 try:
@@ -1486,6 +1653,7 @@ class VideoProcessor:
                         gap_merge_limit=3.0,
                         settings=s,
                     )
+                    grouped = self._split_grouped_chunks_at_hard_cuts(grouped, target_start_sec, target_end_sec)
                     self._write_grouped_chunks_parallel(wav_path, chunk_dir, grouped)
                     try:
                         with open(os.path.join(chunk_dir, "vad_strict.json"), "w", encoding="utf-8") as f:
@@ -1631,6 +1799,7 @@ class VideoProcessor:
                 gap_merge_limit=3.0,
                 settings=s
             )
+            grouped = self._split_grouped_chunks_at_hard_cuts(grouped, target_start_sec, target_end_sec)
             self._write_grouped_chunks_parallel(wav_path, chunk_dir, grouped)
 
             try:

@@ -23,6 +23,7 @@ from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 
 import config
 from core.frame_time import build_frame_time_map, normalize_fps, snap_sec_to_frame
+from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail
 from ui.gpu_rendering import gpu_backend_name, make_accelerated_viewport
 
 
@@ -1119,6 +1120,55 @@ class VideoPlayerWidget(QWidget):
                     pass
         except Exception:
             pass
+
+    def _show_thumbnail_from_cache_path(self, thumb_path: str) -> bool:
+        try:
+            if not thumb_path or not os.path.exists(thumb_path):
+                return False
+            pixmap = QPixmap(thumb_path)
+            if pixmap.isNull():
+                return False
+            self.video_stack.setCurrentIndex(1)
+            self.thumb_label.set_pixmap(pixmap)
+            return True
+        except Exception:
+            return False
+
+    def _thumbnail_cache_dir(self) -> str:
+        try:
+            owner = self.window()
+            project_path = str(getattr(owner, "_current_project_path", "") or "")
+        except Exception:
+            project_path = ""
+        return str(default_thumbnail_cache_dir(project_path))
+
+    def show_cached_thumbnail_at(self, path: str, sec: float = 0.0, *, width: int = 640) -> bool:
+        if not self._is_video_file(path):
+            return False
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            return False
+        result = ensure_thumbnail(
+            path,
+            max(0.0, float(sec or 0.0)),
+            cache_dir=self._thumbnail_cache_dir(),
+            width=max(160, int(width or 640)),
+        )
+        if result.status not in ("cached", "created") or not result.path:
+            return False
+        return self._show_thumbnail_from_cache_path(result.path)
+
+    def prefetch_thumbnail_at(self, path: str, sec: float = 0.0, *, width: int = 640) -> str:
+        if not self._is_video_file(path):
+            return ""
+        result = ensure_thumbnail(
+            path,
+            max(0.0, float(sec or 0.0)),
+            cache_dir=self._thumbnail_cache_dir(),
+            width=max(160, int(width or 640)),
+        )
+        if result.status in ("cached", "created"):
+            return str(result.path or "")
+        return ""
 
     def _extract_and_show_thumbnail(self, path: str):
         if not self._is_video_file(path):
