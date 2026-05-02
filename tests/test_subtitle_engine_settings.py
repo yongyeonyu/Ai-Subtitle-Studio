@@ -1,4 +1,4 @@
-# Version: 03.08.09
+# Version: 03.09.30
 # Phase: PHASE2
 import unittest
 import importlib
@@ -12,6 +12,64 @@ from core.engine import subtitle_engine
 
 
 class SubtitleEngineSettingsTests(unittest.TestCase):
+    def test_final_gap_settings_apply_as_last_timing_pass(self):
+        segments = [
+            {"start": 0.0, "end": 1.0, "text": "A"},
+            {"start": 2.0, "end": 3.0, "text": "B"},
+            {"start": 6.0, "end": 7.0, "text": "C"},
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "continuous_threshold": 1.5,
+                "gap_push_rate": 0.8,
+                "gap_pull_rate": 0.2,
+                "single_subtitle_end": 0.2,
+                "sub_min_duration": 0.2,
+            },
+        )
+
+        self.assertEqual([seg["text"] for seg in adjusted], ["A", "B", "C"])
+        self.assertAlmostEqual(adjusted[0]["end"], 1.8, places=3)
+        self.assertAlmostEqual(adjusted[1]["start"], 1.8, places=3)
+        self.assertAlmostEqual(adjusted[1]["end"], 3.2, places=3)
+        self.assertAlmostEqual(adjusted[2]["start"], 5.8, places=3)
+        self.assertTrue(all(seg.get("_final_gap_settings_applied") for seg in adjusted))
+
+    def test_final_gap_settings_do_not_pull_across_multiclip_boundaries(self):
+        segments = [
+            {"start": 0.0, "end": 1.0, "text": "A", "_clip_idx": 0},
+            {"start": 2.0, "end": 3.0, "text": "B", "_clip_idx": 1},
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "continuous_threshold": 2.0,
+                "gap_push_rate": 0.8,
+                "gap_pull_rate": 0.2,
+                "single_subtitle_end": 0.2,
+            },
+        )
+
+        self.assertAlmostEqual(adjusted[0]["end"], 1.2, places=3)
+        self.assertAlmostEqual(adjusted[1]["start"], 2.0, places=3)
+
+    def test_final_gap_settings_are_idempotent_when_already_applied(self):
+        segments = [
+            {"start": 0.0, "end": 1.8, "text": "A", "_final_gap_settings_applied": True},
+            {"start": 1.8, "end": 3.0, "text": "B", "_final_gap_settings_applied": True},
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {"continuous_threshold": 2.0, "gap_push_rate": 0.8, "gap_pull_rate": 0.2},
+        )
+
+        self.assertAlmostEqual(adjusted[0]["end"], 1.8, places=3)
+        self.assertAlmostEqual(adjusted[1]["start"], 1.8, places=3)
+
     def test_setting_int_uses_fallback_and_default_for_invalid_values(self):
         self.assertEqual(
             subtitle_engine._setting_int(

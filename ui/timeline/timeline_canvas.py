@@ -1,4 +1,4 @@
-# Version: 03.06.21
+# Version: 03.09.18
 # Phase: PHASE2
 """
 ui/timeline_canvas.py
@@ -36,6 +36,7 @@ TimelineCanvasBase = accelerated_widget_base()
 class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintMixin, TimelineCanvasBase):
     seg_clicked             = pyqtSignal(int, float)
     seg_right_clicked       = pyqtSignal(float, QPoint)
+    stt_candidate_selected  = pyqtSignal(dict)
     seg_double_clicked      = pyqtSignal(int, float)
     seg_time_changed        = pyqtSignal(int, float, float, str)
     seg_to_gap              = pyqtSignal(int)
@@ -80,6 +81,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.segments:     list[dict] = []
         self.gap_segments: list[dict] = []
         self.vad_segments: list[dict] = []
+        self.voice_activity_segments: list[dict] = []
         self.total_duration: float = 0.0
         self.active_seg_start: float | None = None
         self.active_seg_line: int | None = None
@@ -144,6 +146,19 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._roughcut_major_cache_key = None
         self._roughcut_major_cache = []
 
+    def _refresh_voice_activity_segments(self):
+        try:
+            from ui.timeline.timeline_analysis import voice_activity_segments_for_editor
+
+            self.voice_activity_segments = voice_activity_segments_for_editor(
+                list(getattr(self, "segments", []) or []),
+                list(getattr(self, "vad_segments", []) or []),
+                list(getattr(self, "gap_segments", []) or []),
+                float(getattr(self, "total_duration", 0.0) or 0.0),
+            )
+        except Exception:
+            self.voice_activity_segments = []
+
     def analysis_markers_cached(self) -> list[dict]:
         from ui.timeline.timeline_analysis import analysis_markers_for_widget
 
@@ -205,6 +220,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
                 gap["active"] = True
 
         self.gap_segments = new_gaps
+        self._refresh_voice_activity_segments()
         self._invalidate_marker_caches()
 
         if active_sec is not None:
@@ -260,7 +276,12 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     def set_vad_segments(self, vad_segs):
         self.vad_segments = vad_segs
         self._speech_mask = None      # 마스크 재계산 트리거
+        self._refresh_voice_activity_segments()
         self._invalidate_marker_caches()
+        self.update()
+
+    def set_voice_activity_segments(self, segments: list[dict]):
+        self.voice_activity_segments = list(segments or [])
         self.update()
 
     def set_active(self, sec):
@@ -304,6 +325,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
     def _seg_at(self, x):
         for seg in self.segments:
+            if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
+                continue
             if self._x(seg["start"]) <= x <= self._x(seg["end"]):
                 return seg
         return None

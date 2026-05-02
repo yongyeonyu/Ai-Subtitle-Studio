@@ -1,4 +1,4 @@
-# Version: 03.06.17
+# Version: 03.09.26
 # Phase: PHASE2
 """
 ui/timeline_input.py
@@ -12,6 +12,8 @@ from ui.editor.editor_helpers import find_segment_at
 
 from ui.timeline.speaker_labels import current_speaker_settings, speaker_labels_for_segment
 from ui.timeline.timeline_constants import (
+    ANALYSIS_BOT,
+    ANALYSIS_TOP,
     DIAMOND_Y,
     HANDLE_R,
     ICON_SZ,
@@ -20,10 +22,55 @@ from ui.timeline.timeline_constants import (
     SEGMENT_HANDLE_MIN_WIDTH,
     SPEAKER_BOT,
     SPEAKER_TOP,
+    STT1_BOT,
+    STT1_TOP,
+    STT2_BOT,
+    STT2_TOP,
+    VOICE_ACTIVITY_BOT,
+    VOICE_ACTIVITY_TOP,
     _build_gaps,
 )
 
 class TimelineInputMixin:
+    _REVIEW_FLAGS = {
+        "non_speech_hallucination_risk",
+        "high_no_speech_prob",
+        "outside_vad_speech",
+        "high_cps",
+        "quality_stale",
+    }
+
+    def _segment_needs_manual_review(self, seg: dict) -> bool:
+        quality = dict(seg.get("quality") or {})
+        label = str(quality.get("confidence_label") or "")
+        flags = set(str(flag) for flag in (quality.get("flags") or ()))
+        return (
+            bool(quality)
+            and (
+                label in {"red", "gray"}
+                or bool(flags.intersection(self._REVIEW_FLAGS))
+                or bool(seg.get("quality_stale"))
+            )
+        )
+
+    def _is_stt_preview_segment(self, seg: dict) -> bool:
+        return bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
+
+    def _stt_preview_source(self, seg: dict) -> str:
+        source = (
+            seg.get("stt_preview_source")
+            or seg.get("stt_source")
+            or seg.get("stt_ensemble_source")
+            or "STT1"
+        )
+        return str(source or "STT1").strip().upper()
+
+    def _is_readonly_analysis_lane_y(self, y: int) -> bool:
+        return (
+            VOICE_ACTIVITY_TOP <= int(y) <= VOICE_ACTIVITY_BOT
+            or ANALYSIS_TOP <= int(y) <= ANALYSIS_BOT
+        )
+
     def focusNextPrevChild(self, next):
         self._snap_closest_diamond()
         return False
@@ -33,7 +80,11 @@ class TimelineInputMixin:
             self._handle_edit_key(ev); ev.accept(); return
 
         if ev.key() in (Qt.Key.Key_F2, Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.active_seg_start is not None:
-            seg = next((s for s in self.segments if abs(s["start"] - self.active_seg_start) < 0.5), None)
+            seg = next((
+                s for s in self.segments
+                if not self._is_stt_preview_segment(s)
+                and abs(s["start"] - self.active_seg_start) < 0.5
+            ), None)
             if seg: self.start_inline_edit(seg.get("line", 0), seg["start"])
             ev.accept(); return
 
@@ -63,6 +114,8 @@ class TimelineInputMixin:
 
         target = None
         for seg in reversed(self.segments):
+            if self._is_stt_preview_segment(seg):
+                continue
             if seg["start"] < self.playhead_sec - 0.1:
                 target = seg["start"]
                 break
@@ -75,6 +128,8 @@ class TimelineInputMixin:
 
         target = None
         for seg in self.segments:
+            if self._is_stt_preview_segment(seg):
+                continue
             if seg["start"] > self.playhead_sec + 0.1:
                 target = seg["start"]
                 break
@@ -83,7 +138,7 @@ class TimelineInputMixin:
 
     def _emit_smart_split_at_playhead(self):
         sec = self._snap_to_frame(self.playhead_sec)
-        seg = find_segment_at(self.segments, sec, skip_gap=True)
+        seg = find_segment_at([s for s in self.segments if not self._is_stt_preview_segment(s)], sec, skip_gap=True)
         if not seg: return
         if sec <= seg["start"] + 0.05 or sec >= seg["end"] - 0.05: return
         mid = (seg["start"] + seg["end"]) / 2.0
@@ -98,6 +153,14 @@ class TimelineInputMixin:
         dy = event.angleDelta().y()
         dx = event.angleDelta().x()
         delta = -(dy if dy != 0 else dx)
+
+        widget = self.parent()
+        while widget:
+            if hasattr(widget, "apply_manual_horizontal_scroll_delta"):
+                widget.apply_manual_horizontal_scroll_delta(delta // 2)
+                event.accept()
+                return
+            widget = widget.parent()
 
         widget = self.parent()
         from PyQt6.QtWidgets import QScrollArea as _ScrollArea
@@ -163,7 +226,33 @@ class TimelineInputMixin:
 
     def _speaker_lane_seg_at(self, x: int, y: int):
         for seg in self.segments:
+            if self._is_stt_preview_segment(seg):
+                continue
             if self._speaker_lane_hit_rect_for_seg(seg).contains(x, y):
+                return seg
+        return None
+
+    def _stt_candidate_at(self, x: int, y: int):
+        if STT1_TOP <= y <= STT1_BOT:
+            lane_source = "STT1"
+        elif STT2_TOP <= y <= STT2_BOT:
+            lane_source = "STT2"
+        else:
+            return None
+        for seg in self.segments:
+            if not self._is_stt_preview_segment(seg):
+                continue
+            source = self._stt_preview_source(seg)
+            if lane_source == "STT1" and source == "STT2":
+                continue
+            if lane_source == "STT2" and source != "STT2":
+                continue
+            try:
+                x1 = self._x(float(seg.get("start", 0.0) or 0.0))
+                x2 = self._x(float(seg.get("end", 0.0) or 0.0))
+            except Exception:
+                continue
+            if x1 <= x <= x2:
                 return seg
         return None
 
@@ -211,6 +300,8 @@ class TimelineInputMixin:
     def _handle_drag_at(self, x: int, y: int):
         point = QPoint(x, y)
         for seg in self.segments:
+            if self._is_stt_preview_segment(seg):
+                continue
             x1, x2 = self._x(seg["start"]), self._x(seg["end"])
             if x2 - x1 < SEGMENT_HANDLE_MIN_WIDTH:
                 continue
@@ -235,6 +326,8 @@ class TimelineInputMixin:
         for i in range(len(self.segments) - 1):
             s1 = self.segments[i]
             s2 = self.segments[i + 1]
+            if self._is_stt_preview_segment(s1) or self._is_stt_preview_segment(s2):
+                continue
             if abs(s1["end"] - s2["start"]) < 0.05:
                 if self._diamond_hit_rect(self._x(s1["end"]), margin=margin).contains(x, y):
                     return i
@@ -366,6 +459,11 @@ class TimelineInputMixin:
                 self.update()
 
         if self._edit_active:
+            if self._is_readonly_analysis_lane_y(y):
+                if ev.button() == Qt.MouseButton.LeftButton:
+                    self._commit_inline_edit()
+                ev.accept()
+                return
             if ev.button() == Qt.MouseButton.RightButton:
                 self._show_mic_menu(ev.globalPosition().toPoint()); return
             if ev.button() == Qt.MouseButton.LeftButton:
@@ -400,9 +498,18 @@ class TimelineInputMixin:
 
         self._just_committed = False; self.setFocus()
 
+        if self._is_readonly_analysis_lane_y(y):
+            self._clear_active_gaps_for_segment_drag()
+            ev.accept()
+            return
+
         # 멀티클립 박스 클릭은 상단 단일 경로에서만 처리
 
         if ev.button() == Qt.MouseButton.RightButton:
+            candidate = self._stt_candidate_at(x, y)
+            if candidate:
+                self.stt_candidate_selected.emit(dict(candidate))
+                return
             speaker_seg = self._speaker_lane_seg_at(x, y)
             if speaker_seg:
                 self._show_speaker_learn_menu(int(speaker_seg.get("line", 0)), ev.globalPosition().toPoint())
@@ -416,13 +523,21 @@ class TimelineInputMixin:
                 seg = self._seg_at(x)
                 if seg:
                     self._last_click_x = x; self._last_click_y = y
-                    self._pending_split_sec = float(self.playhead_sec)
-                    self.start_inline_edit(seg.get("line", 0), seg["start"])
+                    if self._segment_needs_manual_review(seg):
+                        self.seg_right_clicked.emit(float(seg.get("start", 0.0) or 0.0), ev.globalPosition().toPoint())
+                    else:
+                        self._pending_split_sec = float(self.playhead_sec)
+                        self.start_inline_edit(seg.get("line", 0), seg["start"])
             return
 
         if ev.button() != Qt.MouseButton.LeftButton: return
 
         self.focus_mode = "waveform" if y <= SEG_TOP else "segment"; self.update()
+
+        candidate = self._stt_candidate_at(x, y)
+        if candidate:
+            self.stt_candidate_selected.emit(dict(candidate))
+            return
 
         speaker_seg = self._speaker_lane_seg_at(x, y)
         if speaker_seg:
@@ -430,6 +545,8 @@ class TimelineInputMixin:
             return
 
         for seg in self.segments:
+            if self._is_stt_preview_segment(seg):
+                continue
             x1, x2 = self._x(seg["start"]), self._x(seg["end"]); sw = x2 - x1
             if sw > 20 and self._icon_rect(x1, x2).adjusted(-5, -5, 5, 5).contains(x, y):
                 self.seg_to_gap.emit(seg.get("line", 0)); return
@@ -467,6 +584,8 @@ class TimelineInputMixin:
                     g["active"] = True; self.update(); self.gap_activated.emit(g["start"], g["end"]); return
 
         for s in self.segments:
+            if self._is_stt_preview_segment(s):
+                continue
             x1, x2 = self._x(s["start"]), self._x(s["end"])
             if self.active_seg_start is not None and abs(s["start"] - self.active_seg_start) < 0.5:
                 if x1 + 25 < x < x2 - 25 and SEG_TOP <= y <= SEG_BOT:
@@ -552,6 +671,10 @@ class TimelineInputMixin:
         if self._edit_active: self._commit_inline_edit(); return
         x, y = ev.pos().x(), ev.pos().y()
 
+        if self._is_readonly_analysis_lane_y(y):
+            ev.accept()
+            return
+
         diamond_idx = self._diamond_index_at(x, y, margin=5)
         if diamond_idx is not None:
             s1 = self.segments[diamond_idx]
@@ -562,7 +685,11 @@ class TimelineInputMixin:
             self.diamond_merge.emit(s1.get("line", 0), s2.get("line", 0)); return
 
         if SEG_TOP <= y <= SEG_BOT:
-            seg = next((s for s in self.segments if self._x(s["start"]) <= x <= self._x(s["end"])), None)
+            seg = next((
+                s for s in self.segments
+                if not self._is_stt_preview_segment(s)
+                and self._x(s["start"]) <= x <= self._x(s["end"])
+            ), None)
             if seg: self.seg_double_clicked.emit(seg.get("line", 0), seg["start"])
 
     def mouseMoveEvent(self, ev):
@@ -573,6 +700,15 @@ class TimelineInputMixin:
             if seg and SEG_TOP <= y <= SEG_BOT and self._x(seg["start"]) + HANDLE_R < x < self._x(seg["end"]) - HANDLE_R:
                 self.setCursor(Qt.CursorShape.IBeamCursor)
             else: self.setCursor(Qt.CursorShape.ArrowCursor)
+            return
+
+        if self._is_readonly_analysis_lane_y(y):
+            if self._hover_handle is not None or getattr(self, "_hover_diamond", None) is not None or self._hover_line is not None:
+                self._hover_handle = None
+                self._hover_diamond = None
+                self._hover_line = None
+                self.update()
+            self.unsetCursor()
             return
 
         if getattr(self, '_is_panning', False) and (ev.buttons() & Qt.MouseButton.LeftButton):
@@ -621,6 +757,8 @@ class TimelineInputMixin:
         hover_handle = bool(new_hh); hover_center = False
         if not hover_handle:
             for s in self.segments:
+                if self._is_stt_preview_segment(s):
+                    continue
                 x1, x2 = self._x(s["start"]), self._x(s["end"])
                 if self.active_seg_start is not None and abs(s["start"] - self.active_seg_start) < 0.5:
                     if x1 + 25 < x < x2 - 25 and SEG_TOP <= y <= SEG_BOT: hover_center = True; break

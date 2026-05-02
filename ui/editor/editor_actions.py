@@ -1,4 +1,4 @@
-# Version: 03.08.10
+# Version: 03.09.28
 # Phase: PHASE2
 """
 ui/editor_actions.py
@@ -352,8 +352,6 @@ class EditorActionsMixin:
             workspace["last_playhead"] = getattr(self.video_player, 'current_time', 0.0)
         if hasattr(self, 'text_edit'):
             workspace["last_cursor_block"] = self.text_edit.textCursor().blockNumber()
-        if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
-            workspace["zoom_pps"] = self.timeline.canvas.pps
         if hasattr(self, 'splitter'):
             workspace["splitter_sizes"] = self.splitter.sizes()
         try:
@@ -371,12 +369,18 @@ class EditorActionsMixin:
             workspace['edit_lock'] = bool(self.timeline.lock_chk.isChecked())
         except Exception:
             workspace['edit_lock'] = False
-        try:
-            workspace['scroll_x'] = int(self.timeline.scroll.horizontalScrollBar().value())
-        except Exception:
-            workspace['scroll_x'] = 0
         workspace['active_clip_idx'] = int(getattr(self.timeline.canvas, '_active_clip_idx', getattr(main_w, '_active_clip_idx', 0)) or 0)
         workspace['active_work_mode'] = normalize_work_mode(getattr(main_w, '_current_work_mode', EDITOR_MODE))
+        stt_preview_segments = list(getattr(self, "_live_stt_preview_segments", []) or [])
+        voice_activity_segments = []
+        try:
+            if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
+                canvas = self.timeline.canvas
+                if hasattr(canvas, "_refresh_voice_activity_segments"):
+                    canvas._refresh_voice_activity_segments()
+                voice_activity_segments = list(getattr(canvas, "voice_activity_segments", []) or [])
+        except Exception:
+            voice_activity_segments = []
         save_project(
             filepath=project_path,
             media_paths=_media_paths,
@@ -385,6 +389,8 @@ class EditorActionsMixin:
             user_settings=dict(getattr(self, "settings", {}) or {}),
             workspace=workspace,
             active_work_mode=workspace['active_work_mode'],
+            voice_activity_segments=voice_activity_segments,
+            stt_preview_segments=stt_preview_segments,
         )
         from core.project.project_phase1b import enrich_existing_project_file
         _owner = locals().get('main_w', self.window() if hasattr(self, 'window') else self)

@@ -1,8 +1,7 @@
-# Version: 03.08.12
+# Version: 03.09.02
 # Phase: PHASE1-B
 import sys
 import os
-import urllib.request
 import socket
 
 os.environ.setdefault(
@@ -45,6 +44,7 @@ if BASE_DIR not in sys.path:
 
 from ui.main.main_window import MainWindow
 from core.path_manager import get_recent_folders, add_recent_folder
+from core.llm.ollama_provider import ensure_ollama_server
 
 
 def main():
@@ -98,14 +98,7 @@ def main():
 
     win.showMaximized()
 
-    # Ollama 헬스 체크
-    try:
-        req = urllib.request.Request("http://localhost:11434/")
-        with urllib.request.urlopen(req, timeout=1) as response:
-            if response.status == 200:
-                get_logger().log("✅ AI 엔진(Ollama) 실행 중")
-    except Exception:
-        get_logger().log("⚠️ AI 엔진(Ollama)이 꺼져있습니다. 필요시 터미널에서 'ollama serve'를 실행하세요.")
+    ensure_ollama_server(logger=get_logger(), wait_sec=5.0)
 
     sys.exit(app.exec())
 

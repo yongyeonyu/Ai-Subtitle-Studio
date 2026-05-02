@@ -1,4 +1,4 @@
-# Version: 03.01.35
+# Version: 03.09.28
 # Phase: PHASE2
 import json
 import os
@@ -58,11 +58,27 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
         finally:
             window.close()
 
-    def test_missing_project_zoom_fits_timeline_once(self):
+    def test_saved_project_zoom_is_ignored_and_timeline_fits(self):
+        class DummyScrollBar:
+            def __init__(self):
+                self.value = 0
+                self.set_calls = []
+
+            def setValue(self, value):
+                self.value = int(value)
+                self.set_calls.append(int(value))
+
+        class DummyScroll:
+            def __init__(self):
+                self.bar = DummyScrollBar()
+
+            def horizontalScrollBar(self):
+                return self.bar
+
         class DummyTimeline:
             def __init__(self):
                 self.canvas = SimpleNamespace(pps=123.0, update=lambda: None)
-                self.scroll = None
+                self.scroll = DummyScroll()
                 self.lock_chk = None
                 self.fit_called = 0
 
@@ -70,7 +86,7 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
                 self.fit_called += 1
 
         with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as handle:
-            json.dump({"workspace": {}}, handle)
+            json.dump({"workspace": {"zoom_pps": 999.0, "scroll_x": 500}}, handle)
             project_path = handle.name
         try:
             timeline = DummyTimeline()
@@ -78,6 +94,8 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
             owner = SimpleNamespace()
             apply_project_ui_state(owner, editor, project_path)
             self.assertEqual(timeline.fit_called, 1)
+            self.assertEqual(timeline.canvas.pps, 123.0)
+            self.assertEqual(timeline.scroll.bar.set_calls, [])
         finally:
             os.remove(project_path)
 

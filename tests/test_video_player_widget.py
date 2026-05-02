@@ -1,5 +1,6 @@
-# Version: 03.06.22
+# Version: 03.09.07
 # Phase: PHASE2
+import json
 import os
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtMultimedia import QMediaPlayer
 
+import config
 from ui.editor.video_player_widget import VideoPlayerWidget
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
 
@@ -142,6 +144,25 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.close()
             widget.deleteLater()
             self.app.processEvents()
+
+    def test_scene_subtitle_overlay_loads_export_style_on_first_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "user_settings.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {"export_dialog": {"res": "4K (3840px)", "size": "24", "align": "가운데"}},
+                    f,
+                )
+
+            with patch.object(config, "DATASET_DIR", tmp):
+                widget = VideoPlayerWidget()
+                try:
+                    style = widget.video_widget.subtitle_item._style
+                    self.assertEqual(style.get("size"), "24")
+                    self.assertEqual(style.get("res"), "4K (3840px)")
+                finally:
+                    widget.close()
+                    widget.deleteLater()
+                    self.app.processEvents()
 
     def test_repeated_same_subtitle_time_does_not_update_scene_overlay(self):
         widget = VideoPlayerWidget()

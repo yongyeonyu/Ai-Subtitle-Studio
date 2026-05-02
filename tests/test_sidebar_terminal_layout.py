@@ -1,4 +1,4 @@
-# Version: 03.07.10
+# Version: 03.09.10
 # Phase: PHASE2
 import os
 import unittest
@@ -291,8 +291,10 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             panel = window._ensure_sidebar_queue_panel()
             panel.set_queue("큐 리스트 : (1/1) - 100% 완료", items)
             self.assertEqual(panel._table.horizontalHeaderItem(0).text(), "순서")
-            self.assertEqual(panel._table.horizontalHeaderItem(2).text(), "예상시간")
+            self.assertEqual(panel._table.horizontalHeaderItem(2).text(), "상태")
+            self.assertEqual(panel._table.horizontalHeaderItem(3).text(), "예상시간")
             self.assertEqual(panel._table.item(0, 0).text(), "1")
+            self.assertEqual(panel._table.item(0, 2).text(), "완료")
         finally:
             window.close()
             window.deleteLater()
@@ -457,7 +459,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_home_stops_running_backend_and_llm_models(self):
+    def test_home_stops_running_backend_and_runtime_processes(self):
         window = MainWindow()
 
         class _Editor(QWidget):
@@ -498,14 +500,17 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
 
         editor = _Editor(window)
         backend = _Backend()
-        stopped_models = []
         try:
             window._editor_widget = editor
             window.backend = backend
 
             with mock.patch("ui.main.main_window.threading.Thread", _ImmediateThread), \
-                 mock.patch("ui.main.main_window.load_settings", return_value={"selected_model": "gemma4:e4b"}), \
-                 mock.patch("core.llm.ollama_provider.stop_local_llm_models", side_effect=lambda models, logger=None: stopped_models.extend(models)):
+                 mock.patch("core.platform_compat.cleanup_app_runtime_processes", return_value={
+                     "ollama_models": 1,
+                     "ollama_processes": 1,
+                     "child_processes": 1,
+                     "legacy_preview_ffmpeg": 0,
+                 }) as cleanup_runtime:
                 window.show_home()
 
             self.assertTrue(editor.stopped)
@@ -514,9 +519,10 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(editor._roughcut_draft_generation, 4)
             self.assertIn("idle", editor.statuses)
             self.assertTrue(backend.stopped)
-            self.assertIn("gemma4:e4b", stopped_models)
+            cleanup_runtime.assert_called()
         finally:
             window.backend = None
+            window._editor_widget = None
             editor.close()
             editor.deleteLater()
             window.close()
@@ -572,7 +578,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
 
             with mock.patch("ui.main.main_window.threading.Thread", _ImmediateThread), \
                  mock.patch("ui.main.main_window.load_settings", return_value={"selected_model": "gemma4:e4b"}), \
-                 mock.patch("core.llm.ollama_provider.stop_local_llm_models", side_effect=lambda models, logger=None: stopped_models.extend(models)):
+                 mock.patch("core.llm.ollama_provider.stop_local_llm_models", side_effect=lambda models, logger=None, **_kwargs: stopped_models.extend(models)):
                 window._release_ai_models_for_editor_mode()
 
             self.assertFalse(backend.stopped)
@@ -645,6 +651,143 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.backend = None
             editor.close()
             editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_home_cleanup_stops_threads_workers_and_runtime_processes(self):
+        window = MainWindow()
+
+        class _Video:
+            def __init__(self):
+                self._ui_timer = QTimer()
+                self._ui_timer.start(10_000)
+                self.paused = False
+                self.media_player = mock.Mock()
+                self.vocal_player = mock.Mock()
+
+            def pause_video(self):
+                self.paused = True
+
+        class _Timeline:
+            def __init__(self):
+                self.stopped = False
+
+            def stop_waveform_workers(self):
+                self.stopped = True
+
+        class _Editor(QWidget):
+            def __init__(self):
+                super().__init__()
+                self.sm = SimpleNamespace(is_locked=True, state="ST_PROC")
+                self._is_ai_processing = True
+                self._roughcut_draft_timer = QTimer()
+                self._roughcut_draft_timer.start(10_000)
+                self._roughcut_draft_pending = True
+                self._roughcut_draft_generation = 1
+                self.video_player = _Video()
+                self.timeline = _Timeline()
+                self.pipeline_stopped = False
+                self.cleaned = False
+
+            def _stop_pipeline(self):
+                self.pipeline_stopped = True
+
+            def _set_roughcut_draft_status(self, _status):
+                pass
+
+            def _cleanup(self):
+                self.cleaned = True
+
+        class _Processor:
+            def __init__(self):
+                self.released = False
+
+            def release_runtime_models(self):
+                self.released = True
+
+        class _Thread:
+            def __init__(self):
+                self.join_called = False
+
+            def is_alive(self):
+                return not self.join_called
+
+            def join(self, timeout=None):
+                self.join_called = True
+
+        class _Backend:
+            def __init__(self):
+                self._active = True
+                self.stopped = False
+                self.video_processor = _Processor()
+                self._pipeline_thread = _Thread()
+                self._eta_thread = _Thread()
+
+            def stop(self):
+                self.stopped = True
+                self._active = False
+
+        editor = _Editor()
+        backend = _Backend()
+        try:
+            window._editor_widget = editor
+            window.backend = backend
+            with mock.patch("core.audio.live_stt.stop_live_stt_worker", return_value=True), \
+                 mock.patch("core.platform_compat.cleanup_app_runtime_processes", return_value={
+                     "ollama_models": 1,
+                     "ollama_processes": 1,
+                     "child_processes": 1,
+                     "legacy_preview_ffmpeg": 0,
+                 }) as cleanup_runtime:
+                cleaned = window._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.1, force=True)
+
+            self.assertTrue(cleaned)
+            self.assertTrue(editor.pipeline_stopped)
+            self.assertTrue(editor.cleaned)
+            self.assertFalse(editor._roughcut_draft_timer.isActive())
+            self.assertTrue(editor.video_player.paused)
+            editor.video_player.media_player.stop.assert_called_once()
+            editor.video_player.vocal_player.stop.assert_called_once()
+            self.assertTrue(editor.timeline.stopped)
+            self.assertTrue(backend.stopped)
+            self.assertTrue(backend.video_processor.released)
+            self.assertTrue(backend._pipeline_thread.join_called)
+            self.assertTrue(backend._eta_thread.join_called)
+            cleanup_runtime.assert_called_once()
+        finally:
+            window.backend = None
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_initial_home_does_not_cleanup_idle_backend(self):
+        window = MainWindow()
+
+        class _Backend:
+            _active = False
+
+            def __init__(self):
+                self.stopped = False
+
+            def stop(self):
+                self.stopped = True
+
+        backend = _Backend()
+        try:
+            window._editor_widget = None
+            window.backend = backend
+            with mock.patch("core.platform_compat.cleanup_app_runtime_processes") as cleanup_runtime:
+                cleaned = window._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.1)
+
+            self.assertFalse(cleaned)
+            self.assertFalse(backend.stopped)
+            cleanup_runtime.assert_not_called()
+        finally:
+            window.backend = None
             window.close()
             window.deleteLater()
             self.app.processEvents()

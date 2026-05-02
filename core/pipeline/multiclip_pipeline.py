@@ -1,4 +1,4 @@
-# Version: 03.08.05
+# Version: 03.09.30
 # Phase: PHASE2
 """
 core/pipeline/multiclip_pipeline.py
@@ -120,6 +120,20 @@ class MulticlipPipelineMixin:
             for word in seg.get("words", []) or []:
                 word["start"] = float(word.get("start", 0.0)) + offset
                 word["end"] = float(word.get("end", 0.0)) + offset
+            for candidate in seg.get("stt_candidates", []) or []:
+                if not isinstance(candidate, dict):
+                    continue
+                if candidate.get("start") is not None:
+                    candidate["start"] = float(candidate.get("start", 0.0)) + offset
+                if candidate.get("end") is not None:
+                    candidate["end"] = float(candidate.get("end", 0.0)) + offset
+                for word in candidate.get("words", []) or []:
+                    if not isinstance(word, dict):
+                        continue
+                    if word.get("start") is not None:
+                        word["start"] = float(word.get("start", 0.0)) + offset
+                    if word.get("end") is not None:
+                        word["end"] = float(word.get("end", 0.0)) + offset
             asr_meta = seg.get("asr_metadata")
             if isinstance(asr_meta, dict):
                 asr_meta["_clip_idx"] = clip_idx
@@ -185,11 +199,34 @@ class MulticlipPipelineMixin:
 
     def _run_multiclip_stt_llm_pipeline(self, clip_boundaries, total_files):
         """Whisper worker와 LLM worker를 분리해 클립 단위로 겹쳐 처리합니다."""
-        from core.engine.subtitle_engine import optimize_segments
+        from core.engine.subtitle_engine import apply_final_gap_settings, optimize_segments
 
         stt_queue = queue.Queue()
         out_queue = queue.Queue()
         sentinel = object()
+        preview_queue = queue.Queue()
+        preview_sentinel = object()
+
+        def preview_worker():
+            from core.pipeline.stt_preview_optimizer import optimize_stt_preview_segments
+
+            while self._active:
+                item = preview_queue.get()
+                if item is preview_sentinel:
+                    break
+                try:
+                    preview = optimize_stt_preview_segments(
+                        item.get("segments") or [],
+                        source_label=item.get("label") or "STT",
+                        vad_segments=item.get("vad_segments") or [],
+                        clip_offset=float(item.get("offset", 0.0) or 0.0),
+                        clip_idx=item.get("clip_idx"),
+                        clip_path=item.get("clip_path"),
+                    )
+                    if preview and hasattr(self.ui, "_sig_preview_stt_segments"):
+                        self.ui._sig_preview_stt_segments.emit(preview)
+                except Exception as exc:
+                    get_logger().log(f"  ⚠️ 멀티클립 STT 후보 자막 후처리 오류: {exc}")
 
         def stt_worker():
             try:
@@ -277,24 +314,26 @@ class MulticlipPipelineMixin:
                     get_logger().log("  🎤 Whisper 변환 중...")
 
                     clip_segments = []
-                    def _preview_stt_segments(chunk_segs, _label="STT", clip_offset=offset, clip_idx=i, clip_path=target_file):
+                    def _preview_stt_segments(
+                        chunk_segs,
+                        _label="STT",
+                        clip_offset=offset,
+                        clip_idx=i,
+                        clip_path=target_file,
+                        local_vad_segments=vad_segs,
+                    ):
                         if not chunk_segs or not self._active:
                             return
-                        preview = []
-                        for seg in chunk_segs or []:
-                            try:
-                                row = dict(seg)
-                                row["start"] = float(row.get("start", 0.0) or 0.0) + clip_offset
-                                row["end"] = float(row.get("end", row["start"]) or row["start"]) + clip_offset
-                                row["_clip_idx"] = clip_idx
-                                row["_clip_file"] = clip_path
-                                row["stt_pending"] = True
-                                row["_live_stt_preview"] = True
-                                preview.append(row)
-                            except Exception:
-                                continue
-                        if preview and hasattr(self.ui, "_sig_preview_stt_segments"):
-                            self.ui._sig_preview_stt_segments.emit(preview)
+                        preview_queue.put(
+                            {
+                                "segments": [dict(seg) for seg in chunk_segs or []],
+                                "label": str(_label or "STT"),
+                                "offset": clip_offset,
+                                "clip_idx": clip_idx,
+                                "clip_path": clip_path,
+                                "vad_segments": list(local_vad_segments or []),
+                            }
+                        )
 
                     for chunk_segs, _chunk_idx, _chunk_total in self.video_processor.transcribe(
                         chunk_dir,
@@ -329,6 +368,7 @@ class MulticlipPipelineMixin:
                 out_queue.put({"fatal": True, "error": e})
             finally:
                 stt_queue.put(sentinel)
+                preview_queue.put(preview_sentinel)
                 if hasattr(self.ui, "_sig_set_recog_zone"):
                     self.ui._sig_set_recog_zone.emit(-1.0, -1.0)
 
@@ -365,6 +405,7 @@ class MulticlipPipelineMixin:
                         item.get("vad_segments") or [],
                         context=f"멀티클립 {idx + 1}",
                     )
+                    optimized = apply_final_gap_settings(optimized, force=True)
 
                 out_queue.put(
                     {
@@ -384,6 +425,10 @@ class MulticlipPipelineMixin:
         llm_thread = threading.Thread(
             target=llm_worker, daemon=True, name="multiclip-llm-worker"
         )
+        preview_thread = threading.Thread(
+            target=preview_worker, daemon=True, name="multiclip-stt-preview-optimizer"
+        )
+        preview_thread.start()
         stt_thread.start()
         llm_thread.start()
 
@@ -425,6 +470,7 @@ class MulticlipPipelineMixin:
 
         stt_thread.join(timeout=2.0)
         llm_thread.join(timeout=2.0)
+        preview_thread.join(timeout=2.0)
         return processed_count
 
     def _run_multiclip(self):

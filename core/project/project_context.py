@@ -1,4 +1,4 @@
-# Version: 03.06.19
+# Version: 03.09.29
 # Phase: PHASE2
 """
 core/project/project_context.py
@@ -13,6 +13,42 @@ from typing import Any
 
 from core.frame_time import frame_to_sec, normalize_fps
 from core.work_mode import EDITOR_MODE, normalize_work_mode
+
+STT_SEGMENT_METADATA_KEYS = (
+    "stt_candidates",
+    "stt_selected_source",
+    "stt_ensemble_source",
+    "stt_ensemble_similarity",
+    "stt_ensemble_needs_llm_review",
+    "stt_ensemble_inserted_from_stt2",
+    "stt_ensemble_primary_locked",
+    "stt_ensemble_word_rover",
+    "stt_ensemble_llm_selected_source",
+    "stt_ensemble_llm_selected_label",
+    "stt_ensemble_context_prev",
+    "stt_ensemble_context_next",
+    "stt_preview_source",
+    "_live_stt_preview",
+)
+
+NON_PERSISTED_WORKSPACE_KEYS = {
+    "zoom_pps",
+    "pps",
+    "scroll_position",
+    "scroll_x",
+    "timeline_zoom",
+    "timeline_pps",
+}
+
+
+def sanitize_workspace_state(workspace: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(workspace, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in workspace.items()
+        if str(key) not in NON_PERSISTED_WORKSPACE_KEYS
+    }
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -87,9 +123,9 @@ def project_workspace(project: dict[str, Any]) -> dict[str, Any]:
     editor_state = project.get("editor_state", {}) or {}
     workspace = editor_state.get("workspace")
     if isinstance(workspace, dict) and workspace:
-        return dict(workspace)
+        return sanitize_workspace_state(workspace)
     workspace = project.get("workspace")
-    return dict(workspace or {}) if isinstance(workspace, dict) else {}
+    return sanitize_workspace_state(workspace)
 
 
 def project_active_work_mode(project: dict[str, Any]) -> str:
@@ -100,6 +136,71 @@ def project_active_work_mode(project: dict[str, Any]) -> str:
 def project_roughcut_state(project: dict[str, Any]) -> dict[str, Any]:
     state = project.get("roughcut_state", {}) or {}
     return dict(state) if isinstance(state, dict) else {}
+
+
+def project_voice_activity_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
+    editor_analysis = (project.get("editor_state", {}) or {}).get("analysis", {}) or {}
+    raw_segments = editor_analysis.get("voice_activity_segments")
+    if not isinstance(raw_segments, list):
+        raw_segments = (project.get("analysis", {}) or {}).get("voice_activity_segments", [])
+    if not isinstance(raw_segments, list):
+        return []
+    timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
+    primary_fps = normalize_fps(timebase.get("primary_fps", 30.0) or 30.0)
+    out = []
+    for idx, item in enumerate(raw_segments):
+        if not isinstance(item, dict):
+            continue
+        start = _safe_float(item.get("start", 0.0))
+        end = _safe_float(item.get("end", start), start)
+        frame_range = item.get("frame_range", {}) if isinstance(item.get("frame_range"), dict) else {}
+        start_frame = item.get("start_frame", item.get("timeline_start_frame", frame_range.get("start")))
+        end_frame = item.get("end_frame", item.get("timeline_end_frame", frame_range.get("end")))
+        if start_frame is not None:
+            start = frame_to_sec(start_frame, primary_fps)
+        if end_frame is not None:
+            end = frame_to_sec(end_frame, primary_fps)
+        seg = {
+            "index": int(item.get("index", idx + 1) or idx + 1),
+            "start": start,
+            "end": max(start, end),
+            "kind": str(item.get("kind", "uncertain") or "uncertain"),
+            "label": str(item.get("label", "") or ""),
+            "source": str(item.get("source", "") or ""),
+            "color": str(item.get("color", "") or ""),
+        }
+        for key in ("score", "priority", "alpha", "selection_state", "selected_source"):
+            if key in item:
+                seg[key] = item.get(key)
+        if start_frame is not None:
+            seg["start_frame"] = _safe_int(start_frame)
+            seg["timeline_start_frame"] = _safe_int(start_frame)
+        if end_frame is not None:
+            seg["end_frame"] = _safe_int(end_frame)
+            seg["timeline_end_frame"] = _safe_int(end_frame)
+        seg["frame_rate"] = primary_fps
+        seg["timeline_frame_rate"] = primary_fps
+        seg["frame_range"] = {
+            "unit": "frame",
+            "start": seg.get("start_frame"),
+            "end": seg.get("end_frame"),
+            "timeline_frame_rate": primary_fps,
+        }
+        out.append(seg)
+    return out
+
+
+def project_stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
+    editor_state = project.get("editor_state", {}) or {}
+    stt_state = editor_state.get("stt", {}) or {}
+    raw_segments = stt_state.get("preview_segments")
+    if not isinstance(raw_segments, list):
+        raw_segments = editor_state.get("stt_preview_segments")
+    if not isinstance(raw_segments, list):
+        return []
+    timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
+    primary_fps = normalize_fps(timebase.get("primary_fps", 30.0) or 30.0)
+    return _normalize_stt_preview_segments(raw_segments, primary_fps=primary_fps)
 
 
 def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
@@ -184,6 +285,9 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
                 value = seg.get(key)
                 if isinstance(value, (dict, list, bool)):
                     item[key] = value
+        for key in STT_SEGMENT_METADATA_KEYS:
+            if key in seg:
+                item[key] = seg.get(key)
         out.append(item)
     return out
 
@@ -195,10 +299,16 @@ def build_editor_state(
     segments: list[dict[str, Any]],
     workspace: dict[str, Any] | None = None,
     clip_boundaries: list[dict[str, Any]] | None = None,
+    stt_preview_segments: list[dict[str, Any]] | None = None,
+    primary_fps: float | None = None,
 ) -> dict[str, Any]:
     mode = "multiclip" if mode == "multiclip" or len(media_files) > 1 else "single"
     normalized_segments = _normalize_editor_segments(segments)
     boundaries = [_normalize_boundary(item, idx) for idx, item in enumerate(clip_boundaries or [])]
+    stt_preview = _normalize_stt_preview_segments(
+        stt_preview_segments or [],
+        primary_fps=normalize_fps(primary_fps or 30.0),
+    )
     return {
         "schema": "ai_subtitle_studio.editor_state.v1",
         "mode": mode,
@@ -214,7 +324,11 @@ def build_editor_state(
             "segments": normalized_segments,
             "segment_signature": segment_signature(normalized_segments),
         },
-        "workspace": dict(workspace or {}),
+        "stt": {
+            "schema": "stt_candidates.v1",
+            "preview_segments": stt_preview,
+        },
+        "workspace": sanitize_workspace_state(workspace),
     }
 
 
@@ -276,6 +390,72 @@ def _normalize_editor_segments(segments: list[dict[str, Any]]) -> list[dict[str,
         ):
             if key in seg:
                 item[key] = seg.get(key)
+        for key in STT_SEGMENT_METADATA_KEYS:
+            if key in seg:
+                item[key] = seg.get(key)
+        out.append(item)
+    return out
+
+
+def _normalize_stt_preview_segments(
+    segments: list[dict[str, Any]],
+    *,
+    primary_fps: float = 30.0,
+) -> list[dict[str, Any]]:
+    fps = normalize_fps(primary_fps or 30.0)
+    out = []
+    for idx, seg in enumerate(segments or []):
+        if not isinstance(seg, dict):
+            continue
+        text = str(seg.get("text", "") or "").strip()
+        if not text:
+            continue
+        start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
+        end = _safe_float(seg.get("end", seg.get("timeline_end", start)), start)
+        frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+        start_frame = seg.get("start_frame", seg.get("timeline_start_frame", frame_range.get("start")))
+        end_frame = seg.get("end_frame", seg.get("timeline_end_frame", frame_range.get("end")))
+        if start_frame is not None:
+            start = frame_to_sec(start_frame, fps)
+        if end_frame is not None:
+            end = frame_to_sec(end_frame, fps)
+        item = {
+            "index": int(seg.get("index", idx + 1) or idx + 1),
+            "start": start,
+            "end": max(start, end),
+            "text": text,
+            "speaker": str(seg.get("speaker", seg.get("spk", "00")) or "00"),
+            "stt_preview_source": str(
+                seg.get("stt_preview_source")
+                or seg.get("stt_source")
+                or seg.get("stt_ensemble_source")
+                or "STT1"
+            ),
+            "stt_pending": True,
+            "_live_stt_preview": True,
+        }
+        for key in ("_clip_idx", "_clip_file", "words", "quality", "quality_history", "quality_candidates"):
+            if key in seg:
+                item[key] = seg.get(key)
+        for key in STT_SEGMENT_METADATA_KEYS:
+            if key in seg and key not in item:
+                item[key] = seg.get(key)
+        if start_frame is None:
+            start_frame = int(start * fps)
+        if end_frame is None:
+            end_frame = int(end * fps)
+        item["start_frame"] = _safe_int(start_frame)
+        item["end_frame"] = _safe_int(end_frame)
+        item["timeline_start_frame"] = item["start_frame"]
+        item["timeline_end_frame"] = item["end_frame"]
+        item["frame_rate"] = fps
+        item["timeline_frame_rate"] = fps
+        item["frame_range"] = {
+            "unit": "frame",
+            "start": item["start_frame"],
+            "end": item["end_frame"],
+            "timeline_frame_rate": fps,
+        }
         out.append(item)
     return out
 

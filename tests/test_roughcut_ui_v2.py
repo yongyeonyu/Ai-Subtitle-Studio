@@ -1,11 +1,11 @@
-# Version: 03.02.15
+# Version: 03.09.11
 # Phase: PHASE2
 import os
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QLabel, QLineEdit, QWidget
 
 from core.roughcut.models import (
     ChapterMetadata,
@@ -116,6 +116,27 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(collected["roughcut_llm_threads"], 3)
             self.assertNotIn("google_api_key", collected)
             self.assertNotIn("openai_api_key", collected)
+        finally:
+            dialog.close()
+
+    def test_ai_tab_exposes_api_tokens_and_model_download_controls(self):
+        dialog = SettingsDialog({})
+        try:
+            ai_tab = dialog.tabs.widget(3)
+            self.assertIsNotNone(ai_tab.findChild(QLineEdit, "GoogleApiKeyInput"))
+            self.assertIsNotNone(ai_tab.findChild(QLineEdit, "OpenAiApiKeyInput"))
+            self.assertIsNotNone(ai_tab.findChild(QLineEdit, "HuggingFaceTokenInput"))
+            self.assertIsNotNone(ai_tab.findChild(QWidget, "AiModelDownloadPanel"))
+
+            labels = {label.text() for label in ai_tab.findChildren(QLabel)}
+            self.assertIn("Google API Key:", labels)
+            self.assertIn("OpenAI API Key:", labels)
+            self.assertIn("Hugging Face Token:", labels)
+            self.assertIn("모델 다운로드:", labels)
+            self.assertIn("LLM 다운로드:", labels)
+            self.assertIn("Whisper/필수 모델:", labels)
+            self.assertIn("STT1 Whisper 모델:", labels)
+            self.assertIn("STT2 Whisper 모델:", labels)
         finally:
             dialog.close()
 

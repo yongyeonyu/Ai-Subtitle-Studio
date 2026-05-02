@@ -1,4 +1,4 @@
-# Version: 03.08.12
+# Version: 03.09.28
 # Phase: PHASE2
 """
 ui/editor_lifecycle.py
@@ -11,7 +11,6 @@ from PyQt6.QtGui import QTextCursor
 
 import config
 from logger import get_logger
-from core.platform_compat import cleanup_app_runtime_processes
 from core.path_manager import get_srt_path
 from core.project.project_manager import load_project
 from ui.dialogs.message_box import confirm_save_changes
@@ -79,6 +78,8 @@ class EditorLifecycleMixin:
         if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(True)
         if hasattr(editor, 'timeline') and self._project_boundary_times: editor.timeline.set_boundary_times(self._project_boundary_times)
         self.stack.insertWidget(1, editor); self.stack.setCurrentWidget(editor)
+        if hasattr(editor, 'timeline') and hasattr(editor.timeline, 'fit_to_view'):
+            QTimer.singleShot(0, editor.timeline.fit_to_view)
         if self._current_project_path:
             self._restore_workspace(editor, self._current_project_path)
             from core.project.project_phase1b import apply_project_ui_state
@@ -143,10 +144,6 @@ class EditorLifecycleMixin:
             editor.timeline.canvas._active_clip_idx = 0
             editor.timeline.canvas.boundary_times = [bd["end"] for bd in self._multiclip_boundaries[:-1]]
             editor.timeline.canvas.total_duration = total_dur
-            # 줌을 전체 클립이 딱 맞도록 설정
-            scroll_w = max(200, self.width() - 40)
-            editor.timeline.canvas.pps = scroll_w / total_dur
-            editor.timeline.canvas.setMinimumWidth(int(total_dur * editor.timeline.canvas.pps) + 20)
 
             # 글로벌 캔버스
             gc = editor.timeline.global_canvas
@@ -247,6 +244,8 @@ class EditorLifecycleMixin:
         self.stack.insertWidget(1, editor)
         if hasattr(editor, 'timeline'): editor.timeline.set_boundary_times(self._project_boundary_times or [])
         self.stack.setCurrentWidget(editor)
+        if hasattr(editor, 'timeline') and hasattr(editor.timeline, 'fit_to_view'):
+            QTimer.singleShot(0, editor.timeline.fit_to_view)
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.bind_editor(editor)
         if hasattr(self, "_attach_global_menu_to_editor"):
@@ -363,25 +362,13 @@ class EditorLifecycleMixin:
             self._detach_app_event_filter()
         get_logger().clear_ui_callback()
         self.blockSignals(True)
-        if self._editor_widget and hasattr(self._editor_widget, 'video_player'):
-            try:
-                vp = self._editor_widget.video_player
-                if hasattr(vp, '_ui_timer'): vp._ui_timer.stop()
-                if hasattr(vp, 'audio_player'): vp.audio_player.stop()
-                if hasattr(vp, '_worker') and vp._worker:
-                    vp._worker.stop()
-                    vp._worker.wait(200)
-            except: pass
-        if self._editor_widget and hasattr(self._editor_widget, 'timeline'):
-            try:
-                stop_waveform = getattr(self._editor_widget.timeline, "stop_waveform_workers", None)
-                if callable(stop_waveform):
-                    stop_waveform()
-            except Exception:
-                pass
-        if self.backend: self.backend.stop()
         try:
-            cleanup_app_runtime_processes(logger=get_logger(), timeout_sec=0.4)
+            if hasattr(self, "_cleanup_runtime_for_navigation"):
+                self._cleanup_runtime_for_navigation(context="앱 종료", timeout_sec=0.8, force=True)
+            elif self.backend:
+                self.backend.stop()
         except Exception:
             pass
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return
         QTimer.singleShot(100, lambda: os._exit(0))

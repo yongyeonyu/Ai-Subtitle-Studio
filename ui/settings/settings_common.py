@@ -1,4 +1,4 @@
-# Version: 03.08.07
+# Version: 03.09.25
 # Phase: PHASE2
 """
 ui/settings_common.py
@@ -26,18 +26,10 @@ DATASET_DIR = config.DATASET_DIR
 MAC_WHISPER_MODELS = [
     "mlx-community/whisper-large-v3-mlx",
     "mlx-community/whisper-large-v3-turbo",
-    "coreml:large-v3-v20240930_626MB",
     "youngouk/ghost613-turbo-korean-4bit-mlx",
     "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2",
     "mlx-community/whisper-large-v2-mlx",
     "mlx-community/whisper-medium-mlx",
-    "mlx-community/whisper-medium.en-mlx",
-    "mlx-community/whisper-small-mlx",
-    "mlx-community/whisper-small.en-mlx",
-    "mlx-community/whisper-base-mlx",
-    "mlx-community/whisper-base.en-mlx",
-    "mlx-community/whisper-tiny-mlx",
-    "mlx-community/whisper-tiny.en-mlx",
     "mlx-community/distil-whisper-large-v3",
 ]
 
@@ -51,6 +43,21 @@ WINDOWS_WHISPER_MODELS = [
     "large-v1",
     "large",
     "medium",
+    "distil-large-v3",
+    "distil-large-v2",
+    "distil-medium.en",
+    "distil-small.en",
+]
+
+REMOVED_WHISPER_MODELS = {
+    "coreml:large-v3-v20240930_626MB",
+    "mlx-community/whisper-medium.en-mlx",
+    "mlx-community/whisper-small-mlx",
+    "mlx-community/whisper-small.en-mlx",
+    "mlx-community/whisper-base-mlx",
+    "mlx-community/whisper-base.en-mlx",
+    "mlx-community/whisper-tiny-mlx",
+    "mlx-community/whisper-tiny.en-mlx",
     "medium.en",
     "small",
     "small.en",
@@ -58,13 +65,16 @@ WINDOWS_WHISPER_MODELS = [
     "base.en",
     "tiny",
     "tiny.en",
-    "distil-large-v3",
-    "distil-large-v2",
-    "distil-medium.en",
-    "distil-small.en",
-]
+}
 
-DEFAULT_WHISPER_MODELS = MAC_WHISPER_MODELS if config.IS_MAC else WINDOWS_WHISPER_MODELS
+
+def filter_available_whisper_models(models):
+    return [model for model in models if model not in REMOVED_WHISPER_MODELS]
+
+
+DEFAULT_WHISPER_MODELS = filter_available_whisper_models(
+    MAC_WHISPER_MODELS if config.IS_MAC else WINDOWS_WHISPER_MODELS
+)
 
 DEFAULT_ADV_SETTINGS = {
     # Silero

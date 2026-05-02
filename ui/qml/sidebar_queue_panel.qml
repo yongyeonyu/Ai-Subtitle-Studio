@@ -42,7 +42,7 @@ Item {
                 elide: Text.ElideRight
             }
             Text {
-                width: Math.max(40, parent.width - 107)
+                width: Math.max(40, parent.width - 151)
                 text: "파일명"
                 color: "#8E98A3"
                 font.pixelSize: 9
@@ -50,7 +50,16 @@ Item {
                 elide: Text.ElideRight
             }
             Text {
-                width: 64
+                width: 40
+                text: "상태"
+                color: "#8E98A3"
+                font.pixelSize: 9
+                font.bold: true
+                horizontalAlignment: Text.AlignLeft
+                elide: Text.ElideRight
+            }
+            Text {
+                width: 58
                 text: "예상시간"
                 color: "#8E98A3"
                 font.pixelSize: 9
@@ -103,7 +112,7 @@ Item {
                         maximumLineCount: 1
                     }
                     Text {
-                        width: Math.max(40, parent.width - 107)
+                        width: Math.max(40, parent.width - 151)
                         height: parent.height
                         text: modelData.file || "-"
                         color: modelData.done || (modelData.status || "").indexOf("완료") >= 0 ? "#34C759" : "#FFCC44"
@@ -114,7 +123,18 @@ Item {
                         maximumLineCount: 2
                     }
                     Text {
-                        width: 64
+                        width: 40
+                        height: parent.height
+                        text: modelData.statusDisplay || modelData.status || "-"
+                        color: modelData.done || (modelData.status || "").indexOf("완료") >= 0 ? "#34C759" : "#FFCC44"
+                        font.pixelSize: 8
+                        font.bold: modelData.done || (modelData.status || "").indexOf("완료") >= 0
+                        verticalAlignment: Text.AlignVCenter
+                        horizontalAlignment: Text.AlignLeft
+                        elide: Text.ElideRight
+                    }
+                    Text {
+                        width: 58
                         height: parent.height
                         text: modelData.eta || "-"
                         color: modelData.done || (modelData.status || "").indexOf("완료") >= 0 ? "#34C759" : "#FFCC44"

@@ -1,4 +1,4 @@
-# Version: 03.03.01
+# Version: 03.09.24
 # Phase: PHASE2
 from __future__ import annotations
 
@@ -61,6 +61,19 @@ def is_fast_recognition_mode(settings: dict[str, Any] | None) -> bool:
 def editor_roughcut_draft_enabled(settings: dict[str, Any] | None) -> bool:
     merged = merge_roughcut_settings(settings or {})
     return bool(merged.get("editor_roughcut_draft_enabled", False)) and not is_fast_recognition_mode(settings)
+
+
+def editor_roughcut_draft_llm_allowed(
+    segments: list[dict[str, Any]],
+    settings: dict[str, Any] | None,
+) -> bool:
+    merged = merge_roughcut_settings(settings or {})
+    try:
+        max_rows = max(1, int(merged.get("roughcut_llm_max_context_rows", 80) or 80))
+    except Exception:
+        max_rows = 80
+    row_count = len(_subtitle_prompt_rows(segments))
+    return row_count <= max_rows
 
 
 def build_editor_roughcut_draft_prompt(
@@ -826,6 +839,7 @@ __all__ = [
     "build_editor_roughcut_draft_prompt",
     "build_editor_roughcut_draft_result",
     "editor_roughcut_draft_enabled",
+    "editor_roughcut_draft_llm_allowed",
     "is_fast_recognition_mode",
     "merge_editor_roughcut_draft_state",
     "run_editor_roughcut_llm_draft",

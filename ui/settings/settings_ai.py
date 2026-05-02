@@ -1,4 +1,4 @@
-# Version: 03.08.07
+# Version: 03.09.25
 # Phase: PHASE2
 """
 ui/settings_ai.py  ─  ⚙️ AI 엔진 설정 다이얼로그
@@ -15,7 +15,8 @@ import config
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import (
     DEFAULT_ADV_SETTINGS, DEFAULT_WHISPER_MODELS, WINDOWS_WHISPER_MODELS,
-    _fetch_models, _create_bottom_buttons, DATASET_DIR
+    _fetch_models, _create_bottom_buttons, DATASET_DIR,
+    filter_available_whisper_models,
 )
 from ui.style import label_style, settings_button_style, settings_dialog_stylesheet
 from core.llm.provider_registry import cloud_model_items
@@ -69,6 +70,7 @@ class SettingsDialog(QDialog):
             self.models_data = _fetch_models()
 
         model_panel = QWidget()
+        model_panel.setObjectName("AiModelDownloadPanel")
         model_grid = QGridLayout(model_panel)
         model_grid.setContentsMargins(0, 0, 0, 4)
         model_grid.setHorizontalSpacing(10)
@@ -117,7 +119,7 @@ class SettingsDialog(QDialog):
         self.btn_ollama_refresh.clicked.connect(self._refresh_ollama_models)
         ollama_buttons.addWidget(self.btn_ollama_install)
         ollama_buttons.addWidget(self.btn_ollama_refresh)
-        model_grid.addWidget(self._model_grid_label("미설치 LLM:"), 2, 0)
+        model_grid.addWidget(self._model_grid_label("LLM 다운로드:"), 2, 0)
         model_grid.addWidget(self.combo_ollama_catalog, 2, 1)
         model_grid.addLayout(ollama_buttons, 2, 2)
 
@@ -143,7 +145,7 @@ class SettingsDialog(QDialog):
         registry_buttons.addWidget(self.btn_registry_install)
         registry_buttons.addWidget(self.btn_registry_delete)
         registry_buttons.addWidget(self.btn_registry_required)
-        model_grid.addWidget(self._model_grid_label("모델 관리:"), 3, 0)
+        model_grid.addWidget(self._model_grid_label("Whisper/필수 모델:"), 3, 0)
         model_grid.addWidget(self.combo_registry_model, 3, 1)
         model_grid.addLayout(registry_buttons, 3, 2)
 
@@ -162,28 +164,31 @@ class SettingsDialog(QDialog):
         self.lbl_model_info.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.lbl_model_info.setStyleSheet(label_style("muted", 10) + "padding: 0 2px 10px 2px;")
         model_grid.addWidget(self.lbl_model_info, 5, 1, 1, 2)
-        self._hidden_model_panel = model_panel
+        ai_form.addRow("모델 다운로드:", model_panel)
         self.combo_llm.currentIndexChanged.connect(self._update_model_info)
         self._update_model_info()
 
         # 2. API Keys (OS 보안 저장소)
         self.input_api_key = QLineEdit()
+        self.input_api_key.setObjectName("GoogleApiKeyInput")
         self.input_api_key.setPlaceholderText("AI Studio 발급 Google API Key 입력")
         self.input_api_key.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
         self.input_api_key.setText(get_api_key("google"))
-        editor_form.addRow("Google API Key:", self.input_api_key)
+        ai_form.addRow("Google API Key:", self.input_api_key)
 
         self.input_openai_api_key = QLineEdit()
+        self.input_openai_api_key.setObjectName("OpenAiApiKeyInput")
         self.input_openai_api_key.setPlaceholderText("OpenAI API Key 입력")
         self.input_openai_api_key.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
         self.input_openai_api_key.setText(get_api_key("openai"))
-        editor_form.addRow("OpenAI API Key:", self.input_openai_api_key)
+        ai_form.addRow("OpenAI API Key:", self.input_openai_api_key)
 
         self.input_huggingface_token = QLineEdit()
+        self.input_huggingface_token.setObjectName("HuggingFaceTokenInput")
         self.input_huggingface_token.setPlaceholderText("Hugging Face HF_TOKEN 입력")
         self.input_huggingface_token.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
         self.input_huggingface_token.setText(get_api_key("huggingface"))
-        editor_form.addRow("Hugging Face Token:", self.input_huggingface_token)
+        ai_form.addRow("Hugging Face Token:", self.input_huggingface_token)
 
         self._build_editor_llm_prompt_section(editor_form, settings)
         self._build_editor_roughcut_draft_section(editor_form, settings)
@@ -247,6 +252,7 @@ class SettingsDialog(QDialog):
                 if folder_name.startswith("models--") and "whisper" in folder_name.lower():
                     repo_name = folder_name.replace("models--", "", 1).replace("--", "/", 1)
                     if repo_name not in w_models: w_models.append(repo_name)
+        w_models = filter_available_whisper_models(w_models)
         stt1_models = [
             model for model in w_models
             if "ghost613" not in model.lower() and "zeroth" not in model.lower()
@@ -284,11 +290,11 @@ class SettingsDialog(QDialog):
             self.combo_whisper.setCurrentIndex(0)
         self.combo_whisper.blockSignals(False)
         self.combo_whisper.setUpdatesEnabled(True)
-        self._hidden_stt1_model_combo = self.combo_whisper
+        ai_form.addRow("STT1 Whisper 모델:", self.combo_whisper)
 
         self.chk_stt_ensemble = QCheckBox("STT2 병렬 인식 사용 (STT1 우선, STT2는 누락 보강용)")
         self.chk_stt_ensemble.setChecked(bool(settings.get("stt_ensemble_enabled", False)))
-        ai_form.addRow("", self.chk_stt_ensemble)
+        ai_form.addRow("STT2:", self.chk_stt_ensemble)
 
         self.combo_whisper_secondary = QComboBox()
         self.combo_whisper_secondary.setUpdatesEnabled(False)
@@ -320,7 +326,7 @@ class SettingsDialog(QDialog):
             self.combo_whisper_secondary.setCurrentIndex(0)
         self.combo_whisper_secondary.blockSignals(False)
         self.combo_whisper_secondary.setUpdatesEnabled(True)
-        self._hidden_stt2_model_combo = self.combo_whisper_secondary
+        ai_form.addRow("STT2 Whisper 모델:", self.combo_whisper_secondary)
 
         self.chk_stt_ensemble_llm = QCheckBox("LLM 후보 판정 사용")
         self.chk_stt_ensemble_llm.setChecked(bool(settings.get("stt_ensemble_llm_judge_enabled", True)))
@@ -340,7 +346,7 @@ class SettingsDialog(QDialog):
         for k, v in self.audio_map.items():
             if v == curr_audio: self.combo_audio.setCurrentText(k); break
         self._fit_model_combo(self.combo_audio)
-        self._hidden_audio_model_combo = self.combo_audio
+        ai_form.addRow("음성 AI:", self.combo_audio)
 
         # 6. VAD
         self.combo_vad = QComboBox()
@@ -350,7 +356,7 @@ class SettingsDialog(QDialog):
         for k, v in self.vad_map.items():
             if v == curr_vad: self.combo_vad.setCurrentText(k); break
         self._fit_model_combo(self.combo_vad)
-        self._hidden_vad_model_combo = self.combo_vad
+        ai_form.addRow("VAD:", self.combo_vad)
         self.chk_vad_post_align = QCheckBox("VAD로 STT/앙상블 자막 위치 재계산")
         self.chk_vad_post_align.setChecked(bool(settings.get("vad_post_stt_align_enabled", True)))
         ai_form.addRow("", self.chk_vad_post_align)

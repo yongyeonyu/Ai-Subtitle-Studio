@@ -1,4 +1,4 @@
-# Version: 03.06.21
+# Version: 03.09.23
 # Phase: PHASE2
 
 import re
@@ -31,6 +31,15 @@ class SubtitleBlockData(QTextBlockUserData):
         quality_signature: str = "",
         clip_idx: int | None = None,
         clip_file: str = "",
+        stt_selected_source: str = "",
+        stt_ensemble_llm_selected_source: str = "",
+        stt_candidates: list | None = None,
+        stt_ensemble_source: str = "",
+        stt_ensemble_llm_selected_label: str = "",
+        stt_ensemble_similarity: float | None = None,
+        stt_ensemble_needs_llm_review: bool = False,
+        stt_ensemble_inserted_from_stt2: bool = False,
+        stt_ensemble_word_rover: dict | None = None,
     ):
         super().__init__()
         self.spk_id = spk_id
@@ -46,6 +55,15 @@ class SubtitleBlockData(QTextBlockUserData):
         self.quality_signature = str(quality_signature or "")
         self.clip_idx = clip_idx
         self.clip_file = str(clip_file or "")
+        self.stt_selected_source = str(stt_selected_source or "")
+        self.stt_ensemble_llm_selected_source = str(stt_ensemble_llm_selected_source or "")
+        self.stt_candidates = list(stt_candidates or [])
+        self.stt_ensemble_source = str(stt_ensemble_source or "")
+        self.stt_ensemble_llm_selected_label = str(stt_ensemble_llm_selected_label or "")
+        self.stt_ensemble_similarity = stt_ensemble_similarity
+        self.stt_ensemble_needs_llm_review = bool(stt_ensemble_needs_llm_review)
+        self.stt_ensemble_inserted_from_stt2 = bool(stt_ensemble_inserted_from_stt2)
+        self.stt_ensemble_word_rover = dict(stt_ensemble_word_rover or {})
 
 class SubtitleHighlighter(QSyntaxHighlighter):
     def __init__(self, document: QTextDocument):

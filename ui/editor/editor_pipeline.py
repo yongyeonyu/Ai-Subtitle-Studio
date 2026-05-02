@@ -1,4 +1,4 @@
-# Version: 03.08.10
+# Version: 03.09.08
 # Phase: PHASE2
 """
 ui/editor_pipeline.py
@@ -130,12 +130,47 @@ class EditorPipelineMixin:
             main_w._refresh_saved_status_label(is_dirty=True)
         if hasattr(main_w, "_start_post_completion_idle_timer"):
             main_w._start_post_completion_idle_timer()
-        if hasattr(main_w, "_release_ai_models_for_editor_mode"):
-            QTimer.singleShot(0, lambda: main_w._release_ai_models_for_editor_mode(force=True))
-        elif hasattr(self, "_schedule_post_generation_roughcut_draft"):
+        if hasattr(self, "_schedule_post_generation_roughcut_draft"):
             QTimer.singleShot(350, lambda: self._schedule_post_generation_roughcut_draft(force=True))
+        if hasattr(main_w, "_release_ai_models_for_editor_mode"):
+            if hasattr(self, "_schedule_post_generation_roughcut_draft"):
+                QTimer.singleShot(450, self._release_ai_models_after_roughcut_draft)
+            else:
+                QTimer.singleShot(0, lambda: main_w._release_ai_models_for_editor_mode(force=True))
         # E fix: 자막 생성 완료 후 타임라인/캔버스 재동기화
         QTimer.singleShot(200, self._post_completion_sync)
+
+    def _roughcut_draft_cleanup_pending(self) -> bool:
+        status = str(getattr(self, "_roughcut_draft_status", "") or "")
+        if status in {"queued", "running", "saving"}:
+            return True
+        try:
+            timer = getattr(self, "_roughcut_draft_timer", None)
+            if timer is not None and timer.isActive():
+                return True
+        except RuntimeError:
+            return False
+        except Exception:
+            pass
+        try:
+            thread = getattr(self, "_roughcut_draft_thread", None)
+            if thread is not None and thread.is_alive():
+                return True
+        except Exception:
+            pass
+        return bool(getattr(self, "_roughcut_draft_pending", False))
+
+    def _release_ai_models_after_roughcut_draft(self):
+        if self._roughcut_draft_cleanup_pending():
+            QTimer.singleShot(500, self._release_ai_models_after_roughcut_draft)
+            return
+        try:
+            main_w = self.window()
+        except RuntimeError:
+            return
+        release = getattr(main_w, "_release_ai_models_for_editor_mode", None)
+        if callable(release):
+            release(force=True, preserve_roughcut_status=True)
 
     def _post_completion_sync(self):
         """E fix: 자막 생성 완료 후 타임라인/글로벌 캔버스 재동기화"""

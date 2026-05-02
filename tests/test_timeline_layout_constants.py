@@ -1,4 +1,4 @@
-# Version: 03.02.11
+# Version: 03.09.16
 # Phase: PHASE2
 import os
 import unittest
@@ -15,6 +15,10 @@ from ui.timeline.timeline_constants import (
     SEG_BOT,
     SEG_TOP,
     SPEAKER_BOT,
+    STT1_BOT,
+    STT1_TOP,
+    STT2_BOT,
+    STT2_TOP,
     SUBTITLE_TOP,
     WAVE_H,
 )
@@ -25,11 +29,15 @@ class TimelineLayoutConstantsTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_canvas_height_is_unchanged_while_segment_group_moves_down(self):
-        self.assertEqual(CANVAS_H, 230)
+    def test_canvas_height_allows_stt1_stt2_preview_lanes(self):
+        self.assertEqual(CANVAS_H, 314)
         self.assertGreaterEqual(SEG_TOP - (RULER_H + WAVE_H), 34)
         self.assertEqual(SEG_BOT, CANVAS_H)
         self.assertGreater(SUBTITLE_TOP, RULER_H + WAVE_H)
+        self.assertGreater(STT1_TOP, SUBTITLE_TOP)
+        self.assertLess(STT1_BOT, STT2_TOP)
+        self.assertGreater(STT2_TOP, STT1_TOP)
+        self.assertLess(STT2_BOT, SPEAKER_BOT)
         self.assertLess(SPEAKER_BOT, SEG_BOT)
 
     def test_focus_border_style_is_shared_with_editor_panel(self):

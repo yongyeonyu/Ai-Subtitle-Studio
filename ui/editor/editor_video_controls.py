@@ -1,4 +1,4 @@
-# Version: 02.07.00
+# Version: 03.09.09
 # Phase: PHASE1-C
 """
 EditorWidget 비디오 제어 / 재생 단축키 Mixin.
@@ -6,6 +6,7 @@ EditorWidget 비디오 제어 / 재생 단축키 Mixin.
 from PyQt6.QtCore import QTimer, QSettings, QPoint
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtMultimedia import QMediaPlayer
+from PyQt6.QtWidgets import QMenu
 
 from core.media_info import probe_media
 from core.frame_time import normalize_fps
@@ -14,6 +15,14 @@ from ui.editor.editor_helpers import insert_gap_after
 
 
 class EditorVideoControlsMixin:
+    _REVIEW_FLAGS = {
+        "non_speech_hallucination_risk",
+        "high_no_speech_prob",
+        "outside_vad_speech",
+        "high_cps",
+        "quality_stale",
+    }
+
     # ---------------------------------------------------------
     # Video Control
     # ---------------------------------------------------------
@@ -212,6 +221,109 @@ class EditorVideoControlsMixin:
 
 
     def _on_timeline_seg_right_clicked(self, start_sec: float, gpos: QPoint):
-        if self._active_seg_start is not None and abs(start_sec - self._active_seg_start) < 0.05:
-            self._split_at_playhead_or_cut()
+        seg = self._segment_for_start_sec(start_sec)
+        if not seg or not self._segment_needs_manual_review(seg):
             return
+        self._show_timeline_review_menu(seg, gpos)
+
+    def _segment_for_start_sec(self, start_sec: float) -> dict | None:
+        try:
+            target = float(start_sec)
+        except Exception:
+            return None
+        for seg in self._get_current_segments():
+            if seg.get("is_gap"):
+                continue
+            try:
+                if abs(float(seg.get("start", 0.0) or 0.0) - target) < 0.05:
+                    return seg
+            except Exception:
+                continue
+        return None
+
+    def _segment_needs_manual_review(self, seg: dict) -> bool:
+        quality = dict(seg.get("quality") or {})
+        label = str(quality.get("confidence_label") or "")
+        flags = set(str(flag) for flag in (quality.get("flags") or ()))
+        return (
+            bool(quality)
+            and (
+                label in {"red", "gray"}
+                or bool(flags.intersection(self._REVIEW_FLAGS))
+                or bool(seg.get("quality_stale"))
+            )
+        )
+
+    def _show_timeline_review_menu(self, seg: dict, gpos: QPoint):
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background:#151C20; color:#F5F7FA; border:1px solid #2D3942; border-radius:6px; }"
+            "QMenu::item { padding:7px 22px 7px 12px; border-radius:4px; }"
+            "QMenu::item:selected { background-color:#1F3A56; }"
+        )
+        confirm_action = menu.addAction("자막 확정")
+        delete_action = menu.addAction("자막 삭제")
+        chosen = menu.exec(gpos)
+        line = int(seg.get("line", -1) or -1)
+        if chosen is confirm_action:
+            self._confirm_review_segment(line)
+        elif chosen is delete_action:
+            self._delete_review_segment(line)
+
+    def _confirm_review_segment(self, line: int):
+        block = self.text_edit.document().findBlockByNumber(int(line))
+        if not block.isValid():
+            return
+        data = block.userData()
+        if not isinstance(data, SubtitleBlockData) or data.is_gap:
+            return
+        if hasattr(self, "_undo_mgr"):
+            self._undo_mgr.push_immediate()
+        current_seg = self._segment_for_line(int(line)) if hasattr(self, "_segment_for_line") else {}
+        quality = dict(getattr(data, "quality", {}) or {})
+        history = list(getattr(data, "quality_history", []) or [])
+        if quality:
+            history.append(dict(quality))
+        flags = [
+            str(flag)
+            for flag in (quality.get("flags") or [])
+            if str(flag) not in self._REVIEW_FLAGS
+        ]
+        if "manual_confirmed" not in flags:
+            flags.append("manual_confirmed")
+        quality["flags"] = flags
+        quality["confidence_label"] = "green"
+        quality["confidence_reason"] = "manual_confirmed"
+        quality["manual_confirmed"] = True
+        block.setUserData(
+            SubtitleBlockData(
+                data.spk_id,
+                data.start_sec,
+                data.is_gap,
+                stt_mode=getattr(data, "stt_mode", False),
+                stt_pending=getattr(data, "stt_pending", False),
+                original_text=getattr(data, "original_text", ""),
+                dictated_text=getattr(data, "dictated_text", ""),
+                quality=quality,
+                quality_history=history,
+                quality_candidates=list(getattr(data, "quality_candidates", []) or []),
+                quality_signature=self._segment_quality_signature({
+                    "start": data.start_sec,
+                    "end": (current_seg or {}).get("end", data.start_sec),
+                    "text": block.text(),
+                    "speaker": data.spk_id,
+                }) if hasattr(self, "_segment_quality_signature") else getattr(data, "quality_signature", ""),
+                clip_idx=getattr(data, "clip_idx", None),
+                clip_file=getattr(data, "clip_file", ""),
+            )
+        )
+        self._mark_dirty()
+        self._finalize_edit()
+        if hasattr(self, "_refresh_video_subtitle_context"):
+            self._refresh_video_subtitle_context()
+
+    def _delete_review_segment(self, line: int):
+        if int(line) < 0:
+            return
+        if hasattr(self, "_on_seg_to_gap"):
+            self._on_seg_to_gap(int(line))

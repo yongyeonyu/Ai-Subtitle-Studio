@@ -1,4 +1,4 @@
-# Version: 03.07.10
+# Version: 03.09.08
 # Phase: PHASE2
 """
 ui/home_ui.py
@@ -243,9 +243,11 @@ class HomeUIMixin:
                 file_item = table.item(row, 1)
                 eta_item = table.item(row, 4)
                 status = self._plain_queue_status(str(status_item.text() if status_item else "-"))
+                display_status = "완료" if "완료" in status else status
                 items.append({
                     "order": str(row + 1),
                     "status": status,
+                    "statusDisplay": display_status,
                     "done": "완료" in status,
                     "file": str(file_item.text() if file_item else "-"),
                     "eta": str(eta_item.text() if eta_item else "-"),

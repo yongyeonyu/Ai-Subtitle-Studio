@@ -1,4 +1,4 @@
-# Version: 03.01.35
+# Version: 03.09.28
 # Phase: PHASE2
 """
 core/project/project_phase1b.py
@@ -11,7 +11,7 @@ import os
 from datetime import datetime
 from typing import Any
 
-from core.project.project_context import build_editor_state
+from core.project.project_context import build_editor_state, sanitize_workspace_state
 from core.project.project_manager import build_model_settings_snapshot, _augment_project_frame_metadata
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 
@@ -39,12 +39,9 @@ def _selected_segment_line(editor) -> int | None:
 
 def _workspace_snapshot(owner, editor) -> dict[str, Any]:
     timeline = getattr(editor, 'timeline', None)
-    canvas = getattr(timeline, 'canvas', None) if timeline else None
-    scroll = getattr(timeline, 'scroll', None) if timeline else None
     lock_chk = getattr(timeline, 'lock_chk', None) if timeline else None
     state: dict[str, Any] = {
         'last_playhead': float(getattr(editor, '_current_sec', 0.0) or 0.0),
-        'zoom_pps': float(getattr(canvas, 'pps', 0.0) or 0.0) if canvas else 0.0,
         'splitter_sizes': [],
         'terminal_visible': bool(getattr(owner, '_log_visible', False) or getattr(editor, '_log_visible', False) or getattr(editor, 'log_visible', False)),
         'dashboard_mode': getattr(owner, '_dashboard_mode', 'dashboard') or 'dashboard',
@@ -53,14 +50,8 @@ def _workspace_snapshot(owner, editor) -> dict[str, Any]:
         'last_cursor_block': _selected_segment_line(editor),
         'selected_segment_line': _selected_segment_line(editor),
         'edit_lock': bool(lock_chk.isChecked()) if lock_chk is not None else False,
-        'scroll_x': 0,
         'active_clip_idx': int(getattr(editor, '_active_clip_idx', getattr(owner, '_active_clip_idx', 0)) or 0),
     }
-    if scroll and scroll.horizontalScrollBar():
-        try:
-            state['scroll_x'] = int(scroll.horizontalScrollBar().value())
-        except Exception:
-            pass
     if hasattr(editor, 'splitter') and editor.splitter is not None:
         try:
             state['splitter_sizes'] = list(editor.splitter.sizes())
@@ -131,7 +122,7 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
     data['phase'] = 'PHASE2'
     data['mode'] = mode
     data['updated_at'] = datetime.now().isoformat(timespec='seconds')
-    data['workspace'] = {**data.get('workspace', {}), **_workspace_snapshot(owner, editor)}
+    data['workspace'] = sanitize_workspace_state({**data.get('workspace', {}), **_workspace_snapshot(owner, editor)})
     editor_settings = dict(getattr(editor, 'settings', {}) or {})
     if editor_settings:
         data['user_settings'] = editor_settings
@@ -170,8 +161,6 @@ def apply_project_ui_state(owner, editor, project_path: str) -> None:
         return
     ws = data.get('workspace', {}) or {}
     timeline = getattr(editor, 'timeline', None)
-    canvas = getattr(timeline, 'canvas', None) if timeline else None
-    scroll = getattr(timeline, 'scroll', None) if timeline else None
     lock_chk = getattr(timeline, 'lock_chk', None) if timeline else None
     try:
         if hasattr(editor, 'splitter') and editor.splitter is not None and ws.get('splitter_sizes'):
@@ -179,22 +168,13 @@ def apply_project_ui_state(owner, editor, project_path: str) -> None:
     except Exception:
         pass
     try:
-        pps = float(ws.get('zoom_pps', 0.0) or 0.0)
-        if canvas is not None and pps > 0:
-            canvas.pps = pps
-            canvas.update()
-        elif timeline is not None and hasattr(timeline, 'fit_to_view'):
+        if timeline is not None and hasattr(timeline, 'fit_to_view'):
             timeline.fit_to_view()
     except Exception:
         pass
     try:
         if lock_chk is not None:
             lock_chk.setChecked(bool(ws.get('edit_lock', False)))
-    except Exception:
-        pass
-    try:
-        if scroll and scroll.horizontalScrollBar():
-            scroll.horizontalScrollBar().setValue(int(ws.get('scroll_x', 0) or 0))
     except Exception:
         pass
     try:

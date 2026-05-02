@@ -1,4 +1,4 @@
-# Version: 03.06.16
+# Version: 03.09.03
 # Phase: PHASE2
 """
 ui/editor_timeline_video.py
@@ -173,6 +173,8 @@ class EditorTimelineVideoMixin:
             return
         player = self.video_player.media_player
         if player.playbackState() != player.PlaybackState.PlayingState:
+            if hasattr(self.timeline, "set_playback_center_lock"):
+                self.timeline.set_playback_center_lock(False)
             self._reset_playhead_smoothing(getattr(self.timeline.canvas, "playhead_sec", 0.0))
             return
         pos_ms = player.position()
@@ -186,7 +188,9 @@ class EditorTimelineVideoMixin:
         self._playhead_display_sec = current_sec
         self._playhead_anchor_global_sec = current_sec
         self._playhead_anchor_mono = now_mono
-        if hasattr(self.timeline, "follow_playhead"):
+        if hasattr(self.timeline, "follow_playhead_centered"):
+            self.timeline.follow_playhead_centered(current_sec, smooth=True)
+        elif hasattr(self.timeline, "follow_playhead"):
             self.timeline.follow_playhead(current_sec, smooth=True, threshold_px=24.0)
         else:
             self.timeline.set_playhead(current_sec)

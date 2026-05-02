@@ -1,4 +1,4 @@
-# Version: 03.06.21
+# Version: 03.09.19
 # Phase: PHASE2
 """
 ui/timeline_global.py
@@ -289,6 +289,10 @@ class GlobalCanvas(GlobalCanvasBase):
 
         widget = self.parent()
         while widget:
+            if hasattr(widget, "apply_manual_horizontal_scroll_delta"):
+                widget.apply_manual_horizontal_scroll_delta(delta // 2)
+                ev.accept()
+                return
             if hasattr(widget, "scroll"):
                 scrollbar = widget.scroll.horizontalScrollBar()
                 scrollbar.setValue(scrollbar.value() + delta // 2)

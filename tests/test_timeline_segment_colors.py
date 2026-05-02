@@ -1,4 +1,4 @@
-# Version: 03.02.07
+# Version: 03.09.29
 # Phase: PHASE2
 import unittest
 from types import SimpleNamespace
@@ -13,6 +13,8 @@ from ui.timeline.timeline_analysis import (
     editor_analysis_markers,
     roughcut_major_color,
     roughcut_markers,
+    subtitle_detection_color,
+    voice_activity_segments_for_editor,
 )
 
 
@@ -63,6 +65,39 @@ class TimelineSegmentColorTests(unittest.TestCase):
         colors = {marker["label"]: marker["color"] for marker in markers}
         self.assertEqual(colors["음성"], "#34C759")
         self.assertEqual(colors["무음"], "#FF9500")
+
+    def test_subtitle_detection_segments_show_llm_choice_score_and_review_state(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "text": "선택됨",
+                "stt_ensemble_llm_selected_source": "STT2",
+                "stt_candidates": [{"source": "STT2", "score": 0.82}],
+            },
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "확인",
+                "quality": {"confidence_label": "red", "confidence_score": 40},
+            },
+        ]
+
+        voice_segments = voice_activity_segments_for_editor(segments, [], [], 2.0)
+
+        self.assertTrue(all(voice_segments[i]["end"] <= voice_segments[i + 1]["start"] for i in range(len(voice_segments) - 1)))
+        self.assertEqual(voice_segments[0]["kind"], "llm_selected")
+        self.assertEqual(voice_segments[0]["source"], "STT2")
+        self.assertEqual(voice_segments[0]["label"], "STT2 LLM 82점")
+        self.assertEqual(voice_segments[0]["color"], subtitle_detection_color(82))
+        self.assertEqual(voice_segments[1]["kind"], "needs_selection")
+        self.assertIn("선택필요", voice_segments[1]["label"])
+        self.assertEqual(voice_segments[1]["color"], "#8E8E93")
+
+    def test_subtitle_detection_score_color_steps_from_red_to_green(self):
+        self.assertEqual(subtitle_detection_color(0), "#FF453A")
+        self.assertEqual(subtitle_detection_color(50), "#FFCC00")
+        self.assertEqual(subtitle_detection_color(100), "#34C759")
 
     def test_roughcut_major_palette_has_distinct_a_to_z_colors(self):
         colors = [roughcut_major_color(chr(65 + i), i) for i in range(26)]

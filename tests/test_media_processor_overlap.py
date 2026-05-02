@@ -1,8 +1,10 @@
-# Version: 03.08.04
+# Version: 03.09.14
 # Phase: PHASE2
 import os
 import struct
+import sys
 import tempfile
+import threading
 import unittest
 import wave
 from types import SimpleNamespace
@@ -142,6 +144,72 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         progress = self.processor._format_transcribe_progress("STT2", 125.0, 600.0, 20)
 
         self.assertEqual(progress, "  ▶ [STT2] 진행 상황: 02분 05초 / 10분 00초 (20%)")
+
+    def test_ensemble_preview_callback_receives_stt2_segments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "primary",
+                "selected_whisper_model_secondary": "secondary",
+                "vad_post_stt_align_enabled": False,
+            }
+
+            def fake_collect(_chunk_dir, _model, *, label, preview_callback=None, **_kwargs):
+                seg = {
+                    "start": 0.0 if label == "STT1" else 1.0,
+                    "end": 0.8 if label == "STT1" else 1.8,
+                    "text": label,
+                }
+                if callable(preview_callback):
+                    preview_callback([dict(seg)], label)
+                return [seg]
+
+            self.processor._collect_transcribe_result = fake_collect
+
+            result = list(self.processor.transcribe_ensemble(
+                tmp,
+                preview_callback=lambda segs, label: calls.append((label, list(segs))),
+            ))
+
+            self.assertEqual({label for label, _ in calls}, {"STT1", "STT2"})
+            stt2_call = next(segs for label, segs in calls if label == "STT2")
+            self.assertEqual(stt2_call[0]["text"], "STT2")
+            self.assertEqual(result[0][1:], (1, 1))
+
+    def test_ensemble_runs_stt1_and_stt2_on_parallel_threads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            barrier = threading.Barrier(2)
+            thread_names = {}
+            preview_calls = []
+
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "primary",
+                "selected_whisper_model_secondary": "secondary",
+                "vad_post_stt_align_enabled": False,
+            }
+
+            def fake_collect(_chunk_dir, _model, *, label, preview_callback=None, **_kwargs):
+                thread_names[label] = threading.current_thread().name
+                barrier.wait(timeout=2.0)
+                seg = {"start": 0.0, "end": 0.8, "text": label}
+                if callable(preview_callback):
+                    preview_callback([seg], label)
+                    seg["text"] = "mutated-after-preview"
+                return [{"start": 0.0, "end": 0.8, "text": label}]
+
+            self.processor._collect_transcribe_result = fake_collect
+
+            result = list(self.processor.transcribe_ensemble(
+                tmp,
+                preview_callback=lambda segs, label: preview_calls.append((label, list(segs))),
+            ))
+
+            self.assertEqual(set(thread_names), {"STT1", "STT2"})
+            self.assertNotEqual(thread_names["STT1"], thread_names["STT2"])
+            self.assertEqual({label for label, _ in preview_calls}, {"STT1", "STT2"})
+            self.assertNotIn("mutated-after-preview", [segs[0]["text"] for _, segs in preview_calls])
+            self.assertEqual(result[0][1:], (1, 1))
 
     def test_vad_empty_does_not_force_split_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -443,6 +511,69 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             if "TEN_VAD 오디오 스캔" in stage
         ]
         self.assertEqual(progress, ["0%", "10%", "20%", "100%"])
+
+    def test_audio_heartbeat_emits_elapsed_status(self):
+        logs = []
+        stages = []
+
+        class FakeStopEvent:
+            def __init__(self):
+                self.calls = 0
+                self.stopped = False
+
+            def wait(self, _interval):
+                self.calls += 1
+                return self.calls > 1
+
+            def set(self):
+                self.stopped = True
+
+        class FakeThread:
+            def __init__(self, target, **_kwargs):
+                self._target = target
+
+            def start(self):
+                self._target()
+
+            def join(self, timeout=None):
+                pass
+
+        ticks = iter([100.0, 107.0])
+        self.processor.stage_callback = stages.append
+        with patch("core.audio.media_processor.threading.Event", FakeStopEvent), \
+             patch("core.audio.media_processor.threading.Thread", FakeThread), \
+             patch("core.audio.media_processor.time.monotonic", side_effect=lambda: next(ticks)), \
+             patch("core.audio.media_processor.get_logger", return_value=SimpleNamespace(log=logs.append)):
+            handle = self.processor._start_audio_heartbeat("ClearVoice", "음성 향상", interval_sec=5.0)
+            self.processor._stop_audio_heartbeat(handle)
+
+        self.assertIn("⏳ [음성] ClearVoice 음성 향상 중... 7초", stages)
+        self.assertIn("  └ [음성] ClearVoice 음성 향상 진행 중... 7초", logs)
+
+    def test_resemble_enhance_wraps_model_run_with_audio_heartbeat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source.wav")
+            target = os.path.join(tmp, "target.wav")
+            open(source, "wb").close()
+            calls = []
+
+            def fake_copy(_out_dir, out_wav):
+                open(out_wav, "wb").close()
+                return True
+
+            self.processor._resolve_python_cli = lambda *_args, **_kwargs: sys.executable
+            self.processor._resemble_enhance_device = lambda: "cpu"
+            self.processor._run_media_command = lambda *args, **kwargs: calls.append(("run", kwargs.get("label"))) or True
+            self.processor._copy_first_wav_from_dir = fake_copy
+            self.processor._huggingface_env = lambda: {}
+            self.processor._start_audio_heartbeat = lambda label, phase, **_kwargs: calls.append(("start", label, phase)) or ("stop", "thread")
+            self.processor._stop_audio_heartbeat = lambda handle: calls.append(("stop", handle))
+
+            self.assertTrue(self.processor._apply_resemble_enhance(source, target))
+
+            self.assertIn(("start", "Resemble Enhance", "음성 향상"), calls)
+            self.assertIn(("run", "Resemble Enhance 음성 향상"), calls)
+            self.assertIn(("stop", ("stop", "thread")), calls)
 
     def test_long_no_vad_preprocess_extracts_stt_chunks_directly_from_media(self):
         with tempfile.TemporaryDirectory() as tmp:

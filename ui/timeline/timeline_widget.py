@@ -1,9 +1,11 @@
-# Version: 03.06.17
-# Phase: PHASE1-C
+# Version: 03.09.19
+# Phase: PHASE2
 """
 ui/timeline_widget.py
 Timeline widget container
 """
+import time
+
 from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QBrush
 from PyQt6.QtWidgets import (
@@ -32,14 +34,16 @@ class TimelinePlayheadOverlay(QWidget):
         self._timeline = timeline
         self._sec = 0.0
         self._scroll_x = 0
+        self._center_locked = False
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
 
-    def set_state(self, sec: float, scroll_x: int):
+    def set_state(self, sec: float, scroll_x: int, *, center_locked: bool = False):
         self._sec = max(0.0, float(sec or 0.0))
         self._scroll_x = max(0, int(scroll_x or 0))
+        self._center_locked = bool(center_locked)
         self.update()
 
     def paintEvent(self, event):
@@ -47,7 +51,10 @@ class TimelinePlayheadOverlay(QWidget):
         canvas = getattr(timeline, "canvas", None)
         if canvas is None or float(getattr(canvas, "total_duration", 0.0) or 0.0) <= 0:
             return
-        px = int(self._sec * float(getattr(canvas, "pps", 1.0) or 1.0)) - self._scroll_x
+        if self._center_locked:
+            px = max(0, self.width() // 2)
+        else:
+            px = int(self._sec * float(getattr(canvas, "pps", 1.0) or 1.0)) - self._scroll_x
         if px < -16 or px > self.width() + 16:
             return
         painter = QPainter(self)
@@ -66,6 +73,7 @@ class TimelinePlayheadOverlay(QWidget):
 class TimelineWidget(QWidget):
     seg_clicked = pyqtSignal(int, float)
     seg_right_clicked = pyqtSignal(float, QPoint)
+    stt_candidate_selected = pyqtSignal(dict)
     seg_double_clicked = pyqtSignal(int, float)
     seg_time_changed = pyqtSignal(int, float, float, str)
     diamond_merge = pyqtSignal(int, int)
@@ -140,9 +148,9 @@ class TimelineWidget(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidget(self.canvas)
         self.scroll.setWidgetResizable(False)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll.setFixedHeight(CANVAS_H + 16)
+        self.scroll.setFixedHeight(CANVAS_H)
         self.scroll.setStyleSheet("QScrollArea{border:none;}")
 
         lay.addWidget(self.scroll)
@@ -161,6 +169,7 @@ class TimelineWidget(QWidget):
 
         self.canvas.seg_clicked.connect(self.seg_clicked)
         self.canvas.seg_right_clicked.connect(self._on_canvas_right_clicked)
+        self.canvas.stt_candidate_selected.connect(self.stt_candidate_selected.emit)
         self.canvas.seg_double_clicked.connect(self.seg_double_clicked)
         self.canvas.seg_time_changed.connect(self.seg_time_changed)
         self.canvas.seg_to_gap.connect(self.seg_to_gap)
@@ -198,6 +207,9 @@ class TimelineWidget(QWidget):
 
         self._target_scroll_x = 0.0
         self._current_scroll_x = 0.0
+        self._playback_center_lock = False
+        self._pending_playback_center_lock = False
+        self._manual_scroll_until = 0.0
 
         self._smooth_scroll_timer = QTimer(self)
         self._smooth_scroll_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -424,14 +436,20 @@ class TimelineWidget(QWidget):
         self.canvas.set_vad_segments(vad_segs)
         self.global_canvas.set_vad_segments(vad_segs)
 
+    def set_voice_activity_segments(self, segments: list[dict]):
+        if hasattr(self.canvas, "set_voice_activity_segments"):
+            self.canvas.set_voice_activity_segments(segments)
+
     def set_active(self, sec):
         sec = self.snap_sec_to_frame(sec)
         self.canvas.set_active(sec)
         if sec is not None:
             self.center_to_sec(sec, smooth=True)
 
-    def set_playhead(self, sec):
+    def set_playhead(self, sec, *, preserve_center_lock: bool = False):
         sec = self.snap_sec_to_frame(sec)
+        if not preserve_center_lock:
+            self.set_playback_center_lock(False)
         self.canvas.playhead_sec = max(0.0, float(sec or 0.0))
         self._sync_playhead_overlay()
         self.global_canvas.set_playhead(sec)
@@ -439,6 +457,73 @@ class TimelineWidget(QWidget):
     def follow_playhead(self, sec, *, smooth=True, threshold_px=24.0):
         sec = self.snap_sec_to_frame(sec)
         self.set_playhead(sec)
+        self._scroll_canvas_to_sec(sec, smooth=smooth, threshold_px=threshold_px)
+
+    def follow_playhead_centered(self, sec, *, smooth=True):
+        sec = self.snap_sec_to_frame(sec)
+        if self._manual_scroll_active():
+            self.set_playhead(sec)
+            self._target_scroll_x = float(self.scroll.horizontalScrollBar().value())
+            self._current_scroll_x = self._target_scroll_x
+            return
+        if not getattr(self, "_playback_center_lock", False):
+            self.set_playhead(sec)
+            viewport = self.scroll.viewport()
+            viewport_w = viewport.width() if viewport is not None else self.scroll.width()
+            center_x = max(1.0, float(viewport_w) / 2.0)
+            current_scroll = float(self.scroll.horizontalScrollBar().value())
+            playhead_x = float(sec or 0.0) * float(self.canvas.pps or 0.0) - current_scroll
+            target_scroll = float(self._clamp_scroll_x(float(sec or 0.0) * float(self.canvas.pps or 0.0) - center_x))
+            if playhead_x < center_x and target_scroll <= current_scroll + 1.0:
+                self._pending_playback_center_lock = False
+                self._target_scroll_x = current_scroll
+                self._current_scroll_x = current_scroll
+                return
+            if abs(target_scroll - current_scroll) <= 1.0:
+                self._pending_playback_center_lock = False
+                self.set_playback_center_lock(True)
+                self.set_playhead(sec, preserve_center_lock=True)
+                return
+            self._pending_playback_center_lock = True
+            self._scroll_canvas_to_sec(sec, smooth=smooth, threshold_px=0.0)
+            return
+        self.set_playback_center_lock(True)
+        self.set_playhead(sec, preserve_center_lock=True)
+        self._scroll_canvas_to_sec(sec, smooth=smooth, threshold_px=0.0)
+
+    def set_playback_center_lock(self, enabled: bool):
+        enabled = bool(enabled)
+        if not enabled:
+            self._pending_playback_center_lock = False
+        if getattr(self, "_playback_center_lock", False) == enabled:
+            return
+        self._playback_center_lock = enabled
+        self._sync_playhead_overlay()
+
+    def _manual_scroll_active(self) -> bool:
+        return time.monotonic() < float(getattr(self, "_manual_scroll_until", 0.0) or 0.0)
+
+    def _begin_manual_scroll(self, *, hold_sec: float = 0.9):
+        self._manual_scroll_until = time.monotonic() + max(0.1, float(hold_sec or 0.9))
+        self._pending_playback_center_lock = False
+        self.set_playback_center_lock(False)
+        if self._smooth_scroll_timer.isActive():
+            self._smooth_scroll_timer.stop()
+        current = float(self.scroll.horizontalScrollBar().value())
+        self._target_scroll_x = current
+        self._current_scroll_x = current
+
+    def apply_manual_horizontal_scroll_delta(self, delta: int | float):
+        self._begin_manual_scroll()
+        sb = self.scroll.horizontalScrollBar()
+        target = self._clamp_scroll_x(float(sb.value()) + float(delta or 0.0))
+        sb.setValue(target)
+        self._target_scroll_x = float(target)
+        self._current_scroll_x = float(target)
+        self._schedule_vp_sync()
+        self._sync_playhead_overlay()
+
+    def _scroll_canvas_to_sec(self, sec, *, smooth=True, threshold_px=24.0):
         canvas = getattr(self, "canvas", None)
         if canvas is None:
             return
@@ -447,7 +532,7 @@ class TimelineWidget(QWidget):
         target_x = max(0, int(float(sec or 0.0) * float(canvas.pps or 0.0)) - (max(1, viewport_w) // 2))
         target_val = float(self._clamp_scroll_x(target_x))
         current_val = float(self.scroll.horizontalScrollBar().value())
-        if abs(target_val - float(getattr(self, "_target_scroll_x", current_val))) < float(threshold_px):
+        if abs(target_val - float(getattr(self, "_target_scroll_x", current_val))) <= float(threshold_px):
             return
         self._target_scroll_x = target_val
         if smooth:
@@ -470,6 +555,7 @@ class TimelineWidget(QWidget):
             overlay.set_state(
                 float(getattr(self.canvas, "playhead_sec", 0.0) or 0.0),
                 int(self.scroll.horizontalScrollBar().value()),
+                center_locked=bool(getattr(self, "_playback_center_lock", False)),
             )
         except RuntimeError:
             pass
@@ -485,12 +571,16 @@ class TimelineWidget(QWidget):
             self._current_scroll_x = final_x
             self.scroll.horizontalScrollBar().setValue(int(final_x))
             self._smooth_scroll_timer.stop()
+            if getattr(self, "_pending_playback_center_lock", False):
+                self._pending_playback_center_lock = False
+                self.set_playback_center_lock(True)
             return
         self._current_scroll_x = float(self._clamp_scroll_x(self._current_scroll_x + delta * 0.42))
         self.scroll.horizontalScrollBar().setValue(int(self._current_scroll_x))
 
     def center_to_sec(self, sec, smooth=False):
         sec = self.snap_sec_to_frame(sec)
+        self.set_playback_center_lock(False)
         target_x = int(sec * self.canvas.pps)
         half_w = self.scroll.width() // 2
         target_val = int(self._clamp_scroll_x(max(0, target_x - half_w)))
@@ -637,11 +727,7 @@ class TimelineWidget(QWidget):
         dy = ev.angleDelta().y()
         dx = ev.angleDelta().x()
         delta = -(dy if dy != 0 else dx)
-        self.scroll.horizontalScrollBar().setValue(
-            self.scroll.horizontalScrollBar().value() + delta // 2
-        )
-        self._schedule_vp_sync()
-        self._sync_playhead_overlay()
+        self.apply_manual_horizontal_scroll_delta(delta // 2)
         ev.accept()
 
     def _schedule_vp_sync(self, *args):

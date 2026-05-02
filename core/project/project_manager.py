@@ -1,4 +1,4 @@
-# Version: 03.06.19
+# Version: 03.09.29
 # Phase: PHASE2
 """
 core/project_manager.py
@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from core.project.project_context import build_editor_state
+from core.project.project_context import STT_SEGMENT_METADATA_KEYS, build_editor_state, sanitize_workspace_state
 from core.media_info import probe_media
 from core.frame_time import frame_count, frame_duration, frame_to_sec, normalize_fps, sec_to_frame
 from core.work_mode import normalize_work_mode
@@ -90,6 +90,14 @@ def _get_media_probe(filepath: str) -> dict:
         return dict(probe_media(filepath) or {})
     except Exception:
         return {}
+
+
+def _sanitize_project_workspace_fields(project: dict) -> dict:
+    project["workspace"] = sanitize_workspace_state(project.get("workspace", {}) or {})
+    if project.get("editor_state"):
+        editor_workspace = project["editor_state"].get("workspace", {}) or project["workspace"]
+        project["editor_state"]["workspace"] = sanitize_workspace_state(editor_workspace)
+    return project
 
 
 def _clip_frame_fields(timeline_start: float, timeline_end: float, fps: float, timeline_fps: float) -> dict:
@@ -262,6 +270,85 @@ def _augment_project_frame_metadata(project: dict):
                 "end": end_frame,
                 "timeline_frame_rate": primary_fps,
             }
+        stt_state = editor_state.get("stt", {}) or {}
+        stt_preview = stt_state.get("preview_segments")
+        if isinstance(stt_preview, list):
+            stt_state["schema"] = "stt_candidates.v1"
+            for idx, seg in enumerate(stt_preview):
+                if not isinstance(seg, dict):
+                    continue
+                start_frame = seg.get("start_frame", seg.get("timeline_start_frame"))
+                end_frame = seg.get("end_frame", seg.get("timeline_end_frame"))
+                if start_frame is not None:
+                    start = frame_to_sec(start_frame, primary_fps)
+                else:
+                    start = float(seg.get("start", 0.0) or 0.0)
+                    start_frame = sec_to_frame(start, primary_fps)
+                if end_frame is not None:
+                    end = frame_to_sec(end_frame, primary_fps)
+                else:
+                    end = float(seg.get("end", start) or start)
+                    end_frame = sec_to_frame(end, primary_fps)
+                seg["index"] = int(seg.get("index", idx + 1) or idx + 1)
+                seg["start_frame"] = int(start_frame)
+                seg["end_frame"] = int(end_frame)
+                seg["timeline_start_frame"] = int(start_frame)
+                seg["timeline_end_frame"] = int(end_frame)
+                seg["frame_rate"] = primary_fps
+                seg["timeline_frame_rate"] = primary_fps
+                seg["start"] = frame_to_sec(seg["start_frame"], primary_fps)
+                seg["end"] = frame_to_sec(seg["end_frame"], primary_fps)
+                seg["stt_pending"] = True
+                seg["_live_stt_preview"] = True
+                seg["frame_range"] = {
+                    "unit": "frame",
+                    "start": seg["start_frame"],
+                    "end": seg["end_frame"],
+                    "timeline_frame_rate": primary_fps,
+                }
+            editor_state["stt"] = stt_state
+
+    analysis = project.get("analysis")
+    if isinstance(analysis, dict):
+        segments = analysis.get("voice_activity_segments")
+        if isinstance(segments, list):
+            analysis["voice_activity_schema"] = analysis.get("voice_activity_schema") or "subtitle_detection.v1"
+            analysis["voice_activity_timebase"] = dict(project["timeline"]["timebase"])
+            for idx, seg in enumerate(segments):
+                if not isinstance(seg, dict):
+                    continue
+                start_frame = seg.get("start_frame", seg.get("timeline_start_frame"))
+                end_frame = seg.get("end_frame", seg.get("timeline_end_frame"))
+                if start_frame is not None:
+                    start = frame_to_sec(start_frame, primary_fps)
+                else:
+                    start = float(seg.get("start", 0.0) or 0.0)
+                    start_frame = sec_to_frame(start, primary_fps)
+                if end_frame is not None:
+                    end = frame_to_sec(end_frame, primary_fps)
+                else:
+                    end = float(seg.get("end", start) or start)
+                    end_frame = sec_to_frame(end, primary_fps)
+                seg["index"] = int(seg.get("index", idx + 1) or idx + 1)
+                seg["start_frame"] = int(start_frame)
+                seg["end_frame"] = int(end_frame)
+                seg["timeline_start_frame"] = int(start_frame)
+                seg["timeline_end_frame"] = int(end_frame)
+                seg["frame_rate"] = primary_fps
+                seg["timeline_frame_rate"] = primary_fps
+                seg["start"] = frame_to_sec(seg["start_frame"], primary_fps)
+                seg["end"] = frame_to_sec(seg["end_frame"], primary_fps)
+                seg["frame_range"] = {
+                    "unit": "frame",
+                    "start": seg["start_frame"],
+                    "end": seg["end_frame"],
+                    "timeline_frame_rate": primary_fps,
+                }
+        if isinstance(segments, list) and isinstance(editor_state, dict):
+            editor_state.setdefault("analysis", {})
+            editor_state["analysis"]["voice_activity_segments"] = list(analysis.get("voice_activity_segments") or [])
+            editor_state["analysis"]["voice_activity_schema"] = analysis.get("voice_activity_schema", "subtitle_detection.v1")
+            editor_state["analysis"]["voice_activity_timebase"] = dict(project["timeline"]["timebase"])
 
 
 def build_model_settings_snapshot(settings: Optional[dict]) -> dict:
@@ -434,6 +521,7 @@ def create_project(
                 }
                 for c in clips
             ],
+            primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
         ),
 
         "roughcut_state": {},
@@ -442,8 +530,6 @@ def create_project(
         "workspace": {
             "last_playhead": 0.0,
             "last_cursor_block": 0,
-            "zoom_pps": 0.0,
-            "scroll_position": 0.0,
             "splitter_sizes": [],
             "terminal_visible": False,
             "dashboard_mode": "dashboard",
@@ -473,6 +559,7 @@ def create_project(
         filepath = os.path.join(PROJECTS_DIR, f"{name}_{counter}.json")
         counter += 1
 
+    _sanitize_project_workspace_fields(project)
     _augment_project_frame_metadata(project)
     _write_json(filepath, project)
     return filepath
@@ -491,6 +578,8 @@ def save_project(
     workspace: Optional[dict] = None,
     roughcut_state: Optional[dict] = None,
     active_work_mode: Optional[str] = None,
+    voice_activity_segments: Optional[List[dict]] = None,
+    stt_preview_segments: Optional[List[dict]] = None,
 ):
     """기존 프로젝트 JSON 업데이트"""
     if not os.path.exists(filepath):
@@ -550,8 +639,8 @@ def save_project(
         project["subtitles"]["srt_path"] = srt_path
 
     # ── 세그먼트 ──
+    clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
     if segments is not None:
-        clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
         timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or {}
         primary_fps = normalize_fps(timebase.get("primary_fps") or (clips[0].get("fps") if clips else 30.0))
         new_segs = []
@@ -599,6 +688,9 @@ def save_project(
             for key in ("quality", "quality_history", "quality_candidates", "quality_stale"):
                 if key in seg:
                     new_seg[key] = seg.get(key)
+            for key in STT_SEGMENT_METADATA_KEYS:
+                if key in seg:
+                    new_seg[key] = seg.get(key)
             for key in (
                 "start_frame",
                 "end_frame",
@@ -618,6 +710,15 @@ def save_project(
         project.setdefault("subtitles", {})
         project["subtitles"]["segments"] = new_segs
 
+    if voice_activity_segments is not None:
+        project.setdefault("analysis", {})
+        project["analysis"]["voice_activity_schema"] = "subtitle_detection.v1"
+        project["analysis"]["voice_activity_segments"] = [
+            _normalize_voice_activity_segment(item, idx)
+            for idx, item in enumerate(voice_activity_segments or [])
+            if isinstance(item, dict)
+        ]
+
         project["editor_state"] = build_editor_state(
             mode="multiclip" if len(media_paths or project.get("media", []) or []) > 1 else "single",
             media_files=[
@@ -636,6 +737,8 @@ def save_project(
                 }
                 for c in clips
             ],
+            stt_preview_segments=stt_preview_segments,
+            primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
         )
     elif media_paths is not None:
         clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
@@ -648,6 +751,7 @@ def save_project(
                 "quality": seg.get("quality", {}),
                 "quality_history": seg.get("quality_history", []),
                 "quality_candidates": seg.get("quality_candidates", []),
+                **{key: seg.get(key) for key in STT_SEGMENT_METADATA_KEYS if key in seg},
             }
             for seg in (project.get("subtitles", {}) or {}).get("segments", [])
         ]
@@ -665,6 +769,39 @@ def save_project(
                 }
                 for c in clips
             ],
+            stt_preview_segments=stt_preview_segments,
+            primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
+        )
+    elif stt_preview_segments is not None:
+        project["editor_state"] = build_editor_state(
+            mode="multiclip" if len(project.get("media", []) or []) > 1 else "single",
+            media_files=[
+                item.get("path", "")
+                for item in sorted(project.get("media", []), key=lambda item: item.get("order", 0))
+                if item.get("path")
+            ],
+            segments=segments if segments is not None else [
+                {
+                    "start": seg.get("timeline_start", seg.get("start", 0.0)),
+                    "end": seg.get("timeline_end", seg.get("end", 0.0)),
+                    "text": seg.get("text", ""),
+                    "speaker": seg.get("speaker", "00"),
+                    **{key: seg.get(key) for key in STT_SEGMENT_METADATA_KEYS if key in seg},
+                }
+                for seg in (project.get("subtitles", {}) or {}).get("segments", [])
+            ],
+            workspace=workspace or project.get("workspace", {}) or {},
+            clip_boundaries=[
+                {
+                    "start": c.get("timeline_start", 0.0),
+                    "end": c.get("timeline_end", 0.0),
+                    "file": c.get("source_path", ""),
+                    "name": os.path.basename(c.get("source_path", "")),
+                }
+                for c in clips
+            ],
+            stt_preview_segments=stt_preview_segments,
+            primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
         )
 
     # ── 사용자 설정 ──
@@ -676,6 +813,7 @@ def save_project(
 
     # ── 작업 환경 ──
     if workspace is not None:
+        workspace = sanitize_workspace_state(workspace)
         project["workspace"] = workspace
         if project.get("editor_state"):
             project["editor_state"]["workspace"] = workspace
@@ -693,8 +831,29 @@ def save_project(
     else:
         project.setdefault("roughcut_state", project.get("roughcut_state", {}) or {})
 
+    _sanitize_project_workspace_fields(project)
     _augment_project_frame_metadata(project)
     _write_json(filepath, project)
+
+
+def _normalize_voice_activity_segment(item: dict, idx: int) -> dict:
+    start = float(item.get("start", 0.0) or 0.0)
+    end = float(item.get("end", start) or start)
+    normalized = {
+        "id": str(item.get("id") or f"subtitle_detection_{idx + 1:04d}"),
+        "index": idx + 1,
+        "start": start,
+        "end": max(start, end),
+        "kind": str(item.get("kind", "uncertain") or "uncertain"),
+        "label": str(item.get("label", "") or ""),
+        "source": str(item.get("source", "") or ""),
+        "color": str(item.get("color", "") or ""),
+        "priority": int(item.get("priority", 0) or 0),
+    }
+    for key in ("score", "alpha", "selection_state", "selected_source"):
+        if key in item:
+            normalized[key] = item.get(key)
+    return normalized
 
 
 # ─────────────────────────────────────────────
@@ -838,6 +997,7 @@ def add_media_to_project(filepath: str, new_paths: list):
     project.setdefault("roughcut_state", {})
 
     project["updated_at"] = datetime.now().isoformat()
+    _sanitize_project_workspace_fields(project)
     _augment_project_frame_metadata(project)
     _write_json(filepath, project)
 
@@ -909,6 +1069,7 @@ def merge_srt_to_project(filepath: str) -> int | None:
     )
     project.setdefault("roughcut_state", {})
     project["updated_at"] = datetime.now().isoformat()
+    _sanitize_project_workspace_fields(project)
     _augment_project_frame_metadata(project)
     _write_json(filepath, project)
 

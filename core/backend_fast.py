@@ -127,7 +127,7 @@ class CoreBackendFast(CoreBackend):
 
         # ── STEP 3: Whisper + LLM (동기 실행) ──
         import queue as _queue
-        from core.engine.subtitle_engine import optimize_segments
+        from core.engine.subtitle_engine import apply_final_gap_settings, optimize_segments
 
         _SENTINEL = object()
         opt_queue = _queue.Queue()
@@ -170,8 +170,8 @@ class CoreBackendFast(CoreBackend):
                         seg["end"] = seg["start"] + 0.5
 
                 opt = self._align_subtitle_segments_to_vad(opt, vad_segs, context="빠른모드")
-
-                all_segments.extend(opt)
+                all_segments.extend([dict(seg) for seg in opt])
+                opt = apply_final_gap_settings(opt, force=True)
 
                 if hasattr(self.ui, "_sig_append_segments"):
                     self.ui._sig_append_segments.emit(opt)
@@ -281,6 +281,7 @@ class CoreBackendFast(CoreBackend):
             pass
 
         # ── STEP 5~6: SRT 저장 + 내보내기 ──
+        all_segments = apply_final_gap_settings(all_segments, force=True)
         self._save_and_export(target_file, queue_index, all_segments, is_auto_mode=True)
 
         return True

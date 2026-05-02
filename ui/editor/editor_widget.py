@@ -1,4 +1,4 @@
-# Version: 03.08.06
+# Version: 03.09.18
 # Phase: PHASE2
 """Editor widget and function-preserving PHASE1-C layout."""
 import re, os, sys, json, atexit, threading, shutil, time
@@ -390,6 +390,8 @@ class EditorWidget(
             self.timeline.canvas.sig_split_request.connect(self.split_segment_with_text)
 
         self.timeline.seg_clicked.connect(self._on_timeline_seg_clicked)
+        if hasattr(self.timeline, 'stt_candidate_selected'):
+            self.timeline.stt_candidate_selected.connect(self.select_stt_candidate_as_subtitle)
         self.timeline.seg_double_clicked.connect(self._on_timeline_seg_double_clicked)
         self.timeline.scrub_sec.connect(self._on_scrub)
 
@@ -1096,6 +1098,10 @@ class EditorWidget(
 
     def set_vad_segments(self, vad_segs):
         if hasattr(self, 'timeline'): self.timeline.set_vad_segments(vad_segs)
+
+    def set_voice_activity_segments(self, segments):
+        if hasattr(self, 'timeline') and hasattr(self.timeline, 'set_voice_activity_segments'):
+            self.timeline.set_voice_activity_segments(segments)
 
     def set_terminal_visible_layout(self, is_visible: bool):
         if not hasattr(self, 'splitter'): return

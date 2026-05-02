@@ -1,4 +1,4 @@
-# Version: 03.00.26
+# Version: 03.09.28
 # Phase: PHASE2
 """
 core/project/project_snapshot.py
@@ -48,16 +48,11 @@ def _ui_state(editor) -> dict[str, Any]:
     state: dict[str, Any] = {}
     try:
         timeline = getattr(editor, 'timeline', None)
-        canvas = getattr(timeline, 'canvas', None) if timeline else None
-        scroll = getattr(timeline, 'scroll', None) if timeline else None
         lock_chk = getattr(timeline, 'lock_chk', None) if timeline else None
         state['playhead_sec'] = float(getattr(editor, '_current_sec', 0.0) or 0.0)
-        state['pps'] = float(getattr(canvas, 'pps', 0.0) or 0.0) if canvas else 0.0
         state['selected_segment_line'] = _selected_segment_line(editor)
         state['edit_lock'] = bool(lock_chk.isChecked()) if lock_chk is not None else False
         state['log_visible'] = bool(getattr(editor, '_log_visible', False) or getattr(editor, 'log_visible', False))
-        if scroll and scroll.horizontalScrollBar():
-            state['scroll_x'] = int(scroll.horizontalScrollBar().value())
         if hasattr(editor, 'splitter') and editor.splitter is not None:
             try:
                 state['splitter_sizes'] = list(editor.splitter.sizes())

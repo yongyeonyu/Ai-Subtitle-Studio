@@ -1,4 +1,4 @@
-# Version: 03.08.08
+# Version: 03.09.10
 # Phase: PHASE2
 """
 ui/main/main_window.py
@@ -9,6 +9,7 @@ import os
 import datetime
 import time
 import threading
+import gc
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -606,7 +607,7 @@ class MainWindow(
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self):
-        self._stop_active_ai_for_home()
+        self._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.5)
         self._stop_post_completion_idle_timer()
         self._reset_transient_multiclip_state()
         self._dock_global_menu_to_workspace()
@@ -622,13 +623,25 @@ class MainWindow(
         self._build_home_content()
 
     def _stop_active_ai_for_home(self):
-        if getattr(self, "_home_stop_in_progress", False):
-            return
-        self._home_stop_in_progress = True
+        self._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.5)
+
+    def _cleanup_runtime_for_navigation(self, *, context: str = "홈 이동", timeout_sec: float = 0.5, force: bool = False):
+        if getattr(self, "_runtime_cleanup_in_progress", False):
+            return False
+        editor = getattr(self, "_editor_widget", None)
+        should_cleanup = bool(force or editor is not None or self._is_backend_ai_busy())
+        if not should_cleanup:
+            return False
+
+        self._runtime_cleanup_in_progress = True
+        context = str(context or "런타임 정리").strip() or "런타임 정리"
+        stopped_any = False
         try:
-            stopped_any = False
-            should_stop_llm_models = False
-            editor = getattr(self, "_editor_widget", None)
+            try:
+                self._stop_post_completion_idle_timer()
+            except Exception:
+                pass
+
             if editor is not None:
                 try:
                     timer = getattr(editor, "_roughcut_draft_timer", None)
@@ -638,9 +651,6 @@ class MainWindow(
                     editor._roughcut_draft_generation = int(getattr(editor, "_roughcut_draft_generation", 0) or 0) + 1
                     if hasattr(editor, "_set_roughcut_draft_status"):
                         editor._set_roughcut_draft_status("idle")
-                    draft_thread = getattr(editor, "_roughcut_draft_thread", None)
-                    if draft_thread is not None and getattr(draft_thread, "is_alive", lambda: False)():
-                        should_stop_llm_models = True
                 except Exception:
                     pass
                 try:
@@ -648,51 +658,103 @@ class MainWindow(
                     is_processing = bool(getattr(editor, "_is_ai_processing", False))
                     if state_manager is not None:
                         is_processing = is_processing or bool(getattr(state_manager, "is_locked", False))
-                    if is_processing and hasattr(editor, "_stop_pipeline"):
+                    if (force or is_processing) and hasattr(editor, "_stop_pipeline"):
                         editor._stop_pipeline()
                         stopped_any = True
-                        should_stop_llm_models = True
                 except RuntimeError:
                     pass
                 except Exception as exc:
-                    get_logger().log(f"⚠️ 홈 이동 중 에디터 작업 중단 실패: {exc}")
+                    get_logger().log(f"⚠️ {context} 중 에디터 작업 중단 실패: {exc}")
+
+                try:
+                    video_player = getattr(editor, "video_player", None)
+                    if video_player is not None:
+                        timer = getattr(video_player, "_ui_timer", None)
+                        if timer is not None:
+                            timer.stop()
+                        if hasattr(video_player, "pause_video"):
+                            video_player.pause_video()
+                        for player_name in ("media_player", "vocal_player", "audio_player"):
+                            player = getattr(video_player, player_name, None)
+                            if player is not None and hasattr(player, "stop"):
+                                player.stop()
+                except Exception:
+                    pass
+
+                try:
+                    timeline = getattr(editor, "timeline", None)
+                    stop_waveform = getattr(timeline, "stop_waveform_workers", None) if timeline is not None else None
+                    if callable(stop_waveform):
+                        stop_waveform()
+                        stopped_any = True
+                except Exception:
+                    pass
+
+                if force and hasattr(editor, "_cleanup"):
+                    try:
+                        editor._cleanup()
+                    except Exception:
+                        pass
 
             for backend_name in ("backend", "backend_fast"):
                 backend = getattr(self, backend_name, None)
                 if backend is None:
                     continue
                 try:
-                    if bool(getattr(backend, "_active", False)) and hasattr(backend, "stop"):
+                    if hasattr(backend, "stop"):
                         backend.stop()
                         stopped_any = True
-                        should_stop_llm_models = True
-                    else:
-                        processor = getattr(backend, "video_processor", None)
-                        if processor is not None and hasattr(processor, "stop_transcribe"):
+                except Exception as exc:
+                    get_logger().log(f"⚠️ {context} 중 {backend_name} 중단 실패: {exc}")
+
+                processor = getattr(backend, "video_processor", None)
+                if processor is not None:
+                    try:
+                        if hasattr(processor, "release_runtime_models"):
+                            processor.release_runtime_models()
+                        elif hasattr(processor, "stop_transcribe"):
                             processor.stop_transcribe()
-                except Exception as exc:
-                    get_logger().log(f"⚠️ 홈 이동 중 {backend_name} 중단 실패: {exc}")
+                        stopped_any = True
+                    except Exception as exc:
+                        get_logger().log(f"⚠️ {context} 중 {backend_name} STT 런타임 정리 실패: {exc}")
 
-            def _stop_llm_models():
-                try:
-                    settings = load_settings()
-                    models = [
-                        settings.get("selected_model", ""),
-                        settings.get("roughcut_llm_model", ""),
-                        settings.get("selected_roughcut_llm_model", ""),
-                    ]
-                    from core.llm.ollama_provider import stop_local_llm_models
+                for thread_name in ("_pipeline_thread", "_eta_thread"):
+                    thread = getattr(backend, thread_name, None)
+                    try:
+                        if thread is not None and getattr(thread, "is_alive", lambda: False)():
+                            thread.join(timeout=max(0.05, float(timeout_sec) / 2.0))
+                    except RuntimeError:
+                        pass
+                    except Exception:
+                        pass
 
-                    stop_local_llm_models(models, logger=get_logger())
-                except Exception as exc:
-                    get_logger().log(f"⚠️ 홈 이동 중 LLM 모델 종료 실패: {exc}")
+            try:
+                from core.audio.live_stt import stop_live_stt_worker
 
-            if should_stop_llm_models:
-                threading.Thread(target=_stop_llm_models, daemon=True, name="home-stop-llm-models").start()
+                if stop_live_stt_worker():
+                    stopped_any = True
+            except Exception:
+                pass
+
+            try:
+                from core.platform_compat import cleanup_app_runtime_processes
+
+                cleanup_result = cleanup_app_runtime_processes(logger=get_logger(), timeout_sec=timeout_sec)
+                if any(int(v or 0) > 0 for v in cleanup_result.values()):
+                    stopped_any = True
+            except Exception as exc:
+                get_logger().log(f"⚠️ {context} 중 외부 런타임 정리 실패: {exc}")
+
+            try:
+                gc.collect()
+            except Exception:
+                pass
+
             if stopped_any:
-                get_logger().log("🛑 홈 이동: 진행 중인 STT/LLM 작업 중단을 요청했습니다.")
+                get_logger().log(f"🧹 {context}: 스레드/AI 런타임/메모리 정리 완료")
+            return stopped_any
         finally:
-            self._home_stop_in_progress = False
+            self._runtime_cleanup_in_progress = False
 
     def _is_editor_ai_busy(self, editor=None) -> bool:
         editor = editor or getattr(self, "_editor_widget", None)
@@ -730,7 +792,7 @@ class MainWindow(
                 pass
         return False
 
-    def _release_ai_models_for_editor_mode(self, *, force: bool = False):
+    def _release_ai_models_for_editor_mode(self, *, force: bool = False, preserve_roughcut_status: bool = False):
         if getattr(self, "_editor_ai_release_in_progress", False):
             return
         editor = getattr(self, "_editor_widget", None)
@@ -740,7 +802,7 @@ class MainWindow(
         self._editor_ai_release_in_progress = True
         try:
             try:
-                if editor is not None:
+                if editor is not None and not preserve_roughcut_status:
                     timer = getattr(editor, "_roughcut_draft_timer", None)
                     if timer is not None:
                         timer.stop()

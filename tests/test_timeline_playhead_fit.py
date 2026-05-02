@@ -1,4 +1,4 @@
-# Version: 03.06.16
+# Version: 03.09.19
 # Phase: PHASE2
 import os
 import unittest
@@ -217,6 +217,27 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
+    def test_timeline_hides_manual_slider_but_keeps_programmatic_scroll(self):
+        timeline = TimelineWidget()
+        try:
+            self.assertEqual(
+                timeline.scroll.horizontalScrollBarPolicy(),
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+            )
+
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+            timeline.canvas.total_duration = 300.0
+            timeline.canvas.pps = 10.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(300.0, 10.0))
+
+            timeline.center_to_sec(120.0, smooth=False)
+
+            self.assertGreater(timeline.scroll.horizontalScrollBar().value(), 0)
+        finally:
+            timeline.close()
+
     def test_follow_playhead_starts_smooth_scroll_when_target_moves(self):
         timeline = TimelineWidget()
         try:
@@ -239,6 +260,126 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             timeline._update_smooth_scroll()
 
             self.assertGreater(timeline.scroll.horizontalScrollBar().value(), 0)
+        finally:
+            timeline.close()
+
+    def test_centered_playback_follow_locks_after_playhead_reaches_center(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.canvas.total_duration = 300.0
+            timeline.global_canvas.total_duration = 300.0
+            timeline.canvas.pps = 10.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(300.0, 10.0))
+            timeline.scroll.horizontalScrollBar().setValue(0)
+
+            timeline.follow_playhead_centered(120.0, smooth=True)
+
+            self.assertFalse(timeline._playback_center_lock)
+            self.assertFalse(timeline._playhead_overlay._center_locked)
+            self.assertTrue(timeline._pending_playback_center_lock)
+            self.assertEqual(timeline.canvas.playhead_sec, 120.0)
+            self.assertGreater(timeline._target_scroll_x, 0.0)
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
+            self.assertTrue(timeline._smooth_scroll_timer.isActive())
+
+            timeline._current_scroll_x = timeline._target_scroll_x
+            timeline._update_smooth_scroll()
+
+            self.assertTrue(timeline._playback_center_lock)
+            self.assertTrue(timeline._playhead_overlay._center_locked)
+
+            timeline.follow_playhead_centered(121.0, smooth=True)
+
+            self.assertEqual(timeline.canvas.playhead_sec, 121.0)
+            self.assertGreater(timeline._target_scroll_x, timeline.scroll.horizontalScrollBar().value())
+            self.assertTrue(timeline._smooth_scroll_timer.isActive())
+
+            timeline.set_playhead(2.0)
+
+            self.assertFalse(timeline._playback_center_lock)
+            self.assertFalse(timeline._playhead_overlay._center_locked)
+        finally:
+            timeline.close()
+
+    def test_centered_playback_follow_keeps_early_playhead_moving_until_center(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.canvas.total_duration = 300.0
+            timeline.global_canvas.total_duration = 300.0
+            timeline.canvas.pps = 10.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(300.0, 10.0))
+            timeline.scroll.horizontalScrollBar().setValue(0)
+
+            timeline.follow_playhead_centered(10.0, smooth=True)
+
+            self.assertEqual(timeline.canvas.playhead_sec, 10.0)
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
+            self.assertFalse(timeline._playback_center_lock)
+            self.assertFalse(timeline._pending_playback_center_lock)
+            self.assertFalse(timeline._playhead_overlay._center_locked)
+            self.assertFalse(timeline._smooth_scroll_timer.isActive())
+        finally:
+            timeline.close()
+
+    def test_manual_wheel_scroll_releases_center_lock_and_stops_smooth_follow(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.canvas.total_duration = 300.0
+            timeline.global_canvas.total_duration = 300.0
+            timeline.canvas.pps = 10.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(300.0, 10.0))
+            timeline.scroll.horizontalScrollBar().setValue(120)
+            timeline.set_playback_center_lock(True)
+            timeline._target_scroll_x = 800.0
+            timeline._current_scroll_x = 120.0
+            timeline._smooth_scroll_timer.start()
+
+            timeline.apply_manual_horizontal_scroll_delta(160)
+
+            current_scroll = timeline.scroll.horizontalScrollBar().value()
+            self.assertEqual(current_scroll, 280)
+            self.assertFalse(timeline._playback_center_lock)
+            self.assertFalse(timeline._pending_playback_center_lock)
+            self.assertFalse(timeline._smooth_scroll_timer.isActive())
+            self.assertEqual(timeline._target_scroll_x, float(current_scroll))
+            self.assertEqual(timeline._current_scroll_x, float(current_scroll))
+            self.assertTrue(timeline._manual_scroll_active())
+        finally:
+            timeline.close()
+
+    def test_centered_playback_follow_respects_recent_manual_scroll(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.canvas.total_duration = 300.0
+            timeline.global_canvas.total_duration = 300.0
+            timeline.canvas.pps = 10.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(300.0, 10.0))
+            timeline.scroll.horizontalScrollBar().setValue(300)
+            timeline.apply_manual_horizontal_scroll_delta(0)
+
+            timeline.follow_playhead_centered(120.0, smooth=True)
+
+            self.assertEqual(timeline.canvas.playhead_sec, 120.0)
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 300)
+            self.assertFalse(timeline._playback_center_lock)
+            self.assertFalse(timeline._pending_playback_center_lock)
+            self.assertFalse(timeline._smooth_scroll_timer.isActive())
         finally:
             timeline.close()
 
@@ -336,6 +477,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         )
         editor.timeline = SimpleNamespace(
             canvas=SimpleNamespace(playhead_sec=10.0, _edit_active=False, set_active=Mock()),
+            follow_playhead_centered=Mock(),
             follow_playhead=Mock(),
             set_active=Mock(),
         )
@@ -351,7 +493,8 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         try:
             editor._sync_playhead()
 
-            editor.timeline.follow_playhead.assert_called_once_with(27.0, smooth=True, threshold_px=24.0)
+            editor.timeline.follow_playhead_centered.assert_called_once_with(27.0, smooth=True)
+            editor.timeline.follow_playhead.assert_not_called()
             editor.video_player.set_subtitle_display_time.assert_called_once_with(27.0)
             self.assertEqual(editor._playhead_display_sec, 27.0)
         finally:

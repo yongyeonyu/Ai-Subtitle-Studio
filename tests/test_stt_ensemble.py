@@ -1,11 +1,42 @@
+# Version: 03.09.23
+# Phase: PHASE2
 import unittest
+from unittest.mock import patch
 
 from core.audio.stt_ensemble import merge_stt_outputs, text_similarity
+from core.engine.subtitle_engine import _process_one, optimize_segments
+from core.pipeline.multiclip_pipeline import MulticlipPipelineMixin
+from core.pipeline.single_pipeline import _should_flush_final_subtitle_buffer
 from core.settings import get_model_key
 from core.subtitle_quality.vad_alignment_checker import adjust_segments_to_vad_boundaries
 
 
 class STTEnsembleTests(unittest.TestCase):
+    def test_multiclip_offsets_stt_candidate_timestamps(self):
+        segments = [
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "최종",
+                "stt_candidates": [
+                    {
+                        "source": "STT2",
+                        "start": 1.0,
+                        "end": 2.0,
+                        "text": "후보",
+                        "words": [{"word": "후보", "start": 1.1, "end": 1.8}],
+                    }
+                ],
+            }
+        ]
+
+        MulticlipPipelineMixin()._offset_multiclip_segments(segments, 10.0, 1, "/tmp/b.mp4")
+
+        self.assertEqual(segments[0]["_clip_idx"], 1)
+        self.assertAlmostEqual(segments[0]["stt_candidates"][0]["start"], 11.0)
+        self.assertAlmostEqual(segments[0]["stt_candidates"][0]["end"], 12.0)
+        self.assertAlmostEqual(segments[0]["stt_candidates"][0]["words"][0]["start"], 11.1)
+
     def test_merge_keeps_two_candidates_for_overlapping_segments(self):
         primary = [
             {"start": 0.0, "end": 1.2, "text": "안녕하세요", "avg_logprob": -0.2, "no_speech_prob": 0.02},
@@ -168,6 +199,22 @@ class STTEnsembleTests(unittest.TestCase):
 
         self.assertIn("large-v3+ghost613/faster-whisper-large-v3-turbo-korean", key)
 
+    def test_ensemble_final_subtitles_wait_until_transcription_sentinel(self):
+        self.assertFalse(
+            _should_flush_final_subtitle_buffer(
+                300.0,
+                60,
+                stt_ensemble_enabled=True,
+            )
+        )
+        self.assertTrue(
+            _should_flush_final_subtitle_buffer(
+                300.0,
+                60,
+                stt_ensemble_enabled=False,
+            )
+        )
+
     def test_text_similarity_compacts_whitespace_and_punctuation(self):
         self.assertGreater(text_similarity("안녕 하세요!", "안녕하세요"), 0.9)
 
@@ -188,6 +235,77 @@ class STTEnsembleTests(unittest.TestCase):
         self.assertAlmostEqual(adjusted[0]["start"], 0.14)
         self.assertAlmostEqual(adjusted[0]["end"], 1.22)
         self.assertEqual(adjusted[0]["asr_metadata"]["vad_alignment"]["vad_aligned"], True)
+
+    def test_llm_candidate_judge_keeps_selected_source_metadata(self):
+        seg = {
+            "start": 0.0,
+            "end": 1.5,
+            "text": "STT1 문장",
+            "speaker": "00",
+            "stt_candidates": [
+                {"source": "STT1", "text": "STT1 문장", "score": 0.4},
+                {"source": "STT2", "text": "STT2 문장", "score": 0.8},
+            ],
+        }
+
+        with patch("core.engine.subtitle_engine.ollama_split_text", return_value=["B"]):
+            result = _process_one((seg, {}, 10, {}, "gemma4:e4b", "", "", True))
+
+        self.assertEqual(result[0]["text"], "STT2 문장")
+        self.assertEqual(result[0]["stt_ensemble_llm_selected_source"], "STT2")
+        self.assertEqual(result[0]["stt_ensemble_llm_selected_label"], "B")
+
+    def test_llm_candidate_judge_runs_even_when_primary_is_locked(self):
+        seg = {
+            "start": 0.0,
+            "end": 1.5,
+            "text": "STT1 문장",
+            "speaker": "00",
+            "stt_ensemble_primary_locked": True,
+            "stt_candidates": [
+                {"source": "STT1", "text": "STT1 문장", "score": 0.7},
+                {"source": "STT2", "text": "문맥상 맞는 STT2", "score": 0.5},
+            ],
+            "stt_ensemble_context_prev": "앞 문맥",
+            "stt_ensemble_context_next": "다음 문맥",
+        }
+
+        prompts = []
+
+        def _fake_ollama(_model, prompt):
+            prompts.append(prompt)
+            return ["B"]
+
+        with patch("core.engine.subtitle_engine.ollama_split_text", side_effect=_fake_ollama):
+            result = _process_one((seg, {}, 10, {}, "gemma4:e4b", "", "", True))
+
+        self.assertEqual(result[0]["text"], "문맥상 맞는 STT2")
+        self.assertEqual(result[0]["stt_ensemble_llm_selected_source"], "STT2")
+        self.assertIn("앞 문맥", prompts[0])
+        self.assertIn("다음 문맥", prompts[0])
+
+    def test_optimize_recovers_ensemble_segments_if_filters_drop_all_candidates(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 1.4,
+                "text": "STT1 후보",
+                "speaker": "00",
+                "stt_candidates": [
+                    {"source": "STT1", "text": "STT1 후보", "score": 0.7},
+                    {"source": "STT2", "text": "STT2 후보", "score": 0.6},
+                ],
+            }
+        ]
+
+        with (
+            patch("core.engine.subtitle_engine.get_selected_llm", return_value="사용 안함 (Whisper 단독 진행)"),
+            patch("core.engine.subtitle_engine._sanitize", return_value=[]),
+        ):
+            result = optimize_segments(segments)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["text"], "STT1 후보")
 
 
 if __name__ == "__main__":

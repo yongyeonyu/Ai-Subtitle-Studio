@@ -1,4 +1,4 @@
-# Version: 03.08.05
+# Version: 03.09.24
 # Phase: PHASE2
 """
 ui/editor_segments.py
@@ -89,8 +89,11 @@ class EditorSegmentsMixin:
     # Segment Queue
     # ---------------------------------------------------------
     def preview_stt_segments(self, segments: list[dict]):
-        try: self.status_lbl.text()
-        except RuntimeError: return
+        try:
+            if hasattr(self, "status_lbl"):
+                self.status_lbl.text()
+        except RuntimeError:
+            return
         if threading.current_thread() is not threading.main_thread():
             QTimer.singleShot(0, lambda s=list(segments): self.preview_stt_segments(s))
             return
@@ -109,6 +112,12 @@ class EditorSegmentsMixin:
             item["start"] = start
             item["end"] = end
             item["text"] = text
+            item["stt_preview_source"] = str(
+                seg.get("stt_preview_source")
+                or seg.get("stt_source")
+                or seg.get("stt_ensemble_source")
+                or "STT1"
+            )
             item["stt_pending"] = True
             item["_live_stt_preview"] = True
             preview.append(item)
@@ -117,17 +126,21 @@ class EditorSegmentsMixin:
             return
 
         existing_preview = list(getattr(self, "_live_stt_preview_segments", []) or [])
-        existing_preview = self._drop_overlapping_preview(existing_preview, preview)
+        existing_preview = self._drop_overlapping_preview(existing_preview, preview, same_source_only=True)
         self._live_stt_preview_segments = existing_preview + preview
         self._redraw_timeline_with_live_preview()
 
-    def _drop_overlapping_preview(self, preview: list[dict], final_segments: list[dict]) -> list[dict]:
+    def _drop_overlapping_preview(self, preview: list[dict], final_segments: list[dict], *, same_source_only: bool = False) -> list[dict]:
         if not preview or not final_segments:
             return list(preview or [])
         ranges = []
         for seg in final_segments or []:
             try:
-                ranges.append((float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
+                ranges.append((
+                    float(seg.get("start", 0.0) or 0.0),
+                    float(seg.get("end", 0.0) or 0.0),
+                    str(seg.get("stt_preview_source") or seg.get("stt_source") or "").upper(),
+                ))
             except Exception:
                 continue
         if not ranges:
@@ -138,12 +151,156 @@ class EditorSegmentsMixin:
             try:
                 start = float(seg.get("start", 0.0) or 0.0)
                 end = float(seg.get("end", start) or start)
+                source = str(seg.get("stt_preview_source") or seg.get("stt_source") or "").upper()
             except Exception:
                 continue
-            overlaps = any(start < r_end + 0.05 and end > r_start - 0.05 for r_start, r_end in ranges)
+            overlaps = any(
+                (not same_source_only or not r_source or not source or r_source == source)
+                and start < r_end + 0.05
+                and end > r_start - 0.05
+                for r_start, r_end, r_source in ranges
+            )
             if not overlaps:
                 kept.append(seg)
         return kept
+
+    def _stt_candidate_source(self, seg: dict) -> str:
+        source = (
+            seg.get("stt_preview_source")
+            or seg.get("stt_source")
+            or seg.get("stt_ensemble_source")
+            or "STT1"
+        )
+        return str(source or "STT1").strip().upper()
+
+    def _segment_overlap_ratio(self, left: dict, right: dict) -> float:
+        try:
+            l_start = float(left.get("start", 0.0) or 0.0)
+            l_end = float(left.get("end", l_start) or l_start)
+            r_start = float(right.get("start", 0.0) or 0.0)
+            r_end = float(right.get("end", r_start) or r_start)
+        except Exception:
+            return 0.0
+        overlap = max(0.0, min(l_end, r_end) - max(l_start, r_start))
+        base = max(0.001, min(max(0.001, l_end - l_start), max(0.001, r_end - r_start)))
+        return overlap / base
+
+    def _segment_overlaps_time_range(self, seg: dict, start: float, end: float, pad: float = 0.001) -> bool:
+        try:
+            seg_start = float(seg.get("start", 0.0) or 0.0)
+            seg_end = float(seg.get("end", seg_start) or seg_start)
+        except Exception:
+            return False
+        return seg_start < end - pad and seg_end > start + pad
+
+    def _trim_final_segments_around_candidate(self, segments: list[dict], candidate: dict) -> list[dict]:
+        try:
+            cand_start = self._frame_time(float(candidate.get("start", 0.0) or 0.0))
+            cand_end = self._frame_time(float(candidate.get("end", cand_start) or cand_start))
+        except Exception:
+            return list(segments or [])
+        min_keep = max(0.08, float(getattr(self, "video_fps", 30.0) and (2.0 / max(1.0, float(getattr(self, "video_fps", 30.0) or 30.0)))))
+        trimmed: list[dict] = []
+        for seg in segments or []:
+            try:
+                start = self._frame_time(float(seg.get("start", 0.0) or 0.0))
+                end = self._frame_time(float(seg.get("end", start) or start))
+            except Exception:
+                continue
+            if not self._segment_overlaps_time_range(seg, cand_start, cand_end):
+                trimmed.append(dict(seg))
+                continue
+            if start < cand_start and cand_start - start >= min_keep:
+                left = dict(seg)
+                left["start"] = start
+                left["end"] = self._frame_time(cand_start)
+                trimmed.append(left)
+            if cand_end < end and end - cand_end >= min_keep:
+                right = dict(seg)
+                right["start"] = self._frame_time(cand_end)
+                right["end"] = end
+                trimmed.append(right)
+        return trimmed
+
+    def _final_segment_from_stt_candidate(self, candidate: dict) -> dict:
+        source = self._stt_candidate_source(candidate)
+        start = self._frame_time(max(0.0, float(candidate.get("start", 0.0) or 0.0)))
+        end = self._frame_time(max(start + 0.05, float(candidate.get("end", start + 0.5) or start + 0.5)))
+        text = str(candidate.get("text", "") or "").strip()
+        seg = {
+            "start": start,
+            "end": end,
+            "text": text,
+            "speaker": str(candidate.get("speaker", candidate.get("spk", "00")) or "00"),
+            "stt_selected_source": source,
+            "quality": {
+                "confidence_label": "green",
+                "confidence_reason": f"{source} 후보 수동 확정",
+                "manual_confirmed": True,
+                "flags": ["manual_confirmed", "stt_candidate_selected"],
+            },
+        }
+        for key in ("_clip_idx", "_clip_file"):
+            if key in candidate:
+                seg[key] = candidate[key]
+        return seg
+
+    def select_stt_candidate_as_subtitle(self, candidate: dict):
+        try:
+            if hasattr(self, "status_lbl"):
+                self.status_lbl.text()
+        except RuntimeError:
+            return
+        if threading.current_thread() is not threading.main_thread():
+            QTimer.singleShot(0, lambda c=dict(candidate): self.select_stt_candidate_as_subtitle(c))
+            return
+        if not candidate:
+            return
+        final_candidate = self._final_segment_from_stt_candidate(candidate)
+        if not final_candidate.get("text"):
+            return
+
+        try:
+            if hasattr(self, "_undo_mgr"):
+                self._undo_mgr.push_immediate()
+        except Exception:
+            pass
+
+        current = [dict(seg) for seg in self._get_current_segments() if not seg.get("is_gap")]
+        current = self._trim_final_segments_around_candidate(current, final_candidate)
+
+        if not any(
+            abs(float(seg.get("start", 0.0) or 0.0) - final_candidate["start"]) < 0.02
+            and abs(float(seg.get("end", 0.0) or 0.0) - final_candidate["end"]) < 0.02
+            and str(seg.get("text", "") or "") == final_candidate["text"]
+            for seg in current
+        ):
+            current.append(final_candidate)
+
+        current.sort(key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
+        for line, seg in enumerate(current):
+            seg["line"] = line
+
+        if hasattr(self, "_reload_segments_from_list"):
+            self._reload_segments_from_list(current)
+            self._update_timeline_with_confirmed_and_preview(current)
+        else:
+            self._cached_segs = current
+            self.append_segments([final_candidate])
+
+    def _update_timeline_with_confirmed_and_preview(self, confirmed_segments: list[dict]):
+        if not hasattr(self, "timeline"):
+            return
+        confirmed = [seg for seg in list(confirmed_segments or []) if not seg.get("is_gap")]
+        preview = list(getattr(self, "_live_stt_preview_segments", []) or [])
+        combined = sorted(
+            confirmed + preview,
+            key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),
+        )
+        total_dur = combined[-1]["end"] if combined else 0.0
+        if hasattr(self, 'video_player') and self.video_player.total_time > 0.0:
+            total_dur = max(total_dur, self.video_player.total_time)
+        self.timeline.update_segments(combined, self._active_seg_start, total_dur)
 
     def _redraw_timeline_with_live_preview(self):
         if not hasattr(self, "timeline"):
@@ -168,10 +325,6 @@ class EditorSegmentsMixin:
         if threading.current_thread() is not threading.main_thread():
             QTimer.singleShot(0, lambda s=list(segments): self.append_segments(s))
             return
-        self._live_stt_preview_segments = self._drop_overlapping_preview(
-            list(getattr(self, "_live_stt_preview_segments", []) or []),
-            segments or [],
-        )
         self._segment_queue.extend(segments)
         if not self._queue_timer.isActive():
             self._queue_timer.start(80)
@@ -188,6 +341,9 @@ class EditorSegmentsMixin:
         push_rate = float(self.settings.get("gap_push_rate", 0.7))
         single_ext = float(self.settings.get("single_subtitle_end", 0.2))
         is_initial = getattr(self, '_is_initial_load', False)
+        final_gap_ready = bool(self._segment_queue) and all(
+            bool(seg.get("_final_gap_settings_applied")) for seg in self._segment_queue
+        )
 
         doc = self.text_edit.document()
         orig_cursor = self.text_edit.textCursor()
@@ -253,7 +409,7 @@ class EditorSegmentsMixin:
         for i in range(len(self._segment_queue)):
             curr = self._segment_queue[i]
             
-            if not is_initial:
+            if not is_initial and not final_gap_ready:
                 if curr['start'] < last_end: curr['start'] = last_end
                 
                 if i + 1 < len(self._segment_queue):
@@ -267,6 +423,8 @@ class EditorSegmentsMixin:
                         nxt['start'] -= min(single_ext, gap / 2.0)
                 else: 
                     curr['end'] += single_ext
+            elif curr['end'] <= curr['start']:
+                curr['end'] = curr['start'] + 0.5
                     
             last_end = curr['end']
 
@@ -302,6 +460,15 @@ class EditorSegmentsMixin:
                 "stt_pending": bool(seg.get("stt_pending", False)),
                 "original_text": str(seg.get("original_text", "") or ""),
                 "dictated_text": str(seg.get("dictated_text", "") or ""),
+                "stt_selected_source": str(seg.get("stt_selected_source", "") or ""),
+                "stt_ensemble_llm_selected_source": str(seg.get("stt_ensemble_llm_selected_source", "") or ""),
+                "stt_candidates": list(seg.get("stt_candidates") or []),
+                "stt_ensemble_source": str(seg.get("stt_ensemble_source", "") or ""),
+                "stt_ensemble_llm_selected_label": str(seg.get("stt_ensemble_llm_selected_label", "") or ""),
+                "stt_ensemble_similarity": seg.get("stt_ensemble_similarity"),
+                "stt_ensemble_needs_llm_review": bool(seg.get("stt_ensemble_needs_llm_review", False)),
+                "stt_ensemble_inserted_from_stt2": bool(seg.get("stt_ensemble_inserted_from_stt2", False)),
+                "stt_ensemble_word_rover": dict(seg.get("stt_ensemble_word_rover") or {}),
             }
             clip_idx = seg.get("_clip_idx")
             try:
@@ -410,7 +577,22 @@ class EditorSegmentsMixin:
                         "stt_pending": bool(getattr(data, 'stt_pending', False)),
                         "original_text": getattr(data, 'original_text', '') or '',
                         "dictated_text": getattr(data, 'dictated_text', '') or '',
+                        "stt_selected_source": getattr(data, 'stt_selected_source', '') or '',
+                        "stt_ensemble_llm_selected_source": getattr(data, 'stt_ensemble_llm_selected_source', '') or '',
                     }
+                    if getattr(data, "stt_candidates", None):
+                        item["stt_candidates"] = list(getattr(data, "stt_candidates", []) or [])
+                    for attr in (
+                        "stt_ensemble_source",
+                        "stt_ensemble_llm_selected_label",
+                        "stt_ensemble_similarity",
+                        "stt_ensemble_needs_llm_review",
+                        "stt_ensemble_inserted_from_stt2",
+                        "stt_ensemble_word_rover",
+                    ):
+                        value = getattr(data, attr, None)
+                        if value not in (None, "", [], {}):
+                            item[attr] = value
                     if getattr(data, "clip_idx", None) is not None:
                         item["_clip_idx"] = int(getattr(data, "clip_idx"))
                     if getattr(data, "clip_file", ""):
@@ -547,11 +729,12 @@ class EditorSegmentsMixin:
         if hasattr(self, 'video_player') and self.video_player.total_time > 0.0:
             total_dur = max(total_dur, self.video_player.total_time)
         self.timeline.update_segments(timeline_segs, self._active_seg_start, total_dur)
-        if hasattr(self, 'video_player'):
-            _mc_boxes = list(getattr(self.timeline.canvas, '_multiclip_boxes', []) or []) if hasattr(self, 'timeline') else []
+        if hasattr(self, 'video_player') and hasattr(self.video_player, "set_context_segments"):
+            _canvas = getattr(getattr(self, "timeline", None), "canvas", None)
+            _mc_boxes = list(getattr(_canvas, '_multiclip_boxes', []) or []) if _canvas is not None else []
             if _mc_boxes and hasattr(self, '_resolve_active_context'):
                 try:
-                    _gsec = float(getattr(self.timeline.canvas, 'playhead_sec', 0.0) or 0.0)
+                    _gsec = float(getattr(_canvas, 'playhead_sec', 0.0) or 0.0)
                     _ctx = self._resolve_active_context(global_sec=_gsec)
                     self.video_player.set_context_segments(list(_ctx.get('local_segments', []) or []))
                 except Exception:
@@ -560,7 +743,7 @@ class EditorSegmentsMixin:
                 self.video_player.set_context_segments(segs)
 
         # ✅ 최초 로드 시 화면에 맞춤
-        if getattr(self, '_needs_fit_view', True) and segs:
+        if getattr(self, '_needs_fit_view', True) and segs and hasattr(self.timeline, "fit_to_view"):
             self.timeline.fit_to_view()
             self._needs_fit_view = False
 
@@ -711,6 +894,21 @@ class EditorSegmentsMixin:
             except Exception as exc:
                 self._set_roughcut_draft_status("failed")
                 get_logger().log(f"⚠️ 에디터 러프컷 로컬 초안 생성 실패: {exc}")
+            return
+        try:
+            from core.roughcut import editor_roughcut_draft_llm_allowed
+
+            if not editor_roughcut_draft_llm_allowed(segments, settings):
+                max_rows = int(settings.get("roughcut_llm_max_context_rows", 80) or 80)
+                get_logger().log(
+                    "⏩ 긴 영상 러프컷: 자막 row가 "
+                    f"{len(segments)}개라 LLM 초안({max_rows}개 제한)을 건너뛰고 로컬 세그먼트를 즉시 생성합니다."
+                )
+                emit_candidate(None, "local_after_generation_long_video")
+                return
+        except Exception as exc:
+            get_logger().log(f"⚠️ 러프컷 LLM 길이 판단 실패, 로컬 초안으로 진행: {exc}")
+            emit_candidate(None, "local_after_generation_length_guard")
             return
         if time.time() < float(getattr(self, "_roughcut_llm_cooldown_until", 0.0) or 0.0):
             try:

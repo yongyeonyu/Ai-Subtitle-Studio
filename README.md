@@ -4,7 +4,7 @@
 
 AI 기반 자막 생성, 자막 편집, 화자 분리, 멀티클립 처리, 러프컷 분석을 하나의 데스크톱 작업 흐름으로 연결하는 영상 자막 제작 도구입니다.
 
-[![Version](https://img.shields.io/badge/version-v03.09.00-0A84FF?style=for-the-badge)](#)
+[![Version](https://img.shields.io/badge/version-v03.10.00-0A84FF?style=for-the-badge)](#)
 [![Phase](https://img.shields.io/badge/phase-PHASE2-30D158?style=for-the-badge)](#)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
@@ -26,7 +26,7 @@ AI Subtitle Studio는 긴 영상 작업에서 반복되는 자막 생성, 보정
 
 | 항목 | 내용 |
 | --- | --- |
-| 현재 버전 | `v03.09.00` |
+| 현재 버전 | `v03.10.00` |
 | 개발 단계 | `PHASE2` |
 | 기본 브랜치 | `main` |
 | 지원 목표 | macOS, Windows |
@@ -42,6 +42,11 @@ AI Subtitle Studio는 긴 영상 작업에서 반복되는 자막 생성, 보정
 - 자막 타이밍, 텍스트, 화자, 스타일 편집
 - FHD/UHD 출력 기준 자막 스타일 preview
 - 자막 품질 검사, 품질 필터, 후보 비교, 안전 조건 기반 자동 교정
+- 확인 필요 자막은 타임라인 우클릭 메뉴에서 `자막 확정` 또는 `자막 삭제` 처리
+- STT 앙상블 모드에서는 STT1/STT2 후보를 즉시 표시하고 최종 자막은 병합/LLM 분석 완료 후 반영
+- 단일클립/멀티클립 모두 STT1/STT2 후보와 선택 메타데이터를 프로젝트 파일에 저장하고 재열기 때 복원
+- 최종 자막세그먼트는 STT/LLM/VAD/화자 처리가 끝난 뒤 `간격` 설정의 자막간격 조정과 단일자막 유지 값을 마지막에 반영
+- STT1/STT2 후보를 수동 선택한 작업은 Undo/Redo 스냅샷에 포함
 
 ### 편집 워크플로우
 
@@ -60,6 +65,9 @@ AI Subtitle Studio는 긴 영상 작업에서 반복되는 자막 생성, 보정
 - Markdown 편집 가이드 생성
 - retimed SRT 생성
 - 렌더 계획 검증 및 실행 UI
+- 자막 생성 완료 후 러프컷 초안 세그먼트를 먼저 생성하고 이후 AI/STT/LLM 메모리를 정리
+- 긴 영상은 러프컷 초안 LLM 입력 제한을 넘으면 로컬 러프컷 세그먼트를 즉시 생성
+- 사이드바 큐 리스트에서 각 항목의 완료 상태를 별도 상태 칸으로 표시
 
 ## 빠른 시작
 
@@ -126,12 +134,6 @@ ffmpeg -version
 ffprobe -version
 ```
 
-Core ML STT 실험 백엔드는 선택 사항입니다. AI 설정에서 `coreml:large-v3-v20240930_626MB (실험)`을 선택하려면 WhisperKit CLI를 별도로 설치하세요. CLI가 없거나 worker 시작 준비에 실패하면 앱은 기존 MLX Whisper로 자동 대체합니다.
-
-```bash
-brew install whisperkit-cli
-```
-
 앱 실행:
 
 ```bash
@@ -183,7 +185,7 @@ python main.py
 | Gemini | 외부 LLM 보정 |
 | OpenAI | 외부 LLM 보정 |
 
-API Key는 앱 설정 화면 또는 OS 보안 저장소를 통해 관리하는 흐름을 기준으로 합니다. API Key를 저장소에 직접 커밋하지 마세요.
+API Key와 Hugging Face Token은 설정의 `AI` 탭에서 입력하고 OS 보안 저장소에 저장합니다. 같은 `AI` 탭에서 STT1/STT2 Whisper 모델 선택, LLM 다운로드, Whisper/필수 모델 설치 상태 확인과 설치도 함께 관리합니다. API Key를 저장소에 직접 커밋하지 마세요.
 
 ### 출력물 / 로컬 데이터
 
@@ -245,7 +247,8 @@ PY
 | 문서 | 설명 |
 | --- | --- |
 | `File_structure.txt` | 현재 파일 구조 |
-| [`RELEASE_v03.09.00.md`](RELEASE_v03.09.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.10.00.md`](RELEASE_v03.10.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.09.00.md`](RELEASE_v03.09.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.08.00.md`](RELEASE_v03.08.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.07.00.md`](RELEASE_v03.07.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.06.00.md`](RELEASE_v03.06.00.md) | 이전 PHASE2 릴리즈 노트 |
@@ -259,14 +262,21 @@ PY
 
 ## 릴리즈 노트
 
-전체 최신 릴리즈 노트는 [`RELEASE_v03.09.00.md`](RELEASE_v03.09.00.md)를 참고하세요.
+전체 최신 릴리즈 노트는 [`RELEASE_v03.10.00.md`](RELEASE_v03.10.00.md)를 참고하세요.
 
-### 최신 릴리즈: v03.09.00
+### 최신 릴리즈: v03.10.00
 
-- STT1/STT2 병렬 로그에 진행률과 worker 경고 라벨을 붙여 앙상블 실행 상태를 구분합니다.
-- STT 청크가 확정되는 즉시 타임라인/글로벌 캔버스에 임시 세그먼트를 표시합니다.
-- macOS Core ML/WhisperKit STT 실험 백엔드를 추가하고 MLX fallback을 유지합니다.
-- 로컬 Ollama 분할 worker를 안전하게 제한하고, 앱 종료 시 Ollama/ffmpeg/STT worker 런타임을 정리합니다.
+- STT1/STT2 후보를 별도 레인으로 보여주고, 후보 선택/LLM 선택/점수/확인 필요 상태를 타임라인에서 구분합니다.
+- 최종 자막세그먼트는 STT/LLM/VAD/화자 처리 뒤 `간격` 설정을 마지막 순서로 반영합니다.
+- 후보 선택, 자막감지, 프레임 기반 메타데이터, live preview 상태를 프로젝트 저장/복원과 Undo/Redo 경로에 보존합니다.
+- 재생/휠 스크롤/중앙 고정 타임라인 동작을 정리해 긴 영상 편집 중 떨림을 줄였습니다.
+- 앱 시작/홈 이동/종료 시 Ollama, STT, ffmpeg, AI 런타임 정리를 강화하고 AI 설정 모델/토큰 UI를 복원했습니다.
+- ClearVoice와 Resemble Enhance 음성 향상 실행 중에는 경과시간 로그를 표시해 긴 모델 처리 상태를 확인할 수 있습니다.
+- STT2 병렬 인식 사용 시 STT2 실시간 세그먼트를 STT1 아래 별도 레인에 표시합니다.
+- STT2는 STT1과 독립 스레드로 병렬 처리되어 STT1 preview/result 버퍼를 방해하지 않습니다.
+- STT1/STT2 완료 뒤 LLM이 앞뒤 문맥을 참고해 후보를 먼저 고르고, 필터가 후보를 모두 제거하면 앙상블 결과로 최종 자막을 복구합니다.
+- STT 후보를 수동 선택하면 겹치는 최종 자막의 해당 시간대만 자동으로 잘라 다음 후보를 이어서 선택할 수 있습니다.
+- 자막감지 레인은 STT1/STT2 선택 출처, LLM 선택 완료, 자막 점수, 선택 필요 상태를 색상으로 표시하고 프로젝트에 프레임 기준으로 저장합니다.
 - 저장 직전 pending 세그먼트 큐를 flush해 완료 직후 저장 race를 줄였습니다.
 
 ## 보안

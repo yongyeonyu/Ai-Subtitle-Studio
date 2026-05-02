@@ -1,4 +1,4 @@
-# Version: 03.02.17
+# Version: 03.09.29
 # Phase: PHASE2
 """Timeline analysis and cut-safety marker helpers."""
 
@@ -27,6 +27,18 @@ QUALITY_COLORS = {
     "red": "#FF453A",
     "gray": "#8E8E93",
 }
+
+VOICE_ACTIVITY_STYLES = {
+    "speech": ("음성", "#34C759", 40, 128),
+    "silence": ("무음", "#FF9500", 50, 112),
+    "noise": ("노이즈", "#FF453A", 90, 158),
+    "stt_pending": ("STT대기", "#64D2FF", 70, 148),
+    "outside_vad": ("VAD외", "#BF5AF2", 80, 148),
+    "uncertain": ("확인", "#8E8E93", 60, 126),
+}
+
+SUBTITLE_DETECTION_NEEDS_SELECTION_COLOR = "#8E8E93"
+SUBTITLE_DETECTION_IDLE_COLOR = "#2D3942"
 
 MAJOR_SEGMENT_COLORS = (
     "#00E676",  # A
@@ -262,6 +274,285 @@ def editor_analysis_markers(
             }
         )
     return markers
+
+
+def voice_activity_segments_for_editor(
+    segments: list[dict],
+    vad_segments: list[dict],
+    gap_segments: list[dict],
+    total_duration: float,
+) -> list[dict]:
+    """Build the subtitle-detection lane while keeping the legacy save key."""
+    return subtitle_detection_segments_for_editor(segments, vad_segments, gap_segments, total_duration)
+
+
+def subtitle_detection_segments_for_editor(
+    segments: list[dict],
+    vad_segments: list[dict],
+    gap_segments: list[dict],
+    total_duration: float,
+) -> list[dict]:
+    """Build a non-overlapping subtitle detection lane from STT and quality hints."""
+    candidates: list[dict] = []
+    total_duration = max(0.0, float(total_duration or 0.0))
+
+    def add(start, end, kind: str, source: str = "", label: str = "", color: str = "", priority: int = 0, alpha: int = 128, score: float | None = None, selection_state: str = ""):
+        start_f = _as_float(start)
+        end_f = _as_float(end)
+        if start_f is None or end_f is None or end_f <= start_f:
+            return
+        if total_duration > 0:
+            start_f = max(0.0, min(total_duration, start_f))
+            end_f = max(start_f, min(total_duration, end_f))
+        if end_f <= start_f:
+            return
+        label = label or "자막"
+        color = color or SUBTITLE_DETECTION_IDLE_COLOR
+        candidates.append(
+            {
+                "start": round(start_f, 3),
+                "end": round(end_f, 3),
+                "kind": kind,
+                "label": label,
+                "color": color,
+                "priority": priority,
+                "alpha": alpha,
+                "source": source,
+                "score": score,
+                "selection_state": selection_state,
+            }
+        )
+
+    for seg in segments or []:
+        start = seg.get("start")
+        end = seg.get("end")
+        if seg.get("stt_pending") or seg.get("_live_stt_preview"):
+            source = _stt_source_for_segment(seg)
+            score = _subtitle_detection_score(seg, source)
+            color = subtitle_detection_color(score) if score is not None else SUBTITLE_DETECTION_IDLE_COLOR
+            add(
+                start,
+                end,
+                "stt_candidate",
+                source=source or "STT",
+                label=_subtitle_detection_label(source or "STT", score),
+                color=color,
+                priority=45,
+                alpha=116,
+                score=score,
+                selection_state="candidate",
+            )
+            continue
+
+        needs_selection = _subtitle_needs_selection(seg)
+        llm_selected = bool(str(seg.get("stt_ensemble_llm_selected_source", "") or "").strip())
+        manually_selected = bool(str(seg.get("stt_selected_source", "") or "").strip())
+
+        source = _selected_stt_source(seg)
+        score = _subtitle_detection_score(seg, source)
+
+        if needs_selection and not (llm_selected or manually_selected):
+            add(
+                start,
+                end,
+                "needs_selection",
+                source="review",
+                label=_subtitle_detection_label("선택필요", score),
+                color=SUBTITLE_DETECTION_NEEDS_SELECTION_COLOR,
+                priority=96,
+                alpha=154,
+                score=score,
+                selection_state="needs_selection",
+            )
+            continue
+
+        if source in {"STT1", "STT2"}:
+            state = "llm_selected" if llm_selected else ("manual_selected" if manually_selected else "selected")
+            suffix = "LLM" if llm_selected else ("선택" if manually_selected else "")
+            label = _subtitle_detection_label(source, score, suffix=suffix)
+            add(
+                start,
+                end,
+                state,
+                source=source,
+                label=label,
+                color=subtitle_detection_color(score),
+                priority=92 if llm_selected else 84,
+                alpha=158,
+                score=score,
+                selection_state=state,
+            )
+            continue
+
+        quality = dict(seg.get("quality") or {})
+        if quality:
+            add(
+                start,
+                end,
+                "subtitle_score",
+                source="quality",
+                label=_subtitle_detection_label("자막", score),
+                color=subtitle_detection_color(score),
+                priority=54,
+                alpha=126,
+                score=score,
+                selection_state="quality",
+            )
+
+    if not candidates and total_duration > 0:
+        add(0.0, total_duration, "idle", source="subtitle_detection", label="감지대기", color=SUBTITLE_DETECTION_IDLE_COLOR, priority=0, alpha=92)
+
+    return _resolve_non_overlapping_voice_activity(candidates)
+
+
+def subtitle_detection_color(score: float | None) -> str:
+    value = 50.0 if score is None else max(0.0, min(100.0, float(score)))
+    if value >= 50.0:
+        ratio = (value - 50.0) / 50.0
+        r = round(255 + (52 - 255) * ratio)
+        g = round(204 + (199 - 204) * ratio)
+        b = round(0 + (89 - 0) * ratio)
+    else:
+        ratio = value / 50.0
+        r = round(255 + (255 - 255) * ratio)
+        g = round(69 + (204 - 69) * ratio)
+        b = round(58 + (0 - 58) * ratio)
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _subtitle_detection_label(prefix: str, score: float | None, *, suffix: str = "") -> str:
+    score_text = "-" if score is None else f"{float(score):.0f}"
+    label = f"{prefix} {score_text}점"
+    if suffix:
+        label = f"{prefix} {suffix} {score_text}점"
+    return label
+
+
+def _selected_stt_source(seg: dict) -> str:
+    for key in ("stt_selected_source", "stt_ensemble_llm_selected_source", "stt_ensemble_source"):
+        source = str(seg.get(key, "") or "").strip().upper()
+        if source in {"STT1", "STT2"}:
+            return source
+    candidates = list(seg.get("stt_candidates") or [])
+    if len(candidates) == 1:
+        source = str(candidates[0].get("source", "") or "").strip().upper()
+        if source in {"STT1", "STT2"}:
+            return source
+    return ""
+
+
+def _stt_source_for_segment(seg: dict) -> str:
+    for key in ("stt_preview_source", "stt_source", "stt_ensemble_source"):
+        source = str(seg.get(key, "") or "").strip().upper()
+        if source in {"STT1", "STT2"}:
+            return source
+    return ""
+
+
+def _subtitle_needs_selection(seg: dict) -> bool:
+    candidates = [
+        item for item in list(seg.get("stt_candidates") or [])
+        if str(item.get("source", "") or "").strip().upper() in {"STT1", "STT2"}
+    ]
+    selected_source = _selected_stt_source(seg)
+    quality = dict(seg.get("quality") or {})
+    label = str(quality.get("confidence_label") or "").strip().lower()
+    flags = {str(flag) for flag in (quality.get("flags") or ())}
+    return (
+        bool(seg.get("stt_ensemble_needs_llm_review"))
+        or (len(candidates) >= 2 and selected_source not in {"STT1", "STT2"})
+        or label in {"red", "gray"}
+        or bool(flags.intersection({"non_speech_hallucination_risk", "high_no_speech_prob", "outside_vad_speech"}))
+        or bool(seg.get("quality_stale"))
+    )
+
+
+def _subtitle_detection_score(seg: dict, source: str = "") -> float | None:
+    quality = dict(seg.get("quality") or {})
+    score = _as_float(quality.get("confidence_score"))
+    if score is not None:
+        return max(0.0, min(100.0, score))
+
+    target_source = str(source or _selected_stt_source(seg) or _stt_source_for_segment(seg)).strip().upper()
+    for candidate in list(seg.get("stt_candidates") or []):
+        cand_source = str(candidate.get("source", "") or "").strip().upper()
+        if target_source and cand_source != target_source:
+            continue
+        score = _as_float(candidate.get("score"))
+        if score is not None:
+            return _normalize_score_100(score)
+
+    for key in ("score", "confidence", "probability", "avg_confidence"):
+        score = _as_float(seg.get(key))
+        if score is not None:
+            return _normalize_score_100(score)
+
+    similarity = _as_float(seg.get("stt_ensemble_similarity"))
+    if similarity is not None:
+        return _normalize_score_100(similarity)
+    return None
+
+
+def _normalize_score_100(value: float) -> float:
+    value = max(0.0, float(value))
+    if value <= 1.0:
+        value *= 100.0
+    return max(0.0, min(100.0, value))
+
+
+def _voice_kind_from_vad(vad: dict) -> str:
+    raw = " ".join(
+        str(vad.get(key, "") or "").lower()
+        for key in ("kind", "type", "label", "category", "vad_type")
+    )
+    if bool(vad.get("is_noise")) or "noise" in raw or "노이즈" in raw:
+        return "noise"
+    if bool(vad.get("is_silence")) or "silence" in raw or "무음" in raw:
+        return "silence"
+    if "uncertain" in raw or "unknown" in raw or "확인" in raw:
+        return "uncertain"
+    return "speech"
+
+
+def _resolve_non_overlapping_voice_activity(candidates: list[dict]) -> list[dict]:
+    if not candidates:
+        return []
+    boundaries = sorted(
+        {
+            round(float(item["start"]), 3)
+            for item in candidates
+        }
+        | {
+            round(float(item["end"]), 3)
+            for item in candidates
+        }
+    )
+    resolved: list[dict] = []
+    for idx in range(len(boundaries) - 1):
+        start = boundaries[idx]
+        end = boundaries[idx + 1]
+        if end <= start:
+            continue
+        mid = (start + end) / 2.0
+        active = [
+            item for item in candidates
+            if float(item["start"]) <= mid < float(item["end"])
+        ]
+        if not active:
+            continue
+        chosen = max(active, key=lambda item: (int(item.get("priority", 0) or 0), -(float(item.get("end", 0.0)) - float(item.get("start", 0.0)))))
+        item = dict(chosen)
+        item["start"] = start
+        item["end"] = end
+        comparable = (item.get("kind"), item.get("label"), item.get("color"), item.get("source"))
+        if resolved:
+            prev = resolved[-1]
+            prev_key = (prev.get("kind"), prev.get("label"), prev.get("color"), prev.get("source"))
+            if prev_key == comparable and abs(float(prev.get("end", 0.0) or 0.0) - start) < 0.001:
+                prev["end"] = end
+                continue
+        resolved.append(item)
+    return resolved
 
 
 def analysis_markers_for_widget(widget: Any, segments: list[dict], vad_segments: list[dict], gap_segments: list[dict], total_duration: float) -> list[dict]:

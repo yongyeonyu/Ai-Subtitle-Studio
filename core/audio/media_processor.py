@@ -1,4 +1,4 @@
-# Version: 03.08.07
+# Version: 03.09.14
 # Phase: PHASE2
 """
 media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 + Whisper 섹터 동기화)
@@ -73,6 +73,7 @@ class VideoProcessor:
         self._whisper_proc = None
         self._whisper_runner_proc = None
         self._whisper_lock = threading.Lock()
+        self._ensemble_child_lock = threading.Lock()
 
         self._vad_loaded = False
         self._vad_model = None
@@ -208,6 +209,32 @@ class VideoProcessor:
 
     @staticmethod
     def _stop_vad_heartbeat(handle):
+        if not handle:
+            return
+        stop_event, thread = handle
+        try:
+            stop_event.set()
+            thread.join(timeout=0.2)
+        except Exception:
+            pass
+
+    def _start_audio_heartbeat(self, label: str, phase: str = "처리", *, interval_sec: float = 5.0):
+        stop_event = threading.Event()
+        interval = max(1.0, float(interval_sec or 5.0))
+
+        def _beat():
+            started = time.monotonic()
+            while not stop_event.wait(interval):
+                elapsed = int(time.monotonic() - started)
+                self._notify_stage(f"⏳ [음성] {label} {phase} 중... {elapsed}초")
+                get_logger().log(f"  └ [음성] {label} {phase} 진행 중... {elapsed}초")
+
+        thread = threading.Thread(target=_beat, name=f"audio-heartbeat-{label}-{phase}", daemon=True)
+        thread.start()
+        return stop_event, thread
+
+    @staticmethod
+    def _stop_audio_heartbeat(handle):
         if not handle:
             return
         stop_event, thread = handle
@@ -418,14 +445,18 @@ class VideoProcessor:
             os.makedirs(in_dir, exist_ok=True)
             os.makedirs(out_dir, exist_ok=True)
             shutil.copy2(source_wav, os.path.join(in_dir, "input.wav"))
-            if not self._run_media_command(
-                self._resemble_enhance_command(cli, in_dir, out_dir, device),
-                label="Resemble Enhance 음성 향상",
-                timeout=900,
-                env=self._huggingface_env(),
-            ):
-                get_logger().log("  ⚠️ Resemble Enhance 실행 실패 또는 미설치: FFMPEG 정제로 계속 진행합니다")
-                return False
+            heartbeat = self._start_audio_heartbeat("Resemble Enhance", "음성 향상", interval_sec=5.0)
+            try:
+                if not self._run_media_command(
+                    self._resemble_enhance_command(cli, in_dir, out_dir, device),
+                    label="Resemble Enhance 음성 향상",
+                    timeout=900,
+                    env=self._huggingface_env(),
+                ):
+                    get_logger().log("  ⚠️ Resemble Enhance 실행 실패 또는 미설치: FFMPEG 정제로 계속 진행합니다")
+                    return False
+            finally:
+                self._stop_audio_heartbeat(heartbeat)
             return self._copy_first_wav_from_dir(out_dir, target_wav)
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
@@ -442,14 +473,18 @@ class VideoProcessor:
             "audio = engine(input_path=source, online_write=False)\n"
             "engine.write(audio, output_path=target)\n"
         )
-        if not self._run_media_command(
-            [sys.executable, "-c", script, source_wav, target_wav],
-            label="ClearVoice 음성 향상",
-            timeout=900,
-            env=self._huggingface_env(),
-        ):
-            get_logger().log("  ⚠️ ClearVoice 실행 실패 또는 미설치: FFMPEG 정제로 계속 진행합니다")
-            return False
+        heartbeat = self._start_audio_heartbeat("ClearVoice", "음성 향상", interval_sec=5.0)
+        try:
+            if not self._run_media_command(
+                [sys.executable, "-c", script, source_wav, target_wav],
+                label="ClearVoice 음성 향상",
+                timeout=900,
+                env=self._huggingface_env(),
+            ):
+                get_logger().log("  ⚠️ ClearVoice 실행 실패 또는 미설치: FFMPEG 정제로 계속 진행합니다")
+                return False
+        finally:
+            self._stop_audio_heartbeat(heartbeat)
         return os.path.exists(target_wav)
 
     @staticmethod
@@ -1658,11 +1693,12 @@ class VideoProcessor:
     ) -> list[dict]:
         worker = VideoProcessor()
         worker.language = self.language
-        children = getattr(self, "_ensemble_child_processors", None)
-        if not isinstance(children, list):
-            children = []
-            self._ensemble_child_processors = children
-        children.append(worker)
+        with self._ensemble_child_lock:
+            children = getattr(self, "_ensemble_child_processors", None)
+            if not isinstance(children, list):
+                children = []
+                self._ensemble_child_processors = children
+            children.append(worker)
         result: list[dict] = []
         try:
             for chunk_segs, _idx, _total in worker.transcribe(
@@ -1678,11 +1714,28 @@ class VideoProcessor:
                 result.extend(chunk_segs or [])
         finally:
             worker.stop_transcribe()
-            try:
-                children.remove(worker)
-            except ValueError:
-                pass
+            with self._ensemble_child_lock:
+                try:
+                    self._ensemble_child_processors.remove(worker)
+                except (AttributeError, ValueError):
+                    pass
         return result
+
+    def _ensemble_preview_callback(self, label: str, preview_callback):
+        if not callable(preview_callback):
+            return None
+        source_label = str(label or "STT").strip() or "STT"
+
+        def _callback(chunk_segs, _worker_label=None):
+            preview = [dict(seg) for seg in (chunk_segs or [])]
+            if not preview:
+                return
+            try:
+                preview_callback(preview, source_label)
+            except Exception:
+                pass
+
+        return _callback
 
     def transcribe_ensemble(
         self,
@@ -1714,27 +1767,34 @@ class VideoProcessor:
         self._notify_stage("⏳ [STT] STT1/STT2 병렬 인식 중")
         results: dict[str, list[dict]] = {"STT1": [], "STT2": []}
         errors: dict[str, BaseException] = {}
+        result_lock = threading.Lock()
+        error_lock = threading.Lock()
 
         def _run(label: str, model: str):
             try:
-                results[label] = self._collect_transcribe_result(
+                local_result = self._collect_transcribe_result(
                     chunk_dir,
                     model,
                     target_end_sec=target_end_sec,
                     is_single=is_single,
                     label=label,
-                    preview_callback=preview_callback if label == "STT1" else None,
+                    preview_callback=self._ensemble_preview_callback(label, preview_callback),
                 )
+                with result_lock:
+                    results[label] = local_result
             except BaseException as exc:
-                errors[label] = exc
+                with error_lock:
+                    errors[label] = exc
 
-        t1 = threading.Thread(target=_run, args=("STT1", primary_model), daemon=True, name="stt-ensemble-1")
-        t2 = threading.Thread(target=_run, args=("STT2", secondary_model), daemon=True, name="stt-ensemble-2")
         try:
-            t1.start()
-            t2.start()
-            t1.join()
-            t2.join()
+            get_logger().log("  🧵 [STT 앙상블] STT1/STT2 독립 스레드 병렬 처리")
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="stt-ensemble") as executor:
+                futures = [
+                    executor.submit(_run, "STT1", primary_model),
+                    executor.submit(_run, "STT2", secondary_model),
+                ]
+                for future in futures:
+                    future.result()
             for label, exc in errors.items():
                 get_logger().log(f"  ⚠️ [STT 앙상블] {label} 인식 실패: {exc}")
             if not results["STT1"] and not results["STT2"]:
@@ -2031,7 +2091,9 @@ class VideoProcessor:
 
     def stop_transcribe(self):
         try:
-            for child in list(getattr(self, "_ensemble_child_processors", []) or []):
+            with getattr(self, "_ensemble_child_lock", threading.Lock()):
+                children = list(getattr(self, "_ensemble_child_processors", []) or [])
+            for child in children:
                 try:
                     child.stop_transcribe()
                 except Exception:
@@ -2063,13 +2125,16 @@ class VideoProcessor:
     def release_runtime_models(self):
         self.stop_transcribe()
         try:
-            for child in list(getattr(self, "_ensemble_child_processors", []) or []):
+            with getattr(self, "_ensemble_child_lock", threading.Lock()):
+                children = list(getattr(self, "_ensemble_child_processors", []) or [])
+            for child in children:
                 try:
                     if hasattr(child, "release_runtime_models"):
                         child.release_runtime_models()
                 except Exception:
                     pass
-            self._ensemble_child_processors = []
+            with getattr(self, "_ensemble_child_lock", threading.Lock()):
+                self._ensemble_child_processors = []
         except Exception:
             pass
         try:

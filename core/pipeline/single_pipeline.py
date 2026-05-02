@@ -1,4 +1,4 @@
-# Version: 03.08.05
+# Version: 03.09.30
 # Phase: PHASE2
 """
 core/pipeline/single_pipeline.py
@@ -20,6 +20,20 @@ _SENTINEL = object()
 
 def _is_deleted_qt_error(exc: BaseException) -> bool:
     return "wrapped C/C++ object" in str(exc) and "has been deleted" in str(exc)
+
+
+def _should_flush_final_subtitle_buffer(
+    current_duration: float,
+    chunk_time_limit: int,
+    *,
+    stt_ensemble_enabled: bool,
+) -> bool:
+    if stt_ensemble_enabled:
+        return False
+    try:
+        return float(current_duration or 0.0) >= max(1.0, float(chunk_time_limit or 60))
+    except Exception:
+        return False
 
 
 class SinglePipelineMixin:
@@ -299,21 +313,35 @@ class SinglePipelineMixin:
                 t_diarize.start()
 
             auto_collected_segs = []
+            preview_opt_queue = queue.Queue()
+            preview_opt_sentinel = object()
+
+            def _emit_processed_preview(chunk_segs, _label="STT"):
+                from core.pipeline.stt_preview_optimizer import optimize_stt_preview_segments
+
+                preview = optimize_stt_preview_segments(
+                    chunk_segs,
+                    source_label=str(_label or "STT"),
+                    vad_segments=vad_segs,
+                )
+                if preview and self._active:
+                    self._ui_emit("_sig_preview_stt_segments", preview)
 
             def _preview_stt_segments(chunk_segs, _label="STT"):
                 if not chunk_segs or not self._active:
                     return
-                preview = []
-                for seg in chunk_segs or []:
+                preview_opt_queue.put(([dict(seg) for seg in chunk_segs or []], str(_label or "STT")))
+
+            def do_preview_optimize():
+                while self._active:
+                    item = preview_opt_queue.get()
+                    if item is preview_opt_sentinel:
+                        break
                     try:
-                        row = dict(seg)
-                        row["stt_pending"] = True
-                        row["_live_stt_preview"] = True
-                        preview.append(row)
-                    except Exception:
-                        continue
-                if preview:
-                    self._ui_emit("_sig_preview_stt_segments", preview)
+                        chunk_segs, label = item
+                        _emit_processed_preview(chunk_segs, label)
+                    except Exception as exc:
+                        get_logger().log(f"  ⚠️ STT 후보 자막 후처리 오류: {exc}")
 
             def do_transcribe():
                 try:
@@ -332,10 +360,11 @@ class SinglePipelineMixin:
                 finally:
                     if hasattr(self, "video_processor"):
                         self.video_processor.stage_callback = None
+                    preview_opt_queue.put(preview_opt_sentinel)
                     opt_queue.put(_SENTINEL)
 
             def _do_optimize_impl():
-                from core.engine.subtitle_engine import optimize_segments
+                from core.engine.subtitle_engine import apply_final_gap_settings, optimize_segments
 
                 total_files = len(self.files_to_process)
 
@@ -359,16 +388,24 @@ class SinglePipelineMixin:
                         api_key = ""
                     user_prompt = s.get("custom_prompt", "")
                     chunk_time_limit = int(s.get("chunk_time_limit", 60))
+                    stt_ensemble_enabled = bool(s.get("stt_ensemble_enabled", False))
                 except Exception:
                     model_name = ""
                     api_key = ""
                     user_prompt = ""
                     chunk_time_limit = 60
+                    stt_ensemble_enabled = False
 
                 is_gemini = "Gemini" in model_name
                 seg_buffer = []
                 last_c_idx = 0
                 last_t_total = 1
+
+                if stt_ensemble_enabled:
+                    get_logger().log(
+                        "  ⏳ [STT 앙상블] STT1/STT2 후보는 즉시 표시하고 "
+                        "최종 자막은 병합/LLM 분석 완료 후 반영합니다."
+                    )
 
                 def _flush_buffer():
                     nonlocal seg_buffer
@@ -472,7 +509,8 @@ class SinglePipelineMixin:
                                 del seg["text_list"]
                         opt = grouped_opt
 
-                    auto_collected_segs.extend(opt)
+                    auto_collected_segs.extend([dict(seg) for seg in opt])
+                    opt = apply_final_gap_settings(opt, force=True)
 
                     if not self._active or not self._ui_is_alive():
                         return
@@ -525,7 +563,11 @@ class SinglePipelineMixin:
                     buffer_end = seg_buffer[-1]["end"]
                     current_duration = buffer_end - buffer_start
 
-                    if current_duration >= chunk_time_limit:
+                    if _should_flush_final_subtitle_buffer(
+                        current_duration,
+                        chunk_time_limit,
+                        stt_ensemble_enabled=stt_ensemble_enabled,
+                    ):
                         _flush_buffer()
 
                 self._ui_emit("_sig_update_status", last_t_total, last_t_total)
@@ -546,9 +588,12 @@ class SinglePipelineMixin:
                 target=do_transcribe, daemon=True, name="transcriber"
             )
             t_opt = threading.Thread(target=do_optimize, daemon=True, name="optimizer")
+            t_preview = threading.Thread(target=do_preview_optimize, daemon=True, name="stt-preview-optimizer")
+            t_preview.start()
             t_trans.start()
             t_opt.start()
             t_trans.join()
+            t_preview.join()
             t_opt.join()
 
             # ✅ STT 완료 → 큐 즉시 업데이트
@@ -566,7 +611,9 @@ class SinglePipelineMixin:
                 pass
 
             if is_auto_mode:
-                nonlocal_final = auto_collected_segs[:]
+                from core.engine.subtitle_engine import apply_final_gap_settings
+
+                nonlocal_final = apply_final_gap_settings(auto_collected_segs[:], force=True)
 
                 def _auto_proceed():
                     nonlocal final_segments

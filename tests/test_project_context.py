@@ -1,4 +1,4 @@
-# Version: 03.01.17
+# Version: 03.09.29
 # Phase: PHASE2
 import unittest
 import json
@@ -10,11 +10,14 @@ from core.project.project_manager import extract_model_settings, load_project, m
 from core.project.project_context import (
     build_editor_state,
     project_active_work_mode,
+    project_workspace,
     project_clip_boundaries,
     project_media_files,
     project_mode,
+    project_voice_activity_segments,
     project_roughcut_state,
     project_segments_to_editor,
+    project_stt_preview_segments,
     segment_signature,
 )
 
@@ -40,6 +43,60 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(state["single_clip"]["source_path"], "")
         self.assertEqual(state["subtitles"]["segments"][1]["speaker"], "02")
         self.assertEqual(state["workspace"]["last_playhead"], 10.0)
+
+    def test_workspace_zoom_and_scroll_are_not_persisted(self):
+        state = build_editor_state(
+            mode="single",
+            media_files=["/tmp/a.mp4"],
+            segments=[],
+            workspace={
+                "last_playhead": 10.0,
+                "zoom_pps": 999.0,
+                "pps": 888.0,
+                "scroll_position": 77,
+                "scroll_x": 66,
+            },
+        )
+
+        self.assertEqual(state["workspace"], {"last_playhead": 10.0})
+        self.assertEqual(
+            project_workspace({"editor_state": {"workspace": state["workspace"]}}),
+            {"last_playhead": 10.0},
+        )
+
+    def test_save_project_strips_legacy_workspace_zoom_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {"zoom_pps": 999.0, "scroll_x": 100},
+                        "editor_state": {"workspace": {"pps": 888.0, "scroll_position": 200}},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            save_project(
+                str(path),
+                workspace={
+                    "last_playhead": 3.0,
+                    "zoom_pps": 777.0,
+                    "pps": 666.0,
+                    "scroll_x": 55,
+                    "scroll_position": 44,
+                },
+            )
+            loaded = load_project(str(path))
+
+        self.assertEqual(loaded["workspace"], {"last_playhead": 3.0})
+        self.assertEqual(loaded["editor_state"]["workspace"], {"last_playhead": 3.0})
 
     def test_project_segments_to_editor_preserves_clip_and_speaker_fields(self):
         project = {
@@ -88,6 +145,45 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(segment["quality"]["confidence_label"], "red")
         self.assertEqual(segment["quality_history"][0]["confidence_label"], "gray")
         self.assertEqual(segment["quality_candidates"][0]["candidate_id"], "c1")
+
+    def test_editor_state_preserves_stt_metadata_and_preview_candidates(self):
+        state = build_editor_state(
+            mode="multiclip",
+            media_files=["/tmp/a.mp4", "/tmp/b.mp4"],
+            segments=[
+                {
+                    "start": 5.0,
+                    "end": 6.0,
+                    "text": "최종",
+                    "speaker": "00",
+                    "_clip_idx": 1,
+                    "stt_selected_source": "STT2",
+                    "stt_candidates": [
+                        {"source": "STT1", "start": 5.0, "end": 6.0, "text": "후보1"},
+                        {"source": "STT2", "start": 5.0, "end": 6.0, "text": "후보2"},
+                    ],
+                    "stt_ensemble_llm_selected_source": "STT2",
+                }
+            ],
+            stt_preview_segments=[
+                {
+                    "start": 5.0,
+                    "end": 6.0,
+                    "text": "후보2",
+                    "stt_preview_source": "STT2",
+                    "_clip_idx": 1,
+                    "_clip_file": "/tmp/b.mp4",
+                }
+            ],
+        )
+
+        segment = state["subtitles"]["segments"][0]
+        self.assertEqual(segment["stt_selected_source"], "STT2")
+        self.assertEqual(segment["stt_candidates"][1]["text"], "후보2")
+        preview = state["stt"]["preview_segments"][0]
+        self.assertEqual(preview["stt_preview_source"], "STT2")
+        self.assertEqual(preview["_clip_idx"], 1)
+        self.assertTrue(preview["_live_stt_preview"])
 
     def test_segment_signature_changes_when_subtitle_text_changes(self):
         before = segment_signature([{"start": 0.0, "end": 1.0, "text": "원본", "speaker": "00"}])
@@ -257,6 +353,121 @@ class ProjectContextTests(unittest.TestCase):
         editor_segment = loaded["editor_state"]["subtitles"]["segments"][0]
         self.assertEqual(editor_segment["start_frame"], 24)
         self.assertEqual(editor_segment["end_frame"], 36)
+
+    def test_save_project_persists_voice_activity_segments_with_frames(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"fake")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("core.project.project_manager.probe_media", return_value={"duration": 2.0, "fps": 24.0}):
+                save_project(
+                    str(path),
+                    media_paths=[str(media)],
+                    segments=[{"start": 0.0, "end": 0.5, "text": "프레임", "speaker": "00"}],
+                    voice_activity_segments=[
+                        {
+                            "start": 0.5,
+                            "end": 1.25,
+                            "kind": "llm_selected",
+                            "label": "STT2 LLM 82점",
+                            "source": "STT2",
+                            "color": "#70C149",
+                            "score": 82.0,
+                            "selection_state": "llm_selected",
+                        }
+                    ],
+                )
+            loaded = load_project(str(path))
+
+        voice_segment = loaded["analysis"]["voice_activity_segments"][0]
+        self.assertEqual(loaded["analysis"]["voice_activity_schema"], "subtitle_detection.v1")
+        self.assertEqual(voice_segment["start_frame"], 12)
+        self.assertEqual(voice_segment["end_frame"], 30)
+        self.assertEqual(voice_segment["score"], 82.0)
+        self.assertEqual(voice_segment["selection_state"], "llm_selected")
+        self.assertEqual(voice_segment["frame_range"]["unit"], "frame")
+        self.assertEqual(voice_segment["frame_range"]["start"], 12)
+        editor_voice = loaded["editor_state"]["analysis"]["voice_activity_segments"][0]
+        self.assertEqual(editor_voice["start_frame"], 12)
+        self.assertEqual(editor_voice["end_frame"], 30)
+        restored_voice = project_voice_activity_segments(loaded)[0]
+        self.assertEqual(restored_voice["start"], 0.5)
+        self.assertEqual(restored_voice["end"], 1.25)
+        self.assertEqual(restored_voice["source"], "STT2")
+        self.assertEqual(restored_voice["score"], 82.0)
+
+    def test_save_project_persists_multiclip_stt_preview_segments_with_frames(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media_a = Path(tmp) / "a.mp4"
+            media_b = Path(tmp) / "b.mp4"
+            media_a.write_bytes(b"a")
+            media_b.write_bytes(b"b")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("core.project.project_manager.probe_media", return_value={"duration": 10.0, "fps": 24.0}):
+                save_project(
+                    str(path),
+                    media_paths=[str(media_a), str(media_b)],
+                    segments=[
+                        {
+                            "start": 10.0,
+                            "end": 11.0,
+                            "text": "최종",
+                            "speaker": "00",
+                            "stt_selected_source": "STT2",
+                            "stt_candidates": [{"source": "STT2", "text": "후보"}],
+                        }
+                    ],
+                    stt_preview_segments=[
+                        {
+                            "start": 10.0,
+                            "end": 11.0,
+                            "text": "후보",
+                            "stt_preview_source": "STT2",
+                            "_clip_idx": 1,
+                            "_clip_file": str(media_b),
+                        }
+                    ],
+                )
+            loaded = load_project(str(path))
+
+        segment = project_segments_to_editor(loaded)[0]
+        self.assertEqual(segment["stt_selected_source"], "STT2")
+        self.assertEqual(segment["stt_candidates"][0]["source"], "STT2")
+        preview = project_stt_preview_segments(loaded)[0]
+        self.assertEqual(preview["stt_preview_source"], "STT2")
+        self.assertEqual(preview["_clip_idx"], 1)
+        self.assertEqual(preview["start_frame"], 240)
+        self.assertEqual(preview["end_frame"], 264)
 
     def test_project_segments_to_editor_prefers_saved_frame_numbers(self):
         project = {

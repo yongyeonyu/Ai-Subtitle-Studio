@@ -1,4 +1,4 @@
-# Version: 03.07.03
+# Version: 03.09.07
 # Phase: PHASE2
 """
 ui/video_player_widget.py - PyQt6 비디오 플레이어
@@ -88,6 +88,19 @@ def _output_metrics_for_style(style: dict) -> tuple[int, float]:
     return output_width, res_scale
 
 
+def _load_export_dialog_style() -> dict:
+    try:
+        settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
+        if os.path.exists(settings_path):
+            with open(settings_path, "r", encoding="utf-8") as f:
+                style = json.load(f).get("export_dialog", {}) or {}
+                if isinstance(style, dict):
+                    return dict(style)
+    except Exception:
+        pass
+    return {"res": "FHD (1920px)", "size": "22", "align": "가운데"}
+
+
 def _wrap_overlay_text_lines(text: str, fm: QFontMetrics, max_width: int) -> list[str]:
     max_width = max(24, int(max_width))
     wrapped: list[str] = []
@@ -139,9 +152,9 @@ def paint_subtitle_overlay(painter: QPainter, bounds: QRectF, text: str, style: 
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
     try:
-        base_size = int(style.get("size", 60))
+        base_size = int(style.get("size", 22))
     except Exception:
-        base_size = 60
+        base_size = 22
     output_width, res_scale = _output_metrics_for_style(style)
     preview_scale = max(0.01, width / max(1.0, float(output_width)))
     font_px = max(4, int(base_size * res_scale * preview_scale))
@@ -242,7 +255,7 @@ class SubtitleSceneOverlayItem(QGraphicsItem):
         super().__init__()
         self._rect = QRectF()
         self._text = ""
-        self._style: dict = {}
+        self._style: dict = _load_export_dialog_style()
         self.setZValue(20)
 
     def boundingRect(self):
@@ -333,8 +346,12 @@ class SubtitleLabel(QLabel):
             if os.path.exists(settings_path):
                 with open(settings_path, "r", encoding="utf-8") as f:
                     self._export_style = json.load(f).get("export_dialog", {}) or {}
+                    if not isinstance(self._export_style, dict):
+                        self._export_style = {}
         except Exception:
-            self._export_style = {}
+            self._export_style = _load_export_dialog_style()
+        if not self._export_style:
+            self._export_style = _load_export_dialog_style()
 
     def set_export_style(self, style: dict | None):
         self._export_style = dict(style or {})
@@ -402,9 +419,9 @@ class SubtitleLabel(QLabel):
 
         style = self._export_style
         try:
-            base_size = int(style.get("size", 60))
+            base_size = int(style.get("size", 22))
         except Exception:
-            base_size = 60
+            base_size = 22
         output_width, res_scale = self._output_metrics()
         preview_scale = max(0.01, self.width() / max(1.0, float(output_width)))
         font_px = max(4, int(base_size * res_scale * preview_scale))

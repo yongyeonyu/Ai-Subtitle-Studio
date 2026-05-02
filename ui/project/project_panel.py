@@ -1,4 +1,4 @@
-# Version: 03.01.15
+# Version: 03.09.23
 # Phase: PHASE2
 """
 ui/project/project_panel.py
@@ -22,10 +22,12 @@ from core.project.project_manager import (
 )
 from core.project.project_context import (
     project_clip_boundaries,
+    project_voice_activity_segments,
     project_active_work_mode,
     project_media_files,
     project_roughcut_state,
     project_segments_to_editor,
+    project_stt_preview_segments,
 )
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 from ui.project.clip_order_dialog import OrderDialog
@@ -108,8 +110,14 @@ class ProjectUIMixin:
                 editor._apply_multiclip_state_from_owner()
             if hasattr(editor, "_set_process_completed"):
                 editor._set_process_completed()
+            stt_preview = project_stt_preview_segments(project)
+            if stt_preview:
+                editor._live_stt_preview_segments = stt_preview
             if hasattr(editor, "_redraw_timeline"):
                 editor._redraw_timeline()
+            voice_activity = project_voice_activity_segments(project)
+            if voice_activity and hasattr(editor, "set_voice_activity_segments"):
+                editor.set_voice_activity_segments(voice_activity)
         except Exception as e:
             get_logger().log(f"⚠️ 프로젝트 자막 복원 실패: {e}")
         return True
@@ -221,11 +229,17 @@ class ProjectUIMixin:
         if not filepath:
             return
 
+        editor = getattr(self, "_editor_widget", None)
+        stt_preview_segments = []
+        if editor is not None:
+            stt_preview_segments = list(getattr(editor, "_live_stt_preview_segments", []) or [])
+
         save_project(
             filepath,
             segments=segments,
             user_settings=self._load_local_settings(),
             active_work_mode=normalize_work_mode(getattr(self, "_current_work_mode", EDITOR_MODE)),
+            stt_preview_segments=stt_preview_segments,
         )
         get_logger().log("💾 프로젝트 저장 완료")
 

@@ -1,14 +1,16 @@
-# Version: 03.08.08
+# Version: 03.09.02
 # Phase: PHASE2
 """Ollama adapter for local subtitle text splitting."""
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import socket
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -17,6 +19,86 @@ _WARMED: set[str] = set()
 _WARM_LOCK = threading.Lock()
 _STOP_LOCK = threading.Lock()
 _WARMUP_TIMEOUT_SEC = 8.0
+_OLLAMA_ROOT_URL = "http://localhost:11434/"
+
+
+def is_ollama_server_running(timeout: float = 0.6) -> bool:
+    try:
+        req = urllib.request.Request(_OLLAMA_ROOT_URL)
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return int(getattr(response, "status", 0) or 0) == 200
+    except Exception:
+        return False
+
+
+def _iter_ollama_bins() -> list[str]:
+    candidates = [
+        shutil.which("ollama"),
+        shutil.which("ollama.exe"),
+        "/opt/homebrew/bin/ollama",
+        "/usr/local/bin/ollama",
+        os.path.expanduser("~/.ollama/bin/ollama"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Ollama\ollama.exe"),
+    ]
+    result: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in result and os.path.exists(candidate):
+            result.append(candidate)
+    return result
+
+
+def _start_ollama_server_process() -> bool:
+    popen_kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    for ollama_bin in _iter_ollama_bins():
+        try:
+            subprocess.Popen([ollama_bin, "serve"], **popen_kwargs)
+            return True
+        except Exception:
+            continue
+
+    if os.name == "posix" and os.path.exists("/Applications/Ollama.app"):
+        try:
+            subprocess.Popen(["open", "-a", "Ollama"], **popen_kwargs)
+            return True
+        except Exception:
+            pass
+    return False
+
+
+def ensure_ollama_server(logger=None, *, wait_sec: float = 5.0) -> bool:
+    if is_ollama_server_running():
+        if logger:
+            logger.log("✅ AI 엔진(Ollama) 실행 중")
+        return True
+
+    if not _start_ollama_server_process():
+        if logger:
+            logger.log("⚠️ AI 엔진(Ollama) 실행 파일을 찾을 수 없습니다. Ollama 설치를 확인하세요.")
+        return False
+
+    if logger:
+        logger.log("🚀 AI 엔진(Ollama) 자동 시작 중...")
+    deadline = time.monotonic() + max(0.5, float(wait_sec or 0.0))
+    while time.monotonic() < deadline:
+        if is_ollama_server_running(timeout=0.4):
+            if logger:
+                logger.log("✅ AI 엔진(Ollama) 자동 시작 완료")
+            return True
+        time.sleep(0.25)
+
+    if logger:
+        logger.log("⚠️ AI 엔진(Ollama) 자동 시작 확인 실패. Ollama 설치 상태를 확인하세요.")
+    return False
 
 
 def _parse_chunks(out_text: str) -> list[str]:
@@ -34,6 +116,7 @@ def _parse_chunks(out_text: str) -> list[str]:
 def split_text(model: str, prompt: str, timeout: int = 120) -> list[str] | None:
     if not model or "사용 안함" in model:
         return None
+    ensure_ollama_server(wait_sec=4.0)
 
     body = json.dumps({
         "model": model,
@@ -75,6 +158,9 @@ def warmup_model(model: str, logger=None, timeout: float = _WARMUP_TIMEOUT_SEC) 
 
     with _WARM_LOCK:
         if model in _WARMED:
+            return
+        if not ensure_ollama_server(logger=logger, wait_sec=4.0):
+            _WARMED.add(model)
             return
 
         try:

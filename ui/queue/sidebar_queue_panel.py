@@ -1,4 +1,4 @@
-# Version: 03.07.10
+# Version: 03.09.08
 # Phase: PHASE2
 """Sidebar queue summary panel with a Qt Quick front-end and QWidget fallback."""
 
@@ -45,14 +45,16 @@ class SidebarQueuePanel(QWidget):
         )
         layout.addWidget(self._header_lbl)
 
-        self._table = QTableWidget(0, 3)
-        self._table.setHorizontalHeaderLabels(["순서", "파일명", "예상시간"])
+        self._table = QTableWidget(0, 4)
+        self._table.setHorizontalHeaderLabels(["순서", "파일명", "상태", "예상시간"])
         self._table.verticalHeader().setVisible(False)
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         self._table.setColumnWidth(0, 36)
-        self._table.setColumnWidth(2, 68)
+        self._table.setColumnWidth(2, 42)
+        self._table.setColumnWidth(3, 62)
         self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setShowGrid(False)
@@ -108,8 +110,9 @@ class SidebarQueuePanel(QWidget):
             self._table.insertRow(row)
             done = bool(item.get("done")) or "완료" in str(item.get("status", "") or "")
             row_color = "#34C759" if done else "#FFCC44"
-            for col, key in enumerate(("order", "file", "eta")):
-                cell = QTableWidgetItem(str(item.get(key, "") or "-"))
+            for col, key in enumerate(("order", "file", "statusDisplay", "eta")):
+                value = item.get(key, "") if key != "statusDisplay" else item.get("statusDisplay") or item.get("status", "")
+                cell = QTableWidgetItem(str(value or "-"))
                 cell.setForeground(QColor(row_color))
                 cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter if col == 0 else Qt.AlignmentFlag.AlignVCenter)
                 self._table.setItem(row, col, cell)

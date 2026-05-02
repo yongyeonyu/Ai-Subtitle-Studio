@@ -1,4 +1,4 @@
-# Version: 03.08.09
+# Version: 03.09.30
 # Phase: PHASE2
 """
 core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장 
@@ -21,6 +21,7 @@ from core.llm.openai_provider import is_openai_model, split_text as openai_split
 from core.engine.llm_correction_guard import safe_llm_chunks, validate_llm_chunks
 from core.subtitle_quality.llm_guarded_corrector import build_conservative_prompt
 from core.subtitle_quality.timestamp_regrouper import regroup_by_word_timestamps
+from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -451,10 +452,8 @@ def ask_openai_to_split(text: str, threshold: int, rules: dict, model_name: str,
     return guarded if guarded else None
 
 
-def _select_stt_candidate_text(seg: dict, model: str, user_prompt: str, api_key: str) -> str | None:
+def _select_stt_candidate_text(seg: dict, model: str, user_prompt: str, api_key: str) -> dict | None:
     settings = _get_user_settings()
-    if seg.get("stt_ensemble_primary_locked"):
-        return None
     if not settings.get("stt_ensemble_llm_judge_enabled", True):
         return None
     if not model or "사용 안함" in model:
@@ -483,10 +482,12 @@ def _select_stt_candidate_text(seg: dict, model: str, user_prompt: str, api_key:
         )
     prompt = (
         "당신은 한국어 영상 자막 검수자입니다.\n"
-        "아래 STT 후보 중 실제 발화로 가장 자연스럽고, 한국어 구어체로 가장 그럴듯한 후보 하나만 고르세요.\n"
+        "아래 앞뒤 문맥을 참고해서 STT 후보 중 실제 발화로 가장 자연스럽고, 한국어 구어체로 가장 그럴듯한 후보 하나만 고르세요.\n"
         "없는 말을 새로 만들거나 두 후보를 섞지 마세요.\n"
         "반드시 JSON 배열로만 답하세요. 예: [\"A\"] 또는 [\"B\"]\n\n"
         f"시간: {float(seg.get('start', 0) or 0):.2f}s ~ {float(seg.get('end', 0) or 0):.2f}s\n"
+        f"이전 문맥: {str(seg.get('stt_ensemble_context_prev', '') or '').strip()[:220] or '(없음)'}\n"
+        f"다음 문맥: {str(seg.get('stt_ensemble_context_next', '') or '').strip()[:220] or '(없음)'}\n"
         + "\n".join(lines)
     )
     if user_prompt.strip():
@@ -505,10 +506,68 @@ def _select_stt_candidate_text(seg: dict, model: str, user_prompt: str, api_key:
 
     decision = " ".join(str(x) for x in (chunks or [])).upper()
     selected_index = 1 if "B" in decision and "A" not in decision else 0
-    selected = str(unique[selected_index].get("text", "") or "").strip()
+    selected_candidate = unique[selected_index]
+    selected = str(selected_candidate.get("text", "") or "").strip()
+    selected_source = str(selected_candidate.get("source", "") or "").strip().upper()
     if selected:
-        get_logger().log(f"[STT앙상블-LLM판정] {labels[selected_index]} 선택: '{selected[:18]}...'")
-    return selected or None
+        get_logger().log(f"[STT앙상블-LLM판정] {labels[selected_index]}({selected_source or '-'}) 선택: '{selected[:18]}...'")
+    if not selected:
+        return None
+    return {
+        "text": selected,
+        "source": selected_source,
+        "label": labels[selected_index],
+    }
+
+
+def _stt_selection_metadata(seg: dict) -> dict:
+    keys = (
+        "stt_candidates",
+        "stt_ensemble_source",
+        "stt_ensemble_similarity",
+        "stt_ensemble_needs_llm_review",
+        "stt_ensemble_inserted_from_stt2",
+        "stt_ensemble_primary_region",
+        "stt_ensemble_primary_locked",
+        "stt_ensemble_word_rover",
+        "stt_ensemble_llm_selected_source",
+        "stt_ensemble_llm_selected_label",
+        "stt_selected_source",
+    )
+    return {key: seg[key] for key in keys if key in seg}
+
+
+def _annotate_stt_candidate_context(segments: list[dict], window: int = 2) -> list[dict]:
+    if not segments:
+        return []
+    annotated = [dict(seg) for seg in segments]
+
+    def _context_text(seg: dict) -> str:
+        candidates = [
+            str(c.get("text", "") or "").strip()
+            for c in list(seg.get("stt_candidates") or [])
+            if str(c.get("text", "") or "").strip()
+        ]
+        if candidates:
+            return " / ".join(candidates[:2])
+        return str(seg.get("text", "") or "").strip()
+
+    for idx, seg in enumerate(annotated):
+        if len([c for c in list(seg.get("stt_candidates") or []) if str(c.get("text", "") or "").strip()]) < 2:
+            continue
+        prev_items = []
+        for prev in annotated[max(0, idx - window):idx]:
+            text = _context_text(prev)
+            if text:
+                prev_items.append(text)
+        next_items = []
+        for nxt in annotated[idx + 1:idx + 1 + window]:
+            text = _context_text(nxt)
+            if text:
+                next_items.append(text)
+        seg["stt_ensemble_context_prev"] = " | ".join(prev_items)
+        seg["stt_ensemble_context_next"] = " | ".join(next_items)
+    return annotated
 
 
 def _process_one(args: tuple) -> list[dict]:
@@ -531,10 +590,17 @@ def _process_one(args: tuple) -> list[dict]:
     duration = seg.get("end", 0) - seg.get("start", 0)
 
     if seg.get("stt_candidates") and duration >= 0.35:
-        selected_text = _select_stt_candidate_text(seg, model, user_prompt, api_key)
-        if selected_text:
-            seg = {**seg, "text": selected_text}
-            text = selected_text.strip()
+        selected_decision = _select_stt_candidate_text(seg, model, user_prompt, api_key)
+        if selected_decision:
+            selected_text = str(selected_decision.get("text", "") or "").strip()
+            selected_source = str(selected_decision.get("source", "") or "").strip().upper()
+            seg = {
+                **seg,
+                "text": selected_text,
+                "stt_ensemble_llm_selected_source": selected_source,
+                "stt_ensemble_llm_selected_label": str(selected_decision.get("label", "") or ""),
+            }
+            text = selected_text
 
     # 💡 [환각 방지] 너무 짧은 자막은 LLM 교정을 생략합니다.
     if duration < _LLM_SKIP_DUR or len(text.replace(" ", "")) <= (threshold - 5):
@@ -598,6 +664,7 @@ def _process_one(args: tuple) -> list[dict]:
             # 텍스트가 유효할 때만 결과에 추가
             if final_text:
                 result.append({
+                    **_stt_selection_metadata(seg),
                     "start":   t_start,
                     "end":     t_end,
                     "text":    final_text,
@@ -633,6 +700,7 @@ def _process_one(args: tuple) -> list[dict]:
             ct = _clean(t, corrections)
             if ct and len(ct.replace(" ", "").replace("\n", "")) >= 2:
                 result.append({
+                    **_stt_selection_metadata(seg),
                     "start":   buf[0]["start"],
                     "end":     buf[-1]["end"],
                     "text":    ct,
@@ -675,10 +743,146 @@ def _enforce_len(segments: list[dict], threshold: int, rules: dict) -> list[dict
                 t = " ".join(x["word"] for x in buf).strip()
                 ct = _clean(t)
                 if ct:
-                    result.append({"start": buf[0]["start"], "end": buf[-1]["end"],
-                                   "text": ct, "speaker": spk, "words": buf})
+                    result.append({
+                        **_stt_selection_metadata(seg),
+                        "start": buf[0]["start"],
+                        "end": buf[-1]["end"],
+                        "text": ct,
+                        "speaker": spk,
+                        "words": buf,
+                    })
                 buf = []
     return result
+
+def _segment_scope_key(seg: dict):
+    clip_idx = seg.get("_clip_idx")
+    if clip_idx is not None:
+        return ("clip_idx", str(clip_idx))
+    clip_file = seg.get("_clip_file") or seg.get("clip_file")
+    if clip_file:
+        return ("clip_file", str(clip_file))
+    return None
+
+
+def _same_timing_scope(prev: dict, cur: dict) -> bool:
+    prev_key = _segment_scope_key(prev)
+    cur_key = _segment_scope_key(cur)
+    if prev_key is None and cur_key is None:
+        return True
+    return prev_key == cur_key
+
+
+def _update_frame_fields(seg: dict, start: float, end: float) -> None:
+    fps_value = seg.get("timeline_frame_rate") or seg.get("frame_rate") or seg.get("fps")
+    if fps_value in (None, ""):
+        return
+    fps = normalize_fps(fps_value)
+    start_frame = sec_to_frame(start, fps)
+    end_frame = max(start_frame + 1, sec_to_frame(end, fps))
+    seg["timeline_start_frame"] = start_frame
+    seg["timeline_end_frame"] = end_frame
+    seg["start_frame"] = start_frame
+    seg["end_frame"] = end_frame
+    seg["frame_rate"] = fps
+    seg["timeline_frame_rate"] = fps
+    seg["timeline_start"] = frame_to_sec(start_frame, fps)
+    seg["timeline_end"] = frame_to_sec(end_frame, fps)
+    seg["start"] = seg["timeline_start"]
+    seg["end"] = seg["timeline_end"]
+    seg["frame_range"] = {
+        "unit": "frame",
+        "start": start_frame,
+        "end": end_frame,
+        "timeline_frame_rate": fps,
+    }
+
+
+def apply_final_gap_settings(
+    segments: list[dict],
+    settings: dict | None = None,
+    *,
+    force: bool = False,
+) -> list[dict]:
+    """Apply the user-facing Gap settings as the final subtitle timing pass."""
+    if not segments:
+        return segments
+
+    candidates = [dict(seg) for seg in segments if isinstance(seg, dict)]
+    if not candidates:
+        return []
+
+    if not force and all(seg.get("_final_gap_settings_applied") for seg in candidates):
+        return candidates
+
+    s = dict(settings or _get_user_settings() or {})
+    cont_thresh = max(0.0, _setting_float(s, "continuous_threshold", 2.0))
+    push_rate = max(0.0, min(1.0, _setting_float(s, "gap_push_rate", 0.7)))
+    if "gap_pull_rate" in s:
+        pull_rate = max(0.0, min(1.0, _setting_float(s, "gap_pull_rate", 1.0 - push_rate)))
+    else:
+        pull_rate = max(0.0, min(1.0, 1.0 - push_rate))
+    single_ext = max(0.0, _setting_float(s, "single_subtitle_end", 0.2))
+    min_duration = max(0.05, _setting_float(s, "sub_min_duration", 0.2))
+
+    adj = sorted(candidates, key=lambda x: (float(x.get("start", 0.0) or 0.0), float(x.get("end", 0.0) or 0.0)))
+    for seg in adj:
+        if seg.get("is_gap"):
+            continue
+        try:
+            start = max(0.0, float(seg.get("start", 0.0) or 0.0))
+            end = float(seg.get("end", start + min_duration) or start + min_duration)
+        except Exception:
+            start = 0.0
+            end = min_duration
+        if end <= start:
+            end = start + min_duration
+        seg["start"] = start
+        seg["end"] = end
+
+    for idx, cur in enumerate(adj):
+        if cur.get("is_gap"):
+            cur["_final_gap_settings_applied"] = True
+            continue
+
+        nxt = None
+        for candidate in adj[idx + 1:]:
+            if not candidate.get("is_gap"):
+                nxt = candidate
+                break
+
+        if nxt is not None and _same_timing_scope(cur, nxt):
+            gap = float(nxt.get("start", 0.0) or 0.0) - float(cur.get("end", 0.0) or 0.0)
+            if gap < 0.0:
+                cur["end"] = max(float(cur["start"]) + min_duration, float(nxt["start"]) - 0.02)
+                if cur["end"] > float(nxt["start"]):
+                    nxt["start"] = cur["end"]
+                    if float(nxt["end"]) <= float(nxt["start"]):
+                        nxt["end"] = float(nxt["start"]) + min_duration
+            elif gap > 0.0:
+                if gap <= cont_thresh:
+                    cur["end"] = float(cur["end"]) + (gap * push_rate)
+                    nxt["start"] = max(0.0, float(nxt["start"]) - (gap * pull_rate))
+                else:
+                    extension = min(single_ext, gap / 2.0)
+                    cur["end"] = float(cur["end"]) + extension
+                    nxt["start"] = max(0.0, float(nxt["start"]) - extension)
+
+                if float(cur["end"]) > float(nxt["start"]):
+                    boundary = (float(cur["end"]) + float(nxt["start"])) / 2.0
+                    cur["end"] = max(float(cur["start"]) + min_duration, boundary)
+                    nxt["start"] = max(0.0, cur["end"])
+                    if float(nxt["end"]) <= float(nxt["start"]):
+                        nxt["end"] = float(nxt["start"]) + min_duration
+        elif single_ext > 0.0:
+            cur["end"] = float(cur["end"]) + single_ext
+
+        if float(cur["end"]) <= float(cur["start"]):
+            cur["end"] = float(cur["start"]) + min_duration
+        _update_frame_fields(cur, float(cur["start"]), float(cur["end"]))
+        cur["_final_gap_settings_applied"] = True
+
+    return adj
+
 
 def adjust_timing(segments: list[dict]) -> list[dict]:
     if not segments:
@@ -698,6 +902,7 @@ def adjust_timing(segments: list[dict]) -> list[dict]:
 def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = None) -> list[dict]:
     if not segments:
         return segments
+    original_segments = [dict(seg) for seg in segments if isinstance(seg, dict)]
 
     global _EXAONE_WORKERS, _LOCAL_OLLAMA_WORKER_CAP, _GAP_BREAK_SEC, _MIN_DURATION, _MAX_DURATION, _MAX_CPS, _DEDUP_WINDOW
 
@@ -756,6 +961,7 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
         )
 
     segments = _sanitize(segments, corrections)
+    segments = _annotate_stt_candidate_context(segments)
     segments = _dedup_close(segments)
     segments = _absorb_tiny(segments, threshold)
     segments = _global_dedup(segments)
@@ -837,6 +1043,18 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
         optimized = _absorb_tiny(optimized, threshold)
     optimized = adjust_timing(optimized)
     optimized = _global_dedup(optimized)
+    if not optimized and any(seg.get("stt_candidates") for seg in original_segments):
+        get_logger().log("[STT앙상블-보호] 후보 병합 결과가 모두 제거되어 원본 앙상블 세그먼트로 최종 자막을 복구합니다.")
+        fallback = []
+        for seg in _annotate_stt_candidate_context(original_segments):
+            try:
+                processed = _process_one((seg, rules, threshold, corrections, model, user_prompt, api_key, conservative))
+            except Exception:
+                processed = [{**seg, "text": _clean(str(seg.get("text", "") or ""), corrections)}]
+            for item in processed or []:
+                if str(item.get("text", "") or "").strip():
+                    fallback.append(item)
+        optimized = adjust_timing(fallback)
 
     get_logger().log(f"━━━ 자막 최적화 완료: {len(optimized)}개 ━━━\n")
     return optimized

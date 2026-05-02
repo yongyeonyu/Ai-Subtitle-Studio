@@ -1,4 +1,4 @@
-# Version: 03.01.35
+# Version: 03.09.28
 # Phase: PHASE1-C
 """
 ui/workspace_mixin.py
@@ -18,8 +18,6 @@ class WorkspaceMixin:
         ws = {
             "last_playhead": 0.0,
             "last_cursor_block": 0,
-            "zoom_pps": 200.0,
-            "scroll_position": 0.0,
             "splitter_sizes": [],
             "terminal_visible": getattr(self, "_log_visible", False),
             "dashboard_mode": getattr(self, "_dashboard_mode", "dashboard"),
@@ -32,14 +30,6 @@ class WorkspaceMixin:
 
             if hasattr(editor, "text_edit"):
                 ws["last_cursor_block"] = editor.text_edit.textCursor().blockNumber()
-
-            if hasattr(editor, "timeline") and hasattr(editor.timeline, "canvas"):
-                ws["zoom_pps"] = editor.timeline.canvas.pps
-
-            if hasattr(editor, "timeline") and hasattr(editor.timeline, "scroll"):
-                ws["scroll_position"] = float(
-                    editor.timeline.scroll.horizontalScrollBar().value()
-                )
 
             if hasattr(editor, "splitter"):
                 ws["splitter_sizes"] = editor.splitter.sizes()
@@ -96,15 +86,12 @@ class WorkspaceMixin:
 
             workspace = project_data.get("workspace", {})
             if not workspace:
-                self._fit_timeline_if_missing_zoom(editor)
+                self._fit_timeline_on_start(editor)
                 return
 
             def _apply():
                 try:
-                    pps = float(workspace.get("zoom_pps", 0) or 0)
-                    if pps > 0 and hasattr(editor, "timeline") and hasattr(editor.timeline, "canvas"):
-                        editor.timeline.canvas.pps = pps
-                    elif hasattr(editor, "timeline") and hasattr(editor.timeline, "fit_to_view"):
+                    if hasattr(editor, "timeline") and hasattr(editor.timeline, "fit_to_view"):
                         editor.timeline.fit_to_view()
 
                     splitter_sizes = workspace.get("splitter_sizes", [])
@@ -134,11 +121,6 @@ class WorkspaceMixin:
                             editor.text_edit.setTextCursor(cursor)
                             editor.text_edit.ensureCursorVisible()
 
-                    scroll_pos = workspace.get("scroll_position", 0)
-                    if scroll_pos > 0 and hasattr(editor, "timeline") and hasattr(editor.timeline, "scroll"):
-                        editor.timeline.scroll.horizontalScrollBar().setValue(int(scroll_pos))
-                        editor.timeline._target_scroll_x = float(scroll_pos)
-                        editor.timeline._current_scroll_x = float(scroll_pos)
                 except Exception:
                     pass
 
@@ -146,7 +128,10 @@ class WorkspaceMixin:
         except Exception:
             pass
 
-    def _fit_timeline_if_missing_zoom(self, editor):
+    def _fit_timeline_on_start(self, editor):
         timeline = getattr(editor, "timeline", None)
         if timeline is not None and hasattr(timeline, "fit_to_view"):
             QTimer.singleShot(500, timeline.fit_to_view)
+
+    def _fit_timeline_if_missing_zoom(self, editor):
+        self._fit_timeline_on_start(editor)

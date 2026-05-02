@@ -1,4 +1,4 @@
-# Version: 03.02.15
+# Version: 03.09.24
 # Phase: PHASE2
 """Local rough-cut engine helpers.
 
@@ -20,6 +20,7 @@ from .editor_draft import (
     build_editor_roughcut_draft_prompt,
     build_editor_roughcut_draft_result,
     editor_roughcut_draft_enabled,
+    editor_roughcut_draft_llm_allowed,
     is_fast_recognition_mode,
     merge_editor_roughcut_draft_state,
     run_editor_roughcut_llm_draft,
@@ -132,6 +133,7 @@ __all__ = [
     "default_thumbnail_cache_dir",
     "edl_to_dict",
     "editor_roughcut_draft_enabled",
+    "editor_roughcut_draft_llm_allowed",
     "ensure_thumbnail",
     "extract_keywords",
     "ffmpeg_available",

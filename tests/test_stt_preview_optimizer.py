@@ -1,0 +1,45 @@
+# Version: 03.09.27
+# Phase: PHASE2
+
+import unittest
+from unittest.mock import patch
+
+from core.pipeline.stt_preview_optimizer import optimize_stt_preview_segments
+
+
+class SttPreviewOptimizerTest(unittest.TestCase):
+    def test_preview_candidates_run_through_subtitle_optimizer(self):
+        raw = [{"start": 1.0, "end": 3.0, "text": "원본 후보"}]
+        optimized = [{"start": 1.0, "end": 2.0, "text": "정리 후보"}]
+
+        with patch("core.engine.subtitle_engine.optimize_segments", return_value=optimized) as optimize:
+            result = optimize_stt_preview_segments(raw, source_label="STT2", vad_segments=[{"start": 1.0, "end": 3.0}])
+
+        optimize.assert_called_once()
+        self.assertEqual(result[0]["text"], "정리 후보")
+        self.assertEqual(result[0]["stt_preview_source"], "STT2")
+        self.assertTrue(result[0]["stt_pending"])
+        self.assertTrue(result[0]["_live_stt_preview"])
+        self.assertTrue(result[0]["stt_preview_optimized"])
+        self.assertEqual(result[0]["stt_preview_optimizer"], "subtitle_rules_llm")
+
+    def test_multiclip_preview_keeps_clip_metadata_after_optimization(self):
+        optimized = [{"start": 0.5, "end": 1.25, "text": "클립 후보"}]
+
+        with patch("core.engine.subtitle_engine.optimize_segments", return_value=optimized):
+            result = optimize_stt_preview_segments(
+                [{"start": 0.5, "end": 1.25, "text": "raw"}],
+                source_label="STT1",
+                clip_offset=10.0,
+                clip_idx=2,
+                clip_path="/tmp/a.mp4",
+            )
+
+        self.assertAlmostEqual(result[0]["start"], 10.5)
+        self.assertAlmostEqual(result[0]["end"], 11.25)
+        self.assertEqual(result[0]["_clip_idx"], 2)
+        self.assertEqual(result[0]["_clip_file"], "/tmp/a.mp4")
+
+
+if __name__ == "__main__":
+    unittest.main()
