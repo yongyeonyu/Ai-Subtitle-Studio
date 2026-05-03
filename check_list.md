@@ -1,7 +1,7 @@
 # AI Subtitle Studio — 대표님 확인 체크리스트
 # 기준 문서: ACTION_ITEMS.md
 # 최종 수정: 2026-05-03
-# App Version: 03.12.00
+# App Version: 03.13.00
 # GitHub-Publish: 제외 대상. 이 파일은 로컬 운영 문서입니다.
 
 ## 사용 원칙
@@ -13,6 +13,11 @@
 - 문서 운영 원칙은 `ACTION_ITEMS.md` 상단 기준 영역과 `AGENTS.md`에서 관리합니다.
 
 ## 다음 구현 체크리스트
+
+- [ ] MAC-AUDIO-CRASH-1 | macOS 다채널 오디오 입력 안정성 확인
+  - macOS에서 채널 수가 많은 영상 파일을 `시작`으로 처리해도 `audio device has unrecognized channel` 로그 뒤에 앱이 종료되거나 `Segmentation fault: 11`이 나면 안 됨
+  - Ollama 자동 시작, 필수 모델 확인, ffmpeg 오디오 추출 시작 이후에도 앱 프로세스가 유지되어야 함
+  - 대표 샘플처럼 10GB 이상 대용량 영상에서도 시작 직후 비정상 종료 없이 전처리 단계로 넘어가야 함
 
 - [ ] RC-D6 | 러프컷 결과 버전 관리
   - 같은 프로젝트 안에서 러프컷 후보를 여러 개 저장할 수 있어야 함

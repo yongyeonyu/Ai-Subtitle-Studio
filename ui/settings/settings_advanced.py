@@ -15,7 +15,7 @@ import config
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, CUSTOM_DEFAULTS_FILE, _create_bottom_buttons
 from ui.style import button_style, label_style, settings_dialog_stylesheet
-from core.audio.audio_presets import load_audio_presets, apply_audio_preset
+from core.audio import audio_presets as _audio_presets
 
 class AdvancedSettingsDialog(QDialog):
     def __init__(self, settings: dict, parent=None):
@@ -28,7 +28,7 @@ class AdvancedSettingsDialog(QDialog):
         
         self.setStyleSheet(settings_dialog_stylesheet())
         self.result = dict(settings)
-        self.audio_presets = load_audio_presets()
+        self.audio_presets = _audio_presets.load_audio_presets()
         current_preset = self.result.get("audio_preset", "")
         if current_preset in self.audio_presets:
             self.result = apply_audio_preset(self.result, current_preset)
@@ -40,6 +40,7 @@ class AdvancedSettingsDialog(QDialog):
         preset_lbl.setStyleSheet(label_style("accent", 13, bold=True))
         self.combo_audio_preset = QComboBox()
         self.combo_audio_preset.addItem("직접 설정", "")
+        self.combo_audio_preset.addItem("기본값 적용", "__default__")
         for name, preset in self.audio_presets.items():
             desc = preset.get("description", "")
             self.combo_audio_preset.addItem(f"{name} - {desc}" if desc else name, name)
@@ -200,10 +201,18 @@ class AdvancedSettingsDialog(QDialog):
                 
     def _on_audio_preset_changed(self, *args):
         preset_name = self.combo_audio_preset.currentData()
-        if not preset_name:
+        if preset_name == "__default__":
+            default_applier = getattr(_audio_presets, "apply_default_audio_preset", None)
+            if callable(default_applier):
+                self.result = default_applier(self.result)
+            else:
+                self.result = dict(self.result)
+                self.result["audio_preset"] = ""
+        elif not preset_name:
             self.result["audio_preset"] = ""
             return
-        self.result = apply_audio_preset(self.result, preset_name)
+        else:
+            self.result = _audio_presets.apply_audio_preset(self.result, preset_name)
         for slider, key, multiplier, chk_disable in self.sliders_info:
             if key in self.result:
                 try:

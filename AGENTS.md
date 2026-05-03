@@ -1,11 +1,11 @@
 <!--
-Document-Version: 03.12.00
+Document-Version: 03.13.00
 Phase: PHASE2
 Last-Updated: 2026-05-03
 Updated-By: Codex with 대표님
 Previous-Content: v03.10.00 release checkpoint
-This-Update: v03.12.00 release checkpoint for PHASE2 cut-boundary pioneer/follower workflow, project persistence, restart reset, and STT hard-cut alignment
-Codex-Handoff: v03.12.00 release committed/pushed to main. ACTION_ITEMS.md currently has no immediate `now` task; PHASE2-D PAGE3B remains deferred.
+This-Update: v03.13.00 release checkpoint for PHASE2 frame-first cut-boundary enforcement, auto preset detection, personalization/LoRA scaffolding, settings cleanup, and safe UI refactor extraction
+Codex-Handoff: v03.13.00 release committed/pushed to main. ACTION_ITEMS.md currently has no immediate `now` task; PHASE2-D PAGE3B remains deferred.
 -->
 # AGENTS.md — AI Subtitle Studio Agent Guide
 
@@ -14,6 +14,7 @@ Codex-Handoff: v03.12.00 release committed/pushed to main. ACTION_ITEMS.md curre
 - `ACTION_ITEMS.md`
 - `check_list.md`
 - `File_structure.txt`
+- `RELEASE_v03.13.00.md`
 - `RELEASE_v03.12.00.md`
 - `RELEASE_v03.11.00.md`
 - `RELEASE_v03.09.00.md`
@@ -27,9 +28,9 @@ Codex-Handoff: v03.12.00 release committed/pushed to main. ACTION_ITEMS.md curre
 
 ## Current State
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App/doc version: `v03.12.00`
-- `config.py APP_VERSION`: `03.12.00`
-- Next code-change version: `v03.12.01`
+- App/doc version: `v03.13.00`
+- `config.py APP_VERSION`: `03.13.00`
+- Next code-change version: `v03.13.01`
 - Phase: `PHASE2`
 - Latest implemented groups:
   - `v03.01.33`: CP-03/CP-04 saved-state dot, `is_dirty` sync, top status rail
@@ -156,6 +157,7 @@ Codex-Handoff: v03.12.00 release committed/pushed to main. ACTION_ITEMS.md curre
   - `v03.11.18`: full restart clears topicless middle segments, provisional lines, confirmed cut boundaries, and stored cut-boundary project state
   - `v03.11.19`: confirmed cut boundaries restart Whisper chunk extraction even on no-VAD fallback paths
   - `v03.12.00`: release checkpoint for cut-boundary pioneer/follower scanning, cut-boundary persistence/snap, restart reset, sidebar state polish, and Whisper hard-cut alignment
+  - `v03.13.00`: release checkpoint for frame-first cut-boundary enforcement, 6-way auto audio presets, text LoRA accumulation/training scaffolding, settings simplification, GPU-default rendering, and safe sidebar/multiclip refactor extraction
 - Older version history belongs in the versioned `RELEASE_v*.md` files, not here.
 
 ## Communication
@@ -208,7 +210,7 @@ Codex-Handoff: v03.12.00 release committed/pushed to main. ACTION_ITEMS.md curre
   - `File_structure.txt` only when files are added, removed, moved, or their role meaningfully changes.
   - `README.md` only for public-facing usage/install changes that cannot wait for release.
 - Batch nonessential updates to `AGENTS.md`, `ACTION_ITEMS.md`, `README.md`, `check_list.md`, `File_structure.txt`, and the new `RELEASE_v{new_release_version}.md` during the release workflow.
-- Current next code-change version: `v03.12.01`.
+- Current next code-change version: `v03.13.01`.
 - Document-only cleanup does not require app version bump.
 - If deleting a function, class, public helper, UI action, signal, or slot:
   - record reason and impact in the current release note file.
@@ -365,6 +367,7 @@ find . -maxdepth 1 \( -name 'create_all*' -o -name '_backup*' -o -name 'STRUCTUR
 - ACTION_ITEMS.md
 - check_list.md
 - File_structure.txt
+- RELEASE_v03.13.00.md
 - RELEASE_v03.12.00.md
 - RELEASE_v03.11.00.md
 - RELEASE_v03.09.00.md
@@ -374,9 +377,9 @@ find . -maxdepth 1 \( -name 'create_all*' -o -name '_backup*' -o -name 'STRUCTUR
 - RELEASE_v03.05.00.md
 
 현재 기준:
-- 현재 앱/문서 버전: v03.12.00
-- config.py APP_VERSION: 03.12.00
-- 다음 코드 수정 버전: v03.12.01
+- 현재 앱/문서 버전: v03.13.00
+- config.py APP_VERSION: 03.13.00
+- 다음 코드 수정 버전: v03.13.01
 - 현재 phase: PHASE2
 - 다음 우선순위: ACTION_ITEMS.md의 `now` 항목 확인. 현재는 `now: null`, deferred에 `PHASE2-D-PAGE3B`
 

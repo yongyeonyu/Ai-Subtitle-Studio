@@ -3,6 +3,7 @@
 import socket
 import unittest
 from unittest import mock
+import urllib.error
 
 from core.llm import ollama_provider
 
@@ -116,6 +117,54 @@ class OllamaWarmupTest(unittest.TestCase):
         ensure_mock.assert_called_once()
         urlopen_mock.assert_not_called()
         self.assertIn("gemma4:e4b", ollama_provider._WARMED)
+
+    def test_split_text_retries_once_after_http_500(self):
+        success_payload = mock.Mock()
+        success_payload.__enter__ = mock.Mock(return_value=success_payload)
+        success_payload.__exit__ = mock.Mock(return_value=False)
+        success_payload.read.return_value = b'{"response":"[\\"A\\"]"}'
+
+        first_error = urllib.error.HTTPError(
+            url="http://localhost:11434/api/generate",
+            code=500,
+            msg="Internal Server Error",
+            hdrs=None,
+            fp=None,
+        )
+
+        with mock.patch("core.llm.ollama_provider.ensure_ollama_server", return_value=True) as ensure_mock, \
+             mock.patch(
+                 "core.llm.ollama_provider.urllib.request.urlopen",
+                 side_effect=[first_error, success_payload],
+             ) as urlopen_mock, \
+             mock.patch("core.llm.ollama_provider.time.sleep") as sleep_mock:
+            chunks = ollama_provider.split_text("gemma4:e4b", "prompt", timeout=1)
+
+        self.assertEqual(chunks, ["A"])
+        self.assertEqual(urlopen_mock.call_count, 2)
+        self.assertGreaterEqual(ensure_mock.call_count, 2)
+        sleep_mock.assert_called_once()
+
+    def test_split_text_raises_after_repeated_http_500(self):
+        repeated_error = urllib.error.HTTPError(
+            url="http://localhost:11434/api/generate",
+            code=500,
+            msg="Internal Server Error",
+            hdrs=None,
+            fp=None,
+        )
+
+        with mock.patch("core.llm.ollama_provider.ensure_ollama_server", return_value=True), \
+             mock.patch(
+                 "core.llm.ollama_provider.urllib.request.urlopen",
+                 side_effect=[repeated_error, repeated_error, repeated_error],
+             ) as urlopen_mock, \
+             mock.patch("core.llm.ollama_provider.time.sleep") as sleep_mock:
+            with self.assertRaises(urllib.error.HTTPError):
+                ollama_provider.split_text("gemma4:e4b", "prompt", timeout=1)
+
+        self.assertEqual(urlopen_mock.call_count, 3)
+        self.assertEqual(sleep_mock.call_count, 2)
 
 
 if __name__ == "__main__":

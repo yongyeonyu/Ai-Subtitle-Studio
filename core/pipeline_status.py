@@ -33,9 +33,8 @@ def stage_label_for_key(stage_key: str) -> str:
     return STAGE_LABELS.get(str(stage_key or ""), "대기")
 
 
-def generation_stage_keys(status_text: object, *, stt_ensemble_enabled: bool = False) -> set[str]:
-    """Return canonical pipeline stage keys from raw log/status text."""
-    blob = str(status_text or "").lower()
+def _stage_keys_from_blob(blob: str, *, stt_ensemble_enabled: bool = False) -> set[str]:
+    blob = str(blob or "").lower()
     if not blob:
         return set()
 
@@ -86,6 +85,23 @@ def generation_stage_keys(status_text: object, *, stt_ensemble_enabled: bool = F
         return keys
 
     return set()
+
+
+def generation_stage_keys(status_text: object, *, stt_ensemble_enabled: bool = False) -> set[str]:
+    """Return canonical pipeline stage keys from raw log/status text."""
+    blob = str(status_text or "")
+    if not blob:
+        return set()
+
+    normalized = blob.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+    lines = [line.strip() for line in normalized.splitlines() if str(line or "").strip()]
+
+    for line in reversed(lines):
+        keys = _stage_keys_from_blob(line, stt_ensemble_enabled=stt_ensemble_enabled)
+        if keys:
+            return keys
+
+    return _stage_keys_from_blob(normalized, stt_ensemble_enabled=stt_ensemble_enabled)
 
 
 def generation_stage_label(status_text: object, *, stt_ensemble_enabled: bool = False) -> str:

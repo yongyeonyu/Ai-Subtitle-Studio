@@ -1,16 +1,16 @@
 <!--
-Document-Version: 03.12.00
+Document-Version: 03.13.00
 Phase: PHASE2
 Last-Updated: 2026-05-03
 Updated-By: Codex with 대표님
-This-Update: v03.12.00 release sync after cut-boundary pioneer/follower, restart reset, and Whisper hard-cut alignment work
+This-Update: v03.13.00 release sync after frame-first cut-boundary enforcement, auto preset detection, text LoRA accumulation, and safe UI/refactor cleanup
 GitHub-Publish: no
 -->
 # ACTION_QUEUE v2
 
 meta:
-  app: 03.12.00
-  next: 03.12.01
+  app: 03.13.00
+  next: 03.13.01
   phase: PHASE2
   commit: user_explicit_only
   done: remove_from_this_file

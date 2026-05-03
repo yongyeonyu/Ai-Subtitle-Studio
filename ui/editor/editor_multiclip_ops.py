@@ -131,15 +131,21 @@ class EditorMulticlipOpsMixin:
         if hasattr(self, "_segment_queue"):
             self._segment_queue.clear()
         self._is_initial_load = (True if segs else False) and not bool(preserve_view)
+        prev_suspend_autoseek = bool(getattr(self, "_suspend_append_segments_autoseek", False))
+        if preserve_view:
+            self._suspend_append_segments_autoseek = True
         self.text_edit.clear()
-        self.append_segments(segs)
-        self._cached_segs = segs
-        total_dur = segs[-1]['end'] if segs else 0.0
-        if hasattr(self, 'video_player') and self.video_player.total_time > 0:
-            total_dur = max(total_dur, self.video_player.total_time)
-        self.timeline.update_segments(segs, self._active_seg_start, total_dur)
-        self._mark_dirty()
-        self._schedule_timeline()
+        try:
+            self.append_segments(segs)
+            self._cached_segs = segs
+            total_dur = segs[-1]['end'] if segs else 0.0
+            if hasattr(self, 'video_player') and self.video_player.total_time > 0:
+                total_dur = max(total_dur, self.video_player.total_time)
+            self.timeline.update_segments(segs, self._active_seg_start, total_dur)
+            self._mark_dirty()
+            self._schedule_timeline()
+        finally:
+            self._suspend_append_segments_autoseek = prev_suspend_autoseek
 
     def _on_clip_delete_requested(self, clip_idx):
         owner = self.window()

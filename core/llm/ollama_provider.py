@@ -20,6 +20,7 @@ _WARM_LOCK = threading.Lock()
 _STOP_LOCK = threading.Lock()
 _WARMUP_TIMEOUT_SEC = 8.0
 _OLLAMA_ROOT_URL = "http://localhost:11434/"
+_GENERATE_RETRY_STATUS_CODES = {500, 502, 503, 504}
 
 
 def is_ollama_server_running(timeout: float = 0.6) -> bool:
@@ -113,36 +114,71 @@ def _parse_chunks(out_text: str) -> list[str]:
     return [m for m in re.findall(r'"([^"]*)"', out_text or "") if m != "result" and len(m) > 1]
 
 
-def split_text(model: str, prompt: str, timeout: int = 120) -> list[str] | None:
-    if not model or "사용 안함" in model:
-        return None
-    ensure_ollama_server(wait_sec=4.0)
+def _is_retryable_generate_error(exc: BaseException) -> bool:
+    if _is_timeout_error(exc):
+        return True
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            return int(getattr(exc, "code", 0) or 0) in _GENERATE_RETRY_STATUS_CODES
+        except Exception:
+            return False
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        return isinstance(reason, (ConnectionError, socket.timeout, TimeoutError))
+    return False
 
+
+def _build_generate_request(model: str, prompt: str, *, keep_alive: int = -1) -> urllib.request.Request:
     body = json.dumps({
         "model": model,
         "prompt": prompt,
         "stream": False,
         "format": "json",
-        "keep_alive": -1,
+        "keep_alive": keep_alive,
         "options": {
             "temperature": 0.0,
             "num_predict": 256,
         },
     }).encode("utf-8")
 
-    req = urllib.request.Request(
+    return urllib.request.Request(
         "http://localhost:11434/api/generate",
         data=body,
         headers={
             "Content-Type": "application/json",
-            "Connection": "keep-alive",
+            "Connection": "close",
         },
     )
 
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        out_text = json.loads(resp.read().decode("utf-8")).get("response", "")
-    chunks = _parse_chunks(out_text)
-    return chunks or None
+
+def split_text(model: str, prompt: str, timeout: int = 120) -> list[str] | None:
+    if not model or "사용 안함" in model:
+        return None
+    ensure_ollama_server(wait_sec=4.0)
+    last_exc: BaseException | None = None
+
+    for attempt in range(3):
+        keep_alive = -1 if attempt == 0 else 0
+        try:
+            req = _build_generate_request(model, prompt, keep_alive=keep_alive)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                out_text = json.loads(resp.read().decode("utf-8")).get("response", "")
+            chunks = _parse_chunks(out_text)
+            return chunks or None
+        except Exception as exc:
+            last_exc = exc
+            if not _is_retryable_generate_error(exc) or attempt >= 2:
+                raise
+            try:
+                _WARMED.discard(model)
+                ensure_ollama_server(wait_sec=2.0)
+            except Exception:
+                pass
+            time.sleep(0.35 * (attempt + 1))
+
+    if last_exc:
+        raise last_exc
+    return None
 
 
 def _is_timeout_error(exc: BaseException) -> bool:

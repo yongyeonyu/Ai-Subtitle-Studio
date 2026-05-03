@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                              QLabel, QComboBox, QMessageBox, QLineEdit, 
                              QSlider, QPushButton, QCheckBox, QTextEdit,
                              QDoubleSpinBox, QSpinBox, QTabWidget, QWidget,
-                             QScrollArea, QSizePolicy)
-from PyQt6.QtCore import Qt
+                             QScrollArea, QSizePolicy, QToolButton)
+from PyQt6.QtCore import Qt, QSize
 import config
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import (
@@ -18,10 +18,11 @@ from ui.settings.settings_common import (
     _fetch_models, _create_bottom_buttons, DATASET_DIR,
     filter_available_whisper_models,
 )
-from ui.style import label_style, settings_button_style, settings_dialog_stylesheet
+from ui.style import label_style, settings_button_style, settings_dialog_stylesheet, line_icon
 from core.llm.provider_registry import cloud_model_items
 from core.llm.secure_keys import get_api_key, set_api_key
-from core.audio.audio_presets import load_audio_presets, apply_audio_preset
+from core.audio import audio_presets as _audio_presets
+from core.audio.preset_auto_classifier import auto_classify_media_presets, apply_auto_classified_presets
 from core.audio.stt_quality_presets import apply_stt_quality_preset, load_stt_quality_presets, normalize_stt_quality_key
 from core.roughcut import DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT, DEFAULT_ROUGHCUT_PROMPT_V1, merge_roughcut_settings
 
@@ -34,15 +35,13 @@ class SettingsDialog(QDialog):
         self.setStyleSheet(settings_dialog_stylesheet())
         self.result_settings = dict(settings)
         self.stt_quality_presets = load_stt_quality_presets()
-        self.audio_presets = load_audio_presets()
+        self.audio_presets = _audio_presets.load_audio_presets()
 
         layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
-        quick_tab, quick_form = self._make_tab_form()
         editor_tab, editor_form = self._make_tab_form()
         roughcut_tab, roughcut_form = self._make_tab_form()
         ai_tab, ai_form = self._make_tab_form()
-        self.tabs.addTab(quick_tab, "빠른 설정")
         self.tabs.addTab(editor_tab, "에디터 LLM")
         self.tabs.addTab(roughcut_tab, "러프컷 LLM")
         self.tabs.addTab(ai_tab, "AI")
@@ -56,10 +55,17 @@ class SettingsDialog(QDialog):
 
         self.combo_audio_preset = QComboBox()
         self.combo_audio_preset.addItem("직접 설정", "")
-        for name, preset in self.audio_presets.items():
+        self.combo_audio_preset.addItem("기본값 적용", "__default__")
+        for name in _audio_presets.curated_audio_preset_names():
+            preset = self.audio_presets.get(name)
+            if not isinstance(preset, dict):
+                continue
             desc = preset.get("description", "")
             self.combo_audio_preset.addItem(f"{name} - {desc}" if desc else name, name)
         self.combo_audio_preset.setMinimumWidth(350)
+
+        self._build_editor_llm_prompt_section(editor_form, settings)
+        self._build_subtitle_quality_section(editor_form, settings)
 
         # 1. LLM 모델 (무료/유료 필터 + Ollama 설치/삭제)
         self.llm_filter = settings.get("llm_cost_filter", "all")
@@ -68,6 +74,10 @@ class SettingsDialog(QDialog):
             self.models_data = [dict(m) for m in parent._local_llm_models]
         if not self.models_data:
             self.models_data = _fetch_models()
+
+        runtime_section = QLabel("런타임 모델")
+        runtime_section.setStyleSheet(label_style("text", 13, bold=True) + "padding: 0 5px 2px 5px;")
+        ai_form.addRow("", runtime_section)
 
         model_panel = QWidget()
         model_panel.setObjectName("AiModelDownloadPanel")
@@ -169,6 +179,10 @@ class SettingsDialog(QDialog):
         self._update_model_info()
 
         # 2. API Keys (OS 보안 저장소)
+        api_section = QLabel("클라우드 API 키")
+        api_section.setStyleSheet(label_style("text", 13, bold=True) + "padding: 10px 5px 2px 5px;")
+        ai_form.addRow("", api_section)
+
         self.input_api_key = QLineEdit()
         self.input_api_key.setObjectName("GoogleApiKeyInput")
         self.input_api_key.setPlaceholderText("AI Studio 발급 Google API Key 입력")
@@ -190,15 +204,13 @@ class SettingsDialog(QDialog):
         self.input_huggingface_token.setText(get_api_key("huggingface"))
         ai_form.addRow("Hugging Face Token:", self.input_huggingface_token)
 
-        self._build_editor_llm_prompt_section(editor_form, settings)
-        self._build_editor_roughcut_draft_section(editor_form, settings)
-
         self.spin_editor_llm_threads = QSpinBox()
         self.spin_editor_llm_threads.setRange(1, 16)
         editor_thread_default = DEFAULT_ADV_SETTINGS.get("llm_threads", settings.get("llm_workers", 4))
         self.spin_editor_llm_threads.setValue(int(settings.get("llm_threads", settings.get("llm_workers", editor_thread_default)) or 4))
         editor_form.addRow("에디터 LLM 처리 스레드:", self.spin_editor_llm_threads)
 
+        self._build_editor_roughcut_draft_section(roughcut_form, settings)
         self._build_roughcut_llm_section(roughcut_form, settings)
 
         # 3. 자막 묶음 단위 (슬라이더 세팅)
@@ -290,11 +302,13 @@ class SettingsDialog(QDialog):
             self.combo_whisper.setCurrentIndex(0)
         self.combo_whisper.blockSignals(False)
         self.combo_whisper.setUpdatesEnabled(True)
+        stt_section = QLabel("STT 기본")
+        stt_section.setStyleSheet(label_style("text", 13, bold=True) + "padding: 10px 5px 2px 5px;")
+        ai_form.addRow("", stt_section)
         ai_form.addRow("STT1 Whisper 모델:", self.combo_whisper)
 
         self.chk_stt_ensemble = QCheckBox("STT2 병렬 인식 사용 (STT1 우선, STT2는 누락 보강용)")
         self.chk_stt_ensemble.setChecked(bool(settings.get("stt_ensemble_enabled", False)))
-        ai_form.addRow("STT2:", self.chk_stt_ensemble)
 
         self.combo_whisper_secondary = QComboBox()
         self.combo_whisper_secondary.setUpdatesEnabled(False)
@@ -326,11 +340,9 @@ class SettingsDialog(QDialog):
             self.combo_whisper_secondary.setCurrentIndex(0)
         self.combo_whisper_secondary.blockSignals(False)
         self.combo_whisper_secondary.setUpdatesEnabled(True)
-        ai_form.addRow("STT2 Whisper 모델:", self.combo_whisper_secondary)
 
         self.chk_stt_ensemble_llm = QCheckBox("LLM 후보 판정 사용")
         self.chk_stt_ensemble_llm.setChecked(bool(settings.get("stt_ensemble_llm_judge_enabled", True)))
-        ai_form.addRow("", self.chk_stt_ensemble_llm)
 
         # 5. 음성 처리 AI
         self.combo_audio = QComboBox()
@@ -346,7 +358,6 @@ class SettingsDialog(QDialog):
         for k, v in self.audio_map.items():
             if v == curr_audio: self.combo_audio.setCurrentText(k); break
         self._fit_model_combo(self.combo_audio)
-        ai_form.addRow("음성 AI:", self.combo_audio)
 
         # 6. VAD
         self.combo_vad = QComboBox()
@@ -356,13 +367,11 @@ class SettingsDialog(QDialog):
         for k, v in self.vad_map.items():
             if v == curr_vad: self.combo_vad.setCurrentText(k); break
         self._fit_model_combo(self.combo_vad)
-        ai_form.addRow("VAD:", self.combo_vad)
         self.chk_vad_post_align = QCheckBox("VAD로 STT/앙상블 자막 위치 재계산")
         self.chk_vad_post_align.setChecked(bool(settings.get("vad_post_stt_align_enabled", True)))
-        ai_form.addRow("", self.chk_vad_post_align)
-        self._build_subtitle_quality_section(ai_form, settings)
         self._sync_stt_quality_preset_combo(settings.get("stt_quality_preset", "balanced"))
         self._sync_audio_preset_combo(settings.get("audio_preset", ""))
+        self._sync_auto_preset_button_state()
         self._update_editor_roughcut_draft_state()
         self.combo_stt_quality_preset.currentIndexChanged.connect(self._on_stt_quality_preset_changed)
         self.combo_audio_preset.currentIndexChanged.connect(self._on_audio_preset_changed)
@@ -575,10 +584,14 @@ class SettingsDialog(QDialog):
 
     def _sync_audio_preset_combo(self, preset_name: str):
         self.combo_audio_preset.blockSignals(True)
+        matched = False
         for i in range(self.combo_audio_preset.count()):
             if self.combo_audio_preset.itemData(i) == preset_name:
                 self.combo_audio_preset.setCurrentIndex(i)
+                matched = True
                 break
+        if not matched:
+            self.combo_audio_preset.setCurrentIndex(0)
         self.combo_audio_preset.blockSignals(False)
 
     def _sync_stt_quality_preset_combo(self, preset_key: str):
@@ -722,15 +735,10 @@ class SettingsDialog(QDialog):
         self.edit_system_prompt.setStyleSheet("color: #8E98A1;")
         prompt_layout.addWidget(self.edit_system_prompt)
 
-        lbl_user = QLabel("[사용자 프롬프트]")
-        lbl_user.setStyleSheet(label_style("text", 11, bold=True))
-        prompt_layout.addWidget(lbl_user)
-
-        self.edit_user_prompt = QTextEdit()
-        self.edit_user_prompt.setMinimumHeight(105)
-        self.edit_user_prompt.setPlainText(str(settings.get("user_prompt", settings.get("llm_prompt", "")) or ""))
-        self.edit_user_prompt.setPlaceholderText("예: 고유명사는 원문 표기를 유지하고, 차량명/지명은 임의로 바꾸지 마세요.")
-        prompt_layout.addWidget(self.edit_user_prompt)
+        info = QLabel("텍스트 LoRA와 교정 memory를 최우선으로 적용합니다. 에디터 추가 프롬프트는 중복 기능으로 제거되었습니다.")
+        info.setWordWrap(True)
+        info.setStyleSheet(label_style("muted", 11))
+        prompt_layout.addWidget(info)
         form.addRow("LLM 프롬프트:", prompt_layout)
 
     def _build_editor_roughcut_draft_section(self, form: QFormLayout, settings: dict):
@@ -775,13 +783,10 @@ class SettingsDialog(QDialog):
         self.chk_subtitle_quality_auto_correct.setChecked(bool(settings.get("subtitle_quality_auto_correct_enabled", False)))
         form.addRow("자동 교정:", self.chk_subtitle_quality_auto_correct)
 
-        self.chk_correction_memory_enabled = QCheckBox("사용자 교정 memory 사용")
-        self.chk_correction_memory_enabled.setChecked(bool(settings.get("correction_memory_enabled", True)))
-        form.addRow("교정 memory:", self.chk_correction_memory_enabled)
-
-        self.chk_wrong_answer_memory_enabled = QCheckBox("오답 memory 사용")
-        self.chk_wrong_answer_memory_enabled.setChecked(bool(settings.get("wrong_answer_memory_enabled", True)))
-        form.addRow("오답 memory:", self.chk_wrong_answer_memory_enabled)
+        memory_info = QLabel("교정 memory / 오답 memory는 텍스트 LoRA 우선 흐름에 포함되어 항상 함께 사용됩니다.")
+        memory_info.setWordWrap(True)
+        memory_info.setStyleSheet(label_style("muted", 11))
+        form.addRow("텍스트 LoRA 보조:", memory_info)
 
         self.spin_quality_threshold = QSpinBox()
         self.spin_quality_threshold.setRange(70, 100)
@@ -812,15 +817,26 @@ class SettingsDialog(QDialog):
 
     def _on_audio_preset_changed(self, *args):
         preset_name = self.combo_audio_preset.currentData()
-        if not preset_name:
+        if preset_name == "__default__":
+            default_applier = getattr(_audio_presets, "apply_default_audio_preset", None)
+            if callable(default_applier):
+                self.result_settings = default_applier(self.result_settings)
+            else:
+                self.result_settings = dict(self.result_settings)
+                self.result_settings["audio_preset"] = ""
+        elif not preset_name:
             self.result_settings["audio_preset"] = ""
             return
-
-        self.result_settings = apply_audio_preset(self.result_settings, preset_name)
+        else:
+            self.result_settings = _audio_presets.apply_audio_preset(self.result_settings, preset_name)
         self._set_combo_by_data_value(self.combo_audio, self.result_settings.get("selected_audio_ai"), self.audio_map)
         self._set_combo_by_data_value(self.combo_vad, self.result_settings.get("selected_vad"), self.vad_map)
         self._set_combo_by_data_value(self.combo_whisper, self.result_settings.get("selected_whisper_model"))
+        self._set_combo_by_data_value(self.combo_whisper_secondary, self.result_settings.get("selected_whisper_model_secondary"))
+        self.chk_stt_ensemble.setChecked(bool(self.result_settings.get("stt_ensemble_enabled", False)))
+        self.chk_stt_ensemble_llm.setChecked(bool(self.result_settings.get("stt_ensemble_llm_judge_enabled", True)))
         self._set_llm_combo_by_name(self.result_settings.get("selected_model", ""))
+        self._sync_roughcut_llm_controls()
         self._update_model_info()
 
     def _on_stt_quality_preset_changed(self, *args):
@@ -831,6 +847,36 @@ class SettingsDialog(QDialog):
         self._update_editor_roughcut_draft_state()
         self._update_model_info()
 
+    def _on_auto_audio_preset_detect(self):
+        media_path = self._current_media_path()
+        if not media_path:
+            QMessageBox.information(self, "자동 판정", "현재 열려 있는 영상이 없어서 자동 판정을 진행할 수 없습니다.")
+            return
+        try:
+            decision = auto_classify_media_presets(media_path, settings=self._collect_settings())
+            self.result_settings = apply_auto_classified_presets(self.result_settings, decision)
+            self._sync_stt_quality_preset_combo(self.result_settings.get("stt_quality_preset", "balanced"))
+            self._sync_audio_preset_combo(self.result_settings.get("audio_preset", ""))
+            self._set_combo_by_data_value(self.combo_audio, self.result_settings.get("selected_audio_ai"), self.audio_map)
+            self._set_combo_by_data_value(self.combo_vad, self.result_settings.get("selected_vad"), self.vad_map)
+            self._set_combo_by_data_value(self.combo_whisper, self.result_settings.get("selected_whisper_model"))
+            self._set_llm_combo_by_name(self.result_settings.get("selected_model", ""))
+            self._update_editor_roughcut_draft_state()
+            self._update_model_info()
+            self._sync_auto_preset_button_state()
+            QMessageBox.information(
+                self,
+                "자동 판정 완료",
+                (
+                    f"오디오: {decision['audio_preset']}\n"
+                    f"정밀인식: {decision['stt_quality_preset']}\n"
+                    f"신뢰도: {int(round(float(decision.get('confidence', 0.0)) * 100))}%\n\n"
+                    f"{decision.get('reason', '')}"
+                ),
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "자동 판정 실패", str(e))
+
     def _update_editor_roughcut_draft_state(self):
         if not hasattr(self, "chk_editor_roughcut_draft_enabled"):
             return
@@ -840,6 +886,20 @@ class SettingsDialog(QDialog):
         self.btn_editor_roughcut_prompt_default.setEnabled(not is_fast)
         if is_fast:
             self.chk_editor_roughcut_draft_enabled.setChecked(False)
+
+    def _sync_roughcut_llm_controls(self):
+        provider = str(self.result_settings.get("roughcut_llm_provider", "none") or "none")
+        model_name = str(self.result_settings.get("roughcut_llm_model", "사용 안함") or "사용 안함")
+        enabled = (
+            bool(self.result_settings.get("roughcut_llm_enabled", False))
+            and provider not in {"inherit", "none"}
+            and model_name
+            and "사용 안함" not in model_name
+        )
+        self.chk_roughcut_llm_enabled.setChecked(enabled)
+        self.chk_roughcut_llm_override.setChecked(enabled)
+        self._set_combo_data(self.combo_roughcut_llm_provider, provider if enabled else "none")
+        self.input_roughcut_llm_model.setText(model_name if enabled else "사용 안함")
 
     def _refresh_ollama_models(self):
         self.models_data = _fetch_models()
@@ -914,6 +974,42 @@ class SettingsDialog(QDialog):
         ]
         self.lbl_model_info.setText("  |  ".join(parts))
         self.lbl_model_info.setToolTip(" / ".join(plain_parts))
+
+    def _sync_auto_preset_button_state(self):
+        if not hasattr(self, "btn_auto_audio_preset"):
+            return
+        decision = dict(self.result_settings.get("audio_preset_auto_decision") or {})
+        highlighted = bool(decision.get("audio_preset") and decision.get("stt_quality_preset"))
+        icon_color = "#34C759" if highlighted else "#A9B0B7"
+        self.btn_auto_audio_preset.setIcon(line_icon("auto", icon_color, 16))
+        self.btn_auto_audio_preset.setToolTip(
+            str(decision.get("reason") or "영상 기준 자동 판정")
+            if highlighted else
+            "영상 기준 자동 판정"
+        )
+
+    def _current_media_path(self) -> str:
+        owner = self.parent()
+        for candidate in (owner, getattr(owner, "window", lambda: None)()):
+            if candidate is None:
+                continue
+            editor_getter = getattr(candidate, "_active_editor", None)
+            if callable(editor_getter):
+                try:
+                    editor = editor_getter()
+                except Exception:
+                    editor = None
+            else:
+                editor = None
+            media_path = str(
+                getattr(editor, "media_path", "")
+                or getattr(getattr(editor, "sm", None), "current_file", "")
+                or getattr(candidate, "media_path", "")
+                or ""
+            )
+            if media_path:
+                return media_path
+        return ""
     def _collect_settings(self):
         res = dict(self.result_settings)
         m_data = self.combo_llm.currentData() or {}
@@ -936,18 +1032,18 @@ class SettingsDialog(QDialog):
             "huggingface_token_saved": bool(huggingface_token_saved),
             "chunk_time_limit": 99999 if self.chk_chunk_all.isChecked() else self.slider_chunk.value(),
             "llm_cost_filter": self.llm_filter,
-            "user_prompt": self.edit_user_prompt.toPlainText().strip(),
+            "user_prompt": "",
             "editor_roughcut_draft_enabled": self.chk_editor_roughcut_draft_enabled.isChecked(),
             "editor_roughcut_draft_prompt": self.input_editor_roughcut_draft_prompt.toPlainText().strip() or DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT,
             "llm_threads": int(self.spin_editor_llm_threads.value()),
             "llm_workers": int(self.spin_editor_llm_threads.value()),
-            "audio_preset": self.combo_audio_preset.currentData() or "",
+            "audio_preset": "" if self.combo_audio_preset.currentData() == "__default__" else (self.combo_audio_preset.currentData() or ""),
             "stt_quality_preset": self.combo_stt_quality_preset.currentData() or "balanced",
             "subtitle_quality_enabled": bool(self.chk_subtitle_quality_enabled.isChecked()),
             "subtitle_quality_auto_check_after_generate": bool(self.chk_subtitle_quality_auto_check.isChecked()),
             "subtitle_quality_auto_correct_enabled": bool(self.chk_subtitle_quality_auto_correct.isChecked()),
-            "correction_memory_enabled": bool(self.chk_correction_memory_enabled.isChecked()),
-            "wrong_answer_memory_enabled": bool(self.chk_wrong_answer_memory_enabled.isChecked()),
+            "correction_memory_enabled": True,
+            "wrong_answer_memory_enabled": True,
             "review_auto_correct_apply_threshold": int(self.spin_quality_threshold.value()),
             "review_recheck_buffer_sec": round(float(self.spin_quality_recheck_buffer.value()), 2),
             "roughcut_llm_enabled": (

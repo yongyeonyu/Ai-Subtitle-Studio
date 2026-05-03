@@ -10,7 +10,7 @@ from html import escape
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDialog, QLineEdit, QCheckBox, QScrollArea, QComboBox, QMessageBox,
-    QToolButton, QSizePolicy, QMenu
+    QToolButton, QSizePolicy, QMenu, QGridLayout
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QDateTime
 from PyQt6.QtGui import QIcon, QColor, QCursor
@@ -25,13 +25,17 @@ from core.path_manager import (
 )
 from core.settings import load_settings, save_settings
 from core.pipeline_status import generation_stage_keys
-from core.audio.audio_presets import apply_audio_preset, load_audio_presets
+from core.audio import audio_presets as _audio_presets
+from core.audio.preset_auto_classifier import auto_classify_media_presets, apply_auto_classified_presets
 from core.audio.stt_quality_presets import (
     apply_stt_quality_preset,
     load_stt_quality_presets,
     normalize_stt_quality_key,
 )
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE
+from ui.home_sidebar_presets import (
+    sync_sidebar_preset_panel,
+)
 from ui.style import button_style, label_style, line_icon, tool_button_style, settings_dialog_stylesheet
 
 
@@ -130,7 +134,7 @@ class HomeUIMixin:
             nas_folders, nas_count, nas_comp = self._get_nas_folders()
             left_col.addWidget(self._icloud_btn("☁ iCloud 자동 처리", icloud_files, self.start_icloud_sync, subtitle=count_str, comp_title=comp_str))
             left_col.addWidget(self._icloud_btn("▣ NAS 자동 처리", nas_folders, self._open_nas_root, is_nas=True, subtitle=nas_count, comp_title=nas_comp))
-            left_col.addWidget(self._ensure_sidebar_queue_panel(), stretch=1)
+            left_col.addWidget(self._ensure_sidebar_queue_panel(), stretch=3)
         else:
             left_col.addWidget(self._btn("📂 파일 선택", "영상/음성/srt 직접 선택", self.select_files))
             left_col.addWidget(self._btn("📁 폴더 선택", "폴더에서 영상 일괄 선택", self.select_folder))
@@ -152,8 +156,11 @@ class HomeUIMixin:
         columns.addWidget(left_widget, stretch=1)
         if not is_unified:
             columns.addWidget(right_widget, stretch=1)
-        layout.addLayout(columns)
-        layout.addStretch()
+        if is_unified:
+            layout.addLayout(columns, stretch=1)
+        else:
+            layout.addLayout(columns)
+            layout.addStretch()
         if is_unified:
             layout.addWidget(self._ensure_sidebar_preset_panel())
             layout.addWidget(self._sidebar_status_card())
@@ -223,6 +230,8 @@ class HomeUIMixin:
                 raw = str(label.text() or "")
             except RuntimeError:
                 raw = ""
+        if not raw:
+            raw = str(getattr(self, "_sidebar_queue_cache_header", "") or "")
         if raw:
             raw = raw.replace("📋 처리할 파일 리스트", "큐 리스트").replace("진행 중", "").strip()
             raw = raw.replace("  ", " ")
@@ -235,7 +244,7 @@ class HomeUIMixin:
     def _sidebar_queue_items(self) -> list[dict]:
         table = getattr(self, "queue_table", None)
         if table is None:
-            return []
+            return list(getattr(self, "_sidebar_queue_cache_items", []) or [])
         items = []
         try:
             for row in range(table.rowCount()):
@@ -253,7 +262,11 @@ class HomeUIMixin:
                     "eta": str(eta_item.text() if eta_item else "-"),
                 })
         except RuntimeError:
-            return []
+            return list(getattr(self, "_sidebar_queue_cache_items", []) or [])
+        if not items:
+            cached = list(getattr(self, "_sidebar_queue_cache_items", []) or [])
+            if cached:
+                return cached
         return items
 
     def _plain_queue_status(self, status: str) -> str:
@@ -275,10 +288,10 @@ class HomeUIMixin:
     def _sidebar_preset_combo_style(self) -> str:
         return (
             "QComboBox { background:#11181C; color:#F5F7FA; border:1px solid #2D3942; "
-            "border-radius:5px; padding:2px 7px; font-size:9px; font-weight:700; "
-            "min-height:22px; max-height:22px; } "
+            "border-radius:5px; padding:1px 5px; font-size:9px; font-weight:700; "
+            "min-height:18px; max-height:18px; } "
             "QComboBox:hover { border-color:#465663; background:#151C20; } "
-            "QComboBox::drop-down { width:18px; border:none; } "
+            "QComboBox::drop-down { width:16px; border:none; } "
             "QComboBox QAbstractItemView { background:#151C20; color:#F5F7FA; "
             "selection-background-color:#0B84FF; border:1px solid #2D3942; }"
         )
@@ -300,12 +313,15 @@ class HomeUIMixin:
         panel.setStyleSheet("QWidget#SidebarPresetPanel { background:#151C20; border:1px solid #2D3942; border-radius:7px; }")
 
         lay = QVBoxLayout(panel)
-        lay.setContentsMargins(9, 7, 9, 7)
-        lay.setSpacing(5)
+        lay.setContentsMargins(6, 4, 6, 4)
+        lay.setSpacing(0)
 
-        title = QLabel("인식 프리셋")
-        title.setStyleSheet("color:#F5F7FA; font-size:10px; font-weight:800; border:none; background:transparent;")
-        lay.addWidget(title)
+        grid_wrap = QWidget(panel)
+        grid_wrap.setStyleSheet("background:transparent; border:none;")
+        grid = QGridLayout(grid_wrap)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(4)
+        grid.setVerticalSpacing(2)
 
         self.sidebar_stt_quality_combo = QComboBox(panel)
         for key, preset in load_stt_quality_presets().items():
@@ -315,21 +331,50 @@ class HomeUIMixin:
             if desc:
                 self.sidebar_stt_quality_combo.setItemData(self.sidebar_stt_quality_combo.count() - 1, desc, Qt.ItemDataRole.ToolTipRole)
         self.sidebar_stt_quality_combo.setStyleSheet(self._sidebar_preset_combo_style())
+        self.sidebar_stt_quality_combo.setFixedWidth(154)
+        self.sidebar_stt_quality_combo.setFixedHeight(18)
         self.sidebar_stt_quality_combo.currentIndexChanged.connect(self._on_sidebar_stt_quality_changed)
-        lay.addWidget(self._sidebar_preset_row("정밀인식", self.sidebar_stt_quality_combo))
+        stt_row = self._sidebar_preset_row("정밀인식", self.sidebar_stt_quality_combo)
+        grid.addWidget(stt_row, 0, 0)
 
         self.sidebar_audio_preset_combo = QComboBox(panel)
         self.sidebar_audio_preset_combo.addItem("직접 설정", "")
-        for name, preset in load_audio_presets().items():
-            self.sidebar_audio_preset_combo.addItem(name, name)
+        self.sidebar_audio_preset_combo.addItem("기본값 적용", "__default__")
+        curated_audio_presets = _audio_presets.curated_audio_preset_names()
+        loaded_audio_presets = _audio_presets.load_audio_presets()
+        for name in curated_audio_presets:
+            preset = loaded_audio_presets.get(name)
+            if not isinstance(preset, dict):
+                continue
             desc = str(preset.get("description") or "")
+            self.sidebar_audio_preset_combo.addItem(name, name)
             if desc:
                 self.sidebar_audio_preset_combo.setItemData(self.sidebar_audio_preset_combo.count() - 1, desc, Qt.ItemDataRole.ToolTipRole)
         self.sidebar_audio_preset_combo.setStyleSheet(self._sidebar_preset_combo_style())
+        self.sidebar_audio_preset_combo.setFixedWidth(154)
+        self.sidebar_audio_preset_combo.setFixedHeight(18)
         self.sidebar_audio_preset_combo.currentIndexChanged.connect(self._on_sidebar_audio_preset_changed)
-        lay.addWidget(self._sidebar_preset_row("오디오", self.sidebar_audio_preset_combo))
+        audio_row = self._sidebar_preset_row("오디오", self.sidebar_audio_preset_combo)
+        grid.addWidget(audio_row, 1, 0)
 
-        panel.setMaximumHeight(104)
+        self.sidebar_auto_preset_btn = QToolButton(panel)
+        self.sidebar_auto_preset_btn.setText("")
+        self.sidebar_auto_preset_btn.setAutoRaise(False)
+        self.sidebar_auto_preset_btn.setIcon(self._nav_icon("auto", "#A9B0B7"))
+        self.sidebar_auto_preset_btn.setIconSize(QSize(16, 16))
+        self.sidebar_auto_preset_btn.setFixedSize(38, 38)
+        self.sidebar_auto_preset_btn.setStyleSheet(
+            "QToolButton { background:#202A31; border:1px solid #2D3942; border-radius:7px; padding:0; } "
+            "QToolButton:hover { background:#2A363F; border-color:#465663; }"
+        )
+        self.sidebar_auto_preset_btn.clicked.connect(self._on_sidebar_auto_preset_detect)
+        self.sidebar_auto_preset_btn.setToolTip("영상 기준 자동 판정")
+        grid.addWidget(self.sidebar_auto_preset_btn, 0, 1, 2, 1, alignment=Qt.AlignmentFlag.AlignTop)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnMinimumWidth(1, 38)
+        lay.addWidget(grid_wrap)
+
+        panel.setMaximumHeight(60)
 
         self.sidebar_preset_panel = panel
         self._sync_sidebar_preset_panel()
@@ -339,13 +384,13 @@ class HomeUIMixin:
         row.setStyleSheet("background:transparent; border:none;")
         lay = QHBoxLayout(row)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
+        lay.setSpacing(4)
         label = QLabel(label_text)
-        label.setFixedWidth(48)
+        label.setFixedWidth(40)
         label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         label.setStyleSheet("color:#A9B0B7; font-size:9px; font-weight:800; border:none; background:transparent;")
         lay.addWidget(label)
-        lay.addWidget(combo, stretch=1)
+        lay.addWidget(combo, stretch=0)
         return row
 
     def _set_combo_data_silent(self, combo: QComboBox | None, value: str) -> None:
@@ -361,51 +406,7 @@ class HomeUIMixin:
         except RuntimeError:
             pass
     def _sync_sidebar_preset_panel(self, settings: dict | None = None):
-        settings = dict(settings or load_settings())
-        self._set_combo_data_silent(
-            getattr(self, "sidebar_stt_quality_combo", None),
-            normalize_stt_quality_key(settings.get("stt_quality_preset", "balanced")),
-        )
-        self._set_combo_data_silent(
-            getattr(self, "sidebar_audio_preset_combo", None),
-            str(settings.get("audio_preset", "") or ""),
-        )
-
-        combo = getattr(self, "sidebar_cut_boundary_combo", None)
-        if combo is not None:
-            try:
-                from core.cut_boundary import cut_boundary_level
-                current_level = cut_boundary_level(settings)
-            except Exception:
-                enabled = bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True)))
-                current_level = "medium" if enabled else "off"
-
-            try:
-                combo.blockSignals(True)
-
-                # 혹시 기존 사용/미사용 항목만 남아 있으면 4단계 항목으로 재구성
-                existing_data = [combo.itemData(i) for i in range(combo.count())]
-                if not all(x in existing_data for x in ("off", "low", "medium", "high")):
-                    combo.clear()
-                    combo.addItem("사용안함", "off")
-                    combo.addItem("낮음", "low")
-                    combo.addItem("중간", "medium")
-                    combo.addItem("높음", "high")
-
-                found = False
-                for i in range(combo.count()):
-                    if combo.itemData(i) == current_level:
-                        combo.setCurrentIndex(i)
-                        found = True
-                        break
-
-                if not found:
-                    combo.setCurrentIndex(2 if combo.count() >= 3 else 0)
-
-                combo.blockSignals(False)
-            except RuntimeError:
-                # 콤보박스가 C++ 메모리에서 삭제된 상태면 쿨하게 포기하고 유령 객체 제거
-                self.sidebar_cut_boundary_combo = None
+        sync_sidebar_preset_panel(self, settings)
     def _apply_sidebar_settings_update(self, updates: dict | None = None, preset_applier=None):
         settings = dict(load_settings())
         if callable(preset_applier):
@@ -432,12 +433,50 @@ class HomeUIMixin:
         if combo is None:
             return
         preset_name = combo.currentData() or ""
-        if preset_name:
+        if preset_name == "__default__":
+            default_applier = getattr(_audio_presets, "apply_default_audio_preset", None)
+            if callable(default_applier):
+                self._apply_sidebar_settings_update(preset_applier=default_applier)
+            else:
+                self._apply_sidebar_settings_update({"audio_preset": ""})
+        elif preset_name:
             self._apply_sidebar_settings_update(
-                preset_applier=lambda settings: apply_audio_preset(settings, preset_name)
+                preset_applier=lambda settings: _audio_presets.apply_audio_preset(settings, preset_name)
             )
         else:
             self._apply_sidebar_settings_update({"audio_preset": ""})
+
+    def _on_sidebar_auto_preset_detect(self, *args):
+        media_path = self._current_editor_media_path()
+        if not media_path:
+            QMessageBox.information(self, "자동 판정", "현재 에디터에 열린 영상이 없어서 자동 판정을 진행할 수 없습니다.")
+            return
+        settings = dict(load_settings())
+        try:
+            decision = auto_classify_media_presets(media_path, settings=settings)
+            updated = apply_auto_classified_presets(settings, decision)
+            self._apply_ai_settings(updated)
+            self._sync_sidebar_preset_panel(updated)
+            QMessageBox.information(
+                self,
+                "자동 판정 완료",
+                (
+                    f"오디오: {decision['audio_preset']}\n"
+                    f"정밀인식: {decision['stt_quality_preset']}\n"
+                    f"신뢰도: {int(round(float(decision.get('confidence', 0.0)) * 100))}%\n\n"
+                    f"{decision.get('reason', '')}"
+                ),
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "자동 판정 실패", str(e))
+
+    def _current_editor_media_path(self) -> str:
+        editor = self._active_editor()
+        return str(
+            getattr(editor, "media_path", "")
+            or getattr(getattr(editor, "sm", None), "current_file", "")
+            or ""
+        )
 
     def _is_workspace_dirty(self) -> bool:
         editor = self._active_editor()
@@ -628,10 +667,9 @@ class HomeUIMixin:
 
         return {
             "off": "사용안함",
-            "low": "낮음",
-            "medium": "중간",
-            "high": "높음",
-        }.get(str(level or "medium"), "중간")
+            "low": "중간",
+            "medium": "높음",
+        }.get(str(level or "medium"), "높음")
 
     def _pipeline_rows(self, settings: dict) -> list[tuple[str, str, str]]:
         subtitle_llm = str(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "기본")) or "기본")
@@ -674,7 +712,7 @@ class HomeUIMixin:
                             parts.append(str(item.text() or ""))
             except RuntimeError:
                 pass
-        return " ".join(parts).lower()
+        return "\n".join(parts)
 
     def _roughcut_draft_status_value(self) -> str:
         editor = self._active_editor()
@@ -954,26 +992,25 @@ class HomeUIMixin:
 
             choices = [
                 ("사용안함", "off"),
-                ("낮음", "low"),
-                ("중간", "medium"),
-                ("높음", "high"),
+                ("중간", "low"),
+                ("높음", "medium"),
             ]
 
             labels = {
                 "off": "사용안함",
-                "low": "낮음 - 3초 간격",
-                "medium": "중간 - 2초 간격",
-                "high": "높음 - 1초 간격",
+                "low": "중간 - 3초 간격",
+                "medium": "높음 - 2초 간격",
             }
             masks = {
                 "off": "off",
                 "low": "cross4",
                 "medium": "cross5",
-                "high": "o8",
             }
 
             def _cut_boundary_updates(level: str) -> dict:
                 level = str(level or "medium")
+                if level == "high":
+                    level = "medium"
                 enabled = level != "off"
                 return {
                     "scan_cut_boundary_level": level,
@@ -1368,11 +1405,11 @@ class HomeUIMixin:
         row.setSpacing(8 if is_unified else 6)
         if icon_name:
             icon_lbl = QLabel()
-            icon_size = 15 if is_unified else 14
+            icon_size = 13 if is_unified else 14
             icon_lbl.setPixmap(line_icon(icon_name, icon_color, icon_size).pixmap(icon_size, icon_size))
             icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             if is_unified:
-                icon_lbl.setFixedSize(20, 20)
+                icon_lbl.setFixedSize(18, 16)
                 icon_lbl.setStyleSheet("background-color: #11181C; border: none; border-radius: 2px;")
             else:
                 icon_lbl.setFixedSize(16, 16)
@@ -1404,7 +1441,7 @@ class HomeUIMixin:
         layout.setSpacing(4)
         actions = [
             ("AI", "ai", self._open_main_ai_settings),
-            ("상세설정", "settings", self._open_main_adv_settings),
+            *([("개인화", "ai", self._open_main_personalization_learning)] if config.IS_MAC else []),
             ("화자", "speaker", self._open_main_speaker_settings),
             ("화각", "sliders", self._dummy_action),
             ("간격", "timeline", self._open_main_gap_settings),
@@ -1780,16 +1817,7 @@ class HomeUIMixin:
             self._apply_ai_settings(dlg.result_settings)
 
     def _open_main_adv_settings(self):
-        editor = self._active_editor()
-        if editor is not None and hasattr(editor, "_show_adv_settings"):
-            editor._show_adv_settings()
-            return
-        from ui.settings.settings_dialog import AdvancedSettingsDialog
-        settings = load_settings()
-        dlg = AdvancedSettingsDialog(settings, self)
-        if dlg.exec():
-            settings.update(dlg.result)
-            save_settings(settings)
+        self._open_main_ai_settings()
 
     def _open_main_speaker_settings(self):
         editor = self._active_editor()
@@ -1814,6 +1842,12 @@ class HomeUIMixin:
         if dlg.exec():
             settings.update(dlg.result)
             save_settings(settings)
+
+    def _open_main_personalization_learning(self):
+        from ui.settings.settings_personalization import PersonalizationLearningDialog
+
+        dlg = PersonalizationLearningDialog(self)
+        dlg.exec()
 
     def _toggle_main_video(self):
         editor = self._activate_editor_for_main_action()
@@ -1845,17 +1879,13 @@ class HomeUIMixin:
             if mode_combo.itemData(i) == current_mode:
                 mode_combo.setCurrentIndex(i); break
         layout.addWidget(mode_combo)
-        shortcut_row = QHBoxLayout(); btn_ai = QPushButton("AI 설정"); btn_detail = QPushButton("상세설정")
+        shortcut_row = QHBoxLayout(); btn_ai = QPushButton("설정")
         def open_ai_settings():
             from ui.settings.settings_dialog import SettingsDialog
             s = load_settings(); d = SettingsDialog(s, self)
             if d.exec(): self._apply_ai_settings(d.result_settings)
-        def open_advanced_settings():
-            from ui.settings.settings_dialog import AdvancedSettingsDialog
-            s = load_settings(); d = AdvancedSettingsDialog(s, self)
-            if d.exec(): save_settings(d.result)
-        btn_ai.clicked.connect(open_ai_settings); btn_detail.clicked.connect(open_advanced_settings)
-        shortcut_row.addWidget(btn_ai); shortcut_row.addWidget(btn_detail); layout.addLayout(shortcut_row)
+        btn_ai.clicked.connect(open_ai_settings)
+        shortcut_row.addWidget(btn_ai); layout.addLayout(shortcut_row)
         btn_layout = QHBoxLayout(); btn_save = QPushButton("저장"); btn_save.setStyleSheet(button_style("primary"))
         def save_all():
             set_nas_path(nas_input.text()); set_icloud_path(icloud_input.text())

@@ -126,12 +126,14 @@ class SignalHandlersMixin:
             except Exception as exc:
                 get_logger().log(f"⚠️ 컷 경계 placeholder 위젯 준비 실패: {exc}")
                 return
-        try:
-            roughcut.refresh_from_editor(analyze_if_missing=False)
-            self._editor_roughcut_result = getattr(roughcut, "_result", None)
-        except Exception as exc:
-            get_logger().log(f"⚠️ 컷 경계 placeholder 갱신 실패: {exc}")
-            return
+        refresh_from_editor = getattr(roughcut, "refresh_from_editor", None)
+        if callable(refresh_from_editor):
+            try:
+                refresh_from_editor(analyze_if_missing=False)
+            except Exception as exc:
+                get_logger().log(f"⚠️ 컷 경계 placeholder 갱신 실패: {exc}")
+                return
+        self._editor_roughcut_result = getattr(roughcut, "_result", None)
         try:
             if hasattr(editor, "_redraw_timeline"):
                 editor._redraw_timeline()

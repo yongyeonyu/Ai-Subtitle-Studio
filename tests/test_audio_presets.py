@@ -8,6 +8,7 @@ from unittest import mock
 import config
 from core.audio.audio_presets import (
     apply_audio_preset,
+    apply_default_audio_preset,
     load_audio_presets,
 )
 from core.audio.media_processor import VideoProcessor
@@ -49,6 +50,36 @@ class AudioPresetTests(unittest.TestCase):
         self.assertEqual(applied["selected_vad"], "none")
         self.assertFalse(applied["use_basic_filter"])
         self.assertGreaterEqual(applied["df_vol"], 4.8)
+
+    def test_curated_audio_preset_applies_full_stack_recommendation_fields(self):
+        applied = apply_audio_preset({}, "실외-마이크유")
+
+        self.assertEqual(applied["cut_boundary_level"], "medium")
+        self.assertEqual(applied["selected_audio_ai"], "clearvoice")
+        self.assertEqual(applied["selected_vad"], "ten_vad")
+        self.assertTrue(applied["stt_ensemble_enabled"])
+        self.assertTrue(applied["stt_ensemble_llm_judge_enabled"])
+        self.assertEqual(applied["selected_model"], "gemma4:e4b")
+        self.assertEqual(applied["roughcut_llm_provider"], "ollama")
+        self.assertEqual(applied["roughcut_llm_model"], "exaone3.5:7.8b")
+        self.assertEqual(applied["audio_preset_recommended_preprocess_model"], "ffmpeg-outdoor-strong")
+
+    def test_apply_default_audio_preset_restores_default_audio_stack(self):
+        applied = apply_default_audio_preset(
+            {
+                "audio_preset": "야외",
+                "selected_audio_ai": "none",
+                "selected_vad": "none",
+                "ff_chunk": 20,
+                "gap_push_rate": 0.82,
+            }
+        )
+
+        self.assertEqual(applied["audio_preset"], "")
+        self.assertEqual(applied["selected_audio_ai"], "deepfilter")
+        self.assertEqual(applied["selected_vad"], "silero")
+        self.assertEqual(applied["ff_chunk"], 30)
+        self.assertEqual(applied["gap_push_rate"], 0.7)
 
     def test_loaded_presets_use_audio_presets_json_values(self):
         presets = load_audio_presets()

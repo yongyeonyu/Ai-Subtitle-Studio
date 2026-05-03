@@ -170,8 +170,12 @@ class CoreBackendFast(CoreBackend):
                         seg["end"] = seg["start"] + 0.5
 
                 opt = self._align_subtitle_segments_to_vad(opt, vad_segs, context="빠른모드")
-                all_segments.extend([dict(seg) for seg in opt])
                 opt = apply_final_gap_settings(opt, force=True)
+                if hasattr(self, "_magnetize_by_saved_cut_boundaries"):
+                    opt = self._magnetize_by_saved_cut_boundaries(opt, context="빠른모드 최종 자막")
+                if hasattr(self, "_split_by_saved_cut_boundaries"):
+                    opt = self._split_by_saved_cut_boundaries(opt, context="빠른모드 최종 자막")
+                all_segments.extend([dict(seg) for seg in opt])
 
                 if hasattr(self.ui, "_sig_append_segments"):
                     self.ui._sig_append_segments.emit(opt)

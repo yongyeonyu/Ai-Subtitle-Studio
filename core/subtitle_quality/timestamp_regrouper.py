@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
 from core.engine.word_resegmenter import resegment_by_word_timestamps
 from core.subtitle_quality.models import attach_asr_metadata
 from core.subtitle_quality.vad_alignment_checker import annotate_segment_vad_alignment, normalize_vad_segments
@@ -24,6 +25,14 @@ def _as_float(value: Any, default: float = 0.0) -> float:
 
 def _char_count(text: str) -> int:
     return len(str(text or "").replace(" ", "").replace("\n", ""))
+
+
+def _snap_edge_to_frame(sec: float, fps: float, *, edge: str) -> float:
+    frame = sec_to_frame(sec, fps)
+    snapped = frame_to_sec(frame, fps)
+    if edge in {"start", "end"} and snapped < sec:
+        snapped = frame_to_sec(frame + 1, fps)
+    return round(max(0.0, snapped), 6)
 
 
 def _boundary_key(segment: dict[str, Any]) -> tuple[Any, Any]:
@@ -266,8 +275,98 @@ def snap_segments_to_word_vad_boundaries(
     return snapped
 
 
+def refine_segment_edges_with_context(
+    segments: list[dict[str, Any]],
+    vad_segments: list[dict[str, Any]] | None = None,
+    *,
+    frame_rate: float | None = None,
+    leading_pad_sec: float = 0.02,
+    trailing_pad_sec: float = 0.05,
+    max_word_shift_sec: float = 0.12,
+    max_vad_shift_sec: float = 0.10,
+) -> list[dict[str, Any]]:
+    """Final timing polish using word edges, nearby VAD, and frame snapping.
+
+    This pass is intentionally conservative. It only nudges boundaries when the
+    target edge is close enough to the current segment edge, then re-clamps
+    neighboring overlaps and optionally snaps to the active frame grid.
+    """
+    if not segments:
+        return []
+
+    vad = normalize_vad_segments(vad_segments or [])
+    fps = normalize_fps(frame_rate) if frame_rate not in (None, "", 0, 0.0) else 0.0
+    leading_pad = max(0.0, float(leading_pad_sec or 0.0))
+    trailing_pad = max(0.0, float(trailing_pad_sec or 0.0))
+    max_word_shift = max(0.0, float(max_word_shift_sec or 0.0))
+    max_vad_shift = max(0.0, float(max_vad_shift_sec or 0.0))
+
+    refined: list[dict[str, Any]] = []
+    ordered = sorted((dict(item) for item in segments), key=lambda item: _as_float(item.get("start")))
+
+    for segment in ordered:
+        start = max(0.0, _as_float(segment.get("start")))
+        end = max(start + 0.05, _as_float(segment.get("end"), start + 0.05))
+        old_start, old_end = start, end
+        edges = _word_edges(segment)
+        if edges is None:
+            refined.append(segment)
+            continue
+
+        word_start, word_end = edges
+        target_start = word_start
+        target_end = word_end
+
+        refs = _nearby_vad_for_edges(word_start, word_end, vad, max_edge_shift=max_vad_shift)
+        if refs:
+            first = refs[0]
+            last = refs[-1]
+            if abs(_as_float(first.get("start")) - word_start) <= max_vad_shift:
+                target_start = min(target_start, max(0.0, _as_float(first.get("start")) - leading_pad))
+            if abs(_as_float(last.get("end")) - word_end) <= max_vad_shift:
+                target_end = max(target_end, _as_float(last.get("end")) + trailing_pad)
+
+        if abs(target_start - start) <= max_word_shift:
+            start = max(0.0, target_start)
+        if abs(target_end - end) <= max(max_word_shift, max_vad_shift):
+            end = max(start + 0.05, target_end)
+
+        if fps > 0.0:
+            start = _snap_edge_to_frame(start, fps, edge="start")
+            end = _snap_edge_to_frame(end, fps, edge="end")
+            end = max(start + (1.0 / fps), end)
+
+        segment["start"] = round(max(0.0, start), 3)
+        segment["end"] = round(max(segment["start"] + 0.05, end), 3)
+        if abs(segment["start"] - old_start) > 0.001 or abs(segment["end"] - old_end) > 0.001:
+            meta = dict(segment.get("asr_metadata") or {})
+            meta["precision_timing"] = {
+                "from": [round(old_start, 3), round(old_end, 3)],
+                "to": [segment["start"], segment["end"]],
+                "source": "words+vad+frame",
+            }
+            segment["asr_metadata"] = meta
+        refined.append(segment)
+
+    for idx in range(1, len(refined)):
+        prev = refined[idx - 1]
+        cur = refined[idx]
+        prev_start = _as_float(prev.get("start"))
+        cur_start = _as_float(cur.get("start"))
+        if _as_float(prev.get("end")) > cur_start:
+            boundary = max(prev_start + 0.05, cur_start - 0.02)
+            if fps > 0.0:
+                boundary = _snap_edge_to_frame(boundary, fps, edge="end")
+            prev["end"] = round(max(prev_start + 0.05, boundary), 3)
+            if _as_float(cur.get("end")) <= _as_float(cur.get("start")):
+                cur["end"] = round(_as_float(cur.get("start")) + 0.05, 3)
+
+    return refined
+
+
 def regroup_by_word_timestamps(segments: list[dict[str, Any]], **kwargs) -> list[dict[str, Any]]:
     vad_segments = kwargs.pop("vad_segments", None)
+    frame_rate = kwargs.pop("frame_rate", None)
     word_gap_break_sec = kwargs.pop("word_gap_break_sec", 0.65)
     regrouped = resegment_by_word_timestamps(
         segments,
@@ -292,9 +391,14 @@ def regroup_by_word_timestamps(segments: list[dict[str, Any]], **kwargs) -> list
         max_duration=max_duration,
         gap_break_sec=gap_break_sec,
     )
-    return snap_segments_to_word_vad_boundaries(
+    snapped = snap_segments_to_word_vad_boundaries(
         clamped,
         vad_segments=vad_segments,
         edge_pad_sec=0.04,
         max_edge_shift_sec=min(0.35, max(0.12, float(word_gap_break_sec or 0.65) * 0.5)),
+    )
+    return refine_segment_edges_with_context(
+        snapped,
+        vad_segments=vad_segments,
+        frame_rate=frame_rate,
     )

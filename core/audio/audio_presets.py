@@ -16,6 +16,230 @@ import config
 PRESET_PATH = os.path.join(config.DATASET_DIR, "audio_presets.json")
 
 
+def _stt1_model() -> str:
+    return "mlx-community/whisper-large-v3-mlx" if config.IS_MAC else "large-v3"
+
+
+def _stt2_model() -> str:
+    return "youngouk/ghost613-turbo-korean-4bit-mlx" if config.IS_MAC else "ghost613/faster-whisper-large-v3-turbo-korean"
+
+
+def _roughcut_llm(model_name: str) -> dict:
+    enabled = bool(model_name and "사용 안함" not in model_name)
+    return {
+        "roughcut_llm_enabled": enabled,
+        "roughcut_llm_use_override": enabled,
+        "roughcut_llm_provider": "ollama" if enabled else "none",
+        "roughcut_llm_model": model_name if enabled else "사용 안함",
+    }
+
+
+def _full_stack_recommendation(
+    *,
+    cut_level: str,
+    preprocess_model: str,
+    audio_model: str,
+    stt1_model: str,
+    stt2_model: str,
+    vad_model: str,
+    subtitle_llm: str,
+    roughcut_llm_model: str,
+) -> dict:
+    cut_level = str(cut_level or "off").lower()
+    if cut_level == "high":
+        cut_level = "medium"
+    enabled = str(cut_level or "off").lower() != "off"
+    return {
+        "audio_preset_recommended_cut_boundary": cut_level,
+        "audio_preset_recommended_preprocess_model": preprocess_model,
+        "audio_preset_recommended_audio_model": audio_model,
+        "audio_preset_recommended_stt1": stt1_model,
+        "audio_preset_recommended_stt2": stt2_model,
+        "audio_preset_recommended_vad": vad_model,
+        "audio_preset_recommended_subtitle_llm": subtitle_llm,
+        "audio_preset_recommended_roughcut_llm": roughcut_llm_model,
+        "cut_boundary_level": cut_level,
+        "scan_cut_boundary_level": cut_level,
+        "scan_cut_level": cut_level,
+        "cut_boundary_detection_enabled": enabled,
+        "scan_cut_enabled": enabled,
+        "scan_cut_auto_enabled": enabled,
+        "cut_boundary_enabled": enabled,
+        "selected_audio_ai": audio_model,
+        "selected_vad": vad_model,
+        "selected_whisper_model": stt1_model,
+        "selected_whisper_model_secondary": stt2_model,
+        "stt_ensemble_enabled": True,
+        "stt_ensemble_llm_judge_enabled": True,
+        "selected_model": subtitle_llm,
+        **_roughcut_llm(roughcut_llm_model),
+    }
+
+CURATED_AUDIO_PRESET_SPECS = {
+    "실내-마이크유": {
+        "base": "실내일반",
+        "description": "실내 수음 + 외부 마이크 기준의 균형형 프리셋",
+        "stack": _full_stack_recommendation(
+            cut_level="medium",
+            preprocess_model="ffmpeg-balanced",
+            audio_model="deepfilter",
+            stt1_model=_stt1_model(),
+            stt2_model=_stt2_model(),
+            vad_model="silero",
+            subtitle_llm="gemma4:e4b",
+            roughcut_llm_model="exaone3.5:7.8b",
+        ),
+    },
+    "실내-마이크무": {
+        "base": "브이로그실내",
+        "fallbacks": ["스마트폰", "실내일반", "마이크 없음/풀속도"],
+        "description": "실내 수음 + 내장 마이크 기준의 보정형 프리셋",
+        "overrides": {
+            "ff_nf": -27,
+            "ff_dynaudnorm_m": 14.0,
+            "ff_treble_boost": 1.5,
+        },
+        "stack": _full_stack_recommendation(
+            cut_level="medium",
+            preprocess_model="ffmpeg-voice-cleanup",
+            audio_model="deepfilter",
+            stt1_model=_stt1_model(),
+            stt2_model=_stt2_model(),
+            vad_model="silero",
+            subtitle_llm="gemma4:e4b",
+            roughcut_llm_model="exaone3.5:7.8b",
+        ),
+    },
+    "실외-마이크유": {
+        "base": "야외",
+        "description": "실외 수음 + 외부 마이크 기준의 강한 노이즈 대응 프리셋",
+        "stack": _full_stack_recommendation(
+            cut_level="high",
+            preprocess_model="ffmpeg-outdoor-strong",
+            audio_model="clearvoice",
+            stt1_model=_stt1_model(),
+            stt2_model=_stt2_model(),
+            vad_model="ten_vad",
+            subtitle_llm="gemma4:e4b",
+            roughcut_llm_model="exaone3.5:7.8b",
+        ),
+    },
+    "실외-마이크무": {
+        "base": "스마트폰",
+        "fallbacks": ["야외", "마이크 없음/풀속도"],
+        "description": "실외 수음 + 내장 마이크 기준의 강한 보정 프리셋",
+        "overrides": {
+            "ff_nf": -30,
+            "ff_dynaudnorm_m": 18.0,
+            "ff_treble_boost": 3.0,
+        },
+        "stack": _full_stack_recommendation(
+            cut_level="high",
+            preprocess_model="ffmpeg-outdoor-strong",
+            audio_model="clearvoice",
+            stt1_model=_stt1_model(),
+            stt2_model=_stt2_model(),
+            vad_model="ten_vad",
+            subtitle_llm="gemma4:e4b",
+            roughcut_llm_model="exaone3.5:7.8b",
+        ),
+    },
+    "차안-마이크유": {
+        "base": "차량",
+        "fallbacks": ["실내일반"],
+        "description": "차량 내부 + 외부 마이크 기준의 저역/엔진 소음 대응 프리셋",
+        "stack": _full_stack_recommendation(
+            cut_level="high",
+            preprocess_model="ffmpeg-car-lowcut",
+            audio_model="clearvoice",
+            stt1_model=_stt1_model(),
+            stt2_model=_stt2_model(),
+            vad_model="ten_vad",
+            subtitle_llm="gemma4:e4b",
+            roughcut_llm_model="exaone3.5:7.8b",
+        ),
+    },
+    "차안-마이크무": {
+        "base": "차량",
+        "fallbacks": ["스마트폰", "실내일반"],
+        "description": "차량 내부 + 내장 마이크 기준의 강한 저역/노이즈 보정 프리셋",
+        "overrides": {
+            "ff_hp": 150,
+            "ff_nf": -30,
+            "ff_dynaudnorm_m": 18.0,
+            "ff_treble_boost": 2.5,
+        },
+        "stack": _full_stack_recommendation(
+            cut_level="high",
+            preprocess_model="ffmpeg-car-lowcut",
+            audio_model="clearvoice",
+            stt1_model=_stt1_model(),
+            stt2_model=_stt2_model(),
+            vad_model="ten_vad",
+            subtitle_llm="gemma4:e4b",
+            roughcut_llm_model="exaone3.5:7.8b",
+        ),
+    },
+}
+
+
+DEFAULT_AUDIO_APPLY_DATA = {
+    "selected_audio_ai": "deepfilter",
+    "selected_vad": "silero",
+    "vad_threshold": 0.5,
+    "vad_min_speech": 0.25,
+    "vad_min_silence": 2.0,
+    "vad_speech_pad": 0.1,
+    "vad_window_size": 512,
+    "df_hp": 100,
+    "df_eq_g": 8,
+    "df_comp_th": -28,
+    "df_vol": 3.5,
+    "df_atten_lim": 100,
+    "w_df_no_speech": 0.4,
+    "w_df_logprob": -2.5,
+    "w_df_comp": 2.4,
+    "w_df_temp_max": 0.8,
+    "none_hp": 80,
+    "none_lp": 3000,
+    "none_nf": -25,
+    "none_target": -14,
+    "none_comp_th": -28,
+    "none_vol": 4.0,
+    "w_none_no_speech": 0.85,
+    "w_none_logprob": -1.0,
+    "w_none_comp": 1.6,
+    "w_none_temp_max": 0.4,
+    "w_beam_size": 5,
+    "w_patience": 1.0,
+    "w_length_penalty": 1.0,
+    "io_workers": 6,
+    "ff_threads": 0,
+    "ff_ac": 1,
+    "ff_ar": 16000,
+    "ff_hp": 200,
+    "ff_lp": 3000,
+    "ff_nf": -25,
+    "ff_chunk": 30,
+    "ff_dynaudnorm_m": 10.0,
+    "ff_dynaudnorm_p": 0.95,
+    "ff_treble_boost": 0.0,
+    "continuous_threshold": 2.0,
+    "gap_pull_rate": 0.3,
+    "gap_push_rate": 0.7,
+    "single_subtitle_end": 0.2,
+    "split_length_threshold": 10,
+    "sub_min_duration": 0.2,
+    "sub_max_duration": 6.0,
+    "sub_max_cps": 12,
+    "sub_dedup_window": 0.5,
+    "sub_gap_break_sec": 1.5,
+    "prefetch_ahead": 3,
+    "stt_parallel_level": 3,
+    "video_ui_interval_ms": 33,
+}
+
+
 DEFAULT_AUDIO_PRESETS: dict[str, dict] = {'마이크 없음/풀속도': {'description': 'STT 속도 최우선, AudioAI/VAD 생략',
                 'settings': {'vad_threshold': 0.42,
                              'vad_min_speech': 0.22,
@@ -970,10 +1194,10 @@ def load_audio_presets() -> dict[str, dict]:
             for name, preset in data.items():
                 if isinstance(preset, dict):
                     merged[name] = preset
-            return merged
+            return _inject_curated_audio_presets(merged)
     except Exception:
         pass
-    return deepcopy(DEFAULT_AUDIO_PRESETS)
+    return _inject_curated_audio_presets(deepcopy(DEFAULT_AUDIO_PRESETS))
 
 
 def apply_audio_preset(settings: dict, preset_name: str) -> dict:
@@ -984,5 +1208,46 @@ def apply_audio_preset(settings: dict, preset_name: str) -> dict:
     out = dict(settings)
     for key, value in dict(preset.get("settings", {}) or {}).items():
         out[key] = value
+    for key, value in dict(preset.get("stack", {}) or {}).items():
+        out[key] = deepcopy(value)
     out["audio_preset"] = preset_name
     return out
+
+
+def apply_default_audio_preset(settings: dict) -> dict:
+    out = dict(settings)
+    for key, value in DEFAULT_AUDIO_APPLY_DATA.items():
+        out[key] = deepcopy(value)
+    out["audio_preset"] = ""
+    return out
+
+
+def curated_audio_preset_names() -> list[str]:
+    return list(CURATED_AUDIO_PRESET_SPECS.keys())
+
+
+def _first_preset(base_presets: dict[str, dict], names: list[str]) -> dict | None:
+    for name in names:
+        preset = base_presets.get(name)
+        if isinstance(preset, dict):
+            return preset
+    return None
+
+
+def _inject_curated_audio_presets(base_presets: dict[str, dict]) -> dict[str, dict]:
+    merged = deepcopy(base_presets or {})
+    for name, spec in CURATED_AUDIO_PRESET_SPECS.items():
+        candidates = [str(spec.get("base") or "")]
+        candidates.extend(list(spec.get("fallbacks") or []))
+        source = _first_preset(merged, candidates)
+        if not isinstance(source, dict):
+            continue
+        row = deepcopy(source)
+        row["description"] = str(spec.get("description") or row.get("description") or name)
+        settings = dict(row.get("settings") or {})
+        settings.update(deepcopy(spec.get("overrides") or {}))
+        row["settings"] = settings
+        if spec.get("stack"):
+            row["stack"] = deepcopy(spec.get("stack") or {})
+        merged[name] = row
+    return merged

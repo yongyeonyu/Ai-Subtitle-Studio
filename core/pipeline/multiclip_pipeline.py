@@ -201,6 +201,25 @@ class MulticlipPipelineMixin:
         """Whisper worker와 LLM worker를 분리해 클립 단위로 겹쳐 처리합니다."""
         from core.engine.subtitle_engine import apply_final_gap_settings, optimize_segments
 
+        cut_boundary_snapshot = (
+            self._cut_boundary_snapshot_for_pipeline()
+            if hasattr(self, "_cut_boundary_snapshot_for_pipeline")
+            else {"cut_boundaries": [], "provisional_cut_boundaries": []}
+        )
+        pipeline_cut_boundaries = [
+            dict(row) for row in list(cut_boundary_snapshot.get("cut_boundaries", []) or [])
+        ]
+        pipeline_provisional_cut_boundaries = [
+            dict(row) for row in list(cut_boundary_snapshot.get("provisional_cut_boundaries", []) or [])
+        ]
+        try:
+            runtime_settings = load_settings()
+        except Exception:
+            runtime_settings = {}
+        cut_boundary_enabled_runtime = bool(
+            runtime_settings.get("cut_boundary_detection_enabled", runtime_settings.get("scan_cut_enabled", True))
+        )
+
         stt_queue = queue.Queue()
         out_queue = queue.Queue()
         sentinel = object()
@@ -217,21 +236,20 @@ class MulticlipPipelineMixin:
                 try:
                     offset = float(item.get("offset", 0.0) or 0.0)
                     local_cuts = []
-                    for cut in self._project_cut_boundaries_for_pipeline():
+                    for cut in pipeline_cut_boundaries:
                         row = dict(cut)
                         sec = float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0) - offset
                         if sec > 0.0:
                             row["timeline_sec"] = sec
                             row["time"] = sec
                             local_cuts.append(row)
-                    settings = load_settings()
                     preview = optimize_stt_preview_segments(
                         item.get("segments") or [],
                         source_label=item.get("label") or "STT",
                         vad_segments=item.get("vad_segments") or [],
                         cut_boundaries=local_cuts,
-                        provisional_cut_boundaries=self._project_provisional_cut_boundaries_for_pipeline(),
-                        cut_boundary_enabled=bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True))),
+                        provisional_cut_boundaries=pipeline_provisional_cut_boundaries,
+                        cut_boundary_enabled=cut_boundary_enabled_runtime,
                         clip_offset=offset,
                         clip_idx=item.get("clip_idx"),
                         clip_path=item.get("clip_path"),
@@ -246,7 +264,7 @@ class MulticlipPipelineMixin:
                 get_logger().log("\n🎤 멀티클립 STT/LLM 병렬 파이프라인 시작...")
 
                 try:
-                    prefetch_ahead = max(1, int(load_settings().get("prefetch_ahead", 3)))
+                    prefetch_ahead = max(1, int(runtime_settings.get("prefetch_ahead", 3)))
                 except Exception:
                     prefetch_ahead = 3
 
@@ -296,7 +314,7 @@ class MulticlipPipelineMixin:
                             local_hard_cuts = []
                             clip_start = float(offset or 0.0)
                             clip_end = float(bd.get("end", clip_start) or clip_start)
-                            for row in self._project_cut_boundaries_for_pipeline():
+                            for row in pipeline_cut_boundaries:
                                 try:
                                     if isinstance(row, dict):
                                         sec = float(row.get("timeline_sec", row.get("time", row.get("start", 0.0))) or 0.0)
@@ -449,6 +467,10 @@ class MulticlipPipelineMixin:
                         context=f"멀티클립 {idx + 1}",
                     )
                     optimized = apply_final_gap_settings(optimized, force=True)
+                    optimized = self._magnetize_by_saved_cut_boundaries(
+                        optimized,
+                        context=f"멀티클립 {idx + 1} 최종 자막",
+                    )
                     optimized = self._split_by_saved_cut_boundaries(
                         optimized,
                         context=f"멀티클립 {idx + 1} 최종 자막",

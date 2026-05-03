@@ -277,13 +277,17 @@ class VideoProcessor:
                     get_logger().log(f"  ❌ {label} 실행 오류: timeout")
                     return False
                 line = raw_line.strip()
-                if not line.startswith("out_time_ms="):
-                    if line and not line.startswith(("frame=", "fps=", "stream_", "progress=", "bitrate=", "total_size=", "out_time=")):
+                if not (line.startswith("out_time_ms=") or line.startswith("out_time_us=")):
+                    if line and not line.startswith((
+                        "frame=", "fps=", "stream_", "progress=", "bitrate=", "total_size=",
+                        "out_time=", "out_time_us=", "speed=", "dup_frames=", "drop_frames="
+                    )):
                         stderr_lines.append(line)
                         stderr_lines = stderr_lines[-12:]
                     continue
                 try:
-                    out_sec = float(line.split("=", 1)[1]) / 1_000_000.0
+                    raw_value = float(line.split("=", 1)[1])
+                    out_sec = raw_value / 1_000_000.0
                 except Exception:
                     continue
                 last_pct = self._emit_ffmpeg_progress(label, out_sec / duration)
@@ -304,7 +308,7 @@ class VideoProcessor:
 
         if proc.returncode != 0:
             summary = "\n".join(stderr_lines[-10:])
-            get_logger().log(f"  ❌ {label} 실패: {summary[:1200]}")
+            get_logger().log(f"  ❌ {label} 실패(rc={proc.returncode}): {summary[:1200]}")
             return False
         if last_pct < 100:
             self._emit_ffmpeg_progress(label, 1.0, force=True)

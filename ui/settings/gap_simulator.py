@@ -6,14 +6,21 @@ from PyQt6.QtWidgets import QWidget, QToolTip
 from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QFontMetrics
 from PyQt6.QtCore import Qt, QRect
 import config
+from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
 
 
-class GapSimulatorWidget(QWidget):
+GapSimulatorBase = accelerated_widget_base()
+
+
+class GapSimulatorWidget(GapSimulatorBase):
     """실시간 AI 엔진 시뮬레이터 (X5 시승기 실전 데이터 + 오답 필터링 + 마우스 호버 툴팁)"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(340)
         self.setStyleSheet("background: #0F1518; border: 1px solid #24313A; border-radius: 8px;")
+        configure_lightweight_paint(self, opaque=True)
+        configure_opengl_widget(self)
+        self.render_backend = gpu_backend_name()
         
         # 💡 [추가] 마우스 움직임을 추적하여 그려진 상자 위에서 툴팁을 띄우기 위함
         self.setMouseTracking(True)
@@ -29,8 +36,6 @@ class GapSimulatorWidget(QWidget):
         self.max_cps = 12
         self.dedup_win = 0.5
         self.gap_break = 1.5
-        self.min_chars = 5
-        self.pre_merge = 3.0
         self.enforce_ratio = 1.5
         self.hal_dur = 0.8
         self.hal_chars = 10
@@ -105,7 +110,7 @@ class GapSimulatorWidget(QWidget):
         i = 0
         while i < len(split_res):
             curr = split_res[i]
-            if curr["chars"] < self.min_chars:
+            if curr["chars"] < 5:
                 merged = False
                 if i > 0 and (curr["start"] - split_res[i-1]["end"]) < self.gap_break:
                     split_res[i-1]["end"] = curr["end"]

@@ -131,7 +131,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(queue_panel.sizePolicy().verticalPolicy(), QSizePolicy.Policy.Expanding)
             self.assertGreater(queue_panel.maximumHeight(), 10000)
             left_layout = queue_panel.parentWidget().layout()
-            self.assertEqual(left_layout.stretch(left_layout.indexOf(queue_panel)), 1)
+            self.assertEqual(left_layout.stretch(left_layout.indexOf(queue_panel)), 3)
             nav_buttons = []
             for label in window.home_page.findChildren(QLabel):
                 if label.text() in {"홈", "에디터", "러프컷", "숏폼"}:

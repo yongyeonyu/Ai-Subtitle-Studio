@@ -989,14 +989,12 @@ class EditorWidget(
 
         btn_row = QHBoxLayout(); btn_row.setSpacing(5)
         self.btn_ai  = QPushButton("⚙️ AI")
-        self.btn_adv = QPushButton("🛠️ 상세설정")
         self.btn_spk = QPushButton("🗣️ 화자")
         self.btn_gap = QPushButton("⏱️ 간격")
         self.btn_vid = QPushButton("🎬 비디오")
         self.btn_log = QPushButton(self._terminal_log_button_text())
         self._top_btns = [
             (self.btn_ai,  "⚙️ AI",      "AI",      self._show_settings),
-            (self.btn_adv, "🛠️ 상세설정", "상세설정", self._show_adv_settings),
             (self.btn_spk, "🗣️ 화자",    "화자",     self._show_speaker_settings),
             (self.btn_gap, "⏱️ 간격",    "간격",     self._show_gap_settings),
             (self.btn_vid, "🎬 비디오",  "비디오",   self._toggle_video),
@@ -1049,7 +1047,7 @@ class EditorWidget(
 
     def _clean_action_label(self, text: str) -> str:
         label = str(text or "")
-        for token in ("🧠", "▶", "🔄", "⏳", "⌛", "💾", "🎥"):
+        for token in ("🧠", "▶", "🔄", "⏳", "⌛", "💾", "🎥", "■"):
             label = label.replace(token, "")
         return label.strip() or "시작"
 

@@ -374,7 +374,7 @@ def subtitle_detection_segments_for_editor(
 
         if source in {"STT1", "STT2"}:
             state = "llm_selected" if llm_selected else ("manual_selected" if manually_selected else "selected")
-            suffix = "LLM" if llm_selected else ("선택" if manually_selected else "")
+            suffix = "선택"
             label = _subtitle_detection_label(source, score, suffix=suffix)
             add(
                 start,

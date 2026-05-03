@@ -80,7 +80,7 @@ class SubtitleStateManager(QObject):
         self.is_locked = True
         self.is_dirty = True
         self._status_msg = "⏳ 처리중..."
-        self._button_text = "⏳ 처리중"
+        self._button_text = "■ 정지"
         self._button_enabled = True
         self._emit()
 

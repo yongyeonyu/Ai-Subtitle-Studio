@@ -126,7 +126,6 @@ DEFAULT_ADV_SETTINGS = {
     "user_prompt": "",
 
     "continuous_threshold": 2.0,
-    "gap_pull_rate": 0.3,
     "gap_push_rate": 0.7,
     "single_subtitle_end": 0.2,
     "split_length_threshold": 10,

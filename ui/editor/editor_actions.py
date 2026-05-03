@@ -187,6 +187,16 @@ class EditorActionsMixin:
             self._auto_save_project(segs)
         except Exception as e:
             get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {e}")
+        try:
+            from core.personalization.text_lora_dataset import accumulate_personalization_dataset
+
+            accumulate_personalization_dataset(
+                current_segments=[dict(seg) for seg in list(segs or []) if not seg.get("is_gap")],
+                current_project_path=str(getattr(main_w, "_current_project_path", "") or ""),
+                trigger="manual_save",
+            )
+        except Exception as e:
+            get_logger().log(f"⚠️ 개인화 데이터 누적 실패(저장): {e}")
         return True
 
     # ---------------------------------------------------------
@@ -537,11 +547,7 @@ class EditorActionsMixin:
                 engine_label = getattr(self, "engine_lbl", None)
                 main_w._refresh_sidebar_engine_info(engine_label.text() if engine_label is not None else None)
     def _show_adv_settings(self):
-        from ui.settings.settings_dialog import AdvancedSettingsDialog
-        dlg = AdvancedSettingsDialog(self.settings, self)
-        if dlg.exec():
-            self.settings.update(dlg.result)
-            _dm_save_settings(self.settings)
+        self._show_settings()
 
     def _show_speaker_settings(self):
         from ui.settings.settings_dialog import SpeakerDialog

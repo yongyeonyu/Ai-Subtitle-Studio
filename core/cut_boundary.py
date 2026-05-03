@@ -129,16 +129,17 @@ def split_segments_by_cut_boundaries(
     if not enabled:
         return [dict(seg) for seg in segments if isinstance(seg, dict)]
 
-    cuts = normalize_cut_boundaries(boundaries, primary_fps=primary_fps)
-    cut_times = [float(item.get("timeline_sec", item.get("time", 0.0)) or 0.0) for item in cuts]
-    if not cut_times:
+    effective_fps = _boundary_primary_fps(boundaries, primary_fps)
+    cuts = normalize_cut_boundaries(boundaries, primary_fps=effective_fps)
+    cut_frames = [int(item.get("timeline_frame", item.get("frame", 0)) or 0) for item in cuts]
+    if not cut_frames:
         return [dict(seg) for seg in segments if isinstance(seg, dict)]
 
     out: list[dict[str, Any]] = []
     for seg in segments:
         if not isinstance(seg, dict):
             continue
-        item = _fit_one_segment_to_cut(seg, cut_times, cuts, primary_fps=primary_fps)
+        item = _fit_one_segment_to_cut(seg, cut_frames, cuts, primary_fps=effective_fps)
         if item is not None:
             out.append(item)
     for idx, item in enumerate(out):
@@ -161,116 +162,278 @@ def snap_segments_near_cut_boundaries(
     if not enabled:
         return [dict(seg) for seg in segments if isinstance(seg, dict)]
 
-    cuts = normalize_cut_boundaries(boundaries, primary_fps=primary_fps)
-    cut_times = sorted(
+    effective_fps = _boundary_primary_fps(boundaries, primary_fps)
+    cuts = normalize_cut_boundaries(boundaries, primary_fps=effective_fps)
+    cut_frames = sorted(
         {
-            round(float(item.get("timeline_sec", item.get("time", 0.0)) or 0.0), 6)
+            int(item.get("timeline_frame", item.get("frame", 0)) or 0)
             for item in cuts
-            if float(item.get("timeline_sec", item.get("time", 0.0)) or 0.0) > 0.0
+            if int(item.get("timeline_frame", item.get("frame", 0)) or 0) > 0
         }
     )
-    if not cut_times:
+    if not cut_frames:
         return [dict(seg) for seg in segments if isinstance(seg, dict)]
 
-    window = max(0.0, float(snap_window_sec or 0.0))
+    window_frame = max(0, sec_to_frame(float(snap_window_sec or 0.0), effective_fps))
     min_duration = max(0.02, float(min_duration_sec or 0.05))
     snapped: list[dict[str, Any]] = []
     for seg in segments or []:
         if not isinstance(seg, dict):
             continue
         row = deepcopy(seg)
-        start = _as_float(row.get("start", row.get("timeline_start", 0.0)))
-        end = _as_float(row.get("end", row.get("timeline_end", start)), start)
-        if end < start:
-            end = start
+        start_frame, end_frame = _segment_frame_bounds(row, primary_fps)
+        if end_frame < start_frame:
+            end_frame = start_frame
 
-        start_hit = _nearest_cut_time(start, cut_times, window)
-        end_hit = _nearest_cut_time(end, cut_times, window)
-        snapped_start = start_hit if start_hit is not None else start
-        snapped_end = end_hit if end_hit is not None else end
-        if snapped_end <= snapped_start + min_duration:
+        start_hit = _nearest_cut_frame(start_frame, cut_frames, window_frame)
+        end_hit = _nearest_cut_frame(end_frame, cut_frames, window_frame)
+        snapped_start_frame = start_hit if start_hit is not None else start_frame
+        snapped_end_frame = end_hit if end_hit is not None else end_frame
+        min_duration_frame = max(1, sec_to_frame(min_duration, effective_fps))
+        if snapped_end_frame <= snapped_start_frame + min_duration_frame:
             if end_hit is not None and start_hit is None:
-                snapped_start = min(start, max(0.0, snapped_end - min_duration))
+                snapped_start_frame = min(start_frame, max(0, snapped_end_frame - min_duration_frame))
             elif start_hit is not None and end_hit is None:
-                snapped_end = max(end, snapped_start + min_duration)
+                snapped_end_frame = max(end_frame, snapped_start_frame + min_duration_frame)
             else:
-                snapped_start = start
-                snapped_end = end
+                snapped_start_frame = start_frame
+                snapped_end_frame = end_frame
 
-        row["start"] = snapped_start
-        row["end"] = max(snapped_start + min_duration, snapped_end)
+        row["start_frame"] = snapped_start_frame
+        row["end_frame"] = max(snapped_start_frame + min_duration_frame, snapped_end_frame)
+        row["timeline_start_frame"] = row["start_frame"]
+        row["timeline_end_frame"] = row["end_frame"]
+        row["start"] = frame_to_sec(row["start_frame"], effective_fps)
+        row["end"] = frame_to_sec(row["end_frame"], effective_fps)
         row["timeline_start"] = row["start"]
         row["timeline_end"] = row["end"]
         row["cut_boundary_snapped"] = bool(
-            (start_hit is not None and abs(start_hit - start) > 1e-6)
-            or (end_hit is not None and abs(end_hit - end) > 1e-6)
+            (start_hit is not None and start_hit != start_frame)
+            or (end_hit is not None and end_hit != end_frame)
         )
         if start_hit is not None:
-            row["cut_boundary_snap_start"] = start_hit
+            row["cut_boundary_snap_start_frame"] = start_hit
+            row["cut_boundary_snap_start"] = frame_to_sec(start_hit, effective_fps)
         if end_hit is not None:
-            row["cut_boundary_snap_end"] = end_hit
+            row["cut_boundary_snap_end_frame"] = end_hit
+            row["cut_boundary_snap_end"] = frame_to_sec(end_hit, effective_fps)
         snapped.append(row)
     return snapped
 
 
-def _nearest_cut_time(value: float, cut_times: list[float], window: float) -> float | None:
-    if window <= 0.0:
+def magnetize_segments_to_cut_boundaries(
+    segments: list[dict[str, Any]] | None,
+    *,
+    confirmed_boundaries: list[dict[str, Any]] | None = None,
+    provisional_boundaries: list[dict[str, Any]] | None = None,
+    enabled: bool = True,
+    primary_fps: float = 30.0,
+    provisional_window_sec: float = 0.34,
+    confirmed_window_sec: float = 0.48,
+    min_duration_sec: float = 0.05,
+) -> list[dict[str, Any]]:
+    """Snap aggressively to provisional+confirmed cuts, then enforce confirmed hard splits."""
+    if not segments:
+        return []
+    rows = [dict(seg) for seg in segments if isinstance(seg, dict)]
+    if not enabled:
+        return rows
+
+    effective_fps = _boundary_primary_fps(confirmed_boundaries or provisional_boundaries, primary_fps)
+    provisional_rows = normalize_cut_boundaries(provisional_boundaries, primary_fps=effective_fps)
+    confirmed_rows = normalize_cut_boundaries(confirmed_boundaries, primary_fps=effective_fps)
+
+    if provisional_rows:
+        rows = snap_segments_near_cut_boundaries(
+            rows,
+            provisional_rows,
+            enabled=True,
+            primary_fps=effective_fps,
+            snap_window_sec=provisional_window_sec,
+            min_duration_sec=min_duration_sec,
+        )
+    if confirmed_rows:
+        rows = snap_segments_near_cut_boundaries(
+            rows,
+            confirmed_rows,
+            enabled=True,
+            primary_fps=effective_fps,
+            snap_window_sec=confirmed_window_sec,
+            min_duration_sec=min_duration_sec,
+        )
+        rows = split_segments_by_cut_boundaries(
+            rows,
+            confirmed_rows,
+            enabled=True,
+            primary_fps=effective_fps,
+        )
+        rows = clamp_segments_to_cut_scene_edges(
+            rows,
+            confirmed_rows,
+            enabled=True,
+            primary_fps=effective_fps,
+            clamp_window_sec=max(float(confirmed_window_sec or 0.0), 0.60),
+            min_duration_sec=min_duration_sec,
+        )
+
+    for row in rows:
+        row["cut_boundary_magnetized"] = True
+        if provisional_rows:
+            row["cut_boundary_magnetized_provisional"] = True
+        if confirmed_rows:
+            row["cut_boundary_magnetized_confirmed"] = True
+    return rows
+
+
+def _nearest_cut_frame(value: int, cut_frames: list[int], window_frame: int) -> int | None:
+    if window_frame <= 0:
         return None
     best = None
     best_dist = None
-    for cut in cut_times:
-        dist = abs(float(cut) - float(value))
-        if dist > window:
+    for cut in cut_frames:
+        dist = abs(int(cut) - int(value))
+        if dist > window_frame:
             continue
         if best_dist is None or dist < best_dist:
-            best = float(cut)
-            best_dist = dist
+            best = int(cut)
+            best_dist = int(dist)
     return best
+
+
+def clamp_segments_to_cut_scene_edges(
+    segments: list[dict[str, Any]] | None,
+    boundaries: list[dict[str, Any]] | None,
+    *,
+    enabled: bool = True,
+    primary_fps: float = 30.0,
+    clamp_window_sec: float = 0.60,
+    min_duration_sec: float = 0.05,
+) -> list[dict[str, Any]]:
+    """Force segment edges to their owning confirmed scene boundaries when near enough."""
+    if not segments:
+        return []
+    if not enabled:
+        return [dict(seg) for seg in segments if isinstance(seg, dict)]
+
+    effective_fps = _boundary_primary_fps(boundaries, primary_fps)
+    cuts = normalize_cut_boundaries(boundaries, primary_fps=effective_fps)
+    cut_frames = [int(item.get("timeline_frame", item.get("frame", 0)) or 0) for item in cuts]
+    if not cut_frames:
+        return [dict(seg) for seg in segments if isinstance(seg, dict)]
+
+    window_frame = max(0, sec_to_frame(float(clamp_window_sec or 0.0), effective_fps))
+    min_duration = max(0.02, float(min_duration_sec or 0.05))
+    min_duration_frame = max(1, sec_to_frame(min_duration, effective_fps))
+    out: list[dict[str, Any]] = []
+    for seg in segments or []:
+        if not isinstance(seg, dict):
+            continue
+        row = deepcopy(seg)
+        start_frame, end_frame = _segment_frame_bounds(row, effective_fps)
+        if end_frame < start_frame:
+            end_frame = start_frame
+
+        midpoint_frame = (start_frame + end_frame) // 2
+        scene_start_frame = 0
+        scene_end_frame: int | None = None
+        for cut_frame in cut_frames:
+            if cut_frame <= midpoint_frame:
+                scene_start_frame = cut_frame
+            elif cut_frame > midpoint_frame:
+                scene_end_frame = cut_frame
+                break
+
+        clamped = False
+        if abs(start_frame - scene_start_frame) <= window_frame:
+            start_frame = scene_start_frame
+            clamped = True
+        if scene_end_frame is not None and abs(scene_end_frame - end_frame) <= window_frame:
+            end_frame = scene_end_frame
+            clamped = True
+        if end_frame <= start_frame + min_duration_frame:
+            if scene_end_frame is not None and scene_end_frame > start_frame + min_duration_frame:
+                end_frame = scene_end_frame
+                clamped = True
+            else:
+                end_frame = start_frame + min_duration_frame
+
+        row["start_frame"] = start_frame
+        row["end_frame"] = end_frame
+        row["timeline_start_frame"] = start_frame
+        row["timeline_end_frame"] = end_frame
+        row["start"] = frame_to_sec(start_frame, effective_fps)
+        row["end"] = frame_to_sec(end_frame, effective_fps)
+        row["timeline_start"] = row["start"]
+        row["timeline_end"] = row["end"]
+        row["cut_boundary_scene_clamped"] = clamped
+        if clamped:
+            row["cut_boundary_hard_aligned"] = True
+        _attach_cut_local_fields(row, cut_frames, cuts, primary_fps=effective_fps)
+        out.append(row)
+    return out
+
+
+def _boundary_primary_fps(boundaries: list[dict[str, Any]] | None, fallback_fps: float) -> float:
+    for item in boundaries or []:
+        if not isinstance(item, dict):
+            continue
+        for key in ("fps", "timeline_frame_rate", "frame_rate", "source_frame_rate", "video_fps"):
+            value = item.get(key)
+            try:
+                return normalize_fps(float(value or 0.0) or fallback_fps)
+            except Exception:
+                continue
+    return normalize_fps(fallback_fps or 30.0)
 
 
 def _fit_one_segment_to_cut(
     seg: dict[str, Any],
-    cut_times: list[float],
+    cut_frames: list[int],
     cuts: list[dict[str, Any]],
     *,
     primary_fps: float,
 ) -> dict[str, Any] | None:
-    start = _as_float(seg.get("start", seg.get("timeline_start", 0.0)))
-    end = _as_float(seg.get("end", seg.get("timeline_end", start)), start)
-    end = max(start, end)
-    if end <= start + MIN_SLICE_SEC:
+    start_frame, end_frame = _segment_frame_bounds(seg, primary_fps)
+    end_frame = max(start_frame, end_frame)
+    if end_frame <= start_frame + 1:
         row = dict(seg)
-        _attach_cut_local_fields(row, cut_times, cuts, primary_fps=primary_fps)
+        _attach_cut_local_fields(row, cut_frames, cuts, primary_fps=primary_fps)
         return row
 
-    midpoint = (start + end) / 2.0
-    scene_start = 0.0
-    scene_end: float | None = None
+    midpoint_frame = (start_frame + end_frame) // 2
+    scene_start_frame = 0
+    scene_end_frame: int | None = None
     scene_index = 0
-    for idx, cut in enumerate(cut_times):
-        if cut <= midpoint:
-            scene_start = cut
+    for idx, cut_frame in enumerate(cut_frames):
+        if cut_frame <= midpoint_frame:
+            scene_start_frame = cut_frame
             scene_index = idx + 1
-        elif cut > midpoint:
-            scene_end = cut
+        elif cut_frame > midpoint_frame:
+            scene_end_frame = cut_frame
             break
-    fitted_start = max(start, scene_start)
-    fitted_end = end if scene_end is None else min(end, scene_end)
-    if fitted_end <= fitted_start + MIN_SLICE_SEC:
-        fitted_start = scene_start
-        fitted_end = scene_end if scene_end is not None else max(end, scene_start + MIN_SLICE_SEC)
-    if fitted_end <= fitted_start + MIN_SLICE_SEC:
+    fitted_start_frame = max(start_frame, scene_start_frame)
+    fitted_end_frame = end_frame if scene_end_frame is None else min(end_frame, scene_end_frame)
+    edge_tolerance = max(0.06, 2.0 / max(float(primary_fps or 30.0), 1.0))
+    edge_tolerance_frame = max(1, sec_to_frame(edge_tolerance, primary_fps))
+    if abs(fitted_start_frame - scene_start_frame) <= edge_tolerance_frame:
+        fitted_start_frame = scene_start_frame
+    if scene_end_frame is not None and abs(scene_end_frame - fitted_end_frame) <= edge_tolerance_frame:
+        fitted_end_frame = scene_end_frame
+    if fitted_end_frame <= fitted_start_frame + 1:
+        fitted_start_frame = scene_start_frame
+        fitted_end_frame = scene_end_frame if scene_end_frame is not None else max(end_frame, scene_start_frame + 1)
+    if fitted_end_frame <= fitted_start_frame + 1:
         return None
 
     row = deepcopy(seg)
-    row["start"] = fitted_start
-    row["end"] = fitted_end
-    row["timeline_start"] = fitted_start
-    row["timeline_end"] = fitted_end
-    row["start_frame"] = sec_to_frame(fitted_start, primary_fps)
-    row["end_frame"] = sec_to_frame(fitted_end, primary_fps)
-    row["timeline_start_frame"] = row["start_frame"]
-    row["timeline_end_frame"] = row["end_frame"]
+    row["start_frame"] = fitted_start_frame
+    row["end_frame"] = fitted_end_frame
+    row["timeline_start_frame"] = fitted_start_frame
+    row["timeline_end_frame"] = fitted_end_frame
+    row["start"] = frame_to_sec(fitted_start_frame, primary_fps)
+    row["end"] = frame_to_sec(fitted_end_frame, primary_fps)
+    row["timeline_start"] = row["start"]
+    row["timeline_end"] = row["end"]
     row["frame_rate"] = primary_fps
     row["timeline_frame_rate"] = primary_fps
     row["frame_range"] = {
@@ -279,15 +442,17 @@ def _fit_one_segment_to_cut(
         "end": row["end_frame"],
         "timeline_frame_rate": primary_fps,
     }
-    row["cut_boundary_fitted"] = bool(fitted_start != start or fitted_end != end)
-    row["words"] = _clip_timed_items(seg.get("words"), fitted_start, fitted_end)
+    row["cut_boundary_fitted"] = bool(fitted_start_frame != start_frame or fitted_end_frame != end_frame)
+    row["words"] = _clip_timed_items(seg.get("words"), row["start"], row["end"])
     if "stt_candidates" in row:
-        row["stt_candidates"] = _fit_candidates_to_interval(row.get("stt_candidates"), fitted_start, fitted_end, primary_fps)
-    _attach_cut_local_fields(row, cut_times, cuts, primary_fps=primary_fps)
+        row["stt_candidates"] = _fit_candidates_to_interval(row.get("stt_candidates"), row["start"], row["end"], primary_fps)
+    _attach_cut_local_fields(row, cut_frames, cuts, primary_fps=primary_fps)
     row["cut_scene_index"] = scene_index
-    row["cut_scene_start"] = scene_start
-    if scene_end is not None:
-        row["cut_scene_end"] = scene_end
+    row["cut_scene_start_frame"] = scene_start_frame
+    row["cut_scene_start"] = frame_to_sec(scene_start_frame, primary_fps)
+    if scene_end_frame is not None:
+        row["cut_scene_end_frame"] = scene_end_frame
+        row["cut_scene_end"] = frame_to_sec(scene_end_frame, primary_fps)
     return row
 
 
@@ -332,35 +497,51 @@ def _clip_timed_items(items: Any, start: float, end: float) -> list[dict[str, An
 
 def _attach_cut_local_fields(
     row: dict[str, Any],
-    cut_times: list[float],
+    cut_frames: list[int],
     cuts: list[dict[str, Any]],
     *,
     primary_fps: float,
 ) -> None:
-    start = _as_float(row.get("start", row.get("timeline_start", 0.0)))
-    end = _as_float(row.get("end", row.get("timeline_end", start)), start)
-    prev_cut = 0.0
-    next_cut = None
+    start_frame, end_frame = _segment_frame_bounds(row, primary_fps)
+    prev_cut_frame = 0
+    next_cut_frame = None
     cut_index = 0
-    for idx, cut in enumerate(cut_times):
-        if cut <= start + MIN_SLICE_SEC:
-            prev_cut = cut
+    for idx, cut_frame in enumerate(cut_frames):
+        if cut_frame <= start_frame:
+            prev_cut_frame = cut_frame
             cut_index = idx + 1
-        elif cut > start + MIN_SLICE_SEC:
-            next_cut = cut
+        elif cut_frame > start_frame:
+            next_cut_frame = cut_frame
             break
     row["cut_boundary_schema"] = CUT_SEGMENT_SCHEMA
     row["cut_scene_index"] = cut_index
-    row["cut_scene_start"] = prev_cut
-    if next_cut is not None:
-        row["cut_scene_end"] = next_cut
-    row["cut_local_start"] = max(0.0, start - prev_cut)
-    row["cut_local_end"] = max(row["cut_local_start"], end - prev_cut)
-    row["cut_local_start_frame"] = sec_to_frame(row["cut_local_start"], primary_fps)
-    row["cut_local_end_frame"] = sec_to_frame(row["cut_local_end"], primary_fps)
+    row["cut_scene_start_frame"] = prev_cut_frame
+    row["cut_scene_start"] = frame_to_sec(prev_cut_frame, primary_fps)
+    if next_cut_frame is not None:
+        row["cut_scene_end_frame"] = next_cut_frame
+        row["cut_scene_end"] = frame_to_sec(next_cut_frame, primary_fps)
+    row["cut_local_start_frame"] = max(0, start_frame - prev_cut_frame)
+    row["cut_local_end_frame"] = max(row["cut_local_start_frame"], end_frame - prev_cut_frame)
+    row["cut_local_start"] = frame_to_sec(row["cut_local_start_frame"], primary_fps)
+    row["cut_local_end"] = frame_to_sec(row["cut_local_end_frame"], primary_fps)
     if 0 <= cut_index < len(cuts):
         row["cut_boundary_prev_id"] = str(cuts[cut_index - 1].get("id", "")) if cut_index > 0 else ""
         row["cut_boundary_next_id"] = str(cuts[cut_index].get("id", "")) if cut_index < len(cuts) else ""
+
+
+def _segment_frame_bounds(seg: dict[str, Any], primary_fps: float) -> tuple[int, int]:
+    frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+    start_frame = seg.get("start_frame", seg.get("timeline_start_frame", frame_range.get("start")))
+    end_frame = seg.get("end_frame", seg.get("timeline_end_frame", frame_range.get("end")))
+    if start_frame is None:
+        start_frame = sec_to_frame(_as_float(seg.get("start", seg.get("timeline_start", 0.0))), primary_fps)
+    else:
+        start_frame = int(start_frame)
+    if end_frame is None:
+        end_frame = sec_to_frame(_as_float(seg.get("end", seg.get("timeline_end", frame_to_sec(start_frame, primary_fps))), frame_to_sec(start_frame, primary_fps)), primary_fps)
+    else:
+        end_frame = int(end_frame)
+    return max(0, int(start_frame)), max(0, int(end_frame))
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -375,6 +556,7 @@ __all__ = [
     "CUT_SEGMENT_SCHEMA",
     "cut_boundary_enabled",
     "detect_media_cut_boundaries",
+    "magnetize_segments_to_cut_boundaries",
     "normalize_cut_boundaries",
     "project_cut_boundaries",
     "split_segments_by_cut_boundaries",
@@ -654,8 +836,8 @@ def normalize_cut_boundary_level(value) -> str:
         "medium": "medium",
         "중간": "medium",
 
-        "high": "high",
-        "높음": "high",
+        "high": "medium",
+        "높음": "medium",
 
         "true": "medium",
         "1": "medium",
@@ -695,7 +877,6 @@ def cut_boundary_scan_profile(settings: dict | None = None) -> dict:
     step_map = {
         "low": 3.0,
         "medium": 2.0,
-        "high": 1.0,
     }
     profile["sample_step_sec"] = float(step_map.get(level, 2.0))
     profile["choices"] = CUT_BOUNDARY_LEVEL_CHOICES
@@ -1406,8 +1587,8 @@ def normalize_cut_boundary_level(value) -> str:
         "1": "medium",
         "enabled": "medium",
 
-        "높음": "high",
-        "high": "high",
+        "높음": "medium",
+        "high": "medium",
     }
     return aliases.get(raw, "medium")
 
@@ -3330,9 +3511,8 @@ def verify_media_cut_boundary_rows(
 
 CUT_BOUNDARY_LEVEL_CHOICES = (
     ("off", "사용안함"),
-    ("low", "낮음 - 5×5 선택 9칸"),
-    ("medium", "중간 - 5×5 선택 13칸"),
-    ("high", "높음 - 5×5 전체 25칸"),
+    ("low", "중간 - 5×5 선택 9칸"),
+    ("medium", "높음 - 5×5 선택 13칸"),
 )
 
 CUT_BOUNDARY_GRID_PROFILES = {
@@ -3347,7 +3527,7 @@ CUT_BOUNDARY_GRID_PROFILES = {
     },
     "low": {
         "level": "low",
-        "label": "낮음 - 5×5 선택 9칸",
+        "label": "중간 - 5×5 선택 9칸",
         "grid": "5x5",
         "grid_size": 5,
         "mask": "custom9",
@@ -3356,21 +3536,12 @@ CUT_BOUNDARY_GRID_PROFILES = {
     },
     "medium": {
         "level": "medium",
-        "label": "중간 - 5×5 선택 13칸",
+        "label": "높음 - 5×5 선택 13칸",
         "grid": "5x5",
         "grid_size": 5,
         "mask": "custom13",
         "positions": (0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24),
         "cell_count": 13,
-    },
-    "high": {
-        "level": "high",
-        "label": "높음 - 5×5 전체 25칸",
-        "grid": "5x5",
-        "grid_size": 5,
-        "mask": "grid25",
-        "positions": tuple(range(25)),
-        "cell_count": 25,
     },
 }
 
@@ -3420,8 +3591,6 @@ def _auto_5x5_positions_for_level(level: str):
     level = str(level or "medium").lower()
     if level == "low":
         return (1, 3, 7, 10, 12, 14, 17, 21, 23)
-    if level == "high":
-        return tuple(range(25))
     return (0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24)
 
 

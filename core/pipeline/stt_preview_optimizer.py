@@ -39,28 +39,17 @@ def optimize_stt_preview_segments(
         get_logger().log(f"  ⚠️ [{label}] 후보 자막 분리/간격 규칙 적용 실패, 원본 후보 유지: {exc}")
         optimized = raw
 
-    if cut_boundaries:
+    if cut_boundaries or provisional_cut_boundaries:
         try:
-            from core.cut_boundary import split_segments_by_cut_boundaries
+            from core.cut_boundary import magnetize_segments_to_cut_boundaries
 
-            optimized = split_segments_by_cut_boundaries(
+            optimized = magnetize_segments_to_cut_boundaries(
                 optimized,
-                cut_boundaries,
+                confirmed_boundaries=cut_boundaries,
+                provisional_boundaries=provisional_cut_boundaries,
                 enabled=bool(cut_boundary_enabled),
-            )
-        except Exception as exc:
-            get_logger().log(f"  ⚠️ [{label}] 컷 경계 후보 분할 실패, 기존 후보 유지: {exc}")
-
-    snap_targets = list(cut_boundaries or []) + list(provisional_cut_boundaries or [])
-    if snap_targets:
-        try:
-            from core.cut_boundary import snap_segments_near_cut_boundaries
-
-            optimized = snap_segments_near_cut_boundaries(
-                optimized,
-                snap_targets,
-                enabled=bool(cut_boundary_enabled),
-                snap_window_sec=0.32,
+                provisional_window_sec=0.32,
+                confirmed_window_sec=0.46,
                 min_duration_sec=0.05,
             )
         except Exception as exc:

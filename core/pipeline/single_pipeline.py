@@ -258,12 +258,24 @@ class SinglePipelineMixin:
                 if hasattr(self, "_wait_cut_boundary_prescan_before_stt"):
                     self._wait_cut_boundary_prescan_before_stt()
 
+                cut_boundary_snapshot = (
+                    self._cut_boundary_snapshot_for_pipeline()
+                    if hasattr(self, "_cut_boundary_snapshot_for_pipeline")
+                    else {"cut_boundaries": [], "provisional_cut_boundaries": []}
+                )
+                pipeline_cut_boundaries = [
+                    dict(row) for row in list(cut_boundary_snapshot.get("cut_boundaries", []) or [])
+                ]
+                pipeline_provisional_cut_boundaries = [
+                    dict(row) for row in list(cut_boundary_snapshot.get("provisional_cut_boundaries", []) or [])
+                ]
+
                 # ✅ 컷 경계는 STT 입력 청크의 절대 경계다.
                 # media_processor가 오디오 청크를 만들기 전에 hard cut을 주입한다.
                 try:
                     if hasattr(self, "video_processor"):
                         hard_cuts = []
-                        for row in self._project_cut_boundaries_for_pipeline():
+                        for row in pipeline_cut_boundaries:
                             try:
                                 if isinstance(row, dict):
                                     sec = float(row.get("timeline_sec", row.get("time", row.get("start", 0.0))) or 0.0)
@@ -376,8 +388,8 @@ class SinglePipelineMixin:
                     chunk_segs,
                     source_label=str(_label or "STT"),
                     vad_segments=vad_segs,
-                    cut_boundaries=self._project_cut_boundaries_for_pipeline(),
-                    provisional_cut_boundaries=self._project_provisional_cut_boundaries_for_pipeline(),
+                    cut_boundaries=pipeline_cut_boundaries,
+                    provisional_cut_boundaries=pipeline_provisional_cut_boundaries,
                 )
                 if preview and self._active:
                     self._ui_emit("_sig_preview_stt_segments", preview)
@@ -513,6 +525,7 @@ class SinglePipelineMixin:
                             seg["end"] = seg["start"] + 0.5
 
                     opt = self._align_subtitle_segments_to_vad(opt, vad_segs, context="에디터")
+                    opt = self._magnetize_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
                     opt = self._split_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
 
                     if self.max_speakers > 1 and self._speaker_map:
@@ -566,6 +579,7 @@ class SinglePipelineMixin:
                         opt = grouped_opt
 
                     opt = apply_final_gap_settings(opt, force=True)
+                    opt = self._magnetize_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
                     opt = self._split_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
                     auto_collected_segs.extend([dict(seg) for seg in opt])
 
@@ -671,6 +685,8 @@ class SinglePipelineMixin:
                 from core.engine.subtitle_engine import apply_final_gap_settings
 
                 nonlocal_final = apply_final_gap_settings(auto_collected_segs[:], force=True)
+                nonlocal_final = self._magnetize_by_saved_cut_boundaries(nonlocal_final, context="자동모드 최종 자막")
+                nonlocal_final = self._split_by_saved_cut_boundaries(nonlocal_final, context="자동모드 최종 자막")
 
                 def _auto_proceed():
                     nonlocal final_segments

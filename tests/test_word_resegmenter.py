@@ -5,7 +5,11 @@ from unittest import mock
 
 from core.engine import subtitle_engine
 from core.engine.word_resegmenter import resegment_by_word_timestamps
-from core.subtitle_quality.timestamp_regrouper import regroup_by_word_timestamps, snap_segments_to_word_vad_boundaries
+from core.subtitle_quality.timestamp_regrouper import (
+    regroup_by_word_timestamps,
+    refine_segment_edges_with_context,
+    snap_segments_to_word_vad_boundaries,
+)
 
 
 class WordResegmenterTests(unittest.TestCase):
@@ -229,6 +233,48 @@ class WordResegmenterTests(unittest.TestCase):
         self.assertAlmostEqual(result[0]["start"], 0.92)
         self.assertAlmostEqual(result[0]["end"], 2.08)
         self.assertEqual(result[0]["asr_metadata"]["word_vad_timing"]["source"], "whisper_words+vad")
+
+    def test_refine_segment_edges_with_context_snaps_to_words_vad_and_frame(self):
+        result = refine_segment_edges_with_context(
+            [
+                {
+                    "start": 0.93,
+                    "end": 2.11,
+                    "text": "정확한 시간",
+                    "words": [
+                        {"word": "정확한", "start": 1.0, "end": 1.4},
+                        {"word": "시간", "start": 1.5, "end": 2.0},
+                    ],
+                }
+            ],
+            vad_segments=[{"start": 0.98, "end": 2.03}],
+            frame_rate=10.0,
+        )
+
+        self.assertAlmostEqual(result[0]["start"], 1.0)
+        self.assertAlmostEqual(result[0]["end"], 2.1)
+        self.assertEqual(result[0]["asr_metadata"]["precision_timing"]["source"], "words+vad+frame")
+
+    def test_refine_segment_edges_with_context_keeps_neighbors_non_overlapping(self):
+        result = refine_segment_edges_with_context(
+            [
+                {
+                    "start": 0.0,
+                    "end": 1.05,
+                    "text": "첫말",
+                    "words": [{"word": "첫말", "start": 0.1, "end": 1.0}],
+                },
+                {
+                    "start": 1.02,
+                    "end": 2.0,
+                    "text": "둘째",
+                    "words": [{"word": "둘째", "start": 1.02, "end": 1.95}],
+                },
+            ],
+            frame_rate=30.0,
+        )
+
+        self.assertLessEqual(result[0]["end"], result[1]["start"])
 
     def test_llm_split_preserves_matched_word_timestamps(self):
         segment = {

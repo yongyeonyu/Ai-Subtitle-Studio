@@ -1,9 +1,9 @@
 <!--
-Document-Version: 03.12.00
+Document-Version: 03.13.00
 Phase: PHASE2
 Last-Updated: 2026-05-03
 Updated-By: Codex with 대표님
-Scope: 파일/폴더 구조와 각 파일의 역할/현재 버전만 기록. 변경 이력/작업 요약/다음 우선순위는 RELEASE_v03.12.00.md, ACTION_ITEMS.md, AGENTS.md에 분리
+Scope: 파일/폴더 구조와 각 파일의 역할/현재 버전만 기록. 변경 이력/작업 요약/다음 우선순위는 RELEASE_v03.13.00.md, ACTION_ITEMS.md, AGENTS.md에 분리
 Role-Description-Rule: New or updated file role descriptions must be written in English.
 -->
 ================================================================================
@@ -11,7 +11,7 @@ AI Subtitle Studio — 프로젝트 구조 및 버전 관리 문서
 생성일: 2026-04-20
 최종 수정: 2026-05-03
 Phase: PHASE2
-App Version: 03.12.00
+App Version: 03.13.00
 구조 문서 기준: File_structure.txt
 비고: STRUCTURE.txt는 삭제하고 본 문서로 단일화. 본 문서는 구조 색인만 유지
 ================================================================================
@@ -19,9 +19,9 @@ App Version: 03.12.00
 ai_subtitle_studio/
 ├── main.py		                        ←		Application entrypoint with Qt tuning, Ollama auto-start, and shutdown runtime cleanup v03.09.02
 ├── main.bat		                    ←		Windows 실행 배치 파일
-├── config.py		                    ←		Global runtime config, OS detection, APP_VERSION, and HF token/settings defaults v03.12.00
+├── config.py		                    ←		Global runtime config, OS detection, APP_VERSION, and HF token/settings defaults v03.13.00
 ├── logger.py		                    ←		시스템 로그 기록 및 UI 연동             v02.03.00
-├── README.md		                    ←		Korean project overview, install guide, AI settings entry points, and latest release summary v03.12.00
+├── README.md		                    ←		Korean project overview, install guide, AI settings entry points, and latest release summary v03.13.00
 ├── .gitignore		                    ←		로컬 런타임/캐시/교정 memory 제외 규칙 v03.03.00
 ├── AGENTS.md		                    ←		로컬 전용 개발 가이드 / GitHub 제외
 ├── ACTION_ITEMS.md		                ←		로컬 전용 액션아이템 / GitHub 제외
@@ -41,12 +41,14 @@ ai_subtitle_studio/
 ├── RELEASE_v03.09.00.md		        ←		Previous PHASE2 release note / v03.09.00
 ├── RELEASE_v03.10.00.md	        ←		Previous PHASE2 release note / v03.10.00
 ├── RELEASE_v03.11.00.md	        ←		Previous PHASE2 release note / v03.11.00
-├── RELEASE_v03.12.00.md	        ←		Latest PHASE2 release note / v03.12.00
-├── File_structure.txt		            ←		Project file map and role/version index v03.12.00
+├── RELEASE_v03.12.00.md	        ←		Previous PHASE2 release note / v03.12.00
+├── RELEASE_v03.13.00.md	        ←		Latest PHASE2 release note / v03.13.00
+├── File_structure.txt		            ←		Project file map and role/version index v03.13.00
 │
 ├── dataset/
 │   ├── custom_defaults.json		    ←		Default settings preset with cut-boundary scan defaults plus curated Whisper, audio, VAD, and local Ollama worker cap v03.12.00
 │   ├── model_registry.json		        ←		OS-specific AI model registry without unused Whisper/Core ML install targets v03.09.25
+│   ├── personalization/		        ←		Local personalization runtime corpus, manifests, and voice LoRA bridge data [gitignore expected runtime]
 │   └── dataset_correction.json		    ←		교정 데이터
 │
 ├── voice_data/		                    ←		화자 학습 음성 저장 폴더
@@ -74,9 +76,9 @@ ai_subtitle_studio/
 │   ├── settings.py		                ←		설정 로딩/저장/model_key 통합            v02.03.00
 │   ├── media_info.py		            ←		ffprobe 미디어 정보 유틸 + 메모리/디스크 cache v03.01.37
 │   ├── frame_time.py		            ←		영상 FPS 기반 프레임/초 변환, 프레임맵, 프레임 스냅 helper v03.06.16
-│   ├── cut_boundary.py		        ←		Pioneer/follower cut-boundary scan, provisional/confirmed boundary persistence, MPS-assisted verify, and subtitle/STT hard-boundary helpers v03.12.00
+│   ├── cut_boundary.py		        ←		Frame-first pioneer/follower cut-boundary scan, provisional/confirmed persistence, MPS-assisted verify, and hard-boundary subtitle/STT helpers v03.13.00
 │   ├── pipeline_status.py		        ←		Shared subtitle generation mode/stage normalization helper v03.07.04
-│   ├── performance.py		        ←		Hardware profile, worker bounds, Qt cache tuning, and opt-in Qt OpenGL setup v03.07.01
+│   ├── performance.py		        ←		Hardware profile, worker bounds, Qt cache tuning, and default-on Qt OpenGL setup v03.13.00
 │   ├── state_manager.py		    ←		FSM state manager with shared stage parser preservation v03.07.04
 │   ├── work_mode.py		        ←		에디터/러프컷/숏폼 화면 모드 정규화       v03.01.15
 │   ├── model_manager.py		    ←		ModelManager + 모델 설치/삭제/검증/OS 필터/HF Token 다운로드 v03.06.00
@@ -105,10 +107,11 @@ ai_subtitle_studio/
 │   │   └── srt_writer.py		    		SRT 저장 / 화자 SRT / STT 미완료 제외      v02.07.00
 │   │
 │   ├── audio/
+│   │   ├── preset_auto_classifier.py	←		1/3 지점 3분 샘플 기반 대표 1분 특징 추출 + LLM/휴리스틱 오디오·정밀인식 자동 판정 v03.12.02
 │   │   ├── media_processor.py		←		Audio extraction, preprocessing/VAD/STT-labeled progress, cut-boundary hard chunk splits, independent STT1/STT2 ensemble threads, preview callbacks, cache, and runtime release helper v03.12.00
 │   │   ├── resemble_enhance_runner.py		←	Resemble Enhance torchaudio Path 호환 runner v03.06.00
 │   │   ├── stt_ensemble.py		    ←		STT1/STT2 단어 단위 ROVER/저신뢰 교체/후보 점수화 v03.06.00
-│   │   ├── stt_quality_presets.py	←		빠른/균형/정밀 자막 정확도 프리셋         v03.00.19
+│   │   ├── stt_quality_presets.py	←		빠른/균형/정밀 자막 정확도 프리셋 + 6종 오디오 환경 기본 매핑 v03.12.02
 │   │   ├── whisper_mlx.py		    ←		macOS Whisper MLX persistent worker      v02.03.03
 │   │   ├── whisper_coreml.py		←		Optional macOS WhisperKit/Core ML subprocess backend with MLX fallback and cleaned worker env v03.08.10
 │   │   ├── whisper_faster.py		←		Windows faster-whisper subprocess client with STT-labeled stderr logs v03.08.04
@@ -171,22 +174,27 @@ ai_subtitle_studio/
 │   │   ├── recheck_engine.py		←		low-confidence 재검사 대상/window 선정
 │   │   └── quality_pipeline.py		←		검사/자동교정/후보 summary pipeline
 │   │
+│   ├── personalization/
+│   │   ├── text_lora_dataset.py		←		Text LoRA accumulation corpus builder that absorbs legacy corrections, memory pairs, project STT->final subtitle pairs, and voice bridge rows v03.13.00
+│   │   └── text_lora_runner.py		←		macOS text LoRA training-plan/voice profile manifest scaffold for later MPS training integration v03.13.00
+│   │
 │   └── project/
-│       ├── project_manager.py		←		Project create/load/save with frame timebase, provisional/confirmed cut-boundary persistence, STT preview metadata, and sanitized workspace state v03.12.00
+│       ├── project_manager.py		←		Project create/load/save with frame timebase, provisional/confirmed cut-boundary persistence, STT preview metadata, and sanitized workspace state v03.13.00
 │       ├── project_context.py		←		Project JSON adapter restoring editor, roughcut, quality, STT candidate, cut-boundary state, and sanitized workspace state v03.12.00
 │       ├── project_phase1b.py		←		Project save/load enrichment that fits timeline on open and skips persisted zoom/scroll state v03.09.28
 │       ├── project_snapshot.py		←		Project snapshot schema helper without persisted timeline zoom/scroll state v03.09.28
 │       └── data_manager.py		    ←		설정/교정/memory 데이터 I/O             v03.01.25
 │
 └── ui/
-    ├── home_ui.py		            ←		Unified dashboard, compact sidebar navigation, shared stage-parser pipeline table, sidebar queue status rows, and cut-boundary level labels v03.12.00
-    ├── menu_bar.py		            ←		Right workspace bottom menu and shared mode/stage-parser status rail with green active sidebar icon state v03.12.00
+    ├── home_ui.py		            ←		Unified dashboard with compact preset panel, sidebar queue expansion, auto preset trigger, and simplified settings entry points v03.13.00
+    ├── home_sidebar_presets.py		←		Sidebar preset sync helper extracted from home UI for compact preset/status updates v03.13.00
+    ├── menu_bar.py		            ←		Right workspace bottom menu and shared mode/stage-parser status rail with start/stop/restart semantics and green active sidebar icon state v03.13.00
     ├── style.py		            ←		공용 다크 스타일 + SVG icon fallback     v03.01.08
-    ├── gpu_rendering.py		    ←		Optional OpenGL widget/base/viewport/backend helper; custom OpenGL widgets default off v03.07.01
+    ├── gpu_rendering.py		    ←		OpenGL widget/base/viewport/backend helper with GPU rendering preferred by default when available v03.13.00
     ├── qml/project_info_overlay.qml		    ←		사이드바 프로젝트 정보 Qt Quick overlay v03.05.00
     ├── qml/sidebar_queue_panel.qml		        ←		Sidebar queue list Qt Quick/Scene Graph panel with visible row status column v03.09.08
     ├── qml/timeline_playhead_overlay.qml		←	타임라인 플레이헤드 Qt Quick/Scene Graph 오버레이 v03.05.00
-    ├── queue_widget.py		        ←		큐 테이블 + 하단 패널 전환/상태 rail 동기화 v03.01.33
+    ├── queue_widget.py		        ←		Queue table + bottom panel sync with cached sidebar queue header/item state fallback v03.13.00
     ├── cloud_ui.py		            ←		iCloud/NAS 자동처리 영상·음성 상태 카운트 v03.02.05
     │
     ├── sidebar/
@@ -260,7 +268,8 @@ ai_subtitle_studio/
     │   ├── project_panel.py		←		Project panel mixin restoring saved subtitles, STT preview candidates, frame-based voice activity, and cut-boundary state into the editor timeline v03.12.00
     │   ├── multiclip_panel.py		←		멀티클립 정렬 카드 + cached info/Windows-safe thumb v03.01.37
     │   └── workspace_restore.py		←		Workspace restore that applies layout state while forcing timeline fit-to-view on startup v03.09.28
-    ├── settings/		←		Settings dialogs with curated Whisper model lists, AI-tab API token fields, LLM/Whisper model download controls, roughcut, speaker, and gap options v03.09.25
+    ├── settings/		←		Settings dialogs with curated Whisper model lists, AI-tab API token fields, LLM/Whisper model download controls, roughcut, speaker, gap, and personalization options v03.12.01
+    │   └── settings_personalization.py		←		macOS-first personalization learning dialog for text LoRA dataset export and legacy correction asset absorption v03.12.01
     └── dialogs/		←		폴더 선택 / 내보내기 / 공용 메시지       v03.01.01
         └── export_dialog.py		←		자막 동영상 출력 / 저장+preview / 버튼 정렬 v03.01.34
 
@@ -282,6 +291,7 @@ ai_subtitle_studio/
 │   ├── test_cp11_multiclip_offset.py		←		멀티클립 기존 SRT offset/저장 매핑 unittest v03.01.36
 │   ├── test_performance_media_cache.py		←		media probe cache/worker bound unittest v03.01.37
 │   ├── test_stt_quality_presets.py		←		자막 정확도 프리셋 unittest              v03.00.19
+│   ├── test_preset_auto_classifier.py	←		오디오/정밀인식 자동 판정 unittest       v03.12.02
 │   ├── test_media_processor_overlap.py		←		Whisper overlap/dedupe, STT labels, parallel STT1/STT2 preview callback, FFMPEG/VAD/audio heartbeat progress, cache, and direct chunk unittest v03.09.14
 │   ├── test_whisper_coreml.py		←		Optional Core ML Whisper model detection, CLI fallback, and stderr label unittest v03.08.10
 │   ├── test_word_resegmenter.py		←		word/VAD 우선 자막 시간 확정 unittest v03.06.00
@@ -311,5 +321,8 @@ ai_subtitle_studio/
 │   ├── test_subtitle_quality_models.py		←		자막 품질 모델/VAD/risk unittest      v03.01.22
 │   ├── test_model_manager.py		←		모델 레지스트리 OS 필터/한국어 Whisper 모델 unittest v03.06.00
 │   ├── test_ollama_provider.py		←		Ollama warmup, auto-start, unload, and log context unittest v03.09.02
+│   ├── test_text_lora_dataset.py		←		Text LoRA dataset export unittest covering correction dictionary and memory absorption v03.12.01
 │   ├── test_huggingface_token.py		←		HF_TOKEN secure storage, Transformers worker env, and STT-labeled stderr unittest v03.08.04
 │   └── test_windows_platform_compat.py		←		Windows subprocess, macOS worker env cleanup, shutdown runtime guard, and Whisper model conversion unittest v03.09.00
+    ├── project/
+    │   ├── multiclip_cards.py		←		Extracted multiclip card, add-card, and drag container widgets for safer panel refactors v03.13.00

@@ -1,7 +1,7 @@
 # Version: 03.00.20
 # Phase: PHASE2
 """
-ui/settings_gap.py  ─  ⏱️ 자막 간격 및 환각/앵무새 방어 정밀 시뮬레이터 (X5 Edition)
+ui/settings_gap.py  ─  ⏱️ 자막 간격/분할 설정
 [v01.00.10 수정사항]
 - 파라미터 폼 영역을 QScrollArea로 감싸 화면 높이 초과 방지
 - 최대 화면 높이 제한 (화면의 92%)
@@ -92,7 +92,7 @@ class GapSettingsDialog(QDialog):
         left_col.addLayout(form1)
         sep1 = QFrame(); sep1.setFixedHeight(1); sep1.setStyleSheet("background-color: #24313A; margin: 8px 0;"); left_col.addWidget(sep1)
 
-        h3 = QHBoxLayout(); h3.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>LLM 자막 분할 및 삭제 로직</b>")); h3.addStretch(); left_col.addLayout(h3)
+        h3 = QHBoxLayout(); h3.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>자막 분할 및 삭제 기준</b>")); h3.addStretch(); left_col.addLayout(h3)
         form3 = QFormLayout()
 
         self.slider_split = QSlider(Qt.Orientation.Horizontal); self.slider_split.setRange(5, 50)
@@ -145,61 +145,15 @@ class GapSettingsDialog(QDialog):
 
         left_col.addLayout(form3); left_col.addStretch()
 
-        # ==========================================
-        # 👉 [오른쪽 단] 환청 방지 및 시스템 병합
-        # ==========================================
-        h4 = QHBoxLayout(); h4.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>환청 방지 및 시스템 병합 로직 (고급)</b>")); h4.addStretch(); right_col.addLayout(h4)
-        form4 = QFormLayout()
-
-        self.slider_min_chars = QSlider(Qt.Orientation.Horizontal); self.slider_min_chars.setRange(1, 20)
-        cur_min_chars = int(self.result.get("min_chars", 5)); self.slider_min_chars.setValue(cur_min_chars)
-        self.lbl_min_chars = QLabel(f"{cur_min_chars} 자")
-        form4.addRow("최소 병합 글자 수:", self._create_slider_row(self.slider_min_chars, self.lbl_min_chars, "min_chars", 1.0, lambda v: f"{int(v)} 자", 
-            "<b>[설명]</b> 이 글자 수보다 짧은 자막은 주변 문맥(앞/뒤)으로 강제 병합을 시도합니다.<br><br>"
-            "[+] 높음: 짧은 단어들이 고립되지 않고 주변 자막에 강제로 흡수됩니다.<br>"
-            "[-] 낮음: 짧은 감탄사나 단어가 주변과 합쳐지지 않고 따로따로 표시됩니다."))
-
-        self.slider_pre_merge = QSlider(Qt.Orientation.Horizontal); self.slider_pre_merge.setRange(10, 100)
-        cur_pre = int(self.result.get("pre_merge_mult", 3.0) * 10); self.slider_pre_merge.setValue(cur_pre)
-        self.lbl_pre_merge = QLabel(f"{cur_pre/10.0:.1f} 배")
-        form4.addRow("사전 병합 배수:", self._create_slider_row(self.slider_pre_merge, self.lbl_pre_merge, "pre_merge_mult", 10.0, lambda v: f"{v:.1f} 배", 
-            "<b>[설명]</b> AI에게 넘기기 전, 문맥 유지를 위해 미리 문장들을 합치는 배수입니다.<br><br>"
-            "[+] 높음: 여러 문장이 한 번에 LLM으로 넘어가 전체 문맥 파악에 유리해집니다.<br>"
-            "[-] 낮음: 짧은 단위로 분산 처리되어 속도는 빠르나 문맥이 끊길 수 있습니다."))
-
-        self.slider_enforce = QSlider(Qt.Orientation.Horizontal); self.slider_enforce.setRange(10, 50)
-        cur_enforce = int(self.result.get("enforce_ratio", 1.5) * 10); self.slider_enforce.setValue(cur_enforce)
-        self.lbl_enforce = QLabel(f"{cur_enforce/10.0:.1f} 배")
-        form4.addRow("강제 분할 임계치:", self._create_slider_row(self.slider_enforce, self.lbl_enforce, "enforce_ratio", 10.0, lambda v: f"{v:.1f} 배", 
-            "<b>[설명]</b> 자막이 분할 기준 글자 수 대비 이 비율을 초과하면 강제로 나눕니다.<br><br>"
-            "[+] 높음: 아주 긴 문장만 강제로 나뉘고, 웬만하면 문맥이 유지됩니다.<br>"
-            "[-] 낮음: 조금만 길어도 기계적으로 칼같이 나뉘어 호흡이 끊길 수 있습니다."))
-
-        self.slider_hal_dur = QSlider(Qt.Orientation.Horizontal); self.slider_hal_dur.setRange(0, 30)
-        cur_hal_dur = int(self.result.get("halluc_min_dur", 0.8) * 10); self.slider_hal_dur.setValue(cur_hal_dur)
-        self.lbl_hal_dur = QLabel(f"{cur_hal_dur/10.0:.1f} 초")
-        form4.addRow("환청 검사 시간:", self._create_slider_row(self.slider_hal_dur, self.lbl_hal_dur, "halluc_min_dur", 10.0, lambda v: f"{v:.1f} 초", 
-            "<b>[설명]</b> 이 시간보다 짧은데 글자가 많으면 '지어낸 말(환각)'로 간주합니다.<br><br>"
-            "[+] 길게: 환각 검사 구간이 넓어져 더 많은 오류(지어낸 말)를 잡아냅니다.<br>"
-            "[-] 짧게: 짧고 빠르게 말하는 정상 대사도 억울하게 환각으로 오해받아 삭제될 수 있습니다."))
-
-        self.slider_hal_chars = QSlider(Qt.Orientation.Horizontal); self.slider_hal_chars.setRange(1, 30)
-        cur_hal_chars = int(self.result.get("halluc_max_chars", 10)); self.slider_hal_chars.setValue(cur_hal_chars)
-        self.lbl_hal_chars = QLabel(f"{cur_hal_chars} 자")
-        form4.addRow("환청 판정 글자 수:", self._create_slider_row(self.slider_hal_chars, self.lbl_hal_chars, "halluc_max_chars", 1.0, lambda v: f"{int(v)} 자", 
-            "<b>[설명]</b> 환청 검사 구간 내에 이 글자 수를 초과하면 즉시 삭제합니다.<br><br>"
-            "[+] 관대하게: 판정 기준이 널널해져 정상 대사가 억울하게 삭제되는 일이 줄어듭니다.<br>"
-            "[-] 엄격하게: 조금만 글자가 많아도 가차없이 환각으로 간주해 삭제합니다."))
-
-        self.slider_skip = QSlider(Qt.Orientation.Horizontal); self.slider_skip.setRange(0, 30)
-        cur_skip = int(self.result.get("llm_skip_dur", 1.0) * 10); self.slider_skip.setValue(cur_skip)
-        self.lbl_skip = QLabel(f"{cur_skip/10.0:.1f} 초")
-        form4.addRow("AI 교정 건너뛰기:", self._create_slider_row(self.slider_skip, self.lbl_skip, "llm_skip_dur", 10.0, lambda v: f"{v:.1f} 초", 
-            "<b>[설명]</b> 이 시간 이하의 아주 짧은 자막은 AI 환각 방지를 위해 교정을 생략합니다.<br><br>"
-            "[+] 길게: 웬만한 길이는 AI를 거치지 않고 원문 그대로 안전하게 패스(주황 테두리)됩니다.<br>"
-            "[-] 짧게: 아주 짧은 단어도 무조건 AI를 거치며, 없는 말을 지어낼 확률이 높아집니다."))
-
-        right_col.addLayout(form4); right_col.addStretch()
+        h4 = QHBoxLayout(); h4.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>적용 안내</b>")); h4.addStretch(); right_col.addLayout(h4)
+        info = QLabel(
+            "이 메뉴는 최종 자막 생성에서 실제로 쓰는 간격/분할 값만 남겼습니다.<br>"
+            "텍스트 LoRA와 컷 경계 스냅을 우선 적용한 뒤, 여기의 간격/분할 기준이 마지막으로 반영됩니다."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: #A9B0B7; line-height: 1.45; padding: 8px 10px;")
+        right_col.addWidget(info)
+        right_col.addStretch()
 
         two_col_layout.addLayout(left_col)
         v_sep = QFrame(); v_sep.setFrameShape(QFrame.Shape.VLine); v_sep.setStyleSheet("background-color: #24313A; margin: 0 8px;")
@@ -218,11 +172,17 @@ class GapSettingsDialog(QDialog):
         layout.addLayout(_create_bottom_buttons(self, self._on_ok, self._on_reset, self._on_save, save_def_callback=self._on_save_default))
 
         # 모든 슬라이더를 시뮬레이터 갱신에 연결
-        for s in [self.slider_cont, self.slider_push, self.slider_single, 
-                  self.slider_min_dur, self.slider_dedup, self.slider_min_chars, 
-                  self.slider_hal_dur, self.slider_hal_chars, self.slider_skip,
-                  self.slider_gap_break, self.slider_cps, self.slider_split, 
-                  self.slider_max_dur, self.slider_pre_merge, self.slider_enforce]:
+        for s in [
+            self.slider_cont,
+            self.slider_push,
+            self.slider_single,
+            self.slider_min_dur,
+            self.slider_dedup,
+            self.slider_gap_break,
+            self.slider_cps,
+            self.slider_split,
+            self.slider_max_dur,
+        ]:
             s.valueChanged.connect(self._update_simulator)
         
         self._update_simulator()
@@ -235,13 +195,7 @@ class GapSettingsDialog(QDialog):
         self.simulator.split_len = self.slider_split.value()
         self.simulator.min_dur = self.slider_min_dur.value() / 10.0
         self.simulator.dedup_win = self.slider_dedup.value() / 10.0
-        self.simulator.min_chars = self.slider_min_chars.value()
         self.simulator.gap_break = self.slider_gap_break.value() / 10.0
-        self.simulator.pre_merge = self.slider_pre_merge.value() / 10.0
-        self.simulator.enforce_ratio = self.slider_enforce.value() / 10.0
-        self.simulator.hal_dur = self.slider_hal_dur.value() / 10.0
-        self.simulator.hal_chars = self.slider_hal_chars.value()
-        self.simulator.skip_dur = self.slider_skip.value() / 10.0
         self.simulator.max_cps = self.slider_cps.value()
         self.simulator.update()
 
@@ -298,7 +252,6 @@ class GapSettingsDialog(QDialog):
     def _collect_data(self):
         self.result["continuous_threshold"] = self.slider_cont.value() / 10.0
         self.result["gap_push_rate"] = self.slider_push.value() / 100.0
-        self.result["gap_pull_rate"] = 1.0 - self.result["gap_push_rate"]
         self.result["single_subtitle_end"] = self.slider_single.value() / 10.0
         self.result["split_length_threshold"] = int(self.slider_split.value())
         self.result["sub_min_duration"] = self.slider_min_dur.value() / 10.0
@@ -306,12 +259,6 @@ class GapSettingsDialog(QDialog):
         self.result["sub_max_cps"] = int(self.slider_cps.value())
         self.result["sub_dedup_window"] = self.slider_dedup.value() / 10.0
         self.result["sub_gap_break_sec"] = self.slider_gap_break.value() / 10.0
-        self.result["min_chars"] = int(self.slider_min_chars.value())
-        self.result["pre_merge_mult"] = self.slider_pre_merge.value() / 10.0
-        self.result["enforce_ratio"] = self.slider_enforce.value() / 10.0
-        self.result["halluc_min_dur"] = self.slider_hal_dur.value() / 10.0
-        self.result["halluc_max_chars"] = int(self.slider_hal_chars.value())
-        self.result["llm_skip_dur"] = self.slider_skip.value() / 10.0
 
     def _on_save(self): self._collect_data(); save_settings(self.result); self.accept()
     def _on_save_default(self): self._collect_data(); save_default_settings(self.result); QMessageBox.information(self, "완료", "기본값 저장 완료!")

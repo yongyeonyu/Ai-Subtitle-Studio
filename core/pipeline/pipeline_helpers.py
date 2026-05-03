@@ -47,36 +47,89 @@ class PipelineHelpersMixin:
             get_logger().log(f"  ⚠️ [VAD 후처리] {context} 자막 위치 보정 실패: {exc}")
             return out
 
+    def _cut_boundary_snapshot_for_pipeline(self, *, force_reload: bool = False) -> dict:
+        """Return cached cut-boundary/provisional rows for the current project.
+
+        Full subtitle generation calls these helpers many times from preview,
+        STT, LLM, and final post-process paths. Re-reading the project JSON on
+        each call creates avoidable I/O and jitter, so we cache by
+        project-path/mtime plus provisional in-memory fallback signature.
+        """
+        provisional_fallback = [dict(item) for item in list(getattr(self, "_cut_boundary_provisional_rows", []) or [])]
+        try:
+            provisional_signature = json.dumps(
+                provisional_fallback,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except Exception:
+            provisional_signature = str(len(provisional_fallback))
+
+        ui = getattr(self, "ui", None)
+        project_path = str(getattr(ui, "_current_project_path", "") or "")
+        mtime_ns = None
+        if project_path and os.path.exists(project_path):
+            try:
+                st = os.stat(project_path)
+                mtime_ns = int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000)))
+            except Exception:
+                mtime_ns = None
+
+        cache = getattr(self, "_cut_boundary_pipeline_cache", None)
+        if (
+            not force_reload
+            and isinstance(cache, dict)
+            and cache.get("project_path") == project_path
+            and cache.get("mtime_ns") == mtime_ns
+            and cache.get("provisional_signature") == provisional_signature
+        ):
+            return {
+                "cut_boundaries": [dict(item) for item in list(cache.get("cut_boundaries", []) or [])],
+                "provisional_cut_boundaries": [dict(item) for item in list(cache.get("provisional_cut_boundaries", []) or [])],
+            }
+
+        cut_rows: list[dict] = []
+        provisional_rows: list[dict] = provisional_fallback
+        try:
+            from core.cut_boundary import project_cut_boundaries, project_cut_provisional_boundaries
+
+            if project_path and os.path.exists(project_path):
+                with open(project_path, "r", encoding="utf-8") as f:
+                    project = json.load(f)
+                cut_rows = [dict(item) for item in list(project_cut_boundaries(project) or [])]
+                project_provisional = [dict(item) for item in list(project_cut_provisional_boundaries(project) or [])]
+                if project_provisional:
+                    provisional_rows = project_provisional
+        except Exception:
+            cut_rows = []
+            provisional_rows = provisional_fallback
+
+        snapshot = {
+            "project_path": project_path,
+            "mtime_ns": mtime_ns,
+            "provisional_signature": provisional_signature,
+            "cut_boundaries": [dict(item) for item in cut_rows],
+            "provisional_cut_boundaries": [dict(item) for item in provisional_rows],
+        }
+        self._cut_boundary_pipeline_cache = snapshot
+        return {
+            "cut_boundaries": [dict(item) for item in cut_rows],
+            "provisional_cut_boundaries": [dict(item) for item in provisional_rows],
+        }
+
     def _project_cut_boundaries_for_pipeline(self) -> list[dict]:
         """Return saved visual cut boundaries from the current project file."""
         try:
-            from core.cut_boundary import project_cut_boundaries
-
-            ui = getattr(self, "ui", None)
-            project_path = str(getattr(ui, "_current_project_path", "") or "")
-            if not project_path or not os.path.exists(project_path):
-                return []
-            import json
-
-            with open(project_path, "r", encoding="utf-8") as f:
-                return project_cut_boundaries(json.load(f))
+            return list(self._cut_boundary_snapshot_for_pipeline().get("cut_boundaries", []) or [])
         except Exception:
             return []
 
     def _project_provisional_cut_boundaries_for_pipeline(self) -> list[dict]:
         try:
-            from core.cut_boundary import project_cut_provisional_boundaries
-
-            project_path = str(getattr(self.ui, "_current_project_path", "") or "")
-            if not project_path or not os.path.exists(project_path):
-                return [dict(item) for item in list(getattr(self, "_cut_boundary_provisional_rows", []) or [])]
-            with open(project_path, "r", encoding="utf-8") as f:
-                rows = project_cut_provisional_boundaries(json.load(f))
-            if rows:
-                return rows
+            return list(self._cut_boundary_snapshot_for_pipeline().get("provisional_cut_boundaries", []) or [])
         except Exception:
-            pass
-        return [dict(item) for item in list(getattr(self, "_cut_boundary_provisional_rows", []) or [])]
+            return [dict(item) for item in list(getattr(self, "_cut_boundary_provisional_rows", []) or [])]
 
     def _cut_boundary_cache_path_for_start(self, files: list[str], settings: dict) -> str:
         """Return reusable cut-boundary cache path for the current media/settings."""
@@ -864,6 +917,7 @@ class PipelineHelpersMixin:
         """Split subtitle/STT rows so no row crosses a saved visual cut."""
         try:
             from core.cut_boundary import cut_boundary_enabled, split_segments_by_cut_boundaries
+            from core.frame_time import frame_to_sec, sec_to_frame
 
             settings = load_settings()
             boundaries = self._project_cut_boundaries_for_pipeline()
@@ -872,10 +926,18 @@ class PipelineHelpersMixin:
                 offset = float(offset or 0.0)
                 for item in boundaries:
                     row = dict(item)
-                    sec = float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0) - offset
-                    if sec > 0.0:
-                        row["timeline_sec"] = sec
-                        row["time"] = sec
+                    fps = float(row.get("fps", row.get("timeline_frame_rate", row.get("frame_rate", 30.0))) or 30.0)
+                    frame = row.get("timeline_frame", row.get("frame"))
+                    if frame is None:
+                        frame = sec_to_frame(float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0), fps)
+                    shifted_frame = int(frame) - sec_to_frame(offset, fps)
+                    if shifted_frame <= 0:
+                        continue
+                    sec = frame_to_sec(shifted_frame, fps)
+                    row["timeline_frame"] = shifted_frame
+                    row["frame"] = shifted_frame
+                    row["timeline_sec"] = sec
+                    row["time"] = sec
                     local.append(row)
                 boundaries = local
             if not boundaries:
@@ -890,6 +952,57 @@ class PipelineHelpersMixin:
             return result
         except Exception as exc:
             get_logger().log(f"  ⚠️ [컷 경계] {context} 분할 실패, 기존 세그먼트 유지: {exc}")
+            return [dict(seg) for seg in (segments or [])]
+
+    def _magnetize_by_saved_cut_boundaries(self, segments, *, offset: float = 0.0, context: str = "자막") -> list[dict]:
+        """Snap subtitle/STT rows to both provisional and confirmed saved cuts."""
+        try:
+            from core.cut_boundary import (
+                cut_boundary_enabled,
+                magnetize_segments_to_cut_boundaries,
+            )
+            from core.frame_time import frame_to_sec, sec_to_frame
+
+            settings = load_settings()
+            confirmed = self._project_cut_boundaries_for_pipeline()
+            provisional = self._project_cut_provisional_boundaries_for_pipeline()
+            if offset:
+                offset = float(offset or 0.0)
+
+                def _shift(items):
+                    out = []
+                    for item in items:
+                        row = dict(item)
+                        fps = float(row.get("fps", row.get("timeline_frame_rate", row.get("frame_rate", 30.0))) or 30.0)
+                        frame = row.get("timeline_frame", row.get("frame"))
+                        if frame is None:
+                            frame = sec_to_frame(float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0), fps)
+                        shifted_frame = int(frame) - sec_to_frame(offset, fps)
+                        if shifted_frame <= 0:
+                            continue
+                        sec = frame_to_sec(shifted_frame, fps)
+                        row["timeline_frame"] = shifted_frame
+                        row["frame"] = shifted_frame
+                        row["timeline_sec"] = sec
+                        row["time"] = sec
+                        out.append(row)
+                    return out
+
+                confirmed = _shift(confirmed)
+                provisional = _shift(provisional)
+            if not confirmed and not provisional:
+                return [dict(seg) for seg in (segments or [])]
+            return magnetize_segments_to_cut_boundaries(
+                segments,
+                confirmed_boundaries=confirmed,
+                provisional_boundaries=provisional,
+                enabled=cut_boundary_enabled(settings),
+                provisional_window_sec=0.32,
+                confirmed_window_sec=0.60,
+                min_duration_sec=0.05,
+            )
+        except Exception as exc:
+            get_logger().log(f"  ⚠️ [컷 경계] {context} 스냅 실패, 기존 세그먼트 유지: {exc}")
             return [dict(seg) for seg in (segments or [])]
 
     def _ask_single_existing_subtitle(self, target_file) -> bool:
@@ -1727,11 +1840,40 @@ def _patched_build_cut_boundary_topicless_rows(self, detected, *, files=None, do
             rows.append(_pipeline_topicless_row(i + 1, start_frame, end_frame, fps))
 
     try:
-        get_logger().log(
-            f"  ▒ [컷 경계] topicless fps={fps:.3f} "
-            f"cuts={len(cut_frames)} duration_frame={duration_frame} rows={len(rows)}"
-        )
-        for row in rows:
+        current_keys = [
+            (
+                str(row.get("major_id") or ""),
+                int(row.get("timeline_start_frame") or 0),
+                int(row.get("timeline_end_frame") or 0),
+            )
+            for row in rows
+        ]
+        previous_keys = list(getattr(self, "_cut_boundary_topicless_logged_keys", []) or [])
+
+        should_reset = False
+        if not previous_keys:
+            should_reset = True
+        elif len(current_keys) < len(previous_keys):
+            should_reset = True
+        elif current_keys:
+            prev_first = previous_keys[0] if previous_keys else None
+            prev_last = previous_keys[-1] if previous_keys else None
+            if prev_first != current_keys[0] or prev_last != current_keys[-1]:
+                should_reset = True
+
+        if should_reset:
+            previous_seen = set()
+        else:
+            previous_seen = set(previous_keys)
+
+        new_rows = []
+        for row, key in zip(rows, current_keys):
+            if key not in previous_seen:
+                new_rows.append(row)
+
+        setattr(self, "_cut_boundary_topicless_logged_keys", current_keys)
+
+        for row in new_rows:
             get_logger().log(
                 f"  ▒ [컷 경계] split {row.get('major_id')} {row.get('title')} "
                 f"frame={row.get('timeline_start_frame')}->{row.get('timeline_end_frame')} "

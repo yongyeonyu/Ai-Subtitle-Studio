@@ -182,6 +182,16 @@ class EditorPipelineMixin:
             main_w._refresh_saved_status_label(is_dirty=True)
         if hasattr(main_w, "_start_post_completion_idle_timer"):
             main_w._start_post_completion_idle_timer()
+        try:
+            from core.personalization.text_lora_dataset import accumulate_personalization_dataset
+
+            accumulate_personalization_dataset(
+                current_segments=[dict(seg) for seg in list(self._get_current_segments() or []) if not seg.get("is_gap")],
+                current_project_path=str(getattr(main_w, "_current_project_path", "") or ""),
+                trigger="generation_complete",
+            )
+        except Exception as exc:
+            get_logger().log(f"⚠️ 개인화 데이터 누적 실패(생성완료): {exc}")
         if hasattr(self, "_schedule_post_generation_roughcut_draft"):
             QTimer.singleShot(350, lambda: self._schedule_post_generation_roughcut_draft(force=True))
         if hasattr(main_w, "_release_ai_models_for_editor_mode"):
@@ -485,9 +495,8 @@ class EditorPipelineMixin:
             sub = menu.addMenu("🎬 컷 경계 단계")
             choices = [
                 ("off", "사용안함"),
-                ("low", "낮음 - 3초 간격"),
-                ("medium", "중간 - 2초 간격"),
-                ("high", "높음 - 1초 간격"),
+                ("low", "중간 - 3초 간격"),
+                ("medium", "높음 - 2초 간격"),
             ]
 
             for level, label in choices:
@@ -511,6 +520,8 @@ class EditorPipelineMixin:
 
             settings = load_settings() or {}
             level = str(level or "medium")
+            if level == "high":
+                level = "medium"
             settings["scan_cut_boundary_level"] = level
             settings["cut_boundary_level"] = level
 
@@ -522,15 +533,13 @@ class EditorPipelineMixin:
             # profile label 보조 저장
             labels = {
                 "off": "사용안함",
-                "low": "낮음 - 3초 간격",
-                "medium": "중간 - 2초 간격",
-                "high": "높음 - 1초 간격",
+                "low": "중간 - 3초 간격",
+                "medium": "높음 - 2초 간격",
             }
             masks = {
                 "off": "off",
                 "low": "cross4",
                 "medium": "cross5",
-                "high": "o8",
             }
             settings["scan_cut_boundary_label"] = labels.get(level, labels["medium"])
             settings["scan_cut_grid_mask"] = masks.get(level, "cross5")

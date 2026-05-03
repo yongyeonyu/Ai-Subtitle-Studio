@@ -88,7 +88,7 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertTrue(all(voice_segments[i]["end"] <= voice_segments[i + 1]["start"] for i in range(len(voice_segments) - 1)))
         self.assertEqual(voice_segments[0]["kind"], "llm_selected")
         self.assertEqual(voice_segments[0]["source"], "STT2")
-        self.assertEqual(voice_segments[0]["label"], "STT2 LLM 82점")
+        self.assertEqual(voice_segments[0]["label"], "STT2 선택 82점")
         self.assertEqual(voice_segments[0]["color"], subtitle_detection_color(82))
         self.assertEqual(voice_segments[1]["kind"], "needs_selection")
         self.assertIn("선택필요", voice_segments[1]["label"])

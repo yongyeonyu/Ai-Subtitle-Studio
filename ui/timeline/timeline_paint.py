@@ -190,6 +190,13 @@ def stt_candidate_unselected(candidate: dict, final_segments: list[dict]) -> boo
     return stt_candidate_selection_state(candidate, final_segments) == "unselected"
 
 
+def final_stt_selection_source(seg: dict) -> str:
+    manual_source = str(seg.get("stt_selected_source", "") or "").strip().upper()
+    llm_source = str(seg.get("stt_ensemble_llm_selected_source", "") or "").strip().upper()
+    selected_source = manual_source or llm_source
+    return selected_source if selected_source in {"STT1", "STT2"} else ""
+
+
 class TimelinePaintMixin:
 
     def paintEvent(self, event):
@@ -700,6 +707,20 @@ class TimelinePaintMixin:
                     text_color = visual_style.get("text", "")
                     p.setPen(QColor(text_color) if text_color else (QColor("#8A8F98") if is_stt_pending else QColor("#DCE3EA")))
                     p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, seg.get("text", ""))
+                    selected_source = final_stt_selection_source(seg)
+                    if selected_source and rect.width() >= 104:
+                        is_llm_choice = bool(str(seg.get("stt_ensemble_llm_selected_source", "") or "").strip())
+                        badge_rect = QRect(rect.right() - 42, rect.y() + 6, 38, 18)
+                        badge_fill = QColor("#5A4600" if is_llm_choice else "#174A2A")
+                        badge_border = QColor("#FFCC00" if is_llm_choice else "#34C759")
+                        badge_text_color = QColor("#FFF2A8" if is_llm_choice else "#D7FFE4")
+                        p.fillRect(badge_rect, badge_fill)
+                        p.setPen(QPen(badge_border, 1))
+                        p.drawRect(badge_rect)
+                        p.setPen(badge_text_color)
+                        p.setFont(QFont(config.FONT, 7, QFont.Weight.Bold))
+                        p.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, "선택")
+                        p.setFont(seg_font)
 
             ir = self._icon_rect(x1, x2)
             if sw > ICON_SZ + HANDLE_R + 4:
@@ -811,6 +832,8 @@ class TimelinePaintMixin:
             add_x = self._x(add_anchor_sec) + 8
             add_w = 50
             add_h = max(24, subtitle_bot - subtitle_top)
+            max_add_x = max(0, self.width() - add_w - 6)
+            add_x = min(add_x, max_add_x)
             self._clip_add_rect = QRect(int(add_x), int(subtitle_top), add_w, add_h)
             self._clip_add_placeholder = {
                 "start": add_anchor_sec,

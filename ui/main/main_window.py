@@ -369,6 +369,18 @@ class MainWindow(
                 canvas.segments = []
                 canvas.gap_segments = []
                 canvas.vad_segments = []
+                if hasattr(canvas, "voice_activity_segments"):
+                    canvas.voice_activity_segments = []
+                if hasattr(canvas, "_voice_activity_segments"):
+                    canvas._voice_activity_segments = []
+                if hasattr(canvas, "_multiclip_boxes"):
+                    canvas._multiclip_boxes = []
+                if hasattr(canvas, "_active_clip_idx"):
+                    canvas._active_clip_idx = 0
+                if hasattr(canvas, "_selected_candidate"):
+                    canvas._selected_candidate = None
+                if hasattr(canvas, "_selected_candidate_source"):
+                    canvas._selected_candidate_source = ""
                 canvas.active_seg_start = None
                 canvas.playhead_sec = 0.0
                 canvas._last_playhead_px = None
@@ -423,6 +435,10 @@ class MainWindow(
             if hasattr(editor, "_segment_queue"):
                 editor._segment_queue.clear()
             editor._cached_segs = []
+            if hasattr(editor, "_live_stt_preview_segments"):
+                editor._live_stt_preview_segments = []
+            if hasattr(editor, "_accumulated_vad"):
+                editor._accumulated_vad = []
             editor._active_seg_start = 0.0
             editor._completion_handled = False
             editor._roughcut_draft_pending = False
@@ -443,6 +459,8 @@ class MainWindow(
                 timeline.set_playhead(0.0)
                 if hasattr(timeline, "set_vad_segments"):
                     timeline.set_vad_segments([])
+                if hasattr(timeline, "set_voice_activity_segments"):
+                    timeline.set_voice_activity_segments([])
                 _clear_canvas(getattr(timeline, "canvas", None), keep_duration=True)
                 _clear_canvas(getattr(timeline, "global_canvas", None), keep_duration=True)
         except Exception:
@@ -1097,12 +1115,22 @@ class MainWindow(
         self._project_panel_visible = self._log_visible
         sidebar = getattr(self, "home_page", None)
         splitter = getattr(self, "workspace_splitter", None)
+        prev_sizes = []
+        if splitter is not None:
+            try:
+                prev_sizes = list(splitter.sizes())
+            except Exception:
+                prev_sizes = []
         if sidebar is not None:
             sidebar.setVisible(self._log_visible)
         if splitter is not None:
             total = max(1, sum(splitter.sizes()) or splitter.width() or 1600)
             if self._log_visible:
-                sidebar_w = min(218, max(204, int(total * 0.14)))
+                current_sidebar_w = int(prev_sizes[0]) if len(prev_sizes) >= 2 else 0
+                if current_sidebar_w > 0:
+                    sidebar_w = current_sidebar_w
+                else:
+                    sidebar_w = min(218, max(204, int(total * 0.14)))
                 splitter.setSizes([sidebar_w, max(1, total - sidebar_w)])
             else:
                 splitter.setSizes([0, total])

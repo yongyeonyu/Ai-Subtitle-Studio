@@ -9,6 +9,7 @@ existing button/state-machine objects alive behind the scenes.
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QWidget
 
+import config
 from core.pipeline_status import generation_stage_label, process_mode_label
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
 from ui.style import label_style, line_icon, tool_button_style
@@ -265,8 +266,8 @@ class GlobalMenuBar(QWidget):
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(5)
         for text, icon, slot, color in [
-            ("AI", "ai", self._open_ai, "#34C759"),
-            ("설정", "settings", self._open_advanced, "#A9B0B7"),
+            ("설정", "settings", self._open_ai, "#34C759"),
+            *([("개인화", "ai", self._open_personalization, "#34C759")] if config.IS_MAC else []),
             ("화자", "speaker", self._open_speaker, "#A678F4"),
             ("화각", "sliders", self._open_angle_placeholder, "#FF9500"),
             ("간격", "timeline", self._open_gap, "#579DFF"),
@@ -462,7 +463,7 @@ class GlobalMenuBar(QWidget):
         mode = normalize_work_mode(getattr(self.main_window, "_current_work_mode", EDITOR_MODE))
         if mode == ROUGHCUT_MODE:
             icon_name = "refresh"
-        elif "처리" in text:
+        elif "처리" in text or "정지" in text:
             icon_name = "stop"
         elif "재시작" in text:
             icon_name = "refresh"
@@ -510,11 +511,7 @@ class GlobalMenuBar(QWidget):
             self.main_window._open_main_ai_settings()
 
     def _open_advanced(self):
-        editor = self._active_editor()
-        if editor is not None and hasattr(editor, "_show_adv_settings"):
-            editor._show_adv_settings()
-        elif hasattr(self.main_window, "_open_main_adv_settings"):
-            self.main_window._open_main_adv_settings()
+        self._open_ai()
 
     def _open_speaker(self):
         editor = self._active_editor()
@@ -522,6 +519,10 @@ class GlobalMenuBar(QWidget):
             editor._show_speaker_settings()
         elif hasattr(self.main_window, "_open_main_speaker_settings"):
             self.main_window._open_main_speaker_settings()
+
+    def _open_personalization(self):
+        if hasattr(self.main_window, "_open_main_personalization_learning"):
+            self.main_window._open_main_personalization_learning()
 
     def _open_gap(self):
         editor = self._active_editor()

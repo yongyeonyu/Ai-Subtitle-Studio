@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from core.pipeline.stt_preview_optimizer import optimize_stt_preview_segments
+from core.cut_boundary import magnetize_segments_to_cut_boundaries
 
 
 class SttPreviewOptimizerTest(unittest.TestCase):
@@ -53,6 +54,21 @@ class SttPreviewOptimizerTest(unittest.TestCase):
 
         self.assertAlmostEqual(result[0]["start"], 67.0 / 24.0, places=6)
         self.assertAlmostEqual(result[0]["end"], 3.0, places=3)
+
+    def test_magnetize_prefers_provisional_start_and_confirmed_end(self):
+        result = magnetize_segments_to_cut_boundaries(
+            [{"start": 2.77, "end": 3.12, "text": "후보"}],
+            confirmed_boundaries=[{"timeline_sec": 3.0, "timeline_frame": 72, "fps": 24.0}],
+            provisional_boundaries=[{"timeline_sec": 2.8, "timeline_frame": 67, "fps": 24.0, "status": "provisional"}],
+            primary_fps=24.0,
+            provisional_window_sec=0.05,
+            confirmed_window_sec=0.25,
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertAlmostEqual(result[0]["start"], 67.0 / 24.0, places=6)
+        self.assertAlmostEqual(result[0]["end"], 3.0, places=6)
+        self.assertTrue(result[0]["cut_boundary_magnetized"])
 
 
 if __name__ == "__main__":

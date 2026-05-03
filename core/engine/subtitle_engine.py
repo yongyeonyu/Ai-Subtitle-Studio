@@ -917,10 +917,7 @@ def apply_final_gap_settings(
     s = dict(settings or _get_user_settings() or {})
     cont_thresh = max(0.0, _setting_float(s, "continuous_threshold", 2.0))
     push_rate = max(0.0, min(1.0, _setting_float(s, "gap_push_rate", 0.7)))
-    if "gap_pull_rate" in s:
-        pull_rate = max(0.0, min(1.0, _setting_float(s, "gap_pull_rate", 1.0 - push_rate)))
-    else:
-        pull_rate = max(0.0, min(1.0, 1.0 - push_rate))
+    pull_rate = max(0.0, min(1.0, 1.0 - push_rate))
     single_ext = max(0.0, _setting_float(s, "single_subtitle_end", 0.2))
     min_duration = max(0.05, _setting_float(s, "sub_min_duration", 0.2))
 
@@ -1083,6 +1080,7 @@ def optimize_stt_candidate_segments(segments: list[dict], vad_segments: list[dic
         gap_break_sec=_GAP_BREAK_SEC,
         word_gap_break_sec=float(loaded_settings.get("word_timing_gap_break_sec", 0.65) or 0.65),
         vad_segments=vad_segments or [],
+        frame_rate=float(loaded_settings.get("video_fps", 0.0) or 0.0),
         rules=rules,
     )
     optimized = adjust_timing(optimized)

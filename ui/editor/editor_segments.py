@@ -383,8 +383,8 @@ class EditorSegmentsMixin:
             return
 
         cont_thresh = float(self.settings.get("continuous_threshold", 2.0))
-        pull_rate = float(self.settings.get("gap_pull_rate", 0.3))
         push_rate = float(self.settings.get("gap_push_rate", 0.7))
+        pull_rate = max(0.0, min(1.0, 1.0 - push_rate))
         single_ext = float(self.settings.get("single_subtitle_end", 0.2))
         is_initial = getattr(self, '_is_initial_load', False)
         final_gap_ready = bool(self._segment_queue) and all(
@@ -574,13 +574,15 @@ class EditorSegmentsMixin:
         self._schedule_timeline()
         self._refresh_video_subtitle_context()
 
+        suppress_autoseek = bool(getattr(self, "_suspend_append_segments_autoseek", False))
+
         if is_initial:
             self._is_initial_load = False
             if hasattr(self, 'timeline'):
                 self.timeline.set_playhead(0.0); self.timeline.center_to_sec(0.0, smooth=True)
             if hasattr(self, 'video_player'):
                 self.video_player.seek(0.0)
-        elif added_end > 0.0:
+        elif added_end > 0.0 and not suppress_autoseek:
             if hasattr(self, 'timeline'):
                 self.timeline.set_playhead(added_end); self.timeline.center_to_sec(added_end, smooth=True)
             if hasattr(self, 'video_player'):

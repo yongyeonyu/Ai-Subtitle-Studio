@@ -22,8 +22,6 @@ from core.cut_boundary import (
     normalize_cut_boundaries,
     project_cut_boundaries,
     project_cut_provisional_boundaries,
-    snap_segments_near_cut_boundaries,
-    split_segments_by_cut_boundaries,
     sync_project_cut_boundaries,
 )
 from core.project.project_context import STT_SEGMENT_METADATA_KEYS, build_editor_state, sanitize_workspace_state
@@ -677,33 +675,23 @@ def save_project(
         else project_cut_provisional_boundaries(project, primary_fps=primary_fps)
     )
     cut_enabled = cut_boundary_enabled(user_settings if user_settings is not None else project.get("user_settings", {}))
-    snap_targets = normalize_cut_boundaries(
-        list(existing_cut_boundaries) + list(existing_provisional_cut_boundaries),
-        primary_fps=primary_fps,
-    )
     if stt_preview_segments is not None:
-        stt_preview_segments = snap_segments_near_cut_boundaries(
+        from core.cut_boundary import magnetize_segments_to_cut_boundaries
+
+        stt_preview_segments = magnetize_segments_to_cut_boundaries(
             stt_preview_segments,
-            snap_targets,
-            enabled=cut_enabled,
-            primary_fps=primary_fps,
-        )
-        stt_preview_segments = split_segments_by_cut_boundaries(
-            stt_preview_segments,
-            existing_cut_boundaries,
+            confirmed_boundaries=existing_cut_boundaries,
+            provisional_boundaries=existing_provisional_cut_boundaries,
             enabled=cut_enabled,
             primary_fps=primary_fps,
         )
     if segments is not None:
-        segments = snap_segments_near_cut_boundaries(
+        from core.cut_boundary import magnetize_segments_to_cut_boundaries
+
+        segments = magnetize_segments_to_cut_boundaries(
             segments,
-            snap_targets,
-            enabled=cut_enabled,
-            primary_fps=primary_fps,
-        )
-        segments = split_segments_by_cut_boundaries(
-            segments,
-            existing_cut_boundaries,
+            confirmed_boundaries=existing_cut_boundaries,
+            provisional_boundaries=existing_provisional_cut_boundaries,
             enabled=cut_enabled,
             primary_fps=primary_fps,
         )

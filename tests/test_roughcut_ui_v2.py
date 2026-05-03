@@ -84,7 +84,6 @@ class RoughcutUiV2Tests(unittest.TestCase):
         dialog = SettingsDialog({
             "selected_model": "base-model",
             "selected_llm_provider": "ollama",
-            "user_prompt": "editor prompt",
             "editor_roughcut_draft_enabled": True,
             "editor_roughcut_draft_prompt": "editor roughcut draft prompt",
             "llm_threads": 5,
@@ -98,9 +97,9 @@ class RoughcutUiV2Tests(unittest.TestCase):
             "roughcut_llm_threads": 3,
         })
         try:
-            self.assertEqual([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())], ["빠른 설정", "에디터 LLM", "러프컷 LLM", "AI"])
+            self.assertEqual([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())], ["에디터 LLM", "러프컷 LLM", "AI"])
             collected = dialog._collect_settings()
-            self.assertEqual(collected["user_prompt"], "editor prompt")
+            self.assertEqual(collected["user_prompt"], "")
             self.assertEqual(dialog.chk_editor_roughcut_draft_enabled.text(), "자막 생성 후 러프컷 초안 생성")
             self.assertTrue(collected["editor_roughcut_draft_enabled"])
             self.assertEqual(collected["editor_roughcut_draft_prompt"], "editor roughcut draft prompt")
@@ -122,7 +121,7 @@ class RoughcutUiV2Tests(unittest.TestCase):
     def test_ai_tab_exposes_api_tokens_and_model_download_controls(self):
         dialog = SettingsDialog({})
         try:
-            ai_tab = dialog.tabs.widget(3)
+            ai_tab = dialog.tabs.widget(2)
             self.assertIsNotNone(ai_tab.findChild(QLineEdit, "GoogleApiKeyInput"))
             self.assertIsNotNone(ai_tab.findChild(QLineEdit, "OpenAiApiKeyInput"))
             self.assertIsNotNone(ai_tab.findChild(QLineEdit, "HuggingFaceTokenInput"))
@@ -136,7 +135,8 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertIn("LLM 다운로드:", labels)
             self.assertIn("Whisper/필수 모델:", labels)
             self.assertIn("STT1 Whisper 모델:", labels)
-            self.assertIn("STT2 Whisper 모델:", labels)
+            self.assertNotIn("자막 품질 검사:", labels)
+            self.assertNotIn("텍스트 LoRA 보조:", labels)
         finally:
             dialog.close()
 

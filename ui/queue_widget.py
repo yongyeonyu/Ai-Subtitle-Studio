@@ -35,6 +35,8 @@ class QueueMixin:
         self._file_start_times = {}
         self._file_complete_times = {}
         self._real_pct = 0
+        self._sidebar_queue_cache_items = []
+        self._sidebar_queue_cache_header = ""
         self._accumulated_vad = []   # ← 멀티클립 VAD 누적 초기화
 
         self.queue_table.setUpdatesEnabled(False)
@@ -55,6 +57,8 @@ class QueueMixin:
         self.queue_table.setUpdatesEnabled(True)
 
         self.queue_header_lbl.setText(f"큐 리스트 : (1/{len(files)}) - 0% 완료")
+        if hasattr(self, "_refresh_sidebar_queue_cache"):
+            self._refresh_sidebar_queue_cache()
         if hasattr(self, "_sync_sidebar_queue_panel"):
             self._sync_sidebar_queue_panel()
         self._live_timer.start(1000)
@@ -106,6 +110,8 @@ class QueueMixin:
                     if idx not in self._file_complete_times:
                         self.queue_table.setItem(idx, 4, mk(time_txt))
         if hasattr(self, "_sync_sidebar_queue_panel"):
+            if hasattr(self, "_refresh_sidebar_queue_cache"):
+                self._refresh_sidebar_queue_cache()
             self._sync_sidebar_queue_panel()
 
     def _sync_editor_stage_from_queue_status(self, status: str):
@@ -208,6 +214,8 @@ class QueueMixin:
                 if tc:
                     tc.setText(f"{fmt(ef)} / {fmt(xf) if xf > 0 else '학습 중'}")
         if hasattr(self, "_sync_sidebar_queue_panel"):
+            if hasattr(self, "_refresh_sidebar_queue_cache"):
+                self._refresh_sidebar_queue_cache()
             self._sync_sidebar_queue_panel()
 
     def update_queue_header(self, current, total, pct, eta_str=""):
@@ -233,5 +241,37 @@ class QueueMixin:
             self.queue_header_lbl.setText(f"큐 리스트 : ({total}/{total}) - 100% 완료")
         else:
             self.queue_header_lbl.setText(f"큐 리스트 : ({current}/{total}) - {pct}% 완료")
+        if hasattr(self, "_refresh_sidebar_queue_cache"):
+            self._refresh_sidebar_queue_cache()
         if hasattr(self, "_sync_sidebar_queue_panel"):
             self._sync_sidebar_queue_panel()
+
+    def _refresh_sidebar_queue_cache(self):
+        table = getattr(self, "queue_table", None)
+        label = getattr(self, "queue_header_lbl", None)
+        items = []
+        if table is not None:
+            try:
+                for row in range(table.rowCount()):
+                    status_item = table.item(row, 0)
+                    file_item = table.item(row, 1)
+                    eta_item = table.item(row, 4)
+                    status = str(status_item.text() if status_item else "-")
+                    status = self._plain_queue_status(status) if hasattr(self, "_plain_queue_status") else status
+                    display_status = "완료" if "완료" in status else status
+                    items.append({
+                        "order": str(row + 1),
+                        "status": status,
+                        "statusDisplay": display_status,
+                        "done": "완료" in status or "기존자막" in status,
+                        "file": str(file_item.text() if file_item else "-"),
+                        "eta": str(eta_item.text() if eta_item else "-"),
+                    })
+            except RuntimeError:
+                items = list(getattr(self, "_sidebar_queue_cache_items", []) or [])
+        self._sidebar_queue_cache_items = items
+        try:
+            header = str(label.text() if label is not None else "")
+        except RuntimeError:
+            header = ""
+        self._sidebar_queue_cache_header = header

@@ -156,17 +156,12 @@ def configure_qt_runtime() -> None:
 
 
 def configure_qt_gpu_rendering_before_app() -> None:
-    """Apply aggressive Qt OpenGL setup only when explicitly requested.
-
-    macOS can abort inside Qt when forced OpenGL contexts are mixed with
-    multimedia, scroll, and text widgets. Keep the default launch path stable;
-    developers can still opt in with AI_SUBTITLE_FORCE_QT_OPENGL=1.
-    """
+    """Apply Qt OpenGL setup for GPU-backed rendering by default."""
     if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
         return
     if str(os.environ.get("AI_SUBTITLE_GPU_RENDERING", "1")).lower() in {"0", "false", "no"}:
         return
-    if str(os.environ.get("AI_SUBTITLE_FORCE_QT_OPENGL", "0")).lower() not in {"1", "true", "yes", "on"}:
+    if str(os.environ.get("AI_SUBTITLE_FORCE_QT_OPENGL", "1")).lower() not in {"1", "true", "yes", "on"}:
         return
 
     os.environ.setdefault("QT_OPENGL", "desktop")
