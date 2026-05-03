@@ -634,6 +634,51 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             finally:
                 config.OUTPUT_DIR = old_output_dir
 
+    def test_no_vad_fallback_chunks_restart_at_confirmed_cut_boundaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_output_dir = config.OUTPUT_DIR
+            config.OUTPUT_DIR = tmp
+            try:
+                video_path = os.path.join(tmp, "fallback.mp4")
+                open(video_path, "wb").close()
+                cleaned_wav = os.path.join(tmp, "fallback_cleaned.wav")
+                with wave.open(cleaned_wav, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(16000)
+                    wf.writeframes(b"\x00\x00" * int(16000 * 70))
+
+                captured = {}
+
+                self.processor._load_all_settings = lambda: {
+                    "selected_audio_ai": "none",
+                    "selected_vad": "none",
+                    "vad_post_stt_align_enabled": False,
+                    "use_basic_filter": False,
+                    "max_speakers": 1,
+                    "ff_chunk": 30,
+                    "whisper_chunk_overlap_sec": 0.0,
+                    "direct_ffmpeg_chunk_extract": False,
+                }
+                self.processor._run_media_command = lambda *args, **kwargs: True
+                self.processor._write_grouped_chunks_parallel = (
+                    lambda _wav, _dir, grouped: captured.setdefault("grouped", [dict(row) for row in grouped])
+                )
+                self.processor.hard_cut_boundaries = [45.0]
+
+                chunk_dir, vad_segments = self.processor.extract_audio(video_path, target_start_sec=20.0, target_end_sec=70.0)
+
+                self.assertEqual(vad_segments, [])
+                self.assertTrue(chunk_dir.endswith("_chunks"))
+                grouped = captured.get("grouped") or []
+                self.assertEqual(grouped[0], {"start": 20.0, "end": 45.0})
+                self.assertEqual(grouped[1], {"start": 45.0, "end": 50.0})
+                self.assertEqual(grouped[2], {"start": 50.0, "end": 70.0})
+                self.assertTrue(any(abs(float(row.get("start", 0.0)) - 45.0) < 0.001 for row in grouped))
+                self.assertFalse(any(float(row.get("start", 0.0)) < 45.0 < float(row.get("end", 0.0)) for row in grouped))
+            finally:
+                config.OUTPUT_DIR = old_output_dir
+
     def test_wav_activity_stats_detects_audio_level(self):
         with tempfile.TemporaryDirectory() as tmp:
             wav_path = os.path.join(tmp, "voice.wav")

@@ -13,7 +13,12 @@ from typing import Any
 
 from core.frame_time import frame_to_sec, normalize_fps
 from core.work_mode import EDITOR_MODE, normalize_work_mode
-from core.cut_boundary import CUT_BOUNDARY_SCHEMA, normalize_cut_boundaries
+from core.cut_boundary import (
+    CUT_BOUNDARY_PROVISIONAL_SCHEMA,
+    CUT_BOUNDARY_SCHEMA,
+    normalize_cut_boundaries,
+    project_cut_provisional_boundaries,
+)
 
 STT_SEGMENT_METADATA_KEYS = (
     "stt_candidates",
@@ -203,6 +208,12 @@ def project_cut_boundary_segments(project: dict[str, Any]) -> list[dict[str, Any
     return normalize_cut_boundaries(raw, primary_fps=primary_fps)
 
 
+def project_cut_boundary_provisional_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
+    timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
+    primary_fps = normalize_fps(timebase.get("primary_fps", 30.0) or 30.0)
+    return project_cut_provisional_boundaries(project, primary_fps=primary_fps)
+
+
 def project_stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
     editor_state = project.get("editor_state", {}) or {}
     stt_state = editor_state.get("stt", {}) or {}
@@ -314,6 +325,7 @@ def build_editor_state(
     clip_boundaries: list[dict[str, Any]] | None = None,
     stt_preview_segments: list[dict[str, Any]] | None = None,
     cut_boundaries: list[dict[str, Any]] | None = None,
+    provisional_cut_boundaries: list[dict[str, Any]] | None = None,
     primary_fps: float | None = None,
 ) -> dict[str, Any]:
     mode = "multiclip" if mode == "multiclip" or len(media_files) > 1 else "single"
@@ -325,6 +337,10 @@ def build_editor_state(
     )
     cut_boundary_rows = normalize_cut_boundaries(
         cut_boundaries or [],
+        primary_fps=normalize_fps(primary_fps or 30.0),
+    )
+    provisional_cut_boundary_rows = normalize_cut_boundaries(
+        provisional_cut_boundaries or [],
         primary_fps=normalize_fps(primary_fps or 30.0),
     )
     return {
@@ -339,6 +355,8 @@ def build_editor_state(
             "boundaries": boundaries if mode == "multiclip" else [],
             "cut_boundary_schema": CUT_BOUNDARY_SCHEMA,
             "cut_boundaries": cut_boundary_rows if mode == "multiclip" else [],
+            "cut_boundary_provisional_schema": CUT_BOUNDARY_PROVISIONAL_SCHEMA,
+            "cut_boundary_provisional_boundaries": provisional_cut_boundary_rows if mode == "multiclip" else [],
         },
         "subtitles": {
             "segments": normalized_segments,
@@ -351,6 +369,8 @@ def build_editor_state(
         "analysis": {
             "cut_boundary_schema": CUT_BOUNDARY_SCHEMA,
             "cut_boundaries": cut_boundary_rows,
+            "cut_boundary_provisional_schema": CUT_BOUNDARY_PROVISIONAL_SCHEMA,
+            "cut_boundary_provisional_boundaries": provisional_cut_boundary_rows,
         },
         "workspace": sanitize_workspace_state(workspace),
     }

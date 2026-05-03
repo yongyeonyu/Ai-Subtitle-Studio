@@ -709,6 +709,10 @@ class TimelineWidget(QWidget):
         self.canvas.boundary_times = times or []
         self.canvas.update()
 
+    def set_scan_boundary_times(self, times: list[float]):
+        self.canvas.scan_boundary_times = times or []
+        self.canvas.update()
+
     def _update_smooth_scroll(self):
         delta = float(self._target_scroll_x - self._current_scroll_x)
         if abs(delta) <= 1.0:

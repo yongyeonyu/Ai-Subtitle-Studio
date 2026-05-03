@@ -501,7 +501,7 @@ class EditorTimelineVideoMixin:
         self._scan_set_timeline_input_locked(bool(active))
         try:
             if hasattr(self, "timeline") and hasattr(self.timeline, "set_playback_center_lock"):
-                self.timeline.set_playback_center_lock(bool(active))
+                self.timeline.set_playback_center_lock(False)
         except Exception:
             pass
         if not active:
@@ -511,6 +511,31 @@ class EditorTimelineVideoMixin:
                     vp.info_label.setText("")
             except Exception:
                 pass
+
+    def _set_auto_cut_boundary_scan_lines(self, times) -> None:
+        cleaned = []
+        for item in list(times or []):
+            try:
+                sec = self._snap_to_frame(float(item or 0.0))
+            except Exception:
+                continue
+            if sec > 0.0:
+                cleaned.append(sec)
+        try:
+            cleaned = sorted({round(float(sec), 6) for sec in cleaned})
+        except Exception:
+            cleaned = list(cleaned)
+        self._auto_cut_boundary_scan_lines = list(cleaned)
+        timeline = getattr(self, "timeline", None)
+        if timeline is None or not hasattr(timeline, "set_scan_boundary_times"):
+            return
+        timeline.set_scan_boundary_times(list(cleaned))
+        try:
+            if hasattr(timeline, "canvas"):
+                timeline.canvas.update()
+            timeline.update()
+        except Exception:
+            pass
 
     def _preview_auto_cut_boundary_scan(self, current_sec: float, next_sec: float = 0.0) -> None:
         self._set_auto_cut_boundary_scan_active(True)
@@ -646,7 +671,18 @@ class EditorTimelineVideoMixin:
                 vp.video_stack.setCurrentWidget(vp.thumb_label)
 
             try:
-                vp.current_time = float(global_sec)
+                source_path, local_sec, ctx = self._scan_source_and_local_sec(float(global_sec))
+            except Exception:
+                source_path, local_sec, ctx = "", float(global_sec), {}
+            try:
+                vp.current_time = float(local_sec)
+                clip_total = float((ctx or {}).get("duration", 0.0) or 0.0)
+                if clip_total > 0.0:
+                    vp.total_time = clip_total
+                if hasattr(vp, "_last_time_label_ms"):
+                    vp._last_time_label_ms = -250
+                if hasattr(vp, "_ui_tick"):
+                    vp._ui_tick()
             except Exception:
                 pass
 
@@ -690,7 +726,8 @@ class EditorTimelineVideoMixin:
 
         try:
             if hasattr(self, "timeline"):
-                self.timeline.follow_playhead_centered(global_sec, smooth=False)
+                self.timeline.set_playback_center_lock(False)
+                self.timeline.set_playhead(global_sec)
         except Exception:
             pass
 
@@ -702,6 +739,16 @@ class EditorTimelineVideoMixin:
                 if vp.show_cached_thumbnail_at(source_path, local_sec, width=self._scan_preview_thumbnail_size()[0]):
                     if hasattr(vp, "info_label"):
                         vp.info_label.setText(f"컷 경계 탐색 중 · {float(global_sec):.3f}s")
+                    try:
+                        if hasattr(vp, "_last_time_label_ms"):
+                            vp._last_time_label_ms = -250
+                        vp.current_time = float(local_sec)
+                        clip_total = float((_ctx or {}).get("duration", 0.0) or 0.0)
+                        if clip_total > 0.0:
+                            vp.total_time = clip_total
+                        vp._ui_tick()
+                    except Exception:
+                        pass
                     return
         except Exception:
             pass
@@ -1440,39 +1487,47 @@ class EditorTimelineVideoMixin:
             pass
 
         fps = self._current_frame_fps()
-
-        try:
-            local_sec = float(self.video_player.media_player.position() or 0) / 1000.0
-        except Exception:
-            local_sec = float(getattr(self.video_player, "current_time", 0.0) or 0.0)
-
-        local_frame = max(0, int(round(local_sec * fps)))
+        current_global = float(getattr(self.timeline.canvas, 'playhead_sec', 0.0) or 0.0)
+        local_frame = max(0, int(round(current_global * fps)))
         target_frame = max(0, local_frame + direction)
-        target_local = target_frame / fps
-
-        try:
-            total = float(getattr(self.video_player, "total_time", 0.0) or 0.0)
-            if total > 0.0:
-                target_local = min(target_local, total)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self.video_player, "frame_step_seek"):
-                self.video_player.frame_step_seek(target_local)
-            else:
-                self.video_player.seek_direct(target_local)
-        except Exception as e:
-            print(f"⚠️ [frame-step] player seek failed: {e}", flush=True)
-            return
-
-        try:
-            global_sec = self._local_to_global_sec(target_local) if hasattr(self, "_local_to_global_sec") else target_local
-        except Exception:
-            global_sec = target_local
-
-        global_sec = self._snap_to_frame(global_sec)
+        global_sec = self._snap_to_frame(target_frame / fps)
         self._manual_frame_idx = max(0, int(round(global_sec * fps)))
+
+        if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
+            ctx = self._resolve_active_context(global_sec=global_sec)
+            clip_file = str(ctx.get('clip_file', '') or '')
+            current_path = str(getattr(self.video_player, '_current_source_path', '') or '')
+            same_source = bool(clip_file and current_path) and os.path.normpath(clip_file) == os.path.normpath(current_path)
+
+            if same_source:
+                if hasattr(self.timeline, 'canvas'):
+                    self.timeline.canvas._active_clip_idx = int(ctx.get('clip_idx', 0) or 0)
+                target_local = float(ctx.get('local_sec', global_sec) or 0.0)
+                try:
+                    if hasattr(self.video_player, "frame_step_seek"):
+                        self.video_player.frame_step_seek(target_local)
+                    else:
+                        self.video_player.seek_direct(target_local)
+                except Exception as e:
+                    print(f"⚠️ [frame-step] player seek failed: {e}", flush=True)
+                    return
+            else:
+                try:
+                    self._apply_active_context(ctx, autoplay=False, show_thumbnail=False)
+                except Exception as e:
+                    print(f"⚠️ [frame-step] context switch failed: {e}", flush=True)
+                    return
+                target_local = float(ctx.get('local_sec', global_sec) or 0.0)
+        else:
+            target_local = global_sec
+            try:
+                if hasattr(self.video_player, "frame_step_seek"):
+                    self.video_player.frame_step_seek(target_local)
+                else:
+                    self.video_player.seek_direct(target_local)
+            except Exception as e:
+                print(f"⚠️ [frame-step] player seek failed: {e}", flush=True)
+                return
 
         try:
             segs = self._get_current_segments()
@@ -1488,7 +1543,7 @@ class EditorTimelineVideoMixin:
 
         print(
             f"🎯 [frame-step] local frame {local_frame}->{target_frame} "
-            f"{local_sec:.3f}s->{target_local:.3f}s",
+            f"{current_global:.3f}s->{target_local:.3f}s",
             flush=True,
         )
     def _snapshot_timeline_view_for_resize(self) -> dict:

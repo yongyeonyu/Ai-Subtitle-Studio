@@ -230,6 +230,7 @@ class MulticlipPipelineMixin:
                         source_label=item.get("label") or "STT",
                         vad_segments=item.get("vad_segments") or [],
                         cut_boundaries=local_cuts,
+                        provisional_cut_boundaries=self._project_provisional_cut_boundaries_for_pipeline(),
                         cut_boundary_enabled=bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True))),
                         clip_offset=offset,
                         clip_idx=item.get("clip_idx"),

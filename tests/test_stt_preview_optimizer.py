@@ -40,6 +40,20 @@ class SttPreviewOptimizerTest(unittest.TestCase):
         self.assertEqual(result[0]["_clip_idx"], 2)
         self.assertEqual(result[0]["_clip_file"], "/tmp/a.mp4")
 
+    def test_preview_candidates_snap_near_confirmed_and_provisional_cut_boundaries(self):
+        optimized = [{"start": 2.76, "end": 3.18, "text": "클립 후보"}]
+
+        with patch("core.engine.subtitle_engine.optimize_stt_candidate_segments", return_value=optimized):
+            result = optimize_stt_preview_segments(
+                [{"start": 2.76, "end": 3.18, "text": "raw"}],
+                source_label="STT1",
+                cut_boundaries=[{"timeline_sec": 3.0, "timeline_frame": 72, "fps": 24.0}],
+                provisional_cut_boundaries=[{"timeline_sec": 2.8, "timeline_frame": 67, "fps": 24.0, "status": "provisional"}],
+            )
+
+        self.assertAlmostEqual(result[0]["start"], 67.0 / 24.0, places=6)
+        self.assertAlmostEqual(result[0]["end"], 3.0, places=3)
+
 
 if __name__ == "__main__":
     unittest.main()

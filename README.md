@@ -4,7 +4,7 @@
 
 AI 기반 자막 생성, 자막 편집, 화자 분리, 멀티클립 처리, 러프컷 분석을 하나의 데스크톱 작업 흐름으로 연결하는 영상 자막 제작 도구입니다.
 
-[![Version](https://img.shields.io/badge/version-v03.10.00-0A84FF?style=for-the-badge)](#)
+[![Version](https://img.shields.io/badge/version-v03.12.00-0A84FF?style=for-the-badge)](#)
 [![Phase](https://img.shields.io/badge/phase-PHASE2-30D158?style=for-the-badge)](#)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
@@ -26,7 +26,7 @@ AI Subtitle Studio는 긴 영상 작업에서 반복되는 자막 생성, 보정
 
 | 항목 | 내용 |
 | --- | --- |
-| 현재 버전 | `v03.10.00` |
+| 현재 버전 | `v03.12.00` |
 | 개발 단계 | `PHASE2` |
 | 기본 브랜치 | `main` |
 | 지원 목표 | macOS, Windows |
@@ -247,7 +247,9 @@ PY
 | 문서 | 설명 |
 | --- | --- |
 | `File_structure.txt` | 현재 파일 구조 |
-| [`RELEASE_v03.10.00.md`](RELEASE_v03.10.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.12.00.md`](RELEASE_v03.12.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.11.00.md`](RELEASE_v03.11.00.md) | 이전 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.10.00.md`](RELEASE_v03.10.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.09.00.md`](RELEASE_v03.09.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.08.00.md`](RELEASE_v03.08.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.07.00.md`](RELEASE_v03.07.00.md) | 이전 PHASE2 릴리즈 노트 |
@@ -262,22 +264,17 @@ PY
 
 ## 릴리즈 노트
 
-전체 최신 릴리즈 노트는 [`RELEASE_v03.10.00.md`](RELEASE_v03.10.00.md)를 참고하세요.
+전체 최신 릴리즈 노트는 [`RELEASE_v03.12.00.md`](RELEASE_v03.12.00.md)를 참고하세요.
 
-### 최신 릴리즈: v03.10.00
+### 최신 릴리즈: v03.12.00
 
-- STT1/STT2 후보를 별도 레인으로 보여주고, 후보 선택/LLM 선택/점수/확인 필요 상태를 타임라인에서 구분합니다.
-- 최종 자막세그먼트는 STT/LLM/VAD/화자 처리 뒤 `간격` 설정을 마지막 순서로 반영합니다.
-- 후보 선택, 자막감지, 프레임 기반 메타데이터, live preview 상태를 프로젝트 저장/복원과 Undo/Redo 경로에 보존합니다.
-- 재생/휠 스크롤/중앙 고정 타임라인 동작을 정리해 긴 영상 편집 중 떨림을 줄였습니다.
-- 앱 시작/홈 이동/종료 시 Ollama, STT, ffmpeg, AI 런타임 정리를 강화하고 AI 설정 모델/토큰 UI를 복원했습니다.
-- ClearVoice와 Resemble Enhance 음성 향상 실행 중에는 경과시간 로그를 표시해 긴 모델 처리 상태를 확인할 수 있습니다.
-- STT2 병렬 인식 사용 시 STT2 실시간 세그먼트를 STT1 아래 별도 레인에 표시합니다.
-- STT2는 STT1과 독립 스레드로 병렬 처리되어 STT1 preview/result 버퍼를 방해하지 않습니다.
-- STT1/STT2 완료 뒤 LLM이 앞뒤 문맥을 참고해 후보를 먼저 고르고, 필터가 후보를 모두 제거하면 앙상블 결과로 최종 자막을 복구합니다.
-- STT 후보를 수동 선택하면 겹치는 최종 자막의 해당 시간대만 자동으로 잘라 다음 후보를 이어서 선택할 수 있습니다.
-- 자막감지 레인은 STT1/STT2 선택 출처, LLM 선택 완료, 자막 점수, 선택 필요 상태를 색상으로 표시하고 프로젝트에 프레임 기준으로 저장합니다.
-- 저장 직전 pending 세그먼트 큐를 flush해 완료 직후 저장 race를 줄였습니다.
+- 컷 경계 선발대/후발대 스캔을 분리해 시작 전에 임시 경계를 빠르게 수집하고, 후발대가 백그라운드에서 확정 경계를 검증합니다.
+- 임시/확정 컷 경계와 회색 `주제없음` 중분류 세그먼트를 프로젝트와 editor_state에 저장하고 다시 열 때 복원합니다.
+- STT1/STT2 preview 후보와 최종 자막은 저장된 임시/확정 컷 경계 근처에서 스냅되고, 확정 컷 경계는 절대 관통하지 않도록 유지합니다.
+- STT1/STT2 후보 수동 선택은 겹치는 최종 자막을 잘라 교체하며, STT1↔STT2 선택 전환도 Undo/Redo 스냅샷으로 되돌릴 수 있습니다.
+- 재시작 시 회색 중분류, 임시선, 확정선, 프로젝트 컷 경계 상태를 모두 비우고 처음 상태로 리셋합니다.
+- 사이드바 버튼은 열려 있으면 초록 아이콘, 닫혀 있으면 기본 회색 아이콘으로 상태를 드러냅니다.
+- Whisper 오디오 청크는 확정 컷 경계를 hard cut으로 사용하고, VAD 없는 fallback 경로에서도 컷 경계부터 다시 인식하도록 시작점을 재정렬합니다.
 
 ## 보안
 

@@ -46,7 +46,7 @@ class SidebarQueuePanel(QWidget):
         layout.addWidget(self._header_lbl)
 
         self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["순서", "파일명", "숨김", "소요시간 / 예상시간"])
+        self._table.setHorizontalHeaderLabels(["순서", "파일명", "상태", "예상시간"])
         self._table.verticalHeader().setVisible(False)
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)

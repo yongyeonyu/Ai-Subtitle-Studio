@@ -10,6 +10,7 @@ from core.project.project_manager import extract_model_settings, load_project, m
 from core.project.project_context import (
     build_editor_state,
     project_cut_boundary_segments,
+    project_cut_boundary_provisional_segments,
     project_active_work_mode,
     project_workspace,
     project_clip_boundaries,
@@ -177,6 +178,9 @@ class ProjectContextTests(unittest.TestCase):
                     "_clip_file": "/tmp/b.mp4",
                 }
             ],
+            provisional_cut_boundaries=[
+                {"timeline_sec": 5.25, "timeline_frame": 126, "fps": 24.0, "status": "provisional"}
+            ],
         )
 
         segment = state["subtitles"]["segments"][0]
@@ -186,6 +190,7 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(preview["stt_preview_source"], "STT2")
         self.assertEqual(preview["_clip_idx"], 1)
         self.assertTrue(preview["_live_stt_preview"])
+        self.assertEqual(state["analysis"]["cut_boundary_provisional_boundaries"][0]["timeline_frame"], 126)
 
     def test_segment_signature_changes_when_subtitle_text_changes(self):
         before = segment_signature([{"start": 0.0, "end": 1.0, "text": "원본", "speaker": "00"}])
@@ -512,6 +517,10 @@ class ProjectContextTests(unittest.TestCase):
                             "cut_boundaries": [
                                 {"timeline_sec": 3.0, "timeline_frame": 72, "fps": 24.0}
                             ],
+                            "cut_boundary_provisional_schema": "cut_boundaries.provisional.v1",
+                            "cut_boundary_provisional_boundaries": [
+                                {"timeline_sec": 2.9, "timeline_frame": 70, "fps": 24.0, "status": "provisional"}
+                            ],
                         },
                         "timeline": {"tracks": [{"clips": []}]},
                         "media": [],
@@ -536,14 +545,17 @@ class ProjectContextTests(unittest.TestCase):
 
         cut_rows = project_cut_boundary_segments(loaded)
         self.assertEqual(len(cut_rows), 1)
+        provisional_rows = project_cut_boundary_provisional_segments(loaded)
+        self.assertEqual(len(provisional_rows), 1)
         self.assertTrue(loaded["analysis"]["cut_boundary_settings"]["absolute"])
         self.assertEqual(len(loaded["editor_state"]["multiclip"]["cut_boundaries"]), 1)
+        self.assertEqual(len(loaded["editor_state"]["multiclip"]["cut_boundary_provisional_boundaries"]), 1)
         subtitles = project_segments_to_editor(loaded)
         self.assertEqual(len(subtitles), 1)
-        self.assertGreaterEqual(subtitles[0]["start"], 3.0)
+        self.assertAlmostEqual(subtitles[0]["start"], 3.0, places=6)
         previews = project_stt_preview_segments(loaded)
         self.assertEqual(len(previews), 1)
-        self.assertLessEqual(previews[0]["end"], 3.5)
+        self.assertAlmostEqual(previews[0]["start"], 3.0, places=6)
 
     def test_project_segments_to_editor_prefers_saved_frame_numbers(self):
         project = {

@@ -22,6 +22,7 @@ from core.project.project_manager import (
 )
 from core.project.project_context import (
     project_clip_boundaries,
+    project_cut_boundary_provisional_segments,
     project_voice_activity_segments,
     project_active_work_mode,
     project_media_files,
@@ -115,6 +116,11 @@ class ProjectUIMixin:
                 editor._live_stt_preview_segments = stt_preview
             if hasattr(editor, "_redraw_timeline"):
                 editor._redraw_timeline()
+            provisional_boundaries = project_cut_boundary_provisional_segments(project)
+            if provisional_boundaries and hasattr(editor, "timeline") and hasattr(editor.timeline, "set_scan_boundary_times"):
+                editor.timeline.set_scan_boundary_times(
+                    [float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0) for row in provisional_boundaries]
+                )
             voice_activity = project_voice_activity_segments(project)
             if voice_activity and hasattr(editor, "set_voice_activity_segments"):
                 editor.set_voice_activity_segments(voice_activity)

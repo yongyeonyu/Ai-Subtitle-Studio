@@ -33,6 +33,12 @@ class SignalHandlersMixin:
     def preview_cut_boundary_scan(self, current_sec: float, next_sec: float = 0.0):
         self._sig_preview_cut_boundary_scan.emit(float(current_sec or 0.0), float(next_sec or 0.0))
 
+    def preview_cut_boundary_scan_lines(self, times):
+        self._sig_preview_cut_boundary_scan_lines.emit(list(times or []))
+
+    def update_project_boundary_times(self, times):
+        self._sig_update_project_boundary_times.emit(list(times or []))
+
     def update_editor_status(self, c_idx, t_total):
         self._sig_update_status.emit(c_idx, t_total)
 
@@ -220,6 +226,32 @@ class SignalHandlersMixin:
                 handler(float(current_sec or 0.0), float(next_sec or 0.0))
             except Exception as exc:
                 get_logger().log(f"⚠️ 자동 컷 경계 스캔 프리뷰 실패: {exc}")
+
+    def _on_cut_boundary_scan_lines(self, times):
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None:
+            return
+        handler = getattr(editor, "_set_auto_cut_boundary_scan_lines", None)
+        if callable(handler):
+            try:
+                handler(list(times or []))
+            except Exception as exc:
+                get_logger().log(f"⚠️ 자동 컷 경계 임시선 반영 실패: {exc}")
+
+    def _on_project_boundary_times_updated(self, times):
+        try:
+            self._project_boundary_times = list(times or [])
+        except Exception:
+            self._project_boundary_times = []
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None:
+            return
+        try:
+            timeline = getattr(editor, "timeline", None)
+            if timeline is not None and hasattr(timeline, "set_boundary_times"):
+                timeline.set_boundary_times(list(self._project_boundary_times or []))
+        except Exception as exc:
+            get_logger().log(f"⚠️ 컷 경계 확정선 반영 실패: {exc}")
 
     def _warmup_local_llm_models(self):
         import threading

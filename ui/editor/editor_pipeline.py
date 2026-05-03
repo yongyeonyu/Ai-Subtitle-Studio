@@ -358,10 +358,7 @@ class EditorPipelineMixin:
 
             from core.roughcut.cut_boundary_placeholder import extract_topicless_placeholders_from_project
             rows = extract_topicless_placeholders_from_project(project_path)
-            if not rows:
-                return
-
-            rows = [dict(row) for row in rows]
+            rows = [dict(row) for row in list(rows or [])]
 
             # Editor 자체에 반영
             for attr in (
@@ -380,19 +377,21 @@ class EditorPipelineMixin:
                     pass
 
             # roughcut result 형태로도 반영
-            result_dict = {
-                "segments": list(rows),
-                "chapters": [],
-                "edit_decisions": [],
-                "edl_segments": [],
-                "guide_markdown": "",
-                "schema_version": "roughcut_result.v2",
-                "draft_state": {"status": "review"},
-                "video_summary": f"컷 경계 기반 주제없음 중분류 {len(rows)}개",
-            }
+            result_dict = None
+            if rows:
+                result_dict = {
+                    "segments": list(rows),
+                    "chapters": [],
+                    "edit_decisions": [],
+                    "edl_segments": [],
+                    "guide_markdown": "",
+                    "schema_version": "roughcut_result.v2",
+                    "draft_state": {"status": "review"},
+                    "video_summary": f"컷 경계 기반 주제없음 중분류 {len(rows)}개",
+                }
             for attr in ("_roughcut_result", "roughcut_result", "_roughcut_draft_result"):
                 try:
-                    setattr(self, attr, dict(result_dict))
+                    setattr(self, attr, dict(result_dict) if isinstance(result_dict, dict) else None)
                 except Exception:
                     pass
 
@@ -457,11 +456,6 @@ class EditorPipelineMixin:
             except Exception:
                 pass
 
-            try:
-                get_logger().log(f"  ▒ [컷 경계] UI 회색 중분류 반영 완료 ({len(rows)}개)")
-            except Exception:
-                pass
-
         except Exception as exc:
             try:
                 get_logger().log(f"  ⚠️ [컷 경계] UI 회색 중분류 반영 실패: {exc}")
@@ -491,9 +485,9 @@ class EditorPipelineMixin:
             sub = menu.addMenu("🎬 컷 경계 단계")
             choices = [
                 ("off", "사용안함"),
-                ("low", "낮음 - 십자가 4/9"),
-                ("medium", "중간 - 꽉찬 십자가 5/9"),
-                ("high", "높음 - O모양 8/9"),
+                ("low", "낮음 - 3초 간격"),
+                ("medium", "중간 - 2초 간격"),
+                ("high", "높음 - 1초 간격"),
             ]
 
             for level, label in choices:
@@ -528,9 +522,9 @@ class EditorPipelineMixin:
             # profile label 보조 저장
             labels = {
                 "off": "사용안함",
-                "low": "낮음 - 9개 중 십자가 4개",
-                "medium": "중간 - 9개 중 꽉찬 십자가 5개",
-                "high": "높음 - 9개 중 O모양 8개",
+                "low": "낮음 - 3초 간격",
+                "medium": "중간 - 2초 간격",
+                "high": "높음 - 1초 간격",
             }
             masks = {
                 "off": "off",

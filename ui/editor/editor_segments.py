@@ -261,9 +261,17 @@ class EditorSegmentsMixin:
         # 1. 튕김 방지: 현재 스크롤 및 플레이헤드 위치 캡처
         # ---------------------------------------------------------
         saved_sec = None
+        saved_h_scroll = None
         saved_v_scroll = 0
-        if hasattr(self, "timeline") and hasattr(self.timeline, "get_current_sec"):
-            saved_sec = self.timeline.get_current_sec()
+        if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
+            try:
+                saved_sec = float(getattr(self.timeline.canvas, "playhead_sec", 0.0) or 0.0)
+            except Exception:
+                saved_sec = None
+            try:
+                saved_h_scroll = int(self.timeline.scroll.horizontalScrollBar().value())
+            except Exception:
+                saved_h_scroll = None
         if hasattr(self, "text_edit"):
             saved_v_scroll = self.text_edit.verticalScrollBar().value()
 
@@ -292,28 +300,11 @@ class EditorSegmentsMixin:
             return
 
         # ---------------------------------------------------------
-        # 3. 겹치는 최종 자막 찾기 (시간 이동 없이 텍스트만 빼오기 위함)
+        # 3. 겹치는 최종 자막을 후보 경계 기준으로 잘라내고 새 확정 자막 삽입
         # ---------------------------------------------------------
-        best_seg = None
-        max_overlap = -1
-        for seg in current:
-            s_start = float(seg.get("start", 0.0) or 0.0)
-            s_end = float(seg.get("end", 0.0) or 0.0)
-            # 겹치는 구간(초) 계산
-            overlap = max(0, min(cand_end, s_end) - max(cand_start, s_start))
-            if overlap > max_overlap:
-                max_overlap = overlap
-                best_seg = seg
-                
-        # 가장 많이 겹치는 최종 자막을 찾았다면?
-        if best_seg and max_overlap > 0:
-            if best_seg.get("stt_selected_source") == cand_source:
-                # [선택 취소 Toggle] 이미 선택된 상태에서 다시 누르면 배지 제거
-                best_seg["stt_selected_source"] = ""
-            else:
-                # [선택 추가 Toggle] 시작/종료 시간은 절대 건드리지 않고 텍스트와 출처만 교체!
-                best_seg["text"] = cand_text
-                best_seg["stt_selected_source"] = cand_source
+        current = self._trim_final_segments_around_candidate(current, candidate)
+        current.append(self._final_segment_from_stt_candidate(candidate))
+        current.sort(key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
 
         # ---------------------------------------------------------
         # 4. 화면 반영 및 위치 복원
@@ -325,7 +316,7 @@ class EditorSegmentsMixin:
             self.text_edit.blockSignals(True)
 
         if hasattr(self, "_reload_segments_from_list"):
-            self._reload_segments_from_list(current)
+            self._reload_segments_from_list(current, preserve_view=True)
             self._update_timeline_with_confirmed_and_preview(current)
         else:
             self._cached_segs = current
@@ -335,8 +326,14 @@ class EditorSegmentsMixin:
         if hasattr(self, "text_edit"):
             self.text_edit.blockSignals(False)
             self.text_edit.verticalScrollBar().setValue(saved_v_scroll)
-        if hasattr(self, "timeline") and hasattr(self.timeline, "set_current_sec") and saved_sec is not None:
-            self.timeline.set_current_sec(saved_sec)
+        if hasattr(self, "timeline"):
+            try:
+                if saved_sec is not None and hasattr(self.timeline, "set_playhead"):
+                    self.timeline.set_playhead(saved_sec, preserve_center_lock=True)
+                if saved_h_scroll is not None:
+                    self.timeline.scroll.horizontalScrollBar().setValue(int(saved_h_scroll))
+            except Exception:
+                pass
     def _update_timeline_with_confirmed_and_preview(self, confirmed_segments: list[dict]):
         if not hasattr(self, "timeline"):
             return

@@ -377,6 +377,7 @@ class SinglePipelineMixin:
                     source_label=str(_label or "STT"),
                     vad_segments=vad_segs,
                     cut_boundaries=self._project_cut_boundaries_for_pipeline(),
+                    provisional_cut_boundaries=self._project_provisional_cut_boundaries_for_pipeline(),
                 )
                 if preview and self._active:
                     self._ui_emit("_sig_preview_stt_segments", preview)

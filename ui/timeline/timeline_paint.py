@@ -823,14 +823,26 @@ class TimelinePaintMixin:
             p.setFont(QFont(config.FONT, 20, QFont.Weight.Bold))
             p.drawText(self._clip_add_rect, Qt.AlignmentFlag.AlignCenter, "+")
 
-        if self.boundary_times:
-            pen_boundary = QPen(QColor("#4AFF80"), 1)
-            for bt in self.boundary_times:
+        boundary_lane_top = RULER_H + WAVE_H + 5
+        boundary_lane_h = max(18, SEG_TOP - boundary_lane_top - 7)
+        boundary_top = int(boundary_lane_top + 3)
+        boundary_bot = int(boundary_lane_top + boundary_lane_h - 3)
+        if getattr(self, "boundary_times", None):
+            pen_confirmed_boundary = QPen(QColor("#8E8E93"), 1)
+            for bt in list(getattr(self, "boundary_times", []) or []):
+                bx = self._x(bt)
+                if bx < clip_left or bx > clip_right:
+                    continue
+                p.setPen(pen_confirmed_boundary)
+                p.drawLine(bx, boundary_top, bx, boundary_bot)
+        if getattr(self, "scan_boundary_times", None):
+            pen_boundary = QPen(QColor("#00FFD0"), 1)
+            for bt in list(getattr(self, "scan_boundary_times", []) or []):
                 bx = self._x(bt)
                 if bx < clip_left or bx > clip_right:
                     continue
                 p.setPen(pen_boundary)
-                p.drawLine(bx, 0, bx, CANVAS_H)
+                p.drawLine(bx, boundary_top, bx, boundary_bot)
 
         if getattr(self, '_is_listening', False) and self._edit_active:
             seg = next((s for s in self.segments if s.get("line") == self._edit_line), None)

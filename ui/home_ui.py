@@ -961,9 +961,9 @@ class HomeUIMixin:
 
             labels = {
                 "off": "사용안함",
-                "low": "낮음 - 9개 중 십자가 4개",
-                "medium": "중간 - 9개 중 꽉찬 십자가 5개",
-                "high": "높음 - 9개 중 O모양 8개",
+                "low": "낮음 - 3초 간격",
+                "medium": "중간 - 2초 간격",
+                "high": "높음 - 1초 간격",
             }
             masks = {
                 "off": "off",

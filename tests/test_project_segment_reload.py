@@ -98,7 +98,7 @@ class _LivePreviewEditor(EditorSegmentsMixin):
     def _frame_time(self, sec):
         return round(float(sec), 3)
 
-    def _reload_segments_from_list(self, segs):
+    def _reload_segments_from_list(self, segs, preserve_view=False):
         self.reload_called_with = list(segs)
         self._cached_segs = list(segs)
 
@@ -118,7 +118,7 @@ class _UndoableLivePreviewEditor(_LivePreviewEditor):
     def _get_current_segments(self):
         return list(self._cached_segs)
 
-    def _reload_segments_from_list(self, segs):
+    def _reload_segments_from_list(self, segs, preserve_view=False):
         self.reload_called_with = list(segs)
         self._cached_segs = [dict(seg) for seg in segs]
         doc = self.text_edit.document()
@@ -288,6 +288,40 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor._cached_segs[0]["text"], "STT2 후보")
         self.assertEqual(editor._cached_segs[0]["stt_selected_source"], "STT2")
         self.assertEqual(editor._live_stt_preview_segments[0]["text"], "STT2 후보")
+
+    def test_switching_between_stt1_and_stt2_is_undo_redo_snapshot(self):
+        editor = _UndoableLivePreviewEditor()
+        editor._reload_segments_from_list([
+            {"start": 1.0, "end": 2.0, "text": "기존", "speaker": "00"}
+        ])
+        editor.preview_stt_segments([
+            {"start": 1.0, "end": 2.0, "text": "STT1 후보", "stt_preview_source": "STT1"},
+            {"start": 1.0, "end": 2.0, "text": "STT2 후보", "stt_preview_source": "STT2"},
+        ])
+
+        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
+        self.assertEqual(editor._cached_segs[0]["text"], "STT1 후보")
+        self.assertEqual(editor._cached_segs[0]["stt_selected_source"], "STT1")
+
+        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[1])
+        self.assertEqual(editor._cached_segs[0]["text"], "STT2 후보")
+        self.assertEqual(editor._cached_segs[0]["stt_selected_source"], "STT2")
+
+        editor._undo_mgr.undo()
+        self.assertEqual(editor._cached_segs[0]["text"], "STT1 후보")
+        self.assertEqual(editor._cached_segs[0]["stt_selected_source"], "STT1")
+
+        editor._undo_mgr.undo()
+        self.assertEqual(editor._cached_segs[0]["text"], "기존")
+        self.assertNotIn("stt_selected_source", editor._cached_segs[0])
+
+        editor._undo_mgr.redo()
+        self.assertEqual(editor._cached_segs[0]["text"], "STT1 후보")
+        self.assertEqual(editor._cached_segs[0]["stt_selected_source"], "STT1")
+
+        editor._undo_mgr.redo()
+        self.assertEqual(editor._cached_segs[0]["text"], "STT2 후보")
+        self.assertEqual(editor._cached_segs[0]["stt_selected_source"], "STT2")
 
     def test_save_flushes_pending_segment_queue_before_empty_check(self):
         editor = _SaveFlushEditor()

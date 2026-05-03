@@ -273,7 +273,7 @@ def editor_analysis_markers(
                 "start": 0.0,
                 "end": total_duration,
                 "kind": "idle",
-                "label": "분석대기",
+                "label": "",
                 "color": "#2D3942",
                 "priority": 0,
                 "alpha": 96,

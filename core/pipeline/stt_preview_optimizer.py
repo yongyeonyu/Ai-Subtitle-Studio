@@ -12,6 +12,7 @@ def optimize_stt_preview_segments(
     source_label: str = "STT1",
     vad_segments: list[dict] | None = None,
     cut_boundaries: list[dict] | None = None,
+    provisional_cut_boundaries: list[dict] | None = None,
     cut_boundary_enabled: bool = True,
     clip_offset: float = 0.0,
     clip_idx: int | None = None,
@@ -49,6 +50,21 @@ def optimize_stt_preview_segments(
             )
         except Exception as exc:
             get_logger().log(f"  ⚠️ [{label}] 컷 경계 후보 분할 실패, 기존 후보 유지: {exc}")
+
+    snap_targets = list(cut_boundaries or []) + list(provisional_cut_boundaries or [])
+    if snap_targets:
+        try:
+            from core.cut_boundary import snap_segments_near_cut_boundaries
+
+            optimized = snap_segments_near_cut_boundaries(
+                optimized,
+                snap_targets,
+                enabled=bool(cut_boundary_enabled),
+                snap_window_sec=0.32,
+                min_duration_sec=0.05,
+            )
+        except Exception as exc:
+            get_logger().log(f"  ⚠️ [{label}] 컷 경계 스냅 실패, 기존 후보 유지: {exc}")
 
     offset = float(clip_offset or 0.0)
     preview: list[dict] = []

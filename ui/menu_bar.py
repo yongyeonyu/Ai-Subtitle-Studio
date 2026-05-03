@@ -426,6 +426,8 @@ class GlobalMenuBar(QWidget):
         self.btn_auto_start.setToolTip("자동시작 ON" if auto_on else "자동시작 OFF")
         log_visible = bool(getattr(main, "_log_visible", True))
         self.btn_log.setText("사이드바")
+        log_color = "#34C759" if log_visible else "#A9B0B7"
+        self.btn_log.setIcon(line_icon("terminal", log_color, 22))
         self.btn_log.setToolTip("사이드바 숨기기" if log_visible else "사이드바 보기")
 
         compact = self._should_icon_only()

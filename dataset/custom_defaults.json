@@ -436,5 +436,8 @@
   ],
   "scan_cut_auto_gray_super_strong_threshold": 110.0,
   "scan_cut_color_avg_super_strong_relax_regions": 2,
-  "scan_cut_color_avg_regions_required_ratio": 0.45
+  "scan_cut_color_avg_regions_required_ratio": 0.45,
+  "scan_cut_auto_sample_step_sec": 2.0,
+  "cut_boundary_auto_sample_step_sec": 2.0,
+  "scan_cut_auto_interval_sec": 2.0
 }

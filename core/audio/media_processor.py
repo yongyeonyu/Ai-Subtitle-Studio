@@ -1193,9 +1193,17 @@ class VideoProcessor:
                         total_dur = wf.getnframes() / float(wf.getframerate())
                     chunk_sec = max(10.0, float(s.get("ff_chunk", _CHUNK_DURATION)))
                     overlap_sec = self._chunk_overlap_sec(s)
-                    grouped = self._split_range_with_overlap(0.0, total_dur, chunk_sec, overlap_sec)
+                    range_start = max(0.0, float(target_start_sec or 0.0))
+                    range_end = float(total_dur or 0.0)
+                    if target_end_sec is not None:
+                        range_end = min(range_end, max(range_start, float(target_end_sec or range_start)))
+                    grouped = self._split_range_with_overlap(range_start, range_end, chunk_sec, overlap_sec)
+                    grouped = self._split_grouped_chunks_at_hard_cuts(grouped, range_start, range_end)
                     self._write_grouped_chunks_parallel(cleaned_wav, chunk_dir, grouped)
-                    get_logger().log(f"    → Whisper 청크 {len(grouped)}개 생성 완료 (overlap {overlap_sec:.1f}초, 총 {total_dur:.1f}초)")
+                    get_logger().log(
+                        f"    → Whisper 청크 {len(grouped)}개 생성 완료 "
+                        f"(overlap {overlap_sec:.1f}초, 범위 {range_start:.1f}s~{range_end:.1f}s)"
+                    )
                 except Exception as e:
                     get_logger().log(f"  ⚠️ STT 청크 분할 실패: {e}")
 

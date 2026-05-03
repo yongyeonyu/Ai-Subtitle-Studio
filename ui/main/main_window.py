@@ -75,6 +75,8 @@ class MainWindow(
     _sig_refresh_cut_boundary_placeholder = pyqtSignal()
     _sig_set_cut_boundary_scan_active = pyqtSignal(bool)
     _sig_preview_cut_boundary_scan = pyqtSignal(float, float)
+    _sig_preview_cut_boundary_scan_lines = pyqtSignal(list)
+    _sig_update_project_boundary_times = pyqtSignal(list)
 
     def __init__(self):
         super().__init__()
@@ -379,6 +381,10 @@ class MainWindow(
                 canvas._drag_adj_l = None
                 canvas._drag_adj_r = None
                 canvas._snap_lines = []
+                if hasattr(canvas, "boundary_times"):
+                    canvas.boundary_times = []
+                if hasattr(canvas, "scan_boundary_times"):
+                    canvas.scan_boundary_times = []
                 canvas._edit_active = False
                 canvas._edit_line = -1
                 canvas._edit_text = ""
@@ -485,7 +491,8 @@ class MainWindow(
         project_path = str(getattr(self, "_current_project_path", "") or "")
         if project_path and os.path.exists(project_path):
             try:
-                from core.project.project_manager import save_project
+                from core.cut_boundary import sync_project_cut_boundaries
+                from core.project.project_manager import _read_json, _write_json, save_project
                 from core.work_mode import EDITOR_MODE
 
                 save_project(
@@ -493,10 +500,82 @@ class MainWindow(
                     segments=[],
                     roughcut_state={},
                     active_work_mode=EDITOR_MODE,
+                    stt_preview_segments=[],
+                    provisional_cut_boundaries=[],
                 )
+                project = _read_json(project_path)
+                analysis = project.setdefault("analysis", {})
+                analysis["cut_boundaries"] = []
+                analysis["cut_boundary_provisional_boundaries"] = []
+                sync_project_cut_boundaries(
+                    project,
+                    settings=project.get("user_settings", {}),
+                    provisional_boundaries=[],
+                )
+                _write_json(project_path, project)
                 get_logger().log("🧹 재시작: 프로젝트 러프컷 상태와 세그먼트를 초기화했습니다.")
             except Exception as exc:
                 get_logger().log(f"⚠️ 재시작 러프컷 상태 초기화 실패: {exc}")
+
+    def _clear_cut_boundary_state_for_full_restart(self, editor=None):
+        editor = editor or getattr(self, "_editor_widget", None)
+        try:
+            self._project_boundary_times = []
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_sig_update_project_boundary_times"):
+                self._sig_update_project_boundary_times.emit([])
+        except Exception:
+            pass
+
+        if editor is None:
+            return
+
+        for attr in (
+            "_project_boundary_times",
+            "_auto_cut_boundary_scan_lines",
+            "_cut_boundary_topicless_middle_segments",
+            "_middle_segments",
+            "middle_segments",
+            "_roughcut_segments",
+            "roughcut_segments",
+            "_chapter_segments",
+            "chapter_segments",
+            "_roughcut_draft_segments",
+        ):
+            try:
+                setattr(editor, attr, [])
+            except Exception:
+                pass
+        try:
+            editor._scan_cut_state = None
+        except Exception:
+            pass
+        try:
+            if hasattr(editor, "_set_auto_cut_boundary_scan_active"):
+                editor._set_auto_cut_boundary_scan_active(False)
+        except Exception:
+            pass
+        try:
+            if hasattr(editor, "_set_auto_cut_boundary_scan_lines"):
+                editor._set_auto_cut_boundary_scan_lines([])
+        except Exception:
+            pass
+        try:
+            timeline = getattr(editor, "timeline", None)
+            if timeline is not None:
+                if hasattr(timeline, "set_boundary_times"):
+                    timeline.set_boundary_times([])
+                if hasattr(timeline, "set_scan_boundary_times"):
+                    timeline.set_scan_boundary_times([])
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_sig_refresh_cut_boundary_placeholder"):
+                self._sig_refresh_cut_boundary_placeholder.emit()
+        except Exception:
+            pass
 
     def _restart_current_pipeline_from_beginning(self, editor=None) -> bool:
         editor = editor or getattr(self, "_editor_widget", None)
@@ -516,6 +595,7 @@ class MainWindow(
         self._backup_editor_segments_for_restart(editor, files)
         self._clear_editor_for_full_restart(editor)
         self._clear_roughcut_for_full_restart(files)
+        self._clear_cut_boundary_state_for_full_restart(editor)
         try:
             state_manager = getattr(editor, "sm", None)
             if state_manager is not None and hasattr(state_manager, "start_processing"):
@@ -610,6 +690,8 @@ class MainWindow(
         self._sig_refresh_cut_boundary_placeholder.connect(self._do_refresh_cut_boundary_placeholder)
         self._sig_set_cut_boundary_scan_active.connect(self._on_cut_boundary_scan_active)
         self._sig_preview_cut_boundary_scan.connect(self._on_cut_boundary_scan_preview)
+        self._sig_preview_cut_boundary_scan_lines.connect(self._on_cut_boundary_scan_lines)
+        self._sig_update_project_boundary_times.connect(self._on_project_boundary_times_updated)
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self):

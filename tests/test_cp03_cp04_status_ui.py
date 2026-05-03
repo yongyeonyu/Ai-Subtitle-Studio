@@ -88,7 +88,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
 
             cases = {
                 "⏳ [전처리] FFMPEG 오디오 추출 중": "전처리",
-                "⏳ [STT] Whisper 중": "STT 1",
+                "⏳ [STT] Whisper 중": "STT 1/2",
                 "⏳ [자막 LLM] 최적화 중": "자막 LLM",
                 "💾 자동 저장 중...": "저장",
                 "저장 완료": "완료",
@@ -275,6 +275,8 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.segments = [{"start": 0.0, "end": 1.0, "text": "old"}]
                 self.gap_segments = [{"start": 1.0, "end": 2.0, "is_gap": True}]
                 self.vad_segments = [{"start": 0.0, "end": 1.2}]
+                self.boundary_times = [1.5]
+                self.scan_boundary_times = [1.4]
                 self.active_seg_start = 1.0
                 self.playhead_sec = 1.0
                 self.re_recog_zone = (0.0, 1.0)
@@ -322,6 +324,12 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.vad = segments
                 self.canvas.vad_segments = segments
                 self.global_canvas.vad_segments = segments
+
+            def set_boundary_times(self, times):
+                self.canvas.boundary_times = list(times or [])
+
+            def set_scan_boundary_times(self, times):
+                self.canvas.scan_boundary_times = list(times or [])
 
         class _VideoPlayer:
             def __init__(self):
@@ -377,6 +385,20 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                             }]
                         },
                         "subtitles": {"segments": [{"start": 0.0, "end": 1.0, "text": "old"}]},
+                        "analysis": {
+                            "cut_boundaries": [{"timeline_sec": 1.5, "timeline_frame": 45, "fps": 30.0}],
+                            "cut_boundary_provisional_boundaries": [{"timeline_sec": 1.4, "timeline_frame": 42, "fps": 30.0, "status": "provisional"}],
+                        },
+                        "editor_state": {
+                            "analysis": {
+                                "cut_boundaries": [{"timeline_sec": 1.5, "timeline_frame": 45, "fps": 30.0}],
+                                "cut_boundary_provisional_boundaries": [{"timeline_sec": 1.4, "timeline_frame": 42, "fps": 30.0, "status": "provisional"}],
+                            },
+                            "multiclip": {
+                                "cut_boundaries": [{"timeline_sec": 1.5, "timeline_frame": 45, "fps": 30.0}],
+                                "cut_boundary_provisional_boundaries": [{"timeline_sec": 1.4, "timeline_frame": 42, "fps": 30.0, "status": "provisional"}],
+                            },
+                        },
                         "roughcut_state": {"source_signature": "sig", "candidates": [{"candidate_id": "candidate_a"}]},
                     },
                     f,
@@ -393,6 +415,10 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                     _completion_handled=True,
                     _roughcut_draft_pending=True,
                     _is_dirty=True,
+                    _project_boundary_times=[1.5],
+                    _auto_cut_boundary_scan_lines=[1.4],
+                    _cut_boundary_topicless_middle_segments=[{"label": "A 주제없음"}],
+                    _middle_segments=[{"label": "A 주제없음"}],
                     timeline=_Timeline(),
                     video_player=_VideoPlayer(),
                     _get_current_segments=lambda: [
@@ -435,6 +461,8 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.assertIsNone(editor.timeline.canvas._drag_seg)
                 self.assertIsNone(editor.timeline.canvas._drag_edge)
                 self.assertEqual(editor.timeline.canvas._snap_lines, [])
+                self.assertEqual(editor.timeline.canvas.boundary_times, [])
+                self.assertEqual(editor.timeline.canvas.scan_boundary_times, [])
                 self.assertFalse(editor.timeline.canvas._edit_active)
                 self.assertIsNone(editor.timeline.canvas._speech_mask)
                 self.assertTrue(editor.timeline.canvas.invalidated_markers)
@@ -442,6 +470,10 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.assertEqual(editor.timeline.global_canvas.segments, [])
                 self.assertEqual(editor.timeline.global_canvas.gap_segments, [])
                 self.assertEqual(editor.timeline.global_canvas.vad_segments, [])
+                self.assertEqual(editor._project_boundary_times, [])
+                self.assertEqual(editor._auto_cut_boundary_scan_lines, [])
+                self.assertEqual(editor._cut_boundary_topicless_middle_segments, [])
+                self.assertEqual(editor._middle_segments, [])
                 self.assertEqual(editor.video_player.context_segments, [])
                 self.assertEqual(editor.video_player.segments, [])
                 self.assertEqual(editor.video_player._pending_segments, [])
@@ -450,6 +482,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.assertEqual(editor.video_player.seek_sec, 0.0)
                 self.assertEqual(remembered[-1], [])
                 self.assertIsNone(window._editor_roughcut_result)
+                self.assertEqual(window._project_boundary_times, [])
                 self.assertIsNone(window._roughcut_widget._result)
                 self.assertEqual(window._roughcut_widget._roughcut_candidates, [])
                 self.assertEqual(window._roughcut_widget._selected_candidate_id, "")
@@ -459,6 +492,12 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                     saved_project = json.load(f)
                 self.assertEqual(saved_project.get("roughcut_state"), {})
                 self.assertEqual(saved_project.get("subtitles", {}).get("segments"), [])
+                self.assertEqual(saved_project.get("analysis", {}).get("cut_boundaries"), [])
+                self.assertEqual(saved_project.get("analysis", {}).get("cut_boundary_provisional_boundaries"), [])
+                self.assertEqual(saved_project.get("editor_state", {}).get("analysis", {}).get("cut_boundaries"), [])
+                self.assertEqual(saved_project.get("editor_state", {}).get("analysis", {}).get("cut_boundary_provisional_boundaries"), [])
+                self.assertEqual(saved_project.get("editor_state", {}).get("multiclip", {}).get("cut_boundaries"), [])
+                self.assertEqual(saved_project.get("editor_state", {}).get("multiclip", {}).get("cut_boundary_provisional_boundaries"), [])
                 self.assertIn("대기", window.queue_table.item(0, 0).text())
                 self.assertIn("(1/1)", window.queue_header_lbl.text())
                 backup_dir = os.path.join(tmp, "자막백업")
