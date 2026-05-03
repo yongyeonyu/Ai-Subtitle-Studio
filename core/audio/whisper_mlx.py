@@ -13,7 +13,7 @@ import subprocess
 import json
 import threading
 import uuid
-from logger import get_logger
+from core.runtime.logger import get_logger
 from core.llm.secure_keys import get_api_key
 from core.platform_compat import subprocess_env
 

@@ -19,8 +19,8 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QEvent
 from PyQt6.QtGui import QKeySequence, QShortcut, QColor, QTextCursor, QIcon
 from PyQt6.QtMultimedia import QMediaPlayer
 
-import config
-from logger import get_logger
+from core.runtime import config
+from core.runtime.logger import get_logger
 from core.project.data_manager import (
     load_settings as _dm_load_settings, save_settings as _dm_save_settings,
     load_corrections as _dm_load_corrections, save_correction as _dm_save_correction,
@@ -1068,9 +1068,10 @@ class EditorWidget(
             self.btn_log.setText("로그" if is_compact else self._terminal_log_button_text())
 
     def _position_video_expand_button(self):
-        self._apply_fixed_video_preview_width()
+        return
 
     def _apply_fixed_video_preview_width(self):
+        return
         if not hasattr(self, "splitter") or not hasattr(self, "video_player"):
             return
         if getattr(self, "_video_width_locking", False):
@@ -1124,8 +1125,10 @@ class EditorWidget(
 
     def set_terminal_visible_layout(self, is_visible: bool):
         if not hasattr(self, 'splitter'): return
-        self.splitter.setSizes([7200, 2800] if is_visible else [6500, 3500])
         QTimer.singleShot(0, self._position_video_expand_button)
+        timeline = getattr(self, "timeline", None)
+        if timeline is not None and hasattr(timeline, "schedule_fit_to_view"):
+            timeline.schedule_fit_to_view((0, 120, 260))
         if hasattr(self, "btn_log"):
             self.btn_log.setText(self._terminal_log_button_text())
 

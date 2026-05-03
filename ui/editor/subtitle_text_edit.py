@@ -10,7 +10,7 @@ from PyQt6.QtGui import (
     QTextCursor, QTextCharFormat, QColor, QFont,
     QSyntaxHighlighter, QTextDocument, QKeyEvent, QTextBlockUserData, QPainter, QTextBlockFormat
 )
-import config
+from core.runtime import config
 from ui.editor.timestamp_area import TimestampArea
 from ui.gpu_rendering import gpu_backend_name, make_accelerated_viewport
 
@@ -40,6 +40,13 @@ class SubtitleBlockData(QTextBlockUserData):
         stt_ensemble_needs_llm_review: bool = False,
         stt_ensemble_inserted_from_stt2: bool = False,
         stt_ensemble_word_rover: dict | None = None,
+        score: float | None = None,
+        stt_score: float | None = None,
+        score_color: str = "",
+        stt_score_color: str = "",
+        stt_score_label: str = "",
+        stt_score_flags: list | None = None,
+        stt_score_components: dict | None = None,
     ):
         super().__init__()
         self.spk_id = spk_id
@@ -64,6 +71,13 @@ class SubtitleBlockData(QTextBlockUserData):
         self.stt_ensemble_needs_llm_review = bool(stt_ensemble_needs_llm_review)
         self.stt_ensemble_inserted_from_stt2 = bool(stt_ensemble_inserted_from_stt2)
         self.stt_ensemble_word_rover = dict(stt_ensemble_word_rover or {})
+        self.score = score
+        self.stt_score = stt_score
+        self.score_color = str(score_color or "")
+        self.stt_score_color = str(stt_score_color or "")
+        self.stt_score_label = str(stt_score_label or "")
+        self.stt_score_flags = list(stt_score_flags or [])
+        self.stt_score_components = dict(stt_score_components or {})
 
 class SubtitleHighlighter(QSyntaxHighlighter):
     def __init__(self, document: QTextDocument):

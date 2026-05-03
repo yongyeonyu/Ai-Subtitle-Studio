@@ -12,8 +12,8 @@ import os
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore import Qt
 
-import config
-from logger import get_logger
+from core.runtime import config
+from core.runtime.logger import get_logger
 from core.project.data_manager import save_settings as _dm_save_settings
 from core.engine.subtitle_engine import save_srt
 from core.path_manager import get_srt_path
@@ -342,6 +342,11 @@ class EditorActionsMixin:
         media_path = getattr(self, 'media_path', None)
         if not media_path:
             return
+        if segs is None:
+            try:
+                segs = self._get_current_segments()
+            except Exception:
+                segs = []
 
         main_w = self.window()
         project_path = getattr(main_w, '_current_project_path', None)
@@ -383,14 +388,19 @@ class EditorActionsMixin:
         workspace['active_work_mode'] = normalize_work_mode(getattr(main_w, '_current_work_mode', EDITOR_MODE))
         stt_preview_segments = list(getattr(self, "_live_stt_preview_segments", []) or [])
         voice_activity_segments = []
+        provisional_cut_boundaries = []
         try:
             if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
                 canvas = self.timeline.canvas
                 if hasattr(canvas, "_refresh_voice_activity_segments"):
                     canvas._refresh_voice_activity_segments()
                 voice_activity_segments = list(getattr(canvas, "voice_activity_segments", []) or [])
+                provisional_cut_boundaries = list(getattr(canvas, "scan_boundary_times", []) or [])
         except Exception:
             voice_activity_segments = []
+            provisional_cut_boundaries = []
+        if not provisional_cut_boundaries:
+            provisional_cut_boundaries = list(getattr(self, "_auto_cut_boundary_scan_lines", []) or [])
         save_project(
             filepath=project_path,
             media_paths=_media_paths,
@@ -401,6 +411,7 @@ class EditorActionsMixin:
             active_work_mode=workspace['active_work_mode'],
             voice_activity_segments=voice_activity_segments,
             stt_preview_segments=stt_preview_segments,
+            provisional_cut_boundaries=provisional_cut_boundaries,
         )
         from core.project.project_phase1b import enrich_existing_project_file
         _owner = locals().get('main_w', self.window() if hasattr(self, 'window') else self)

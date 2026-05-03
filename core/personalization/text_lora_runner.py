@@ -125,9 +125,22 @@ def build_text_lora_training_plan(
             "micro_batch_size": int(micro_batch_size),
         },
         "command": command,
+        "training_objective": {
+            "task": "subtitle_qa_correction",
+            "input": "STT 후보 또는 교정 전 자막",
+            "output": "검수 완료 최종 자막",
+            "rules": [
+                "원문 발화의 단어, 순서, 의미, 구어체를 보존한다",
+                "띄어쓰기, 명백한 오탈자, 최소 문장부호만 교정한다",
+                "없는 말, 설명, 요약, 문어체 변환을 학습하지 않는다",
+                "고유명사, 숫자, 영어 표기는 확실하지 않으면 원문을 유지한다",
+                "wrong_answer_memory 문구는 STT 환각/오답으로 보고 사용을 피한다",
+            ],
+        },
         "notes": [
-            "mac first text LoRA training scaffold",
-            "uses accumulated personalization corpus",
+            "mac first subtitle QA text LoRA training scaffold",
+            "uses accumulated STT candidate -> final subtitle corpus",
+            "preserves spoken style while learning conservative subtitle review corrections",
             "voice LoRA remains separate but shares frame/speaker bridge",
         ],
     }

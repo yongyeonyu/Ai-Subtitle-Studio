@@ -8,8 +8,8 @@ core/backend_fast.py
 - 단일 파일과의 차이: 에디터 대기 없이 자동 진행
 """
 import os, threading, time
-import config
-from logger import get_logger
+from core.runtime import config
+from core.runtime.logger import get_logger
 from .pipeline.backend_core import CoreBackend
 from .settings import load_settings, get_model_key
 from .time_history import get_expected_time, add_history

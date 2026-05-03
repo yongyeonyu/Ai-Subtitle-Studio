@@ -59,8 +59,14 @@ def is_fast_recognition_mode(settings: dict[str, Any] | None) -> bool:
 
 
 def editor_roughcut_draft_enabled(settings: dict[str, Any] | None) -> bool:
-    merged = merge_roughcut_settings(settings or {})
-    return bool(merged.get("editor_roughcut_draft_enabled", False)) and not is_fast_recognition_mode(settings)
+    try:
+        from core.cut_boundary import cut_boundary_enabled
+
+        enabled = bool(cut_boundary_enabled(settings or {}))
+    except Exception:
+        merged = merge_roughcut_settings(settings or {})
+        enabled = bool(merged.get("cut_boundary_detection_enabled", merged.get("scan_cut_enabled", True)))
+    return enabled and not is_fast_recognition_mode(settings)
 
 
 def editor_roughcut_draft_llm_allowed(
@@ -81,12 +87,10 @@ def build_editor_roughcut_draft_prompt(
     *,
     settings: dict[str, Any] | None = None,
 ) -> str:
-    merged = merge_roughcut_settings(settings or {})
-    prompt = str(merged.get("editor_roughcut_draft_prompt") or "").strip() or DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT
     body = {
         "prompt_id": "editor_post_generation_roughcut_draft_v1",
         "language": "ko",
-        "editor_instructions": prompt,
+        "editor_instructions": DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT,
         "output_contract": {
             "json_only": True,
             "schema": {
@@ -128,7 +132,7 @@ def run_editor_roughcut_llm_draft(
         return _call_ollama_json(model, prompt, timeout=timeout)
     except Exception as exc:
         try:
-            from logger import get_logger
+            from core.runtime.logger import get_logger
 
             get_logger().log(f"⚠️ 에디터 러프컷 초안 LLM 실패, 로컬 초안으로 대체: {exc}")
         except Exception:

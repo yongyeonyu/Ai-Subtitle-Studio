@@ -227,6 +227,13 @@ class UndoManager:
             "stt_ensemble_needs_llm_review": getattr(ud, "stt_ensemble_needs_llm_review", False),
             "stt_ensemble_inserted_from_stt2": getattr(ud, "stt_ensemble_inserted_from_stt2", False),
             "stt_ensemble_word_rover": dict(getattr(ud, "stt_ensemble_word_rover", {}) or {}),
+            "score": getattr(ud, "score", None),
+            "stt_score": getattr(ud, "stt_score", None),
+            "score_color": getattr(ud, "score_color", ""),
+            "stt_score_color": getattr(ud, "stt_score_color", ""),
+            "stt_score_label": getattr(ud, "stt_score_label", ""),
+            "stt_score_flags": list(getattr(ud, "stt_score_flags", []) or []),
+            "stt_score_components": dict(getattr(ud, "stt_score_components", {}) or {}),
         }
 
     @staticmethod
@@ -254,4 +261,11 @@ class UndoManager:
             stt_ensemble_needs_llm_review=meta.get("stt_ensemble_needs_llm_review", False),
             stt_ensemble_inserted_from_stt2=meta.get("stt_ensemble_inserted_from_stt2", False),
             stt_ensemble_word_rover=dict(meta.get("stt_ensemble_word_rover") or {}),
+            score=meta.get("score"),
+            stt_score=meta.get("stt_score"),
+            score_color=meta.get("score_color", ""),
+            stt_score_color=meta.get("stt_score_color", ""),
+            stt_score_label=meta.get("stt_score_label", ""),
+            stt_score_flags=list(meta.get("stt_score_flags") or []),
+            stt_score_components=dict(meta.get("stt_score_components") or {}),
         )

@@ -17,8 +17,9 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-import config
+from core.runtime import config
 from core.path_manager import get_last_folder
+from core.settings import load_settings
 from ui.project.multiclip_cards import AddCard, ClipCard, ClipContainer
 
 
@@ -40,7 +41,7 @@ class MultiClipEditor(QDialog):
 
         self.sorted_files = sorted(file_paths, key=lambda p: os.path.basename(p).lower())
         self.cards = []
-        self.selected_mode = "fast"
+        self.selected_mode = "multiclip"
         self._reorder_only = reorder_only
         self._show_multiclip_btn = show_multiclip
         self._add_card = None
@@ -87,6 +88,21 @@ class MultiClipEditor(QDialog):
         self.scroll.setWidget(self.container)
         layout.addWidget(self.scroll)
 
+        if not self._reorder_only:
+            current_settings = self._resolve_pipeline_settings()
+            current_title = QLabel("현재 적용될 설정")
+            current_title.setStyleSheet("color:#C8D1D8; font-size:12px; font-weight:700; margin-top:4px;")
+            layout.addWidget(current_title)
+
+            self.current_settings_lbl = QLabel(self._pipeline_summary_text(current_settings))
+            self.current_settings_lbl.setWordWrap(True)
+            self.current_settings_lbl.setTextFormat(Qt.TextFormat.RichText)
+            self.current_settings_lbl.setStyleSheet(
+                "background:#172028; border:1px solid #2A3943; border-radius:6px; "
+                "padding:10px 12px; color:#D7E0E8; font-size:11px;"
+            )
+            layout.addWidget(self.current_settings_lbl)
+
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
@@ -105,32 +121,83 @@ class MultiClipEditor(QDialog):
             btn_ok.clicked.connect(self.accept)
             btn_layout.addWidget(btn_ok)
         else:
-            btn_fast = QPushButton("빠른모드")
-            btn_fast.setStyleSheet(
-                "background:#FFD700; color:#000; padding:8px 24px; font-weight:bold; border-radius:4px;"
-            )
-            btn_fast.clicked.connect(self._accept_fast)
-
-            btn_quality = QPushButton("품질모드")
-            btn_quality.setStyleSheet(
-                "background:#4AFF80; color:#000; padding:8px 24px; font-weight:bold; border-radius:4px;"
-            )
-            btn_quality.clicked.connect(self._accept_quality)
-
             btn_multiclip = QPushButton("멀티클립 편집")
             btn_multiclip.setStyleSheet(
                 "background:#4FC3F7; color:#000; padding:8px 24px; font-weight:bold; border-radius:4px;"
             )
             btn_multiclip.clicked.connect(self._accept_multiclip)
 
-            btn_layout.addWidget(btn_fast)
-            btn_layout.addWidget(btn_quality)
-
-            if self._show_multiclip_btn:
-                btn_layout.addWidget(btn_multiclip)
+            btn_layout.addWidget(btn_multiclip)
 
         layout.addLayout(btn_layout)
         self._rebuild_cards()
+
+    def _resolve_pipeline_settings(self) -> dict:
+        parent = self.parent()
+        if parent is not None:
+            settings = getattr(parent, "settings", None)
+            if isinstance(settings, dict) and settings:
+                return dict(settings)
+        try:
+            return dict(load_settings())
+        except Exception:
+            return {}
+
+    def _display_model_name(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "미사용"
+        text = text.replace("mlx-community/", "").replace("-mlx", "")
+        if "/" in text:
+            text = text.split("/")[-1]
+        return text
+
+    def _cut_boundary_label(self, settings: dict) -> str:
+        level = str(
+            settings.get(
+                "cut_boundary_level",
+                settings.get("scan_cut_boundary_level", "medium"),
+            )
+            or "medium"
+        ).strip().lower()
+        if level == "high":
+            level = "medium"
+        return {"off": "사용안함", "low": "낮음", "medium": "중간"}.get(level, "중간")
+
+    def _pipeline_summary_text(self, settings: dict) -> str:
+        audio_model = {
+            "deepfilter": "DeepFilter",
+            "rnnoise": "RNNoise",
+            "resemble_enhance": "Resemble",
+            "clearvoice": "ClearVoice",
+            "none": "미사용",
+        }.get(str(settings.get("selected_audio_ai", "none") or "none"), "미사용")
+        vad_model = {
+            "silero": "Silero",
+            "ten_vad": "TEN VAD",
+            "webrtc": "WebRTC",
+            "pyannote": "Pyannote",
+            "none": "미사용",
+        }.get(str(settings.get("selected_vad", "none") or "none"), "미사용")
+        stt_quality = str(settings.get("stt_quality_preset", "balanced") or "balanced")
+        stt_quality = {
+            "fast": "빠른 인식",
+            "balanced": "균형",
+            "precise": "정밀 인식",
+        }.get(stt_quality, stt_quality)
+        audio_preset = str(settings.get("audio_preset", "") or "").strip() or "직접 설정"
+        stt1 = self._display_model_name(settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "")))
+        stt2 = "미사용"
+        if bool(settings.get("stt_ensemble_enabled")):
+            stt2 = self._display_model_name(settings.get("selected_whisper_model_secondary", ""))
+        subtitle_llm = self._display_model_name(settings.get("selected_model", ""))
+        return (
+            f"정밀인식 <b>{stt_quality}</b>  |  "
+            f"오디오 <b>{audio_preset}</b>  |  "
+            f"컷 경계 <b>{self._cut_boundary_label(settings)}</b><br>"
+            f"음성 <b>{audio_model}</b>  |  STT1 <b>{stt1}</b>  |  "
+            f"STT2 <b>{stt2}</b>  |  VAD <b>{vad_model}</b>  |  자막 LLM <b>{subtitle_llm}</b>"
+        )
 
     def _remove_clip(self, idx):
         if idx < 0 or idx >= len(self.sorted_files):
@@ -197,14 +264,6 @@ class MultiClipEditor(QDialog):
     def _sort_by_date(self):
         self.sorted_files.sort(key=lambda p: os.path.getmtime(p))
         self._rebuild_cards()
-
-    def _accept_fast(self):
-        self.selected_mode = "fast"
-        self.accept()
-
-    def _accept_quality(self):
-        self.selected_mode = "quality"
-        self.accept()
 
     def _accept_multiclip(self):
         self.selected_mode = "multiclip"

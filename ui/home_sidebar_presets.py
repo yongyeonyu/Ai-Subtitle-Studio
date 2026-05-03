@@ -18,6 +18,22 @@ from core.audio.stt_quality_presets import (
 from core.settings import load_settings
 
 
+def _resolve_audio_preset_combo_data(settings: dict | None) -> str:
+    resolver = getattr(_audio_presets, "resolve_audio_preset_combo_data", None)
+    if callable(resolver):
+        return str(resolver(settings))
+
+    data = dict(settings or {})
+    preset_name = str(data.get("audio_preset", "") or "").strip()
+    if preset_name:
+        return preset_name
+
+    default_apply_data = dict(getattr(_audio_presets, "DEFAULT_AUDIO_APPLY_DATA", {}) or {})
+    if default_apply_data and all(data.get(key) == value for key, value in default_apply_data.items()):
+        return "__default__"
+    return ""
+
+
 def sync_sidebar_preset_panel(host, settings: dict | None = None) -> None:
     settings = dict(settings or load_settings())
     host._set_combo_data_silent(
@@ -26,7 +42,7 @@ def sync_sidebar_preset_panel(host, settings: dict | None = None) -> None:
     )
     host._set_combo_data_silent(
         getattr(host, "sidebar_audio_preset_combo", None),
-        str(settings.get("audio_preset", "") or ""),
+        _resolve_audio_preset_combo_data(settings),
     )
 
     auto_btn = getattr(host, "sidebar_auto_preset_btn", None)
@@ -62,8 +78,8 @@ def sync_sidebar_preset_panel(host, settings: dict | None = None) -> None:
         if not all(x in existing_data for x in ("off", "low", "medium")) or any(x == "high" for x in existing_data):
             combo.clear()
             combo.addItem("사용안함", "off")
-            combo.addItem("중간", "low")
-            combo.addItem("높음", "medium")
+            combo.addItem("낮음", "low")
+            combo.addItem("중간", "medium")
 
         for i in range(combo.count()):
             if combo.itemData(i) == current_level:

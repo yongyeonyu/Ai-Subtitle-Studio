@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import config
+from core.runtime import config
 
 CORRECTION_MEMORY_FILE = Path(config.DATASET_DIR) / "correction_memory.json"
 

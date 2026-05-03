@@ -9,7 +9,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QMessageBox
 
-from logger import get_logger
+from core.runtime.logger import get_logger
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 
 

@@ -216,6 +216,8 @@ class TimelineWidget(QWidget):
         self._playback_center_lock = False
         self._pending_playback_center_lock = False
         self._manual_scroll_until = 0.0
+        self._fit_to_view_locked = False
+        self._fit_after_resize_pending = False
 
         self._smooth_scroll_timer = QTimer(self)
         self._smooth_scroll_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -281,10 +283,37 @@ class TimelineWidget(QWidget):
         end_padding = 96
         return max(int(float(dur) * pps) + end_padding, self.scroll.width())
 
+    def _fit_reference_width(self) -> int:
+        global_canvas = getattr(self, "global_canvas", None)
+        if global_canvas is not None:
+            try:
+                global_width = int(global_canvas.width())
+            except RuntimeError:
+                global_width = 0
+            if global_width > 0:
+                return max(1, global_width)
+        viewport = self.scroll.viewport()
+        viewport_w = viewport.width() if viewport is not None else self.scroll.width()
+        return max(1, int(viewport_w))
+
+    def _fit_content_duration(self) -> float:
+        if self._selected_clip_idx >= 0 and self._selected_clip_duration > 0:
+            return max(0.0, float(self._selected_clip_duration))
+
+        boxes = list(getattr(self.canvas, "_multiclip_boxes", []) or [])
+        if boxes:
+            return max(0.0, float(boxes[-1].get("end", 0.0) or 0.0))
+
+        segments = [seg for seg in list(getattr(self.canvas, "segments", []) or []) if not seg.get("is_gap")]
+        if segments:
+            return max(0.0, max(float(seg.get("end", 0.0) or 0.0) for seg in segments))
+
+        return max(0.0, float(getattr(self.canvas, "total_duration", 0.0) or 0.0))
+
     def _fit_pps_for_duration(self, dur: float) -> float:
         if dur <= 0:
             return float(self.canvas.pps)
-        visible_w = max(1, self.scroll.viewport().width() - 20)
+        visible_w = self._fit_reference_width()
         return max(0.001, min(500.0, visible_w / max(0.001, float(dur))))
 
     def _clamp_scroll_x(self, value: float) -> int:
@@ -365,6 +394,8 @@ class TimelineWidget(QWidget):
         self._sync_focus_border()
         self._sync_playhead_overlay()
         self._schedule_vp_sync()
+        if bool(getattr(self, "_fit_to_view_locked", False)):
+            self.schedule_fit_to_view()
 
     def paintEvent(self, ev):
         super().paintEvent(ev)
@@ -410,15 +441,21 @@ class TimelineWidget(QWidget):
         return max(0.0, float(sec))
 
     def _viewport_fracs_for_selected_clip(self):
-        dur = max(0.001, float(getattr(self.canvas, "total_duration", 0.0)))
-        if dur <= 0:
-            return 0.0, 1.0
-
         sb = self.scroll.horizontalScrollBar()
         view_w = self.scroll.viewport().width() if self.scroll.viewport() else self.scroll.width()
         global_start = float(sb.value()) / max(0.001, float(self.canvas.pps))
         global_end = float(sb.value() + view_w) / max(0.001, float(self.canvas.pps))
 
+        if self._selected_clip_idx >= 0 and self._selected_clip_duration > 0:
+            clip_start = float(self._selected_clip_offset or 0.0)
+            clip_dur = max(0.001, float(self._selected_clip_duration or 0.0))
+            local_start = max(0.0, min(clip_dur, global_start - clip_start))
+            local_end = max(local_start, min(clip_dur, global_end - clip_start))
+            return local_start / clip_dur, local_end / clip_dur
+
+        dur = max(0.001, float(getattr(self.canvas, "total_duration", 0.0)))
+        if dur <= 0:
+            return 0.0, 1.0
         return max(0.0, min(1.0, global_start / dur)), max(0.0, min(1.0, global_end / dur))
 
 
@@ -590,7 +627,7 @@ class TimelineWidget(QWidget):
             self.set_playback_center_lock(False)
         self.canvas.playhead_sec = max(0.0, float(sec or 0.0))
         self._sync_playhead_overlay()
-        self.global_canvas.set_playhead(sec)
+        self.global_canvas.set_playhead(self._global_to_local_sec(sec))
 
     def follow_playhead(self, sec, *, smooth=True, threshold_px=24.0):
         sec = self.snap_sec_to_frame(sec)
@@ -927,23 +964,49 @@ class TimelineWidget(QWidget):
         self.global_canvas.update()
 
     def fit_to_view(self):
-        dur = self.canvas.total_duration
+        boxes = list(getattr(self.canvas, "_multiclip_boxes", []) or [])
+        is_multiclip = bool(boxes)
+        if is_multiclip:
+            dur = max(0.0, float(boxes[-1].get("end", 0.0) or 0.0))
+        else:
+            dur = self._fit_content_duration()
         if dur <= 0:
             return
+        self._fit_to_view_locked = True
+        self._fit_after_resize_pending = False
 
         new_pps = self._fit_pps_for_duration(dur)
         self.canvas.pps = new_pps
 
-        target_w = self._canvas_width_for_duration(dur, new_pps)
+        total_dur = max(float(getattr(self.canvas, "total_duration", 0.0) or 0.0), dur)
+        target_w = self._canvas_width_for_duration(total_dur, new_pps)
         if self.canvas.width() != target_w:
             self.canvas.setFixedWidth(target_w)
         self.canvas.update()
 
-        self.scroll.horizontalScrollBar().setValue(0)
-        self._target_scroll_x = 0.0
-        self._current_scroll_x = 0.0
-        self.global_canvas.update_viewport(0.0, 1.0)
+        fit_start_sec = 0.0
+        if not is_multiclip and self._selected_clip_idx >= 0 and self._selected_clip_duration > 0:
+            fit_start_sec = max(0.0, float(self._selected_clip_offset or 0.0))
+
+        target_scroll = self._clamp_scroll_x(fit_start_sec * new_pps)
+        self.scroll.horizontalScrollBar().setValue(target_scroll)
+        self._target_scroll_x = float(target_scroll)
+        self._current_scroll_x = float(target_scroll)
+
+        if is_multiclip:
+            start_frac = 0.0
+            end_frac = 1.0
+        elif self._selected_clip_idx >= 0 and self._selected_clip_duration > 0:
+            clip_dur = max(0.001, float(self._selected_clip_duration or 0.0))
+            start_frac = 0.0
+            end_frac = max(start_frac, min(1.0, dur / clip_dur))
+        else:
+            total_for_view = max(0.001, float(getattr(self.canvas, "total_duration", 0.0) or 0.0))
+            start_frac = max(0.0, min(1.0, fit_start_sec / total_for_view))
+            end_frac = max(start_frac, min(1.0, (fit_start_sec + dur) / total_for_view))
+        self.global_canvas.update_viewport(start_frac, end_frac)
         self.global_canvas.update()
+        self._sync_playhead_overlay()
 
     def zoom_in(self):
         self._zoom_canvas(1.15)
@@ -952,4 +1015,18 @@ class TimelineWidget(QWidget):
         self._zoom_canvas(1 / 1.15)
 
     def _zoom_canvas(self, factor: float):
+        self._fit_to_view_locked = False
         self._apply_zoom(factor)
+
+    def schedule_fit_to_view(self, delays: tuple[int, ...] = (0, 80, 180)) -> None:
+        if self._fit_after_resize_pending:
+            return
+        self._fit_after_resize_pending = True
+
+        def _run_final_fit():
+            self._fit_after_resize_pending = False
+            self.fit_to_view()
+
+        for delay in delays[:-1]:
+            QTimer.singleShot(int(delay), self.fit_to_view)
+        QTimer.singleShot(int(delays[-1] if delays else 0), _run_final_fit)

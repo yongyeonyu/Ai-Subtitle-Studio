@@ -48,6 +48,12 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertEqual(precise["selected_vad"], "ten_vad")
         self.assertEqual(precise["cut_boundary_level"], "medium")
         self.assertTrue(precise["cut_boundary_detection_enabled"])
+        self.assertTrue(precise["stt_ensemble_enabled"])
+        self.assertTrue(precise["stt_candidate_scoring_enabled"])
+        self.assertFalse(precise["stt_ensemble_llm_judge_enabled"])
+        self.assertEqual(precise["roughcut_llm_model"], "exaone3.5:7.8b")
+        self.assertEqual(precise["roughcut_llm_provider"], "ollama")
+        self.assertEqual(precise["audio_preset_recommended_preprocess_model"], "ffmpeg-outdoor-strong")
 
     def test_korean_aliases_normalize(self):
         self.assertEqual(normalize_stt_quality_key("빠른 인식"), "fast")

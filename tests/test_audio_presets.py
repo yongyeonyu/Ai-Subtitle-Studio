@@ -5,11 +5,13 @@ import tempfile
 import unittest
 from unittest import mock
 
-import config
+from core.runtime import config
 from core.audio.audio_presets import (
     apply_audio_preset,
     apply_default_audio_preset,
     load_audio_presets,
+    resolve_audio_preset_combo_data,
+    uses_default_audio_preset,
 )
 from core.audio.media_processor import VideoProcessor
 
@@ -80,6 +82,28 @@ class AudioPresetTests(unittest.TestCase):
         self.assertEqual(applied["selected_vad"], "silero")
         self.assertEqual(applied["ff_chunk"], 30)
         self.assertEqual(applied["gap_push_rate"], 0.7)
+
+    def test_default_audio_stack_is_recognized_as_default_mode(self):
+        applied = apply_default_audio_preset(
+            {
+                "audio_preset": "실외-마이크유",
+                "selected_audio_ai": "clearvoice",
+                "selected_vad": "ten_vad",
+            }
+        )
+
+        self.assertTrue(uses_default_audio_preset(applied))
+        self.assertEqual(resolve_audio_preset_combo_data(applied), "__default__")
+
+    def test_manual_empty_audio_preset_is_not_forced_to_default_mode(self):
+        manual = {
+            "audio_preset": "",
+            "selected_audio_ai": "none",
+            "selected_vad": "silero",
+        }
+
+        self.assertFalse(uses_default_audio_preset(manual))
+        self.assertEqual(resolve_audio_preset_combo_data(manual), "")
 
     def test_loaded_presets_use_audio_presets_json_values(self):
         presets = load_audio_presets()

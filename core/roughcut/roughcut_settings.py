@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import config
+from core.runtime import config
 
 
 def default_roughcut_settings() -> dict[str, Any]:

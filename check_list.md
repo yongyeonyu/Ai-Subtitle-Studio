@@ -1,7 +1,7 @@
 # AI Subtitle Studio — 대표님 확인 체크리스트
 # 기준 문서: ACTION_ITEMS.md
-# 최종 수정: 2026-05-03
-# App Version: 03.13.00
+# 최종 수정: 2026-05-04
+# App Version: 03.14.00
 # GitHub-Publish: 제외 대상. 이 파일은 로컬 운영 문서입니다.
 
 ## 사용 원칙

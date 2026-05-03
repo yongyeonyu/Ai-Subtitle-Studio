@@ -1,4 +1,4 @@
-# Version: 03.10.03
+# Version: 03.14.00
 # Phase: PHASE2
 
 
@@ -9,7 +9,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.13.00"
+APP_VERSION = "03.14.00"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -26,7 +26,7 @@ APP_NAME      = "AI Subtitle Studio"
 INSTANCE_PORT = 47291
 
 # ── 📂 주요 폴더 경로 설정 ──
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR    = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DATASET_DIR = os.path.join(BASE_DIR, "dataset")
 OUTPUT_DIR  = os.path.join(BASE_DIR, "output")
 VOICE_DATA_DIR = os.path.join(BASE_DIR, "voice_data")
@@ -34,8 +34,6 @@ VOICE_DATA_DIR = os.path.join(BASE_DIR, "voice_data")
 CORRECTIONS_DIR  = DATASET_DIR              # 호환용 alias
 CORRECTIONS_FILE = os.path.join(DATASET_DIR, "dataset_correction.json")
 RULES_FILE       = os.path.join(DATASET_DIR, "subtitle_rule.json")
-
-CORRECTIONS_DIR = DATASET_DIR  # ✅ 추가
 
 # iCloud 드롭존
 # ✅ 수정: 폴더명 분리 → 나중에 사용자 설정으로 이동 가능
@@ -56,18 +54,20 @@ DEFAULT_FOLDER = ""
 OLLAMA_MODEL = "exaone3.5:7.8b"
 
 DEFAULT_LLM_PROMPT = (
-    "당신은 유튜브 채널의 전문 자막 편집자입니다.\n"
-    "아래 '원본 텍스트'의 단어, 문장 구조, 의미를 100% 그대로 유지하면서 오직 띄어쓰기/단순 오탈자만 교정하고 규칙에 따라 분리하세요.\n"
+    "당신은 한국어 유튜브/브이로그 자막을 검수하는 전문 자막 QA 편집자입니다.\n"
+    "아래 '원본 텍스트'는 이미 STT가 들은 발화입니다. 들리지 않은 말을 보태지 말고, 원문의 단어·순서·말투·의미를 최대한 보존하세요.\n"
+    "역할은 번역/요약/각색이 아니라 자막 검수입니다. 시청자가 읽기 편하도록 띄어쓰기, 명백한 오탈자, 최소 문장부호, 자연스러운 줄 분리만 수행하세요.\n"
     "[기본 규칙]\n"
-    "1. 맞춤법, 띄어쓰기를 교정한다.\n"
-    "2. 음성인식 오류에 의한 단순 오탈자만 수정한다.\n"
-    "3. 없는 사실을 지어내거나 화법을 멋대로 바꾸지 마라. 오직 들리는 내용만 교정한다.\n"
-    "4. '~했고요', '~거든요', '~잖아' 등 특유의 구어체와 감성, 감탄사를 절대 표준어로 바꾸지 말고 원본 그대로 살린다.\n"
-    "5. 절대 부가 설명이나 인사말을 넣지 말고, 오직 분리된 결과 문자열만 출력한다.\n"
-    "6. 마침표(.)는 모두 제거하되 쉼표(,) / 느낌표(!) / 물결(~)은 문맥에 맞춰서 자연스럽게 넣는다.\n"
-    "7. 한 줄당 글자 수가 약 {threshold}자(±5자 오차 허용)가 되도록 시청자가 읽기 편한 자연스러운 호흡(어절 단위)에서 문장을 나누세요.\n"
-    "8. 문장을 나눌 때는 반드시 다음 단어들 뒤({end_words})나, 다음 단어들 앞({start_words})에서 나누세요.\n"
-    "9. 원본 텍스트가 5자 이하이면서 문맥과 관계없는 파편화된 단어일 경우, 무리하게 문장으로 만들지 말고 해당 항목을 결과 리스트에서 제외(삭제)하라.\n\n"
+    "1. 맞춤법보다 원문 보존이 우선입니다. 확실한 띄어쓰기와 명백한 STT 오탈자만 교정하세요.\n"
+    "2. 고유명사, 행사명, 브랜드명, 숫자, 영어 표기는 추측해서 바꾸지 말고 원문을 우선 유지하세요.\n"
+    "3. 없는 사실, 설명, 주어, 목적어, 감정 표현을 추가하지 마세요. 문맥상 그럴듯해도 들린 내용이 아니면 금지입니다.\n"
+    "4. '~했고요', '~거든요', '~잖아', '아', '어', '뭐' 같은 구어체·머뭇거림·감탄은 의미가 있으면 살리고 문어체로 고치지 마세요.\n"
+    "5. 반복 발화는 실제 말버릇이면 유지하되, STT 환각처럼 같은 문구가 비정상적으로 반복되면 새 문장을 만들지 말고 원문 범위 안에서 최소 정리하세요.\n"
+    "6. 마침표(.)는 모두 제거하고, 쉼표(,) / 느낌표(!) / 물결(~)은 의미가 바뀌지 않을 때만 최소로 사용하세요.\n"
+    "7. 한 줄당 글자 수가 약 {threshold}자(±5자 오차 허용)가 되도록 시청자가 읽기 편한 호흡과 어절 단위에서 나누세요.\n"
+    "8. 문장을 나눌 때는 가능한 한 다음 단어들 뒤({end_words})나, 다음 단어들 앞({start_words})에서 나누세요.\n"
+    "9. 원본 텍스트가 5자 이하이고 문맥과 무관한 파편/환각으로 보일 때만 결과 리스트에서 제외하세요. 확실하지 않으면 유지하세요.\n"
+    "10. 절대 부가 설명이나 인사말을 넣지 말고, 오직 분리된 결과 문자열만 출력하세요.\n\n"
 )
 
 # ── ⚙️ 고급 상세 설정 ──
@@ -99,6 +99,9 @@ DEFAULT_ADV_SETTINGS = {
     "sub_max_cps":        12,
     "sub_dedup_window":   0.5,
     "stt_ensemble_enabled": False,
+    "stt_candidate_scoring_enabled": False,
+    "stt_low_score_recheck_enabled": True,
+    "stt_low_score_recheck_threshold": 50,
     "selected_whisper_model_secondary": (
         "youngouk/ghost613-turbo-korean-4bit-mlx"
         if IS_MAC else
@@ -111,6 +114,7 @@ DEFAULT_ADV_SETTINGS = {
     "subtitle_quality_enabled": False,
     "subtitle_quality_auto_check_after_generate": False,
     "subtitle_quality_auto_correct_enabled": False,
+    "editor_lora_runtime_enabled": False,
     "vad_pre_split_enabled": False,
     "review_vad_before_stt_enabled": False,
     "review_vad_strict_mode": True,
@@ -123,8 +127,8 @@ DEFAULT_ADV_SETTINGS = {
     "review_auto_correct_require_user_confirm": True,
     "ten_vad_threshold": 0.5,
     "ten_vad_hop_size": 256,
-    "correction_memory_enabled": True,
-    "wrong_answer_memory_enabled": True,
+    "correction_memory_enabled": False,
+    "wrong_answer_memory_enabled": False,
     "score_weight_asr_metadata": 0.25,
     "score_weight_vad_alignment": 0.20,
     "score_weight_word_timestamp": 0.15,

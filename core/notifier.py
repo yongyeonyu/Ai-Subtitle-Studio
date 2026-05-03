@@ -6,8 +6,8 @@ ntfy 푸시 알림 전송 유틸
 - backend.py / editor_pipeline.py에서 분리
 """
 
-import config
-from logger import get_logger
+from core.runtime import config
+from core.runtime.logger import get_logger
 
 
 def send_ntfy(title: str, message: str, tags: str = ""):

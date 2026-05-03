@@ -452,7 +452,7 @@ def build_topicless_middle_segments(
 
 def _topicless_split_log_emit(message: str) -> None:
     try:
-        from logger import get_logger
+        from core.runtime.logger import get_logger
         get_logger().log(message)
     except Exception:
         try:
@@ -501,15 +501,51 @@ def _topicless_split_row_meta(row: dict) -> tuple[str, int, int, float, float, f
     return label, start_frame, end_frame, start_sec, end_sec, fps
 
 
+_TOPICLESS_SPLIT_LOGGED_KEYS: list[tuple[str, int, int]] = []
+
+
 def _topicless_log_split_rows(rows, *, context: str = "build") -> None:
     rows = list(rows or [])
     if not rows:
         _topicless_split_log_emit(f"  ▒ [컷 경계] split 없음 context={context}")
         return
 
-    _topicless_split_log_emit(f"  ▒ [컷 경계] split frame/time 로그 시작 context={context} count={len(rows)}")
-
+    current_keys: list[tuple[str, int, int]] = []
     for row in rows:
+        if not isinstance(row, dict):
+            continue
+        label, start_frame, end_frame, _start_sec, _end_sec, _fps = _topicless_split_row_meta(row)
+        current_keys.append((label, int(start_frame), int(end_frame)))
+
+    global _TOPICLESS_SPLIT_LOGGED_KEYS
+    previous_keys = list(_TOPICLESS_SPLIT_LOGGED_KEYS or [])
+
+    should_reset = False
+    if not previous_keys:
+        should_reset = True
+    elif len(current_keys) < len(previous_keys):
+        should_reset = True
+    elif current_keys:
+        prev_first = previous_keys[0] if previous_keys else None
+        prev_last = previous_keys[-1] if previous_keys else None
+        if prev_first != current_keys[0] or prev_last != current_keys[-1]:
+            should_reset = True
+
+    previous_seen = set() if should_reset else set(previous_keys)
+    new_rows = []
+    for row, key in zip(rows, current_keys):
+        if key not in previous_seen:
+            new_rows.append(row)
+
+    _TOPICLESS_SPLIT_LOGGED_KEYS = current_keys
+    if not new_rows:
+        return
+
+    _topicless_split_log_emit(
+        f"  ▒ [컷 경계] split frame/time 로그 시작 context={context} new={len(new_rows)} total={len(rows)}"
+    )
+
+    for row in new_rows:
         if not isinstance(row, dict):
             continue
 
@@ -563,4 +599,3 @@ def apply_topicless_placeholders_to_project(
     return rows
 
 # === TOPICLESS SPLIT LOG PATCH END ===
-

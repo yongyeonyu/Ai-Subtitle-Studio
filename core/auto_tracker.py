@@ -4,7 +4,7 @@ import os
 import json
 import time
 import threading  # 💡 [추가] 스레드 동시 접근 방지를 위한 모듈 임포트
-from logger import get_logger
+from core.runtime.logger import get_logger
 
 # dataset 폴더 위치 정의
 TRACKER_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dataset", "auto_tracker.json")

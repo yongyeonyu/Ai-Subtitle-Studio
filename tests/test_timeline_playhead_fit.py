@@ -255,6 +255,40 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
+    def test_fit_to_view_uses_full_multiclip_range_even_when_clip_is_selected(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            boxes = [
+                {"index": 1, "start": 0.0, "end": 30.0},
+                {"index": 2, "start": 30.0, "end": 75.0},
+                {"index": 3, "start": 75.0, "end": 120.0},
+            ]
+            timeline.canvas._multiclip_boxes = list(boxes)
+            timeline.canvas.total_duration = 120.0
+            timeline.global_canvas.total_duration = 120.0
+            timeline._waveform_mode = "multi"
+            timeline._selected_clip_idx = 1
+            timeline._selected_clip_offset = 30.0
+            timeline._selected_clip_duration = 45.0
+            timeline.canvas.pps = 20.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(120.0, 20.0))
+            timeline.scroll.horizontalScrollBar().setValue(300)
+
+            timeline.fit_to_view()
+
+            self.assertAlmostEqual(timeline.canvas.pps, timeline._fit_pps_for_duration(120.0))
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
+            self.assertEqual(timeline._target_scroll_x, 0.0)
+            self.assertEqual(timeline._current_scroll_x, 0.0)
+            self.assertEqual(timeline.global_canvas.view_start, 0.0)
+            self.assertEqual(timeline.global_canvas.view_end, 1.0)
+        finally:
+            timeline.close()
+
     def test_playhead_uses_overlay_without_canvas_body_repaint(self):
         timeline = TimelineWidget()
         try:

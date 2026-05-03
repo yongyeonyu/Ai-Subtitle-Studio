@@ -11,9 +11,9 @@ import os
 import subprocess
 import tempfile
 
-import config
+from core.runtime import config
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
-from logger import get_logger
+from core.runtime.logger import get_logger
 
 
 def detect_stt_speech_segments(media_path: str) -> list[dict]:

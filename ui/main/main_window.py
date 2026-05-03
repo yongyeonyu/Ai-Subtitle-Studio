@@ -35,8 +35,8 @@ from ui.project.workspace_restore import WorkspaceMixin
 from ui.main.main_file_ops import FileOpsMixin
 from ui.main.main_signals import SignalHandlersMixin
 
-import config
-from logger import get_logger
+from core.runtime import config
+from core.runtime.logger import get_logger
 from core.cloud_sync import CloudSyncManager
 from core.path_manager import (
     get_icloud_path, get_nas_path, get_local_path, ensure_nas_mounted,
@@ -132,6 +132,7 @@ class MainWindow(
         self._build_ui()
         self._connect_signals()
         QTimer.singleShot(0, self._warmup_local_llm_models)
+        QTimer.singleShot(1200, self._preflight_selected_local_llm_models)
         QTimer.singleShot(900, self._check_required_models_on_startup)
 
         self._cloud_sync_manager = CloudSyncManager(
@@ -397,6 +398,21 @@ class MainWindow(
                     canvas.boundary_times = []
                 if hasattr(canvas, "scan_boundary_times"):
                     canvas.scan_boundary_times = []
+                for attr in (
+                    "_cut_boundary_topicless_middle_segments",
+                    "_roughcut_segments",
+                    "roughcut_segments",
+                    "_middle_segments",
+                    "middle_segments",
+                    "_chapter_segments",
+                    "chapter_segments",
+                    "_roughcut_draft_segments",
+                    "_roughcut_result",
+                    "roughcut_result",
+                    "_roughcut_draft_result",
+                ):
+                    if hasattr(canvas, attr):
+                        setattr(canvas, attr, [] if "result" not in attr else None)
                 canvas._edit_active = False
                 canvas._edit_line = -1
                 canvas._edit_text = ""
@@ -561,9 +577,12 @@ class MainWindow(
             "_chapter_segments",
             "chapter_segments",
             "_roughcut_draft_segments",
+            "_roughcut_result",
+            "roughcut_result",
+            "_roughcut_draft_result",
         ):
             try:
-                setattr(editor, attr, [])
+                setattr(editor, attr, [] if "result" not in attr else None)
             except Exception:
                 pass
         try:
@@ -587,11 +606,32 @@ class MainWindow(
                     timeline.set_boundary_times([])
                 if hasattr(timeline, "set_scan_boundary_times"):
                     timeline.set_scan_boundary_times([])
-        except Exception:
-            pass
-        try:
-            if hasattr(self, "_sig_refresh_cut_boundary_placeholder"):
-                self._sig_refresh_cut_boundary_placeholder.emit()
+                for obj in (timeline, getattr(timeline, "canvas", None), getattr(timeline, "global_canvas", None)):
+                    if obj is None:
+                        continue
+                    for attr in (
+                        "_cut_boundary_topicless_middle_segments",
+                        "_roughcut_segments",
+                        "roughcut_segments",
+                        "_middle_segments",
+                        "middle_segments",
+                        "_chapter_segments",
+                        "chapter_segments",
+                        "_roughcut_draft_segments",
+                        "_roughcut_result",
+                        "roughcut_result",
+                        "_roughcut_draft_result",
+                    ):
+                        try:
+                            setattr(obj, attr, [] if "result" not in attr else None)
+                        except Exception:
+                            pass
+                    if hasattr(obj, "_invalidate_marker_caches"):
+                        obj._invalidate_marker_caches()
+                    if hasattr(obj, "_invalidate_static_cache"):
+                        obj._invalidate_static_cache()
+                    if hasattr(obj, "update"):
+                        obj.update()
         except Exception:
             pass
 
@@ -949,8 +989,11 @@ class MainWindow(
                         settings = load_settings()
                         models = [
                             settings.get("selected_model", ""),
+                            settings.get("subtitle_llm_model", ""),
+                            settings.get("selected_llm_model", ""),
                             settings.get("roughcut_llm_model", ""),
                             settings.get("selected_roughcut_llm_model", ""),
+                            settings.get("roughcut_model", ""),
                             getattr(config, "OLLAMA_MODEL", ""),
                         ]
                         from core.llm.ollama_provider import stop_local_llm_models
@@ -959,8 +1002,14 @@ class MainWindow(
                             stopped_runtime = True
                     except Exception as exc:
                         get_logger().log(f"⚠️ 에디터 모드 LLM 모델 종료 실패: {exc}")
+                    try:
+                        import gc
+
+                        gc.collect()
+                    except Exception:
+                        pass
                     if stopped_runtime:
-                        get_logger().log("🧹 에디터 모드: AI/STT/LLM 모델을 종료해 메모리를 확보했습니다.")
+                        get_logger().log("🧹 에디터 모드: 자막 생성 완료 후 AI/STT/LLM 모델을 모두 종료해 메모리를 확보했습니다.")
                 finally:
                     self._editor_ai_release_in_progress = False
 
@@ -1111,6 +1160,7 @@ class MainWindow(
 
     # ── 로그 토글 ────────────────────────────────────────
     def _apply_log_visible(self, visible: bool, *, persist: bool = True):
+        previous_visible = bool(getattr(self, "_log_visible", True))
         self._log_visible = bool(visible)
         self._project_panel_visible = self._log_visible
         sidebar = getattr(self, "home_page", None)
@@ -1123,7 +1173,7 @@ class MainWindow(
                 prev_sizes = []
         if sidebar is not None:
             sidebar.setVisible(self._log_visible)
-        if splitter is not None:
+        if splitter is not None and previous_visible != self._log_visible:
             total = max(1, sum(splitter.sizes()) or splitter.width() or 1600)
             if self._log_visible:
                 current_sidebar_w = int(prev_sizes[0]) if len(prev_sizes) >= 2 else 0

@@ -4,7 +4,7 @@
 
 AI 기반 자막 생성, 자막 편집, 화자 분리, 멀티클립 처리, 러프컷 분석을 하나의 데스크톱 작업 흐름으로 연결하는 영상 자막 제작 도구입니다.
 
-[![Version](https://img.shields.io/badge/version-v03.13.00-0A84FF?style=for-the-badge)](#)
+[![Version](https://img.shields.io/badge/version-v03.14.00-0A84FF?style=for-the-badge)](#)
 [![Phase](https://img.shields.io/badge/phase-PHASE2-30D158?style=for-the-badge)](#)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
@@ -26,7 +26,7 @@ AI Subtitle Studio는 긴 영상 작업에서 반복되는 자막 생성, 보정
 
 | 항목 | 내용 |
 | --- | --- |
-| 현재 버전 | `v03.13.00` |
+| 현재 버전 | `v03.14.00` |
 | 개발 단계 | `PHASE2` |
 | 기본 브랜치 | `main` |
 | 지원 목표 | macOS, Windows |
@@ -204,9 +204,9 @@ API Key와 Hugging Face Token은 설정의 `AI` 탭에서 입력하고 OS 보안
 ```text
 ai_subtitle_studio/
 ├── main.py                    # 앱 실행 진입점
-├── config.py                  # 앱 버전, OS 감지, 기본 설정
 ├── requirements-mac.txt       # macOS 의존성
 ├── requirements-windows.txt   # Windows 의존성
+├── core/runtime/config.py     # 앱 버전, OS 감지, 기본 설정
 ├── core/                      # 자막, 오디오, 러프컷, 프로젝트 처리 로직
 ├── ui/                        # PyQt6 UI
 ├── tests/                     # unittest
@@ -223,8 +223,8 @@ ai_subtitle_studio/
 기본 테스트:
 
 ```bash
-venv/bin/python -m unittest discover -s tests
-python3 -m py_compile main.py config.py
+venv/bin/python -m pytest -q
+python3 -m compileall -q main.py core ui tests
 git diff --check
 ```
 
@@ -247,7 +247,8 @@ PY
 | 문서 | 설명 |
 | --- | --- |
 | `File_structure.txt` | 현재 파일 구조 |
-| [`RELEASE_v03.13.00.md`](RELEASE_v03.13.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.14.00.md`](RELEASE_v03.14.00.md) | 최신 PHASE2 릴리즈 노트 |
+| [`RELEASE_v03.13.00.md`](RELEASE_v03.13.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.12.00.md`](RELEASE_v03.12.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.11.00.md`](RELEASE_v03.11.00.md) | 이전 PHASE2 릴리즈 노트 |
 | [`RELEASE_v03.10.00.md`](RELEASE_v03.10.00.md) | 이전 PHASE2 릴리즈 노트 |
@@ -265,16 +266,15 @@ PY
 
 ## 릴리즈 노트
 
-전체 최신 릴리즈 노트는 [`RELEASE_v03.13.00.md`](RELEASE_v03.13.00.md)를 참고하세요.
+전체 최신 릴리즈 노트는 [`RELEASE_v03.14.00.md`](RELEASE_v03.14.00.md)를 참고하세요.
 
-### 최신 릴리즈: v03.13.00
+### 최신 릴리즈: v03.14.00
 
-- 정식 컷 경계를 프레임 우선 기준으로 더 엄격하게 적용하고, 자막/STT 세그먼트가 씬 경계에 더 정확히 붙도록 보강했습니다.
-- 오디오 프리셋을 `실내/실외/차안 x 마이크 유/무` 6종으로 단순화하고, 영상 기준 자동 판정으로 오디오/정밀인식 프리셋을 함께 맞춥니다.
-- 오디오 프리셋은 컷 경계, 전처리, 음성 필터, STT1/STT2, VAD, 자막 LLM, 러프컷 LLM 추천값까지 같이 적용합니다.
-- 텍스트 LoRA 데이터셋은 교정 memory와 사전뿐 아니라 실제 `STT 선택본 -> 최종 자막` pair를 누적하고, 음성 LoRA 연계용 frame/speaker bridge manifest까지 쌓습니다.
-- 설정창과 사이드바 중복 UI를 줄이고, 홈 프리셋/멀티클립 패널 일부를 분리해 다음 리팩토링 기반을 만들었습니다.
-- Ollama 500 재시도 복구와 ffmpeg progress 파서 보강으로 생성 중 런타임 복원력이 올라갔습니다.
+- v03.13.x 구조 리팩토링 라인을 마감하고 앱 버전을 `03.14.00`으로 올렸습니다.
+- 루트 runtime 파일을 `core/runtime`으로 옮기고 전체 import를 새 경로로 정리했습니다.
+- 컷 경계, 오디오 처리, 프로젝트 저장, 자막 엔진, 러프컷 상태, 홈/에디터/설정 UI의 긴 파일을 기능 단위 helper/mixin으로 분리했습니다.
+- 자막 엔진의 settings/prompt/timing helper와 프로젝트 frame/model-setting helper를 독립 모듈로 분리해 테스트 표면을 좁혔습니다.
+- 도달 불가능했던 중복 cut-boundary detector/profile 구현과 중복 roughcut topicless fallback 구현을 제거했습니다.
 
 ## 보안
 

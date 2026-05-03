@@ -37,7 +37,6 @@ def resolve_roughcut_llm_config(settings: dict[str, Any] | None = None) -> Rough
         provider = inherited_provider
     if not use_override or model in ("", "inherit"):
         model = inherited_model
-    prompt = str(merged.get("roughcut_llm_prompt") or "").strip() or DEFAULT_ROUGHCUT_PROMPT_V1
     return RoughCutLLMConfig(
         enabled=bool(merged.get("roughcut_llm_enabled", False)),
         use_override=use_override,
@@ -49,7 +48,7 @@ def resolve_roughcut_llm_config(settings: dict[str, Any] | None = None) -> Rough
         chunk_rows=max(1, int(merged.get("roughcut_llm_chunk_rows", 12) or 12)),
         lookahead_rows=max(0, int(merged.get("roughcut_llm_lookahead_rows", 8) or 8)),
         threads=max(1, int(merged.get("roughcut_llm_threads", 4) or 4)),
-        prompt=prompt,
+        prompt=DEFAULT_ROUGHCUT_PROMPT_V1,
     )
 
 

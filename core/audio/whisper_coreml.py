@@ -16,9 +16,9 @@ import sys
 import threading
 from pathlib import Path
 
-import config
+from core.runtime import config
 from core.platform_compat import hidden_subprocess_kwargs, subprocess_env
-from logger import get_logger
+from core.runtime.logger import get_logger
 
 
 COREML_MODEL_PREFIX = "coreml:"

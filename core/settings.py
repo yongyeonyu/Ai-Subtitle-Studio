@@ -5,7 +5,7 @@ core/settings.py
 앱 전체 설정 로딩/저장 통합 모듈
 """
 import os, json
-import config
+from core.runtime import config
 
 SETTINGS_PATH = os.path.join(config.DATASET_DIR, "user_settings.json")
 
@@ -19,7 +19,7 @@ def load_settings() -> dict:
         return {}
     except Exception as e:
         try:
-            from logger import get_logger
+            from core.runtime.logger import get_logger
             get_logger().log(f"⚠️ 설정 로드 실패: {e}")
         except Exception:
             pass

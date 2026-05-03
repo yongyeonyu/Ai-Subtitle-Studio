@@ -9,8 +9,8 @@ import os
 import threading
 import time
 
-import config
-from logger import get_logger
+from core.runtime import config
+from core.runtime.logger import get_logger
 from core.audio.media_processor import VideoProcessor
 from core.time_history import get_expected_time
 from core.settings import load_settings, get_model_key

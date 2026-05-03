@@ -8,7 +8,7 @@ import os
 import json
 import subprocess
 import time
-from logger import get_logger
+from core.runtime.logger import get_logger
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SETTINGS_FILE = os.path.join(ROOT_DIR, "dataset", "folder_settings.json")

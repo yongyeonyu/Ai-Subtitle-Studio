@@ -5,8 +5,8 @@ import json
 import re
 from typing import Dict, Tuple, List, Any
 
-from logger import get_logger
-from config import (
+from core.runtime.logger import get_logger
+from core.runtime.config import (
     DATASET_DIR,
     CORRECTIONS_FILE,
     RULES_FILE,
@@ -29,46 +29,77 @@ DEFAULT_RULES = {
     ]
 }
 
+
+def _unique_sorted_words(items: list[str] | tuple[str, ...] | None) -> list[str]:
+    out = []
+    seen = set()
+    for item in items or []:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return sorted(out)
+
+
+def _normalize_rule_payload(file_rules: dict[str, Any] | None) -> Dict[str, Any]:
+    file_rules = dict(file_rules or {})
+    return {
+        "end_words": _unique_sorted_words(
+            list(DEFAULT_RULES["end_words"]) + list(file_rules.get("end_words") or [])
+        ),
+        "start_words": _unique_sorted_words(
+            list(DEFAULT_RULES["start_words"]) + list(file_rules.get("start_words") or [])
+        ),
+        # split_* 계열은 subtitle_rule.json이 있으면 우선 사용하고, 없으면 config fallback 사용
+        "split_rules": _unique_sorted_words(
+            file_rules.get("split_rules") or DEFAULT_SPLIT_RULES
+        ),
+        "split_punctuation": _unique_sorted_words(
+            file_rules.get("split_punctuation") or DEFAULT_SPLIT_PUNCTUATION
+        ),
+        "max_chars": int(file_rules.get("max_chars") or DEFAULT_MAX_CHARS),
+    }
+
+
 def _ensure_dataset_dir():
     """dataset 폴더 존재 보장 (안전장치)"""
     os.makedirs(DATASET_DIR, exist_ok=True)
 
-def load_subtitle_rules() -> Dict[str, List[str]]:
+def load_subtitle_rules() -> Dict[str, Any]:
     """
-    기본 규칙(DEFAULT_RULES) + RULES_FILE 내 end_words/start_words를 병합하여 반환
-    - 누적 방식
-    - 중복 제거
-    - 정렬
+    subtitle_rule.json을 단일 소스로 읽고, 비어 있는 값은 config fallback으로 채웁니다.
+    반환값에는 다음이 모두 포함됩니다.
+    - end_words
+    - start_words
+    - split_rules
+    - split_punctuation
+    - max_chars
     """
     _ensure_dataset_dir()
-
-    rules = {
-        "end_words": list(DEFAULT_RULES["end_words"]),
-        "start_words": list(DEFAULT_RULES["start_words"]),
-    }
 
     if os.path.exists(RULES_FILE):
         try:
             with open(RULES_FILE, "r", encoding="utf-8") as f:
                 file_rules = json.load(f)
-
-            for key in ("end_words", "start_words"):
-                if isinstance(file_rules.get(key), list):
-                    combined = set(rules[key]) | set(file_rules[key])
-                    rules[key] = sorted(combined)
-
+            if isinstance(file_rules, dict):
+                return _normalize_rule_payload(file_rules)
         except Exception as e:
             get_logger().log(f"⚠️ 규칙 파일 로드 중 오류: {e}")
 
-    return rules
+    return _normalize_rule_payload({})
 
-def _write_rules_file(rules: Dict[str, List[str]]) -> None:
-    """RULES_FILE에 end_words/start_words만 안전하게 저장"""
+def _write_rules_file(rules: Dict[str, Any]) -> None:
+    """RULES_FILE에 규칙 payload를 안전하게 저장"""
     _ensure_dataset_dir()
 
+    normalized = _normalize_rule_payload(rules)
     payload = {
-        "end_words": rules.get("end_words", []),
-        "start_words": rules.get("start_words", []),
+        "end_words": normalized.get("end_words", []),
+        "start_words": normalized.get("start_words", []),
+        "split_rules": normalized.get("split_rules", []),
+        "split_punctuation": normalized.get("split_punctuation", []),
+        "max_chars": normalized.get("max_chars", DEFAULT_MAX_CHARS),
     }
 
     try:
@@ -110,9 +141,9 @@ def remove_split_rule(word: str) -> None:
         get_logger().log(f"📝 자막 분할 규칙 제거: {clean_word}")
 
 def reset_split_rules() -> None:
-    """규칙을 기본값(DEFAULT_RULES)으로 초기화"""
+    """규칙을 기본값 + split fallback 값으로 초기화"""
     _ensure_dataset_dir()
-    _write_rules_file(DEFAULT_RULES)
+    _write_rules_file({})
     get_logger().log("♻️ 자막 분할 규칙이 기본값으로 초기화되었습니다.")
 
 # ─────────────────────────────────────────────────────────────
@@ -188,22 +219,15 @@ def apply_corrections(text: str, corrections: Dict[str, str]) -> str:
 
 def load_rules() -> Tuple[List[str], List[str], int]:
     """
-    subtitle_rule.json에서 분할 관련 설정을 읽어 반환
-    (없거나 깨졌으면 config 기본값 반환)
+    subtitle_rule.json에서 분할 관련 설정을 읽어 반환합니다.
+    실질 소스는 load_subtitle_rules()를 재사용하고, config 상수는 fallback으로만 사용합니다.
     """
-    if os.path.exists(RULES_FILE):
-        try:
-            with open(RULES_FILE, "r", encoding="utf-8") as f:
-                rules = json.load(f) or {}
-            return (
-                rules.get("split_rules", DEFAULT_SPLIT_RULES),
-                rules.get("split_punctuation", DEFAULT_SPLIT_PUNCTUATION),
-                rules.get("max_chars", DEFAULT_MAX_CHARS),
-            )
-        except Exception as e:
-            get_logger().log(f"⚠️ 분할 규칙 로드 실패: {e}")
-
-    return DEFAULT_SPLIT_RULES, DEFAULT_SPLIT_PUNCTUATION, DEFAULT_MAX_CHARS
+    rules = load_subtitle_rules()
+    return (
+        list(rules.get("split_rules") or DEFAULT_SPLIT_RULES),
+        list(rules.get("split_punctuation") or DEFAULT_SPLIT_PUNCTUATION),
+        int(rules.get("max_chars") or DEFAULT_MAX_CHARS),
+    )
 
 # ─────────────────────────────────────────────────────────────
 # 환각/반복 제거

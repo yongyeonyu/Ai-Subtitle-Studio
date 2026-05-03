@@ -13,7 +13,7 @@ import subprocess
 import time
 from pathlib import Path
 
-import config
+from core.runtime import config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 

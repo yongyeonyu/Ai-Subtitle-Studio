@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt, QTimer
 import requests
-import config
+from core.runtime import config
 from ui.style import line_icon, settings_button_style
 
 DATASET_DIR = config.DATASET_DIR
@@ -137,6 +137,9 @@ DEFAULT_ADV_SETTINGS = {
 
     # Subtitle quality review defaults. Runtime behavior stays opt-in.
     "stt_ensemble_enabled": False,
+    "stt_candidate_scoring_enabled": False,
+    "stt_low_score_recheck_enabled": True,
+    "stt_low_score_recheck_threshold": 50,
     "selected_whisper_model_secondary": (
         "youngouk/ghost613-turbo-korean-4bit-mlx"
         if config.IS_MAC else
@@ -149,6 +152,7 @@ DEFAULT_ADV_SETTINGS = {
     "subtitle_quality_enabled": False,
     "subtitle_quality_auto_check_after_generate": False,
     "subtitle_quality_auto_correct_enabled": False,
+    "editor_lora_runtime_enabled": False,
     "vad_pre_split_enabled": False,
     "review_vad_before_stt_enabled": False,
     "review_vad_strict_mode": True,
@@ -159,8 +163,8 @@ DEFAULT_ADV_SETTINGS = {
     "review_auto_correct_min_improvement": 10,
     "review_recheck_buffer_sec": 1.2,
     "review_auto_correct_require_user_confirm": True,
-    "correction_memory_enabled": True,
-    "wrong_answer_memory_enabled": True,
+    "correction_memory_enabled": False,
+    "wrong_answer_memory_enabled": False,
     "score_weight_asr_metadata": 0.25,
     "score_weight_vad_alignment": 0.20,
     "score_weight_word_timestamp": 0.15,

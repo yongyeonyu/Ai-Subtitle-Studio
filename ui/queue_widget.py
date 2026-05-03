@@ -35,8 +35,9 @@ class QueueMixin:
         self._file_start_times = {}
         self._file_complete_times = {}
         self._real_pct = 0
-        self._sidebar_queue_cache_items = []
-        self._sidebar_queue_cache_header = ""
+        if files:
+            self._sidebar_queue_cache_items = []
+            self._sidebar_queue_cache_header = ""
         self._accumulated_vad = []   # ← 멀티클립 VAD 누적 초기화
 
         self.queue_table.setUpdatesEnabled(False)
@@ -269,7 +270,8 @@ class QueueMixin:
                     })
             except RuntimeError:
                 items = list(getattr(self, "_sidebar_queue_cache_items", []) or [])
-        self._sidebar_queue_cache_items = items
+        if items or not list(getattr(self, "_sidebar_queue_cache_items", []) or []):
+            self._sidebar_queue_cache_items = items
         try:
             header = str(label.text() if label is not None else "")
         except RuntimeError:

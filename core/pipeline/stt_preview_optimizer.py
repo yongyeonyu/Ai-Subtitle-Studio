@@ -3,7 +3,19 @@
 """Apply subtitle split and Gap rules to STT preview candidate lanes."""
 from __future__ import annotations
 
-from logger import get_logger
+from core.runtime.logger import get_logger
+
+
+def _score_preview_enabled() -> tuple[bool, dict]:
+    try:
+        from core.settings import load_settings
+
+        settings = load_settings()
+    except Exception:
+        settings = {}
+    preset = str(settings.get("stt_quality_preset", "") or "").strip().lower()
+    enabled = bool(settings.get("stt_candidate_scoring_enabled")) or preset == "precise"
+    return enabled, settings
 
 
 def optimize_stt_preview_segments(
@@ -54,6 +66,20 @@ def optimize_stt_preview_segments(
             )
         except Exception as exc:
             get_logger().log(f"  ⚠️ [{label}] 컷 경계 스냅 실패, 기존 후보 유지: {exc}")
+
+    scoring_enabled, settings = _score_preview_enabled()
+    if scoring_enabled:
+        try:
+            from core.audio.stt_candidate_scorer import annotate_stt_candidates
+
+            optimized = annotate_stt_candidates(
+                optimized,
+                source=label,
+                vad_segments=vad_segments or [],
+                settings=settings,
+            )
+        except Exception as exc:
+            get_logger().log(f"  ⚠️ [{label}] 후보 점수 계산 실패, 색상 점수 없이 표시: {exc}")
 
     offset = float(clip_offset or 0.0)
     preview: list[dict] = []

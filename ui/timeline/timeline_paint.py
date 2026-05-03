@@ -8,7 +8,7 @@ import numpy as np
 from PyQt6.QtCore import QPoint, QRect, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygon
 
-import config
+from core.runtime import config
 
 from ui.timeline.timeline_constants import (
     ANALYSIS_BOT,
@@ -36,7 +36,11 @@ from ui.timeline.timeline_constants import (
     WAVE_HALF,
     WAVE_MID,
 )
-from ui.timeline.timeline_analysis import analysis_markers_for_widget, roughcut_major_markers_for_widget
+from ui.timeline.timeline_analysis import (
+    analysis_markers_for_widget,
+    roughcut_major_markers_for_widget,
+    subtitle_detection_color,
+)
 from ui.timeline.speaker_labels import (
     current_speaker_settings,
     normalize_speaker_id,
@@ -597,8 +601,16 @@ class TimelinePaintMixin:
                 selection_state = stt_candidate_selection_state(seg, final_stt_segments)
                 is_selected = selection_state in {"manual", "llm"}
                 is_unselected = selection_state == "unselected"
-                fill_color = QColor("#3D3F43" if is_unselected else fill_hex)
-                border_color = QColor("#FFCC00" if selection_state == "llm" else ("#FFFFFF" if is_selected else border_hex))
+                score = seg.get("stt_score", seg.get("score"))
+                score_hex = str(seg.get("score_color") or seg.get("stt_score_color") or "")
+                if not score_hex:
+                    try:
+                        score_hex = subtitle_detection_color(float(score))
+                    except Exception:
+                        score_hex = ""
+                fill_color = QColor("#3D3F43" if is_unselected else (score_hex or fill_hex))
+                fill_color.setAlpha(96 if is_unselected else 142)
+                border_color = QColor("#FFCC00" if selection_state == "llm" else ("#FFFFFF" if is_selected else (score_hex or border_hex)))
                 text_color = QColor("#9AA0A6" if is_unselected else text_hex)
                 p.fillRect(rect, fill_color)
                 p.setPen(QPen(border_color, 2 if is_selected else 1))
@@ -851,7 +863,7 @@ class TimelinePaintMixin:
         boundary_top = int(boundary_lane_top + 3)
         boundary_bot = int(boundary_lane_top + boundary_lane_h - 3)
         if getattr(self, "boundary_times", None):
-            pen_confirmed_boundary = QPen(QColor("#8E8E93"), 1)
+            pen_confirmed_boundary = QPen(QColor("#8E8E93"), 1, Qt.PenStyle.DashLine)
             for bt in list(getattr(self, "boundary_times", []) or []):
                 bx = self._x(bt)
                 if bx < clip_left or bx > clip_right:
@@ -859,9 +871,27 @@ class TimelinePaintMixin:
                 p.setPen(pen_confirmed_boundary)
                 p.drawLine(bx, boundary_top, bx, boundary_bot)
         if getattr(self, "scan_boundary_times", None):
-            pen_boundary = QPen(QColor("#00FFD0"), 1)
             for bt in list(getattr(self, "scan_boundary_times", []) or []):
-                bx = self._x(bt)
+                if isinstance(bt, dict):
+                    try:
+                        sec = float(bt.get("timeline_sec", bt.get("time", bt.get("start", 0.0))) or 0.0)
+                    except Exception:
+                        continue
+                    status = str(bt.get("status", "") or "").lower()
+                    verified = status in {"verified", "confirmed"} or bool(bt.get("verified"))
+                else:
+                    try:
+                        sec = float(bt or 0.0)
+                    except Exception:
+                        continue
+                    status = "provisional"
+                    verified = False
+                pen_boundary = (
+                    QPen(QColor("#00FFD0"), 1)
+                    if not verified
+                    else QPen(QColor("#8E8E93"), 1, Qt.PenStyle.DashLine)
+                )
+                bx = self._x(sec)
                 if bx < clip_left or bx > clip_right:
                     continue
                 p.setPen(pen_boundary)

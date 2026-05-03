@@ -156,12 +156,12 @@ def configure_qt_runtime() -> None:
 
 
 def configure_qt_gpu_rendering_before_app() -> None:
-    """Apply Qt OpenGL setup for GPU-backed rendering by default."""
+    """Apply Qt OpenGL setup only when the user explicitly opts in."""
     if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
         return
-    if str(os.environ.get("AI_SUBTITLE_GPU_RENDERING", "1")).lower() in {"0", "false", "no"}:
+    if str(os.environ.get("AI_SUBTITLE_GPU_RENDERING", "0")).lower() not in {"1", "true", "yes", "on"}:
         return
-    if str(os.environ.get("AI_SUBTITLE_FORCE_QT_OPENGL", "1")).lower() not in {"1", "true", "yes", "on"}:
+    if str(os.environ.get("AI_SUBTITLE_FORCE_QT_OPENGL", "0")).lower() not in {"1", "true", "yes", "on"}:
         return
 
     os.environ.setdefault("QT_OPENGL", "desktop")

@@ -1,0 +1,855 @@
+# Version: 03.13.03
+# Phase: PHASE2
+"""Audio command, preprocessing, cache, and chunk helpers for VideoProcessor."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import wave
+
+from core.llm.secure_keys import get_api_key
+from core.media_info import probe_media
+from core.performance import bounded_worker_count
+from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs, rnnoise_binary, subprocess_env
+from core.runtime import config
+from core.runtime.logger import get_logger
+from core.subtitle_quality.vad_alignment_checker import apply_review_vad_settings, review_vad_config
+
+_VAD_CACHE_VERSION = 3
+_AUDIO_CACHE_VERSION = 2
+
+
+def _runtime_get_logger():
+    owner = sys.modules.get("core.audio.media_processor")
+    return getattr(owner, "get_logger", get_logger)()
+
+
+def _runtime_get_api_key(service: str) -> str:
+    owner = sys.modules.get("core.audio.media_processor")
+    return getattr(owner, "get_api_key", get_api_key)(service)
+
+
+class VideoProcessorAudioHelpersMixin:
+    def _notify_stage(self, status: str):
+        callback = getattr(self, "stage_callback", None)
+        if not callable(callback):
+            return
+        try:
+            callback(str(status or ""))
+        except Exception:
+            pass
+
+    def _run_media_command(self, cmd: list[str], *, label: str, timeout: float | None = None, env: dict | None = None) -> bool:
+        if self._should_run_ffmpeg_with_progress(cmd):
+            return self._run_ffmpeg_with_progress(cmd, label=label, timeout=timeout, env=env)
+
+        try:
+            subprocess_kwargs = hidden_subprocess_kwargs()
+            if env is not None:
+                subprocess_kwargs["env"] = env
+            result = subprocess.run(
+                [str(x) for x in cmd],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                **subprocess_kwargs,
+            )
+        except FileNotFoundError as e:
+            _runtime_get_logger().log(f"  ❌ {label} 실행 파일을 찾을 수 없습니다: {e}")
+            return False
+        except Exception as e:
+            _runtime_get_logger().log(f"  ❌ {label} 실행 오류: {e}")
+            return False
+
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            lines = [line.strip() for line in err.splitlines() if line.strip()]
+            summary = "\n".join(lines[-10:]) if lines else err
+            _runtime_get_logger().log(f"  ❌ {label} 실패: {summary[:1200]}")
+            return False
+        return True
+
+    @staticmethod
+    def _should_run_ffmpeg_with_progress(cmd: list[str]) -> bool:
+        if not cmd:
+            return False
+        binary = os.path.basename(str(cmd[0] or "")).lower()
+        return binary.startswith("ffmpeg") and "-progress" not in [str(x) for x in cmd]
+
+    @staticmethod
+    def _first_ffmpeg_input(cmd: list[str]) -> str:
+        items = [str(x) for x in cmd]
+        for idx, item in enumerate(items[:-1]):
+            if item == "-i":
+                return items[idx + 1]
+        return ""
+
+    @staticmethod
+    def _ffmpeg_progress_command(cmd: list[str]) -> list[str]:
+        items = [str(x) for x in cmd]
+        insert_at = 1
+        for marker in ("-nostdin", "-loglevel"):
+            if marker in items:
+                idx = items.index(marker)
+                insert_at = max(insert_at, idx + (2 if marker == "-loglevel" and idx + 1 < len(items) else 1))
+        return items[:insert_at] + ["-progress", "pipe:1", "-nostats"] + items[insert_at:]
+
+    def _media_duration_for_progress(self, path: str) -> float:
+        if not path:
+            return 0.0
+        try:
+            if path.lower().endswith(".wav"):
+                with wave.open(path, "rb") as wf:
+                    rate = float(wf.getframerate() or 0)
+                    return (wf.getnframes() / rate) if rate > 0 else 0.0
+        except Exception:
+            pass
+        try:
+            info = probe_media(path)
+            return float(info.get("duration") or 0.0)
+        except Exception:
+            return 0.0
+
+    def _emit_ffmpeg_progress(self, label: str, ratio: float, *, force: bool = False) -> int:
+        pct = max(0, min(100 if force else 99, int(ratio * 100)))
+        state = getattr(self, "_ffmpeg_progress_state", {})
+        key = str(label or "ffmpeg")
+        last_pct, _last_ts = state.get(key, (-1, 0.0))
+        if pct <= last_pct:
+            return last_pct
+        state[key] = (pct, time.monotonic())
+        self._ffmpeg_progress_state = state
+        text = f"⏳ [전처리] {label} 진행 중 {pct}%"
+        self._notify_stage(text)
+        _runtime_get_logger().log(f"  └ [전처리] {label} 진행률 {pct}%")
+        return pct
+
+    def _emit_vad_progress(self, label: str, phase: str, pct: int, *, force: bool = False, step: int = 10) -> int:
+        step = max(1, int(step or 10))
+        pct = max(0, min(100, int(pct or 0)))
+        if not force and pct < 100:
+            pct = (pct // step) * step
+        state = getattr(self, "_vad_progress_state", {})
+        key = f"{label}:{phase}"
+        last_pct = state.get(key, -1)
+        if pct <= last_pct:
+            return last_pct
+        state[key] = pct
+        self._vad_progress_state = state
+        self._notify_stage(f"⏳ [VAD] {label} {phase} {pct}%")
+        _runtime_get_logger().log(f"  └ [VAD 후처리] {label} {phase} 진행률 {pct}%")
+        return pct
+
+    def _start_vad_heartbeat(self, label: str, phase: str, *, interval_sec: float = 5.0):
+        stop_event = threading.Event()
+        interval = max(1.0, float(interval_sec or 5.0))
+
+        def _beat():
+            started = time.monotonic()
+            while not stop_event.wait(interval):
+                elapsed = int(time.monotonic() - started)
+                self._notify_stage(f"⏳ [VAD] {label} {phase} 중... {elapsed}초")
+                _runtime_get_logger().log(f"  └ [VAD 후처리] {label} {phase} 진행 중... {elapsed}초")
+
+        thread = threading.Thread(target=_beat, name=f"vad-heartbeat-{label}-{phase}", daemon=True)
+        thread.start()
+        return stop_event, thread
+
+    @staticmethod
+    def _stop_vad_heartbeat(handle):
+        if not handle:
+            return
+        stop_event, thread = handle
+        try:
+            stop_event.set()
+            thread.join(timeout=0.2)
+        except Exception:
+            pass
+
+    def _start_audio_heartbeat(self, label: str, phase: str = "처리", *, interval_sec: float = 5.0):
+        stop_event = threading.Event()
+        interval = max(1.0, float(interval_sec or 5.0))
+
+        def _beat():
+            started = time.monotonic()
+            while not stop_event.wait(interval):
+                elapsed = int(time.monotonic() - started)
+                self._notify_stage(f"⏳ [음성] {label} {phase} 중... {elapsed}초")
+                _runtime_get_logger().log(f"  └ [음성] {label} {phase} 진행 중... {elapsed}초")
+
+        thread = threading.Thread(target=_beat, name=f"audio-heartbeat-{label}-{phase}", daemon=True)
+        thread.start()
+        return stop_event, thread
+
+    @staticmethod
+    def _stop_audio_heartbeat(handle):
+        if not handle:
+            return
+        stop_event, thread = handle
+        try:
+            stop_event.set()
+            thread.join(timeout=0.2)
+        except Exception:
+            pass
+
+    def _run_ffmpeg_with_progress(self, cmd: list[str], *, label: str, timeout: float | None = None, env: dict | None = None) -> bool:
+        duration = self._media_duration_for_progress(self._first_ffmpeg_input(cmd))
+        if duration <= 0:
+            return self._run_media_command_no_progress(cmd, label=label, timeout=timeout, env=env)
+
+        progress_cmd = self._ffmpeg_progress_command(cmd)
+        stderr_lines = []
+        started_at = time.monotonic()
+        last_pct = -1
+        try:
+            state = getattr(self, "_ffmpeg_progress_state", {})
+            state.pop(str(label or "ffmpeg"), None)
+            self._ffmpeg_progress_state = state
+            subprocess_kwargs = hidden_subprocess_kwargs()
+            if env is not None:
+                subprocess_kwargs["env"] = env
+            proc = subprocess.Popen(
+                progress_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                **subprocess_kwargs,
+            )
+            self._emit_ffmpeg_progress(label, 0.0, force=True)
+            assert proc.stdout is not None
+            for raw_line in proc.stdout:
+                if timeout and time.monotonic() - started_at > timeout:
+                    proc.kill()
+                    _runtime_get_logger().log(f"  ❌ {label} 실행 오류: timeout")
+                    return False
+                line = raw_line.strip()
+                if not (line.startswith("out_time_ms=") or line.startswith("out_time_us=")):
+                    if line and not line.startswith((
+                        "frame=", "fps=", "stream_", "progress=", "bitrate=", "total_size=",
+                        "out_time=", "out_time_us=", "speed=", "dup_frames=", "drop_frames="
+                    )):
+                        stderr_lines.append(line)
+                        stderr_lines = stderr_lines[-12:]
+                    continue
+                try:
+                    raw_value = float(line.split("=", 1)[1])
+                    out_sec = raw_value / 1_000_000.0
+                except Exception:
+                    continue
+                last_pct = self._emit_ffmpeg_progress(label, out_sec / duration)
+            proc.wait(timeout=1)
+        except FileNotFoundError as e:
+            _runtime_get_logger().log(f"  ❌ {label} 실행 파일을 찾을 수 없습니다: {e}")
+            return False
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            _runtime_get_logger().log(f"  ❌ {label} 실행 오류: timeout")
+            return False
+        except Exception as e:
+            _runtime_get_logger().log(f"  ❌ {label} 실행 오류: {e}")
+            return False
+
+        if proc.returncode != 0:
+            summary = "\n".join(stderr_lines[-10:])
+            _runtime_get_logger().log(f"  ❌ {label} 실패(rc={proc.returncode}): {summary[:1200]}")
+            return False
+        if last_pct < 100:
+            self._emit_ffmpeg_progress(label, 1.0, force=True)
+        _runtime_get_logger().log(f"  └ [전처리] {label} 완료")
+        return True
+
+    def _run_media_command_no_progress(self, cmd: list[str], *, label: str, timeout: float | None = None, env: dict | None = None) -> bool:
+        try:
+            subprocess_kwargs = hidden_subprocess_kwargs()
+            if env is not None:
+                subprocess_kwargs["env"] = env
+            result = subprocess.run(
+                [str(x) for x in cmd],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                **subprocess_kwargs,
+            )
+        except FileNotFoundError as e:
+            _runtime_get_logger().log(f"  ❌ {label} 실행 파일을 찾을 수 없습니다: {e}")
+            return False
+        except Exception as e:
+            _runtime_get_logger().log(f"  ❌ {label} 실행 오류: {e}")
+            return False
+
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            lines = [line.strip() for line in err.splitlines() if line.strip()]
+            summary = "\n".join(lines[-10:]) if lines else err
+            _runtime_get_logger().log(f"  ❌ {label} 실패: {summary[:1200]}")
+            return False
+        return True
+
+    def _huggingface_env(self) -> dict:
+        env = subprocess_env()
+        token = env.get("HF_TOKEN") or env.get("HUGGINGFACE_HUB_TOKEN") or _runtime_get_api_key("huggingface")
+        if token:
+            env.setdefault("HF_TOKEN", token)
+            env.setdefault("HUGGINGFACE_HUB_TOKEN", token)
+        return env
+
+    def _resolve_python_cli(self, name: str, env_var: str | None = None) -> str:
+        exe_name = f"{name}.exe" if getattr(config, "IS_WINDOWS", False) and not name.endswith(".exe") else name
+        isolated_tool_path = ""
+        if name == "resemble-enhance":
+            scripts_dir = "Scripts" if getattr(config, "IS_WINDOWS", False) else "bin"
+            isolated_tool_path = os.path.join(config.BASE_DIR, ".codex_work", "resemble_enhance", scripts_dir, exe_name)
+        candidates = [
+            os.environ.get(env_var, "") if env_var else "",
+            shutil.which(name),
+            os.path.join(os.path.dirname(sys.executable), exe_name) if sys.executable else "",
+            os.path.join(config.BASE_DIR, "bin", exe_name),
+            os.path.join(config.BASE_DIR, "tools", exe_name),
+            isolated_tool_path,
+        ]
+        for candidate in candidates:
+            if candidate and os.path.exists(candidate):
+                return candidate
+        return exe_name
+
+    @staticmethod
+    def _resemble_enhance_device() -> str:
+        try:
+            import torch
+
+            if getattr(getattr(torch, "backends", None), "mps", None) and torch.backends.mps.is_available():
+                return "mps"
+            if torch.cuda.is_available():
+                return "cuda"
+        except Exception:
+            pass
+        return "cpu"
+
+    def _resemble_enhance_command(self, cli: str, in_dir: str, out_dir: str, device: str) -> list[str]:
+        runner = os.path.join(config.BASE_DIR, "core", "audio", "resemble_enhance_runner.py")
+        cli_dir = os.path.dirname(os.path.abspath(cli or ""))
+        python_name = "python.exe" if getattr(config, "IS_WINDOWS", False) else "python"
+        isolated_python = os.path.join(cli_dir, python_name)
+        if os.path.exists(runner) and os.path.exists(isolated_python):
+            return [isolated_python, runner, in_dir, out_dir, "--denoise_only", "--device", device]
+        return [cli, in_dir, out_dir, "--denoise_only", "--device", device]
+
+    def _apply_rnnoise(self, source_wav: str, target_wav: str) -> bool:
+        ffmpeg = ffmpeg_binary()
+        rnnoise = rnnoise_binary()
+        raw_in = f"{target_wav}.rnnoise.in.raw"
+        raw_out = f"{target_wav}.rnnoise.out.raw"
+        try:
+            if not self._run_media_command(
+                [
+                    ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+                    "-i", source_wav,
+                    "-ac", "1", "-ar", "48000",
+                    "-f", "s16le",
+                    raw_in,
+                ],
+                label="RNNoise 입력 변환",
+            ):
+                return False
+            if not self._run_media_command([rnnoise, raw_in, raw_out], label="RNNoise 노이즈 제거"):
+                _runtime_get_logger().log("  ⚠️ RNNoise 실행 실패 또는 미설치: FFMPEG 정제로 계속 진행합니다")
+                return False
+            return self._run_media_command(
+                [
+                    ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+                    "-f", "s16le", "-ar", "48000", "-ac", "1",
+                    "-i", raw_out,
+                    "-acodec", "pcm_s16le",
+                    target_wav,
+                ],
+                label="RNNoise WAV 변환",
+            )
+        finally:
+            for path in (raw_in, raw_out):
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except Exception:
+                    pass
+
+    def _copy_first_wav_from_dir(self, source_dir: str, target_wav: str) -> bool:
+        for root, _dirs, files in os.walk(source_dir):
+            for name in files:
+                if name.lower().endswith(".wav"):
+                    shutil.copy2(os.path.join(root, name), target_wav)
+                    return os.path.exists(target_wav)
+        return False
+
+    def _apply_resemble_enhance(self, source_wav: str, target_wav: str) -> bool:
+        cli = self._resolve_python_cli("resemble-enhance", env_var="RESEMBLE_ENHANCE_BINARY")
+        device = self._resemble_enhance_device()
+        work_dir = f"{target_wav}.resemble_tmp"
+        in_dir = os.path.join(work_dir, "input")
+        out_dir = os.path.join(work_dir, "output")
+        try:
+            os.makedirs(in_dir, exist_ok=True)
+            os.makedirs(out_dir, exist_ok=True)
+            shutil.copy2(source_wav, os.path.join(in_dir, "input.wav"))
+            heartbeat = self._start_audio_heartbeat("Resemble Enhance", "음성 향상", interval_sec=5.0)
+            try:
+                if not self._run_media_command(
+                    self._resemble_enhance_command(cli, in_dir, out_dir, device),
+                    label="Resemble Enhance 음성 향상",
+                    timeout=900,
+                    env=self._huggingface_env(),
+                ):
+                    _runtime_get_logger().log("  ⚠️ Resemble Enhance 실행 실패 또는 미설치: FFMPEG 정제로 계속 진행합니다")
+                    return False
+            finally:
+                self._stop_audio_heartbeat(heartbeat)
+            return self._copy_first_wav_from_dir(out_dir, target_wav)
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    def _apply_clearvoice(self, source_wav: str, target_wav: str) -> bool:
+        if importlib.util.find_spec("clearvoice") is None:
+            _runtime_get_logger().log("  ⚠️ ClearVoice 패키지가 설치되어 있지 않습니다: python3.11 -m pip install clearvoice")
+            return False
+        script = (
+            "import sys\n"
+            "from clearvoice import ClearVoice\n"
+            "source, target = sys.argv[1], sys.argv[2]\n"
+            "engine = ClearVoice(task='speech_enhancement', model_names=['MossFormer2_SE_48K'])\n"
+            "audio = engine(input_path=source, online_write=False)\n"
+            "engine.write(audio, output_path=target)\n"
+        )
+        heartbeat = self._start_audio_heartbeat("ClearVoice", "음성 향상", interval_sec=5.0)
+        try:
+            if not self._run_media_command(
+                [sys.executable, "-c", script, source_wav, target_wav],
+                label="ClearVoice 음성 향상",
+                timeout=900,
+                env=self._huggingface_env(),
+            ):
+                _runtime_get_logger().log("  ⚠️ ClearVoice 실행 실패 또는 미설치: FFMPEG 정제로 계속 진행합니다")
+                return False
+        finally:
+            self._stop_audio_heartbeat(heartbeat)
+        return os.path.exists(target_wav)
+
+    @staticmethod
+    def _float_setting(settings: dict, key: str, default: float, min_value: float | None = None, max_value: float | None = None) -> float:
+        try:
+            value = float(settings.get(key, default))
+        except (TypeError, ValueError):
+            value = float(default)
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+
+    @staticmethod
+    def _fmt_filter_num(value: float) -> str:
+        return f"{value:g}"
+
+    def _build_ffmpeg_preprocess_filter(self, settings: dict) -> str:
+        hp = int(self._float_setting(settings, "ff_hp", settings.get("none_hp", 90), 0, 500))
+        lp = int(self._float_setting(settings, "ff_lp", settings.get("none_lp", 3200), 0, 8000))
+        nf = self._float_setting(settings, "ff_nf", settings.get("none_nf", -32), -80, 0)
+        dyn_m = self._float_setting(settings, "ff_dynaudnorm_m", 10.0, 1.0, 50.0)
+        dyn_p = self._float_setting(settings, "ff_dynaudnorm_p", 0.95, 0.5, 1.0)
+        treble = self._float_setting(settings, "ff_treble_boost", 0.0, -10.0, 20.0)
+        target = self._float_setting(settings, "none_target", -14.0, -40.0, 0.0)
+
+        filters = []
+        if hp > 0:
+            filters.append(f"highpass=f={hp}")
+        if lp > 0:
+            filters.append(f"lowpass=f={lp}")
+        filters.append(f"afftdn=nf={self._fmt_filter_num(nf)}")
+        filters.append(
+            "dynaudnorm=f=150:g=9:"
+            f"m={self._fmt_filter_num(dyn_m)}:"
+            f"p={self._fmt_filter_num(dyn_p)}"
+        )
+        if abs(treble) >= 0.01:
+            filters.append(
+                "equalizer=f=3200:width_type=h:width=2200:"
+                f"g={self._fmt_filter_num(treble)}"
+            )
+        filters.append(f"loudnorm=I={self._fmt_filter_num(target)}")
+        return ",".join(filters) if filters else "anull"
+
+    def _build_audio_cleanup_filter(self, audio_ai: str, settings: dict) -> str:
+        df_vol = self._float_setting(settings, "df_vol", 3.5, 0.5, 8.0)
+
+        if audio_ai == "deepfilter":
+            hp = int(self._float_setting(settings, "df_hp", 100, 0, 500))
+            lp = int(self._float_setting(settings, "df_lp", 8000, 1000, 8000))
+            nf = self._float_setting(settings, "df_nf", settings.get("ff_nf", -32), -80, 0)
+            eq_gain = self._float_setting(settings, "df_eq_g", 8, -10, 20)
+            comp_th = self._float_setting(settings, "df_comp_th", -28, -60, 0)
+            return (
+                f"highpass=f={hp},lowpass=f={lp},"
+                f"afftdn=nf={self._fmt_filter_num(nf)},"
+                "equalizer=f=3000:width_type=h:width=2000:"
+                f"g={self._fmt_filter_num(eq_gain)},"
+                f"acompressor=threshold={self._fmt_filter_num(comp_th)}dB:ratio=4:attack=5:release=50,"
+                "speechnorm=e=12:r=0.0001:l=1,"
+                f"volume={self._fmt_filter_num(df_vol)},"
+                "loudnorm=I=-14:LRA=11:tp=-1.0"
+            )
+
+        if audio_ai == "rnnoise":
+            hp = int(self._float_setting(settings, "df_hp", 100, 0, 500))
+            lp = int(self._float_setting(settings, "df_lp", 8000, 1000, 8000))
+            eq_gain = self._float_setting(settings, "df_eq_g", 8, -10, 20)
+            comp_th = self._float_setting(settings, "df_comp_th", -28, -60, 0)
+            return (
+                f"highpass=f={hp},lowpass=f={lp},"
+                "equalizer=f=3000:width_type=h:width=2000:"
+                f"g={self._fmt_filter_num(eq_gain)},"
+                f"acompressor=threshold={self._fmt_filter_num(comp_th)}dB:ratio=3:attack=5:release=60,"
+                "speechnorm=e=10:r=0.0001:l=1,"
+                f"volume={self._fmt_filter_num(df_vol)},"
+                "loudnorm=I=-14:LRA=11:tp=-1.0"
+            )
+
+        if audio_ai in {"resemble_enhance", "clearvoice"}:
+            hp = int(self._float_setting(settings, "df_hp", 100, 0, 500))
+            lp = int(self._float_setting(settings, "df_lp", 8000, 1000, 8000))
+            comp_th = self._float_setting(settings, "df_comp_th", -28, -60, 0)
+            return (
+                f"highpass=f={hp},lowpass=f={lp},"
+                f"acompressor=threshold={self._fmt_filter_num(comp_th)}dB:ratio=2.5:attack=6:release=70,"
+                "speechnorm=e=8:r=0.0001:l=1,"
+                "loudnorm=I=-14:LRA=11:tp=-1.0"
+            )
+
+        if audio_ai == "none":
+            return "anull"
+
+        return "anull"
+
+    @staticmethod
+    def _audio_cleanup_label(audio_ai: str, filter_applied: bool = False) -> str:
+        if audio_ai in {"rnnoise", "resemble_enhance", "clearvoice"} and not filter_applied:
+            return "FFMPEG"
+        return {
+            "deepfilter": "DeepFilter",
+            "rnnoise": "RNNoise",
+            "resemble_enhance": "Resemble Enhance",
+            "clearvoice": "ClearVoice",
+            "none": "미사용",
+        }.get(audio_ai, str(audio_ai or "미사용"))
+
+    def _ffmpeg_parallel_args(self, settings: dict) -> list[str]:
+        workers = bounded_worker_count(settings.get("ffmpeg_filter_threads", self.io_workers), kind="cpu")
+        # `-threads 0` lets codecs choose an efficient default, while
+        # `-filter_threads` gives heavier audio filters several cores.
+        return ["-threads", "0", "-filter_threads", str(max(1, workers))]
+
+    @staticmethod
+    def _ffmpeg_audio_stream_args() -> list[str]:
+        # Keep preprocessing on the first audio stream only. GPU video decode does
+        # not speed up audio extraction, so avoid touching video/subtitle/data streams.
+        return ["-map", "0:a:0", "-vn", "-sn", "-dn"]
+
+    @staticmethod
+    def _can_fuse_ffmpeg_preprocess(audio_ai: str) -> bool:
+        return str(audio_ai or "none").lower() in {"none", "deepfilter"}
+
+    @staticmethod
+    def _combine_audio_filters(*filters: str) -> str:
+        chain = []
+        for value in filters:
+            text = str(value or "").strip()
+            if not text or text == "anull":
+                continue
+            chain.append(text)
+        return ",".join(chain) if chain else "anull"
+
+    def _audio_cache_config(
+        self,
+        video_path: str,
+        settings: dict,
+        *,
+        audio_ai: str,
+        use_basic: bool,
+        master_filter: str,
+        active_filter: str,
+    ) -> dict:
+        try:
+            source = os.path.abspath(video_path)
+            stat = os.stat(video_path)
+            source_size = int(stat.st_size)
+            source_mtime_ns = int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
+        except Exception:
+            source = os.path.abspath(video_path or "")
+            source_size = 0
+            source_mtime_ns = 0
+        return {
+            "version": _AUDIO_CACHE_VERSION,
+            "source": source,
+            "source_size": source_size,
+            "source_mtime_ns": source_mtime_ns,
+            "audio_ai": str(audio_ai or "none"),
+            "use_basic_filter": bool(use_basic),
+            "master_filter": str(master_filter or "anull"),
+            "active_filter": str(active_filter or "anull"),
+            "sample_rate": 16000,
+            "channels": 1,
+            "pcm": "s16le",
+            "ffmpeg_filter_threads": int(max(1, bounded_worker_count(settings.get("ffmpeg_filter_threads", self.io_workers), kind="cpu"))),
+        }
+
+    def _direct_chunk_span(self, video_path: str, target_start_sec=0.0, target_end_sec=None) -> tuple[float, float]:
+        total_dur = self._media_duration_for_progress(video_path)
+        start = max(0.0, float(target_start_sec or 0.0))
+        if target_end_sec is None:
+            end = float(total_dur or 0.0)
+        else:
+            end = max(start, float(target_end_sec or start))
+            if total_dur > 0:
+                end = min(end, total_dur)
+        return start, max(start, end)
+
+    def _hard_cut_boundaries_for_span(self, start: float, end: float) -> tuple[float, ...]:
+        """Return hard cut times inside the requested STT span.
+
+        hard_cut_boundaries is injected by the pipeline before audio extraction.
+        These boundaries are absolute/local seconds for the current media file.
+        STT wav chunks must never cross these cuts.
+        """
+        try:
+            start = float(start or 0.0)
+            end = float(end or 0.0)
+        except Exception:
+            return ()
+
+        cuts = []
+        for item in list(getattr(self, "hard_cut_boundaries", []) or []):
+            try:
+                if isinstance(item, dict):
+                    sec = float(item.get("timeline_sec", item.get("time", item.get("start", 0.0))) or 0.0)
+                else:
+                    sec = float(item)
+            except Exception:
+                continue
+
+            if start < sec < end:
+                cuts.append(round(sec, 3))
+
+        return tuple(sorted(set(cuts)))
+
+    def _chunk_item_span(self, item):
+        """Best-effort grouped chunk span reader.
+
+        Supports dict chunks and tuple/list chunks. This is intentionally
+        defensive because grouped chunk formats differ between direct ffmpeg,
+        VAD, and force split paths.
+        """
+        if isinstance(item, dict):
+            for sk, ek in (("start", "end"), ("start_sec", "end_sec"), ("s", "e")):
+                if sk in item and ek in item:
+                    try:
+                        return float(item[sk]), float(item[ek]), sk, ek, None
+                    except Exception:
+                        pass
+            if "offset" in item and "duration" in item:
+                try:
+                    s = float(item["offset"])
+                    return s, s + float(item["duration"]), "offset", "duration", "duration"
+                except Exception:
+                    pass
+
+        if isinstance(item, (list, tuple)):
+            numeric = []
+            for idx, val in enumerate(item):
+                try:
+                    numeric.append((idx, float(val)))
+                except Exception:
+                    continue
+
+            # Common forms: (start, end), (idx, start, end), (path, start, end)
+            for a, b in ((0, 1), (1, 2)):
+                if len(item) > b:
+                    try:
+                        s = float(item[a])
+                        e = float(item[b])
+                        if e > s:
+                            return s, e, a, b, None
+                    except Exception:
+                        pass
+
+            if len(numeric) >= 2:
+                a, s = numeric[0]
+                b, e = numeric[1]
+                if e > s:
+                    return s, e, a, b, None
+
+        return None
+
+    def _replace_chunk_item_span(self, item, start: float, end: float, sk, ek, mode):
+        if isinstance(item, dict):
+            row = dict(item)
+            if mode == "duration":
+                row[sk] = round(start, 3)
+                row[ek] = round(max(0.0, end - start), 3)
+            else:
+                row[sk] = round(start, 3)
+                row[ek] = round(end, 3)
+            return row
+
+        if isinstance(item, tuple):
+            row = list(item)
+            row[sk] = round(start, 3)
+            row[ek] = round(end, 3)
+            return tuple(row)
+
+        if isinstance(item, list):
+            row = list(item)
+            row[sk] = round(start, 3)
+            row[ek] = round(end, 3)
+            return row
+
+        return item
+
+    def _split_grouped_chunks_at_hard_cuts(self, grouped, span_start: float | None = None, span_end: float | None = None):
+        """Split STT wav extraction chunks at hard visual cuts.
+
+        This is the STT-input-level hard boundary enforcement.
+        Final subtitle splitting remains as a second safety layer.
+        """
+        items = list(grouped or [])
+        if not items:
+            return grouped
+
+        detected_spans = []
+        for item in items:
+            span = self._chunk_item_span(item)
+            if span is not None:
+                detected_spans.append(span)
+
+        if not detected_spans:
+            return grouped
+
+        if span_start is None:
+            span_start = min(s for s, _, _, _, _ in detected_spans)
+        if span_end is None:
+            span_end = max(e for _, e, _, _, _ in detected_spans)
+
+        hard_cuts = self._hard_cut_boundaries_for_span(float(span_start), float(span_end))
+        if not hard_cuts:
+            return grouped
+
+        out = []
+        changed = False
+
+        for item in items:
+            span = self._chunk_item_span(item)
+            if span is None:
+                out.append(item)
+                continue
+
+            start, end, sk, ek, mode = span
+            inner = [c for c in hard_cuts if start < c < end]
+            if not inner:
+                out.append(item)
+                continue
+
+            points = [start] + inner + [end]
+            for idx in range(len(points) - 1):
+                a = points[idx]
+                b = points[idx + 1]
+                if b <= a or (b - a) < 0.05:
+                    continue
+                out.append(self._replace_chunk_item_span(item, a, b, sk, ek, mode))
+            changed = True
+
+        if changed:
+            try:
+                _runtime_get_logger().log(
+                    f"  ✂️ [컷 경계] STT 오디오 청크 {len(items)}개 → {len(out)}개 hard split "
+                    f"(경계 {len(hard_cuts)}개)"
+                )
+            except Exception:
+                pass
+
+        return out
+
+
+    def _can_direct_extract_stt_chunks(
+        self,
+        settings: dict,
+        *,
+        audio_ai: str,
+        vad_model: str,
+        vad_pre_split_enabled: bool,
+        vad_post_align_enabled: bool,
+        span_sec: float,
+        is_partial: bool,
+    ) -> bool:
+        if not bool(settings.get("direct_ffmpeg_chunk_extract", True)):
+            return False
+        if not self._can_fuse_ffmpeg_preprocess(audio_ai):
+            return False
+        if vad_pre_split_enabled:
+            return False
+        if str(vad_model or "none").lower() != "none" and vad_post_align_enabled:
+            return False
+        try:
+            if int(settings.get("max_speakers", 1) or 1) > 1:
+                return False
+        except Exception:
+            return False
+        if span_sec <= 0:
+            return False
+        min_sec = float(settings.get("direct_ffmpeg_chunk_min_sec", 600.0) or 0.0)
+        return bool(is_partial or span_sec >= max(0.0, min_sec))
+
+    def _cleaned_audio_cache_valid(self, cleaned_wav: str, meta_path: str, cache_config: dict) -> bool:
+        if not os.path.exists(cleaned_wav) or os.path.getsize(cleaned_wav) <= 1024 * 100:
+            return False
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception:
+            return False
+        return payload == cache_config
+
+    def _write_cleaned_audio_cache_meta(self, meta_path: str, cache_config: dict) -> None:
+        try:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(cache_config, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _vad_cache_config(self, settings: dict) -> dict:
+        effective_s = apply_review_vad_settings(settings)
+        return {
+            "version": _VAD_CACHE_VERSION,
+            "review_vad_config": review_vad_config(settings),
+            "vad_threshold": float(effective_s.get("vad_threshold", 0.5)),
+            "vad_min_speech": float(effective_s.get("vad_min_speech", 0.25)),
+            "vad_min_silence": float(effective_s.get("vad_min_silence", 2.0)),
+            "vad_speech_pad": float(effective_s.get("vad_speech_pad", 0.2)),
+            "vad_window_size": int(effective_s.get("vad_window_size", 512) or 512),
+        }
+
+    # 💡 파라미터에 target_start_sec와 target_end_sec 추가
+    # 💡 1. 메인 파이프라인 (불필요한 중복 로직 싹 걷어내고 아주 깔끔해졌습니다)
+    # 💡 [STEP 1] 메인 파이프라인 (is_single_segment 파라미터 추가)

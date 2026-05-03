@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-import config
+from core.runtime import config
 
 
 def _quality_model() -> str:
@@ -13,6 +13,14 @@ def _quality_model() -> str:
 
 def _fast_model() -> str:
     return "mlx-community/whisper-large-v3-turbo" if config.IS_MAC else "large-v3-turbo"
+
+
+def _secondary_model() -> str:
+    return (
+        "youngouk/ghost613-turbo-korean-4bit-mlx"
+        if config.IS_MAC else
+        "ghost613/faster-whisper-large-v3-turbo-korean"
+    )
 
 
 def _decoder_settings(
@@ -47,6 +55,39 @@ def _pipeline_mapping(audio_preset: str, audio_ai: str, vad: str, ff_chunk: int,
     }
 
 
+def _roughcut_llm_mapping(model_name: str) -> dict:
+    enabled = bool(model_name and "사용 안함" not in model_name)
+    return {
+        "roughcut_llm_enabled": enabled,
+        "roughcut_llm_use_override": enabled,
+        "roughcut_llm_provider": "ollama" if enabled else "none",
+        "roughcut_llm_model": model_name if enabled else "사용 안함",
+    }
+
+
+def _recommended_stack_mapping(
+    *,
+    cut_level: str,
+    preprocess_model: str,
+    audio_model: str,
+    stt1_model: str,
+    stt2_model: str,
+    vad_model: str,
+    subtitle_llm: str,
+    roughcut_llm_model: str,
+) -> dict:
+    return {
+        "audio_preset_recommended_cut_boundary": cut_level,
+        "audio_preset_recommended_preprocess_model": preprocess_model,
+        "audio_preset_recommended_audio_model": audio_model,
+        "audio_preset_recommended_stt1": stt1_model,
+        "audio_preset_recommended_stt2": stt2_model,
+        "audio_preset_recommended_vad": vad_model,
+        "audio_preset_recommended_subtitle_llm": subtitle_llm,
+        "audio_preset_recommended_roughcut_llm": roughcut_llm_model,
+    }
+
+
 def _cut_boundary_mapping(level: str) -> dict:
     level = str(level or "medium").strip().lower()
     if level == "high":
@@ -76,6 +117,8 @@ def _cut_boundary_mapping(level: str) -> dict:
 
 
 def load_stt_quality_presets() -> dict[str, dict]:
+    quality_model = _quality_model()
+    secondary_model = _secondary_model()
     return {
         "fast": {
             "label": "빠른 인식",
@@ -83,6 +126,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
             "settings": {
                 "selected_whisper_model": _fast_model(),
                 "selected_model": "사용 안함 (Whisper 단독 진행)",
+                "stt_candidate_scoring_enabled": False,
                 **_pipeline_mapping("실내-마이크무", "none", "none", 30, 0.5, 4),
                 **_cut_boundary_mapping("off"),
                 **_decoder_settings(0.86, -1.0, 1.6, 0.0, 3, 1.0),
@@ -94,6 +138,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
             "settings": {
                 "selected_whisper_model": _quality_model(),
                 "selected_model": "exaone3.5:2.4b",
+                "stt_candidate_scoring_enabled": False,
                 **_pipeline_mapping("실내-마이크유", "deepfilter", "silero", 25, 1.5, 3),
                 **_cut_boundary_mapping("low"),
                 **_decoder_settings(0.58, -1.8, 2.2, 0.4, 5, 1.1),
@@ -103,10 +148,25 @@ def load_stt_quality_presets() -> dict[str, dict]:
             "label": "정밀 인식",
             "description": "정확도 우선, 강한 전처리/음성필터/VAD 조합",
             "settings": {
-                "selected_whisper_model": _quality_model(),
+                "selected_whisper_model": quality_model,
                 "selected_model": "gemma4:e4b",
+                "stt_candidate_scoring_enabled": True,
+                "selected_whisper_model_secondary": secondary_model,
+                "stt_ensemble_enabled": True,
+                "stt_ensemble_llm_judge_enabled": False,
                 **_pipeline_mapping("실외-마이크유", "clearvoice", "ten_vad", 20, 3.0, 2),
                 **_cut_boundary_mapping("medium"),
+                **_roughcut_llm_mapping("exaone3.5:7.8b"),
+                **_recommended_stack_mapping(
+                    cut_level="medium",
+                    preprocess_model="ffmpeg-outdoor-strong",
+                    audio_model="clearvoice",
+                    stt1_model=quality_model,
+                    stt2_model=secondary_model,
+                    vad_model="ten_vad",
+                    subtitle_llm="gemma4:e4b",
+                    roughcut_llm_model="exaone3.5:7.8b",
+                ),
                 **_decoder_settings(0.42, -2.6, 2.4, 0.6, 8, 1.35),
             },
         },

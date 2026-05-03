@@ -11,7 +11,7 @@ import os
 from datetime import datetime
 from typing import Any
 
-import config
+from core.runtime import config
 from core.project.project_context import build_editor_state
 
 PROJECTS_DIR = os.path.join(config.BASE_DIR, 'projects')
@@ -110,12 +110,36 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         media_files = [os.path.abspath(editor.media_path)]
     mode = 'multiclip' if len(media_files) > 1 else 'single'
     project_path = _auto_project_path(owner, media_files, mode)
+    stt_preview_segments = list(getattr(editor, "_live_stt_preview_segments", []) or []) if editor is not None else []
+    provisional_cut_boundaries = []
+    voice_activity_segments = []
+    if editor is not None:
+        canvas = getattr(getattr(editor, "timeline", None), "canvas", None)
+        if canvas is not None:
+            try:
+                if hasattr(canvas, "_refresh_voice_activity_segments"):
+                    canvas._refresh_voice_activity_segments()
+                voice_activity_segments = list(getattr(canvas, "voice_activity_segments", []) or [])
+                provisional_cut_boundaries = list(getattr(canvas, "scan_boundary_times", []) or [])
+            except Exception:
+                voice_activity_segments = []
+                provisional_cut_boundaries = []
+        if not provisional_cut_boundaries:
+            provisional_cut_boundaries = list(getattr(editor, "_auto_cut_boundary_scan_lines", []) or [])
+
+    cut_boundaries = [
+        row if isinstance(row, dict) else {"timeline_sec": row, "time": row, "status": "verified"}
+        for row in list(getattr(owner, '_project_boundary_times', []) or [])
+    ]
     editor_state = build_editor_state(
         mode=mode,
         media_files=media_files,
         segments=segments or [],
         workspace=_ui_state(editor) if editor is not None else {},
         clip_boundaries=list(getattr(owner, '_multiclip_boundaries', []) or []),
+        stt_preview_segments=stt_preview_segments,
+        cut_boundaries=cut_boundaries,
+        provisional_cut_boundaries=provisional_cut_boundaries,
     )
     payload = {
         'version': PROJECT_SCHEMA_VERSION,
@@ -135,6 +159,22 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
             'sorted_files': list(getattr(owner, '_multiclip_files', []) or []),
         },
     }
+    if voice_activity_segments:
+        payload.setdefault("analysis", {})
+        payload["analysis"]["voice_activity_schema"] = "subtitle_detection.v1"
+        payload["analysis"]["voice_activity_segments"] = voice_activity_segments
+        payload["editor_state"].setdefault("analysis", {})
+        payload["editor_state"]["analysis"]["voice_activity_segments"] = voice_activity_segments
+    stt_tracks = (editor_state.get("stt", {}) or {}).get("candidate_tracks")
+    if isinstance(stt_tracks, dict) and stt_tracks:
+        payload.setdefault("analysis", {})
+        payload["analysis"]["stt_candidate_schema"] = "stt_candidate_tracks.v1"
+        payload["analysis"]["stt_candidate_tracks"] = stt_tracks
+        payload["analysis"]["stt_candidate_counts"] = {
+            str(source): len(rows)
+            for source, rows in stt_tracks.items()
+            if isinstance(rows, list)
+        }
     try:
         if os.path.exists(project_path):
             with open(project_path, 'r', encoding='utf-8') as f:

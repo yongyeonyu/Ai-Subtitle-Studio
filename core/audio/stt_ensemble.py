@@ -7,8 +7,14 @@ import re
 from difflib import SequenceMatcher
 from typing import Any
 
+from core.audio.stt_candidate_scorer import score_stt_candidate, stt_score_label, stt_score_to_color
+
 
 _KO_RE = re.compile(r"[가-힣]")
+_KNOWN_HALLUCINATION_RE = re.compile(
+    r"(시청해주셔서|구독|좋아요|알림설정|자막제공|감사합니다|안녕히계세요)",
+    re.IGNORECASE,
+)
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -24,6 +30,22 @@ def normalize_text(text: str) -> str:
 
 def compact_text(text: str) -> str:
     return re.sub(r"[\s\W_]+", "", str(text or ""), flags=re.UNICODE).lower()
+
+
+def _repeat_risk(text: str) -> bool:
+    compact = compact_text(text)
+    if len(compact) < 6:
+        return False
+    if _KNOWN_HALLUCINATION_RE.search(str(text or "")):
+        return True
+    if re.search(r"(.{2,6})\1{2,}", compact):
+        return True
+    tokens = [tok for tok in re.split(r"\s+", normalize_text(text)) if tok]
+    if len(tokens) >= 5:
+        unique_ratio = len(set(tokens)) / max(1, len(tokens))
+        if unique_ratio <= 0.45:
+            return True
+    return False
 
 
 def text_similarity(left: str, right: str) -> float:
@@ -86,6 +108,35 @@ def candidate_score(segment: dict) -> float:
     )
 
 
+def _normalize_score_100(value: Any) -> float | None:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if score <= 1.0:
+        score *= 100.0
+    return max(0.0, min(100.0, score))
+
+
+def _candidate_score_100(segment: dict) -> float:
+    for key in ("stt_score", "score", "confidence", "probability", "avg_confidence"):
+        score = _normalize_score_100(segment.get(key))
+        if score is not None:
+            return score
+    return float(score_stt_candidate(segment).get("score", 0.0) or 0.0)
+
+
+def _candidate_usable(segment: dict) -> bool:
+    score = _candidate_score_100(segment)
+    explicit_score = any(segment.get(key) is not None for key in ("stt_score", "score", "confidence", "probability", "avg_confidence"))
+    if explicit_score and score < 24.0:
+        return False
+    flags = set(str(flag) for flag in (segment.get("stt_score_flags") or []))
+    if flags.intersection({"known_hallucination_phrase", "repetition_hallucination_risk", "severe_hallucination_risk"}) and score < 68.0:
+        return False
+    return bool(normalize_text(segment.get("text", "")))
+
+
 def _word_text(word: dict) -> str:
     return normalize_text(word.get("word") or word.get("text") or "")
 
@@ -112,6 +163,8 @@ def _segment_quality_flags(segment: dict) -> set[str]:
     duration = max(0.05, _as_float(segment.get("end")) - _as_float(segment.get("start")))
     if text and len(text) / duration > 20.0:
         flags.add("too_fast_text")
+    if _repeat_risk(segment.get("text", "")):
+        flags.add("repeated_or_known_hallucination")
     if candidate_score(segment) < 0.45:
         flags.add("low_candidate_score")
     return flags
@@ -119,7 +172,18 @@ def _segment_quality_flags(segment: dict) -> set[str]:
 
 def _segment_is_low_confidence(segment: dict) -> bool:
     flags = _segment_quality_flags(segment)
-    return bool(flags.intersection({"low_avg_logprob", "high_no_speech_prob", "high_compression_ratio", "too_fast_text"})) or len(flags) >= 2
+    return bool(flags.intersection({"low_avg_logprob", "high_no_speech_prob", "high_compression_ratio", "too_fast_text", "repeated_or_known_hallucination"})) or len(flags) >= 2
+
+
+def _secondary_is_safe_for_promotion(segment: dict) -> bool:
+    flags = _segment_quality_flags(segment)
+    if "repeated_or_known_hallucination" in flags:
+        return False
+    if "high_no_speech_prob" in flags or "high_compression_ratio" in flags:
+        return False
+    explicit_score = any(segment.get(key) is not None for key in ("stt_score", "score", "confidence", "probability", "avg_confidence"))
+    threshold = 62.0 if explicit_score else 8.0
+    return _candidate_score_100(segment) >= threshold
 
 
 def _protected_word(text: str) -> bool:
@@ -192,10 +256,8 @@ def _word_score(word: dict, parent: dict, *, source: str, parent_low_confidence:
     score = _word_confidence(word, 0.45 if word.get("synthetic") else 0.55)
     parent_score = max(-1.0, min(2.5, candidate_score(parent))) / 3.5 + 0.3
     score += parent_score * 0.25
-    if source == "STT1" and not parent_low_confidence:
-        score += 0.08
-    if source == "STT2" and parent_low_confidence:
-        score += 0.10
+    if not parent_low_confidence:
+        score += 0.04
     if word.get("synthetic"):
         score -= 0.12
     return score
@@ -299,12 +361,23 @@ def _word_level_rover(primary: dict, secondary: dict) -> tuple[str, list[dict], 
 
 
 def _candidate_payload(source: str, segment: dict) -> dict:
+    score = round(_candidate_score_100(segment), 2)
+    score_flags = list(segment.get("stt_score_flags") or [])
+    if not score_flags:
+        score_flags = sorted(_segment_quality_flags(segment))
     return {
         "source": source,
         "text": normalize_text(segment.get("text", "")),
         "start": round(_as_float(segment.get("start")), 3),
         "end": round(_as_float(segment.get("end")), 3),
-        "score": round(candidate_score(segment), 4),
+        "score": score,
+        "stt_score": score,
+        "score_color": str(segment.get("score_color") or segment.get("stt_score_color") or stt_score_to_color(score)),
+        "stt_score_label": str(segment.get("stt_score_label") or stt_score_label(score)),
+        "stt_score_flags": score_flags,
+        "stt_score_components": dict(segment.get("stt_score_components") or {}),
+        "stt_recheck_applied": bool(segment.get("stt_recheck_applied", False)),
+        "stt_recheck_original_scores": dict(segment.get("stt_recheck_original_scores") or {}),
         "avg_logprob": segment.get("avg_logprob"),
         "no_speech_prob": segment.get("no_speech_prob"),
         "compression_ratio": segment.get("compression_ratio"),
@@ -312,7 +385,7 @@ def _candidate_payload(source: str, segment: dict) -> dict:
 
 
 def _pick_best(candidates: list[tuple[str, dict]]) -> tuple[str, dict]:
-    return max(candidates, key=lambda item: candidate_score(item[1]))
+    return max(candidates, key=lambda item: _candidate_score_100(item[1]))
 
 
 def _merge_group(candidates: list[tuple[str, dict]]) -> dict:
@@ -323,6 +396,10 @@ def _merge_group(candidates: list[tuple[str, dict]]) -> dict:
     merged["end"] = max(_as_float(seg.get("end")) for seg in group_segments)
     merged["text"] = normalize_text(selected.get("text", ""))
     merged["stt_ensemble_source"] = source
+    selected_score = _candidate_score_100(selected)
+    merged["score"] = round(selected_score, 2)
+    merged["stt_score"] = round(selected_score, 2)
+    merged["score_color"] = str(selected.get("score_color") or selected.get("stt_score_color") or stt_score_to_color(selected_score))
     merged["stt_candidates"] = [_candidate_payload(src, seg) for src, seg in candidates]
     merged["stt_ensemble_similarity"] = (
         text_similarity(candidates[0][1].get("text", ""), candidates[1][1].get("text", ""))
@@ -338,8 +415,8 @@ def _merge_primary_group(primary_item: tuple[str, dict], candidates: list[tuple[
     rover_meta: dict[str, Any] = {"enabled": False, "replaced": 0, "aligned": 0}
     if len(candidates) >= 2:
         secondary = candidates[1][1]
-        primary_score = candidate_score(primary)
-        secondary_score = candidate_score(secondary)
+        primary_score = _candidate_score_100(primary)
+        secondary_score = _candidate_score_100(secondary)
         similarity = text_similarity(primary.get("text", ""), secondary.get("text", ""))
         primary_low = _segment_is_low_confidence(primary)
         secondary_low = _segment_is_low_confidence(secondary)
@@ -347,7 +424,9 @@ def _merge_primary_group(primary_item: tuple[str, dict], candidates: list[tuple[
         secondary_words = _words_from_segment(secondary)
         has_real_word_timestamps = bool(primary.get("words")) and bool(secondary.get("words"))
         protected_mismatch = _has_protected_primary_mismatch(primary, secondary)
-        if has_real_word_timestamps and primary_words and secondary_words and similarity >= 0.20:
+        secondary_safe = _secondary_is_safe_for_promotion(secondary)
+        promotion_margin = 4.0 if primary_low else (5.0 if primary_score < 70.0 else 8.0)
+        if secondary_safe and has_real_word_timestamps and primary_words and secondary_words and similarity >= 0.20:
             rover_text, rover_words, rover_meta = _word_level_rover(primary, secondary)
             if rover_meta.get("enabled") and rover_meta.get("replaced", 0) > 0:
                 selected_source = "ROVER"
@@ -356,21 +435,26 @@ def _merge_primary_group(primary_item: tuple[str, dict], candidates: list[tuple[
                 selected_segment["words"] = rover_words
         if (
             selected_source == "STT1"
-            and primary_low
-            and not secondary_low
+            and secondary_safe
             and not protected_mismatch
-            and secondary_score >= primary_score + 0.22
+            and secondary_score >= primary_score + promotion_margin
             and similarity >= 0.12
-            and (not primary_words or not secondary_words or similarity >= 0.42)
+            and (primary_low or not primary_words or not secondary_words or similarity >= 0.42)
         ):
             selected_source = "STT2"
             selected_segment = secondary
 
     merged = dict(selected_segment)
+    if selected_source == "STT1" and selected_segment.get("stt_recheck_applied"):
+        selected_source = "RECHECK"
     merged["start"] = round(_as_float(selected_segment.get("start")), 3)
     merged["end"] = round(_as_float(selected_segment.get("end")), 3)
     merged["text"] = normalize_text(selected_segment.get("text", ""))
     merged["stt_ensemble_source"] = selected_source
+    selected_score = _candidate_score_100(selected_segment)
+    merged["score"] = round(selected_score, 2)
+    merged["stt_score"] = round(selected_score, 2)
+    merged["score_color"] = str(selected_segment.get("score_color") or selected_segment.get("stt_score_color") or stt_score_to_color(selected_score))
     merged["stt_ensemble_primary_region"] = True
     merged["stt_ensemble_primary_locked"] = selected_source == "STT1"
     if selected_source != "STT1":
@@ -428,7 +512,7 @@ def _is_safe_secondary_insert(secondary: dict, primary_items: list[tuple[str, di
     overlap = _primary_overlap_seconds(secondary, primary_items)
     if overlap > min(0.18, s_dur * 0.12):
         return False
-    if candidate_score(secondary) < 0.15:
+    if not _secondary_is_safe_for_promotion(secondary):
         return False
     return not _secondary_has_primary_coverage(secondary, primary_items)
 
@@ -508,8 +592,8 @@ def merge_stt_outputs(primary: list[dict], secondary: list[dict]) -> list[dict]:
     low-confidence STT1 words with stronger STT2 words. STT2-only regions that
     STT1 appears to have missed are still inserted as additional subtitles.
     """
-    primary_items = [("STT1", dict(seg)) for seg in primary if normalize_text(seg.get("text", ""))]
-    secondary_items = [("STT2", dict(seg)) for seg in secondary if normalize_text(seg.get("text", ""))]
+    primary_items = [("STT1", dict(seg)) for seg in primary if _candidate_usable(seg)]
+    secondary_items = [("STT2", dict(seg)) for seg in secondary if _candidate_usable(seg)]
     if not primary_items:
         return [_merge_group([item]) for item in secondary_items]
     if not secondary_items:

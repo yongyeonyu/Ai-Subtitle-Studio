@@ -10,8 +10,8 @@ import threading
 import traceback
 import time
 
-import config
-from logger import get_logger
+from core.runtime import config
+from core.runtime.logger import get_logger
 from core.settings import load_settings, get_model_key
 from core.time_history import get_expected_time
 from core.media_info import probe_media_many

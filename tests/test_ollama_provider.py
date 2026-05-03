@@ -19,6 +19,7 @@ class _Logger:
 class OllamaWarmupTest(unittest.TestCase):
     def setUp(self):
         ollama_provider._WARMED.clear()
+        ollama_provider._PROBE_OK_UNTIL.clear()
 
     def test_warmup_timeout_is_skipped_without_failure_log(self):
         logger = _Logger()
@@ -165,6 +166,71 @@ class OllamaWarmupTest(unittest.TestCase):
 
         self.assertEqual(urlopen_mock.call_count, 3)
         self.assertEqual(sleep_mock.call_count, 2)
+
+    def test_resolve_ollama_model_for_request_falls_back_after_model_load_failure(self):
+        logger = _Logger()
+
+        first_error = urllib.error.HTTPError(
+            url="http://localhost:11434/api/generate",
+            code=500,
+            msg="Internal Server Error",
+            hdrs=None,
+            fp=mock.Mock(read=mock.Mock(return_value=b'{"error":"unable to load model: broken-blob"}')),
+        )
+        success_payload = mock.Mock()
+        success_payload.__enter__ = mock.Mock(return_value=success_payload)
+        success_payload.__exit__ = mock.Mock(return_value=False)
+        success_payload.read.return_value = b'{"response":"ok"}'
+
+        with mock.patch("core.llm.ollama_provider.ensure_ollama_server", return_value=True), \
+             mock.patch("core.llm.ollama_provider._get_ollama_installed_models", return_value=["gemma4:e4b", "exaone3.5:7.8b"]), \
+             mock.patch(
+                 "core.llm.ollama_provider.urllib.request.urlopen",
+                 side_effect=[first_error, success_payload],
+             ):
+            resolved = ollama_provider.resolve_ollama_model_for_request("gemma4:e4b", logger=logger, context="자막 LLM", timeout=1.0)
+
+        self.assertEqual(resolved, "exaone3.5:7.8b")
+        joined = "\n".join(logger.lines)
+        self.assertIn("모델 로드 실패", joined)
+        self.assertIn("자동 대체", joined)
+
+    def test_resolve_ollama_model_for_request_skips_probe_when_recently_confirmed(self):
+        logger = _Logger()
+        ollama_provider._mark_model_probe_ok("exaone3.5:7.8b", ttl_sec=30.0)
+
+        with mock.patch("core.llm.ollama_provider.ensure_ollama_server") as ensure_mock, \
+             mock.patch("core.llm.ollama_provider.urllib.request.urlopen") as urlopen_mock:
+            resolved = ollama_provider.resolve_ollama_model_for_request("exaone3.5:7.8b", logger=logger, context="자막 LLM", timeout=1.0)
+
+        self.assertEqual(resolved, "exaone3.5:7.8b")
+        ensure_mock.assert_not_called()
+        urlopen_mock.assert_not_called()
+        self.assertEqual(logger.lines, [])
+
+    def test_resolve_ollama_model_for_request_can_disable_fallback(self):
+        logger = _Logger()
+        first_error = urllib.error.HTTPError(
+            url="http://localhost:11434/api/generate",
+            code=500,
+            msg="Internal Server Error",
+            hdrs=None,
+            fp=mock.Mock(read=mock.Mock(return_value=b'{"error":"unable to load model: broken-blob"}')),
+        )
+
+        with mock.patch("core.llm.ollama_provider.ensure_ollama_server", return_value=True), \
+             mock.patch("core.llm.ollama_provider.urllib.request.urlopen", side_effect=[first_error]) as urlopen_mock:
+            resolved = ollama_provider.resolve_ollama_model_for_request(
+                "gemma4:e4b",
+                logger=logger,
+                context="자막 LLM",
+                timeout=1.0,
+                allow_fallback=False,
+            )
+
+        self.assertEqual(resolved, "gemma4:e4b")
+        self.assertEqual(urlopen_mock.call_count, 1)
+        self.assertNotIn("자동 대체", "\n".join(logger.lines))
 
 
 if __name__ == "__main__":

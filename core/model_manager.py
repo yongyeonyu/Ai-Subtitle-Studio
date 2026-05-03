@@ -13,9 +13,9 @@ import shutil
 from copy import deepcopy
 from pathlib import Path
 
-import config
+from core.runtime import config
 from core.llm.secure_keys import get_api_key
-from logger import get_logger
+from core.runtime.logger import get_logger
 
 REGISTRY_PATH = Path(config.DATASET_DIR) / "model_registry.json"
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]

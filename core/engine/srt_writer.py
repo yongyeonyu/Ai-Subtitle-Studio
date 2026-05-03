@@ -7,9 +7,9 @@ import json
 import os
 from datetime import datetime
 
-import config
+from core.runtime import config
 from core.utils import seconds_to_srt_time
-from logger import get_logger
+from core.runtime.logger import get_logger
 
 
 def save_srt(segments: list[dict], srt_path: str, apply_offset: bool = True, adjust_timing_func=None):

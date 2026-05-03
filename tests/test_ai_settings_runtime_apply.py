@@ -82,12 +82,12 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             window._unified_dashboard = True
             window._build_home_content()
             dialog = SettingsDialog({}, window)
-            self.assertEqual([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())], ["에디터 LLM", "러프컷 LLM", "AI"])
+            self.assertEqual([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())], ["자막 검수", "중분류", "모델/API", "자동 설정"])
             label_texts = [label.text() for label in dialog.findChildren(QLabel)]
             self.assertFalse(any("자막 정확도 프리셋" in text for text in label_texts))
             self.assertFalse(any("오디오 프리셋" in text for text in label_texts))
-            self.assertTrue(any("자막 품질 검사:" in text for text in label_texts))
-            self.assertTrue(any("텍스트 LoRA 보조:" in text for text in label_texts))
+            self.assertTrue(any("LoRA 교정:" in text for text in label_texts))
+            self.assertTrue(any("적용 데이터:" in text for text in label_texts))
             widget_texts = []
             for widget in dialog.findChildren(QWidget):
                 text_getter = getattr(widget, "text", None)

@@ -8,15 +8,33 @@ Windows 전용 Whisper 백엔드 (faster-whisper)
 """
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 from core.platform_compat import hidden_subprocess_kwargs
-from logger import get_logger
+from core.runtime.logger import get_logger
 
 
-def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple: str, log_label: str = "STT"):
+def _temperature_values(value: str) -> list[float]:
+    vals = []
+    for part in re.findall(r"-?\d+(?:\.\d+)?", str(value or "")):
+        try:
+            vals.append(float(part))
+        except Exception:
+            pass
+    return vals or [0.0]
+
+
+def run_whisper(
+    chunk_paths: list,
+    model: str,
+    language: str,
+    temperature_tuple: str,
+    log_label: str = "STT",
+    options: dict | None = None,
+):
     """
     faster-whisper를 별도 프로세스로 실행.
     media_processor.py 호환: Popen-like 객체 반환 (stdout.readline() 가능)
@@ -34,7 +52,10 @@ def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple:
         "model": fw_model,
         "fallback_model": _fallback_model_name(fw_model),
         "language": language,
+        "temperature_values": _temperature_values(temperature_tuple),
     }
+    if options:
+        task.update(dict(options))
 
     label = (log_label or "STT").strip() or "STT"
     get_logger().log(f"  🔧 [{label}] faster-whisper subprocess 시작: {fw_model}")

@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt, QPoint
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap, QTextCursor
 from PyQt6.QtWidgets import QMenu
 
-import config
+from core.runtime import config
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_helpers import get_sub_block_indices
 

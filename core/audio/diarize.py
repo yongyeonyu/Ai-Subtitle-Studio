@@ -10,7 +10,7 @@ import time
 import json
 import threading
 import numpy as np
-from logger import get_logger
+from core.runtime.logger import get_logger
 
 def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2) -> list[dict]:
     cache_file = f"{os.path.splitext(file_path)[0]}_speaker_cache.json"

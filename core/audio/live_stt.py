@@ -20,10 +20,10 @@ import threading
 import time
 from dataclasses import dataclass
 
-import config
+from core.runtime import config
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.settings import load_settings
-from logger import get_logger
+from core.runtime.logger import get_logger
 
 
 _LIVE_MLX_PROC = None

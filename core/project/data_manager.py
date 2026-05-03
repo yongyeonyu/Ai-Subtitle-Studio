@@ -22,8 +22,8 @@ import json
 import re
 import shutil
 
-import config
-from logger import get_logger
+from core.runtime import config
+from core.runtime.logger import get_logger
 
 # 수정 — 설정 경로를 앱 공통 경로(config.DATASET_DIR)로 통일
 DATASET_DIR = config.DATASET_DIR
@@ -128,12 +128,18 @@ def add_wrong_answer_memory_item(phrase: str, **kwargs) -> dict:
 
 # ── subtitle_rule ─────────────────────────────────────────────────────────
 def load_subtitle_rules() -> dict:
-    if os.path.exists(SUBTITLE_RULE_FILE):
-        try:
-            with open(SUBTITLE_RULE_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            pass
+    try:
+        from core.utils import load_subtitle_rules as _load_rules
+
+        return dict(_load_rules() or {})
+    except Exception:
+        if os.path.exists(SUBTITLE_RULE_FILE):
+            try:
+                with open(SUBTITLE_RULE_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return data if isinstance(data, dict) else {}
+            except Exception:
+                pass
     return {}
 
 def update_split_rule(subtitle_rules: dict, word: str, add: bool = True) -> dict:

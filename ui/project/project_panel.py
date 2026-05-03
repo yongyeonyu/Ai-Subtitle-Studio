@@ -8,7 +8,7 @@ import os
 
 from PyQt6.QtWidgets import QFileDialog, QDialog, QMessageBox, QInputDialog
 
-from logger import get_logger
+from core.runtime.logger import get_logger
 from core.path_manager import get_last_folder
 from core.project.project_manager import (
     PROJECTS_DIR,
@@ -118,9 +118,10 @@ class ProjectUIMixin:
                 editor._redraw_timeline()
             provisional_boundaries = project_cut_boundary_provisional_segments(project)
             if provisional_boundaries and hasattr(editor, "timeline") and hasattr(editor.timeline, "set_scan_boundary_times"):
-                editor.timeline.set_scan_boundary_times(
-                    [float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0) for row in provisional_boundaries]
-                )
+                if hasattr(editor, "_set_auto_cut_boundary_scan_lines"):
+                    editor._set_auto_cut_boundary_scan_lines(provisional_boundaries)
+                else:
+                    editor.timeline.set_scan_boundary_times(provisional_boundaries)
             voice_activity = project_voice_activity_segments(project)
             if voice_activity and hasattr(editor, "set_voice_activity_segments"):
                 editor.set_voice_activity_segments(voice_activity)
@@ -237,8 +238,22 @@ class ProjectUIMixin:
 
         editor = getattr(self, "_editor_widget", None)
         stt_preview_segments = []
+        voice_activity_segments = []
+        provisional_cut_boundaries = []
         if editor is not None:
             stt_preview_segments = list(getattr(editor, "_live_stt_preview_segments", []) or [])
+            canvas = getattr(getattr(editor, "timeline", None), "canvas", None)
+            if canvas is not None:
+                try:
+                    if hasattr(canvas, "_refresh_voice_activity_segments"):
+                        canvas._refresh_voice_activity_segments()
+                    voice_activity_segments = list(getattr(canvas, "voice_activity_segments", []) or [])
+                    provisional_cut_boundaries = list(getattr(canvas, "scan_boundary_times", []) or [])
+                except Exception:
+                    voice_activity_segments = []
+                    provisional_cut_boundaries = []
+            if not provisional_cut_boundaries:
+                provisional_cut_boundaries = list(getattr(editor, "_auto_cut_boundary_scan_lines", []) or [])
 
         save_project(
             filepath,
@@ -246,6 +261,8 @@ class ProjectUIMixin:
             user_settings=self._load_local_settings(),
             active_work_mode=normalize_work_mode(getattr(self, "_current_work_mode", EDITOR_MODE)),
             stt_preview_segments=stt_preview_segments,
+            voice_activity_segments=voice_activity_segments,
+            provisional_cut_boundaries=provisional_cut_boundaries,
         )
         get_logger().log("💾 프로젝트 저장 완료")
 

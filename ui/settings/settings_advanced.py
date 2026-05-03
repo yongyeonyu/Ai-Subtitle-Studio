@@ -11,11 +11,29 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt, QTimer
-import config
+from core.runtime import config
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, CUSTOM_DEFAULTS_FILE, _create_bottom_buttons
 from ui.style import button_style, label_style, settings_dialog_stylesheet
 from core.audio import audio_presets as _audio_presets
+from core.audio.audio_presets import apply_audio_preset
+
+
+def _resolve_audio_preset_combo_data(settings: dict | None) -> str:
+    resolver = getattr(_audio_presets, "resolve_audio_preset_combo_data", None)
+    if callable(resolver):
+        return str(resolver(settings))
+
+    data = dict(settings or {})
+    preset_name = str(data.get("audio_preset", "") or "").strip()
+    if preset_name:
+        return preset_name
+
+    default_apply_data = dict(getattr(_audio_presets, "DEFAULT_AUDIO_APPLY_DATA", {}) or {})
+    if default_apply_data and all(data.get(key) == value for key, value in default_apply_data.items()):
+        return "__default__"
+    return ""
+
 
 class AdvancedSettingsDialog(QDialog):
     def __init__(self, settings: dict, parent=None):
@@ -44,11 +62,11 @@ class AdvancedSettingsDialog(QDialog):
         for name, preset in self.audio_presets.items():
             desc = preset.get("description", "")
             self.combo_audio_preset.addItem(f"{name} - {desc}" if desc else name, name)
-        if current_preset:
-            for _i in range(self.combo_audio_preset.count()):
-                if self.combo_audio_preset.itemData(_i) == current_preset:
-                    self.combo_audio_preset.setCurrentIndex(_i)
-                    break
+        combo_value = _resolve_audio_preset_combo_data(self.result)
+        for _i in range(self.combo_audio_preset.count()):
+            if self.combo_audio_preset.itemData(_i) == combo_value:
+                self.combo_audio_preset.setCurrentIndex(_i)
+                break
         preset_layout.addWidget(preset_lbl)
         preset_layout.addWidget(self.combo_audio_preset, stretch=1)
         layout.addLayout(preset_layout)
@@ -346,14 +364,14 @@ class AdvancedSettingsDialog(QDialog):
             self.result[key] = actual_v
             if chk_disable:
                 self.result[f"{key}_disabled"] = chk_disable.isChecked()
-        self.result["audio_preset"] = self.combo_audio_preset.currentData() or ""
+        self.result["audio_preset"] = "" if self.combo_audio_preset.currentData() == "__default__" else (self.combo_audio_preset.currentData() or "")
         if "hf_token" in self.result: del self.result["hf_token"]
         if "llm_prompt" in self.result: del self.result["llm_prompt"]
         save_settings(self.result)
         self.accept()
 
     def _on_save_default(self):
-        self.result["audio_preset"] = self.combo_audio_preset.currentData() or ""
+        self.result["audio_preset"] = "" if self.combo_audio_preset.currentData() == "__default__" else (self.combo_audio_preset.currentData() or "")
         
         # 찌꺼기 데이터 정리
         if "hf_token" in self.result: del self.result["hf_token"]
@@ -362,7 +380,7 @@ class AdvancedSettingsDialog(QDialog):
         save_default_settings(self.result)
         QMessageBox.information(self, "완료", "현재 오디오/엔진 설정을 시스템 기본값으로 저장했습니다.")
     def _on_ok(self):
-        self.result["audio_preset"] = self.combo_audio_preset.currentData() or ""
+        self.result["audio_preset"] = "" if self.combo_audio_preset.currentData() == "__default__" else (self.combo_audio_preset.currentData() or "")
         
         if "hf_token" in self.result:
             del self.result["hf_token"]

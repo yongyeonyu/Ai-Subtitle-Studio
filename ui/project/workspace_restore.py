@@ -9,7 +9,7 @@ import os
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
 
-from logger import get_logger
+from core.runtime.logger import get_logger
 from core.project.project_manager import load_project
 
 

@@ -63,6 +63,15 @@ class FileOpsMixin:
         if self.add_recent_folder_callback:
             self.add_recent_folder_callback(folder_path)
 
+    def _prepare_single_file_queue(self, files):
+        files = list(files or [])
+        if not files:
+            return
+        if hasattr(self, "init_queue_list"):
+            self.init_queue_list(files)
+        if hasattr(self, "_sig_update_queue_header"):
+            self._sig_update_queue_header.emit(1, len(files), 0, "")
+
     def select_files(self):
         paths, _ = self._safe_open_file_names(
             "파일 선택",
@@ -83,6 +92,7 @@ class FileOpsMixin:
         if vid and len(vid) > 1:
             self._show_multiclip_then_batch(vid, show_multiclip=True)
         elif vid and len(vid) == 1 and self.backend:
+            self._prepare_single_file_queue(vid)
             self.backend.start_pipeline(vid)
         elif srt:
             self._open_srt_in_editor(srt[0])
@@ -128,6 +138,7 @@ class FileOpsMixin:
             return
         if dlg.result() and dlg.selected_files:
             if len(dlg.selected_files) == 1 and self.backend:
+                self._prepare_single_file_queue(dlg.selected_files)
                 self.backend.start_pipeline(dlg.selected_files, folder=folder)
             elif len(dlg.selected_files) > 1:
                 self._show_multiclip_then_batch(
@@ -158,6 +169,7 @@ class FileOpsMixin:
         if srt:
             self._open_srt_in_editor(srt[0])
         elif vid and len(vid) == 1 and self.backend:
+            self._prepare_single_file_queue(vid)
             self.backend.start_pipeline(vid)
         elif vid and len(vid) > 1:
             self._show_multiclip_then_batch(vid, show_multiclip=False)
@@ -179,18 +191,10 @@ class FileOpsMixin:
         dlg = MultiClipEditor(files, self, show_multiclip=show_multiclip)
         if dlg.exec():
             self._multiclip_files = list(dlg.sorted_files)
-            if dlg.selected_mode == "fast":
-                self._start_batch(dlg.sorted_files, folder=folder)
-            elif dlg.selected_mode == "quality":
-                if self.backend:
-                    self.backend.start_pipeline(
-                        dlg.sorted_files, folder=folder, is_auto_start=True
-                    )
-            elif dlg.selected_mode == "multiclip":
-                if self.backend:
-                    self.backend.start_multiclip_pipeline(
-                        dlg.sorted_files, folder=folder
-                    )
+            if self.backend:
+                self.backend.start_multiclip_pipeline(
+                    dlg.sorted_files, folder=folder
+                )
 
     def _clear_cache(self):
         msg = QMessageBox(self)
@@ -256,7 +260,7 @@ class FileOpsMixin:
                     editor._on_save(skip_auto_next=True)
             except Exception as exc:
                 try:
-                    from logger import get_logger
+                    from core.runtime.logger import get_logger
                     get_logger().log(f"⚠️ 종료 전 자막 저장 실패: {exc}")
                 except Exception:
                     pass
@@ -271,7 +275,7 @@ class FileOpsMixin:
                 shutil.copy2(project_path, os.path.join(backup_dir, f"{base}_{stamp}{ext or '.json'}"))
             except Exception as exc:
                 try:
-                    from logger import get_logger
+                    from core.runtime.logger import get_logger
                     get_logger().log(f"⚠️ 종료 전 프로젝트 백업 실패: {exc}")
                 except Exception:
                     pass

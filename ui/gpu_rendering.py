@@ -1,9 +1,9 @@
 # Version: 03.07.01
 # Phase: PHASE2
-"""Small helpers for GPU-backed Qt widgets.
+"""Small helpers for optional GPU-backed Qt widgets.
 
-GPU-backed widget/viewports are now the default runtime path. They can still be
-disabled through environment flags when a specific machine needs a fallback.
+OpenGL widgets are opt-in because macOS/QtMultimedia can crash in the platform
+driver before Python can catch anything. Keep the default path boring and stable.
 """
 from __future__ import annotations
 
@@ -24,13 +24,13 @@ def _env_enabled(name: str, default: str = "0") -> bool:
 def gpu_runtime_enabled() -> bool:
     if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
         return False
-    return str(os.environ.get("AI_SUBTITLE_GPU_RENDERING", "1")).strip().lower() not in _FALSE_VALUES
+    return _env_enabled("AI_SUBTITLE_GPU_RENDERING", "0")
 
 
 def gpu_widgets_enabled() -> bool:
     if not gpu_runtime_enabled():
         return False
-    return _env_enabled("AI_SUBTITLE_EXPERIMENTAL_OPENGL_WIDGETS", "1")
+    return _env_enabled("AI_SUBTITLE_EXPERIMENTAL_OPENGL_WIDGETS", "0")
 
 
 def accelerated_widget_base():

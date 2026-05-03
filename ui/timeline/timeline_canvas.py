@@ -9,7 +9,7 @@ from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import QSizePolicy
 
-import config
+from core.runtime import config
 from core.frame_time import normalize_fps, snap_sec_to_frame
 
 from ui.timeline.timeline_constants import (

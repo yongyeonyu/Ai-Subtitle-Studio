@@ -13,14 +13,23 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from typing import Any
 
 
 _WARMED: set[str] = set()
+_PROBE_OK_UNTIL: dict[str, float] = {}
 _WARM_LOCK = threading.Lock()
 _STOP_LOCK = threading.Lock()
 _WARMUP_TIMEOUT_SEC = 8.0
+_PROBE_OK_TTL_SEC = 180.0
 _OLLAMA_ROOT_URL = "http://localhost:11434/"
 _GENERATE_RETRY_STATUS_CODES = {500, 502, 503, 504}
+_FALLBACK_MODEL_PREFERENCES = (
+    "exaone3.5:7.8b",
+    "qwen2.5:7b",
+    "gemma2:9b",
+    "gemma2:2b",
+)
 
 
 def is_ollama_server_running(timeout: float = 0.6) -> bool:
@@ -151,6 +160,160 @@ def _build_generate_request(model: str, prompt: str, *, keep_alive: int = -1) ->
     )
 
 
+def _read_http_error_body(exc: BaseException) -> str:
+    if not isinstance(exc, urllib.error.HTTPError):
+        return ""
+    fp = getattr(exc, "fp", None)
+    if fp is None:
+        return ""
+    try:
+        raw = fp.read()
+    except Exception:
+        return ""
+    try:
+        return raw.decode("utf-8", errors="replace")
+    except Exception:
+        return str(raw)
+
+
+def _extract_ollama_error_message(exc: BaseException) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        body = _read_http_error_body(exc)
+        if body:
+            try:
+                parsed = json.loads(body or "{}")
+            except Exception:
+                parsed = {}
+            if isinstance(parsed, dict):
+                message = str(parsed.get("error") or "").strip()
+                if message:
+                    return message
+            text = body.strip()
+            if text:
+                return text
+        return str(exc)
+    return str(exc)
+
+
+def _get_ollama_installed_models(timeout: float = 1.5) -> list[str]:
+    try:
+        req = urllib.request.Request("http://localhost:11434/api/tags")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8") or "{}")
+    except Exception:
+        return []
+    rows = payload.get("models", []) if isinstance(payload, dict) else []
+    result: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or row.get("model") or "").strip()
+        if name and name not in result:
+            result.append(name)
+    return result
+
+
+def _probe_ollama_model_once(model: str, *, timeout: float = 8.0) -> dict[str, Any]:
+    try:
+        req = _build_generate_request(model, "ping", keep_alive=-1)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read()
+        return {"ok": True, "model": model, "message": ""}
+    except Exception as exc:
+        return {
+            "ok": False,
+            "model": model,
+            "message": _extract_ollama_error_message(exc),
+            "exception": exc,
+        }
+
+
+def _candidate_fallback_models(model: str) -> list[str]:
+    installed = _get_ollama_installed_models()
+    result: list[str] = []
+    current = str(model or "").strip()
+    for name in _FALLBACK_MODEL_PREFERENCES:
+        if name != current and name in installed and name not in result:
+            result.append(name)
+    for name in installed:
+        if name != current and name not in result:
+            result.append(name)
+    return result
+
+
+def ollama_probe_timeout(model: str, default: float = 8.0) -> float:
+    text = str(model or "").strip().lower()
+    timeout = max(3.0, float(default or 8.0))
+    if text.startswith("gemma4:"):
+        return max(timeout, 20.0)
+    return timeout
+
+
+def _mark_model_probe_ok(model: str, ttl_sec: float = _PROBE_OK_TTL_SEC) -> None:
+    text = str(model or "").strip()
+    if not text:
+        return
+    _PROBE_OK_UNTIL[text] = time.monotonic() + max(10.0, float(ttl_sec or _PROBE_OK_TTL_SEC))
+    _WARMED.add(text)
+
+
+def _model_probe_still_valid(model: str) -> bool:
+    text = str(model or "").strip()
+    if not text:
+        return False
+    until = float(_PROBE_OK_UNTIL.get(text, 0.0) or 0.0)
+    return until > time.monotonic()
+
+
+def resolve_ollama_model_for_request(
+    model: str,
+    logger=None,
+    *,
+    context: str = "LLM",
+    timeout: float = 8.0,
+    allow_fallback: bool = True,
+) -> str:
+    text = str(model or "").strip()
+    if not text or "사용 안함" in text:
+        return text
+    if _model_probe_still_valid(text):
+        return text
+    if not ensure_ollama_server(logger=logger, wait_sec=4.0):
+        return text
+
+    timeout = ollama_probe_timeout(text, timeout)
+    probe = _probe_ollama_model_once(text, timeout=timeout)
+    if probe.get("ok"):
+        _mark_model_probe_ok(text)
+        return text
+
+    message = str(probe.get("message") or "알 수 없는 오류").strip()
+    lowered = message.lower()
+    model_load_failed = "unable to load model" in lowered or "model" in lowered and "load" in lowered
+    if logger:
+        if model_load_failed:
+            logger.log(f"⚠️ {context}: Ollama 모델 로드 실패 `{text}`")
+            logger.log(f"   원인: {message}")
+        else:
+            logger.log(f"⚠️ {context}: Ollama 모델 사전 점검 실패 `{text}` ({message})")
+
+    if not allow_fallback:
+        return text
+
+    for fallback in _candidate_fallback_models(text):
+        candidate = _probe_ollama_model_once(fallback, timeout=max(3.0, timeout * 0.75))
+        if not candidate.get("ok"):
+            continue
+        _mark_model_probe_ok(fallback)
+        if logger:
+            logger.log(f"↪️ {context}: `{text}` 대신 `{fallback}` 으로 자동 대체합니다.")
+        return fallback
+
+    if logger:
+        logger.log(f"⚠️ {context}: 사용 가능한 대체 Ollama 모델을 찾지 못했습니다. 현재 설정 `{text}` 유지")
+    return text
+
+
 def split_text(model: str, prompt: str, timeout: int = 120) -> list[str] | None:
     if not model or "사용 안함" in model:
         return None
@@ -163,6 +326,7 @@ def split_text(model: str, prompt: str, timeout: int = 120) -> list[str] | None:
             req = _build_generate_request(model, prompt, keep_alive=keep_alive)
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 out_text = json.loads(resp.read().decode("utf-8")).get("response", "")
+            _mark_model_probe_ok(model)
             chunks = _parse_chunks(out_text)
             return chunks or None
         except Exception as exc:
@@ -223,7 +387,7 @@ def warmup_model(model: str, logger=None, timeout: float = _WARMUP_TIMEOUT_SEC) 
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 resp.read()
 
-            _WARMED.add(model)
+            _mark_model_probe_ok(model, ttl_sec=max(_PROBE_OK_TTL_SEC, timeout * 6.0))
             if logger:
                 logger.log(f"🔥 Ollama 워밍업 완료: {model}")
         except Exception as e:

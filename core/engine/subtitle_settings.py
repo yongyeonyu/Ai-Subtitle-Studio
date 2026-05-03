@@ -1,0 +1,107 @@
+# Version: 03.14.00
+# Phase: PHASE2
+"""Runtime settings helpers for subtitle optimization."""
+
+import json
+import os
+
+from core.llm.ollama_provider import ollama_probe_timeout, resolve_ollama_model_for_request
+from core.llm.openai_provider import is_openai_model
+from core.runtime import config
+
+
+def _get_user_settings():
+    path = os.path.join(config.DATASET_DIR, "user_settings.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def get_local_dataset_corrections() -> dict:
+    correction_path = getattr(config, "CORRECTIONS_FILE", os.path.join(config.DATASET_DIR, "dataset_correction.json"))
+    try:
+        with open(correction_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def get_selected_llm() -> str:
+    settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
+    try:
+        with open(settings_path, "r", encoding="utf-8") as f:
+            return json.load(f).get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
+    except Exception:
+        return getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b")
+
+
+def _setting_int(settings: dict, key: str, default: int, fallback_key: str | None = None) -> int:
+    value = settings.get(key, None)
+    if value in (None, "") and fallback_key:
+        value = settings.get(fallback_key, None)
+    if value in (None, ""):
+        value = default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _setting_float(settings: dict, key: str, default: float) -> float:
+    value = settings.get(key, default)
+    if value in (None, ""):
+        value = default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_local_ollama_model(model: str) -> bool:
+    text = str(model or "").strip()
+    if not text or "사용 안함" in text:
+        return False
+    if "Gemini" in text or is_openai_model(text):
+        return False
+    return True
+
+
+def _resolve_runtime_llm_model(model: str, logger=None, *, context: str = "자막 LLM") -> str:
+    text = str(model or "").strip()
+    if not _is_local_ollama_model(text):
+        return text
+    return resolve_ollama_model_for_request(
+        text,
+        logger=logger,
+        context=context,
+        timeout=ollama_probe_timeout(text, 8.0),
+        allow_fallback=True,
+    )
+
+
+def _effective_llm_workers(
+    model: str,
+    configured_workers: int,
+    settings: dict,
+    segment_count: int,
+    *,
+    local_worker_cap: int = 2,
+) -> tuple[int, str]:
+    configured = max(1, int(configured_workers or 1))
+    count = max(1, int(segment_count or 1))
+    if not _is_local_ollama_model(model):
+        return 1, "api"
+    local_cap = max(1, _setting_int(settings or {}, "local_ollama_llm_max_workers", local_worker_cap))
+    return max(1, min(configured, local_cap, count)), "local"
+
+
+def _quality_conservative_enabled(settings: dict | None) -> bool:
+    settings = settings or {}
+    return bool(
+        settings.get("subtitle_quality_enabled")
+        or settings.get("subtitle_quality_auto_check_after_generate")
+        or settings.get("subtitle_quality_auto_correct_enabled")
+    )

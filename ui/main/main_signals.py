@@ -8,8 +8,8 @@ import os
 
 from PyQt6.QtWidgets import QMessageBox
 
-import config
-from logger import get_logger
+from core.runtime import config
+from core.runtime.logger import get_logger
 
 
 class SignalHandlersMixin:
@@ -274,6 +274,37 @@ class SignalHandlersMixin:
                 }]
                 get_logger().log(f"⚠️ 로컬 LLM 자동 스캔 실패: {e}")
         threading.Thread(target=_scan, daemon=True, name="llm-warmup").start()
+
+    def _preflight_selected_local_llm_models(self):
+        import threading
+
+        def _run():
+            try:
+                from core.settings import load_settings
+                from core.llm.ollama_provider import ollama_probe_timeout, resolve_ollama_model_for_request
+
+                settings = load_settings()
+                candidates = [
+                    ("자막 LLM", settings.get("selected_model", "")),
+                    ("러프컷 LLM", settings.get("roughcut_llm_model", "")),
+                ]
+                seen = set()
+                for context, model in candidates:
+                    name = str(model or "").strip()
+                    if not name or name in seen or "사용 안함" in name:
+                        continue
+                    seen.add(name)
+                    resolve_ollama_model_for_request(
+                        name,
+                        logger=get_logger(),
+                        context=context,
+                        timeout=ollama_probe_timeout(name, 12.0),
+                        allow_fallback=False,
+                    )
+            except Exception as exc:
+                get_logger().log(f"⚠️ 시작 시 Ollama 모델 점검 실패: {exc}")
+
+        threading.Thread(target=_run, daemon=True, name="llm-preflight").start()
 
     def _check_required_models_on_startup(self):
         if getattr(self, "_required_model_check_done", False):

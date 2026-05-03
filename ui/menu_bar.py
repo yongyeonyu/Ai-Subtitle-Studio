@@ -9,7 +9,7 @@ existing button/state-machine objects alive behind the scenes.
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QWidget
 
-import config
+from core.runtime import config
 from core.pipeline_status import generation_stage_label, process_mode_label
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
 from ui.style import label_style, line_icon, tool_button_style
@@ -302,9 +302,7 @@ class GlobalMenuBar(QWidget):
         self.btn_auto_start = self._wide_button("자동", "sliders", self._toggle_auto_start)
         self.btn_help = self._wide_button("도움말", "help", self._open_help)
         self.btn_log = self._wide_button("사이드바", "terminal", self._toggle_log)
-        self.btn_auto_settings = self._wide_button("자동설정", "settings", self._open_auto_settings, min_width=96)
         self.btn_cache_clear = self._wide_button("캐쉬삭제", "trash", self._clear_cache, min_width=96)
-        right.addWidget(self.btn_auto_settings)
         right.addWidget(self.btn_cache_clear)
         right.addWidget(self.btn_auto_start)
         right.addWidget(self.btn_help)
@@ -327,7 +325,7 @@ class GlobalMenuBar(QWidget):
         btn.setIconSize(QSize(MENU_SMALL_ICON, MENU_SMALL_ICON))
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         btn.setFixedHeight(MENU_BUTTON_HEIGHT)
-        btn.setMinimumWidth(MENU_SMALL_WIDTH)
+        btn.setFixedWidth(MENU_SMALL_WIDTH)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet(tool_button_style("toolbar"))
         btn.clicked.connect(slot)
@@ -341,7 +339,7 @@ class GlobalMenuBar(QWidget):
         btn.setIconSize(QSize(MENU_WIDE_ICON, MENU_WIDE_ICON))
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         btn.setFixedHeight(MENU_BUTTON_HEIGHT)
-        btn.setMinimumWidth(min_width)
+        btn.setFixedWidth(min_width)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet(tool_button_style(kind))
         btn.setProperty("expandedMinWidth", min_width)
@@ -356,7 +354,7 @@ class GlobalMenuBar(QWidget):
         btn.setIconSize(QSize(MENU_ACTION_ICON, MENU_ACTION_ICON))
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         btn.setFixedHeight(MENU_BUTTON_HEIGHT)
-        btn.setMinimumWidth(MENU_ACTION_WIDTH)
+        btn.setFixedWidth(MENU_ACTION_WIDTH)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet(tool_button_style("toolbar"))
         btn.clicked.connect(slot)
@@ -443,20 +441,17 @@ class GlobalMenuBar(QWidget):
                     btn.setIconSize(QSize(MENU_ACTION_ICON, MENU_ACTION_ICON))
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setFixedHeight(MENU_BUTTON_HEIGHT)
-                    btn.setMinimumWidth(MENU_ACTION_WIDTH)
-                    btn.setMaximumWidth(16777215)
-                elif btn in (self.btn_auto_start, self.btn_help, self.btn_log, self.btn_auto_settings, self.btn_cache_clear):
+                    btn.setFixedWidth(MENU_ACTION_WIDTH)
+                elif btn in (self.btn_auto_start, self.btn_help, self.btn_log, self.btn_cache_clear):
                     btn.setIconSize(QSize(MENU_WIDE_ICON, MENU_WIDE_ICON))
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setFixedHeight(MENU_BUTTON_HEIGHT)
-                    btn.setMinimumWidth(int(btn.property("expandedMinWidth") or 72))
-                    btn.setMaximumWidth(16777215)
+                    btn.setFixedWidth(int(btn.property("expandedMinWidth") or 72))
                 else:
                     btn.setIconSize(QSize(MENU_SMALL_ICON, MENU_SMALL_ICON))
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setFixedHeight(MENU_BUTTON_HEIGHT)
-                    btn.setMinimumWidth(MENU_SMALL_WIDTH)
-                    btn.setMaximumWidth(16777215)
+                    btn.setFixedWidth(MENU_SMALL_WIDTH)
 
     def _sync_start_icon(self):
         text = str(self.btn_start.text() or "")
@@ -583,10 +578,6 @@ class GlobalMenuBar(QWidget):
         else:
             self._click_editor_button("btn_save")
         self.refresh()
-
-    def _open_auto_settings(self):
-        if hasattr(self.main_window, "_show_path_settings"):
-            self.main_window._show_path_settings()
 
     def _toggle_auto_start(self):
         if hasattr(self.main_window, "_toggle_auto_start_enabled"):

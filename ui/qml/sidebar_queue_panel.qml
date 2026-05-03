@@ -18,14 +18,14 @@ Item {
 
     Column {
         anchors.fill: parent
-        anchors.margins: 8
-        spacing: 6
+        anchors.margins: 10
+        spacing: 7
 
         Text {
             width: parent.width
             text: root.headerText
             color: "#F5F7FA"
-            font.pixelSize: 10
+            font.pixelSize: 11
             font.bold: true
             elide: Text.ElideRight
         }
@@ -34,15 +34,16 @@ Item {
             width: parent.width
             spacing: 3
             Text {
-                width: 26
+                width: 30
                 text: "순서"
                 color: "#8E98A3"
                 font.pixelSize: 9
                 font.bold: true
+                horizontalAlignment: Text.AlignHCenter
                 elide: Text.ElideRight
             }
             Text {
-                width: Math.max(40, parent.width - 135)
+                width: Math.max(62, parent.width - 104)
                 text: "파일명"
                 color: "#8E98A3"
                 font.pixelSize: 9
@@ -50,12 +51,12 @@ Item {
                 elide: Text.ElideRight
             }
             Text {
-                width: 100
-                text: "소요시간 / 예상시간"
+                width: 62
+                text: "시간"
                 color: "#8E98A3"
                 font.pixelSize: 9
                 font.bold: true
-                horizontalAlignment: Text.AlignLeft
+                horizontalAlignment: Text.AlignRight
                 elide: Text.ElideRight
             }
         }
@@ -80,15 +81,61 @@ Item {
 
             delegate: Rectangle {
                 width: list.width
-                height: 38
+                height: 48
                 color: index % 2 === 0 ? "#151C20" : "#10161A"
-                radius: 4
+                radius: 6
 
                 Row {
                     anchors.fill: parent
-                    anchors.leftMargin: 5
-                    anchors.rightMargin: 3
-                    spacing: 3
+                    anchors.leftMargin: 6
+                    anchors.rightMargin: 6
+                    spacing: 6
+
+                    Text {
+                        width: 30
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: modelData.order || (index + 1)
+                        color: modelData.done ? "#34C759" : "#FFCC44"
+                        font.pixelSize: 10
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        elide: Text.ElideRight
+                    }
+
+                    Column {
+                        width: Math.max(62, parent.width - 110)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 3
+
+                        Text {
+                            width: parent.width
+                            text: modelData.file || "-"
+                            color: "#F5F7FA"
+                            font.pixelSize: 10
+                            font.bold: false
+                            elide: Text.ElideMiddle
+                        }
+
+                        Text {
+                            width: parent.width
+                            text: modelData.done ? "완료" : (modelData.statusDisplay || modelData.status || "대기 중")
+                            color: modelData.done ? "#34C759" : "#8E98A3"
+                            font.pixelSize: 8
+                            font.bold: false
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    Text {
+                        width: 62
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: modelData.eta || modelData.statusDisplay || modelData.status || "-"
+                        color: modelData.done ? "#34C759" : "#FFCC44"
+                        font.pixelSize: 10
+                        font.bold: true
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
+                    }
                 }
             }
 

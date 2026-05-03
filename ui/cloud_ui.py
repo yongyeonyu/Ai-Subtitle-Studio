@@ -8,7 +8,7 @@ iCloud / NAS automatic processing UI helpers.
 import os
 from PyQt6.QtWidgets import QMessageBox
 
-from logger import get_logger
+from core.runtime.logger import get_logger
 from core.path_manager import (
     get_icloud_path, get_nas_path, ensure_nas_mounted, get_local_path,
     get_nas_excluded_folders, set_nas_excluded_folders

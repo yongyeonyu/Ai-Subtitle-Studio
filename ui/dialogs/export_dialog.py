@@ -17,9 +17,9 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRectF, QPointF
 from PyQt6.QtGui  import QColor, QPixmap, QImage, QFont, QPainter, QPen, QBrush, QPainterPath, QFontMetrics
-import config
+from core.runtime import config
 from core.engine.subtitle_engine import save_srt
-from logger import get_logger
+from core.runtime.logger import get_logger
 from ui.style import button_style, settings_button_style, settings_dialog_stylesheet
 
 # ── 설정 저장 로직 ──

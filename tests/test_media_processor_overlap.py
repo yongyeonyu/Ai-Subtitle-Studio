@@ -10,7 +10,7 @@ import wave
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import config
+from core.runtime import config
 from core.audio.media_processor import VideoProcessor
 from core.audio.stt_quality_presets import apply_stt_quality_preset
 
@@ -210,6 +210,67 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             self.assertEqual({label for label, _ in preview_calls}, {"STT1", "STT2"})
             self.assertNotIn("mutated-after-preview", [segs[0]["text"] for _, segs in preview_calls])
             self.assertEqual(result[0][1:], (1, 1))
+
+    def test_normalize_scored_tracks_filters_stt1_and_stt2_with_same_rule(self):
+        tracks = {
+            "STT1": [
+                {"start": 0.0, "end": 1.0, "text": "정상 문장", "stt_score": 78, "stt_score_flags": ["ok"]},
+                {"start": 1.0, "end": 2.0, "text": "반복 반복 반복 반복", "stt_score": 45, "stt_score_flags": ["repetition_hallucination_risk"]},
+            ],
+            "STT2": [
+                {"start": 0.0, "end": 1.0, "text": "다른 정상 문장", "stt_score": 74, "stt_score_flags": ["ok"]},
+                {"start": 1.0, "end": 2.0, "text": "시청해주셔서 감사합니다", "stt_score": 66, "stt_score_flags": ["known_hallucination_phrase"]},
+            ],
+        }
+
+        normalized = self.processor._normalize_scored_stt_tracks(
+            tracks,
+            {"stt_candidate_keep_score": 24},
+        )
+
+        self.assertEqual([seg["text"] for seg in normalized["STT1"]], ["정상 문장"])
+        self.assertEqual([seg["text"] for seg in normalized["STT2"]], ["다른 정상 문장"])
+
+    def test_recheck_replaces_both_stt_tracks_for_low_score_range(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            results = {
+                "STT1": [{"start": 0.0, "end": 1.0, "text": "원본1", "stt_score": 31}],
+                "STT2": [{"start": 0.0, "end": 1.0, "text": "원본2", "stt_score": 29}],
+            }
+            settings = {
+                "stt_low_score_recheck_enabled": True,
+                "stt_low_score_recheck_threshold": 50,
+            }
+
+            self.processor._prepare_recheck_clip = lambda item, _out_dir, _idx, _settings: {
+                "range": item,
+                "start": item.start,
+                "end": item.end,
+            }
+            self.processor._collect_transcribe_result = lambda *_args, **_kwargs: [
+                {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "재검사",
+                    "avg_logprob": -0.12,
+                    "no_speech_prob": 0.01,
+                    "compression_ratio": 1.0,
+                    "words": [{"word": "재검사", "start": 0.05, "end": 0.95, "confidence": 0.93}],
+                }
+            ]
+
+            updated = self.processor._recheck_low_score_stt_ranges(
+                tmp,
+                results,
+                settings,
+                [],
+                "primary-model",
+            )
+
+            self.assertEqual([seg["text"] for seg in updated["STT1"]], ["재검사"])
+            self.assertEqual([seg["text"] for seg in updated["STT2"]], ["재검사"])
+            self.assertTrue(updated["STT1"][0]["stt_recheck_applied"])
+            self.assertTrue(updated["STT2"][0]["stt_recheck_applied"])
 
     def test_vad_empty_does_not_force_split_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:

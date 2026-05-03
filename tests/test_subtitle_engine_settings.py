@@ -7,7 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-import config
+from core.runtime import config
 from core.engine import subtitle_engine
 
 

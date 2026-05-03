@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtCore import Qt
-import config
+from core.runtime import config
 
 
 class FolderDialog(QDialog):

@@ -1,11 +1,11 @@
 <!--
-Document-Version: 03.13.00
+Document-Version: 03.14.00
 Phase: PHASE2
-Last-Updated: 2026-05-03
+Last-Updated: 2026-05-04
 Updated-By: Codex with 대표님
 Previous-Content: v03.10.00 release checkpoint
-This-Update: v03.13.00 release checkpoint for PHASE2 frame-first cut-boundary enforcement, auto preset detection, personalization/LoRA scaffolding, settings cleanup, and safe UI refactor extraction
-Codex-Handoff: v03.13.00 release committed/pushed to main. ACTION_ITEMS.md currently has no immediate `now` task; PHASE2-D PAGE3B remains deferred.
+This-Update: v03.14.00 release sync after closing the v03.13.x refactor line
+Codex-Handoff: v03.14.00 release prep is local/uncommitted until final verification and explicit publish step complete. ACTION_ITEMS.md currently has no immediate `now` task; PHASE2-D PAGE3B remains deferred.
 -->
 # AGENTS.md — AI Subtitle Studio Agent Guide
 
@@ -14,6 +14,7 @@ Codex-Handoff: v03.13.00 release committed/pushed to main. ACTION_ITEMS.md curre
 - `ACTION_ITEMS.md`
 - `check_list.md`
 - `File_structure.txt`
+- `RELEASE_v03.14.00.md`
 - `RELEASE_v03.13.00.md`
 - `RELEASE_v03.12.00.md`
 - `RELEASE_v03.11.00.md`
@@ -28,9 +29,9 @@ Codex-Handoff: v03.13.00 release committed/pushed to main. ACTION_ITEMS.md curre
 
 ## Current State
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App/doc version: `v03.13.00`
-- `config.py APP_VERSION`: `03.13.00`
-- Next code-change version: `v03.13.01`
+- App/doc version: `v03.14.00`
+- `core/runtime/config.py APP_VERSION`: `03.14.00`
+- Next code-change version: `v03.14.01`
 - Phase: `PHASE2`
 - Latest implemented groups:
   - `v03.01.33`: CP-03/CP-04 saved-state dot, `is_dirty` sync, top status rail
@@ -158,6 +159,16 @@ Codex-Handoff: v03.13.00 release committed/pushed to main. ACTION_ITEMS.md curre
   - `v03.11.19`: confirmed cut boundaries restart Whisper chunk extraction even on no-VAD fallback paths
   - `v03.12.00`: release checkpoint for cut-boundary pioneer/follower scanning, cut-boundary persistence/snap, restart reset, sidebar state polish, and Whisper hard-cut alignment
   - `v03.13.00`: release checkpoint for frame-first cut-boundary enforcement, 6-way auto audio presets, text LoRA accumulation/training scaffolding, settings simplification, GPU-default rendering, and safe sidebar/multiclip refactor extraction
+  - `v03.13.01`: macOS startup crash hotfix; Qt OpenGL/QOpenGLWidget rendering is explicit opt-in again after GPU carveout SIGSEGV reports
+  - `v03.13.02`: project-wide refactor pass moves runtime config/logger into `core/runtime`, rewires imports, and extracts scan-cut/topicless helper installers from long mixin files
+  - `v03.13.03`: large-file refactor pass extracts cut-boundary auto/FPS installers, VideoProcessor audio/VAD helper mixins, and home sidebar helper mixin
+  - `v03.13.04`: large-file refactor pass extracts editor scan-cut core helpers, video overlay widgets, and AI settings roughcut helper mixin
+  - `v03.13.05`: large-file refactor pass splits scan-cut patch installers into base/refine/resume stages and extracts editor roughcut draft helpers
+  - `v03.13.06`: large-file refactor pass extracts pipeline cut-boundary cache, prescan, placeholder, split, and snap helpers into a dedicated mixin
+  - `v03.13.07`: large-file refactor pass splits auto cut-boundary installer into profile, utility, strict verify, and pioneer/follower scan modules
+  - `v03.13.08`: large-file refactor pass extracts VideoProcessor Whisper transcription, STT ensemble, low-score recheck, and payload de-dup helpers into a dedicated mixin
+  - `v03.13.09`: large-file refactor pass extracts audio preset data, project frame/model-setting helpers, subtitle settings/prompts/timing helpers, roughcut topicless placeholder installer, and removes duplicate cut-boundary detector fallback code
+  - `v03.14.00`: release checkpoint for the v03.13.x structural refactor line, including runtime relocation, cut-boundary/audio/project/subtitle/UI helper split, and large-file responsibility cleanup
 - Older version history belongs in the versioned `RELEASE_v*.md` files, not here.
 
 ## Communication
@@ -201,7 +212,7 @@ Codex-Handoff: v03.13.00 release committed/pushed to main. ACTION_ITEMS.md curre
   - PyQt6 DLL/plugin issues
 
 ## Version Rules
-- Code behavior changes still require the patch version to advance and `config.py APP_VERSION` to match.
+- Code behavior changes still require the patch version to advance and `core/runtime/config.py APP_VERSION` to match.
 - Do not mass-update every 운영 문서 for each feature/bug fix. For routine code changes, update only the documents that are strictly needed for that change:
   - `ACTION_ITEMS.md` only when the action queue changes.
   - `check_list.md` only when 대표님 direct UX confirmation is needed.
@@ -210,7 +221,7 @@ Codex-Handoff: v03.13.00 release committed/pushed to main. ACTION_ITEMS.md curre
   - `File_structure.txt` only when files are added, removed, moved, or their role meaningfully changes.
   - `README.md` only for public-facing usage/install changes that cannot wait for release.
 - Batch nonessential updates to `AGENTS.md`, `ACTION_ITEMS.md`, `README.md`, `check_list.md`, `File_structure.txt`, and the new `RELEASE_v{new_release_version}.md` during the release workflow.
-- Current next code-change version: `v03.13.01`.
+- Current next code-change version: `v03.14.01`.
 - Document-only cleanup does not require app version bump.
 - If deleting a function, class, public helper, UI action, signal, or slot:
   - record reason and impact in the current release note file.
@@ -236,7 +247,7 @@ Codex-Handoff: v03.13.00 release committed/pushed to main. ACTION_ITEMS.md curre
   - Example: `01.00.00` -> `01.01.00`
   - Current example: `03.02.00` -> `03.03.00`
 - During release, update:
-  - `config.py APP_VERSION`
+  - `core/runtime/config.py APP_VERSION`
   - `File_structure.txt`
   - `ACTION_ITEMS.md`
   - `AGENTS.md`
@@ -367,6 +378,7 @@ find . -maxdepth 1 \( -name 'create_all*' -o -name '_backup*' -o -name 'STRUCTUR
 - ACTION_ITEMS.md
 - check_list.md
 - File_structure.txt
+- RELEASE_v03.14.00.md
 - RELEASE_v03.13.00.md
 - RELEASE_v03.12.00.md
 - RELEASE_v03.11.00.md
@@ -377,9 +389,9 @@ find . -maxdepth 1 \( -name 'create_all*' -o -name '_backup*' -o -name 'STRUCTUR
 - RELEASE_v03.05.00.md
 
 현재 기준:
-- 현재 앱/문서 버전: v03.13.00
-- config.py APP_VERSION: 03.13.00
-- 다음 코드 수정 버전: v03.13.01
+- 현재 앱/문서 버전: v03.14.00
+- core/runtime/config.py APP_VERSION: 03.14.00
+- 다음 코드 수정 버전: v03.14.01
 - 현재 phase: PHASE2
 - 다음 우선순위: ACTION_ITEMS.md의 `now` 항목 확인. 현재는 `now: null`, deferred에 `PHASE2-D-PAGE3B`
 
@@ -387,7 +399,7 @@ find . -maxdepth 1 \( -name 'create_all*' -o -name '_backup*' -o -name 'STRUCTUR
 - 기존 기능 삭제 금지
 - 완료한 ACTION_ITEMS.md 항목은 삭제
 - 대표님 직접 확인 항목은 check_list.md에 유지
-- 코드 동작 수정 시 패치 버전과 config.py APP_VERSION은 맞추되, 운영 문서 전체 갱신은 하지 말고 꼭 필요한 문서만 갱신
+- 코드 동작 수정 시 패치 버전과 core/runtime/config.py APP_VERSION은 맞추되, 운영 문서 전체 갱신은 하지 말고 꼭 필요한 문서만 갱신
 - 비필수 문서 동기화는 릴리즈 시 AGENTS/ACTION_ITEMS/README/check_list/File_structure/새 RELEASE_v{릴리즈버전}.md에 일괄 반영
 - 삭제한 def/class/helper/UI action/signal/slot은 현재 RELEASE_v*.md에 사유와 영향 범위 기록
 - Windows 환경을 항상 고려

@@ -12,8 +12,8 @@ import os, time, threading
 from PyQt6.QtWidgets import QMessageBox, QMenu
 from PyQt6.QtCore import QTimer, QPoint, QObject, pyqtSignal
 
-import config
-from logger import get_logger
+from core.runtime import config
+from core.runtime.logger import get_logger
 from core.project.project_manager import create_project
 from core.path_manager import get_srt_path
 
@@ -101,18 +101,9 @@ class EditorPipelineMixin:
 
     def _start_pipeline(self, is_restart=False):
         main_w = self.window()
+        layout_snapshot = self._snapshot_start_layout()
         if hasattr(main_w, "_stop_post_completion_idle_timer"):
             main_w._stop_post_completion_idle_timer()
-        try:
-            if hasattr(main_w, "_apply_log_visible"):
-                main_w._apply_log_visible(True, persist=False)
-        except Exception:
-            pass
-        try:
-            if hasattr(self, "set_terminal_visible_layout"):
-                self.set_terminal_visible_layout(True)
-        except Exception:
-            pass
         try:
             from core.settings import load_settings
             latest_settings = load_settings()
@@ -123,6 +114,25 @@ class EditorPipelineMixin:
         except Exception:
             pass
         self._completion_handled = False
+
+        if not is_restart:
+            try:
+                main_w = self.window()
+                if hasattr(main_w, "_clear_editor_for_full_restart"):
+                    main_w._clear_editor_for_full_restart(self)
+                if hasattr(main_w, "_clear_cut_boundary_state_for_full_restart"):
+                    main_w._clear_cut_boundary_state_for_full_restart(self)
+                if hasattr(main_w, "_clear_roughcut_for_full_restart"):
+                    media_files = list(getattr(main_w, "_multiclip_files", []) or [])
+                    if not media_files:
+                        media_path = getattr(self, "media_path", "") or ""
+                        media_files = [media_path] if media_path else []
+                    main_w._clear_roughcut_for_full_restart(media_files)
+            except Exception as exc:
+                try:
+                    get_logger().log(f"⚠️ 시작 전 이전 캔버스 상태 초기화 실패: {exc}")
+                except Exception:
+                    pass
 
         # ✅ 컷 경계 기반 러프컷 선구성: STT 시작 전에 컷 경계 먼저 스캔
         try:
@@ -140,6 +150,72 @@ class EditorPipelineMixin:
         self._process_start_time = time.time()
         self._backend_finished = False
         self._execute_pipeline_logic(is_restart)
+        self._restore_start_layout(layout_snapshot)
+
+    def _snapshot_start_layout(self) -> dict:
+        """Capture layout sizes that should not shift just because processing starts."""
+        snap = {}
+        try:
+            main_w = self.window()
+        except RuntimeError:
+            main_w = None
+        for key, owner, attr in (
+            ("workspace_splitter", main_w, "workspace_splitter"),
+            ("editor_splitter", self, "splitter"),
+        ):
+            splitter = getattr(owner, attr, None) if owner is not None else None
+            if splitter is None:
+                continue
+            try:
+                snap[key] = list(splitter.sizes())
+            except Exception:
+                pass
+        panel = getattr(main_w, "bottom_work_panel", None) if main_w is not None else None
+        if panel is not None:
+            try:
+                snap["bottom_work_panel"] = {
+                    "visible": bool(panel.isVisible()),
+                    "maximum_height": int(panel.maximumHeight()),
+                    "minimum_height": int(panel.minimumHeight()),
+                }
+            except Exception:
+                pass
+        return snap
+
+    def _restore_start_layout(self, snap: dict | None) -> None:
+        if not snap:
+            return
+
+        def _restore_once():
+            try:
+                main_w = self.window()
+            except RuntimeError:
+                return
+            for key, owner, attr in (
+                ("workspace_splitter", main_w, "workspace_splitter"),
+                ("editor_splitter", self, "splitter"),
+            ):
+                sizes = list((snap or {}).get(key) or [])
+                splitter = getattr(owner, attr, None) if owner is not None else None
+                if splitter is None or not sizes:
+                    continue
+                try:
+                    if len(splitter.sizes()) == len(sizes):
+                        splitter.setSizes(sizes)
+                except Exception:
+                    pass
+            panel_state = (snap or {}).get("bottom_work_panel")
+            panel = getattr(main_w, "bottom_work_panel", None)
+            if panel is not None and isinstance(panel_state, dict):
+                try:
+                    panel.setMinimumHeight(int(panel_state.get("minimum_height", panel.minimumHeight())))
+                    panel.setMaximumHeight(int(panel_state.get("maximum_height", panel.maximumHeight())))
+                    panel.setVisible(bool(panel_state.get("visible", panel.isVisible())))
+                except Exception:
+                    pass
+
+        for delay in (0, 60, 180, 360):
+            QTimer.singleShot(delay, _restore_once)
 
     def _prepare_cut_boundaries_before_start(self):
         main_w = self.window()
@@ -195,12 +271,24 @@ class EditorPipelineMixin:
         if hasattr(self, "_schedule_post_generation_roughcut_draft"):
             QTimer.singleShot(350, lambda: self._schedule_post_generation_roughcut_draft(force=True))
         if hasattr(main_w, "_release_ai_models_for_editor_mode"):
-            if hasattr(self, "_schedule_post_generation_roughcut_draft"):
-                QTimer.singleShot(450, self._release_ai_models_after_roughcut_draft)
-            else:
-                QTimer.singleShot(0, lambda: main_w._release_ai_models_for_editor_mode(force=True))
+            QTimer.singleShot(450, self._schedule_post_generation_model_release)
         # E fix: 자막 생성 완료 후 타임라인/캔버스 재동기화
         QTimer.singleShot(200, self._post_completion_sync)
+
+    def _schedule_post_generation_model_release(self):
+        """자막 생성 완료 후 남아 있는 AI/STT/LLM 모델 언로드를 예약한다."""
+        try:
+            if hasattr(self, "_schedule_post_generation_roughcut_draft"):
+                self._release_ai_models_after_roughcut_draft()
+                return
+            main_w = self.window()
+        except RuntimeError:
+            return
+        except Exception:
+            return
+        release = getattr(main_w, "_release_ai_models_for_editor_mode", None)
+        if callable(release):
+            release(force=True)
 
     def _roughcut_draft_cleanup_pending(self) -> bool:
         status = str(getattr(self, "_roughcut_draft_status", "") or "")
@@ -495,8 +583,8 @@ class EditorPipelineMixin:
             sub = menu.addMenu("🎬 컷 경계 단계")
             choices = [
                 ("off", "사용안함"),
-                ("low", "중간 - 3초 간격"),
-                ("medium", "높음 - 2초 간격"),
+                ("low", "낮음 - 3초 간격"),
+                ("medium", "중간 - 2초 간격"),
             ]
 
             for level, label in choices:
@@ -533,8 +621,8 @@ class EditorPipelineMixin:
             # profile label 보조 저장
             labels = {
                 "off": "사용안함",
-                "low": "중간 - 3초 간격",
-                "medium": "높음 - 2초 간격",
+                "low": "낮음 - 3초 간격",
+                "medium": "중간 - 2초 간격",
             }
             masks = {
                 "off": "off",

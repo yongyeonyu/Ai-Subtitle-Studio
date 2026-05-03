@@ -122,7 +122,7 @@ class RoughCutModelsV2Tests(unittest.TestCase):
         })
         self.assertEqual(override.provider, "ollama")
         self.assertEqual(override.model, "exaone-test")
-        self.assertEqual(override.prompt, "custom roughcut prompt")
+        self.assertEqual(override.prompt, DEFAULT_ROUGHCUT_PROMPT_V1)
         self.assertEqual(override.temperature, 1.0)
         self.assertEqual(override.threads, 7)
         self.assertIn("중분류 A/B/C/D", DEFAULT_ROUGHCUT_PROMPT_V1)

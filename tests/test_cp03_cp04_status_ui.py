@@ -13,7 +13,7 @@ from PyQt6.QtCore import QObject, Qt
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QApplication, QLabel, QTextEdit, QWidget
 
-import config
+from core.runtime import config
 from core.state_manager import SubtitleStateManager
 from core.work_mode import EDITOR_MODE
 from ui.home_ui import HomeUIMixin

@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QWidget, QLabel, QLineEdit, QVBoxLayout, QApplicatio
 from PyQt6.QtCore    import Qt, QThread, pyqtSignal
 from PyQt6.QtGui     import QTextCursor, QFont
 
-import config
+from core.runtime import config
 
 class EditorPopup(QWidget):
     """우클릭 → 즉시 텍스트 입력창 표시 (메뉴 없음)."""

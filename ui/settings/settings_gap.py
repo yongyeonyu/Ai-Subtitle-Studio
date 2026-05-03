@@ -197,6 +197,7 @@ class GapSettingsDialog(QDialog):
         self.simulator.dedup_win = self.slider_dedup.value() / 10.0
         self.simulator.gap_break = self.slider_gap_break.value() / 10.0
         self.simulator.max_cps = self.slider_cps.value()
+        self.simulator.max_dur = self.slider_max_dur.value() / 10.0
         self.simulator.update()
 
     def _create_slider_row(self, slider: QSlider, label: QLabel, key: str, multiplier: float, format_func, tip: str) -> QHBoxLayout:

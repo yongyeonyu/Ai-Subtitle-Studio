@@ -171,7 +171,7 @@ class MultiClipWaveformWorker(QThread):
         total_px = max(1, int(total_dur * 100))
         combined = np.zeros(total_px, dtype=np.float32)
 
-        import config
+        from core.runtime import config
 
         for idx, clip in enumerate(self._clips):
             if self.isInterruptionRequested():

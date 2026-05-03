@@ -9,7 +9,7 @@ import threading
 from PyQt6.QtCore import QRect, Qt, QTimer
 from PyQt6.QtGui import QFont, QFontMetrics
 
-import config
+from core.runtime import config
 from ui.timeline.timeline_constants import HANDLE_R, SEG_BOT, SEG_TOP
 
 
@@ -372,9 +372,10 @@ class TimelineInlineEditMixin:
         if not seg:
             return
 
-        import os, subprocess, config
+        import os, subprocess
         from PyQt6.QtWidgets import QInputDialog
-        from logger import get_logger
+        from core.runtime import config
+        from core.runtime.logger import get_logger
 
         start_sec = seg["start"]
         end_sec = seg["end"]
@@ -465,7 +466,7 @@ class TimelineInlineEditMixin:
         def _listen():
             try:
                 from core.audio.live_stt import transcribe_microphone_once
-                from logger import get_logger
+                from core.runtime.logger import get_logger
 
                 result = transcribe_microphone_once(profile=profile)
                 if getattr(self, "_speech_stop_requested", False):
@@ -480,7 +481,7 @@ class TimelineInlineEditMixin:
 
             except Exception as e:
                 try:
-                    from logger import get_logger
+                    from core.runtime.logger import get_logger
                     get_logger().log(f"⚠️ 마이크 STT 실패: {e}")
                 except Exception:
                     pass

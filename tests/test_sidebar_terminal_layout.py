@@ -131,7 +131,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(queue_panel.sizePolicy().verticalPolicy(), QSizePolicy.Policy.Expanding)
             self.assertGreater(queue_panel.maximumHeight(), 10000)
             left_layout = queue_panel.parentWidget().layout()
-            self.assertEqual(left_layout.stretch(left_layout.indexOf(queue_panel)), 3)
+            self.assertEqual(left_layout.stretch(left_layout.indexOf(queue_panel)), 7)
             nav_buttons = []
             for label in window.home_page.findChildren(QLabel):
                 if label.text() in {"홈", "에디터", "러프컷", "숏폼"}:
@@ -139,7 +139,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                     if parent is not None and parent.objectName() == "MenuButton":
                         nav_buttons.append(parent)
             self.assertEqual(len(nav_buttons), 4)
-            self.assertTrue(all(btn.maximumHeight() == 36 for btn in nav_buttons))
+            self.assertTrue(all(btn.maximumHeight() == 30 for btn in nav_buttons))
             preset_panel = getattr(window, "sidebar_preset_panel", None)
             self.assertIsNotNone(preset_panel)
             self.assertLessEqual(window.sidebar_terminal_panel.maximumHeight(), 132)
@@ -178,8 +178,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                     "selected_roughcut_llm_model": "사용 안함",
                 }
             )
-            self.assertIn("color:#00D46A; padding:1px 10px 1px 0; font-weight:800;", progress_html)
-            self.assertIn("color:#FFD60A; padding:1px 10px 1px 0; font-weight:800;", progress_html)
+            self.assertIn("color:#00D46A; padding:1px 10px 1px 0; font-weight:400;", progress_html)
+            self.assertIn("color:#FFD60A; padding:1px 10px 1px 0; font-weight:400;", progress_html)
             self.assertIn("style='color:#00D46A; text-decoration:none;", progress_html)
             self.assertIn("style='color:#FFD60A; text-decoration:none;", progress_html)
         finally:
@@ -247,7 +247,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_saved_editor_without_generation_log_does_not_mark_pipeline_done(self):
+    def test_saved_editor_after_generation_marks_pipeline_done(self):
         window = MainWindow()
         try:
             editor = type("Editor", (), {})()
@@ -269,7 +269,10 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             completed = window._pipeline_completed_stage_keys(settings, current)
 
             self.assertEqual(current, set())
-            self.assertEqual(completed, set())
+            self.assertEqual(
+                completed,
+                {"cut_boundary", "preprocess", "audio", "stt1", "vad", "subtitle_llm", "roughcut_llm"},
+            )
         finally:
             window.close()
             window.deleteLater()
@@ -291,10 +294,9 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             panel = window._ensure_sidebar_queue_panel()
             panel.set_queue("큐 리스트 : (1/1) - 100% 완료", items)
             self.assertEqual(panel._table.horizontalHeaderItem(0).text(), "순서")
-            self.assertEqual(panel._table.horizontalHeaderItem(2).text(), "상태")
-            self.assertEqual(panel._table.horizontalHeaderItem(3).text(), "예상시간")
+            self.assertEqual(panel._table.horizontalHeaderItem(2).text(), "시간")
             self.assertEqual(panel._table.item(0, 0).text(), "1")
-            self.assertEqual(panel._table.item(0, 2).text(), "완료")
+            self.assertIn("완료", panel._table.item(0, 1).text())
         finally:
             window.close()
             window.deleteLater()

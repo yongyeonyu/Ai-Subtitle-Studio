@@ -27,6 +27,7 @@ dataset/user_settings.json
 dataset/subtitle_rule.json
 dataset/correction_memory.json
 dataset/wrong_answer_memory.json
+dataset/personalization/
 
 # ── 출력 파일 (음성/영상) ──
 output/

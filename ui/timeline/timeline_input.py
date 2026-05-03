@@ -7,7 +7,7 @@ Timeline input mixin
 from PyQt6.QtCore import QPoint, QRect, Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon, QPainter, QPixmap, QPolygon
 
-import config
+from core.runtime import config
 from ui.editor.editor_helpers import find_segment_at
 
 from ui.timeline.speaker_labels import current_speaker_settings, speaker_labels_for_segment

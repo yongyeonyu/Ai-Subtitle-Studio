@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import config
+from core.runtime import config
 from core.project.data_manager import CORRECTION_FILE
 from core.project.project_manager import PROJECTS_DIR, load_project
 from core.frame_time import normalize_fps, sec_to_frame
@@ -26,7 +26,19 @@ TEXT_LORA_QUALITY_PROFILE = {
     "project_pair_min_output_chars": 4,
     "project_pair_max_chars": 120,
     "project_pair_min_delta_ratio": 0.08,
+    "training_goal": "subtitle_qa_correction",
+    "preserve_speech_style": True,
+    "avoid_invention": True,
 }
+TEXT_LORA_SUBTITLE_QA_INSTRUCTION = (
+    "STT 후보를 최종 자막으로 검수한다. 원문 발화의 단어, 순서, 의미, 구어체를 보존하고 "
+    "띄어쓰기, 명백한 오탈자, 최소 문장부호만 교정한다. 없는 말, 설명, 요약, 문어체 변환, "
+    "고유명사/숫자 추측 교정을 하지 않는다."
+)
+TEXT_LORA_HALLUCINATION_INSTRUCTION = (
+    "자막 검수 중 확인된 STT 환각/오답 문구를 제거하거나 사용하지 않도록 학습한다. "
+    "확실하지 않은 내용은 새 문장으로 보강하지 않는다."
+)
 
 
 def _now() -> str:
@@ -169,6 +181,7 @@ def _segment_rows_for_lora(
                 "source": source_tag,
                 "input": input_text,
                 "output": output,
+                "instruction": TEXT_LORA_SUBTITLE_QA_INSTRUCTION,
                 "meta": {
                     "project_path": project_path,
                     "project_name": project_name,
@@ -330,6 +343,7 @@ def build_text_lora_dataset(
                 "source": "legacy_correction",
                 "input": original,
                 "output": corrected,
+                "instruction": TEXT_LORA_SUBTITLE_QA_INSTRUCTION,
                 "meta": {
                     "priority": "high",
                     "weight": 1.0,
@@ -356,6 +370,7 @@ def build_text_lora_dataset(
                 "source": "correction_memory",
                 "input": original,
                 "output": corrected,
+                "instruction": TEXT_LORA_SUBTITLE_QA_INSTRUCTION,
                 "meta": {
                     "type": str(row.get("type") or "typo"),
                     "confidence": float(row.get("confidence", 0.0) or 0.0),
@@ -387,6 +402,7 @@ def build_text_lora_dataset(
                 "source": "wrong_answer_memory",
                 "input": phrase,
                 "output": "",
+                "instruction": TEXT_LORA_HALLUCINATION_INSTRUCTION,
                 "meta": {
                     "count": int(row.get("count", 1) or 1),
                     "context": str(row.get("context") or ""),
@@ -607,6 +623,8 @@ def accumulate_personalization_dataset(
         "last_voice_bridge_rows": voice_appended,
         "notes": [
             "텍스트 LoRA 실사용 코퍼스 자동 누적",
+            "목표: STT 후보를 최종 자막으로 검수하는 subtitle QA 교정 LoRA",
+            "원문 발화/구어체/고유명사를 보존하고 띄어쓰기·명백한 오탈자·최소 문장부호만 학습",
             "생성 결과 STT 선택본 -> 최종 자막 pair 저장",
             "추후 음성 LoRA 연결용 frame/text/speaker bridge 포함",
         ],

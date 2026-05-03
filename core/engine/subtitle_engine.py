@@ -1,4 +1,4 @@
-# Version: 03.10.03
+# Version: 03.14.00
 # Phase: PHASE2
 """
 core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장 
@@ -16,70 +16,36 @@ import difflib
 
 from core.llm.secure_keys import get_api_key
 from core.llm.gemini_provider import split_text as gemini_split_text
-from core.llm.ollama_provider import split_text as ollama_split_text, warmup_model as warmup_ollama_model
+from core.llm.ollama_provider import (
+    split_text as ollama_split_text,
+    warmup_model as warmup_ollama_model,
+)
 from core.llm.openai_provider import is_openai_model, split_text as openai_split_text
 from core.engine.llm_correction_guard import safe_llm_chunks, validate_llm_chunks
-from core.subtitle_quality.llm_guarded_corrector import build_conservative_prompt
 from core.subtitle_quality.timestamp_regrouper import regroup_by_word_timestamps
-from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
-
+from core.personalization.runtime_lora_context import runtime_lora_enabled
+from core.engine.subtitle_prompts import _build_llm_prompt
+from core.engine.subtitle_settings import (
+    _effective_llm_workers as _effective_llm_workers_impl,
+    _get_user_settings,
+    _quality_conservative_enabled,
+    _resolve_runtime_llm_model,
+    _setting_float,
+    _setting_int,
+    get_local_dataset_corrections,
+    get_selected_llm,
+)
+from core.engine.subtitle_timing import (
+    adjust_timing,
+    apply_final_gap_settings,
+)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import config
-from logger import get_logger
+from core.runtime import config
+from core.runtime.logger import get_logger
 from core.utils import load_subtitle_rules
 
-# 💡 [설정 데이터 로드]
-def _get_user_settings():
-    import json
-    path = os.path.join(config.DATASET_DIR, "user_settings.json")
-    try:
-        with open(path, "r", encoding="utf-8") as f: 
-            return json.load(f)
-    except: 
-        return {}
-
 _S = _get_user_settings() # 설정 데이터 스냅샷 로드
-
-def _setting_int(settings: dict, key: str, default: int, fallback_key: str | None = None) -> int:
-    value = settings.get(key, None)
-    if value in (None, "") and fallback_key:
-        value = settings.get(fallback_key, None)
-    if value in (None, ""):
-        value = default
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _setting_float(settings: dict, key: str, default: float) -> float:
-    value = settings.get(key, default)
-    if value in (None, ""):
-        value = default
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _is_local_ollama_model(model: str) -> bool:
-    text = str(model or "").strip()
-    if not text or "사용 안함" in text:
-        return False
-    if "Gemini" in text or is_openai_model(text):
-        return False
-    return True
-
-
-def _effective_llm_workers(model: str, configured_workers: int, settings: dict, segment_count: int) -> tuple[int, str]:
-    configured = max(1, int(configured_workers or 1))
-    count = max(1, int(segment_count or 1))
-    if not _is_local_ollama_model(model):
-        return 1, "api"
-    local_cap = max(1, _setting_int(settings or {}, "local_ollama_llm_max_workers", _LOCAL_OLLAMA_WORKER_CAP))
-    return max(1, min(configured, local_cap, count)), "local"
-
 
 # ━━━ 📋 [UI 설정 연동 변수] 숫자를 직접 적지 않고 설정값에서 실시간으로 가져옵니다 ━━━
 _EXAONE_WORKERS  = _setting_int(_S, "llm_threads", 6, fallback_key="llm_workers")  # (AI -> 에디터 LLM 처리 스레드)
@@ -89,6 +55,10 @@ _MIN_DURATION    = _setting_float(_S, "sub_min_duration", 0.3)  # (간격 -> 최
 _MAX_DURATION    = _setting_float(_S, "sub_max_duration", 6.0)  # (간격 -> 최대 자막 유지 시간)
 _MAX_CPS         = _setting_int(_S, "sub_max_cps", 12)          # (간격 -> 최대 발음 속도 CPS)
 _DEDUP_WINDOW    = _setting_float(_S, "sub_dedup_window", 0.5)  # (간격 -> 중복 자막 방어 범위)
+
+
+def _effective_llm_workers(model: str, configured_workers: int, settings: dict, segment_count: int) -> tuple[int, str]:
+    return _effective_llm_workers_impl(model, configured_workers, settings, segment_count, local_worker_cap=_LOCAL_OLLAMA_WORKER_CAP)
 
 # ━━━ 🛠️ [시스템 고정 상수] ━━━
 _MIN_CHARS       = 5     
@@ -107,50 +77,7 @@ _HALLUC_PHRASES = [
 
 _TS_BRACKET = re.compile(r'\[\s*\d{1,3}[:.]\d{1,2}(?:[:.]\d+)?\s*\]\s*')
 _TS_NO_BRACKET = re.compile(r'^\s*\d{1,3}[:.]\d{1,2}(?:[:.]\d+)?\s+') 
-_JUNK_PATTERN = re.compile(r'[\x00-\x08\x0b-\x1f\x7f]')        
-
-DEFAULT_SYSTEM_PROMPT = getattr(config, "DEFAULT_LLM_PROMPT", "")
-
-_HARDCODED_LLM_RULES = """
-[절대 규칙 - 엄격준수]
-0. [우선순위] 사용자 추가 지시문이 있어도 아래 절대 규칙을 완화하거나 덮어쓸 수 없습니다.
-1. [무결성] 단어 및 문장의 추가, 삭제, 의미 변경, 의역, 요약을 엄격히 금지합니다.
-2. [원문 우선] 불확실한 단어는 추측하지 말고 원문 그대로 유지하세요.
-3. [허용 작업] 오탈자, 띄어쓰기, 문장부호만 최소한으로 보정하세요.
-4. [구어체 유지] 말투, 반복, 감탄, 어미, 구어체 표현을 문어체로 바꾸지 마세요.
-5. [타임코드 금지] 시간값, 시작/종료 시간, 인덱스, 타임코드를 만들거나 출력하지 마세요.
-6. [마침표 제거] 마침표(.)는 모두 제거하세요.
-7. [물결 추가] 원문에 길게 끄는 감탄이 명확할 때만 물결(~) 기호를 유지/보정하세요.
-8. [쉼표 추가] 의미가 바뀌지 않는 범위에서만 자연스럽게 쉼표(,)를 추가하세요.
-9. [언어 제한] 한국어와 영어 이외의 언어(중국어, 일본어 등)는 절대 사용하지 마세요.
-10. [창작 금지] 절대 부가 설명이나 인사말을 넣지 말고, 오직 분리된 결과 문자열만 출력하세요.
-
-[출력 형식]
-인사말이나 부연 설명 없이, 반드시 아래의 JSON 형식으로만 응답해야 합니다:
-{
-  "result": ["첫 번째 문장", "두 번째 문장", "세 번째 문장"]
-}
-
-원본 텍스트: {text}
-"""
-
-def get_local_dataset_corrections() -> dict:
-    settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
-    try:
-        # 💡 [치명적 버그 수정] path -> settings_path 로 변수명 오타 교정!
-        with open(settings_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-def get_selected_llm() -> str:
-    settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
-    try:
-        # 💡 [치명적 버그 수정] path -> settings_path 로 변수명 오타 교정!
-        with open(settings_path, "r", encoding="utf-8") as f:
-            return json.load(f).get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
-    except Exception:
-        return getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b")
+_JUNK_PATTERN = re.compile(r'[\x00-\x08\x0b-\x1f\x7f]')
 
 def _clean(text: str, corrections: dict | None = None) -> str:
     original = text
@@ -365,31 +292,20 @@ def is_natural_break(word: str, next_word: str, rules: dict) -> bool:
         return True
     return False
 
-def _quality_conservative_enabled(settings: dict | None) -> bool:
-    settings = settings or {}
-    return bool(
-        settings.get("subtitle_quality_enabled")
-        or settings.get("subtitle_quality_auto_check_after_generate")
-        or settings.get("subtitle_quality_auto_correct_enabled")
-    )
-
-
-def ask_exaone_to_split(text: str, threshold: int, rules: dict, model: str, user_prompt: str, conservative: bool = False) -> list[str] | None:
+def ask_exaone_to_split(
+    text: str,
+    threshold: int,
+    rules: dict,
+    model: str,
+    user_prompt: str,
+    conservative: bool = False,
+    settings: dict | None = None,
+) -> list[str] | None:
     if "사용 안함" in model:
         return None
+    model = _resolve_runtime_llm_model(model, logger=get_logger(), context="자막 LLM")
 
-    end_words = ", ".join(rules.get("end_words", []))
-    start_words = ", ".join(rules.get("start_words", []))
-
-    if user_prompt.strip():
-        combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n[사용자 추가 지시문]\n{user_prompt.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
-    else:
-        combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
-
-    if conservative:
-        combined_prompt = build_conservative_prompt(combined_prompt)
-
-    prompt = combined_prompt.replace("{threshold}", str(threshold)).replace("{end_words}", end_words).replace("{start_words}", start_words).replace("{text}", text)
+    prompt = _build_llm_prompt(text, threshold, rules, user_prompt, conservative=conservative, settings=settings)
 
     try:
         chunks = ollama_split_text(model, prompt) or []
@@ -408,33 +324,24 @@ def ask_exaone_to_split(text: str, threshold: int, rules: dict, model: str, user
         return guarded if guarded else None
 
     except Exception as e:
-        get_logger().log(f"[LLM 연결/파싱 실패] {e}")
+        get_logger().log(f"[LLM 연결/파싱 실패] 모델={model} / {e}")
         return None
 
-def _build_llm_prompt(text: str, threshold: int, rules: dict, user_prompt: str, conservative: bool = False) -> str:
-    end_words = ", ".join(rules.get("end_words", []))
-    start_words = ", ".join(rules.get("start_words", []))
-    if user_prompt.strip():
-        combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n[사용자 추가 지시문]\n{user_prompt.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
-    else:
-        combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
-    if conservative:
-        combined_prompt = build_conservative_prompt(combined_prompt)
-    return (
-        combined_prompt
-        .replace("{threshold}", str(threshold))
-        .replace("{end_words}", end_words)
-        .replace("{start_words}", start_words)
-        .replace("{text}", text)
-    )
-
-
-def ask_openai_to_split(text: str, threshold: int, rules: dict, model_name: str, user_prompt: str, api_key: str, conservative: bool = False) -> list[str] | None:
+def ask_openai_to_split(
+    text: str,
+    threshold: int,
+    rules: dict,
+    model_name: str,
+    user_prompt: str,
+    api_key: str,
+    conservative: bool = False,
+    settings: dict | None = None,
+) -> list[str] | None:
     if not api_key:
         get_logger().log("❌ API 키가 없습니다. 환경설정에서 OpenAI API Key를 입력해주세요.")
         return None
     try:
-        chunks = openai_split_text(api_key, model_name, _build_llm_prompt(text, threshold, rules, user_prompt, conservative=conservative))
+        chunks = openai_split_text(api_key, model_name, _build_llm_prompt(text, threshold, rules, user_prompt, conservative=conservative, settings=settings))
     except Exception as e:
         get_logger().log(f"[OpenAI 연결/파싱 실패] {e}")
         return None
@@ -499,6 +406,7 @@ def _select_stt_candidate_text(seg: dict, model: str, user_prompt: str, api_key:
         elif is_openai_model(model):
             chunks = openai_split_text(api_key, model, prompt)
         else:
+            model = _resolve_runtime_llm_model(model, logger=get_logger(), context="STT 앙상블 LLM")
             chunks = ollama_split_text(model, prompt)
     except Exception as exc:
         get_logger().log(f"[STT앙상블-LLM판정 실패] {exc}")
@@ -533,6 +441,13 @@ def _stt_selection_metadata(seg: dict) -> dict:
         "stt_ensemble_llm_selected_source",
         "stt_ensemble_llm_selected_label",
         "stt_selected_source",
+        "score",
+        "stt_score",
+        "score_color",
+        "stt_score_color",
+        "stt_score_label",
+        "stt_score_flags",
+        "stt_score_components",
     )
     return {key: seg[key] for key in keys if key in seg}
 
@@ -571,15 +486,20 @@ def _annotate_stt_candidate_context(segments: list[dict], window: int = 2) -> li
 
 
 def _process_one(args: tuple) -> list[dict]:
-    if len(args) == 8:
+    if len(args) == 9:
+        seg, rules, threshold, corrections, model, user_prompt, api_key, conservative, runtime_settings = args
+    elif len(args) == 8:
         seg, rules, threshold, corrections, model, user_prompt, api_key, conservative = args
+        runtime_settings = None
     elif len(args) == 7:
         seg, rules, threshold, corrections, model, user_prompt, api_key = args
         conservative = False
+        runtime_settings = None
     else:
         seg, rules, threshold, corrections, model, user_prompt = args
         api_key = ""
         conservative = False
+        runtime_settings = None
 
     spk  = seg.get("speaker", "SPEAKER_00")
     text = seg.get("text", "").strip()
@@ -626,11 +546,11 @@ def _process_one(args: tuple) -> list[dict]:
     if "사용 안함" in str(model or ""):
         chunks = None
     elif "Gemini" in model:
-        chunks = ask_gemini_to_split(text, threshold, rules, model, user_prompt, api_key, conservative=conservative)
+        chunks = ask_gemini_to_split(text, threshold, rules, model, user_prompt, api_key, conservative=conservative, settings=runtime_settings)
     elif is_openai_model(model):
-        chunks = ask_openai_to_split(text, threshold, rules, model, user_prompt, api_key, conservative=conservative)
+        chunks = ask_openai_to_split(text, threshold, rules, model, user_prompt, api_key, conservative=conservative, settings=runtime_settings)
     else:
-        chunks = ask_exaone_to_split(text, threshold, rules, model, user_prompt, conservative=conservative)
+        chunks = ask_exaone_to_split(text, threshold, rules, model, user_prompt, conservative=conservative, settings=runtime_settings)
 
 
     if chunks:
@@ -717,7 +637,11 @@ def _process_one(args: tuple) -> list[dict]:
 
 
 def _process_one_llm_only(args: tuple) -> list[dict]:
-    seg, rules, threshold, corrections, model, user_prompt, api_key, conservative = args
+    if len(args) == 9:
+        seg, rules, threshold, corrections, model, user_prompt, api_key, conservative, runtime_settings = args
+    else:
+        seg, rules, threshold, corrections, model, user_prompt, api_key, conservative = args
+        runtime_settings = None
     spk = seg.get("speaker", "SPEAKER_00")
     text = str(seg.get("text", "") or "").strip()
     if not text:
@@ -762,11 +686,11 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
             word.setdefault("speaker", spk)
 
     if "Gemini" in model:
-        chunks = ask_gemini_to_split(cleaned_text, threshold, rules, model, user_prompt, api_key, conservative=conservative)
+        chunks = ask_gemini_to_split(cleaned_text, threshold, rules, model, user_prompt, api_key, conservative=conservative, settings=runtime_settings)
     elif is_openai_model(model):
-        chunks = ask_openai_to_split(cleaned_text, threshold, rules, model, user_prompt, api_key, conservative=conservative)
+        chunks = ask_openai_to_split(cleaned_text, threshold, rules, model, user_prompt, api_key, conservative=conservative, settings=runtime_settings)
     else:
-        chunks = ask_exaone_to_split(cleaned_text, threshold, rules, model, user_prompt, conservative=conservative)
+        chunks = ask_exaone_to_split(cleaned_text, threshold, rules, model, user_prompt, conservative=conservative, settings=runtime_settings)
 
     if not chunks:
         return [{**seg, "text": cleaned_text}]
@@ -853,148 +777,6 @@ def _enforce_len(segments: list[dict], threshold: int, rules: dict) -> list[dict
                     })
                 buf = []
     return result
-
-def _segment_scope_key(seg: dict):
-    clip_idx = seg.get("_clip_idx")
-    if clip_idx is not None:
-        return ("clip_idx", str(clip_idx))
-    clip_file = seg.get("_clip_file") or seg.get("clip_file")
-    if clip_file:
-        return ("clip_file", str(clip_file))
-    return None
-
-
-def _same_timing_scope(prev: dict, cur: dict) -> bool:
-    prev_key = _segment_scope_key(prev)
-    cur_key = _segment_scope_key(cur)
-    if prev_key is None and cur_key is None:
-        return True
-    return prev_key == cur_key
-
-
-def _update_frame_fields(seg: dict, start: float, end: float) -> None:
-    fps_value = seg.get("timeline_frame_rate") or seg.get("frame_rate") or seg.get("fps")
-    if fps_value in (None, ""):
-        return
-    fps = normalize_fps(fps_value)
-    start_frame = sec_to_frame(start, fps)
-    end_frame = max(start_frame + 1, sec_to_frame(end, fps))
-    seg["timeline_start_frame"] = start_frame
-    seg["timeline_end_frame"] = end_frame
-    seg["start_frame"] = start_frame
-    seg["end_frame"] = end_frame
-    seg["frame_rate"] = fps
-    seg["timeline_frame_rate"] = fps
-    seg["timeline_start"] = frame_to_sec(start_frame, fps)
-    seg["timeline_end"] = frame_to_sec(end_frame, fps)
-    seg["start"] = seg["timeline_start"]
-    seg["end"] = seg["timeline_end"]
-    seg["frame_range"] = {
-        "unit": "frame",
-        "start": start_frame,
-        "end": end_frame,
-        "timeline_frame_rate": fps,
-    }
-
-
-def apply_final_gap_settings(
-    segments: list[dict],
-    settings: dict | None = None,
-    *,
-    force: bool = False,
-) -> list[dict]:
-    """Apply the user-facing Gap settings as the final subtitle timing pass."""
-    if not segments:
-        return segments
-
-    candidates = [dict(seg) for seg in segments if isinstance(seg, dict)]
-    if not candidates:
-        return []
-
-    if not force and all(seg.get("_final_gap_settings_applied") for seg in candidates):
-        return candidates
-
-    s = dict(settings or _get_user_settings() or {})
-    cont_thresh = max(0.0, _setting_float(s, "continuous_threshold", 2.0))
-    push_rate = max(0.0, min(1.0, _setting_float(s, "gap_push_rate", 0.7)))
-    pull_rate = max(0.0, min(1.0, 1.0 - push_rate))
-    single_ext = max(0.0, _setting_float(s, "single_subtitle_end", 0.2))
-    min_duration = max(0.05, _setting_float(s, "sub_min_duration", 0.2))
-
-    adj = sorted(candidates, key=lambda x: (float(x.get("start", 0.0) or 0.0), float(x.get("end", 0.0) or 0.0)))
-    for seg in adj:
-        if seg.get("is_gap"):
-            continue
-        try:
-            start = max(0.0, float(seg.get("start", 0.0) or 0.0))
-            end = float(seg.get("end", start + min_duration) or start + min_duration)
-        except Exception:
-            start = 0.0
-            end = min_duration
-        if end <= start:
-            end = start + min_duration
-        seg["start"] = start
-        seg["end"] = end
-
-    for idx, cur in enumerate(adj):
-        if cur.get("is_gap"):
-            cur["_final_gap_settings_applied"] = True
-            continue
-
-        nxt = None
-        for candidate in adj[idx + 1:]:
-            if not candidate.get("is_gap"):
-                nxt = candidate
-                break
-
-        if nxt is not None and _same_timing_scope(cur, nxt):
-            gap = float(nxt.get("start", 0.0) or 0.0) - float(cur.get("end", 0.0) or 0.0)
-            if gap < 0.0:
-                cur["end"] = max(float(cur["start"]) + min_duration, float(nxt["start"]) - 0.02)
-                if cur["end"] > float(nxt["start"]):
-                    nxt["start"] = cur["end"]
-                    if float(nxt["end"]) <= float(nxt["start"]):
-                        nxt["end"] = float(nxt["start"]) + min_duration
-            elif gap > 0.0:
-                if gap <= cont_thresh:
-                    cur["end"] = float(cur["end"]) + (gap * push_rate)
-                    nxt["start"] = max(0.0, float(nxt["start"]) - (gap * pull_rate))
-                else:
-                    extension = min(single_ext, gap / 2.0)
-                    cur["end"] = float(cur["end"]) + extension
-                    nxt["start"] = max(0.0, float(nxt["start"]) - extension)
-
-                if float(cur["end"]) > float(nxt["start"]):
-                    boundary = (float(cur["end"]) + float(nxt["start"])) / 2.0
-                    cur["end"] = max(float(cur["start"]) + min_duration, boundary)
-                    nxt["start"] = max(0.0, cur["end"])
-                    if float(nxt["end"]) <= float(nxt["start"]):
-                        nxt["end"] = float(nxt["start"]) + min_duration
-        elif single_ext > 0.0:
-            cur["end"] = float(cur["end"]) + single_ext
-
-        if float(cur["end"]) <= float(cur["start"]):
-            cur["end"] = float(cur["start"]) + min_duration
-        _update_frame_fields(cur, float(cur["start"]), float(cur["end"]))
-        cur["_final_gap_settings_applied"] = True
-
-    return adj
-
-
-def adjust_timing(segments: list[dict]) -> list[dict]:
-    if not segments:
-        return segments
-    adj = sorted([dict(s) for s in segments], key=lambda x: x["start"])
-    for i in range(1, len(adj)):
-        prev = adj[i - 1]
-        cur = adj[i]
-        
-        if prev["end"] > cur["start"]:
-            prev["end"] = max(prev["start"] + 0.1, cur["start"] - 0.02)
-            
-        if cur["end"] <= cur["start"]:
-            cur["end"] = cur["start"] + 0.3
-    return adj
 
 def _optimizer_context() -> tuple[dict, list[dict], str, dict, int, str, str, dict, dict]:
     global _EXAONE_WORKERS, _LOCAL_OLLAMA_WORKER_CAP, _GAP_BREAK_SEC, _MIN_DURATION, _MAX_DURATION, _MAX_CPS, _DEDUP_WINDOW
@@ -1094,6 +876,7 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
         return segments
     original_segments = [dict(seg) for seg in segments if isinstance(seg, dict)]
     loaded_settings, rules, model, corrections, threshold, user_prompt, api_key, _raw_corr, _settings = _optimizer_context()
+    model = _resolve_runtime_llm_model(model, logger=get_logger(), context="자막 LLM")
     short_m = model.split(":")[0].upper()
     get_logger().log(f"\n━━━ 자막 최적화 시작 ({len(segments)}개 세그먼트) ━━━")
     get_logger().log(
@@ -1104,8 +887,10 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
     conservative = _quality_conservative_enabled(loaded_settings)
     if conservative:
         get_logger().log("[LLM-보수Profile] 자막 품질 검사/자동교정 보호 규칙을 적용합니다.")
+    if runtime_lora_enabled(loaded_settings):
+        get_logger().log("[텍스트 LoRA] 자동 교정 허용: 교정 memory/오답 memory/사용자 단어/줄바꿈 규칙을 최종 LLM에 적용합니다.")
 
-    args = [(seg, rules, threshold, corrections, model, user_prompt, api_key, conservative) for seg in segments]
+    args = [(seg, rules, threshold, corrections, model, user_prompt, api_key, conservative, loaded_settings) for seg in segments]
     optimized: list[dict] = []
 
     if "사용 안함" in model:
@@ -1166,7 +951,7 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
         fallback = []
         for seg in _annotate_stt_candidate_context(original_segments):
             try:
-                processed = _process_one_llm_only((seg, rules, threshold, corrections, model, user_prompt, api_key, conservative))
+                processed = _process_one_llm_only((seg, rules, threshold, corrections, model, user_prompt, api_key, conservative, loaded_settings))
             except Exception:
                 processed = [{**seg, "text": _clean(str(seg.get("text", "") or ""), corrections)}]
             for item in processed or []:
@@ -1174,6 +959,7 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
                     fallback.append(item)
         optimized = adjust_timing(fallback)
 
+    optimized = apply_final_gap_settings(optimized, loaded_settings, force=False)
     get_logger().log(f"━━━ 자막 최적화 완료: {len(optimized)}개 ━━━\n")
     return optimized
 
@@ -1181,13 +967,22 @@ def save_srt(segments: list[dict], srt_path: str, apply_offset: bool = True):
     from core.engine.srt_writer import save_srt as _save_srt
     return _save_srt(segments, srt_path, apply_offset=apply_offset, adjust_timing_func=adjust_timing)
 
-def ask_gemini_to_split(text: str, threshold: int, rules: dict, model_name: str, user_prompt: str, api_key: str, conservative: bool = False) -> list[str] | None:
+def ask_gemini_to_split(
+    text: str,
+    threshold: int,
+    rules: dict,
+    model_name: str,
+    user_prompt: str,
+    api_key: str,
+    conservative: bool = False,
+    settings: dict | None = None,
+) -> list[str] | None:
     if not api_key:
         get_logger().log("❌ API 키가 없습니다. 환경설정에서 Google API Key를 입력해주세요.")
         return None
 
     try:
-        chunks = gemini_split_text(api_key, model_name, _build_llm_prompt(text, threshold, rules, user_prompt, conservative=conservative))
+        chunks = gemini_split_text(api_key, model_name, _build_llm_prompt(text, threshold, rules, user_prompt, conservative=conservative, settings=settings))
     except Exception:
         return [text]
 

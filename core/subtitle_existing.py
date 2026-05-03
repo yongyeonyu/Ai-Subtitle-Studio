@@ -10,7 +10,7 @@ import shutil
 from core.media_info import probe_media
 from core.path_manager import get_srt_path
 from core.srt_parser import parse_srt
-from logger import get_logger
+from core.runtime.logger import get_logger
 
 
 def backup_existing_srt(target_file_or_srt: str) -> bool:

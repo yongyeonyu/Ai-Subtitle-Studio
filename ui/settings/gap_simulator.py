@@ -5,7 +5,7 @@
 from PyQt6.QtWidgets import QWidget, QToolTip
 from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QFontMetrics
 from PyQt6.QtCore import Qt, QRect
-import config
+from core.runtime import config
 from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
 
 
@@ -33,6 +33,7 @@ class GapSimulatorWidget(GapSimulatorBase):
         self.single_ext = 0.2
         self.split_len = 15
         self.min_dur = 0.3
+        self.max_dur = 6.0
         self.max_cps = 12
         self.dedup_win = 0.5
         self.gap_break = 1.5
@@ -96,7 +97,7 @@ class GapSimulatorWidget(GapSimulatorBase):
         split_res = []
         limit = int(self.split_len * self.enforce_ratio)
         for b in survivors:
-            if b["chars"] > limit:
+            if b["chars"] > limit or (float(b["end"]) - float(b["start"])) > self.max_dur:
                 mid = (b["start"] + b["end"]) / 2
                 half = len(b["text"]) // 2
                 t1 = b["text"][:half] + ".."

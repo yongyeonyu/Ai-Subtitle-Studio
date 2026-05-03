@@ -88,7 +88,7 @@ def _suppress_stderr_line(text: str) -> bool:
 
 def _attach_stderr_logger(proc, log_label: str = "STT"):
     def _log_stderr():
-        from logger import get_logger
+        from core.runtime.logger import get_logger
 
         for line in proc.stderr:
             line = _format_stderr_log(line, log_label=log_label)

@@ -9,7 +9,7 @@ import os
 import re
 import shutil
 
-import config
+from core.runtime import config
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtMultimedia import QSoundEffect
 from PyQt6.QtWidgets import (

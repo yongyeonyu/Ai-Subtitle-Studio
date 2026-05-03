@@ -3,7 +3,7 @@
 import os
 import time
 import threading
-from logger import get_logger
+from core.runtime.logger import get_logger
 from core.auto_tracker import AutoTracker
 
 

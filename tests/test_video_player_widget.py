@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtMultimedia import QMediaPlayer
 
-import config
+from core.runtime import config
 from ui.editor.video_player_widget import VideoPlayerWidget
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
 
@@ -259,6 +259,40 @@ class VideoPlayerWidgetTests(unittest.TestCase):
         self.assertEqual(len(editor.applied_contexts), 1)
         self.assertFalse(editor.applied_contexts[0][1])
         self.assertFalse(editor.applied_contexts[0][2])
+
+    def test_clip_context_waits_for_new_media_source_before_consuming_pending_seek(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
+                widget._current_source_path = "/tmp/clip_a.mp4"
+                with patch.object(widget, "_is_video_file", return_value=False), \
+                     patch.object(widget, "_playback_path_for", return_value=f.name), \
+                     patch.object(widget, "_ensure_media_source_loaded", side_effect=[False, True]), \
+                     patch.object(widget.media_player, "setPosition") as set_position, \
+                     patch.object(widget, "toggle_play") as toggle_play:
+                    widget.load_clip_context(
+                        f.name,
+                        segments=[{"start": 0.0, "end": 1.0, "text": "둘째 클립"}],
+                        seek_sec=2.0,
+                        autoplay=True,
+                        show_thumbnail=False,
+                    )
+
+                    self.assertEqual(widget._pending_seek_sec, 2.0)
+                    self.assertTrue(widget._pending_autoplay)
+                    set_position.assert_not_called()
+                    toggle_play.assert_not_called()
+
+                    widget._apply_loaded_media_state()
+
+                set_position.assert_called_with(2000)
+                self.assertIsNone(widget._pending_seek_sec)
+                self.assertFalse(widget._pending_autoplay)
+                toggle_play.assert_called_once()
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
 
 
 if __name__ == "__main__":

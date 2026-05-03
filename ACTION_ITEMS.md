@@ -1,16 +1,16 @@
 <!--
-Document-Version: 03.13.00
+Document-Version: 03.14.00
 Phase: PHASE2
-Last-Updated: 2026-05-03
+Last-Updated: 2026-05-04
 Updated-By: Codex with 대표님
-This-Update: v03.13.00 release sync after frame-first cut-boundary enforcement, auto preset detection, text LoRA accumulation, and safe UI/refactor cleanup
+This-Update: v03.14.00 release sync after closing the v03.13.x refactor line
 GitHub-Publish: no
 -->
 # ACTION_QUEUE v2
 
 meta:
-  app: 03.13.00
-  next: 03.13.01
+  app: 03.14.00
+  next: 03.14.01
   phase: PHASE2
   commit: user_explicit_only
   done: remove_from_this_file
@@ -19,7 +19,7 @@ meta:
   routine_change_docs:
     policy: minimal_only
     update_immediately:
-      - config.py_APP_VERSION_if_code_behavior_changes
+      - core/runtime/config.py_APP_VERSION_if_code_behavior_changes
       - ACTION_ITEMS.md_only_if_queue_changes
       - check_list.md_only_if_user_confirmation_needed
       - current_RELEASE_v*.md_only_for_removed_defs_classes_helpers_ui_actions_signals_slots_or_nondeferrable_risk

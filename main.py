@@ -10,7 +10,7 @@ os.environ.setdefault(
 )
 os.environ.setdefault("AV_LOG_LEVEL", "16")
 
-import config
+from core.runtime import config
 from core.performance import configure_qt_gpu_rendering_before_app, configure_qt_runtime
 from core.platform_compat import cleanup_app_runtime_processes, cleanup_stale_preview_proxy_processes
 
@@ -18,7 +18,7 @@ configure_qt_gpu_rendering_before_app()
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import Qt
-from logger import get_logger
+from core.runtime.logger import get_logger
 
 _instance_socket = None
 

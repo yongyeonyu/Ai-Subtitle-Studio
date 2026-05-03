@@ -12,8 +12,8 @@ import tempfile
 import shutil
 import re
 
-import config
-from logger import get_logger
+from core.runtime import config
+from core.runtime.logger import get_logger
 
 
 def render_subtitle_mov(srt_path: str, target_file: str, export_settings: dict,

@@ -34,6 +34,13 @@ STT_SEGMENT_METADATA_KEYS = (
     "stt_ensemble_context_prev",
     "stt_ensemble_context_next",
     "stt_preview_source",
+    "score",
+    "stt_score",
+    "score_color",
+    "stt_score_color",
+    "stt_score_label",
+    "stt_score_flags",
+    "stt_score_components",
     "_live_stt_preview",
 )
 
@@ -218,8 +225,24 @@ def project_stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]
     editor_state = project.get("editor_state", {}) or {}
     stt_state = editor_state.get("stt", {}) or {}
     raw_segments = stt_state.get("preview_segments")
-    if not isinstance(raw_segments, list):
+    if not isinstance(raw_segments, list) or not raw_segments:
         raw_segments = editor_state.get("stt_preview_segments")
+    if not isinstance(raw_segments, list) or not raw_segments:
+        tracks = stt_state.get("candidate_tracks")
+        if not isinstance(tracks, dict):
+            tracks = (editor_state.get("analysis", {}) or {}).get("stt_candidate_tracks")
+        if not isinstance(tracks, dict):
+            tracks = (project.get("analysis", {}) or {}).get("stt_candidate_tracks")
+        if isinstance(tracks, dict):
+            raw_segments = []
+            for source, rows in tracks.items():
+                if not isinstance(rows, list):
+                    continue
+                for row in rows:
+                    if isinstance(row, dict):
+                        item = dict(row)
+                        item["stt_preview_source"] = str(source)
+                        raw_segments.append(item)
     if not isinstance(raw_segments, list):
         return []
     timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
@@ -335,6 +358,11 @@ def build_editor_state(
         stt_preview_segments or [],
         primary_fps=normalize_fps(primary_fps or 30.0),
     )
+    stt_candidate_tracks = build_stt_candidate_tracks(
+        normalized_segments,
+        stt_preview,
+        primary_fps=normalize_fps(primary_fps or 30.0),
+    )
     cut_boundary_rows = normalize_cut_boundaries(
         cut_boundaries or [],
         primary_fps=normalize_fps(primary_fps or 30.0),
@@ -365,15 +393,123 @@ def build_editor_state(
         "stt": {
             "schema": "stt_candidates.v1",
             "preview_segments": stt_preview,
+            "candidate_tracks": stt_candidate_tracks,
+            "candidate_counts": {
+                source: len(rows)
+                for source, rows in stt_candidate_tracks.items()
+            },
         },
         "analysis": {
             "cut_boundary_schema": CUT_BOUNDARY_SCHEMA,
             "cut_boundaries": cut_boundary_rows,
             "cut_boundary_provisional_schema": CUT_BOUNDARY_PROVISIONAL_SCHEMA,
             "cut_boundary_provisional_boundaries": provisional_cut_boundary_rows,
+            "stt_candidate_tracks": stt_candidate_tracks,
         },
         "workspace": sanitize_workspace_state(workspace),
     }
+
+
+def build_stt_candidate_tracks(
+    segments: list[dict[str, Any]] | None,
+    preview_segments: list[dict[str, Any]] | None = None,
+    *,
+    primary_fps: float = 30.0,
+) -> dict[str, list[dict[str, Any]]]:
+    """Persist STT1/STT2 candidate subtitles as independent project tracks."""
+    fps = normalize_fps(primary_fps or 30.0)
+    tracks: dict[str, list[dict[str, Any]]] = {"STT1": [], "STT2": []}
+    seen: set[tuple[str, int, int, str]] = set()
+
+    def add_row(source: str, row: dict[str, Any], parent: dict[str, Any] | None = None) -> None:
+        if not isinstance(row, dict):
+            return
+        source_key = _normalize_stt_source(source or row.get("source") or row.get("stt_preview_source"))
+        if source_key not in tracks:
+            return
+        text = str(row.get("text", "") or "").strip()
+        if not text:
+            return
+        parent = parent or {}
+        start = _safe_float(row.get("start", row.get("timeline_start", parent.get("start", 0.0))))
+        end = _safe_float(row.get("end", row.get("timeline_end", parent.get("end", start))), start)
+        start_frame = row.get("start_frame", row.get("timeline_start_frame"))
+        end_frame = row.get("end_frame", row.get("timeline_end_frame"))
+        if start_frame is None:
+            start_frame = int(start * fps)
+        if end_frame is None:
+            end_frame = int(max(start, end) * fps)
+        start_frame = _safe_int(start_frame)
+        end_frame = max(start_frame, _safe_int(end_frame, start_frame))
+        key = (source_key, start_frame, end_frame, text)
+        if key in seen:
+            return
+        seen.add(key)
+        item = {
+            "index": len(tracks[source_key]) + 1,
+            "source": source_key,
+            "start": frame_to_sec(start_frame, fps),
+            "end": frame_to_sec(end_frame, fps),
+            "text": text,
+            "speaker": str(row.get("speaker", row.get("spk", parent.get("speaker", "00"))) or "00"),
+            "start_frame": start_frame,
+            "end_frame": end_frame,
+            "timeline_start_frame": start_frame,
+            "timeline_end_frame": end_frame,
+            "frame_rate": fps,
+            "timeline_frame_rate": fps,
+            "frame_range": {
+                "unit": "frame",
+                "start": start_frame,
+                "end": end_frame,
+                "timeline_frame_rate": fps,
+            },
+        }
+        for key_name in (
+            "_clip_idx",
+            "_clip_file",
+            "score",
+            "stt_score",
+            "score_color",
+            "stt_score_color",
+            "stt_score_label",
+            "stt_score_flags",
+            "stt_score_components",
+            "avg_logprob",
+            "no_speech_prob",
+            "compression_ratio",
+            "words",
+            "quality",
+            "quality_history",
+            "quality_candidates",
+        ):
+            if key_name in row:
+                item[key_name] = row.get(key_name)
+            elif key_name in parent:
+                item[key_name] = parent.get(key_name)
+        tracks[source_key].append(item)
+
+    for seg in segments or []:
+        if not isinstance(seg, dict):
+            continue
+        for candidate in list(seg.get("stt_candidates") or []):
+            add_row(str(candidate.get("source", "")), candidate, seg)
+
+    for seg in preview_segments or []:
+        if not isinstance(seg, dict):
+            continue
+        add_row(str(seg.get("stt_preview_source") or seg.get("stt_source") or "STT1"), seg, seg)
+
+    return {source: rows for source, rows in tracks.items() if rows}
+
+
+def _normalize_stt_source(source: Any) -> str:
+    text = str(source or "").upper().strip()
+    if "STT2" in text or text in {"SECONDARY", "S2"}:
+        return "STT2"
+    if "STT1" in text or text in {"PRIMARY", "S1", ""}:
+        return "STT1"
+    return text
 
 
 def segment_signature(segments: list[dict[str, Any]]) -> str:

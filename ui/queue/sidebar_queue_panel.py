@@ -45,17 +45,14 @@ class SidebarQueuePanel(QWidget):
         )
         layout.addWidget(self._header_lbl)
 
-        self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["순서", "파일명", "상태", "예상시간"])
+        self._table = QTableWidget(0, 3)
+        self._table.setHorizontalHeaderLabels(["순서", "파일명", "시간"])
         self._table.verticalHeader().setVisible(False)
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self._table.setColumnWidth(0, 26)
-        self._table.setColumnHidden(2, True)
-        self._table.setColumnWidth(2, 42)
-        self._table.setColumnWidth(3, 100)
+        self._table.setColumnWidth(0, 32)
+        self._table.setColumnWidth(2, 64)
         self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setShowGrid(False)
@@ -111,11 +108,22 @@ class SidebarQueuePanel(QWidget):
             self._table.insertRow(row)
             done = bool(item.get("done")) or "완료" in str(item.get("status", "") or "")
             row_color = "#34C759" if done else "#FFCC44"
-            for col, key in enumerate(("order", "file", "statusDisplay", "eta")):
-                value = item.get(key, "") if key != "statusDisplay" else item.get("statusDisplay") or item.get("status", "")
+            status = item.get("statusDisplay") or item.get("status", "대기 중")
+            file_text = str(item.get("file", "-") or "-")
+            value_map = {
+                "order": item.get("order", row + 1),
+                "file": f"{file_text}\n{'완료' if done else status}",
+                "eta": item.get("eta", "-"),
+            }
+            for col, key in enumerate(("order", "file", "eta")):
+                value = value_map.get(key, "-")
                 cell = QTableWidgetItem(str(value or "-"))
                 cell.setForeground(QColor(row_color))
-                cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter if col == 0 else Qt.AlignmentFlag.AlignVCenter)
+                cell.setTextAlignment(
+                    Qt.AlignmentFlag.AlignCenter
+                    if col in {0, 2}
+                    else Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+                )
                 self._table.setItem(row, col, cell)
-            self._table.setRowHeight(row, 36)
+            self._table.setRowHeight(row, 48)
         self._table.setUpdatesEnabled(True)

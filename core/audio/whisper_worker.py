@@ -32,6 +32,11 @@ def main():
     model_path = task["model"]
     fallback_model = task.get("fallback_model") or ""
     language = task["language"]
+    temperature_values = task.get("temperature_values") or [0.0]
+    try:
+        temperature_values = [float(x) for x in temperature_values]
+    except Exception:
+        temperature_values = [0.0]
 
     try:
         from faster_whisper import WhisperModel
@@ -93,13 +98,36 @@ def main():
 
     for chunk_path in chunk_paths:
         try:
-            segments, info = whisper.transcribe(
-                chunk_path,
-                language=language,
-                word_timestamps=True,
-                beam_size=5,
-                condition_on_previous_text=False,
-            )
+            kwargs = {
+                "language": language,
+                "word_timestamps": True,
+                "beam_size": int(task.get("beam_size", 5) or 5),
+                "condition_on_previous_text": bool(task.get("condition_on_previous_text", False)),
+                "temperature": tuple(temperature_values),
+            }
+            for key in ("best_of", "patience", "length_penalty", "repetition_penalty", "no_repeat_ngram_size"):
+                if task.get(key) is not None:
+                    kwargs[key] = task.get(key)
+            for key in ("compression_ratio_threshold", "log_prob_threshold", "no_speech_threshold"):
+                if task.get(key) is not None:
+                    kwargs[key] = float(task.get(key))
+            if task.get("vad_filter") is not None:
+                kwargs["vad_filter"] = bool(task.get("vad_filter"))
+            if isinstance(task.get("vad_parameters"), dict):
+                kwargs["vad_parameters"] = task.get("vad_parameters")
+            if task.get("hallucination_silence_threshold") is not None:
+                kwargs["hallucination_silence_threshold"] = float(task.get("hallucination_silence_threshold"))
+
+            try:
+                segments, info = whisper.transcribe(chunk_path, **kwargs)
+            except TypeError:
+                fallback_kwargs = {
+                    "language": language,
+                    "word_timestamps": True,
+                    "beam_size": int(task.get("beam_size", 5) or 5),
+                    "condition_on_previous_text": bool(task.get("condition_on_previous_text", False)),
+                }
+                segments, info = whisper.transcribe(chunk_path, **fallback_kwargs)
             result_segments = []
             for seg in segments:
                 words = []

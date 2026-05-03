@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-import config
+from core.runtime import config
 
 
 class OrderDialog(QDialog):

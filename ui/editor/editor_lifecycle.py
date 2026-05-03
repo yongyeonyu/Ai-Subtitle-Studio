@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QTextCursor
 
-import config
-from logger import get_logger
+from core.runtime import config
+from core.runtime.logger import get_logger
 from core.path_manager import get_srt_path
 from core.project.project_manager import load_project
 from ui.dialogs.message_box import confirm_save_changes
@@ -18,7 +18,7 @@ from ui.dialogs.message_box import confirm_save_changes
 
 def _save_srt_impl(srt_path, segments):
     import os
-    from logger import get_logger
+    from core.runtime.logger import get_logger
 
     if not segments:
         get_logger().log('❌ 빈 세그먼트라 SRT 저장을 건너뜁니다.')
@@ -99,7 +99,7 @@ class EditorLifecycleMixin:
             if hasattr(editor, 'timeline'):
                 editor.timeline.fit_to_view()
         except Exception as e:
-            from logger import get_logger
+            from core.runtime.logger import get_logger
             get_logger().log(f'⚠️ reuse 완료 상태 전환 실패: {e}')
 
     def _init_editor(self, target_file, is_batch=False):

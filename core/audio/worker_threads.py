@@ -9,7 +9,7 @@ PyQt6 : QThread + pyqtSignal 패턴
 UI는 절대 block되지 않음.
 """
 from PyQt6.QtCore import QThread, pyqtSignal
-from logger import get_logger
+from core.runtime.logger import get_logger
 
 
 class PipelineWorker(QThread):
