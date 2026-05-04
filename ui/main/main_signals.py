@@ -5,8 +5,10 @@ ui/main/main_signals.py
 SignalHandlersMixin — Qt 시그널 핸들러 (세그먼트 전달 · VAD · recog zone · LLM 웜업)
 """
 import os
+import threading
 
-from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtCore import QThread, QTimer
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from core.runtime import config
 from core.runtime.logger import get_logger
@@ -20,6 +22,19 @@ class SignalHandlersMixin:
 
     def append_segments_to_editor(self, segments):
         self._sig_append_segments.emit(segments)
+
+    def append_segments_to_editor_and_wait(self, segments, timeout_sec: float = 2.0):
+        app = QApplication.instance()
+        if app is not None and QThread.currentThread() == app.thread():
+            self._do_append_segments(segments, flush=True)
+            return True
+        ready_event = threading.Event()
+        self._sig_append_segments_ready.emit(list(segments or []), ready_event)
+        try:
+            timeout = max(0.1, float(timeout_sec or 2.0))
+        except Exception:
+            timeout = 2.0
+        return bool(ready_event.wait(timeout))
 
     def preview_stt_segments_in_editor(self, segments):
         self._sig_preview_stt_segments.emit(segments)
@@ -47,14 +62,52 @@ class SignalHandlersMixin:
         self.log_text.verticalScrollBar().setValue(
             self.log_text.verticalScrollBar().maximum()
         )
+        if not bool(getattr(self, "_sidebar_engine_refresh_pending", False)):
+            self._sidebar_engine_refresh_pending = True
 
-    def _do_append_segments(self, segments):
+            def _refresh():
+                self._sidebar_engine_refresh_pending = False
+                refresher = getattr(self, "_refresh_sidebar_engine_info", None)
+                if callable(refresher):
+                    refresher()
+
+            QTimer.singleShot(80, _refresh)
+
+    def _do_append_segments(self, segments, *, flush: bool = False):
         if self._editor_widget:
             self._editor_widget.append_segments(segments)
+            if flush:
+                flusher = getattr(self._editor_widget, "_flush_pending_segment_queue_now", None)
+                if callable(flusher):
+                    flusher()
+                elif hasattr(self._editor_widget, "_flush_queue"):
+                    try:
+                        self._editor_widget._flush_queue()
+                    except Exception:
+                        pass
+                QApplication.processEvents()
+
+    def _do_append_segments_ready(self, segments, ready_event):
+        try:
+            self._do_append_segments(segments, flush=True)
+        finally:
+            if hasattr(ready_event, "set"):
+                try:
+                    ready_event.set()
+                except Exception:
+                    pass
 
     def _do_preview_stt_segments(self, segments):
         if self._editor_widget and hasattr(self._editor_widget, "preview_stt_segments"):
             self._editor_widget.preview_stt_segments(segments)
+
+    def _do_set_llm_review_segment(self, payload):
+        editor = getattr(self, "_editor_widget", None)
+        timeline = getattr(editor, "timeline", None) if editor is not None else None
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        setter = getattr(canvas, "set_llm_review_segment", None) if canvas is not None else None
+        if callable(setter):
+            setter(dict(payload or {}))
 
     def _do_clear_editor(self):
         if hasattr(self, "_clear_editor_for_full_restart"):
@@ -147,6 +200,49 @@ class SignalHandlersMixin:
             target_file, on_save, on_start, on_prev, on_exit, is_batch
         )
 
+    def open_editor_for_file_and_wait(
+        self,
+        target_file,
+        on_save,
+        on_start,
+        on_prev,
+        on_exit,
+        is_batch=False,
+        timeout_sec: float = 5.0,
+    ) -> bool:
+        target = str(target_file or "")
+        if not target:
+            return False
+        app = QApplication.instance()
+        if app is not None and QThread.currentThread() == app.thread():
+            self._do_open_editor(target, on_save, on_start, on_prev, on_exit, is_batch)
+            return True
+        ready_event = threading.Event()
+        self._sig_open_editor_ready.emit(
+            target, on_save, on_start, on_prev, on_exit, is_batch, ready_event
+        )
+        try:
+            timeout = max(0.1, float(timeout_sec or 5.0))
+        except Exception:
+            timeout = 5.0
+        return bool(ready_event.wait(timeout))
+
+    def ensure_processing_editor(self, target_file, timeout_sec: float = 5.0) -> bool:
+        target = str(target_file or "")
+        if not target:
+            return False
+        app = QApplication.instance()
+        if app is not None and QThread.currentThread() == app.thread():
+            self._do_prepare_processing_editor(target)
+            return True
+        ready_event = threading.Event()
+        self._sig_prepare_processing_editor.emit(target, ready_event)
+        try:
+            timeout = max(0.1, float(timeout_sec or 5.0))
+        except Exception:
+            timeout = 5.0
+        return bool(ready_event.wait(timeout))
+
     def _do_open_editor(
         self, target_file, on_save, on_start, on_prev, on_exit, is_batch=False
     ):
@@ -156,6 +252,59 @@ class SignalHandlersMixin:
         self._on_exit_cb = on_exit
         self._target_file = target_file
         self._init_editor(target_file, is_batch)
+
+    def _do_open_editor_ready(
+        self, target_file, on_save, on_start, on_prev, on_exit, is_batch=False, ready_event=None
+    ):
+        try:
+            self._do_open_editor(target_file, on_save, on_start, on_prev, on_exit, is_batch)
+        finally:
+            if hasattr(ready_event, "set"):
+                try:
+                    ready_event.set()
+                except Exception:
+                    pass
+
+    def _do_prepare_processing_editor(self, target_file, ready_event=None):
+        target = str(target_file or "")
+
+        def _noop(*_args, **_kwargs):
+            return None
+
+        editor = getattr(self, "_editor_widget", None)
+        same_target = bool(
+            editor is not None
+            and str(getattr(editor, "media_path", "") or "") == target
+        )
+
+        if not same_target:
+            self._do_open_editor(target, _noop, _noop, _noop, _noop, False)
+            editor = getattr(self, "_editor_widget", None)
+
+        if editor is not None:
+            try:
+                editor.is_auto_start = True
+            except Exception:
+                pass
+            state_manager = getattr(editor, "sm", None)
+            if state_manager is not None:
+                try:
+                    if str(getattr(state_manager, "state", "") or "") != "ST_PROC":
+                        state_manager.start_auto_mode()
+                except Exception:
+                    pass
+            activator = getattr(self, "_activate_editor_for_main_action", None)
+            if callable(activator):
+                try:
+                    activator()
+                except Exception:
+                    pass
+
+        if hasattr(ready_event, "set"):
+            try:
+                ready_event.set()
+            except Exception:
+                pass
 
     def _do_load_multiclip_waveform(self, clip_boundaries):
         if self._editor_widget and hasattr(self._editor_widget, "timeline"):

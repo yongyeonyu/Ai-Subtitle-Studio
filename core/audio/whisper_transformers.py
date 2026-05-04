@@ -82,6 +82,8 @@ def _suppress_stderr_line(text: str) -> bool:
         "A custom logits processor of type",
         "Ignoring clean_up_tokenization_spaces=True for BPE tokenizer WhisperTokenizer",
         "MallocStackLogging: can't turn off malloc stack logging",
+        "You are sending unauthenticated requests to the HF Hub",
+        "Whisper did not predict an ending timestamp",
     )
     return any(fragment in str(text or "") for fragment in noise)
 

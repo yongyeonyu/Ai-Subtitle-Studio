@@ -6,7 +6,7 @@ from __future__ import annotations
 
 
 CUT_BOUNDARY_LEVEL_CHOICES = (
-    ("off", "사용안함"),
+    ("off", "미사용"),
     ("low", "낮음 - 5×5 선택 9칸"),
     ("medium", "중간 - 5×5 선택 13칸"),
 )
@@ -14,7 +14,7 @@ CUT_BOUNDARY_LEVEL_CHOICES = (
 CUT_BOUNDARY_GRID_PROFILES = {
     "off": {
         "level": "off",
-        "label": "사용안함",
+        "label": "미사용",
         "grid": "5x5",
         "grid_size": 5,
         "mask": "off",

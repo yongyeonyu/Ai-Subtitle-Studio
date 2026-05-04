@@ -13,6 +13,7 @@ from core.path_manager import (
     get_icloud_path, get_nas_path, ensure_nas_mounted, get_local_path,
     get_nas_excluded_folders, set_nas_excluded_folders
 )
+from core.media_queue_order import ordered_media_files
 from ui.dialogs.folder_dialog import NasFolderDialog
 
 
@@ -56,8 +57,12 @@ class CloudUIMixin:
         self._auto_audio_tune_per_file = True
         if hasattr(self, "_set_runtime_quality_override_for_scope"):
             self._set_runtime_quality_override_for_scope(self._auto_quality_scope_for_files(files_list))
-        if hasattr(self, "_start_batch"):
-            self._start_batch(files_list, folder=folder)
+        if hasattr(self, "_start_queue_mode"):
+            self._start_queue_mode(
+                files_list,
+                folder=folder,
+                source=self._auto_quality_scope_for_files(files_list),
+            )
         elif self.backend:
             self.backend.start_pipeline(files_list, folder=folder, is_auto_start=True)
             if self._editor_widget and hasattr(self._editor_widget, 'update_status'):
@@ -98,11 +103,20 @@ class CloudUIMixin:
                 pass
 
     def start_icloud_sync(self):
+        file_data, _pending, _completed = self._get_icloud_files()
+        files = [file_path for _name, file_path in file_data if self._auto_media_kind(file_path)]
+        if not files:
+            self._auto_processing_active = False
+            return
+        folder = get_icloud_path()
         self._is_auto_pipeline = True
         self._auto_processing_active = True
         if hasattr(self, "_set_runtime_quality_override_for_scope"):
             self._set_runtime_quality_override_for_scope("icloud")
-        self.backend.start_pipeline([], is_icloud=True)
+        if hasattr(self, "_start_queue_mode"):
+            self._start_queue_mode(files, folder=folder, source="icloud")
+        elif self.backend:
+            self.backend.start_pipeline(files, folder=folder, is_auto_start=True)
 
     def _auto_quality_scope_for_files(self, files_list) -> str:
         first = str((files_list or [""])[0] or "")
@@ -134,12 +148,11 @@ class CloudUIMixin:
         except ImportError:
             tracker = None
         try:
-            for f in os.listdir(path):
-                if f.startswith('.') or "_자막소스.mov" in f:
-                    continue
-                ext = os.path.splitext(f)[1].lower()
-                kind = self._auto_media_kind(f)
-                file_path = os.path.join(path, f)
+            valid_extensions = tuple(self._AUTO_VIDEO_EXTS | self._AUTO_AUDIO_EXTS | {'.srt'})
+            for file_path in ordered_media_files(path, valid_extensions=valid_extensions):
+                display_name = os.path.relpath(file_path, path)
+                ext = os.path.splitext(file_path)[1].lower()
+                kind = self._auto_media_kind(file_path)
                 status = tracker.get_status(file_path) if tracker else None
                 if status == "완료":
                     if kind == "video":
@@ -149,14 +162,14 @@ class CloudUIMixin:
                     continue
                 if kind == "video":
                     v_count += 1
-                    files.append((f, file_path))
+                    files.append((display_name, file_path))
                 elif kind == "audio":
                     a_count += 1
-                    files.append((f, file_path))
+                    files.append((display_name, file_path))
                 elif ext == '.srt':
-                    files.append((f, file_path))
+                    files.append((display_name, file_path))
             pending, completed = self._auto_status_text(v_count, a_count, comp_v_count, comp_a_count)
-            return sorted(files), pending, completed
+            return files, pending, completed
         except Exception:
             return [], "오류", ""
 
@@ -235,13 +248,10 @@ class CloudUIMixin:
                 self._auto_export_subtitle_video = bool(getattr(dlg, "export_subtitle_video", False))
                 if hasattr(self, "_set_runtime_quality_override_for_scope"):
                     self._set_runtime_quality_override_for_scope("nas")
-                mode = str(getattr(dlg, "processing_mode", "individual") or "individual")
-                if mode == "multiclip" and len(dlg.selected_files) > 1:
-                    self._show_multiclip_then_batch(dlg.selected_files, folder=local_path, show_multiclip=False)
-                elif len(dlg.selected_files) == 1 and self.backend:
-                    self.backend.start_pipeline(dlg.selected_files, folder=local_path)
+                if hasattr(self, "_start_queue_mode"):
+                    self._start_queue_mode(dlg.selected_files, folder=local_path, source="nas")
                 else:
-                    self._start_batch(dlg.selected_files, folder=local_path)
+                    self.backend.start_pipeline(dlg.selected_files, folder=local_path, is_auto_start=True)
             elif hasattr(self, "_restore_current_work_mode"):
                 self._restore_current_work_mode()
             else:

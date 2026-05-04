@@ -23,6 +23,8 @@ class SttPreviewOptimizerTest(unittest.TestCase):
         self.assertTrue(result[0]["_live_stt_preview"])
         self.assertTrue(result[0]["stt_preview_optimized"])
         self.assertEqual(result[0]["stt_preview_optimizer"], "subtitle_split_gap_rules")
+        self.assertIn("stt_score", result[0])
+        self.assertIn("stt_score_color", result[0])
 
     def test_multiclip_preview_keeps_clip_metadata_after_optimization(self):
         optimized = [{"start": 0.5, "end": 1.25, "text": "클립 후보"}]

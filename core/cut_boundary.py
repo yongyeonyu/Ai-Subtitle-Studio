@@ -990,7 +990,7 @@ def detect_media_cut_boundaries(
 
         if level == "off":
             if get_logger:
-                get_logger().log("  🎬 [컷 경계] 단계=사용안함, 분석을 건너뜁니다")
+                get_logger().log("  🎬 [컷 경계] 단계=미사용, 분석을 건너뜁니다")
             return []
 
         positions = sample_positions
@@ -1184,7 +1184,7 @@ def detect_media_cut_boundaries(
 # === CUT_BOUNDARY_CROSS5_LEVEL_OVERRIDE ===
 
 CUT_BOUNDARY_LEVEL_CHOICES = (
-    ("off", "사용안함"),
+    ("off", "미사용"),
     ("low", "낮음"),
     ("medium", "중간"),
 )
@@ -1196,7 +1196,7 @@ CUT_BOUNDARY_GRID_PROFILES = {
     # 6 7 8
     "off": {
         "level": "off",
-        "label": "사용안함",
+        "label": "미사용",
         "mask": "off",
         "positions": (),
         "cell_count": 0,

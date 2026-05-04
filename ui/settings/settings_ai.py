@@ -23,6 +23,7 @@ from core.llm.secure_keys import get_api_key, set_api_key
 from core.audio import audio_presets as _audio_presets
 from core.audio.preset_auto_classifier import auto_classify_media_presets, apply_auto_classified_presets
 from core.audio.stt_quality_presets import (
+    STT_QUALITY_PRESET_ORDER,
     apply_stt_quality_preset,
     load_stt_quality_presets,
     normalize_stt_quality_key,
@@ -724,10 +725,15 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         form.addRow("NAS 자동 처리:", self.chk_auto_nas_detect)
 
         self.combo_auto_start_mode = QComboBox()
-        self.combo_auto_start_mode.addItem("정확도 우선", "quality")
-        current_mode = str(path_settings.get("auto_start_mode", settings.get("auto_start_mode", "quality")) or "quality")
-        if current_mode in {"fast", "preset"}:
-            current_mode = "quality"
+        for key in STT_QUALITY_PRESET_ORDER:
+            self.combo_auto_start_mode.addItem(stt_quality_label(key), key)
+        current_mode = normalize_stt_quality_key(
+            path_settings.get("auto_start_mode")
+            or path_settings.get("nas_stt_quality_preset")
+            or path_settings.get("icloud_stt_quality_preset")
+            or settings.get("auto_start_mode")
+            or "precise"
+        )
         self._set_combo_data(self.combo_auto_start_mode, current_mode)
         form.addRow("자동 처리 모드:", self.combo_auto_start_mode)
 
@@ -971,9 +977,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         google_key_saved = set_api_key("google", self.input_api_key.text().strip())
         openai_key_saved = set_api_key("openai", self.input_openai_api_key.text().strip())
         huggingface_token_saved = set_api_key("huggingface", self.input_huggingface_token.text().strip())
-        auto_start_mode = self.combo_auto_start_mode.currentData() or "quality"
-        if auto_start_mode in {"fast", "preset"}:
-            auto_start_mode = "quality"
+        auto_start_mode = normalize_stt_quality_key(self.combo_auto_start_mode.currentData() or "precise")
         auto_start_enabled = bool(self.chk_auto_start_enabled.isChecked())
         auto_correct_enabled = bool(self.chk_subtitle_quality_auto_correct.isChecked())
         res.update({
@@ -998,7 +1002,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "llm_workers": int(self.spin_editor_llm_threads.value()),
             "audio_preset": "" if self.combo_audio_preset.currentData() == "__default__" else (self.combo_audio_preset.currentData() or ""),
             "stt_quality_preset": self.combo_stt_quality_preset.currentData() or "precise",
-            "stt_candidate_scoring_enabled": (self.combo_stt_quality_preset.currentData() or "precise") == "precise",
+            "stt_candidate_scoring_enabled": True,
             "stt_low_score_recheck_enabled": bool(self.chk_stt_low_score_recheck.isChecked()),
             "stt_low_score_recheck_threshold": int(self.spin_stt_low_score_recheck_threshold.value()),
             "subtitle_quality_enabled": False,
@@ -1022,6 +1026,8 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "nas_auto_detect": bool(self.chk_auto_nas_detect.isChecked()),
             "auto_start_mode": auto_start_mode,
             "auto_start_enabled": auto_start_enabled,
+            "icloud_stt_quality_preset": auto_start_mode,
+            "nas_stt_quality_preset": auto_start_mode,
         })
         save_path_settings(path_settings)
         res.pop("google_api_key", None)
@@ -1055,6 +1061,9 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
                 main_w._is_icloud_auto_mode = bool(get_icloud_auto_detect())
             if hasattr(main_w, "_is_nas_auto_mode"):
                 main_w._is_nas_auto_mode = bool(get_nas_auto_detect())
+            if hasattr(main_w, "_sync_subtitle_quality_combos_for_scope"):
+                main_w._sync_subtitle_quality_combos_for_scope("icloud")
+                main_w._sync_subtitle_quality_combos_for_scope("nas")
             if hasattr(main_w, "_start_configured_watchers"):
                 main_w._start_configured_watchers()
             if hasattr(main_w, "_refresh_work_mode_ui"):

@@ -24,7 +24,7 @@ DEFAULT_SETTINGS = {
     "recent_folders": [],
     "auto_detect_enabled": False,
     "nas_excluded_folders": [],
-    "auto_start_mode": "quality",
+    "auto_start_mode": "precise",
     "auto_start_enabled": True,
     "icloud_stt_quality_preset": "fast",
     "nas_stt_quality_preset": "balanced",

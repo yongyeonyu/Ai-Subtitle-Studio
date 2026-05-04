@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
 from core.runtime import config
 from core.settings import load_settings, save_settings
 from core.path_manager import load_settings as _path_load_settings, save_settings as _path_save_settings
-from core.pipeline_status import generation_stage_keys
+from core.pipeline_status import generation_stage_keys, generation_stage_keys_all
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
     apply_stt_quality_preset,
@@ -122,29 +122,76 @@ class HomeSidebarMixin:
         table = getattr(self, "queue_table", None)
         if table is None:
             return list(getattr(self, "_sidebar_queue_cache_items", []) or [])
+        try:
+            if table.rowCount() == 0:
+                return []
+        except RuntimeError:
+            return list(getattr(self, "_sidebar_queue_cache_items", []) or [])
         items = []
+        try:
+            active_row = int(getattr(self, "_current_file_idx", 1) or 1) - 1
+        except Exception:
+            active_row = 0
         try:
             for row in range(table.rowCount()):
                 status_item = table.item(row, 0)
                 file_item = table.item(row, 1)
+                duration_item = table.item(row, 3)
                 eta_item = table.item(row, 4)
-                status = self._plain_queue_status(str(status_item.text() if status_item else "-"))
-                display_status = "완료" if "완료" in status else status
+                raw_status = str(status_item.text() if status_item else "-")
+                status = self._plain_queue_status(raw_status)
+                flagger = getattr(self, "_queue_status_flags", None)
+                if callable(flagger):
+                    done, error, status_active = flagger(raw_status)
+                else:
+                    stripped = raw_status.strip()
+                    stage_done_only = "컷 경계" in stripped and "완료" in stripped
+                    done = (
+                        not stage_done_only
+                        and "미완료" not in stripped
+                        and (
+                            stripped in {"완료", "✅기존자막", "기존자막"}
+                            or stripped.startswith("✅")
+                            and "완료" in stripped
+                            or "기존자막" in stripped
+                        )
+                    )
+                    error = any(token in status for token in ("오류", "실패", "중단"))
+                    status_active = not done and not error and not any(token in status for token in ("대기", "-"))
+                active = status_active and row == active_row
+                display_status = "완료" if done else status
                 items.append({
                     "order": str(row + 1),
                     "status": status,
                     "statusDisplay": display_status,
-                    "done": "완료" in status,
+                    "done": done,
+                    "active": active,
+                    "error": error,
                     "file": str(file_item.text() if file_item else "-"),
-                    "eta": str(eta_item.text() if eta_item else "-"),
+                    "eta": self._queue_sidebar_time_text(
+                        str(eta_item.text() if eta_item else "-"),
+                        str(duration_item.text() if duration_item else "-"),
+                    ),
                 })
         except RuntimeError:
             return list(getattr(self, "_sidebar_queue_cache_items", []) or [])
-        if not items:
-            cached = list(getattr(self, "_sidebar_queue_cache_items", []) or [])
-            if cached:
-                return cached
         return items
+
+    def _queue_sidebar_time_text(self, eta_text: str, duration_text: str) -> str:
+        formatter = getattr(self, "_queue_card_time_text", None)
+        if callable(formatter):
+            return formatter(eta_text, duration_text)
+        eta = str(eta_text or "-").strip() or "-"
+        if eta in {"?", "계산 중", "분석 중..", "예상불가"}:
+            eta = "-"
+        if "/" in eta:
+            left, right = [part.strip() for part in eta.split("/", 1)]
+            left = left or "00:00"
+            right = "-" if right in {"", "?", "계산 중", "분석 중..", "예상불가"} else right
+            return f"{left} / {right}"
+        if eta == "-":
+            return "-"
+        return f"00:00 / {eta}"
 
     def _plain_queue_status(self, status: str) -> str:
         text = str(status or "").strip()
@@ -600,12 +647,47 @@ class HomeSidebarMixin:
         return vad_model, "자막/음성 겹침 검수"
 
     def _roughcut_llm_name(self, settings: dict, subtitle_llm: str) -> tuple[str, str]:
+        if not self._cut_boundary_enabled(settings):
+            return "미사용", "러프컷 규칙 기반"
         if not bool(settings.get("roughcut_llm_enabled", False)):
             return "미사용", "러프컷 규칙 기반"
         model = str(settings.get("roughcut_llm_model", "") or "").strip()
         if not model or model.lower() == "inherit" or "사용 안함" in model:
             return "미사용", "러프컷 규칙 기반"
         return self._short_model_name(model), "러프컷 전용"
+
+    def _cut_boundary_enabled(self, settings: dict) -> bool:
+        try:
+            from core.cut_boundary import cut_boundary_level
+
+            return str(cut_boundary_level(settings or {})).strip().lower() != "off"
+        except Exception:
+            return bool(
+                (settings or {}).get(
+                    "cut_boundary_detection_enabled",
+                    (settings or {}).get("scan_cut_enabled", True),
+                )
+            )
+
+    def _subtitle_llm_enabled(self, settings: dict) -> bool:
+        model = str((settings or {}).get("selected_model", "") or "").strip()
+        provider = str((settings or {}).get("selected_llm_provider", "ollama") or "ollama").strip().lower()
+        if not model:
+            return True
+        if provider == "none":
+            return False
+        return "사용 안함" not in model
+
+    def _roughcut_llm_effective_enabled(self, settings: dict) -> bool:
+        if not self._cut_boundary_enabled(settings):
+            return False
+        if not bool((settings or {}).get("roughcut_llm_enabled", False)):
+            return False
+        model = str((settings or {}).get("roughcut_llm_model", "") or "").strip()
+        provider = str((settings or {}).get("roughcut_llm_provider", "ollama") or "ollama").strip().lower()
+        if not model or provider == "none":
+            return False
+        return "사용 안함" not in model
 
     def _cut_boundary_sidebar_label(self, settings: dict) -> str:
         """Return sidebar display label for cut-boundary level."""
@@ -622,13 +704,14 @@ class HomeSidebarMixin:
             level = "medium" if enabled else "off"
 
         return {
-            "off": "사용안함",
+            "off": "미사용",
             "low": "낮음",
             "medium": "중간",
         }.get(str(level or "medium"), "중간")
 
     def _pipeline_rows(self, settings: dict) -> list[tuple[str, str, str]]:
         subtitle_llm = str(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "기본")) or "기본")
+        subtitle_llm_label = "미사용" if not self._subtitle_llm_enabled(settings) else getattr(self, "_short_model_name", lambda s: s)(subtitle_llm)
         vad_model, _vad_role = getattr(self, "_vad_model_name", lambda s: ("기본", ""))(settings)
         roughcut_llm, _roughcut_role = getattr(self, "_roughcut_llm_name", lambda s, l: ("기본", ""))(settings, subtitle_llm)
         stt1_model = getattr(self, "_short_model_name", lambda s: s)(settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "기본")))
@@ -645,7 +728,7 @@ class HomeSidebarMixin:
             ("stt1", "STT 1", stt1_model),
             ("stt2", "STT 2", stt2_model),
             ("vad", "VAD", vad_model),
-            ("subtitle_llm", "자막 LLM", getattr(self, "_short_model_name", lambda s: s)(subtitle_llm)),
+            ("subtitle_llm", "자막 LLM", subtitle_llm_label),
             ("roughcut_llm", "러프컷 LLM", roughcut_llm),
         ]
     def _pipeline_status_blob(self) -> str:
@@ -658,6 +741,32 @@ class HomeSidebarMixin:
                 parts.append(str(label.text() or ""))
             except RuntimeError:
                 pass
+        for attr in ("log_text",):
+            widget = getattr(self, attr, None)
+            if widget is None:
+                continue
+            try:
+                if hasattr(widget, "toPlainText"):
+                    text = str(widget.toPlainText() or "")
+                elif hasattr(widget, "text"):
+                    text = str(widget.text() or "")
+                else:
+                    text = ""
+                if text:
+                    parts.append(text[-16000:])
+            except RuntimeError:
+                pass
+        editor = self._active_editor()
+        if editor is not None:
+            for attr in ("engine_lbl", "status_label", "status_lbl"):
+                label = getattr(editor, attr, None)
+                if label is None:
+                    continue
+                try:
+                    if hasattr(label, "text"):
+                        parts.append(str(label.text() or ""))
+                except RuntimeError:
+                    pass
         table = getattr(self, "queue_table", None)
         if table is not None:
             try:
@@ -669,6 +778,24 @@ class HomeSidebarMixin:
             except RuntimeError:
                 pass
         return "\n".join(parts)
+
+    def _pipeline_cached_stage_keys(self, blob: str) -> set[str]:
+        text = str(blob or "").lower()
+        if not text:
+            return set()
+
+        cached: set[str] = set()
+        cache_tokens = ("캐시", "캐쉬", "cache")
+        reuse_tokens = ("재사용", "재활용", "reuse", "reused")
+        if any(token in text for token in cache_tokens) and any(token in text for token in reuse_tokens):
+            if "[전처리]" in text or "ffmpeg 오디오 캐시" in text or "오디오 캐시" in text:
+                cached.add("preprocess")
+                cached.add("audio")
+            if "[음성]" in text or "음성필터" in text or "음성 필터" in text or "deepfilter" in text:
+                cached.add("audio")
+            if "[vad" in text or "vad 캐시" in text:
+                cached.add("vad")
+        return cached
 
     def _cut_boundary_scan_line_confirmed(self, row) -> bool:
         if not isinstance(row, dict):
@@ -688,6 +815,23 @@ class HomeSidebarMixin:
         provisional_lines = list(getattr(editor, "_auto_cut_boundary_scan_lines", []) or [])
         return any(not self._cut_boundary_scan_line_confirmed(row) for row in provisional_lines)
 
+    def _cut_boundary_scan_completed(self, editor, blob: str) -> bool:
+        if (
+            "컷 경계 완료" in blob
+            or "컷 경계 자동 분석 완료" in blob
+            or "STT 시작 전 자동 분석 완료" in blob
+            or "캐시 재사용" in blob and "[컷 경계]" in blob
+        ):
+            return True
+        if editor is None:
+            return False
+        if bool(getattr(editor, "_cut_boundary_prescan_completed", False)):
+            return True
+        lines = list(getattr(editor, "_auto_cut_boundary_scan_lines", []) or [])
+        if lines and all(self._cut_boundary_scan_line_confirmed(row) for row in lines):
+            return True
+        return bool(getattr(self, "_project_boundary_times", []) or [])
+
     def _roughcut_draft_status_value(self) -> str:
         editor = self._active_editor()
         if editor is None:
@@ -701,32 +845,66 @@ class HomeSidebarMixin:
         if not self._is_subtitle_generation_running():
             return set()
 
-        return generation_stage_keys(
-            self._pipeline_status_blob(),
+        blob = self._pipeline_status_blob()
+        keys = generation_stage_keys_all(
+            blob,
             stt_ensemble_enabled=bool(settings.get("stt_ensemble_enabled", False)),
         )
+        if not keys:
+            keys = generation_stage_keys(
+                blob,
+                stt_ensemble_enabled=bool(settings.get("stt_ensemble_enabled", False)),
+            )
+        return keys
 
     def _pipeline_completed_stage_keys(self, settings: dict, current_keys: set[str]) -> set[str]:
         completed: set[str] = set()
         blob = self._pipeline_status_blob()
+        blob_lower = str(blob or "").lower()
         editor = self._active_editor()
         generation_running = self._is_subtitle_generation_running()
         state_value = str(getattr(getattr(editor, "sm", None), "state", "") or "") if editor is not None else ""
-        queue_done = "100% 완료" in blob
+        queue_done = False
         try:
             table = getattr(self, "queue_table", None)
             if table is not None and table.rowCount() > 0:
                 done_rows = 0
                 for row in range(table.rowCount()):
                     item = table.item(row, 0)
-                    text = str(item.text() if item is not None else "")
-                    if "완료" in text or "기존자막" in text:
+                    raw_text = str(item.text() if item is not None else "")
+                    flagger = getattr(self, "_queue_status_flags", None)
+                    if callable(flagger):
+                        row_done = bool(flagger(raw_text)[0])
+                    else:
+                        stripped = raw_text.strip()
+                        stage_done_only = "컷 경계" in stripped and "완료" in stripped
+                        row_done = (
+                            not stage_done_only
+                            and "미완료" not in stripped
+                            and (
+                                stripped in {"완료", "✅기존자막", "기존자막"}
+                                or stripped.startswith("✅")
+                                and "완료" in stripped
+                                or "기존자막" in stripped
+                            )
+                        )
+                    if row_done:
                         done_rows += 1
                 queue_done = queue_done or done_rows >= table.rowCount()
         except RuntimeError:
             pass
+        stage_now = set(current_keys or set())
+        live_stage_active = bool(stage_now & {
+            "cut_boundary",
+            "preprocess",
+            "audio",
+            "stt1",
+            "stt2",
+            "vad",
+            "subtitle_llm",
+        })
         generation_done = (
-            not generation_running
+            not live_stage_active
             and (
                 "자막 생성 완료" in blob
                 or queue_done
@@ -735,16 +913,63 @@ class HomeSidebarMixin:
             )
         )
         cut_boundary_pending = self._cut_boundary_scan_pending(editor)
-        stage_now = set(current_keys or set())
+        cut_boundary_done = self._cut_boundary_scan_completed(editor, blob)
+        cached_stages = self._pipeline_cached_stage_keys(blob)
+        completed.update(cached_stages)
+        cut_boundary_enabled = self._cut_boundary_enabled(settings)
         vad_enabled = settings.get("selected_vad", "none") != "none"
         stt2_enabled = bool(settings.get("stt_ensemble_enabled", False))
+        subtitle_llm_enabled = self._subtitle_llm_enabled(settings)
+        roughcut_enabled = self._roughcut_llm_effective_enabled(settings)
+        editor_roughcut_count = getattr(editor, "_last_roughcut_draft_major_count", None) if editor is not None else None
+        roughcut_status = self._roughcut_draft_status_value()
+        explicit_save_done = any(
+            token in blob_lower
+            for token in (
+                "프로젝트 저장 완료",
+                "저장 완료:",
+                ".srt 저장 완료",
+                "💾 저장 완료",
+                "📦 프로젝트 저장 완료",
+            )
+        )
+        roughcut_started = (
+            "roughcut_llm" in stage_now
+            or roughcut_status in {"queued", "running", "saving", "done"}
+            or editor_roughcut_count is not None
+        )
+
+        if not cut_boundary_enabled:
+            completed.add("cut_boundary")
+        if not stt2_enabled:
+            completed.add("stt2")
+        if not vad_enabled:
+            completed.add("vad")
+        if not subtitle_llm_enabled:
+            completed.add("subtitle_llm")
+        if not roughcut_enabled:
+            completed.add("roughcut_llm")
 
         if generation_done:
-            completed.update({"cut_boundary", "preprocess", "audio", "stt1", "subtitle_llm"})
+            completed.update({"preprocess", "audio", "stt1"})
+            if cut_boundary_enabled:
+                completed.add("cut_boundary")
             if stt2_enabled:
                 completed.add("stt2")
             if vad_enabled:
                 completed.add("vad")
+            if subtitle_llm_enabled:
+                completed.add("subtitle_llm")
+        elif explicit_save_done:
+            completed.update({"preprocess", "audio", "stt1"})
+            if cut_boundary_enabled:
+                completed.add("cut_boundary")
+            if stt2_enabled:
+                completed.add("stt2")
+            if vad_enabled:
+                completed.add("vad")
+            if subtitle_llm_enabled:
+                completed.add("subtitle_llm")
         else:
             later_than_cut = {"preprocess", "audio", "stt1", "stt2", "vad", "subtitle_llm"}
             later_than_preprocess = {"audio", "stt1", "stt2", "vad", "subtitle_llm"}
@@ -752,35 +977,42 @@ class HomeSidebarMixin:
             later_than_stt = {"vad", "subtitle_llm"}
             later_than_vad = {"subtitle_llm"}
 
-            if stage_now & later_than_cut and not cut_boundary_pending:
+            if cut_boundary_enabled and stage_now & later_than_cut and not cut_boundary_pending:
+                completed.add("cut_boundary")
+            if cut_boundary_enabled and cut_boundary_done:
                 completed.add("cut_boundary")
             if stage_now & later_than_preprocess:
                 completed.add("preprocess")
             if stage_now & later_than_audio:
                 completed.add("audio")
-            if stage_now & later_than_stt:
+            stt_still_active = bool(stage_now & {"stt1", "stt2"})
+            if stage_now & later_than_stt and not stt_still_active:
                 completed.add("stt1")
                 if stt2_enabled:
                     completed.add("stt2")
-            if vad_enabled and stage_now & later_than_vad:
+            if vad_enabled and stage_now & later_than_vad and "vad" not in stage_now:
                 completed.add("vad")
+            if roughcut_started:
+                completed.update({"preprocess", "audio", "stt1"})
+                if cut_boundary_enabled:
+                    completed.add("cut_boundary")
+                if stt2_enabled:
+                    completed.add("stt2")
+                if vad_enabled:
+                    completed.add("vad")
+                if subtitle_llm_enabled:
+                    completed.add("subtitle_llm")
 
-        roughcut_status = self._roughcut_draft_status_value()
         editor_count = getattr(editor, "_last_roughcut_draft_major_count", None) if editor is not None else None
-        if roughcut_status == "done" or editor_count is not None:
+        if roughcut_enabled and (roughcut_status == "done" or editor_count is not None):
             completed.add("roughcut_llm")
-        if self._roughcut_status_text().startswith("완료"):
+        if roughcut_enabled and self._roughcut_status_text().startswith("완료"):
             completed.add("roughcut_llm")
-        if generation_done:
+        if roughcut_enabled and generation_done:
             completed.add("roughcut_llm")
 
-        if cut_boundary_pending:
+        if cut_boundary_enabled and cut_boundary_pending and not cut_boundary_done:
             completed.discard("cut_boundary")
-
-        if not stt2_enabled:
-            completed.discard("stt2")
-        if not vad_enabled:
-            completed.discard("vad")
         return completed
 
     def _pipeline_model_link(self, key: str, text: str, *, current: bool = False, completed: bool = False) -> str:
@@ -804,8 +1036,8 @@ class HomeSidebarMixin:
         current_keys = self._pipeline_current_stage_keys(settings)
         completed_keys = self._pipeline_completed_stage_keys(settings, current_keys)
         for idx, (key, stage, model) in enumerate(self._pipeline_rows(settings), 1):
-            current = key in current_keys
             completed = key in completed_keys
+            current = key in current_keys and not completed
             bg_style = " background-color:#12362A;" if current else ""
             num_color = "#00D46A" if completed else ("#FFD60A" if current else "#F5F7FA")
             stage_color = num_color if (completed or current) else "#F5F7FA"
@@ -1010,13 +1242,13 @@ class HomeSidebarMixin:
                 current = "medium" if bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True))) else "off"
 
             choices = [
-                ("사용안함", "off"),
+                ("미사용", "off"),
                 ("낮음", "low"),
                 ("중간", "medium"),
             ]
 
             labels = {
-                "off": "사용안함",
+                "off": "미사용",
                 "low": "낮음 - 3초 간격",
                 "medium": "중간 - 2초 간격",
             }
@@ -1045,6 +1277,15 @@ class HomeSidebarMixin:
                     # detector profile 보조 저장
                     "scan_cut_boundary_label": labels.get(level, labels["medium"]),
                     "scan_cut_grid_mask": masks.get(level, "cross5"),
+                    **(
+                        {
+                            "roughcut_llm_enabled": False,
+                            "roughcut_llm_use_override": True,
+                            "roughcut_llm_provider": "none",
+                            "roughcut_llm_model": "사용 안함",
+                        }
+                        if not enabled else {}
+                    ),
                 }
 
             for label, value in choices:

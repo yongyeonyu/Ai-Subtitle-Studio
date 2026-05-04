@@ -13,9 +13,7 @@ def _score_preview_enabled() -> tuple[bool, dict]:
         settings = load_settings()
     except Exception:
         settings = {}
-    preset = str(settings.get("stt_quality_preset", "") or "").strip().lower()
-    enabled = bool(settings.get("stt_candidate_scoring_enabled")) or preset == "precise"
-    return enabled, settings
+    return True, settings
 
 
 def optimize_stt_preview_segments(
@@ -58,10 +56,6 @@ def optimize_stt_preview_segments(
         from core.engine.subtitle_engine import optimize_stt_candidate_segments
 
         optimized = optimize_stt_candidate_segments(raw, vad_segments=vad_segments or [])
-        if optimized:
-            get_logger().log(f"  ✅ [{label}] 후보 자막 분리/간격 규칙 적용 완료 ({len(raw)}개 → {len(optimized)}개)")
-        else:
-            get_logger().log(f"  ℹ️ [{label}] 후보 자막 분리/간격 규칙 적용 완료 ({len(raw)}개 → 0개)")
     except Exception as exc:
         get_logger().log(f"  ⚠️ [{label}] 후보 자막 분리/간격 규칙 적용 실패, 원본 후보 유지: {exc}")
         optimized = raw

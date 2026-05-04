@@ -1,7 +1,7 @@
 <!--
-Document-Version: 03.15.00
+Document-Version: 03.16.00
 Phase: PHASE2
-Last-Updated: 2026-05-04
+Last-Updated: 2026-05-05
 Updated-By: Codex
 Purpose: Remaining work queue only.
 -->
@@ -19,8 +19,8 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "03.15.00"
-document_version: "03.15.00"
+app_version: "03.16.00"
+document_version: "03.16.00"
 phase: "PHASE2"
 next_phase: "PHASE3_LORA_GROUND_TRUTH_TRAINING"
 commit_policy: "Commit only when the user explicitly asks."
@@ -323,6 +323,96 @@ Storage requirements:
 - Should imported ground-truth media be referenced in place, copied into a dataset folder, or selectable per import?
 - Should top-20 split-rule updates be automatic after training or require a review/apply button?
 - What maximum disk budget should the personalization folder enforce before compaction?
+
+### PHASE2_QUEUE_PANEL_UI_CLEANUP
+
+Status: planned
+Priority: high
+First step: `P2-QUEUE-UI-01`
+
+Goal:
+
+Clean up the queue panel UI so the list is easier to scan during folder-queue work. The current queue rows need layout polish for filename readability, status readability, time-column visibility, spacing consistency, and scrollbar interaction.
+
+Scope:
+
+- Keep the existing folder queue behavior unchanged.
+- Improve row layout for order, filename, status text, and duration columns.
+- Prevent long filenames from colliding with status text or the time column.
+- Ensure ellipsis, padding, and column widths remain readable in the current narrow panel width.
+- Reduce visual clutter in row cards, inner spacing, and divider treatment.
+- Review scrollbar width, inset, and overlap so it does not visually crowd the content area.
+- Keep Korean and long-path-derived filenames readable on both macOS and Windows.
+
+Exit criteria:
+
+- Queue rows remain readable without clipped duration text in the current panel width.
+- Processing, waiting, and completed states are visually distinct and consistently aligned.
+- Long filenames truncate cleanly and do not push the time column out of view.
+- The queue list looks stable across mixed filename lengths and status lengths.
+
+Implementation plan:
+
+1. `P2-QUEUE-UI-01`: Audit the current queue panel widgets, row layout, and stylesheet rules.
+2. `P2-QUEUE-UI-02`: Adjust row structure, spacing, and size policies for filename, status, and time columns.
+3. `P2-QUEUE-UI-03`: Refine truncation, alignment, and scrollbar styling for narrow-width stability.
+4. `P2-QUEUE-UI-04`: Verify the queue panel with long Korean filenames, long Latin filenames, and active processing states.
+
+### PHASE2_SILENCE_LANE_SEPARATION
+
+Status: planned
+Priority: high
+First step: `P2-SILENCE-SEP-01`
+
+Goal:
+
+Separate the meaning of the upper silence-segment lane and the lower voice/silence lane so subtitle generation and subtitle editing use the upper lane only, while the lower lane remains reserved for future bulk silence-removal workflows.
+
+Problem:
+
+- `여기부터 생성` / `여기까지 생성` is currently using the lower `음성/무음` lane as the generation boundary source.
+- The user wants subtitle generation to target the upper red-box silence segment range instead.
+- The upper lane and lower lane are currently being treated as if they describe the same boundary source, which causes subtitle generation to affect the wrong region.
+
+Required behavior:
+
+- Treat the upper silence-segment lane as the only source of truth for:
+  - `여기부터 생성`
+  - `여기까지 생성`
+  - subtitle-segment edit/delete boundary rules
+- Treat the lower `음성/무음` lane as a separate data model for future `무음구간 삭제` features only.
+- Do not let lower-lane silence regions change subtitle-generation range decisions.
+- Keep both lanes visible, but manage and update them independently.
+
+Exit criteria:
+
+- Running `여기부터 생성` or `여기까지 생성` inside an upper silence segment generates subtitles only within that upper silence segment range.
+- Subtitle edit/delete behavior follows upper-lane silence segment boundaries only.
+- Lower `음성/무음` lane remains unchanged by subtitle generation commands.
+- The code clearly separates upper silence boundary data from lower audio silence classification data.
+
+Look at files:
+
+- `ui/timeline/timeline_input.py`
+- `ui/timeline/timeline_analysis.py`
+- `ui/timeline/timeline_paint.py`
+- `ui/editor/editor_timeline_video.py`
+- `ui/editor/editor_pipeline.py`
+
+Look at functions/classes:
+
+- hit-testing and context-menu handlers for silence regions
+- `여기부터 생성` / `여기까지 생성` action handlers
+- subtitle-segment delete / trim boundary helpers
+- lower `음성/무음` lane generation and storage sync paths
+
+Implementation plan:
+
+1. `P2-SILENCE-SEP-01`: Audit which lane currently supplies boundary ranges to `여기부터 생성` / `여기까지 생성`.
+2. `P2-SILENCE-SEP-02`: Split upper silence-segment state and lower `음성/무음` state into separate read/write paths.
+3. `P2-SILENCE-SEP-03`: Rebind generation/edit/delete actions to use upper silence-segment boundaries only.
+4. `P2-SILENCE-SEP-04`: Preserve lower-lane data for future bulk silence-removal work without affecting subtitle generation.
+5. `P2-SILENCE-SEP-05`: Add regression tests that prove the two lanes can diverge without changing each other’s behavior.
 
 ## Parked Work
 

@@ -48,6 +48,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     sig_clip_delete_requested = pyqtSignal(int)
     sig_clip_add_requested    = pyqtSignal()   #  : clip_idx
     playhead_menu_requested = pyqtSignal(QPoint, float)
+    provisional_cut_boundary_requested = pyqtSignal(float)
+    provisional_cut_boundary_delete_requested = pyqtSignal(int, float)
     diamond_merge           = pyqtSignal(int, int)
     sig_smart_split         = pyqtSignal(int, float, bool)
     sig_speech_result       = pyqtSignal(str)
@@ -57,6 +59,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         super().__init__(parent)
         self.re_recog_zone = None
         self.re_recog_progress = None
+        self.llm_review_segment: dict | None = None
         self.setMinimumHeight(CANVAS_H)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMouseTracking(True)
@@ -69,6 +72,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._ime_preedit = ""
         self.sig_speech_result.connect(self._on_speech_result)
         self._is_listening = False
+        self._listening_line: int | None = None
+        self._mic_waveform_samples: list[float] = []
 
         self.pps = 200.0
         self.frame_rate: float = 30.0
@@ -91,6 +96,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._active_clip_idx: int = 0   # active clip index (init fix)
         self._hover_line:  int | None = None
         self._hover_handle: tuple | None = None
+        self._hover_scan_boundary_idx: int | None = None
 
         self._drag_seg:   dict | None = None
         self._drag_edge:  str  | None = None
@@ -105,6 +111,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._drag_adj_orig_end_r:   float = 0.0
 
         self._snap_lines = []
+        self._drag_guide_x: int | None = None
+        self._drag_snap_candidate: dict | None = None
         self._is_scrubbing = False
         self._is_panning = False
 
@@ -148,6 +156,22 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._render_epoch = int(getattr(self, "_render_epoch", 0) or 0) + 1
         self._paint_index_cache = {}
         self._paint_last_visible_counts = {}
+
+    def begin_mic_visualization(self, line_num: int | None = None):
+        self._is_listening = True
+        self._listening_line = None if line_num is None else int(line_num)
+        self._mic_waveform_samples = []
+        self.update()
+
+    def update_mic_visualization(self, samples):
+        self._mic_waveform_samples = list(samples or [])
+        self.update()
+
+    def end_mic_visualization(self):
+        self._is_listening = False
+        self._listening_line = None
+        self._mic_waveform_samples = []
+        self.update()
 
     def _paint_time_window(self, rect: QRect | None = None, *, pad_px: int = 96) -> tuple[float, float]:
         rect = rect or self.rect()
@@ -307,10 +331,19 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         return list(self._roughcut_major_cache)
 
     def update_segments(self, segs, active_sec, total_dur):
+        source_gaps = [
+            dict(s)
+            for s in list(segs or [])
+            if s.get("is_gap") and float(s.get("end", s.get("start", 0.0)) or 0.0) > float(s.get("start", 0.0) or 0.0)
+        ]
         self.segments = [s for s in segs if not s.get("is_gap")]
         self.total_duration = total_dur or (segs[-1]["end"] if segs else 0.0)
 
-        new_gaps = _build_gaps(self.segments, self.total_duration)
+        generated_gaps = _build_gaps(self.segments, self.total_duration)
+        if source_gaps:
+            new_gaps = self._preserve_explicit_gaps(generated_gaps, source_gaps)
+        else:
+            new_gaps = generated_gaps
         old_active = {
             (g["start"], g["end"])
             for g in self.gap_segments
@@ -320,6 +353,18 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         for gap in new_gaps:
             if (gap["start"], gap["end"]) in old_active:
                 gap["active"] = True
+            for source in source_gaps:
+                try:
+                    same_start = abs(float(source.get("start", 0.0) or 0.0) - float(gap.get("start", 0.0) or 0.0)) < 0.05
+                    same_end = abs(float(source.get("end", 0.0) or 0.0) - float(gap.get("end", 0.0) or 0.0)) < 0.05
+                except Exception:
+                    same_start = same_end = False
+                if not (same_start and same_end):
+                    continue
+                for key in ("quality", "quality_history", "quality_candidates", "linked_silence_for_line"):
+                    if key in source:
+                        gap[key] = source[key]
+                break
 
         self.gap_segments = new_gaps
         self._refresh_voice_activity_segments()
@@ -331,6 +376,69 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             self._sync_active_segment_key(active_sec)
 
         self.update()
+
+    def set_llm_review_segment(self, payload: dict | None) -> None:
+        data = dict(payload or {})
+        if not data.get("active"):
+            self.llm_review_segment = None
+            self.update()
+            return
+        try:
+            start = max(0.0, float(data.get("start", 0.0) or 0.0))
+            end = max(start, float(data.get("end", start) or start))
+        except Exception:
+            self.llm_review_segment = None
+            self.update()
+            return
+        if end <= start:
+            end = start + max(0.05, 1.0 / max(1.0, float(getattr(self, "frame_rate", 30.0) or 30.0)))
+        data["start"] = start
+        data["end"] = end
+        self.llm_review_segment = data
+        self.update()
+
+    def _preserve_explicit_gaps(self, generated_gaps: list[dict], source_gaps: list[dict]) -> list[dict]:
+        preserved: list[dict] = []
+        explicit = sorted(source_gaps or [], key=lambda gap: (float(gap.get("start", 0.0) or 0.0), float(gap.get("end", 0.0) or 0.0)))
+        min_gap = 0.05
+
+        def _gap_copy(base: dict, start: float, end: float) -> dict:
+            item = dict(base)
+            item["start"] = start
+            item["end"] = end
+            item["text"] = ""
+            item["is_gap"] = True
+            item.setdefault("active", False)
+            return item
+
+        for generated in generated_gaps or []:
+            gs = float(generated.get("start", 0.0) or 0.0)
+            ge = float(generated.get("end", gs) or gs)
+            if ge <= gs + min_gap:
+                continue
+            cursor = gs
+            matched = False
+
+            for source in explicit:
+                ss = float(source.get("start", 0.0) or 0.0)
+                se = float(source.get("end", ss) or ss)
+                if se <= gs + min_gap or ss >= ge - min_gap:
+                    continue
+                matched = True
+                if ss > cursor + min_gap:
+                    preserved.append(_gap_copy(generated, cursor, min(ss, ge)))
+                start = max(gs, ss)
+                end = min(ge, se)
+                if end > start + min_gap:
+                    preserved.append(_gap_copy(source, start, end))
+                cursor = max(cursor, end)
+
+            if not matched:
+                preserved.append(dict(generated))
+            elif cursor < ge - min_gap:
+                preserved.append(_gap_copy(generated, cursor, ge))
+
+        return preserved
 
     def _sync_active_segment_key(self, sec=None, seg=None):
         if seg is None and sec is not None:
@@ -404,6 +512,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         old_px = self._last_playhead_px
         self.playhead_sec = sec
         self._last_playhead_px = px
+        if getattr(self, "_external_playhead_overlay", False):
+            return
         if old_px is None:
             self.update(QRect(max(0, px - 12), 0, 24, CANVAS_H))
         else:
@@ -431,7 +541,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
     def _seg_at(self, x):
         for seg in self.segments:
-            if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
+            if bool(seg.get("stt_pending") or seg.get("_live_stt_preview") or seg.get("_live_subtitle_preview")):
                 continue
             if self._x(seg["start"]) <= x <= self._x(seg["end"]):
                 return seg
@@ -472,7 +582,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             self.update()
 
     def _get_prev_seg(self, seg):
-        segs = sorted(self.segments, key=lambda s: s["start"])
+        segs = self._editable_segments_sorted()
         try:
             idx = segs.index(seg)
             return segs[idx - 1] if idx > 0 else None
@@ -480,12 +590,22 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             return None
 
     def _get_next_seg(self, seg):
-        segs = sorted(self.segments, key=lambda s: s["start"])
+        segs = self._editable_segments_sorted()
         try:
             idx = segs.index(seg)
             return segs[idx + 1] if idx + 1 < len(segs) else None
         except ValueError:
             return None
+
+    def _editable_segments_sorted(self):
+        return sorted(
+            [
+                s for s in self.segments
+                if not s.get("is_gap")
+                and not bool(s.get("stt_pending") or s.get("_live_stt_preview") or s.get("_live_subtitle_preview"))
+            ],
+            key=lambda s: (float(s.get("start", 0.0) or 0.0), float(s.get("end", 0.0) or 0.0)),
+        )
 
     def _get_fps(self):
         if float(getattr(self, "frame_rate", 0.0) or 0.0) > 0:

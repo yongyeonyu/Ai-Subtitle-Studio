@@ -3,6 +3,7 @@
 """
 Editor STT follow-along mode.
 """
+import os
 import threading
 
 from PyQt6.QtCore import QTimer
@@ -18,6 +19,7 @@ class EditorSTTModeMixin:
         self._stt_mode_enabled = False
         self._stt_recording = False
         self._stt_vad_running = False
+        self._stt_mic_capture_session = None
         self._stt_repeat_timer = QTimer(self)
         self._stt_repeat_timer.setSingleShot(True)
         self._stt_repeat_timer.timeout.connect(self._finish_stt_repeat_segment)
@@ -52,8 +54,21 @@ class EditorSTTModeMixin:
             self.status_lbl.setText("🎙️ STT 모드 ON")
             get_logger().log("🎙️ STT 모드 ON: 시작 버튼을 누르면 VAD-only STT 세그먼트를 생성합니다.")
         else:
+            session = getattr(self, "_stt_mic_capture_session", None)
+            if session is not None and hasattr(session, "stop"):
+                try:
+                    session.stop()
+                except Exception:
+                    pass
+            self._stt_mic_capture_session = None
             self._stt_recording = False
             self._stt_vad_running = False
+            if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
+                try:
+                    self.timeline.canvas.end_mic_visualization()
+                except Exception:
+                    self.timeline.canvas._is_listening = False
+                    self.timeline.canvas.update()
             self.status_lbl.setText("✏️ STT 모드 OFF")
             get_logger().log("🎙️ STT 모드 OFF")
         self._refresh_stt_visuals()
@@ -208,16 +223,49 @@ class EditorSTTModeMixin:
         self._stt_target_line = block.blockNumber()
         self.status_lbl.setText("🎙️ 녹음 중...")
         if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
-            self.timeline.canvas._is_listening = True
-            self.timeline.canvas.update()
+            try:
+                self.timeline.canvas.begin_mic_visualization(self._stt_target_line)
+            except Exception:
+                self.timeline.canvas._is_listening = True
+                self.timeline.canvas.update()
         get_logger().log("🎙️ STT 따라말하기 녹음 시작")
 
-        def _worker():
+        session = None
+        try:
+            from ui.editor.live_microphone_session import LiveMicrophoneSession
+
+            session = LiveMicrophoneSession(self)
+        except Exception as exc:
+            self._stt_recording = False
+            self.status_lbl.setText("⚠️ 마이크 초기화 실패")
+            if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
+                try:
+                    self.timeline.canvas.end_mic_visualization()
+                except Exception:
+                    self.timeline.canvas._is_listening = False
+                    self.timeline.canvas.update()
+            get_logger().log(f"⚠️ STT 따라말하기 마이크 초기화 실패: {exc}")
+            return
+
+        self._stt_mic_capture_session = session
+        if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
+            canvas = self.timeline.canvas
+            try:
+                session.waveform_changed.connect(canvas.update_mic_visualization)
+            except Exception:
+                pass
+
+        def _worker(captured_wav: str, has_audio: bool, error_text: str):
             text = ""
             try:
-                from core.audio.live_stt import transcribe_microphone_once
+                from core.audio.live_stt import transcribe_wav_file
 
-                result = transcribe_microphone_once("quality")
+                if not has_audio or not captured_wav:
+                    if error_text:
+                        get_logger().log(f"⚠️ STT 따라말하기 실패: {error_text}")
+                    return
+                QTimer.singleShot(0, lambda: self.status_lbl.setText("🎙️ STT 처리 중..."))
+                result = transcribe_wav_file(captured_wav, profile="quality")
                 text = result.text
                 if text:
                     get_logger().log(
@@ -226,15 +274,43 @@ class EditorSTTModeMixin:
             except Exception as exc:
                 get_logger().log(f"⚠️ STT 따라말하기 실패: {exc}")
             finally:
+                try:
+                    if captured_wav and os.path.exists(captured_wav):
+                        os.remove(captured_wav)
+                except Exception:
+                    pass
                 self.sig_live_stt_result.emit(text)
 
-        threading.Thread(target=_worker, daemon=True, name="editor-stt-follow-mode").start()
+        def _on_capture_finished(captured_wav: str, has_audio: bool, error_text: str, _elapsed: float):
+            threading.Thread(
+                target=_worker,
+                args=(captured_wav, has_audio, error_text),
+                daemon=True,
+                name="editor-stt-follow-mode",
+            ).start()
+
+        session.finished.connect(_on_capture_finished)
+        if not session.start():
+            self._stt_recording = False
+            self._stt_mic_capture_session = None
+            self.status_lbl.setText("⚠️ 마이크 시작 실패")
+            if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
+                try:
+                    self.timeline.canvas.end_mic_visualization()
+                except Exception:
+                    self.timeline.canvas._is_listening = False
+                    self.timeline.canvas.update()
+            return
 
     def _apply_stt_text_to_current(self, text: str):
         self._stt_recording = False
+        self._stt_mic_capture_session = None
         if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
-            self.timeline.canvas._is_listening = False
-            self.timeline.canvas.update()
+            try:
+                self.timeline.canvas.end_mic_visualization()
+            except Exception:
+                self.timeline.canvas._is_listening = False
+                self.timeline.canvas.update()
         text = str(text or "").strip()
         if not text:
             self.status_lbl.setText("🎙️ STT 결과 없음")

@@ -45,6 +45,9 @@ class CoreBackendFast(CoreBackend):
         self.files_to_process = list(files)
         self.current_folder = folder
         self.is_auto_start = True
+        self._individual_queue_mode = True
+        self._reset_backend_individual_clip_context(invalidate_prefetch=True)
+        self._reset_ui_individual_clip_context(clear_project=True)
         self.total_expected_time = 0.0
         self.pipeline_start_time = time.time()
         self.is_first_start = False
@@ -66,6 +69,14 @@ class CoreBackendFast(CoreBackend):
         단일 파일 정확도 우선 자동 처리 (에디터 대기 없음)
         - 오디오 추출 → STT 앙상블/LLM 검수 → SRT 저장 → 다음 파일
         """
+        self._reset_backend_individual_clip_context(invalidate_prefetch=True)
+        self._reset_ui_individual_clip_context(clear_project=True)
+        try:
+            if hasattr(self.ui, "ensure_processing_editor"):
+                self.ui.ensure_processing_editor(target_file)
+        except Exception as exc:
+            get_logger().log(f"⚠️ 처리 화면 전환 준비 실패: {exc}")
+
         vname = os.path.basename(target_file)
         fsize = os.path.getsize(target_file) / (1024 * 1024) if os.path.exists(target_file) else 0
 
@@ -92,7 +103,7 @@ class CoreBackendFast(CoreBackend):
             decision = auto_classify_media_presets(target_file, settings=base_settings)
             updated = apply_auto_classified_presets(base_settings, decision)
             tune = dict(updated.get("audio_preset_auto_tune") or {})
-            if tune and hasattr(self.video_processor, "set_auto_audio_tune_overrides"):
+            if hasattr(self.video_processor, "set_auto_audio_tune_overrides"):
                 self.video_processor.set_auto_audio_tune_overrides(tune)
             try:
                 append_audio_lora_record(decision, target_file)
@@ -185,10 +196,15 @@ class CoreBackendFast(CoreBackend):
                 chunk_segs = seg_buffer
                 seg_buffer = []
                 try:
-                    opt = optimize_segments(chunk_segs, vad_segments=vad_segs)
+                    def _llm_progress(payload):
+                        self._ui_emit("_sig_set_llm_review_segment", dict(payload or {}))
+
+                    opt = optimize_segments(chunk_segs, vad_segments=vad_segs, llm_progress_callback=_llm_progress)
                 except Exception as exc:
                     get_logger().log(f"  ⚠️ LLM 최적화 실패, STT 결과 유지: {exc}")
                     opt = chunk_segs
+                finally:
+                    self._ui_emit("_sig_set_llm_review_segment", {"active": False})
 
                 for seg in opt:
                     if seg["start"] < 0.0:
@@ -298,7 +314,7 @@ class CoreBackendFast(CoreBackend):
 
                 if hasattr(self.ui, '_sig_update_queue'):
                     try:
-                        self.ui._sig_update_queue.emit(queue_index, "✅ 자막 생성 완료", eta_done, "", "")
+                        self.ui._sig_update_queue.emit(queue_index, "저장 준비 중", eta_done, "", "")
                     except RuntimeError:
                         pass
 
@@ -327,9 +343,7 @@ class CoreBackendFast(CoreBackend):
         # ── STEP 5~6: SRT 저장 + 내보내기 ──
         all_segments = apply_final_gap_settings(all_segments, force=True)
         all_segments = align_stt_candidates_to_subtitle_segments(all_segments)
-        self._save_and_export(target_file, queue_index, all_segments, is_auto_mode=True)
-
-        return True
+        return bool(self._save_and_export(target_file, queue_index, all_segments, is_auto_mode=True))
 
     def _run_all(self):
         """배치 모드 전용 _run_all: 에디터 대기 없이 순차 처리"""
@@ -362,6 +376,9 @@ class CoreBackendFast(CoreBackend):
                         pass
                 if ok:
                     success_count += 1
+
+            if hasattr(self.ui, '_sig_update_queue_header'):
+                self.ui._sig_update_queue_header.emit(total_files, total_files, 100, "")
 
             if getattr(self.ui, '_is_auto_pipeline', False):
                 self._send_ntfy_notification(

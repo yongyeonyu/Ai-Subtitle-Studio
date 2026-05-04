@@ -167,6 +167,60 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
             get_logger().log(f"    └ ⚠️ 초기화 중 오류: {e}")
 
     # ─── 저장 + 내보내기 ─────────────────────────────────
+    def _emit_queue_status(self, queue_index, status, time_txt="", info_txt="", len_txt=""):
+        if hasattr(self.ui, "_sig_update_queue"):
+            try:
+                self.ui._sig_update_queue.emit(queue_index, status, time_txt, info_txt, len_txt)
+            except RuntimeError:
+                pass
+
+    def _save_project_for_queue_clip(self, target_file, srt_path, final_segments):
+        from core.project.project_manager import create_project, save_project
+        from core.work_mode import EDITOR_MODE
+
+        ui = getattr(self, "ui", None)
+        editor = getattr(ui, "_editor_widget", None) if ui is not None else None
+        project_path = str(getattr(ui, "_current_project_path", "") or "") if ui is not None else ""
+        settings = dict(getattr(editor, "settings", {}) or {})
+        if not project_path:
+            base_name = os.path.splitext(os.path.basename(target_file))[0]
+            project_path = create_project(
+                name=base_name,
+                media_paths=[target_file],
+                srt_path=srt_path,
+                user_settings=settings,
+            )
+            if ui is not None:
+                ui._current_project_path = project_path
+
+        workspace = {
+            "last_playhead": 0.0,
+            "last_cursor_block": 0,
+            "active_clip_idx": 0,
+            "active_work_mode": EDITOR_MODE,
+        }
+        try:
+            if editor is not None and hasattr(editor, "video_player"):
+                workspace["last_playhead"] = float(getattr(editor.video_player, "current_time", 0.0) or 0.0)
+            if editor is not None and hasattr(editor, "text_edit"):
+                workspace["last_cursor_block"] = int(editor.text_edit.textCursor().blockNumber())
+        except Exception:
+            pass
+
+        save_project(
+            filepath=project_path,
+            media_paths=[target_file],
+            srt_path=srt_path,
+            segments=list(final_segments or []),
+            user_settings=settings,
+            workspace=workspace,
+            active_work_mode=EDITOR_MODE,
+            voice_activity_segments=[],
+            stt_preview_segments=[],
+            provisional_cut_boundaries=[],
+        )
+        return project_path
+
     def _save_and_export(self, target_file, queue_index, final_segments, is_auto_mode):
         """SRT 저장 + MOV 렌더링 + 완료 처리"""
         get_logger().log("\n  [STEP 5] 💾 SRT 저장 중...")
@@ -175,8 +229,13 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
             from core.path_manager import get_srt_path
 
             srt_path = get_srt_path(target_file)
+            self._emit_queue_status(queue_index, "💾 SRT 저장 중", "", "", "")
             save_srt(final_segments, srt_path, apply_offset=True)
             get_logger().log(f"✅ {os.path.basename(srt_path)} 저장 완료")
+
+            self._emit_queue_status(queue_index, "📦 프로젝트 저장 중", "", "", "")
+            project_path = self._save_project_for_queue_clip(target_file, srt_path, final_segments)
+            get_logger().log(f"📦 프로젝트 저장 완료: {os.path.basename(project_path)}")
 
             is_video_export = False
             export_settings = {}
@@ -204,11 +263,7 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
                     tags="memo,sparkles",
                 )
 
-            if hasattr(self.ui, "_sig_update_queue"):
-                try:
-                    self.ui._sig_update_queue.emit(queue_index, "✅ 자막출력(srt)", "", "", "")
-                except RuntimeError:
-                    pass
+            self._emit_queue_status(queue_index, "💾 SRT 저장됨", "", "", "")
 
             # ── STEP 6: MOV 렌더링 ──
             if is_video_export:
@@ -216,16 +271,18 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
                     get_logger().log(
                         "\n  [STEP 6] 🎥 투명 자막 영상(MOV) 백그라운드 렌더링 중..."
                     )
-                    if hasattr(self.ui, "_sig_update_queue"):
-                        self.ui._sig_update_queue.emit(
-                            queue_index, "🎥 자막영상출력(mov)", "", "", ""
-                        )
-                    self._run_background_render(
+                    self._emit_queue_status(queue_index, "🎥 자막영상출력(mov)", "", "", "")
+                    render_ok = self._run_background_render(
                         srt_path, target_file, export_settings, current_idx, total_cnt
                     )
+                    if not render_ok:
+                        self._emit_queue_status(queue_index, "❌ 자막영상출력 실패", "", "", "")
+                        return False
                 except Exception as e:
                     get_logger().log(f"❌ MOV 렌더링 오류: {e}")
                     get_logger().log(traceback.format_exc())
+                    self._emit_queue_status(queue_index, "❌ 자막영상출력 실패", "", "", "")
+                    return False
 
             try:
                 from core.auto_tracker import AutoTracker
@@ -236,21 +293,19 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
             except Exception:
                 pass
 
-            if hasattr(self.ui, "_sig_update_queue"):
-                try:
-                    if is_auto_mode:
-                        self.ui._sig_update_queue.emit(
-                            queue_index, "완료 (다음파일)", "", "", ""
-                        )
-                    else:
-                        self.ui._sig_update_queue.emit(
-                            queue_index, "자막생성완료", "", "", ""
-                        )
-                except RuntimeError:
-                    pass
+            self._emit_queue_status(
+                queue_index,
+                "✅ 완료" if is_auto_mode else "✅ 자막생성완료",
+                "",
+                "",
+                "",
+            )
+            return True
 
         except Exception as e:
             get_logger().log(f"❌ 처리 실패: {e}")
+            self._emit_queue_status(queue_index, "❌ 저장 실패", "", "", "")
+            return False
 
     # ─── 렌더링 ──────────────────────────────────────────
     def _run_background_render(self, srt_path, target_file, s, current_idx=1, total_cnt=1):
@@ -337,7 +392,7 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
             vp = VideoProcessor()
             try:
                 tune = self._auto_audio_tune_settings_for_file(target_file)
-                if tune and hasattr(vp, "set_auto_audio_tune_overrides"):
+                if hasattr(vp, "set_auto_audio_tune_overrides"):
                     vp.set_auto_audio_tune_overrides(tune)
                 res = self._validate_audio_extract_result(
                     vp.extract_audio(target_file),
@@ -384,7 +439,7 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
             cached = self._prefetch_cache.pop(target_file, None)
 
         tune = self._auto_audio_tune_settings_for_file(target_file)
-        if tune and hasattr(self.video_processor, "set_auto_audio_tune_overrides"):
+        if hasattr(self.video_processor, "set_auto_audio_tune_overrides"):
             self.video_processor.set_auto_audio_tune_overrides(tune)
         if cached:
             return self._validate_audio_extract_result(cached, target_file)

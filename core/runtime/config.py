@@ -1,4 +1,4 @@
-# Version: 03.15.00
+# Version: 03.16.00
 # Phase: PHASE2
 
 
@@ -9,7 +9,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.15.00"
+APP_VERSION = "03.16.00"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -99,7 +99,7 @@ DEFAULT_ADV_SETTINGS = {
     "sub_max_cps":        12,
     "sub_dedup_window":   0.5,
     "accuracy_first_mode": True,
-    "auto_start_mode": "quality",
+    "auto_start_mode": "precise",
     "stt_quality_preset": "precise",
     "stt_ensemble_enabled": True,
     "stt_candidate_scoring_enabled": True,

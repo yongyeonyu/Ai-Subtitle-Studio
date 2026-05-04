@@ -99,6 +99,10 @@ class PipelineCutBoundaryMixin:
         except Exception:
             return [dict(item) for item in list(getattr(self, "_cut_boundary_provisional_rows", []) or [])]
 
+    def _project_cut_provisional_boundaries_for_pipeline(self) -> list[dict]:
+        """Backward-compatible alias for provisional cut-boundary rows."""
+        return self._project_provisional_cut_boundaries_for_pipeline()
+
     def _cut_boundary_cache_path_for_start(self, files: list[str], settings: dict) -> str:
         """Return reusable cut-boundary cache path for the current media/settings."""
         import hashlib
@@ -540,7 +544,8 @@ class PipelineCutBoundaryMixin:
         except Exception:
             pass
 
-        candidates.append(0)
+        if not candidates:
+            candidates.append(0)
 
         seen = set()
         for qi in candidates:
@@ -567,7 +572,6 @@ class PipelineCutBoundaryMixin:
 
             old_thread = getattr(self, "_cut_boundary_prescan_thread", None)
             if old_thread is not None and old_thread.is_alive():
-                get_logger().log("  🎬 [컷 경계] 이미 자동 분석이 진행 중입니다")
                 return []
 
             def _worker():
@@ -916,6 +920,9 @@ class PipelineCutBoundaryMixin:
                             files=list(files or []),
                             done=True,
                         )
+                        self._cut_boundary_prescan_completed = True
+                        self._ui_emit("_sig_set_cut_boundary_scan_active", False)
+                        self._ui_emit("_sig_preview_cut_boundary_scan_lines", [])
                         self._emit_cut_boundary_count_to_sidebar(len(detected), done=True)
                     except Exception as exc:
                         get_logger().log(f"  ⚠️ [컷 경계] 최종 중분류 확정 실패: {exc}")

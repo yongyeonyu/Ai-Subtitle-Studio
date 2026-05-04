@@ -53,6 +53,9 @@ class WindowsPlatformCompatTest(unittest.TestCase):
         self.assertTrue(platform_compat._is_preview_proxy_ffmpeg_command(
             f"ffmpeg -y -i sample.mp4 {cache}/abc_preview_720p.mp4.tmp.mp4"
         ))
+        self.assertTrue(platform_compat._is_preview_proxy_ffmpeg_command(
+            f"ffmpeg -y -i sample.mp4 {cache}/abc_preview_720p_hevc.mp4.tmp.mp4"
+        ))
         self.assertFalse(platform_compat._is_preview_proxy_ffmpeg_command(
             "ffmpeg -y -i sample.mp4 /tmp/render_output.mp4"
         ))

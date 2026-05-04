@@ -19,13 +19,16 @@ from typing import Any
 
 _WARMED: set[str] = set()
 _PROBE_OK_UNTIL: dict[str, float] = {}
+_PROBE_FAILED_UNTIL: dict[str, float] = {}
 _WARM_LOCK = threading.Lock()
 _START_LOCK = threading.Lock()
 _STOP_LOCK = threading.Lock()
 _WARMUP_TIMEOUT_SEC = 8.0
 _PROBE_OK_TTL_SEC = 180.0
+_PROBE_FAILED_TTL_SEC = 60.0
 _SERVER_READY_UNTIL = 0.0
 _START_IN_PROGRESS_UNTIL = 0.0
+_SERVER_READY_LOGGED_UNTIL = 0.0
 _OLLAMA_ROOT_URL = "http://localhost:11434/"
 _GENERATE_RETRY_STATUS_CODES = {500, 502, 503, 504}
 _PROBE_RETRY_STATUS_CODES = {502, 503, 504}
@@ -109,16 +112,56 @@ def _start_ollama_server_process() -> bool:
     return False
 
 
-def ensure_ollama_server(logger=None, *, wait_sec: float = 5.0) -> bool:
+def restart_ollama_server(logger=None, *, wait_sec: float = 6.0) -> bool:
+    """Restart Ollama runtime processes, then wait until the API is ready."""
     global _SERVER_READY_UNTIL, _START_IN_PROGRESS_UNTIL
+
+    with _STOP_LOCK:
+        _SERVER_READY_UNTIL = 0.0
+        _START_IN_PROGRESS_UNTIL = 0.0
+        stopped = 0
+        try:
+            from core.platform_compat import cleanup_ollama_runtime_processes
+
+            stopped = cleanup_ollama_runtime_processes(timeout_sec=0.8)
+        except Exception:
+            stopped = 0
+        if logger:
+            if stopped:
+                logger.log(f"🔄 AI 엔진(Ollama) 재시작 중... 기존 프로세스 {stopped}개 정리")
+            else:
+                logger.log("🔄 AI 엔진(Ollama) 재시작 중...")
+        time.sleep(0.35)
+        if not _start_ollama_server_process():
+            if logger:
+                logger.log("⚠️ AI 엔진(Ollama) 재시작 실패: 실행 파일을 찾을 수 없습니다.")
+            return False
+
+        deadline = time.monotonic() + max(1.0, float(wait_sec or 0.0))
+        while time.monotonic() < deadline:
+            if _is_ollama_api_ready(timeout=0.8):
+                _SERVER_READY_UNTIL = time.monotonic() + 10.0
+                if logger:
+                    logger.log("✅ AI 엔진(Ollama) 재시작 완료")
+                return True
+            time.sleep(0.25)
+
+        if logger:
+            logger.log("⚠️ AI 엔진(Ollama) 재시작 후에도 응답이 없습니다.")
+        return False
+
+
+def ensure_ollama_server(logger=None, *, wait_sec: float = 5.0) -> bool:
+    global _SERVER_READY_UNTIL, _START_IN_PROGRESS_UNTIL, _SERVER_READY_LOGGED_UNTIL
 
     now = time.monotonic()
     if _SERVER_READY_UNTIL > now:
         return True
     if _is_ollama_api_ready():
         _SERVER_READY_UNTIL = time.monotonic() + 10.0
-        if logger:
+        if logger and _SERVER_READY_LOGGED_UNTIL <= time.monotonic():
             logger.log("✅ AI 엔진(Ollama) 실행 중")
+            _SERVER_READY_LOGGED_UNTIL = time.monotonic() + 15.0
         return True
 
     with _START_LOCK:
@@ -127,8 +170,9 @@ def ensure_ollama_server(logger=None, *, wait_sec: float = 5.0) -> bool:
             return True
         if _is_ollama_api_ready():
             _SERVER_READY_UNTIL = time.monotonic() + 10.0
-            if logger:
+            if logger and _SERVER_READY_LOGGED_UNTIL <= time.monotonic():
                 logger.log("✅ AI 엔진(Ollama) 실행 중")
+                _SERVER_READY_LOGGED_UNTIL = time.monotonic() + 15.0
             return True
 
         launched = False
@@ -150,7 +194,11 @@ def ensure_ollama_server(logger=None, *, wait_sec: float = 5.0) -> bool:
             if _is_ollama_api_ready(timeout=0.8):
                 _SERVER_READY_UNTIL = time.monotonic() + 10.0
                 if logger:
-                    logger.log("✅ AI 엔진(Ollama) 자동 시작 완료" if launched else "✅ AI 엔진(Ollama) 실행 중")
+                    if launched:
+                        logger.log("✅ AI 엔진(Ollama) 자동 시작 완료")
+                    elif _SERVER_READY_LOGGED_UNTIL <= time.monotonic():
+                        logger.log("✅ AI 엔진(Ollama) 실행 중")
+                        _SERVER_READY_LOGGED_UNTIL = time.monotonic() + 15.0
                 return True
             time.sleep(0.25)
 
@@ -346,6 +394,21 @@ def _model_probe_still_valid(model: str) -> bool:
     return until > time.monotonic()
 
 
+def _mark_model_probe_failed(model: str, ttl_sec: float = _PROBE_FAILED_TTL_SEC) -> None:
+    text = str(model or "").strip()
+    if not text:
+        return
+    _PROBE_FAILED_UNTIL[text] = time.monotonic() + max(5.0, float(ttl_sec or _PROBE_FAILED_TTL_SEC))
+
+
+def _model_probe_recently_failed(model: str) -> bool:
+    text = str(model or "").strip()
+    if not text:
+        return False
+    until = float(_PROBE_FAILED_UNTIL.get(text, 0.0) or 0.0)
+    return until > time.monotonic()
+
+
 def resolve_ollama_model_for_request(
     model: str,
     logger=None,
@@ -358,6 +421,8 @@ def resolve_ollama_model_for_request(
     if not text or "사용 안함" in text:
         return text
     if _model_probe_still_valid(text):
+        return text
+    if _model_probe_recently_failed(text):
         return text
     if not ensure_ollama_server(logger=logger, wait_sec=4.0):
         return text
@@ -379,6 +444,7 @@ def resolve_ollama_model_for_request(
             logger.log(f"⚠️ {context}: Ollama 모델 사전 점검 실패 `{text}` ({message})")
 
     if not allow_fallback:
+        _mark_model_probe_failed(text)
         return text
 
     for fallback in _candidate_fallback_models(text):
@@ -392,6 +458,7 @@ def resolve_ollama_model_for_request(
 
     if logger:
         logger.log(f"⚠️ {context}: 사용 가능한 대체 Ollama 모델을 찾지 못했습니다. 현재 설정 `{text}` 유지")
+    _mark_model_probe_failed(text)
     return text
 
 

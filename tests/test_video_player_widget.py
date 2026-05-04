@@ -91,7 +91,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
-    def test_preview_uses_original_source_without_encoding_proxy(self):
+    def test_preview_starts_hevc_proxy_build_and_uses_original_until_ready(self):
         widget = VideoPlayerWidget()
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -99,12 +99,17 @@ class VideoPlayerWidgetTests(unittest.TestCase):
                 with open(src, "wb") as f:
                     f.write(b"video")
 
-                with patch("ui.editor.video_player_widget.subprocess.Popen") as popen:
+                proc = Mock()
+                proc.poll.return_value = None
+                with patch("ui.editor.video_player_widget.subprocess.Popen", return_value=proc) as popen:
                     playback_path = widget._playback_path_for(src)
 
                 self.assertEqual(playback_path, src)
                 self.assertEqual(widget._proxy_playback_path, src)
-                popen.assert_not_called()
+                popen.assert_called_once()
+                command = popen.call_args.args[0]
+                self.assertIn("-c:v", command)
+                self.assertIn(command[command.index("-c:v") + 1], {"hevc_videotoolbox", "libx265"})
         finally:
             widget.close()
             widget.deleteLater()
@@ -117,6 +122,32 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             rect = widget._displayed_video_rect(SimpleNamespace(width=lambda: 1920, height=lambda: 1080))
             self.assertLessEqual(rect.height(), 720)
             self.assertLessEqual(rect.width(), 1280)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_source_name_badge_lives_on_control_bar_right(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget.video_container.resize(640, 360)
+            widget._source_aspect = 16 / 9
+            path = "/tmp/DJI_20260504010101_very_long_camera_clip_name.MP4"
+
+            widget._set_source_name_badge(path)
+            widget._layout_video_overlay()
+
+            label = widget.source_name_label
+            self.assertFalse(label.isHidden())
+            self.assertEqual(label.toolTip(), os.path.basename(path))
+            self.assertEqual(label.text(), os.path.basename(path))
+            self.assertFalse(label.wordWrap())
+            self.assertIn("background: transparent", label.styleSheet())
+            self.assertIn("border: none", label.styleSheet())
+            self.assertIsNot(label.parentWidget(), widget.video_container)
+            self.assertIs(label.parentWidget(), widget.info_label.parentWidget())
+            control_layout = label.parentWidget().layout()
+            self.assertGreater(control_layout.indexOf(label), control_layout.indexOf(widget.info_label))
         finally:
             widget.close()
             widget.deleteLater()
@@ -196,6 +227,50 @@ class VideoPlayerWidgetTests(unittest.TestCase):
                 widget._ui_tick()
 
             provider.assert_not_called()
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_toggle_play_rewinds_to_last_playable_frame_near_end(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget.total_time = 10.0
+            widget.set_frame_rate(25.0)
+            widget.current_time = 10.0
+            widget._media_source_loaded = True
+
+            with patch.object(widget, "_ensure_media_source_loaded", return_value=True), \
+                 patch.object(widget, "_refresh_provider_segments"), \
+                 patch.object(widget, "_hide_thumbnail"), \
+                 patch.object(widget.media_player, "playbackState", return_value=QMediaPlayer.PlaybackState.StoppedState), \
+                 patch.object(widget.media_player, "setPosition") as set_position, \
+                 patch.object(widget.media_player, "play") as play_mock, \
+                 patch.object(widget, "_ensure_audio_outputs"):
+                widget.toggle_play()
+
+            set_position.assert_called_once_with(9960)
+            play_mock.assert_called_once()
+            self.assertEqual(widget.current_frame, 249)
+            self.assertAlmostEqual(widget.current_time, 9.96, places=2)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_seek_direct_uses_frame_position_mapping(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget._rebuild_frame_time_map(duration=10.0, fps=24.0)
+            widget._media_source_loaded = True
+
+            with patch.object(widget.media_player, "setPosition") as set_position, \
+                 patch.object(widget, "_refresh_provider_segments"):
+                widget.seek_direct(1.041)
+
+            self.assertEqual(widget.current_frame, 24)
+            self.assertAlmostEqual(widget.current_time, 1.0, places=6)
+            set_position.assert_called_once_with(1000)
         finally:
             widget.close()
             widget.deleteLater()

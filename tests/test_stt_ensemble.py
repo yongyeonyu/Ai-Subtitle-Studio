@@ -4,9 +4,14 @@ import unittest
 from unittest.mock import patch
 
 from core.audio.stt_ensemble import merge_stt_outputs, text_similarity
+from core.engine import subtitle_engine
 from core.engine.subtitle_engine import _process_one, optimize_segments
 from core.pipeline.multiclip_pipeline import MulticlipPipelineMixin
-from core.pipeline.single_pipeline import _should_flush_final_subtitle_buffer
+from core.pipeline.single_pipeline import (
+    SinglePipelineMixin,
+    _should_flush_final_subtitle_buffer,
+    _should_flush_live_subtitle_buffer,
+)
 from core.settings import get_model_key
 from core.subtitle_quality.vad_alignment_checker import adjust_segments_to_vad_boundaries
 
@@ -199,10 +204,10 @@ class STTEnsembleTests(unittest.TestCase):
 
         self.assertIn("large-v3+ghost613/faster-whisper-large-v3-turbo-korean", key)
 
-    def test_ensemble_final_subtitles_wait_until_transcription_sentinel(self):
-        self.assertFalse(
+    def test_subtitle_buffer_flushes_live_regardless_of_ensemble(self):
+        self.assertTrue(
             _should_flush_final_subtitle_buffer(
-                300.0,
+                0.8,
                 60,
                 stt_ensemble_enabled=True,
             )
@@ -213,6 +218,73 @@ class STTEnsembleTests(unittest.TestCase):
                 60,
                 stt_ensemble_enabled=False,
             )
+        )
+
+    def test_all_modes_flush_chunks_for_live_progress(self):
+        self.assertTrue(
+            _should_flush_live_subtitle_buffer(
+                1.0,
+                60,
+                stt_ensemble_enabled=False,
+                individual_queue_mode=True,
+            )
+        )
+        self.assertTrue(
+            _should_flush_live_subtitle_buffer(
+                1.0,
+                60,
+                stt_ensemble_enabled=True,
+                individual_queue_mode=True,
+            )
+        )
+        self.assertTrue(
+            _should_flush_live_subtitle_buffer(
+                1.0,
+                60,
+                stt_ensemble_enabled=False,
+                individual_queue_mode=False,
+            )
+        )
+
+    def test_individual_queue_appends_segments_one_by_one(self):
+        class Pipeline(SinglePipelineMixin):
+            def __init__(self):
+                self._individual_queue_mode = True
+                self._active = True
+                self.calls = []
+
+            def _ui_attr(self, name, default=None):
+                if name == "append_segments_to_editor_and_wait":
+                    return lambda segments, timeout_sec=2.0: self.calls.append(list(segments))
+                return default
+
+            def _ui_call(self, method_name, *args, **kwargs):
+                method = self._ui_attr(method_name)
+                if callable(method):
+                    method(*args, **kwargs)
+                    return True
+                return False
+
+            def _ui_is_alive(self):
+                return True
+
+            def _ui_emit(self, signal_name, *args):
+                self.calls.append(("emit", signal_name, args))
+                return True
+
+        pipeline = Pipeline()
+        with patch("core.pipeline.single_pipeline.time.sleep", return_value=None):
+            pipeline._append_live_segments_to_editor([
+                {"start": 0.0, "end": 1.0, "text": "첫 자막"},
+                {"start": 1.0, "end": 2.0, "text": "둘째 자막"},
+            ])
+
+        self.assertEqual(
+            pipeline.calls,
+            [
+                [{"start": 0.0, "end": 1.0, "text": "첫 자막"}],
+                [{"start": 1.0, "end": 2.0, "text": "둘째 자막"}],
+            ],
         )
 
     def test_text_similarity_compacts_whitespace_and_punctuation(self):
@@ -248,7 +320,12 @@ class STTEnsembleTests(unittest.TestCase):
             ],
         }
 
-        with patch("core.engine.subtitle_engine.ollama_split_text", return_value=["B"]):
+        with (
+            patch("core.engine.subtitle_engine._get_user_settings", return_value={"stt_ensemble_llm_judge_enabled": True}),
+            patch("core.engine.subtitle_engine._local_ollama_ready", return_value=True),
+            patch("core.engine.subtitle_engine._resolve_runtime_llm_model", side_effect=lambda model, **_: model),
+            patch("core.engine.subtitle_engine.ollama_split_text", return_value=["B"]),
+        ):
             result = _process_one((seg, {}, 10, {}, "gemma4:e4b", "", "", True))
 
         self.assertEqual(result[0]["text"], "STT2 문장")
@@ -276,7 +353,12 @@ class STTEnsembleTests(unittest.TestCase):
             prompts.append(prompt)
             return ["B"]
 
-        with patch("core.engine.subtitle_engine.ollama_split_text", side_effect=_fake_ollama):
+        with (
+            patch("core.engine.subtitle_engine._get_user_settings", return_value={"stt_ensemble_llm_judge_enabled": True}),
+            patch("core.engine.subtitle_engine._local_ollama_ready", return_value=True),
+            patch("core.engine.subtitle_engine._resolve_runtime_llm_model", side_effect=lambda model, **_: model),
+            patch("core.engine.subtitle_engine.ollama_split_text", side_effect=_fake_ollama),
+        ):
             result = _process_one((seg, {}, 10, {}, "gemma4:e4b", "", "", True))
 
         self.assertEqual(result[0]["text"], "문맥상 맞는 STT2")
@@ -306,6 +388,46 @@ class STTEnsembleTests(unittest.TestCase):
 
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["text"], "STT1 후보")
+
+    def test_local_llm_connection_refused_is_logged_once_and_falls_back(self):
+        class Logger:
+            def __init__(self):
+                self.lines = []
+
+            def log(self, line):
+                self.lines.append(str(line))
+
+        logger = Logger()
+        seg = {
+            "start": 0.0,
+            "end": 1.5,
+            "text": "STT1 문장",
+            "speaker": "00",
+            "stt_candidates": [
+                {"source": "STT1", "text": "STT1 문장", "score": 0.4},
+                {"source": "STT2", "text": "STT2 문장", "score": 0.8},
+            ],
+        }
+
+        subtitle_engine._LOCAL_LLM_UNAVAILABLE_UNTIL = 0.0
+        try:
+            with (
+                patch("core.engine.subtitle_engine.get_logger", return_value=logger),
+                patch("core.engine.subtitle_engine.ensure_ollama_server", return_value=False) as ensure_mock,
+                patch("core.engine.subtitle_engine.restart_ollama_server", return_value=False) as restart_mock,
+                patch("core.engine.subtitle_engine.ollama_split_text") as split_mock,
+            ):
+                first = _process_one((dict(seg), {}, 10, {}, "gemma4:e4b", "", "", True))
+                second = _process_one((dict(seg), {}, 10, {}, "gemma4:e4b", "", "", True))
+        finally:
+            subtitle_engine._LOCAL_LLM_UNAVAILABLE_UNTIL = 0.0
+
+        self.assertEqual(first[0]["text"], "STT1 문장")
+        self.assertEqual(second[0]["text"], "STT1 문장")
+        self.assertEqual(ensure_mock.call_count, 1)
+        restart_mock.assert_called_once()
+        split_mock.assert_not_called()
+        self.assertEqual(sum("Ollama 연결 실패" in line for line in logger.lines), 1)
 
 
 if __name__ == "__main__":

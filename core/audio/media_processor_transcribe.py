@@ -390,11 +390,7 @@ class VideoProcessorTranscribeMixin:
                         vad_strict = json.load(f)
                 except Exception:
                     vad_strict = []
-            scoring_enabled = (
-                bool(s.get("stt_candidate_scoring_enabled"))
-                or stt_rescue.enabled(s)
-                or str(s.get("stt_quality_preset", "") or "").strip().lower() == "precise"
-            )
+            scoring_enabled = True
             if scoring_enabled:
                 try:
                     from core.audio.stt_candidate_scorer import (

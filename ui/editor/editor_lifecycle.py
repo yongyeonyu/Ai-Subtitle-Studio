@@ -104,8 +104,15 @@ class EditorLifecycleMixin:
         from ui.editor.editor_widget import EditorWidget
         self._current_work_mode = "editor"
         vname = os.path.basename(target_file); self._remove_old_editor()
-        editor = EditorWidget(video_name=vname, segments=[], media_path=target_file, parent=self)
+        editor = EditorWidget(
+            video_name=vname,
+            segments=[],
+            media_path=target_file,
+            parent=self,
+            defer_media_load=bool(is_batch),
+        )
         editor.is_auto_start = is_batch; self._editor_widget = editor
+        editor._queue_mode_fit_view = bool(is_batch)
 
         editor._project_clips = None
         if self._current_project_path and self.backend:
@@ -222,8 +229,6 @@ class EditorLifecycleMixin:
                     pass
                 QTimer.singleShot(500, lambda: self._finalize_reuse_completion(editor))
             
-        if is_batch: QTimer.singleShot(600, lambda e=editor: e.btn_start.click() if hasattr(e, 'btn_start') else None)
-
         def safe_home(*args):
             QTimer.singleShot(0, self.show_home)
         def force_exit_app(*args): self.close()
@@ -256,6 +261,14 @@ class EditorLifecycleMixin:
             QTimer.singleShot(0, self._refresh_work_mode_ui)
         if hasattr(self, "_release_ai_models_for_editor_mode"):
             QTimer.singleShot(0, self._release_ai_models_for_editor_mode)
+        if is_batch and hasattr(editor, "_load_queue_clip_media_staged"):
+            QTimer.singleShot(
+                0,
+                lambda e=editor, p=target_file: e._load_queue_clip_media_staged(
+                    p,
+                    auto_start=True,
+                ),
+            )
 
     def _remove_old_editor(self):
         old = getattr(self, "_editor_widget", None)

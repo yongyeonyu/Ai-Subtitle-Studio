@@ -11,7 +11,7 @@ from core.audio.stt_quality_presets import apply_stt_quality_preset, normalize_s
 
 ACCURACY_FIRST_DEFAULTS = {
     "accuracy_first_mode": True,
-    "auto_start_mode": "quality",
+    "auto_start_mode": "precise",
     "stt_quality_preset": "precise",
     "stt_ensemble_enabled": True,
     "stt_ensemble_llm_judge_enabled": True,
@@ -44,7 +44,7 @@ ACCURACY_FIRST_DEFAULTS = {
 
 ACCURACY_RUNTIME_DEFAULTS = {
     "accuracy_first_mode": True,
-    "auto_start_mode": "quality",
+    "auto_start_mode": "precise",
     "stt_low_score_recheck_enabled": True,
     "stt_low_score_recheck_threshold": 60,
     "stt_low_score_recheck_padding_sec": 0.8,
@@ -84,8 +84,9 @@ def apply_accuracy_first_defaults(settings: dict | None) -> dict:
     out = dict(settings or {})
     for key, value in ACCURACY_FIRST_DEFAULTS.items():
         out.setdefault(key, deepcopy(value))
-    if str(out.get("auto_start_mode") or "").strip().lower() in {"fast", "preset"}:
-        out["auto_start_mode"] = "quality"
+    out["auto_start_mode"] = normalize_stt_quality_key(
+        out.get("auto_start_mode") or out.get("stt_quality_preset") or "precise"
+    )
     if "stt_quality_preset" not in out or not str(out.get("stt_quality_preset") or "").strip():
         out["stt_quality_preset"] = "precise"
     return out

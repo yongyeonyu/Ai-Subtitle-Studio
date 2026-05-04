@@ -43,7 +43,10 @@ def transcribe_microphone_once(profile: str = "quality") -> LiveSTTResult:
     start_ts = time.time()
     settings = load_settings()
 
-    import speech_recognition as sr
+    try:
+        import speech_recognition as sr
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("speech_recognition 모듈이 설치되어 있지 않습니다. UI 마이크 캡처 경로를 사용해 주세요.") from exc
 
     recognizer = sr.Recognizer()
     recognizer.dynamic_energy_threshold = True
@@ -69,19 +72,10 @@ def transcribe_microphone_once(profile: str = "quality") -> LiveSTTResult:
         with open(raw_wav, "wb") as f:
             f.write(audio.get_wav_data(convert_rate=16000, convert_width=2))
 
-        wav_path = _prepare_live_wav(raw_wav, clean_wav)
-        model = _select_live_model(settings, profile)
-
         try:
-            text = _transcribe_local_whisper(wav_path, model)
-            text = _postprocess_live_text(text)
-            if text:
-                return LiveSTTResult(
-                    text=text,
-                    engine="local-whisper",
-                    model=model,
-                    elapsed=time.time() - start_ts,
-                )
+            result = transcribe_wav_file(raw_wav, profile=profile, settings=settings, start_ts=start_ts)
+            if result.text:
+                return result
         except Exception as e:
             get_logger().log(f"⚠️ 로컬 마이크 STT 실패, fallback 시도: {e}")
 
@@ -92,6 +86,29 @@ def transcribe_microphone_once(profile: str = "quality") -> LiveSTTResult:
             engine="google-fallback",
             model="speech_recognition/google",
             elapsed=time.time() - start_ts,
+        )
+
+
+def transcribe_wav_file(
+    wav_path: str,
+    *,
+    profile: str = "quality",
+    settings: dict | None = None,
+    start_ts: float | None = None,
+) -> LiveSTTResult:
+    started = float(start_ts or time.time())
+    settings = dict(settings or load_settings() or {})
+    with tempfile.TemporaryDirectory(prefix="ai_subtitle_live_stt_") as td:
+        clean_wav = os.path.join(td, "mic_clean.wav")
+        prepared_wav = _prepare_live_wav(str(wav_path), clean_wav)
+        model = _select_live_model(settings, profile)
+        text = _transcribe_local_whisper(prepared_wav, model)
+        text = _postprocess_live_text(text)
+        return LiveSTTResult(
+            text=text,
+            engine="local-whisper",
+            model=model,
+            elapsed=time.time() - started,
         )
 
 

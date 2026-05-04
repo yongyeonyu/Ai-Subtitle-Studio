@@ -185,6 +185,8 @@ class EditorScanCutCoreMixin:
         try:
             if hasattr(self, "timeline") and hasattr(self.timeline, "set_playback_center_lock"):
                 self.timeline.set_playback_center_lock(False)
+            if hasattr(self, "timeline") and hasattr(self.timeline, "set_playhead_busy"):
+                self.timeline.set_playhead_busy(self._scan_cut_is_running())
         except Exception:
             pass
         if not active:
@@ -291,19 +293,102 @@ class EditorScanCutCoreMixin:
         except Exception:
             pass
 
+    def _on_provisional_cut_boundary_requested(self, global_sec: float) -> None:
+        try:
+            sec = self._snap_to_frame(float(global_sec or 0.0))
+        except Exception:
+            sec = float(global_sec or 0.0)
+        if sec <= 0.0:
+            return
+        try:
+            fps = float(self._current_frame_fps())
+        except Exception:
+            fps = 30.0
+        try:
+            frame = int(round(sec * fps))
+        except Exception:
+            frame = 0
+        row = {
+            "timeline_sec": sec,
+            "time": sec,
+            "start": sec,
+            "timeline_frame": frame,
+            "frame": frame,
+            "fps": fps,
+            "status": "provisional",
+            "reason": "manual_roughcut_middle_right_click",
+        }
+        existing = list(getattr(self, "_auto_cut_boundary_scan_lines", []) or [])
+        self._set_auto_cut_boundary_scan_lines([*existing, row])
+        try:
+            if hasattr(self, "_mark_dirty"):
+                self._mark_dirty()
+        except Exception:
+            pass
+        try:
+            vp = getattr(self, "video_player", None)
+            if vp is not None and hasattr(vp, "info_label"):
+                vp.info_label.setText(f"임시 컷 경계 추가 · {sec:.3f}s")
+        except Exception:
+            pass
+
+    def _on_provisional_cut_boundary_delete_requested(self, index: int, global_sec: float) -> None:
+        try:
+            sec = self._snap_to_frame(float(global_sec or 0.0))
+        except Exception:
+            sec = float(global_sec or 0.0)
+        existing = list(getattr(self, "_auto_cut_boundary_scan_lines", []) or [])
+        removed = False
+        kept = []
+        for row in existing:
+            try:
+                row_sec = float(row.get("timeline_sec", row.get("time", row.get("start", 0.0))) or 0.0) if isinstance(row, dict) else float(row or 0.0)
+            except Exception:
+                kept.append(row)
+                continue
+            if abs(row_sec - sec) <= 0.055:
+                removed = True
+                continue
+            kept.append(row)
+
+        try:
+            idx = int(index)
+        except Exception:
+            idx = -1
+        if not removed and 0 <= idx < len(existing):
+            kept = list(existing)
+            kept.pop(idx)
+            removed = True
+        if not removed:
+            return
+        self._auto_cut_boundary_scan_lines = []
+        self._set_auto_cut_boundary_scan_lines(kept)
+        try:
+            canvas = getattr(getattr(self, "timeline", None), "canvas", None)
+            if canvas is not None:
+                canvas._hover_scan_boundary_idx = None
+                canvas.update()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_mark_dirty"):
+                self._mark_dirty()
+        except Exception:
+            pass
+        try:
+            vp = getattr(self, "video_player", None)
+            if vp is not None and hasattr(vp, "info_label"):
+                vp.info_label.setText(f"임시 컷 경계 삭제 · {sec:.3f}s")
+        except Exception:
+            pass
+
     def _preview_auto_cut_boundary_scan(self, current_sec: float, next_sec: float = 0.0) -> None:
         self._set_auto_cut_boundary_scan_active(True)
-        self._scan_preview_global_sec(float(current_sec or 0.0))
+        self._scan_preview_global_sec(float(current_sec or 0.0), show_thumbnail=False)
         try:
-            source_path, _, _ctx = self._scan_source_and_local_sec(float(next_sec or current_sec or 0.0))
             vp = getattr(self, "video_player", None)
-            if vp is not None and source_path and hasattr(vp, "prefetch_thumbnail_at"):
-                target_sec = float(next_sec or current_sec or 0.0)
-                try:
-                    local_sec = float((_ctx or {}).get("local_sec", target_sec) or target_sec)
-                except Exception:
-                    local_sec = target_sec
-                vp.prefetch_thumbnail_at(source_path, local_sec, width=self._scan_preview_thumbnail_size()[0])
+            if vp is not None and hasattr(vp, "info_label"):
+                vp.info_label.setText(f"컷 경계 탐색 중 · {float(current_sec or 0.0):.3f}s")
         except Exception:
             pass
 
@@ -457,7 +542,7 @@ class EditorScanCutCoreMixin:
             return False
 
 
-    def _scan_preview_global_sec(self, global_sec: float) -> None:
+    def _scan_preview_global_sec(self, global_sec: float, *, show_thumbnail: bool = True) -> None:
         """
         scan-cut 진행 중 preview.
 
@@ -483,6 +568,9 @@ class EditorScanCutCoreMixin:
                 self.timeline.set_playhead(global_sec)
         except Exception:
             pass
+
+        if not show_thumbnail:
+            return
 
         # 2) 캐시 썸네일 우선: 같은 시점을 반복 방문해도 ffmpeg/OpenCV 비용이 덜 든다.
         try:
@@ -733,6 +821,12 @@ class EditorScanCutCoreMixin:
                 video_player.set_scan_cut_active(direction)
         except Exception:
             pass
+        try:
+            timeline = getattr(self, "timeline", None)
+            if timeline is not None and hasattr(timeline, "set_playhead_busy"):
+                timeline.set_playhead_busy(bool(direction) or bool(getattr(self, "_auto_cut_boundary_scan_active", False)))
+        except Exception:
+            pass
 
     def _cancel_scan_cut(self, reason: str = "cancelled", *, update_label: bool = True):
         try:
@@ -791,6 +885,7 @@ class EditorScanCutCoreMixin:
         if hasattr(self.video_player, "pause_video"):
             self.video_player.pause_video()
 
+        self._set_scan_cut_button_active(direction)
         fps = self._current_frame_fps()
         start_sec = self._manual_global_sec_from_player()
         start_frame = max(0, int(round(start_sec * fps)))
@@ -812,6 +907,7 @@ class EditorScanCutCoreMixin:
                 self.video_player.info_label.setText("컷 경계 탐색 실패 · 프레임 없음")
             except Exception:
                 pass
+            self._set_scan_cut_button_active(0)
             return
 
         self._scan_cut_state = {
@@ -839,7 +935,6 @@ class EditorScanCutCoreMixin:
             pass
 
         self._scan_set_timeline_input_locked(True)
-        self._set_scan_cut_button_active(direction)
         self._scan_cut_timer.stop()
         self._scan_cut_timer.setInterval(interval)
         self._scan_cut_timer.start()

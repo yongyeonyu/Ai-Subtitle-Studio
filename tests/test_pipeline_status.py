@@ -2,7 +2,12 @@
 # Phase: PHASE2
 import unittest
 
-from core.pipeline_status import generation_stage_keys, generation_stage_label, process_mode_label
+from core.pipeline_status import (
+    generation_stage_keys,
+    generation_stage_keys_all,
+    generation_stage_label,
+    process_mode_label,
+)
 
 
 class PipelineStatusTests(unittest.TestCase):
@@ -16,6 +21,19 @@ class PipelineStatusTests(unittest.TestCase):
         self.assertEqual(generation_stage_keys("⏳ [VAD] TEN VAD 음성 섹터 스캔 중"), {"vad"})
         self.assertEqual(generation_stage_keys("⏳ [STT] STT1/STT2 병렬 인식 중", stt_ensemble_enabled=True), {"stt1", "stt2"})
         self.assertEqual(generation_stage_keys("⏳ [자막 LLM] 교정/분리 중"), {"subtitle_llm"})
+
+    def test_pipeline_stage_parser_can_collect_parallel_live_steps(self):
+        status = "\n".join(
+            [
+                "  ▶ [STT1] 진행 상황: 00분 22초 / 02분 59초 (13%)",
+                "[STT2] Loading weights: 100%",
+                "[LLM-보정차단] 원문 무결성 검사",
+            ]
+        )
+        self.assertEqual(
+            generation_stage_keys_all(status, stt_ensemble_enabled=True),
+            {"stt1", "stt2", "subtitle_llm"},
+        )
 
     def test_process_mode_label_uses_processing_state_before_screen_mode(self):
         self.assertEqual(

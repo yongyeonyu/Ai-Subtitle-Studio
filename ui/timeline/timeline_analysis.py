@@ -6,6 +6,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.project.subtitle_status import (
+    SUBTITLE_STATUS_COLORS,
+    subtitle_detection_score,
+)
+
 
 SAFETY_COLORS = {
     "ideal": "#34C759",
@@ -39,7 +44,6 @@ VOICE_ACTIVITY_STYLES = {
 
 SUBTITLE_DETECTION_NEEDS_SELECTION_COLOR = "#8E8E93"
 SUBTITLE_DETECTION_IDLE_COLOR = "#2D3942"
-
 MAJOR_SEGMENT_COLORS = (
     "#00E676",  # A
     "#FF453A",  # B
@@ -178,30 +182,110 @@ def editor_analysis_markers(
     markers: list[dict] = []
     total_duration = max(0.0, float(total_duration or 0.0))
 
+    def _clip_range(start: float, end: float) -> tuple[float, float] | None:
+        if total_duration > 0:
+            start = max(0.0, min(total_duration, start))
+            end = max(start, min(total_duration, end))
+        if end - start < 0.05:
+            return None
+        return start, end
+
+    def _merged_ranges(items: list[tuple[float, float]], min_len: float = 0.05) -> list[tuple[float, float]]:
+        merged: list[tuple[float, float]] = []
+        for start, end in sorted(items):
+            clipped = _clip_range(start, end)
+            if clipped is None:
+                continue
+            start, end = clipped
+            if end - start < min_len:
+                continue
+            if merged and start <= merged[-1][1] + 0.001:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    def _subtract_ranges(
+        base_ranges: list[tuple[float, float]],
+        blockers: list[tuple[float, float]],
+    ) -> list[tuple[float, float]]:
+        blockers = _merged_ranges(blockers)
+        result: list[tuple[float, float]] = []
+        for start, end in _merged_ranges(base_ranges):
+            pieces = [(start, end)]
+            for block_start, block_end in blockers:
+                next_pieces: list[tuple[float, float]] = []
+                for piece_start, piece_end in pieces:
+                    if block_end <= piece_start or block_start >= piece_end:
+                        next_pieces.append((piece_start, piece_end))
+                        continue
+                    if block_start > piece_start + 0.05:
+                        next_pieces.append((piece_start, min(block_start, piece_end)))
+                    if block_end < piece_end - 0.05:
+                        next_pieces.append((max(block_end, piece_start), piece_end))
+                pieces = next_pieces
+                if not pieces:
+                    break
+            result.extend(pieces)
+        return _merged_ranges(result)
+
+    speech_ranges: list[tuple[float, float]] = []
+    for seg in segments or []:
+        if seg.get("is_gap"):
+            continue
+        start = _as_float(seg.get("start"))
+        end = _as_float(seg.get("end"))
+        if start is None or end is None or end <= start:
+            continue
+        speech_ranges.append((start, end))
+
+    vad_silence_ranges: list[tuple[float, float]] = []
     for vad in vad_segments or []:
         start = _as_float(vad.get("start"))
         end = _as_float(vad.get("end"))
         if start is None or end is None or end <= start:
             continue
-        markers.append(
-            {
-                "start": start,
-                "end": end,
-                "kind": "vad",
-                "label": "음성",
-                "color": "#34C759",
-                "priority": 10,
-                "alpha": 62,
-            }
-        )
+        if _voice_kind_from_vad(vad) == "silence":
+            vad_silence_ranges.append((start, end))
+        else:
+            speech_ranges.append((start, end))
 
+    gap_ranges: list[tuple[float, float]] = []
     for gap in gap_segments or []:
         start = _as_float(gap.get("start"))
         end = _as_float(gap.get("end"))
         if start is None or end is None or end <= start:
             continue
-        if end - start < 0.25:
-            continue
+        gap_ranges.append((start, end))
+    gap_ranges.extend(vad_silence_ranges)
+
+    if not gap_ranges and speech_ranges and total_duration > 0:
+        cursor = 0.0
+        for start, end in _merged_ranges(speech_ranges):
+            if start > cursor + 0.05:
+                gap_ranges.append((cursor, start))
+            cursor = max(cursor, end)
+        if total_duration > cursor + 0.05:
+            gap_ranges.append((cursor, total_duration))
+
+    # The bottom voice/silence lane is driven by subtitle gap blocks, but real
+    # subtitle/STT blocks win when stale or wide gap ranges overlap them.
+    silence_ranges = _subtract_ranges(gap_ranges, speech_ranges)
+
+    cursor = 0.0
+    for start, end in silence_ranges:
+        if start > cursor + 0.05:
+            markers.append(
+                {
+                    "start": cursor,
+                    "end": start,
+                    "kind": "speech",
+                    "label": "음성",
+                    "color": "#34C759",
+                    "priority": 10,
+                    "alpha": 74,
+                }
+            )
         markers.append(
             {
                 "start": start,
@@ -210,73 +294,34 @@ def editor_analysis_markers(
                 "label": "무음",
                 "color": "#FF9500",
                 "priority": 20,
-                "alpha": 118,
+                "alpha": 132,
             }
         )
+        cursor = max(cursor, end)
 
-    for seg in segments or []:
-        start = _as_float(seg.get("start"))
-        end = _as_float(seg.get("end"))
-        if start is None or end is None or end <= start:
-            continue
-        quality = dict(seg.get("quality") or {})
-        if quality:
-            label_key = str(quality.get("confidence_label") or "gray")
-            flags = set(quality.get("flags") or ())
-            score = quality.get("confidence_score")
-            score_text = "-" if score is None else f"{float(score):.0f}"
-            needs_review = label_key in {"red", "gray"} or bool(flags.intersection({"non_speech_hallucination_risk", "high_no_speech_prob", "outside_vad_speech"}))
-            markers.append(
-                {
-                    "start": start,
-                    "end": end,
-                    "kind": f"subtitle_quality:{label_key}",
-                    "label": "확인" if needs_review else f"Q{score_text}",
-                    "color": QUALITY_COLORS.get(label_key, "#8E8E93"),
-                    "priority": 95 if needs_review else 35,
-                    "alpha": 162 if needs_review else 104,
-                }
-            )
-        duration = max(0.001, end - start)
-        text = str(seg.get("text") or "")
-        chars = len("".join(text.split()))
-        cps = chars / duration
-        label = ""
-        color = ""
-        priority = 0
-        if seg.get("stt_pending"):
-            label, color, priority = "STT대기", "#FF453A", 88
-        elif duration < 0.35:
-            label, color, priority = "짧음", "#FF453A", 82
-        elif cps >= 16.0:
-            label, color, priority = "CPS위험", "#FF453A", 80
-        elif cps >= 12.0:
-            label, color, priority = "빠름", "#FFCC00", 62
-        elif duration >= 8.0:
-            label, color, priority = "장문", "#FF9500", 56
-        if label:
-            markers.append(
-                {
-                    "start": start,
-                    "end": end,
-                    "kind": "subtitle_risk",
-                    "label": label,
-                    "color": color,
-                    "priority": priority,
-                    "alpha": 150 if priority >= 80 else 128,
-                }
-            )
+    if total_duration > cursor + 0.05:
+        markers.append(
+            {
+                "start": cursor,
+                "end": total_duration,
+                "kind": "speech",
+                "label": "음성",
+                "color": "#34C759",
+                "priority": 10,
+                "alpha": 74,
+            }
+        )
 
     if not markers and total_duration > 0:
         markers.append(
             {
                 "start": 0.0,
                 "end": total_duration,
-                "kind": "idle",
-                "label": "",
-                "color": "#2D3942",
-                "priority": 0,
-                "alpha": 96,
+                "kind": "speech",
+                "label": "음성",
+                "color": "#34C759",
+                "priority": 10,
+                "alpha": 74,
             }
         )
     return markers
@@ -350,31 +395,64 @@ def subtitle_detection_segments_for_editor(
             )
             continue
 
-        needs_selection = _subtitle_needs_selection(seg)
         llm_selected = bool(str(seg.get("stt_ensemble_llm_selected_source", "") or "").strip())
         manually_selected = bool(str(seg.get("stt_selected_source", "") or "").strip())
 
         source = _selected_stt_source(seg)
         score = _subtitle_detection_score(seg, source)
+        quality = dict(seg.get("quality") or {})
+        flags = {str(flag) for flag in (quality.get("flags") or [])}
+        manually_confirmed = bool(quality.get("manual_confirmed")) or "manual_confirmed" in flags
+        review_state = subtitle_review_state(seg)
 
-        if needs_selection and not (llm_selected or manually_selected):
+        if manually_confirmed:
             add(
                 start,
                 end,
-                "needs_selection",
+                "subtitle_confirmed",
+                source="manual_confirmed",
+                label="자막확정",
+                color="#34C759",
+                priority=98,
+                alpha=162,
+                score=score,
+                selection_state="manual_confirmed",
+            )
+            continue
+
+        if review_state == "recheck":
+            add(
+                start,
+                end,
+                "recheck",
+                source=source or "quality",
+                label=_subtitle_detection_label("재검사", score),
+                color=SUBTITLE_STATUS_COLORS["recheck"],
+                priority=97,
+                alpha=162,
+                score=score,
+                selection_state="recheck",
+            )
+            continue
+
+        if review_state == "conflict" and not (llm_selected or manually_selected):
+            add(
+                start,
+                end,
+                "conflict",
                 source="review",
-                label=_subtitle_detection_label("선택필요", score),
-                color=SUBTITLE_DETECTION_NEEDS_SELECTION_COLOR,
+                label=_subtitle_detection_label("판단불가", score),
+                color=SUBTITLE_STATUS_COLORS["conflict"],
                 priority=96,
                 alpha=154,
                 score=score,
-                selection_state="needs_selection",
+                selection_state="conflict",
             )
             continue
 
         if source in {"STT1", "STT2"}:
-            state = "llm_selected" if llm_selected else ("manual_selected" if manually_selected else "selected")
-            suffix = "선택"
+            state = "llm_selected" if llm_selected else ("manual_selected" if manually_selected else "pending")
+            suffix = "미확정"
             label = _subtitle_detection_label(source, score, suffix=suffix)
             add(
                 start,
@@ -382,7 +460,7 @@ def subtitle_detection_segments_for_editor(
                 state,
                 source=source,
                 label=label,
-                color=subtitle_detection_color(score),
+                color=SUBTITLE_STATUS_COLORS["pending"],
                 priority=92 if llm_selected else 84,
                 alpha=158,
                 score=score,
@@ -390,23 +468,39 @@ def subtitle_detection_segments_for_editor(
             )
             continue
 
-        quality = dict(seg.get("quality") or {})
         if quality:
             add(
                 start,
                 end,
                 "subtitle_score",
                 source="quality",
-                label=_subtitle_detection_label("자막", score),
-                color=subtitle_detection_color(score),
+                label=_subtitle_detection_label("미확정", score),
+                color=SUBTITLE_STATUS_COLORS["pending"],
                 priority=54,
                 alpha=126,
                 score=score,
                 selection_state="quality",
             )
 
+    for gap in gap_segments or []:
+        quality = dict(gap.get("quality") or {})
+        flags = {str(flag) for flag in (quality.get("flags") or [])}
+        if not (bool(quality.get("linked_silence")) or "linked_silence" in flags):
+            continue
+        add(
+            gap.get("start"),
+            gap.get("end"),
+            "linked_silence",
+            source="silence",
+            label="무음",
+            color="#34C759",
+            priority=82,
+            alpha=142,
+            selection_state="linked_silence",
+        )
+
     if not candidates and total_duration > 0:
-        add(0.0, total_duration, "idle", source="subtitle_detection", label="감지대기", color=SUBTITLE_DETECTION_IDLE_COLOR, priority=0, alpha=92)
+        add(0.0, total_duration, "idle", source="subtitle_detection", label="음성", color="#34C759", priority=0, alpha=92)
 
     return _resolve_non_overlapping_voice_activity(candidates)
 
@@ -473,30 +567,32 @@ def _subtitle_needs_selection(seg: dict) -> bool:
     )
 
 
-def _subtitle_detection_score(seg: dict, source: str = "") -> float | None:
-    quality = dict(seg.get("quality") or {})
-    score = _as_float(quality.get("confidence_score"))
-    if score is not None:
-        return max(0.0, min(100.0, score))
+def _recheck_threshold() -> float:
+    from core.project.subtitle_status import recheck_threshold
 
-    target_source = str(source or _selected_stt_source(seg) or _stt_source_for_segment(seg)).strip().upper()
+    return recheck_threshold()
+
+
+def _stt_candidate_scores(seg: dict) -> list[float]:
+    scores: list[float] = []
     for candidate in list(seg.get("stt_candidates") or []):
-        cand_source = str(candidate.get("source", "") or "").strip().upper()
-        if target_source and cand_source != target_source:
+        if str(candidate.get("source", "") or "").strip().upper() not in {"STT1", "STT2"}:
             continue
         score = _as_float(candidate.get("score"))
         if score is not None:
-            return _normalize_score_100(score)
+            scores.append(_normalize_score_100(score))
+    return scores
 
-    for key in ("score", "confidence", "probability", "avg_confidence"):
-        score = _as_float(seg.get(key))
-        if score is not None:
-            return _normalize_score_100(score)
 
-    similarity = _as_float(seg.get("stt_ensemble_similarity"))
-    if similarity is not None:
-        return _normalize_score_100(similarity)
-    return None
+def subtitle_review_state(seg: dict, *, recheck_threshold: float | None = None) -> str:
+    from core.project.subtitle_status import subtitle_review_state as _shared_subtitle_review_state
+
+    threshold = None if recheck_threshold is None else float(recheck_threshold)
+    return _shared_subtitle_review_state(seg, threshold=threshold)
+
+
+def _subtitle_detection_score(seg: dict, source: str = "") -> float | None:
+    return subtitle_detection_score(seg, source)
 
 
 def _normalize_score_100(value: float) -> float:
@@ -562,10 +658,6 @@ def _resolve_non_overlapping_voice_activity(candidates: list[dict]) -> list[dict
 
 
 def analysis_markers_for_widget(widget: Any, segments: list[dict], vad_segments: list[dict], gap_segments: list[dict], total_duration: float) -> list[dict]:
-    result = find_roughcut_result(widget)
-    roughcut = roughcut_markers(result) if result is not None else []
-    if roughcut:
-        return roughcut
     return editor_analysis_markers(segments, vad_segments, gap_segments, total_duration)
 
 

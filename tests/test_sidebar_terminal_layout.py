@@ -315,6 +315,41 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_disabled_pipeline_stages_start_completed_and_use_misusage_label(self):
+        window = MainWindow()
+        try:
+            settings = {
+                "cut_boundary_level": "off",
+                "scan_cut_boundary_level": "off",
+                "cut_boundary_detection_enabled": False,
+                "scan_cut_enabled": False,
+                "selected_audio_ai": "deepfilter",
+                "selected_whisper_model": "whisper-large-v3-turbo",
+                "stt_ensemble_enabled": False,
+                "selected_vad": "none",
+                "selected_model": "사용 안함 (Whisper 단독 진행)",
+                "selected_llm_provider": "none",
+                "roughcut_llm_enabled": True,
+                "roughcut_llm_provider": "ollama",
+                "roughcut_llm_model": "exaone3.5:7.8b",
+            }
+
+            rows = window._pipeline_rows(settings)
+            row_map = {key: model for key, _stage, model in rows}
+            completed = window._pipeline_completed_stage_keys(settings, set())
+
+            self.assertEqual(row_map["cut_boundary"], "미사용")
+            self.assertEqual(row_map["subtitle_llm"], "미사용")
+            self.assertEqual(row_map["roughcut_llm"], "미사용")
+            self.assertEqual(
+                completed,
+                {"cut_boundary", "stt2", "vad", "subtitle_llm", "roughcut_llm"},
+            )
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_saved_editor_after_generation_marks_pipeline_done(self):
         window = MainWindow()
         try:
@@ -339,7 +374,50 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(current, set())
             self.assertEqual(
                 completed,
-                {"cut_boundary", "preprocess", "audio", "stt1", "vad", "subtitle_llm", "roughcut_llm"},
+                {"cut_boundary", "preprocess", "audio", "stt1", "stt2", "vad", "subtitle_llm", "roughcut_llm"},
+            )
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_fast_preset_saved_editor_marks_all_stages_complete_even_when_disabled(self):
+        window = MainWindow()
+        try:
+            editor = type("Editor", (), {})()
+            editor._roughcut_draft_status = "idle"
+            editor._last_roughcut_draft_major_count = None
+            editor.sm = type("State", (), {"state": "ST_SAVED"})()
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: False
+            settings = {
+                "cut_boundary_level": "off",
+                "scan_cut_boundary_level": "off",
+                "cut_boundary_detection_enabled": False,
+                "scan_cut_enabled": False,
+                "selected_audio_ai": "deepfilter",
+                "selected_whisper_model": "whisper-large-v3-turbo",
+                "stt_ensemble_enabled": False,
+                "selected_vad": "none",
+                "selected_model": "사용 안함 (Whisper 단독 진행)",
+                "selected_llm_provider": "none",
+                "roughcut_llm_enabled": False,
+            }
+
+            completed = window._pipeline_completed_stage_keys(settings, set())
+
+            self.assertEqual(
+                completed,
+                {
+                    "cut_boundary",
+                    "preprocess",
+                    "audio",
+                    "stt1",
+                    "stt2",
+                    "vad",
+                    "subtitle_llm",
+                    "roughcut_llm",
+                },
             )
         finally:
             window.close()
@@ -377,6 +455,140 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_pipeline_live_log_marks_verified_cut_and_cache_reuse_green(self):
+        window = MainWindow()
+        try:
+            editor = SimpleNamespace(
+                _auto_cut_boundary_scan_active=False,
+                _auto_cut_boundary_scan_lines=[
+                    {"timeline_sec": 1.2, "status": "verified"},
+                    {"timeline_sec": 2.4, "confirmed": True},
+                ],
+                _roughcut_draft_status="idle",
+                _last_roughcut_draft_major_count=None,
+                sm=SimpleNamespace(state="ST_PROC"),
+            )
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: True
+            window.log_text.setPlainText(
+                "\n".join(
+                    [
+                        "  └ ♻️ [전처리] 원본/설정이 같은 오디오 캐시를 재사용합니다",
+                        "  ▶ [STT1] 진행 상황: 00분 22초 / 02분 59초 (13%)",
+                        "[STT2] Loading weights: 100%",
+                        "[LLM-보정차단] 원문 무결성 검사",
+                    ]
+                )
+            )
+
+            settings = {
+                "selected_audio_ai": "deepfilter",
+                "selected_whisper_model": "whisper-large-v3",
+                "stt_ensemble_enabled": True,
+                "selected_whisper_model_secondary": "ghost613-turbo-korean-4bit",
+                "selected_vad": "silero",
+                "selected_model": "gemma4:e4b",
+                "roughcut_llm_enabled": False,
+            }
+            current = window._pipeline_current_stage_keys(settings)
+            completed = window._pipeline_completed_stage_keys(settings, current)
+
+            self.assertEqual(current & {"stt1", "stt2", "subtitle_llm"}, {"stt1", "stt2", "subtitle_llm"})
+            self.assertIn("cut_boundary", completed)
+            self.assertIn("preprocess", completed)
+            self.assertIn("audio", completed)
+            self.assertNotIn("stt1", completed)
+            self.assertNotIn("stt2", completed)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_live_pipeline_stage_prevents_stale_saved_state_from_marking_done(self):
+        window = MainWindow()
+        try:
+            editor = SimpleNamespace(
+                _auto_cut_boundary_scan_active=False,
+                _auto_cut_boundary_scan_lines=[{"timeline_sec": 1.2, "status": "verified"}],
+                _roughcut_draft_status="idle",
+                _last_roughcut_draft_major_count=None,
+                sm=SimpleNamespace(state="ST_SAVED"),
+            )
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: True
+            window.log_text.setPlainText("[STT2] Loading weights: 100%\n[LLM-보정차단] 원문 무결성 검사")
+
+            current = window._pipeline_current_stage_keys(
+                {
+                    "stt_ensemble_enabled": True,
+                    "selected_vad": "silero",
+                    "roughcut_llm_enabled": False,
+                }
+            )
+            completed = window._pipeline_completed_stage_keys(
+                {
+                    "stt_ensemble_enabled": True,
+                    "selected_vad": "silero",
+                    "roughcut_llm_enabled": False,
+                },
+                current,
+            )
+
+            self.assertIn("stt2", current)
+            self.assertNotIn("stt1", completed)
+            self.assertNotIn("stt2", completed)
+            self.assertNotIn("subtitle_llm", completed)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_save_completion_log_marks_stt1_complete_even_if_stale_stt_log_remains(self):
+        window = MainWindow()
+        try:
+            editor = SimpleNamespace(
+                _auto_cut_boundary_scan_active=False,
+                _auto_cut_boundary_scan_lines=[{"timeline_sec": 1.2, "status": "verified"}],
+                _roughcut_draft_status="idle",
+                _last_roughcut_draft_major_count=None,
+                sm=SimpleNamespace(state="ST_PROC"),
+            )
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: True
+            window.log_text.setPlainText(
+                "\n".join(
+                    [
+                        "  ▶ [STT1] 진행 상황: 00분 46초 / 02분 59초 (38%)",
+                        "📦 프로젝트 저장 완료: DJI_20260217224203_0075_D.json",
+                        "💾 저장 완료: DJI_20260217224203_0075_D.srt",
+                    ]
+                )
+            )
+
+            settings = {
+                "cut_boundary_level": "off",
+                "scan_cut_boundary_level": "off",
+                "cut_boundary_detection_enabled": False,
+                "scan_cut_enabled": False,
+                "selected_audio_ai": "deepfilter",
+                "selected_whisper_model": "whisper-large-v3-turbo",
+                "stt_ensemble_enabled": False,
+                "selected_vad": "silero",
+                "selected_model": "사용 안함 (Whisper 단독 진행)",
+                "selected_llm_provider": "none",
+                "roughcut_llm_enabled": False,
+            }
+
+            current = window._pipeline_current_stage_keys(settings)
+            completed = window._pipeline_completed_stage_keys(settings, current)
+
+            self.assertIn("stt1", current)
+            self.assertIn("stt1", completed)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_unconfirmed_cut_boundary_lines_keep_cut_stage_pending(self):
         window = MainWindow()
         try:
@@ -406,6 +618,37 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_pipeline_table_does_not_mark_done_from_queue_header_percent_only(self):
+        window = MainWindow()
+        try:
+            editor = SimpleNamespace(
+                _auto_cut_boundary_scan_active=False,
+                _auto_cut_boundary_scan_lines=[],
+                _roughcut_draft_status="idle",
+                _last_roughcut_draft_major_count=None,
+                sm=SimpleNamespace(state="ST_IDLE"),
+            )
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: False
+            window.queue_header_lbl.setText("큐 리스트 : (1/1) - 100% 완료")
+            window.queue_table.setRowCount(1)
+            window.queue_table.setItem(0, 0, QTableWidgetItem("저장 준비 중"))
+
+            completed = window._pipeline_completed_stage_keys(
+                {
+                    "stt_ensemble_enabled": True,
+                    "selected_vad": "silero",
+                    "roughcut_llm_enabled": True,
+                },
+                set(),
+            )
+
+            self.assertEqual(completed, {"roughcut_llm"})
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_timeline_cut_boundary_marker_verified_statuses(self):
         from ui.timeline.timeline_paint import cut_boundary_scan_marker_verified
 
@@ -420,19 +663,180 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.queue_table.setRowCount(1)
             window.queue_table.setItem(0, 0, QTableWidgetItem("✅ 자막 생성 완료"))
             window.queue_table.setItem(0, 1, QTableWidgetItem("DJI_20260217224203_0075_D.MP4"))
-            window.queue_table.setItem(0, 4, QTableWidgetItem("01:37 / ?"))
+            window.queue_table.setItem(0, 3, QTableWidgetItem("00:10"))
+            window.queue_table.setItem(0, 4, QTableWidgetItem("00:10 / 01:37"))
             items = window._sidebar_queue_items()
             self.assertEqual(items[0]["order"], "1")
             self.assertEqual(items[0]["status"], "자막 생성 완료")
             self.assertTrue(items[0]["done"])
             self.assertNotIn("✅", items[0]["status"])
+            self.assertEqual(items[0]["eta"], "00:10 / 01:37")
 
             panel = window._ensure_sidebar_queue_panel()
             panel.set_queue("큐 리스트 : (1/1) - 100% 완료", items)
-            self.assertEqual(panel._table.horizontalHeaderItem(0).text(), "순서")
-            self.assertEqual(panel._table.horizontalHeaderItem(2).text(), "시간")
-            self.assertEqual(panel._table.item(0, 0).text(), "1")
-            self.assertIn("완료", panel._table.item(0, 1).text())
+            self.assertFalse(panel._table.horizontalHeader().isVisible())
+            self.assertEqual(panel._table.columnCount(), 2)
+            self.assertIn("완료", panel._table.item(0, 0).text())
+            self.assertIn("0️⃣1️⃣ DJI_", panel._table.item(0, 1).text())
+            self.assertIn("00:10 / 01:37", panel._table.item(0, 1).text())
+            self.assertNotIn("?", panel._table.item(0, 1).text())
+            self.assertNotIn("예상시간", panel._table.item(0, 1).text())
+            self.assertGreaterEqual(panel._table.item(0, 1).text().count("\n"), 2)
+            self.assertGreaterEqual(panel._table.rowHeight(0), 62)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_queue_running_eta_uses_elapsed_over_expected(self):
+        window = MainWindow()
+        try:
+            window.queue_table.setRowCount(1)
+            window.queue_table.setItem(0, 0, QTableWidgetItem("자막 생성 중"))
+            window.queue_table.setItem(0, 1, QTableWidgetItem("clip_a.mp4"))
+            window.queue_table.setItem(0, 3, QTableWidgetItem("02:59"))
+            window.queue_table.setItem(0, 4, QTableWidgetItem("00:02"))
+            items = window._sidebar_queue_items()
+            self.assertEqual(items[0]["eta"], "00:00 / 00:02")
+
+            window.queue_table.setItem(0, 4, QTableWidgetItem("01:35 / 02:59"))
+            items = window._sidebar_queue_items()
+            self.assertEqual(items[0]["eta"], "01:35 / 02:59")
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_queue_order_uses_keycap_digits(self):
+        window = MainWindow()
+        try:
+            panel = window._ensure_sidebar_queue_panel()
+            panel.set_queue(
+                "큐 리스트 : (10/12) - 30% 완료",
+                [
+                    {
+                        "order": "10",
+                        "file": "clip_10.mov",
+                        "eta": "00:10 / 00:30",
+                        "status": "대기 중",
+                        "statusDisplay": "대기 중",
+                        "done": False,
+                        "active": False,
+                        "error": False,
+                    }
+                ],
+            )
+
+            self.assertIn("1️⃣0️⃣ clip_10.mov", panel._table.item(0, 1).text())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_queue_single_digit_order_is_two_keycaps(self):
+        window = MainWindow()
+        try:
+            panel = window._ensure_sidebar_queue_panel()
+            panel.set_queue(
+                "큐 리스트 : (2/12) - 10% 완료",
+                [
+                    {
+                        "order": "2",
+                        "file": "clip_02.mov",
+                        "eta": "00:02 / 00:20",
+                        "status": "대기 중",
+                        "statusDisplay": "대기 중",
+                        "done": False,
+                        "active": False,
+                        "error": False,
+                    }
+                ],
+            )
+
+            self.assertIn("0️⃣2️⃣ clip_02.mov", panel._table.item(0, 1).text())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_queue_panel_does_not_mark_active_status_with_complete_word_as_done(self):
+        window = MainWindow()
+        try:
+            panel = window._ensure_sidebar_queue_panel()
+            panel.set_queue(
+                "큐 리스트 : (1/1) - 99% 완료",
+                [
+                    {
+                        "order": "1",
+                        "file": "clip_01.mov",
+                        "eta": "00:21 / 02:59",
+                        "status": "자막 생성 완료 판정 중",
+                        "statusDisplay": "자막 생성 완료 판정 중",
+                        "done": False,
+                        "active": True,
+                        "error": False,
+                    }
+                ],
+            )
+
+            self.assertEqual(panel._table.item(0, 0).text(), "자막 생성 완료 판정 중")
+            self.assertEqual(panel._table.item(0, 0).foreground().color().name().upper(), "#FFD84D")
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_queue_panel_focuses_active_row(self):
+        window = MainWindow()
+        try:
+            panel = window._ensure_sidebar_queue_panel()
+            items = [
+                {
+                    "order": str(idx + 1),
+                    "file": f"clip_{idx + 1}.mov",
+                    "eta": "00:10",
+                    "status": "대기 중",
+                    "statusDisplay": "대기 중",
+                    "done": False,
+                    "active": idx == 8,
+                    "error": False,
+                }
+                for idx in range(12)
+            ]
+            panel.set_queue("큐 리스트 : (9/12) - 30% 완료", items)
+
+            self.assertEqual(panel._table.currentRow(), 8)
+            active_fg = panel._table.item(8, 1).foreground().color().name().upper()
+            waiting_fg = panel._table.item(0, 1).foreground().color().name().upper()
+            self.assertEqual(active_fg, "#FFD84D")
+            self.assertEqual(waiting_fg, "#9DB0BB")
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_queue_panel_sanitizes_multiple_active_rows(self):
+        window = MainWindow()
+        try:
+            panel = window._ensure_sidebar_queue_panel()
+            items = [
+                {
+                    "order": str(idx + 1),
+                    "file": f"clip_{idx + 1}.mov",
+                    "eta": "00:10",
+                    "status": "컷 경계 확인 중",
+                    "statusDisplay": "컷 경계 확인 중",
+                    "done": False,
+                    "active": idx in {1, 2},
+                    "error": False,
+                }
+                for idx in range(4)
+            ]
+            panel.set_queue("큐 리스트 : (2/4) - 10% 완료", items)
+
+            self.assertEqual(panel._table.currentRow(), 1)
+            self.assertEqual(panel._table.item(1, 1).foreground().color().name().upper(), "#FFD84D")
+            self.assertEqual(panel._table.item(2, 1).foreground().color().name().upper(), "#9DB0BB")
         finally:
             window.close()
             window.deleteLater()

@@ -21,8 +21,10 @@ class OllamaWarmupTest(unittest.TestCase):
     def setUp(self):
         ollama_provider._WARMED.clear()
         ollama_provider._PROBE_OK_UNTIL.clear()
+        ollama_provider._PROBE_FAILED_UNTIL.clear()
         ollama_provider._SERVER_READY_UNTIL = 0.0
         ollama_provider._START_IN_PROGRESS_UNTIL = 0.0
+        ollama_provider._SERVER_READY_LOGGED_UNTIL = 0.0
 
     def test_warmup_timeout_is_skipped_without_failure_log(self):
         logger = _Logger()
@@ -113,6 +115,21 @@ class OllamaWarmupTest(unittest.TestCase):
             self.assertFalse(ollama_provider.ensure_ollama_server(logger=logger, wait_sec=0.1))
 
         self.assertIn("실행 파일을 찾을 수 없습니다", "\n".join(logger.lines))
+
+    def test_restart_ollama_server_restarts_runtime_before_skip(self):
+        logger = _Logger()
+
+        with mock.patch("core.platform_compat.cleanup_ollama_runtime_processes", return_value=2) as cleanup_mock, \
+             mock.patch("core.llm.ollama_provider._start_ollama_server_process", return_value=True) as start_mock, \
+             mock.patch("core.llm.ollama_provider._is_ollama_api_ready", side_effect=[False, True]), \
+             mock.patch("core.llm.ollama_provider.time.sleep"):
+            self.assertTrue(ollama_provider.restart_ollama_server(logger=logger, wait_sec=1.0))
+
+        cleanup_mock.assert_called_once()
+        start_mock.assert_called_once()
+        joined = "\n".join(logger.lines)
+        self.assertIn("재시작 중", joined)
+        self.assertIn("재시작 완료", joined)
 
     def test_warmup_auto_starts_ollama_before_request(self):
         logger = _Logger()
@@ -213,6 +230,28 @@ class OllamaWarmupTest(unittest.TestCase):
         ensure_mock.assert_not_called()
         urlopen_mock.assert_not_called()
         self.assertEqual(logger.lines, [])
+
+    def test_resolve_ollama_model_for_request_skips_repeated_failed_probe(self):
+        logger = _Logger()
+        first_error = urllib.error.HTTPError(
+            url="http://localhost:11434/api/generate",
+            code=500,
+            msg="Internal Server Error",
+            hdrs=None,
+            fp=mock.Mock(read=mock.Mock(return_value=b'{"error":"unable to load model: broken-blob"}')),
+        )
+
+        with mock.patch("core.llm.ollama_provider.ensure_ollama_server", return_value=True) as ensure_mock, \
+             mock.patch("core.llm.ollama_provider._get_ollama_installed_models", return_value=[]), \
+             mock.patch("core.llm.ollama_provider.urllib.request.urlopen", side_effect=[first_error]) as urlopen_mock:
+            first = ollama_provider.resolve_ollama_model_for_request("gemma4:e4b", logger=logger, context="STT 앙상블 LLM", timeout=1.0)
+            second = ollama_provider.resolve_ollama_model_for_request("gemma4:e4b", logger=logger, context="STT 앙상블 LLM", timeout=1.0)
+
+        self.assertEqual(first, "gemma4:e4b")
+        self.assertEqual(second, "gemma4:e4b")
+        ensure_mock.assert_called_once()
+        urlopen_mock.assert_called_once()
+        self.assertEqual(sum("사용 가능한 대체 Ollama 모델" in line for line in logger.lines), 1)
 
     def test_resolve_ollama_model_for_request_can_disable_fallback(self):
         logger = _Logger()

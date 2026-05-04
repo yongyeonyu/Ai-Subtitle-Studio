@@ -209,7 +209,7 @@ class MultiClipEditor(QDialog):
         ).strip().lower()
         if level == "high":
             level = "medium"
-        return {"off": "사용안함", "low": "낮음", "medium": "중간"}.get(level, "중간")
+        return {"off": "미사용", "low": "낮음", "medium": "중간"}.get(level, "중간")
 
     def _pipeline_summary_text(self, settings: dict) -> str:
         audio_model = {

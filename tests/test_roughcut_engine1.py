@@ -333,6 +333,10 @@ class RoughCutEngine1Tests(unittest.TestCase):
 
         self.assertEqual(len(plan.extract_commands), len(edl))
         self.assertEqual(plan.extract_commands[0][0], "ffmpeg")
+        self.assertIn("-c:v", plan.extract_commands[0])
+        self.assertIn(plan.extract_commands[0][plan.extract_commands[0].index("-c:v") + 1], {"hevc_videotoolbox", "libx265"})
+        self.assertIn("-c:v", plan.concat_command)
+        self.assertIn(plan.concat_command[plan.concat_command.index("-c:v") + 1], {"hevc_videotoolbox", "libx265"})
         self.assertIn("roughcut_concat.txt", plan.concat_file_path)
         self.assertEqual(plan.concat_command[-1], "/tmp/out.mp4")
 
@@ -351,9 +355,12 @@ class RoughCutEngine1Tests(unittest.TestCase):
             "/tmp/roughcut_subtitled.mp4",
         )
 
-        self.assertEqual(command[:3], ("ffmpeg", "-y", "-i"))
+        self.assertEqual(command[:2], ("ffmpeg", "-y"))
+        self.assertIn("-i", command)
         self.assertIn("-vf", command)
         self.assertIn("subtitles=", command[command.index("-vf") + 1])
+        self.assertIn("-c:v", command)
+        self.assertIn(command[command.index("-c:v") + 1], {"hevc_videotoolbox", "libx265"})
         self.assertEqual(command[-1], "/tmp/roughcut_subtitled.mp4")
 
     def test_subtitle_retimer_clips_and_maps_to_output_time(self):

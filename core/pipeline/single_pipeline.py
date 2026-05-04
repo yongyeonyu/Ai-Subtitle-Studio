@@ -28,16 +28,44 @@ def _should_flush_final_subtitle_buffer(
     *,
     stt_ensemble_enabled: bool,
 ) -> bool:
-    if stt_ensemble_enabled:
-        return False
     try:
-        return float(current_duration or 0.0) >= max(1.0, float(chunk_time_limit or 60))
+        return float(current_duration or 0.0) > 0.0
     except Exception:
         return False
 
 
+def _should_flush_live_subtitle_buffer(
+    current_duration: float,
+    chunk_time_limit: int,
+    *,
+    stt_ensemble_enabled: bool,
+    individual_queue_mode: bool,
+) -> bool:
+    return _should_flush_final_subtitle_buffer(
+        current_duration,
+        chunk_time_limit,
+        stt_ensemble_enabled=stt_ensemble_enabled,
+    )
+
+
 class SinglePipelineMixin:
     """단일 / 배치 품질모드 파이프라인."""
+
+    def _append_live_segments_to_editor(self, segments: list[dict]) -> None:
+        segments = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+        if not segments:
+            return
+        if (
+            getattr(self, "_individual_queue_mode", False)
+            and callable(self._ui_attr("append_segments_to_editor_and_wait"))
+        ):
+            for seg in segments:
+                if not self._active or not self._ui_is_alive():
+                    return
+                self._ui_call("append_segments_to_editor_and_wait", [seg], timeout_sec=2.0)
+                time.sleep(0.04)
+            return
+        self._ui_emit("_sig_append_segments", segments)
 
     def _ui_is_alive(self) -> bool:
         try:
@@ -109,6 +137,8 @@ class SinglePipelineMixin:
 
                 self._process_one(target_file, i)
 
+            self._ui_emit("_sig_update_queue_header", total_files, total_files, 100, "")
+
             if bool(self._ui_attr("_is_auto_pipeline", False)):
                 self._send_ntfy_notification(
                     title=f"🏆 {config.APP_NAME} 작업 종료",
@@ -143,6 +173,10 @@ class SinglePipelineMixin:
                 pass
 
     def _process_one(self, target_file, queue_index):
+        if getattr(self, "_individual_queue_mode", False):
+            self._reset_backend_individual_clip_context(invalidate_prefetch=True)
+            self._reset_ui_individual_clip_context(clear_project=True)
+
         # ── STEP 0: 백업 ──
         self._backup_existing(target_file)
 
@@ -187,13 +221,18 @@ class SinglePipelineMixin:
             queue_index > 0 and len(self.files_to_process) > 1
         )
 
+        open_editor_method = (
+            "open_editor_for_file_and_wait"
+            if callable(self._ui_attr("open_editor_for_file_and_wait"))
+            else "open_editor_for_file"
+        )
         if not self._ui_call(
-            "open_editor_for_file",
+            open_editor_method,
             target_file, on_save, on_start, on_prev, on_exit, is_batch=is_auto_mode
         ):
             raise Exception("USER_EXIT")
 
-        if is_auto_mode:
+        if is_auto_mode and not getattr(self, "_individual_queue_mode", False):
             threading.Timer(0.05, on_start).start()
 
         start_event.wait()
@@ -257,6 +296,8 @@ class SinglePipelineMixin:
             # 정확도 우선 파이프라인: legacy batch override가 남아있으면 제거
             if hasattr(self, 'video_processor'):
                 self.video_processor.clear_fast_mode_overrides()
+                if getattr(self, "_individual_queue_mode", False):
+                    self.video_processor.set_auto_audio_tune_overrides(None)
             if hasattr(self, "video_processor"):
                 self.video_processor.stage_callback = (
                     lambda status, qi=queue_index: self._ui_emit("_sig_update_queue", qi, status, "", "", "")
@@ -306,11 +347,12 @@ class SinglePipelineMixin:
                     self.video_processor.stage_callback = None
 
             try:
-                prefetch_ahead = max(1, int(load_settings().get("prefetch_ahead", 3)))
+                prefetch_ahead = 0 if getattr(self, "_individual_queue_mode", False) else max(1, int(load_settings().get("prefetch_ahead", 3)))
             except Exception:
-                prefetch_ahead = 3
-            for _pf in self.files_to_process[queue_index + 1: queue_index + 1 + prefetch_ahead]:
-                self._prefetch_audio_for_file(_pf)
+                prefetch_ahead = 0 if getattr(self, "_individual_queue_mode", False) else 3
+            if prefetch_ahead > 0:
+                for _pf in self.files_to_process[queue_index + 1: queue_index + 1 + prefetch_ahead]:
+                    self._prefetch_audio_for_file(_pf)
 
             if not res:
                 get_logger().log("❌ 오디오 추출 실패")
@@ -492,6 +534,9 @@ class SinglePipelineMixin:
                     seg_buffer = []
 
                     try:
+                        def _llm_progress(payload):
+                            self._ui_emit("_sig_set_llm_review_segment", dict(payload or {}))
+
                         self._ui_emit("_sig_update_queue", queue_index, "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중", "", "", "")
                         if is_gemini and len(chunk_segs) > 1:
                             from core.engine.subtitle_engine import ask_gemini_to_split
@@ -501,6 +546,17 @@ class SinglePipelineMixin:
                             chunk_end = chunk_segs[-1]["end"]
                             full_text = " ".join([seg["text"] for seg in chunk_segs])
                             rules = load_subtitle_rules()
+                            _llm_progress(
+                                {
+                                    "active": True,
+                                    "idx": 0,
+                                    "total": 1,
+                                    "start": chunk_start,
+                                    "end": chunk_end,
+                                    "text": full_text,
+                                    "line": int(chunk_segs[0].get("line", -1) or -1),
+                                }
+                            )
                             res_chunks = ask_gemini_to_split(
                                 full_text, 15, rules, model_name, user_prompt, api_key
                             )
@@ -518,12 +574,14 @@ class SinglePipelineMixin:
                                         }
                                     )
                             else:
-                                opt = optimize_segments(chunk_segs, vad_segments=vad_segs)
+                                opt = optimize_segments(chunk_segs, vad_segments=vad_segs, llm_progress_callback=_llm_progress)
                         else:
-                            opt = optimize_segments(chunk_segs, vad_segments=vad_segs)
+                            opt = optimize_segments(chunk_segs, vad_segments=vad_segs, llm_progress_callback=_llm_progress)
                     except Exception as e:
                         get_logger().log(f"  ❌ 최적화 오류: {e}")
                         opt = chunk_segs
+                    finally:
+                        self._ui_emit("_sig_set_llm_review_segment", {"active": False})
 
                     if not self._active or not self._ui_is_alive():
                         return
@@ -607,7 +665,7 @@ class SinglePipelineMixin:
                         return
 
                     try:
-                        self._ui_emit("_sig_append_segments", opt)
+                        self._append_live_segments_to_editor(opt)
                         self._ui_emit("_sig_update_status", last_c_idx, last_t_total)
                     except Exception:
                         pass
@@ -654,10 +712,11 @@ class SinglePipelineMixin:
                     buffer_end = seg_buffer[-1]["end"]
                     current_duration = buffer_end - buffer_start
 
-                    if _should_flush_final_subtitle_buffer(
+                    if _should_flush_live_subtitle_buffer(
                         current_duration,
                         chunk_time_limit,
                         stt_ensemble_enabled=stt_ensemble_enabled,
+                        individual_queue_mode=bool(getattr(self, "_individual_queue_mode", False)),
                     ):
                         _flush_buffer()
 
@@ -691,7 +750,7 @@ class SinglePipelineMixin:
             if not self._active:
                 return
 
-            self._ui_emit("_sig_update_queue", queue_index, "자막 생성 완료", "", "", "")
+            self._ui_emit("_sig_update_queue", queue_index, "저장 준비 중", "", "", "")
 
             try:
                 s = load_settings()
@@ -721,7 +780,8 @@ class SinglePipelineMixin:
                     action_state[0] = "next"
                     edit_event.set()
 
-                threading.Timer(0.05, _auto_proceed).start()
+                auto_delay = 0.35 if getattr(self, "_individual_queue_mode", False) else 0.05
+                threading.Timer(auto_delay, _auto_proceed).start()
 
             edit_event.wait()
 

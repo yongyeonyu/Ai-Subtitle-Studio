@@ -4,6 +4,7 @@
 ui/timeline_inline_edit.py
 Timeline inline edit mixin
 """
+import os
 import threading
 
 from PyQt6.QtCore import QRect, Qt, QTimer
@@ -144,6 +145,8 @@ class TimelineInlineEditMixin:
         self._edit_line = -1
         self._edit_text = ""
         self._edit_orig = ""
+        self._ime_preedit = ""
+        self._cursor_vis = False
         self._cursor_timer.stop()
         self.sig_editing_mode.emit(False)
         self._update_inline_edit_region(line)
@@ -461,16 +464,33 @@ class TimelineInlineEditMixin:
 
         self._is_listening = True
         self._speech_stop_requested = False
+        session = None
+        try:
+            from ui.editor.live_microphone_session import LiveMicrophoneSession
+
+            session = LiveMicrophoneSession(self)
+        except Exception as e:
+            self._is_listening = False
+            from core.runtime.logger import get_logger
+            get_logger().log(f"⚠️ 마이크 캡처 초기화 실패: {e}")
+            self._update_inline_edit_region()
+            return
+        self._mic_capture_session = session
+        if hasattr(self, "begin_mic_visualization"):
+            self.begin_mic_visualization(getattr(self, "_edit_line", None))
+        session.waveform_changed.connect(self.update_mic_visualization if hasattr(self, "update_mic_visualization") else (lambda _samples: None))
         self._update_inline_edit_region()
 
-        def _listen():
+        def _listen(captured_wav: str, has_audio: bool, error_text: str, _elapsed: float):
             try:
-                from core.audio.live_stt import transcribe_microphone_once
+                from core.audio.live_stt import transcribe_wav_file
                 from core.runtime.logger import get_logger
 
-                result = transcribe_microphone_once(profile=profile)
-                if getattr(self, "_speech_stop_requested", False):
+                if not has_audio or not captured_wav:
+                    if error_text:
+                        get_logger().log(f"⚠️ 마이크 STT 실패: {error_text}")
                     return
+                result = transcribe_wav_file(captured_wav, profile=profile)
                 if result.text:
                     get_logger().log(
                         f"🎙️ 마이크 STT 완료: {result.engine} / {result.model} / {result.elapsed:.1f}s"
@@ -486,15 +506,46 @@ class TimelineInlineEditMixin:
                 except Exception:
                     pass
             finally:
+                try:
+                    if captured_wav and os.path.exists(captured_wav):
+                        os.remove(captured_wav)
+                except Exception:
+                    pass
                 self._is_listening = False
                 self._speech_stop_requested = False
-                QTimer.singleShot(0, self._update_inline_edit_region)
+                def _cleanup():
+                    self._mic_capture_session = None
+                    if hasattr(self, "end_mic_visualization"):
+                        self.end_mic_visualization()
+                    self._update_inline_edit_region()
+                QTimer.singleShot(0, _cleanup)
 
-        threading.Thread(target=_listen, daemon=True).start()
+        def _on_capture_finished(captured_wav: str, has_audio: bool, error_text: str, elapsed: float):
+            threading.Thread(
+                target=_listen,
+                args=(captured_wav, has_audio, error_text, elapsed),
+                daemon=True,
+                name="timeline-inline-mic-transcribe",
+            ).start()
+
+        session.finished.connect(_on_capture_finished)
+        if not session.start():
+            self._is_listening = False
+            self._speech_stop_requested = False
+            self._mic_capture_session = None
+            if hasattr(self, "end_mic_visualization"):
+                self.end_mic_visualization()
+            self._update_inline_edit_region()
 
     def _stop_listening(self):
         self._speech_stop_requested = True
+        session = getattr(self, "_mic_capture_session", None)
+        if session is not None and hasattr(session, "stop"):
+            session.stop()
+            return
         self._is_listening = False
+        if hasattr(self, "end_mic_visualization"):
+            self.end_mic_visualization()
         self._update_inline_edit_region()
 
     def _on_speech_result(self, text):

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import QMessageBox
 
-from ui.style import COLORS
+from ui.style import COLORS, line_icon
 
 
 def message_box_stylesheet() -> str:
@@ -38,6 +38,8 @@ def show_message(
     box.setWindowTitle(title)
     box.setText(text)
     box.setIcon(icon)
+    if icon == QMessageBox.Icon.Question:
+        box.setIconPixmap(line_icon("question", "#FFFFFF", 88).pixmap(88, 88))
     box.setStandardButtons(buttons)
     box.setDefaultButton(default)
     box.setStyleSheet(message_box_stylesheet())

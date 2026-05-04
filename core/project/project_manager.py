@@ -29,6 +29,7 @@ from core.project.project_context import (
     project_stt_preview_segments,
     sanitize_workspace_state,
 )
+from core.project.subtitle_status import subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
 from core.project.project_model_settings import (
     build_model_settings_snapshot,
@@ -503,6 +504,7 @@ def save_project(
             if existing_seg is None:
                 existing_seg = existing_by_time.get(_segment_lookup_key(new_seg))
             _copy_missing_stt_metadata(new_seg, existing_seg)
+            new_seg.update({key: value for key, value in subtitle_status_payload(new_seg).items() if value not in (None, "")})
             for key in (
                 "start_frame",
                 "end_frame",

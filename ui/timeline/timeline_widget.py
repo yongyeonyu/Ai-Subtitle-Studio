@@ -35,15 +35,17 @@ class TimelinePlayheadOverlay(QWidget):
         self._sec = 0.0
         self._scroll_x = 0
         self._center_locked = False
+        self._busy = False
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
 
-    def set_state(self, sec: float, scroll_x: int, *, center_locked: bool = False):
+    def set_state(self, sec: float, scroll_x: int, *, center_locked: bool = False, busy: bool = False):
         self._sec = max(0.0, float(sec or 0.0))
         self._scroll_x = max(0, int(scroll_x or 0))
         self._center_locked = bool(center_locked)
+        self._busy = bool(busy)
         self.update()
 
     def paintEvent(self, event):
@@ -64,7 +66,7 @@ class TimelinePlayheadOverlay(QWidget):
         painter.drawLine(px, 0, px, self.height())
         handle_r = 7
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setBrush(QBrush(QColor("#FFCC00")))
+        painter.setBrush(QBrush(QColor("#FF453A" if self._busy else "#FFCC00")))
         painter.setPen(QPen(QColor("#FFFFFF"), 1))
         painter.drawEllipse(px - handle_r, 2, handle_r * 2, handle_r * 2)
         painter.end()
@@ -89,7 +91,10 @@ class TimelineWidget(QWidget):
     sig_inline_text_changed = pyqtSignal(int, str)
     sig_editing_mode = pyqtSignal(bool)
     playhead_menu_requested = pyqtSignal(QPoint, float)
+    provisional_cut_boundary_requested = pyqtSignal(float)
+    provisional_cut_boundary_delete_requested = pyqtSignal(int, float)
     sig_clip_selected = pyqtSignal(int)
+    waveform_ready = pyqtSignal(str, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -189,6 +194,8 @@ class TimelineWidget(QWidget):
         self.canvas.sig_inline_text_changed.connect(self.sig_inline_text_changed.emit)
         self.canvas.sig_editing_mode.connect(self.sig_editing_mode.emit)
         self.canvas.playhead_menu_requested.connect(self.playhead_menu_requested.emit)
+        self.canvas.provisional_cut_boundary_requested.connect(self.provisional_cut_boundary_requested.emit)
+        self.canvas.provisional_cut_boundary_delete_requested.connect(self.provisional_cut_boundary_delete_requested.emit)
         self.canvas.diamond_merge.connect(self.diamond_merge)
         self.canvas.sig_smart_split.connect(self.sig_smart_split)
         self.canvas.step_frame.connect(self.step_frame)
@@ -198,6 +205,7 @@ class TimelineWidget(QWidget):
         self._wf_worker = None
         self._mc_worker = None
         self._waveform_mode = "single"
+        self._waveform_path = ""
         self._selected_clip_idx = -1
         self._selected_clip_offset = 0.0
         self._selected_clip_duration = 0.0
@@ -305,11 +313,13 @@ class TimelineWidget(QWidget):
         if boxes:
             return max(0.0, float(boxes[-1].get("end", 0.0) or 0.0))
 
+        total_duration = max(0.0, float(getattr(self.canvas, "total_duration", 0.0) or 0.0))
         segments = [seg for seg in list(getattr(self.canvas, "segments", []) or []) if not seg.get("is_gap")]
         if segments:
-            return max(0.0, max(float(seg.get("end", 0.0) or 0.0) for seg in segments))
+            seg_end = max(float(seg.get("end", 0.0) or 0.0) for seg in segments)
+            return max(total_duration, max(0.0, seg_end))
 
-        return max(0.0, float(getattr(self.canvas, "total_duration", 0.0) or 0.0))
+        return total_duration
 
     def _fit_pps_for_duration(self, dur: float) -> float:
         if dur <= 0:
@@ -543,7 +553,7 @@ class TimelineWidget(QWidget):
             self._restore_subtitle_resize_view()
         if _preserve_scroll_x is not None and not fit_view:
             self._restore_segment_drag_view()
-        if fit_view:
+        if fit_view or bool(getattr(self, "_fit_to_view_locked", False)):
             self.fit_to_view()
         elif self._waveform_mode == "multi":
             # 멀티클립에서는 현재 줌(pps) 유지. 최초 전체 로드에서만 fit_to_view 허용.
@@ -620,23 +630,35 @@ class TimelineWidget(QWidget):
     def set_active(self, sec):
         sec = self.snap_sec_to_frame(sec)
         self.canvas.set_active(sec)
+        if bool(getattr(self, "_fit_to_view_locked", False)):
+            self._sync_playhead_overlay()
+            return
         if sec is not None and not self._segment_drag_view_freeze_active():
             self.center_to_sec(sec, smooth=True)
     def set_playhead(self, sec, *, preserve_center_lock: bool = False):
         sec = self.snap_sec_to_frame(sec)
         if not preserve_center_lock:
             self.set_playback_center_lock(False)
-        self.canvas.playhead_sec = max(0.0, float(sec or 0.0))
+        self.canvas.set_playhead(max(0.0, float(sec or 0.0)))
         self._sync_playhead_overlay()
         self.global_canvas.set_playhead(self._global_to_local_sec(sec))
 
     def follow_playhead(self, sec, *, smooth=True, threshold_px=24.0):
         sec = self.snap_sec_to_frame(sec)
         self.set_playhead(sec)
+        if bool(getattr(self, "_fit_to_view_locked", False)):
+            self._target_scroll_x = float(self.scroll.horizontalScrollBar().value())
+            self._current_scroll_x = self._target_scroll_x
+            return
         self._scroll_canvas_to_sec(sec, smooth=smooth, threshold_px=threshold_px)
 
     def follow_playhead_centered(self, sec, *, smooth=True):
         sec = self.snap_sec_to_frame(sec)
+        if bool(getattr(self, "_fit_to_view_locked", False)):
+            self.set_playhead(sec)
+            self._target_scroll_x = float(self.scroll.horizontalScrollBar().value())
+            self._current_scroll_x = self._target_scroll_x
+            return
         if self._manual_scroll_active():
             self.set_playhead(sec)
             self._target_scroll_x = float(self.scroll.horizontalScrollBar().value())
@@ -739,9 +761,25 @@ class TimelineWidget(QWidget):
                 float(getattr(self.canvas, "playhead_sec", 0.0) or 0.0),
                 int(self.scroll.horizontalScrollBar().value()),
                 center_locked=bool(getattr(self, "_playback_center_lock", False)),
+                busy=bool(getattr(self.canvas, "playhead_busy", False)),
             )
         except RuntimeError:
             pass
+
+    def set_playhead_busy(self, busy: bool):
+        busy = bool(busy)
+        for canvas in (getattr(self, "canvas", None), getattr(self, "global_canvas", None)):
+            if canvas is not None:
+                setattr(canvas, "playhead_busy", busy)
+                try:
+                    canvas.setProperty("playhead_busy", busy)
+                except Exception:
+                    pass
+                try:
+                    canvas.update()
+                except Exception:
+                    pass
+        self._sync_playhead_overlay()
 
     def set_boundary_times(self, times: list[float]):
         self.canvas.boundary_times = times or []
@@ -767,6 +805,11 @@ class TimelineWidget(QWidget):
 
     def center_to_sec(self, sec, smooth=False):
         sec = self.snap_sec_to_frame(sec)
+        if bool(getattr(self, "_fit_to_view_locked", False)):
+            self._target_scroll_x = float(self.scroll.horizontalScrollBar().value())
+            self._current_scroll_x = self._target_scroll_x
+            self._sync_playhead_overlay()
+            return
         if hasattr(self, "_subtitle_resize_keep_view_active") and self._subtitle_resize_keep_view_active():
             if hasattr(self, "_restore_subtitle_resize_view"):
                 self._restore_subtitle_resize_view()
@@ -795,6 +838,7 @@ class TimelineWidget(QWidget):
             return
 
         self._waveform_mode = "single"
+        self._waveform_path = str(path or "")
 
         if self._mc_worker:
             try:
@@ -894,6 +938,7 @@ class TimelineWidget(QWidget):
         self.canvas.set_waveform(wf)
         self.global_canvas.set_waveform(wf)
         self.global_canvas.total_duration = d
+        self.waveform_ready.emit(str(getattr(self, "_waveform_path", "") or ""), float(d or 0.0))
 
     def wheelEvent(self, ev):
         mods = ev.modifiers()
@@ -915,6 +960,7 @@ class TimelineWidget(QWidget):
                 ev.accept()
                 return
 
+            self._begin_manual_zoom()
             self._apply_zoom(new_pps / max(0.001, float(self.canvas.pps)))
             ev.accept()
             return
@@ -1016,9 +1062,14 @@ class TimelineWidget(QWidget):
         self._zoom_canvas(1 / 1.15)
 
     def _zoom_canvas(self, factor: float):
-        self._fit_to_view_locked = False
-        self._manual_zoom_since_fit = True
+        self._begin_manual_zoom()
         self._apply_zoom(factor)
+
+    def _begin_manual_zoom(self) -> None:
+        self._fit_to_view_locked = False
+        self._fit_after_resize_pending = False
+        self._manual_zoom_since_fit = True
+        self._begin_manual_scroll(hold_sec=1.2)
 
     def auto_fit_to_view(self) -> bool:
         if bool(getattr(self, "_manual_zoom_since_fit", False)):
@@ -1035,8 +1086,10 @@ class TimelineWidget(QWidget):
 
         def _run_final_fit():
             self._fit_after_resize_pending = False
+            if bool(getattr(self, "_manual_zoom_since_fit", False)):
+                return
             self.fit_to_view()
 
         for delay in delays[:-1]:
-            QTimer.singleShot(int(delay), self.fit_to_view)
+            QTimer.singleShot(int(delay), lambda: None if bool(getattr(self, "_manual_zoom_since_fit", False)) else self.fit_to_view())
         QTimer.singleShot(int(delays[-1] if delays else 0), _run_final_fit)

@@ -11,10 +11,14 @@ core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장
 """
 import re
 import difflib  
+import threading
+import time
 
 from core.llm.secure_keys import get_api_key
 from core.llm.gemini_provider import split_text as gemini_split_text
 from core.llm.ollama_provider import (
+    ensure_ollama_server,
+    restart_ollama_server,
     split_text as ollama_split_text,
     warmup_model as warmup_ollama_model,
 )
@@ -65,6 +69,54 @@ _ENFORCE_RATIO   = 1.5
 _HALLUC_MIN_DUR  = 0.8   
 _HALLUC_MAX_CHARS = 10   
 _LLM_SKIP_DUR    = 1.0
+_LOCAL_LLM_BACKOFF_SEC = 60.0
+_LOCAL_LLM_UNAVAILABLE_UNTIL = 0.0
+_LOCAL_LLM_LOCK = threading.Lock()
+
+
+def _is_local_llm_connection_error(exc: BaseException) -> bool:
+    text = str(exc or "").lower()
+    return any(
+        fragment in text
+        for fragment in (
+            "connection refused",
+            "errno 61",
+            "urlopen error",
+            "failed to establish",
+            "connection aborted",
+            "connection reset",
+            "timed out",
+        )
+    )
+
+
+def _mark_local_llm_unavailable(model: str, context: str, reason: str) -> None:
+    global _LOCAL_LLM_UNAVAILABLE_UNTIL
+    now = time.monotonic()
+    should_log = False
+    with _LOCAL_LLM_LOCK:
+        if _LOCAL_LLM_UNAVAILABLE_UNTIL <= now:
+            should_log = True
+        _LOCAL_LLM_UNAVAILABLE_UNTIL = now + _LOCAL_LLM_BACKOFF_SEC
+    if should_log:
+        get_logger().log(
+            f"[{context}] Ollama 연결 실패: {reason}. "
+            f"로컬 LLM 단계를 {int(_LOCAL_LLM_BACKOFF_SEC)}초 동안 건너뛰고 STT 결과로 계속 진행합니다. "
+            f"Ollama 앱/서버와 모델({model})을 확인해 주세요."
+        )
+
+
+def _local_ollama_ready(model: str, context: str) -> bool:
+    now = time.monotonic()
+    with _LOCAL_LLM_LOCK:
+        if _LOCAL_LLM_UNAVAILABLE_UNTIL > now:
+            return False
+    if ensure_ollama_server(logger=get_logger(), wait_sec=1.5):
+        return True
+    if restart_ollama_server(logger=get_logger(), wait_sec=6.0):
+        return True
+    _mark_local_llm_unavailable(model, context, "서버 응답 없음")
+    return False
 
 # 💡 [신규 이식] media_processor에서 이사 온 환각 방지 리스트
 _HALLUC_PHRASES = [
@@ -301,6 +353,8 @@ def ask_exaone_to_split(
 ) -> list[str] | None:
     if "사용 안함" in model:
         return None
+    if not _local_ollama_ready(model, "자막 LLM"):
+        return None
     model = _resolve_runtime_llm_model(model, logger=get_logger(), context="자막 LLM")
 
     prompt = _build_llm_prompt(text, threshold, rules, user_prompt, conservative=conservative, settings=settings)
@@ -322,6 +376,9 @@ def ask_exaone_to_split(
         return guarded if guarded else None
 
     except Exception as e:
+        if _is_local_llm_connection_error(e):
+            _mark_local_llm_unavailable(model, "자막 LLM", str(e))
+            return None
         get_logger().log(f"[LLM 연결/파싱 실패] 모델={model} / {e}")
         return None
 
@@ -404,9 +461,14 @@ def _select_stt_candidate_text(seg: dict, model: str, user_prompt: str, api_key:
         elif is_openai_model(model):
             chunks = openai_split_text(api_key, model, prompt)
         else:
+            if not _local_ollama_ready(model, "STT 앙상블 LLM"):
+                return None
             model = _resolve_runtime_llm_model(model, logger=get_logger(), context="STT 앙상블 LLM")
             chunks = ollama_split_text(model, prompt)
     except Exception as exc:
+        if _is_local_llm_connection_error(exc):
+            _mark_local_llm_unavailable(model, "STT 앙상블 LLM", str(exc))
+            return None
         get_logger().log(f"[STT앙상블-LLM판정 실패] {exc}")
         return None
 
@@ -827,11 +889,6 @@ def optimize_stt_candidate_segments(segments: list[dict], vad_segments: list[dic
     if not segments:
         return segments
     loaded_settings, rules, _model, corrections, threshold, user_prompt, _api_key, _raw_corr, _settings = _optimizer_context()
-    get_logger().log(f"\n━━━ STT 후보 규칙 적용 시작 ({len(segments)}개 세그먼트) ━━━")
-    get_logger().log(
-        f"설정 적용: 분할({threshold}자), 최대길이({_MAX_DURATION}초), "
-        f"CPS({_MAX_CPS}), 간격({_GAP_BREAK_SEC}초), LLM(미적용)"
-    )
     args = [
         (dict(seg), rules, threshold, corrections, "사용 안함 (STT 후보 규칙 전용)", user_prompt, "", False)
         for seg in segments
@@ -859,11 +916,37 @@ def optimize_stt_candidate_segments(segments: list[dict], vad_segments: list[dic
     )
     optimized = adjust_timing(optimized)
     optimized = apply_final_gap_settings(optimized, force=True)
-    get_logger().log(f"━━━ STT 후보 규칙 적용 완료: {len(optimized)}개 ━━━\n")
     return optimized
 
 
-def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = None) -> list[dict]:
+def _emit_llm_progress(progress_callback, *, active: bool, idx: int = -1, total: int = 0, seg: dict | None = None) -> None:
+    if not callable(progress_callback):
+        return
+    payload = {
+        "active": bool(active),
+        "idx": int(idx),
+        "total": int(total),
+    }
+    if seg:
+        payload.update(
+            {
+                "start": float(seg.get("start", 0.0) or 0.0),
+                "end": float(seg.get("end", seg.get("start", 0.0)) or seg.get("start", 0.0) or 0.0),
+                "text": str(seg.get("text", "") or ""),
+                "line": int(seg.get("line", -1) or -1),
+            }
+        )
+    try:
+        progress_callback(payload)
+    except Exception:
+        pass
+
+
+def optimize_segments(
+    segments: list[dict],
+    vad_segments: list[dict] | None = None,
+    llm_progress_callback=None,
+) -> list[dict]:
     if not segments:
         return segments
     original_segments = [dict(seg) for seg in segments if isinstance(seg, dict)]
@@ -912,14 +995,19 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
         if max_workers == 1:
             for idx, a in enumerate(args):
                 try:
+                    _emit_llm_progress(llm_progress_callback, active=True, idx=idx, total=len(args), seg=segments[idx])
                     optimized.extend(_process_one_llm_only(a))
                 except Exception as e:
                     get_logger().log(f"LLM 처리 오류: {e}")
                     optimized.append(segments[idx])
         else:
             try:
+                def _process_with_progress(index: int, arg):
+                    _emit_llm_progress(llm_progress_callback, active=True, idx=index, total=len(args), seg=segments[index])
+                    return _process_one_llm_only(arg)
+
                 with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="llm") as ex:
-                    futures = {ex.submit(_process_one_llm_only, a): i for i, a in enumerate(args)}
+                    futures = {ex.submit(_process_with_progress, i, a): i for i, a in enumerate(args)}
                     result_map: dict[int, list] = {}
 
                     for fut in as_completed(futures):
@@ -953,6 +1041,7 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
 
     optimized = apply_final_gap_settings(optimized, loaded_settings, force=False)
     optimized = align_stt_candidates_to_subtitle_segments(optimized)
+    _emit_llm_progress(llm_progress_callback, active=False)
     get_logger().log(f"━━━ 자막 최적화 완료: {len(optimized)}개 ━━━\n")
     return optimized
 

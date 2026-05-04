@@ -2,6 +2,7 @@
 # Phase: PHASE2
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -146,6 +147,34 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(dialog.spin_editor_llm_threads.value(), 6)
         finally:
             dialog.close()
+
+    def test_auto_settings_mode_uses_same_quality_presets_and_syncs_auto_scopes(self):
+        with patch(
+            "ui.settings.settings_ai.load_path_settings",
+            return_value={
+                "auto_start_mode": "quality",
+                "icloud_stt_quality_preset": "fast",
+                "nas_stt_quality_preset": "balanced",
+            },
+        ), patch("ui.settings.settings_ai.save_path_settings") as save_mock:
+            dialog = SettingsDialog({})
+            try:
+                labels = [dialog.combo_auto_start_mode.itemText(i) for i in range(dialog.combo_auto_start_mode.count())]
+                values = [dialog.combo_auto_start_mode.itemData(i) for i in range(dialog.combo_auto_start_mode.count())]
+                self.assertEqual(labels, ["빠름", "보통", "높음"])
+                self.assertEqual(values, ["fast", "balanced", "precise"])
+                self.assertEqual(dialog.combo_auto_start_mode.currentData(), "precise")
+
+                dialog.combo_auto_start_mode.setCurrentIndex(1)
+                collected = dialog._collect_settings()
+
+                self.assertEqual(collected["auto_start_mode"], "balanced")
+                saved = save_mock.call_args.args[0]
+                self.assertEqual(saved["auto_start_mode"], "balanced")
+                self.assertEqual(saved["icloud_stt_quality_preset"], "balanced")
+                self.assertEqual(saved["nas_stt_quality_preset"], "balanced")
+            finally:
+                dialog.close()
 
     def test_fast_preset_disables_editor_roughcut_draft_option(self):
         dialog = SettingsDialog({"editor_roughcut_draft_enabled": True, "stt_quality_preset": "fast"})

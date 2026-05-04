@@ -37,6 +37,22 @@ class HuggingFaceTokenTests(unittest.TestCase):
 
         self.assertEqual(line, "[STT2] [transformers] warning")
 
+    def test_transformers_stderr_suppresses_hf_unauthenticated_warning(self):
+        line = _format_stderr_log(
+            "Warning: You are sending unauthenticated requests to the HF Hub.",
+            log_label="STT2",
+        )
+
+        self.assertEqual(line, "")
+
+    def test_transformers_stderr_suppresses_missing_timestamp_warning(self):
+        line = _format_stderr_log(
+            "[transformers] Whisper did not predict an ending timestamp, which can happen if audio is cut off.",
+            log_label="STT2",
+        )
+
+        self.assertEqual(line, "")
+
     def test_media_processor_hf_env_injects_saved_token_for_audio_enhancers(self):
         base_env = {k: v for k, v in os.environ.items() if k not in {"HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"}}
         with patch("core.audio.media_processor.os.environ", base_env), \

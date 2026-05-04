@@ -8,8 +8,8 @@ from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtGui import QTextCursor
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtGui import QWheelEvent, QTextCursor
+from PyQt6.QtCore import QPoint, QPointF, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QTextEdit, QWidget
 
@@ -205,6 +205,38 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
         editor.timeline.canvas.start_inline_edit.assert_called_once_with(0, 3.0)
 
+    def test_seg_time_changed_schedules_resize_redraw_without_nameerror(self):
+        editor = _DummyTimelineVideoEditor()
+        editor.video_fps = 30.0
+        editor._snapshot_timeline_view_for_resize = Mock(return_value={"scroll_x": 120})
+        editor._redraw_timeline_preserve_resize_view = Mock()
+        editor.timeline = SimpleNamespace(
+            _begin_subtitle_resize_keep_view=Mock(),
+            _finish_subtitle_resize_keep_view=Mock(),
+        )
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("첫 줄")
+        editor.text_edit.update_margins = Mock()
+        editor.text_edit.timestampArea = SimpleNamespace(update=Mock())
+
+        try:
+            block = editor.text_edit.document().findBlockByNumber(0)
+            block.setUserData(SubtitleBlockData("첫 줄", 1.0, False))
+
+            editor._on_seg_time_changed(0, 1.5, 2.0, "square_left")
+            self.app.processEvents()
+
+            ud = block.userData()
+            self.assertIsInstance(ud, SubtitleBlockData)
+            self.assertAlmostEqual(float(ud.start_sec), 1.5)
+            editor.text_edit.update_margins.assert_called_once()
+            editor.text_edit.timestampArea.update.assert_called_once()
+            editor.timeline._begin_subtitle_resize_keep_view.assert_called_once()
+            editor.timeline._finish_subtitle_resize_keep_view.assert_called_once()
+            editor._redraw_timeline_preserve_resize_view.assert_called_once_with({"scroll_x": 120})
+        finally:
+            editor.text_edit.close()
+
     def test_live_canvas_inline_edit_skips_editor_document_rewrite(self):
         editor = _InlineEditEditor()
         editor.text_edit = QTextEdit()
@@ -321,6 +353,168 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
+    def test_wheel_zoom_releases_fit_to_view_lock(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 240.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, timeline.canvas.pps))
+
+            timeline.fit_to_view()
+            fit_pps = timeline.canvas.pps
+            event = QWheelEvent(
+                QPointF(120, 40),
+                QPointF(120, 40),
+                QPoint(0, 0),
+                QPoint(0, 120),
+                Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.ControlModifier,
+                Qt.ScrollPhase.ScrollUpdate,
+                False,
+            )
+
+            timeline.wheelEvent(event)
+            zoomed_pps = timeline.canvas.pps
+
+            self.assertTrue(event.isAccepted())
+            self.assertFalse(timeline._fit_to_view_locked)
+            self.assertTrue(timeline._manual_zoom_since_fit)
+            self.assertGreater(zoomed_pps, fit_pps)
+
+            timeline.update_segments(
+                [{"line": 0, "start": 0.0, "end": 240.0, "text": "생성 중"}],
+                active_sec=0.0,
+                total_dur=240.0,
+            )
+
+            self.assertEqual(timeline.canvas.pps, zoomed_pps)
+        finally:
+            timeline.close()
+
+    def test_pending_fit_to_view_is_ignored_after_wheel_zoom(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 240.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, timeline.canvas.pps))
+
+            timeline.fit_to_view()
+            timeline.schedule_fit_to_view((0,))
+            fit_pps = timeline.canvas.pps
+            event = QWheelEvent(
+                QPointF(120, 40),
+                QPointF(120, 40),
+                QPoint(0, 0),
+                QPoint(0, 120),
+                Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.ControlModifier,
+                Qt.ScrollPhase.ScrollUpdate,
+                False,
+            )
+
+            timeline.wheelEvent(event)
+            zoomed_pps = timeline.canvas.pps
+            self.assertGreater(zoomed_pps, fit_pps)
+
+            self.app.processEvents()
+            self.app.processEvents()
+
+            self.assertFalse(timeline._fit_to_view_locked)
+            self.assertEqual(timeline.canvas.pps, zoomed_pps)
+        finally:
+            timeline.close()
+
+    def test_fit_to_view_lock_blocks_generation_scroll_follow(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 240.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.pps = 10.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, 10.0))
+            timeline.scroll.horizontalScrollBar().setValue(300)
+
+            timeline.fit_to_view()
+            fit_pps = timeline.canvas.pps
+
+            timeline.center_to_sec(120.0, smooth=False)
+            timeline.follow_playhead(180.0, smooth=False)
+            timeline.follow_playhead_centered(210.0, smooth=False)
+            timeline.set_active(30.0)
+
+            self.assertTrue(timeline._fit_to_view_locked)
+            self.assertAlmostEqual(timeline.canvas.pps, fit_pps)
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
+            self.assertEqual(timeline.canvas.playhead_sec, 210.0)
+        finally:
+            timeline.close()
+
+    def test_fit_to_view_lock_reapplies_after_generation_segment_updates(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.canvas.total_duration = 60.0
+            timeline.global_canvas.total_duration = 60.0
+            timeline.canvas.pps = 10.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(60.0, 10.0))
+
+            timeline.fit_to_view()
+
+            timeline.update_segments(
+                [{"line": 0, "start": 0.0, "end": 180.0, "text": "생성 중"}],
+                active_sec=0.0,
+                total_dur=180.0,
+            )
+
+            self.assertTrue(timeline._fit_to_view_locked)
+            self.assertAlmostEqual(timeline.canvas.pps, timeline._fit_pps_for_duration(180.0))
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
+            self.assertEqual(timeline.global_canvas.view_start, 0.0)
+            self.assertEqual(timeline.global_canvas.view_end, 1.0)
+        finally:
+            timeline.close()
+
+    def test_fit_to_view_uses_total_duration_while_partial_segments_generate(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.canvas.total_duration = 240.0
+            timeline.global_canvas.total_duration = 240.0
+            timeline.canvas.pps = 10.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(240.0, 10.0))
+            timeline.canvas.update_segments(
+                [{"line": 0, "start": 0.0, "end": 12.0, "text": "일부 생성"}],
+                active_sec=0.0,
+                total_dur=240.0,
+            )
+
+            timeline.fit_to_view()
+
+            self.assertAlmostEqual(timeline.canvas.pps, timeline._fit_pps_for_duration(240.0))
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
+        finally:
+            timeline.close()
+
     def test_placeholder_refresh_auto_fit_skips_during_playback(self):
         editor = _PipelineFitEditor()
         playing_state = object()
@@ -348,6 +542,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             self.assertTrue(getattr(timeline.canvas, "_external_playhead_overlay", False))
             self.assertEqual(timeline.canvas.playhead_sec, 2.5)
+            self.assertEqual(timeline.canvas._last_playhead_px, timeline.canvas._x(2.5))
             timeline.canvas.update.assert_not_called()
             self.assertEqual(timeline._playhead_overlay._sec, 2.5)
             self.assertIs(timeline._playhead_overlay.parent(), timeline.scroll.viewport())
@@ -687,6 +882,70 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         text = qml_path.read_text(encoding="utf-8")
         self.assertIn("playheadX", text)
         self.assertIn("visiblePlayhead", text)
+        self.assertIn("playheadBusy", text)
+
+    def test_playhead_busy_state_marks_overlay_and_canvas(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.canvas.total_duration = 10.0
+            timeline.set_playhead(2.0)
+
+            timeline.set_playhead_busy(True)
+
+            self.assertTrue(getattr(timeline.canvas, "playhead_busy", False))
+            self.assertTrue(getattr(timeline.global_canvas, "playhead_busy", False))
+            self.assertTrue(getattr(timeline._playhead_overlay, "_busy", False))
+
+            timeline.set_playhead_busy(False)
+
+            self.assertFalse(getattr(timeline.canvas, "playhead_busy", True))
+            self.assertFalse(getattr(timeline._playhead_overlay, "_busy", True))
+        finally:
+            timeline.close()
+
+    def test_scan_cut_active_toggles_playhead_busy_state(self):
+        editor = _DummyTimelineVideoEditor()
+        editor.video_player = SimpleNamespace(set_scan_cut_active=Mock())
+        editor.timeline = SimpleNamespace(set_playhead_busy=Mock(), set_playback_center_lock=Mock())
+        editor._auto_cut_boundary_scan_active = False
+
+        editor._set_scan_cut_button_active(1)
+        editor.timeline.set_playhead_busy.assert_called_with(True)
+
+        editor.timeline.set_playhead_busy.reset_mock()
+        editor._set_scan_cut_button_active(0)
+        editor.timeline.set_playhead_busy.assert_called_with(False)
+
+        editor.timeline.set_playhead_busy.reset_mock()
+        editor._set_auto_cut_boundary_scan_active(True)
+        editor.timeline.set_playhead_busy.assert_called_with(True)
+
+    def test_auto_cut_boundary_preview_moves_playhead_without_thumbnail_work(self):
+        editor = _DummyTimelineVideoEditor()
+        editor.video_fps = 30.0
+        editor.timeline = SimpleNamespace(
+            set_playback_center_lock=Mock(),
+            set_playhead=Mock(),
+            set_playhead_busy=Mock(),
+        )
+        editor.video_player = SimpleNamespace(
+            info_label=SimpleNamespace(setText=Mock()),
+            show_cached_thumbnail_at=Mock(),
+            prefetch_thumbnail_at=Mock(),
+            frame_step_seek=Mock(),
+            seek_direct=Mock(),
+        )
+        editor._scan_source_and_local_sec = Mock(return_value=("/tmp/video.mp4", 12.0, {"local_sec": 12.0}))
+
+        editor._preview_auto_cut_boundary_scan(12.0, 14.0)
+
+        editor.timeline.set_playhead.assert_called_once_with(12.0)
+        editor.video_player.info_label.setText.assert_called()
+        editor.video_player.show_cached_thumbnail_at.assert_not_called()
+        editor.video_player.prefetch_thumbnail_at.assert_not_called()
+        editor.video_player.frame_step_seek.assert_not_called()
+        editor.video_player.seek_direct.assert_not_called()
+        editor._scan_source_and_local_sec.assert_not_called()
 
     def test_zoom_buttons_anchor_to_visible_playhead(self):
         timeline = TimelineWidget()
@@ -736,6 +995,33 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             new_playhead_x = timeline.canvas.playhead_sec * timeline.canvas.pps - timeline.scroll.horizontalScrollBar().value()
             self.assertAlmostEqual(new_playhead_x, viewport_center, delta=1.0)
+        finally:
+            timeline.close()
+
+    def test_zoom_during_playback_releases_center_locked_overlay(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.canvas.total_duration = 120.0
+            timeline.global_canvas.total_duration = 120.0
+            timeline.canvas.pps = 10.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(120.0, 10.0))
+            timeline.set_playhead(40.0)
+            timeline.set_playback_center_lock(True)
+            self.assertTrue(timeline._playhead_overlay._center_locked)
+
+            timeline.zoom_in()
+            self.app.processEvents()
+            self.assertFalse(timeline._playhead_overlay._center_locked)
+
+            old_x = timeline._playhead_overlay._sec * timeline.canvas.pps - timeline._playhead_overlay._scroll_x
+            timeline.set_playhead(41.0)
+            self.app.processEvents()
+            new_x = timeline._playhead_overlay._sec * timeline.canvas.pps - timeline._playhead_overlay._scroll_x
+            self.assertGreater(new_x, old_x)
         finally:
             timeline.close()
 

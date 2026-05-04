@@ -5,6 +5,13 @@ import time
 import threading
 from core.runtime.logger import get_logger
 from core.auto_tracker import AutoTracker
+from core.media_queue_order import (
+    MEDIA_QUEUE_EXTENSIONS,
+    media_entry_allowed,
+    natural_sort_key,
+    ordered_media_files,
+    path_is_excluded,
+)
 
 
 class CloudSyncManager:
@@ -19,7 +26,7 @@ class CloudSyncManager:
         self._running = False
         self._thread = None
         self.tracker = AutoTracker()
-        self.valid_extensions = ('.m4a', '.wav', '.mp3', '.mp4', '.mov', '.MOV', '.MP4')
+        self.valid_extensions = MEDIA_QUEUE_EXTENSIONS
         self._size_cache = {}
         self._in_flight = set()
         self._folder_jobs = {}
@@ -147,15 +154,12 @@ class CloudSyncManager:
 
     def _get_valid_files(self) -> list:
         if self.mode == "nas":
-            files = []
-            for folder in self._get_nas_leaf_folders():
-                files.extend(self._files_in_folder(folder))
-            return sorted(files)
-        try:
-            files = [os.path.join(self.dropzone_path, f) for f in os.listdir(self.dropzone_path) if not f.startswith('.') and f.lower().endswith(self.valid_extensions) and "_자막소스.mov" not in f]
-            return sorted(files)
-        except Exception:
-            return []
+            return ordered_media_files(
+                self.dropzone_path,
+                valid_extensions=self.valid_extensions,
+                excluded_paths=self._get_excluded_folders(),
+            )
+        return ordered_media_files(self.dropzone_path, valid_extensions=self.valid_extensions)
 
     def _get_excluded_folders(self):
         try:
@@ -165,11 +169,7 @@ class CloudSyncManager:
             return set()
 
     def _is_excluded(self, path, excluded):
-        norm = os.path.normpath(path)
-        for ex in excluded:
-            if norm == ex or norm.startswith(ex + os.sep):
-                return True
-        return False
+        return path_is_excluded(path, excluded)
 
     def _get_nas_leaf_folders(self):
         root = self.dropzone_path
@@ -178,11 +178,14 @@ class CloudSyncManager:
         excluded = self._get_excluded_folders()
         leaf = []
         for current, dirs, files in os.walk(root):
-            dirs[:] = sorted([d for d in dirs if not d.startswith('.')])
+            dirs[:] = sorted([d for d in dirs if not d.startswith('.')], key=natural_sort_key)
             if self._is_excluded(current, excluded):
                 dirs[:] = []
                 continue
-            valid_here = any((not f.startswith('.')) and f.lower().endswith(self.valid_extensions) and "_자막소스.mov" not in f for f in files)
+            valid_here = any(
+                media_entry_allowed(os.path.join(current, f), self.valid_extensions)
+                for f in files
+            )
             valid_child_dir = False
             for d in dirs:
                 dp = os.path.join(current, d)
@@ -192,17 +195,27 @@ class CloudSyncManager:
                     child_files = os.listdir(dp)
                 except Exception:
                     continue
-                if any((not cf.startswith('.')) and cf.lower().endswith(self.valid_extensions) for cf in child_files):
+                if any(
+                    media_entry_allowed(os.path.join(dp, cf), self.valid_extensions)
+                    for cf in child_files
+                ):
                     valid_child_dir = True
             if valid_here and not valid_child_dir:
                 leaf.append(current)
-        return sorted(leaf, key=lambda p: [part.lower() for part in os.path.relpath(p, root).split(os.sep)])
+        return sorted(
+            leaf,
+            key=lambda path: tuple(
+                natural_sort_key(part)
+                for part in os.path.relpath(path, root).split(os.sep)
+            ),
+        )
 
     def _files_in_folder(self, folder):
-        try:
-            return sorted(os.path.join(folder, f) for f in os.listdir(folder) if not f.startswith('.') and f.lower().endswith(self.valid_extensions) and "_자막소스.mov" not in f)
-        except Exception:
-            return []
+        return ordered_media_files(
+            folder,
+            valid_extensions=self.valid_extensions,
+            excluded_paths=self._get_excluded_folders() if self.mode == "nas" else None,
+        )
 
     def _folder_size(self, files):
         total = 0

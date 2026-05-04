@@ -117,7 +117,7 @@ def _cut_boundary_mapping(level: str) -> dict:
         level = "medium"
     enabled = level != "off"
     labels = {
-        "off": "사용안함",
+        "off": "미사용",
         "low": "중간 - 3초 간격",
         "medium": "높음 - 2초 간격",
     }
@@ -151,7 +151,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
                 "selected_model": "사용 안함 (Whisper 단독 진행)",
                 "stt_ensemble_enabled": False,
                 "stt_ensemble_llm_judge_enabled": False,
-                "stt_candidate_scoring_enabled": False,
+                "stt_candidate_scoring_enabled": True,
                 **_pipeline_mapping(30, 0.5, 4),
                 **_cut_boundary_mapping("off"),
                 **_decoder_settings(0.86, -1.0, 1.6, 0.0, 3, 1.0),
@@ -165,7 +165,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
                 "selected_model": "exaone3.5:2.4b",
                 "stt_ensemble_enabled": False,
                 "stt_ensemble_llm_judge_enabled": False,
-                "stt_candidate_scoring_enabled": False,
+                "stt_candidate_scoring_enabled": True,
                 **_pipeline_mapping(25, 1.5, 3),
                 **_cut_boundary_mapping("low"),
                 **_decoder_settings(0.58, -1.8, 2.2, 0.4, 5, 1.1),
@@ -204,6 +204,8 @@ def normalize_stt_quality_key(value: str | None) -> str:
         "balance": "balanced",
         "balanced": "balanced",
         "높음": "precise",
+        "정확도 우선": "precise",
+        "quality": "precise",
         "정밀 인식": "precise",
         "정밀인식": "precise",
         "precise": "precise",

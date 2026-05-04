@@ -20,7 +20,9 @@ from PyQt6.QtGui import QPixmap, QImage
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from core.runtime import config
 from core.frame_time import build_frame_time_map, normalize_fps, snap_sec_to_frame
+from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail
+from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args
 from ui.editor.video_overlay_widgets import (
     ThumbnailLabel,
     SubtitleLabel,
@@ -58,13 +60,17 @@ class _WorkerProxy:
 
     def seek(self, sec):
         if sec > 0.05:
-            self._hide_thumbnail()
-        sec = max(0.0, float(sec))
-        self.current_time = sec
-        self._pending_seek_sec = sec
-        self.media_player.setPosition(int(sec * 1000))
-        if getattr(self, 'has_vocal_track', False):
-            self.vocal_player.setPosition(int(sec * 1000))
+            self.parent_widget._hide_thumbnail()
+        parent = self.parent_widget
+        frame = parent.frame_for_sec(max(0.0, float(sec)))
+        sec = parent.sec_for_frame(frame)
+        parent.current_frame = frame
+        parent.current_time = sec
+        parent._pending_seek_sec = sec
+        pos_ms = parent.position_ms_for_frame(frame)
+        self.media_player.setPosition(pos_ms)
+        if getattr(parent, 'has_vocal_track', False):
+            parent.vocal_player.setPosition(pos_ms)
 
 class VideoPlayerWidget(QWidget):
     frame_step_requested = pyqtSignal(int)
@@ -107,6 +113,10 @@ class VideoPlayerWidget(QWidget):
         self._preview_max_width: int = 1280
         self._pending_media_source_path: str = ""
         self._media_source_loaded: bool = False
+        self._source_display_name: str = ""
+        self._proxy_build_proc = None
+        self._proxy_build_src: str = ""
+        self._proxy_build_dst: str = ""
 
         self.media_player = QMediaPlayer(self)
         self.audio_output = None
@@ -209,11 +219,15 @@ class VideoPlayerWidget(QWidget):
         if self._pending_seek_sec is not None:
             pending = float(self._pending_seek_sec)
             self._pending_seek_sec = None
+            pending_frame = self.frame_for_sec(pending)
+            pending = self.sec_for_frame(pending_frame)
+            self.current_frame = pending_frame
             self.current_time = pending
             self.set_subtitle_display_time(pending, refresh=False)
-            self.media_player.setPosition(int(pending * 1000))
+            pending_pos_ms = self.position_ms_for_frame(pending_frame)
+            self.media_player.setPosition(pending_pos_ms)
             if getattr(self, 'has_vocal_track', False):
-                self.vocal_player.setPosition(int(pending * 1000))
+                self.vocal_player.setPosition(pending_pos_ms)
         if self._pending_thumb_path:
             path = self._pending_thumb_path
             sec = float(self._pending_thumb_sec)
@@ -322,6 +336,25 @@ class VideoPlayerWidget(QWidget):
         self.info_label.setMaximumHeight(34)
         self.info_label.setStyleSheet("color: #A9B0B7; font-size: 10px; background: transparent; border: none;")
         ctrl_layout.addWidget(self.info_label)
+
+        self.source_name_label = QLabel(ctrl)
+        self.source_name_label.setObjectName("VideoSourceNameLabel")
+        self.source_name_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.source_name_label.setWordWrap(False)
+        self.source_name_label.setMinimumWidth(0)
+        self.source_name_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.source_name_label.setStyleSheet(
+            "QLabel#VideoSourceNameLabel {"
+            " color: #EAF2F8;"
+            " background: transparent;"
+            " border: none;"
+            " padding: 0;"
+            " font-size: 10px;"
+            " font-weight: 700;"
+            "}"
+        )
+        self.source_name_label.hide()
+        ctrl_layout.addWidget(self.source_name_label)
 
         layout.addWidget(ctrl)
         QTimer.singleShot(0, self._layout_video_overlay)
@@ -466,6 +499,29 @@ class VideoPlayerWidget(QWidget):
         except Exception:
             pass
 
+    def _set_source_name_badge(self, path: str):
+        name = os.path.basename(str(path or "").strip())
+        self._source_display_name = name
+        label = getattr(self, "source_name_label", None)
+        if label is None:
+            return
+        label.setToolTip(name)
+        if not name:
+            label.hide()
+            return
+        self._refresh_source_name_label()
+
+    def _refresh_source_name_label(self):
+        label = getattr(self, "source_name_label", None)
+        if label is None:
+            return
+        name = str(getattr(self, "_source_display_name", "") or "")
+        if not name:
+            label.hide()
+            return
+        label.setText(name)
+        label.show()
+
     def _scene_subtitle_item(self):
         return getattr(getattr(self, "video_widget", None), "subtitle_item", None)
 
@@ -540,6 +596,7 @@ class VideoPlayerWidget(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._layout_video_overlay()
+        self._refresh_source_name_label()
 
     def _get_video_ui_interval_ms(self) -> int:
         try:
@@ -575,24 +632,108 @@ class VideoPlayerWidget(QWidget):
         return True
 
     def _preview_proxy_enabled(self) -> bool:
-        return False
+        return self._legacy_preview_proxy_enabled()
 
     def _proxy_path_for(self, path: str) -> str:
-        return ""
+        root = os.path.join(config.DATASET_DIR, "video_preview_cache")
+        os.makedirs(root, exist_ok=True)
+        digest = hashlib.sha1(os.path.abspath(path).encode("utf-8")).hexdigest()[:16]
+        base = os.path.splitext(os.path.basename(path))[0]
+        safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in base)[:48]
+        return os.path.join(root, f"{safe}_{digest}_preview_720p_hevc.mp4")
 
     def _playback_path_for(self, path: str) -> str:
         self._proxy_original_path = path
         self._proxy_playback_path = path
+        if not self._preview_proxy_enabled() or not self._is_video_file(path):
+            return path
+        proxy_path = self._proxy_path_for(path)
+        if proxy_path and os.path.exists(proxy_path):
+            self._proxy_playback_path = proxy_path
+            return proxy_path
+        if proxy_path:
+            self._start_proxy_build(path, proxy_path)
         return path
 
     def _start_proxy_build(self, src: str, dst: str):
-        return
+        proc = getattr(self, "_proxy_build_proc", None)
+        if proc is not None and proc.poll() is None:
+            return
+        tmp_dst = f"{dst}.tmp.mp4"
+        try:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            try:
+                os.remove(tmp_dst)
+            except OSError:
+                pass
+            cmd = [
+                ffmpeg_binary(),
+                "-y",
+                *ffmpeg_hwdecode_args(),
+                "-i",
+                src,
+                "-vf",
+                "scale=w=min(1280\\,iw):h=-2",
+                *hevc_encode_args(quality="fast"),
+                "-c:a",
+                "aac",
+                "-b:a",
+                "160k",
+                "-movflags",
+                "+faststart",
+                tmp_dst,
+            ]
+            self._proxy_build_src = src
+            self._proxy_build_dst = dst
+            self._proxy_build_proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                **hidden_subprocess_kwargs(strip_qt=True),
+            )
+            QTimer.singleShot(500, lambda s=src, t=tmp_dst, d=dst: self._poll_proxy_build(s, t, d))
+        except Exception:
+            self._proxy_build_proc = None
 
     def _poll_proxy_build(self, src: str, _tmp_dst: str, dst: str):
-        return
+        proc = getattr(self, "_proxy_build_proc", None)
+        if proc is None:
+            return
+        if proc.poll() is None:
+            QTimer.singleShot(500, lambda s=src, t=_tmp_dst, d=dst: self._poll_proxy_build(s, t, d))
+            return
+        ok = proc.returncode == 0 and os.path.exists(_tmp_dst)
+        self._proxy_build_proc = None
+        if not ok:
+            try:
+                os.remove(_tmp_dst)
+            except OSError:
+                pass
+            return
+        try:
+            os.replace(_tmp_dst, dst)
+        except OSError:
+            return
+        if os.path.normpath(getattr(self, "_current_source_path", "") or "") == os.path.normpath(src):
+            self._switch_to_proxy(dst)
 
     def _switch_to_proxy(self, _proxy_path: str):
-        return
+        if not _proxy_path or not os.path.exists(_proxy_path):
+            return
+        try:
+            was_playing = self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+            pos_ms = self.position_ms_for_frame(getattr(self, "current_frame", self.frame_for_sec(self.current_time)))
+            self.media_player.pause()
+            self.media_player.setSource(QUrl.fromLocalFile(_proxy_path))
+            self.media_player.setPosition(pos_ms)
+            self._pending_media_source_path = _proxy_path
+            self._proxy_playback_path = _proxy_path
+            self._media_source_loaded = True
+            self.info_label.setText("HEVC 프리뷰")
+            if was_playing:
+                self.media_player.play()
+        except Exception:
+            pass
 
     def _legacy_preview_proxy_enabled(self) -> bool:
         try:
@@ -610,6 +751,7 @@ class VideoPlayerWidget(QWidget):
         if self._pending_segments is None:
             self._pending_segments = list(self.segments)
         if os.path.exists(path):
+            self._set_source_name_badge(path)
             self._current_source_path = path
             try:
                 from core.media_info import probe_media
@@ -633,7 +775,7 @@ class VideoPlayerWidget(QWidget):
             if self.audio_output is not None:
                 self.audio_output.setVolume(1.0)
             self.has_vocal_track = False
-            self.info_label.setText(f"720p 표시 프리뷰 | {os.path.basename(path)}")
+            self.info_label.setText("")
             if self._is_video_file(path) and self._pending_thumb_path is None:
                 self._extract_and_show_thumbnail(path)
             elif not self._is_video_file(path):
@@ -654,7 +796,7 @@ class VideoPlayerWidget(QWidget):
         mm = int((sec % 3600) // 60)
         ss = sec % 60.0
         ts = f"{hh:02d}:{mm:02d}:{ss:06.3f}"
-        cmd = ["ffmpeg", "-y", "-ss", ts, "-i", path, "-frames:v", "1", "-q:v", "2", thumb_path]
+        cmd = ["ffmpeg", "-y", "-ss", ts, *ffmpeg_hwdecode_args(), "-i", path, "-frames:v", "1", "-q:v", "2", thumb_path]
         kwargs = {'stdout': __import__('subprocess').DEVNULL, 'stderr': __import__('subprocess').DEVNULL}
         if __import__('os').name == 'nt':
             kwargs['creationflags'] = 0x08000000
@@ -729,7 +871,7 @@ class VideoPlayerWidget(QWidget):
         temp_dir = tempfile.gettempdir()
         thumb_path = os.path.join(temp_dir, "thumb_temp_cpd.jpg")
         
-        cmd = ["ffmpeg", "-y", "-ss", "00:00:00", "-i", path, "-frames:v", "1", "-q:v", "2", thumb_path]
+        cmd = ["ffmpeg", "-y", "-ss", "00:00:00", *ffmpeg_hwdecode_args(), "-i", path, "-frames:v", "1", "-q:v", "2", thumb_path]
         kwargs = {'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL}
         if os.name == 'nt': 
             kwargs['creationflags'] = 0x08000000
@@ -770,6 +912,12 @@ class VideoPlayerWidget(QWidget):
     def sec_for_frame(self, frame: int) -> float:
         return getattr(self, "frame_time_map", build_frame_time_map(self.total_time, self.frame_rate)).sec_for_frame(frame)
 
+    def position_ms_for_frame(self, frame: int) -> int:
+        return getattr(self, "frame_time_map", build_frame_time_map(self.total_time, self.frame_rate)).position_ms_for_frame(frame)
+
+    def position_ms_for_sec(self, sec: float) -> int:
+        return getattr(self, "frame_time_map", build_frame_time_map(self.total_time, self.frame_rate)).position_ms_for_sec(sec)
+
     def current_playback_frame_time(self) -> tuple[int, float]:
         frame_map = getattr(self, "frame_time_map", None)
         if frame_map is None:
@@ -780,6 +928,18 @@ class VideoPlayerWidget(QWidget):
         self.current_frame = frame
         self.current_time = sec
         return frame, sec
+
+    def _last_playable_frame(self) -> int:
+        frame_map = getattr(self, "frame_time_map", None)
+        if frame_map is None:
+            frame_map = build_frame_time_map(self.total_time, self.frame_rate)
+            self.frame_time_map = frame_map
+        if frame_map.total_frames <= 0:
+            return 0
+        return max(0, frame_map.total_frames - 1)
+
+    def _last_playable_sec(self) -> float:
+        return self.sec_for_frame(self._last_playable_frame())
 
     def set_subtitle_display_time(self, sec: float | None, refresh: bool = True):
         if sec is None:
@@ -924,9 +1084,9 @@ class VideoPlayerWidget(QWidget):
         self.set_subtitle_display_time(sec, refresh=False)
         self._pending_seek_sec = None
         if self._media_source_loaded:
-            self.media_player.setPosition(int(sec * 1000))
+            self.media_player.setPosition(self.position_ms_for_frame(self.current_frame))
         if getattr(self, 'has_vocal_track', False) and self._media_source_loaded:
-            self.vocal_player.setPosition(int(sec * 1000))
+            self.vocal_player.setPosition(self.position_ms_for_frame(self.current_frame))
         self._refresh_provider_segments(force=True)
         self._refresh_subtitle_now()
 
@@ -950,9 +1110,9 @@ class VideoPlayerWidget(QWidget):
         self._pending_seek_sec = None
         self.set_subtitle_display_time(sec, refresh=False)
         if self._media_source_loaded:
-            self.media_player.setPosition(int(round(sec * 1000.0)))
+            self.media_player.setPosition(self.position_ms_for_frame(self.current_frame))
         if getattr(self, 'has_vocal_track', False) and self._media_source_loaded:
-            self.vocal_player.setPosition(int(round(sec * 1000.0)))
+            self.vocal_player.setPosition(self.position_ms_for_frame(self.current_frame))
         self._hide_thumbnail()
         self._refresh_subtitle_now()
         if hasattr(self, '_ui_tick'):
@@ -967,9 +1127,9 @@ class VideoPlayerWidget(QWidget):
         self.set_subtitle_display_time(sec, refresh=False)
         self._pending_seek_sec = float(sec)
         if self._media_source_loaded:
-            self.media_player.setPosition(int(sec * 1000))
+            self.media_player.setPosition(self.position_ms_for_frame(self.current_frame))
         if getattr(self, 'has_vocal_track', False) and self._media_source_loaded:
-            self.vocal_player.setPosition(int(sec * 1000))
+            self.vocal_player.setPosition(self.position_ms_for_frame(self.current_frame))
         self._refresh_provider_segments(force=True)
         self._refresh_subtitle_now()
 
@@ -1002,8 +1162,18 @@ class VideoPlayerWidget(QWidget):
                 self.vocal_player.pause()
         else:
             self._refresh_provider_segments(force=True)
-            if self.current_time > 0.05:
-                self.media_player.setPosition(int(self.current_time * 1000))
+            start_frame = self.frame_for_sec(max(0.0, float(getattr(self, "current_time", 0.0) or 0.0)))
+            last_playable_frame = self._last_playable_frame()
+            if self.total_time > 0.0 and start_frame >= last_playable_frame:
+                start_frame = last_playable_frame
+                start_sec = self.sec_for_frame(start_frame)
+                self.current_frame = start_frame
+                self.current_time = start_sec
+                self.set_subtitle_display_time(start_sec, refresh=False)
+            else:
+                start_sec = self.sec_for_frame(start_frame)
+            if start_sec > 0.05:
+                self.media_player.setPosition(self.position_ms_for_frame(start_frame))
             if getattr(self, 'has_vocal_track', False):
                 self.vocal_player.setPosition(self.media_player.position())
             self.media_player.play()

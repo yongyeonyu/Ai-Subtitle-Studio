@@ -11,11 +11,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QObject, Qt
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import QApplication, QLabel, QTextEdit, QWidget
+from PyQt6.QtWidgets import QApplication, QLabel, QTableWidget, QTextEdit, QWidget
 
 from core.runtime import config
 from core.state_manager import SubtitleStateManager
 from core.work_mode import EDITOR_MODE
+from ui.editor.editor_actions import EditorActionsMixin
+from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.home_ui import HomeUIMixin
 from ui.menu_bar import StatusRail
 from ui.queue_widget import QueueMixin
@@ -136,6 +138,112 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         finally:
             rail.close()
 
+    def test_trim_vad_segments_before_keeps_prefix_and_clips_overlap(self):
+        dummy = SimpleNamespace()
+        rows = [
+            {"start": 0.0, "end": 2.0},
+            {"start": 2.5, "end": 5.0},
+            {"start": 5.0, "end": 7.0},
+        ]
+        kept = EditorPipelineMixin._trim_vad_segments_before(dummy, rows, 4.0)
+        self.assertEqual(
+            kept,
+            [
+                {"start": 0.0, "end": 2.0},
+                {"start": 2.5, "end": 4.0},
+            ],
+        )
+
+    def test_trim_cut_boundary_state_for_partial_rerun_filters_project_and_ui_after_start(self):
+        class _Sig:
+            def __init__(self):
+                self.emitted = []
+
+            def emit(self, payload=None):
+                self.emitted.append(payload)
+
+        class _Timeline:
+            def __init__(self):
+                self.boundary_times = None
+                self.scan_boundary_times = None
+
+            def set_boundary_times(self, times):
+                self.boundary_times = list(times)
+
+            def set_scan_boundary_times(self, times):
+                self.scan_boundary_times = list(times)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = os.path.join(tmp, "sample.assp")
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "version": "03.15.00",
+                        "user_settings": {},
+                        "analysis": {
+                            "cut_boundaries": [
+                                {"timeline_sec": 10.0, "timeline_frame": 300, "fps": 30.0},
+                                {"timeline_sec": 50.0, "timeline_frame": 1500, "fps": 30.0},
+                            ],
+                            "cut_boundary_provisional_boundaries": [
+                                {"timeline_sec": 12.0, "timeline_frame": 360, "fps": 30.0, "status": "provisional"},
+                                {"timeline_sec": 55.0, "timeline_frame": 1650, "fps": 30.0, "status": "provisional"},
+                            ],
+                            "cut_boundary_prescan_done": True,
+                            "cut_boundary_cache_path": "/tmp/cache.json",
+                            "cut_boundary_cache_type": "cut_boundaries_only",
+                        },
+                    },
+                    f,
+                    ensure_ascii=False,
+                )
+
+            sig_boundaries = _Sig()
+            sig_refresh = _Sig()
+            backend = SimpleNamespace(
+                _cut_boundary_pipeline_cache={"old": True},
+                _cut_boundary_provisional_rows=[],
+            )
+            main_w = SimpleNamespace(
+                _current_project_path=project_path,
+                _project_boundary_times=[10.0, 50.0],
+                _sig_update_project_boundary_times=sig_boundaries,
+                _sig_refresh_cut_boundary_placeholder=sig_refresh,
+                backend=backend,
+            )
+            timeline = _Timeline()
+            editor = SimpleNamespace(
+                window=lambda: main_w,
+                _auto_cut_boundary_scan_lines=[
+                    {"timeline_sec": 12.0, "timeline_frame": 360, "fps": 30.0, "status": "provisional"},
+                    {"timeline_sec": 55.0, "timeline_frame": 1650, "fps": 30.0, "status": "provisional"},
+                ],
+                timeline=timeline,
+            )
+            editor._trim_cut_boundary_rows_before = lambda rows, cutoff: EditorPipelineMixin._trim_cut_boundary_rows_before(editor, rows, cutoff)
+            editor._set_auto_cut_boundary_scan_lines = lambda rows: setattr(editor, "_auto_cut_boundary_scan_lines", list(rows))
+
+            EditorPipelineMixin._trim_cut_boundary_state_for_partial_rerun(editor, 40.0)
+
+            self.assertEqual(main_w._project_boundary_times, [10.0])
+            self.assertEqual(timeline.boundary_times, [10.0])
+            self.assertEqual(len(editor._auto_cut_boundary_scan_lines), 1)
+            self.assertEqual(editor._auto_cut_boundary_scan_lines[0]["timeline_sec"], 12.0)
+            self.assertEqual(sig_boundaries.emitted[-1], [10.0])
+            self.assertIsNone(backend._cut_boundary_pipeline_cache)
+            self.assertEqual(len(backend._cut_boundary_provisional_rows), 1)
+
+            with open(project_path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            saved_analysis = saved.get("analysis", {})
+            self.assertEqual(len(saved_analysis.get("cut_boundaries", [])), 1)
+            self.assertEqual(saved_analysis["cut_boundaries"][0]["timeline_sec"], 10.0)
+            self.assertEqual(len(saved_analysis.get("cut_boundary_provisional_boundaries", [])), 1)
+            self.assertEqual(saved_analysis["cut_boundary_provisional_boundaries"][0]["timeline_sec"], 12.0)
+            self.assertNotIn("cut_boundary_prescan_done", saved_analysis)
+            self.assertNotIn("cut_boundary_cache_path", saved_analysis)
+            self.assertNotIn("cut_boundary_cache_type", saved_analysis)
+
     def test_progress_ticks_do_not_overwrite_active_stage_status(self):
         state_manager = SubtitleStateManager()
         state_manager.start_ai_all()
@@ -169,6 +277,535 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         self.assertIn("완료", queue.editor.sm._status_msg)
         self.assertTrue(queue.synced)
         self.assertIs(queue.refreshed_dirty, True)
+
+    def test_final_queue_header_marks_remaining_rows_done(self):
+        class DummyTimer:
+            def __init__(self):
+                self.stopped = False
+
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                self.stopped = True
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+                self.synced = False
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                self.synced = True
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"])
+        queue.update_queue_status(0, "✅ 완료")
+        queue.update_queue_header(2, 2, 100, "")
+
+        statuses = [
+            queue.queue_table.item(row, 0).text()
+            for row in range(queue.queue_table.rowCount())
+        ]
+        self.assertEqual(statuses, ["✅ 완료", "대기 중"])
+        self.assertFalse(queue._live_timer.stopped)
+        self.assertTrue(queue.synced)
+
+    def test_checked_queue_completion_status_is_done_but_plain_text_is_active(self):
+        class DummyTimer:
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                pass
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = DummyQueue()
+        self.assertEqual(queue._queue_status_flags("✅ 자막 생성 완료"), (True, False, False))
+        self.assertEqual(queue._queue_status_flags("자막 생성 완료"), (False, False, True))
+        self.assertEqual(queue._queue_status_flags("✅ 컷 경계 완료"), (False, False, True))
+
+    def test_final_queue_header_does_not_complete_active_processing_row(self):
+        class DummyTimer:
+            def __init__(self):
+                self.stopped = False
+
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                self.stopped = True
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4"])
+        queue.update_queue_status(0, "저장 준비 중")
+        queue.update_queue_header(1, 1, 100, "")
+
+        self.assertEqual(queue.queue_header_lbl.text(), "큐 리스트 : (1/1) - 99% 완료")
+        self.assertEqual(queue.queue_table.item(0, 0).text(), "저장 준비 중")
+        self.assertFalse(queue._live_timer.stopped)
+
+        queue.update_queue_status(0, "✅ 완료")
+        queue.update_queue_header(1, 1, 100, "")
+        self.assertEqual(queue.queue_header_lbl.text(), "큐 리스트 : (1/1) - 100% 완료")
+        self.assertTrue(queue._live_timer.stopped)
+
+    def test_manual_save_syncs_single_queue_row_to_complete(self):
+        class DummyMain(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = SimpleNamespace(start=lambda _interval: None, stop=lambda: None)
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        class DummyEditor(EditorActionsMixin):
+            def __init__(self, main_w):
+                self._main_w = main_w
+                self.media_path = "/tmp/clip_a.mp4"
+
+            def window(self):
+                return self._main_w
+
+        main_w = DummyMain()
+        main_w.init_queue_list(["/tmp/clip_a.mp4"])
+        main_w.update_queue_status(0, "저장 준비 중")
+
+        editor = DummyEditor(main_w)
+        editor._sync_queue_saved_state()
+
+        self.assertEqual(main_w.queue_table.item(0, 0).text(), "✅ 완료")
+        self.assertEqual(main_w.queue_header_lbl.text(), "큐 리스트 : (1/1) - 100% 완료")
+
+    def test_queue_status_refreshes_sidebar_engine_info_on_completion(self):
+        class DummyTimer:
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                pass
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self.engine_refresh_count = 0
+                self._live_timer = DummyTimer()
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+            def _refresh_sidebar_engine_info(self):
+                self.engine_refresh_count += 1
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4"])
+        before = queue.engine_refresh_count
+
+        queue.update_queue_status(0, "✅ 완료")
+        queue.update_queue_header(1, 1, 100, "")
+
+        self.assertGreaterEqual(queue.engine_refresh_count, before + 2)
+
+    def test_completed_queue_row_keeps_done_highlight_when_next_clip_starts(self):
+        class DummyTimer:
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                pass
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+                self.synced = False
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                self.synced = True
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"])
+        queue.update_queue_status(0, "✅ 완료")
+        done_bg = queue.queue_table.item(0, 0).background().color().name().upper()
+
+        queue.update_queue_header(2, 2, 0, "")
+        queue.update_queue_status(1, "⏳ 오디오 추출 중")
+
+        self.assertIn("완료", queue.queue_table.item(0, 0).text())
+        self.assertEqual(queue.queue_table.item(0, 0).background().color().name().upper(), done_bg)
+        queue._refresh_sidebar_queue_cache()
+        self.assertTrue(queue._sidebar_queue_cache_items[0]["done"])
+        self.assertTrue(queue._sidebar_queue_cache_items[1]["active"])
+
+    def test_completed_queue_row_ignores_late_non_terminal_updates(self):
+        class DummyTimer:
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                pass
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+                self.synced = False
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                self.synced = True
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4", "/tmp/clip_c.mp4"])
+        queue.update_queue_status(0, "✅ 완료")
+        queue.update_queue_status(1, "✅ 완료")
+        row0_bg = queue.queue_table.item(0, 0).background().color().name().upper()
+        row1_bg = queue.queue_table.item(1, 0).background().color().name().upper()
+
+        queue.update_queue_status(0, "컷 경계 확인 중 50%", "66", "", "")
+        queue.update_queue_status(1, "🎥 자막영상출력(mov)", "10", "", "")
+        queue.update_queue_status(2, "컷 경계 확인 중 10%", "", "", "")
+
+        self.assertEqual(queue.queue_table.item(0, 0).text(), "✅ 완료")
+        self.assertEqual(queue.queue_table.item(1, 0).text(), "✅ 완료")
+        self.assertEqual(queue.queue_table.item(0, 0).background().color().name().upper(), row0_bg)
+        self.assertEqual(queue.queue_table.item(1, 0).background().color().name().upper(), row1_bg)
+        self.assertIn("컷 경계", queue.queue_table.item(2, 0).text())
+        queue._refresh_sidebar_queue_cache()
+        self.assertTrue(queue._sidebar_queue_cache_items[0]["done"])
+        self.assertTrue(queue._sidebar_queue_cache_items[1]["done"])
+        self.assertTrue(queue._sidebar_queue_cache_items[2]["active"])
+
+    def test_completed_queue_row_resets_when_same_clip_restarts(self):
+        class DummyTimer:
+            def __init__(self):
+                self.started = False
+                self.stopped = False
+
+            def start(self, _interval):
+                self.started = True
+
+            def stop(self):
+                self.stopped = True
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+                self.synced = False
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                self.synced = True
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4"])
+        queue.update_queue_status(0, "✅ 완료")
+        queue.update_queue_header(1, 1, 100, "")
+        self.assertEqual(queue.queue_header_lbl.text(), "큐 리스트 : (1/1) - 100% 완료")
+        self.assertTrue(queue._queue_status_flags(queue.queue_table.item(0, 0).text())[0])
+        self.assertIn(0, queue._file_complete_times)
+
+        queue.update_queue_status(0, "⏳ 오디오 추출 중")
+        queue.update_queue_header(1, 1, 0, "")
+
+        self.assertEqual(queue.queue_table.item(0, 0).text(), "⏳ 오디오 추출 중")
+        self.assertEqual(queue.queue_table.item(0, 4).text(), "계산 중")
+        self.assertEqual(queue.queue_header_lbl.text(), "큐 리스트 : (1/1) - 0% 완료")
+        self.assertNotIn(0, queue._file_complete_times)
+        queue._refresh_sidebar_queue_cache()
+        self.assertFalse(queue._sidebar_queue_cache_items[0]["done"])
+        self.assertTrue(queue._sidebar_queue_cache_items[0]["active"])
+        self.assertTrue(queue._live_timer.started)
+
+    def test_completed_queue_row_resets_when_same_clip_restarts_from_llm_stage(self):
+        class DummyTimer:
+            def __init__(self):
+                self.started = False
+                self.stopped = False
+
+            def start(self, _interval):
+                self.started = True
+
+            def stop(self):
+                self.stopped = True
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+                self.synced = False
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                self.synced = True
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4"])
+        queue.update_queue_status(0, "✅ 완료")
+        queue.update_queue_header(1, 1, 100, "")
+
+        queue.update_queue_status(0, "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중")
+
+        self.assertEqual(queue.queue_table.item(0, 0).text(), "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중")
+        self.assertNotIn(0, queue._file_complete_times)
+        queue._refresh_sidebar_queue_cache()
+        self.assertFalse(queue._sidebar_queue_cache_items[0]["done"])
+        self.assertTrue(queue._sidebar_queue_cache_items[0]["active"])
+        self.assertTrue(queue._live_timer.started)
+
+    def test_queue_visuals_allow_only_current_row_active(self):
+        class DummyTimer:
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                pass
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4", "/tmp/clip_c.mp4"])
+        queue._current_file_idx = 3
+        queue.queue_table.item(0, 0).setText("컷 경계 확인 중 50%")
+        queue.queue_table.item(1, 0).setText("🎥 자막영상출력(mov)")
+        queue.queue_table.item(2, 0).setText("⏳ Whisper 중")
+        for row in range(queue.queue_table.rowCount()):
+            queue._apply_queue_row_visual_state(row)
+
+        queue._refresh_sidebar_queue_cache()
+        active_rows = [
+            row
+            for row, item in enumerate(queue._sidebar_queue_cache_items)
+            if item["active"]
+        ]
+        self.assertEqual(active_rows, [2])
+        self.assertNotEqual(queue.queue_table.item(0, 0).foreground().color().name().upper(), "#FFD84D")
+        self.assertNotEqual(queue.queue_table.item(1, 0).foreground().color().name().upper(), "#FFD84D")
+        self.assertEqual(queue.queue_table.item(2, 0).foreground().color().name().upper(), "#FFD84D")
+
+    def test_queue_header_advance_repairs_prior_incomplete_rows(self):
+        class DummyTimer:
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                pass
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+                self.synced = False
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                self.synced = True
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4", "/tmp/clip_c.mp4"])
+        queue.update_queue_status(0, "컷 경계 확인 중 50%")
+        queue.update_queue_status(1, "🎥 자막영상출력(mov)")
+        queue.update_queue_header(3, 3, 5, "")
+
+        self.assertEqual(queue.queue_table.item(0, 0).text(), "✅ 완료")
+        self.assertEqual(queue.queue_table.item(1, 0).text(), "✅ 완료")
+        self.assertEqual(queue.queue_table.item(2, 0).text(), "대기 중")
+        queue._refresh_sidebar_queue_cache()
+        self.assertTrue(queue._sidebar_queue_cache_items[0]["done"])
+        self.assertTrue(queue._sidebar_queue_cache_items[1]["done"])
+        self.assertFalse(queue._sidebar_queue_cache_items[2]["done"])
+
+    def test_pending_eta_update_does_not_mark_prior_rows_done(self):
+        class DummyTimer:
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                pass
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"])
+        queue.update_queue_status(1, "대기 중", "20", "1920x1080", "00:10")
+
+        self.assertEqual(queue.queue_table.item(0, 0).text(), "대기 중")
+        self.assertEqual(queue.queue_table.item(1, 0).text(), "대기 중")
+
+    def test_late_eta_header_does_not_rewind_current_queue_index(self):
+        class DummyTimer:
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                pass
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4", "/tmp/clip_c.mp4"])
+        queue.update_queue_header(3, 3, 5, "")
+        queue.update_queue_header(1, 3, 0, "2분 10초")
+
+        self.assertEqual(queue._current_file_idx, 3)
+        self.assertEqual(queue._real_pct, 5)
+        self.assertIn("(3/3) - 5%", queue.queue_header_lbl.text())
+        self.assertEqual(queue.queue_table.item(0, 0).text(), "✅ 완료")
+        self.assertEqual(queue.queue_table.item(1, 0).text(), "✅ 완료")
+
+    def test_late_pending_eta_does_not_clear_active_queue_row(self):
+        class DummyTimer:
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                pass
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"])
+        queue.update_queue_status(1, "컷 경계 확인 중 50%")
+        queue.update_queue_status(1, "대기 중", "20", "1920x1080", "00:10")
+
+        self.assertEqual(queue.queue_table.item(1, 0).text(), "컷 경계 확인 중 50%")
+        self.assertEqual(queue.queue_table.item(1, 2).text(), "1920x1080")
+        self.assertEqual(queue.queue_table.item(1, 3).text(), "00:10")
+        queue._refresh_sidebar_queue_cache()
+        self.assertEqual(queue._sidebar_queue_cache_items[1]["eta"], "00:00 / 00:20")
+
+    def test_restart_queue_eta_metadata_restarts_media_duration_probe(self):
+        from ui.main.main_window import MainWindow
+
+        class ImmediateThread:
+            def __init__(self, target=None, daemon=None, name=None):
+                self.target = target
+                self.daemon = daemon
+                self.name = name
+                self.started = False
+
+            def start(self):
+                self.started = True
+                if callable(self.target):
+                    self.target()
+
+        class Backend:
+            def __init__(self):
+                self.files_to_process = ["old.mp4"]
+                self._show_queue_for_current_run = False
+                self._video_durations = {"old.mp4": 12.0}
+                self.called = False
+
+            def _precalculate_etas(self):
+                self.called = True
+
+        window = MainWindow()
+        backend = Backend()
+        try:
+            with patch("ui.main.main_window.threading.Thread", ImmediateThread):
+                window._restart_queue_eta_metadata(backend, ["/tmp/new.mp4"])
+
+            self.assertTrue(backend.called)
+            self.assertEqual(backend.files_to_process, ["/tmp/new.mp4"])
+            self.assertTrue(backend._show_queue_for_current_run)
+            self.assertEqual(backend._video_durations, {})
+            self.assertEqual(backend._eta_thread.name, "eta-calculator-restart")
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
 
     def test_save_clears_dirty_until_real_subtitle_edit(self):
         from ui.editor.editor_widget import EditorWidget
@@ -545,6 +1182,70 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 )
             finally:
                 window.close()
+
+    def test_restart_prescan_uses_current_cut_boundary_settings(self):
+        from ui.main.main_window import MainWindow
+
+        class _Backend:
+            def __init__(self):
+                self.calls = []
+
+            def _auto_scan_cut_boundaries_for_start(self, project_path, files):
+                self.calls.append((project_path, list(files or [])))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = os.path.join(tmp, "sample.mp4")
+            project_path = os.path.join(tmp, "sample.assp")
+            open(media_path, "wb").close()
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "version": "03.14.00",
+                        "media": [{"path": media_path}],
+                        "user_settings": {
+                            "stt_quality_preset": "fast",
+                            "cut_boundary_level": "off",
+                            "cut_boundary_detection_enabled": False,
+                        },
+                        "analysis": {
+                            "cut_boundaries": [],
+                            "cut_boundary_prescan_done": True,
+                            "cut_boundary_cache_path": "/tmp/stale.json",
+                            "cut_boundary_cache_type": "cut_boundaries_only",
+                        },
+                    },
+                    f,
+                    ensure_ascii=False,
+                )
+
+            window = MainWindow()
+            backend = _Backend()
+            try:
+                window._current_project_path = project_path
+                current_settings = {
+                    "stt_quality_preset": "balanced",
+                    "scan_cut_boundary_level": "low",
+                    "cut_boundary_level": "low",
+                    "cut_boundary_detection_enabled": True,
+                    "scan_cut_enabled": True,
+                    "scan_cut_auto_enabled": True,
+                    "cut_boundary_enabled": True,
+                }
+                with patch("ui.main.main_window.load_settings", return_value=dict(current_settings)):
+                    window._prepare_cut_boundary_prescan_for_restart(backend, [media_path])
+
+                self.assertEqual(backend.calls, [(project_path, [media_path])])
+                with open(project_path, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+                self.assertEqual(saved["user_settings"]["stt_quality_preset"], "balanced")
+                self.assertEqual(saved["user_settings"]["cut_boundary_level"], "low")
+                self.assertNotIn("cut_boundary_prescan_done", saved["analysis"])
+                self.assertNotIn("cut_boundary_cache_path", saved["analysis"])
+                self.assertNotIn("cut_boundary_cache_type", saved["analysis"])
+            finally:
+                window.close()
+                window.deleteLater()
+                self.app.processEvents()
 
     def test_forced_multiclip_restart_moves_existing_srts_to_backup(self):
         from core.pipeline import multiclip_pipeline

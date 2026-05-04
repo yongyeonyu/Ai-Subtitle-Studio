@@ -42,11 +42,97 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         self.total_expected_time = 0.0
         self.pipeline_start_time = 0.0
         self.is_first_start = True
+        self._individual_queue_mode = False
 
         self._prefetch_cache = {}
         self._prefetch_threads = {}
         self._prefetch_generation = 0
         self._prefetch_lock = threading.Lock()
+
+    def _reset_ui_individual_clip_context(self, *, clear_project: bool = True):
+        ui = getattr(self, "ui", None)
+        if ui is None:
+            return
+        reset = getattr(ui, "_reset_transient_multiclip_state", None)
+        if callable(reset):
+            try:
+                reset()
+            except Exception:
+                pass
+        else:
+            for attr, value in (
+                ("_multiclip_files", []),
+                ("_multiclip_boundaries", []),
+                ("_accumulated_vad", []),
+                ("_project_boundary_times", []),
+                ("_reuse_clip_indices", set()),
+            ):
+                try:
+                    setattr(ui, attr, value.copy() if hasattr(value, "copy") else value)
+                except Exception:
+                    pass
+        if clear_project:
+            try:
+                ui._current_project_path = None
+            except Exception:
+                pass
+        for attr, value in (
+            ("_editor_roughcut_result", None),
+            ("_stored_roughcut_result", None),
+            ("_auto_cut_boundary_scan_lines", []),
+            ("_cut_boundary_topicless_middle_segments", []),
+        ):
+            try:
+                setattr(ui, attr, value.copy() if hasattr(value, "copy") else value)
+            except Exception:
+                pass
+        try:
+            if hasattr(ui, "_sig_update_project_boundary_times"):
+                ui._sig_update_project_boundary_times.emit([])
+        except Exception:
+            pass
+
+    def _reset_backend_individual_clip_context(self, *, invalidate_prefetch: bool = True):
+        self._speaker_map = []
+        self._reuse_existing_single_subtitle = False
+        self._reuse_existing_multiclip_subtitles = False
+        self._reuse_clip_indices = set()
+        for attr, value in (
+            ("_cut_boundary_pipeline_cache", None),
+            ("_cut_boundary_provisional_rows", []),
+            ("_cut_boundary_sidebar_last_key", None),
+            ("_cut_boundary_topicless_logged_keys", []),
+            ("_auto_audio_tune_cache", {}),
+        ):
+            try:
+                setattr(self, attr, value.copy() if hasattr(value, "copy") else value)
+            except Exception:
+                pass
+        vp = getattr(self, "video_processor", None)
+        if vp is not None:
+            for method_name in ("clear_fast_mode_overrides", "clear_auto_audio_tune_overrides"):
+                method = getattr(vp, method_name, None)
+                if callable(method):
+                    try:
+                        method()
+                    except Exception:
+                        pass
+            try:
+                vp.stage_callback = None
+            except Exception:
+                pass
+            try:
+                vp.hard_cut_boundaries = []
+            except Exception:
+                pass
+        if invalidate_prefetch:
+            try:
+                with self._prefetch_lock:
+                    self._prefetch_generation += 1
+                    self._prefetch_cache.clear()
+                    self._prefetch_threads.clear()
+            except Exception:
+                pass
 
     # ─── 파이프라인 시작 ─────────────────────────────────
     def start_pipeline(self, files, folder=None, is_icloud=False, is_auto_start=False):
@@ -56,7 +142,13 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         self.current_folder = folder
         self.is_icloud = bool(is_icloud)
         self.is_auto_start = is_auto_start
+        self._individual_queue_mode = bool(folder or is_icloud or is_auto_start)
+        self._show_queue_for_current_run = bool(self.files_to_process)
         self._reuse_existing_single_subtitle = False
+
+        if self._individual_queue_mode:
+            self._reset_backend_individual_clip_context(invalidate_prefetch=True)
+            self._reset_ui_individual_clip_context(clear_project=True)
 
         self.total_expected_time = 0.0
         self.pipeline_start_time = 0.0
@@ -79,7 +171,7 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
                 self.files_to_process[0]
             )
 
-        if hasattr(self.ui, "init_queue_list"):
+        if self._show_queue_for_current_run and hasattr(self.ui, "init_queue_list"):
             self.ui.init_queue_list(self.files_to_process)
 
         self._video_durations = {}
@@ -163,7 +255,7 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
                 if expected_time > 0:
                     total_expected_time += expected_time
 
-                if hasattr(self.ui, "_sig_update_queue"):
+                if self._show_queue_for_current_run and hasattr(self.ui, "_sig_update_queue"):
                     self.ui._sig_update_queue.emit(
                         i, "대기 중", str(expected_time), info_txt, len_txt
                     )
@@ -171,14 +263,18 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
                 get_logger().log(
                     f"⚠️ ETA 계산 실패: {os.path.basename(target_file)} / {e}"
                 )
-                if hasattr(self.ui, "_sig_update_queue"):
+                if self._show_queue_for_current_run and hasattr(self.ui, "_sig_update_queue"):
                     self.ui._sig_update_queue.emit(
                         i, "대기 중", "예상불가", "오류", "-"
                     )
 
         self.total_expected_time = total_expected_time
 
-        if total_expected_time > 0 and hasattr(self.ui, "_sig_update_queue_header"):
+        if (
+            self._show_queue_for_current_run
+            and total_expected_time > 0
+            and hasattr(self.ui, "_sig_update_queue_header")
+        ):
             t_mins, t_secs = int(total_expected_time // 60), int(
                 total_expected_time % 60
             )
@@ -188,6 +284,8 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
                 total_str = f"{t_hours}시간 {t_mins}분 {t_secs}초"
             else:
                 total_str = f"{t_mins}분 {t_secs}초"
+            current = max(1, int(getattr(self.ui, "_current_file_idx", 1) or 1))
+            pct = max(0, int(getattr(self.ui, "_real_pct", 0) or 0))
             self.ui._sig_update_queue_header.emit(
-                1, len(self.files_to_process), 0, total_str
+                current, len(self.files_to_process), pct, total_str
             )

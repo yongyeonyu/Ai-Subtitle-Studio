@@ -21,8 +21,8 @@ class _DummyBackend:
     def start_multiclip_pipeline(self, files, folder=None):
         self.calls.append((list(files or []), folder))
 
-    def start_pipeline(self, files, folder=None):
-        self.pipeline_calls.append((list(files or []), folder))
+    def start_pipeline(self, files, folder=None, is_icloud=False, is_auto_start=False):
+        self.pipeline_calls.append((list(files or []), folder, bool(is_auto_start)))
 
 
 class _DummyWindow(FileOpsMixin):
@@ -59,6 +59,7 @@ class _DummyFolderWindow(FileOpsMixin):
         self.batch_calls = []
         self._multiclip_files = []
         self._project_boundary_times = []
+        self._current_project_path = None
 
     def _safe_open_directory(self, _title, _folder):
         return "/tmp"
@@ -125,9 +126,10 @@ class MulticlipPanelTests(unittest.TestCase):
 
         self.assertEqual(owner.batch_calls, [])
         self.assertEqual(owner.backend.calls, [])
-        self.assertEqual(owner.backend.pipeline_calls, [(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"], "/tmp")])
+        self.assertEqual(owner.backend.pipeline_calls, [(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"], "/tmp", True)])
         self.assertEqual(owner._multiclip_files, [])
         self.assertEqual(owner._multiclip_boundaries, [])
+        self.assertTrue(owner._is_queue_mode)
         self.assertTrue(owner._auto_export_subtitle_video)
 
     def test_folder_dialog_ignores_multiclip_mode_and_runs_individual_pipeline(self):
@@ -147,7 +149,8 @@ class MulticlipPanelTests(unittest.TestCase):
 
         self.assertEqual(owner.batch_calls, [])
         self.assertEqual(owner.backend.calls, [])
-        self.assertEqual(owner.backend.pipeline_calls, [(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"], "/tmp")])
+        self.assertEqual(owner.backend.pipeline_calls, [(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"], "/tmp", True)])
+        self.assertTrue(owner._is_queue_mode)
         self.assertTrue(owner._auto_export_subtitle_video)
 
     def test_regular_folder_dialog_hides_auto_detect_and_uses_confirm(self):
@@ -221,6 +224,35 @@ class MulticlipPanelTests(unittest.TestCase):
             finally:
                 dialog.close()
                 dialog.deleteLater()
+                self.app.processEvents()
+
+    def test_folder_dialog_defaults_to_all_selected_and_respects_excluded_nas_root(self):
+        from PyQt6.QtCore import Qt
+        from ui.dialogs.folder_dialog import FolderDialog, NasFolderDialog
+
+        with tempfile.TemporaryDirectory() as tmp:
+            open(os.path.join(tmp, "voice_a.wav"), "wb").close()
+            open(os.path.join(tmp, "voice_b.wav"), "wb").close()
+
+            regular = FolderDialog(tmp)
+            nas = NasFolderDialog(tmp, excluded_folders=[tmp])
+            try:
+                regular._collect_state()
+                self.assertEqual(len(regular.selected_files), 2)
+
+                regular_root = regular.tree.invisibleRootItem().child(0)
+                self.assertEqual(regular_root.checkState(regular.select_col), Qt.CheckState.Checked)
+
+                nas._collect_state()
+                self.assertEqual(nas.selected_files, [])
+
+                nas_root = nas.tree.invisibleRootItem().child(0)
+                self.assertEqual(nas_root.checkState(nas.select_col), Qt.CheckState.Unchecked)
+            finally:
+                regular.close()
+                nas.close()
+                regular.deleteLater()
+                nas.deleteLater()
                 self.app.processEvents()
 
 

@@ -112,7 +112,8 @@ def _is_preview_proxy_ffmpeg_command(command: str) -> bool:
     preview_cache_dir = str(PROJECT_ROOT / "dataset" / "video_preview_cache").replace("\\", "/")
     return (
         preview_cache_dir in normalized_command
-        and "_preview_720p.mp4.tmp.mp4" in normalized_command
+        and "_preview_720p" in normalized_command
+        and ".tmp.mp4" in normalized_command
     )
 
 

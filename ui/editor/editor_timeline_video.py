@@ -11,6 +11,7 @@ ui/editor_timeline_video.py
 
 import os
 import time
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
 
 from core.frame_time import normalize_fps, snap_sec_to_frame
@@ -19,7 +20,6 @@ from ui.editor.editor_scan_cut_core import EditorScanCutCoreMixin
 from ui.editor.editor_helpers import (
     find_segment_at, get_sub_block_indices,
     make_gap_ud, delete_block_safely, insert_gap_after,
-    merge_adjacent_gaps_around
 )
 
 
@@ -454,16 +454,20 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             timeline._begin_subtitle_resize_keep_view()
         doc = self.text_edit.document()
         cur = QTextCursor(doc)
+        prev_sync_lock = bool(getattr(self, "_sync_lock", False))
+        self._sync_lock = True
         cur.beginEditBlock()
 
         block = doc.findBlockByNumber(line_num)
         if not block.isValid():
             cur.endEditBlock()
+            self._sync_lock = prev_sync_lock
             return
 
         ud = block.userData()
         if not isinstance(ud, SubtitleBlockData):
             cur.endEditBlock()
+            self._sync_lock = prev_sync_lock
             return
 
         old_start = float(ud.start_sec)
@@ -514,6 +518,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
 
         self.text_edit.update_margins()
         cur.endEditBlock()
+        self._sync_lock = prev_sync_lock
         if hasattr(self.text_edit, 'timestampArea'):
             self.text_edit.timestampArea.update()
         QTimer.singleShot(0, lambda s=dict(_timeline_resize_view_state): self._redraw_timeline_preserve_resize_view(s))
@@ -534,6 +539,14 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             return
 
         seg_start = float(ud.start_sec)
+        seg_end = None
+        try:
+            for seg in self._get_current_segments():
+                if int(seg.get("line", -1)) == int(line_num) and not seg.get("is_gap"):
+                    seg_end = float(seg.get("end", seg_start) or seg_start)
+                    break
+        except Exception:
+            seg_end = None
         sub_indices = get_sub_block_indices(doc, line_num, seg_start)
 
         cur = QTextCursor(doc)
@@ -550,12 +563,62 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         cur.removeSelectedText()
         block.setUserData(make_gap_ud(seg_start))
 
-        # 인접 Gap 병합
-        merge_adjacent_gaps_around(block)
-
         cur.endEditBlock()
         self.text_edit.setTextCursor(cur)
+        if seg_end is not None and seg_end > seg_start:
+            self._remove_live_detection_for_range(seg_start, seg_end)
         self._finalize_edit()
+
+    def _remove_live_detection_for_range(self, start_sec: float, end_sec: float):
+        start = float(start_sec)
+        end = float(end_sec)
+        if end <= start:
+            return
+
+        live = list(getattr(self, "_live_stt_preview_segments", []) or [])
+        if live:
+            self._live_stt_preview_segments = self._trim_segments_outside_range(live, start, end)
+
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None)
+        if canvas is not None:
+            try:
+                canvas.voice_activity_segments = self._trim_segments_outside_range(
+                    list(getattr(canvas, "voice_activity_segments", []) or []),
+                    start,
+                    end,
+                )
+                if hasattr(canvas, "_invalidate_marker_caches"):
+                    canvas._invalidate_marker_caches()
+                canvas.update()
+            except Exception:
+                pass
+
+    def _trim_segments_outside_range(self, segments: list[dict], start_sec: float, end_sec: float) -> list[dict]:
+        start = float(start_sec)
+        end = float(end_sec)
+        if end <= start:
+            return list(segments or [])
+        trimmed: list[dict] = []
+        min_len = max(0.02, min(0.1, 1.0 / max(1.0, self._current_frame_fps())))
+        for seg in list(segments or []):
+            try:
+                seg_start = float(seg.get("start", 0.0) or 0.0)
+                seg_end = float(seg.get("end", seg_start) or seg_start)
+            except Exception:
+                continue
+            if seg_end <= start + 0.001 or seg_start >= end - 0.001:
+                trimmed.append(dict(seg))
+                continue
+            if seg_start < start - min_len:
+                left = dict(seg)
+                left["end"] = self._snap_to_frame(start)
+                trimmed.append(left)
+            if seg_end > end + min_len:
+                right = dict(seg)
+                right["start"] = self._snap_to_frame(end)
+                trimmed.append(right)
+        return trimmed
 
     def _on_gap_activated(self, gap_start: float, gap_end: float):
         self._undo_mgr.push_immediate()
@@ -698,17 +761,59 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                 subtitle_idx = first_idx + offset
         return subtitle_idx
 
+    def _gap_generation_silence_scope(self, gap_start: float, gap_end: float, pivot_sec: float) -> tuple[float, float] | None:
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None)
+        if canvas is None:
+            return gap_start, gap_end
+        try:
+            markers = canvas.analysis_markers_cached() if hasattr(canvas, "analysis_markers_cached") else []
+        except Exception:
+            markers = []
+        silence_ranges: list[tuple[float, float]] = []
+        for marker in list(markers or []):
+            kind = str(marker.get("kind", "") or "").strip().lower()
+            label = str(marker.get("label", "") or "").strip()
+            if kind != "silence" and label != "무음":
+                continue
+            try:
+                start = self._snap_to_frame(float(marker.get("start", 0.0) or 0.0))
+                end = self._snap_to_frame(float(marker.get("end", start) or start))
+            except Exception:
+                continue
+            start = max(gap_start, start)
+            end = min(gap_end, end)
+            if end > start:
+                silence_ranges.append((start, end))
+
+        if not silence_ranges:
+            return gap_start, gap_end
+
+        pivot = self._snap_to_frame(float(pivot_sec))
+        containing = [item for item in silence_ranges if item[0] - 0.001 <= pivot <= item[1] + 0.001]
+        if containing:
+            return min(containing, key=lambda item: item[1] - item[0])
+        return min(silence_ranges, key=lambda item: min(abs(pivot - item[0]), abs(pivot - item[1])))
+
     def _on_gap_generate_requested(self, gap_start: float, gap_end: float, pivot_sec: float, mode: str):
         self._undo_mgr.push_immediate()
         gap_start = self._snap_to_frame(gap_start)
         gap_end = self._snap_to_frame(gap_end)
         pivot_sec = self._snap_to_frame(pivot_sec)
         pivot_sec = max(gap_start, min(gap_end, pivot_sec))
+        scope = self._gap_generation_silence_scope(gap_start, gap_end, pivot_sec)
+        if scope is None:
+            return
+        scope_start, scope_end = scope
+        pivot_sec = max(scope_start, min(scope_end, pivot_sec))
+        min_span = max(0.02, min(0.1, 1.0 / max(1.0, self._current_frame_fps())))
         if mode == "to":
-            sub_start, sub_end = gap_start, pivot_sec
+            pivot_sec = min(scope_end, max(scope_start + min_span, pivot_sec))
+            sub_start, sub_end = scope_start, pivot_sec
         else:
-            sub_start, sub_end = pivot_sec, gap_end
-        if sub_end <= sub_start + max(0.02, min(0.1, 1.0 / max(1.0, self._current_frame_fps()))):
+            pivot_sec = max(scope_start, min(scope_end - min_span, pivot_sec))
+            sub_start, sub_end = pivot_sec, scope_end
+        if sub_end < sub_start + (min_span * 0.5):
             return
 
         parts: list[tuple[str, str, float]] = []
@@ -722,6 +827,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         cur.beginEditBlock()
         subtitle_idx = self._apply_gap_generation_parts(gap_start, parts)
         cur.endEditBlock()
+        self._remove_live_detection_for_range(sub_start, sub_end)
 
         block = self.text_edit.document().findBlockByNumber(subtitle_idx)
         if block.isValid():

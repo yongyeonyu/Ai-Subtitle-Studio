@@ -304,7 +304,10 @@ class ProjectSegmentReloadTests(unittest.TestCase):
 
         self.assertEqual(len(editor._live_stt_preview_segments), 1)
         self.assertTrue(editor._live_stt_preview_segments[0]["stt_pending"])
-        self.assertEqual(editor.timeline.updated[0][0]["text"], "미리보기")
+        subtitle_drafts = [seg for seg in editor.timeline.updated[0] if seg.get("_live_subtitle_preview")]
+        stt_previews = [seg for seg in editor.timeline.updated[0] if seg.get("_live_stt_preview")]
+        self.assertEqual(subtitle_drafts[0]["text"], "미리보기")
+        self.assertEqual(stt_previews[0]["text"], "미리보기")
         self.assertEqual(editor.timeline.updated[2], 10.0)
         self.assertEqual(editor._segment_queue, [])
 
@@ -319,7 +322,23 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             [seg["stt_preview_source"] for seg in editor._live_stt_preview_segments],
             ["STT1", "STT2"],
         )
-        self.assertEqual([seg["text"] for seg in editor.timeline.updated[0]], ["STT1", "STT2"])
+        subtitle_drafts = [seg for seg in editor.timeline.updated[0] if seg.get("_live_subtitle_preview")]
+        stt_previews = [seg for seg in editor.timeline.updated[0] if seg.get("_live_stt_preview")]
+        self.assertEqual([seg["text"] for seg in subtitle_drafts], ["STT1"])
+        self.assertEqual([seg["text"] for seg in stt_previews], ["STT1", "STT2"])
+
+    def test_live_subtitle_preview_is_removed_when_final_segment_overlaps(self):
+        editor = _LivePreviewEditor()
+        editor.preview_stt_segments([{"start": 1.0, "end": 2.0, "text": "드래프트", "stt_preview_source": "STT1"}])
+        self.assertTrue(any(seg.get("_live_subtitle_preview") for seg in editor.timeline.updated[0]))
+
+        editor._cached_segs = [{"start": 1.0, "end": 2.0, "text": "최종", "speaker": "00"}]
+        editor._redraw_timeline_with_live_preview()
+
+        subtitle_drafts = [seg for seg in editor.timeline.updated[0] if seg.get("_live_subtitle_preview")]
+        stt_previews = [seg for seg in editor.timeline.updated[0] if seg.get("_live_stt_preview")]
+        self.assertEqual(subtitle_drafts, [])
+        self.assertEqual([seg["text"] for seg in stt_previews], ["드래프트"])
 
     def test_final_segments_keep_live_preview_candidates_for_manual_selection(self):
         editor = _LivePreviewEditor()
@@ -517,7 +536,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor._cached_segs[0]["text"], "STT1 후보")
         self.assertEqual(editor._cached_segs[0]["stt_selected_source"], "STT1")
 
-        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[1])
+        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
         self.assertEqual(editor._cached_segs[0]["text"], "STT2 후보")
         self.assertEqual(editor._cached_segs[0]["stt_selected_source"], "STT2")
 

@@ -1,7 +1,7 @@
 <!--
-Document-Version: 03.15.00
+Document-Version: 03.16.00
 Phase: PHASE2
-Last-Updated: 2026-05-04
+Last-Updated: 2026-05-05
 Updated-By: Codex
 Purpose: Agent bootstrap and handoff rules only.
 -->
@@ -61,9 +61,9 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 ## Current Continuation Facts
 
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- Current app version in code: `03.15.00`
-- Current handoff document version: `03.15.00`
-- Latest release checkpoint: `v03.15.00`
+- Current app version in code: `03.16.00`
+- Current handoff document version: `03.16.00`
+- Latest release checkpoint: `v03.16.00`
 - Current phase: `PHASE2`
 - Next planned phase: `PHASE3_LORA_GROUND_TRUTH_TRAINING`
 - Product priority: generate highly accurate subtitles on the first pass, even if processing takes longer.
@@ -73,6 +73,7 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 ## Collaboration Rules
 
 - Reply to the user in Korean unless they explicitly request another language.
+- Use formal, respectful Korean honorific language when replying to the user.
 - Keep repository documentation written in English unless the file is source data or user-visible Korean copy.
 - Implement requested changes directly when the request is clear.
 - Preserve existing user changes. Do not revert unrelated dirty files.

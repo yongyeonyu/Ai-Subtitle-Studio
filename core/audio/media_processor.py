@@ -454,6 +454,9 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         """Legacy batch override 제거."""
         self._fast_mode_overrides = None
 
+    def clear_auto_audio_tune_overrides(self):
+        self._auto_audio_tune_overrides = None
+
     def set_auto_audio_tune_overrides(self, overrides: dict | None):
         self._auto_audio_tune_overrides = dict(overrides or {}) if overrides else None
 

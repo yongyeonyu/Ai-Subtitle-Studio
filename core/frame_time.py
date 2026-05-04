@@ -44,6 +44,10 @@ def frame_duration(fps: float | int | str | None) -> float:
     return round(1.0 / normalize_fps(fps), 9)
 
 
+def frame_to_position_ms(frame: float | int | str | None, fps: float | int | str | None) -> int:
+    return max(0, int(round(frame_to_sec(frame, fps) * 1000.0)))
+
+
 def frame_count(duration_sec: float | int | str | None, fps: float | int | str | None) -> int:
     try:
         value = float(duration_sec)
@@ -73,6 +77,12 @@ class FrameTimeMap:
         if self.total_frames > 0:
             frame_idx = max(0, min(frame_idx, max(0, self.total_frames - 1)))
         return frame_to_sec(frame_idx, self.fps)
+
+    def position_ms_for_frame(self, frame: float | int | str | None) -> int:
+        return frame_to_position_ms(frame, self.fps)
+
+    def position_ms_for_sec(self, sec: float | int | str | None) -> int:
+        return self.position_ms_for_frame(self.frame_for_sec(sec))
 
     def snap_sec(self, sec: float | int | str | None) -> float:
         return round(self.sec_for_frame(self.frame_for_sec(sec)), 6)

@@ -11,8 +11,9 @@ import json
 import os
 from typing import Any
 
-from core.frame_time import frame_to_sec, normalize_fps
+from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
 from core.work_mode import EDITOR_MODE, normalize_work_mode
+from core.project.subtitle_status import subtitle_status_payload
 from core.cut_boundary import (
     CUT_BOUNDARY_PROVISIONAL_SCHEMA,
     CUT_BOUNDARY_SCHEMA,
@@ -41,6 +42,11 @@ STT_SEGMENT_METADATA_KEYS = (
     "stt_score_label",
     "stt_score_flags",
     "stt_score_components",
+    "subtitle_review_state",
+    "subtitle_status_color",
+    "subtitle_status_schema",
+    "subtitle_status_score",
+    "subtitle_status_source",
     "_live_stt_preview",
 )
 
@@ -335,6 +341,7 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
         for key in STT_SEGMENT_METADATA_KEYS:
             if key in seg:
                 item[key] = seg.get(key)
+        item.update({key: value for key, value in subtitle_status_payload(item).items() if value not in (None, "")})
         out.append(item)
     return out
 
@@ -352,24 +359,25 @@ def build_editor_state(
     primary_fps: float | None = None,
 ) -> dict[str, Any]:
     mode = "multiclip" if mode == "multiclip" or len(media_files) > 1 else "single"
-    normalized_segments = _normalize_editor_segments(segments)
+    fps = normalize_fps(primary_fps or 30.0)
+    normalized_segments = _normalize_editor_segments(segments, primary_fps=fps)
     boundaries = [_normalize_boundary(item, idx) for idx, item in enumerate(clip_boundaries or [])]
     stt_preview = _normalize_stt_preview_segments(
         stt_preview_segments or [],
-        primary_fps=normalize_fps(primary_fps or 30.0),
+        primary_fps=fps,
     )
     stt_candidate_tracks = build_stt_candidate_tracks(
         normalized_segments,
         stt_preview,
-        primary_fps=normalize_fps(primary_fps or 30.0),
+        primary_fps=fps,
     )
     cut_boundary_rows = normalize_cut_boundaries(
         cut_boundaries or [],
-        primary_fps=normalize_fps(primary_fps or 30.0),
+        primary_fps=fps,
     )
     provisional_cut_boundary_rows = normalize_cut_boundaries(
         provisional_cut_boundaries or [],
-        primary_fps=normalize_fps(primary_fps or 30.0),
+        primary_fps=fps,
     )
     return {
         "schema": "ai_subtitle_studio.editor_state.v1",
@@ -530,17 +538,31 @@ def segment_signature(segments: list[dict[str, Any]]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _normalize_editor_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_editor_segments(segments: list[dict[str, Any]], *, primary_fps: float = 30.0) -> list[dict[str, Any]]:
+    fps = normalize_fps(primary_fps or 30.0)
     out = []
     for idx, seg in enumerate(segments or []):
         if seg.get("is_gap"):
             continue
         start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
         end = _safe_float(seg.get("end", seg.get("timeline_end", start)), start)
+        frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+        start_frame = seg.get("start_frame", seg.get("timeline_start_frame", frame_range.get("start")))
+        end_frame = seg.get("end_frame", seg.get("timeline_end_frame", frame_range.get("end")))
+        if start_frame is None:
+            start_frame = sec_to_frame(start, fps)
+        else:
+            start = frame_to_sec(start_frame, fps)
+        if end_frame is None:
+            end_frame = sec_to_frame(max(start, end), fps)
+        else:
+            end = frame_to_sec(end_frame, fps)
+        start_frame = _safe_int(start_frame)
+        end_frame = max(start_frame, _safe_int(end_frame, start_frame))
         item = {
             "line": int(seg.get("line", idx) or idx),
-            "start": start,
-            "end": max(start, end),
+            "start": frame_to_sec(start_frame, fps),
+            "end": frame_to_sec(end_frame, fps),
             "text": str(seg.get("text", "") or ""),
             "speaker": str(seg.get("speaker", seg.get("spk", "00")) or "00"),
             "speaker_list": list(seg.get("speaker_list", []) or []),
@@ -548,6 +570,18 @@ def _normalize_editor_segments(segments: list[dict[str, Any]]) -> list[dict[str,
             "stt_pending": bool(seg.get("stt_pending", False)),
             "original_text": str(seg.get("original_text", "") or ""),
             "dictated_text": str(seg.get("dictated_text", "") or ""),
+            "start_frame": start_frame,
+            "end_frame": end_frame,
+            "timeline_start_frame": start_frame,
+            "timeline_end_frame": end_frame,
+            "frame_rate": fps,
+            "timeline_frame_rate": fps,
+            "frame_range": {
+                "unit": "frame",
+                "start": start_frame,
+                "end": end_frame,
+                "timeline_frame_rate": fps,
+            },
         }
         for key in (
             "_clip_idx",
@@ -557,22 +591,16 @@ def _normalize_editor_segments(segments: list[dict[str, Any]]) -> list[dict[str,
             "quality_history",
             "quality_candidates",
             "quality_stale",
-            "start_frame",
-            "end_frame",
-            "timeline_start_frame",
-            "timeline_end_frame",
             "clip_local_start_frame",
             "clip_local_end_frame",
-            "frame_rate",
-            "timeline_frame_rate",
             "source_frame_rate",
-            "frame_range",
         ):
             if key in seg:
                 item[key] = seg.get(key)
         for key in STT_SEGMENT_METADATA_KEYS:
             if key in seg:
                 item[key] = seg.get(key)
+        item.update({key: value for key, value in subtitle_status_payload(item).items() if value not in (None, "")})
         out.append(item)
     return out
 
@@ -620,6 +648,7 @@ def _normalize_stt_preview_segments(
         for key in STT_SEGMENT_METADATA_KEYS:
             if key in seg and key not in item:
                 item[key] = seg.get(key)
+        item.update({key: value for key, value in subtitle_status_payload(item).items() if value not in (None, "")})
         if start_frame is None:
             start_frame = int(start * fps)
         if end_frame is None:

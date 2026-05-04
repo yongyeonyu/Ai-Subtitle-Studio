@@ -131,7 +131,7 @@ DEFAULT_ADV_SETTINGS = {
 
     # Accuracy-first subtitle generation defaults.
     "accuracy_first_mode": True,
-    "auto_start_mode": "quality",
+    "auto_start_mode": "precise",
     "stt_quality_preset": "precise",
     "stt_ensemble_enabled": True,
     "stt_candidate_scoring_enabled": True,

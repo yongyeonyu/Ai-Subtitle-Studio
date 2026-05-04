@@ -11,7 +11,9 @@ from datetime import datetime
 from typing import Any
 
 from core.runtime import config
+from core.frame_time import normalize_fps, sec_to_frame
 from core.project.project_context import STT_SEGMENT_METADATA_KEYS, build_editor_state, project_stt_preview_segments
+from core.project.subtitle_status import subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
 
 PROJECTS_DIR = os.path.join(config.BASE_DIR, 'projects')
@@ -24,6 +26,13 @@ def _safe_name(name: str) -> str:
     out = ''.join('_' if c in banned else c for c in (name or '').strip())
     out = out.strip().strip('.')
     return out or 'untitled_project'
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
 
 
 def _editor_from_owner(owner):
@@ -49,7 +58,14 @@ def _ui_state(editor) -> dict[str, Any]:
     try:
         timeline = getattr(editor, 'timeline', None)
         lock_chk = getattr(timeline, 'lock_chk', None) if timeline else None
-        state['playhead_sec'] = float(getattr(editor, '_current_sec', 0.0) or 0.0)
+        fps = _editor_primary_fps(editor)
+        playhead_sec = float(getattr(editor, '_current_sec', 0.0) or 0.0)
+        canvas = getattr(timeline, 'canvas', None) if timeline else None
+        if canvas is not None:
+            playhead_sec = float(getattr(canvas, 'playhead_sec', playhead_sec) or playhead_sec)
+        state['playhead_frame'] = sec_to_frame(playhead_sec, fps)
+        state['playhead_sec'] = state['playhead_frame'] / fps
+        state['timeline_frame_rate'] = fps
         state['selected_segment_line'] = _selected_segment_line(editor)
         state['edit_lock'] = bool(lock_chk.isChecked()) if lock_chk is not None else False
         state['log_visible'] = bool(getattr(editor, '_log_visible', False) or getattr(editor, 'log_visible', False))
@@ -65,12 +81,36 @@ def _ui_state(editor) -> dict[str, Any]:
     return state
 
 
-def _normalized_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _editor_primary_fps(editor) -> float:
+    try:
+        player = getattr(editor, "video_player", None)
+        return normalize_fps(
+            getattr(editor, "video_fps", None)
+            or getattr(player, "frame_rate", None)
+            or 30.0
+        )
+    except Exception:
+        return 30.0
+
+
+def _normalized_segments(segments: list[dict[str, Any]], *, primary_fps: float = 30.0) -> list[dict[str, Any]]:
+    fps = normalize_fps(primary_fps)
     out = []
     for seg in segments or []:
+        start = float(seg.get('start', 0.0) or 0.0)
+        end = float(seg.get('end', start) or start)
+        frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+        start_frame = seg.get("start_frame", seg.get("timeline_start_frame", frame_range.get("start")))
+        end_frame = seg.get("end_frame", seg.get("timeline_end_frame", frame_range.get("end")))
+        if start_frame is None:
+            start_frame = sec_to_frame(start, fps)
+        if end_frame is None:
+            end_frame = sec_to_frame(max(start, end), fps)
+        start_frame = _safe_int(start_frame)
+        end_frame = max(start_frame, _safe_int(end_frame, start_frame))
         item = {
-            'start': float(seg.get('start', 0.0) or 0.0),
-            'end': float(seg.get('end', 0.0) or 0.0),
+            'start': start_frame / fps,
+            'end': end_frame / fps,
             'text': str(seg.get('text', '') or ''),
             'speaker': str(seg.get('speaker', seg.get('spk', '00')) or '00'),
             'speaker_list': list(seg.get('speaker_list', [])) if seg.get('speaker_list') else [],
@@ -78,10 +118,26 @@ def _normalized_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]
             'stt_pending': bool(seg.get('stt_pending', False)),
             'original_text': str(seg.get('original_text', '') or ''),
             'dictated_text': str(seg.get('dictated_text', '') or ''),
+            'start_frame': start_frame,
+            'end_frame': end_frame,
+            'timeline_start_frame': start_frame,
+            'timeline_end_frame': end_frame,
+            'frame_rate': fps,
+            'timeline_frame_rate': fps,
+            'frame_range': {
+                'unit': 'frame',
+                'start': start_frame,
+                'end': end_frame,
+                'timeline_frame_rate': fps,
+            },
         }
         for key in STT_SEGMENT_METADATA_KEYS:
             if key in seg:
                 item[key] = seg.get(key)
+        for key in ("quality", "quality_history", "quality_candidates", "quality_stale"):
+            if key in seg:
+                item[key] = seg.get(key)
+        item.update({key: value for key, value in subtitle_status_payload(item).items() if value not in (None, "")})
         out.append(item)
     return out
 
@@ -143,6 +199,7 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         row if isinstance(row, dict) else {"timeline_sec": row, "time": row, "status": "verified"}
         for row in list(getattr(owner, '_project_boundary_times', []) or [])
     ]
+    primary_fps = _editor_primary_fps(editor) if editor is not None else 30.0
     editor_state = build_editor_state(
         mode=mode,
         media_files=media_files,
@@ -152,6 +209,7 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         stt_preview_segments=stt_preview_segments,
         cut_boundaries=cut_boundaries,
         provisional_cut_boundaries=provisional_cut_boundaries,
+        primary_fps=primary_fps,
     )
     payload = {
         'version': PROJECT_SCHEMA_VERSION,
@@ -162,7 +220,7 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         'saved_at': datetime.now().isoformat(timespec='seconds'),
         'media_files': media_files,
         'srt_path': os.path.abspath(srt_path) if srt_path else None,
-        'segments': _normalized_segments(segments or []),
+        'segments': _normalized_segments(segments or [], primary_fps=primary_fps),
         'ui_state': editor_state.get('workspace', {}),
         'editor_state': editor_state,
         'project_meta': {

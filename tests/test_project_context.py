@@ -214,6 +214,43 @@ class ProjectContextTests(unittest.TestCase):
         self.assertTrue(preview["_live_stt_preview"])
         self.assertEqual(state["analysis"]["cut_boundary_provisional_boundaries"][0]["timeline_frame"], 126)
 
+    def test_editor_state_persists_subtitle_review_status(self):
+        state = build_editor_state(
+            mode="single",
+            media_files=["/tmp/movie.mp4"],
+            segments=[
+                {
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "자동 선택",
+                    "speaker": "00",
+                    "quality": {"confidence_label": "green", "confidence_score": 96},
+                    "stt_ensemble_llm_selected_source": "STT1",
+                    "stt_candidates": [{"source": "STT1", "score": 0.96, "text": "자동 선택"}],
+                },
+                {
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "확정",
+                    "speaker": "00",
+                    "quality": {
+                        "confidence_label": "green",
+                        "confidence_score": 98,
+                        "manual_confirmed": True,
+                        "flags": ["manual_confirmed"],
+                    },
+                },
+            ],
+        )
+
+        pending, confirmed = state["subtitles"]["segments"]
+        self.assertEqual(pending["subtitle_review_state"], "pending")
+        self.assertEqual(pending["subtitle_status_color"], "#FFCC00")
+        self.assertEqual(pending["subtitle_status_schema"], "subtitle_status.v1")
+        self.assertEqual(pending["subtitle_status_source"], "STT1")
+        self.assertEqual(confirmed["subtitle_review_state"], "confirmed")
+        self.assertEqual(confirmed["subtitle_status_color"], "#34C759")
+
     def test_segment_signature_changes_when_subtitle_text_changes(self):
         before = segment_signature([{"start": 0.0, "end": 1.0, "text": "원본", "speaker": "00"}])
         after = segment_signature([{"start": 0.0, "end": 1.0, "text": "수정", "speaker": "00"}])
@@ -497,6 +534,87 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(preview["_clip_idx"], 1)
         self.assertEqual(preview["start_frame"], 240)
         self.assertEqual(preview["end_frame"], 264)
+
+    def test_save_project_persists_subtitle_status_and_stt_score_colors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"video")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("core.project.project_manager.probe_media", return_value={"duration": 4.0, "fps": 24.0}):
+                save_project(
+                    str(path),
+                    media_paths=[str(media)],
+                    segments=[
+                        {
+                            "start": 0.0,
+                            "end": 1.0,
+                            "text": "미확정",
+                            "speaker": "00",
+                            "quality": {"confidence_label": "green", "confidence_score": 91},
+                            "stt_ensemble_llm_selected_source": "STT1",
+                            "stt_candidates": [
+                                {
+                                    "source": "STT1",
+                                    "start": 0.0,
+                                    "end": 1.0,
+                                    "text": "미확정",
+                                    "stt_score": 91,
+                                    "stt_score_color": "#52C759",
+                                }
+                            ],
+                        },
+                        {
+                            "start": 1.0,
+                            "end": 2.0,
+                            "text": "확정",
+                            "speaker": "00",
+                            "quality": {
+                                "confidence_label": "green",
+                                "confidence_score": 99,
+                                "manual_confirmed": True,
+                                "flags": ["manual_confirmed"],
+                            },
+                        },
+                    ],
+                    stt_preview_segments=[
+                        {
+                            "start": 0.0,
+                            "end": 1.0,
+                            "text": "미확정",
+                            "stt_preview_source": "STT1",
+                            "stt_score": 91,
+                            "stt_score_color": "#52C759",
+                        }
+                    ],
+                )
+            loaded = load_project(str(path))
+
+        first, second = loaded["subtitles"]["segments"]
+        self.assertEqual(first["subtitle_review_state"], "pending")
+        self.assertEqual(first["subtitle_status_color"], "#FFCC00")
+        self.assertEqual(first["stt_candidates"][0]["stt_score_color"], "#52C759")
+        self.assertEqual(second["subtitle_review_state"], "confirmed")
+        self.assertEqual(second["subtitle_status_color"], "#34C759")
+        editor_first = project_segments_to_editor(loaded)[0]
+        self.assertEqual(editor_first["subtitle_review_state"], "pending")
+        preview = project_stt_preview_segments(loaded)[0]
+        self.assertEqual(preview["stt_score"], 91)
+        self.assertEqual(preview["stt_score_color"], "#52C759")
 
     def test_project_save_and_phase1b_enrich_preserve_stt1_stt2_tracks(self):
         with tempfile.TemporaryDirectory() as tmp:

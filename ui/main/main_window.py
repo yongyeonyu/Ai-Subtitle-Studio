@@ -60,12 +60,15 @@ class MainWindow(
 ):
     _sig_show_home           = pyqtSignal()
     _sig_append_segments     = pyqtSignal(list)
+    _sig_append_segments_ready = pyqtSignal(list, object)
     _sig_update_status       = pyqtSignal(int, int)
     _sig_open_editor         = pyqtSignal(str, object, object, object, object, bool)
+    _sig_open_editor_ready   = pyqtSignal(str, object, object, object, object, bool, object)
     _sig_set_vad_segments    = pyqtSignal(list)
     _sig_update_queue        = pyqtSignal(int, str, str, str, str)
     _sig_update_queue_header = pyqtSignal(int, int, int, str)
     _sig_auto_start_pipeline = pyqtSignal(list)
+    _sig_prepare_processing_editor = pyqtSignal(str, object)
     _sig_load_multiclip_waveform = pyqtSignal(list)
     _sig_set_recog_zone      = pyqtSignal(float, float)
     _sig_set_recog_progress  = pyqtSignal(float)
@@ -77,6 +80,7 @@ class MainWindow(
     _sig_preview_cut_boundary_scan = pyqtSignal(float, float)
     _sig_preview_cut_boundary_scan_lines = pyqtSignal(list)
     _sig_update_project_boundary_times = pyqtSignal(list)
+    _sig_set_llm_review_segment = pyqtSignal(dict)
 
     def __init__(self):
         super().__init__()
@@ -131,8 +135,10 @@ class MainWindow(
 
         self._build_ui()
         self._connect_signals()
-        QTimer.singleShot(0, self._warmup_local_llm_models)
-        QTimer.singleShot(1200, self._preflight_selected_local_llm_models)
+        _offscreen_test = str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen"
+        if not _offscreen_test:
+            QTimer.singleShot(0, self._warmup_local_llm_models)
+            QTimer.singleShot(1200, self._preflight_selected_local_llm_models)
         QTimer.singleShot(900, self._check_required_models_on_startup)
 
         self._cloud_sync_manager = CloudSyncManager(
@@ -655,6 +661,7 @@ class MainWindow(
         self._clear_editor_for_full_restart(editor)
         self._clear_roughcut_for_full_restart(files)
         self._clear_cut_boundary_state_for_full_restart(editor)
+        self._prepare_cut_boundary_prescan_for_restart(backend, files)
         try:
             state_manager = getattr(editor, "sm", None)
             if state_manager is not None and hasattr(state_manager, "start_processing"):
@@ -675,6 +682,7 @@ class MainWindow(
             pass
         if hasattr(self, "init_queue_list"):
             self.init_queue_list(files)
+        self._restart_queue_eta_metadata(backend, files)
         try:
             if hasattr(self, "_live_timer"):
                 self._live_timer.start(1000)
@@ -697,6 +705,62 @@ class MainWindow(
         backend._active = True
         backend.restart_current_file()
         return True
+
+    def _restart_queue_eta_metadata(self, backend, files) -> None:
+        """Refresh queue ETA/video-duration metadata after a completed-state restart."""
+        files = list(files or [])
+        if backend is None or not files:
+            return
+        precalculate = getattr(backend, "_precalculate_etas", None)
+        if not callable(precalculate):
+            return
+        try:
+            backend.files_to_process = list(files)
+            backend._show_queue_for_current_run = True
+            backend._video_durations = {}
+            thread = threading.Thread(
+                target=precalculate,
+                daemon=True,
+                name="eta-calculator-restart",
+            )
+            backend._eta_thread = thread
+            thread.start()
+        except Exception as exc:
+            get_logger().log(f"⚠️ 재시작 큐 시간 계산 준비 실패: {exc}")
+
+    def _prepare_cut_boundary_prescan_for_restart(self, backend, files) -> None:
+        """Re-arm cut-boundary prescan when restarting from a completed editor state."""
+        files = list(files or [])
+        if backend is None or not files:
+            return
+        scan = getattr(backend, "_auto_scan_cut_boundaries_for_start", None)
+        if not callable(scan):
+            return
+        try:
+            settings = load_settings()
+        except Exception:
+            settings = {}
+        project_path = str(getattr(self, "_current_project_path", "") or "")
+        if project_path and os.path.exists(project_path):
+            try:
+                from core.project.project_io import read_project_file, write_project_file
+
+                project = read_project_file(project_path)
+                project["user_settings"] = dict(settings or {})
+                analysis = project.setdefault("analysis", {})
+                for key in (
+                    "cut_boundary_prescan_done",
+                    "cut_boundary_cache_path",
+                    "cut_boundary_cache_type",
+                ):
+                    analysis.pop(key, None)
+                write_project_file(project_path, project)
+            except Exception as exc:
+                get_logger().log(f"⚠️ 재시작 컷 경계 설정 갱신 실패: {exc}")
+        try:
+            scan(project_path, files)
+        except Exception as exc:
+            get_logger().log(f"⚠️ 재시작 컷 경계 사전 분석 시작 실패: {exc}")
 
     def _dock_global_menu_to_workspace(self):
         menu = getattr(self, "global_menu_bar", None)
@@ -734,12 +798,15 @@ class MainWindow(
     def _connect_signals(self):
         self._sig_show_home.connect(self.show_home)
         self._sig_append_segments.connect(self._do_append_segments)
+        self._sig_append_segments_ready.connect(self._do_append_segments_ready)
         self._sig_update_status.connect(self._do_update_status)
         self._sig_open_editor.connect(self._do_open_editor)
+        self._sig_open_editor_ready.connect(self._do_open_editor_ready)
         self._sig_set_vad_segments.connect(self._on_vad_segments)
         self._sig_update_queue.connect(self.update_queue_status)
         self._sig_update_queue_header.connect(self.update_queue_header)
         self._sig_auto_start_pipeline.connect(self._do_auto_start_pipeline)
+        self._sig_prepare_processing_editor.connect(self._do_prepare_processing_editor)
         self._sig_load_multiclip_waveform.connect(self._do_load_multiclip_waveform)
         self._sig_set_recog_zone.connect(self._on_recog_zone)
         self._sig_set_recog_progress.connect(self._on_recog_progress)
@@ -751,6 +818,7 @@ class MainWindow(
         self._sig_preview_cut_boundary_scan.connect(self._on_cut_boundary_scan_preview)
         self._sig_preview_cut_boundary_scan_lines.connect(self._on_cut_boundary_scan_lines)
         self._sig_update_project_boundary_times.connect(self._on_project_boundary_times_updated)
+        self._sig_set_llm_review_segment.connect(self._do_set_llm_review_segment)
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self):

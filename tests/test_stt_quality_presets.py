@@ -29,6 +29,7 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertNotIn("selected_vad", applied)
         self.assertEqual(applied["cut_boundary_level"], "off")
         self.assertFalse(applied["cut_boundary_detection_enabled"])
+        self.assertTrue(applied["stt_candidate_scoring_enabled"])
         self.assertLess(applied["w_beam_size"], settings["w_beam_size"])
         self.assertEqual(applied["w_none_temp_max"], 0.0)
 
@@ -44,6 +45,7 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertNotIn("selected_vad", balanced)
         self.assertEqual(balanced["cut_boundary_level"], "low")
         self.assertTrue(balanced["cut_boundary_detection_enabled"])
+        self.assertTrue(balanced["stt_candidate_scoring_enabled"])
         self.assertNotIn("audio_preset", precise)
         self.assertNotIn("selected_audio_ai", precise)
         self.assertNotIn("selected_vad", precise)

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args
+
 from .models import EDLSegment
 
 
@@ -54,12 +56,16 @@ def build_ffmpeg_extract_command(
         "-y",
         "-ss",
         f"{segment.source_start:.3f}",
+        *ffmpeg_hwdecode_args(),
         "-i",
         segment.source_path,
         "-t",
         f"{duration:.3f}",
-        "-c",
-        "copy",
+        *hevc_encode_args(quality="fast"),
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
         _safe_path(output_path),
     )
 
@@ -72,14 +78,18 @@ def build_ffmpeg_concat_command(
     return (
         ffmpeg_binary,
         "-y",
+        *ffmpeg_hwdecode_args(),
         "-f",
         "concat",
         "-safe",
         "0",
         "-i",
         _safe_path(concat_file_path),
-        "-c",
-        "copy",
+        *hevc_encode_args(quality="balanced"),
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
         _safe_path(output_path),
     )
 
@@ -99,10 +109,12 @@ def build_ffmpeg_subtitle_burnin_command(
     return (
         ffmpeg_binary,
         "-y",
+        *ffmpeg_hwdecode_args(),
         "-i",
         _safe_path(input_path),
         "-vf",
         f"subtitles='{_subtitle_filter_path(subtitle_path)}'",
+        *hevc_encode_args(quality="balanced"),
         "-c:a",
         "copy",
         output,

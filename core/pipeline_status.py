@@ -104,6 +104,21 @@ def generation_stage_keys(status_text: object, *, stt_ensemble_enabled: bool = F
     return _stage_keys_from_blob(normalized, stt_ensemble_enabled=stt_ensemble_enabled)
 
 
+def generation_stage_keys_all(status_text: object, *, stt_ensemble_enabled: bool = False) -> set[str]:
+    """Return every canonical pipeline stage key mentioned in raw log/status text."""
+    blob = str(status_text or "")
+    if not blob:
+        return set()
+
+    normalized = blob.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+    keys: set[str] = set()
+    for line in normalized.splitlines():
+        keys.update(_stage_keys_from_blob(line, stt_ensemble_enabled=stt_ensemble_enabled))
+    if not keys:
+        keys.update(_stage_keys_from_blob(normalized, stt_ensemble_enabled=stt_ensemble_enabled))
+    return keys
+
+
 def generation_stage_label(status_text: object, *, stt_ensemble_enabled: bool = False) -> str:
     keys = generation_stage_keys(status_text, stt_ensemble_enabled=True)
     if not keys:

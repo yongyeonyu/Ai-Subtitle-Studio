@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.runtime import config
+from core.media_queue_order import MEDIA_QUEUE_EXTENSIONS, ordered_child_paths
 from core.settings import load_settings, save_settings
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
@@ -166,39 +167,33 @@ class FolderDialog(QDialog):
         return ["", "", "", name] if self.show_auto_detect else ["", "", name]
 
     def _populate_tree(self):
-        valid_exts = {".mp4", ".mov", ".wav", ".m4a", ".m2a", ".mp3", ".aac"}
         self.tree.blockSignals(True)
 
         def add_nodes(parent_item, current_path):
-            try:
-                entries = sorted(os.listdir(current_path))
-            except PermissionError:
-                return False
             has_valid_children = False
-            for entry in entries:
-                if entry.startswith("."):
-                    continue
-                full_path = os.path.join(current_path, entry)
-                if os.path.isdir(full_path):
-                    dir_item = QTreeWidgetItem(parent_item, self._row_values(f"📁 {entry}"))
-                    dir_item.setFlags(dir_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                    dir_item.setCheckState(self.select_col, Qt.CheckState.Unchecked)
-                    if self.exclude_col is not None:
-                        dir_item.setData(self.exclude_col, Qt.ItemDataRole.UserRole, full_path)
-                    dir_item.setData(self.name_col, Qt.ItemDataRole.UserRole, full_path)
-                    self._set_exclude_widget(dir_item, full_path)
-                    if add_nodes(dir_item, full_path):
-                        has_valid_children = True
-                    else:
-                        parent_item.removeChild(dir_item)
-                elif os.path.isfile(full_path) and os.path.splitext(entry)[1].lower() in valid_exts:
-                    file_item = QTreeWidgetItem(parent_item, self._row_values(entry))
-                    file_item.setFlags(file_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                    file_item.setCheckState(self.select_col, Qt.CheckState.Unchecked)
-                    file_item.setData(self.name_col, Qt.ItemDataRole.UserRole, full_path)
-                    file_item.setTextAlignment(self.thumb_col, Qt.AlignmentFlag.AlignCenter)
-                    self._set_placeholder_thumbnail(file_item, full_path)
+            dirs, files = ordered_child_paths(current_path, valid_extensions=MEDIA_QUEUE_EXTENSIONS)
+            for full_path in dirs:
+                entry = os.path.basename(full_path)
+                dir_item = QTreeWidgetItem(parent_item, self._row_values(f"📁 {entry}"))
+                dir_item.setFlags(dir_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                dir_item.setCheckState(self.select_col, Qt.CheckState.Unchecked)
+                if self.exclude_col is not None:
+                    dir_item.setData(self.exclude_col, Qt.ItemDataRole.UserRole, full_path)
+                dir_item.setData(self.name_col, Qt.ItemDataRole.UserRole, full_path)
+                self._set_exclude_widget(dir_item, full_path)
+                if add_nodes(dir_item, full_path):
                     has_valid_children = True
+                else:
+                    parent_item.removeChild(dir_item)
+            for full_path in files:
+                entry = os.path.basename(full_path)
+                file_item = QTreeWidgetItem(parent_item, self._row_values(entry))
+                file_item.setFlags(file_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                file_item.setCheckState(self.select_col, Qt.CheckState.Unchecked)
+                file_item.setData(self.name_col, Qt.ItemDataRole.UserRole, full_path)
+                file_item.setTextAlignment(self.thumb_col, Qt.AlignmentFlag.AlignCenter)
+                self._set_placeholder_thumbnail(file_item, full_path)
+                has_valid_children = True
             return has_valid_children
 
         root_item = QTreeWidgetItem(self.tree, self._row_values(os.path.basename(self.root_path) or self.root_path))
@@ -212,6 +207,7 @@ class FolderDialog(QDialog):
         root_item.setExpanded(True)
         self.tree.blockSignals(False)
         self._refresh_disabled_styles()
+        self._apply_default_selection()
 
     def _set_placeholder_thumbnail(self, item, file_path: str):
         ext = os.path.splitext(file_path)[1].lower()
@@ -294,6 +290,40 @@ class FolderDialog(QDialog):
             self._set_check_state_all(self.tree.invisibleRootItem(), state)
         finally:
             self._syncing_checks = False
+
+    def _apply_default_selection(self):
+        self._syncing_checks = True
+        self.tree.blockSignals(True)
+        try:
+            root = self.tree.invisibleRootItem()
+            for i in range(root.childCount()):
+                self._set_default_selection_state(root.child(i))
+        finally:
+            self.tree.blockSignals(False)
+            self._syncing_checks = False
+
+    def _set_default_selection_state(self, item):
+        if item.childCount() == 0:
+            state = (
+                Qt.CheckState.Unchecked
+                if self._item_is_excluded(item)
+                else Qt.CheckState.Checked
+            )
+            item.setCheckState(self.select_col, state)
+            return state
+
+        child_states = [
+            self._set_default_selection_state(item.child(i))
+            for i in range(item.childCount())
+        ]
+        if child_states and all(state == Qt.CheckState.Checked for state in child_states):
+            state = Qt.CheckState.Checked
+        elif child_states and all(state == Qt.CheckState.Unchecked for state in child_states):
+            state = Qt.CheckState.Unchecked
+        else:
+            state = Qt.CheckState.PartiallyChecked
+        item.setCheckState(self.select_col, state)
+        return state
 
     def _set_check_state_all(self, parent, state):
         for i in range(parent.childCount()):

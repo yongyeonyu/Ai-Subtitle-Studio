@@ -140,7 +140,14 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                 ranges.append((
                     float(seg.get("start", 0.0) or 0.0),
                     float(seg.get("end", 0.0) or 0.0),
-                    str(seg.get("stt_preview_source") or seg.get("stt_source") or "").upper(),
+                    str(
+                        seg.get("stt_preview_source")
+                        or seg.get("stt_source")
+                        or seg.get("stt_selected_source")
+                        or seg.get("stt_ensemble_llm_selected_source")
+                        or seg.get("stt_ensemble_source")
+                        or ""
+                    ).upper(),
                 ))
             except Exception:
                 continue
@@ -152,7 +159,14 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             try:
                 start = float(seg.get("start", 0.0) or 0.0)
                 end = float(seg.get("end", start) or start)
-                source = str(seg.get("stt_preview_source") or seg.get("stt_source") or "").upper()
+                source = str(
+                    seg.get("stt_preview_source")
+                    or seg.get("stt_source")
+                    or seg.get("stt_selected_source")
+                    or seg.get("stt_ensemble_llm_selected_source")
+                    or seg.get("stt_ensemble_source")
+                    or ""
+                ).upper()
             except Exception:
                 continue
             overlaps = any(
@@ -164,6 +178,114 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             if not overlaps:
                 kept.append(seg)
         return kept
+
+    def _build_live_subtitle_preview_segments(
+        self,
+        preview_segments: list[dict],
+        confirmed_segments: list[dict] | None = None,
+    ) -> list[dict]:
+        """Build non-persistent subtitle-lane drafts from live STT candidates."""
+        preview_segments = [dict(seg) for seg in list(preview_segments or []) if isinstance(seg, dict)]
+        confirmed_segments = [
+            dict(seg) for seg in list(confirmed_segments or [])
+            if isinstance(seg, dict) and not seg.get("is_gap") and not seg.get("_live_subtitle_preview")
+        ]
+        preview_segments = self._drop_overlapping_preview(
+            preview_segments,
+            confirmed_segments,
+            same_source_only=False,
+        )
+        if not preview_segments:
+            return []
+
+        def _as_float(value, default=0.0):
+            try:
+                return float(value)
+            except Exception:
+                return default
+
+        def _source_priority(seg: dict) -> int:
+            source = self._stt_candidate_source(seg)
+            if source == "STT1":
+                return 0
+            if source in {"STT", ""}:
+                return 1
+            if source == "STT2":
+                return 2
+            return 3
+
+        def _overlaps(left: dict, right: dict) -> bool:
+            try:
+                l_start = float(left.get("start", 0.0) or 0.0)
+                l_end = float(left.get("end", l_start) or l_start)
+                r_start = float(right.get("start", 0.0) or 0.0)
+                r_end = float(right.get("end", r_start) or r_start)
+            except Exception:
+                return False
+            return l_start < r_end + 0.05 and l_end > r_start - 0.05
+
+        drafts: list[dict] = []
+        ordered = sorted(
+            preview_segments,
+            key=lambda seg: (
+                _as_float(seg.get("start")),
+                _source_priority(seg),
+                _as_float(seg.get("end")),
+            ),
+        )
+        for seg in ordered:
+            text = str(seg.get("text", "") or "").strip()
+            if not text:
+                continue
+            start = self._frame_time(max(0.0, _as_float(seg.get("start"))))
+            end = self._frame_time(max(start + 0.05, _as_float(seg.get("end"), start + 0.5)))
+            source = self._stt_candidate_source(seg)
+            try:
+                score = float(seg.get("stt_score", seg.get("score", 98.0)) or 98.0)
+            except Exception:
+                score = 98.0
+            score = max(0.0, min(100.0, score if score > 1.0 else score * 100.0))
+            candidate = dict(seg)
+            candidate["source"] = source
+            candidate["score"] = score
+            candidate["stt_score"] = score
+            draft = dict(seg)
+            draft.pop("stt_pending", None)
+            draft.pop("_live_stt_preview", None)
+            draft["start"] = start
+            draft["end"] = end
+            draft["text"] = text
+            draft["line"] = -1000 - len(drafts)
+            draft["_live_subtitle_preview"] = True
+            draft["stt_ensemble_source"] = source
+            draft["stt_candidates"] = [candidate]
+            draft["score"] = score
+            draft["stt_score"] = score
+            draft["quality"] = {
+                "confidence_label": "yellow",
+                "confidence_score": score,
+                "confidence_reason": f"{source} 실시간 자막 드래프트",
+                "flags": ["live_subtitle_preview"],
+            }
+
+            replace_idx = None
+            skip = False
+            for idx, existing in enumerate(drafts):
+                if not _overlaps(draft, existing):
+                    continue
+                if _source_priority(draft) < _source_priority(existing):
+                    replace_idx = idx
+                else:
+                    skip = True
+                break
+            if replace_idx is not None:
+                drafts[replace_idx] = draft
+            elif not skip:
+                drafts.append(draft)
+
+        for line, draft in enumerate(sorted(drafts, key=lambda seg: (seg["start"], seg["end"]))):
+            draft["line"] = -1000 - line
+        return sorted(drafts, key=lambda seg: (seg["start"], seg["end"]))
 
     def _stt_candidate_source(self, seg: dict) -> str:
         source = (
@@ -413,6 +535,45 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         current = self._trim_final_segments_around_candidate(current, placed_candidate)
         current.append(selected_seg)
         current.sort(key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
+        # Keep preview candidates stable for undo/redo and single-candidate
+        # workflows, but if multiple overlapping candidates exist for the same
+        # slot then drop only the source the user just selected so the
+        # remaining alternative stays selectable without a duplicate highlight.
+        existing_preview = [dict(seg) for seg in list(getattr(self, "_live_stt_preview_segments", []) or [])]
+        has_alternative_overlap = any(
+            float(seg.get("start", 0.0) or 0.0) < float(selected_seg.get("end", 0.0) or 0.0) + 0.05
+            and float(seg.get("end", 0.0) or 0.0) > float(selected_seg.get("start", 0.0) or 0.0) - 0.05
+            and str(
+                seg.get("stt_preview_source")
+                or seg.get("stt_source")
+                or seg.get("stt_selected_source")
+                or seg.get("stt_ensemble_llm_selected_source")
+                or seg.get("stt_ensemble_source")
+                or ""
+            ).strip().upper() != cand_source
+            for seg in existing_preview
+        )
+        if has_alternative_overlap:
+            kept_preview = []
+            for seg in existing_preview:
+                source = str(
+                    seg.get("stt_preview_source")
+                    or seg.get("stt_source")
+                    or seg.get("stt_selected_source")
+                    or seg.get("stt_ensemble_llm_selected_source")
+                    or seg.get("stt_ensemble_source")
+                    or ""
+                ).strip().upper()
+                overlaps = (
+                    float(seg.get("start", 0.0) or 0.0) < float(selected_seg.get("end", 0.0) or 0.0) + 0.05
+                    and float(seg.get("end", 0.0) or 0.0) > float(selected_seg.get("start", 0.0) or 0.0) - 0.05
+                )
+                if overlaps and source == cand_source:
+                    continue
+                kept_preview.append(seg)
+            self._live_stt_preview_segments = kept_preview
+        else:
+            self._live_stt_preview_segments = existing_preview
 
         # ---------------------------------------------------------
         # 4. 화면 반영 및 위치 복원
@@ -467,14 +628,24 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             list(getattr(self, "_live_stt_preview_segments", []) or []),
             confirmed,
         )
+        subtitle_preview = self._build_live_subtitle_preview_segments(preview, confirmed)
         combined = sorted(
-            confirmed + preview,
+            confirmed + subtitle_preview + preview,
             key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),
         )
         total_dur = combined[-1]["end"] if combined else 0.0
         if hasattr(self, 'video_player') and self.video_player.total_time > 0.0:
             total_dur = max(total_dur, self.video_player.total_time)
         self.timeline.update_segments(combined, self._active_seg_start, total_dur)
+        if getattr(self, "_queue_mode_fit_view", False):
+            try:
+                setattr(self.timeline, "_manual_zoom_since_fit", False)
+                if hasattr(self.timeline, "schedule_fit_to_view"):
+                    self.timeline.schedule_fit_to_view((0, 120, 260))
+                elif hasattr(self.timeline, "fit_to_view"):
+                    QTimer.singleShot(0, self.timeline.fit_to_view)
+            except Exception:
+                pass
 
     def _redraw_timeline_with_live_preview(self):
         if not hasattr(self, "timeline"):
@@ -487,10 +658,14 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             list(getattr(self, "_live_stt_preview_segments", []) or []),
             confirmed,
         )
-        if not preview:
+        subtitle_preview = self._build_live_subtitle_preview_segments(preview, confirmed)
+        if not preview and not subtitle_preview:
             self._redraw_timeline()
             return
-        combined = sorted(confirmed + preview, key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
+        combined = sorted(
+            confirmed + subtitle_preview + preview,
+            key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),
+        )
         total_dur = combined[-1]["end"] if combined else 0.0
         if hasattr(self, 'video_player') and self.video_player.total_time > 0.0:
             total_dur = max(total_dur, self.video_player.total_time)
@@ -710,6 +885,15 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         self._sync_lock = False
 
         self._schedule_timeline()
+        if getattr(self, "_queue_mode_fit_view", False) and hasattr(self, "timeline"):
+            try:
+                setattr(self.timeline, "_manual_zoom_since_fit", False)
+                if hasattr(self.timeline, "schedule_fit_to_view"):
+                    self.timeline.schedule_fit_to_view((0, 120, 260))
+                elif hasattr(self.timeline, "fit_to_view"):
+                    QTimer.singleShot(0, self.timeline.fit_to_view)
+            except Exception:
+                pass
         self._refresh_video_subtitle_context()
 
         suppress_autoseek = bool(getattr(self, "_suspend_append_segments_autoseek", False))
@@ -808,6 +992,11 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                                 flags.append("quality_stale")
                             quality["flags"] = flags
                             item["quality"] = quality
+                    if getattr(data, "linked_silence_for_line", None) is not None:
+                        try:
+                            item["linked_silence_for_line"] = int(getattr(data, "linked_silence_for_line"))
+                        except Exception:
+                            pass
                     segments.append(item)
             
             block = block.next()
@@ -976,6 +1165,8 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
 
     def _on_cursor_moved(self):
         if self._sync_lock: return
+        if bool(getattr(self, "_timeline_drag_in_progress", False)):
+            return
         if hasattr(self, "_timeline_lock_edit_enabled") and self._timeline_lock_edit_enabled():
             return
         line_num = self.text_edit.textCursor().blockNumber()
@@ -1010,8 +1201,10 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         timeline_segs = segs
         preview = list(getattr(self, "_live_stt_preview_segments", []) or [])
         if preview:
+            confirmed = [seg for seg in segs if not seg.get("is_gap")]
+            subtitle_preview = self._build_live_subtitle_preview_segments(preview, confirmed)
             timeline_segs = sorted(
-                [seg for seg in segs if not seg.get("is_gap")] + preview,
+                confirmed + subtitle_preview + preview,
                 key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),
             )
         if hasattr(self, "_highlighter"):
@@ -1084,6 +1277,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
 
     def _on_drag_started(self): 
         # 💡 드래그를 시작하기 직전의 전체 뷰 스냅샷 저장!
+        self._timeline_drag_in_progress = True
         self._undo_mgr.push_immediate()
         
         self._drag_cursor = QTextCursor(self.text_edit.document())
@@ -1093,6 +1287,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         if hasattr(self, '_drag_cursor') and self._drag_cursor:
             self._drag_cursor.endEditBlock()
             self._drag_cursor = None
+        self._timeline_drag_in_progress = False
         self._schedule_timeline()
 
     # 💡 [신규] 특정 시간대의 블록을 지우고 새 자막으로 교체하는 외과 수술 로직

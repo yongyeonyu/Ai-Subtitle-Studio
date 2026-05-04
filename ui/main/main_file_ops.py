@@ -100,33 +100,43 @@ class FileOpsMixin:
         if vid and len(vid) > 1:
             self._show_multiclip_then_batch(vid, show_multiclip=True)
         elif vid and len(vid) == 1 and self.backend:
-            self._prepare_single_file_queue(vid)
+            if hasattr(self, "clear_queue_list"):
+                self.clear_queue_list()
             self.backend.start_pipeline(vid)
         elif srt:
+            if hasattr(self, "clear_queue_list"):
+                self.clear_queue_list()
             self._open_srt_in_editor(srt[0])
 
-    def _start_batch(self, files, folder=None):
-        """멀티 파일 → 정확도 우선 자동 배치 모드 (중복 호출 방지)."""
+    def _start_queue_mode(self, files, folder=None, source="queue"):
+        """폴더/NAS/iCloud 공용 큐 모드: 클립을 하나씩 열고 시작 버튼 흐름으로 자동 처리."""
         if not files:
             return
 
-        if getattr(self, "_batch_starting", False):
+        if getattr(self, "_queue_mode_starting", False):
             return
-        self._batch_starting = True
+        self._queue_mode_starting = True
 
         try:
-            from core.backend_fast import CoreBackendFast
-
             self._is_auto_pipeline = True
-            if not getattr(self, "backend_fast", None):
-                self.backend_fast = CoreBackendFast(self)
-
-            if getattr(self.backend_fast, "_active", False):
+            self._is_queue_mode = True
+            self._auto_audio_tune_per_file = True
+            self._current_project_path = None
+            self._project_boundary_times = []
+            self._clear_multiclip_runtime_state()
+            if not self.backend:
                 return
-
-            self.backend_fast.start_batch(files, folder=folder)
+            if getattr(self.backend, "_active", False):
+                return
+            if hasattr(self, "_prepare_single_file_queue"):
+                self._prepare_single_file_queue(files)
+            self.backend.start_pipeline(files, folder=folder, is_auto_start=True)
         finally:
-            QTimer.singleShot(500, lambda: setattr(self, "_batch_starting", False))
+            QTimer.singleShot(500, lambda: setattr(self, "_queue_mode_starting", False))
+
+    def _start_batch(self, files, folder=None):
+        """기존 호출부 호환용 별칭 — 내부적으로 공용 큐 모드를 사용한다."""
+        return self._start_queue_mode(files, folder=folder, source="batch")
 
     def select_folder(self):
         folder = self._safe_open_directory(
@@ -151,9 +161,7 @@ class FileOpsMixin:
             return
         if dlg.result() and dlg.selected_files:
             self._auto_export_subtitle_video = bool(getattr(dlg, "export_subtitle_video", False))
-            if self.backend:
-                self._prepare_single_file_queue(dlg.selected_files)
-                self.backend.start_pipeline(dlg.selected_files, folder=folder)
+            self._start_queue_mode(dlg.selected_files, folder=folder, source="folder")
 
     def _open_recent(self, folder):
         if not os.path.exists(folder):
@@ -182,9 +190,12 @@ class FileOpsMixin:
         srt = [p for p in paths if p.lower().endswith(".srt")]
         vid = [p for p in paths if not p.lower().endswith(".srt")]
         if srt:
+            if hasattr(self, "clear_queue_list"):
+                self.clear_queue_list()
             self._open_srt_in_editor(srt[0])
         elif vid and len(vid) == 1 and self.backend:
-            self._prepare_single_file_queue(vid)
+            if hasattr(self, "clear_queue_list"):
+                self.clear_queue_list()
             self.backend.start_pipeline(vid)
         elif vid and len(vid) > 1:
             self._show_multiclip_then_batch(vid, show_multiclip=False)

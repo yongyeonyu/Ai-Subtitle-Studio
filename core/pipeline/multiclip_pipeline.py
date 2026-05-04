@@ -454,12 +454,31 @@ class MulticlipPipelineMixin:
                         f"  🧠 LLM 최적화 중: [{idx + 1}/{total_files}] {vname}"
                     )
                     try:
-                        optimized = optimize_segments(segments, vad_segments=item.get("vad_segments") or [])
+                        clip_offset = 0.0
+                        try:
+                            clip_offset = float((clip_boundaries or [])[idx].get("start", 0.0) or 0.0)
+                        except Exception:
+                            clip_offset = 0.0
+
+                        def _llm_progress(payload):
+                            data = dict(payload or {})
+                            if data.get("active"):
+                                data["start"] = float(data.get("start", 0.0) or 0.0) + clip_offset
+                                data["end"] = float(data.get("end", data.get("start", 0.0)) or data.get("start", 0.0) or 0.0) + clip_offset
+                            self._ui_emit("_sig_set_llm_review_segment", data)
+
+                        optimized = optimize_segments(
+                            segments,
+                            vad_segments=item.get("vad_segments") or [],
+                            llm_progress_callback=_llm_progress,
+                        )
                     except Exception as e:
                         get_logger().log(
                             f"  ⚠️ LLM 최적화 실패, Whisper 결과 유지: {vname} / {e}"
                         )
                         optimized = segments
+                    finally:
+                        self._ui_emit("_sig_set_llm_review_segment", {"active": False})
                     optimized = self._sanitize_multiclip_segments(optimized, idx, clip_file)
                     optimized = self._magnetize_by_saved_cut_boundaries(
                         optimized,
@@ -623,7 +642,9 @@ class MulticlipPipelineMixin:
                 else:
                     total_str = f"{t_mins}분 {t_secs}초"
 
-                self.ui._sig_update_queue_header.emit(1, total_files, 0, total_str)
+                current = max(1, int(getattr(self.ui, "_current_file_idx", 1) or 1))
+                pct = max(0, int(getattr(self.ui, "_real_pct", 0) or 0))
+                self.ui._sig_update_queue_header.emit(current, total_files, pct, total_str)
 
             # 멀티클립 경계 정보를 UI에 전달 (에디터 열기 전)
             self.ui._multiclip_boundaries = clip_boundaries

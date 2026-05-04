@@ -73,7 +73,14 @@ class EditorWidget(
     _JUNK_START_RE            = re.compile(r'^\s*\d{1,3}[:\.]\d{2}(?:[:\.]\d+)?\s+')
     _auto_start_next = False
 
-    def __init__(self, video_name: str, segments: list[dict], media_path: str | None = None, parent=None):
+    def __init__(
+        self,
+        video_name: str,
+        segments: list[dict],
+        media_path: str | None = None,
+        parent=None,
+        defer_media_load: bool = False,
+    ):
         super().__init__(parent)
         self._has_auto_started = False
         self._process_start_time = None
@@ -188,7 +195,7 @@ class EditorWidget(
             self.append_segments(segments)
             QTimer.singleShot(350, self._mark_initial_segments_saved)
 
-        if media_path:
+        if media_path and not defer_media_load:
             QTimer.singleShot(200, lambda: self._load_video(media_path))
 
         self._playhead_timer = QTimer()
@@ -419,6 +426,8 @@ class EditorWidget(
         if hasattr(self.timeline, 'sig_inline_text_changed'): self.timeline.sig_inline_text_changed.connect(self._on_inline_text_changed)
         if hasattr(self.timeline, 'sig_editing_mode'):        self.timeline.sig_editing_mode.connect(self._on_seg_editing_mode)
         if hasattr(self.timeline, 'playhead_menu_requested'): self.timeline.playhead_menu_requested.connect(self._show_playhead_menu)
+        if hasattr(self.timeline, 'provisional_cut_boundary_requested'): self.timeline.provisional_cut_boundary_requested.connect(self._on_provisional_cut_boundary_requested)
+        if hasattr(self.timeline, 'provisional_cut_boundary_delete_requested'): self.timeline.provisional_cut_boundary_delete_requested.connect(self._on_provisional_cut_boundary_delete_requested)
         if hasattr(self.timeline, 'sig_smart_split'):         self.timeline.sig_smart_split.connect(self._on_smart_split)
             
         root.addWidget(self.timeline)
