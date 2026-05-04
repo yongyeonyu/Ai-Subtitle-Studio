@@ -337,6 +337,36 @@ def voice_activity_segments_for_editor(
     return subtitle_detection_segments_for_editor(segments, vad_segments, gap_segments, total_duration)
 
 
+def subtitle_generation_silence_segments_for_editor(
+    gap_segments: list[dict],
+    total_duration: float,
+) -> list[dict]:
+    markers: list[dict] = []
+    total_duration = max(0.0, float(total_duration or 0.0))
+    for gap in gap_segments or []:
+        start = _as_float(gap.get("start"))
+        end = _as_float(gap.get("end"))
+        if start is None or end is None or end <= start:
+            continue
+        if total_duration > 0:
+            start = max(0.0, min(total_duration, start))
+            end = max(start, min(total_duration, end))
+        if end <= start:
+            continue
+        markers.append(
+            {
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "kind": "generation_silence",
+                "label": "무음구간",
+                "color": "#FF6B6B",
+                "priority": 78,
+                "alpha": 138,
+            }
+        )
+    return markers
+
+
 def subtitle_detection_segments_for_editor(
     segments: list[dict],
     vad_segments: list[dict],
@@ -483,6 +513,17 @@ def subtitle_detection_segments_for_editor(
             )
 
     for gap in gap_segments or []:
+        add(
+            gap.get("start"),
+            gap.get("end"),
+            "generation_silence",
+            source="generation_silence",
+            label="무음구간",
+            color="#FF6B6B",
+            priority=22,
+            alpha=130,
+            selection_state="generation_silence",
+        )
         quality = dict(gap.get("quality") or {})
         flags = {str(flag) for flag in (quality.get("flags") or [])}
         if not (bool(quality.get("linked_silence")) or "linked_silence" in flags):

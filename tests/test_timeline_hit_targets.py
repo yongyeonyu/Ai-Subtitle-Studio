@@ -355,11 +355,9 @@ class TimelineHitTargetTests(unittest.TestCase):
 
     def test_gap_generate_from_playhead_is_clamped_to_silence_marker(self):
         class DummyCanvas:
-            def analysis_markers_cached(self):
+            def generation_silence_markers_cached(self):
                 return [
-                    {"start": 0.0, "end": 10.0, "kind": "speech", "label": "음성"},
-                    {"start": 10.0, "end": 15.0, "kind": "silence", "label": "무음"},
-                    {"start": 15.0, "end": 22.0, "kind": "speech", "label": "음성"},
+                    {"start": 10.0, "end": 15.0, "kind": "generation_silence", "label": "무음구간"},
                 ]
 
         class DummyTimeline:
@@ -440,10 +438,25 @@ class TimelineHitTargetTests(unittest.TestCase):
         canvas.set_frame_rate(30.0)
         canvas.pps = 10.0
         canvas.playhead_sec = 12.0
+        canvas.generation_silence_markers_cached = lambda: [
+            {"start": 10.0, "end": 15.0, "kind": "generation_silence", "label": "무음구간"},
+        ]
+        try:
+            scope = canvas._gap_generation_scope_for_pivot({"start": 10.0, "end": 22.0}, 12.0)
+            self.assertEqual(scope, (10.0, 15.0))
+        finally:
+            canvas.close()
+
+    def test_gap_generate_menu_scope_ignores_lower_audio_silence_lane(self):
+        canvas = TimelineCanvas()
+        canvas.set_frame_rate(30.0)
+        canvas.pps = 10.0
+        canvas.playhead_sec = 12.0
+        canvas.generation_silence_markers_cached = lambda: [
+            {"start": 10.0, "end": 15.0, "kind": "generation_silence", "label": "무음구간"},
+        ]
         canvas.analysis_markers_cached = lambda: [
-            {"start": 0.0, "end": 10.0, "kind": "speech", "label": "음성"},
-            {"start": 10.0, "end": 15.0, "kind": "silence", "label": "무음"},
-            {"start": 15.0, "end": 22.0, "kind": "speech", "label": "음성"},
+            {"start": 10.0, "end": 22.0, "kind": "silence", "label": "무음"},
         ]
         try:
             scope = canvas._gap_generation_scope_for_pivot({"start": 10.0, "end": 22.0}, 12.0)

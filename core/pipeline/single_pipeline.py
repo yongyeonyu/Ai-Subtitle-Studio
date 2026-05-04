@@ -280,6 +280,8 @@ class SinglePipelineMixin:
             self._active = True
             self._speaker_map = []
             edit_event.clear()
+            if hasattr(self, "_apply_personalization_runtime_override_for_file"):
+                self._apply_personalization_runtime_override_for_file(target_file)
             self._reload_speaker_settings()
             vname = os.path.basename(target_file)
             fsize = (

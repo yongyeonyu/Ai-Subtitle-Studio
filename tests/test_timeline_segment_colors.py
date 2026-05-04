@@ -17,6 +17,7 @@ from ui.timeline.timeline_analysis import (
     editor_analysis_markers,
     roughcut_major_color,
     roughcut_markers,
+    subtitle_generation_silence_segments_for_editor,
     subtitle_review_state,
     subtitle_detection_color,
     voice_activity_segments_for_editor,
@@ -230,6 +231,42 @@ class TimelineSegmentColorTests(unittest.TestCase):
 
         self.assertEqual([marker["kind"] for marker in markers], ["speech", "silence", "speech"])
         self.assertEqual((markers[1]["start"], markers[1]["end"], markers[1]["label"]), (1.0, 3.0, "무음"))
+
+    def test_generation_silence_lane_is_separate_from_lower_audio_silence_lane(self):
+        gap_segments = [{"start": 1.0, "end": 3.0, "is_gap": True, "quality": {"linked_silence": True}}]
+
+        generation = subtitle_generation_silence_segments_for_editor(gap_segments, 4.0)
+        detection = voice_activity_segments_for_editor([], [], gap_segments, 4.0)
+
+        self.assertEqual(
+            generation,
+            [{
+                "start": 1.0,
+                "end": 3.0,
+                "kind": "generation_silence",
+                "label": "무음구간",
+                "color": "#FF6B6B",
+                "priority": 78,
+                "alpha": 138,
+            }],
+        )
+        self.assertTrue(any(item["kind"] == "linked_silence" for item in detection))
+        self.assertEqual(
+            detection,
+            [{
+                "start": 1.0,
+                "end": 3.0,
+                "kind": "linked_silence",
+                "label": "무음",
+                "color": "#34C759",
+                "priority": 82,
+                "alpha": 142,
+                "source": "silence",
+                "score": None,
+                "selection_state": "linked_silence",
+            }],
+        )
+        self.assertNotEqual(generation[0]["label"], detection[0]["label"])
 
     def test_analysis_lane_keeps_short_silence_ranges_visible(self):
         markers = editor_analysis_markers(

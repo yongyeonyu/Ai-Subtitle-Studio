@@ -78,23 +78,24 @@ Item {
             model: root.queueItems
             spacing: 6
             boundsBehavior: Flickable.StopAtBounds
+            rightMargin: queueScroll.visible ? 4 : 0
             ScrollBar.vertical: ScrollBar {
                 id: queueScroll
                 policy: list.contentHeight > list.height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
-                width: 7
-                padding: 1
+                width: 8
+                padding: 2
                 minimumSize: 0.12
 
                 background: Rectangle {
-                    implicitWidth: 7
-                    radius: 3
+                    implicitWidth: 8
+                    radius: 4
                     color: "#0A1013"
                     opacity: queueScroll.size < 1.0 ? 1.0 : 0.0
                 }
 
                 contentItem: Rectangle {
-                    implicitWidth: 5
-                    radius: 3
+                    implicitWidth: 6
+                    radius: 4
                     color: queueScroll.pressed ? "#74A9FF" : (queueScroll.hovered ? "#53636D" : "#33424A")
                     opacity: queueScroll.size < 1.0 ? 1.0 : 0.0
                 }
@@ -104,8 +105,10 @@ Item {
                 id: queueCard
                 property bool currentActive: index === root.activeQueueIndex() && modelData.active && !modelData.done && !modelData.error
                 property string statusText: modelData.done ? "완료" : (modelData.statusDisplay || modelData.status || "대기 중")
-                width: list.width - (list.contentHeight > list.height ? 6 : 0)
-                height: 78
+                property color statusColor: modelData.done ? "#55D97A" : (modelData.error ? "#FF6B78" : (currentActive ? "#FFD84D" : "#9DB0BB"))
+                property string timeText: modelData.eta || "-"
+                width: list.width - (list.contentHeight > list.height ? 8 : 0)
+                height: 86
                 color: modelData.done ? "#13261D" : (modelData.error ? "#291719" : (currentActive ? "#17242C" : "#121A1E"))
                 border.color: modelData.done ? "#286B43" : (modelData.error ? "#6D2E35" : (currentActive ? "#FFD84D" : "#1D2A31"))
                 border.width: currentActive ? 2 : 1
@@ -115,62 +118,105 @@ Item {
                     anchors.fill: parent
                     anchors.leftMargin: 10
                     anchors.rightMargin: 10
-                    anchors.topMargin: 8
-                    anchors.bottomMargin: 8
-                    spacing: 2
+                    anchors.topMargin: 9
+                    anchors.bottomMargin: 9
+                    spacing: 6
 
                     Row {
                         width: parent.width
-                        height: 29
-                        spacing: 4
+                        height: 40
+                        spacing: 8
 
-                        Text {
-                            id: orderText
-                            width: implicitWidth
-                            height: parent.height
-                            text: root.keycapOrder(modelData.order || (index + 1))
-                            color: "#CFEFFF"
-                            font.pixelSize: 11
-                            font.bold: true
-                            verticalAlignment: Text.AlignTop
+                        Rectangle {
+                            id: orderChip
+                            width: 34
+                            height: 20
+                            radius: 10
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: currentActive ? "#244455" : "#17262D"
+                            border.color: currentActive ? "#7CC5FF" : "#31424A"
+                            border.width: 1
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: root.keycapOrder(modelData.order || (index + 1))
+                                color: "#CFEFFF"
+                                font.pixelSize: 10
+                                font.bold: true
+                            }
                         }
 
-                        Text {
-                            width: parent.width - orderText.width - 4
-                            height: 29
-                            text: modelData.file || "-"
-                            color: "#F5F7FA"
-                            font.pixelSize: 11
-                            font.bold: true
-                            wrapMode: Text.WrapAnywhere
-                            maximumLineCount: 2
-                            elide: Text.ElideRight
+                        Column {
+                            width: parent.width - orderChip.width - timeBadge.width - 16
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 3
+
+                            Text {
+                                width: parent.width
+                                text: modelData.file || "-"
+                                color: "#F5F7FA"
+                                font.pixelSize: 11
+                                font.bold: true
+                                wrapMode: Text.WrapAnywhere
+                                maximumLineCount: 2
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        Rectangle {
+                            id: timeBadge
+                            width: 84
+                            height: 26
+                            radius: 13
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: modelData.done ? "#173222" : (modelData.error ? "#351C1F" : "#121E24")
+                            border.color: modelData.done ? "#286B43" : (modelData.error ? "#6D2E35" : "#31424A")
+                            border.width: 1
+
+                            Text {
+                                anchors.fill: parent
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                text: queueCard.timeText
+                                color: queueCard.statusColor
+                                font.pixelSize: 9
+                                font.bold: true
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
                         }
                     }
 
-                    Item {
+                    Rectangle {
                         width: parent.width
-                        height: 14
+                        height: 1
+                        color: currentActive ? "#27414F" : "#1A272D"
+                        opacity: 0.9
+                    }
+
+                    Row {
+                        width: parent.width
+                        height: 16
+                        spacing: 6
+
+                        Rectangle {
+                            width: 8
+                            height: 8
+                            radius: 4
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: queueCard.statusColor
+                        }
+
                         Text {
-                            x: 0
-                            width: parent.width
+                            width: parent.width - 14
                             text: queueCard.statusText
-                            color: modelData.done ? "#55D97A" : (modelData.error ? "#FF6B78" : (currentActive ? "#FFD84D" : "#9DB0BB"))
+                            color: queueCard.statusColor
                             font.pixelSize: 9
                             font.bold: modelData.done || modelData.error || currentActive
-                            horizontalAlignment: Text.AlignLeft
                             verticalAlignment: Text.AlignVCenter
                             elide: Text.ElideRight
                         }
-                    }
-
-                    Text {
-                        width: parent.width
-                        text: modelData.eta || "-"
-                        color: modelData.done ? "#55D97A" : (modelData.error ? "#FF6B78" : "#FFD84D")
-                        font.pixelSize: 10
-                        font.bold: true
-                        elide: Text.ElideRight
                     }
                 }
             }

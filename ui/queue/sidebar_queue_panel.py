@@ -51,7 +51,7 @@ class SidebarQueuePanel(QWidget):
         self._table.horizontalHeader().setVisible(False)
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self._table.setColumnWidth(0, 72)
+        self._table.setColumnWidth(0, 86)
         self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -61,9 +61,9 @@ class SidebarQueuePanel(QWidget):
             "QTableWidget { background: #0F171B; color: #F5F7FA; border: 1px solid #31424A; "
             "border-top: none; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; "
             "font-size: 10px; } "
-            "QTableWidget::item { padding: 3px 4px; border-bottom: 1px solid #1D2A31; } "
+            "QTableWidget::item { padding: 5px 6px; border-bottom: 1px solid #1D2A31; } "
             "QTableWidget::item:selected { background: #17242C; color: #FFD84D; } "
-            "QScrollBar:vertical { background: #0A1013; width: 8px; margin: 2px 1px 2px 0; "
+            "QScrollBar:vertical { background: #0A1013; width: 8px; margin: 3px 2px 3px 0; "
             "border: none; border-radius: 4px; } "
             "QScrollBar::handle:vertical { background: #33424A; min-height: 28px; border-radius: 4px; } "
             "QScrollBar::handle:vertical:hover { background: #53636D; } "
@@ -146,7 +146,7 @@ class SidebarQueuePanel(QWidget):
                     else Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
                 )
                 self._table.setItem(row, col, cell)
-            self._table.setRowHeight(row, 62)
+            self._table.setRowHeight(row, 68)
         self._table.setUpdatesEnabled(True)
         if active_row >= 0:
             self._table.setCurrentCell(active_row, 0)
@@ -172,12 +172,17 @@ class SidebarQueuePanel(QWidget):
                 return prefix + "-"
             parts[0] = prefix + parts[0]
             return "\n".join(parts[:2])
-        if len(prefix + text) <= 24:
+        if len(prefix + text) <= 26:
             return prefix + text
         stem, ext = os.path.splitext(text)
         if not stem or not ext:
-            mid = max(10, len(text) // 2)
-            return f"{prefix}{text[:mid]}\n{text[mid:]}"
-        first = stem[: max(12, min(len(stem), 24))]
+            mid = max(10, min(len(text) - 1, len(text) // 2))
+            rest = text[mid:]
+            if len(rest) > 18:
+                rest = rest[:17] + "…"
+            return f"{prefix}{text[:mid]}\n{rest}"
+        first = stem[: max(12, min(len(stem), 20))]
         rest = stem[len(first):] + ext
+        if len(rest) > 18:
+            rest = "…" + rest[-17:]
         return f"{prefix}{first}\n{rest or ext}"

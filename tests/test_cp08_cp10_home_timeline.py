@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QEvent
 from PyQt6.QtWidgets import QApplication
 
 from core.project.project_phase1b import apply_project_ui_state
@@ -42,6 +43,60 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
             window._on_post_completion_idle_timeout()
             self.assertTrue(window._post_completion_idle_enabled)
             self.assertGreater(window._post_completion_idle_remaining_ms(), 0)
+        finally:
+            window.close()
+
+    def test_general_user_activity_refreshes_personalization_idle_timer_without_post_completion_mode(self):
+        window = MainWindow()
+        try:
+            trainer = getattr(window, "_personalization_idle_trainer", None)
+            self.assertIsNotNone(trainer)
+            trainer.last_user_activity_ms = 0
+
+            event = QEvent(QEvent.Type.MouseButtonPress)
+            window.eventFilter(window, event)
+
+            self.assertGreater(int(getattr(trainer, "last_user_activity_ms", 0) or 0), 0)
+            self.assertFalse(window._post_completion_idle_enabled)
+        finally:
+            window.close()
+
+    def test_main_window_installs_app_event_filter_for_personalization_idle_tracking(self):
+        window = MainWindow()
+        try:
+            self.assertTrue(bool(getattr(window, "_app_event_filter_installed", False)))
+        finally:
+            window.close()
+
+    def test_main_window_detaches_app_event_filter_on_close(self):
+        window = MainWindow()
+        self.assertTrue(bool(getattr(window, "_app_event_filter_installed", False)))
+
+        window.close()
+
+        self.assertFalse(bool(getattr(window, "_app_event_filter_installed", False)))
+
+    def test_stopping_post_completion_idle_timer_keeps_personalization_event_filter_installed(self):
+        window = MainWindow()
+        try:
+            window._start_post_completion_idle_timer()
+            self.assertTrue(bool(getattr(window, "_app_event_filter_installed", False)))
+
+            window._stop_post_completion_idle_timer()
+
+            self.assertTrue(bool(getattr(window, "_app_event_filter_installed", False)))
+        finally:
+            window.close()
+
+    def test_post_completion_idle_timeout_keeps_personalization_event_filter_installed(self):
+        window = MainWindow()
+        try:
+            window._start_post_completion_idle_timer()
+            self.assertTrue(bool(getattr(window, "_app_event_filter_installed", False)))
+
+            window._on_post_completion_idle_timeout()
+
+            self.assertTrue(bool(getattr(window, "_app_event_filter_installed", False)))
         finally:
             window.close()
 

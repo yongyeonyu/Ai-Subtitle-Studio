@@ -306,6 +306,25 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             self._analysis_markers_cache_key = key
         return list(self._analysis_markers_cache)
 
+    def generation_silence_markers_cached(self) -> list[dict]:
+        from ui.timeline.timeline_analysis import subtitle_generation_silence_segments_for_editor
+
+        key = (
+            "generation_silence",
+            int(getattr(self, "_render_epoch", 0) or 0),
+            id(self.gap_segments),
+            len(self.gap_segments),
+            round(float(self.total_duration or 0.0), 3),
+        )
+        cache_key = getattr(self, "_generation_silence_cache_key", None)
+        if cache_key != key:
+            self._generation_silence_markers_cache = subtitle_generation_silence_segments_for_editor(
+                list(getattr(self, "gap_segments", []) or []),
+                float(getattr(self, "total_duration", 0.0) or 0.0),
+            )
+            self._generation_silence_cache_key = key
+        return list(getattr(self, "_generation_silence_markers_cache", []))
+
     def roughcut_major_markers_cached(self) -> list[dict]:
         from ui.timeline.timeline_analysis import find_roughcut_result, roughcut_major_markers
 

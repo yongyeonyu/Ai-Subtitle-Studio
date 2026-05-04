@@ -1,6 +1,6 @@
 <!--
-Document-Version: 03.16.00
-Phase: PHASE2
+Document-Version: 03.17.00
+Phase: PHASE3
 Last-Updated: 2026-05-05
 Updated-By: Codex
 Scope: Actual project filesystem map. `.git/`, `venv/`, `__pycache__/`, and `.pytest_cache/` are intentionally not expanded.
@@ -10,8 +10,8 @@ Role-Description-Rule: Tree entries are generated from actual paths; review note
 AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
 Last Updated: 2026-05-05
-Phase: PHASE2
-App Version: 03.16.00
+Phase: PHASE3
+App Version: 03.17.00
 Structure Document: File_structure.txt
 Note: This file is an actual tree map and excludes cache-only Python bytecode folders.
 ================================================================================
@@ -110,7 +110,15 @@ ai_subtitle_studio/
 │   │   ├── provider_registry.py
 │   │   └── secure_keys.py
 │   ├── personalization/
+│   │   ├── ground_truth_import.py
+│   │   ├── idle_trainer.py
+│   │   ├── lora_models.py
+│   │   ├── lora_optimizer.py
+│   │   ├── lora_rule_learning.py
+│   │   ├── lora_storage.py
+│   │   ├── lora_trial_scoring.py
 │   │   ├── runtime_lora_context.py
+│   │   ├── runtime_personalization.py
 │   │   ├── text_lora_dataset.py
 │   │   └── text_lora_runner.py
 │   ├── pipeline/
@@ -212,6 +220,11 @@ ai_subtitle_studio/
 │   ├── video_codec.py
 │   └── work_mode.py
 ├── dataset/
+│   ├── lora_personalization/
+│   │   ├── audio_preset_lora.jsonl
+│   │   ├── text_lora_corpus.jsonl
+│   │   ├── text_lora_corpus_manifest.json
+│   │   └── voice_lora_bridge.jsonl
 │   ├── personalization/
 │   │   ├── trained_adapters/
 │   │   ├── audio_preset_lora.jsonl
@@ -296,17 +309,22 @@ ai_subtitle_studio/
 │   ├── test_export_dialog_controls.py
 │   ├── test_gap_simulator.py
 │   ├── test_gpu_rendering.py
+│   ├── test_ground_truth_import.py
 │   ├── test_help_dialog.py
 │   ├── test_huggingface_token.py
 │   ├── test_individual_queue_context.py
 │   ├── test_live_microphone_session.py
 │   ├── test_llm_correction_guard.py
+│   ├── test_lora_personalization_storage.py
+│   ├── test_lora_rule_learning.py
+│   ├── test_lora_trial_scoring.py
 │   ├── test_media_processor_overlap.py
 │   ├── test_media_queue_order.py
 │   ├── test_model_manager.py
 │   ├── test_multiclip_panel.py
 │   ├── test_ollama_provider.py
 │   ├── test_performance_media_cache.py
+│   ├── test_personalization_idle_runtime.py
 │   ├── test_pipeline_audio_extract_guard.py
 │   ├── test_pipeline_cut_boundary_cache.py
 │   ├── test_pipeline_status.py
@@ -496,5 +514,6 @@ ai_subtitle_studio/
 ├── RELEASE_v03.14.00.md
 ├── RELEASE_v03.15.00.md
 ├── RELEASE_v03.16.00.md
+├── RELEASE_v03.17.00.md
 ├── requirements-mac.txt
 └── requirements-windows.txt

@@ -37,6 +37,7 @@ from ui.main.main_signals import SignalHandlersMixin
 
 from core.runtime import config
 from core.runtime.logger import get_logger
+from core.personalization.idle_trainer import PersonalizationIdleTrainer
 from core.cloud_sync import CloudSyncManager
 from core.path_manager import (
     get_icloud_path, get_nas_path, get_local_path, ensure_nas_mounted,
@@ -135,6 +136,8 @@ class MainWindow(
 
         self._build_ui()
         self._connect_signals()
+        self._personalization_idle_trainer = PersonalizationIdleTrainer(self)
+        self._attach_app_event_filter()
         _offscreen_test = str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen"
         if not _offscreen_test:
             QTimer.singleShot(0, self._warmup_local_llm_models)
@@ -1170,15 +1173,17 @@ class MainWindow(
 
     def eventFilter(self, obj, event):
         try:
-            if self._is_user_activity_event(event):
-                self._reset_post_completion_idle_timer()
+            if self._is_general_user_activity_event(event):
+                trainer = getattr(self, "_personalization_idle_trainer", None)
+                if trainer is not None:
+                    trainer.note_user_activity()
+                if getattr(self, "_post_completion_idle_enabled", False):
+                    self._reset_post_completion_idle_timer()
         except Exception:
             pass
         return False
 
-    def _is_user_activity_event(self, event) -> bool:
-        if not getattr(self, "_post_completion_idle_enabled", False):
-            return False
+    def _is_general_user_activity_event(self, event) -> bool:
         return event.type() in {
             QEvent.Type.MouseButtonPress,
             QEvent.Type.MouseButtonRelease,
@@ -1191,6 +1196,35 @@ class MainWindow(
             QEvent.Type.TouchUpdate,
             QEvent.Type.TouchEnd,
         }
+
+    def _run_personalization_idle_jobs_now(self):
+        trainer = getattr(self, "_personalization_idle_trainer", None)
+        if trainer is None:
+            return {"started": False, "reason": "trainer_unavailable"}
+        return trainer.run_pending_now()
+
+    def _pause_personalization_idle_jobs(self):
+        trainer = getattr(self, "_personalization_idle_trainer", None)
+        if trainer is None:
+            return {}
+        return trainer.pause_pending_jobs()
+
+    def _resume_personalization_idle_jobs(self):
+        trainer = getattr(self, "_personalization_idle_trainer", None)
+        if trainer is None:
+            return {}
+        return trainer.resume_pending_jobs()
+
+    def _clear_personalization_idle_jobs(self, *, keep_completed: bool = True):
+        trainer = getattr(self, "_personalization_idle_trainer", None)
+        if trainer is None:
+            return {}
+        return trainer.clear_pending_jobs(keep_completed=keep_completed)
+
+    def _is_user_activity_event(self, event) -> bool:
+        if not getattr(self, "_post_completion_idle_enabled", False):
+            return False
+        return self._is_general_user_activity_event(event)
 
     def _start_post_completion_idle_timer(self):
         self._post_completion_idle_enabled = True
@@ -1217,7 +1251,6 @@ class MainWindow(
             self._post_completion_idle_countdown_timer.stop()
         except Exception:
             pass
-        self._detach_app_event_filter()
         self._refresh_post_completion_idle_status()
 
     def _post_completion_idle_remaining_ms(self) -> int:
@@ -1260,7 +1293,6 @@ class MainWindow(
             self._post_completion_idle_countdown_timer.stop()
         except Exception:
             pass
-        self._detach_app_event_filter()
         backend = getattr(self, "backend", None)
         if backend is not None and hasattr(backend, "_action_state") and hasattr(backend, "_edit_event"):
             try:
@@ -1337,3 +1369,10 @@ class MainWindow(
     def _refresh_video(self):
         if self._editor_widget and hasattr(self._editor_widget, "video_player"):
             self._editor_widget.video_player.resizeEvent(None)
+
+    def closeEvent(self, event):
+        try:
+            self._detach_app_event_filter()
+        except Exception:
+            pass
+        super().closeEvent(event)

@@ -20,7 +20,7 @@ from core.runtime import config
 
 
 AUTO_AUDIO_PRESET_NAME = "auto"
-AUDIO_LORA_CORPUS_PATH = Path(config.DATASET_DIR) / "personalization" / "audio_preset_lora.jsonl"
+AUDIO_LORA_CORPUS_PATH = Path(config.DATASET_DIR) / "lora_personalization" / "audio_preset_lora.jsonl"
 
 
 _AUTO_AUDIO_CANDIDATES = (

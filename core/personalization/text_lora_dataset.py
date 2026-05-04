@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from core.personalization.lora_storage import LORA_PERSONALIZATION_DIR
 from core.runtime import config
 from core.project.data_manager import CORRECTION_FILE
 from core.project.project_manager import PROJECTS_DIR, load_project
@@ -15,7 +16,7 @@ from core.subtitle_quality.correction_memory import load_correction_memory
 from core.subtitle_quality.wrong_answer_memory import load_wrong_answer_memory
 
 
-TEXT_LORA_DATASET_DIR = Path(config.DATASET_DIR) / "personalization"
+TEXT_LORA_DATASET_DIR = Path(LORA_PERSONALIZATION_DIR)
 TEXT_LORA_DATASET_PATH = TEXT_LORA_DATASET_DIR / "text_lora_dataset.jsonl"
 TEXT_LORA_MANIFEST_PATH = TEXT_LORA_DATASET_DIR / "text_lora_manifest.json"
 TEXT_LORA_CORPUS_PATH = TEXT_LORA_DATASET_DIR / "text_lora_corpus.jsonl"

@@ -10,6 +10,7 @@ import threading
 
 from core.runtime.logger import get_logger
 from core.audio.media_processor import VideoProcessor
+from core.personalization.runtime_personalization import merged_runtime_override
 from core.time_history import get_expected_time
 from core.settings import (
     clear_runtime_settings_override,
@@ -48,6 +49,31 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         self._prefetch_threads = {}
         self._prefetch_generation = 0
         self._prefetch_lock = threading.Lock()
+        self._current_personalization_runtime_override = {}
+
+    def _apply_personalization_runtime_override_for_file(self, target_file: str) -> dict:
+        base_override = dict(getattr(self.ui, "_runtime_settings_override", None) or {})
+        merged = merged_runtime_override(base_override, str(target_file or ""))
+        self._current_personalization_runtime_override = dict(merged)
+        set_runtime_settings_override(merged)
+        target_name = os.path.basename(str(target_file or "")) or "-"
+        if merged:
+            detail_keys = (
+                "selected_audio_ai",
+                "stt_quality_preset",
+                "split_length_threshold",
+                "sub_max_cps",
+                "sub_gap_break_sec",
+                "selected_model",
+                "selected_llm_provider",
+            )
+            details = [f"{key}={merged[key]}" for key in detail_keys if key in merged]
+            if not details:
+                details = [f"{key}={value}" for key, value in list(merged.items())[:6]]
+            get_logger().log(f"🧠 [개인화] {target_name} 적용: {', '.join(details)}")
+        else:
+            get_logger().log(f"🧠 [개인화] {target_name} 적용 데이터 없음, 기본 설정 유지")
+        return merged
 
     def _reset_ui_individual_clip_context(self, *, clear_project: bool = True):
         ui = getattr(self, "ui", None)

@@ -299,6 +299,8 @@ class MulticlipPipelineMixin:
 
                     self._emit_multiclip_queue_status(i, "⏳ 오디오 추출 중", "", "", "")
                     self._backup_existing(target_file)
+                    if hasattr(self, "_apply_personalization_runtime_override_for_file"):
+                        self._apply_personalization_runtime_override_for_file(target_file)
 
                     if hasattr(self, 'video_processor'):
                         self.video_processor.clear_fast_mode_overrides()

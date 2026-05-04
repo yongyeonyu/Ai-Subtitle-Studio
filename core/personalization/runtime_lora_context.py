@@ -7,14 +7,15 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from core.personalization.lora_storage import LORA_PERSONALIZATION_DIR, load_best_settings, load_learned_rules
 from core.runtime import config
 from core.utils import load_subtitle_rules
 from core.subtitle_quality.correction_memory import search_correction_memory
 from core.subtitle_quality.wrong_answer_memory import search_wrong_answer_memory
 
 
-TEXT_LORA_CORPUS_PATH = Path(config.DATASET_DIR) / "personalization" / "text_lora_corpus.jsonl"
-TEXT_LORA_DATASET_PATH = Path(config.DATASET_DIR) / "personalization" / "text_lora_dataset.jsonl"
+TEXT_LORA_CORPUS_PATH = Path(LORA_PERSONALIZATION_DIR) / "text_lora_corpus.jsonl"
+TEXT_LORA_DATASET_PATH = Path(LORA_PERSONALIZATION_DIR) / "text_lora_dataset.jsonl"
 LEGACY_CORRECTION_PATH = Path(getattr(config, "CORRECTIONS_FILE", Path(config.DATASET_DIR) / "dataset_correction.json"))
 
 
@@ -181,6 +182,40 @@ def _split_rule_summary(rules: dict[str, Any] | None, settings: dict[str, Any] |
     return summary
 
 
+def _learned_rule_summary_lines() -> list[str]:
+    lines: list[str] = []
+    try:
+        learned_split = load_learned_rules("split")
+        split_items = list(learned_split.get("items") or [])
+        top_split = [str(item.get("rule_text") or "").strip() for item in split_items[:8] if str(item.get("rule_text") or "").strip()]
+        if top_split:
+            lines.append(f"- 학습된 분리 우선순위: {', '.join(top_split)}")
+    except Exception:
+        pass
+    try:
+        learned_break = load_learned_rules("line_break")
+        line_items = list(learned_break.get("items") or [])
+        top_line = [str(item.get("rule_text") or "").strip() for item in line_items[:4] if str(item.get("rule_text") or "").strip()]
+        if top_line:
+            lines.append(f"- 학습된 줄바꿈 패턴: {', '.join(top_line)}")
+    except Exception:
+        pass
+    try:
+        best = load_best_settings()
+        defaults = dict(best.get("global_recommended_defaults") or {})
+        if defaults:
+            compact = []
+            for key in ("selected_audio_ai", "stt_quality_preset", "split_length_threshold", "sub_max_cps"):
+                value = defaults.get(key)
+                if value not in (None, ""):
+                    compact.append(f"{key}={value}")
+            if compact:
+                lines.append(f"- 학습된 기본 추천값: {', '.join(compact)}")
+    except Exception:
+        pass
+    return lines
+
+
 def build_runtime_lora_prompt(
     text: str,
     rules: dict[str, Any] | None,
@@ -229,6 +264,7 @@ def build_runtime_lora_prompt(
         lines.append("- 누적 자막 작업 예시:")
         for idx, item in enumerate(examples, 1):
             lines.append(f"  {idx}. {_norm(item.get('input'))} -> {_norm(item.get('output'))}")
+    lines.extend(_learned_rule_summary_lines())
     lines.append("위 예시와 충돌하면 원문 무결성, 짧고 자연스러운 한국어 구어체, 사용자 교정 memory 순서로 판단하세요.")
     return "\n".join(lines)
 

@@ -147,12 +147,13 @@ def build_text_lora_training_plan(
     return plan
 
 
-def save_text_lora_training_plan(**kwargs) -> dict[str, Any]:
+def save_text_lora_training_plan(*, plan_path: str | Path | None = None, **kwargs) -> dict[str, Any]:
     plan = build_text_lora_training_plan(**kwargs)
-    TEXT_LORA_TRAINING_PLAN_PATH.parent.mkdir(parents=True, exist_ok=True)
-    TEXT_LORA_TRAINING_PLAN_PATH.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    target = Path(plan_path) if plan_path else TEXT_LORA_TRAINING_PLAN_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
-        "plan_path": str(TEXT_LORA_TRAINING_PLAN_PATH),
+        "plan_path": str(target),
         "backend": str(plan.get("backend", "") or ""),
         "usable_rows": int(((plan.get("stats") or {}).get("usable_text_rows", 0)) or 0),
         "output_dir": str(plan.get("output_dir", "") or ""),
@@ -217,12 +218,13 @@ def build_voice_lora_profile_manifest(
     return manifest
 
 
-def save_voice_lora_profile_manifest(**kwargs) -> dict[str, Any]:
+def save_voice_lora_profile_manifest(*, manifest_path: str | Path | None = None, **kwargs) -> dict[str, Any]:
     manifest = build_voice_lora_profile_manifest(**kwargs)
-    VOICE_LORA_PROFILE_MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
-    VOICE_LORA_PROFILE_MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    target = Path(manifest_path) if manifest_path else VOICE_LORA_PROFILE_MANIFEST_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
-        "manifest_path": str(VOICE_LORA_PROFILE_MANIFEST_PATH),
+        "manifest_path": str(target),
         "speaker_profiles": int(len(list(manifest.get("speaker_profiles") or []))),
     }
 

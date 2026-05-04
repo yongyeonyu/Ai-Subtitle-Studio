@@ -503,14 +503,17 @@ class TimelineInputMixin:
             return None
 
         try:
-            markers = self.analysis_markers_cached() if hasattr(self, "analysis_markers_cached") else []
+            if hasattr(self, "generation_silence_markers_cached"):
+                markers = self.generation_silence_markers_cached()
+            else:
+                markers = []
         except Exception:
             markers = []
         silence_ranges: list[tuple[float, float]] = []
         for marker in list(markers or []):
             kind = str(marker.get("kind", "") or "").strip().lower()
             label = str(marker.get("label", "") or "").strip()
-            if kind != "silence" and label != "무음":
+            if kind not in {"generation_silence", "linked_silence"} and label not in {"무음구간", "무음"}:
                 continue
             start = self._snap_to_frame(float(marker.get("start", 0.0) or 0.0))
             end = self._snap_to_frame(float(marker.get("end", start) or start))
