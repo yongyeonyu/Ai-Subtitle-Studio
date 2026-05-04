@@ -1,4 +1,4 @@
-# Version: 03.13.07
+# Version: 03.14.29
 # Phase: PHASE2
 """Strict color-average verifiers for auto cut-boundary scan."""
 
@@ -277,11 +277,35 @@ def build_strict_verify_helpers(deps: dict):
         # gray 통과 조건
         gray_pass = gray_adj_pass or gray_window_pass
 
+        def provisional_hint(reason: str):
+            choices = []
+            if best_win["frame"] is not None:
+                choices.append(("gray_window_rollback", best_win["frame"], best_win["score"], best_win["regions"], best_win["deltas"], best_win.get("stage", 0)))
+            if best_adj["frame"] is not None:
+                choices.append((best_adj.get("mode", "gray_adj"), best_adj["frame"], best_adj["score"], best_adj["regions"], best_adj["deltas"], 1))
+            if best_color["frame"] is not None:
+                choices.append(("color_window", best_color["frame"], best_color["score"], best_color["regions"], best_color["deltas"], color_window_frames))
+            if not choices:
+                return {"passed": False, "reason": reason}
+            mode, frame, score, regions, deltas, stage = choices[0]
+            return {
+                "passed": False,
+                "reason": reason,
+                "provisional_frame": int(frame),
+                "provisional_sec": float(int(frame) / fps),
+                "provisional_score": float(score or 0.0),
+                "provisional_regions": int(regions or 0),
+                "provisional_mode": str(mode),
+                "provisional_stage": int(stage or 0),
+                "provisional_deltas": list(deltas or []),
+                "rollback_relocated": True,
+            }
+
         if not gray_pass:
-            return {"passed": False, "reason": "gray_failed"}
+            return provisional_hint("gray_failed")
 
         if not color_pass:
-            return {"passed": False, "reason": "color_avg_failed"}
+            return provisional_hint("color_avg_failed")
 
         # 통과 위치 선택
         if gray_window_pass:
@@ -446,9 +470,27 @@ def build_strict_verify_helpers(deps: dict):
         gray_pass = gray_adj_pass or gray_window_pass
         color_pass = best_color["frame"] is not None and best_color["score"] >= color_threshold and best_color["regions"] >= relaxed_color_required_regions
         if not gray_pass:
-            return {"passed": False, "reason": "gray_failed"}
+            choices = []
+            if best_win["frame"] is not None:
+                choices.append(("gray_window_rollback_mps", best_win["frame"], best_win["score"], best_win["regions"], best_win["deltas"], best_win.get("stage", 0)))
+            if best_adj["frame"] is not None:
+                choices.append((best_adj.get("mode", "gray_adj_mps"), best_adj["frame"], best_adj["score"], best_adj["regions"], best_adj["deltas"], 1))
+            if best_color["frame"] is not None:
+                choices.append(("color_window_mps", best_color["frame"], best_color["score"], best_color["regions"], best_color["deltas"], color_window_frames))
+            if not choices:
+                return {"passed": False, "reason": "gray_failed"}
+            mode, frame, score, regions, deltas, stage = choices[0]
+            return {"passed": False, "reason": "gray_failed", "provisional_frame": int(frame), "provisional_sec": float(int(frame) / fps), "provisional_score": float(score or 0.0), "provisional_regions": int(regions or 0), "provisional_mode": str(mode), "provisional_stage": int(stage or 0), "provisional_deltas": list(deltas or []), "rollback_relocated": True}
         if not color_pass:
-            return {"passed": False, "reason": "color_avg_failed"}
+            choices = []
+            if best_win["frame"] is not None:
+                choices.append(("gray_window_rollback_mps", best_win["frame"], best_win["score"], best_win["regions"], best_win["deltas"], best_win.get("stage", 0)))
+            if best_adj["frame"] is not None:
+                choices.append((best_adj.get("mode", "gray_adj_mps"), best_adj["frame"], best_adj["score"], best_adj["regions"], best_adj["deltas"], 1))
+            if best_color["frame"] is not None:
+                choices.append(("color_window_mps", best_color["frame"], best_color["score"], best_color["regions"], best_color["deltas"], color_window_frames))
+            mode, frame, score, regions, deltas, stage = choices[0]
+            return {"passed": False, "reason": "color_avg_failed", "provisional_frame": int(frame), "provisional_sec": float(int(frame) / fps), "provisional_score": float(score or 0.0), "provisional_regions": int(regions or 0), "provisional_mode": str(mode), "provisional_stage": int(stage or 0), "provisional_deltas": list(deltas or []), "rollback_relocated": True}
         if gray_window_pass:
             selected_frame = int(best_win["frame"]); selected_score = float(best_win["score"]); selected_regions = int(best_win["regions"]); selected_mode = "gray_window_color_avg_mps"; selected_deltas = list(best_win["deltas"])
         else:

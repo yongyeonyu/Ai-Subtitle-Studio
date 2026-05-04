@@ -1,4 +1,4 @@
-# Version: 03.09.25
+# Version: 03.14.17
 # Phase: PHASE2
 """
 ui/settings_common.py
@@ -8,15 +8,9 @@ settings 다이얼로그 공통 상수, 유틸 함수, 공유 데이터
 import os
 import json
 
-from core.project.data_manager import load_settings, save_settings, save_default_settings
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QComboBox, QSpinBox, QPushButton, QSlider, QFrame,
-    QToolTip, QTabWidget, QWidget, QTextEdit, QCheckBox, QMessageBox, QLineEdit
+    QHBoxLayout, QPushButton
 )
-from PyQt6.QtGui import QCursor
-from PyQt6.QtCore import Qt, QTimer
-import requests
 from core.runtime import config
 from ui.style import line_icon, settings_button_style
 
@@ -135,11 +129,16 @@ DEFAULT_ADV_SETTINGS = {
     "sub_dedup_window": 0.5,
     "sub_gap_break_sec": 1.5,
 
-    # Subtitle quality review defaults. Runtime behavior stays opt-in.
-    "stt_ensemble_enabled": False,
-    "stt_candidate_scoring_enabled": False,
+    # Accuracy-first subtitle generation defaults.
+    "accuracy_first_mode": True,
+    "auto_start_mode": "quality",
+    "stt_quality_preset": "precise",
+    "stt_ensemble_enabled": True,
+    "stt_candidate_scoring_enabled": True,
     "stt_low_score_recheck_enabled": True,
-    "stt_low_score_recheck_threshold": 50,
+    "stt_low_score_recheck_threshold": 60,
+    "stt_low_score_recheck_padding_sec": 0.8,
+    "stt_low_score_recheck_max_segments": 240,
     "selected_whisper_model_secondary": (
         "youngouk/ghost613-turbo-korean-4bit-mlx"
         if config.IS_MAC else
@@ -150,21 +149,26 @@ DEFAULT_ADV_SETTINGS = {
     "vad_post_stt_max_shift_sec": 0.7,
     "vad_post_stt_edge_pad_sec": 0.04,
     "subtitle_quality_enabled": False,
-    "subtitle_quality_auto_check_after_generate": False,
-    "subtitle_quality_auto_correct_enabled": False,
-    "editor_lora_runtime_enabled": False,
+    "subtitle_quality_auto_check_after_generate": True,
+    "subtitle_quality_auto_correct_enabled": True,
+    "editor_lora_runtime_enabled": True,
+    "audio_chunk_routing_enabled": True,
+    "audio_chunk_route_vad_enabled": True,
+    "audio_chunk_profile_sec": 30.0,
+    "whisper_chunk_overlap_sec": 3.0,
+    "chunk_time_limit": 180,
     "vad_pre_split_enabled": False,
-    "review_vad_before_stt_enabled": False,
+    "review_vad_before_stt_enabled": True,
     "review_vad_strict_mode": True,
     "review_vad_speech_pad_sec": 0.35,
     "review_vad_min_silence_sec": 0.8,
     "review_min_segment_score_to_keep": 55,
-    "review_auto_correct_apply_threshold": 92,
-    "review_auto_correct_min_improvement": 10,
-    "review_recheck_buffer_sec": 1.2,
-    "review_auto_correct_require_user_confirm": True,
-    "correction_memory_enabled": False,
-    "wrong_answer_memory_enabled": False,
+    "review_auto_correct_apply_threshold": 94,
+    "review_auto_correct_min_improvement": 8,
+    "review_recheck_buffer_sec": 1.5,
+    "review_auto_correct_require_user_confirm": False,
+    "correction_memory_enabled": True,
+    "wrong_answer_memory_enabled": True,
     "score_weight_asr_metadata": 0.25,
     "score_weight_vad_alignment": 0.20,
     "score_weight_word_timestamp": 0.15,
@@ -185,8 +189,6 @@ except Exception:
 
 
 def _fetch_models():
-    settings = load_settings()
-
     models = []
     try:
         from core.model_manager import get_local_llm_models

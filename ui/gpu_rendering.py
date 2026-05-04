@@ -1,4 +1,4 @@
-# Version: 03.07.01
+# Version: 03.14.31
 # Phase: PHASE2
 """Small helpers for optional GPU-backed Qt widgets.
 
@@ -27,14 +27,19 @@ def gpu_runtime_enabled() -> bool:
     return _env_enabled("AI_SUBTITLE_GPU_RENDERING", "0")
 
 
-def gpu_widgets_enabled() -> bool:
+def gpu_widgets_enabled(feature: str | None = None) -> bool:
     if not gpu_runtime_enabled():
         return False
+    if str(feature or "").strip().lower() == "timeline":
+        return _env_enabled("AI_SUBTITLE_TIMELINE_OPENGL_WIDGETS", "1") or _env_enabled(
+            "AI_SUBTITLE_EXPERIMENTAL_OPENGL_WIDGETS",
+            "0",
+        )
     return _env_enabled("AI_SUBTITLE_EXPERIMENTAL_OPENGL_WIDGETS", "0")
 
 
-def accelerated_widget_base():
-    if not gpu_widgets_enabled():
+def accelerated_widget_base(feature: str | None = None):
+    if not gpu_widgets_enabled(feature):
         return QWidget
     try:
         from PyQt6.QtOpenGLWidgets import QOpenGLWidget
@@ -43,8 +48,8 @@ def accelerated_widget_base():
     return QOpenGLWidget
 
 
-def gpu_backend_name() -> str:
-    return "opengl-widget" if gpu_widgets_enabled() else "qwidget"
+def gpu_backend_name(feature: str | None = None) -> str:
+    return "opengl-widget" if gpu_widgets_enabled(feature) else "qwidget"
 
 
 def configure_lightweight_paint(widget: QWidget, *, opaque: bool = True) -> None:
@@ -68,8 +73,8 @@ def configure_opengl_widget(widget: QWidget) -> None:
         pass
 
 
-def make_accelerated_viewport(parent=None) -> QWidget | None:
-    if not gpu_widgets_enabled():
+def make_accelerated_viewport(parent=None, feature: str | None = None) -> QWidget | None:
+    if not gpu_widgets_enabled(feature):
         return None
     try:
         from PyQt6.QtOpenGLWidgets import QOpenGLWidget

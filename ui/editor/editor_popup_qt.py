@@ -1,12 +1,11 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 03.14.02
+# Phase: PHASE2
 """
 ui/editor_popup_qt.py  ─ 단어 교정 팝업
 [개편] 타임스탬프 독립 마진 구조에 맞춰 SubtitleBlockData 연동 완비
 """
-import re
 from PyQt6.QtWidgets import QWidget, QLabel, QLineEdit, QVBoxLayout, QApplication
-from PyQt6.QtCore    import Qt, QThread, pyqtSignal
+from PyQt6.QtCore    import Qt
 from PyQt6.QtGui     import QTextCursor, QFont
 
 from core.runtime import config
@@ -107,19 +106,29 @@ class EditorPopup(QWidget):
         if not (root and anchor and end_c):
             return
 
-        cur = te.textCursor()
-        cur.beginEditBlock()
-        cur.setPosition(anchor.position())
-        cur.setPosition(end_c.position(), QTextCursor.MoveMode.KeepAnchor)
-        cur.insertText(new_word)
-        cur.endEditBlock()
-        te.setTextCursor(cur)
+        replace_count = 0
+        if hasattr(self.owner, "_replace_text_in_all_subtitles"):
+            replace_count = self.owner._replace_text_in_all_subtitles(
+                root,
+                new_word,
+                anchor=anchor,
+                end_cursor=end_c,
+            )
+        else:
+            cur = te.textCursor()
+            cur.beginEditBlock()
+            cur.setPosition(anchor.position())
+            cur.setPosition(end_c.position(), QTextCursor.MoveMode.KeepAnchor)
+            cur.insertText(new_word)
+            cur.endEditBlock()
+            te.setTextCursor(cur)
+            replace_count = 1
 
-        hl = getattr(self.owner, "_highlighter", None)
-        if hl and hasattr(hl, "mark_edited"):
-            hl.mark_edited(cur.blockNumber())
+            hl = getattr(self.owner, "_highlighter", None)
+            if hl and hasattr(hl, "mark_edited"):
+                hl.mark_edited(cur.blockNumber())
 
-        if hasattr(self.owner, "_save_correction"):
+        if replace_count and hasattr(self.owner, "_save_correction"):
             self.owner._save_correction(root, new_word)
 
     def close_popup(self, refocus=False):

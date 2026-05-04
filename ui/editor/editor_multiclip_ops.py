@@ -1,4 +1,4 @@
-# Version: 03.01.36
+# Version: 03.14.05
 # Phase: PHASE2
 """
 EditorWidget 멀티클립 파일 추가/삭제/리매핑 Mixin.
@@ -137,6 +137,13 @@ class EditorMulticlipOpsMixin:
         self.text_edit.clear()
         try:
             self.append_segments(segs)
+            if preserve_view and hasattr(self, "_flush_queue"):
+                self._flush_queue()
+                try:
+                    if getattr(self, "_queue_timer", None) is not None:
+                        self._queue_timer.stop()
+                except Exception:
+                    pass
             self._cached_segs = segs
             total_dur = segs[-1]['end'] if segs else 0.0
             if hasattr(self, 'video_player') and self.video_player.total_time > 0:

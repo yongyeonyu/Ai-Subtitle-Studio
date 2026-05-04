@@ -6,10 +6,8 @@ MainWindow 에디터 열기/저장/닫기 Mixin
 """
 import os
 from PyQt6.QtWidgets import QMessageBox
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QTextCursor
+from PyQt6.QtCore import QTimer
 
-from core.runtime import config
 from core.runtime.logger import get_logger
 from core.path_manager import get_srt_path
 from core.project.project_manager import load_project

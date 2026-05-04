@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QLabel, QTextEdit, QVBoxLayout, QWidget
 
-from ui.style import COLORS, label_style, panel_style
+from ui.style import label_style, panel_style
 
 
 class RoughcutLogPanel(QWidget):

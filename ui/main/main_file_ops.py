@@ -1,17 +1,16 @@
-# Version: 03.01.15
+# Version: 03.14.23
 # Phase: PHASE1-B
 """
 ui/main/main_file_ops.py
 FileOpsMixin — 파일/폴더 선택 · 배치 시작 · 멀티클립 진입 · 캐시 삭제 · 종료
 """
 import os
-import sys
 
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
 from PyQt6.QtCore import QTimer
 
 from core.path_manager import (
-    get_srt_path, get_last_folder, set_last_folder,
+    get_last_folder, set_last_folder,
     ensure_nas_mounted, get_recent_folders, add_recent_folder,
 )
 from core.settings import load_settings, save_settings
@@ -72,6 +71,12 @@ class FileOpsMixin:
         if hasattr(self, "_sig_update_queue_header"):
             self._sig_update_queue_header.emit(1, len(files), 0, "")
 
+    def _clear_multiclip_runtime_state(self):
+        self._multiclip_files = []
+        self._multiclip_boundaries = []
+        self._accumulated_vad = []
+        self._reuse_existing_multiclip_subtitles = False
+
     def select_files(self):
         paths, _ = self._safe_open_file_names(
             "파일 선택",
@@ -83,10 +88,13 @@ class FileOpsMixin:
         set_last_folder(os.path.dirname(paths[0]))
         self._add_recent_folder(os.path.dirname(paths[0]))
         self._is_auto_pipeline = False
+        self._auto_export_subtitle_video = False
+        self._auto_audio_tune_per_file = True
+        if hasattr(self, "_clear_runtime_quality_override"):
+            self._clear_runtime_quality_override()
         self._current_project_path = None
         self._project_boundary_times = []
-        self._multiclip_boundaries = []
-        self._accumulated_vad = []
+        self._clear_multiclip_runtime_state()
         srt = [p for p in paths if p.lower().endswith(".srt")]
         vid = [p for p in paths if not p.lower().endswith(".srt")]
         if vid and len(vid) > 1:
@@ -98,7 +106,7 @@ class FileOpsMixin:
             self._open_srt_in_editor(srt[0])
 
     def _start_batch(self, files, folder=None):
-        """멀티 파일 → backend_fast 배치 모드 (중복 호출 방지)"""
+        """멀티 파일 → 정확도 우선 자동 배치 모드 (중복 호출 방지)."""
         if not files:
             return
 
@@ -124,26 +132,28 @@ class FileOpsMixin:
         folder = self._safe_open_directory(
             "폴더 선택", get_last_folder() or os.path.expanduser("~")
         )
-        if not folder or not ensure_nas_mounted(folder):
+        if not folder:
             return
         set_last_folder(folder)
         self._add_recent_folder(folder)
         self._is_auto_pipeline = False
+        self._auto_export_subtitle_video = False
+        self._auto_audio_tune_per_file = True
+        if hasattr(self, "_clear_runtime_quality_override"):
+            self._clear_runtime_quality_override()
         self._current_project_path = None
         self._project_boundary_times = []
+        self._clear_multiclip_runtime_state()
         from ui.dialogs.folder_dialog import FolderDialog
 
         dlg = FolderDialog(folder, self)
         if dlg.exec() and getattr(dlg, "saved_only", False):
             return
         if dlg.result() and dlg.selected_files:
-            if len(dlg.selected_files) == 1 and self.backend:
+            self._auto_export_subtitle_video = bool(getattr(dlg, "export_subtitle_video", False))
+            if self.backend:
                 self._prepare_single_file_queue(dlg.selected_files)
                 self.backend.start_pipeline(dlg.selected_files, folder=folder)
-            elif len(dlg.selected_files) > 1:
-                self._show_multiclip_then_batch(
-                    dlg.selected_files, folder=folder, show_multiclip=False
-                )
 
     def _open_recent(self, folder):
         if not os.path.exists(folder):
@@ -155,8 +165,13 @@ class FileOpsMixin:
         set_last_folder(folder)
         self._add_recent_folder(folder)
         self._is_auto_pipeline = False
+        self._auto_export_subtitle_video = False
+        self._auto_audio_tune_per_file = True
+        if hasattr(self, "_clear_runtime_quality_override"):
+            self._clear_runtime_quality_override()
         self._current_project_path = None
         self._project_boundary_times = []
+        self._clear_multiclip_runtime_state()
         paths, _ = self._safe_open_file_names(
             "파일 선택",
             folder,
@@ -236,7 +251,10 @@ class FileOpsMixin:
     def _quick_exit(self):
         self._backup_before_quick_exit()
         if self.backend:
-            self.backend.stop()
+            try:
+                self.backend.stop(log_context="앱 종료")
+            except TypeError:
+                self.backend.stop()
         QApplication.quit()
 
     def _restore_current_work_mode(self):

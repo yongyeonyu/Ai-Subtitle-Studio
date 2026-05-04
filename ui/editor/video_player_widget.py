@@ -15,7 +15,7 @@ from bisect import bisect_right
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QSizePolicy, QStackedWidget)
 from PyQt6.QtCore import Qt, QTimer, QRectF, QUrl, pyqtSignal
-from PyQt6.QtGui import QPixmap, QFontDatabase, QImage
+from PyQt6.QtGui import QPixmap, QImage
 
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from core.runtime import config
@@ -24,11 +24,7 @@ from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail
 from ui.editor.video_overlay_widgets import (
     ThumbnailLabel,
     SubtitleLabel,
-    SubtitleSceneOverlayItem,
     VideoSurfaceView,
-    paint_subtitle_overlay,
-    _available_font_family,
-    _wrap_overlay_text_lines,
 )
 
 
@@ -592,10 +588,10 @@ class VideoPlayerWidget(QWidget):
     def _start_proxy_build(self, src: str, dst: str):
         return
 
-    def _poll_proxy_build(self, src: str, tmp_dst: str, dst: str):
+    def _poll_proxy_build(self, src: str, _tmp_dst: str, dst: str):
         return
 
-    def _switch_to_proxy(self, proxy_path: str):
+    def _switch_to_proxy(self, _proxy_path: str):
         return
 
     def _legacy_preview_proxy_enabled(self) -> bool:

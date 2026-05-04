@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import threading
 import time
@@ -226,14 +225,14 @@ class EditorRoughcutDraftMixin:
             return
         try:
             from core.project.project_manager import save_project
+            from core.project.project_io import read_project_file
             from core.roughcut import EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID, merge_editor_roughcut_draft_state
             from core.work_mode import EDITOR_MODE
 
             existing_state = {}
             if os.path.exists(project_path):
                 try:
-                    with open(project_path, "r", encoding="utf-8") as f:
-                        existing_state = json.load(f).get("roughcut_state", {}) or {}
+                    existing_state = read_project_file(project_path).get("roughcut_state", {}) or {}
                 except Exception:
                     existing_state = {}
             candidate.pop("_generation", None)

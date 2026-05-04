@@ -1,4 +1,4 @@
-# Version: 03.13.07
+# Version: 03.14.29
 # Phase: PHASE2
 """Pioneer/follower scan functions for auto cut-boundary detection."""
 
@@ -354,7 +354,6 @@ def build_auto_grid_scan_helpers(deps: dict):
         effective_threshold = _cb_level_effective_threshold(level, float(threshold or 24.0)) * pioneer_strict_multiplier
         min_gap_sec = _cb_level_min_gap_sec(level)
         pioneer_workers = max(1, min(4, int(settings.get("scan_cut_pioneer_workers", 4) or 4)))
-        pioneer_refine_workers = max(1, min(4, int(settings.get("scan_cut_pioneer_refine_workers", 4) or 4)))
         gpu_refine_enabled = bool(settings.get("scan_cut_pioneer_gpu_refine_enabled", True))
         cuda_available = _cb_cuda_available() if gpu_refine_enabled else False
 
@@ -364,9 +363,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                 return []
             rows_local = []
             prev_gray = None
-            prev_t = max(0.0, float(start_frame) / fps)
             last_emit_t = -999999.0
-            total_frames = max(1, end_frame - start_frame)
             try:
                 frame_no = int(start_frame)
                 while frame_no < end_frame:
@@ -433,7 +430,6 @@ def build_auto_grid_scan_helpers(deps: dict):
                                 except Exception:
                                     pass
                     prev_gray = gray
-                    prev_t = t
                     frame_no += step_frames
             finally:
                 try:
@@ -539,6 +535,7 @@ def build_auto_grid_scan_helpers(deps: dict):
         found_callback=None,
         **kwargs,
     ):
+        provisional_callback = kwargs.pop("provisional_callback", None)
         settings = dict(settings or {})
         try:
             from core.settings import load_settings
@@ -615,6 +612,43 @@ def build_auto_grid_scan_helpers(deps: dict):
                     except Exception:
                         pass
                 if not verified or not verified.get("passed"):
+                    if isinstance(verified, dict) and verified.get("rollback_relocated") and verified.get("provisional_frame") is not None:
+                        provisional_frame = int(verified.get("provisional_frame") or coarse_frame)
+                        provisional_local_sec = float(verified.get("provisional_sec", provisional_frame / fps) or (provisional_frame / fps))
+                        timeline_sec = float(clip_offset or 0.0) + provisional_local_sec
+                        timeline_frame = sec_to_frame(timeline_sec, fps)
+                        hint = dict(row)
+                        hint.update(
+                            {
+                                "schema": "cut_boundary.v1",
+                                "id": f"cut_provisional_{timeline_frame:08d}",
+                                "time": timeline_sec,
+                                "timeline_sec": timeline_sec,
+                                "frame": timeline_frame,
+                                "timeline_frame": timeline_frame,
+                                "fps": fps,
+                                "frame_rate": fps,
+                                "timeline_frame_rate": fps,
+                                "clip_idx": int(clip_idx or 0),
+                                "clip_local_sec": provisional_local_sec,
+                                "source_path": str(filepath),
+                                "score": float(verified.get("provisional_score", hint.get("score", 0.0)) or 0.0),
+                                "regions": int(verified.get("provisional_regions", hint.get("regions", 0)) or 0),
+                                "reason": str(verified.get("reason") or "rollback_relocated_provisional"),
+                                "detector": "rollback-largest-change-provisional",
+                                "source": "visual_provisional",
+                                "absolute": True,
+                                "locked": False,
+                                "status": "provisional",
+                                "verified": False,
+                                "rollback_relocated": True,
+                                "provisional_mode": str(verified.get("provisional_mode") or ""),
+                                "provisional_stage": int(verified.get("provisional_stage", 0) or 0),
+                                "line_color": "gray",
+                                "line_style": "dotted",
+                            }
+                        )
+                        return {"provisional": hint}
                     return None
                 refined_local_sec = float(verified.get("sec", local_sec) or local_sec)
                 timeline_sec = float(clip_offset or 0.0) + refined_local_sec
@@ -649,7 +683,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                         "verify_backend": follower_backend,
                     }
                 )
-                return fixed
+                return {"verified": fixed}
 
             with ThreadPoolExecutor(max_workers=follower_workers, thread_name_prefix="cut-boundary-follower") as executor:
                 future_map = {
@@ -659,10 +693,24 @@ def build_auto_grid_scan_helpers(deps: dict):
                 }
                 for future in as_completed(future_map):
                     fixed = None
+                    provisional_hint = None
                     try:
-                        fixed = future.result()
+                        result = future.result()
                     except Exception:
-                        fixed = None
+                        result = None
+                    if isinstance(result, dict) and result.get("verified"):
+                        fixed = result.get("verified")
+                    elif isinstance(result, dict) and result.get("provisional"):
+                        provisional_hint = result.get("provisional")
+                    elif isinstance(result, dict):
+                        fixed = result
+                    if provisional_hint is not None:
+                        if callable(provisional_callback):
+                            try:
+                                provisional_callback(dict(provisional_hint), list(verified_rows))
+                            except Exception:
+                                pass
+                        continue
                     if fixed is None:
                         continue
                     duplicate = False

@@ -1,4 +1,4 @@
-# Version: 03.01.37
+# Version: 03.14.33
 # Phase: PHASE1-B
 """
 core/pipeline/backend_core.py
@@ -7,13 +7,16 @@ Mixin 상속: PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMixin
 """
 import os
 import threading
-import time
 
-from core.runtime import config
 from core.runtime.logger import get_logger
 from core.audio.media_processor import VideoProcessor
 from core.time_history import get_expected_time
-from core.settings import load_settings, get_model_key
+from core.settings import (
+    clear_runtime_settings_override,
+    get_model_key,
+    load_settings,
+    set_runtime_settings_override,
+)
 from core.media_info import probe_media_many
 
 from core.pipeline.pipeline_helpers import PipelineHelpersMixin
@@ -48,8 +51,10 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
     # ─── 파이프라인 시작 ─────────────────────────────────
     def start_pipeline(self, files, folder=None, is_icloud=False, is_auto_start=False):
         self._active = True
+        set_runtime_settings_override(getattr(self.ui, "_runtime_settings_override", None))
         self.files_to_process = list(files)
         self.current_folder = folder
+        self.is_icloud = bool(is_icloud)
         self.is_auto_start = is_auto_start
         self._reuse_existing_single_subtitle = False
 
@@ -63,6 +68,10 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
             self._prefetch_threads = {}
 
         if not self.files_to_process:
+            self._active = False
+            clear_runtime_settings_override()
+            if hasattr(self.ui, "_clear_runtime_quality_override"):
+                self.ui._clear_runtime_quality_override()
             return
 
         if len(self.files_to_process) == 1 and not is_auto_start:
@@ -94,7 +103,7 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         self._speaker_map = []
 
     # ─── 정지 ────────────────────────────────────────────
-    def stop(self):
+    def stop(self, *, log_context: str = "파이프라인 중단", unload_llm: bool = True):
         self._active = False
 
         try:
@@ -103,18 +112,23 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         except Exception as e:
             get_logger().log(f"⚠️ stop_transcribe 실패: {e}")
 
-        try:
-            settings = load_settings()
-            llm_models = [
-                settings.get("selected_model", ""),
-                settings.get("roughcut_llm_model", ""),
-                settings.get("selected_roughcut_llm_model", ""),
-            ]
-            from core.llm.ollama_provider import stop_local_llm_models_async
+        if unload_llm:
+            try:
+                settings = load_settings()
+                llm_models = [
+                    settings.get("selected_model", ""),
+                    settings.get("roughcut_llm_model", ""),
+                    settings.get("selected_roughcut_llm_model", ""),
+                ]
+                from core.llm.ollama_provider import stop_local_llm_models_async
 
-            stop_local_llm_models_async(llm_models, logger=get_logger())
-        except Exception as e:
-            get_logger().log(f"⚠️ LLM 모델 종료 요청 실패: {e}")
+                stop_local_llm_models_async(
+                    llm_models,
+                    logger=get_logger(),
+                    log_context=str(log_context or "파이프라인 중단"),
+                )
+            except Exception as e:
+                get_logger().log(f"⚠️ LLM 모델 종료 요청 실패: {e}")
 
         try:
             with self._prefetch_lock:

@@ -1,4 +1,4 @@
-# Version: 03.09.10
+# Version: 03.14.33
 # Phase: PHASE2
 """
 ui/main/main_window.py
@@ -235,8 +235,8 @@ class MainWindow(
 
     def _create_sidebar_terminal_panel(self):
         panel = TerminalLogWidget(self.home_page)
-        panel.setMinimumHeight(88)
-        panel.setMaximumHeight(132)
+        panel.setMinimumHeight(116)
+        panel.setMaximumHeight(190)
         panel.setStyleSheet(
             "QWidget#TerminalLogPanel { background: #11181C; border: 1px solid #2D3942; border-radius: 7px; }"
         )
@@ -526,7 +526,8 @@ class MainWindow(
         if project_path and os.path.exists(project_path):
             try:
                 from core.cut_boundary import sync_project_cut_boundaries
-                from core.project.project_manager import _read_json, _write_json, save_project
+                from core.project.project_io import read_project_file, write_project_file
+                from core.project.project_manager import save_project
                 from core.work_mode import EDITOR_MODE
 
                 save_project(
@@ -537,7 +538,7 @@ class MainWindow(
                     stt_preview_segments=[],
                     provisional_cut_boundaries=[],
                 )
-                project = _read_json(project_path)
+                project = read_project_file(project_path)
                 analysis = project.setdefault("analysis", {})
                 analysis["cut_boundaries"] = []
                 analysis["cut_boundary_provisional_boundaries"] = []
@@ -546,7 +547,7 @@ class MainWindow(
                     settings=project.get("user_settings", {}),
                     provisional_boundaries=[],
                 )
-                _write_json(project_path, project)
+                write_project_file(project_path, project)
                 get_logger().log("🧹 재시작: 프로젝트 러프컷 상태와 세그먼트를 초기화했습니다.")
             except Exception as exc:
                 get_logger().log(f"⚠️ 재시작 러프컷 상태 초기화 실패: {exc}")
@@ -753,9 +754,11 @@ class MainWindow(
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self):
-        self._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.5)
+        active_work = self._is_editor_ai_busy(getattr(self, "_editor_widget", None)) or self._is_backend_ai_busy()
+        self._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.5, stop_active=False)
         self._stop_post_completion_idle_timer()
-        self._reset_transient_multiclip_state()
+        if not active_work:
+            self._reset_transient_multiclip_state()
         self._dock_global_menu_to_workspace()
         self.stack.setCurrentIndex(0)
         if hasattr(self, "_show_bottom_queue_table"):
@@ -769,13 +772,33 @@ class MainWindow(
         self._build_home_content()
 
     def _stop_active_ai_for_home(self):
-        self._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.5)
+        self._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.5, stop_active=True)
 
-    def _cleanup_runtime_for_navigation(self, *, context: str = "홈 이동", timeout_sec: float = 0.5, force: bool = False):
+    def _cleanup_runtime_for_navigation(
+        self,
+        *,
+        context: str = "홈 이동",
+        timeout_sec: float = 0.5,
+        force: bool = False,
+        stop_active: bool = False,
+    ):
         if getattr(self, "_runtime_cleanup_in_progress", False):
             return False
         editor = getattr(self, "_editor_widget", None)
-        should_cleanup = bool(force or editor is not None or self._is_backend_ai_busy())
+        editor_busy = self._is_editor_ai_busy(editor)
+        backend_busy = self._is_backend_ai_busy()
+        if (editor_busy or backend_busy) and not (force or stop_active):
+            return False
+        cleanup_key = (str(context or ""), id(editor) if editor is not None else 0)
+        if (
+            not force
+            and editor is not None
+            and not editor_busy
+            and not backend_busy
+            and getattr(self, "_last_runtime_cleanup_key", None) == cleanup_key
+        ):
+            return False
+        should_cleanup = bool(force or stop_active or editor is not None or backend_busy)
         if not should_cleanup:
             return False
 
@@ -804,7 +827,7 @@ class MainWindow(
                     is_processing = bool(getattr(editor, "_is_ai_processing", False))
                     if state_manager is not None:
                         is_processing = is_processing or bool(getattr(state_manager, "is_locked", False))
-                    if (force or is_processing) and hasattr(editor, "_stop_pipeline"):
+                    if (force or stop_active or is_processing) and hasattr(editor, "_stop_pipeline"):
                         editor._stop_pipeline()
                         stopped_any = True
                 except RuntimeError:
@@ -846,9 +869,23 @@ class MainWindow(
                 backend = getattr(self, backend_name, None)
                 if backend is None:
                     continue
+                backend_instance_busy = self._is_backend_instance_busy(backend)
                 try:
-                    if hasattr(backend, "stop"):
-                        backend.stop()
+                    backend_active = bool(getattr(backend, "_active", False))
+                    should_stop_backend = bool(
+                        stop_active or backend_instance_busy or (force and backend_active)
+                    )
+                    if should_stop_backend and hasattr(backend, "stop"):
+                        stop_fn = getattr(backend, "stop")
+                        try:
+                            import inspect
+
+                            if "log_context" in inspect.signature(stop_fn).parameters:
+                                stop_fn(log_context=context)
+                            else:
+                                stop_fn()
+                        except (TypeError, ValueError):
+                            stop_fn()
                         stopped_any = True
                 except Exception as exc:
                     get_logger().log(f"⚠️ {context} 중 {backend_name} 중단 실패: {exc}")
@@ -898,6 +935,7 @@ class MainWindow(
 
             if stopped_any:
                 get_logger().log(f"🧹 {context}: 스레드/AI 런타임/메모리 정리 완료")
+            self._last_runtime_cleanup_key = cleanup_key
             return stopped_any
         finally:
             self._runtime_cleanup_in_progress = False
@@ -926,16 +964,23 @@ class MainWindow(
             backend = getattr(self, backend_name, None)
             if backend is None:
                 continue
-            try:
-                if bool(getattr(backend, "_active", False)):
-                    return True
-                thread = getattr(backend, "_pipeline_thread", None)
-                if thread is not None and getattr(thread, "is_alive", lambda: False)():
-                    return True
-            except RuntimeError:
-                continue
-            except Exception:
-                pass
+            if self._is_backend_instance_busy(backend):
+                return True
+        return False
+
+    def _is_backend_instance_busy(self, backend) -> bool:
+        if backend is None:
+            return False
+        try:
+            if bool(getattr(backend, "_active", False)):
+                return True
+            thread = getattr(backend, "_pipeline_thread", None)
+            if thread is not None and getattr(thread, "is_alive", lambda: False)():
+                return True
+        except RuntimeError:
+            return False
+        except Exception:
+            pass
         return False
 
     def _release_ai_models_for_editor_mode(self, *, force: bool = False, preserve_roughcut_status: bool = False):

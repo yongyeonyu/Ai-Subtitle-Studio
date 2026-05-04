@@ -1,10 +1,59 @@
-# Version: 03.01.22
+# Version: 03.14.19
 # Phase: PHASE2
 from __future__ import annotations
 
 from copy import deepcopy
 
 from core.runtime import config
+
+
+STT_QUALITY_PRESET_ORDER = ("fast", "balanced", "precise")
+STT_QUALITY_PRESET_LABELS = {
+    "fast": "빠름",
+    "balanced": "보통",
+    "precise": "높음",
+}
+STT_QUALITY_USER_PRESET_KEY = "stt_quality_user_presets"
+STT_QUALITY_SAVED_SETTING_KEYS = {
+    "selected_whisper_model",
+    "selected_whisper_model_secondary",
+    "stt_ensemble_enabled",
+    "stt_ensemble_llm_judge_enabled",
+    "stt_candidate_scoring_enabled",
+    "selected_model",
+    "selected_llm_provider",
+    "scan_cut_boundary_level",
+    "cut_boundary_level",
+    "scan_cut_level",
+    "cut_boundary_detection_enabled",
+    "scan_cut_enabled",
+    "scan_cut_auto_enabled",
+    "cut_boundary_enabled",
+    "scan_cut_boundary_label",
+    "scan_cut_grid_mask",
+    "ff_chunk",
+    "whisper_chunk_overlap_sec",
+    "stt_parallel_level",
+    "roughcut_llm_enabled",
+    "roughcut_llm_use_override",
+    "roughcut_llm_provider",
+    "roughcut_llm_model",
+    "w_beam_size",
+    "w_patience",
+    "w_length_penalty",
+    "w_dm_no_speech",
+    "w_dm_logprob",
+    "w_dm_comp",
+    "w_dm_temp_max",
+    "w_df_no_speech",
+    "w_df_logprob",
+    "w_df_comp",
+    "w_df_temp_max",
+    "w_none_no_speech",
+    "w_none_logprob",
+    "w_none_comp",
+    "w_none_temp_max",
+}
 
 
 def _quality_model() -> str:
@@ -44,11 +93,8 @@ def _decoder_settings(
     return out
 
 
-def _pipeline_mapping(audio_preset: str, audio_ai: str, vad: str, ff_chunk: int, overlap_sec: float, parallel_level: int) -> dict:
+def _pipeline_mapping(ff_chunk: int, overlap_sec: float, parallel_level: int) -> dict:
     return {
-        "audio_preset": audio_preset,
-        "selected_audio_ai": audio_ai,
-        "selected_vad": vad,
         "ff_chunk": ff_chunk,
         "whisper_chunk_overlap_sec": overlap_sec,
         "stt_parallel_level": parallel_level,
@@ -62,29 +108,6 @@ def _roughcut_llm_mapping(model_name: str) -> dict:
         "roughcut_llm_use_override": enabled,
         "roughcut_llm_provider": "ollama" if enabled else "none",
         "roughcut_llm_model": model_name if enabled else "사용 안함",
-    }
-
-
-def _recommended_stack_mapping(
-    *,
-    cut_level: str,
-    preprocess_model: str,
-    audio_model: str,
-    stt1_model: str,
-    stt2_model: str,
-    vad_model: str,
-    subtitle_llm: str,
-    roughcut_llm_model: str,
-) -> dict:
-    return {
-        "audio_preset_recommended_cut_boundary": cut_level,
-        "audio_preset_recommended_preprocess_model": preprocess_model,
-        "audio_preset_recommended_audio_model": audio_model,
-        "audio_preset_recommended_stt1": stt1_model,
-        "audio_preset_recommended_stt2": stt2_model,
-        "audio_preset_recommended_vad": vad_model,
-        "audio_preset_recommended_subtitle_llm": subtitle_llm,
-        "audio_preset_recommended_roughcut_llm": roughcut_llm_model,
     }
 
 
@@ -121,52 +144,46 @@ def load_stt_quality_presets() -> dict[str, dict]:
     secondary_model = _secondary_model()
     return {
         "fast": {
-            "label": "빠른 인식",
-            "description": "속도 우선, 전처리/음성필터/VAD 최소화",
+            "label": STT_QUALITY_PRESET_LABELS["fast"],
+            "description": "속도 우선, STT/LLM 경량 조합",
             "settings": {
                 "selected_whisper_model": _fast_model(),
                 "selected_model": "사용 안함 (Whisper 단독 진행)",
+                "stt_ensemble_enabled": False,
+                "stt_ensemble_llm_judge_enabled": False,
                 "stt_candidate_scoring_enabled": False,
-                **_pipeline_mapping("실내-마이크무", "none", "none", 30, 0.5, 4),
+                **_pipeline_mapping(30, 0.5, 4),
                 **_cut_boundary_mapping("off"),
                 **_decoder_settings(0.86, -1.0, 1.6, 0.0, 3, 1.0),
             },
         },
         "balanced": {
-            "label": "균형",
+            "label": STT_QUALITY_PRESET_LABELS["balanced"],
             "description": "일반 자막 생성용 기본 조합",
             "settings": {
                 "selected_whisper_model": _quality_model(),
                 "selected_model": "exaone3.5:2.4b",
+                "stt_ensemble_enabled": False,
+                "stt_ensemble_llm_judge_enabled": False,
                 "stt_candidate_scoring_enabled": False,
-                **_pipeline_mapping("실내-마이크유", "deepfilter", "silero", 25, 1.5, 3),
+                **_pipeline_mapping(25, 1.5, 3),
                 **_cut_boundary_mapping("low"),
                 **_decoder_settings(0.58, -1.8, 2.2, 0.4, 5, 1.1),
             },
         },
         "precise": {
-            "label": "정밀 인식",
-            "description": "정확도 우선, 강한 전처리/음성필터/VAD 조합",
+            "label": STT_QUALITY_PRESET_LABELS["precise"],
+            "description": "정확도 우선, STT 앙상블/LLM 검수 강화",
             "settings": {
                 "selected_whisper_model": quality_model,
                 "selected_model": "gemma4:e4b",
                 "stt_candidate_scoring_enabled": True,
                 "selected_whisper_model_secondary": secondary_model,
                 "stt_ensemble_enabled": True,
-                "stt_ensemble_llm_judge_enabled": False,
-                **_pipeline_mapping("실외-마이크유", "clearvoice", "ten_vad", 20, 3.0, 2),
+                "stt_ensemble_llm_judge_enabled": True,
+                **_pipeline_mapping(20, 3.0, 2),
                 **_cut_boundary_mapping("medium"),
                 **_roughcut_llm_mapping("exaone3.5:7.8b"),
-                **_recommended_stack_mapping(
-                    cut_level="medium",
-                    preprocess_model="ffmpeg-outdoor-strong",
-                    audio_model="clearvoice",
-                    stt1_model=quality_model,
-                    stt2_model=secondary_model,
-                    vad_model="ten_vad",
-                    subtitle_llm="gemma4:e4b",
-                    roughcut_llm_model="exaone3.5:7.8b",
-                ),
                 **_decoder_settings(0.42, -2.6, 2.4, 0.6, 8, 1.35),
             },
         },
@@ -178,17 +195,20 @@ def normalize_stt_quality_key(value: str | None) -> str:
     if key in load_stt_quality_presets():
         return key
     aliases = {
+        "빠름": "fast",
         "빠른 인식": "fast",
         "빠른인식": "fast",
         "fast": "fast",
+        "보통": "balanced",
         "균형": "balanced",
         "balance": "balanced",
         "balanced": "balanced",
+        "높음": "precise",
         "정밀 인식": "precise",
         "정밀인식": "precise",
         "precise": "precise",
     }
-    return aliases.get(key, "balanced")
+    return aliases.get(key, "precise")
 
 
 def apply_stt_quality_preset(settings: dict, preset_key: str) -> dict:
@@ -197,5 +217,34 @@ def apply_stt_quality_preset(settings: dict, preset_key: str) -> dict:
     preset = presets[key]
     out = dict(settings)
     out.update(deepcopy(preset.get("settings", {})))
+    user_presets = dict(out.get(STT_QUALITY_USER_PRESET_KEY) or {})
+    user_preset = user_presets.get(key)
+    if isinstance(user_preset, dict):
+        user_settings = user_preset.get("settings", {})
+        if isinstance(user_settings, dict):
+            out.update(deepcopy(user_settings))
+    out["stt_quality_preset"] = key
+    return out
+
+
+def stt_quality_label(value: str | None) -> str:
+    key = normalize_stt_quality_key(value)
+    return STT_QUALITY_PRESET_LABELS.get(key, STT_QUALITY_PRESET_LABELS["precise"])
+
+
+def save_stt_quality_user_preset(settings: dict, preset_key: str) -> dict:
+    key = normalize_stt_quality_key(preset_key)
+    out = dict(settings or {})
+    snapshot = {
+        setting_key: deepcopy(out[setting_key])
+        for setting_key in STT_QUALITY_SAVED_SETTING_KEYS
+        if setting_key in out
+    }
+    user_presets = dict(out.get(STT_QUALITY_USER_PRESET_KEY) or {})
+    user_presets[key] = {
+        "label": stt_quality_label(key),
+        "settings": snapshot,
+    }
+    out[STT_QUALITY_USER_PRESET_KEY] = user_presets
     out["stt_quality_preset"] = key
     return out

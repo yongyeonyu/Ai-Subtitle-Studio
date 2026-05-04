@@ -419,7 +419,6 @@ def _merge_primary_group(primary_item: tuple[str, dict], candidates: list[tuple[
         secondary_score = _candidate_score_100(secondary)
         similarity = text_similarity(primary.get("text", ""), secondary.get("text", ""))
         primary_low = _segment_is_low_confidence(primary)
-        secondary_low = _segment_is_low_confidence(secondary)
         primary_words = _words_from_segment(primary)
         secondary_words = _words_from_segment(secondary)
         has_real_word_timestamps = bool(primary.get("words")) and bool(secondary.get("words"))

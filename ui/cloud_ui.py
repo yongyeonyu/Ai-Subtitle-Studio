@@ -1,4 +1,4 @@
-# Version: 03.02.05
+# Version: 03.14.19
 # Phase: PHASE1-B
 """
 ui/cloud_ui.py
@@ -13,8 +13,7 @@ from core.path_manager import (
     get_icloud_path, get_nas_path, ensure_nas_mounted, get_local_path,
     get_nas_excluded_folders, set_nas_excluded_folders
 )
-from core.settings import load_settings
-from ui.dialogs.folder_dialog import FolderDialog
+from ui.dialogs.folder_dialog import NasFolderDialog
 
 
 class CloudUIMixin:
@@ -52,11 +51,12 @@ class CloudUIMixin:
     def _do_auto_start_pipeline(self, files_list):
         if not files_list:
             return
-        settings = load_settings()
-        mode = settings.get("auto_start_mode", "quality")
         folder = os.path.dirname(files_list[0]) if files_list else None
         self._is_auto_pipeline = True
-        if mode == "fast" and hasattr(self, "_start_batch"):
+        self._auto_audio_tune_per_file = True
+        if hasattr(self, "_set_runtime_quality_override_for_scope"):
+            self._set_runtime_quality_override_for_scope(self._auto_quality_scope_for_files(files_list))
+        if hasattr(self, "_start_batch"):
             self._start_batch(files_list, folder=folder)
         elif self.backend:
             self.backend.start_pipeline(files_list, folder=folder, is_auto_start=True)
@@ -100,7 +100,25 @@ class CloudUIMixin:
     def start_icloud_sync(self):
         self._is_auto_pipeline = True
         self._auto_processing_active = True
+        if hasattr(self, "_set_runtime_quality_override_for_scope"):
+            self._set_runtime_quality_override_for_scope("icloud")
         self.backend.start_pipeline([], is_icloud=True)
+
+    def _auto_quality_scope_for_files(self, files_list) -> str:
+        first = str((files_list or [""])[0] or "")
+        try:
+            nas_root = get_local_path(get_nas_path())
+            if nas_root and first and os.path.commonpath([os.path.abspath(first), os.path.abspath(nas_root)]) == os.path.abspath(nas_root):
+                return "nas"
+        except Exception:
+            pass
+        try:
+            icloud_root = get_icloud_path()
+            if icloud_root and first and os.path.commonpath([os.path.abspath(first), os.path.abspath(icloud_root)]) == os.path.abspath(icloud_root):
+                return "icloud"
+        except Exception:
+            pass
+        return "workspace"
 
     def _get_icloud_files(self):
         path = get_icloud_path()
@@ -202,7 +220,8 @@ class CloudUIMixin:
             return
         local_path = get_local_path(nas_url)
         self._is_auto_pipeline = False
-        dlg = FolderDialog(local_path, self, excluded_folders=get_nas_excluded_folders())
+        self._auto_export_subtitle_video = False
+        dlg = NasFolderDialog(local_path, self, excluded_folders=get_nas_excluded_folders())
         if dlg.exec():
             set_nas_excluded_folders(sorted(dlg.excluded_folders))
             self._add_recent_folder(local_path)
@@ -213,10 +232,16 @@ class CloudUIMixin:
                     self.show_home()
                 return
             if dlg.selected_files:
-                if len(dlg.selected_files) == 1 and self.backend:
-                    self.backend.start_pipeline(dlg.selected_files, folder=local_path)
-                elif len(dlg.selected_files) > 1:
+                self._auto_export_subtitle_video = bool(getattr(dlg, "export_subtitle_video", False))
+                if hasattr(self, "_set_runtime_quality_override_for_scope"):
+                    self._set_runtime_quality_override_for_scope("nas")
+                mode = str(getattr(dlg, "processing_mode", "individual") or "individual")
+                if mode == "multiclip" and len(dlg.selected_files) > 1:
                     self._show_multiclip_then_batch(dlg.selected_files, folder=local_path, show_multiclip=False)
+                elif len(dlg.selected_files) == 1 and self.backend:
+                    self.backend.start_pipeline(dlg.selected_files, folder=local_path)
+                else:
+                    self._start_batch(dlg.selected_files, folder=local_path)
             elif hasattr(self, "_restore_current_work_mode"):
                 self._restore_current_work_mode()
             else:

@@ -1,6 +1,7 @@
-# Version: 03.09.31
+# Version: 03.14.05
 # Phase: PHASE2
 import unittest
+import re
 
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QApplication, QTextEdit
@@ -29,15 +30,51 @@ class _TextEdit:
 
 
 class _VideoPlayer:
-    total_time = 0.0
+    def __init__(self, total_time=0.0):
+        self.total_time = float(total_time)
+        self.seek_calls = []
+
+    def seek(self, sec):
+        self.seek_calls.append(float(sec))
+
+
+class _ScrollBar:
+    def __init__(self):
+        self._value = 0
+
+    def value(self):
+        return self._value
+
+    def setValue(self, value):
+        self._value = int(value)
+
+
+class _TimelineScroll:
+    def __init__(self):
+        self._horizontal = _ScrollBar()
+
+    def horizontalScrollBar(self):
+        return self._horizontal
 
 
 class _Timeline:
     def __init__(self):
         self.updated = None
+        self.active_calls = []
+        self.playhead_calls = []
+        self.canvas = type("Canvas", (), {"playhead_sec": 0.0, "segments": []})()
+        self.scroll = _TimelineScroll()
 
     def update_segments(self, segs, active_sec, total_dur):
         self.updated = (list(segs), active_sec, total_dur)
+        self.canvas.segments = list(segs)
+
+    def set_active(self, sec):
+        self.active_calls.append(float(sec))
+
+    def set_playhead(self, sec, *, preserve_center_lock=False):
+        self.canvas.playhead_sec = float(sec)
+        self.playhead_calls.append((float(sec), bool(preserve_center_lock)))
 
 
 class _Status:
@@ -48,12 +85,16 @@ class _Status:
 class _QueueTimer:
     def __init__(self):
         self.started = False
+        self.stopped = False
 
     def isActive(self):
         return False
 
     def start(self, _ms):
         self.started = True
+
+    def stop(self):
+        self.stopped = True
 
 
 class _ActiveQueueTimer(_QueueTimer):
@@ -83,7 +124,7 @@ class _LivePreviewEditor(EditorSegmentsMixin):
     def __init__(self):
         self.status_lbl = _Status()
         self.timeline = _Timeline()
-        self.video_player = type("VideoPlayer", (), {"total_time": 10.0})()
+        self.video_player = _VideoPlayer(total_time=10.0)
         self._active_seg_start = None
         self._cached_segs = []
         self._segment_queue = []
@@ -139,6 +180,77 @@ class _UndoableLivePreviewEditor(_LivePreviewEditor):
                 )
             )
         self._update_timeline_with_confirmed_and_preview(self._cached_segs)
+
+
+class _ReplacementEditor(EditorSegmentsMixin):
+    def __init__(self):
+        self.text_edit = QTextEdit()
+        self.video_player = _VideoPlayer(total_time=20.0)
+        self._cached_segs = []
+        self.dirty = False
+        self.scheduled = False
+        self.refreshed = False
+
+    def load_blocks(self, rows):
+        doc = self.text_edit.document()
+        cur = QTextCursor(doc)
+        cur.select(QTextCursor.SelectionType.Document)
+        cur.removeSelectedText()
+        for idx, (text, start, is_gap) in enumerate(rows):
+            if idx > 0:
+                cur.insertText("\n")
+            cur.insertText(text)
+            cur.block().setUserData(SubtitleBlockData("00", float(start), bool(is_gap)))
+
+    def _mark_dirty(self):
+        self.dirty = True
+
+    def _schedule_timeline(self):
+        self.scheduled = True
+
+    def _refresh_video_subtitle_context(self):
+        self.refreshed = True
+
+
+class _ActualSelectionEditor(EditorMulticlipOpsMixin, EditorSegmentsMixin):
+    _JUNK_TS_RE = re.compile(r"(?!)")
+    _JUNK_NO_BRACKET_3PART = re.compile(r"(?!)")
+    _JUNK_NO_BRACKET_3PART_END = re.compile(r"(?!)")
+    _JUNK_START_RE = re.compile(r"(?!)")
+
+    def __init__(self):
+        self.status_lbl = _Status()
+        self.text_edit = QTextEdit()
+        self.text_edit.update_margins = lambda: None
+        self.timeline = _Timeline()
+        self.video_player = _VideoPlayer(total_time=100.0)
+        self.settings = {
+            "continuous_threshold": 2.0,
+            "gap_push_rate": 0.7,
+            "single_subtitle_end": 0.2,
+            "spk1_id": "00",
+            "spk2_id": "01",
+            "subtitle_quality_auto_check_after_generate": False,
+        }
+        self.video_fps = 30.0
+        self._active_seg_start = None
+        self._cached_segs = []
+        self._segment_queue = []
+        self._queue_timer = _QueueTimer()
+        self._sync_lock = False
+        self._is_initial_load = False
+        self.dirty = False
+        self.scheduled = False
+        self.refreshed = False
+
+    def _mark_dirty(self):
+        self.dirty = True
+
+    def _schedule_timeline(self):
+        self.scheduled = True
+
+    def _refresh_video_subtitle_context(self):
+        self.refreshed = True
 
 
 class _Editor(EditorMulticlipOpsMixin):
@@ -234,6 +346,108 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor.reload_called_with[0]["quality"]["confidence_label"], "green")
         self.assertEqual(len(editor._live_stt_preview_segments), 1)
         self.assertEqual(editor._live_stt_preview_segments[0]["text"], "STT1 후보")
+
+    def test_select_stt_candidate_anchors_playhead_to_candidate_start(self):
+        editor = _LivePreviewEditor()
+        editor.timeline.canvas.playhead_sec = 99.0
+        editor.timeline.scroll.horizontalScrollBar().setValue(37)
+        editor._cached_segs = [{"start": 90.0, "end": 100.0, "text": "끝 자막", "speaker": "00"}]
+        editor.preview_stt_segments([
+            {"start": 12.5, "end": 13.5, "text": "STT2 후보", "stt_preview_source": "STT2"}
+        ])
+
+        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
+
+        self.assertEqual(editor._active_seg_start, 12.5)
+        self.assertEqual(editor.timeline.active_calls[-1], 12.5)
+        self.assertEqual(editor.timeline.playhead_calls[-1], (12.5, True))
+        self.assertEqual(editor.timeline.canvas.playhead_sec, 12.5)
+        self.assertEqual(editor.video_player.seek_calls[-1], 12.5)
+        self.assertEqual(editor.timeline.scroll.horizontalScrollBar().value(), 37)
+
+    def test_select_stt_candidate_fits_near_boundary_candidate_to_original_slot(self):
+        editor = _LivePreviewEditor()
+        editor.video_fps = 30.0
+        editor._cached_segs = [{"start": 1.0, "end": 2.0, "text": "기존", "speaker": "00"}]
+        editor.preview_stt_segments([
+            {"start": 0.92, "end": 2.08, "text": "STT2 후보", "stt_preview_source": "STT2"}
+        ])
+
+        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
+
+        self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["STT2 후보"])
+        self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(1.0, 2.0)])
+        self.assertEqual(editor.reload_called_with[0]["stt_selected_source"], "STT2")
+        self.assertEqual(editor.reload_called_with[0]["stt_candidates"][0]["_stt_placement_mode"], "replace_original_slot")
+        self.assertEqual(editor.timeline.playhead_calls[-1], (1.0, True))
+
+    def test_select_stt_candidate_targets_best_original_slot_when_candidate_bleeds_across_boundary(self):
+        editor = _LivePreviewEditor()
+        editor.video_fps = 30.0
+        editor._cached_segs = [
+            {"start": 0.0, "end": 1.0, "text": "앞 자막", "speaker": "00"},
+            {"start": 1.0, "end": 2.0, "text": "기존", "speaker": "00"},
+        ]
+        editor.preview_stt_segments([
+            {"start": 0.94, "end": 2.04, "text": "STT1 후보", "stt_preview_source": "STT1"}
+        ])
+
+        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
+
+        self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["앞 자막", "STT1 후보"])
+        self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(0.0, 1.0), (1.0, 2.0)])
+        self.assertEqual(editor.reload_called_with[1]["stt_candidates"][0]["_stt_placement_mode"], "replace_original_slot")
+
+    def test_select_stt_candidate_preserve_reload_flush_does_not_autoseek_to_tail(self):
+        editor = _ActualSelectionEditor()
+        try:
+            editor._reload_segments_from_list([
+                {"start": 0.0, "end": 1.0, "text": "앞", "speaker": "00"},
+                {"start": 90.0, "end": 95.0, "text": "뒤", "speaker": "00"},
+            ], preserve_view=True)
+            editor.timeline.playhead_calls.clear()
+            editor.video_player.seek_calls.clear()
+            editor.timeline.canvas.playhead_sec = 90.0
+            editor.preview_stt_segments([
+                {"start": 0.0, "end": 1.0, "text": "STT1 선택", "stt_preview_source": "STT1"}
+            ])
+
+            editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
+            editor._flush_queue()
+
+            self.assertEqual(editor.timeline.playhead_calls, [(0.0, True)])
+            self.assertEqual(editor.video_player.seek_calls, [0.0])
+            self.assertEqual(editor._segment_queue, [])
+            self.assertTrue(editor._queue_timer.stopped)
+        finally:
+            editor.text_edit.close()
+
+    def test_replace_text_in_all_subtitles_skips_gap_blocks(self):
+        editor = _ReplacementEditor()
+        try:
+            editor.load_blocks([
+                ("BMW랑 BMW", 0.0, False),
+                ("BMW 쉬는중", 1.0, True),
+                ("끝 BMW", 2.0, False),
+            ])
+            block = editor.text_edit.document().findBlockByNumber(0)
+            anchor = QTextCursor(block)
+            anchor.setPosition(block.position())
+            end = QTextCursor(block)
+            end.setPosition(block.position() + 3)
+
+            replaced = editor._replace_text_in_all_subtitles("BMW", "비엠", anchor=anchor, end_cursor=end)
+
+            self.assertEqual(replaced, 3)
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["비엠랑 비엠", "BMW 쉬는중", "끝 비엠"])
+            self.assertEqual([seg["text"] for seg in editor._cached_segs], ["비엠랑 비엠", "BMW 쉬는중", "끝 비엠"])
+            self.assertTrue(editor._cached_segs[1]["is_gap"])
+            self.assertTrue(editor.dirty)
+            self.assertTrue(editor.scheduled)
+            self.assertTrue(editor.refreshed)
+            self.assertEqual(editor.text_edit.document().findBlockByNumber(0).userData().start_sec, 0.0)
+        finally:
+            editor.text_edit.close()
 
     def test_select_stt_candidate_trims_overlapping_final_segment_edges(self):
         editor = _LivePreviewEditor()

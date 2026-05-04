@@ -1,4 +1,4 @@
-# Version: 03.09.08
+# Version: 03.14.03
 # Phase: PHASE2
 """
 ui/editor_pipeline.py
@@ -9,8 +9,8 @@ ui/editor_pipeline.py
 - 기존 기능 100% 유지
 """
 import os, time, threading
-from PyQt6.QtWidgets import QMessageBox, QMenu
-from PyQt6.QtCore import QTimer, QPoint, QObject, pyqtSignal
+from PyQt6.QtWidgets import QMenu
+from PyQt6.QtCore import QTimer, QObject, pyqtSignal
 
 from core.runtime import config
 from core.runtime.logger import get_logger
@@ -27,6 +27,30 @@ class PartialSignals(QObject):
 
 
 class EditorPipelineMixin:
+    def _is_video_playing_for_timeline_fit(self) -> bool:
+        try:
+            player = getattr(getattr(self, "video_player", None), "media_player", None)
+            return bool(player and player.playbackState() == player.PlaybackState.PlayingState)
+        except Exception:
+            return False
+
+    def _auto_fit_timeline_if_user_view_allows(self, timeline) -> bool:
+        if timeline is None or self._is_video_playing_for_timeline_fit():
+            return False
+        auto_fit = getattr(timeline, "auto_fit_to_view", None)
+        if callable(auto_fit):
+            try:
+                return bool(auto_fit())
+            except Exception:
+                return False
+        if bool(getattr(timeline, "_manual_zoom_since_fit", False)):
+            return False
+        try:
+            timeline.fit_to_view()
+            return True
+        except Exception:
+            return False
+
     # ---------------------------------------------------------
     # Backend Signal Hook
     # ---------------------------------------------------------
@@ -548,11 +572,7 @@ class EditorPipelineMixin:
                     except Exception:
                         pass
 
-            try:
-                if timeline is not None:
-                    timeline.fit_to_view()
-            except Exception:
-                pass
+            self._auto_fit_timeline_if_user_view_allows(timeline)
 
         except Exception as exc:
             try:
@@ -568,10 +588,6 @@ class EditorPipelineMixin:
     def _add_cut_boundary_level_submenu(self, menu):
         try:
             from core.settings import load_settings
-            try:
-                from core.settings import save_settings
-            except Exception:
-                save_settings = None
             try:
                 from core.cut_boundary import cut_boundary_level
             except Exception:

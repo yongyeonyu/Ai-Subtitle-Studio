@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import json
 import os
 import time
 from typing import Iterable
+
+from core.project.project_io import read_project_file, write_project_file
 
 
 def _cut_sec(row) -> float | None:
@@ -153,8 +154,7 @@ def apply_topicless_placeholders_to_project(
     if not rows:
         return []
 
-    with open(project_path, "r", encoding="utf-8") as f:
-        project = json.load(f)
+    project = read_project_file(project_path)
 
     project.setdefault("analysis", {})
     analysis = project["analysis"]
@@ -188,8 +188,7 @@ def apply_topicless_placeholders_to_project(
 
     analysis["cut_boundary_topicless_updated_at"] = time.time()
 
-    with open(project_path, "w", encoding="utf-8") as f:
-        json.dump(project, f, ensure_ascii=False, indent=2)
+    write_project_file(project_path, project)
 
     return rows
 
@@ -199,8 +198,7 @@ def extract_topicless_placeholders_from_project(project_path: str) -> list[dict]
         return []
 
     try:
-        with open(project_path, "r", encoding="utf-8") as f:
-            project = json.load(f)
+        project = read_project_file(project_path)
     except Exception:
         return []
 

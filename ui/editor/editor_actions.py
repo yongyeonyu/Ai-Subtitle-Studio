@@ -1,4 +1,4 @@
-# Version: 03.09.28
+# Version: 03.14.07
 # Phase: PHASE2
 """
 ui/editor_actions.py
@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 from PyQt6.QtWidgets import QMessageBox
-from PyQt6.QtCore import Qt
 
 from core.runtime import config
 from core.runtime.logger import get_logger
@@ -76,11 +75,76 @@ class EditorActionsMixin:
         except Exception:
             self._saved_segments_signature = ""
 
+    def _current_project_path_for_dirty_check(self) -> str:
+        for owner in (self, self.window() if hasattr(self, "window") else None):
+            try:
+                project_path = str(getattr(owner, "_current_project_path", "") or "")
+            except Exception:
+                project_path = ""
+            if project_path:
+                return project_path
+        return ""
+
+    def _project_file_dirty_signature(self, project_path: str | None = None) -> str:
+        project_path = str(project_path or self._current_project_path_for_dirty_check() or "")
+        if not project_path or not os.path.exists(project_path):
+            return ""
+        with open(project_path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+
+    def _remember_saved_project_file(self, project_path: str | None = None):
+        project_path = str(project_path or self._current_project_path_for_dirty_check() or "")
+        self._saved_project_path = project_path
+        try:
+            self._saved_project_signature = self._project_file_dirty_signature(project_path)
+        except Exception:
+            self._saved_project_signature = ""
+
+    def _project_file_has_unsaved_changes(self) -> bool:
+        saved_path = str(getattr(self, "_saved_project_path", "") or "")
+        saved_sig = str(getattr(self, "_saved_project_signature", "") or "")
+        project_path = self._current_project_path_for_dirty_check()
+        if not saved_path or not saved_sig or not project_path:
+            return False
+        if os.path.abspath(project_path) != os.path.abspath(saved_path):
+            return True
+        try:
+            current_sig = self._project_file_dirty_signature(project_path)
+        except Exception:
+            return False
+        return bool(current_sig and current_sig != saved_sig)
+
+    def _mark_unsaved_project_change_detected(self):
+        try:
+            self._is_dirty = True
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "sm") and not getattr(self.sm, "is_dirty", False):
+                self.sm.is_dirty = True
+                if hasattr(self.sm, "_broadcast"):
+                    self.sm._broadcast()
+        except Exception:
+            pass
+        try:
+            main_w = self.window()
+            if hasattr(main_w, "_refresh_saved_status_label"):
+                main_w._refresh_saved_status_label(is_dirty=True, touch_saved_time=False)
+        except Exception:
+            pass
+
     def _has_unsaved_changes(self) -> bool:
+        try:
+            if self._project_file_has_unsaved_changes():
+                self._mark_unsaved_project_change_detected()
+                return True
+        except Exception:
+            pass
         saved_sig = getattr(self, "_saved_segments_signature", None)
         if saved_sig:
             try:
-                return self._segments_dirty_signature() != saved_sig
+                if self._segments_dirty_signature() != saved_sig:
+                    return True
             except Exception:
                 pass
         try:
@@ -150,6 +214,7 @@ class EditorActionsMixin:
             get_logger().log("💾 저장 취소: STT 미완료 세그먼트 확인 필요")
             return False
 
+        self._last_saved_srt_outputs = []
         try:
             main_w = self.window()
             multiclip_files = list(getattr(main_w, '_multiclip_files', []) or [])
@@ -161,6 +226,7 @@ class EditorActionsMixin:
                 srt_path = get_srt_path(self.media_path)
                 save_srt(srt_output_segs, srt_path)
                 get_logger().log(f"💾 저장 완료: {os.path.basename(srt_path)}")
+                self._last_saved_srt_outputs = [(srt_path, self.media_path)]
                 saved_any = True
             else:
                 get_logger().log("⚠️ 저장 실패: media_path가 없어 SRT 저장 경로를 만들 수 없습니다.")
@@ -177,16 +243,20 @@ class EditorActionsMixin:
         except Exception:
             pass
 
-        self._remember_saved_segments(segs)
-        self._mark_save_completed(touch_saved_time=True)
-
         if not skip_auto_next:
             self._skip_prev_confirm_once = True
 
+        self._remember_saved_segments(segs)
         try:
             self._auto_save_project(segs)
         except Exception as e:
             get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {e}")
+        try:
+            self._auto_export_saved_subtitle_videos()
+        except Exception as e:
+            get_logger().log(f"⚠️ 자막영상 자동 출력 실패: {e}")
+        self._remember_saved_project_file()
+        self._mark_save_completed(touch_saved_time=True)
         try:
             from core.personalization.text_lora_dataset import accumulate_personalization_dataset
 
@@ -262,6 +332,7 @@ class EditorActionsMixin:
             clip_segs.setdefault(cidx, []).append(seg)
 
         saved_count = 0
+        saved_outputs = []
 
         # 개별 SRT 저장 (클립 로컬 타임스탬프)
         for i, clip_file in enumerate(multiclip_files):
@@ -284,6 +355,7 @@ class EditorActionsMixin:
                 local_segs.append(ls)
 
             save_srt(local_segs, srt_path)
+            saved_outputs.append((srt_path, clip_file))
             saved_count += 1
             get_logger().log(
                 f"💾 개별 저장: {os.path.basename(srt_path)} ({len(local_segs)}개)"
@@ -313,6 +385,7 @@ class EditorActionsMixin:
         combined_saved = False
         if combined_segs:
             save_srt(combined_segs, combined_srt_path)
+            saved_outputs.append((combined_srt_path, combined_srt_path))
             combined_saved = True
             get_logger().log(
                 f"💾 통합 저장: {os.path.basename(combined_srt_path)} "
@@ -321,6 +394,7 @@ class EditorActionsMixin:
         elif segs:
             non_gap = [s for s in segs if not s.get("is_gap") and s.get("text", "").strip()]
             save_srt(non_gap, combined_srt_path)
+            saved_outputs.append((combined_srt_path, combined_srt_path))
             combined_saved = True
             get_logger().log(
                 f"💾 통합 저장: {os.path.basename(combined_srt_path)} "
@@ -328,15 +402,48 @@ class EditorActionsMixin:
             )
 
         get_logger().log(f"✅ 멀티클립 저장 완료: 개별 {saved_count}개 + 통합 1개")
+        self._last_saved_srt_outputs = saved_outputs
         return bool(saved_count or combined_saved)
+
+    def _auto_export_saved_subtitle_videos(self):
+        try:
+            main_w = self.window()
+            enabled = bool(getattr(main_w, "_auto_export_subtitle_video", False))
+        except Exception:
+            enabled = False
+        if not enabled:
+            return
+
+        outputs = list(getattr(self, "_last_saved_srt_outputs", []) or [])
+        if not outputs:
+            return
+        try:
+            from ui.dialogs.export_dialog import _load_es
+            from core.renderer import render_subtitle_mov
+
+            export_settings = _load_es()
+        except Exception as exc:
+            get_logger().log(f"⚠️ 자막영상 출력 설정 로드 실패: {exc}")
+            return
+
+        total = len(outputs)
+        for idx, item in enumerate(outputs, start=1):
+            try:
+                srt_path, target_file = item
+                if not srt_path or not os.path.exists(srt_path):
+                    continue
+                label = os.path.basename(str(target_file or srt_path))
+                get_logger().log(f"🎥 자막영상 자동 출력 [{idx}/{total}]: {label}")
+                render_subtitle_mov(srt_path, target_file or srt_path, export_settings, idx, total)
+            except Exception as exc:
+                get_logger().log(f"⚠️ 자막영상 자동 출력 실패 [{idx}/{total}]: {exc}")
 
     # ---------------------------------------------------------
     # 프로젝트 자동 저장
     # ---------------------------------------------------------
     def _auto_save_project(self, segs: list = None):
         from core.project.project_manager import (
-            save_project, create_project, load_project,
-            ensure_projects_dir, PROJECTS_DIR
+            save_project, create_project
         )
 
         media_path = getattr(self, 'media_path', None)

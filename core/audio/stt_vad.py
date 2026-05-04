@@ -11,7 +11,6 @@ import os
 import subprocess
 import tempfile
 
-from core.runtime import config
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.runtime.logger import get_logger
 

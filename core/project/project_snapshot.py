@@ -1,4 +1,4 @@
-# Version: 03.09.28
+# Version: 03.14.28
 # Phase: PHASE2
 """
 core/project/project_snapshot.py
@@ -6,13 +6,13 @@ Project JSON save/load helpers for PHASE1-B.
 """
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
 from typing import Any
 
 from core.runtime import config
-from core.project.project_context import build_editor_state
+from core.project.project_context import STT_SEGMENT_METADATA_KEYS, build_editor_state, project_stt_preview_segments
+from core.project.project_io import read_project_file, write_project_file
 
 PROJECTS_DIR = os.path.join(config.BASE_DIR, 'projects')
 os.makedirs(PROJECTS_DIR, exist_ok=True)
@@ -68,7 +68,7 @@ def _ui_state(editor) -> dict[str, Any]:
 def _normalized_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out = []
     for seg in segments or []:
-        out.append({
+        item = {
             'start': float(seg.get('start', 0.0) or 0.0),
             'end': float(seg.get('end', 0.0) or 0.0),
             'text': str(seg.get('text', '') or ''),
@@ -78,7 +78,11 @@ def _normalized_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]
             'stt_pending': bool(seg.get('stt_pending', False)),
             'original_text': str(seg.get('original_text', '') or ''),
             'dictated_text': str(seg.get('dictated_text', '') or ''),
-        })
+        }
+        for key in STT_SEGMENT_METADATA_KEYS:
+            if key in seg:
+                item[key] = seg.get(key)
+        out.append(item)
     return out
 
 
@@ -111,6 +115,14 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
     mode = 'multiclip' if len(media_files) > 1 else 'single'
     project_path = _auto_project_path(owner, media_files, mode)
     stt_preview_segments = list(getattr(editor, "_live_stt_preview_segments", []) or []) if editor is not None else []
+    existing_project = {}
+    try:
+        if os.path.exists(project_path):
+            existing_project = read_project_file(project_path)
+            if not stt_preview_segments:
+                stt_preview_segments = project_stt_preview_segments(existing_project)
+    except Exception:
+        existing_project = {}
     provisional_cut_boundaries = []
     voice_activity_segments = []
     if editor is not None:
@@ -175,13 +187,7 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
             for source, rows in stt_tracks.items()
             if isinstance(rows, list)
         }
-    try:
-        if os.path.exists(project_path):
-            with open(project_path, 'r', encoding='utf-8') as f:
-                existing = json.load(f)
-            payload['roughcut_state'] = existing.get('roughcut_state', {})
-    except Exception:
-        payload['roughcut_state'] = {}
+    payload['roughcut_state'] = existing_project.get('roughcut_state', {}) if isinstance(existing_project, dict) else {}
     payload.setdefault('roughcut_state', {})
     return payload
 
@@ -190,13 +196,10 @@ def save_project_snapshot(owner, segments: list[dict[str, Any]] | None = None, s
     payload = build_project_payload(owner, segments=segments, srt_path=srt_path)
     payload['save_reason'] = reason
     project_path = payload['project_path']
-    os.makedirs(os.path.dirname(project_path), exist_ok=True)
-    with open(project_path, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+    write_project_file(project_path, payload)
     setattr(owner, '_current_project_path', project_path)
     return project_path
 
 
 def load_project_snapshot(project_path: str) -> dict[str, Any]:
-    with open(project_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    return read_project_file(project_path)

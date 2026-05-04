@@ -8,7 +8,7 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QTableWidgetItem, QWidget
+from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QComboBox, QTableWidgetItem, QWidget
 
 from ui.main.main_window import MainWindow
 
@@ -141,8 +141,24 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(len(nav_buttons), 4)
             self.assertTrue(all(btn.maximumHeight() == 30 for btn in nav_buttons))
             preset_panel = getattr(window, "sidebar_preset_panel", None)
-            self.assertIsNotNone(preset_panel)
-            self.assertLessEqual(window.sidebar_terminal_panel.maximumHeight(), 132)
+            self.assertIsNone(preset_panel)
+            quality_combo = getattr(window, "sidebar_subtitle_quality_combo", None)
+            self.assertIsNotNone(quality_combo)
+            self.assertEqual([quality_combo.itemText(i) for i in range(quality_combo.count())], ["빠름", "보통", "높음"])
+            self.assertGreaterEqual(quality_combo.view().minimumWidth(), 104)
+            self.assertIn("QAbstractItemView::item", quality_combo.styleSheet())
+            quality_row = window.home_page.findChild(QWidget, "SidebarSubtitleQualityRow")
+            self.assertIsNotNone(quality_row)
+            self.assertEqual(quality_row.height(), 24)
+            self.assertEqual(getattr(window, "sidebar_subtitle_quality_save_btn", None).text(), "저장")
+            self.assertGreaterEqual(window.sidebar_settings_label.minimumHeight(), 120)
+            self.assertGreaterEqual(window.sidebar_settings_label.parentWidget().minimumHeight(), 166)
+            quality_combos = [
+                combo for combo in window.home_page.findChildren(QComboBox)
+                if [combo.itemText(i) for i in range(combo.count())] == ["빠름", "보통", "높음"]
+            ]
+            self.assertGreaterEqual(len(quality_combos), 3)
+            self.assertGreaterEqual(window.sidebar_terminal_panel.maximumHeight(), 180)
         finally:
             window.close()
             window.deleteLater()
@@ -164,6 +180,12 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIn("font-family:Menlo, Monaco, Consolas, monospace", html)
             self.assertIn("font-weight:400", html)
             self.assertIn("model:stt1", html)
+            self.assertNotIn("model:audio", html)
+            self.assertNotIn("model:vad", html)
+            self.assertNotIn("DeepFilter<span", html)
+            self.assertNotIn("Silero<span", html)
+            self.assertNotIn(">단계</td>", html)
+            self.assertNotIn(">모델</td>", html)
             self.assertNotIn("text-decoration:none; font-weight:800", html)
 
             window._pipeline_current_stage_keys = lambda _settings: {"stt1"}
@@ -180,12 +202,57 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             )
             self.assertIn("color:#00D46A; padding:1px 10px 1px 0; font-weight:400;", progress_html)
             self.assertIn("color:#FFD60A; padding:1px 10px 1px 0; font-weight:400;", progress_html)
-            self.assertIn("style='color:#00D46A; text-decoration:none;", progress_html)
+            self.assertIn("color:#00D46A; padding:1px 0; font-family:Menlo", progress_html)
             self.assertIn("style='color:#FFD60A; text-decoration:none;", progress_html)
         finally:
             window.close()
             window.deleteLater()
             self.app.processEvents()
+
+    def test_subtitle_quality_combos_keep_independent_scopes(self):
+        path_settings = {
+            "icloud_stt_quality_preset": "fast",
+            "nas_stt_quality_preset": "balanced",
+        }
+
+        def _load_path_settings():
+            return dict(path_settings)
+
+        def _save_path_settings(settings):
+            path_settings.update(settings)
+
+        with mock.patch("ui.home_sidebar._path_load_settings", side_effect=_load_path_settings), \
+                mock.patch("ui.home_sidebar._path_save_settings", side_effect=_save_path_settings):
+            window = MainWindow()
+            try:
+                window._unified_dashboard = True
+                window._build_home_content()
+                self.app.processEvents()
+
+                combos = {
+                    str(combo.property("subtitleQualityScope") or "workspace"): combo
+                    for combo in window.home_page.findChildren(QComboBox)
+                    if [combo.itemText(i) for i in range(combo.count())] == ["빠름", "보통", "높음"]
+                }
+                self.assertEqual(combos["icloud"].currentData(), "fast")
+                self.assertEqual(combos["nas"].currentData(), "balanced")
+                for scope in ("icloud", "nas"):
+                    combo = combos[scope]
+                    card = combo.parentWidget()
+                    self.assertIsNotNone(card)
+                    self.assertGreaterEqual(card.width() - combo.geometry().right() - 1, 10)
+
+                combos["icloud"].setCurrentIndex(combos["icloud"].findData("precise"))
+                self.assertEqual(path_settings["icloud_stt_quality_preset"], "precise")
+                self.assertEqual(path_settings["nas_stt_quality_preset"], "balanced")
+                self.assertEqual(combos["nas"].currentData(), "balanced")
+
+                override = window._set_runtime_quality_override_for_scope("nas")
+                self.assertEqual(override["stt_quality_preset"], "balanced")
+            finally:
+                window.close()
+                window.deleteLater()
+                self.app.processEvents()
 
     def test_pipeline_roughcut_completion_marks_final_stage_green(self):
         window = MainWindow()
@@ -210,6 +277,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             )
 
             self.assertIn(">7</td>", html)
+            self.assertIn(">8</td>", html)
             self.assertIn("러프컷 LLM", html)
             self.assertIn("style='color:#00D46A; text-decoration:none;", html)
         finally:
@@ -277,6 +345,74 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.close()
             window.deleteLater()
             self.app.processEvents()
+
+    def test_confirmed_cut_boundary_lines_do_not_block_completion(self):
+        window = MainWindow()
+        try:
+            editor = SimpleNamespace(
+                _auto_cut_boundary_scan_active=False,
+                _auto_cut_boundary_scan_lines=[
+                    {"timeline_sec": 1.2, "status": "confirmed"},
+                    {"timeline_sec": 2.4, "verified": True},
+                ],
+                _roughcut_draft_status="idle",
+                _last_roughcut_draft_major_count=None,
+                sm=SimpleNamespace(state="ST_SAVED"),
+            )
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: False
+
+            completed = window._pipeline_completed_stage_keys(
+                {
+                    "stt_ensemble_enabled": False,
+                    "selected_vad": "none",
+                    "roughcut_llm_enabled": False,
+                },
+                set(),
+            )
+
+            self.assertIn("cut_boundary", completed)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_unconfirmed_cut_boundary_lines_keep_cut_stage_pending(self):
+        window = MainWindow()
+        try:
+            editor = SimpleNamespace(
+                _auto_cut_boundary_scan_active=False,
+                _auto_cut_boundary_scan_lines=[{"timeline_sec": 1.2, "status": "provisional"}],
+                _roughcut_draft_status="idle",
+                _last_roughcut_draft_major_count=None,
+                sm=SimpleNamespace(state="ST_SAVED"),
+            )
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: False
+
+            completed = window._pipeline_completed_stage_keys(
+                {
+                    "stt_ensemble_enabled": False,
+                    "selected_vad": "none",
+                    "roughcut_llm_enabled": False,
+                },
+                set(),
+            )
+
+            self.assertNotIn("cut_boundary", completed)
+            self.assertTrue(window._cut_boundary_scan_pending(editor))
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_timeline_cut_boundary_marker_verified_statuses(self):
+        from ui.timeline.timeline_paint import cut_boundary_scan_marker_verified
+
+        self.assertTrue(cut_boundary_scan_marker_verified({"status": "confirmed"}))
+        self.assertTrue(cut_boundary_scan_marker_verified({"status": "verified"}))
+        self.assertTrue(cut_boundary_scan_marker_verified({"confirmed": True}))
+        self.assertFalse(cut_boundary_scan_marker_verified({"status": "provisional"}))
 
     def test_sidebar_queue_status_is_plain_and_eta_header_is_full_text(self):
         window = MainWindow()
@@ -461,7 +597,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_home_stops_running_backend_and_runtime_processes(self):
+    def test_home_preserves_running_backend_and_runtime_processes(self):
         window = MainWindow()
 
         class _Editor(QWidget):
@@ -515,13 +651,13 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                  }) as cleanup_runtime:
                 window.show_home()
 
-            self.assertTrue(editor.stopped)
-            self.assertFalse(editor._roughcut_draft_timer.isActive())
-            self.assertFalse(editor._roughcut_draft_pending)
-            self.assertEqual(editor._roughcut_draft_generation, 4)
-            self.assertIn("idle", editor.statuses)
-            self.assertTrue(backend.stopped)
-            cleanup_runtime.assert_called()
+            self.assertFalse(editor.stopped)
+            self.assertTrue(editor._roughcut_draft_timer.isActive())
+            self.assertTrue(editor._roughcut_draft_pending)
+            self.assertEqual(editor._roughcut_draft_generation, 3)
+            self.assertNotIn("idle", editor.statuses)
+            self.assertFalse(backend.stopped)
+            cleanup_runtime.assert_not_called()
         finally:
             window.backend = None
             window._editor_widget = None
@@ -790,6 +926,116 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             cleanup_runtime.assert_not_called()
         finally:
             window.backend = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_app_exit_force_does_not_log_pipeline_stop_for_idle_backend(self):
+        window = MainWindow()
+
+        class _Backend:
+            _active = False
+
+            def __init__(self):
+                self.stopped = False
+
+            def stop(self, *, log_context="파이프라인 중단"):
+                self.stopped = True
+                self.log_context = log_context
+
+        backend = _Backend()
+        try:
+            window._editor_widget = None
+            window.backend = backend
+            with mock.patch(
+                "core.platform_compat.cleanup_app_runtime_processes",
+                return_value={
+                    "ollama_models": 0,
+                    "ollama_processes": 0,
+                    "child_processes": 0,
+                    "legacy_preview_ffmpeg": 0,
+                },
+            ):
+                cleaned = window._cleanup_runtime_for_navigation(
+                    context="앱 종료", timeout_sec=0.1, force=True
+                )
+
+            self.assertFalse(cleaned)
+            self.assertFalse(backend.stopped)
+        finally:
+            window.backend = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_app_exit_force_passes_context_to_active_backend_stop(self):
+        window = MainWindow()
+
+        class _Backend:
+            def __init__(self):
+                self._active = True
+                self.log_context = None
+
+            def stop(self, *, log_context="파이프라인 중단"):
+                self.log_context = log_context
+                self._active = False
+
+        backend = _Backend()
+        try:
+            window._editor_widget = None
+            window.backend = backend
+            with mock.patch(
+                "core.platform_compat.cleanup_app_runtime_processes",
+                return_value={
+                    "ollama_models": 0,
+                    "ollama_processes": 0,
+                    "child_processes": 0,
+                    "legacy_preview_ffmpeg": 0,
+                },
+            ):
+                cleaned = window._cleanup_runtime_for_navigation(
+                    context="앱 종료", timeout_sec=0.1, force=True
+                )
+
+            self.assertTrue(cleaned)
+            self.assertEqual(backend.log_context, "앱 종료")
+        finally:
+            window.backend = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_repeated_home_does_not_cleanup_same_idle_editor_twice(self):
+        window = MainWindow()
+
+        class _Editor(QWidget):
+            def __init__(self):
+                super().__init__()
+                self.sm = SimpleNamespace(is_locked=False, state="ST_IDLE")
+                self._is_ai_processing = False
+
+        editor = _Editor()
+        try:
+            window._editor_widget = editor
+            with mock.patch(
+                "core.platform_compat.cleanup_app_runtime_processes",
+                return_value={
+                    "ollama_models": 1,
+                    "ollama_processes": 0,
+                    "child_processes": 0,
+                    "legacy_preview_ffmpeg": 0,
+                },
+            ) as cleanup_runtime:
+                first = window._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.1)
+                second = window._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.1)
+
+            self.assertTrue(first)
+            self.assertFalse(second)
+            cleanup_runtime.assert_called_once()
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
             window.close()
             window.deleteLater()
             self.app.processEvents()

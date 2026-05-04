@@ -1,85 +1,13 @@
-# Version: 03.14.00
+# Version: 03.14.12
 # Phase: PHASE2
 """Curated/default audio preset data for AI Subtitle Studio."""
 
 from __future__ import annotations
 
-from core.runtime import config
-
-
-def _stt1_model() -> str:
-    return "mlx-community/whisper-large-v3-mlx" if config.IS_MAC else "large-v3"
-
-
-def _stt2_model() -> str:
-    return "youngouk/ghost613-turbo-korean-4bit-mlx" if config.IS_MAC else "ghost613/faster-whisper-large-v3-turbo-korean"
-
-
-def _roughcut_llm(model_name: str) -> dict:
-    enabled = bool(model_name and "사용 안함" not in model_name)
-    return {
-        "roughcut_llm_enabled": enabled,
-        "roughcut_llm_use_override": enabled,
-        "roughcut_llm_provider": "ollama" if enabled else "none",
-        "roughcut_llm_model": model_name if enabled else "사용 안함",
-    }
-
-
-def _full_stack_recommendation(
-    *,
-    cut_level: str,
-    preprocess_model: str,
-    audio_model: str,
-    stt1_model: str,
-    stt2_model: str,
-    vad_model: str,
-    subtitle_llm: str,
-    roughcut_llm_model: str,
-) -> dict:
-    cut_level = str(cut_level or "off").lower()
-    if cut_level == "high":
-        cut_level = "medium"
-    enabled = str(cut_level or "off").lower() != "off"
-    return {
-        "audio_preset_recommended_cut_boundary": cut_level,
-        "audio_preset_recommended_preprocess_model": preprocess_model,
-        "audio_preset_recommended_audio_model": audio_model,
-        "audio_preset_recommended_stt1": stt1_model,
-        "audio_preset_recommended_stt2": stt2_model,
-        "audio_preset_recommended_vad": vad_model,
-        "audio_preset_recommended_subtitle_llm": subtitle_llm,
-        "audio_preset_recommended_roughcut_llm": roughcut_llm_model,
-        "cut_boundary_level": cut_level,
-        "scan_cut_boundary_level": cut_level,
-        "scan_cut_level": cut_level,
-        "cut_boundary_detection_enabled": enabled,
-        "scan_cut_enabled": enabled,
-        "scan_cut_auto_enabled": enabled,
-        "cut_boundary_enabled": enabled,
-        "selected_audio_ai": audio_model,
-        "selected_vad": vad_model,
-        "selected_whisper_model": stt1_model,
-        "selected_whisper_model_secondary": stt2_model,
-        "stt_ensemble_enabled": True,
-        "stt_ensemble_llm_judge_enabled": True,
-        "selected_model": subtitle_llm,
-        **_roughcut_llm(roughcut_llm_model),
-    }
-
 CURATED_AUDIO_PRESET_SPECS = {
     "실내-마이크유": {
         "base": "실내일반",
         "description": "실내 수음 + 외부 마이크 기준의 균형형 프리셋",
-        "stack": _full_stack_recommendation(
-            cut_level="medium",
-            preprocess_model="ffmpeg-balanced",
-            audio_model="deepfilter",
-            stt1_model=_stt1_model(),
-            stt2_model=_stt2_model(),
-            vad_model="silero",
-            subtitle_llm="gemma4:e4b",
-            roughcut_llm_model="exaone3.5:7.8b",
-        ),
     },
     "실내-마이크무": {
         "base": "브이로그실내",
@@ -90,30 +18,10 @@ CURATED_AUDIO_PRESET_SPECS = {
             "ff_dynaudnorm_m": 14.0,
             "ff_treble_boost": 1.5,
         },
-        "stack": _full_stack_recommendation(
-            cut_level="medium",
-            preprocess_model="ffmpeg-voice-cleanup",
-            audio_model="deepfilter",
-            stt1_model=_stt1_model(),
-            stt2_model=_stt2_model(),
-            vad_model="silero",
-            subtitle_llm="gemma4:e4b",
-            roughcut_llm_model="exaone3.5:7.8b",
-        ),
     },
     "실외-마이크유": {
         "base": "야외",
         "description": "실외 수음 + 외부 마이크 기준의 강한 노이즈 대응 프리셋",
-        "stack": _full_stack_recommendation(
-            cut_level="high",
-            preprocess_model="ffmpeg-outdoor-strong",
-            audio_model="clearvoice",
-            stt1_model=_stt1_model(),
-            stt2_model=_stt2_model(),
-            vad_model="ten_vad",
-            subtitle_llm="gemma4:e4b",
-            roughcut_llm_model="exaone3.5:7.8b",
-        ),
     },
     "실외-마이크무": {
         "base": "스마트폰",
@@ -124,31 +32,11 @@ CURATED_AUDIO_PRESET_SPECS = {
             "ff_dynaudnorm_m": 18.0,
             "ff_treble_boost": 3.0,
         },
-        "stack": _full_stack_recommendation(
-            cut_level="high",
-            preprocess_model="ffmpeg-outdoor-strong",
-            audio_model="clearvoice",
-            stt1_model=_stt1_model(),
-            stt2_model=_stt2_model(),
-            vad_model="ten_vad",
-            subtitle_llm="gemma4:e4b",
-            roughcut_llm_model="exaone3.5:7.8b",
-        ),
     },
     "차안-마이크유": {
         "base": "차량",
         "fallbacks": ["실내일반"],
         "description": "차량 내부 + 외부 마이크 기준의 저역/엔진 소음 대응 프리셋",
-        "stack": _full_stack_recommendation(
-            cut_level="high",
-            preprocess_model="ffmpeg-car-lowcut",
-            audio_model="clearvoice",
-            stt1_model=_stt1_model(),
-            stt2_model=_stt2_model(),
-            vad_model="ten_vad",
-            subtitle_llm="gemma4:e4b",
-            roughcut_llm_model="exaone3.5:7.8b",
-        ),
     },
     "차안-마이크무": {
         "base": "차량",
@@ -160,23 +48,11 @@ CURATED_AUDIO_PRESET_SPECS = {
             "ff_dynaudnorm_m": 18.0,
             "ff_treble_boost": 2.5,
         },
-        "stack": _full_stack_recommendation(
-            cut_level="high",
-            preprocess_model="ffmpeg-car-lowcut",
-            audio_model="clearvoice",
-            stt1_model=_stt1_model(),
-            stt2_model=_stt2_model(),
-            vad_model="ten_vad",
-            subtitle_llm="gemma4:e4b",
-            roughcut_llm_model="exaone3.5:7.8b",
-        ),
     },
 }
 
 
 DEFAULT_AUDIO_APPLY_DATA = {
-    "selected_audio_ai": "deepfilter",
-    "selected_vad": "silero",
     "vad_threshold": 0.5,
     "vad_min_speech": 0.25,
     "vad_min_silence": 2.0,

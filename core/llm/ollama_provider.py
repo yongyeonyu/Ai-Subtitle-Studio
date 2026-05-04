@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import http.client
 import os
 import re
 import shutil
@@ -19,11 +20,24 @@ from typing import Any
 _WARMED: set[str] = set()
 _PROBE_OK_UNTIL: dict[str, float] = {}
 _WARM_LOCK = threading.Lock()
+_START_LOCK = threading.Lock()
 _STOP_LOCK = threading.Lock()
 _WARMUP_TIMEOUT_SEC = 8.0
 _PROBE_OK_TTL_SEC = 180.0
+_SERVER_READY_UNTIL = 0.0
+_START_IN_PROGRESS_UNTIL = 0.0
 _OLLAMA_ROOT_URL = "http://localhost:11434/"
 _GENERATE_RETRY_STATUS_CODES = {500, 502, 503, 504}
+_PROBE_RETRY_STATUS_CODES = {502, 503, 504}
+_TRANSIENT_CONNECTION_FRAGMENTS = (
+    "remote end closed connection",
+    "connection reset",
+    "connection refused",
+    "connection aborted",
+    "temporarily unavailable",
+    "timed out",
+    "timeout",
+)
 _FALLBACK_MODEL_PREFERENCES = (
     "exaone3.5:7.8b",
     "qwen2.5:7b",
@@ -36,6 +50,16 @@ def is_ollama_server_running(timeout: float = 0.6) -> bool:
     try:
         req = urllib.request.Request(_OLLAMA_ROOT_URL)
         with urllib.request.urlopen(req, timeout=timeout) as response:
+            return int(getattr(response, "status", 0) or 0) == 200
+    except Exception:
+        return False
+
+
+def _is_ollama_api_ready(timeout: float = 0.8) -> bool:
+    try:
+        req = urllib.request.Request("http://localhost:11434/api/tags")
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            response.read(128)
             return int(getattr(response, "status", 0) or 0) == 200
     except Exception:
         return False
@@ -86,29 +110,53 @@ def _start_ollama_server_process() -> bool:
 
 
 def ensure_ollama_server(logger=None, *, wait_sec: float = 5.0) -> bool:
-    if is_ollama_server_running():
+    global _SERVER_READY_UNTIL, _START_IN_PROGRESS_UNTIL
+
+    now = time.monotonic()
+    if _SERVER_READY_UNTIL > now:
+        return True
+    if _is_ollama_api_ready():
+        _SERVER_READY_UNTIL = time.monotonic() + 10.0
         if logger:
             logger.log("✅ AI 엔진(Ollama) 실행 중")
         return True
 
-    if not _start_ollama_server_process():
-        if logger:
-            logger.log("⚠️ AI 엔진(Ollama) 실행 파일을 찾을 수 없습니다. Ollama 설치를 확인하세요.")
-        return False
-
-    if logger:
-        logger.log("🚀 AI 엔진(Ollama) 자동 시작 중...")
-    deadline = time.monotonic() + max(0.5, float(wait_sec or 0.0))
-    while time.monotonic() < deadline:
-        if is_ollama_server_running(timeout=0.4):
-            if logger:
-                logger.log("✅ AI 엔진(Ollama) 자동 시작 완료")
+    with _START_LOCK:
+        now = time.monotonic()
+        if _SERVER_READY_UNTIL > now:
             return True
-        time.sleep(0.25)
+        if _is_ollama_api_ready():
+            _SERVER_READY_UNTIL = time.monotonic() + 10.0
+            if logger:
+                logger.log("✅ AI 엔진(Ollama) 실행 중")
+            return True
 
-    if logger:
-        logger.log("⚠️ AI 엔진(Ollama) 자동 시작 확인 실패. Ollama 설치 상태를 확인하세요.")
-    return False
+        launched = False
+        server_seen = is_ollama_server_running(timeout=0.5)
+        if not server_seen and _START_IN_PROGRESS_UNTIL <= now:
+            if not _start_ollama_server_process():
+                if logger:
+                    logger.log("⚠️ AI 엔진(Ollama) 실행 파일을 찾을 수 없습니다. Ollama 설치를 확인하세요.")
+                return False
+            launched = True
+            _START_IN_PROGRESS_UNTIL = now + max(2.0, float(wait_sec or 0.0))
+            if logger:
+                logger.log("🚀 AI 엔진(Ollama) 자동 시작 중...")
+        elif server_seen:
+            _START_IN_PROGRESS_UNTIL = now + max(1.0, min(3.0, float(wait_sec or 0.0)))
+
+        deadline = time.monotonic() + max(0.8, float(wait_sec or 0.0))
+        while time.monotonic() < deadline:
+            if _is_ollama_api_ready(timeout=0.8):
+                _SERVER_READY_UNTIL = time.monotonic() + 10.0
+                if logger:
+                    logger.log("✅ AI 엔진(Ollama) 자동 시작 완료" if launched else "✅ AI 엔진(Ollama) 실행 중")
+                return True
+            time.sleep(0.25)
+
+        if logger:
+            logger.log("⚠️ AI 엔진(Ollama) 자동 시작 확인 실패. Ollama 설치 상태를 확인하세요.")
+        return False
 
 
 def _parse_chunks(out_text: str) -> list[str]:
@@ -124,6 +172,8 @@ def _parse_chunks(out_text: str) -> list[str]:
 
 
 def _is_retryable_generate_error(exc: BaseException) -> bool:
+    if _is_transient_ollama_connection_error(exc):
+        return True
     if _is_timeout_error(exc):
         return True
     if isinstance(exc, urllib.error.HTTPError):
@@ -135,6 +185,22 @@ def _is_retryable_generate_error(exc: BaseException) -> bool:
         reason = getattr(exc, "reason", None)
         return isinstance(reason, (ConnectionError, socket.timeout, TimeoutError))
     return False
+
+
+def _is_transient_ollama_connection_error(exc: BaseException) -> bool:
+    if isinstance(exc, (ConnectionError, socket.timeout, TimeoutError, http.client.RemoteDisconnected)):
+        return True
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            return int(getattr(exc, "code", 0) or 0) in _PROBE_RETRY_STATUS_CODES
+        except Exception:
+            return False
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, (ConnectionError, socket.timeout, TimeoutError, http.client.RemoteDisconnected)):
+            return True
+    text = f"{exc} {getattr(exc, 'reason', '')}".lower()
+    return any(fragment in text for fragment in _TRANSIENT_CONNECTION_FRAGMENTS)
 
 
 def _build_generate_request(model: str, prompt: str, *, keep_alive: int = -1) -> urllib.request.Request:
@@ -228,6 +294,21 @@ def _probe_ollama_model_once(model: str, *, timeout: float = 8.0) -> dict[str, A
         }
 
 
+def _probe_ollama_model(model: str, *, timeout: float = 8.0, attempts: int = 3) -> dict[str, Any]:
+    last: dict[str, Any] = {"ok": False, "model": model, "message": "알 수 없는 오류"}
+    total = max(1, int(attempts or 1))
+    for attempt in range(total):
+        last = _probe_ollama_model_once(model, timeout=timeout)
+        if last.get("ok"):
+            return last
+        exc = last.get("exception")
+        if attempt >= total - 1 or not isinstance(exc, BaseException) or not _is_transient_ollama_connection_error(exc):
+            return last
+        ensure_ollama_server(wait_sec=2.0)
+        time.sleep(0.35 * (attempt + 1))
+    return last
+
+
 def _candidate_fallback_models(model: str) -> list[str]:
     installed = _get_ollama_installed_models()
     result: list[str] = []
@@ -282,7 +363,7 @@ def resolve_ollama_model_for_request(
         return text
 
     timeout = ollama_probe_timeout(text, timeout)
-    probe = _probe_ollama_model_once(text, timeout=timeout)
+    probe = _probe_ollama_model(text, timeout=timeout, attempts=3)
     if probe.get("ok"):
         _mark_model_probe_ok(text)
         return text
@@ -301,7 +382,7 @@ def resolve_ollama_model_for_request(
         return text
 
     for fallback in _candidate_fallback_models(text):
-        candidate = _probe_ollama_model_once(fallback, timeout=max(3.0, timeout * 0.75))
+        candidate = _probe_ollama_model(fallback, timeout=max(3.0, timeout * 0.75), attempts=2)
         if not candidate.get("ok"):
             continue
         _mark_model_probe_ok(fallback)

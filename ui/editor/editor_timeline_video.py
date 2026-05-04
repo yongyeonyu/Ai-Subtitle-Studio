@@ -193,7 +193,6 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                 self.timeline.set_playback_center_lock(False)
             self._reset_playhead_smoothing(getattr(self.timeline.canvas, "playhead_sec", 0.0))
             return
-        pos_ms = player.position()
         dur_ms = player.duration()
         if dur_ms <= 0:
             return

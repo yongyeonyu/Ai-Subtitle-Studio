@@ -1,4 +1,4 @@
-# Version: 03.13.06
+# Version: 03.14.29
 # Phase: PHASE1-B
 """
 core/pipeline/cut_boundary_helpers.py
@@ -8,6 +8,7 @@ import json
 import os
 import time
 
+from core.project.project_io import read_project_file, write_project_file
 from core.runtime.logger import get_logger
 from core.settings import load_settings
 
@@ -63,8 +64,7 @@ class PipelineCutBoundaryMixin:
             from core.cut_boundary import project_cut_boundaries, project_cut_provisional_boundaries
 
             if project_path and os.path.exists(project_path):
-                with open(project_path, "r", encoding="utf-8") as f:
-                    project = json.load(f)
+                project = read_project_file(project_path)
                 cut_rows = [dict(item) for item in list(project_cut_boundaries(project) or [])]
                 project_provisional = [dict(item) for item in list(project_cut_provisional_boundaries(project) or [])]
                 if project_provisional:
@@ -172,8 +172,7 @@ class PipelineCutBoundaryMixin:
 
             # ✅ 핵심: 현재 프로젝트 파일은 그대로 두고 analysis.cut_boundaries만 주입
             if project_path and os.path.exists(project_path):
-                with open(project_path, "r", encoding="utf-8") as f:
-                    project = json.load(f)
+                project = read_project_file(project_path)
 
                 project.setdefault("analysis", {})
                 project["analysis"]["cut_boundaries"] = list(rows)
@@ -183,8 +182,7 @@ class PipelineCutBoundaryMixin:
 
                 sync_project_cut_boundaries(project, settings=settings)
 
-                with open(project_path, "w", encoding="utf-8") as f:
-                    json.dump(project, f, ensure_ascii=False, indent=2)
+                write_project_file(project_path, project)
 
             get_logger().log(
                 f"  ♻️ [컷 경계] 캐시 재사용: {len(rows)}개 "
@@ -438,8 +436,7 @@ class PipelineCutBoundaryMixin:
             if not rows:
                 return []
 
-            with open(project_path, "r", encoding="utf-8") as f:
-                project = json.load(f)
+            project = read_project_file(project_path)
 
             project.setdefault("analysis", {})
             analysis = project["analysis"]
@@ -467,8 +464,7 @@ class PipelineCutBoundaryMixin:
             if self._placeholder_rows_can_be_overwritten(project.get("middle_segments", [])):
                 project["middle_segments"] = list(rows)
 
-            with open(project_path, "w", encoding="utf-8") as f:
-                json.dump(project, f, ensure_ascii=False, indent=2)
+            write_project_file(project_path, project)
 
             if bool(done):
                 get_logger().log(
@@ -626,17 +622,13 @@ class PipelineCutBoundaryMixin:
 
             clip_boundaries = list(getattr(self.ui, "_multiclip_boundaries", []) or [])
             detected: list[dict] = []
-            provisional_times: list[float] = []
             provisional_rows: list[dict] = []
             follower_jobs: list[dict] = []
             self._cut_boundary_provisional_rows = []
             total_files = len(list(files or []))
             progress_preview_interval_sec = 0.18
-            progress_log_interval_sec = 0.75
-            provisional_emit_interval_sec = 0.0
             last_preview_emit_mono = 0.0
             last_progress_log_mono = 0.0
-            last_provisional_emit_mono = 0.0
             pioneer_done_by_clip: dict[int, bool] = {}
             pioneer_progress_by_clip: dict[int, dict[int, int]] = {}
             last_logged_progress_pct_by_clip: dict[int, int] = {}
@@ -668,10 +660,18 @@ class PipelineCutBoundaryMixin:
 
             self._ui_emit("_sig_set_cut_boundary_scan_active", True)
 
+            def _style_provisional_row(row: dict) -> dict:
+                styled = dict(row or {})
+                styled["status"] = "provisional"
+                styled["verified"] = False
+                styled["line_color"] = "gray"
+                styled["line_style"] = "dotted"
+                styled.setdefault("source", "visual_provisional")
+                return styled
+
             def _save_detected_now():
                 try:
-                    with open(project_path, "r", encoding="utf-8") as f:
-                        project = json.load(f)
+                    project = read_project_file(project_path)
                     project.setdefault("analysis", {})
                     project["analysis"]["cut_boundaries"] = list(detected)
                     project["analysis"]["cut_boundary_provisional_boundaries"] = list(provisional_rows)
@@ -680,8 +680,7 @@ class PipelineCutBoundaryMixin:
                         settings=settings,
                         provisional_boundaries=list(provisional_rows),
                     )
-                    with open(project_path, "w", encoding="utf-8") as f:
-                        json.dump(project, f, ensure_ascii=False, indent=2)
+                    write_project_file(project_path, project)
                 except Exception as exc:
                     get_logger().log(f"  ⚠️ [컷 경계] 중간 저장 실패: {exc}")
 
@@ -736,48 +735,43 @@ class PipelineCutBoundaryMixin:
                     except Exception:
                         pass
 
-            def _provisional_found(row: dict, current_rows: list[dict]):
+            def _provisional_found(row: dict, _current_rows: list[dict]):
                 sec = self._cut_boundary_sec_from_row(row)
                 if sec is not None and sec > 0.0:
-                    provisional = dict(row)
-                    provisional["status"] = "provisional"
+                    provisional = _style_provisional_row(row)
                     provisional_rows.append(provisional)
                     provisional_rows[:] = normalize_cut_boundaries(list(provisional_rows))
                     self._cut_boundary_provisional_rows = [dict(item) for item in provisional_rows]
                     preview_rows = [dict(item) for item in provisional_rows]
                     self._ui_emit("_sig_preview_cut_boundary_scan_lines", preview_rows)
 
-            def _found_verified(row: dict, current_rows: list[dict]):
+            def _found_verified(row: dict, _current_rows: list[dict]):
                 detected[:] = normalize_cut_boundaries(list(detected) + [dict(row)])
                 provisional_sec = self._cut_boundary_sec_from_row(row)
                 if provisional_sec is not None:
-                    updated = False
+                    kept = []
                     for item in provisional_rows:
                         try:
                             item_sec = float(item.get("timeline_sec", item.get("time", 0.0)) or 0.0)
                         except Exception:
+                            kept.append(item)
                             continue
-                        if abs(item_sec - float(provisional_sec)) <= 0.001:
-                            item.update(dict(row))
-                            item["status"] = "verified"
-                            updated = True
-                    if not updated:
-                        verified_row = dict(row)
-                        verified_row["status"] = "verified"
-                        provisional_rows.append(verified_row)
+                        if abs(item_sec - float(provisional_sec)) > 0.50:
+                            kept.append(item)
+                    provisional_rows[:] = kept
                     provisional_rows[:] = normalize_cut_boundaries(list(provisional_rows))
-                preview_rows = [dict(item) for item in provisional_rows]
-                verified_preview = dict(row)
-                verified_preview["status"] = "verified"
-                provisional_rows[:] = normalize_cut_boundaries(list(preview_rows) + [verified_preview])
                 preview_rows = [dict(item) for item in provisional_rows]
                 self._cut_boundary_provisional_rows = [dict(item) for item in provisional_rows]
                 self._ui_emit("_sig_preview_cut_boundary_scan_lines", preview_rows)
+                self._ui_emit(
+                    "_sig_update_project_boundary_times",
+                    [float(item.get("timeline_sec", item.get("time", 0.0)) or 0.0) for item in detected],
+                )
                 _save_detected_now()
                 # CUT_TOPICLESS_GRAY_FIX_FOUND_V2
                 try:
                     from core.roughcut.cut_boundary_placeholder import apply_topicless_placeholders_to_project
-                    placeholder_rows = apply_topicless_placeholders_to_project(
+                    apply_topicless_placeholders_to_project(
                         project_path,
                         detected,
                         media_duration=None,
@@ -808,6 +802,41 @@ class PipelineCutBoundaryMixin:
                 self._ui_emit("_sig_refresh_cut_boundary_placeholder")
                 try:
                     self._ui_emit("_sig_refresh_cut_boundary_placeholder")
+                except Exception:
+                    pass
+
+            def _relocated_provisional_found(row: dict, _current_rows: list[dict]):
+                sec = self._cut_boundary_sec_from_row(row)
+                if sec is None or sec <= 0.0:
+                    return
+                relocated = _style_provisional_row(row)
+                try:
+                    clip_idx = int(relocated.get("clip_idx", 0) or 0)
+                except Exception:
+                    clip_idx = 0
+                kept = []
+                for item in provisional_rows:
+                    try:
+                        old_clip_idx = int(item.get("clip_idx", 0) or 0)
+                    except Exception:
+                        old_clip_idx = 0
+                    try:
+                        old_sec = float(item.get("timeline_sec", item.get("time", 0.0)) or 0.0)
+                    except Exception:
+                        old_sec = 0.0
+                    if old_clip_idx == clip_idx and abs(old_sec - float(sec)) <= 0.75:
+                        continue
+                    kept.append(item)
+                kept.append(relocated)
+                provisional_rows[:] = normalize_cut_boundaries(list(kept))
+                self._cut_boundary_provisional_rows = [dict(item) for item in provisional_rows]
+                self._ui_emit("_sig_preview_cut_boundary_scan_lines", [dict(item) for item in provisional_rows])
+                _save_detected_now()
+                try:
+                    get_logger().log(
+                        f"  ▫️ [컷 경계] 임시선 재배치: {float(sec):.3f}s "
+                        f"({relocated.get('provisional_mode', 'rollback')}, score {float(relocated.get('score', 0.0) or 0.0):.1f})"
+                    )
                 except Exception:
                     pass
 
@@ -861,8 +890,14 @@ class PipelineCutBoundaryMixin:
 
             def _follower_worker():
                 try:
+                    if provisional_rows:
+                        provisional_rows[:] = []
+                        self._cut_boundary_provisional_rows = []
+                        self._ui_emit("_sig_preview_cut_boundary_scan_lines", [])
+                        _save_detected_now()
+                        get_logger().log("  ▫️ [컷 경계] 선발대 임시선을 정리하고 후발대 rollback 임시선으로 재배치합니다")
                     for job in follower_jobs:
-                        verified_rows = verify_media_cut_boundary_rows(
+                        verify_media_cut_boundary_rows(
                             job["path"],
                             job["rows"],
                             clip_offset=job["offset"],
@@ -871,6 +906,7 @@ class PipelineCutBoundaryMixin:
                             sample_positions=scan_profile.get("positions", ()),
                             settings=settings,
                             found_callback=_found_verified,
+                            provisional_callback=_relocated_provisional_found,
                         )
                     _save_detected_now()
                     try:
@@ -946,7 +982,17 @@ class PipelineCutBoundaryMixin:
             get_logger().log(f"  ⚠️ [컷 경계] {context} 분할 실패, 기존 세그먼트 유지: {exc}")
             return [dict(seg) for seg in (segments or [])]
 
-    def _magnetize_by_saved_cut_boundaries(self, segments, *, offset: float = 0.0, context: str = "자막") -> list[dict]:
+    def _magnetize_by_saved_cut_boundaries(
+        self,
+        segments,
+        *,
+        offset: float = 0.0,
+        context: str = "자막",
+        include_confirmed: bool = True,
+        include_provisional: bool = True,
+        provisional_window_sec: float = 0.32,
+        confirmed_window_sec: float = 0.60,
+    ) -> list[dict]:
         """Snap subtitle/STT rows to both provisional and confirmed saved cuts."""
         try:
             from core.cut_boundary import (
@@ -956,8 +1002,8 @@ class PipelineCutBoundaryMixin:
             from core.frame_time import frame_to_sec, sec_to_frame
 
             settings = load_settings()
-            confirmed = self._project_cut_boundaries_for_pipeline()
-            provisional = self._project_cut_provisional_boundaries_for_pipeline()
+            confirmed = self._project_cut_boundaries_for_pipeline() if include_confirmed else []
+            provisional = self._project_cut_provisional_boundaries_for_pipeline() if include_provisional else []
             if offset:
                 offset = float(offset or 0.0)
 
@@ -989,8 +1035,8 @@ class PipelineCutBoundaryMixin:
                 confirmed_boundaries=confirmed,
                 provisional_boundaries=provisional,
                 enabled=cut_boundary_enabled(settings),
-                provisional_window_sec=0.32,
-                confirmed_window_sec=0.60,
+                provisional_window_sec=provisional_window_sec,
+                confirmed_window_sec=confirmed_window_sec,
                 min_duration_sec=0.05,
             )
         except Exception as exc:

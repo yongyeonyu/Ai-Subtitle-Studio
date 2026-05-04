@@ -1,22 +1,18 @@
-# Version: 03.14.00
+# Version: 03.14.19
 # Phase: PHASE2
 """Runtime settings helpers for subtitle optimization."""
 
 import json
 import os
-
 from core.llm.ollama_provider import ollama_probe_timeout, resolve_ollama_model_for_request
 from core.llm.openai_provider import is_openai_model
 from core.runtime import config
 
 
 def _get_user_settings():
-    path = os.path.join(config.DATASET_DIR, "user_settings.json")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    from core.settings import load_settings
+
+    return load_settings()
 
 
 def get_local_dataset_corrections() -> dict:
@@ -30,12 +26,7 @@ def get_local_dataset_corrections() -> dict:
 
 
 def get_selected_llm() -> str:
-    settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
-    try:
-        with open(settings_path, "r", encoding="utf-8") as f:
-            return json.load(f).get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
-    except Exception:
-        return getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b")
+    return _get_user_settings().get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
 
 
 def _setting_int(settings: dict, key: str, default: int, fallback_key: str | None = None) -> int:

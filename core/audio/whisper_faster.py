@@ -7,7 +7,6 @@ Windows 전용 Whisper 백엔드 (faster-whisper)
 - media_processor.py의 proc.stdout.readline() 인터페이스와 호환
 """
 import json
-import os
 import re
 import subprocess
 import sys

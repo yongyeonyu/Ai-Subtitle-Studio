@@ -1,37 +1,26 @@
-# Version: 03.13.03
+# Version: 03.14.27
 # Phase: PHASE2
 """
 ui/home_ui.py
 MainWindow 홈 화면 빌드 Mixin
 """
 import os
-import re
-from html import escape
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QComboBox, QMessageBox,
-    QToolButton, QSizePolicy, QMenu, QGridLayout
+    QScrollArea, QMessageBox,
+    QToolButton, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QDateTime
-from PyQt6.QtGui import QIcon, QColor, QCursor
+from PyQt6.QtCore import Qt, QTimer, QSize
+from PyQt6.QtGui import QIcon, QColor
 
 from core.runtime import config
 from core.path_manager import (
     get_icloud_path,
-    get_icloud_auto_detect, get_nas_auto_detect,
     get_nas_path, get_local_path,
     ensure_nas_mounted,
     get_nas_excluded_folders
 )
 from core.settings import load_settings, save_settings
-from core.pipeline_status import generation_stage_keys
-from core.audio import audio_presets as _audio_presets
-from core.audio.preset_auto_classifier import auto_classify_media_presets, apply_auto_classified_presets
-from core.audio.stt_quality_presets import (
-    apply_stt_quality_preset,
-    load_stt_quality_presets,
-    normalize_stt_quality_key,
-)
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE
 from ui.home_sidebar import HomeSidebarMixin
 from ui.style import button_style, label_style, line_icon, tool_button_style
@@ -64,6 +53,7 @@ class HomeUIMixin(HomeSidebarMixin):
     def _build_home_content(self):
         self._preview_containers = []
         self._watchdog_labels = []
+        self._subtitle_quality_combos = []
         overlay = getattr(self, "_project_info_overlay", None)
         if overlay is not None:
             try:
@@ -72,7 +62,15 @@ class HomeUIMixin(HomeSidebarMixin):
             except RuntimeError:
                 pass
             self._project_info_overlay = None
-        for attr in ("status_rail", "saved_status_label", "sidebar_settings_label", "sidebar_terminal_panel", "sidebar_preset_panel"):
+        for attr in (
+            "status_rail",
+            "saved_status_label",
+            "sidebar_settings_label",
+            "sidebar_terminal_panel",
+            "sidebar_preset_panel",
+            "sidebar_subtitle_quality_combo",
+            "sidebar_subtitle_quality_save_btn",
+        ):
             widget = getattr(self, attr, None)
             if widget is not None:
                 try:
@@ -160,7 +158,6 @@ class HomeUIMixin(HomeSidebarMixin):
             layout.addLayout(columns)
             layout.addStretch()
         if is_unified:
-            layout.addWidget(self._ensure_sidebar_preset_panel())
             layout.addWidget(self._sidebar_status_card())
             terminal_panel = (
                 self._ensure_sidebar_terminal_panel()
@@ -197,10 +194,11 @@ class HomeUIMixin(HomeSidebarMixin):
 
     def _sidebar_status_card(self):
         card = QWidget()
+        card.setMinimumHeight(166)
         card.setStyleSheet("background: #1B2429; border: 1px solid #2D3942; border-radius: 7px;")
         lay = QVBoxLayout(card)
         lay.setContentsMargins(10, 7, 10, 7)
-        lay.setSpacing(4)
+        lay.setSpacing(5)
 
         if not hasattr(self, "saved_status_label"):
             self.saved_status_label = QLabel("", self.home_page)
@@ -209,9 +207,11 @@ class HomeUIMixin(HomeSidebarMixin):
             self.sidebar_settings_label = QLabel("", self.home_page)
         self.sidebar_settings_label.setWordWrap(True)
         self.sidebar_settings_label.setMinimumWidth(0)
+        self.sidebar_settings_label.setMinimumHeight(120)
         self.sidebar_settings_label.setTextFormat(Qt.TextFormat.RichText)
-        self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 9px; font-weight: bold; background: transparent; border: none;")
+        self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 8px; font-weight: bold; background: transparent; border: none;")
         self._refresh_sidebar_engine_info()
+        lay.addWidget(self._create_sidebar_subtitle_quality_row(card))
         lay.addWidget(self.sidebar_settings_label)
         return card
     def _toggle_sidebar_stt_mode(self):
@@ -341,7 +341,7 @@ class HomeUIMixin(HomeSidebarMixin):
         w.leaveEvent = lambda e, _w=w: _w.setStyleSheet(_w._normal_ss)
         w.setCursor(Qt.CursorShape.PointingHandCursor)
         layout = QVBoxLayout(w)
-        layout.setContentsMargins(6 if is_unified else 20, 4 if is_unified else 14, 6 if is_unified else 20, 4 if is_unified else 14)
+        layout.setContentsMargins(6 if is_unified else 20, 4 if is_unified else 14, 10 if is_unified else 20, 4 if is_unified else 14)
         layout.setSpacing(2 if is_unified else 6)
         active = getattr(self, '_is_nas_auto_mode', False) if is_nas else getattr(self, '_is_icloud_auto_mode', False)
         text_color = "#FFFFFF" if is_unified else ("#1D1D1F" if active else "#6E6E73")
@@ -369,6 +369,16 @@ class HomeUIMixin(HomeSidebarMixin):
         )
         wd_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         wd_lbl.setVisible(False)
+        if hasattr(self, "_make_subtitle_quality_combo"):
+            quality_combo = self._make_subtitle_quality_combo(
+                w,
+                width=68 if is_unified else 94,
+                height=20 if is_unified else 24,
+                scope="nas" if is_nas else "icloud",
+            )
+            quality_combo.setAttribute(Qt.WidgetAttribute.WA_NoMousePropagation, True)
+            quality_combo.setToolTip("자막품질 프리셋")
+            header_row.addWidget(quality_combo)
         header_row.addWidget(wd_lbl)
         layout.addLayout(header_row)
 

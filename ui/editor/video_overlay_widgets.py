@@ -277,7 +277,7 @@ class SubtitleSceneOverlayItem(QGraphicsItem):
         self._style = next_style
         self.update()
 
-    def paint(self, painter, option, widget=None):
+    def paint(self, painter, _option, widget=None):
         paint_subtitle_overlay(painter, self._rect, self._text, self._style)
 
 

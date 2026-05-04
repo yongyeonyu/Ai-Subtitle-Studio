@@ -6,7 +6,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core.runtime import config
 from core.personalization.runtime_lora_context import build_runtime_lora_prompt
 from core.utils import load_rules, load_subtitle_rules
 

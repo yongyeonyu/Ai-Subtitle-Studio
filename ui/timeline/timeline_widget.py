@@ -1,4 +1,4 @@
-# Version: 03.09.19
+# Version: 03.14.03
 # Phase: PHASE2
 """
 ui/timeline_widget.py
@@ -218,6 +218,7 @@ class TimelineWidget(QWidget):
         self._manual_scroll_until = 0.0
         self._fit_to_view_locked = False
         self._fit_after_resize_pending = False
+        self._manual_zoom_since_fit = False
 
         self._smooth_scroll_timer = QTimer(self)
         self._smooth_scroll_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -883,7 +884,7 @@ class TimelineWidget(QWidget):
             self.global_canvas.total_duration = d
             self.global_canvas.update()
             if not self._multiclip_fit_done:
-                self.fit_to_view()
+                self.auto_fit_to_view()
                 self._multiclip_fit_done = True
             return
 
@@ -948,7 +949,6 @@ class TimelineWidget(QWidget):
         if clip_idx < 0 or clip_idx >= len(boxes):
             return
 
-        box = boxes[clip_idx]
         self._apply_selected_clip_context(int(clip_idx))
         self.sig_clip_selected.emit(clip_idx)
 
@@ -974,6 +974,7 @@ class TimelineWidget(QWidget):
             return
         self._fit_to_view_locked = True
         self._fit_after_resize_pending = False
+        self._manual_zoom_since_fit = False
 
         new_pps = self._fit_pps_for_duration(dur)
         self.canvas.pps = new_pps
@@ -1016,9 +1017,18 @@ class TimelineWidget(QWidget):
 
     def _zoom_canvas(self, factor: float):
         self._fit_to_view_locked = False
+        self._manual_zoom_since_fit = True
         self._apply_zoom(factor)
 
+    def auto_fit_to_view(self) -> bool:
+        if bool(getattr(self, "_manual_zoom_since_fit", False)):
+            return False
+        self.fit_to_view()
+        return True
+
     def schedule_fit_to_view(self, delays: tuple[int, ...] = (0, 80, 180)) -> None:
+        if bool(getattr(self, "_manual_zoom_since_fit", False)):
+            return
         if self._fit_after_resize_pending:
             return
         self._fit_after_resize_pending = True

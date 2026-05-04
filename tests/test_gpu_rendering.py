@@ -1,4 +1,4 @@
-# Version: 03.07.01
+# Version: 03.14.31
 # Phase: PHASE2
 import os
 import unittest
@@ -26,6 +26,20 @@ class GpuRenderingSafetyTests(unittest.TestCase):
         ):
             self.assertTrue(gpu_widgets_enabled())
             self.assertEqual(gpu_backend_name(), "opengl-widget")
+
+    def test_timeline_widgets_use_gpu_rendering_opt_in_without_global_experimental_flag(self):
+        from ui.gpu_rendering import gpu_backend_name, gpu_widgets_enabled
+
+        with patch.dict(
+            os.environ,
+            {
+                "AI_SUBTITLE_GPU_RENDERING": "1",
+            },
+            clear=True,
+        ):
+            self.assertFalse(gpu_widgets_enabled())
+            self.assertTrue(gpu_widgets_enabled("timeline"))
+            self.assertEqual(gpu_backend_name("timeline"), "opengl-widget")
 
     def test_opengl_widgets_disabled_offscreen_even_when_requested(self):
         from ui.gpu_rendering import gpu_widgets_enabled

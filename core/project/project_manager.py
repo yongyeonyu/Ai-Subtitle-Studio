@@ -1,4 +1,4 @@
-# Version: 03.14.00
+# Version: 03.14.28
 # Phase: PHASE2
 """
 core/project_manager.py
@@ -12,7 +12,6 @@ core/project_manager.py
 """
 
 import os
-import json
 import uuid
 from datetime import datetime
 from typing import List, Optional
@@ -24,10 +23,14 @@ from core.cut_boundary import (
     project_cut_provisional_boundaries,
     sync_project_cut_boundaries,
 )
-from core.project.project_context import STT_SEGMENT_METADATA_KEYS, build_editor_state, sanitize_workspace_state
+from core.project.project_context import (
+    STT_SEGMENT_METADATA_KEYS,
+    build_editor_state,
+    project_stt_preview_segments,
+    sanitize_workspace_state,
+)
+from core.project.project_io import read_project_file, write_project_file
 from core.project.project_model_settings import (
-    MODEL_SETTING_KEYS,
-    MODEL_SETTINGS_SCHEMA_VERSION,
     build_model_settings_snapshot,
     extract_model_settings,
     merge_project_model_settings,
@@ -38,10 +41,22 @@ from core.project.project_frames import (
     _get_media_probe as _get_media_probe_impl,
 )
 from core.media_info import probe_media
-from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
+from core.frame_time import frame_to_sec, normalize_fps
 from core.work_mode import normalize_work_mode
 
 PROJECT_SCHEMA_VERSION = "03.00.26"
+
+__all__ = [
+    "PROJECTS_DIR",
+    "add_media_to_project",
+    "create_project",
+    "ensure_projects_dir",
+    "extract_model_settings",
+    "get_boundary_times",
+    "load_project",
+    "merge_project_model_settings",
+    "save_project",
+]
 
 
 # ─────────────────────────────────────────────
@@ -112,6 +127,39 @@ def _clip_frame_fields(timeline_start: float, timeline_end: float, fps: float, t
 
 def _augment_project_frame_metadata(project: dict):
     return _augment_project_frame_metadata_impl(project, probe_func=_get_media_probe)
+
+
+def _segment_lookup_key(seg: dict) -> tuple[float, float]:
+    start = seg.get("timeline_start", seg.get("start", 0.0))
+    end = seg.get("timeline_end", seg.get("end", start))
+    try:
+        start = round(float(start or 0.0), 3)
+        end = round(float(end or start), 3)
+    except Exception:
+        start = 0.0
+        end = start
+    return start, end
+
+
+def _existing_segment_matchers(existing_segments: list[dict]) -> tuple[dict[str, dict], dict[tuple[float, float], dict]]:
+    by_id: dict[str, dict] = {}
+    by_time: dict[tuple[float, float], dict] = {}
+    for row in existing_segments or []:
+        if not isinstance(row, dict):
+            continue
+        row_id = str(row.get("id", "") or "")
+        if row_id:
+            by_id[row_id] = row
+        by_time[_segment_lookup_key(row)] = row
+    return by_id, by_time
+
+
+def _copy_missing_stt_metadata(target: dict, source: dict | None) -> None:
+    if not isinstance(source, dict):
+        return
+    for key in STT_SEGMENT_METADATA_KEYS:
+        if key in source and key not in target:
+            target[key] = source.get(key)
 
 
 # ─────────────────────────────────────────────
@@ -375,7 +423,8 @@ def save_project(
         else project_cut_provisional_boundaries(project, primary_fps=primary_fps)
     )
     cut_enabled = cut_boundary_enabled(user_settings if user_settings is not None else project.get("user_settings", {}))
-    if stt_preview_segments is not None:
+    explicit_stt_preview_update = stt_preview_segments is not None
+    if explicit_stt_preview_update:
         from core.cut_boundary import magnetize_segments_to_cut_boundaries
 
         stt_preview_segments = magnetize_segments_to_cut_boundaries(
@@ -385,6 +434,11 @@ def save_project(
             enabled=cut_enabled,
             primary_fps=primary_fps,
         )
+    effective_stt_preview_segments = (
+        stt_preview_segments
+        if explicit_stt_preview_update
+        else project_stt_preview_segments(project)
+    )
     if segments is not None:
         from core.cut_boundary import magnetize_segments_to_cut_boundaries
 
@@ -396,6 +450,8 @@ def save_project(
             primary_fps=primary_fps,
         )
         new_segs = []
+        existing_subtitle_segments = (project.get("subtitles", {}) or {}).get("segments", []) or []
+        existing_by_id, existing_by_time = _existing_segment_matchers(existing_subtitle_segments)
 
         for i, seg in enumerate(segments):
             if seg.get("start_frame", seg.get("timeline_start_frame")) is not None:
@@ -443,6 +499,10 @@ def save_project(
             for key in STT_SEGMENT_METADATA_KEYS:
                 if key in seg:
                     new_seg[key] = seg.get(key)
+            existing_seg = existing_by_id.get(str(seg.get("id", "") or ""))
+            if existing_seg is None:
+                existing_seg = existing_by_time.get(_segment_lookup_key(new_seg))
+            _copy_missing_stt_metadata(new_seg, existing_seg)
             for key in (
                 "start_frame",
                 "end_frame",
@@ -489,7 +549,7 @@ def save_project(
                 }
                 for c in clips
             ],
-            stt_preview_segments=stt_preview_segments,
+            stt_preview_segments=effective_stt_preview_segments,
             cut_boundaries=existing_cut_boundaries,
             provisional_cut_boundaries=existing_provisional_cut_boundaries,
             primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
@@ -523,7 +583,7 @@ def save_project(
                 }
                 for c in clips
             ],
-            stt_preview_segments=stt_preview_segments,
+            stt_preview_segments=effective_stt_preview_segments,
             cut_boundaries=existing_cut_boundaries,
             provisional_cut_boundaries=existing_provisional_cut_boundaries,
             primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
@@ -557,6 +617,42 @@ def save_project(
                 for c in clips
             ],
             stt_preview_segments=stt_preview_segments,
+            cut_boundaries=existing_cut_boundaries,
+            provisional_cut_boundaries=existing_provisional_cut_boundaries,
+            primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
+        )
+    elif segments is not None:
+        project["editor_state"] = build_editor_state(
+            mode="multiclip" if len(project.get("media", []) or []) > 1 else "single",
+            media_files=[
+                item.get("path", "")
+                for item in sorted(project.get("media", []), key=lambda item: item.get("order", 0))
+                if item.get("path")
+            ],
+            segments=[
+                {
+                    "start": seg.get("timeline_start", seg.get("start", 0.0)),
+                    "end": seg.get("timeline_end", seg.get("end", 0.0)),
+                    "text": seg.get("text", ""),
+                    "speaker": seg.get("speaker", "00"),
+                    "quality": seg.get("quality", {}),
+                    "quality_history": seg.get("quality_history", []),
+                    "quality_candidates": seg.get("quality_candidates", []),
+                    **{key: seg.get(key) for key in STT_SEGMENT_METADATA_KEYS if key in seg},
+                }
+                for seg in (project.get("subtitles", {}) or {}).get("segments", [])
+            ],
+            workspace=workspace or project.get("workspace", {}) or {},
+            clip_boundaries=[
+                {
+                    "start": c.get("timeline_start", 0.0),
+                    "end": c.get("timeline_end", 0.0),
+                    "file": c.get("source_path", ""),
+                    "name": os.path.basename(c.get("source_path", "")),
+                }
+                for c in clips
+            ],
+            stt_preview_segments=effective_stt_preview_segments,
             cut_boundaries=existing_cut_boundaries,
             provisional_cut_boundaries=existing_provisional_cut_boundaries,
             primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
@@ -863,13 +959,11 @@ def merge_srt_to_project(filepath: str) -> int | None:
 # ─────────────────────────────────────────────
 
 def _read_json(filepath: str) -> dict:
-    with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return read_project_file(filepath)
 
 
 def _write_json(filepath: str, data: dict):
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    write_project_file(filepath, data)
 
 
 def _parse_srt_to_segments(srt_path: str) -> list:

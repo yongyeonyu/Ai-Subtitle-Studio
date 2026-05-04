@@ -7,7 +7,7 @@ Hugging Face Transformers Whisper backend for experimental Korean fine-tuned mod
 from __future__ import annotations
 
 import json
-import os
+import os  # noqa: F401 - tests patch module os.environ shared by subprocess_env()
 import subprocess
 import sys
 import threading

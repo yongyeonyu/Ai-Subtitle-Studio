@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
 
@@ -345,7 +344,6 @@ class EditorScanCutCoreMixin:
         """
         try:
             from PyQt6.QtGui import QImage, QPixmap
-            from PyQt6.QtCore import Qt
         except Exception:
             return None
 
@@ -426,9 +424,9 @@ class EditorScanCutCoreMixin:
                 vp.video_stack.setCurrentWidget(vp.thumb_label)
 
             try:
-                source_path, local_sec, ctx = self._scan_source_and_local_sec(float(global_sec))
+                _source_path, local_sec, ctx = self._scan_source_and_local_sec(float(global_sec))
             except Exception:
-                source_path, local_sec, ctx = "", float(global_sec), {}
+                local_sec, ctx = float(global_sec), {}
             try:
                 vp.current_time = float(local_sec)
                 clip_total = float((ctx or {}).get("duration", 0.0) or 0.0)
@@ -987,8 +985,9 @@ class EditorScanCutCoreMixin:
         }
 
         try:
-            with open(project_path, "r", encoding="utf-8") as f:
-                project = json.load(f)
+            from core.project.project_io import read_project_file, write_project_file
+
+            project = read_project_file(project_path)
         except Exception as exc:
             print(f"⚠️ [scan-cut] 프로젝트 파일 읽기 실패: {exc}", flush=True)
             return
@@ -1034,8 +1033,7 @@ class EditorScanCutCoreMixin:
         project["updated_at"] = datetime.now().isoformat()
 
         try:
-            with open(project_path, "w", encoding="utf-8") as f:
-                json.dump(project, f, ensure_ascii=False, indent=2)
+            write_project_file(project_path, project)
             print(
                 f"💾 [scan-cut] project cut boundary saved frame={frame} time={global_sec:.3f}s count={len(boundaries)}",
                 flush=True,

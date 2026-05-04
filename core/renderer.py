@@ -1,4 +1,4 @@
-# Version: 02.03.00
+# Version: 03.14.07
 # Phase: PHASE1-B
 """
 core/renderer.py
@@ -141,17 +141,18 @@ def render_subtitle_mov(srt_path: str, target_file: str, export_settings: dict,
         if os.path.exists(out_p):
             get_logger().log(f"    └ ✅ MOV 렌더링 완료: {os.path.basename(out_p)}")
 
-            dest_dir = getattr(
-                config, "ICLOUD_DROPZONE",
-                os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT"),
-            )
-            os.makedirs(dest_dir, exist_ok=True)
-            dest_file = os.path.join(dest_dir, os.path.basename(out_p))
+            if s.get("icloud", False):
+                dest_dir = getattr(
+                    config, "ICLOUD_DROPZONE",
+                    os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT"),
+                )
+                os.makedirs(dest_dir, exist_ok=True)
+                dest_file = os.path.join(dest_dir, os.path.basename(out_p))
 
-            if os.path.abspath(out_p) != os.path.abspath(dest_file):
-                get_logger().log("    └ ☁️ iCloud로 자동 복사 중...")
-                shutil.copy2(out_p, dest_file)
-                get_logger().log("    └ ✅ iCloud 복사 완료")
+                if os.path.abspath(out_p) != os.path.abspath(dest_file):
+                    get_logger().log("    └ ☁️ iCloud로 자동 복사 중...")
+                    shutil.copy2(out_p, dest_file)
+                    get_logger().log("    └ ✅ iCloud 복사 완료")
 
             return True
 

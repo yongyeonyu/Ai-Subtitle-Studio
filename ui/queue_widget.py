@@ -168,9 +168,6 @@ class QueueMixin:
             return
 
         now = time.time()
-        elapsed = now - active_backend.pipeline_start_time
-        expected = getattr(active_backend, 'total_expected_time', 0.0)
-
         def fmt(sec):
             m, s = divmod(int(sec), 60)
             h, m = divmod(m, 60)
@@ -196,8 +193,6 @@ class QueueMixin:
             pct = int((done_count / effective_total) * 100)
         pct = max(0, min(100, pct))
         
-        exp_str = fmt(expected) if expected > 0 else "예상불가"
-
         self.queue_header_lbl.setText(f"큐 리스트 : ({c}/{t}) - {pct}% 완료")
 
         for i in range(self.queue_table.rowCount()):

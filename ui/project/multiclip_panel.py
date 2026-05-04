@@ -1,4 +1,4 @@
-# Version: 03.01.37
+# Version: 03.14.13
 # Phase: PHASE1-B
 """
 ui/project/multiclip_panel.py
@@ -9,6 +9,7 @@ import os
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -19,7 +20,14 @@ from PyQt6.QtWidgets import (
 
 from core.runtime import config
 from core.path_manager import get_last_folder
-from core.settings import load_settings
+from core.settings import load_settings, save_settings
+from core.audio.stt_quality_presets import (
+    STT_QUALITY_PRESET_ORDER,
+    apply_stt_quality_preset,
+    load_stt_quality_presets,
+    normalize_stt_quality_key,
+    stt_quality_label,
+)
 from ui.project.multiclip_cards import AddCard, ClipCard, ClipContainer
 
 
@@ -45,6 +53,7 @@ class MultiClipEditor(QDialog):
         self._reorder_only = reorder_only
         self._show_multiclip_btn = show_multiclip
         self._add_card = None
+        self.stt_quality_preset = normalize_stt_quality_key(load_settings().get("stt_quality_preset", "precise"))
 
         self._build_ui()
 
@@ -58,6 +67,25 @@ class MultiClipEditor(QDialog):
         )
         header.addWidget(self.header_lbl)
         header.addStretch()
+
+        quality_lbl = QLabel("자막품질")
+        quality_lbl.setStyleSheet("color:#C8D1D8; font-size:12px; font-weight:700;")
+        header.addWidget(quality_lbl)
+        self.combo_subtitle_quality = QComboBox()
+        for key in STT_QUALITY_PRESET_ORDER:
+            preset = load_stt_quality_presets().get(key, {})
+            self.combo_subtitle_quality.addItem(str(preset.get("label") or stt_quality_label(key)), key)
+        self.combo_subtitle_quality.setFixedWidth(92)
+        self.combo_subtitle_quality.setToolTip("멀티클립에 적용할 자막품질 프리셋")
+        self.combo_subtitle_quality.setStyleSheet(
+            "QComboBox { background:#172028; color:#F5F7FA; border:1px solid #2A3943; "
+            "border-radius:4px; padding:4px 18px 4px 8px; font-weight:700; } "
+            "QComboBox::drop-down { border:none; width:16px; } "
+            "QAbstractItemView { background:#172028; color:#F5F7FA; selection-background-color:#1A84FF; }"
+        )
+        self._sync_subtitle_quality_combo()
+        self.combo_subtitle_quality.currentIndexChanged.connect(self._on_subtitle_quality_changed)
+        header.addWidget(self.combo_subtitle_quality)
 
         btn_name = QPushButton("이름순")
         btn_name.setStyleSheet(
@@ -137,11 +165,30 @@ class MultiClipEditor(QDialog):
         if parent is not None:
             settings = getattr(parent, "settings", None)
             if isinstance(settings, dict) and settings:
-                return dict(settings)
+                return apply_stt_quality_preset(dict(settings), self.stt_quality_preset)
         try:
-            return dict(load_settings())
+            return apply_stt_quality_preset(dict(load_settings()), self.stt_quality_preset)
         except Exception:
             return {}
+
+    def _sync_subtitle_quality_combo(self):
+        key = normalize_stt_quality_key(self.stt_quality_preset)
+        self.combo_subtitle_quality.blockSignals(True)
+        for idx in range(self.combo_subtitle_quality.count()):
+            if self.combo_subtitle_quality.itemData(idx) == key:
+                self.combo_subtitle_quality.setCurrentIndex(idx)
+                break
+        self.combo_subtitle_quality.blockSignals(False)
+
+    def _on_subtitle_quality_changed(self, *args):
+        self.stt_quality_preset = normalize_stt_quality_key(self.combo_subtitle_quality.currentData() or "precise")
+        settings = apply_stt_quality_preset(load_settings(), self.stt_quality_preset)
+        save_settings(settings)
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "_apply_ai_settings"):
+            parent._apply_ai_settings(settings)
+        if hasattr(self, "current_settings_lbl"):
+            self.current_settings_lbl.setText(self._pipeline_summary_text(settings))
 
     def _display_model_name(self, value: str) -> str:
         text = str(value or "").strip()
@@ -179,23 +226,16 @@ class MultiClipEditor(QDialog):
             "pyannote": "Pyannote",
             "none": "미사용",
         }.get(str(settings.get("selected_vad", "none") or "none"), "미사용")
-        stt_quality = str(settings.get("stt_quality_preset", "balanced") or "balanced")
-        stt_quality = {
-            "fast": "빠른 인식",
-            "balanced": "균형",
-            "precise": "정밀 인식",
-        }.get(stt_quality, stt_quality)
-        audio_preset = str(settings.get("audio_preset", "") or "").strip() or "직접 설정"
         stt1 = self._display_model_name(settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "")))
         stt2 = "미사용"
         if bool(settings.get("stt_ensemble_enabled")):
             stt2 = self._display_model_name(settings.get("selected_whisper_model_secondary", ""))
         subtitle_llm = self._display_model_name(settings.get("selected_model", ""))
         return (
-            f"정밀인식 <b>{stt_quality}</b>  |  "
-            f"오디오 <b>{audio_preset}</b>  |  "
+            f"자막품질 <b>{stt_quality_label(settings.get('stt_quality_preset'))}</b>  |  "
+            f"오토 오디오 <b>클립 시작 시 자동 결정</b>  |  "
             f"컷 경계 <b>{self._cut_boundary_label(settings)}</b><br>"
-            f"음성 <b>{audio_model}</b>  |  STT1 <b>{stt1}</b>  |  "
+            f"현재 음성 <b>{audio_model}</b>  |  STT1 <b>{stt1}</b>  |  "
             f"STT2 <b>{stt2}</b>  |  VAD <b>{vad_model}</b>  |  자막 LLM <b>{subtitle_llm}</b>"
         )
 

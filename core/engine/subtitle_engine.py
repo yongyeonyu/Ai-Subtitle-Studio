@@ -1,4 +1,4 @@
-# Version: 03.14.00
+# Version: 03.14.29
 # Phase: PHASE2
 """
 core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장 
@@ -9,8 +9,6 @@ core/subtitle_engine.py  ─ 자막 최적화 + SRT 저장
 [추가] 일반/화자 자막 분리 생성 및 "자막백업" 폴더 내 날짜+순번 자동 채번 백업 기능 완비
 [복구] 불필요한 초강력 시간태그 삭제 알고리즘 제거 (에디터 네비게이션 태그 오해 해소)
 """
-import os
-import json
 import re
 import difflib  
 
@@ -36,12 +34,12 @@ from core.engine.subtitle_settings import (
     get_selected_llm,
 )
 from core.engine.subtitle_timing import (
+    align_stt_candidates_to_subtitle_segments,
     adjust_timing,
     apply_final_gap_settings,
 )
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from core.runtime import config
 from core.runtime.logger import get_logger
 from core.utils import load_subtitle_rules
 
@@ -788,34 +786,28 @@ def _optimizer_context() -> tuple[dict, list[dict], str, dict, int, str, str, di
     api_key = ""
     loaded_settings = {}
 
-    settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
-    if os.path.exists(settings_path):
-        try:
-            with open(settings_path, "r", encoding="utf-8") as f:
-                s = json.load(f)
-                loaded_settings = dict(s)
-                threshold = _setting_int(s, "split_length_threshold", 10)
-                _EXAONE_WORKERS = _setting_int(s, "llm_threads", 6, fallback_key="llm_workers")
-                _LOCAL_OLLAMA_WORKER_CAP = _setting_int(s, "local_ollama_llm_max_workers", 2)
-                _GAP_BREAK_SEC = _setting_float(s, "sub_gap_break_sec", 1.5)
-                _MIN_DURATION = _setting_float(s, "sub_min_duration", 0.2)
-                _MAX_DURATION = _setting_float(s, "sub_max_duration", 6.0)
-                _MAX_CPS = _setting_int(s, "sub_max_cps", 12)
-                _DEDUP_WINDOW = _setting_float(s, "sub_dedup_window", 0.5)
+    s = _get_user_settings()
+    loaded_settings = dict(s)
+    threshold = _setting_int(s, "split_length_threshold", 10)
+    _EXAONE_WORKERS = _setting_int(s, "llm_threads", 6, fallback_key="llm_workers")
+    _LOCAL_OLLAMA_WORKER_CAP = _setting_int(s, "local_ollama_llm_max_workers", 2)
+    _GAP_BREAK_SEC = _setting_float(s, "sub_gap_break_sec", 1.5)
+    _MIN_DURATION = _setting_float(s, "sub_min_duration", 0.2)
+    _MAX_DURATION = _setting_float(s, "sub_max_duration", 6.0)
+    _MAX_CPS = _setting_int(s, "sub_max_cps", 12)
+    _DEDUP_WINDOW = _setting_float(s, "sub_dedup_window", 0.5)
 
-                if "user_prompt" in s:
-                    user_prompt = s["user_prompt"]
-                elif "llm_prompt" in s:
-                    user_prompt = s["llm_prompt"]
+    if "user_prompt" in s:
+        user_prompt = s["user_prompt"]
+    elif "llm_prompt" in s:
+        user_prompt = s["llm_prompt"]
 
-                if "Gemini" in model:
-                    api_key = get_api_key("google") or s.get("google_api_key", "")
-                elif is_openai_model(model):
-                    api_key = get_api_key("openai") or s.get("openai_api_key", "")
-                else:
-                    api_key = ""
-        except Exception:
-            pass
+    if "Gemini" in model:
+        api_key = get_api_key("google") or s.get("google_api_key", "")
+    elif is_openai_model(model):
+        api_key = get_api_key("openai") or s.get("openai_api_key", "")
+    else:
+        api_key = ""
 
     raw_corr = get_local_dataset_corrections()
     corrections: dict = {}
@@ -960,6 +952,7 @@ def optimize_segments(segments: list[dict], vad_segments: list[dict] | None = No
         optimized = adjust_timing(fallback)
 
     optimized = apply_final_gap_settings(optimized, loaded_settings, force=False)
+    optimized = align_stt_candidates_to_subtitle_segments(optimized)
     get_logger().log(f"━━━ 자막 최적화 완료: {len(optimized)}개 ━━━\n")
     return optimized
 

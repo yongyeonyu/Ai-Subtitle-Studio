@@ -8,7 +8,6 @@ macOS (Apple Silicon) 전용 Whisper 백엔드
 """
 
 import sys
-import os
 import subprocess
 import json
 import threading

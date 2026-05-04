@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRectF, QPointF
-from PyQt6.QtGui  import QColor, QPixmap, QImage, QFont, QPainter, QPen, QBrush, QPainterPath, QFontMetrics
+from PyQt6.QtGui  import QColor, QPixmap, QImage, QFont, QPainter, QBrush, QFontMetrics
 from core.runtime import config
 from core.engine.subtitle_engine import save_srt
 from core.runtime.logger import get_logger

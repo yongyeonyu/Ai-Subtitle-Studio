@@ -2,7 +2,6 @@
 # Phase: PHASE2
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 from dataclasses import asdict, replace
@@ -16,6 +15,7 @@ from core.project.project_context import (
     project_segments_to_editor,
     segment_signature,
 )
+from core.project.project_io import read_project_file
 from core.project.project_manager import save_project
 from core.settings import load_settings
 from core.roughcut import (
@@ -84,8 +84,7 @@ class RoughcutStateMixin:
         if not project_path or not os.path.exists(project_path):
             return None
         try:
-            with open(project_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = read_project_file(project_path)
         except Exception:
             return None
         state = data.get("roughcut_state", {}) or {}
@@ -376,8 +375,7 @@ class RoughcutStateMixin:
         project_path = self._project_path()
         if project_path and os.path.exists(project_path):
             try:
-                with open(project_path, "r", encoding="utf-8") as f:
-                    return project_media_files(json.load(f))
+                return project_media_files(read_project_file(project_path))
             except Exception:
                 pass
         media_path = self._media_path()
@@ -387,8 +385,7 @@ class RoughcutStateMixin:
         project_path = self._project_path()
         if project_path and os.path.exists(project_path):
             try:
-                with open(project_path, "r", encoding="utf-8") as f:
-                    return project_mode(json.load(f))
+                return project_mode(read_project_file(project_path))
             except Exception:
                 pass
         return "multiclip" if len(self._project_media_files()) > 1 else "single"
@@ -401,8 +398,7 @@ class RoughcutStateMixin:
         project_path = self._project_path()
         if project_path and os.path.exists(project_path):
             try:
-                with open(project_path, "r", encoding="utf-8") as f:
-                    boundaries = project_clip_boundaries(json.load(f))
+                boundaries = project_clip_boundaries(read_project_file(project_path))
                 if boundaries:
                     return boundaries
             except Exception:
@@ -498,8 +494,7 @@ class RoughcutStateMixin:
         if not project_path or not os.path.exists(project_path):
             return []
         try:
-            with open(project_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = read_project_file(project_path)
         except Exception:
             return []
 
@@ -765,8 +760,7 @@ class RoughcutStateMixin:
             project_path = self._project_path()
             if project_path and os.path.exists(project_path):
                 try:
-                    with open(project_path, "r", encoding="utf-8") as f:
-                        segments = project_segments_to_editor(json.load(f))
+                    segments = project_segments_to_editor(read_project_file(project_path))
                 except Exception:
                     segments = []
         if not segments:

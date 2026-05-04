@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QDialog,
-    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -131,42 +130,6 @@ class SpeakerDialog(QDialog):
                 if sys.platform == 'win32': os.startfile(vd)
                 elif sys.platform == 'darwin': subprocess.Popen(['open', vd])
                 else: subprocess.Popen(['xdg-open', vd])
-                return
-                path, _ = QFileDialog.getOpenFileName(
-                    self,
-                    "학습할 음성/영상 파일 선택",
-                    "",
-                    "Audio/Video (*.wav *.m4a *.mp3 *.aac *.mp4 *.mov *.MOV)",
-                )
-                if not path:
-                    return
-
-                default_name = f"spk{idx}_voice"
-                name, ok = QInputDialog.getText(
-                    self,
-                    "화자 음성 저장",
-                    "파일 이름 (확장자 제외):",
-                    text=default_name,
-                )
-                if not ok or not name.strip():
-                    return
-
-                name = name.strip()
-                if not name.endswith(".wav"):
-                    name += ".wav"
-
-                dst = os.path.join(config.VOICE_DATA_DIR, name)
-                try:
-                    os.makedirs(config.VOICE_DATA_DIR, exist_ok=True)
-                    shutil.copy(path, dst)
-                    self._refresh_voice_row(idx)
-                    QMessageBox.information(
-                        self,
-                        "학습 저장",
-                        f"화자 {idx} 학습 파일 저장 완료\n{dst}",
-                    )
-                except Exception as e:
-                    QMessageBox.warning(self, "오류", f"파일 저장 실패:\n{e}")
 
             btn_voice.clicked.connect(learn_voice)
 

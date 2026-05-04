@@ -1,4 +1,4 @@
-# Version: 03.14.00
+# Version: 03.15.00
 # Phase: PHASE2
 
 
@@ -9,7 +9,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.14.00"
+APP_VERSION = "03.15.00"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -98,10 +98,15 @@ DEFAULT_ADV_SETTINGS = {
     "sub_min_duration":   0.2,
     "sub_max_cps":        12,
     "sub_dedup_window":   0.5,
-    "stt_ensemble_enabled": False,
-    "stt_candidate_scoring_enabled": False,
+    "accuracy_first_mode": True,
+    "auto_start_mode": "quality",
+    "stt_quality_preset": "precise",
+    "stt_ensemble_enabled": True,
+    "stt_candidate_scoring_enabled": True,
     "stt_low_score_recheck_enabled": True,
-    "stt_low_score_recheck_threshold": 50,
+    "stt_low_score_recheck_threshold": 60,
+    "stt_low_score_recheck_padding_sec": 0.8,
+    "stt_low_score_recheck_max_segments": 240,
     "selected_whisper_model_secondary": (
         "youngouk/ghost613-turbo-korean-4bit-mlx"
         if IS_MAC else
@@ -112,23 +117,28 @@ DEFAULT_ADV_SETTINGS = {
     "vad_post_stt_max_shift_sec": 0.7,
     "vad_post_stt_edge_pad_sec": 0.04,
     "subtitle_quality_enabled": False,
-    "subtitle_quality_auto_check_after_generate": False,
-    "subtitle_quality_auto_correct_enabled": False,
-    "editor_lora_runtime_enabled": False,
+    "subtitle_quality_auto_check_after_generate": True,
+    "subtitle_quality_auto_correct_enabled": True,
+    "editor_lora_runtime_enabled": True,
+    "audio_chunk_routing_enabled": True,
+    "audio_chunk_route_vad_enabled": True,
+    "audio_chunk_profile_sec": 30.0,
+    "whisper_chunk_overlap_sec": 3.0,
+    "chunk_time_limit": 180,
     "vad_pre_split_enabled": False,
-    "review_vad_before_stt_enabled": False,
+    "review_vad_before_stt_enabled": True,
     "review_vad_strict_mode": True,
     "review_vad_speech_pad_sec": 0.35,
     "review_vad_min_silence_sec": 0.8,
     "review_min_segment_score_to_keep": 55,
-    "review_auto_correct_apply_threshold": 92,
-    "review_auto_correct_min_improvement": 10,
-    "review_recheck_buffer_sec": 1.2,
-    "review_auto_correct_require_user_confirm": True,
+    "review_auto_correct_apply_threshold": 94,
+    "review_auto_correct_min_improvement": 8,
+    "review_recheck_buffer_sec": 1.5,
+    "review_auto_correct_require_user_confirm": False,
     "ten_vad_threshold": 0.5,
     "ten_vad_hop_size": 256,
-    "correction_memory_enabled": False,
-    "wrong_answer_memory_enabled": False,
+    "correction_memory_enabled": True,
+    "wrong_answer_memory_enabled": True,
     "score_weight_asr_metadata": 0.25,
     "score_weight_vad_alignment": 0.20,
     "score_weight_word_timestamp": 0.15,

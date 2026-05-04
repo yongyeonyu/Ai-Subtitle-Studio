@@ -2,13 +2,12 @@
 # Phase: PHASE2
 
 import re
-import time
 
-from PyQt6.QtWidgets import QTextEdit, QWidget
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QMimeData, QRect, QSize
+from PyQt6.QtWidgets import QTextEdit
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QMimeData, QRect
 from PyQt6.QtGui import (
     QTextCursor, QTextCharFormat, QColor, QFont,
-    QSyntaxHighlighter, QTextDocument, QKeyEvent, QTextBlockUserData, QPainter, QTextBlockFormat
+    QSyntaxHighlighter, QTextDocument, QKeyEvent, QTextBlockUserData
 )
 from core.runtime import config
 from ui.editor.timestamp_area import TimestampArea

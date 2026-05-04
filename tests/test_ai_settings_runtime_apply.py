@@ -99,7 +99,10 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             self.assertNotIn("러프컷 분석에서 LLM 사용", widget_texts)
             self.assertFalse(any("API Key / 온도" in text for text in label_texts))
             self.assertTrue(any("Hugging Face Token:" in text for text in label_texts))
-            self.assertIsNotNone(getattr(window, "sidebar_preset_panel", None))
+            self.assertIsNone(getattr(window, "sidebar_preset_panel", None))
+            self.assertFalse(hasattr(window, "sidebar_stt_quality_combo"))
+            self.assertFalse(hasattr(window, "sidebar_audio_preset_combo"))
+            self.assertFalse(hasattr(window, "sidebar_auto_preset_btn"))
             audio_values = set(dialog.audio_map.values())
             self.assertIn("rnnoise", audio_values)
             self.assertIn("deepfilter", audio_values)
@@ -108,51 +111,6 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             self.assertNotIn("demucs", audio_values)
             self.assertIn("ten_vad", set(dialog.vad_map.values()))
 
-            base = {
-                "stt_quality_preset": "balanced",
-                "audio_preset": "",
-                "selected_whisper_model": "mlx-community/whisper-large-v3-mlx",
-                "selected_model": "exaone3.5:2.4b",
-                "selected_audio_ai": "deepfilter",
-                "selected_vad": "silero",
-            }
-            with patch("ui.home_ui.load_settings", return_value=dict(base)), patch("ui.home_ui.save_settings") as save_mock:
-                for i in range(window.sidebar_stt_quality_combo.count()):
-                    if window.sidebar_stt_quality_combo.itemData(i) == "fast":
-                        window.sidebar_stt_quality_combo.setCurrentIndex(i)
-                        break
-                self.assertTrue(save_mock.called)
-                saved = save_mock.call_args.args[0]
-                self.assertEqual(saved["stt_quality_preset"], "fast")
-                self.assertIn("selected_whisper_model", saved)
-                self.assertEqual(saved["audio_preset"], "실내-마이크무")
-                self.assertEqual(saved["selected_audio_ai"], "none")
-                self.assertEqual(saved["selected_vad"], "none")
-                self.assertEqual(saved["cut_boundary_level"], "off")
-                self.assertFalse(saved["cut_boundary_detection_enabled"])
-
-            with patch("ui.home_ui.load_settings", return_value=dict(base)), patch("ui.home_ui.save_settings") as save_mock:
-                for i in range(window.sidebar_audio_preset_combo.count()):
-                    if window.sidebar_audio_preset_combo.itemData(i) == "실외-마이크유":
-                        window.sidebar_audio_preset_combo.setCurrentIndex(i)
-                        break
-                self.assertTrue(save_mock.called)
-                saved = save_mock.call_args.args[0]
-                self.assertEqual(saved["audio_preset"], "실외-마이크유")
-                self.assertEqual(saved["selected_audio_ai"], "clearvoice")
-                self.assertEqual(saved["selected_vad"], "ten_vad")
-
-            with patch("ui.home_ui.load_settings", return_value=dict(base)), patch("ui.home_ui.save_settings") as save_mock:
-                for i in range(window.sidebar_audio_preset_combo.count()):
-                    if window.sidebar_audio_preset_combo.itemData(i) == "__default__":
-                        window.sidebar_audio_preset_combo.setCurrentIndex(i)
-                        break
-                self.assertTrue(save_mock.called)
-                saved = save_mock.call_args.args[0]
-                self.assertEqual(saved["audio_preset"], "")
-                self.assertEqual(saved["selected_audio_ai"], "deepfilter")
-                self.assertEqual(saved["selected_vad"], "silero")
-                self.assertEqual(saved["ff_chunk"], 30)
         finally:
             if "dialog" in locals():
                 dialog.close()
@@ -222,6 +180,12 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             self.assertEqual(saved["selected_llm_provider"], "ollama")
             self.assertEqual(saved["audio_preset"], "실외-마이크유")
             self.assertEqual(saved["stt_quality_preset"], "precise")
+            user_preset = saved["stt_quality_user_presets"]["precise"]["settings"]
+            self.assertEqual(user_preset["selected_model"], "gemma3:4b")
+            from core.audio.stt_quality_presets import apply_stt_quality_preset
+
+            reloaded = apply_stt_quality_preset(saved, "precise")
+            self.assertEqual(reloaded["selected_model"], "gemma3:4b")
         finally:
             window.close()
             window.deleteLater()
@@ -245,7 +209,7 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_sidebar_auto_preset_button_highlights_after_decision(self):
+    def test_sidebar_auto_preset_button_removed(self):
         window = MainWindow()
         try:
             window._unified_dashboard = True
@@ -260,8 +224,7 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
                 },
             }
             window._sync_sidebar_preset_panel(settings)
-            self.assertEqual(window.sidebar_auto_preset_btn.text(), "")
-            self.assertIn("자동 판정 테스트", window.sidebar_auto_preset_btn.toolTip())
+            self.assertIsNone(getattr(window, "sidebar_auto_preset_btn", None))
         finally:
             window.close()
             window.deleteLater()

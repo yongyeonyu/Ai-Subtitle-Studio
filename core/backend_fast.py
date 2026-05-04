@@ -1,23 +1,28 @@
-# Version: 02.03.00
+# Version: 03.14.34
 # Phase: PHASE1-B
 """
 core/backend_fast.py
-멀티 클립 배치 전용 파이프라인
+자동 배치 전용 파이프라인
 - CoreBackend를 상속하여 단일 파일 로직 재사용
-- 멀티 파일: 자동 시작 + SRT 개별 저장 + 큐 순차 처리
+- 멀티 파일: 정확도 우선 자동 시작 + SRT 개별 저장 + 큐 순차 처리
 - 단일 파일과의 차이: 에디터 대기 없이 자동 진행
 """
 import os, threading, time
 from core.runtime import config
 from core.runtime.logger import get_logger
 from .pipeline.backend_core import CoreBackend
-from .settings import load_settings, get_model_key
+from .settings import (
+    clear_runtime_settings_override,
+    get_model_key,
+    load_settings,
+    set_runtime_settings_override,
+)
 from .time_history import get_expected_time, add_history
 
 
 class CoreBackendFast(CoreBackend):
     """
-    멀티 클립 배치 모드 전용.
+    자동 배치 모드 전용.
     - start_pipeline()에서 is_auto_start=True로 호출
     - 에디터 편집 대기 없이 STT → SRT 저장 자동 진행
     """
@@ -29,13 +34,14 @@ class CoreBackendFast(CoreBackend):
         # 여기서는 추가 콜백 등록 없이 초기화만 완료
 
     def start_batch(self, files, folder=None):
-        """멀티 파일 배치 시작 (직접 스레드 관리 — 부모 start_pipeline 호출 안 함)"""
+        """멀티 파일 정확도 우선 배치 시작 (직접 스레드 관리)."""
         if not files:
             return
         if self._active:
             return
 
         self._active = True
+        set_runtime_settings_override(getattr(self.ui, "_runtime_settings_override", None))
         self.files_to_process = list(files)
         self.current_folder = folder
         self.is_auto_start = True
@@ -50,22 +56,22 @@ class CoreBackendFast(CoreBackend):
         self._eta_thread = threading.Thread(target=self._precalculate_etas, daemon=True, name="eta-calculator")
         self._eta_thread.start()
 
-        get_logger().log(f"⚡ 배치 모드: {len(self.files_to_process)}개 파일 자동 처리 시작")
+        get_logger().log(f"🎯 정확도 우선 배치: {len(self.files_to_process)}개 파일 자동 처리 시작")
 
         self._pipeline_thread = threading.Thread(target=self._run_all, daemon=True, name="batch-main")
         self._pipeline_thread.start()
 
     def _process_one_fast(self, target_file, queue_index):
         """
-        단일 파일 고속 처리 (에디터 대기 없음)
-        - 오디오 추출 → STT → SRT 저장 → 다음 파일
+        단일 파일 정확도 우선 자동 처리 (에디터 대기 없음)
+        - 오디오 추출 → STT 앙상블/LLM 검수 → SRT 저장 → 다음 파일
         """
         vname = os.path.basename(target_file)
         fsize = os.path.getsize(target_file) / (1024 * 1024) if os.path.exists(target_file) else 0
 
         get_logger().log(
             f"\n{'=' * 44}\n"
-            f"⚡ [{queue_index + 1}/{len(self.files_to_process)}] {vname}\n"
+            f"🎯 [{queue_index + 1}/{len(self.files_to_process)}] {vname}\n"
             f"{'=' * 44}\n"
             f"  📂 파일: {vname} ({fsize:.1f} MB)"
         )
@@ -73,28 +79,45 @@ class CoreBackendFast(CoreBackend):
         # ── STEP 0: 백업 ──
         self._backup_existing(target_file)
 
-        # ── STEP 1: 오디오 추출 (빠른모드 오버라이드 적용) ──
-        self.video_processor._fast_mode_overrides = {
-            "selected_whisper_model": "mlx-community/whisper-large-v3-turbo",
-            "selected_vad": "none",
-            "selected_audio_ai": "none",
-            "use_basic_filter": False,
-            "min_speakers": 1,
-            "max_speakers": 1,
-        }
-        get_logger().log("  ⚡ 빠른모드: turbo / VAD off / AudioAI off / 화자1명")
+        # ── STEP 1: 오디오 추출 (클립/청크별 오토 오디오 라우팅 적용) ──
+        try:
+            from core.audio.preset_auto_classifier import (
+                append_audio_lora_record,
+                apply_auto_classified_presets,
+                auto_classify_media_presets,
+                format_auto_audio_decision_log,
+            )
+
+            base_settings = dict(load_settings())
+            decision = auto_classify_media_presets(target_file, settings=base_settings)
+            updated = apply_auto_classified_presets(base_settings, decision)
+            tune = dict(updated.get("audio_preset_auto_tune") or {})
+            if tune and hasattr(self.video_processor, "set_auto_audio_tune_overrides"):
+                self.video_processor.set_auto_audio_tune_overrides(tune)
+            try:
+                append_audio_lora_record(decision, target_file)
+            except Exception as record_exc:
+                get_logger().log(f"  ⚠️ [오토 오디오] LoRA 누적 기록 실패: {record_exc}")
+            get_logger().log(format_auto_audio_decision_log(decision, target_file))
+        except Exception as exc:
+            get_logger().log(f"  ⚠️ [오토 오디오] 자동 프리셋 실패: {exc}")
+
+        self.video_processor.clear_fast_mode_overrides()
+        get_logger().log("  🎯 정확도 우선: 오토 오디오 + STT 앙상블 + LLM 검수 적용")
 
         if hasattr(self.ui, '_sig_update_queue'):
             self.ui._sig_update_queue.emit(queue_index, "⏳ 오디오 추출 중", "", "", "")
 
-        res = self.video_processor.extract_audio(target_file)
+        res = self._validate_audio_extract_result(
+            self.video_processor.extract_audio(target_file),
+            target_file,
+        )
         if not res:
             get_logger().log(f"❌ 오디오 추출 실패: {vname}")
             if hasattr(self.ui, '_sig_update_queue'):
                 self.ui._sig_update_queue.emit(queue_index, "❌ 추출 실패", "", "", "")
             return False
 
-        # 빠른모드 오버라이드 제거 (이후 품질모드 오염 방지)
         self.video_processor.clear_fast_mode_overrides()
 
         chunk_dir, vad_segs = res
@@ -104,7 +127,7 @@ class CoreBackendFast(CoreBackend):
         # ── STEP 2: ETA 계산 + STT 시작 ──
         try:
             s = load_settings()
-            model_key = "FAST:" + get_model_key(s)
+            model_key = "QUALITY:" + get_model_key(s)
 
             if target_file in getattr(self, '_video_durations', {}):
                 video_duration_sec = self._video_durations[target_file]
@@ -118,7 +141,7 @@ class CoreBackendFast(CoreBackend):
 
             if hasattr(self.ui, '_sig_update_queue'):
                 eta_str = str(expected_time) if expected_time > 0 else "예상불가"
-                self.ui._sig_update_queue.emit(queue_index, "⚡ 자막 생성 중", eta_str, "", "")
+                self.ui._sig_update_queue.emit(queue_index, "🎯 자막 생성 중", eta_str, "", "")
             process_start_time = time.time()
 
         except Exception:
@@ -128,6 +151,7 @@ class CoreBackendFast(CoreBackend):
         # ── STEP 3: Whisper + LLM (동기 실행) ──
         import queue as _queue
         from core.engine.subtitle_engine import apply_final_gap_settings, optimize_segments
+        from core.engine.subtitle_timing import align_stt_candidates_to_subtitle_segments
 
         _SENTINEL = object()
         opt_queue = _queue.Queue()
@@ -135,7 +159,7 @@ class CoreBackendFast(CoreBackend):
 
         def do_transcribe():
             try:
-                for chunk_segs, c_idx, t_total in self.video_processor.transcribe(chunk_dir, is_fast_mode=True):
+                for chunk_segs, c_idx, t_total in self.video_processor.transcribe(chunk_dir, is_fast_mode=False):
                     if not self._active:
                         break
                     opt_queue.put((chunk_segs, c_idx, t_total))
@@ -149,10 +173,9 @@ class CoreBackendFast(CoreBackend):
             except Exception:
                 chunk_time_limit = 60
 
-            get_logger().log('  ⚡ 빠른모드: LLM 최적화 skip')
+            get_logger().log("  🧠 정확도 우선: STT 결과를 LLM으로 교정/분리합니다.")
 
             seg_buffer = []
-            last_c_idx = 0
             last_t_total = 1
 
             def _flush():
@@ -161,7 +184,11 @@ class CoreBackendFast(CoreBackend):
                     return
                 chunk_segs = seg_buffer
                 seg_buffer = []
-                opt = chunk_segs
+                try:
+                    opt = optimize_segments(chunk_segs, vad_segments=vad_segs)
+                except Exception as exc:
+                    get_logger().log(f"  ⚠️ LLM 최적화 실패, STT 결과 유지: {exc}")
+                    opt = chunk_segs
 
                 for seg in opt:
                     if seg["start"] < 0.0:
@@ -169,12 +196,26 @@ class CoreBackendFast(CoreBackend):
                     if seg["end"] <= seg["start"]:
                         seg["end"] = seg["start"] + 0.5
 
-                opt = self._align_subtitle_segments_to_vad(opt, vad_segs, context="빠른모드")
+                if hasattr(self, "_magnetize_by_saved_cut_boundaries"):
+                    opt = self._magnetize_by_saved_cut_boundaries(
+                        opt,
+                        context="정확도 우선 정식 컷",
+                        include_provisional=False,
+                    )
+                if hasattr(self, "_split_by_saved_cut_boundaries"):
+                    opt = self._split_by_saved_cut_boundaries(opt, context="정확도 우선 최종 자막")
+                opt = self._align_subtitle_segments_to_vad(opt, vad_segs, context="정확도 우선 배치")
                 opt = apply_final_gap_settings(opt, force=True)
                 if hasattr(self, "_magnetize_by_saved_cut_boundaries"):
-                    opt = self._magnetize_by_saved_cut_boundaries(opt, context="빠른모드 최종 자막")
+                    opt = self._magnetize_by_saved_cut_boundaries(
+                        opt,
+                        context="정확도 우선 임시 컷",
+                        include_confirmed=False,
+                        include_provisional=True,
+                    )
                 if hasattr(self, "_split_by_saved_cut_boundaries"):
-                    opt = self._split_by_saved_cut_boundaries(opt, context="빠른모드 최종 자막")
+                    opt = self._split_by_saved_cut_boundaries(opt, context="정확도 우선 최종 자막")
+                opt = align_stt_candidates_to_subtitle_segments(opt)
                 all_segments.extend([dict(seg) for seg in opt])
 
                 if hasattr(self.ui, "_sig_append_segments"):
@@ -186,8 +227,7 @@ class CoreBackendFast(CoreBackend):
                     _flush()
                     break
 
-                chunk_segs, c_idx, t_total = item
-                last_c_idx = c_idx
+                chunk_segs, _c_idx, t_total = item
                 last_t_total = t_total
 
                 total_files = len(self.files_to_process)
@@ -230,8 +270,8 @@ class CoreBackendFast(CoreBackend):
             if hasattr(self.ui, '_sig_update_status'):
                 self.ui._sig_update_status.emit(last_t_total, last_t_total)
 
-        t1 = threading.Thread(target=do_transcribe, daemon=True, name="fast-transcriber")
-        t2 = threading.Thread(target=do_optimize, daemon=True, name="fast-optimizer")
+        t1 = threading.Thread(target=do_transcribe, daemon=True, name="quality-batch-transcriber")
+        t2 = threading.Thread(target=do_optimize, daemon=True, name="quality-batch-optimizer")
         t1.start()
         t2.start()
         t1.join()
@@ -286,6 +326,7 @@ class CoreBackendFast(CoreBackend):
 
         # ── STEP 5~6: SRT 저장 + 내보내기 ──
         all_segments = apply_final_gap_settings(all_segments, force=True)
+        all_segments = align_stt_candidates_to_subtitle_segments(all_segments)
         self._save_and_export(target_file, queue_index, all_segments, is_auto_mode=True)
 
         return True
@@ -337,6 +378,12 @@ class CoreBackendFast(CoreBackend):
 
         finally:
             self._active = False
+            clear_runtime_settings_override()
+            try:
+                if hasattr(self.ui, "_clear_runtime_quality_override"):
+                    self.ui._clear_runtime_quality_override()
+            except Exception:
+                pass
             try:
                 if hasattr(self.ui, 'request_show_home'):
                     self.ui.request_show_home()

@@ -473,6 +473,7 @@ class VideoProcessorTranscribeMixin:
         log_label: str = "STT",
         preview_callback=None,
     ):
+        _ = is_fast_mode
         chunks = sorted([f for f in os.listdir(chunk_dir) if f.endswith(".wav")])
         if not chunks:
             yield [], 0, 0

@@ -1,5 +1,6 @@
-# Version: 03.04.01
+# Version: 03.14.12
 # Phase: PHASE2
+import json
 import os
 import tempfile
 import unittest
@@ -53,20 +54,26 @@ class AudioPresetTests(unittest.TestCase):
         self.assertFalse(applied["use_basic_filter"])
         self.assertGreaterEqual(applied["df_vol"], 4.8)
 
-    def test_curated_audio_preset_applies_full_stack_recommendation_fields(self):
+    def test_curated_audio_preset_does_not_apply_stage_recommendation_fields(self):
         applied = apply_audio_preset({}, "실외-마이크유")
 
-        self.assertEqual(applied["cut_boundary_level"], "medium")
-        self.assertEqual(applied["selected_audio_ai"], "clearvoice")
-        self.assertEqual(applied["selected_vad"], "ten_vad")
-        self.assertTrue(applied["stt_ensemble_enabled"])
-        self.assertTrue(applied["stt_ensemble_llm_judge_enabled"])
-        self.assertEqual(applied["selected_model"], "gemma4:e4b")
-        self.assertEqual(applied["roughcut_llm_provider"], "ollama")
-        self.assertEqual(applied["roughcut_llm_model"], "exaone3.5:7.8b")
-        self.assertEqual(applied["audio_preset_recommended_preprocess_model"], "ffmpeg-outdoor-strong")
+        blocked_keys = {
+            "cut_boundary_level",
+            "selected_audio_ai",
+            "selected_vad",
+            "stt_ensemble_enabled",
+            "stt_ensemble_llm_judge_enabled",
+            "selected_model",
+            "roughcut_llm_provider",
+            "roughcut_llm_model",
+            "audio_preset_recommended_preprocess_model",
+        }
+        self.assertFalse(blocked_keys.intersection(applied))
+        self.assertEqual(applied["audio_preset"], "실외-마이크유")
+        self.assertGreaterEqual(applied["df_vol"], 4.8)
+        self.assertGreaterEqual(applied["ff_treble_boost"], 3.0)
 
-    def test_apply_default_audio_preset_restores_default_audio_stack(self):
+    def test_apply_default_audio_preset_restores_audio_fields_only(self):
         applied = apply_default_audio_preset(
             {
                 "audio_preset": "야외",
@@ -78,8 +85,8 @@ class AudioPresetTests(unittest.TestCase):
         )
 
         self.assertEqual(applied["audio_preset"], "")
-        self.assertEqual(applied["selected_audio_ai"], "deepfilter")
-        self.assertEqual(applied["selected_vad"], "silero")
+        self.assertEqual(applied["selected_audio_ai"], "none")
+        self.assertEqual(applied["selected_vad"], "none")
         self.assertEqual(applied["ff_chunk"], 30)
         self.assertEqual(applied["gap_push_rate"], 0.7)
 
@@ -112,6 +119,20 @@ class AudioPresetTests(unittest.TestCase):
         outdoor = presets["야외"]["settings"]
         self.assertGreaterEqual(outdoor["df_vol"], 4.8)
         self.assertEqual(outdoor["df_lp"], 5200)
+
+    def test_media_processor_applies_auto_tune_after_named_preset(self):
+        processor = VideoProcessor()
+        with mock.patch.object(config, "DATASET_DIR", "/tmp/missing-settings-dir"):
+            processor.set_auto_audio_tune_overrides({
+                "ff_hp": 190,
+                "selected_audio_ai": "clearvoice",
+                "selected_vad": "ten_vad",
+            })
+            settings = processor._load_all_settings()
+
+        self.assertEqual(settings["ff_hp"], 190)
+        self.assertEqual(settings.get("selected_audio_ai"), "clearvoice")
+        self.assertEqual(settings.get("selected_vad"), "ten_vad")
 
     def test_media_processor_uses_ffmpeg_and_cleanup_preset_fields(self):
         processor = VideoProcessor()
@@ -172,6 +193,122 @@ class AudioPresetTests(unittest.TestCase):
         self.assertEqual(VideoProcessor._audio_cleanup_label("resemble_enhance", True), "Resemble Enhance")
         self.assertEqual(VideoProcessor._audio_cleanup_label("clearvoice", True), "ClearVoice")
         self.assertEqual(VideoProcessor._audio_cleanup_label("deepfilter", False), "DeepFilter")
+
+    def test_adaptive_chunk_audio_routing_writes_per_chunk_routes(self):
+        class RoutingProcessor(VideoProcessor):
+            def __init__(self):
+                super().__init__()
+                self.commands = []
+
+            def _classify_chunk_audio_route(self, _media_path, _seg, _settings, *, index, tmpdir):
+                if index == 0:
+                    return {
+                        "audio_strategy": "clean_voice",
+                        "audio_strategy_label": "깨끗한 음성",
+                        "audio_tune_reason": "테스트 구간 1",
+                        "confidence": 0.7,
+                        "settings": {
+                            "selected_audio_ai": "deepfilter",
+                            "selected_vad": "silero",
+                            "ff_hp": 120,
+                            "ff_lp": 4200,
+                        },
+                        "audio_profile": {"environment": "indoor", "noise_level": "low"},
+                    }
+                return {
+                    "audio_strategy": "noisy_voice",
+                    "audio_strategy_label": "잡음 음성",
+                    "audio_tune_reason": "테스트 구간 2",
+                    "confidence": 0.82,
+                    "settings": {
+                        "selected_audio_ai": "clearvoice",
+                        "selected_vad": "ten_vad",
+                        "ff_hp": 180,
+                        "ff_lp": 5200,
+                        "df_hp": 160,
+                    },
+                    "audio_profile": {"environment": "outdoor", "noise_level": "high"},
+                }
+
+            def _run_media_command_no_progress(self, cmd, *, label, timeout=None, env=None):
+                self.commands.append(list(cmd))
+                out = str(cmd[-1])
+                with open(out, "wb") as f:
+                    f.write(b"wav")
+                return True
+
+            def _apply_clearvoice(self, source_wav, target_wav):
+                with open(target_wav, "wb") as f:
+                    f.write(b"clear")
+                return True
+
+        processor = RoutingProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "media.mp4")
+            open(media, "wb").close()
+            chunk_dir = os.path.join(tmp, "chunks")
+            ok = processor._write_adaptive_grouped_chunks_from_media(
+                media,
+                chunk_dir,
+                [{"start": 0.0, "end": 20.0}, {"start": 20.0, "end": 40.0}],
+                {
+                    "use_basic_filter": True,
+                    "audio_chunk_routing_enabled": True,
+                    "audio_chunk_route_vad_enabled": False,
+                    "ffmpeg_filter_threads": 1,
+                },
+            )
+
+            self.assertTrue(ok)
+            self.assertTrue(os.path.exists(os.path.join(chunk_dir, "vad_000_0.000.wav")))
+            self.assertTrue(os.path.exists(os.path.join(chunk_dir, "vad_001_20.000.wav")))
+            with open(os.path.join(chunk_dir, "audio_routes.json"), "r", encoding="utf-8") as f:
+                routes = json.load(f)
+
+        self.assertEqual([r["audio_tune_settings"]["selected_audio_ai"] for r in routes], ["deepfilter", "clearvoice"])
+        self.assertEqual([r["audio_tune_settings"]["selected_vad"] for r in routes], ["silero", "ten_vad"])
+        filters = [cmd[cmd.index("-af") + 1] for cmd in processor.commands if "-af" in cmd]
+        self.assertTrue(any("highpass=f=120" in value for value in filters))
+        self.assertTrue(any("highpass=f=180" in value for value in filters))
+
+    def test_adaptive_chunk_audio_routing_offsets_chunk_vad_segments(self):
+        class VadRoutingProcessor(VideoProcessor):
+            def _classify_chunk_audio_route(self, _media_path, _seg, _settings, *, index, tmpdir):
+                return {
+                    "audio_strategy": "clean_voice",
+                    "audio_strategy_label": "깨끗한 음성",
+                    "confidence": 0.75,
+                    "settings": {"selected_audio_ai": "deepfilter", "selected_vad": "silero"},
+                    "audio_profile": {"environment": "indoor", "noise_level": "low"},
+                }
+
+            def _run_media_command_no_progress(self, cmd, *, label, timeout=None, env=None):
+                with open(cmd[-1], "wb") as f:
+                    f.write(b"wav")
+                return True
+
+            def _detect_vad_timestamps(self, wav_path, vad_model, s, *args, **kwargs):
+                return [{"start": 0.2, "end": 1.1, "source": vad_model}]
+
+        processor = VadRoutingProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "media.mp4")
+            open(media, "wb").close()
+            chunk_dir = os.path.join(tmp, "chunks")
+            ok = processor._write_adaptive_grouped_chunks_from_media(
+                media,
+                chunk_dir,
+                [{"start": 30.0, "end": 40.0}],
+                {"use_basic_filter": True, "audio_chunk_routing_enabled": True, "audio_chunk_route_vad_enabled": True},
+            )
+            with open(os.path.join(chunk_dir, "vad_strict.json"), "r", encoding="utf-8") as f:
+                vad_rows = json.load(f)
+
+        self.assertTrue(ok)
+        self.assertEqual(vad_rows[0]["start"], 30.2)
+        self.assertEqual(vad_rows[0]["end"], 31.1)
+        self.assertEqual(vad_rows[0]["source"], "chunk_silero")
+        self.assertTrue(vad_rows[0]["post_stt_align"])
 
     def test_ten_vad_flags_merge_into_speech_segments(self):
         processor = VideoProcessor()

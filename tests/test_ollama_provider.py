@@ -1,5 +1,6 @@
 # Version: 03.09.01
 # Phase: PHASE2
+import http.client
 import socket
 import unittest
 from unittest import mock
@@ -20,6 +21,8 @@ class OllamaWarmupTest(unittest.TestCase):
     def setUp(self):
         ollama_provider._WARMED.clear()
         ollama_provider._PROBE_OK_UNTIL.clear()
+        ollama_provider._SERVER_READY_UNTIL = 0.0
+        ollama_provider._START_IN_PROGRESS_UNTIL = 0.0
 
     def test_warmup_timeout_is_skipped_without_failure_log(self):
         logger = _Logger()
@@ -77,7 +80,8 @@ class OllamaWarmupTest(unittest.TestCase):
     def test_ensure_ollama_server_logs_running_without_start(self):
         logger = _Logger()
 
-        with mock.patch("core.llm.ollama_provider.is_ollama_server_running", return_value=True), \
+        with mock.patch("core.llm.ollama_provider._is_ollama_api_ready", return_value=True), \
+             mock.patch("core.llm.ollama_provider.is_ollama_server_running", return_value=True), \
              mock.patch("core.llm.ollama_provider._start_ollama_server_process") as start_mock:
             self.assertTrue(ollama_provider.ensure_ollama_server(logger=logger, wait_sec=0.1))
 
@@ -91,6 +95,7 @@ class OllamaWarmupTest(unittest.TestCase):
             "core.llm.ollama_provider.is_ollama_server_running",
             side_effect=[False, False, True],
         ), \
+             mock.patch("core.llm.ollama_provider._is_ollama_api_ready", side_effect=[False, False, True]), \
              mock.patch("core.llm.ollama_provider._start_ollama_server_process", return_value=True), \
              mock.patch("core.llm.ollama_provider.time.sleep"):
             self.assertTrue(ollama_provider.ensure_ollama_server(logger=logger, wait_sec=1.0))
@@ -102,7 +107,8 @@ class OllamaWarmupTest(unittest.TestCase):
     def test_ensure_ollama_server_reports_missing_executable(self):
         logger = _Logger()
 
-        with mock.patch("core.llm.ollama_provider.is_ollama_server_running", return_value=False), \
+        with mock.patch("core.llm.ollama_provider._is_ollama_api_ready", return_value=False), \
+             mock.patch("core.llm.ollama_provider.is_ollama_server_running", return_value=False), \
              mock.patch("core.llm.ollama_provider._start_ollama_server_process", return_value=False):
             self.assertFalse(ollama_provider.ensure_ollama_server(logger=logger, wait_sec=0.1))
 
@@ -231,6 +237,45 @@ class OllamaWarmupTest(unittest.TestCase):
         self.assertEqual(resolved, "gemma4:e4b")
         self.assertEqual(urlopen_mock.call_count, 1)
         self.assertNotIn("자동 대체", "\n".join(logger.lines))
+
+    def test_ensure_ollama_server_waits_for_api_ready_when_root_is_up(self):
+        logger = _Logger()
+
+        with mock.patch("core.llm.ollama_provider._is_ollama_api_ready", side_effect=[False, False, True]), \
+             mock.patch("core.llm.ollama_provider.is_ollama_server_running", return_value=True), \
+             mock.patch("core.llm.ollama_provider._start_ollama_server_process") as start_mock, \
+             mock.patch("core.llm.ollama_provider.time.sleep"):
+            self.assertTrue(ollama_provider.ensure_ollama_server(logger=logger, wait_sec=1.0))
+
+        start_mock.assert_not_called()
+        self.assertIn("AI 엔진(Ollama) 실행 중", "\n".join(logger.lines))
+
+    def test_resolve_ollama_model_retries_remote_disconnected_probe(self):
+        logger = _Logger()
+        success_payload = mock.Mock()
+        success_payload.__enter__ = mock.Mock(return_value=success_payload)
+        success_payload.__exit__ = mock.Mock(return_value=False)
+        success_payload.read.return_value = b'{"response":"ok"}'
+
+        with mock.patch("core.llm.ollama_provider.ensure_ollama_server", return_value=True) as ensure_mock, \
+             mock.patch(
+                 "core.llm.ollama_provider.urllib.request.urlopen",
+                 side_effect=[http.client.RemoteDisconnected("Remote end closed connection without response"), success_payload],
+             ) as urlopen_mock, \
+             mock.patch("core.llm.ollama_provider.time.sleep") as sleep_mock:
+            resolved = ollama_provider.resolve_ollama_model_for_request(
+                "gemma4:e4b",
+                logger=logger,
+                context="자막 LLM",
+                timeout=1.0,
+                allow_fallback=False,
+            )
+
+        self.assertEqual(resolved, "gemma4:e4b")
+        self.assertEqual(urlopen_mock.call_count, 2)
+        self.assertGreaterEqual(ensure_mock.call_count, 2)
+        sleep_mock.assert_called_once()
+        self.assertEqual(logger.lines, [])
 
 
 if __name__ == "__main__":

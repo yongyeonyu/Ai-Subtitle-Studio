@@ -1,4 +1,4 @@
-# Version: 03.13.03
+# Version: 03.14.33
 # Phase: PHASE2
 """Audio command, preprocessing, cache, and chunk helpers for VideoProcessor."""
 
@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import tempfile
 import wave
 
 from core.llm.secure_keys import get_api_key
@@ -35,6 +36,15 @@ def _runtime_get_logger():
 def _runtime_get_api_key(service: str) -> str:
     owner = sys.modules.get("core.audio.media_processor")
     return getattr(owner, "get_api_key", get_api_key)(service)
+
+
+def _media_command_error_summary(returncode: int, summary: str) -> str:
+    summary = str(summary or "").strip()
+    if summary:
+        return summary
+    if int(returncode or 0) == 255:
+        return "외부 중단 신호로 프로세스가 종료되었습니다. 처리 중 홈/앱 종료 정리 루틴이 실행되었는지 확인하세요."
+    return "오류 출력 없음"
 
 
 class VideoProcessorAudioHelpersMixin:
@@ -75,6 +85,7 @@ class VideoProcessorAudioHelpersMixin:
             err = (result.stderr or result.stdout or "").strip()
             lines = [line.strip() for line in err.splitlines() if line.strip()]
             summary = "\n".join(lines[-10:]) if lines else err
+            summary = _media_command_error_summary(result.returncode, summary)
             _runtime_get_logger().log(f"  ❌ {label} 실패: {summary[:1200]}")
             return False
         return True
@@ -266,6 +277,7 @@ class VideoProcessorAudioHelpersMixin:
 
         if proc.returncode != 0:
             summary = "\n".join(stderr_lines[-10:])
+            summary = _media_command_error_summary(proc.returncode, summary)
             _runtime_get_logger().log(f"  ❌ {label} 실패(rc={proc.returncode}): {summary[:1200]}")
             return False
         if last_pct < 100:
@@ -298,6 +310,7 @@ class VideoProcessorAudioHelpersMixin:
             err = (result.stderr or result.stdout or "").strip()
             lines = [line.strip() for line in err.splitlines() if line.strip()]
             summary = "\n".join(lines[-10:]) if lines else err
+            summary = _media_command_error_summary(result.returncode, summary)
             _runtime_get_logger().log(f"  ❌ {label} 실패: {summary[:1200]}")
             return False
         return True
@@ -581,6 +594,336 @@ class VideoProcessorAudioHelpersMixin:
                 continue
             chain.append(text)
         return ",".join(chain) if chain else "anull"
+
+    @staticmethod
+    def _adaptive_audio_routing_enabled(settings: dict | None) -> bool:
+        data = dict(settings or {})
+        if bool(data.get("audio_chunk_routing_disabled", False)):
+            return False
+        return bool(data.get("audio_chunk_routing_enabled", True))
+
+    def _audio_route_sample_span(self, start: float, end: float, settings: dict | None = None) -> tuple[float, float]:
+        start = max(0.0, float(start or 0.0))
+        end = max(start, float(end or start))
+        duration = max(0.0, end - start)
+        if duration <= 0.0:
+            return start, 0.0
+        try:
+            max_sample = float((settings or {}).get("audio_chunk_profile_sec", 30.0) or 30.0)
+        except Exception:
+            max_sample = 30.0
+        sample_dur = min(duration, max(8.0, min(30.0, max_sample)))
+        sample_start = start + max(0.0, (duration - sample_dur) / 2.0)
+        return round(sample_start, 3), round(sample_dur, 3)
+
+    def _extract_audio_route_sample(
+        self,
+        media_path: str,
+        sample_path: str,
+        *,
+        start: float,
+        duration: float,
+        settings: dict,
+    ) -> bool:
+        if duration <= 0.0:
+            return False
+        cmd = [
+            ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error",
+            *self._ffmpeg_parallel_args(settings),
+            "-ss", f"{max(0.0, float(start or 0.0)):.3f}",
+            "-t", f"{max(0.05, float(duration or 0.05)):.3f}",
+            "-i", media_path,
+            *self._ffmpeg_audio_stream_args(),
+            "-ac", "1", "-ar", "16000",
+            "-sample_fmt", "s16",
+            sample_path,
+        ]
+        return self._run_media_command_no_progress(cmd, label="오디오 라우팅 샘플 추출")
+
+    def _fallback_chunk_audio_route(self, settings: dict, *, reason: str = "clip-level auto preset fallback") -> dict:
+        from core.audio.audio_presets import auto_audio_settings_only
+
+        tune = auto_audio_settings_only(settings)
+        return {
+            "audio_strategy": "clip_fallback",
+            "audio_strategy_label": "클립 기준 유지",
+            "audio_tune_reason": reason,
+            "confidence": 0.5,
+            "settings": tune,
+            "audio_profile": {},
+            "features": {},
+            "candidate_scores": [],
+        }
+
+    def _classify_chunk_audio_route(
+        self,
+        media_path: str,
+        seg: dict,
+        settings: dict,
+        *,
+        index: int,
+        tmpdir: str,
+    ) -> dict:
+        from core.audio.audio_presets import auto_audio_settings_only
+        from core.audio.preset_auto_classifier import (
+            analyze_sample_features,
+            build_audio_profile,
+            select_audio_candidate,
+        )
+
+        start = max(0.0, float(seg.get("start", 0.0) or 0.0))
+        end = max(start, float(seg.get("end", start) or start))
+        sample_start, sample_dur = self._audio_route_sample_span(start, end, settings)
+        sample_path = os.path.join(tmpdir, f"route_{index:03d}_{sample_start:.3f}.wav")
+        if not self._extract_audio_route_sample(
+            media_path,
+            sample_path,
+            start=sample_start,
+            duration=sample_dur,
+            settings=settings,
+        ):
+            return self._fallback_chunk_audio_route(settings, reason="샘플 추출 실패")
+
+        try:
+            features = analyze_sample_features(sample_path)
+            features.update({
+                "sample_count": 1,
+                "sample_duration_sec": sample_dur,
+                "total_scanned_sec": sample_dur,
+                "media_duration_sec": max(0.0, end - start),
+            })
+            profile = build_audio_profile(features)
+            result = select_audio_candidate(profile, features, use_lora_prior=True)
+            tune = auto_audio_settings_only(result.get("settings") or {})
+            return {
+                "audio_strategy": str(result.get("id") or "clean_voice"),
+                "audio_strategy_label": str(result.get("label") or ""),
+                "audio_tune_reason": str(result.get("reason") or ""),
+                "confidence": float(result.get("score", 0.0) or 0.0),
+                "settings": tune,
+                "audio_profile": profile,
+                "features": features,
+                "candidate_scores": list(result.get("candidate_scores") or []),
+                "sample_start": sample_start,
+                "sample_duration": sample_dur,
+            }
+        except Exception as exc:
+            return self._fallback_chunk_audio_route(settings, reason=f"프로파일링 실패: {exc}")
+
+    def _route_log_line(self, idx: int, seg: dict, route: dict) -> str:
+        settings = dict(route.get("settings") or {})
+        profile = dict(route.get("audio_profile") or {})
+        start = float(seg.get("start", 0.0) or 0.0)
+        end = float(seg.get("end", start) or start)
+        audio_ai = self._audio_cleanup_label(str(settings.get("selected_audio_ai", "none") or "none"), True)
+        vad = str(settings.get("selected_vad", "none") or "none")
+        confidence = int(round(float(route.get("confidence", 0.0) or 0.0) * 100))
+        env = str(profile.get("environment") or "-")
+        noise = str(profile.get("noise_level") or "-")
+        return (
+            f"    · 청크 {idx + 1:02d} {start:.1f}s~{end:.1f}s: "
+            f"{audio_ai} / VAD {vad} / {env} / noise {noise} / confidence {confidence}%"
+        )
+
+    def _write_adaptive_chunk_from_media(
+        self,
+        media_path: str,
+        out_path: str,
+        seg: dict,
+        settings: dict,
+        *,
+        tmpdir: str,
+    ) -> bool:
+        start = max(0.0, float(seg.get("start", 0.0) or 0.0))
+        end = max(start, float(seg.get("end", start) or start))
+        duration = max(0.001, end - start)
+        audio_ai = str(settings.get("selected_audio_ai", "none") or "none").lower()
+        use_basic = bool(settings.get("use_basic_filter", True))
+        master_filter = self._build_ffmpeg_preprocess_filter(settings)
+        active_filter = self._build_audio_cleanup_filter(audio_ai, settings)
+
+        if self._can_fuse_ffmpeg_preprocess(audio_ai):
+            fused_filter = self._combine_audio_filters(master_filter if use_basic else "anull", active_filter)
+            cmd = [
+                ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error",
+                *self._ffmpeg_parallel_args(settings),
+                "-ss", f"{start:.3f}",
+                "-t", f"{duration:.3f}",
+                "-i", media_path,
+                *self._ffmpeg_audio_stream_args(),
+                "-ac", "1", "-ar", "16000",
+                "-af", fused_filter,
+                "-acodec", "pcm_s16le",
+                out_path,
+            ]
+            return (
+                self._run_media_command_no_progress(cmd, label="구간별 FFMPEG 청크 추출")
+                and os.path.exists(out_path)
+                and os.path.getsize(out_path) > 0
+            )
+
+        raw_wav = os.path.join(tmpdir, f"{os.path.basename(out_path)}.raw.wav")
+        extract_cmd = [
+            ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error",
+            *self._ffmpeg_parallel_args(settings),
+            "-ss", f"{start:.3f}",
+            "-t", f"{duration:.3f}",
+            "-i", media_path,
+            *self._ffmpeg_audio_stream_args(),
+            "-ac", "1", "-ar", "48000",
+        ]
+        if use_basic:
+            extract_cmd.extend(["-af", master_filter])
+        extract_cmd.extend(["-acodec", "pcm_s16le", raw_wav])
+        if not self._run_media_command_no_progress(extract_cmd, label="구간별 FFMPEG 원본 청크 추출"):
+            return False
+
+        ai_wav = raw_wav
+        if audio_ai == "rnnoise":
+            routed_wav = os.path.join(tmpdir, f"{os.path.basename(out_path)}.rnnoise.wav")
+            if self._apply_rnnoise(raw_wav, routed_wav) and os.path.exists(routed_wav):
+                ai_wav = routed_wav
+        elif audio_ai == "resemble_enhance":
+            routed_wav = os.path.join(tmpdir, f"{os.path.basename(out_path)}.resemble.wav")
+            if self._apply_resemble_enhance(raw_wav, routed_wav) and os.path.exists(routed_wav):
+                ai_wav = routed_wav
+        elif audio_ai == "clearvoice":
+            routed_wav = os.path.join(tmpdir, f"{os.path.basename(out_path)}.clearvoice.wav")
+            if self._apply_clearvoice(raw_wav, routed_wav) and os.path.exists(routed_wav):
+                ai_wav = routed_wav
+
+        final_cmd = [
+            ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error",
+            *self._ffmpeg_parallel_args(settings),
+            "-i", ai_wav,
+            "-ac", "1", "-ar", "16000",
+            "-af", active_filter,
+            "-acodec", "pcm_s16le",
+            out_path,
+        ]
+        return (
+            self._run_media_command_no_progress(final_cmd, label="구간별 음성필터 청크 정제")
+            and os.path.exists(out_path)
+            and os.path.getsize(out_path) > 0
+        )
+
+    def _write_adaptive_grouped_chunks_from_media(
+        self,
+        media_path: str,
+        chunk_dir: str,
+        grouped: list[dict],
+        settings: dict,
+    ) -> bool:
+        if not grouped:
+            return False
+        os.makedirs(chunk_dir, exist_ok=True)
+        self._notify_stage("⏳ [오디오] 청크별 오디오 프로파일링/라우팅 중")
+        _runtime_get_logger().log(
+            f"  🧭 [오디오 라우팅] 정확도 우선: 청크 {len(grouped)}개를 각각 분석해 FFmpeg/음성필터/VAD 후보를 결정합니다"
+        )
+
+        routes = []
+        route_vad_segments = []
+        route_vad_enabled = bool(settings.get("audio_chunk_route_vad_enabled", settings.get("vad_post_stt_align_enabled", True)))
+        failures = 0
+        with tempfile.TemporaryDirectory(prefix="audio_chunk_route_") as tmpdir:
+            for idx, seg in enumerate(grouped):
+                start = max(0.0, float(seg.get("start", 0.0) or 0.0))
+                out = os.path.join(chunk_dir, f"vad_{idx:03d}_{start:.3f}.wav")
+                route = self._classify_chunk_audio_route(media_path, seg, settings, index=idx, tmpdir=tmpdir)
+                chunk_settings = dict(settings)
+                chunk_settings.update(dict(route.get("settings") or {}))
+                ok = self._write_adaptive_chunk_from_media(media_path, out, seg, chunk_settings, tmpdir=tmpdir)
+                route_meta = {
+                    "index": idx,
+                    "start": round(float(seg.get("start", 0.0) or 0.0), 3),
+                    "end": round(float(seg.get("end", 0.0) or 0.0), 3),
+                    "path": out,
+                    "ok": bool(ok),
+                    "audio_strategy": route.get("audio_strategy"),
+                    "audio_strategy_label": route.get("audio_strategy_label"),
+                    "audio_tune_reason": route.get("audio_tune_reason"),
+                    "confidence": route.get("confidence"),
+                    "audio_profile": route.get("audio_profile"),
+                    "audio_tune_settings": dict(route.get("settings") or {}),
+                }
+                if ok and route_vad_enabled:
+                    vad_model = str(chunk_settings.get("selected_vad", "none") or "none").lower()
+                    if vad_model != "none":
+                        try:
+                            chunk_vad = self._detect_vad_timestamps(
+                                out,
+                                vad_model,
+                                chunk_settings,
+                                target_start_sec=0.0,
+                                target_end_sec=None,
+                                is_single_segment=False,
+                                for_post_stt_align=True,
+                            )
+                        except Exception:
+                            chunk_vad = []
+                        offset_vad = []
+                        for row in chunk_vad or []:
+                            try:
+                                item = dict(row)
+                                item["start"] = round(start + float(item.get("start", 0.0) or 0.0), 3)
+                                item["end"] = round(start + float(item.get("end", 0.0) or 0.0), 3)
+                                item["source"] = f"chunk_{vad_model}"
+                                item["post_stt_align"] = True
+                                item["vad_word_filter"] = bool(item.get("vad_word_filter", True))
+                                offset_vad.append(item)
+                            except Exception:
+                                continue
+                        if offset_vad:
+                            route_vad_segments.extend(offset_vad)
+                        route_meta["vad_segments"] = len(offset_vad)
+                routes.append(route_meta)
+                _runtime_get_logger().log(self._route_log_line(idx, seg, route))
+                if not ok:
+                    failures += 1
+                    _runtime_get_logger().log(f"  ⚠️ [오디오 라우팅] 청크 {idx + 1} 생성 실패")
+
+        try:
+            with open(os.path.join(chunk_dir, "audio_routes.json"), "w", encoding="utf-8") as f:
+                json.dump(routes, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        if route_vad_segments:
+            try:
+                route_vad_segments.sort(key=lambda row: (float(row.get("start", 0.0) or 0.0), float(row.get("end", 0.0) or 0.0)))
+                with open(os.path.join(chunk_dir, "vad_strict.json"), "w", encoding="utf-8") as f:
+                    json.dump(route_vad_segments, f, ensure_ascii=False, indent=2)
+                _runtime_get_logger().log(f"  ✅ [오디오 라우팅] 청크별 VAD 후처리 구간 {len(route_vad_segments)}개 생성")
+            except Exception:
+                pass
+
+        if failures:
+            _runtime_get_logger().log(f"  ⚠️ [오디오 라우팅] 실패 {failures}개: 기존 청크 생성 경로로 재시도합니다")
+            return False
+        _runtime_get_logger().log(f"  ✅ [오디오 라우팅] 청크별 오디오 라우팅 완료 ({len(grouped)}개)")
+        return True
+
+    def _grouped_chunks_from_existing_wavs(self, chunk_dir: str) -> list[dict]:
+        grouped = []
+        try:
+            names = sorted(name for name in os.listdir(chunk_dir) if name.lower().endswith(".wav"))
+        except Exception:
+            return grouped
+        for name in names:
+            path = os.path.join(chunk_dir, name)
+            match = re.search(r"vad_\d+_([\d.]+)\.wav$", name)
+            if not match:
+                continue
+            try:
+                start = float(match.group(1))
+                with wave.open(path, "r") as wf:
+                    duration = wf.getnframes() / float(wf.getframerate())
+            except Exception:
+                continue
+            if duration <= 0:
+                continue
+            grouped.append({"start": round(start, 3), "end": round(start + duration, 3)})
+        return grouped
 
     def _audio_cache_config(
         self,

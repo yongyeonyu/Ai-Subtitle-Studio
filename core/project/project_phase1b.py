@@ -1,4 +1,4 @@
-# Version: 03.09.28
+# Version: 03.14.28
 # Phase: PHASE2
 """
 core/project/project_phase1b.py
@@ -6,12 +6,17 @@ PHASE1-B project save/load extension helpers.
 """
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
 from typing import Any
 
-from core.project.project_context import build_editor_state, sanitize_workspace_state
+from core.project.project_context import (
+    STT_SEGMENT_METADATA_KEYS,
+    build_editor_state,
+    project_stt_preview_segments,
+    sanitize_workspace_state,
+)
+from core.project.project_io import read_project_file, write_project_file
 from core.project.project_manager import build_model_settings_snapshot, _augment_project_frame_metadata
 from core.cut_boundary import cut_boundary_enabled, project_cut_boundaries, split_segments_by_cut_boundaries, sync_project_cut_boundaries
 from core.work_mode import EDITOR_MODE, normalize_work_mode
@@ -86,11 +91,22 @@ def _media_paths(owner, editor, project_data: dict[str, Any]) -> list[str]:
 def _normalize_segments_for_legacy(segments: list[dict[str, Any]] | None, existing: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     if not segments:
         return existing or []
+    existing_by_id: dict[str, dict[str, Any]] = {}
+    existing_by_time: dict[tuple[float, float], dict[str, Any]] = {}
+    for row in existing or []:
+        if not isinstance(row, dict):
+            continue
+        row_id = str(row.get('id', '') or '')
+        if row_id:
+            existing_by_id[row_id] = row
+        start = float(row.get('timeline_start', row.get('start', 0.0)) or 0.0)
+        end = float(row.get('timeline_end', row.get('end', start)) or start)
+        existing_by_time[(round(start, 3), round(end, 3))] = row
     out = []
     for idx, seg in enumerate(segments, 1):
-        start = float(seg.get('start', 0.0) or 0.0)
-        end = float(seg.get('end', 0.0) or 0.0)
-        out.append({
+        start = float(seg.get('start', seg.get('timeline_start', 0.0)) or 0.0)
+        end = float(seg.get('end', seg.get('timeline_end', start)) or start)
+        item = {
             'id': seg.get('id', f'seg_{idx:04d}'),
             'index': idx,
             'timeline_start': start,
@@ -108,15 +124,23 @@ def _normalize_segments_for_legacy(segments: list[dict[str, Any]] | None, existi
             'stt_pending': bool(seg.get('stt_pending', False)),
             'original_text': str(seg.get('original_text', '') or ''),
             'dictated_text': str(seg.get('dictated_text', '') or ''),
-        })
+        }
+        for key in STT_SEGMENT_METADATA_KEYS:
+            if key in seg:
+                item[key] = seg.get(key)
+        existing_seg = existing_by_id.get(str(seg.get('id', '') or '')) or existing_by_time.get((round(start, 3), round(end, 3)))
+        if isinstance(existing_seg, dict):
+            for key in STT_SEGMENT_METADATA_KEYS:
+                if key in existing_seg and key not in item:
+                    item[key] = existing_seg.get(key)
+        out.append(item)
     return out
 
 
 def enrich_existing_project_file(project_path: str, owner, editor, segments: list[dict[str, Any]] | None = None, srt_path: str | None = None) -> str:
     if not project_path or not os.path.exists(project_path):
         return project_path
-    with open(project_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+    data = read_project_file(project_path)
     media_files = _media_paths(owner, editor, data)
     mode = 'multiclip' if len(media_files) > 1 else 'single'
     data['version'] = PROJECT_SCHEMA_VERSION
@@ -146,6 +170,7 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
         segments=segments or subtitles.get('segments') or [],
         workspace=data['workspace'],
         clip_boundaries=list(getattr(owner, '_multiclip_boundaries', []) or []),
+        stt_preview_segments=project_stt_preview_segments(data),
         cut_boundaries=cut_boundaries,
     )
     data.setdefault('roughcut_state', {})
@@ -156,8 +181,7 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
         ]
     _augment_project_frame_metadata(data)
     sync_project_cut_boundaries(data, settings=editor_settings or data.get('user_settings', {}))
-    with open(project_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    write_project_file(project_path, data)
     return project_path
 
 
@@ -165,8 +189,7 @@ def apply_project_ui_state(owner, editor, project_path: str) -> None:
     if not project_path or not os.path.exists(project_path):
         return
     try:
-        with open(project_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        data = read_project_file(project_path)
     except Exception:
         return
     ws = data.get('workspace', {}) or {}

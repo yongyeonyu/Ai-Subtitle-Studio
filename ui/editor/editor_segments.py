@@ -1,15 +1,16 @@
-# Version: 03.13.05
+# Version: 03.14.29
 # Phase: PHASE2
 """
 ui/editor_segments.py
 EditorWidget의 자막 에디터 조작, 큐 처리, 세그먼트 I/O 메서드 모음.
 [수정] core 폴더 이동에 따른 데이터 매니저 경로 및 상대 경로 최적화 완료
 """
-import hashlib, json, re, os, threading, time
-from PyQt6.QtCore import Qt, QTimer
+import hashlib, json, re, threading
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
 
 from core.runtime.logger import get_logger
+from core.engine.subtitle_timing import align_stt_preview_to_subtitle_segments
 
 # 💡 [경로 수정] editor_data_manager -> core.data_manager
 from core.project.data_manager import save_correction as _dm_save_correction
@@ -17,7 +18,6 @@ from core.project.data_manager import save_correction as _dm_save_correction
 # 수정 — 절대 import로 통일 (editor_widget.py, editor_timeline_video.py와 동일)
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_roughcut_draft import EditorRoughcutDraftMixin
-from ui.editor.editor_helpers import get_sub_block_indices
 
 class EditorSegmentsMixin(EditorRoughcutDraftMixin):
     """자막 에디터 조작 / 큐 처리 / 세그먼트 I/O"""
@@ -194,6 +194,102 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             return False
         return seg_start < end - pad and seg_end > start + pad
 
+    def _best_final_segment_for_stt_candidate(self, segments: list[dict], candidate: dict) -> dict | None:
+        try:
+            cand_start = float(candidate.get("start", 0.0) or 0.0)
+            cand_end = float(candidate.get("end", cand_start) or cand_start)
+        except Exception:
+            return None
+        if cand_end <= cand_start:
+            return None
+        cand_dur = max(0.001, cand_end - cand_start)
+        cand_center = (cand_start + cand_end) / 2.0
+        best_seg = None
+        best_score = 0.0
+        fps = max(1.0, float(getattr(self, "video_fps", 30.0) or 30.0))
+        edge_tol = max(0.18, min(0.45, 6.0 / fps))
+
+        for seg in segments or []:
+            if seg.get("is_gap"):
+                continue
+            try:
+                start = float(seg.get("start", 0.0) or 0.0)
+                end = float(seg.get("end", start) or start)
+            except Exception:
+                continue
+            if end <= start:
+                continue
+            seg_dur = max(0.001, end - start)
+            overlap = max(0.0, min(end, cand_end) - max(start, cand_start))
+            center_bonus = 1.0 if start - edge_tol <= cand_center <= end + edge_tol else 0.0
+            edge_bonus = 0.0
+            if abs(cand_start - start) <= edge_tol:
+                edge_bonus += 0.5
+            if abs(cand_end - end) <= edge_tol:
+                edge_bonus += 0.5
+            if overlap <= 0.0 and not center_bonus:
+                continue
+            score = (overlap / cand_dur) * 0.55 + (overlap / seg_dur) * 0.30 + center_bonus * 0.10 + edge_bonus * 0.05
+            if score > best_score:
+                best_score = score
+                best_seg = seg
+
+        return dict(best_seg) if best_seg is not None and best_score >= 0.35 else None
+
+    def _fit_stt_candidate_to_final_segment_slot(self, candidate: dict, segments: list[dict]) -> dict:
+        placed = dict(candidate or {})
+        target = self._best_final_segment_for_stt_candidate(segments, placed)
+        if not target:
+            placed["_stt_placement_mode"] = "raw"
+            return placed
+
+        try:
+            cand_start = float(placed.get("start", 0.0) or 0.0)
+            cand_end = float(placed.get("end", cand_start) or cand_start)
+            target_start = float(target.get("start", 0.0) or 0.0)
+            target_end = float(target.get("end", target_start) or target_start)
+        except Exception:
+            placed["_stt_placement_mode"] = "raw"
+            return placed
+        if cand_end <= cand_start or target_end <= target_start:
+            placed["_stt_placement_mode"] = "raw"
+            return placed
+
+        cand_dur = max(0.001, cand_end - cand_start)
+        target_dur = max(0.001, target_end - target_start)
+        overlap = max(0.0, min(target_end, cand_end) - max(target_start, cand_start))
+        cand_coverage = overlap / cand_dur
+        target_coverage = overlap / target_dur
+        fps = max(1.0, float(getattr(self, "video_fps", 30.0) or 30.0))
+        edge_tol = max(0.18, min(0.45, 6.0 / fps))
+        near_start = abs(cand_start - target_start) <= edge_tol
+        near_end = abs(cand_end - target_end) <= edge_tol
+        center = (cand_start + cand_end) / 2.0
+        center_in_target = target_start - edge_tol <= center <= target_end + edge_tol
+
+        if (
+            (cand_coverage >= 0.80 and target_coverage >= 0.70)
+            or (cand_coverage >= 0.75 and near_start and near_end)
+            or (target_coverage >= 0.82 and center_in_target)
+        ):
+            placed["start"] = self._frame_time(target_start)
+            placed["end"] = self._frame_time(target_end)
+            placed["_stt_placement_mode"] = "replace_original_slot"
+        elif overlap > 0.0 and center_in_target:
+            placed["start"] = self._frame_time(max(cand_start, target_start))
+            placed["end"] = self._frame_time(min(cand_end, target_end))
+            placed["_stt_placement_mode"] = "clamp_to_original_slot"
+        else:
+            placed["_stt_placement_mode"] = "raw"
+
+        placed["_stt_target_line"] = target.get("line")
+        placed["_stt_target_start"] = target_start
+        placed["_stt_target_end"] = target_end
+        for key in ("speaker", "spk", "_clip_idx", "_clip_file"):
+            if key in target and key not in placed:
+                placed[key] = target[key]
+        return placed
+
     def _trim_final_segments_around_candidate(self, segments: list[dict], candidate: dict) -> list[dict]:
         try:
             cand_start = self._frame_time(float(candidate.get("start", 0.0) or 0.0))
@@ -272,16 +368,11 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             return
 
         # ---------------------------------------------------------
-        # 1. 튕김 방지: 현재 스크롤 및 플레이헤드 위치 캡처
+        # 1. 튕김 방지: 현재 스크롤 위치 캡처
         # ---------------------------------------------------------
-        saved_sec = None
         saved_h_scroll = None
         saved_v_scroll = 0
         if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
-            try:
-                saved_sec = float(getattr(self.timeline.canvas, "playhead_sec", 0.0) or 0.0)
-            except Exception:
-                saved_sec = None
             try:
                 saved_h_scroll = int(self.timeline.scroll.horizontalScrollBar().value())
             except Exception:
@@ -302,7 +393,6 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         # ---------------------------------------------------------
         cand_text = str(candidate.get("text", "")).strip()
         cand_start = float(candidate.get("start", 0.0) or 0.0)
-        cand_end = float(candidate.get("end", 0.0) or 0.0)
         
         cand_source = ""
         if hasattr(self, "_stt_candidate_source"):
@@ -316,8 +406,12 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         # ---------------------------------------------------------
         # 3. 겹치는 최종 자막을 후보 경계 기준으로 잘라내고 새 확정 자막 삽입
         # ---------------------------------------------------------
-        current = self._trim_final_segments_around_candidate(current, candidate)
-        current.append(self._final_segment_from_stt_candidate(candidate))
+        placed_candidate = self._fit_stt_candidate_to_final_segment_slot(candidate, current)
+        selected_seg = self._final_segment_from_stt_candidate(placed_candidate)
+        candidate_anchor_sec = float(selected_seg.get("start", cand_start) or cand_start)
+
+        current = self._trim_final_segments_around_candidate(current, placed_candidate)
+        current.append(selected_seg)
         current.sort(key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
 
         # ---------------------------------------------------------
@@ -325,6 +419,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         # ---------------------------------------------------------
         for line, seg in enumerate(current):
             seg["line"] = line
+        self._active_seg_start = candidate_anchor_sec
 
         if hasattr(self, "text_edit"):
             self.text_edit.blockSignals(True)
@@ -342,17 +437,36 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             self.text_edit.verticalScrollBar().setValue(saved_v_scroll)
         if hasattr(self, "timeline"):
             try:
-                if saved_sec is not None and hasattr(self.timeline, "set_playhead"):
-                    self.timeline.set_playhead(saved_sec, preserve_center_lock=True)
+                if hasattr(self.timeline, "set_active"):
+                    self.timeline.set_active(candidate_anchor_sec)
+                if hasattr(self.timeline, "set_playhead"):
+                    try:
+                        self.timeline.set_playhead(candidate_anchor_sec, preserve_center_lock=True)
+                    except TypeError:
+                        self.timeline.set_playhead(candidate_anchor_sec)
                 if saved_h_scroll is not None:
                     self.timeline.scroll.horizontalScrollBar().setValue(int(saved_h_scroll))
             except Exception:
                 pass
+        if hasattr(self, "video_player") and hasattr(self.video_player, "seek"):
+            try:
+                local_sec = (
+                    self._global_to_local_sec(candidate_anchor_sec)
+                    if hasattr(self, "_global_to_local_sec")
+                    else candidate_anchor_sec
+                )
+                self.video_player.seek(local_sec)
+            except Exception:
+                pass
+
     def _update_timeline_with_confirmed_and_preview(self, confirmed_segments: list[dict]):
         if not hasattr(self, "timeline"):
             return
         confirmed = [seg for seg in list(confirmed_segments or []) if not seg.get("is_gap")]
-        preview = list(getattr(self, "_live_stt_preview_segments", []) or [])
+        preview = align_stt_preview_to_subtitle_segments(
+            list(getattr(self, "_live_stt_preview_segments", []) or []),
+            confirmed,
+        )
         combined = sorted(
             confirmed + preview,
             key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),
@@ -369,7 +483,10 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             confirmed = [seg for seg in self._get_current_segments() if not seg.get("is_gap")]
         except Exception:
             confirmed = list(getattr(self, "_cached_segs", []) or [])
-        preview = list(getattr(self, "_live_stt_preview_segments", []) or [])
+        preview = align_stt_preview_to_subtitle_segments(
+            list(getattr(self, "_live_stt_preview_segments", []) or []),
+            confirmed,
+        )
         if not preview:
             self._redraw_timeline()
             return
@@ -724,6 +841,101 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
     def _trigger_editor_popup(self, word, anchor, end_c, gpos):
         self.editor_popup.trigger(word, anchor, end_c, gpos)
 
+    def _replace_text_in_all_subtitles(self, old_text: str, new_text: str, *, anchor=None, end_cursor=None) -> int:
+        old_text = str(old_text or "")
+        new_text = str(new_text or "")
+        if not old_text or old_text == new_text or not hasattr(self, "text_edit"):
+            return 0
+
+        doc = self.text_edit.document()
+        matches_by_line: dict[int, list[int]] = {}
+        block = doc.begin()
+        while block.isValid():
+            ud = block.userData()
+            if isinstance(ud, SubtitleBlockData) and not getattr(ud, "is_gap", False):
+                text = block.text()
+                positions = []
+                start = text.find(old_text)
+                while start >= 0:
+                    positions.append(start)
+                    start = text.find(old_text, start + len(old_text))
+                if positions:
+                    matches_by_line[int(block.blockNumber())] = positions
+            block = block.next()
+
+        replace_count = sum(len(v) for v in matches_by_line.values())
+        if replace_count <= 0:
+            return 0
+
+        selected_line = -1
+        selected_offset = 0
+        cursor_ref = anchor if anchor is not None else end_cursor
+        if cursor_ref is not None:
+            try:
+                anchor_block = doc.findBlock(cursor_ref.position())
+                if anchor_block.isValid():
+                    selected_line = int(anchor_block.blockNumber())
+                    selected_offset = int(cursor_ref.position() - anchor_block.position())
+            except Exception:
+                selected_line = -1
+
+        try:
+            if hasattr(self, "_undo_mgr"):
+                self._undo_mgr.push_immediate()
+        except Exception:
+            pass
+
+        prev_inline = bool(getattr(self, "_inline_updating", False))
+        self._inline_updating = True
+        cur = QTextCursor(doc)
+        cur.beginEditBlock()
+        try:
+            for line_num in sorted(matches_by_line.keys(), reverse=True):
+                block = doc.findBlockByNumber(line_num)
+                if not block.isValid():
+                    continue
+                base_pos = int(block.position())
+                for offset in sorted(matches_by_line[line_num], reverse=True):
+                    cur.setPosition(base_pos + offset)
+                    cur.setPosition(base_pos + offset + len(old_text), QTextCursor.MoveMode.KeepAnchor)
+                    cur.insertText(new_text)
+        finally:
+            cur.endEditBlock()
+            self._inline_updating = prev_inline
+
+        if selected_line >= 0:
+            try:
+                selected_block = doc.findBlockByNumber(selected_line)
+                if selected_block.isValid():
+                    before_selected = sum(1 for offset in matches_by_line.get(selected_line, []) if offset < selected_offset)
+                    adjusted_offset = selected_offset + before_selected * (len(new_text) - len(old_text))
+                    cur = QTextCursor(selected_block)
+                    cur.setPosition(selected_block.position() + max(0, adjusted_offset) + len(new_text))
+                    self.text_edit.setTextCursor(cur)
+            except Exception:
+                pass
+
+        hl = getattr(self, "_highlighter", None)
+        if hl and hasattr(hl, "mark_edited"):
+            for line_num in matches_by_line:
+                hl.mark_edited(line_num)
+        if hasattr(self.text_edit, "update_margins"):
+            self.text_edit.update_margins()
+        if hasattr(self.text_edit, "timestampArea"):
+            self.text_edit.timestampArea.update()
+
+        try:
+            self._cached_segs = self._get_current_segments()
+        except Exception:
+            pass
+        if hasattr(self, "_mark_dirty"):
+            self._mark_dirty()
+        if hasattr(self, "_schedule_timeline"):
+            self._schedule_timeline()
+        if hasattr(self, "_refresh_video_subtitle_context"):
+            self._refresh_video_subtitle_context()
+        return replace_count
+
     def _on_selection_changed(self):
         if hasattr(self, "_timeline_lock_edit_enabled") and self._timeline_lock_edit_enabled():
             cur = self.text_edit.textCursor()
@@ -827,8 +1039,12 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                 self.video_player.set_context_segments(segs)
 
         # ✅ 최초 로드 시 화면에 맞춤
-        if getattr(self, '_needs_fit_view', True) and segs and hasattr(self.timeline, "fit_to_view"):
-            self.timeline.fit_to_view()
+        if getattr(self, '_needs_fit_view', False) and segs and hasattr(self.timeline, "fit_to_view"):
+            auto_fit = getattr(self.timeline, "auto_fit_to_view", None)
+            if callable(auto_fit):
+                auto_fit()
+            else:
+                self.timeline.fit_to_view()
             self._needs_fit_view = False
 
     def _refresh_video_subtitle_context(self):

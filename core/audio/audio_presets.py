@@ -1,4 +1,4 @@
-# Version: 03.14.00
+# Version: 03.14.13
 # Phase: PHASE1-B
 """
 core/audio/audio_presets.py
@@ -20,6 +20,69 @@ from core.audio.audio_preset_data import (
     DEFAULT_AUDIO_APPLY_DATA,
     DEFAULT_AUDIO_PRESETS,
 )
+
+
+_STAGE_SETTING_KEYS = {
+    "cut_boundary_level",
+    "scan_cut_boundary_level",
+    "scan_cut_level",
+    "cut_boundary_detection_enabled",
+    "scan_cut_enabled",
+    "scan_cut_auto_enabled",
+    "cut_boundary_enabled",
+    "selected_audio_ai",
+    "selected_vad",
+    "selected_whisper_model",
+    "selected_whisper_model_secondary",
+    "stt_ensemble_enabled",
+    "stt_ensemble_llm_judge_enabled",
+    "stt_quality_preset",
+    "selected_model",
+    "roughcut_llm_enabled",
+    "roughcut_llm_use_override",
+    "roughcut_llm_provider",
+    "roughcut_llm_model",
+}
+_STAGE_SETTING_PREFIXES = (
+    "audio_preset_recommended_",
+    "roughcut_llm_",
+)
+
+
+def is_audio_preset_setting_key(key: str) -> bool:
+    name = str(key or "")
+    if name in _STAGE_SETTING_KEYS:
+        return False
+    return not any(name.startswith(prefix) for prefix in _STAGE_SETTING_PREFIXES)
+
+
+def audio_preset_settings_only(settings: dict | None) -> dict:
+    return {
+        key: deepcopy(value)
+        for key, value in dict(settings or {}).items()
+        if is_audio_preset_setting_key(str(key))
+    }
+
+
+def auto_audio_settings_only(settings: dict | None) -> dict:
+    allowed_stage_audio_keys = {
+        "selected_audio_ai",
+        "selected_vad",
+        "vad_threshold",
+        "vad_min_speech",
+        "vad_min_silence",
+        "vad_speech_pad",
+        "vad_window_size",
+        "ten_vad_threshold",
+        "vad_pre_split_enabled",
+        "vad_post_stt_align_enabled",
+    }
+    data = dict(settings or {})
+    out = audio_preset_settings_only(data)
+    for key in allowed_stage_audio_keys:
+        if key in data:
+            out[key] = deepcopy(data[key])
+    return out
 
 
 def ensure_audio_presets_file() -> None:
@@ -52,17 +115,15 @@ def apply_audio_preset(settings: dict, preset_name: str) -> dict:
     if not preset:
         return settings
     out = dict(settings)
-    for key, value in dict(preset.get("settings", {}) or {}).items():
+    for key, value in audio_preset_settings_only(preset.get("settings")).items():
         out[key] = value
-    for key, value in dict(preset.get("stack", {}) or {}).items():
-        out[key] = deepcopy(value)
     out["audio_preset"] = preset_name
     return out
 
 
 def apply_default_audio_preset(settings: dict) -> dict:
     out = dict(settings)
-    for key, value in DEFAULT_AUDIO_APPLY_DATA.items():
+    for key, value in audio_preset_settings_only(DEFAULT_AUDIO_APPLY_DATA).items():
         out[key] = deepcopy(value)
     out["audio_preset"] = ""
     return out
@@ -72,7 +133,7 @@ def uses_default_audio_preset(settings: dict | None) -> bool:
     data = dict(settings or {})
     if str(data.get("audio_preset", "") or "").strip():
         return False
-    for key, value in DEFAULT_AUDIO_APPLY_DATA.items():
+    for key, value in audio_preset_settings_only(DEFAULT_AUDIO_APPLY_DATA).items():
         if data.get(key) != value:
             return False
     return True
@@ -113,7 +174,5 @@ def _inject_curated_audio_presets(base_presets: dict[str, dict]) -> dict[str, di
         settings = dict(row.get("settings") or {})
         settings.update(deepcopy(spec.get("overrides") or {}))
         row["settings"] = settings
-        if spec.get("stack"):
-            row["stack"] = deepcopy(spec.get("stack") or {})
         merged[name] = row
     return merged

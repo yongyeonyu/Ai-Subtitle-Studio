@@ -16,7 +16,6 @@ try:
 except Exception:
     QSvgRenderer = None
 
-from core.runtime import config
 
 
 COLORS = {

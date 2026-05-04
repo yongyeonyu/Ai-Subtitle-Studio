@@ -1,4 +1,4 @@
-# Version: 03.08.10
+# Version: 03.14.06
 # Phase: PHASE2
 import os
 import json
@@ -230,6 +230,45 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.assertTrue(exited)
             finally:
                 editor.close()
+
+    def test_project_file_change_marks_editor_dirty(self):
+        from ui.editor.editor_actions import EditorActionsMixin
+
+        class ProjectDirtyEditor(EditorActionsMixin):
+            def __init__(self, project_path):
+                self._current_project_path = project_path
+                self._is_dirty = False
+                self.sm = SubtitleStateManager()
+                self.refreshes = []
+                self._remember_saved_segments([])
+
+            def _get_current_segments(self):
+                return []
+
+            def window(self):
+                return SimpleNamespace(
+                    _current_project_path=self._current_project_path,
+                    _refresh_saved_status_label=lambda **kwargs: self.refreshes.append(kwargs),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = os.path.join(tmp, "sample.assp")
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump({"project": "sample", "version": 1}, f, ensure_ascii=False)
+
+            editor = ProjectDirtyEditor(project_path)
+            editor._remember_saved_project_file()
+            self.assertFalse(editor._has_unsaved_changes())
+            self.assertFalse(editor._is_dirty)
+            self.assertFalse(editor.sm.is_dirty)
+
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump({"project": "sample", "version": 2}, f, ensure_ascii=False)
+
+            self.assertTrue(editor._has_unsaved_changes())
+            self.assertTrue(editor._is_dirty)
+            self.assertTrue(editor.sm.is_dirty)
+            self.assertTrue(any(item.get("is_dirty") is True for item in editor.refreshes))
 
     def test_editor_top_mode_toolbar_is_removed(self):
         from ui.editor.editor_widget import EditorWidget

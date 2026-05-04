@@ -1,10 +1,8 @@
-# Version: 03.14.00
+# Version: 03.14.29
 # Phase: PHASE2
 """Cut-boundary helpers for absolute scene splits."""
 from __future__ import annotations
 
-import os
-import sys
 from copy import deepcopy
 from typing import Any
 
@@ -176,6 +174,7 @@ def snap_segments_near_cut_boundaries(
 
     window_frame = max(0, sec_to_frame(float(snap_window_sec or 0.0), effective_fps))
     min_duration = max(0.02, float(min_duration_sec or 0.05))
+    min_duration_frame = max(1, sec_to_frame(min_duration, effective_fps))
     snapped: list[dict[str, Any]] = []
     for seg in segments or []:
         if not isinstance(seg, dict):
@@ -189,7 +188,22 @@ def snap_segments_near_cut_boundaries(
         end_hit = _nearest_cut_frame(end_frame, cut_frames, window_frame)
         snapped_start_frame = start_hit if start_hit is not None else start_frame
         snapped_end_frame = end_hit if end_hit is not None else end_frame
-        min_duration_frame = max(1, sec_to_frame(min_duration, effective_fps))
+        if (
+            start_hit is not None
+            and end_hit is not None
+            and start_hit == end_hit
+            and snapped_end_frame <= snapped_start_frame + min_duration_frame
+        ):
+            start_dist = abs(int(start_frame) - int(start_hit))
+            end_dist = abs(int(end_frame) - int(end_hit))
+            if start_dist <= end_dist:
+                snapped_start_frame = start_hit
+                snapped_end_frame = end_frame
+                end_hit = None
+            else:
+                snapped_start_frame = start_frame
+                snapped_end_frame = end_hit
+                start_hit = None
         if snapped_end_frame <= snapped_start_frame + min_duration_frame:
             if end_hit is not None and start_hit is None:
                 snapped_start_frame = min(start_frame, max(0, snapped_end_frame - min_duration_frame))
@@ -232,7 +246,7 @@ def magnetize_segments_to_cut_boundaries(
     confirmed_window_sec: float = 0.48,
     min_duration_sec: float = 0.05,
 ) -> list[dict[str, Any]]:
-    """Snap aggressively to provisional+confirmed cuts, then enforce confirmed hard splits."""
+    """Apply confirmed cuts as hard bounds, then use provisional cuts as soft nearby snaps."""
     if not segments:
         return []
     rows = [dict(seg) for seg in segments if isinstance(seg, dict)]
@@ -243,15 +257,6 @@ def magnetize_segments_to_cut_boundaries(
     provisional_rows = normalize_cut_boundaries(provisional_boundaries, primary_fps=effective_fps)
     confirmed_rows = normalize_cut_boundaries(confirmed_boundaries, primary_fps=effective_fps)
 
-    if provisional_rows:
-        rows = snap_segments_near_cut_boundaries(
-            rows,
-            provisional_rows,
-            enabled=True,
-            primary_fps=effective_fps,
-            snap_window_sec=provisional_window_sec,
-            min_duration_sec=min_duration_sec,
-        )
     if confirmed_rows:
         rows = snap_segments_near_cut_boundaries(
             rows,
@@ -274,6 +279,22 @@ def magnetize_segments_to_cut_boundaries(
             primary_fps=effective_fps,
             clamp_window_sec=max(float(confirmed_window_sec or 0.0), 0.60),
             min_duration_sec=min_duration_sec,
+        )
+    if provisional_rows:
+        rows = snap_segments_near_cut_boundaries(
+            rows,
+            provisional_rows,
+            enabled=True,
+            primary_fps=effective_fps,
+            snap_window_sec=provisional_window_sec,
+            min_duration_sec=min_duration_sec,
+        )
+    if confirmed_rows:
+        rows = split_segments_by_cut_boundaries(
+            rows,
+            confirmed_rows,
+            enabled=True,
+            primary_fps=effective_fps,
         )
 
     for row in rows:
@@ -867,7 +888,6 @@ def _cb_refine_cut_time_with_pyramid(
     - high:   0.5s -> 0.25s -> 0.125s
     """
     try:
-        import cv2
 
         steps = _cb_level_pyramid_steps(level)
         best_time = float(coarse_time)

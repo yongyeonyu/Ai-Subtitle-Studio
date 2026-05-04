@@ -1,4 +1,4 @@
-# Version: 03.09.26
+# Version: 03.14.31
 # Phase: PHASE2
 """
 ui/timeline_input.py
@@ -786,7 +786,10 @@ class TimelineInputMixin:
             self.drag_finished.emit()
             self._drag_seg = self._drag_edge = self._drag_adj_l = self._drag_adj_r = None
             self._drag_diamond_idx = None; self._snap_lines = []; self.unsetCursor()
-            self.gap_segments = _build_gaps(self.segments, self.total_duration); self.update(); return
+            self.gap_segments = _build_gaps(self.segments, self.total_duration)
+            if hasattr(self, "_invalidate_render_cache"):
+                self._invalidate_render_cache()
+            self.update(); return
 
         if self._drag_seg:
             edge = str(self._drag_edge) if self._drag_edge else ""
@@ -796,7 +799,10 @@ class TimelineInputMixin:
             self.drag_finished.emit()
             self._drag_seg = self._drag_edge = self._drag_adj_l = self._drag_adj_r = None
             self._snap_lines = []; self.unsetCursor()
-            self.gap_segments = _build_gaps(self.segments, self.total_duration); self.update()
+            self.gap_segments = _build_gaps(self.segments, self.total_duration)
+            if hasattr(self, "_invalidate_render_cache"):
+                self._invalidate_render_cache()
+            self.update()
 
     def _apply_drag(self, delta):
         if delta == 0: return
@@ -895,4 +901,7 @@ class TimelineInputMixin:
                     nb = max(self._snap_to_frame(seg["start"] + ml), min(self._snap_to_frame(lr), nb))
                     seg["end"] = nb
                     self.seg_time_changed.emit(seg.get("line", 0), seg["start"], seg["end"], "square_right")
-            self.gap_segments = _build_gaps(self.segments, self.total_duration); self.update()
+            self.gap_segments = _build_gaps(self.segments, self.total_duration)
+            if hasattr(self, "_invalidate_render_cache"):
+                self._invalidate_render_cache()
+            self.update()

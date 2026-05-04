@@ -1,4 +1,4 @@
-# Version: 03.10.02
+# Version: 03.14.03
 # Phase: PHASE2
 import os
 import unittest
@@ -14,6 +14,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QTextEdit, QWidget
 
 from ui.editor.editor_segments import EditorSegmentsMixin
+from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.editor.editor_widget import EditorWidget
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
@@ -64,6 +65,10 @@ class _ClickEditor(EditorTimelineVideoMixin):
 
 class _InlineEditEditor:
     _on_inline_text_changed = EditorWidget._on_inline_text_changed
+
+
+class _PipelineFitEditor(EditorPipelineMixin):
+    pass
 
 
 class TimelinePlayheadFitTests(unittest.TestCase):
@@ -288,6 +293,46 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertEqual(timeline.global_canvas.view_end, 1.0)
         finally:
             timeline.close()
+
+    def test_auto_fit_to_view_respects_manual_zoom(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 240.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, timeline.canvas.pps))
+
+            timeline.fit_to_view()
+            fit_pps = timeline.canvas.pps
+            timeline.zoom_in()
+            zoomed_pps = timeline.canvas.pps
+
+            self.assertGreater(zoomed_pps, fit_pps)
+            self.assertFalse(timeline.auto_fit_to_view())
+            self.assertEqual(timeline.canvas.pps, zoomed_pps)
+
+            timeline.schedule_fit_to_view((0,))
+            self.app.processEvents()
+            self.assertEqual(timeline.canvas.pps, zoomed_pps)
+        finally:
+            timeline.close()
+
+    def test_placeholder_refresh_auto_fit_skips_during_playback(self):
+        editor = _PipelineFitEditor()
+        playing_state = object()
+        player = SimpleNamespace(
+            PlaybackState=SimpleNamespace(PlayingState=playing_state),
+            playbackState=Mock(return_value=playing_state),
+        )
+        editor.video_player = SimpleNamespace(media_player=player)
+        timeline = SimpleNamespace(auto_fit_to_view=Mock(return_value=True))
+
+        self.assertFalse(editor._auto_fit_timeline_if_user_view_allows(timeline))
+        timeline.auto_fit_to_view.assert_not_called()
 
     def test_playhead_uses_overlay_without_canvas_body_repaint(self):
         timeline = TimelineWidget()

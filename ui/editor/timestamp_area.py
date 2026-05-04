@@ -3,7 +3,7 @@
 
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import QSize, Qt, QRect, QPoint
-from PyQt6.QtGui import QPainter, QColor, QFont, QTextCursor, QBrush
+from PyQt6.QtGui import QPainter, QColor, QFont, QBrush
 from core.runtime import config
 
 class TimestampArea(QWidget):

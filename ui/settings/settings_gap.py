@@ -1,4 +1,4 @@
-# Version: 03.00.20
+# Version: 03.14.30
 # Phase: PHASE2
 """
 ui/settings_gap.py  ─  ⏱️ 자막 간격/분할 설정
@@ -7,7 +7,6 @@ ui/settings_gap.py  ─  ⏱️ 자막 간격/분할 설정
 - 최대 화면 높이 제한 (화면의 92%)
 - 폼 row 간격 축소 (verticalSpacing=3)
 """
-import json
 from PyQt6.QtWidgets import (
     QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QPushButton, QSlider, QFrame, QMessageBox, QToolTip
@@ -15,8 +14,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt
 from core.project.data_manager import save_settings, save_default_settings
-from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, CUSTOM_DEFAULTS_FILE, _create_bottom_buttons
-from ui.style import button_style, label_style, settings_dialog_stylesheet
+from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, _create_bottom_buttons
+from ui.style import button_style, settings_dialog_stylesheet
 
 
 from ui.settings.gap_simulator import GapSimulatorWidget
@@ -39,7 +38,7 @@ class GapSettingsDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
         
-        h1 = QHBoxLayout(); h1.addWidget(QLabel("<b style='font-size: 15px;'>실시간 AI 엔진 시뮬레이터</b>")); h1.addStretch(); layout.addLayout(h1)
+        h1 = QHBoxLayout(); h1.addWidget(QLabel("<b style='font-size: 15px;'>자막 간격 시뮬레이터</b>")); h1.addStretch(); layout.addLayout(h1)
         self.simulator = GapSimulatorWidget(); layout.addWidget(self.simulator)
         sep0 = QFrame(); sep0.setFixedHeight(1); sep0.setStyleSheet("background-color: #24313A; margin: 6px 0;"); layout.addWidget(sep0)
 
@@ -58,7 +57,7 @@ class GapSettingsDialog(QDialog):
         right_col.setContentsMargins(8, 0, 0, 0)
         
         # ==========================================
-        # 👈 [왼쪽 단] 파라미터 튜닝 + 분할/삭제
+        # 👈 [왼쪽 단] 파라미터 튜닝
         # ==========================================
         h2 = QHBoxLayout(); h2.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>파라미터 튜닝</b>")); h2.addStretch(); left_col.addLayout(h2)
         form1 = QFormLayout()
@@ -92,8 +91,10 @@ class GapSettingsDialog(QDialog):
         left_col.addLayout(form1)
         sep1 = QFrame(); sep1.setFixedHeight(1); sep1.setStyleSheet("background-color: #24313A; margin: 8px 0;"); left_col.addWidget(sep1)
 
-        h3 = QHBoxLayout(); h3.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>자막 분할 및 삭제 기준</b>")); h3.addStretch(); left_col.addLayout(h3)
+        h3 = QHBoxLayout(); h3.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>자막 분할 및 삭제 기준</b>")); h3.addStretch(); right_col.addLayout(h3)
         form3 = QFormLayout()
+        form3.setVerticalSpacing(3)
+        form3.setHorizontalSpacing(8)
 
         self.slider_split = QSlider(Qt.Orientation.Horizontal); self.slider_split.setRange(5, 50)
         cur_split = int(self.result.get("split_length_threshold", 10)); self.slider_split.setValue(cur_split)
@@ -143,22 +144,13 @@ class GapSettingsDialog(QDialog):
             "[+] 길게: 호흡이 긴 대사라도 끊기지 않고 한 줄에 자연스럽게 합쳐집니다.<br>"
             "[-] 짧게: 오디오가 살짝만 비어도 자막이 잘게 파편화되어 분리됩니다."))
 
-        left_col.addLayout(form3); left_col.addStretch()
+        right_col.addLayout(form3); right_col.addStretch()
+        left_col.addStretch()
 
-        h4 = QHBoxLayout(); h4.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>적용 안내</b>")); h4.addStretch(); right_col.addLayout(h4)
-        info = QLabel(
-            "이 메뉴는 최종 자막 생성에서 실제로 쓰는 간격/분할 값만 남겼습니다.<br>"
-            "텍스트 LoRA와 컷 경계 스냅을 우선 적용한 뒤, 여기의 간격/분할 기준이 마지막으로 반영됩니다."
-        )
-        info.setWordWrap(True)
-        info.setStyleSheet("color: #A9B0B7; line-height: 1.45; padding: 8px 10px;")
-        right_col.addWidget(info)
-        right_col.addStretch()
-
-        two_col_layout.addLayout(left_col)
+        two_col_layout.addLayout(left_col, 1)
         v_sep = QFrame(); v_sep.setFrameShape(QFrame.Shape.VLine); v_sep.setStyleSheet("background-color: #24313A; margin: 0 8px;")
         two_col_layout.addWidget(v_sep)
-        two_col_layout.addLayout(right_col)
+        two_col_layout.addLayout(right_col, 1)
 
         scroll_layout.addLayout(two_col_layout)
 

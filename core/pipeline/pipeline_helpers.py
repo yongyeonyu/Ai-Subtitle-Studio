@@ -1,4 +1,4 @@
-# Version: 03.13.06
+# Version: 03.14.34
 # Phase: PHASE1-B
 """
 core/pipeline/pipeline_helpers.py
@@ -186,7 +186,10 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
                 except ImportError:
                     from ui.dialogs.export_dialog import _load_es
                 export_settings = _load_es()
-                is_video_export = export_settings.get("icloud", False)
+                is_video_export = bool(
+                    getattr(self.ui, "_auto_export_subtitle_video", False)
+                    or export_settings.get("icloud", False)
+                )
             except Exception:
                 pass
 
@@ -211,7 +214,7 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
             if is_video_export:
                 try:
                     get_logger().log(
-                        "\n  [STEP 6] 🎥 투명 자막 영상(MOV) 백그라운드 렌더링 및 iCloud 백업 중..."
+                        "\n  [STEP 6] 🎥 투명 자막 영상(MOV) 백그라운드 렌더링 중..."
                     )
                     if hasattr(self.ui, "_sig_update_queue"):
                         self.ui._sig_update_queue.emit(
@@ -294,6 +297,28 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
         send_ntfy(title, message, tags)
 
     # ─── 프리페치 ────────────────────────────────────────
+    def _validate_audio_extract_result(self, result, target_file=None, *, context: str = "오디오 추출"):
+        """Return a usable audio extraction result only when STT wav chunks exist."""
+        if not result:
+            return None
+        try:
+            chunk_dir = result[0]
+        except Exception:
+            chunk_dir = ""
+        try:
+            has_chunks = os.path.isdir(chunk_dir) and any(
+                str(name).lower().endswith(".wav") for name in os.listdir(chunk_dir)
+            )
+        except Exception:
+            has_chunks = False
+        if has_chunks:
+            return result
+
+        label = os.path.basename(str(target_file or "")) if target_file else ""
+        suffix = f" ({label})" if label else ""
+        get_logger().log(f"❌ {context} 실패: 생성된 STT 청크가 없습니다{suffix}")
+        return None
+
     def _prefetch_audio_for_file(self, target_file):
         if not target_file or not self._active:
             return
@@ -311,7 +336,14 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
         def _task():
             vp = VideoProcessor()
             try:
-                res = vp.extract_audio(target_file)
+                tune = self._auto_audio_tune_settings_for_file(target_file)
+                if tune and hasattr(vp, "set_auto_audio_tune_overrides"):
+                    vp.set_auto_audio_tune_overrides(tune)
+                res = self._validate_audio_extract_result(
+                    vp.extract_audio(target_file),
+                    target_file,
+                    context="오디오 선추출",
+                )
                 with self._prefetch_lock:
                     if current_generation == self._prefetch_generation:
                         self._prefetch_cache[target_file] = res
@@ -351,10 +383,58 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
         with self._prefetch_lock:
             cached = self._prefetch_cache.pop(target_file, None)
 
+        tune = self._auto_audio_tune_settings_for_file(target_file)
+        if tune and hasattr(self.video_processor, "set_auto_audio_tune_overrides"):
+            self.video_processor.set_auto_audio_tune_overrides(tune)
         if cached:
-            return cached
+            return self._validate_audio_extract_result(cached, target_file)
+        return self._validate_audio_extract_result(
+            self.video_processor.extract_audio(target_file),
+            target_file,
+        )
 
-        return self.video_processor.extract_audio(target_file)
+    def _auto_audio_tune_enabled(self) -> bool:
+        try:
+            settings = load_settings()
+            return not bool(settings.get("audio_preset_auto_disabled", False))
+        except Exception:
+            return True
+
+    def _auto_audio_tune_settings_for_file(self, target_file: str) -> dict:
+        if not self._auto_audio_tune_enabled():
+            return {}
+        target_file = str(target_file or "")
+        if not target_file:
+            return {}
+        cache = getattr(self, "_auto_audio_tune_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._auto_audio_tune_cache = cache
+        if target_file in cache:
+            return dict(cache.get(target_file) or {})
+        try:
+            from core.audio.preset_auto_classifier import (
+                append_audio_lora_record,
+                apply_auto_classified_presets,
+                auto_classify_media_presets,
+                format_auto_audio_decision_log,
+            )
+
+            base_settings = dict(load_settings())
+            decision = auto_classify_media_presets(target_file, settings=base_settings)
+            updated = apply_auto_classified_presets(base_settings, decision)
+            tune = dict(updated.get("audio_preset_auto_tune") or {})
+            cache[target_file] = tune
+            try:
+                append_audio_lora_record(decision, target_file)
+            except Exception as record_exc:
+                get_logger().log(f"  ⚠️ [오토 오디오] LoRA 누적 기록 실패: {record_exc}")
+            get_logger().log(format_auto_audio_decision_log(decision, target_file))
+            return tune
+        except Exception as exc:
+            get_logger().log(f"⚠️ 오디오 자동 튜닝 실패: {os.path.basename(target_file)} / {exc}")
+            cache[target_file] = {}
+            return {}
 
 from core.pipeline.topicless_segments import install_topicless_segment_helpers
 

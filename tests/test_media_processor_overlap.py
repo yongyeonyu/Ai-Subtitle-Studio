@@ -683,8 +683,10 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 chunks = sorted(f for f in os.listdir(chunk_dir) if f.endswith(".wav"))
                 self.assertEqual(len(chunks), 3)
                 self.assertFalse(os.path.exists(os.path.join(tmp, "long_cleaned.wav")))
-                self.assertEqual([label for label, _cmd in calls], ["ffmpeg 직접 청크 추출"] * 3)
-                first_cmd = calls[0][1]
+                self.assertEqual([label for label, _cmd in calls].count("오디오 라우팅 샘플 추출"), 3)
+                self.assertEqual([label for label, _cmd in calls].count("구간별 FFMPEG 청크 추출"), 3)
+                self.assertTrue(os.path.exists(os.path.join(chunk_dir, "audio_routes.json")))
+                first_cmd = next(cmd for label, cmd in calls if label == "구간별 FFMPEG 청크 추출")
                 self.assertIn("-ss", first_cmd)
                 self.assertIn("-t", first_cmd)
                 self.assertIn(video_path, first_cmd)
@@ -793,6 +795,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             ):
                 calls.append(
                     {
+                        "sampling_rate": sampling_rate,
                         "threshold": threshold,
                         "min_speech": min_speech_duration_ms,
                         "min_silence": min_silence_duration_ms,
@@ -869,7 +872,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 speech_pad_ms,
                 window_size_samples,
             ):
-                calls.append(threshold)
+                calls.append({"sampling_rate": sampling_rate, "threshold": threshold})
                 if len(calls) == 1:
                     return []
                 return [

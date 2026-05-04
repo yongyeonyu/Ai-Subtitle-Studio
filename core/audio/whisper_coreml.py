@@ -14,7 +14,6 @@ import shutil
 import subprocess
 import sys
 import threading
-from pathlib import Path
 
 from core.runtime import config
 from core.platform_compat import hidden_subprocess_kwargs, subprocess_env

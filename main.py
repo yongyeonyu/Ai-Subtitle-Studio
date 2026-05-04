@@ -17,7 +17,6 @@ from core.platform_compat import cleanup_app_runtime_processes, cleanup_stale_pr
 configure_qt_gpu_rendering_before_app()
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtCore import Qt
 from core.runtime.logger import get_logger
 
 _instance_socket = None
@@ -29,7 +28,7 @@ def check_single_instance():
     try:
         _instance_socket.bind(('127.0.0.1', config.INSTANCE_PORT))
     except socket.error:
-        app = QApplication.instance() or QApplication(sys.argv)
+        QApplication.instance() or QApplication(sys.argv)
         msg = QMessageBox()
         msg.setIcon(QMessageBox.Icon.Warning)
         msg.setWindowTitle("중복 실행 방지")

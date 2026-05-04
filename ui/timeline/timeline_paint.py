@@ -1,4 +1,4 @@
-# Version: 03.10.01
+# Version: 03.14.31
 # Phase: PHASE2
 """
 ui/timeline_paint.py
@@ -66,6 +66,17 @@ QUALITY_SEGMENT_COLORS = {
     "red": ("#4A1F24", "#FF453A"),
     "gray": ("#2F343A", "#8E8E93"),
 }
+
+
+def cut_boundary_scan_marker_verified(marker) -> bool:
+    if not isinstance(marker, dict):
+        return False
+    status = str(marker.get("status", "") or "").strip().lower()
+    return (
+        status in {"verified", "confirmed", "accepted", "done"}
+        or bool(marker.get("verified"))
+        or bool(marker.get("confirmed"))
+    )
 
 
 def segment_text_kind(text: str) -> str:
@@ -212,6 +223,51 @@ class TimelinePaintMixin:
         paint_clip = event.rect()
         clip_left = max(0, paint_clip.left())
         clip_right = min(total_w, paint_clip.right() + 1)
+        if hasattr(self, "_paint_time_window") and hasattr(self, "_visible_items_for_paint"):
+            visible_start_sec, visible_end_sec = self._paint_time_window(paint_clip)
+            visible_segments = self._visible_items_for_paint(
+                getattr(self, "segments", []),
+                "segments",
+                visible_start_sec,
+                visible_end_sec,
+                pad_sec=0.35,
+            )
+            visible_gap_segments = self._visible_items_for_paint(
+                getattr(self, "gap_segments", []),
+                "gaps",
+                visible_start_sec,
+                visible_end_sec,
+                pad_sec=0.10,
+            )
+            visible_vad_segments = self._visible_items_for_paint(
+                getattr(self, "vad_segments", []),
+                "vad",
+                visible_start_sec,
+                visible_end_sec,
+                pad_sec=0.10,
+            )
+            visible_voice_activity_segments = self._visible_items_for_paint(
+                getattr(self, "voice_activity_segments", []),
+                "voice_activity",
+                visible_start_sec,
+                visible_end_sec,
+                pad_sec=0.10,
+            )
+            visible_multiclip_boxes = self._visible_items_for_paint(
+                getattr(self, "_multiclip_boxes", []),
+                "multiclip_boxes",
+                visible_start_sec,
+                visible_end_sec,
+                pad_sec=0.25,
+            )
+        else:
+            visible_start_sec = max(0.0, clip_left / max(0.001, float(self.pps)))
+            visible_end_sec = max(visible_start_sec, clip_right / max(0.001, float(self.pps)))
+            visible_segments = list(getattr(self, "segments", []) or [])
+            visible_gap_segments = list(getattr(self, "gap_segments", []) or [])
+            visible_vad_segments = list(getattr(self, "vad_segments", []) or [])
+            visible_voice_activity_segments = list(getattr(self, "voice_activity_segments", []) or [])
+            visible_multiclip_boxes = list(getattr(self, "_multiclip_boxes", []) or [])
         overview_mode = float(getattr(self, "pps", 0.0) or 0.0) < 8.0
         subtitle_top = SUBTITLE_TOP
         subtitle_bot = SUBTITLE_BOT
@@ -221,11 +277,11 @@ class TimelinePaintMixin:
         audio_mid = (ANALYSIS_TOP + ANALYSIS_BOT) // 2
         track_bottom = SEG_BOT
         stt_preview_segments = [
-            seg for seg in self.segments
+            seg for seg in visible_segments
             if bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
         ]
         final_stt_segments = [
-            seg for seg in self.segments
+            seg for seg in visible_segments
             if not bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
         ]
         stt1_preview_segments = [seg for seg in stt_preview_segments if stt_preview_source(seg) != "STT2"]
@@ -281,7 +337,7 @@ class TimelinePaintMixin:
             lane_top = mid_y - 12
             lane_h = 24
             p.setPen(Qt.PenStyle.NoPen)
-            voice_segments = list(getattr(self, "voice_activity_segments", []) or [])
+            voice_segments = list(visible_voice_activity_segments or [])
             if not voice_segments:
                 try:
                     from ui.timeline.timeline_analysis import subtitle_detection_segments_for_editor
@@ -293,6 +349,14 @@ class TimelinePaintMixin:
                     )
                 except Exception:
                     voice_segments = []
+                if voice_segments and hasattr(self, "_visible_items_for_paint"):
+                    voice_segments = self._visible_items_for_paint(
+                        voice_segments,
+                        "voice_activity_fallback",
+                        visible_start_sec,
+                        visible_end_sec,
+                        pad_sec=0.10,
+                    )
 
             for vs in voice_segments:
                 x1 = self._x(float(vs.get("start", 0.0) or 0.0))
@@ -344,6 +408,14 @@ class TimelinePaintMixin:
                     list(getattr(self, "gap_segments", []) or []),
                     float(getattr(self, "total_duration", 0.0) or 0.0),
                 )
+            if markers and hasattr(self, "_visible_items_for_paint"):
+                markers = self._visible_items_for_paint(
+                    markers,
+                    "analysis_markers",
+                    visible_start_sec,
+                    visible_end_sec,
+                    pad_sec=0.10,
+                )
             markers.sort(key=lambda item: int(item.get("priority", 0) or 0))
             for marker in markers:
                 start = max(0.0, float(marker.get("start", 0.0) or 0.0))
@@ -370,6 +442,16 @@ class TimelinePaintMixin:
             markers = self.roughcut_major_markers_cached() if hasattr(self, "roughcut_major_markers_cached") else roughcut_major_markers_for_widget(self)
             if not markers:
                 return
+            if hasattr(self, "_visible_items_for_paint"):
+                markers = self._visible_items_for_paint(
+                    markers,
+                    "roughcut_major_markers",
+                    visible_start_sec,
+                    visible_end_sec,
+                    pad_sec=0.10,
+                )
+                if not markers:
+                    return
             clip = event.rect()
             lane_top = RULER_H + WAVE_H + 5
             lane_h = max(18, SEG_TOP - lane_top - 7)
@@ -546,7 +628,7 @@ class TimelinePaintMixin:
 
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(87, 157, 255, 34))
-            for vs in self.vad_segments:
+            for vs in visible_vad_segments:
                 vx1 = self._x(vs["start"])
                 vx2 = self._x(vs["end"])
                 if vx2 < clip_left or vx1 > clip_right:
@@ -570,7 +652,7 @@ class TimelinePaintMixin:
         for y in (subtitle_top - 5, STT1_TOP - 3, STT2_TOP - 3, speaker_top - 3, voice_mid - 14, audio_mid - 14, track_bottom):
             p.drawLine(clip_left, y, clip_right, y)
 
-        for g in self.gap_segments:
+        for g in visible_gap_segments:
             x1, x2 = self._x(g["start"]), self._x(g["end"]); sw = max(4, x2 - x1)
             if x2 < clip_left or x1 > clip_right:
                 continue
@@ -619,7 +701,12 @@ class TimelinePaintMixin:
                     badge_w = 36 if is_selected and rect.width() >= 90 else 0
                     text_rect = QRect(rect.x() + 8, rect.y() + 5, max(8, rect.width() - 16 - badge_w), rect.height() - 10)
                     p.setPen(text_color)
-                    p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, str(seg.get("text", "") or ""))
+                    preview_text = str(seg.get("text", "") or "")
+                    if rect.width() < 132:
+                        preview_text = p.fontMetrics().elidedText(preview_text.replace("\n", " "), Qt.TextElideMode.ElideRight, text_rect.width())
+                        p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, preview_text)
+                    else:
+                        p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, preview_text)
                     if badge_w:
                         badge_rect = QRect(rect.right() - badge_w - 4, rect.y() + 6, badge_w, 18)
                         badge_fill = QColor("#5A4600" if selection_state == "llm" else "#174A2A")
@@ -637,7 +724,7 @@ class TimelinePaintMixin:
         _draw_stt_preview_lane(stt2_preview_segments, STT2_TOP, STT2_BOT, "#1A3148", "#64D2FF", "#BDEBFF")
 
         seg_font = QFont(config.FONT, 9); p.setFont(seg_font)
-        for seg in self.segments:
+        for seg in final_stt_segments:
             if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
                 continue
             x1, x2 = self._x(seg["start"]), self._x(seg["end"]); sw = max(2, x2 - x1)
@@ -718,7 +805,12 @@ class TimelinePaintMixin:
                 if rect.width() >= 44:
                     text_color = visual_style.get("text", "")
                     p.setPen(QColor(text_color) if text_color else (QColor("#8A8F98") if is_stt_pending else QColor("#DCE3EA")))
-                    p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, seg.get("text", ""))
+                    seg_text = str(seg.get("text", "") or "")
+                    if rect.width() < 164:
+                        seg_text = p.fontMetrics().elidedText(seg_text.replace("\n", " "), Qt.TextElideMode.ElideRight, text_rect.width())
+                        p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, seg_text)
+                    else:
+                        p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, seg_text)
                     selected_source = final_stt_selection_source(seg)
                     if selected_source and rect.width() >= 104:
                         is_llm_choice = bool(str(seg.get("stt_ensemble_llm_selected_source", "") or "").strip())
@@ -793,7 +885,7 @@ class TimelinePaintMixin:
         self._clip_add_rect = QRect()
         self._clip_add_placeholder = None
         if self._multiclip_boxes:
-            for box in self._multiclip_boxes:
+            for box in visible_multiclip_boxes:
                 bx1 = self._x(box["start"])
                 bx2 = self._x(box["end"])
                 bw = bx2 - bx1
@@ -877,17 +969,15 @@ class TimelinePaintMixin:
                         sec = float(bt.get("timeline_sec", bt.get("time", bt.get("start", 0.0))) or 0.0)
                     except Exception:
                         continue
-                    status = str(bt.get("status", "") or "").lower()
-                    verified = status in {"verified", "confirmed"} or bool(bt.get("verified"))
+                    verified = cut_boundary_scan_marker_verified(bt)
                 else:
                     try:
                         sec = float(bt or 0.0)
                     except Exception:
                         continue
-                    status = "provisional"
                     verified = False
                 pen_boundary = (
-                    QPen(QColor("#00FFD0"), 1)
+                    QPen(QColor("#8E8E93"), 1, Qt.PenStyle.DotLine)
                     if not verified
                     else QPen(QColor("#8E8E93"), 1, Qt.PenStyle.DashLine)
                 )

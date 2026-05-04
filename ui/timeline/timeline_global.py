@@ -1,4 +1,4 @@
-# Version: 03.09.19
+# Version: 03.14.31
 # Phase: PHASE2
 """
 ui/timeline_global.py
@@ -14,7 +14,7 @@ from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDT
 from ui.timeline.timeline_analysis import analysis_markers_for_widget
 from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
 
-GlobalCanvasBase = accelerated_widget_base()
+GlobalCanvasBase = accelerated_widget_base("timeline")
 
 
 class GlobalCanvas(GlobalCanvasBase):
@@ -28,7 +28,7 @@ class GlobalCanvas(GlobalCanvasBase):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         configure_lightweight_paint(self, opaque=True)
         configure_opengl_widget(self)
-        self.render_backend = gpu_backend_name()
+        self.render_backend = gpu_backend_name("timeline")
 
         self.segments = []
         self.view_start = 0.0

@@ -1,7 +1,7 @@
-# Version: 03.10.02
+# Version: 03.14.31
 # Phase: PHASE2
 """Editor widget and function-preserving PHASE1-C layout."""
-import re, os, sys, json, atexit, threading, shutil, time
+import re, os, sys, atexit, time
 from ui.editor.undo_manager import UndoManager
 
 def _mac_safe_exit():
@@ -12,25 +12,22 @@ atexit.register(_mac_safe_exit)
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
-    QPushButton, QLabel, QSizePolicy, QMessageBox, QMenu, QLineEdit, QComboBox,
+    QPushButton, QLabel, QMessageBox, QLineEdit, QComboBox,
     QToolButton, QCheckBox, QApplication
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QEvent
-from PyQt6.QtGui import QKeySequence, QShortcut, QColor, QTextCursor, QIcon
-from PyQt6.QtMultimedia import QMediaPlayer
+from PyQt6.QtGui import QKeySequence, QShortcut, QTextCursor, QIcon
 
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.project.data_manager import (
-    load_settings as _dm_load_settings, save_settings as _dm_save_settings,
-    load_corrections as _dm_load_corrections, save_correction as _dm_save_correction,
-    cleanup_rules as _dm_cleanup_rules, load_subtitle_rules as _dm_load_rules
+    load_settings as _dm_load_settings, load_corrections as _dm_load_corrections, cleanup_rules as _dm_cleanup_rules, load_subtitle_rules as _dm_load_rules
 )
 from core.state_manager import SubtitleStateManager
 from ui.timeline.timeline_widget import TimelineWidget
 from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
 from ui.timeline.speaker_labels import current_speaker_settings
-from ui.style import button_style, label_style, line_icon, panel_style, tool_button_style
+from ui.style import button_style, label_style, line_icon, tool_button_style
 from ui.editor.editor_popup_qt import EditorPopup
 from ui.editor.video_player_widget import VideoPlayerWidget
 from ui.editor.subtitle_text_edit import SubtitleTextEdit, SubtitleHighlighter, SubtitleBlockData
@@ -186,6 +183,8 @@ class EditorWidget(
         if segments:
             if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
                 self.timeline.canvas.segments = [dict(s) for s in segments]
+                if hasattr(self.timeline.canvas, "_invalidate_render_cache"):
+                    self.timeline.canvas._invalidate_render_cache()
             self.append_segments(segments)
             QTimer.singleShot(350, self._mark_initial_segments_saved)
 
@@ -288,6 +287,8 @@ class EditorWidget(
             return
         try:
             self._remember_saved_segments(self._get_current_segments())
+            if hasattr(self, "_remember_saved_project_file"):
+                self._remember_saved_project_file()
             if hasattr(self, "sm") and self.sm.state != SubtitleStateManager.ST_PROC:
                 self.sm.complete_save()
         except Exception:
@@ -295,6 +296,11 @@ class EditorWidget(
 
     def _on_auto_save(self):
         if self.sm.is_locked: return
+        if hasattr(self, "_has_unsaved_changes"):
+            try:
+                self._has_unsaved_changes()
+            except Exception:
+                pass
         if self.sm.is_dirty:
             segs = self._get_current_segments()
             if not segs:
@@ -1059,8 +1065,6 @@ class EditorWidget(
         top_font = "10px" if is_compact else "11px"
         for btn, full_t, comp_t, _ in getattr(self, '_top_btns', []):
             btn.setText(comp_t if is_compact else full_t); btn.setStyleSheet(button_style("toolbar", font_size=top_font, padding="6px 8px"))
-        bot_font = "11px" if is_compact else "13px"
-        bot_pad  = "8px 10px" if is_compact else "10px 18px"
         for btn, full_t, comp_t, _ in getattr(self, '_bot_btns', []):
             if btn != getattr(self, 'btn_start', None):
                 btn.setText(comp_t if is_compact else full_t)
@@ -1072,32 +1076,6 @@ class EditorWidget(
 
     def _apply_fixed_video_preview_width(self):
         return
-        if not hasattr(self, "splitter") or not hasattr(self, "video_player"):
-            return
-        if getattr(self, "_video_width_locking", False):
-            return
-        try:
-            sizes = self.splitter.sizes()
-            if len(sizes) < 2 or self.splitter.width() <= 0:
-                QTimer.singleShot(0, self._position_video_expand_button)
-                return
-            if not self.video_player.isVisible() or sizes[1] <= 8:
-                return
-
-            total_w = max(1, sum(sizes))
-            video_h = self._video_fixed_height()
-            target_video_w = int(video_h * (16 / 9)) + 16
-            target_video_w = max(260, min(target_video_w, total_w - 260))
-            if abs(sizes[1] - target_video_w) <= 2:
-                return
-            self._video_width_locking = True
-            self.video_player.setMinimumWidth(260)
-            self.splitter.setSizes([max(260, total_w - target_video_w), target_video_w])
-            self.splitter.update()
-        except Exception:
-            pass
-        finally:
-            self._video_width_locking = False
 
     def _video_fixed_height(self):
         try:

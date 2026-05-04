@@ -4,7 +4,6 @@ import unittest
 from pathlib import Path
 
 from core.personalization.text_lora_dataset import (
-    TEXT_LORA_CORPUS_MANIFEST_PATH,
     build_text_lora_dataset,
     accumulate_personalization_dataset,
     export_text_lora_dataset,
@@ -61,6 +60,7 @@ class TextLoraDatasetTests(unittest.TestCase):
                 corrections_path=corrections,
                 correction_memory_path=correction_memory,
                 wrong_answer_memory_path=wrong_answer_memory,
+                project_paths=[],
             )
 
             self.assertEqual(payload["stats"]["legacy_corrections"], 1)
@@ -87,6 +87,7 @@ class TextLoraDatasetTests(unittest.TestCase):
                 corrections_path=corrections,
                 correction_memory_path=root / "missing_correction_memory.json",
                 wrong_answer_memory_path=root / "missing_wrong_answer_memory.json",
+                project_paths=[],
             )
 
             self.assertTrue(dataset_path.exists())
@@ -142,6 +143,7 @@ class TextLoraDatasetTests(unittest.TestCase):
                 }
             ],
             current_project_path="/tmp/current_project.json",
+            project_paths=[],
         )
 
         self.assertEqual(payload["stats"]["project_segment_pairs"], 1)
@@ -170,6 +172,7 @@ class TextLoraDatasetTests(unittest.TestCase):
                 },
             ],
             current_project_path="/tmp/current_project.json",
+            project_paths=[],
         )
 
         self.assertEqual(payload["stats"]["project_segment_pairs"], 0)

@@ -1,4 +1,4 @@
-# Version: 03.12.02
+# Version: 03.14.12
 # Phase: PHASE2
 import os
 import tempfile
@@ -13,7 +13,9 @@ from core.audio.preset_auto_classifier import (
     analyze_sample_features,
     apply_auto_classified_presets,
     auto_classify_media_presets,
+    build_audio_profile,
     choose_representative_window,
+    tune_audio_settings_for_profile,
 )
 
 
@@ -82,37 +84,80 @@ class PresetAutoClassifierTests(unittest.TestCase):
         self.assertGreater(features["low_band_ratio"], 0.5)
         self.assertLess(features["high_band_ratio"], 0.2)
 
-    def test_apply_auto_classified_presets_updates_both_audio_and_quality(self):
+    def test_apply_auto_classified_presets_preserves_stage_settings(self):
         updated = apply_auto_classified_presets(
-            {"selected_model": "old"},
-            {"audio_preset": "차안-마이크무", "stt_quality_preset": "precise", "confidence": 0.91, "reason": "test"},
+            {
+                "selected_model": "old",
+                "selected_audio_ai": "none",
+                "selected_vad": "none",
+                "stt_quality_preset": "balanced",
+            },
+            {
+                "audio_preset": "차안-마이크무",
+                "stt_quality_preset": "precise",
+                "confidence": 0.91,
+                "reason": "test",
+                "audio_tune_settings": {"ff_hp": 190, "selected_audio_ai": "clearvoice"},
+                "audio_profile": {"environment": "car"},
+                "audio_tune_reason": "저역/차내 소음 대응",
+            },
         )
 
-        self.assertEqual(updated["audio_preset"], "차안-마이크무")
-        self.assertEqual(updated["stt_quality_preset"], "precise")
-        self.assertEqual(updated["selected_vad"], "ten_vad")
-        self.assertEqual(updated["audio_preset_auto_decision"]["audio_preset"], "차안-마이크무")
+        self.assertEqual(updated["audio_preset"], "auto")
+        self.assertEqual(updated["stt_quality_preset"], "balanced")
+        self.assertEqual(updated["selected_model"], "old")
+        self.assertEqual(updated["selected_audio_ai"], "clearvoice")
+        self.assertEqual(updated["selected_vad"], "none")
+        self.assertEqual(updated["ff_hp"], 190)
+        self.assertEqual(updated["audio_preset_auto_tune"]["selected_audio_ai"], "clearvoice")
+        self.assertEqual(updated["audio_preset_auto_decision"]["audio_preset"], "auto")
+        self.assertEqual(updated["audio_preset_auto_decision"]["suggested_stt_quality_preset"], "precise")
+        self.assertEqual(updated["audio_preset_auto_decision"]["audio_profile"]["environment"], "car")
 
-    def test_auto_classify_media_presets_falls_back_to_heuristic_without_llm(self):
-        with mock.patch("core.audio.preset_auto_classifier.prepare_audio_sample") as prep, \
-             mock.patch("core.audio.preset_auto_classifier.analyze_sample_features") as analyze:
+    def test_audio_profile_tunes_car_low_rumble_to_strong_filter_stack(self):
+        features = {
+            "rms_mean": 0.021,
+            "rms_p90": 0.08,
+            "silence_ratio": 0.42,
+            "zero_crossing_rate": 0.08,
+            "low_band_ratio": 0.62,
+            "high_band_ratio": 0.04,
+            "spectral_centroid_hz": 900.0,
+        }
+        profile = build_audio_profile(features, audio_preset="차안-마이크무")
+        tune, reason = tune_audio_settings_for_profile(profile, features)
+
+        self.assertEqual(profile["environment"], "car")
+        self.assertTrue(profile["low_rumble"])
+        self.assertEqual(tune["selected_audio_ai"], "clearvoice")
+        self.assertEqual(tune["selected_vad"], "ten_vad")
+        self.assertIn("vad_threshold", tune)
+        self.assertGreaterEqual(tune["ff_hp"], 170)
+        self.assertLessEqual(tune["ff_nf"], -30)
+        self.assertIn("저역", reason)
+
+    def test_auto_classify_media_presets_scans_samples_without_llm(self):
+        with mock.patch("core.audio.preset_auto_classifier.prepare_audio_samples") as prep:
             prep.return_value = {
-                "wav_path": "/tmp/fake.wav",
                 "media_duration_sec": 600.0,
-                "window_start_sec": 110.0,
-                "window_duration_sec": 180.0,
-                "representative_start_sec": 60.0,
-                "representative_duration_sec": 60.0,
-            }
-            analyze.return_value = {
-                "rms_mean": 0.02,
-                "rms_p90": 0.08,
-                "silence_ratio": 0.3,
-                "zero_crossing_rate": 0.22,
-                "low_band_ratio": 0.12,
-                "mid_band_ratio": 0.62,
-                "high_band_ratio": 0.18,
-                "spectral_centroid_hz": 3200.0,
+                "samples": [
+                    {
+                        "index": 1,
+                        "start_sec": 0.0,
+                        "duration_sec": 30.0,
+                        "speech_score": 0.62,
+                        "features": {
+                            "rms_mean": 0.02,
+                            "rms_p90": 0.08,
+                            "silence_ratio": 0.3,
+                            "zero_crossing_rate": 0.22,
+                            "low_band_ratio": 0.12,
+                            "mid_band_ratio": 0.62,
+                            "high_band_ratio": 0.18,
+                            "spectral_centroid_hz": 3200.0,
+                        },
+                    }
+                ],
             }
             with tempfile.TemporaryDirectory() as tmp:
                 media = os.path.join(tmp, "sample.mp4")
@@ -120,8 +165,13 @@ class PresetAutoClassifierTests(unittest.TestCase):
 
                 decision = auto_classify_media_presets(media, settings={"selected_model": "사용 안함 (Whisper 단독 진행)"})
 
-        self.assertEqual(decision["audio_preset"], "실외-마이크무")
-        self.assertEqual(decision["stt_quality_preset"], "precise")
+        self.assertEqual(decision["audio_preset"], "auto")
+        self.assertEqual(decision["audio_strategy"], "noisy_voice")
+        self.assertEqual(decision["audio_profile"]["environment"], "outdoor")
+        self.assertIn("audio_tune_settings", decision)
+        self.assertEqual(decision["audio_tune_settings"]["selected_vad"], "ten_vad")
+        self.assertEqual(decision["audio_tune_settings"]["selected_audio_ai"], "clearvoice")
+        self.assertGreaterEqual(decision["audio_tune_settings"]["ff_hp"], 150)
         self.assertFalse(decision["llm_used"])
 
 

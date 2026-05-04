@@ -1,4 +1,4 @@
-# Version: 03.13.04
+# Version: 03.14.17
 # Phase: PHASE2
 """
 ui/settings_ai.py  ─  ⚙️ AI 엔진 설정 다이얼로그
@@ -9,21 +9,26 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                              QLabel, QComboBox, QMessageBox, QLineEdit, 
                              QSlider, QPushButton, QCheckBox, QTextEdit,
                              QDoubleSpinBox, QSpinBox, QTabWidget, QWidget,
-                             QScrollArea, QSizePolicy, QToolButton)
-from PyQt6.QtCore import Qt, QSize
+                             QScrollArea, QSizePolicy)
+from PyQt6.QtCore import Qt
 from core.runtime import config
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import (
     DEFAULT_ADV_SETTINGS, DEFAULT_WHISPER_MODELS, WINDOWS_WHISPER_MODELS,
-    _fetch_models, _create_bottom_buttons, DATASET_DIR,
-    filter_available_whisper_models,
+    _fetch_models, _create_bottom_buttons, filter_available_whisper_models,
 )
 from ui.style import label_style, settings_button_style, settings_dialog_stylesheet, line_icon
 from core.llm.provider_registry import cloud_model_items
 from core.llm.secure_keys import get_api_key, set_api_key
 from core.audio import audio_presets as _audio_presets
 from core.audio.preset_auto_classifier import auto_classify_media_presets, apply_auto_classified_presets
-from core.audio.stt_quality_presets import apply_stt_quality_preset, load_stt_quality_presets, normalize_stt_quality_key
+from core.audio.stt_quality_presets import (
+    apply_stt_quality_preset,
+    load_stt_quality_presets,
+    normalize_stt_quality_key,
+    stt_quality_label,
+)
+from core.accuracy_policy import apply_accuracy_first_runtime_settings
 from ui.settings.settings_roughcut import SettingsRoughcutMixin
 from core.path_manager import (
     get_icloud_auto_detect,
@@ -383,7 +388,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self._fit_model_combo(self.combo_vad)
         self.chk_vad_post_align = QCheckBox("VAD로 STT/앙상블 자막 위치 재계산")
         self.chk_vad_post_align.setChecked(bool(settings.get("vad_post_stt_align_enabled", True)))
-        self._sync_stt_quality_preset_combo(settings.get("stt_quality_preset", "balanced"))
+        self._sync_stt_quality_preset_combo(settings.get("stt_quality_preset", "precise"))
         self._sync_audio_preset_combo(settings.get("audio_preset", ""))
         self._sync_auto_preset_button_state()
         self._update_editor_roughcut_draft_state()
@@ -719,10 +724,10 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         form.addRow("NAS 자동 처리:", self.chk_auto_nas_detect)
 
         self.combo_auto_start_mode = QComboBox()
-        self.combo_auto_start_mode.addItem("빠른모드", "fast")
-        self.combo_auto_start_mode.addItem("품질모드", "quality")
-        self.combo_auto_start_mode.addItem("프리셋 모드", "preset")
+        self.combo_auto_start_mode.addItem("정확도 우선", "quality")
         current_mode = str(path_settings.get("auto_start_mode", settings.get("auto_start_mode", "quality")) or "quality")
+        if current_mode in {"fast", "preset"}:
+            current_mode = "quality"
         self._set_combo_data(self.combo_auto_start_mode, current_mode)
         form.addRow("자동 처리 모드:", self.combo_auto_start_mode)
 
@@ -736,11 +741,17 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         form.addRow("", section)
 
         self.chk_subtitle_quality_auto_check = QCheckBox("자막 생성 후 자동 검사")
-        self.chk_subtitle_quality_auto_check.setChecked(bool(settings.get("subtitle_quality_auto_check_after_generate", False)))
+        self.chk_subtitle_quality_auto_check.setChecked(bool(settings.get(
+            "subtitle_quality_auto_check_after_generate",
+            DEFAULT_ADV_SETTINGS.get("subtitle_quality_auto_check_after_generate", True),
+        )))
         form.addRow("자동 검사:", self.chk_subtitle_quality_auto_check)
 
         self.chk_subtitle_quality_auto_correct = QCheckBox("자동 교정 허용 (LoRA/개인화 적용)")
-        self.chk_subtitle_quality_auto_correct.setChecked(bool(settings.get("subtitle_quality_auto_correct_enabled", False)))
+        self.chk_subtitle_quality_auto_correct.setChecked(bool(settings.get(
+            "subtitle_quality_auto_correct_enabled",
+            DEFAULT_ADV_SETTINGS.get("subtitle_quality_auto_correct_enabled", True),
+        )))
         form.addRow("LoRA 교정:", self.chk_subtitle_quality_auto_correct)
 
         memory_info = QLabel(
@@ -763,8 +774,8 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.spin_stt_low_score_recheck_threshold.setSuffix(" 점")
         self.spin_stt_low_score_recheck_threshold.setValue(int(settings.get(
             "stt_low_score_recheck_threshold",
-            DEFAULT_ADV_SETTINGS.get("stt_low_score_recheck_threshold", 50),
-        ) or 50))
+            DEFAULT_ADV_SETTINGS.get("stt_low_score_recheck_threshold", 60),
+        ) or 60))
         form.addRow("재검사 기준 점수:", self.spin_stt_low_score_recheck_threshold)
 
         self.spin_quality_threshold = QSpinBox()
@@ -772,8 +783,8 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.spin_quality_threshold.setSuffix(" 점")
         self.spin_quality_threshold.setValue(int(settings.get(
             "review_auto_correct_apply_threshold",
-            DEFAULT_ADV_SETTINGS.get("review_auto_correct_apply_threshold", 92),
-        ) or 92))
+            DEFAULT_ADV_SETTINGS.get("review_auto_correct_apply_threshold", 94),
+        ) or 94))
         form.addRow("자동 적용 최소 점수:", self.spin_quality_threshold)
 
         self.spin_quality_recheck_buffer = QDoubleSpinBox()
@@ -783,8 +794,8 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.spin_quality_recheck_buffer.setSuffix(" 초")
         self.spin_quality_recheck_buffer.setValue(float(settings.get(
             "review_recheck_buffer_sec",
-            DEFAULT_ADV_SETTINGS.get("review_recheck_buffer_sec", 1.2),
-        ) or 1.2))
+            DEFAULT_ADV_SETTINGS.get("review_recheck_buffer_sec", 1.5),
+        ) or 1.5))
         form.addRow("재검사 앞뒤 버퍼:", self.spin_quality_recheck_buffer)
 
     def _set_combo_data(self, combo: QComboBox, value: str):
@@ -808,18 +819,10 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             return
         else:
             self.result_settings = _audio_presets.apply_audio_preset(self.result_settings, preset_name)
-        self._set_combo_by_data_value(self.combo_audio, self.result_settings.get("selected_audio_ai"), self.audio_map)
-        self._set_combo_by_data_value(self.combo_vad, self.result_settings.get("selected_vad"), self.vad_map)
-        self._set_combo_by_data_value(self.combo_whisper, self.result_settings.get("selected_whisper_model"))
-        self._set_combo_by_data_value(self.combo_whisper_secondary, self.result_settings.get("selected_whisper_model_secondary"))
-        self.chk_stt_ensemble.setChecked(bool(self.result_settings.get("stt_ensemble_enabled", False)))
-        self.chk_stt_ensemble_llm.setChecked(bool(self.result_settings.get("stt_ensemble_llm_judge_enabled", True)))
-        self._set_llm_combo_by_name(self.result_settings.get("selected_model", ""))
-        self._sync_roughcut_llm_controls()
         self._update_model_info()
 
     def _on_stt_quality_preset_changed(self, *args):
-        preset_key = self.combo_stt_quality_preset.currentData() or "balanced"
+        preset_key = self.combo_stt_quality_preset.currentData() or "precise"
         self.result_settings = apply_stt_quality_preset(self.result_settings, preset_key)
         self._set_combo_by_data_value(self.combo_whisper, self.result_settings.get("selected_whisper_model"))
         self._set_llm_combo_by_name(self.result_settings.get("selected_model", ""))
@@ -834,13 +837,9 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         try:
             decision = auto_classify_media_presets(media_path, settings=self._collect_settings())
             self.result_settings = apply_auto_classified_presets(self.result_settings, decision)
-            self._sync_stt_quality_preset_combo(self.result_settings.get("stt_quality_preset", "balanced"))
             self._sync_audio_preset_combo(self.result_settings.get("audio_preset", ""))
             self._set_combo_by_data_value(self.combo_audio, self.result_settings.get("selected_audio_ai"), self.audio_map)
             self._set_combo_by_data_value(self.combo_vad, self.result_settings.get("selected_vad"), self.vad_map)
-            self._set_combo_by_data_value(self.combo_whisper, self.result_settings.get("selected_whisper_model"))
-            self._set_llm_combo_by_name(self.result_settings.get("selected_model", ""))
-            self._update_editor_roughcut_draft_state()
             self._update_model_info()
             self._sync_auto_preset_button_state()
             QMessageBox.information(
@@ -848,7 +847,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
                 "자동 판정 완료",
                 (
                     f"오디오: {decision['audio_preset']}\n"
-                    f"정밀인식: {decision['stt_quality_preset']}\n"
+                    f"추천 자막품질(미적용): {stt_quality_label(decision.get('stt_quality_preset'))}\n"
                     f"신뢰도: {int(round(float(decision.get('confidence', 0.0)) * 100))}%\n\n"
                     f"{decision.get('reason', '')}"
                 ),
@@ -973,6 +972,8 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         openai_key_saved = set_api_key("openai", self.input_openai_api_key.text().strip())
         huggingface_token_saved = set_api_key("huggingface", self.input_huggingface_token.text().strip())
         auto_start_mode = self.combo_auto_start_mode.currentData() or "quality"
+        if auto_start_mode in {"fast", "preset"}:
+            auto_start_mode = "quality"
         auto_start_enabled = bool(self.chk_auto_start_enabled.isChecked())
         auto_correct_enabled = bool(self.chk_subtitle_quality_auto_correct.isChecked())
         res.update({
@@ -996,8 +997,8 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "llm_threads": int(self.spin_editor_llm_threads.value()),
             "llm_workers": int(self.spin_editor_llm_threads.value()),
             "audio_preset": "" if self.combo_audio_preset.currentData() == "__default__" else (self.combo_audio_preset.currentData() or ""),
-            "stt_quality_preset": self.combo_stt_quality_preset.currentData() or "balanced",
-            "stt_candidate_scoring_enabled": (self.combo_stt_quality_preset.currentData() or "balanced") == "precise",
+            "stt_quality_preset": self.combo_stt_quality_preset.currentData() or "precise",
+            "stt_candidate_scoring_enabled": (self.combo_stt_quality_preset.currentData() or "precise") == "precise",
             "stt_low_score_recheck_enabled": bool(self.chk_stt_low_score_recheck.isChecked()),
             "stt_low_score_recheck_threshold": int(self.spin_stt_low_score_recheck_threshold.value()),
             "subtitle_quality_enabled": False,
@@ -1012,6 +1013,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "auto_start_mode": auto_start_mode,
             "auto_start_enabled": auto_start_enabled,
         })
+        res = apply_accuracy_first_runtime_settings(res)
         path_settings = load_path_settings()
         path_settings.update({
             "nas_path": self.input_auto_nas_path.text().strip(),

@@ -1,4 +1,4 @@
-# Version: 03.14.00
+# Version: 03.14.29
 # Phase: PHASE2
 """Final subtitle timing and frame-field adjustment helpers."""
 
@@ -47,6 +47,172 @@ def _update_frame_fields(seg: dict, start: float, end: float) -> None:
         "end": end_frame,
         "timeline_frame_rate": fps,
     }
+
+
+def _as_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _time_bounds(row: dict) -> tuple[float, float]:
+    start = _as_float(row.get("start", row.get("timeline_start", 0.0)))
+    end = _as_float(row.get("end", row.get("timeline_end", start)), start)
+    return start, max(start, end)
+
+
+def _ranges_overlap(left: dict, right: dict, *, pad: float = 0.0) -> float:
+    left_start, left_end = _time_bounds(left)
+    right_start, right_end = _time_bounds(right)
+    return max(0.0, min(left_end, right_end) - max(left_start, right_start) + float(pad or 0.0))
+
+
+def _center_in_range(row: dict, target: dict, *, pad: float = 0.0) -> bool:
+    start, end = _time_bounds(row)
+    target_start, target_end = _time_bounds(target)
+    center = (start + end) / 2.0
+    return (target_start - pad) <= center <= (target_end + pad)
+
+
+def _same_candidate_scope(candidate: dict, segment: dict) -> bool:
+    cand_key = _segment_scope_key(candidate)
+    seg_key = _segment_scope_key(segment)
+    return cand_key is None or seg_key is None or cand_key == seg_key
+
+
+def _candidate_frame_rate(candidate: dict, fallback: dict) -> float | None:
+    for source in (candidate, fallback):
+        for key in ("timeline_frame_rate", "frame_rate", "fps", "source_frame_rate"):
+            value = source.get(key)
+            if value not in (None, ""):
+                try:
+                    return normalize_fps(value)
+                except Exception:
+                    continue
+    return None
+
+
+def _update_candidate_time_fields(candidate: dict, start: float, end: float, fallback_segment: dict) -> None:
+    start = max(0.0, float(start or 0.0))
+    end = max(start + 0.05, float(end or start + 0.05))
+    candidate["start"] = round(start, 3)
+    candidate["end"] = round(end, 3)
+    candidate["timeline_start"] = candidate["start"]
+    candidate["timeline_end"] = candidate["end"]
+    fps = _candidate_frame_rate(candidate, fallback_segment)
+    if fps:
+        start_frame = sec_to_frame(candidate["start"], fps)
+        end_frame = max(start_frame + 1, sec_to_frame(candidate["end"], fps))
+        candidate["start_frame"] = start_frame
+        candidate["end_frame"] = end_frame
+        candidate["timeline_start_frame"] = start_frame
+        candidate["timeline_end_frame"] = end_frame
+        candidate["frame_rate"] = fps
+        candidate["timeline_frame_rate"] = fps
+        candidate["frame_range"] = {
+            "unit": "frame",
+            "start": start_frame,
+            "end": end_frame,
+            "timeline_frame_rate": fps,
+        }
+
+
+def _overlapped_subtitle_span(
+    candidate: dict,
+    subtitles: list[dict],
+    *,
+    edge_pad_sec: float = 0.08,
+) -> tuple[float, float] | None:
+    matches = []
+    for segment in subtitles or []:
+        if segment.get("is_gap") or not _same_candidate_scope(candidate, segment):
+            continue
+        overlap = _ranges_overlap(candidate, segment)
+        if overlap > 0.0 or _center_in_range(candidate, segment, pad=edge_pad_sec):
+            matches.append(segment)
+    if not matches:
+        return None
+    starts, ends = zip(*(_time_bounds(item) for item in matches))
+    return min(starts), max(ends)
+
+
+def align_stt_candidates_to_subtitle_segments(
+    segments: list[dict],
+    *,
+    edge_pad_sec: float = 0.08,
+) -> list[dict]:
+    """Align STT1/STT2 candidate timings to final subtitle slots without changing text."""
+    if not segments:
+        return segments
+    subtitles = [
+        dict(seg)
+        for seg in segments
+        if isinstance(seg, dict) and not seg.get("is_gap")
+    ]
+    if not subtitles:
+        return []
+
+    aligned = []
+    for segment in subtitles:
+        row = dict(segment)
+        candidates = []
+        for candidate in list(row.get("stt_candidates") or []):
+            if not isinstance(candidate, dict):
+                continue
+            cand = dict(candidate)
+            span = _overlapped_subtitle_span(cand, subtitles, edge_pad_sec=edge_pad_sec)
+            if span is None:
+                span = _time_bounds(row)
+                cand["stt_alignment_fallback"] = "parent_subtitle"
+            _update_candidate_time_fields(cand, span[0], span[1], row)
+            cand["stt_aligned_to_subtitle_segments"] = True
+            cand["stt_alignment_preserved_text"] = True
+            candidates.append(cand)
+        if candidates:
+            row["stt_candidates"] = candidates
+        aligned.append(row)
+    return aligned
+
+
+def align_stt_preview_to_subtitle_segments(
+    preview_segments: list[dict],
+    subtitle_segments: list[dict],
+    *,
+    edge_pad_sec: float = 0.08,
+) -> list[dict]:
+    """Align visible STT1/STT2 preview lanes to final subtitle spans without editing text."""
+    if not preview_segments:
+        return []
+    subtitles = [
+        dict(seg)
+        for seg in subtitle_segments or []
+        if isinstance(seg, dict) and not seg.get("is_gap")
+    ]
+    if not subtitles:
+        return [dict(row) for row in preview_segments if isinstance(row, dict)]
+
+    out = []
+    for preview in preview_segments or []:
+        if not isinstance(preview, dict):
+            continue
+        row = dict(preview)
+        source = str(
+            row.get("stt_preview_source")
+            or row.get("stt_source")
+            or row.get("stt_ensemble_source")
+            or ""
+        ).upper()
+        if source not in {"STT1", "STT2"}:
+            out.append(row)
+            continue
+        span = _overlapped_subtitle_span(row, subtitles, edge_pad_sec=edge_pad_sec)
+        if span is not None:
+            _update_candidate_time_fields(row, span[0], span[1], row)
+            row["stt_preview_aligned_to_subtitle_segments"] = True
+            row["stt_alignment_preserved_text"] = True
+        out.append(row)
+    return out
 
 
 def apply_final_gap_settings(

@@ -1,4 +1,4 @@
-# Version: 03.10.03
+# Version: 03.14.29
 # Phase: PHASE2
 """Apply subtitle split and Gap rules to STT preview candidate lanes."""
 from __future__ import annotations
@@ -38,6 +38,21 @@ def optimize_stt_preview_segments(
     raw = [dict(seg) for seg in segments if isinstance(seg, dict)]
     if not raw:
         return []
+
+    if cut_boundaries:
+        try:
+            from core.cut_boundary import magnetize_segments_to_cut_boundaries
+
+            raw = magnetize_segments_to_cut_boundaries(
+                raw,
+                confirmed_boundaries=cut_boundaries,
+                provisional_boundaries=None,
+                enabled=bool(cut_boundary_enabled),
+                confirmed_window_sec=0.46,
+                min_duration_sec=0.05,
+            )
+        except Exception as exc:
+            get_logger().log(f"  ⚠️ [{label}] 정식 컷 선분할 실패, 원본 후보 유지: {exc}")
 
     try:
         from core.engine.subtitle_engine import optimize_stt_candidate_segments

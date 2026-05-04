@@ -1,4 +1,4 @@
-# Version: 03.09.30
+# Version: 03.14.34
 # Phase: PHASE2
 """
 core/pipeline/single_pipeline.py
@@ -126,6 +126,15 @@ class SinglePipelineMixin:
         finally:
             self._active = False
             try:
+                from core.settings import clear_runtime_settings_override
+
+                clear_runtime_settings_override()
+                ui = self._ui_object()
+                if ui is not None and hasattr(ui, "_clear_runtime_quality_override"):
+                    ui._clear_runtime_quality_override()
+            except Exception:
+                pass
+            try:
                 ui = self._ui_object()
                 if ui is not None and hasattr(ui, "_auto_processing_active"):
                     ui._auto_processing_active = False
@@ -245,7 +254,7 @@ class SinglePipelineMixin:
                 f"\n{'=' * 44}\n\n{'─' * 44}\n  📂 파일: {vname} ({fsize:.1f} MB)\n{'─' * 44}"
             )
 
-            # 품질모드: 빠른모드 오버라이드가 남아있으면 제거
+            # 정확도 우선 파이프라인: legacy batch override가 남아있으면 제거
             if hasattr(self, 'video_processor'):
                 self.video_processor.clear_fast_mode_overrides()
             if hasattr(self, "video_processor"):
@@ -432,6 +441,7 @@ class SinglePipelineMixin:
 
             def _do_optimize_impl():
                 from core.engine.subtitle_engine import apply_final_gap_settings, optimize_segments
+                from core.engine.subtitle_timing import align_stt_candidates_to_subtitle_segments
 
                 total_files = len(self.files_to_process)
 
@@ -524,9 +534,13 @@ class SinglePipelineMixin:
                         if seg["end"] <= seg["start"]:
                             seg["end"] = seg["start"] + 0.5
 
-                    opt = self._align_subtitle_segments_to_vad(opt, vad_segs, context="에디터")
-                    opt = self._magnetize_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
+                    opt = self._magnetize_by_saved_cut_boundaries(
+                        opt,
+                        context="에디터 최종 자막 정식 컷",
+                        include_provisional=False,
+                    )
                     opt = self._split_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
+                    opt = self._align_subtitle_segments_to_vad(opt, vad_segs, context="에디터")
 
                     if self.max_speakers > 1 and self._speaker_map:
                         from core.audio.diarize import get_speaker_for_segment
@@ -579,8 +593,14 @@ class SinglePipelineMixin:
                         opt = grouped_opt
 
                     opt = apply_final_gap_settings(opt, force=True)
-                    opt = self._magnetize_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
+                    opt = self._magnetize_by_saved_cut_boundaries(
+                        opt,
+                        context="에디터 최종 자막 임시 컷",
+                        include_confirmed=False,
+                        include_provisional=True,
+                    )
                     opt = self._split_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
+                    opt = align_stt_candidates_to_subtitle_segments(opt)
                     auto_collected_segs.extend([dict(seg) for seg in opt])
 
                     if not self._active or not self._ui_is_alive():
@@ -683,10 +703,17 @@ class SinglePipelineMixin:
 
             if is_auto_mode:
                 from core.engine.subtitle_engine import apply_final_gap_settings
+                from core.engine.subtitle_timing import align_stt_candidates_to_subtitle_segments
 
                 nonlocal_final = apply_final_gap_settings(auto_collected_segs[:], force=True)
-                nonlocal_final = self._magnetize_by_saved_cut_boundaries(nonlocal_final, context="자동모드 최종 자막")
+                nonlocal_final = self._magnetize_by_saved_cut_boundaries(
+                    nonlocal_final,
+                    context="자동모드 최종 자막 임시 컷",
+                    include_confirmed=False,
+                    include_provisional=True,
+                )
                 nonlocal_final = self._split_by_saved_cut_boundaries(nonlocal_final, context="자동모드 최종 자막")
+                nonlocal_final = align_stt_candidates_to_subtitle_segments(nonlocal_final)
 
                 def _auto_proceed():
                     nonlocal final_segments

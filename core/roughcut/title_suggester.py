@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
-from .models import ChapterMetadata, RoughCutResult, RoughCutSegment, RoughCutTitleSuggestion
+from .models import RoughCutResult, RoughCutTitleSuggestion
 from .roughcut_llm import run_roughcut_llm_action
 from .roughcut_settings import merge_roughcut_settings
 

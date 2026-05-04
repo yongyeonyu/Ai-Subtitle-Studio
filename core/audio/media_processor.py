@@ -1,4 +1,4 @@
-# Version: 03.13.08
+# Version: 03.14.17
 # Phase: PHASE2
 """
 media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 + Whisper 섹터 동기화)
@@ -11,15 +11,16 @@ import json
 import os
 import shutil
 import subprocess
-import sys
+import sys  # noqa: F401 - compatibility hook for runtime/test patching
 import threading
-import time
-import wave
+import time  # noqa: F401 - compatibility hook for heartbeat tests/runtime patching
 from concurrent.futures import ThreadPoolExecutor
-from core.audio.audio_presets import apply_audio_preset
+from core.audio.audio_presets import apply_audio_preset, auto_audio_settings_only
+from core.accuracy_policy import apply_accuracy_first_runtime_settings
 from core.audio.media_processor_audio import VideoProcessorAudioHelpersMixin
 from core.audio.media_processor_transcribe import VideoProcessorTranscribeMixin
 from core.audio.media_processor_vad import VideoProcessorVadMixin
+from core.llm.secure_keys import get_api_key  # noqa: F401 - patched by audio helper tests/runtime hooks
 from core.performance import bounded_worker_count
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.runtime import config
@@ -28,7 +29,6 @@ from core.subtitle_quality.vad_alignment_checker import (
     review_vad_config,
     review_vad_enabled,
 )
-from core.llm.secure_keys import get_api_key
 
 _CHUNK_DURATION = 30
 _OVERLAP_SEC = 3.0
@@ -71,8 +71,17 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         self._vad_utils = None
         self.stage_callback = None
 
-    def process_video(self, media_path, ui_callback, min_spk=1, max_spk=1, target_start_sec=0.0, target_end_sec=None, is_single_segment=False):
-        import time
+    def process_video(
+        self,
+        media_path,
+        ui_callback=None,
+        min_spk=1,
+        max_spk=1,
+        target_start_sec=0.0,
+        target_end_sec=None,
+        is_single_segment=False,
+    ):
+        _ = (ui_callback, min_spk, max_spk)
 
         # 오디오 추출 단계로 is_single_segment 전달
         chunk_dir, vad_segments = self.extract_audio(media_path, target_start_sec, target_end_sec, is_single_segment)
@@ -137,7 +146,11 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                 "  └ [전처리] 전체 WAV 생성을 건너뛰고 원본에서 STT 청크를 직접 추출합니다 "
                 f"(청크 {len(grouped)}개, {direct_span:.1f}초)"
             )
-            ok = self._write_grouped_chunks_from_media_parallel(video_path, chunk_dir, grouped, fused_filter, s)
+            ok = False
+            if self._adaptive_audio_routing_enabled(s):
+                ok = self._write_adaptive_grouped_chunks_from_media(video_path, chunk_dir, grouped, s)
+            if not ok:
+                ok = self._write_grouped_chunks_from_media_parallel(video_path, chunk_dir, grouped, fused_filter, s)
             if ok:
                 get_logger().log(f"    → Whisper 청크 {len(grouped)}개 직접 생성 완료 (overlap {overlap_sec:.1f}초)")
                 return chunk_dir, []
@@ -310,7 +323,8 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
 
                 grouped = self._build_grouped_chunks(vad_segments, total_dur, settings=s)
                 grouped = self._split_grouped_chunks_at_hard_cuts(grouped, target_start_sec, target_end_sec)
-                self._write_grouped_chunks_parallel(cleaned_wav, chunk_dir, grouped)
+                if not self._adaptive_audio_routing_enabled(s) or not self._write_adaptive_grouped_chunks_from_media(video_path, chunk_dir, grouped, s):
+                    self._write_grouped_chunks_parallel(cleaned_wav, chunk_dir, grouped)
 
                 try:
                     with open(os.path.join(chunk_dir, "vad_strict.json"), "w", encoding="utf-8") as f:
@@ -328,6 +342,10 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                     cleaned_wav, chunk_dir, vad_model, s,
                     target_start_sec, target_end_sec, is_single_segment
                 )
+                if vad_success and self._adaptive_audio_routing_enabled(s):
+                    routed_grouped = self._grouped_chunks_from_existing_wavs(chunk_dir)
+                    if routed_grouped:
+                        self._write_adaptive_grouped_chunks_from_media(video_path, chunk_dir, routed_grouped, s)
 
                 # ✅ 캐시 저장
                 if vad_success and not is_partial:
@@ -379,7 +397,8 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                         range_end = min(range_end, max(range_start, float(target_end_sec or range_start)))
                     grouped = self._split_range_with_overlap(range_start, range_end, chunk_sec, overlap_sec)
                     grouped = self._split_grouped_chunks_at_hard_cuts(grouped, range_start, range_end)
-                    self._write_grouped_chunks_parallel(cleaned_wav, chunk_dir, grouped)
+                    if not self._adaptive_audio_routing_enabled(s) or not self._write_adaptive_grouped_chunks_from_media(video_path, chunk_dir, grouped, s):
+                        self._write_grouped_chunks_parallel(cleaned_wav, chunk_dir, grouped)
                     get_logger().log(
                         f"    → Whisper 청크 {len(grouped)}개 생성 완료 "
                         f"(overlap {overlap_sec:.1f}초, 범위 {range_start:.1f}s~{range_end:.1f}s)"
@@ -394,7 +413,7 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         except: pass
 
     def _load_all_settings(self):
-        """user_settings.json 로드 (오류 시 로그 남김). fast-mode override 지원."""
+        """user_settings.json 로드 (오류 시 로그 남김). Legacy override hook 지원."""
         settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
 
         data = dict(getattr(config, "DEFAULT_ADV_SETTINGS", {}) or {})
@@ -411,21 +430,32 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             except Exception as e:
                 get_logger().log(f"⚠️ user_settings.json 로드 실패: {e}")
 
+        data = apply_accuracy_first_runtime_settings(data)
+
         preset_name = str(data.get("audio_preset", "") or "")
         if preset_name:
             try:
                 data = apply_audio_preset(data, preset_name)
             except Exception as e:
                 get_logger().log(f"⚠️ 오디오 프리셋 적용 실패({preset_name}): {e}")
-        # 빠른모드 오버라이드: _fast_mode_overrides가 있으면 적용
+        auto_tune = data.get("audio_preset_auto_tune")
+        if isinstance(auto_tune, dict):
+            data.update(auto_audio_settings_only(auto_tune))
+        runtime_tune = getattr(self, "_auto_audio_tune_overrides", None)
+        if isinstance(runtime_tune, dict) and runtime_tune:
+            data.update(auto_audio_settings_only(runtime_tune))
+        # Legacy override hook kept for compatibility with older batch callers.
         overrides = getattr(self, '_fast_mode_overrides', None)
         if overrides and isinstance(overrides, dict):
             data.update(overrides)
         return data
 
     def clear_fast_mode_overrides(self):
-        """빠른모드 오버라이드 제거 — 품질모드/멀티클립 진입 시 호출"""
+        """Legacy batch override 제거."""
         self._fast_mode_overrides = None
+
+    def set_auto_audio_tune_overrides(self, overrides: dict | None):
+        self._auto_audio_tune_overrides = dict(overrides or {}) if overrides else None
 
     def _ffmpeg_trim_to_wav(self, src_wav: str, out_wav: str, start_sec: float, duration_sec: float) -> bool:
         result = subprocess.run(

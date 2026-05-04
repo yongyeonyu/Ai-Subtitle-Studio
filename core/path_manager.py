@@ -1,5 +1,5 @@
-# Version: 02.03.00
-# Phase: PHASE1-B
+# Version: 03.14.19
+# Phase: PHASE2
 """
 core/path_manager.py
 [수정] 들여쓰기 에러(IndentationError) 해결 및 음성 파일 확장자 지원 추가
@@ -23,7 +23,11 @@ DEFAULT_SETTINGS = {
     "icloud_path": "",
     "recent_folders": [],
     "auto_detect_enabled": False,
-    "nas_excluded_folders": []
+    "nas_excluded_folders": [],
+    "auto_start_mode": "quality",
+    "auto_start_enabled": True,
+    "icloud_stt_quality_preset": "fast",
+    "nas_stt_quality_preset": "balanced",
 }
 
 def load_settings():

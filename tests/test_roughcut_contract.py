@@ -13,7 +13,6 @@ from core.roughcut import (
     detect_topic_shift,
     generate_cut_points,
     generate_edl,
-    render_from_edl,
     run_roughcut_pipeline,
     write_markdown_guide,
 )

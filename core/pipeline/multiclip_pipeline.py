@@ -1,4 +1,4 @@
-# Version: 03.09.30
+# Version: 03.14.34
 # Phase: PHASE2
 """
 core/pipeline/multiclip_pipeline.py
@@ -10,7 +10,6 @@ import threading
 import traceback
 import time
 
-from core.runtime import config
 from core.runtime.logger import get_logger
 from core.settings import load_settings, get_model_key
 from core.time_history import get_expected_time
@@ -200,6 +199,7 @@ class MulticlipPipelineMixin:
     def _run_multiclip_stt_llm_pipeline(self, clip_boundaries, total_files):
         """Whisper worker와 LLM worker를 분리해 클립 단위로 겹쳐 처리합니다."""
         from core.engine.subtitle_engine import apply_final_gap_settings, optimize_segments
+        from core.engine.subtitle_timing import align_stt_candidates_to_subtitle_segments
 
         cut_boundary_snapshot = (
             self._cut_boundary_snapshot_for_pipeline()
@@ -461,6 +461,15 @@ class MulticlipPipelineMixin:
                         )
                         optimized = segments
                     optimized = self._sanitize_multiclip_segments(optimized, idx, clip_file)
+                    optimized = self._magnetize_by_saved_cut_boundaries(
+                        optimized,
+                        context=f"멀티클립 {idx + 1} 최종 자막 정식 컷",
+                        include_provisional=False,
+                    )
+                    optimized = self._split_by_saved_cut_boundaries(
+                        optimized,
+                        context=f"멀티클립 {idx + 1} 최종 자막",
+                    )
                     optimized = self._align_subtitle_segments_to_vad(
                         optimized,
                         item.get("vad_segments") or [],
@@ -469,17 +478,21 @@ class MulticlipPipelineMixin:
                     optimized = apply_final_gap_settings(optimized, force=True)
                     optimized = self._magnetize_by_saved_cut_boundaries(
                         optimized,
-                        context=f"멀티클립 {idx + 1} 최종 자막",
+                        context=f"멀티클립 {idx + 1} 최종 자막 임시 컷",
+                        include_confirmed=False,
+                        include_provisional=True,
                     )
                     optimized = self._split_by_saved_cut_boundaries(
                         optimized,
                         context=f"멀티클립 {idx + 1} 최종 자막",
                     )
+                    optimized = align_stt_candidates_to_subtitle_segments(optimized)
                 if item.get("skip_optimize"):
                     optimized = self._split_by_saved_cut_boundaries(
                         optimized,
                         context=f"멀티클립 {idx + 1} 기존 자막",
                     )
+                    optimized = align_stt_candidates_to_subtitle_segments(optimized)
 
                 out_queue.put(
                     {

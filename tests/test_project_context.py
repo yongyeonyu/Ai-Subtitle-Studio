@@ -4,9 +4,12 @@ import unittest
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from core.project.project_io import read_project_file, write_project_file
 from core.project.project_manager import extract_model_settings, load_project, merge_project_model_settings, save_project
+from core.project.project_phase1b import enrich_existing_project_file
 from core.project.project_context import (
     build_editor_state,
     project_cut_boundary_segments,
@@ -66,6 +69,25 @@ class ProjectContextTests(unittest.TestCase):
             project_workspace({"editor_state": {"workspace": state["workspace"]}}),
             {"last_playhead": 10.0},
         )
+
+    def test_project_io_roundtrip_preserves_stt_unicode_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            payload = {
+                "project_name": "테스트",
+                "analysis": {
+                    "stt_candidate_tracks": {
+                        "STT1": [{"start": 0.0, "end": 1.0, "text": "안녕하세요"}],
+                        "STT2": [{"start": 0.0, "end": 1.0, "text": "안녕 하세요"}],
+                    }
+                },
+            }
+
+            write_project_file(str(path), payload)
+            loaded = read_project_file(str(path))
+
+        self.assertEqual(loaded["project_name"], "테스트")
+        self.assertEqual(loaded["analysis"]["stt_candidate_tracks"]["STT2"][0]["text"], "안녕 하세요")
 
     def test_save_project_strips_legacy_workspace_zoom_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -475,6 +497,106 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(preview["_clip_idx"], 1)
         self.assertEqual(preview["start_frame"], 240)
         self.assertEqual(preview["end_frame"], 264)
+
+    def test_project_save_and_phase1b_enrich_preserve_stt1_stt2_tracks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"video")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {
+                            "tracks": [
+                                {
+                                    "clips": [
+                                        {
+                                            "id": "clip_a",
+                                            "source_path": str(media),
+                                            "timeline_start": 0.0,
+                                            "timeline_end": 10.0,
+                                            "order": 0,
+                                            "fps": 24.0,
+                                        }
+                                    ]
+                                }
+                            ],
+                            "timebase": {"primary_fps": 24.0},
+                        },
+                        "media": [{"order": 0, "path": str(media), "type": "video", "duration": 10.0, "offset": 0.0}],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            final_segment = {
+                "id": "seg_a",
+                "start": 1.0,
+                "end": 2.0,
+                "text": "최종 자막",
+                "speaker": "00",
+                "stt_selected_source": "STT2",
+                "stt_candidates": [
+                    {"source": "STT1", "start": 1.0, "end": 2.0, "text": "후보 일"},
+                    {"source": "STT2", "start": 1.0, "end": 2.0, "text": "후보 이"},
+                ],
+            }
+            save_project(
+                str(path),
+                segments=[final_segment],
+                stt_preview_segments=[
+                    {"start": 1.0, "end": 2.0, "text": "후보 일", "stt_preview_source": "STT1"},
+                    {"start": 1.0, "end": 2.0, "text": "후보 이", "stt_preview_source": "STT2"},
+                ],
+            )
+            save_project(
+                str(path),
+                segments=[{"id": "seg_a", "start": 1.0, "end": 2.0, "text": "수정 자막", "speaker": "00"}],
+            )
+            intermediate = load_project(str(path))
+            self.assertEqual(
+                {*intermediate["editor_state"]["stt"]["candidate_tracks"].keys()},
+                {"STT1", "STT2"},
+            )
+
+            owner = SimpleNamespace(
+                _multiclip_files=[],
+                _multiclip_boundaries=[],
+                _project_boundary_times=[],
+                _dashboard_mode="dashboard",
+                _project_panel_visible=True,
+                _current_work_mode="editor",
+                _active_clip_idx=0,
+                _log_visible=False,
+            )
+            editor = SimpleNamespace(
+                media_path=str(media),
+                settings={},
+                _current_sec=0.0,
+                _active_clip_idx=0,
+            )
+            enrich_existing_project_file(
+                str(path),
+                owner,
+                editor,
+                segments=[{"id": "seg_a", "start": 1.0, "end": 2.0, "text": "수정 자막", "speaker": "00"}],
+            )
+            loaded = load_project(str(path))
+
+        segment = loaded["subtitles"]["segments"][0]
+        self.assertEqual(segment["stt_selected_source"], "STT2")
+        self.assertEqual(segment["stt_candidates"][0]["source"], "STT1")
+        tracks = loaded["editor_state"]["stt"]["candidate_tracks"]
+        self.assertEqual({*tracks.keys()}, {"STT1", "STT2"})
+        self.assertEqual(tracks["STT1"][0]["text"], "후보 일")
+        self.assertEqual(tracks["STT2"][0]["text"], "후보 이")
+        previews = project_stt_preview_segments(loaded)
+        self.assertEqual([row["stt_preview_source"] for row in previews], ["STT1", "STT2"])
 
     def test_cut_boundary_fit_prevents_subtitle_and_stt_preview_crossing(self):
         boundaries = [{"timeline_sec": 3.0, "timeline_frame": 72, "fps": 24.0}]

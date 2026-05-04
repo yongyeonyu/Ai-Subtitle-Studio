@@ -1,27 +1,21 @@
-# Version: 03.09.18
+# Version: 03.14.31
 # Phase: PHASE2
 """
 ui/timeline_canvas.py
 Timeline canvas
 """
+from bisect import bisect_left, bisect_right
+
 import numpy as np
 from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import QSizePolicy
 
-from core.runtime import config
 from core.frame_time import normalize_fps, snap_sec_to_frame
 
 from ui.timeline.timeline_constants import (
     CANVAS_H,
-    HANDLE_R,
     ICON_SZ,
-    RULER_H,
-    SEG_BOT,
     SEG_TOP,
-    WAVE_H,
-    WAVE_HALF,
-    WAVE_MID,
     _build_gaps,
 )
 from ui.timeline.timeline_paint import TimelinePaintMixin
@@ -30,7 +24,7 @@ from ui.timeline.timeline_inline_edit import TimelineInlineEditMixin
 from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
 
 
-TimelineCanvasBase = accelerated_widget_base()
+TimelineCanvasBase = accelerated_widget_base("timeline")
 
 
 class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintMixin, TimelineCanvasBase):
@@ -69,7 +63,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         configure_lightweight_paint(self, opaque=True)
         configure_opengl_widget(self)
-        self.render_backend = gpu_backend_name()
+        self.render_backend = gpu_backend_name("timeline")
         self.focus_mode = "segment"
         self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
         self._ime_preedit = ""
@@ -130,6 +124,9 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._analysis_markers_cache: list[dict] = []
         self._roughcut_major_cache_key = None
         self._roughcut_major_cache: list[dict] = []
+        self._render_epoch = 0
+        self._paint_index_cache: dict[str, dict] = {}
+        self._paint_last_visible_counts: dict[str, int] = {}
 
     # ---------------------------------------------------------
     # State / Utility
@@ -146,6 +143,107 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._analysis_markers_cache = []
         self._roughcut_major_cache_key = None
         self._roughcut_major_cache = []
+
+    def _invalidate_render_cache(self):
+        self._render_epoch = int(getattr(self, "_render_epoch", 0) or 0) + 1
+        self._paint_index_cache = {}
+        self._paint_last_visible_counts = {}
+
+    def _paint_time_window(self, rect: QRect | None = None, *, pad_px: int = 96) -> tuple[float, float]:
+        rect = rect or self.rect()
+        pps = max(0.001, float(getattr(self, "pps", 1.0) or 1.0))
+        left = max(0, int(rect.left()) - int(pad_px))
+        right = max(left + 1, int(rect.right()) + int(pad_px) + 1)
+        return max(0.0, left / pps), max(0.0, right / pps)
+
+    @staticmethod
+    def _paint_item_bounds(item: dict) -> tuple[float, float]:
+        try:
+            start = float(item.get("start", item.get("timeline_sec", item.get("time", 0.0))) or 0.0)
+        except Exception:
+            start = 0.0
+        try:
+            end = float(item.get("end", item.get("timeline_end", start)) or start)
+        except Exception:
+            end = start
+        if end < start:
+            start, end = end, start
+        return start, end
+
+    def _linear_visible_items_for_paint(self, items, start_sec: float, end_sec: float) -> list:
+        visible = []
+        for item in list(items or []):
+            if not isinstance(item, dict):
+                continue
+            start, end = self._paint_item_bounds(item)
+            if end >= start_sec and start <= end_sec:
+                visible.append(item)
+        return visible
+
+    def _visible_items_for_paint(
+        self,
+        items,
+        cache_name: str,
+        start_sec: float,
+        end_sec: float,
+        *,
+        pad_sec: float = 0.0,
+    ) -> list:
+        rows = list(items or [])
+        start_sec = max(0.0, float(start_sec or 0.0) - float(pad_sec or 0.0))
+        end_sec = max(start_sec, float(end_sec or start_sec) + float(pad_sec or 0.0))
+        if not rows:
+            self._paint_last_visible_counts[str(cache_name)] = 0
+            return []
+        if len(rows) < 64 or getattr(self, "_drag_seg", None) is not None:
+            visible = self._linear_visible_items_for_paint(rows, start_sec, end_sec)
+            self._paint_last_visible_counts[str(cache_name)] = len(visible)
+            return visible
+
+        cache_name = str(cache_name or "items")
+        sig = (id(items), len(rows), int(getattr(self, "_render_epoch", 0) or 0))
+        cache = dict(getattr(self, "_paint_index_cache", {}).get(cache_name) or {})
+        if cache.get("sig") != sig:
+            by_start = []
+            by_end = []
+            for idx, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    continue
+                start, end = self._paint_item_bounds(row)
+                by_start.append((start, end, idx, row))
+                by_end.append((end, start, idx, row))
+            by_start.sort(key=lambda item: (item[0], item[1], item[2]))
+            by_end.sort(key=lambda item: (item[0], item[1], item[2]))
+            cache = {
+                "sig": sig,
+                "by_start": by_start,
+                "starts": [item[0] for item in by_start],
+                "by_end": by_end,
+                "ends": [item[0] for item in by_end],
+            }
+            self._paint_index_cache[cache_name] = cache
+
+        starts = list(cache.get("starts") or [])
+        ends = list(cache.get("ends") or [])
+        by_start = list(cache.get("by_start") or [])
+        by_end = list(cache.get("by_end") or [])
+        if not by_start:
+            self._paint_last_visible_counts[cache_name] = 0
+            return []
+
+        start_side_count = bisect_right(starts, end_sec)
+        end_side_index = bisect_left(ends, start_sec)
+        end_side_count = max(0, len(by_end) - end_side_index)
+
+        if start_side_count <= end_side_count:
+            candidates = by_start[:start_side_count]
+            visible = [row for start, end, _idx, row in candidates if end >= start_sec and start <= end_sec]
+        else:
+            candidates = by_end[end_side_index:]
+            visible = [row for end, start, _idx, row in candidates if end >= start_sec and start <= end_sec]
+            visible.sort(key=lambda row: self._paint_item_bounds(row)[0])
+        self._paint_last_visible_counts[cache_name] = len(visible)
+        return visible
 
     def _refresh_voice_activity_segments(self):
         try:
@@ -164,11 +262,14 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         from ui.timeline.timeline_analysis import analysis_markers_for_widget
 
         key = (
+            int(getattr(self, "_render_epoch", 0) or 0),
+            id(self.segments),
+            id(self.vad_segments),
+            id(self.gap_segments),
             len(self.segments),
             len(self.vad_segments),
             len(self.gap_segments),
             round(float(self.total_duration or 0.0), 3),
-            tuple((round(float(s.get("start", 0.0) or 0.0), 3), round(float(s.get("end", 0.0) or 0.0), 3), str(s.get("text", "") or ""), str(s.get("quality", "") or "")) for s in self.segments),
         )
         if self._analysis_markers_cache_key != key:
             self._analysis_markers_cache = analysis_markers_for_widget(
@@ -223,6 +324,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.gap_segments = new_gaps
         self._refresh_voice_activity_segments()
         self._invalidate_marker_caches()
+        self._invalidate_render_cache()
 
         if active_sec is not None:
             self.active_seg_start = active_sec
@@ -279,10 +381,12 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._speech_mask = None      # 마스크 재계산 트리거
         self._refresh_voice_activity_segments()
         self._invalidate_marker_caches()
+        self._invalidate_render_cache()
         self.update()
 
     def set_voice_activity_segments(self, segments: list[dict]):
         self.voice_activity_segments = list(segments or [])
+        self._invalidate_render_cache()
         self.update()
 
     def set_active(self, sec):
@@ -310,6 +414,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     def set_waveform(self, wf):
         self._waveform = wf
         self._speech_mask = None
+        self._invalidate_render_cache()
         self.update()
 
     def _x(self, sec):

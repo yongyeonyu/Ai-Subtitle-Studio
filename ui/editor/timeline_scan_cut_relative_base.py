@@ -248,7 +248,7 @@ def _rel_make_region_thumbnails(self, frame, cv2_mod, scale_w: int, scale_h: int
     return tuple(result)
 
 
-def _rel_capture_image_at_global(self, global_sec: float, region_mode: str = "fast4", include_center=None):
+def _rel_capture_image_at_global(self, global_sec: float, region_mode: str = "fast4", **_legacy_kwargs):
     cv2_mod = _rel_scan_get_cv2_module(self)
     if not cv2_mod:
         return None

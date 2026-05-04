@@ -6,6 +6,7 @@ from core.audio.stt_quality_presets import (
     apply_stt_quality_preset,
     load_stt_quality_presets,
     normalize_stt_quality_key,
+    save_stt_quality_user_preset,
 )
 
 
@@ -14,7 +15,7 @@ class STTQualityPresetTests(unittest.TestCase):
         presets = load_stt_quality_presets()
 
         self.assertEqual(list(presets), ["fast", "balanced", "precise"])
-        self.assertEqual([presets[key]["label"] for key in presets], ["빠른 인식", "균형", "정밀 인식"])
+        self.assertEqual([presets[key]["label"] for key in presets], ["빠름", "보통", "높음"])
 
     def test_apply_fast_preset_uses_whisper_only_and_speed_settings(self):
         settings = {"selected_model": "exaone3.5:7.8b", "w_beam_size": 8}
@@ -23,9 +24,9 @@ class STTQualityPresetTests(unittest.TestCase):
 
         self.assertEqual(applied["stt_quality_preset"], "fast")
         self.assertEqual(applied["selected_model"], "사용 안함 (Whisper 단독 진행)")
-        self.assertEqual(applied["audio_preset"], "실내-마이크무")
-        self.assertEqual(applied["selected_audio_ai"], "none")
-        self.assertEqual(applied["selected_vad"], "none")
+        self.assertNotIn("audio_preset", applied)
+        self.assertNotIn("selected_audio_ai", applied)
+        self.assertNotIn("selected_vad", applied)
         self.assertEqual(applied["cut_boundary_level"], "off")
         self.assertFalse(applied["cut_boundary_detection_enabled"])
         self.assertLess(applied["w_beam_size"], settings["w_beam_size"])
@@ -38,27 +39,51 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertGreater(precise["w_beam_size"], balanced["w_beam_size"])
         self.assertLess(precise["w_df_no_speech"], balanced["w_df_no_speech"])
         self.assertEqual(precise["selected_model"], "gemma4:e4b")
-        self.assertEqual(balanced["audio_preset"], "실내-마이크유")
-        self.assertEqual(balanced["selected_audio_ai"], "deepfilter")
-        self.assertEqual(balanced["selected_vad"], "silero")
+        self.assertNotIn("audio_preset", balanced)
+        self.assertNotIn("selected_audio_ai", balanced)
+        self.assertNotIn("selected_vad", balanced)
         self.assertEqual(balanced["cut_boundary_level"], "low")
         self.assertTrue(balanced["cut_boundary_detection_enabled"])
-        self.assertEqual(precise["audio_preset"], "실외-마이크유")
-        self.assertEqual(precise["selected_audio_ai"], "clearvoice")
-        self.assertEqual(precise["selected_vad"], "ten_vad")
+        self.assertNotIn("audio_preset", precise)
+        self.assertNotIn("selected_audio_ai", precise)
+        self.assertNotIn("selected_vad", precise)
         self.assertEqual(precise["cut_boundary_level"], "medium")
         self.assertTrue(precise["cut_boundary_detection_enabled"])
         self.assertTrue(precise["stt_ensemble_enabled"])
         self.assertTrue(precise["stt_candidate_scoring_enabled"])
-        self.assertFalse(precise["stt_ensemble_llm_judge_enabled"])
+        self.assertTrue(precise["stt_ensemble_llm_judge_enabled"])
         self.assertEqual(precise["roughcut_llm_model"], "exaone3.5:7.8b")
         self.assertEqual(precise["roughcut_llm_provider"], "ollama")
-        self.assertEqual(precise["audio_preset_recommended_preprocess_model"], "ffmpeg-outdoor-strong")
 
     def test_korean_aliases_normalize(self):
+        self.assertEqual(normalize_stt_quality_key("빠름"), "fast")
+        self.assertEqual(normalize_stt_quality_key("보통"), "balanced")
+        self.assertEqual(normalize_stt_quality_key("높음"), "precise")
         self.assertEqual(normalize_stt_quality_key("빠른 인식"), "fast")
         self.assertEqual(normalize_stt_quality_key("정밀인식"), "precise")
-        self.assertEqual(normalize_stt_quality_key(""), "balanced")
+        self.assertEqual(normalize_stt_quality_key(""), "precise")
+
+    def test_saved_user_preset_overrides_stage_settings_without_audio(self):
+        settings = apply_stt_quality_preset({}, "balanced")
+        settings.update(
+            {
+                "selected_whisper_model": "custom-stt",
+                "selected_model": "custom-llm",
+                "selected_audio_ai": "deepfilter",
+                "selected_vad": "silero",
+            }
+        )
+
+        saved = save_stt_quality_user_preset(settings, "balanced")
+        applied = apply_stt_quality_preset(saved, "balanced")
+
+        self.assertEqual(applied["selected_whisper_model"], "custom-stt")
+        self.assertEqual(applied["selected_model"], "custom-llm")
+        self.assertEqual(applied["selected_audio_ai"], "deepfilter")
+        self.assertEqual(applied["selected_vad"], "silero")
+        user_settings = saved["stt_quality_user_presets"]["balanced"]["settings"]
+        self.assertNotIn("selected_audio_ai", user_settings)
+        self.assertNotIn("selected_vad", user_settings)
 
 
 if __name__ == "__main__":

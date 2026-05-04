@@ -1,4 +1,4 @@
-# Version: 03.13.03
+# Version: 03.14.26
 # Phase: PHASE2
 """Home sidebar status, preset, and model-selection helpers."""
 
@@ -8,25 +8,26 @@ import sys
 from html import escape
 
 from PyQt6.QtCore import Qt, QTimer, QSize, QDateTime
-from PyQt6.QtGui import QIcon, QColor, QCursor
+from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QComboBox, QMessageBox,
-    QToolButton, QSizePolicy, QMenu, QGridLayout,
+    QWidget, QHBoxLayout, QLabel, QPushButton,
+    QComboBox, QSizePolicy, QMenu,
 )
 
 from core.runtime import config
 from core.settings import load_settings, save_settings
+from core.path_manager import load_settings as _path_load_settings, save_settings as _path_save_settings
 from core.pipeline_status import generation_stage_keys
-from core.audio import audio_presets as _audio_presets
-from core.audio.preset_auto_classifier import auto_classify_media_presets, apply_auto_classified_presets
 from core.audio.stt_quality_presets import (
+    STT_QUALITY_PRESET_ORDER,
     apply_stt_quality_preset,
     load_stt_quality_presets,
     normalize_stt_quality_key,
+    save_stt_quality_user_preset,
+    stt_quality_label,
 )
 from ui.home_sidebar_presets import sync_sidebar_preset_panel
-from ui.style import button_style, label_style, line_icon, tool_button_style
+from ui.style import line_icon
 
 
 ROUGHCUT_LLM_MIN_PARAMETERS_B = 7.0
@@ -62,6 +63,10 @@ def _runtime_save_settings(settings):
 
 
 class SidebarComboBox(QComboBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.view().setMinimumWidth(104)
+
     def setCurrentIndex(self, index: int) -> None:
         same_index = int(index) == self.currentIndex()
         super().setCurrentIndex(index)
@@ -169,88 +174,219 @@ class HomeSidebarMixin:
         )
 
     def _ensure_sidebar_preset_panel(self):
-        panel = getattr(self, "sidebar_preset_panel", None)
-        if panel is not None:
-            try:
-                if panel.parent() is None:
-                    panel.setParent(self.home_page)
-                self._sync_sidebar_preset_panel()
-                return panel
-            except RuntimeError:
-                pass
-            self.sidebar_preset_panel = None
+        for attr in (
+            "sidebar_preset_panel",
+            "sidebar_stt_quality_combo",
+            "sidebar_audio_preset_combo",
+            "sidebar_auto_preset_btn",
+        ):
+            if hasattr(self, attr):
+                try:
+                    obj = getattr(self, attr)
+                    if hasattr(obj, "setParent"):
+                        obj.setParent(None)
+                except RuntimeError:
+                    pass
+                try:
+                    delattr(self, attr)
+                except Exception:
+                    pass
+        return None
 
-        panel = QWidget(self.home_page)
-        panel.setObjectName("SidebarPresetPanel")
-        panel.setStyleSheet("QWidget#SidebarPresetPanel { background:#151C20; border:1px solid #2D3942; border-radius:7px; }")
-
-        lay = QVBoxLayout(panel)
-        lay.setContentsMargins(6, 3, 6, 3)
-        lay.setSpacing(0)
-
-        grid_wrap = QWidget(panel)
-        grid_wrap.setStyleSheet("background:transparent; border:none;")
-        grid = QGridLayout(grid_wrap)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(4)
-
-        self.sidebar_stt_quality_combo = SidebarComboBox(panel)
-        for key, preset in load_stt_quality_presets().items():
-            label = str(preset.get("label") or key)
-            self.sidebar_stt_quality_combo.addItem(label, key)
-            desc = str(preset.get("description") or "")
-            if desc:
-                self.sidebar_stt_quality_combo.setItemData(self.sidebar_stt_quality_combo.count() - 1, desc, Qt.ItemDataRole.ToolTipRole)
-        self.sidebar_stt_quality_combo.setStyleSheet(self._sidebar_preset_combo_style())
-        self.sidebar_stt_quality_combo.setFixedWidth(88)
-        self.sidebar_stt_quality_combo.setFixedHeight(18)
-        self.sidebar_stt_quality_combo.currentIndexChanged.connect(self._on_sidebar_stt_quality_changed)
-        stt_row = self._sidebar_preset_row("정밀인식", self.sidebar_stt_quality_combo)
-        grid.addWidget(stt_row, 0, 0)
-
-        self.sidebar_audio_preset_combo = SidebarComboBox(panel)
-        self.sidebar_audio_preset_combo.addItem("직접 설정", "")
-        self.sidebar_audio_preset_combo.addItem("기본값 적용", "__default__")
-        curated_audio_presets = _audio_presets.curated_audio_preset_names()
-        loaded_audio_presets = _audio_presets.load_audio_presets()
-        for name in curated_audio_presets:
-            preset = loaded_audio_presets.get(name)
-            if not isinstance(preset, dict):
-                continue
-            desc = str(preset.get("description") or "")
-            self.sidebar_audio_preset_combo.addItem(name, name)
-            if desc:
-                self.sidebar_audio_preset_combo.setItemData(self.sidebar_audio_preset_combo.count() - 1, desc, Qt.ItemDataRole.ToolTipRole)
-        self.sidebar_audio_preset_combo.setStyleSheet(self._sidebar_preset_combo_style())
-        self.sidebar_audio_preset_combo.setFixedWidth(88)
-        self.sidebar_audio_preset_combo.setFixedHeight(18)
-        self.sidebar_audio_preset_combo.currentIndexChanged.connect(self._on_sidebar_audio_preset_changed)
-        audio_row = self._sidebar_preset_row("오디오", self.sidebar_audio_preset_combo)
-        grid.addWidget(audio_row, 1, 0)
-
-        self.sidebar_auto_preset_btn = QToolButton(panel)
-        self.sidebar_auto_preset_btn.setText("")
-        self.sidebar_auto_preset_btn.setAutoRaise(False)
-        self.sidebar_auto_preset_btn.setIcon(self._nav_icon("auto", "#A9B0B7"))
-        self.sidebar_auto_preset_btn.setIconSize(QSize(15, 15))
-        self.sidebar_auto_preset_btn.setFixedSize(34, 34)
-        self.sidebar_auto_preset_btn.setStyleSheet(
-            "QToolButton { background:#202A31; border:1px solid #2D3942; border-radius:7px; padding:0; margin:0; } "
-            "QToolButton:hover { background:#2A363F; border-color:#465663; }"
+    def _sidebar_subtitle_quality_combo_style(self) -> str:
+        return (
+            "QComboBox { background:#0E1A20; color:#F5F7FA; border:1px solid #2D3942; "
+            "border-radius:4px; padding:1px 17px 1px 9px; font-size:10px; font-weight:700; } "
+            "QComboBox:hover { border-color:#3F8CFF; background:#14242B; } "
+            "QComboBox::drop-down { border:none; width:16px; } "
+            "QAbstractItemView { background:#11181C; color:#F5F7FA; selection-background-color:#1A84FF; "
+            "selection-color:#FFFFFF; border:1px solid #2D3942; padding:4px; outline:0; } "
+            "QAbstractItemView::item { min-height:22px; padding:3px 16px 3px 16px; }"
         )
-        self.sidebar_auto_preset_btn.clicked.connect(self._on_sidebar_auto_preset_detect)
-        self.sidebar_auto_preset_btn.setToolTip("영상 기준 자동 판정")
-        grid.addWidget(self.sidebar_auto_preset_btn, 0, 1, 2, 1, alignment=Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
-        grid.setColumnStretch(0, 0)
-        grid.setColumnMinimumWidth(1, 34)
-        lay.addWidget(grid_wrap)
 
-        panel.setMaximumHeight(60)
+    def _subtitle_quality_preset_items(self) -> list[tuple[str, str]]:
+        presets = load_stt_quality_presets()
+        return [
+            (str(presets.get(key, {}).get("label") or stt_quality_label(key)), key)
+            for key in STT_QUALITY_PRESET_ORDER
+        ]
 
-        self.sidebar_preset_panel = panel
-        self._sync_sidebar_preset_panel()
-        return panel
+    def _register_subtitle_quality_combo(self, combo: QComboBox) -> QComboBox:
+        combos = list(getattr(self, "_subtitle_quality_combos", []) or [])
+        combos = [item for item in combos if item is not combo]
+        combos.append(combo)
+        self._subtitle_quality_combos = combos
+        return combo
+
+    def _sync_subtitle_quality_combos(self, preset_key: str | None = None):
+        self._sync_subtitle_quality_combos_for_scope("workspace", preset_key)
+
+    def _subtitle_quality_scope_key(self, scope: str | None) -> str:
+        scope = str(scope or "workspace").strip().lower()
+        if scope == "icloud":
+            return "icloud_stt_quality_preset"
+        if scope == "nas":
+            return "nas_stt_quality_preset"
+        return "stt_quality_preset"
+
+    def _subtitle_quality_scope_default(self, scope: str | None) -> str:
+        scope = str(scope or "workspace").strip().lower()
+        if scope == "icloud":
+            return "fast"
+        if scope == "nas":
+            return "balanced"
+        return "precise"
+
+    def _subtitle_quality_key_for_scope(self, scope: str | None = None) -> str:
+        scope = str(scope or "workspace").strip().lower()
+        default = self._subtitle_quality_scope_default(scope)
+        if scope in {"icloud", "nas"}:
+            try:
+                return normalize_stt_quality_key(_path_load_settings().get(self._subtitle_quality_scope_key(scope), default))
+            except Exception:
+                return normalize_stt_quality_key(default)
+        return normalize_stt_quality_key(_runtime_load_settings().get("stt_quality_preset", default))
+
+    def _save_subtitle_quality_key_for_scope(self, scope: str | None, preset_key: str | None):
+        scope = str(scope or "workspace").strip().lower()
+        key = normalize_stt_quality_key(preset_key or self._subtitle_quality_scope_default(scope))
+        if scope in {"icloud", "nas"}:
+            settings = _path_load_settings()
+            settings[self._subtitle_quality_scope_key(scope)] = key
+            _path_save_settings(settings)
+            self._sync_subtitle_quality_combos_for_scope(scope, key)
+            return key
+        self._apply_subtitle_quality_preset(key)
+        return key
+
+    def _sync_subtitle_quality_combos_for_scope(self, scope: str | None = None, preset_key: str | None = None):
+        requested_scope = str(scope or "workspace").strip().lower()
+        key = normalize_stt_quality_key(preset_key or self._subtitle_quality_key_for_scope(requested_scope))
+        alive = []
+        for combo in list(getattr(self, "_subtitle_quality_combos", []) or []):
+            try:
+                combo_scope = str(combo.property("subtitleQualityScope") or "workspace").strip().lower()
+                if combo_scope != requested_scope:
+                    alive.append(combo)
+                    continue
+                combo.blockSignals(True)
+                combo_key = key if combo_scope == requested_scope else self._subtitle_quality_key_for_scope(combo_scope)
+                for idx in range(combo.count()):
+                    if combo.itemData(idx) == combo_key:
+                        combo.setCurrentIndex(idx)
+                        break
+                combo.blockSignals(False)
+                alive.append(combo)
+            except RuntimeError:
+                continue
+        self._subtitle_quality_combos = alive
+
+    def _make_subtitle_quality_combo(self, parent=None, *, width: int = 92, height: int = 24, scope: str = "workspace") -> QComboBox:
+        combo = SidebarComboBox(parent)
+        scope = str(scope or "workspace").strip().lower()
+        combo.setProperty("subtitleQualityScope", scope)
+        for label, key in self._subtitle_quality_preset_items():
+            combo.addItem(label, key)
+        combo.setFixedHeight(height)
+        if width > 0:
+            combo.setFixedWidth(width)
+        else:
+            combo.setMinimumWidth(60)
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        combo.setStyleSheet(self._sidebar_subtitle_quality_combo_style())
+        combo.setToolTip("자막품질 프리셋")
+        combo.currentIndexChanged.connect(self._on_subtitle_quality_combo_changed)
+        self._register_subtitle_quality_combo(combo)
+        self._sync_subtitle_quality_combos_for_scope(scope)
+        return combo
+
+    def _apply_subtitle_quality_preset(self, preset_key: str | None, *, announce: bool = False):
+        key = normalize_stt_quality_key(preset_key)
+        settings = apply_stt_quality_preset(_runtime_load_settings(), key)
+        self._apply_ai_settings(settings)
+        self._sync_subtitle_quality_combos_for_scope("workspace", key)
+        if announce:
+            try:
+                from core.runtime.logger import get_logger
+
+                get_logger().log(f"💾 자막품질 저장: {stt_quality_label(key)}")
+            except Exception:
+                pass
+        return settings
+
+    def _on_subtitle_quality_combo_changed(self, *args):
+        combo = self.sender()
+        if combo is None or not hasattr(combo, "currentData"):
+            return
+        scope = str(combo.property("subtitleQualityScope") or "workspace").strip().lower()
+        self._save_subtitle_quality_key_for_scope(scope, combo.currentData())
+
+    def _on_sidebar_subtitle_quality_save(self):
+        combo = getattr(self, "sidebar_subtitle_quality_combo", None)
+        key = normalize_stt_quality_key(
+            combo.currentData() if combo is not None else _runtime_load_settings().get("stt_quality_preset")
+        )
+        settings = save_stt_quality_user_preset(_runtime_load_settings(), key)
+        self._apply_ai_settings(settings)
+        self._sync_subtitle_quality_combos_for_scope("workspace", key)
+        try:
+            from core.runtime.logger import get_logger
+
+            get_logger().log(f"💾 자막품질 프리셋 저장: {stt_quality_label(key)}")
+        except Exception:
+            pass
+
+    def _create_sidebar_subtitle_quality_row(self, parent=None) -> QWidget:
+        row = QWidget(parent)
+        row.setObjectName("SidebarSubtitleQualityRow")
+        row.setStyleSheet("QWidget#SidebarSubtitleQualityRow { background: transparent; border: none; }")
+        row.setFixedHeight(24)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+
+        label = QLabel("자막품질", row)
+        label.setFixedWidth(54)
+        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        label.setStyleSheet("color:#00D46A; font-size:10px; font-weight:800; background:transparent; border:none;")
+        layout.addWidget(label)
+
+        combo = self._make_subtitle_quality_combo(row, width=0, height=22, scope="workspace")
+        self.sidebar_subtitle_quality_combo = combo
+        layout.addWidget(combo, stretch=1)
+
+        save_btn = QPushButton("저장", row)
+        save_btn.setIcon(line_icon("save", "#F5F7FA", 16))
+        save_btn.setIconSize(QSize(9, 9))
+        save_btn.setFixedSize(44, 22)
+        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save_btn.setToolTip("현재 자막품질 설정 저장")
+        save_btn.setStyleSheet(
+            "QPushButton { background:#24313A; color:#F5F7FA; border:1px solid #344652; "
+            "border-radius:4px; padding:0 4px; font-size:9px; font-weight:800; } "
+            "QPushButton:hover { background:#2D3D47; border-color:#3F8CFF; } "
+            "QPushButton:pressed { background:#1A84FF; color:#FFFFFF; }"
+        )
+        save_btn.clicked.connect(self._on_sidebar_subtitle_quality_save)
+        self.sidebar_subtitle_quality_save_btn = save_btn
+        layout.addWidget(save_btn)
+        layout.addStretch(1)
+        return row
+
+    def _settings_for_subtitle_quality_scope(self, scope: str | None) -> dict:
+        key = self._subtitle_quality_key_for_scope(scope)
+        settings = apply_stt_quality_preset(_runtime_load_settings(), key)
+        settings["stt_quality_preset"] = key
+        return settings
+
+    def _set_runtime_quality_override_for_scope(self, scope: str | None):
+        self._runtime_settings_override = self._settings_for_subtitle_quality_scope(scope)
+        return self._runtime_settings_override
+
+    def _clear_runtime_quality_override(self):
+        self._runtime_settings_override = None
+
     def _sidebar_preset_row(self, label_text: str, combo: QComboBox) -> QWidget:
         row = QWidget()
         row.setStyleSheet("background:transparent; border:none;")
@@ -289,59 +425,6 @@ class HomeSidebarMixin:
         self._apply_ai_settings(settings)
         self._sync_sidebar_preset_panel(settings)
         return settings
-
-    def _on_sidebar_stt_quality_changed(self, *args):
-        combo = getattr(self, "sidebar_stt_quality_combo", None)
-        if combo is None:
-            return
-        self._apply_sidebar_settings_update(
-            preset_applier=lambda settings: apply_stt_quality_preset(
-                settings,
-                combo.currentData() or "balanced",
-            )
-        )
-
-    def _on_sidebar_audio_preset_changed(self, *args):
-        combo = getattr(self, "sidebar_audio_preset_combo", None)
-        if combo is None:
-            return
-        preset_name = combo.currentData() or ""
-        if preset_name == "__default__":
-            default_applier = getattr(_audio_presets, "apply_default_audio_preset", None)
-            if callable(default_applier):
-                self._apply_sidebar_settings_update(preset_applier=default_applier)
-            else:
-                self._apply_sidebar_settings_update({"audio_preset": ""})
-        elif preset_name:
-            self._apply_sidebar_settings_update(
-                preset_applier=lambda settings: _audio_presets.apply_audio_preset(settings, preset_name)
-            )
-        else:
-            self._apply_sidebar_settings_update({"audio_preset": ""})
-
-    def _on_sidebar_auto_preset_detect(self, *args):
-        media_path = self._current_editor_media_path()
-        if not media_path:
-            QMessageBox.information(self, "자동 판정", "현재 에디터에 열린 영상이 없어서 자동 판정을 진행할 수 없습니다.")
-            return
-        settings = dict(_runtime_load_settings())
-        try:
-            decision = auto_classify_media_presets(media_path, settings=settings)
-            updated = apply_auto_classified_presets(settings, decision)
-            self._apply_ai_settings(updated)
-            self._sync_sidebar_preset_panel(updated)
-            QMessageBox.information(
-                self,
-                "자동 판정 완료",
-                (
-                    f"오디오: {decision['audio_preset']}\n"
-                    f"정밀인식: {decision['stt_quality_preset']}\n"
-                    f"신뢰도: {int(round(float(decision.get('confidence', 0.0)) * 100))}%\n\n"
-                    f"{decision.get('reason', '')}"
-                ),
-            )
-        except Exception as e:
-            QMessageBox.warning(self, "자동 판정 실패", str(e))
 
     def _current_editor_media_path(self) -> str:
         editor = self._active_editor()
@@ -587,6 +670,24 @@ class HomeSidebarMixin:
                 pass
         return "\n".join(parts)
 
+    def _cut_boundary_scan_line_confirmed(self, row) -> bool:
+        if not isinstance(row, dict):
+            return True
+        status = str(row.get("status", "") or "").strip().lower()
+        return (
+            status in {"verified", "confirmed", "accepted", "done"}
+            or bool(row.get("verified"))
+            or bool(row.get("confirmed"))
+        )
+
+    def _cut_boundary_scan_pending(self, editor) -> bool:
+        if editor is None:
+            return False
+        if bool(getattr(editor, "_auto_cut_boundary_scan_active", False)):
+            return True
+        provisional_lines = list(getattr(editor, "_auto_cut_boundary_scan_lines", []) or [])
+        return any(not self._cut_boundary_scan_line_confirmed(row) for row in provisional_lines)
+
     def _roughcut_draft_status_value(self) -> str:
         editor = self._active_editor()
         if editor is None:
@@ -633,12 +734,7 @@ class HomeSidebarMixin:
                 or bool(getattr(editor, "_subtitle_generation_completed", False))
             )
         )
-        cut_scan_active = bool(getattr(editor, "_auto_cut_boundary_scan_active", False)) if editor is not None else False
-        provisional_cut_lines = list(getattr(editor, "_auto_cut_boundary_scan_lines", []) or []) if editor is not None else []
-        cut_boundary_pending = cut_scan_active or any(
-            str((row or {}).get("status", "") if isinstance(row, dict) else "provisional").lower() != "verified"
-            for row in provisional_cut_lines
-        )
+        cut_boundary_pending = self._cut_boundary_scan_pending(editor)
         stage_now = set(current_keys or set())
         vad_enabled = settings.get("selected_vad", "none") != "none"
         stt2_enabled = bool(settings.get("stt_ensemble_enabled", False))
@@ -689,7 +785,7 @@ class HomeSidebarMixin:
 
     def _pipeline_model_link(self, key: str, text: str, *, current: bool = False, completed: bool = False) -> str:
         color = "#00D46A" if completed else ("#FFD60A" if current else "#F5F7FA")
-        dropdown_icon = " ▾" if key in {"cut_boundary", "audio", "stt1", "stt2", "vad", "subtitle_llm", "roughcut_llm"} else ""
+        dropdown_icon = " ▾" if key in {"cut_boundary", "stt1", "stt2", "subtitle_llm", "roughcut_llm"} else ""
         return (
             f"<a href='model:{escape(key)}' "
             f"style='color:{color}; text-decoration:none; font-family:Menlo, Monaco, Consolas, monospace; font-weight:400;'>"
@@ -700,10 +796,8 @@ class HomeSidebarMixin:
         rows = []
         model_links = {
             "컷 경계": "cut_boundary",
-            "음성": "audio",
             "STT 1": "stt1",
             "STT 2": "stt2",
-            "VAD": "vad",
             "자막 LLM": "subtitle_llm",
             "러프컷 LLM": "roughcut_llm",
         }
@@ -729,12 +823,7 @@ class HomeSidebarMixin:
                 "</tr>"
             )
         return (
-            "<table cellspacing='0' cellpadding='0' style='font-size:9px;'>"
-            "<tr>"
-            "<td></td>"
-            "<td style='color:#00D46A; padding:0 10px 2px 0; font-weight:400;'>단계</td>"
-            "<td style='color:#00D46A; padding:0 0 2px 0; font-family:Menlo, Monaco, Consolas, monospace; font-weight:400;'>모델</td>"
-            "</tr>"
+            "<table cellspacing='0' cellpadding='0' style='font-size:8px; margin-top:3px;'>"
             + "".join(rows)
             + "</table>"
         )
@@ -766,6 +855,7 @@ class HomeSidebarMixin:
         label.setText(formatted)
         label.setToolTip(self._pipeline_info_plain(settings))
         self._sync_sidebar_preset_panel(settings)
+        self._sync_subtitle_quality_combos(settings.get("stt_quality_preset"))
 
     def _apply_ai_settings(self, settings: dict):
         _runtime_save_settings(settings)
@@ -891,7 +981,14 @@ class HomeSidebarMixin:
         return [item for item in self._llm_model_items() if self._roughcut_llm_is_capable(item)]
 
     def _apply_sidebar_model_selection(self, updates: dict):
-        self._apply_sidebar_settings_update(updates)
+        settings = dict(_runtime_load_settings())
+        if updates:
+            settings.update(updates)
+        key = normalize_stt_quality_key(settings.get("stt_quality_preset") or "precise")
+        settings = save_stt_quality_user_preset(settings, key)
+        self._apply_ai_settings(settings)
+        self._sync_sidebar_preset_panel(settings)
+        return settings
 
     def _add_action(self, menu: QMenu, label: str, callback, *, checked: bool = False):
         action = menu.addAction(label)

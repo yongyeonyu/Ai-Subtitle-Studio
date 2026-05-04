@@ -75,7 +75,6 @@ def _rel_refine_boundary(self, start_frame: int, end_frame: int, fps: float, rea
     best_frame = None
     best_score = -1.0
     best_regions = 0
-    best_deltas = []
 
     for stage in stages:
         stage = max(1, int(stage))
@@ -117,7 +116,6 @@ def _rel_refine_boundary(self, start_frame: int, end_frame: int, fps: float, rea
         best_frame = int(local_best_frame)
         best_score = float(local_best_score)
         best_regions = int(local_best_regions)
-        best_deltas = list(local_best_deltas)
 
         lo = max(0, best_frame - stage)
         hi = best_frame + stage
@@ -556,7 +554,6 @@ def _rel_refine_boundary(self, start_frame: int, end_frame: int, fps: float, rea
     best_frame = None
     best_score = -1.0
     best_regions = 0
-    best_deltas = []
 
     for stage in stages:
         stage = max(1, int(stage))
@@ -597,7 +594,6 @@ def _rel_refine_boundary(self, start_frame: int, end_frame: int, fps: float, rea
         best_frame = int(local_best_frame)
         best_score = float(local_best_score)
         best_regions = int(local_best_regions)
-        best_deltas = list(local_best_deltas)
 
         lo = max(0, best_frame - stage)
         hi = best_frame + stage

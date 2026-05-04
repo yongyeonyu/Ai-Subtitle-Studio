@@ -1,4 +1,4 @@
-# Version: 03.01.25
+# Version: 03.14.17
 # Phase: PHASE2
 """
 editor_data_manager.py
@@ -24,6 +24,7 @@ import shutil
 
 from core.runtime import config
 from core.runtime.logger import get_logger
+from core.accuracy_policy import apply_accuracy_first_runtime_settings
 
 # 수정 — 설정 경로를 앱 공통 경로(config.DATASET_DIR)로 통일
 DATASET_DIR = config.DATASET_DIR
@@ -51,12 +52,14 @@ def load_settings() -> dict:
             logger.log("🚚 custom_defaults.json을 dataset 폴더로 이동 완료!")
         except: pass
 
-    # 1. 기본값(custom_defaults.json) 불러오기
-    defaults = {}
+    # 1. 기본값(config + custom_defaults.json) 불러오기
+    defaults = dict(getattr(config, "DEFAULT_ADV_SETTINGS", {}) or {})
     if os.path.exists(CUSTOM_DEFAULTS_FILE):
         try:
             with open(CUSTOM_DEFAULTS_FILE, 'r', encoding='utf-8') as f:
-                defaults = json.load(f)
+                custom_defaults = json.load(f)
+                if isinstance(custom_defaults, dict):
+                    defaults.update(custom_defaults)
         except: pass
 
     # 2. 사용자 설정(user_settings.json) 불러오기
@@ -71,7 +74,7 @@ def load_settings() -> dict:
     merged_settings = defaults.copy()
     merged_settings.update(user_settings)
 
-    return merged_settings
+    return apply_accuracy_first_runtime_settings(merged_settings)
 
 # ── 설정 저장 (분리됨) ──────────────────────────────────────────────────────
 
@@ -166,7 +169,7 @@ def update_split_rule(subtitle_rules: dict, word: str, add: bool = True) -> dict
 
 # ── cleanup (저장/종료시 정리) ────────────────────────────────────────────
 def cleanup_rules(corrections: dict, subtitle_rules: dict,
-                  settings: dict, get_segments_fn) -> tuple:
+                  settings: dict, *_legacy_args) -> tuple:
     logger = get_logger()
     logger.log("\n  ━━━ 데이터셋 정리 시작 ━━━")
 

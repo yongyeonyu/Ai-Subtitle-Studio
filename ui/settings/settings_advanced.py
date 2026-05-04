@@ -11,7 +11,6 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt, QTimer
-from core.runtime import config
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, CUSTOM_DEFAULTS_FILE, _create_bottom_buttons
 from ui.style import button_style, label_style, settings_dialog_stylesheet
