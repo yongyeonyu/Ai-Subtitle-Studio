@@ -1,5 +1,5 @@
 <!--
-Document-Version: 03.19.00
+Document-Version: 03.20.00
 Phase: PHASE3
 Last-Updated: 2026-05-05
 Updated-By: Codex
@@ -61,15 +61,15 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 ## Current Continuation Facts
 
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- Current app version in code: `03.19.00`
-- Current handoff document version: `03.19.00`
-- Latest release checkpoint: `v03.19.00`
+- Current app version in code: `03.20.00`
+- Current handoff document version: `03.20.00`
+- Latest release checkpoint: `v03.20.00`
 - Current phase: `PHASE3`
 - Next planned phase: `PHASE4_iPad`
 - Product priority: generate highly accurate subtitles on the first pass, even if processing takes longer.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
 - Cross-platform rule: macOS and Windows must remain supported, including Korean paths, spaces, backslashes, subprocess handling, ffmpeg/ffprobe, faster-whisper workers, and PyQt6 runtime behavior.
-- Queue state: `ACTION_ITEMS.md` is parked-only; no active non-iPad items remain after the LoRA automation, vector retrieval, unified uncompressed ZIP bundle, idle-only low-resource learning, Full learning controls, detailed learning logs, and gap autosettings release.
+- Queue state: `ACTION_ITEMS.md` is parked-only; no active non-iPad items remain after the LoRA automation, vector retrieval, unified uncompressed ZIP bundle, STT1 adapter planning, quality-tier LoRA runtime policy, live editor previews, low-resource idle learning, Full learning controls, detailed learning logs, gap autosettings, and editor responsiveness release.
 
 ## Collaboration Rules
 

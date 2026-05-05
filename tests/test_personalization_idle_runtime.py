@@ -19,6 +19,7 @@ from core.personalization.idle_trainer import (
     recover_interrupted_training_jobs,
     run_training_queue_once,
 )
+from core.audio.whisper_transformers import is_transformers_whisper_model
 from core.personalization.lora_models import TruthTableRow
 from core.personalization.lora_storage import (
     append_truth_table_rows,
@@ -57,6 +58,19 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    @staticmethod
+    def _perfect_trial_metrics(score: float = 96.0) -> dict:
+        return {
+            "final_score": score,
+            "character_error_rate": 0.02,
+            "eojeol_error_rate": 0.03,
+            "timing_overlap_score": 0.98,
+            "line_break_match_score": 1.0,
+            "punctuation_match_score": 1.0,
+            "parenthetical_exclusion_correctness": 1.0,
+            "segment_split_merge_f1": 1.0,
+        }
+
     def test_idle_trainer_queue_controls_pause_resume_and_clear(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             initialize_lora_personalization_store(tmpdir)
@@ -64,19 +78,19 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
                 [{"media_id": "media-001", "media_path": "/tmp/clip_a.mp4", "subtitle_path": "/tmp/clip_a.srt"}],
                 store_dir=tmpdir,
             )
-            self.assertEqual(len(list(payload.get("items") or [])), 5)
+            self.assertEqual(len(list(payload.get("items") or [])), 6)
 
             owner = _DummyOwner()
             trainer = PersonalizationIdleTrainer(owner, store_dir=tmpdir)
             trainer._poll_timer.stop()
             try:
-                self.assertEqual(trainer.queue_summary().get("waiting"), 5)
+                self.assertEqual(trainer.queue_summary().get("waiting"), 6)
 
                 trainer.pause_pending_jobs()
-                self.assertEqual(trainer.queue_summary().get("paused"), 5)
+                self.assertEqual(trainer.queue_summary().get("paused"), 6)
 
                 trainer.resume_pending_jobs()
-                self.assertEqual(trainer.queue_summary().get("waiting"), 5)
+                self.assertEqual(trainer.queue_summary().get("waiting"), 6)
 
                 trainer.clear_pending_jobs(keep_completed=False)
                 self.assertEqual(load_training_queue(tmpdir).get("items"), [])
@@ -101,6 +115,21 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
 
             self.assertEqual(summary, "완료 1개 · 실행중 1개 · 대기 2개")
             self.assertEqual(format_training_queue_status_summary({"items": []}), "대기 작업 없음")
+
+    def test_idle_trainer_defaults_to_slow_low_resource_schedule(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+
+            owner = _DummyOwner()
+            trainer = PersonalizationIdleTrainer(owner, store_dir=tmpdir)
+            trainer._poll_timer.stop()
+            try:
+                self.assertGreaterEqual(trainer.idle_window_ms, 300_000)
+                self.assertGreaterEqual(trainer.cooldown_ms, 300_000)
+                self.assertGreaterEqual(trainer._poll_timer.interval(), 30_000)
+            finally:
+                trainer._poll_timer.stop()
+                trainer.deleteLater()
 
     def test_enqueue_full_training_jobs_requeues_completed_jobs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -133,10 +162,12 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
 
             first_payload = enqueue_full_training_jobs(store_dir=tmpdir)
             first_items = list(first_payload.get("items") or [])
-            self.assertEqual(len(first_items), 8)
+            self.assertEqual(len(first_items), 9)
             self.assertIn("build_retrieval_index", {str(item.get("job_type") or "") for item in first_items})
             voice_job = next(item for item in first_items if str(item.get("job_type") or "") == "build_voice_profiles")
             self.assertTrue((voice_job.get("payload") or {}).get("extract_audio"))
+            stt1_job = next(item for item in first_items if str(item.get("job_type") or "") == "build_stt1_whisper_adapter")
+            self.assertTrue((stt1_job.get("payload") or {}).get("extract_audio"))
 
             first_items[0]["status"] = "complete"
             first_items[0]["progress"] = 1.0
@@ -164,9 +195,67 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
 
             self.assertTrue(result["processed"])
             joined = "\n".join(logs)
-            self.assertIn("[LoRA 학습] 시작: 수동 · 1/3 · truth 분석", joined)
+            self.assertIn("[LoRA 학습] 시작: 수동 · 1/4 · truth 분석", joined)
             self.assertIn("truth table 규칙 분석 중", joined)
             self.assertIn("검색 인덱스 갱신", joined)
+
+    def test_low_resource_training_downgrades_full_audio_extraction_jobs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            save_training_queue(
+                [
+                    {
+                        "job_id": "voice-full",
+                        "job_type": "build_voice_profiles",
+                        "media_id": "global",
+                        "media_path": "",
+                        "subtitle_path": "",
+                        "status": "waiting",
+                        "priority": 1,
+                        "progress": 0.0,
+                        "attempts": 0,
+                        "payload": {"manual_full_training": True, "extract_audio": True},
+                    }
+                ],
+                tmpdir,
+            )
+
+            with (
+                patch(
+                    "core.personalization.idle_trainer.save_voice_lora_profile_manifest",
+                    return_value={"speaker_profiles": 1},
+                ),
+                patch(
+                    "core.personalization.idle_trainer.save_voice_lora_training_plan",
+                    return_value={
+                        "usable_voice_rows": 7,
+                        "stored_audio_items": 0,
+                        "extraction_errors": 0,
+                        "extraction_skipped": 0,
+                    },
+                ) as voice_plan,
+            ):
+                result = run_training_queue_once(tmpdir, low_resource=True)
+
+            self.assertTrue(result["processed"])
+            self.assertEqual(voice_plan.call_args.kwargs["extract_audio"], False)
+            item = load_training_queue(tmpdir)["items"][0]
+            self.assertEqual(item["status"], "complete")
+            payload = dict(item.get("payload") or {})
+            self.assertTrue(payload.get("resumed_as_low_resource_idle"))
+            self.assertTrue(payload.get("audio_extraction_deferred"))
+            self.assertEqual(payload["checkpoint"]["reason"], "audio_extraction_deferred")
+
+    def test_low_resource_training_skips_retention_prune(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            enqueue_default_training_jobs([], store_dir=tmpdir)
+
+            with patch("core.personalization.idle_trainer.prune_low_value_personalization_data") as prune:
+                result = run_training_queue_once(tmpdir, low_resource=True)
+
+            self.assertTrue(result["processed"])
+            prune.assert_not_called()
 
     def test_run_training_queue_once_writes_store_local_training_outputs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -193,7 +282,7 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
                 [{"media_id": "media-001", "media_path": "/Users/test/Movies/clip_a.mp4", "subtitle_path": "/Users/test/Movies/clip_a.srt"}],
                 store_dir=tmpdir,
             )
-            self.assertEqual(len(list(payload.get("items") or [])), 5)
+            self.assertEqual(len(list(payload.get("items") or [])), 6)
 
             paths = store_paths(tmpdir)
             (paths["root"] / "text_lora_corpus.jsonl").write_text(
@@ -266,7 +355,7 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
                 return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
             with patch("core.personalization.text_lora_runner.subprocess.run", side_effect=fake_run):
-                for _ in range(5):
+                for _ in range(6):
                     result = run_training_queue_once(tmpdir)
                     processed.append(result)
 
@@ -284,6 +373,8 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             self.assertIn("checkpoint_history", queue_items[0]["payload"])
             self.assertTrue((paths["root"] / "text_lora_training_plan.json").exists())
             self.assertTrue((paths["root"] / "voice_lora_profile_manifest.json").exists())
+            self.assertTrue((paths["root"] / "stt1_whisper_adapter_training_plan.json").exists())
+            self.assertTrue((paths["root"] / "stt1_whisper_adapter_runtime_manifest.json").exists())
             self.assertTrue((paths["root"] / "learned_split_rules.json").exists())
             self.assertGreater(len(paths["setting_trials"].read_text(encoding="utf-8").strip().splitlines()), 0)
             self.assertGreater(len(paths["prompt_trials"].read_text(encoding="utf-8").strip().splitlines()), 0)
@@ -305,6 +396,112 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             best_settings = load_best_settings(tmpdir)
             self.assertIn("media-001", dict(best_settings.get("by_media_id") or {}))
             self.assertEqual(best_settings.get("global_recommended_defaults"), {})
+
+    def test_runtime_override_uses_ready_stt1_adapter_manifest(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            paths = store_paths(tmpdir)
+            model_dir = paths["trained_adapters"] / "personal_stt1_whisper_adapter" / "merged_transformers"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            (model_dir / "config.json").write_text("{}", encoding="utf-8")
+            (model_dir / "preprocessor_config.json").write_text("{}", encoding="utf-8")
+            paths["stt1_whisper_adapter_runtime_manifest"].write_text(
+                json.dumps(
+                    {
+                        "schema": "ai_subtitle_studio.stt1_whisper_adapter_runtime_manifest.v1",
+                        "runtime_ready": True,
+                        "dataset_stats": {"usable_training_rows": 32},
+                        "activation_policy": {
+                            "minimum_truth_rows": 24,
+                            "minimum_retrieval_score": 28.0,
+                            "allow_global_fallback": True,
+                        },
+                        "runtime_candidates": {
+                            "mac": {
+                                "backend": "transformers-whisper",
+                                "selected_whisper_model": str(model_dir),
+                                "ready": True,
+                            }
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("core.personalization.runtime_personalization.config.IS_MAC", True), patch(
+                "core.personalization.runtime_personalization.load_settings",
+                return_value={"stt_quality_preset": "precise"},
+            ):
+                override = personalization_settings_override_for_media("/Users/test/Movies/fresh_clip.mp4", store_dir=tmpdir)
+
+            self.assertEqual(override["selected_whisper_model"], str(model_dir))
+            self.assertTrue(is_transformers_whisper_model(str(model_dir)))
+
+    def test_fast_quality_excludes_learned_lora_runtime_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            media_path = "/Users/test/Movies/fast_clip.mp4"
+            record_setting_trial_result(
+                media_id="fast-001",
+                media_path=media_path,
+                subtitle_path="/Users/test/Movies/fast_clip.srt",
+                config={
+                    "selected_audio_ai": "clearvoice",
+                    "selected_model": "gpt-5.5",
+                    "stt_ensemble_enabled": True,
+                    "sub_max_cps": 15,
+                },
+                metrics=self._perfect_trial_metrics(),
+                reason="fast should stay stt1 only without lora",
+                store_dir=tmpdir,
+            )
+
+            with patch(
+                "core.personalization.runtime_personalization.load_settings",
+                return_value={"stt_quality_preset": "fast"},
+            ):
+                override = personalization_settings_override_for_media(media_path, store_dir=tmpdir)
+
+            self.assertEqual(override, {"stt_ensemble_enabled": False})
+
+    def test_balanced_quality_uses_only_stt1_minimal_lora_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            media_path = "/Users/test/Movies/balanced_clip.mp4"
+            record_setting_trial_result(
+                media_id="balanced-001",
+                media_path=media_path,
+                subtitle_path="/Users/test/Movies/balanced_clip.srt",
+                config={
+                    "selected_audio_ai": "clearvoice",
+                    "selected_whisper_model": "large-v3",
+                    "selected_model": "gpt-5.5",
+                    "stt_quality_preset": "precise",
+                    "subtitle_quality_auto_correct_enabled": True,
+                    "stt_ensemble_enabled": True,
+                    "sub_max_cps": 15,
+                    "sub_gap_break_sec": 1.0,
+                },
+                metrics=self._perfect_trial_metrics(),
+                reason="balanced should keep only lightweight stt1 lora keys",
+                store_dir=tmpdir,
+            )
+
+            with patch(
+                "core.personalization.runtime_personalization.load_settings",
+                return_value={"stt_quality_preset": "balanced"},
+            ):
+                override = personalization_settings_override_for_media(media_path, store_dir=tmpdir)
+
+            self.assertEqual(override["selected_audio_ai"], "clearvoice")
+            self.assertEqual(override["selected_whisper_model"], "large-v3")
+            self.assertEqual(override["sub_max_cps"], 15)
+            self.assertEqual(override["sub_gap_break_sec"], 1.0)
+            self.assertEqual(override["stt_ensemble_enabled"], False)
+            self.assertNotIn("selected_model", override)
+            self.assertNotIn("stt_quality_preset", override)
+            self.assertNotIn("subtitle_quality_auto_correct_enabled", override)
 
     def test_voice_profile_job_fails_when_audio_sources_are_missing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -439,8 +636,8 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
                     self.assertFalse(worker.is_alive())
 
                 joined = "\n".join(logs)
-                self.assertIn("자동 학습 상태: 대기 3개 (백그라운드 시작)", joined)
-                self.assertIn("자동 학습 상태: 완료 1개 · 대기 2개 (백그라운드 완료)", joined)
+                self.assertIn("자동 학습 상태: 대기 4개 (백그라운드 시작)", joined)
+                self.assertIn("자동 학습 상태: 완료 1개 · 대기 3개 (백그라운드 완료)", joined)
             finally:
                 trainer._poll_timer.stop()
                 trainer.deleteLater()
@@ -654,14 +851,17 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             windows_override = personalization_settings_override_for_media(
                 "c:/users/user/videos/clip one.mp4",
                 store_dir=tmpdir,
+                base_settings={"stt_quality_preset": "precise"},
             )
             nas_override = personalization_settings_override_for_media(
                 "smb://nas/share/Season01/clip_a.mov",
                 store_dir=tmpdir,
+                base_settings={"stt_quality_preset": "precise"},
             )
             icloud_override = personalization_settings_override_for_media(
                 "/Users/user/Library/Mobile Documents/com~apple~CloudDocs/Jobs/clip_b.mp4",
                 store_dir=tmpdir,
+                base_settings={"stt_quality_preset": "precise"},
             )
 
             self.assertEqual(windows_override["selected_audio_ai"], "clearvoice")

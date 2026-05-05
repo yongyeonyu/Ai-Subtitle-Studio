@@ -770,6 +770,49 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         queue._refresh_sidebar_queue_cache()
         self.assertEqual(queue._sidebar_queue_cache_items[1]["eta"], "00:00 / 00:20")
 
+    def test_cut_boundary_active_row_updates_elapsed_time_per_clip(self):
+        class DummyTimer:
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                pass
+
+        class DummyBackend:
+            def __init__(self):
+                self._active = True
+                self.pipeline_start_time = 100.0
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+                self.backend = DummyBackend()
+                self.backend_fast = None
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4"])
+
+        with patch("ui.queue_widget.time.time", return_value=100.0):
+            queue.update_queue_status(0, "컷 경계 확인 중 5%", "57:31", "", "57:31")
+
+        self.assertIn(0, queue._file_start_times)
+        self.assertEqual(queue.queue_table.item(0, 4).text(), "00:00 / 57:31")
+
+        with patch("ui.queue_widget.time.time", return_value=105.0):
+            queue._update_live_queue_header()
+
+        self.assertEqual(queue.queue_table.item(0, 4).text(), "00:05 / 57:31")
+        queue._refresh_sidebar_queue_cache()
+        self.assertEqual(queue._sidebar_queue_cache_items[0]["eta"], "00:05 / 57:31")
+
     def test_restart_queue_eta_metadata_restarts_media_duration_probe(self):
         from ui.main.main_window import MainWindow
 
@@ -838,7 +881,10 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.assertTrue(editor.sm.is_dirty)
 
                 editor._auto_save_project = lambda segs=None: None
+                scheduled_exports = []
+                editor._schedule_auto_export_saved_subtitle_videos = lambda: scheduled_exports.append(True)
                 self.assertTrue(editor._on_save(skip_auto_next=True))
+                self.assertEqual(scheduled_exports, [])
                 self.assertFalse(editor._has_unsaved_changes())
                 self.assertFalse(editor.sm.is_dirty)
 
@@ -910,6 +956,43 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             self.assertTrue(editor._is_dirty)
             self.assertTrue(editor.sm.is_dirty)
             self.assertTrue(any(item.get("is_dirty") is True for item in editor.refreshes))
+
+    def test_editor_manual_edit_pauses_idle_work_without_unloading_models(self):
+        from ui.editor.editor_segments import EditorSegmentsMixin
+
+        calls = []
+
+        class EditWindow:
+            def _refresh_saved_status_label(self, **kwargs):
+                calls.append(("refresh", kwargs))
+
+            def _reset_post_completion_idle_timer(self):
+                calls.append(("reset_idle", None))
+
+            def _pause_personalization_for_foreground_activity(self, reason, *, hold_ms=0):
+                calls.append(("pause_lora", reason, hold_ms))
+
+            def _release_ai_models_for_editor_mode(self, *args, **kwargs):
+                calls.append(("release", args, kwargs))
+
+        class DirtyEditor(EditorSegmentsMixin):
+            def __init__(self):
+                self.sm = SubtitleStateManager()
+                self._window = EditWindow()
+
+            def _has_unsaved_changes(self):
+                return True
+
+            def window(self):
+                return self._window
+
+        editor = DirtyEditor()
+        editor._mark_dirty()
+
+        self.assertTrue(editor.sm.is_dirty)
+        self.assertIn(("reset_idle", None), calls)
+        self.assertTrue(any(item[0] == "pause_lora" and item[1] == "subtitle_editor_edit" for item in calls))
+        self.assertFalse(any(item[0] == "release" for item in calls))
 
     def test_editor_top_mode_toolbar_is_removed(self):
         from ui.editor.editor_widget import EditorWidget

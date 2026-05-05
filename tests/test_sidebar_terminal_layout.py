@@ -543,6 +543,47 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_engine_summary_label_does_not_fake_live_pipeline_stages(self):
+        window = MainWindow()
+        try:
+            editor = SimpleNamespace(
+                _auto_cut_boundary_scan_active=False,
+                _auto_cut_boundary_scan_lines=[],
+                _roughcut_draft_status="idle",
+                _last_roughcut_draft_major_count=None,
+                sm=SimpleNamespace(state="ST_PROC"),
+                engine_lbl=QLabel(
+                    "[VAD] : Silero\n"
+                    "[음성] : DeepFilter\n"
+                    "[STT] : whisper-large-v3 + Whisper-Large-v3-turbo-STT-Zeroth-KO-v2\n"
+                    "[LLM] : EXAONE3.5"
+                ),
+            )
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: True
+            window.log_text.setPlainText("")
+
+            settings = {
+                "selected_audio_ai": "deepfilter",
+                "selected_whisper_model": "whisper-large-v3",
+                "stt_ensemble_enabled": True,
+                "selected_whisper_model_secondary": "ghost613-turbo-korean-4bit",
+                "selected_vad": "silero",
+                "selected_model": "exaone3.5:7.8b",
+                "roughcut_llm_enabled": False,
+            }
+
+            current = window._pipeline_current_stage_keys(settings)
+            completed = window._pipeline_completed_stage_keys(settings, current)
+
+            self.assertEqual(current, set())
+            for key in ("cut_boundary", "preprocess", "audio", "stt1", "stt2", "vad", "subtitle_llm"):
+                self.assertNotIn(key, completed)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_save_completion_log_marks_stt1_complete_even_if_stale_stt_log_remains(self):
         window = MainWindow()
         try:

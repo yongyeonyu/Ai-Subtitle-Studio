@@ -896,6 +896,9 @@ class EditorPipelineMixin:
             if seg_end <= float(start_sec or 0.0):
                 live_preview.append(dict(seg))
         self._live_stt_preview_segments = live_preview
+        remover = getattr(self, "_remove_live_editor_preview_overlapping", None)
+        if callable(remover):
+            remover([{"start": float(start_sec or 0.0), "end": float(end_sec or start_sec or 0.0)}])
 
         existing_vad = []
         try:
@@ -1225,6 +1228,30 @@ class EditorPipelineMixin:
     # ---------------------------------------------------------
     # Progress & Status
     # ---------------------------------------------------------
+    def set_live_processing_stage(self, text: str):
+        import threading as _th
+        if _th.current_thread() is not _th.main_thread():
+            QTimer.singleShot(0, lambda t=str(text or ""): self.set_live_processing_stage(t))
+            return
+        message = str(text or "").strip()
+        if not message:
+            return
+        now = time.monotonic()
+        if (
+            message == str(getattr(self, "_last_live_processing_stage", "") or "")
+            and now < float(getattr(self, "_next_live_processing_stage_at", 0.0) or 0.0)
+        ):
+            return
+        self._last_live_processing_stage = message
+        self._next_live_processing_stage_at = now + 0.25
+        try:
+            if hasattr(self, "sm") and getattr(self.sm, "is_locked", False):
+                self.sm.set_custom_status(message)
+            elif hasattr(self, "status_lbl"):
+                self.status_lbl.setText(message)
+        except RuntimeError:
+            return
+
     # ✅ [v01.00.16] 완료 조건 단일화 — EditorPipeline만 완료 판단
     def update_progress(self, c_idx, t_total):
         import threading as _th

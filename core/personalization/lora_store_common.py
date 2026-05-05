@@ -34,6 +34,10 @@ VOICE_LORA_BRIDGE_PATH = LORA_PERSONALIZATION_DIR / "voice_lora_bridge.jsonl"
 VOICE_LORA_PROFILE_MANIFEST_PATH = LORA_PERSONALIZATION_DIR / "voice_lora_profile_manifest.json"
 VOICE_LORA_TRAINING_PLAN_PATH = LORA_PERSONALIZATION_DIR / "voice_lora_training_plan.json"
 VOICE_LORA_DATASET_MANIFEST_PATH = LORA_PERSONALIZATION_DIR / "voice_lora_dataset_manifest.json"
+STT1_WHISPER_ADAPTER_DATASET_PATH = LORA_PERSONALIZATION_DIR / "stt1_whisper_adapter_dataset.jsonl"
+STT1_WHISPER_ADAPTER_DATASET_MANIFEST_PATH = LORA_PERSONALIZATION_DIR / "stt1_whisper_adapter_dataset_manifest.json"
+STT1_WHISPER_ADAPTER_TRAINING_PLAN_PATH = LORA_PERSONALIZATION_DIR / "stt1_whisper_adapter_training_plan.json"
+STT1_WHISPER_ADAPTER_RUNTIME_MANIFEST_PATH = LORA_PERSONALIZATION_DIR / "stt1_whisper_adapter_runtime_manifest.json"
 TEXT_LORA_DATASET_PATH = LORA_PERSONALIZATION_DIR / "text_lora_dataset.jsonl"
 TEXT_LORA_MANIFEST_PATH = LORA_PERSONALIZATION_DIR / "text_lora_manifest.json"
 TEXT_LORA_CORPUS_PATH = LORA_PERSONALIZATION_DIR / "text_lora_corpus.jsonl"
@@ -49,6 +53,7 @@ JSONL_KINDS = {
     "setting_trials": SETTING_TRIALS_PATH.name,
     "prompt_trials": PROMPT_TRIALS_PATH.name,
     "voice_lora_bridge": VOICE_LORA_BRIDGE_PATH.name,
+    "stt1_whisper_adapter_dataset": STT1_WHISPER_ADAPTER_DATASET_PATH.name,
     "text_lora_dataset": TEXT_LORA_DATASET_PATH.name,
     "text_lora_corpus": TEXT_LORA_CORPUS_PATH.name,
     "audio_preset_lora": AUDIO_PRESET_LORA_PATH.name,
@@ -70,6 +75,10 @@ UNIFIED_LORA_BUNDLE_SOURCE_KEYS = (
     "llm_review_request",
     "llm_review_result",
     "voice_lora_bridge",
+    "stt1_whisper_adapter_dataset",
+    "stt1_whisper_adapter_dataset_manifest",
+    "stt1_whisper_adapter_training_plan",
+    "stt1_whisper_adapter_runtime_manifest",
     "voice_lora_profile_manifest",
     "voice_lora_training_plan",
     "voice_lora_dataset_manifest",
@@ -89,6 +98,7 @@ BUNDLE_JSONL_SECTION_KEYS = (
     "prompt_trials",
     "retention_history",
     "voice_lora_bridge",
+    "stt1_whisper_adapter_dataset",
     "text_lora_dataset",
     "text_lora_corpus",
     "audio_preset_lora",
@@ -106,6 +116,9 @@ BUNDLE_JSON_SECTION_KEYS = (
     "voice_lora_profile_manifest",
     "voice_lora_training_plan",
     "voice_lora_dataset_manifest",
+    "stt1_whisper_adapter_dataset_manifest",
+    "stt1_whisper_adapter_training_plan",
+    "stt1_whisper_adapter_runtime_manifest",
     "text_lora_manifest",
     "text_lora_corpus_manifest",
     "text_lora_training_plan",
@@ -143,6 +156,11 @@ def store_paths(store_dir: str | Path | None = None) -> dict[str, Path]:
         "voice_lora_training_plan": root / VOICE_LORA_TRAINING_PLAN_PATH.name,
         "voice_lora_dataset_manifest": root / VOICE_LORA_DATASET_MANIFEST_PATH.name,
         "voice_lora_clips": root / TRAINED_ADAPTERS_DIR.name / "personal_voice_lora" / "clips",
+        "stt1_whisper_adapter_dataset": root / STT1_WHISPER_ADAPTER_DATASET_PATH.name,
+        "stt1_whisper_adapter_dataset_manifest": root / STT1_WHISPER_ADAPTER_DATASET_MANIFEST_PATH.name,
+        "stt1_whisper_adapter_training_plan": root / STT1_WHISPER_ADAPTER_TRAINING_PLAN_PATH.name,
+        "stt1_whisper_adapter_runtime_manifest": root / STT1_WHISPER_ADAPTER_RUNTIME_MANIFEST_PATH.name,
+        "stt1_whisper_adapter_clips": root / TRAINED_ADAPTERS_DIR.name / "personal_stt1_whisper_adapter" / "clips",
         "text_lora_dataset": root / TEXT_LORA_DATASET_PATH.name,
         "text_lora_manifest": root / TEXT_LORA_MANIFEST_PATH.name,
         "text_lora_corpus": root / TEXT_LORA_CORPUS_PATH.name,

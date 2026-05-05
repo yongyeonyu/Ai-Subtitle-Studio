@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from core.personalization.lora_models import TrialRecord, TruthTableRow
 from core.personalization.lora_storage import (
@@ -161,15 +162,33 @@ class LoraVectorRetrieverTests(unittest.TestCase):
             self.assertIn("scene=car", prompt)
             self.assertIn("괄호(), 대괄호[], 중괄호{}", prompt)
 
+    def test_fast_quality_disables_runtime_lora_prompt_context(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._seed_vehicle_store(tmpdir)
+            build_lora_retrieval_index(tmpdir)
+
+            prompt = build_runtime_lora_prompt(
+                "bmw x5 고속도로 노면 소음 확인",
+                {},
+                {"editor_lora_runtime_enabled": True, "stt_quality_preset": "fast"},
+                store_dir=tmpdir,
+            )
+
+            self.assertEqual(prompt, "")
+
     def test_retrieved_settings_apply_to_similar_media_without_exact_path_match(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._seed_vehicle_store(tmpdir)
             build_lora_retrieval_index(tmpdir)
 
-            override = personalization_settings_override_for_media(
-                "/new_jobs/BMW X5 vehicle review final cut.mp4",
-                store_dir=tmpdir,
-            )
+            with patch(
+                "core.personalization.runtime_personalization.load_settings",
+                return_value={"stt_quality_preset": "precise"},
+            ):
+                override = personalization_settings_override_for_media(
+                    "/new_jobs/BMW X5 vehicle review final cut.mp4",
+                    store_dir=tmpdir,
+                )
             direct = retrieve_lora_context(
                 "BMW X5 vehicle review final cut",
                 media_path="/new_jobs/BMW X5 vehicle review final cut.mp4",

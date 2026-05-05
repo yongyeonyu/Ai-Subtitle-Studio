@@ -23,6 +23,7 @@ from core.personalization.lora_storage import (
 )
 from core.personalization.lora_vector_retriever import build_lora_retrieval_index
 from core.runtime.logger import get_logger
+from core.personalization.stt1_whisper_adapter_runner import save_stt1_whisper_adapter_training_plan
 from core.personalization.text_lora_runner import (
     save_text_lora_training_plan,
     save_voice_lora_profile_manifest,
@@ -43,10 +44,19 @@ QUEUE_JOB_TYPE_LABELS = {
     "analyze_truth_table": "truth 분석",
     "build_text_training_plan": "text 학습계획",
     "build_voice_profiles": "목소리 프로필",
+    "build_stt1_whisper_adapter": "STT1 어댑터",
     "build_retrieval_index": "검색 인덱스",
     "optimize_settings": "설정 최적화",
     "optimize_prompts": "프롬프트 최적화",
 }
+LOW_RESOURCE_POLL_INTERVAL_MS = 30_000
+LOW_RESOURCE_IDLE_WINDOW_MS = 300_000
+LOW_RESOURCE_COOLDOWN_MS = 300_000
+LOW_RESOURCE_INDEX_REFRESH_INTERVAL_SEC = 1_800.0
+LOW_RESOURCE_PROGRESS_SAVE_INTERVAL_SEC = 3.0
+LOW_RESOURCE_PROGRESS_BUCKET_STEP = 25
+MANUAL_PROGRESS_BUCKET_STEP = 10
+AUDIO_EXTRACTION_JOB_TYPES = {"build_voice_profiles", "build_stt1_whisper_adapter"}
 
 
 def _queue_status_label(status: Any) -> str:
@@ -134,6 +144,13 @@ def enqueue_default_training_jobs(
             subtitle_path="",
             job_type="build_voice_profiles",
             priority=30,
+        ).to_record(),
+        TrainingQueueItem(
+            media_id="global",
+            media_path="",
+            subtitle_path="",
+            job_type="build_stt1_whisper_adapter",
+            priority=40,
         ).to_record(),
     ]
     for index, pair in enumerate(list(imported_pairs or []), start=1):
@@ -230,8 +247,16 @@ def _manual_full_training_jobs(
             media_id="global",
             media_path="",
             subtitle_path="",
-            job_type="build_retrieval_index",
+            job_type="build_stt1_whisper_adapter",
             priority=40,
+            payload={"manual_full_training": True, "extract_audio": True},
+        ).to_record(),
+        TrainingQueueItem(
+            media_id="global",
+            media_path="",
+            subtitle_path="",
+            job_type="build_retrieval_index",
+            priority=50,
             payload={"manual_full_training": True, "force": True},
         ).to_record(),
     ]
@@ -310,7 +335,7 @@ def enqueue_full_training_jobs(
     saved["manual_full_training"] = {
         "queued_jobs": len(jobs),
         "requeued_jobs": requeued,
-        "truth_media_count": max(0, (len(jobs) - 4) // 2),
+        "truth_media_count": max(0, (len(jobs) - 5) // 2),
     }
     refresh_lora_personalization_manifest(store_dir)
     get_logger().log(
@@ -361,7 +386,7 @@ def _save_queue_payload(payload: dict[str, Any], store_dir: str | Path | None = 
 def _lora_index_refresh_due(
     store_dir: str | Path | None = None,
     *,
-    min_interval_sec: float = 600.0,
+    min_interval_sec: float = LOW_RESOURCE_INDEX_REFRESH_INTERVAL_SEC,
 ) -> bool:
     """Throttle retrieval-index rebuilds during low-resource idle learning."""
     try:
@@ -375,6 +400,23 @@ def _lora_index_refresh_due(
     except Exception:
         return True
     return age_sec >= max(0.0, float(min_interval_sec or 0.0))
+
+
+def _low_resource_job_copy(job: dict[str, Any]) -> dict[str, Any]:
+    """Downgrade expensive queued work when it resumes as idle background learning."""
+    adjusted = dict(job or {})
+    job_type = str(adjusted.get("job_type") or "")
+    payload = dict(adjusted.get("payload") or {})
+    if bool(payload.get("manual_full_training")):
+        payload["manual_full_training"] = False
+        payload["resumed_as_low_resource_idle"] = True
+    if job_type in AUDIO_EXTRACTION_JOB_TYPES and bool(payload.get("extract_audio")):
+        payload["extract_audio"] = False
+        payload["audio_extraction_deferred"] = True
+    if job_type == "build_retrieval_index":
+        payload["force"] = False
+    adjusted["payload"] = payload
+    return adjusted
 
 
 def recover_interrupted_training_jobs(
@@ -479,6 +521,52 @@ def run_training_job(
         if not extract_audio:
             result["reason"] = "audio_extraction_deferred"
         return {"status": status, "score": float((stored if extract_audio else usable) if usable else 0), "result": result}
+    if job_type == "build_stt1_whisper_adapter":
+        if not rows:
+            return {"status": "skipped", "score": None, "result": {"reason": "missing_truth_rows"}}
+        job_payload = dict(job.get("payload") or {})
+        extract_audio = bool(job_payload.get("extract_audio"))
+        get_logger().log(
+            f"🧠 [LoRA 학습] {job_label}: STT1 Whisper adapter"
+            f"{' + WAV 클립' if extract_audio else ''} 준비 중"
+        )
+        result = save_stt1_whisper_adapter_training_plan(
+            store_dir=store_dir,
+            truth_table_path=paths["truth_table"],
+            voice_bridge_path=paths["voice_lora_bridge"],
+            multimodal_context_path=paths["multimodal_lora_context"],
+            dataset_path=paths["stt1_whisper_adapter_dataset"],
+            dataset_manifest_path=paths["stt1_whisper_adapter_dataset_manifest"],
+            plan_path=paths["stt1_whisper_adapter_training_plan"],
+            runtime_manifest_path=paths["stt1_whisper_adapter_runtime_manifest"],
+            output_dir=paths["trained_adapters"] / "personal_stt1_whisper_adapter",
+            extract_audio=extract_audio,
+            progress_callback=progress_callback if extract_audio else None,
+            cancel_callback=cancel_callback,
+        )
+        if bool(result.get("cancelled")):
+            return {"status": "waiting", "score": None, "result": {"reason": "cancelled", **result}}
+        usable = int(result.get("usable_rows", 0) or 0)
+        ready = int(result.get("audio_ready_items", 0) or 0)
+        errors = int(result.get("extraction_errors", 0) or 0)
+        skipped = int(result.get("extraction_skipped", 0) or 0)
+        status = "complete"
+        reason = ""
+        if extract_audio and usable > 0 and ready < usable and (errors > 0 or skipped > 0):
+            status = "failed" if ready == 0 else "partial"
+            reason = (
+                f"stt1_adapter_audio_incomplete: ready {ready}/{usable}, "
+                f"errors {errors}, skipped {skipped}"
+            )
+        elif not extract_audio:
+            reason = "audio_extraction_deferred"
+        elif bool(result.get("runtime_ready")):
+            reason = f"runtime_ready:{str(result.get('runtime_model') or '').strip()}"
+        return {
+            "status": status,
+            "score": float(ready if extract_audio else usable),
+            "result": {**result, "reason": reason},
+        }
     if job_type == "build_retrieval_index":
         job_payload = dict(job.get("payload") or {})
         force = bool(job_payload.get("force", True))
@@ -541,6 +629,8 @@ def run_training_queue_once(
     target = next((item for item in jobs if str(item.get("status") or "") == "waiting"), None)
     if target is None:
         return {"processed": False, "reason": "no_pending_job"}
+    if low_resource:
+        target = _low_resource_job_copy(target)
 
     job_id = str(target.get("job_id") or "")
     job_type = str(target.get("job_type") or "")
@@ -593,21 +683,39 @@ def run_training_queue_once(
         except Exception:
             pass
 
-    voice_progress_last_logged = {"bucket": -1}
+    progress_buckets: dict[str, int] = {}
+    progress_save_times: dict[str, float] = {}
 
     def save_progress(update: dict[str, Any]) -> None:
         processed = int(update.get("processed", 0) or 0)
         total = int(update.get("total", 0) or 0)
         if total <= 0:
             return
+        progress_kind = str(update.get("kind") or "voice_lora_audio").strip() or "voice_lora_audio"
+        progress_stage = str(update.get("stage") or "voice_clip_extraction").strip() or "voice_clip_extraction"
+        progress_label = "STT1 음성 클립" if progress_kind == "stt1_whisper_audio" else "목소리 클립"
         progress = 0.1 + min(0.85, max(0.0, processed / total) * 0.85)
         message = (
-            f"voice clip extraction {processed}/{total} "
+            f"{progress_label} {processed}/{total} "
             f"(new {int(update.get('extracted', 0) or 0)}, "
             f"ready {int(update.get('already_ready', 0) or 0)}, "
             f"skipped {int(update.get('skipped', 0) or 0)}, "
             f"errors {int(update.get('errors', 0) or 0)})"
         )
+        pct = int(min(100, max(0, round((processed / total) * 100))))
+        bucket_step = LOW_RESOURCE_PROGRESS_BUCKET_STEP if low_resource else MANUAL_PROGRESS_BUCKET_STEP
+        bucket = 100 if processed >= total else (pct // max(1, bucket_step)) * max(1, bucket_step)
+        bucket_key = f"{progress_kind}:{job_id}"
+        previous_bucket = int(progress_buckets.get(bucket_key, -1))
+        bucket_changed = bucket != previous_bucket
+        now_mono = time.monotonic()
+        last_save_at = float(progress_save_times.get(bucket_key, 0.0) or 0.0)
+        save_due = (now_mono - last_save_at) >= LOW_RESOURCE_PROGRESS_SAVE_INTERVAL_SEC
+        if low_resource and not bucket_changed and not save_due and processed < total:
+            return
+        progress_save_times[bucket_key] = now_mono
+        if bucket_changed:
+            progress_buckets[bucket_key] = bucket
         progress_payload = load_training_queue(store_dir)
         current_job = _job_from_payload(progress_payload, job_id) or target
         progress_payload = _update_job(
@@ -618,7 +726,7 @@ def run_training_queue_once(
             last_error=message,
             payload=_checkpoint_payload(
                 current_job,
-                "voice_clip_extraction",
+                progress_stage,
                 processed=processed,
                 total=total,
                 extracted=int(update.get("extracted", 0) or 0),
@@ -629,24 +737,29 @@ def run_training_queue_once(
             ),
         )
         _save_queue_payload(progress_payload, store_dir)
-        pct = int(min(100, max(0, round((processed / total) * 100))))
-        bucket = 100 if processed >= total else (pct // 10) * 10
-        if bucket >= 0 and bucket != int(voice_progress_last_logged.get("bucket", -1)):
-            voice_progress_last_logged["bucket"] = bucket
+        if bucket_changed:
             get_logger().log(
-                "🧠 [LoRA 학습] 진행: 목소리 클립 "
+                f"🧠 [LoRA 학습] 진행: {progress_label} "
                 f"{processed}/{total} ({pct}%) · 새 {int(update.get('extracted', 0) or 0)} · "
                 f"준비됨 {int(update.get('already_ready', 0) or 0)} · 건너뜀 {int(update.get('skipped', 0) or 0)} · "
                 f"오류 {int(update.get('errors', 0) or 0)}"
             )
 
     try:
-        outcome = run_training_job(
-            target,
-            store_dir=store_dir,
-            progress_callback=save_progress,
-            cancel_callback=cancel_callback,
-        )
+        if low_resource and job_type == "build_retrieval_index" and not _lora_index_refresh_due(store_dir):
+            outcome = {
+                "status": "skipped",
+                "score": None,
+                "result": {"reason": "low_resource_index_cooldown"},
+            }
+            get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 생략: 저전력 쿨다운")
+        else:
+            outcome = run_training_job(
+                target,
+                store_dir=store_dir,
+                progress_callback=save_progress,
+                cancel_callback=cancel_callback,
+            )
         payload = load_training_queue(store_dir)
         outcome_status = str(outcome.get("status") or "complete")
         outcome_reason = str((outcome.get("result") or {}).get("reason") or "")
@@ -679,15 +792,18 @@ def run_training_queue_once(
                 appended_counts["setting_trials"] = int(result_payload.get("trial_count", 0) or 0)
             elif job_type == "optimize_prompts":
                 appended_counts["prompt_trials"] = int(result_payload.get("trial_count", 0) or 0)
-            try:
-                prune_result = prune_low_value_personalization_data(
-                    store_dir=store_dir,
-                    trigger=f"training_job:{job_type}",
-                    appended_counts=appended_counts,
-                )
-                outcome["retention"] = prune_result
-            except Exception as prune_exc:
-                get_logger().log(f"⚠️ [개인화 학습] 낮은 점수 정리 실패: {prune_exc}")
+            if not low_resource:
+                try:
+                    prune_result = prune_low_value_personalization_data(
+                        store_dir=store_dir,
+                        trigger=f"training_job:{job_type}",
+                        appended_counts=appended_counts,
+                    )
+                    outcome["retention"] = prune_result
+                except Exception as prune_exc:
+                    get_logger().log(f"⚠️ [개인화 학습] 낮은 점수 정리 실패: {prune_exc}")
+            else:
+                outcome["retention"] = {"skipped": True, "reason": "low_resource_idle"}
             try:
                 if (not low_resource) or _lora_index_refresh_due(store_dir):
                     get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 중")
@@ -743,8 +859,8 @@ class PersonalizationIdleTrainer(QObject):
         super().__init__(owner)
         self.owner = owner
         self.store_dir = str(store_dir) if store_dir else None
-        self.idle_window_ms = 120_000
-        self.cooldown_ms = 120_000
+        self.idle_window_ms = LOW_RESOURCE_IDLE_WINDOW_MS
+        self.cooldown_ms = LOW_RESOURCE_COOLDOWN_MS
         self.last_user_activity_ms = QDateTime.currentMSecsSinceEpoch()
         self._worker_thread: threading.Thread | None = None
         self._worker_lock = threading.Lock()
@@ -757,7 +873,7 @@ class PersonalizationIdleTrainer(QObject):
         self._last_auto_learning_status_log = ""
         recover_interrupted_training_jobs(self.store_dir, reason="trainer_startup")
         self._poll_timer = QTimer(self)
-        self._poll_timer.setInterval(15_000)
+        self._poll_timer.setInterval(LOW_RESOURCE_POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._poll)
         self._poll_timer.start()
 

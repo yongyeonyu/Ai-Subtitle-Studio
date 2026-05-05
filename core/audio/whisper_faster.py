@@ -100,6 +100,15 @@ def run_whisper(
 def _convert_model_name(mlx_model: str) -> str:
     """mlx-community 모델명을 faster-whisper 호환 모델명으로 변환 (로컬 우선)"""
     requested_raw = (mlx_model or "").strip()
+    if requested_raw:
+        try:
+            explicit_path = Path(requested_raw).expanduser()
+        except Exception:
+            explicit_path = None
+        if explicit_path is not None and explicit_path.exists() and explicit_path.is_dir():
+            if any((explicit_path / name).exists() for name in ("model.bin", "model.safetensors", "config.json")):
+                get_logger().log(f"  📂 로컬 Whisper 모델 사용: {explicit_path}")
+                return str(explicit_path)
 
     conversions = {
         "mlx-community/whisper-large-v3-mlx": "large-v3",

@@ -319,7 +319,8 @@ class EditorActionsMixin:
         except Exception as e:
             get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {e}")
         try:
-            self._auto_export_saved_subtitle_videos()
+            if self._should_auto_export_after_editor_save():
+                self._schedule_auto_export_saved_subtitle_videos()
         except Exception as e:
             get_logger().log(f"⚠️ 자막영상 자동 출력 실패: {e}")
         self._remember_saved_project_file()
@@ -473,8 +474,64 @@ class EditorActionsMixin:
         self._last_saved_srt_outputs = saved_outputs
         return bool(saved_count or combined_saved)
 
-    def _auto_export_saved_subtitle_videos(self):
+    def _should_auto_export_after_editor_save(self) -> bool:
+        """Manual editor saves should stay lightweight; queue/cloud completion renders elsewhere."""
+        try:
+            main_w = self.window()
+        except Exception:
+            return False
+        return bool(
+            getattr(main_w, "_is_auto_pipeline", False)
+            or getattr(main_w, "_auto_processing_active", False)
+        )
+
+    def _schedule_auto_export_saved_subtitle_videos(self, *, delay_ms: int = 1500):
         outputs = list(getattr(self, "_last_saved_srt_outputs", []) or [])
+        if not outputs:
+            return
+        generation = int(getattr(self, "_auto_export_video_generation", 0) or 0) + 1
+        self._auto_export_video_generation = generation
+        self._auto_export_video_outputs = outputs
+        try:
+            from PyQt6.QtCore import QTimer
+
+            QTimer.singleShot(max(0, int(delay_ms)), lambda gen=generation: self._run_scheduled_auto_export(gen))
+        except Exception:
+            self._run_scheduled_auto_export(generation)
+
+    def _run_scheduled_auto_export(self, generation: int):
+        if int(generation or 0) != int(getattr(self, "_auto_export_video_generation", 0) or 0):
+            return
+        if bool(getattr(self, "_auto_export_video_running", False)):
+            return
+        try:
+            main_w = self.window()
+            if hasattr(main_w, "_is_editor_actively_editing") and main_w._is_editor_actively_editing():
+                self._schedule_auto_export_saved_subtitle_videos(delay_ms=10_000)
+                return
+        except Exception:
+            pass
+
+        outputs = list(getattr(self, "_auto_export_video_outputs", []) or [])
+        if not outputs:
+            return
+        self._auto_export_video_running = True
+
+        def _worker():
+            try:
+                self._auto_export_saved_subtitle_videos(outputs=outputs)
+            finally:
+                self._auto_export_video_running = False
+
+        try:
+            import threading
+
+            threading.Thread(target=_worker, daemon=True, name="editor-subtitle-video-export").start()
+        except Exception:
+            _worker()
+
+    def _auto_export_saved_subtitle_videos(self, *, outputs: list | None = None):
+        outputs = list(outputs if outputs is not None else getattr(self, "_last_saved_srt_outputs", []) or [])
         if not outputs:
             return
         try:

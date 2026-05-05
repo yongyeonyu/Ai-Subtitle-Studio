@@ -5,6 +5,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+from core.personalization.lora_runtime_policy import (
+    LORA_POLICY_OFF,
+    LORA_POLICY_STT1_MINIMAL,
+    lora_policy_mode_for_quality,
+    lora_quality_key_from_settings,
+)
 from core.personalization.lora_storage import load_best_settings, load_learned_rules
 from core.personalization.lora_vector_retriever import retrieve_lora_context
 from core.runtime import config
@@ -18,6 +24,8 @@ LEGACY_CORRECTION_PATH = Path(getattr(config, "CORRECTIONS_FILE", Path(config.DA
 
 def runtime_lora_enabled(settings: dict[str, Any] | None) -> bool:
     settings = settings or {}
+    if lora_policy_mode_for_quality(lora_quality_key_from_settings(settings)) == LORA_POLICY_OFF:
+        return False
     return bool(
         settings.get("subtitle_quality_auto_correct_enabled")
         or settings.get("editor_lora_runtime_enabled")
@@ -174,15 +182,27 @@ def _retrieved_lora_context_lines(
     *,
     store_dir: str | Path | None = None,
 ) -> list[str]:
-    try:
-        result = retrieve_lora_context(
-            text,
-            settings=settings,
-            store_dir=store_dir,
-            limit=14,
-            per_kind=4,
-            rebuild_if_stale=False,
+    quality_key = lora_quality_key_from_settings(settings)
+    minimal = lora_policy_mode_for_quality(quality_key) == LORA_POLICY_STT1_MINIMAL
+    retrieval_kwargs: dict[str, Any] = {
+        "settings": settings,
+        "store_dir": store_dir,
+        "limit": 8 if minimal else 14,
+        "per_kind": 2 if minimal else 4,
+        "rebuild_if_stale": False,
+    }
+    if minimal:
+        retrieval_kwargs["kinds"] = (
+            "truth_table",
+            "text_lora_dataset",
+            "text_lora_corpus",
+            "excluded_parentheticals",
+            "learned_split_rules",
+            "learned_line_break_rules",
+            "multimodal_lora_context",
         )
+    try:
+        result = retrieve_lora_context(text, **retrieval_kwargs)
     except Exception:
         return []
     items = list(result.get("items") or [])

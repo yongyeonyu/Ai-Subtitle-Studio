@@ -125,6 +125,7 @@ class CoreBackendFast(CoreBackend):
 
         if hasattr(self.ui, '_sig_update_queue'):
             self.ui._sig_update_queue.emit(queue_index, "⏳ 오디오 추출 중", "", "", "")
+        self._ui_emit("_sig_editor_processing_stage", "⏳ 오디오 추출 중")
 
         res = self._validate_audio_extract_result(
             self.video_processor.extract_audio(target_file),
@@ -160,6 +161,7 @@ class CoreBackendFast(CoreBackend):
             if hasattr(self.ui, '_sig_update_queue'):
                 eta_str = str(expected_time) if expected_time > 0 else "예상불가"
                 self.ui._sig_update_queue.emit(queue_index, "🎯 자막 생성 중", eta_str, "", "")
+            self._ui_emit("_sig_editor_processing_stage", "🎯 자막 생성 중")
             process_start_time = time.time()
 
         except Exception:
@@ -173,15 +175,49 @@ class CoreBackendFast(CoreBackend):
 
         _SENTINEL = object()
         opt_queue = _queue.Queue()
+        preview_opt_queue = _queue.Queue()
+        preview_opt_sentinel = object()
         all_segments = []
+
+        def _emit_processed_preview(chunk_segs, label="STT"):
+            try:
+                from core.pipeline.stt_preview_optimizer import optimize_stt_preview_segments
+
+                preview = optimize_stt_preview_segments(
+                    chunk_segs,
+                    source_label=str(label or "STT"),
+                    vad_segments=vad_segs,
+                )
+                if preview:
+                    self._ui_emit("_sig_preview_stt_segments", preview)
+            except Exception as exc:
+                get_logger().log(f"  ⚠️ 자동 배치 STT 후보 자막 후처리 오류: {exc}")
+
+        def _preview_stt_segments(chunk_segs, label="STT"):
+            if not chunk_segs or not self._active:
+                return
+            preview_opt_queue.put(([dict(seg) for seg in chunk_segs or []], str(label or "STT")))
+
+        def do_preview_optimize():
+            while self._active:
+                item = preview_opt_queue.get()
+                if item is preview_opt_sentinel:
+                    break
+                chunk_segs, label = item
+                _emit_processed_preview(chunk_segs, label)
 
         def do_transcribe():
             try:
-                for chunk_segs, c_idx, t_total in self.video_processor.transcribe(chunk_dir, is_fast_mode=False):
+                for chunk_segs, c_idx, t_total in self.video_processor.transcribe(
+                    chunk_dir,
+                    is_fast_mode=False,
+                    preview_callback=_preview_stt_segments,
+                ):
                     if not self._active:
                         break
                     opt_queue.put((chunk_segs, c_idx, t_total))
             finally:
+                preview_opt_queue.put(preview_opt_sentinel)
                 opt_queue.put(_SENTINEL)
 
         def do_optimize():
@@ -206,6 +242,7 @@ class CoreBackendFast(CoreBackend):
                     def _llm_progress(payload):
                         self._ui_emit("_sig_set_llm_review_segment", dict(payload or {}))
 
+                    self._emit_processing_stage(queue_index, "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중")
                     opt = optimize_segments(chunk_segs, vad_segments=vad_segs, llm_progress_callback=_llm_progress)
                 except Exception as exc:
                     get_logger().log(f"  ⚠️ LLM 최적화 실패, STT 결과 유지: {exc}")
@@ -293,11 +330,14 @@ class CoreBackendFast(CoreBackend):
             if hasattr(self.ui, '_sig_update_status'):
                 self.ui._sig_update_status.emit(last_t_total, last_t_total)
 
+        t0 = threading.Thread(target=do_preview_optimize, daemon=True, name="quality-batch-stt-preview")
         t1 = threading.Thread(target=do_transcribe, daemon=True, name="quality-batch-transcriber")
         t2 = threading.Thread(target=do_optimize, daemon=True, name="quality-batch-optimizer")
+        t0.start()
         t1.start()
         t2.start()
         t1.join()
+        t0.join()
         t2.join()
 
         # ── 큐 즉시 업데이트 ──

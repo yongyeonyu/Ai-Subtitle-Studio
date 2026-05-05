@@ -188,15 +188,20 @@ def _bundle_counts_from_rows(
     setting_trials: list[dict[str, Any]],
     prompt_trials: list[dict[str, Any]],
     voice_bridge_rows: list[dict[str, Any]],
+    stt1_whisper_adapter_dataset_rows: list[dict[str, Any]],
     text_lora_dataset_rows: list[dict[str, Any]],
     text_lora_corpus_rows: list[dict[str, Any]],
     audio_preset_rows: list[dict[str, Any]],
     multimodal_context_rows: list[dict[str, Any]],
     retention_history: list[dict[str, Any]] | None = None,
     voice_training_plan: dict[str, Any] | None = None,
+    stt1_whisper_adapter_plan: dict[str, Any] | None = None,
+    stt1_whisper_runtime_manifest: dict[str, Any] | None = None,
     retrieval_index: dict[str, Any] | None = None,
 ) -> dict[str, int]:
     voice_training_plan = dict(voice_training_plan or {})
+    stt1_whisper_adapter_plan = dict(stt1_whisper_adapter_plan or {})
+    stt1_whisper_runtime_manifest = dict(stt1_whisper_runtime_manifest or {})
     retrieval_index = dict(retrieval_index or {})
     return {
         "truth_table_rows": len(truth_rows),
@@ -207,6 +212,12 @@ def _bundle_counts_from_rows(
         "voice_lora_bridge_rows": len(voice_bridge_rows),
         "voice_lora_training_items": len(list(voice_training_plan.get("items") or [])),
         "voice_lora_stored_audio_items": count_ready_voice_audio_items(voice_training_plan),
+        "stt1_whisper_adapter_dataset_rows": len(stt1_whisper_adapter_dataset_rows),
+        "stt1_whisper_adapter_training_items": len(list(stt1_whisper_adapter_plan.get("items") or [])),
+        "stt1_whisper_adapter_audio_items": sum(
+            1 for item in list(stt1_whisper_adapter_plan.get("items") or []) if bool((item or {}).get("audio_ready"))
+        ),
+        "stt1_whisper_adapter_runtime_ready": 1 if bool(stt1_whisper_runtime_manifest.get("runtime_ready")) else 0,
         "text_lora_dataset_rows": len(text_lora_dataset_rows),
         "text_lora_corpus_rows": len(text_lora_corpus_rows),
         "audio_preset_lora_rows": len(audio_preset_rows),
@@ -218,6 +229,7 @@ def _bundle_counts_from_rows(
             + len(setting_trials)
             + len(prompt_trials)
             + len(voice_bridge_rows)
+            + len(stt1_whisper_adapter_dataset_rows)
             + len(text_lora_dataset_rows)
             + len(text_lora_corpus_rows)
             + len(audio_preset_rows)
@@ -234,11 +246,14 @@ def _bundle_counts_from_cache(paths: dict[str, Path]) -> dict[str, int]:
         prompt_trials=read_jsonl(paths["prompt_trials"]),
         retention_history=read_jsonl(paths["retention_history"]),
         voice_bridge_rows=read_jsonl(paths["voice_lora_bridge"]),
+        stt1_whisper_adapter_dataset_rows=read_jsonl(paths["stt1_whisper_adapter_dataset"]),
         text_lora_dataset_rows=read_jsonl(paths["text_lora_dataset"]),
         text_lora_corpus_rows=read_jsonl(paths["text_lora_corpus"]),
         audio_preset_rows=read_jsonl(paths["audio_preset_lora"]),
         multimodal_context_rows=read_jsonl(paths["multimodal_lora_context"]),
         voice_training_plan=read_json(paths["voice_lora_training_plan"], {}),
+        stt1_whisper_adapter_plan=read_json(paths["stt1_whisper_adapter_training_plan"], {}),
+        stt1_whisper_runtime_manifest=read_json(paths["stt1_whisper_adapter_runtime_manifest"], {}),
         retrieval_index=read_json(paths["lora_retrieval_index"], {}),
     )
 
@@ -246,6 +261,8 @@ def _bundle_counts_from_cache(paths: dict[str, Path]) -> dict[str, int]:
 def _build_unified_lora_data_bundle(paths: dict[str, Path]) -> dict[str, Any]:
     jsonl_sections = {key: read_jsonl(paths[key]) for key in BUNDLE_JSONL_SECTION_KEYS}
     voice_training_plan = read_json(paths["voice_lora_training_plan"], {})
+    stt1_whisper_adapter_plan = read_json(paths["stt1_whisper_adapter_training_plan"], {})
+    stt1_whisper_runtime_manifest = read_json(paths["stt1_whisper_adapter_runtime_manifest"], {})
     retrieval_index = read_json(paths["lora_retrieval_index"], {})
     records = [
         {"kind": kind, "record": row}
@@ -255,6 +272,7 @@ def _build_unified_lora_data_bundle(paths: dict[str, Path]) -> dict[str, Any]:
             "setting_trials",
             "prompt_trials",
             "voice_lora_bridge",
+            "stt1_whisper_adapter_dataset",
             "text_lora_dataset",
             "text_lora_corpus",
             "audio_preset_lora",
@@ -274,6 +292,9 @@ def _build_unified_lora_data_bundle(paths: dict[str, Path]) -> dict[str, Any]:
         "voice_lora_profile_manifest": read_json(paths["voice_lora_profile_manifest"], {}),
         "voice_lora_training_plan": voice_training_plan,
         "voice_lora_dataset_manifest": read_json(paths["voice_lora_dataset_manifest"], {}),
+        "stt1_whisper_adapter_dataset_manifest": read_json(paths["stt1_whisper_adapter_dataset_manifest"], {}),
+        "stt1_whisper_adapter_training_plan": stt1_whisper_adapter_plan,
+        "stt1_whisper_adapter_runtime_manifest": stt1_whisper_runtime_manifest,
         "text_lora_manifest": read_json(paths["text_lora_manifest"], {}),
         "text_lora_corpus_manifest": read_json(paths["text_lora_corpus_manifest"], {}),
         "text_lora_training_plan": read_json(paths["text_lora_training_plan"], {}),
@@ -298,11 +319,14 @@ def _build_unified_lora_data_bundle(paths: dict[str, Path]) -> dict[str, Any]:
             prompt_trials=jsonl_sections["prompt_trials"],
             retention_history=jsonl_sections["retention_history"],
             voice_bridge_rows=jsonl_sections["voice_lora_bridge"],
+            stt1_whisper_adapter_dataset_rows=jsonl_sections["stt1_whisper_adapter_dataset"],
             text_lora_dataset_rows=jsonl_sections["text_lora_dataset"],
             text_lora_corpus_rows=jsonl_sections["text_lora_corpus"],
             audio_preset_rows=jsonl_sections["audio_preset_lora"],
             multimodal_context_rows=jsonl_sections["multimodal_lora_context"],
             voice_training_plan=voice_training_plan,
+            stt1_whisper_adapter_plan=stt1_whisper_adapter_plan,
+            stt1_whisper_runtime_manifest=stt1_whisper_runtime_manifest,
             retrieval_index=retrieval_index,
         ),
         "sections": sections,
@@ -509,11 +533,14 @@ def initialize_lora_personalization_store(store_dir: str | Path | None = None) -
 def refresh_lora_personalization_manifest(store_dir: str | Path | None = None) -> dict[str, Any]:
     paths = store_paths(store_dir)
     voice_training_plan = read_json(paths["voice_lora_training_plan"], {})
+    stt1_whisper_adapter_plan = read_json(paths["stt1_whisper_adapter_training_plan"], {})
+    stt1_whisper_runtime_manifest = read_json(paths["stt1_whisper_adapter_runtime_manifest"], {})
     counts = {
         "truth_table_rows": len(read_jsonl(paths["truth_table"])),
         "excluded_parenthetical_rows": len(read_jsonl(paths["excluded_parentheticals"])),
         "setting_trial_rows": len(read_jsonl(paths["setting_trials"])),
         "prompt_trial_rows": len(read_jsonl(paths["prompt_trials"])),
+        "stt1_whisper_adapter_dataset_rows": len(read_jsonl(paths["stt1_whisper_adapter_dataset"])),
         "text_lora_dataset_rows": len(read_jsonl(paths["text_lora_dataset"])),
         "text_lora_corpus_rows": len(read_jsonl(paths["text_lora_corpus"])),
         "audio_preset_lora_rows": len(read_jsonl(paths["audio_preset_lora"])),
@@ -531,6 +558,11 @@ def refresh_lora_personalization_manifest(store_dir: str | Path | None = None) -
         "voice_lora_profile_count": len(list((read_json(paths["voice_lora_profile_manifest"], {}) or {}).get("speaker_profiles") or [])),
         "voice_lora_training_items": len(list((voice_training_plan or {}).get("items") or [])),
         "voice_lora_stored_audio_items": count_ready_voice_audio_items(voice_training_plan),
+        "stt1_whisper_adapter_training_items": len(list((stt1_whisper_adapter_plan or {}).get("items") or [])),
+        "stt1_whisper_adapter_audio_items": sum(
+            1 for item in list((stt1_whisper_adapter_plan or {}).get("items") or []) if bool((item or {}).get("audio_ready"))
+        ),
+        "stt1_whisper_adapter_runtime_ready": 1 if bool((stt1_whisper_runtime_manifest or {}).get("runtime_ready")) else 0,
     }
     retrieval_index = read_json(paths["lora_retrieval_index"], {})
     counts.update(
@@ -552,6 +584,7 @@ def refresh_lora_personalization_manifest(store_dir: str | Path | None = None) -
                 + counts.get("setting_trial_rows", 0)
                 + counts.get("prompt_trial_rows", 0)
                 + counts.get("voice_lora_bridge_rows", 0)
+                + counts.get("stt1_whisper_adapter_dataset_rows", 0)
                 + counts.get("text_lora_dataset_rows", 0)
                 + counts.get("text_lora_corpus_rows", 0)
                 + counts.get("audio_preset_lora_rows", 0)

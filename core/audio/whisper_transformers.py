@@ -11,6 +11,7 @@ import os  # noqa: F401 - tests patch module os.environ shared by subprocess_env
 import subprocess
 import sys
 import threading
+from pathlib import Path
 
 from core.llm.secure_keys import get_api_key
 from core.platform_compat import subprocess_env
@@ -24,7 +25,22 @@ TRANSFORMERS_KOREAN_WHISPER_MODELS = {
 
 
 def is_transformers_whisper_model(model: str) -> bool:
-    return str(model or "").strip() in TRANSFORMERS_KOREAN_WHISPER_MODELS
+    value = str(model or "").strip()
+    if value in TRANSFORMERS_KOREAN_WHISPER_MODELS:
+        return True
+    try:
+        target = Path(value).expanduser()
+    except Exception:
+        return False
+    if not target.exists() or not target.is_dir():
+        return False
+    has_config = (target / "config.json").exists()
+    has_processor = any(
+        (target / name).exists()
+        for name in ("preprocessor_config.json", "tokenizer_config.json", "generation_config.json", "tokenizer.json")
+    )
+    has_adapter_only = (target / "adapter_config.json").exists()
+    return bool(has_config and has_processor and not has_adapter_only)
 
 
 def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple: str = "(0.0,)", log_label: str = "STT"):

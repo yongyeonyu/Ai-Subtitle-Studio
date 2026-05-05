@@ -130,6 +130,13 @@ class EditorMulticlipOpsMixin:
             pass
         if hasattr(self, "_segment_queue"):
             self._segment_queue.clear()
+        for attr, value in (
+            ("_live_editor_preview_queue", []),
+            ("_live_editor_preview_segments", []),
+            ("_live_editor_preview_keys", set()),
+        ):
+            if hasattr(self, attr):
+                setattr(self, attr, value.copy() if hasattr(value, "copy") else value)
         self._is_initial_load = (True if segs else False) and not bool(preserve_view)
         prev_suspend_autoseek = bool(getattr(self, "_suspend_append_segments_autoseek", False))
         if preserve_view:

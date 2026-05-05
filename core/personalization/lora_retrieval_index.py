@@ -149,6 +149,17 @@ def _payload_for_kind(kind: str, row: dict[str, Any]) -> dict[str, Any]:
                 "clip_path": json_preview(row.get("clip_path")),
             }
         )
+    elif kind == "stt1_whisper_adapter_dataset":
+        payload.update(
+            {
+                "transcript_text": strip_editorial_brackets(row.get("transcript_text")),
+                "weak_input_text": strip_editorial_brackets(row.get("weak_input_text")),
+                "speaker": json_preview(row.get("speaker")),
+                "classification_summary": json_preview(row.get("classification_summary") or {}),
+                "candidate_context_summary": json_preview(row.get("candidate_context_summary") or {}),
+                "training_tags": json_preview(row.get("training_tags") or []),
+            }
+        )
     elif kind.startswith("learned_"):
         payload.update(
             {
@@ -167,6 +178,8 @@ def _payload_for_kind(kind: str, row: dict[str, Any]) -> dict[str, Any]:
 def _quality_for_doc(kind: str, row: dict[str, Any]) -> float:
     if kind in {"truth_table", "text_lora_corpus"}:
         return 0.82
+    if kind == "stt1_whisper_adapter_dataset":
+        return max(0.45, min(0.95, safe_float(row.get("train_weight"), 0.78) / 1.25))
     if kind == "text_lora_dataset":
         return 0.74
     if kind == "multimodal_lora_context":
@@ -288,6 +301,21 @@ def _document_text(kind: str, row: dict[str, Any]) -> str:
                 ]
             )
         )[:LORA_RETRIEVAL_MAX_TEXT_CHARS]
+    if kind == "stt1_whisper_adapter_dataset":
+        return norm_text(
+            " ".join(
+                [
+                    *common,
+                    "stt1 whisper adapter training runtime personalization",
+                    strip_editorial_brackets(row.get("transcript_text")),
+                    strip_editorial_brackets(row.get("weak_input_text")),
+                    str(row.get("speaker") or ""),
+                    *flatten_search_text(row.get("classification_summary") or {}),
+                    *flatten_search_text(row.get("candidate_context_summary") or {}),
+                    *flatten_search_text(row.get("training_tags") or []),
+                ]
+            )
+        )[:LORA_RETRIEVAL_MAX_TEXT_CHARS]
     return norm_text(" ".join([*common, *flatten_search_text(row)]))[:LORA_RETRIEVAL_MAX_TEXT_CHARS]
 
 
@@ -390,6 +418,9 @@ def _iter_manifest_plan_docs(paths: dict[str, Path]) -> list[dict[str, Any]]:
             "voice_lora_profile_manifest",
             "voice_lora_training_plan",
             "voice_lora_dataset_manifest",
+            "stt1_whisper_adapter_dataset_manifest",
+            "stt1_whisper_adapter_training_plan",
+            "stt1_whisper_adapter_runtime_manifest",
         )
     ):
         payload = read_json(paths[key], {})

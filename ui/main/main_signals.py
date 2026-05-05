@@ -103,11 +103,27 @@ class SignalHandlersMixin:
 
     def _do_set_llm_review_segment(self, payload):
         editor = getattr(self, "_editor_widget", None)
+        if editor is not None and hasattr(editor, "set_live_processing_stage"):
+            data = dict(payload or {})
+            if data.get("active"):
+                idx = int(data.get("idx", 0) or 0) + 1
+                total = max(1, int(data.get("total", 1) or 1))
+                sample = str(data.get("text", "") or "").strip().replace("\n", " ")
+                if len(sample) > 34:
+                    sample = sample[:34] + "..."
+                suffix = f" · {sample}" if sample else ""
+                editor.set_live_processing_stage(f"자막 LLM 검수 중 ({idx}/{total}){suffix}")
         timeline = getattr(editor, "timeline", None) if editor is not None else None
         canvas = getattr(timeline, "canvas", None) if timeline is not None else None
         setter = getattr(canvas, "set_llm_review_segment", None) if canvas is not None else None
         if callable(setter):
             setter(dict(payload or {}))
+
+    def _do_editor_processing_stage(self, text):
+        editor = getattr(self, "_editor_widget", None)
+        setter = getattr(editor, "set_live_processing_stage", None) if editor is not None else None
+        if callable(setter):
+            setter(str(text or ""))
 
     def _do_clear_editor(self):
         if hasattr(self, "_clear_editor_for_full_restart"):
@@ -124,6 +140,13 @@ class SignalHandlersMixin:
         try:
             if hasattr(ed, '_segment_queue'):
                 ed._segment_queue.clear()
+            for attr, value in (
+                ("_live_editor_preview_queue", []),
+                ("_live_editor_preview_segments", []),
+                ("_live_editor_preview_keys", set()),
+            ):
+                if hasattr(ed, attr):
+                    setattr(ed, attr, value.copy() if hasattr(value, "copy") else value)
         except Exception:
             pass
         try:

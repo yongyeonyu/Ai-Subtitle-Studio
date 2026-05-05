@@ -42,8 +42,8 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                 self.sm.is_dirty = True
         else:
             self._is_dirty = True
-        if started_editing and hasattr(self, "_request_editor_mode_runtime_release"):
-            self._request_editor_mode_runtime_release()
+        if started_editing and hasattr(self, "_note_editor_foreground_activity"):
+            self._note_editor_foreground_activity()
         try:
             main_w = self.window()
             if hasattr(main_w, "_refresh_saved_status_label"):
@@ -51,20 +51,20 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         except Exception:
             pass
 
-    def _request_editor_mode_runtime_release(self):
+    def _note_editor_foreground_activity(self):
         try:
-            import time
-
-            now = time.monotonic()
-            if now < float(getattr(self, "_next_editor_runtime_release_at", 0.0) or 0.0):
-                return
-            self._next_editor_runtime_release_at = now + 3.0
             main_w = self.window()
-            release = getattr(main_w, "_release_ai_models_for_editor_mode", None)
-            if callable(release):
-                QTimer.singleShot(0, release)
+            reset_idle = getattr(main_w, "_reset_post_completion_idle_timer", None)
+            if callable(reset_idle):
+                reset_idle()
+            pause_lora = getattr(main_w, "_pause_personalization_for_foreground_activity", None)
+            if callable(pause_lora):
+                pause_lora("subtitle_editor_edit", hold_ms=300_000)
         except Exception:
             pass
+
+    def _request_editor_mode_runtime_release(self):
+        self._note_editor_foreground_activity()
 
     def _rebuild_subtitle_memory_cache(self, segments: list[dict] | None = None) -> dict:
         segs = list(segments if segments is not None else self._get_current_segments())
@@ -187,6 +187,271 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         existing_preview = self._drop_overlapping_preview(existing_preview, preview, same_source_only=True)
         self._live_stt_preview_segments = existing_preview + preview
         self._redraw_timeline_with_live_preview()
+        self._queue_live_editor_preview_segments(preview)
+
+    def _live_editor_preview_key(self, seg: dict) -> tuple:
+        try:
+            start = round(float(seg.get("start", 0.0) or 0.0), 2)
+            end = round(float(seg.get("end", start) or start), 2)
+        except Exception:
+            start = end = 0.0
+        return (
+            str(seg.get("stt_preview_source") or seg.get("stt_source") or "STT1").strip().upper(),
+            start,
+            end,
+            str(seg.get("text", "") or "").strip(),
+        )
+
+    def _queue_live_editor_preview_segments(self, preview: list[dict]) -> None:
+        if not hasattr(self, "text_edit") or not preview:
+            return
+        queued = getattr(self, "_live_editor_preview_queue", None)
+        if queued is None:
+            self._live_editor_preview_queue = []
+            queued = self._live_editor_preview_queue
+        seen = getattr(self, "_live_editor_preview_keys", None)
+        if seen is None:
+            self._live_editor_preview_keys = set()
+            seen = self._live_editor_preview_keys
+
+        for seg in preview:
+            key = self._live_editor_preview_key(seg)
+            if key in seen:
+                continue
+            source = key[0]
+            if source not in {"STT1", "STT"} and self._has_live_editor_preview_overlap(seg, prefer_primary=True):
+                continue
+            seen.add(key)
+            queued.append(dict(seg))
+
+        if not queued:
+            return
+        timer = getattr(self, "_live_editor_preview_timer", None)
+        if timer is not None:
+            try:
+                if not timer.isActive():
+                    timer.start(320)
+                return
+            except Exception:
+                pass
+        self._flush_live_editor_preview_queue()
+
+    def _has_live_editor_preview_overlap(self, seg: dict, *, prefer_primary: bool = False) -> bool:
+        try:
+            start = float(seg.get("start", 0.0) or 0.0)
+            end = float(seg.get("end", start) or start)
+        except Exception:
+            return False
+        source = str(seg.get("stt_preview_source") or seg.get("stt_source") or "STT1").strip().upper()
+        for existing in list(getattr(self, "_live_editor_preview_segments", []) or []):
+            try:
+                e_start = float(existing.get("start", 0.0) or 0.0)
+                e_end = float(existing.get("end", e_start) or e_start)
+            except Exception:
+                continue
+            if not (start < e_end + 0.05 and end > e_start - 0.05):
+                continue
+            e_source = str(existing.get("stt_preview_source") or existing.get("stt_source") or "STT1").strip().upper()
+            if not prefer_primary or e_source in {"STT1", "STT"} or e_source == source:
+                return True
+        return False
+
+    def _flush_live_editor_preview_queue(self) -> None:
+        if not hasattr(self, "text_edit"):
+            return
+        queue = list(getattr(self, "_live_editor_preview_queue", []) or [])
+        self._live_editor_preview_queue = []
+        if not queue:
+            return
+
+        drafts = []
+        for seg in sorted(queue, key=lambda row: (float(row.get("start", 0.0) or 0.0), float(row.get("end", 0.0) or 0.0))):
+            if self._has_live_editor_preview_overlap(seg, prefer_primary=True):
+                continue
+            text = str(seg.get("text", "") or "").replace("\u2028", "\n").strip()
+            if not text:
+                continue
+            draft = dict(seg)
+            draft["text"] = text
+            drafts.append(draft)
+        if not drafts:
+            return
+
+        doc = self.text_edit.document()
+        if not hasattr(self, "_live_editor_preview_segments"):
+            self._live_editor_preview_segments = []
+        prev_inline = bool(getattr(self, "_inline_updating", False))
+        prev_sync = bool(getattr(self, "_sync_lock", False))
+        self._inline_updating = True
+        self._sync_lock = True
+        doc.blockSignals(True)
+        try:
+            cursor = QTextCursor(doc)
+            cursor.beginEditBlock()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            if doc.blockCount() > 0 and doc.lastBlock().text().strip():
+                cursor.insertText("\n")
+            spk_id = str(getattr(self, "settings", {}).get("spk1_id", "00") if hasattr(self, "settings") else "00")
+            for index, seg in enumerate(drafts):
+                if index > 0:
+                    cursor.insertText("\n")
+                text = self._clean_live_editor_preview_text(seg.get("text", ""))
+                if not text:
+                    continue
+                try:
+                    start_sec = self._frame_time(max(0.0, float(seg.get("start", 0.0) or 0.0)))
+                except Exception:
+                    start_sec = 0.0
+                source = str(seg.get("stt_preview_source") or seg.get("stt_source") or "STT1").strip().upper()
+                cursor.insertText(text.replace("\n", "\u2028"))
+                cursor.block().setUserData(
+                    SubtitleBlockData(
+                        spk_id,
+                        start_sec,
+                        stt_pending=True,
+                        live_preview=True,
+                        live_preview_source=source,
+                        live_preview_stage=f"{source} 실시간 드래프트",
+                    )
+                )
+                stored = dict(seg)
+                stored["start"] = start_sec
+                stored["stt_preview_source"] = source
+                self._live_editor_preview_segments.append(stored)
+            cursor.endEditBlock()
+        finally:
+            doc.blockSignals(False)
+            self._sync_lock = prev_sync
+            self._inline_updating = prev_inline
+
+        try:
+            self.text_edit.update_margins()
+        except Exception:
+            pass
+        try:
+            if hasattr(self.text_edit, "timestampArea"):
+                self.text_edit.timestampArea.update()
+        except Exception:
+            pass
+        self._set_live_preview_status(drafts)
+
+    def _clean_live_editor_preview_text(self, text: str) -> str:
+        text = str(text or "")
+        for attr in (
+            "_JUNK_TS_RE",
+            "_JUNK_NO_BRACKET_3PART",
+            "_JUNK_NO_BRACKET_3PART_END",
+            "_JUNK_START_RE",
+        ):
+            pattern = getattr(self, attr, None)
+            if pattern is not None and hasattr(pattern, "sub"):
+                text = pattern.sub("", text)
+        text = text.strip()
+        text = re.sub(r"<[^>]+>", "", text)
+        parts = [re.sub(r"[ \t\f\v]+", " ", part).strip() for part in text.replace("\r", "").split("\n")]
+        return "\n".join(part for part in parts if part)
+
+    def _set_live_preview_status(self, drafts: list[dict]) -> None:
+        if not drafts or not hasattr(self, "set_live_processing_stage"):
+            return
+        sources = sorted({
+            str(seg.get("stt_preview_source") or seg.get("stt_source") or "STT1").strip().upper()
+            for seg in drafts
+        })
+        label = "/".join(source for source in sources if source) or "STT"
+        self.set_live_processing_stage(f"{label} 실시간 자막 드래프트 표시 중 · {len(drafts)}개 추가")
+
+    def _remove_live_editor_preview_overlapping(self, final_segments: list[dict]) -> None:
+        if not hasattr(self, "text_edit") or not final_segments:
+            return
+        ranges = []
+        for seg in final_segments:
+            try:
+                start = float(seg.get("start", 0.0) or 0.0)
+                end = float(seg.get("end", start) or start)
+            except Exception:
+                continue
+            if end > start:
+                ranges.append((start, end))
+        if not ranges:
+            return
+        cover_start = min(start for start, _ in ranges)
+        cover_end = max(end for _, end in ranges)
+
+        def _covered(start: float, end: float) -> bool:
+            return end > cover_start - 0.12 and start < cover_end + 0.12
+
+        doc = self.text_edit.document()
+        to_remove = []
+        block = doc.begin()
+        while block.isValid():
+            data = block.userData()
+            if isinstance(data, SubtitleBlockData) and getattr(data, "live_preview", False):
+                try:
+                    start = float(getattr(data, "start_sec", 0.0) or 0.0)
+                except Exception:
+                    start = 0.0
+                end = start + 0.5
+                for preview in list(getattr(self, "_live_editor_preview_segments", []) or []):
+                    try:
+                        p_start = float(preview.get("start", 0.0) or 0.0)
+                    except Exception:
+                        continue
+                    if abs(p_start - start) <= 0.03:
+                        try:
+                            end = float(preview.get("end", end) or end)
+                        except Exception:
+                            pass
+                        break
+                if _covered(start, end):
+                    to_remove.append(block.blockNumber())
+            block = block.next()
+        if not to_remove:
+            return
+
+        prev_inline = bool(getattr(self, "_inline_updating", False))
+        prev_sync = bool(getattr(self, "_sync_lock", False))
+        self._inline_updating = True
+        self._sync_lock = True
+        doc.blockSignals(True)
+        try:
+            cursor = QTextCursor(doc)
+            cursor.beginEditBlock()
+            for line_num in sorted(to_remove, reverse=True):
+                block = doc.findBlockByNumber(line_num)
+                if not block.isValid():
+                    continue
+                cursor.setPosition(block.position())
+                cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+                if block.next().isValid():
+                    cursor.deleteChar()
+                elif block.previous().isValid():
+                    cursor.deletePreviousChar()
+            cursor.endEditBlock()
+        finally:
+            doc.blockSignals(False)
+            self._sync_lock = prev_sync
+            self._inline_updating = prev_inline
+
+        self._live_editor_preview_segments = [
+            dict(seg)
+            for seg in list(getattr(self, "_live_editor_preview_segments", []) or [])
+            if not _covered(float(seg.get("start", 0.0) or 0.0), float(seg.get("end", seg.get("start", 0.0)) or 0.0))
+        ]
+        self._live_editor_preview_keys = {
+            self._live_editor_preview_key(seg)
+            for seg in list(getattr(self, "_live_editor_preview_segments", []) or [])
+        }
+        try:
+            self.text_edit.update_margins()
+        except Exception:
+            pass
+        try:
+            if hasattr(self.text_edit, "timestampArea"):
+                self.text_edit.timestampArea.update()
+        except Exception:
+            pass
 
     def _drop_overlapping_preview(self, preview: list[dict], final_segments: list[dict], *, same_source_only: bool = False) -> list[dict]:
         if not preview or not final_segments:
@@ -744,6 +1009,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
 
         if not self._segment_queue:
             return
+        self._remove_live_editor_preview_overlapping(self._segment_queue)
 
         cont_thresh = float(self.settings.get("continuous_threshold", 2.0))
         push_rate = float(self.settings.get("gap_push_rate", 0.7))
@@ -985,6 +1251,10 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             
             # ✅ [#1 핵심 수정] 갭 블록도 포함 — 무음구간이 End Time 계산에 반영됩니다
             include_empty_stt = bool(getattr(data, 'stt_pending', False) or getattr(data, 'stt_mode', False))
+            if data is not None and getattr(data, "live_preview", False):
+                block = block.next()
+                line_idx += 1
+                continue
             if data is not None and (text or is_gap or include_empty_stt):
                 # ✅ 갭 블록은 절대 이전 세그먼트에 병합하지 않음 (갭↔자막 병합 방지)
                 if (not is_gap

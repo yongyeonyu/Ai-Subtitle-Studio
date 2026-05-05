@@ -76,6 +76,9 @@ class _Timeline:
         self.canvas.playhead_sec = float(sec)
         self.playhead_calls.append((float(sec), bool(preserve_center_lock)))
 
+    def center_to_sec(self, _sec, smooth=False):
+        return None
+
 
 class _Status:
     def text(self):
@@ -339,6 +342,38 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         stt_previews = [seg for seg in editor.timeline.updated[0] if seg.get("_live_stt_preview")]
         self.assertEqual(subtitle_drafts, [])
         self.assertEqual([seg["text"] for seg in stt_previews], ["드래프트"])
+
+    def test_live_stt_preview_is_visible_in_editor_without_saved_commit(self):
+        editor = _ActualSelectionEditor()
+        try:
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "실시간 드래프트", "stt_preview_source": "STT1"}
+            ])
+            editor._flush_live_editor_preview_queue()
+
+            self.assertIn("실시간 드래프트", editor.text_edit.toPlainText())
+            self.assertEqual([seg for seg in editor._get_current_segments() if not seg.get("is_gap")], [])
+        finally:
+            editor.text_edit.close()
+
+    def test_final_segment_replaces_overlapping_live_editor_preview(self):
+        editor = _ActualSelectionEditor()
+        try:
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "실시간 드래프트", "stt_preview_source": "STT1"}
+            ])
+            editor._flush_live_editor_preview_queue()
+
+            editor.append_segments([{"start": 1.0, "end": 2.0, "text": "최종 자막", "speaker": "00"}])
+            editor._flush_queue()
+
+            editor_text = editor.text_edit.toPlainText()
+            self.assertIn("최종 자막", editor_text)
+            self.assertNotIn("실시간 드래프트", editor_text)
+            saved = [seg for seg in editor._get_current_segments() if not seg.get("is_gap")]
+            self.assertEqual([seg["text"] for seg in saved], ["최종 자막"])
+        finally:
+            editor.text_edit.close()
 
     def test_final_segments_keep_live_preview_candidates_for_manual_selection(self):
         editor = _LivePreviewEditor()

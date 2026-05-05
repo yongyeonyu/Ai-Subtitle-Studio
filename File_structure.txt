@@ -1,9 +1,9 @@
 <!--
-Document-Version: 03.19.00
+Document-Version: 03.20.00
 Phase: PHASE3
 Last-Updated: 2026-05-05
 Updated-By: Codex
-Scope: Actual project filesystem map. `.git/`, `venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, and large runtime cache/output folders are intentionally not expanded.
+Scope: Actual project filesystem map. `.git/`, `venv/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.codex_work/`, and large runtime cache/output folders are intentionally not expanded.
 Role-Description-Rule: Tree entries are generated from actual paths; review notes are removed.
 -->
 ================================================================================
@@ -11,66 +11,98 @@ AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
 Last Updated: 2026-05-05
 Phase: PHASE3
-App Version: 03.19.00
+App Version: 03.20.00
 Structure Document: File_structure.txt
-Note: This file is an actual tree map and excludes cache-only Python bytecode folders.
+Note: This file is an actual tree map and excludes cache-only Python bytecode folders, virtualenvs, local Codex scratch files, secrets, and large runtime output/cache folders.
 ================================================================================
 
 ai_subtitle_studio/
-├── assets/
-│   └── icons/
-│       ├── ui/
-│       │   ├── ai.svg
-│       │   ├── auto.svg
-│       │   ├── cancel.svg
-│       │   ├── check.svg
-│       │   ├── clock.svg
-│       │   ├── cloud.svg
-│       │   ├── edit.svg
-│       │   ├── export.svg
-│       │   ├── file.svg
-│       │   ├── fit.svg
-│       │   ├── folder.svg
-│       │   ├── help.svg
-│       │   ├── home.svg
-│       │   ├── llm.svg
-│       │   ├── mic.svg
-│       │   ├── minus.svg
-│       │   ├── more.svg
-│       │   ├── nas.svg
-│       │   ├── next.svg
-│       │   ├── play.svg
-│       │   ├── plus.svg
-│       │   ├── power.svg
-│       │   ├── prev.svg
-│       │   ├── project.svg
-│       │   ├── redo.svg
-│       │   ├── refresh.svg
-│       │   ├── review.svg
-│       │   ├── roughcut.svg
-│       │   ├── save.svg
-│       │   ├── search.svg
-│       │   ├── settings.svg
-│       │   ├── shortform.svg
-│       │   ├── sliders.svg
-│       │   ├── speaker.svg
-│       │   ├── stop.svg
-│       │   ├── subtitle.svg
-│       │   ├── terminal.svg
-│       │   ├── timeline.svg
-│       │   ├── trash.svg
-│       │   ├── undo.svg
-│       │   └── video.svg
-│       ├── app_icon.svg
-│       └── README.md
-├── checkpoints/
-│   └── MossFormer2_SE_48K/
-│       ├── .gitattributes
-│       ├── last_best_checkpoint
-│       ├── last_best_checkpoint.pt
-│       └── README.md
-├── core/
-│   ├── audio/
+├── .gitignore
+├── ACTION_ITEMS.md
+├── AGENTS.md
+├── File_structure.txt
+├── README.md
+├── RELEASE_v02.02.00.md
+├── RELEASE_v02.03.00.md
+├── RELEASE_v02.04.00.md
+├── RELEASE_v02.06.00.md
+├── RELEASE_v02.07.00.md
+├── RELEASE_v03.00.00.md
+├── RELEASE_v03.03.00.md
+├── RELEASE_v03.04.00.md
+├── RELEASE_v03.05.00.md
+├── RELEASE_v03.06.00.md
+├── RELEASE_v03.07.00.md
+├── RELEASE_v03.08.00.md
+├── RELEASE_v03.09.00.md
+├── RELEASE_v03.10.00.md
+├── RELEASE_v03.11.00.md
+├── RELEASE_v03.12.00.md
+├── RELEASE_v03.13.00.md
+├── RELEASE_v03.14.00.md
+├── RELEASE_v03.15.00.md
+├── RELEASE_v03.16.00.md
+├── RELEASE_v03.17.00.md
+├── RELEASE_v03.18.00.md
+├── RELEASE_v03.19.00.md
+├── RELEASE_v03.20.00.md
+├── assets
+│   ├── icons
+│   │   ├── README.md
+│   │   ├── app_icon.svg
+│   │   ├── ui
+│   │   │   ├── ai.svg
+│   │   │   ├── auto.svg
+│   │   │   ├── cancel.svg
+│   │   │   ├── check.svg
+│   │   │   ├── clock.svg
+│   │   │   ├── cloud.svg
+│   │   │   ├── edit.svg
+│   │   │   ├── export.svg
+│   │   │   ├── file.svg
+│   │   │   ├── fit.svg
+│   │   │   ├── folder.svg
+│   │   │   ├── help.svg
+│   │   │   ├── home.svg
+│   │   │   ├── llm.svg
+│   │   │   ├── mic.svg
+│   │   │   ├── minus.svg
+│   │   │   ├── more.svg
+│   │   │   ├── nas.svg
+│   │   │   ├── next.svg
+│   │   │   ├── play.svg
+│   │   │   ├── plus.svg
+│   │   │   ├── power.svg
+│   │   │   ├── prev.svg
+│   │   │   ├── project.svg
+│   │   │   ├── redo.svg
+│   │   │   ├── refresh.svg
+│   │   │   ├── review.svg
+│   │   │   ├── roughcut.svg
+│   │   │   ├── save.svg
+│   │   │   ├── search.svg
+│   │   │   ├── settings.svg
+│   │   │   ├── shortform.svg
+│   │   │   ├── sliders.svg
+│   │   │   ├── speaker.svg
+│   │   │   ├── stop.svg
+│   │   │   ├── subtitle.svg
+│   │   │   ├── terminal.svg
+│   │   │   ├── timeline.svg
+│   │   │   ├── trash.svg
+│   │   │   ├── undo.svg
+│   │   │   ├── video.svg
+├── check_list.md
+├── checkpoints
+│   ├── MossFormer2_SE_48K
+│   │   ├── .gitattributes
+│   │   ├── README.md
+│   │   ├── last_best_checkpoint
+│   │   ├── last_best_checkpoint.pt
+├── core
+│   ├── __init__.py
+│   ├── accuracy_policy.py
+│   ├── audio
 │   │   ├── __init__.py
 │   │   ├── audio_preset_data.py
 │   │   ├── audio_presets.py
@@ -92,8 +124,18 @@ ai_subtitle_studio/
 │   │   ├── whisper_mlx.py
 │   │   ├── whisper_transformers.py
 │   │   ├── whisper_worker.py
-│   │   └── worker_threads.py
-│   ├── engine/
+│   │   ├── worker_threads.py
+│   ├── auto_tracker.py
+│   ├── backend_fast.py
+│   ├── cloud_sync.py
+│   ├── cut_boundary.py
+│   ├── cut_boundary_auto.py
+│   ├── cut_boundary_auto_profile.py
+│   ├── cut_boundary_auto_scan.py
+│   ├── cut_boundary_auto_utils.py
+│   ├── cut_boundary_auto_verify.py
+│   ├── cut_boundary_fps.py
+│   ├── engine
 │   │   ├── __init__.py
 │   │   ├── llm_correction_guard.py
 │   │   ├── srt_writer.py
@@ -101,15 +143,22 @@ ai_subtitle_studio/
 │   │   ├── subtitle_prompts.py
 │   │   ├── subtitle_settings.py
 │   │   ├── subtitle_timing.py
-│   │   └── word_resegmenter.py
-│   ├── llm/
+│   │   ├── word_resegmenter.py
+│   ├── frame_time.py
+│   ├── llm
 │   │   ├── __init__.py
 │   │   ├── gemini_provider.py
 │   │   ├── ollama_provider.py
 │   │   ├── openai_provider.py
 │   │   ├── provider_registry.py
-│   │   └── secure_keys.py
-│   ├── personalization/
+│   │   ├── secure_keys.py
+│   ├── media_info.py
+│   ├── media_queue_order.py
+│   ├── model_manager.py
+│   ├── notifier.py
+│   ├── path_manager.py
+│   ├── performance.py
+│   ├── personalization
 │   │   ├── ground_truth_import.py
 │   │   ├── idle_trainer.py
 │   │   ├── llm_review_exchange.py
@@ -122,6 +171,7 @@ ai_subtitle_studio/
 │   │   ├── lora_retrieval_scoring.py
 │   │   ├── lora_retrieval_utils.py
 │   │   ├── lora_rule_learning.py
+│   │   ├── lora_runtime_policy.py
 │   │   ├── lora_storage.py
 │   │   ├── lora_store_bundle.py
 │   │   ├── lora_store_common.py
@@ -130,9 +180,10 @@ ai_subtitle_studio/
 │   │   ├── lora_vector_retriever.py
 │   │   ├── runtime_lora_context.py
 │   │   ├── runtime_personalization.py
+│   │   ├── stt1_whisper_adapter_runner.py
 │   │   ├── text_lora_dataset.py
-│   │   └── text_lora_runner.py
-│   ├── pipeline/
+│   │   ├── text_lora_runner.py
+│   ├── pipeline
 │   │   ├── __init__.py
 │   │   ├── backend_core.py
 │   │   ├── cut_boundary_helpers.py
@@ -140,8 +191,10 @@ ai_subtitle_studio/
 │   │   ├── pipeline_helpers.py
 │   │   ├── single_pipeline.py
 │   │   ├── stt_preview_optimizer.py
-│   │   └── topicless_segments.py
-│   ├── project/
+│   │   ├── topicless_segments.py
+│   ├── pipeline_status.py
+│   ├── platform_compat.py
+│   ├── project
 │   │   ├── __init__.py
 │   │   ├── data_manager.py
 │   │   ├── project_context.py
@@ -152,8 +205,9 @@ ai_subtitle_studio/
 │   │   ├── project_phase1b.py
 │   │   ├── project_snapshot.py
 │   │   ├── project_srt.py
-│   │   └── subtitle_status.py
-│   ├── roughcut/
+│   │   ├── subtitle_status.py
+│   ├── renderer.py
+│   ├── roughcut
 │   │   ├── __init__.py
 │   │   ├── boundary_refiner.py
 │   │   ├── chapter_segmenter.py
@@ -182,12 +236,16 @@ ai_subtitle_studio/
 │   │   ├── thumbnail_cache.py
 │   │   ├── title_suggester.py
 │   │   ├── topic_detector.py
-│   │   └── transcript_packer.py
-│   ├── runtime/
+│   │   ├── transcript_packer.py
+│   ├── runtime
 │   │   ├── __init__.py
 │   │   ├── config.py
-│   │   └── logger.py
-│   ├── subtitle_quality/
+│   │   ├── logger.py
+│   ├── settings.py
+│   ├── srt_parser.py
+│   ├── state_manager.py
+│   ├── subtitle_existing.py
+│   ├── subtitle_quality
 │   │   ├── __init__.py
 │   │   ├── candidate_generator.py
 │   │   ├── candidate_ranker.py
@@ -200,49 +258,12 @@ ai_subtitle_studio/
 │   │   ├── recheck_engine.py
 │   │   ├── timestamp_regrouper.py
 │   │   ├── vad_alignment_checker.py
-│   │   └── wrong_answer_memory.py
-│   ├── __init__.py
-│   ├── accuracy_policy.py
-│   ├── auto_tracker.py
-│   ├── backend_fast.py
-│   ├── cloud_sync.py
-│   ├── cut_boundary.py
-│   ├── cut_boundary_auto.py
-│   ├── cut_boundary_auto_profile.py
-│   ├── cut_boundary_auto_scan.py
-│   ├── cut_boundary_auto_utils.py
-│   ├── cut_boundary_auto_verify.py
-│   ├── cut_boundary_fps.py
-│   ├── frame_time.py
-│   ├── media_info.py
-│   ├── media_queue_order.py
-│   ├── model_manager.py
-│   ├── notifier.py
-│   ├── path_manager.py
-│   ├── performance.py
-│   ├── pipeline_status.py
-│   ├── platform_compat.py
-│   ├── renderer.py
-│   ├── settings.py
-│   ├── srt_parser.py
-│   ├── state_manager.py
-│   ├── subtitle_existing.py
+│   │   ├── wrong_answer_memory.py
 │   ├── time_history.py
 │   ├── utils.py
 │   ├── video_codec.py
-│   └── work_mode.py
-├── dataset/
-│   ├── personalization/
-│   │   ├── trained_adapters/
-│   │   │   └── personal_text_lora/
-│   │   ├── audio_preset_lora.jsonl
-│   │   ├── text_lora_corpus.jsonl
-│   │   ├── text_lora_corpus_manifest.json
-│   │   ├── text_lora_dataset.jsonl
-│   │   ├── text_lora_manifest.json
-│   │   ├── text_lora_training_plan.json
-│   │   ├── voice_lora_bridge.jsonl
-│   │   └── voice_lora_profile_manifest.json
+│   ├── work_mode.py
+├── dataset
 │   ├── audio_presets.json
 │   ├── auto_tracker.json
 │   ├── correction_memory.json
@@ -250,10 +271,25 @@ ai_subtitle_studio/
 │   ├── dataset_correction.json
 │   ├── folder_settings.json
 │   ├── model_registry.json
+│   ├── personalization
+│   │   ├── audio_preset_lora.jsonl
+│   │   ├── text_lora_corpus.jsonl
+│   │   ├── text_lora_corpus_manifest.json
+│   │   ├── text_lora_dataset.jsonl
+│   │   ├── text_lora_manifest.json
+│   │   ├── text_lora_training_plan.json
+│   │   ├── trained_adapters
+│   │   │   ├── personal_text_lora
+│   │   ├── voice_lora_bridge.jsonl
+│   │   ├── voice_lora_profile_manifest.json
 │   ├── subtitle_rule.json
 │   ├── time_history.json
-│   └── user_settings.json
-├── tests/
+│   ├── user_settings.json
+├── main.bat
+├── main.py
+├── requirements-mac.txt
+├── requirements-windows.txt
+├── tests
 │   ├── conftest.py
 │   ├── test_accuracy_policy.py
 │   ├── test_ai_settings_runtime_apply.py
@@ -330,14 +366,16 @@ ai_subtitle_studio/
 │   ├── test_whisper_coreml.py
 │   ├── test_whisper_model_catalog.py
 │   ├── test_windows_platform_compat.py
-│   └── test_word_resegmenter.py
-├── ui/
-│   ├── dialogs/
+│   ├── test_word_resegmenter.py
+├── ui
+│   ├── __init__.py
+│   ├── cloud_ui.py
+│   ├── dialogs
 │   │   ├── __init__.py
 │   │   ├── export_dialog.py
 │   │   ├── folder_dialog.py
-│   │   └── message_box.py
-│   ├── editor/
+│   │   ├── message_box.py
+│   ├── editor
 │   │   ├── __init__.py
 │   │   ├── editor_actions.py
 │   │   ├── editor_helpers.py
@@ -367,38 +405,44 @@ ai_subtitle_studio/
 │   │   ├── video_overlay_widgets.py
 │   │   ├── video_playback_backend.py
 │   │   ├── video_player_widget.py
-│   │   └── video_subtitle_overlay.qml
-│   ├── help/
+│   │   ├── video_subtitle_overlay.qml
+│   ├── gpu_rendering.py
+│   ├── help
 │   │   ├── __init__.py
 │   │   ├── help_content.py
-│   │   └── help_dialog.py
-│   ├── log/
+│   │   ├── help_dialog.py
+│   ├── home_sidebar.py
+│   ├── home_sidebar_presets.py
+│   ├── home_ui.py
+│   ├── log
 │   │   ├── __init__.py
-│   │   └── terminal_log_widget.py
-│   ├── main/
+│   │   ├── terminal_log_widget.py
+│   ├── main
 │   │   ├── __init__.py
 │   │   ├── bottom_work_panel.py
 │   │   ├── main_file_ops.py
 │   │   ├── main_signals.py
 │   │   ├── main_window.py
-│   │   └── workspace_stack.py
-│   ├── project/
+│   │   ├── workspace_stack.py
+│   ├── menu_bar.py
+│   ├── project
 │   │   ├── clip_order_dialog.py
 │   │   ├── multiclip_cards.py
 │   │   ├── multiclip_panel.py
 │   │   ├── project_panel.py
-│   │   └── workspace_restore.py
-│   ├── qml/
+│   │   ├── workspace_restore.py
+│   ├── qml
 │   │   ├── project_info_overlay.qml
 │   │   ├── project_sidebar_shell.qml
 │   │   ├── settings_panel_header.qml
 │   │   ├── sidebar_queue_panel.qml
-│   │   └── timeline_playhead_overlay.qml
-│   ├── queue/
+│   │   ├── timeline_playhead_overlay.qml
+│   ├── queue
 │   │   ├── __init__.py
 │   │   ├── queue_panel_widget.py
-│   │   └── sidebar_queue_panel.py
-│   ├── roughcut/
+│   │   ├── sidebar_queue_panel.py
+│   ├── queue_widget.py
+│   ├── roughcut
 │   │   ├── __init__.py
 │   │   ├── roughcut_bottom_panel.py
 │   │   ├── roughcut_detail.py
@@ -413,8 +457,8 @@ ai_subtitle_studio/
 │   │   ├── roughcut_table_panel.py
 │   │   ├── roughcut_title_panel.py
 │   │   ├── roughcut_topicless.py
-│   │   └── roughcut_widget.py
-│   ├── settings/
+│   │   ├── roughcut_widget.py
+│   ├── settings
 │   │   ├── __init__.py
 │   │   ├── gap_simulator.py
 │   │   ├── personalization_learning_actions.py
@@ -428,11 +472,12 @@ ai_subtitle_studio/
 │   │   ├── settings_gap.py
 │   │   ├── settings_personalization.py
 │   │   ├── settings_roughcut.py
-│   │   └── settings_speaker.py
-│   ├── sidebar/
+│   │   ├── settings_speaker.py
+│   ├── sidebar
 │   │   ├── __init__.py
-│   │   └── project_sidebar_widget.py
-│   ├── timeline/
+│   │   ├── project_sidebar_widget.py
+│   ├── style.py
+│   ├── timeline
 │   │   ├── __init__.py
 │   │   ├── speaker_labels.py
 │   │   ├── timeline_analysis.py
@@ -445,50 +490,7 @@ ai_subtitle_studio/
 │   │   ├── timeline_scenegraph.py
 │   │   ├── timeline_scenegraph.qml
 │   │   ├── timeline_waveform.py
-│   │   └── timeline_widget.py
-│   ├── __init__.py
-│   ├── cloud_ui.py
-│   ├── gpu_rendering.py
-│   ├── home_sidebar.py
-│   ├── home_sidebar_presets.py
-│   ├── home_ui.py
-│   ├── menu_bar.py
-│   ├── queue_widget.py
-│   └── style.py
-├── voice_data/
+│   │   ├── timeline_widget.py
+├── voice_data
 │   ├── spk2_goodrain.wav
-│   └── spk3_voice.wav
-├── .env
-├── .gitignore
-├── ACTION_ITEMS.md
-├── AGENTS.md
-├── check_list.md
-├── File_structure.txt
-├── main.bat
-├── main.py
-├── README.md
-├── RELEASE_v02.02.00.md
-├── RELEASE_v02.03.00.md
-├── RELEASE_v02.04.00.md
-├── RELEASE_v02.06.00.md
-├── RELEASE_v02.07.00.md
-├── RELEASE_v03.00.00.md
-├── RELEASE_v03.03.00.md
-├── RELEASE_v03.04.00.md
-├── RELEASE_v03.05.00.md
-├── RELEASE_v03.06.00.md
-├── RELEASE_v03.07.00.md
-├── RELEASE_v03.08.00.md
-├── RELEASE_v03.09.00.md
-├── RELEASE_v03.10.00.md
-├── RELEASE_v03.11.00.md
-├── RELEASE_v03.12.00.md
-├── RELEASE_v03.13.00.md
-├── RELEASE_v03.14.00.md
-├── RELEASE_v03.15.00.md
-├── RELEASE_v03.16.00.md
-├── RELEASE_v03.17.00.md
-├── RELEASE_v03.18.00.md
-├── RELEASE_v03.19.00.md
-├── requirements-mac.txt
-└── requirements-windows.txt
+│   ├── spk3_voice.wav

@@ -1,5 +1,5 @@
 <!--
-Document-Version: 03.19.00
+Document-Version: 03.20.00
 Phase: PARKED_ONLY
 Last-Updated: 2026-05-05
 Updated-By: Codex
@@ -19,8 +19,8 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "03.19.00"
-document_version: "03.19.00"
+app_version: "03.20.00"
+document_version: "03.20.00"
 phase: "PARKED_ONLY"
 next_phase: "PHASE4_iPad"
 commit_policy: "Commit only when the user explicitly asks."
@@ -49,7 +49,7 @@ release_handoff_files:
 
 - No active non-iPad items remain.
 - User-requested exclusion is still in effect for `PHASE4_iPad`.
-- v03.19.00 release work is complete; LoRA automation, vector retrieval, unified uncompressed bundle storage, idle-only low-resource learning, Full learning controls, detailed learning logs, gap autosettings, and related refactors are not active backlog.
+- v03.20.00 release work is complete; LoRA automation, vector retrieval, unified uncompressed bundle storage, STT1 adapter planning, quality-tier runtime policy, live editor previews, idle-only low-resource learning, Full learning controls, detailed learning logs, gap autosettings, editor responsiveness, and related refactors are not active backlog.
 
 ## Parked Work
 

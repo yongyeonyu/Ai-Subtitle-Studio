@@ -51,6 +51,11 @@ def _should_flush_live_subtitle_buffer(
 class SinglePipelineMixin:
     """단일 / 배치 품질모드 파이프라인."""
 
+    def _emit_processing_stage(self, queue_index: int, status: str) -> None:
+        text = str(status or "")
+        self._ui_emit("_sig_update_queue", queue_index, text, "", "", "")
+        self._ui_emit("_sig_editor_processing_stage", text)
+
     def _append_live_segments_to_editor(self, segments: list[dict]) -> None:
         segments = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
         if not segments:
@@ -302,7 +307,7 @@ class SinglePipelineMixin:
                     self.video_processor.set_auto_audio_tune_overrides(None)
             if hasattr(self, "video_processor"):
                 self.video_processor.stage_callback = (
-                    lambda status, qi=queue_index: self._ui_emit("_sig_update_queue", qi, status, "", "", "")
+                    lambda status, qi=queue_index: self._emit_processing_stage(qi, status)
                 )
             try:
                 # ✅ 순서 고정:
@@ -478,7 +483,7 @@ class SinglePipelineMixin:
                 try:
                     if hasattr(self, "video_processor"):
                         self.video_processor.stage_callback = (
-                            lambda status, qi=queue_index: self._ui_emit("_sig_update_queue", qi, status, "", "", "")
+                            lambda status, qi=queue_index: self._emit_processing_stage(qi, status)
                         )
                     for chunk_segs, c_idx, t_total in self.video_processor.transcribe(
                         _chunk_dir,
@@ -555,7 +560,7 @@ class SinglePipelineMixin:
                         def _llm_progress(payload):
                             self._ui_emit("_sig_set_llm_review_segment", dict(payload or {}))
 
-                        self._ui_emit("_sig_update_queue", queue_index, "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중", "", "", "")
+                        self._emit_processing_stage(queue_index, "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중")
                         if is_gemini and len(chunk_segs) > 1:
                             from core.engine.subtitle_engine import ask_gemini_to_split
                             from core.utils import load_subtitle_rules

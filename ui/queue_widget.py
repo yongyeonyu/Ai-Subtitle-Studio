@@ -15,6 +15,55 @@ from PyQt6.QtGui import QColor
 class QueueMixin:
     """큐 테이블 관리 (MainWindow에 Mixin으로 결합)"""
 
+    def _format_queue_clock(self, sec) -> str:
+        try:
+            total = max(0, int(float(sec)))
+        except Exception:
+            return "00:00"
+        m, s = divmod(total, 60)
+        h, m = divmod(m, 60)
+        return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+
+    def _parse_queue_seconds_value(self, value) -> float | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            pass
+        if ":" not in text:
+            return None
+        parts = [part.strip() for part in text.split(":")]
+        if not parts or any(not part.isdigit() for part in parts):
+            return None
+        try:
+            units = [int(part) for part in parts]
+        except ValueError:
+            return None
+        if len(units) == 2:
+            minutes, seconds = units
+            return float((minutes * 60) + seconds)
+        if len(units) == 3:
+            hours, minutes, seconds = units
+            return float((hours * 3600) + (minutes * 60) + seconds)
+        return None
+
+    def _queue_expected_time_label(self, idx: int, eta_text: str = "", duration_text: str = "") -> str:
+        expected = self._expected_seconds.get(idx, 0)
+        if expected > 0:
+            return self._format_queue_clock(expected)
+        eta = str(eta_text or "").strip()
+        if "/" in eta:
+            _left, right = [part.strip() for part in eta.split("/", 1)]
+            eta = right
+        if eta and eta not in {"-", "?", "계산 중", "분석 중..", "예상불가", "학습 중"}:
+            return eta
+        duration = str(duration_text or "").strip()
+        if duration and duration not in {"-", "?", "00:00"}:
+            return duration
+        return ""
+
     def clear_queue_list(self, header: str = "큐 리스트 : (0/0) - 0% 완료"):
         table = getattr(self, "queue_table", None)
         if table is not None:
@@ -243,14 +292,6 @@ class QueueMixin:
                 it = QTableWidgetItem(text)
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 return it
-            def fmt(sec):
-                try:
-                    s = float(sec)
-                    m, s = divmod(int(s), 60)
-                    h, m = divmod(m, 60)
-                    return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
-                except:
-                    return "00:00"
             incoming_done, incoming_error, incoming_active = self._queue_status_flags(status)
             try:
                 current_idx = int(getattr(self, "_current_file_idx", 0) or 0)
@@ -293,7 +334,7 @@ class QueueMixin:
                 engine_dirty = True
             if apply_status:
                 self.queue_table.setItem(idx, 0, mk(apply_status))
-                if ("자막 생성 중" in apply_status or "오디오 추출 중" in apply_status) and idx not in self._file_start_times:
+                if incoming_active and idx not in self._file_start_times:
                     self._file_start_times[idx] = time.time()
                 # ✅ 완료 시 소요시간/예상시간 즉시 기록
                 if self._queue_status_flags(apply_status)[0]:
@@ -301,22 +342,32 @@ class QueueMixin:
                     st = self._file_start_times.get(idx, 0)
                     if st > 0:
                         elapsed = time.time() - st
-                        expected = self._expected_seconds.get(idx, 0)
-                        e_str = fmt(elapsed)
-                        x_str = fmt(expected) if expected > 0 else "?"
+                        x_str = self._queue_expected_time_label(
+                            idx,
+                            str(self.queue_table.item(idx, 4).text() if self.queue_table.item(idx, 4) else ""),
+                            str(self.queue_table.item(idx, 3).text() if self.queue_table.item(idx, 3) else ""),
+                        ) or "?"
+                        e_str = self._format_queue_clock(elapsed)
                         self.queue_table.setItem(idx, 4, mk(f"{e_str} / {x_str}"))
             if info_txt:
                 self.queue_table.setItem(idx, 2, mk(info_txt))
             if len_txt:
                 self.queue_table.setItem(idx, 3, mk(len_txt))
             if time_txt:
-                try:
-                    sec_val = float(time_txt)
+                sec_val = self._parse_queue_seconds_value(time_txt)
+                if sec_val is not None:
                     self._expected_seconds[idx] = sec_val
-                    # ✅ 이미 완료된 항목은 time_txt로 덮어쓰지 않음
                     if idx not in self._file_complete_times:
-                        self.queue_table.setItem(idx, 4, mk(fmt(sec_val)))
-                except (ValueError, TypeError):
+                        if incoming_active and idx in self._file_start_times:
+                            elapsed = max(0.0, time.time() - float(self._file_start_times.get(idx, 0) or 0))
+                            self.queue_table.setItem(
+                                idx,
+                                4,
+                                mk(f"{self._format_queue_clock(elapsed)} / {self._format_queue_clock(sec_val)}"),
+                            )
+                        else:
+                            self.queue_table.setItem(idx, 4, mk(self._format_queue_clock(sec_val)))
+                else:
                     if idx not in self._file_complete_times:
                         self.queue_table.setItem(idx, 4, mk(time_txt))
             self._apply_queue_row_visual_state(idx)
@@ -388,11 +439,6 @@ class QueueMixin:
             return
 
         now = time.time()
-        def fmt(sec):
-            m, s = divmod(int(sec), 60)
-            h, m = divmod(m, 60)
-            return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
-
         c = getattr(self, '_current_file_idx', 1)
         t = getattr(self, '_total_files', 1)
         self._mark_prior_queue_rows_done(c)
@@ -417,22 +463,30 @@ class QueueMixin:
         
         self.queue_header_lbl.setText(f"큐 리스트 : ({c}/{t}) - {pct}% 완료")
 
+        active_row = self._current_queue_active_row()
         for i in range(self.queue_table.rowCount()):
             si = self.queue_table.item(i, 0)
             if not si:
                 continue
             status_text = si.text()
-            row_done, _row_error, _row_active = self._queue_status_flags(status_text)
+            row_done, _row_error, status_active = self._queue_status_flags(status_text)
             if row_done:
                 self._apply_queue_row_visual_state(i)
                 continue
-            if "자막 생성 중" in status_text:
+            if status_active and i == active_row:
+                if i not in self._file_start_times:
+                    self._file_start_times[i] = now
                 st = self._file_start_times.get(i, now)
                 ef = now - st
-                xf = self._expected_seconds.get(i, 0)
                 tc = self.queue_table.item(i, 4)
                 if tc:
-                    tc.setText(f"{fmt(ef)} / {fmt(xf) if xf > 0 else '학습 중'}")
+                    duration_item = self.queue_table.item(i, 3)
+                    expected_label = self._queue_expected_time_label(
+                        i,
+                        str(tc.text() if tc else ""),
+                        str(duration_item.text() if duration_item else ""),
+                    ) or "학습 중"
+                    tc.setText(f"{self._format_queue_clock(ef)} / {expected_label}")
             self._apply_queue_row_visual_state(i)
         if hasattr(self, "_sync_sidebar_queue_panel"):
             if hasattr(self, "_refresh_sidebar_queue_cache"):

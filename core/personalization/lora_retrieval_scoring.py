@@ -55,6 +55,7 @@ def _kind_boost(kind: str) -> float:
         "prompt_trials": 4.0,
         "audio_preset_lora": 5.0,
         "voice_lora_bridge": 3.0,
+        "stt1_whisper_adapter_dataset": 5.0,
         "excluded_parentheticals": 6.0,
         "learned_split_rules": 4.0,
         "learned_line_break_rules": 4.0,

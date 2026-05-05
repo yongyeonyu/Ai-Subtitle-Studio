@@ -64,6 +64,8 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertTrue(paths["retention_policy"].exists())
             self.assertTrue(paths["retention_history"].exists())
             self.assertEqual(paths["lora_retrieval_index"].name, "lora_retrieval_index.json")
+            self.assertTrue(paths["stt1_whisper_adapter_dataset"].exists())
+            self.assertEqual(paths["stt1_whisper_adapter_dataset"].name, "stt1_whisper_adapter_dataset.jsonl")
             self.assertTrue(paths["unified_lora_data"].exists())
             self.assertEqual(paths["unified_lora_data"].name, "lora_data_bundle.zip")
             self.assertTrue(zipfile.is_zipfile(paths["unified_lora_data"]))
@@ -79,7 +81,67 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertEqual(manifest["counts"]["llm_review_result_files"], 0)
             self.assertEqual(manifest["counts"]["retention_history_rows"], 0)
             self.assertEqual(manifest["counts"]["lora_retrieval_index_docs"], 0)
+            self.assertEqual(manifest["counts"]["stt1_whisper_adapter_dataset_rows"], 0)
+            self.assertEqual(manifest["counts"]["stt1_whisper_adapter_runtime_ready"], 0)
             self.assertEqual(manifest["counts"]["unified_lora_data_records"], 0)
+
+    def test_manifest_counts_stt1_adapter_dataset_and_runtime_ready(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            paths = store_paths(tmpdir)
+            model_dir = paths["trained_adapters"] / "personal_stt1_whisper_adapter" / "merged_transformers"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            (model_dir / "config.json").write_text("{}", encoding="utf-8")
+            (model_dir / "preprocessor_config.json").write_text("{}", encoding="utf-8")
+            paths["stt1_whisper_adapter_dataset"].write_text(
+                json.dumps(
+                    {
+                        "schema": "ai_subtitle_studio.stt1_whisper_adapter_training_item.v1",
+                        "media_id": "media-001",
+                        "transcript_text": "안녕하세요.",
+                        "audio_ready": True,
+                        "train_weight": 0.88,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            paths["stt1_whisper_adapter_training_plan"].write_text(
+                json.dumps(
+                    {
+                        "schema": "ai_subtitle_studio.stt1_whisper_adapter_training_plan.v1",
+                        "items": [{"audio_ready": True}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            paths["stt1_whisper_adapter_runtime_manifest"].write_text(
+                json.dumps(
+                    {
+                        "schema": "ai_subtitle_studio.stt1_whisper_adapter_runtime_manifest.v1",
+                        "runtime_ready": True,
+                        "runtime_candidates": {
+                            "mac": {
+                                "ready": True,
+                                "selected_whisper_model": str(model_dir),
+                            }
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            manifest = refresh_lora_personalization_manifest(tmpdir)
+            bundle = load_unified_lora_data_bundle(store_dir=tmpdir)
+
+            self.assertEqual(manifest["counts"]["stt1_whisper_adapter_dataset_rows"], 1)
+            self.assertEqual(manifest["counts"]["stt1_whisper_adapter_training_items"], 1)
+            self.assertEqual(manifest["counts"]["stt1_whisper_adapter_audio_items"], 1)
+            self.assertEqual(manifest["counts"]["stt1_whisper_adapter_runtime_ready"], 1)
+            self.assertEqual(bundle["counts"]["stt1_whisper_adapter_dataset_rows"], 1)
 
     def test_manifest_counts_voice_audio_only_when_wav_exists(self):
         with tempfile.TemporaryDirectory() as tmpdir:

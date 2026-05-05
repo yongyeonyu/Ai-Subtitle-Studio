@@ -28,6 +28,12 @@ from core.personalization.text_lora_runner import (
     VOICE_LORA_PROFILE_MANIFEST_PATH,
     VOICE_LORA_TRAINING_PLAN_PATH,
 )
+from core.personalization.stt1_whisper_adapter_runner import (
+    STT1_WHISPER_ADAPTER_DATASET_MANIFEST_PATH,
+    STT1_WHISPER_ADAPTER_DATASET_PATH,
+    STT1_WHISPER_ADAPTER_RUNTIME_MANIFEST_PATH,
+    STT1_WHISPER_ADAPTER_TRAINING_PLAN_PATH,
+)
 from ui.style import button_style, settings_dialog_stylesheet
 
 
@@ -44,6 +50,7 @@ QUEUE_JOB_TYPE_LABELS = {
     "analyze_truth_table": "truth 분석",
     "build_text_training_plan": "text 학습계획",
     "build_voice_profiles": "목소리 프로필",
+    "build_stt1_whisper_adapter": "STT1 어댑터",
     "build_retrieval_index": "검색 인덱스",
     "optimize_settings": "설정 최적화",
     "optimize_prompts": "프롬프트 최적화",
@@ -90,6 +97,9 @@ def lora_learning_help_text() -> str:
             "",
             "통합 LoRA 데이터 파일",
             "   lora_data_bundle.zip 하나가 사용자가 관리하는 대표 학습 파일입니다. 내부 JSON/JSONL shard는 빠른 append와 UI 확인을 위한 cache이며, ZIP 파일에서 다시 만들 수 있습니다.",
+            "",
+            "STT1 Whisper adapter 준비",
+            "   ground truth pair와 context를 이용해 STT1 전용 Whisper adapter dataset/plan/runtime manifest를 따로 만듭니다. 검색형 LoRA는 그대로 유지하고, 준비된 adapter 산출물이 있을 때만 STT1 모델로 자동 연결합니다.",
             "",
             "목소리 LoRA 준비",
             "   영상 자막 구간의 화자, 프레임, 텍스트를 이용해 voice_lora_bridge와 voice_lora_training_plan을 만들고, 필요하면 구간별 WAV 음성 클립도 저장합니다. 실제 음성 LoRA는 텍스트 LoRA와 별도 adapter이며, 내 목소리처럼 사용 허가된 화자 음성만 학습 대상으로 삼아야 합니다.",
@@ -243,7 +253,7 @@ def _format_voice_rows(rows: list[dict[str, Any]], *, limit: int = 18) -> list[s
     for row in rows[-limit:]:
         clip = _short_path(row.get("clip_path") or row.get("media_path") or row.get("project_path"))
         speaker = str(row.get("speaker") or "unknown")
-        text = row.get("text") or row.get("speech_training_text") or row.get("input_text")
+        text = row.get("text") or row.get("transcript_text") or row.get("speech_training_text") or row.get("input_text")
         output.append(f"- {_record_time(row)} · {clip} · speaker={speaker} · {_duration_label(row)}")
         output.append(f"  voice text: {preview_text(text, 150) or '-'}")
     return output
@@ -382,6 +392,7 @@ def build_learning_info_payload() -> dict[str, str]:
         "prompt_trials": paths["prompt_trials"],
         "retention_history": paths["retention_history"],
         "voice_lora_bridge": paths["voice_lora_bridge"],
+        "stt1_whisper_adapter_dataset": STT1_WHISPER_ADAPTER_DATASET_PATH,
         "text_lora_dataset": TEXT_LORA_DATASET_PATH,
         "text_lora_corpus": TEXT_LORA_CORPUS_PATH,
         "audio_preset_lora": paths["root"] / "audio_preset_lora.jsonl",
@@ -402,6 +413,10 @@ def build_learning_info_payload() -> dict[str, str]:
         "voice_lora_profile_manifest": VOICE_LORA_PROFILE_MANIFEST_PATH,
         "voice_lora_training_plan": VOICE_LORA_TRAINING_PLAN_PATH,
         "voice_lora_dataset_manifest": VOICE_LORA_DATASET_MANIFEST_PATH,
+        "stt1_whisper_adapter_dataset": STT1_WHISPER_ADAPTER_DATASET_PATH,
+        "stt1_whisper_adapter_dataset_manifest": STT1_WHISPER_ADAPTER_DATASET_MANIFEST_PATH,
+        "stt1_whisper_adapter_training_plan": STT1_WHISPER_ADAPTER_TRAINING_PLAN_PATH,
+        "stt1_whisper_adapter_runtime_manifest": STT1_WHISPER_ADAPTER_RUNTIME_MANIFEST_PATH,
         "learned_split_rules": paths["learned_split_rules"],
         "learned_line_break_rules": paths["learned_line_break_rules"],
         "setting_trials": paths["setting_trials"],
@@ -430,6 +445,10 @@ def build_learning_info_payload() -> dict[str, str]:
         "voice_lora_profile_manifest": "목소리 profile",
         "voice_lora_training_plan": "목소리 학습 계획",
         "voice_lora_dataset_manifest": "목소리 dataset manifest",
+        "stt1_whisper_adapter_dataset": "STT1 adapter dataset",
+        "stt1_whisper_adapter_dataset_manifest": "STT1 adapter dataset manifest",
+        "stt1_whisper_adapter_training_plan": "STT1 adapter 학습 계획",
+        "stt1_whisper_adapter_runtime_manifest": "STT1 adapter runtime manifest",
         "learned_split_rules": "split 규칙",
         "learned_line_break_rules": "줄바꿈 규칙",
         "setting_trials": "setting trial",
@@ -484,6 +503,8 @@ def build_learning_info_payload() -> dict[str, str]:
         f"- 검색 점수 모델: {retrieval_summary.get('score_model', '-')}",
         f"- 목소리 bridge/학습 item: {counts.get('voice_lora_bridge_rows', 0)}구간 / {counts.get('voice_lora_training_items', 0)}개",
         f"- 준비된 음성 클립: {counts.get('voice_lora_stored_audio_items', 0)}개",
+        f"- STT1 adapter dataset/item: {counts.get('stt1_whisper_adapter_dataset_rows', 0)}행 / {counts.get('stt1_whisper_adapter_training_items', 0)}개",
+        f"- STT1 adapter runtime ready: {'예' if int(counts.get('stt1_whisper_adapter_runtime_ready', 0) or 0) > 0 else '아니오'}",
         f"- 대기 작업: {counts.get('queue_items', 0)}개",
         "",
         "[저장 위치]",
@@ -523,6 +544,7 @@ def build_learning_info_payload() -> dict[str, str]:
         )
     )
     learning_lines.extend(_section("최근 목소리 LoRA bridge", _format_voice_rows(list(jsonl["voice_lora_bridge"].get("rows") or []))))
+    learning_lines.extend(_section("최근 STT1 adapter dataset", _format_voice_rows(list(jsonl["stt1_whisper_adapter_dataset"].get("rows") or []))))
     learning_lines.extend(
         _section("최근 영상/음성/자막 context", _format_multimodal_context_rows(list(jsonl["multimodal_lora_context"].get("rows") or [])))
     )
@@ -556,7 +578,8 @@ def build_learning_info_payload() -> dict[str, str]:
 
     header = (
         f"최근 학습 데이터: {latest_data.get('label', '-')} · {latest_data.get('mtime', '-')}  |  "
-        f"truth {counts.get('truth_table_rows', 0)}행 · voice {counts.get('voice_lora_bridge_rows', 0)}구간"
+        f"truth {counts.get('truth_table_rows', 0)}행 · voice {counts.get('voice_lora_bridge_rows', 0)}구간 · "
+        f"stt1 {counts.get('stt1_whisper_adapter_training_items', 0)}개"
     )
     return {
         "header": header,

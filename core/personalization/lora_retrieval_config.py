@@ -32,6 +32,7 @@ INDEX_JSONL_SOURCE_KEYS = (
     "setting_trials",
     "prompt_trials",
     "voice_lora_bridge",
+    "stt1_whisper_adapter_dataset",
     "text_lora_dataset",
     "text_lora_corpus",
     "audio_preset_lora",
@@ -47,9 +48,14 @@ INDEX_JSON_SOURCE_KEYS = (
     "voice_lora_profile_manifest",
     "voice_lora_training_plan",
     "voice_lora_dataset_manifest",
+    "stt1_whisper_adapter_dataset_manifest",
+    "stt1_whisper_adapter_training_plan",
+    "stt1_whisper_adapter_runtime_manifest",
 )
 RUNTIME_SETTING_KEYS = {
     "selected_audio_ai",
+    "selected_whisper_model",
+    "stt_ensemble_enabled",
     "stt_quality_preset",
     "subtitle_quality_enabled",
     "subtitle_quality_auto_check_after_generate",

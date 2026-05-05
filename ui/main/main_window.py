@@ -82,6 +82,7 @@ class MainWindow(
     _sig_preview_cut_boundary_scan_lines = pyqtSignal(list)
     _sig_update_project_boundary_times = pyqtSignal(list)
     _sig_set_llm_review_segment = pyqtSignal(dict)
+    _sig_editor_processing_stage = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -845,6 +846,7 @@ class MainWindow(
         self._sig_preview_cut_boundary_scan_lines.connect(self._on_cut_boundary_scan_lines)
         self._sig_update_project_boundary_times.connect(self._on_project_boundary_times_updated)
         self._sig_set_llm_review_segment.connect(self._do_set_llm_review_segment)
+        self._sig_editor_processing_stage.connect(self._do_editor_processing_stage)
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self):
@@ -1304,6 +1306,8 @@ class MainWindow(
             return
         editor = getattr(self, "_editor_widget", None)
         if not force and (self._is_editor_ai_busy(editor) or self._is_backend_ai_busy()):
+            return
+        if not force and self._is_editor_actively_editing():
             return
 
         self._editor_ai_release_in_progress = True

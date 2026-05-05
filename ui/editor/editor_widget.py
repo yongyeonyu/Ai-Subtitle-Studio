@@ -122,12 +122,19 @@ class EditorWidget(
         self._active_seg_start: float | None = None
         self._sync_lock          = False
         self._segment_queue: list[dict] = []
+        self._live_editor_preview_queue: list[dict] = []
+        self._live_editor_preview_segments: list[dict] = []
+        self._live_editor_preview_keys: set[tuple] = set()
+        self._live_editor_preview_pending = False
         self._inline_updating    = False
         self._init_stt_mode_state()
         self.sig_live_stt_result.connect(self._apply_stt_text_to_current)
         self.sig_stt_vad_segments.connect(self._apply_stt_vad_segments)
 
         self._queue_timer    = QTimer(); self._queue_timer.setSingleShot(True);    self._queue_timer.timeout.connect(self._flush_queue)
+        self._live_editor_preview_timer = QTimer(self)
+        self._live_editor_preview_timer.setSingleShot(True)
+        self._live_editor_preview_timer.timeout.connect(self._flush_live_editor_preview_queue)
         self._timeline_timer = QTimer(); self._timeline_timer.setSingleShot(True); self._timeline_timer.timeout.connect(self._redraw_timeline)
         self._nav_timer      = QTimer(); self._nav_timer.setSingleShot(True)
         self._roughcut_draft_timer = QTimer(self)

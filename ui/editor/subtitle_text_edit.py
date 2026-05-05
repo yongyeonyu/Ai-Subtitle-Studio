@@ -47,6 +47,9 @@ class SubtitleBlockData(QTextBlockUserData):
         stt_score_label: str = "",
         stt_score_flags: list | None = None,
         stt_score_components: dict | None = None,
+        live_preview: bool = False,
+        live_preview_source: str = "",
+        live_preview_stage: str = "",
     ):
         super().__init__()
         self.spk_id = spk_id
@@ -78,6 +81,9 @@ class SubtitleBlockData(QTextBlockUserData):
         self.stt_score_label = str(stt_score_label or "")
         self.stt_score_flags = list(stt_score_flags or [])
         self.stt_score_components = dict(stt_score_components or {})
+        self.live_preview = bool(live_preview)
+        self.live_preview_source = str(live_preview_source or "")
+        self.live_preview_stage = str(live_preview_stage or "")
 
 class SubtitleHighlighter(QSyntaxHighlighter):
     def __init__(self, document: QTextDocument):
@@ -148,14 +154,20 @@ class SubtitleHighlighter(QSyntaxHighlighter):
         spk_color = "#FFFFFF"
         if isinstance(ud, SubtitleBlockData):
             spk_color = self.speaker_colors.get(ud.spk_id, "#FFFFFF")
-            if getattr(ud, "stt_pending", False):
+            if getattr(ud, "live_preview", False):
+                spk_color = "#A8B2BD"
+            elif getattr(ud, "stt_pending", False):
                 spk_color = "#8A8F98"
 
         if len(text) > 0:
             cfmt = QTextCharFormat()
             cfmt.setForeground(QColor(spk_color))
-            if isinstance(ud, SubtitleBlockData) and getattr(ud, "stt_pending", False):
-                cfmt.setBackground(QColor(72, 40, 40, 80))
+            if isinstance(ud, SubtitleBlockData):
+                if getattr(ud, "live_preview", False):
+                    cfmt.setBackground(QColor(32, 48, 56, 88))
+                    cfmt.setFontItalic(True)
+                elif getattr(ud, "stt_pending", False):
+                    cfmt.setBackground(QColor(72, 40, 40, 80))
             self.setFormat(0, len(text), cfmt)
 
 class SubtitleTextEdit(QTextEdit):

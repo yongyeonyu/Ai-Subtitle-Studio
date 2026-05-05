@@ -60,14 +60,26 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         if merged:
             detail_keys = (
                 "selected_audio_ai",
+                "selected_whisper_model",
                 "stt_quality_preset",
+                "stt_ensemble_enabled",
                 "split_length_threshold",
                 "sub_max_cps",
                 "sub_gap_break_sec",
                 "selected_model",
                 "selected_llm_provider",
             )
-            details = [f"{key}={merged[key]}" for key in detail_keys if key in merged]
+            details = []
+            for key in detail_keys:
+                if key not in merged:
+                    continue
+                value = merged[key]
+                if key == "selected_whisper_model":
+                    try:
+                        value = os.path.basename(str(value).rstrip("/\\")) or value
+                    except Exception:
+                        pass
+                details.append(f"{key}={value}")
             if not details:
                 details = [f"{key}={value}" for key, value in list(merged.items())[:6]]
             get_logger().log(f"🧠 [개인화] {target_name} 적용: {', '.join(details)}")

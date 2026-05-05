@@ -12,6 +12,10 @@ SETTINGS_PATH = os.path.join(config.DATASET_DIR, "user_settings.json")
 _RUNTIME_SETTINGS_OVERRIDE: dict | None = None
 
 
+def _settings_path() -> str:
+    return os.path.join(config.DATASET_DIR, "user_settings.json")
+
+
 def set_runtime_settings_override(settings: dict | None) -> None:
     global _RUNTIME_SETTINGS_OVERRIDE
     _RUNTIME_SETTINGS_OVERRIDE = dict(settings or {}) if settings else None
@@ -28,7 +32,7 @@ def runtime_settings_override() -> dict:
 def load_settings() -> dict:
     base = dict(getattr(config, "DEFAULT_ADV_SETTINGS", {}) or {})
     try:
-        with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+        with open(_settings_path(), "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
             base.update(data)
@@ -51,8 +55,9 @@ def load_settings() -> dict:
 
 
 def save_settings(data: dict):
-    os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
-    with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+    settings_path = _settings_path()
+    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+    with open(settings_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 

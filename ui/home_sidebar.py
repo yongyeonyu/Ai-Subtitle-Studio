@@ -764,7 +764,11 @@ class HomeSidebarMixin:
                 pass
         editor = self._active_editor()
         if editor is not None:
-            for attr in ("engine_lbl", "status_label", "status_lbl"):
+            # `engine_lbl` is a static settings summary like `[STT]`, `[VAD]`, `[음성]`.
+            # Treating it as a live pipeline source causes freshly opened files to
+            # look like they are already running/completed, so only runtime status
+            # labels should feed stage detection.
+            for attr in ("status_label", "status_lbl"):
                 label = getattr(editor, attr, None)
                 if label is None:
                     continue

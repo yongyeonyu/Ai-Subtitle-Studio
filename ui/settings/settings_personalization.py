@@ -53,6 +53,7 @@ from core.personalization.text_lora_runner import (
     save_voice_lora_profile_manifest,
     save_voice_lora_training_plan,
 )
+from core.personalization.stt1_whisper_adapter_runner import save_stt1_whisper_adapter_training_plan
 from ui.settings.personalization_learning_actions import (
     PersonalizationLearningActionsMixin,
     VoiceLoraDatasetWorker,
@@ -85,6 +86,7 @@ QUEUE_JOB_TYPE_LABELS = {
     "analyze_truth_table": "truth 분석",
     "build_text_training_plan": "text 학습계획",
     "build_voice_profiles": "목소리 프로필",
+    "build_stt1_whisper_adapter": "STT1 어댑터",
     "build_retrieval_index": "검색 인덱스",
     "optimize_settings": "설정 최적화",
     "optimize_prompts": "프롬프트 최적화",
@@ -294,6 +296,7 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
             f"규칙 {counts.get('learned_split_rules', 0)}개/{counts.get('learned_line_break_rules', 0)}개 · "
             f"context {counts.get('multimodal_lora_context_rows', 0)}행 · "
             f"목소리 {counts.get('voice_lora_bridge_rows', 0)}구간 · "
+            f"STT1 adapter {counts.get('stt1_whisper_adapter_training_items', 0)}개 · "
             f"코퍼스 {int(legacy_stats.get('total_items', 0) or 0)}개"
         )
 
@@ -657,6 +660,7 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         plan_result = save_text_lora_training_plan()
         voice_result = save_voice_lora_profile_manifest()
         voice_plan_result = save_voice_lora_training_plan()
+        stt1_plan_result = save_stt1_whisper_adapter_training_plan()
         self._refresh_summary()
         QMessageBox.information(
             self,
@@ -668,6 +672,7 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
                     f"코퍼스 누적: 텍스트 {int(accumulate_result.get('appended_rows', 0) or 0)}개 / 음성 {int(accumulate_result.get('voice_bridge_rows', 0) or 0)}개 / context {int(accumulate_result.get('multimodal_context_rows', 0) or 0)}개",
                     f"학습 프레임 row: {int(plan_result.get('usable_rows', 0) or 0)}개 / 음성 프로필 수: {int(voice_result.get('speaker_profiles', 0) or 0)}개",
                     f"목소리 LoRA item: {int(voice_plan_result.get('usable_voice_rows', 0) or 0)}개 / 저장 WAV {int(voice_plan_result.get('stored_audio_items', 0) or 0)}개 / backend: {voice_plan_result.get('backend', '')}",
+                    f"STT1 adapter item: {int(stt1_plan_result.get('usable_rows', 0) or 0)}개 / 준비 WAV {int(stt1_plan_result.get('audio_ready_items', 0) or 0)}개 / runtime ready: {'예' if bool(stt1_plan_result.get('runtime_ready')) else '아니오'}",
                 ]
             ),
         )
