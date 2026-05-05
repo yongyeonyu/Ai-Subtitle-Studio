@@ -8,7 +8,7 @@ Release app version: `03.19.00`
 
 ## Summary
 
-v03.19.00 is the Phase 3 automated LoRA personalization and runtime retrieval release. It builds on the v03.18.00 GPU/QML, lightweight project, and LoRA voice-data checkpoint by making LoRA learning easier for users: video/SRT pairs can be imported as ground truth, editorial bracket text is excluded from speech learning, LoRA data is kept as a unified local bundle, and the runtime subtitle pipeline can retrieve the most relevant learned data through scored/vectorized search.
+v03.19.00 is the Phase 3 automated LoRA personalization and runtime retrieval release. It builds on the v03.18.00 GPU/QML, lightweight project, and LoRA voice-data checkpoint by making LoRA learning easier for users: video/SRT pairs can be imported as ground truth, editorial bracket text is excluded from speech learning, LoRA data is kept as a unified local ZIP bundle, and the runtime subtitle pipeline can retrieve the most relevant learned data through scored/vectorized search.
 
 This release note intentionally references only v03.18.00 as the previous checkpoint. Older cumulative history remains in older `RELEASE_v*.md` files and should not be copied into handoff documents.
 
@@ -20,11 +20,16 @@ This release note intentionally references only v03.18.00 as the previous checkp
 - Added scored/vectorized LoRA retrieval with hybrid hash-vector, BM25, media-path, recency, quality, and context-facet signals so large LoRA datasets can stay fast and relevant at subtitle-generation time.
 - Added runtime LoRA prompt/context helpers that bring relevant corrections, ground-truth rows, split/line-break rules, prompt/settings trials, audio presets, and multimodal context into subtitle generation.
 - Added unified LoRA bundle storage and restore/reset support so local LoRA data behaves like one managed model artifact instead of a loose menu of JSONL files.
+- Stored the unified LoRA file as a single ZIP_STORED archive with compression level 0 so it behaves like one portable model file without compression overhead.
 - Added idle training queue recovery and shutdown handling so interrupted LoRA jobs can resume from persisted progress after app restart or forced termination.
+- Restricted background LoRA training to idle-safe windows, paused it immediately for foreground file/folder/project/iCloud/NAS entry, and returned it to low-resource background learning after the user goes idle again.
+- Added manual personalization `Full` learning start/stop controls that can temporarily run a complete refresh and then return to low-resource automatic learning.
+- Added detailed LoRA training logs for queue preparation, job order, learning mode, truth/text/voice/index/settings/prompt stages, voice extraction progress, and retrieval-index refresh decisions.
 - Added user-facing learning information UI with latest updates, queue state, corpus counts, learned rules, voice/profile rows, and detailed LoRA inspection.
 - Simplified and compacted the LoRA settings UI by hiding advanced operations behind fewer user-facing controls and moving routine learning into automatic idle behavior.
 - Added a Gap dialog `자동설정` action that applies LoRA-learned timing settings to subtitle gap sliders when learned data exists.
 - Extended LoRA setting trials and runtime setting overrides to include the full key gap-settings family: continuous threshold, push rate, single subtitle tail, split target length, min/max duration, max CPS, dedupe window, and silence break.
+- Stabilized processing UI behavior around start/exit flows, including fast pause on app quit, stable editor geometry while processing starts, clearer queue-card filenames, and pending cut-boundary status display.
 - Refactored large LoRA and project modules into focused storage, bundle, retrieval, scoring, UI-info, UI-action, and SRT helper modules while preserving public compatibility wrappers.
 - Hardened Qt/offscreen test teardown by avoiding unsafe deferred widget deletion in the test runner and disabling startup-only delayed model checks during offscreen tests.
 
@@ -34,6 +39,7 @@ This release note intentionally references only v03.18.00 as the previous checkp
 - macOS and Windows remain supported targets. Path handling must continue to cover Korean filenames, spaces, backslashes, subprocess entry points, ffmpeg/ffprobe, faster-whisper workers, QML, OpenGL/SceneGraph, PyQt6 runtime behavior, and local LoRA bundle paths.
 - `core/runtime/config.py` remains the source of truth for `APP_VERSION`.
 - Runtime LoRA data under `dataset/lora_personalization/` is local user data and is ignored by Git. Source code should use the storage helpers to create, restore, reset, and compact it.
+- The primary LoRA learning artifact is `dataset/lora_personalization/lora_data_bundle.zip`, written as an uncompressed managed ZIP bundle.
 - This release does not resume iPad work. `PHASE4_iPad` remains parked until the user explicitly asks to resume it.
 - The handoff set remains `AGENTS.md`, `ACTION_ITEMS.md`, `File_structure.txt`, `README.md`, and the latest `RELEASE_v*.md`.
 
@@ -45,7 +51,7 @@ Completed verification for this release:
 - `python3 -m compileall -q main.py core ui tests`
 - `git diff --check -- .`
 - `venv/bin/python -m pytest -q`
-  - `659 passed in 42.04s`
+  - `670 passed in 48.76s`
 
 ## Next Direction
 

@@ -130,6 +130,9 @@ class ProjectUIMixin:
         return True
 
     def _create_project(self):
+        pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
+        if callable(pause_lora):
+            pause_lora("project_create", hold_ms=300_000)
         name, ok = QInputDialog.getText(self, "프로젝트 만들기", "프로젝트 이름:")
         if not ok or not name.strip():
             return
@@ -171,6 +174,9 @@ class ProjectUIMixin:
             self.backend.start_pipeline(paths)
 
     def _open_project(self):
+        pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
+        if callable(pause_lora):
+            pause_lora("project_open", hold_ms=300_000)
         filepath, _ = QFileDialog.getOpenFileName(
             self,
             "프로젝트 열기",

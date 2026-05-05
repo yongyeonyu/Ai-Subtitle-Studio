@@ -4,6 +4,12 @@
 import sys
 import os
 import socket
+import faulthandler
+
+try:
+    faulthandler.enable(all_threads=True)
+except Exception:
+    pass
 
 os.environ.setdefault(
     "QT_LOGGING_RULES",
@@ -13,7 +19,11 @@ os.environ.setdefault("AV_LOG_LEVEL", "16")
 
 from core.runtime import config
 from core.performance import configure_qt_gpu_rendering_before_app, configure_qt_runtime
-from core.platform_compat import cleanup_app_runtime_processes, cleanup_stale_preview_proxy_processes
+from core.platform_compat import (
+    cleanup_app_child_processes,
+    cleanup_app_runtime_processes,
+    cleanup_stale_preview_proxy_processes,
+)
 
 configure_qt_gpu_rendering_before_app()
 
@@ -81,8 +91,15 @@ def main():
 
     win = MainWindow()
     def _shutdown_runtime_in_order():
-        win._shutdown_personalization_idle_trainer(timeout_sec=3.0)
-        cleanup_app_runtime_processes(logger=get_logger(), timeout_sec=0.2)
+        pause_runtime = getattr(win, "_pause_all_runtime_work_for_exit", None)
+        if callable(pause_runtime):
+            pause_runtime(context="앱 종료")
+        win._shutdown_personalization_idle_trainer(timeout_sec=0.0)
+        if getattr(win, "_fast_exit_requested", False):
+            cleanup_app_child_processes(timeout_sec=0.0)
+            cleanup_stale_preview_proxy_processes(timeout_sec=0.0)
+            return
+        cleanup_app_runtime_processes(logger=get_logger(), timeout_sec=0.05)
 
     app.aboutToQuit.connect(_shutdown_runtime_in_order)
     if cleaned_preview_jobs:

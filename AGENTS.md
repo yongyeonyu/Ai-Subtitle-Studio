@@ -69,7 +69,7 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Product priority: generate highly accurate subtitles on the first pass, even if processing takes longer.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
 - Cross-platform rule: macOS and Windows must remain supported, including Korean paths, spaces, backslashes, subprocess handling, ffmpeg/ffprobe, faster-whisper workers, and PyQt6 runtime behavior.
-- Queue state: `ACTION_ITEMS.md` is parked-only; no active non-iPad items remain after the LoRA automation, vector retrieval, unified bundle, and gap autosettings release.
+- Queue state: `ACTION_ITEMS.md` is parked-only; no active non-iPad items remain after the LoRA automation, vector retrieval, unified uncompressed ZIP bundle, idle-only low-resource learning, Full learning controls, detailed learning logs, and gap autosettings release.
 
 ## Collaboration Rules
 

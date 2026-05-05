@@ -7,7 +7,9 @@ core/backend_fast.py
 - 멀티 파일: 정확도 우선 자동 시작 + SRT 개별 저장 + 큐 순차 처리
 - 단일 파일과의 차이: 에디터 대기 없이 자동 진행
 """
-import os, threading, time
+import os
+import threading
+import time
 from core.runtime import config
 from core.runtime.logger import get_logger
 from .pipeline.backend_core import CoreBackend
@@ -39,6 +41,9 @@ class CoreBackendFast(CoreBackend):
             return
         if self._active:
             return
+        pause_lora = getattr(self.ui, "_pause_personalization_for_foreground_activity", None)
+        if callable(pause_lora):
+            pause_lora("fast_batch_start", hold_ms=300_000)
 
         self._active = True
         set_runtime_settings_override(getattr(self.ui, "_runtime_settings_override", None))
@@ -86,6 +91,8 @@ class CoreBackendFast(CoreBackend):
             f"{'=' * 44}\n"
             f"  📂 파일: {vname} ({fsize:.1f} MB)"
         )
+        if hasattr(self, "_apply_personalization_runtime_override_for_file"):
+            self._apply_personalization_runtime_override_for_file(target_file)
 
         # ── STEP 0: 백업 ──
         self._backup_existing(target_file)

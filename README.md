@@ -16,7 +16,7 @@ Accuracy-first desktop subtitle production for long-form video, rough cuts, spea
 
 AI Subtitle Studio is built for one primary outcome: produce highly accurate subtitles on the first pass, even when that takes longer than a fast draft. The goal is to reduce manual correction time by combining STT, audio preprocessing, VAD, cut-boundary alignment, LLM cleanup, subtitle timing rules, and project-aware editing in one desktop workflow.
 
-Current development is in PHASE3. The current release turns LoRA personalization into an automated local learning system: video/SRT pairs can feed ground-truth tables, bracketed editorial notes are excluded from speech learning, multimodal context is classified, runtime LoRA data is retrieved through scored/vectorized search, and learned gap settings can be applied from the Gap dialog.
+Current development is in PHASE3. The current release turns LoRA personalization into an automated local learning system: video/SRT pairs can feed ground-truth tables, bracketed editorial notes are excluded from speech learning, multimodal context is classified, runtime LoRA data is retrieved through scored/vectorized search, learned gap settings can be applied from the Gap dialog, and idle-safe low-resource training can keep improving the local bundle in the background.
 
 ## Core Workflows
 
@@ -30,7 +30,7 @@ Current development is in PHASE3. The current release turns LoRA personalization
 - Roughcut draft generation from subtitle and scene structure.
 - Subtitle video output after subtitle generation.
 - GPU/QML timeline, overlay, editor, settings, and project-panel migration foundations.
-- Text, voice, multimodal, and settings LoRA personalization data management, including LLM review JSON exchange, transcript-aligned WAV clip manifests, unified local bundle storage, vectorized runtime retrieval, and Gap autosettings.
+- Text, voice, multimodal, and settings LoRA personalization data management, including LLM review JSON exchange, transcript-aligned WAV clip manifests, a single uncompressed managed ZIP bundle, vectorized runtime retrieval, Full learning controls, idle-only background learning, detailed learning logs, and Gap autosettings.
 
 All core algorithms should be shared across single-file, multiclip, folder queue, iCloud, and NAS modes.
 

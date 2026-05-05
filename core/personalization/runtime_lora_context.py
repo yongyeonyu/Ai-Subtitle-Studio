@@ -181,6 +181,7 @@ def _retrieved_lora_context_lines(
             store_dir=store_dir,
             limit=14,
             per_kind=4,
+            rebuild_if_stale=False,
         )
     except Exception:
         return []

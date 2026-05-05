@@ -32,6 +32,10 @@ from core.personalization.lora_store_common import (
 )
 
 
+LORA_ARCHIVE_COMPRESSION_NAME = "stored_no_compression"
+LORA_ARCHIVE_COMPRESSION_LEVEL = 0
+
+
 def _bundle_record_count(payload: dict[str, Any]) -> int:
     counts = dict((payload or {}).get("counts") or {})
     try:
@@ -68,10 +72,12 @@ def _write_unified_lora_archive(path: Path, payload: dict[str, Any], paths: dict
         "record_count": _bundle_record_count(payload),
         "attachment_files": len(attachment_files),
         "attachment_bytes": attachment_bytes,
+        "compression": LORA_ARCHIVE_COMPRESSION_NAME,
+        "compression_level": LORA_ARCHIVE_COMPRESSION_LEVEL,
     }
     tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_STORED) as archive:
             archive.writestr(UNIFIED_LORA_ARCHIVE_MANIFEST_NAME, json.dumps(metadata, ensure_ascii=False, indent=2))
             archive.writestr(UNIFIED_LORA_ARCHIVE_PAYLOAD_NAME, json.dumps(payload, ensure_ascii=False, indent=2))
             for item in attachment_files:
@@ -279,6 +285,8 @@ def _build_unified_lora_data_bundle(paths: dict[str, Path]) -> dict[str, Any]:
         "storage_mode": "single_file_managed_zip_bundle",
         "bundle_role": "primary_user_managed_lora_learning_file",
         "archive_format": "zip",
+        "archive_compression": LORA_ARCHIVE_COMPRESSION_NAME,
+        "archive_compression_level": LORA_ARCHIVE_COMPRESSION_LEVEL,
         "archive_payload_file": UNIFIED_LORA_ARCHIVE_PAYLOAD_NAME,
         "store_dir": str(paths["root"]),
         "managed_file": str(paths["unified_lora_data"]),

@@ -618,6 +618,75 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_cut_boundary_completion_wait_log_does_not_mark_stage_green(self):
+        window = MainWindow()
+        try:
+            editor = SimpleNamespace(
+                _auto_cut_boundary_scan_active=False,
+                _auto_cut_boundary_scan_lines=[],
+                _cut_boundary_prescan_completed=False,
+                _roughcut_draft_status="idle",
+                _last_roughcut_draft_major_count=None,
+                sm=SimpleNamespace(state="ST_PROC"),
+            )
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: True
+            window.log_text.setPlainText("  🎬 [컷 경계] STT 시작 전 자동 분석 완료 대기 중...")
+            settings = {
+                "stt_ensemble_enabled": False,
+                "selected_vad": "none",
+                "roughcut_llm_enabled": False,
+            }
+
+            current = window._pipeline_current_stage_keys(settings)
+            completed = window._pipeline_completed_stage_keys(settings, current)
+
+            self.assertIn("cut_boundary", current)
+            self.assertNotIn("cut_boundary", completed)
+            self.assertTrue(window._cut_boundary_log_pending(window._pipeline_status_blob()))
+            self.assertFalse(window._cut_boundary_scan_completed(editor, window._pipeline_status_blob()))
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_cut_boundary_final_completion_log_still_marks_stage_done(self):
+        window = MainWindow()
+        try:
+            editor = SimpleNamespace(
+                _auto_cut_boundary_scan_active=False,
+                _auto_cut_boundary_scan_lines=[],
+                _cut_boundary_prescan_completed=False,
+                _roughcut_draft_status="idle",
+                _last_roughcut_draft_major_count=None,
+                sm=SimpleNamespace(state="ST_PROC"),
+            )
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: True
+            window.log_text.setPlainText(
+                "\n".join(
+                    [
+                        "  🎬 [컷 경계] STT 시작 전 자동 분석 완료 대기 중...",
+                        "  ✅ [컷 경계] STT 시작 전 자동 분석 완료",
+                    ]
+                )
+            )
+            settings = {
+                "stt_ensemble_enabled": False,
+                "selected_vad": "none",
+                "roughcut_llm_enabled": False,
+            }
+
+            current = window._pipeline_current_stage_keys(settings)
+            completed = window._pipeline_completed_stage_keys(settings, current)
+
+            self.assertFalse(window._cut_boundary_log_pending(window._pipeline_status_blob()))
+            self.assertIn("cut_boundary", completed)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_pipeline_table_does_not_mark_done_from_queue_header_percent_only(self):
         window = MainWindow()
         try:
@@ -947,6 +1016,31 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             )
             self.assertFalse(window.bottom_work_panel.isHidden())
         finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_queue_updates_do_not_collapse_bottom_panel_during_editor_processing(self):
+        window = MainWindow()
+        editor = QWidget()
+        try:
+            editor.sm = SimpleNamespace(state="ST_PROC")
+            editor._is_ai_processing = True
+            window._editor_widget = editor
+            window.stack.addWidget(editor)
+            window.stack.setCurrentWidget(editor)
+            window.bottom_work_panel.setVisible(True)
+            window.bottom_work_panel.setMaximumHeight(190)
+
+            window._show_bottom_queue_table()
+
+            self.assertFalse(window.bottom_work_panel.isHidden())
+            self.assertEqual(window.bottom_work_panel.maximumHeight(), 190)
+            self.assertTrue(window._should_preserve_editor_processing_layout())
+        finally:
+            window._editor_widget = None
+            editor.close()
+            editor.deleteLater()
             window.close()
             window.deleteLater()
             self.app.processEvents()
@@ -1405,6 +1499,132 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(backend.log_context, "앱 종료")
         finally:
             window.backend = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_fast_exit_pause_signals_runtime_without_joining_backend_threads(self):
+        window = MainWindow()
+
+        class _Event:
+            def __init__(self):
+                self.set_called = False
+
+            def set(self):
+                self.set_called = True
+
+        class _ThreadRef:
+            def __init__(self):
+                self.join_called = False
+
+            def is_alive(self):
+                return True
+
+            def join(self, timeout=None):
+                self.join_called = True
+
+        class _Backend:
+            def __init__(self):
+                self._active = True
+                self._action_state = ["wait"]
+                self._edit_event = _Event()
+                self._start_event = _Event()
+                self._pipeline_thread = _ThreadRef()
+                self.stop_called = False
+
+            def stop(self, *, log_context="파이프라인 중단", unload_llm=True):
+                self.stop_called = True
+                self.stop_context = log_context
+                self.unload_llm = unload_llm
+
+        class _Trainer:
+            def __init__(self):
+                self.suspend_args = None
+                self.shutdown_timeout = None
+
+            def suspend_for_foreground_activity(self, *, reason, hold_ms):
+                self.suspend_args = (reason, hold_ms)
+                return {"suspended": True}
+
+            def shutdown(self, *, timeout_sec=3.0):
+                self.shutdown_timeout = timeout_sec
+                return {"stopped": False, "busy": True}
+
+        class _Manager:
+            def __init__(self):
+                self._running = True
+                self.stopped = False
+
+            def stop(self):
+                self.stopped = True
+                self._running = False
+
+        fake_threads = []
+
+        class _FakeThread:
+            def __init__(self, *, target, daemon=False, name=None):
+                self.target = target
+                self.daemon = daemon
+                self.name = name
+                self.started = False
+                fake_threads.append(self)
+
+            def start(self):
+                self.started = True
+
+        backend = _Backend()
+        trainer = _Trainer()
+        cloud_manager = _Manager()
+        nas_manager = _Manager()
+        try:
+            window.backend = backend
+            window.backend_fast = None
+            window._personalization_idle_trainer = trainer
+            window._cloud_sync_manager = cloud_manager
+            window._nas_sync_manager = nas_manager
+            with mock.patch("ui.main.main_window.threading.Thread", _FakeThread), \
+                 mock.patch("core.audio.live_stt.stop_live_stt_worker", return_value=False):
+                paused = window._pause_all_runtime_work_for_exit(context="앱 종료")
+
+            self.assertTrue(paused)
+            self.assertTrue(window._fast_exit_requested)
+            self.assertEqual(trainer.suspend_args, ("app_exit", 3_600_000))
+            self.assertEqual(trainer.shutdown_timeout, 0.0)
+            self.assertTrue(cloud_manager.stopped)
+            self.assertTrue(nas_manager.stopped)
+            self.assertFalse(backend._active)
+            self.assertEqual(backend._action_state[0], "exit")
+            self.assertTrue(backend._edit_event.set_called)
+            self.assertTrue(backend._start_event.set_called)
+            self.assertFalse(backend._pipeline_thread.join_called)
+            self.assertFalse(backend.stop_called)
+            self.assertEqual(len(fake_threads), 1)
+            self.assertTrue(fake_threads[0].daemon)
+            self.assertEqual(fake_threads[0].name, "fast-exit-backend-stop")
+            self.assertTrue(fake_threads[0].started)
+        finally:
+            window.backend = None
+            window.backend_fast = None
+            window._editor_widget = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_quick_exit_skips_backup_when_runtime_busy_and_pauses_first(self):
+        window = MainWindow()
+        events = []
+        try:
+            window._has_active_runtime_work_for_exit = lambda: True
+            window._pause_all_runtime_work_for_exit = lambda *, context: events.append(("pause", context))
+            window._backup_before_quick_exit = lambda: events.append(("backup", None))
+            window._schedule_forced_process_exit = lambda *, delay_ms: events.append(("schedule", delay_ms))
+
+            with mock.patch("ui.main.main_file_ops.QApplication.quit") as quit_app:
+                window._quick_exit()
+
+            self.assertEqual(events, [("pause", "앱 종료"), ("schedule", 250)])
+            quit_app.assert_called_once()
+        finally:
             window.close()
             window.deleteLater()
             self.app.processEvents()

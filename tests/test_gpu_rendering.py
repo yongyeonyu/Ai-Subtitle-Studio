@@ -31,6 +31,16 @@ class GpuRenderingSafetyTests(unittest.TestCase):
             self.assertFalse(gpu_widgets_enabled("timeline"))
             self.assertEqual(gpu_backend_name("timeline"), "qwidget")
 
+    def test_opengl_widgets_are_default_off_in_real_app_runs(self):
+        from ui.gpu_rendering import gpu_backend_name, gpu_widgets_enabled
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("ui.gpu_rendering._running_under_pytest", return_value=False):
+            self.assertFalse(gpu_widgets_enabled())
+            self.assertEqual(gpu_backend_name(), "qwidget")
+            self.assertFalse(gpu_widgets_enabled("video"))
+            self.assertEqual(gpu_backend_name("video"), "qwidget")
+
     def test_opengl_widgets_require_explicit_opt_in(self):
         from ui.gpu_rendering import gpu_backend_name, gpu_widgets_enabled
 

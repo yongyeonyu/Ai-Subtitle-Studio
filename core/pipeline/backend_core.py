@@ -162,6 +162,9 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
 
     # ─── 파이프라인 시작 ─────────────────────────────────
     def start_pipeline(self, files, folder=None, is_icloud=False, is_auto_start=False):
+        pause_lora = getattr(self.ui, "_pause_personalization_for_foreground_activity", None)
+        if callable(pause_lora):
+            pause_lora("pipeline_start", hold_ms=300_000)
         self._active = True
         set_runtime_settings_override(getattr(self.ui, "_runtime_settings_override", None))
         self.files_to_process = list(files)

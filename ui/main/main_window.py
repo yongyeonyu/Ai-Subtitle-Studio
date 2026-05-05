@@ -118,6 +118,10 @@ class MainWindow(
         self._post_completion_idle_enabled = False
         self._post_completion_idle_ms = 600_000
         self._app_event_filter_installed = False
+        self._lora_foreground_busy_until_ms = 0
+        self._lora_foreground_busy_reason = ""
+        self._fast_exit_requested = False
+        self._fast_exit_pause_logged = False
 
         settings = load_settings()
         self._auto_start_on = settings.get("auto_start_enabled", True)
@@ -307,8 +311,27 @@ class MainWindow(
         panel = getattr(self, "bottom_work_panel", None)
         if panel is not None:
             panel.show_queue_table()
+            if self._should_preserve_editor_processing_layout():
+                return
             panel.setVisible(False)
             panel.setMaximumHeight(0)
+
+    def _should_preserve_editor_processing_layout(self) -> bool:
+        """Keep the editor/video geometry stable while the start pipeline is running."""
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None:
+            return False
+        try:
+            stack = getattr(self, "stack", None)
+            if stack is not None and stack.currentWidget() is not editor:
+                return False
+        except RuntimeError:
+            return False
+        except Exception:
+            pass
+        state_manager = getattr(editor, "sm", None)
+        state = str(getattr(state_manager, "state", "") or "")
+        return state == "ST_PROC" or bool(getattr(editor, "_is_ai_processing", False))
 
     def _show_bottom_roughcut_table(self):
         self._dock_global_menu_to_workspace()
@@ -841,6 +864,9 @@ class MainWindow(
                 self._trash_bin.pop(0)
             self._editor_widget = None
         self._build_home_content()
+        pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
+        if callable(pause_lora):
+            pause_lora("home_return", hold_ms=120_000)
 
     def _stop_active_ai_for_home(self):
         self._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.5, stop_active=True)
@@ -1010,6 +1036,225 @@ class MainWindow(
             return stopped_any
         finally:
             self._runtime_cleanup_in_progress = False
+
+    def _has_active_runtime_work_for_exit(self) -> bool:
+        editor = getattr(self, "_editor_widget", None)
+        if self._is_editor_ai_busy(editor) or self._is_backend_ai_busy():
+            return True
+        if bool(getattr(self, "_auto_processing_active", False)):
+            return True
+        for manager_name in ("_cloud_sync_manager", "_nas_sync_manager"):
+            manager = getattr(self, manager_name, None)
+            if manager is None:
+                continue
+            try:
+                if bool(getattr(manager, "_in_flight", None)) or bool(getattr(manager, "_folder_jobs", None)):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _restore_normal_cursor_for_exit(self):
+        app = QApplication.instance()
+        if app is None:
+            return
+        for _ in range(8):
+            try:
+                if QApplication.overrideCursor() is None:
+                    break
+                QApplication.restoreOverrideCursor()
+            except Exception:
+                break
+
+    def _schedule_forced_process_exit(self, *, delay_ms: int = 250):
+        if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
+            return
+        delay_sec = max(0.02, float(max(20, int(delay_ms))) / 1000.0)
+        try:
+            timer = threading.Timer(delay_sec, lambda: os._exit(0))
+            timer.daemon = True
+            timer.start()
+        except Exception:
+            pass
+        try:
+            QTimer.singleShot(max(20, int(delay_ms)), lambda: os._exit(0))
+        except Exception:
+            pass
+
+    def _pause_editor_runtime_for_exit(self, editor) -> bool:
+        if editor is None:
+            return False
+        stopped_any = False
+        try:
+            state_manager = getattr(editor, "sm", None)
+            if state_manager is not None and hasattr(state_manager, "stop_processing"):
+                state_manager.stop_processing("앱 종료로 작업을 일시 정지했습니다.")
+                stopped_any = True
+        except Exception:
+            pass
+        for timer_name in ("_spinner_timer", "_roughcut_draft_timer", "_cut_boundary_scan_timer"):
+            try:
+                timer = getattr(editor, timer_name, None)
+                if timer is not None and hasattr(timer, "stop"):
+                    timer.stop()
+                    stopped_any = True
+            except Exception:
+                pass
+        try:
+            editor._roughcut_draft_pending = False
+            editor._roughcut_draft_generation = int(getattr(editor, "_roughcut_draft_generation", 0) or 0) + 1
+        except Exception:
+            pass
+        try:
+            video_player = getattr(editor, "video_player", None)
+            if video_player is not None:
+                timer = getattr(video_player, "_ui_timer", None)
+                if timer is not None:
+                    timer.stop()
+                if hasattr(video_player, "pause_video"):
+                    video_player.pause_video()
+                for player_name in ("media_player", "vocal_player", "audio_player"):
+                    player = getattr(video_player, player_name, None)
+                    if player is not None and hasattr(player, "stop"):
+                        player.stop()
+                stopped_any = True
+        except Exception:
+            pass
+        try:
+            timeline = getattr(editor, "timeline", None)
+            stop_waveform = getattr(timeline, "stop_waveform_workers", None) if timeline is not None else None
+            if callable(stop_waveform):
+                stop_waveform()
+                stopped_any = True
+        except Exception:
+            pass
+        return stopped_any
+
+    def _pause_backend_runtime_for_exit(self, backend, *, context: str = "앱 종료") -> bool:
+        if backend is None:
+            return False
+        was_busy = self._is_backend_instance_busy(backend)
+        stopped_any = bool(was_busy)
+        try:
+            setattr(backend, "_active", False)
+        except Exception:
+            pass
+        try:
+            action_state = getattr(backend, "_action_state", None)
+            if isinstance(action_state, list) and action_state:
+                action_state[0] = "exit"
+                stopped_any = True
+        except Exception:
+            pass
+        for event_name in ("_edit_event", "_start_event"):
+            try:
+                event_obj = getattr(backend, event_name, None)
+                if event_obj is not None and hasattr(event_obj, "set"):
+                    event_obj.set()
+                    stopped_any = True
+            except Exception:
+                pass
+
+        stop_fn = getattr(backend, "stop", None)
+        if callable(stop_fn) and was_busy:
+            def _stop_backend_without_blocking_ui():
+                try:
+                    import inspect
+
+                    params = inspect.signature(stop_fn).parameters
+                    kwargs = {}
+                    if "log_context" in params:
+                        kwargs["log_context"] = context
+                    if "unload_llm" in params:
+                        kwargs["unload_llm"] = False
+                    stop_fn(**kwargs)
+                except TypeError:
+                    try:
+                        stop_fn()
+                    except Exception:
+                        pass
+                except Exception as exc:
+                    try:
+                        get_logger().log(f"⚠️ {context} 중 백엔드 일시정지 실패: {exc}")
+                    except Exception:
+                        pass
+
+            try:
+                threading.Thread(
+                    target=_stop_backend_without_blocking_ui,
+                    daemon=True,
+                    name="fast-exit-backend-stop",
+                ).start()
+            except Exception:
+                pass
+        return stopped_any
+
+    def _stop_auto_watchdogs_for_exit(self) -> bool:
+        stopped_any = False
+        for manager_name in ("_cloud_sync_manager", "_nas_sync_manager"):
+            manager = getattr(self, manager_name, None)
+            if manager is None:
+                continue
+            try:
+                if bool(getattr(manager, "_running", False)):
+                    stopped_any = True
+                if hasattr(manager, "stop"):
+                    manager.stop()
+            except Exception:
+                pass
+        return stopped_any
+
+    def _pause_all_runtime_work_for_exit(self, *, context: str = "앱 종료") -> bool:
+        self._fast_exit_requested = True
+        context = str(context or "앱 종료").strip() or "앱 종료"
+        stopped_any = False
+        try:
+            self._restore_normal_cursor_for_exit()
+        except Exception:
+            pass
+        try:
+            self._detach_app_event_filter()
+        except Exception:
+            pass
+        try:
+            self._stop_post_completion_idle_timer()
+        except Exception:
+            pass
+        try:
+            stopped_any = self._stop_auto_watchdogs_for_exit() or stopped_any
+        except Exception:
+            pass
+        try:
+            self._pause_personalization_for_foreground_activity("app_exit", hold_ms=3_600_000)
+            self._shutdown_personalization_idle_trainer(timeout_sec=0.0)
+            stopped_any = True
+        except Exception:
+            pass
+        try:
+            stopped_any = self._pause_editor_runtime_for_exit(getattr(self, "_editor_widget", None)) or stopped_any
+        except Exception:
+            pass
+        for backend_name in ("backend", "backend_fast"):
+            try:
+                stopped_any = self._pause_backend_runtime_for_exit(
+                    getattr(self, backend_name, None),
+                    context=context,
+                ) or stopped_any
+            except Exception:
+                pass
+        try:
+            from core.audio.live_stt import stop_live_stt_worker
+
+            stopped_any = bool(stop_live_stt_worker()) or stopped_any
+        except Exception:
+            pass
+        if stopped_any and not getattr(self, "_fast_exit_pause_logged", False):
+            try:
+                get_logger().log("⏸️ 앱 종료: 진행 중인 작업을 즉시 일시 정지했습니다.")
+            except Exception:
+                pass
+            self._fast_exit_pause_logged = True
+        return stopped_any
 
     def _is_editor_ai_busy(self, editor=None) -> bool:
         editor = editor or getattr(self, "_editor_widget", None)
@@ -1212,6 +1457,35 @@ class MainWindow(
             return {"started": False, "reason": "trainer_unavailable"}
         return trainer.run_pending_now()
 
+    def _pause_personalization_for_foreground_activity(
+        self,
+        reason: str = "foreground_activity",
+        *,
+        hold_ms: int = 120_000,
+    ):
+        """Stop launching LoRA learning while the user/app starts foreground work."""
+        now = QDateTime.currentMSecsSinceEpoch()
+        try:
+            hold = max(0, int(hold_ms))
+        except Exception:
+            hold = 120_000
+        self._lora_foreground_busy_until_ms = max(
+            int(getattr(self, "_lora_foreground_busy_until_ms", 0) or 0),
+            now + hold,
+        )
+        self._lora_foreground_busy_reason = str(reason or "foreground_activity")
+        trainer = getattr(self, "_personalization_idle_trainer", None)
+        if trainer is None:
+            return {"suspended": False, "reason": "trainer_unavailable"}
+        try:
+            return trainer.suspend_for_foreground_activity(
+                reason=self._lora_foreground_busy_reason,
+                hold_ms=hold,
+            )
+        except Exception as exc:
+            get_logger().log(f"⚠️ 개인화 학습 일시중지 실패: {exc}")
+            return {"suspended": False, "reason": str(exc)}
+
     def _pause_personalization_idle_jobs(self):
         trainer = getattr(self, "_personalization_idle_trainer", None)
         if trainer is None:
@@ -1393,9 +1667,24 @@ class MainWindow(
         return result
 
     def closeEvent(self, event):
+        busy_before_exit = False
         try:
-            self._detach_app_event_filter()
+            busy_before_exit = bool(self._has_active_runtime_work_for_exit())
         except Exception:
             pass
-        self._shutdown_personalization_idle_trainer(timeout_sec=3.0)
-        super().closeEvent(event)
+        self._pause_all_runtime_work_for_exit(context="앱 종료")
+        if not busy_before_exit:
+            try:
+                self._backup_before_quick_exit()
+            except Exception:
+                pass
+        try:
+            get_logger().clear_ui_callback()
+        except Exception:
+            pass
+        try:
+            self.blockSignals(True)
+        except Exception:
+            pass
+        event.accept()
+        self._schedule_forced_process_exit(delay_ms=120)

@@ -67,6 +67,10 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertTrue(paths["unified_lora_data"].exists())
             self.assertEqual(paths["unified_lora_data"].name, "lora_data_bundle.zip")
             self.assertTrue(zipfile.is_zipfile(paths["unified_lora_data"]))
+            with zipfile.ZipFile(paths["unified_lora_data"], "r") as archive:
+                for info in archive.infolist():
+                    self.assertEqual(info.compress_type, zipfile.ZIP_STORED)
+                    self.assertEqual(info.compress_size, info.file_size)
             self.assertIn("llm_review_request", paths)
             self.assertIn("llm_review_result", paths)
             self.assertEqual(manifest["counts"]["truth_table_rows"], 0)
@@ -407,6 +411,15 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertTrue(result["exists"])
             self.assertTrue(result["refreshed"])
             self.assertTrue(zipfile.is_zipfile(Path(result["path"])))
+            with zipfile.ZipFile(Path(result["path"]), "r") as archive:
+                names = set(archive.namelist())
+                self.assertIn("manifest.json", names)
+                manifest_payload = json.loads(archive.read("manifest.json").decode("utf-8"))
+                self.assertEqual(manifest_payload["compression"], "stored_no_compression")
+                self.assertEqual(manifest_payload["compression_level"], 0)
+                for info in archive.infolist():
+                    self.assertEqual(info.compress_type, zipfile.ZIP_STORED)
+                    self.assertEqual(info.compress_size, info.file_size)
             self.assertEqual(result["record_count"], 2)
             payload = load_unified_lora_data_bundle(result["path"])
             self.assertEqual(payload["records"][0]["kind"], "prompt_trials")
@@ -414,6 +427,8 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertEqual(payload["storage_mode"], "single_file_managed_zip_bundle")
             self.assertEqual(payload["bundle_role"], "primary_user_managed_lora_learning_file")
             self.assertEqual(payload["archive_format"], "zip")
+            self.assertEqual(payload["archive_compression"], "stored_no_compression")
+            self.assertEqual(payload["archive_compression_level"], 0)
             self.assertEqual(payload["sections"]["text_lora_corpus"][0]["output"], "안녕하세요")
             self.assertEqual(payload["sections"]["text_lora_corpus_manifest"]["stats"]["total_items"], 1)
 

@@ -821,14 +821,74 @@ class HomeSidebarMixin:
         provisional_lines = list(getattr(editor, "_auto_cut_boundary_scan_lines", []) or [])
         return any(not self._cut_boundary_scan_line_confirmed(row) for row in provisional_lines)
 
+    def _cut_boundary_status_lines(self, blob: str) -> list[str]:
+        normalized = str(blob or "").replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+        lines = [line.strip() for line in normalized.splitlines() if str(line or "").strip()]
+        return [
+            line
+            for line in lines
+            if any(
+                token in line.lower()
+                for token in (
+                    "[컷 경계]",
+                    "컷 경계",
+                    "scan-cut",
+                    "scan cut",
+                    "cut boundary",
+                    "cut_boundary",
+                )
+            )
+        ]
+
+    def _cut_boundary_line_is_pending(self, line: str) -> bool:
+        text = str(line or "").lower()
+        return any(
+            token in text
+            for token in (
+                "완료 대기",
+                "완료대기",
+                "대기 중",
+                "대기중",
+                "진행 중",
+                "진행중",
+                "분석 중",
+                "분석중",
+                "탐색 중",
+                "탐색중",
+                "확인 중",
+                "확인중",
+                "waiting",
+                "pending",
+                "running",
+            )
+        )
+
+    def _cut_boundary_log_pending(self, blob: str) -> bool:
+        for line in reversed(self._cut_boundary_status_lines(blob)):
+            if self._cut_boundary_line_is_pending(line):
+                return True
+            if self._cut_boundary_line_is_complete(line):
+                return False
+        return False
+
+    def _cut_boundary_line_is_complete(self, line: str) -> bool:
+        text = str(line or "")
+        return any(
+            token in text
+            for token in (
+                "컷 경계 완료",
+                "컷 경계 자동 분석 완료",
+                "STT 시작 전 자동 분석 완료",
+                "캐시 재사용",
+            )
+        )
+
     def _cut_boundary_scan_completed(self, editor, blob: str) -> bool:
-        if (
-            "컷 경계 완료" in blob
-            or "컷 경계 자동 분석 완료" in blob
-            or "STT 시작 전 자동 분석 완료" in blob
-            or "캐시 재사용" in blob and "[컷 경계]" in blob
-        ):
-            return True
+        for line in reversed(self._cut_boundary_status_lines(blob)):
+            if self._cut_boundary_line_is_pending(line):
+                return False
+            if self._cut_boundary_line_is_complete(line):
+                return True
         if editor is None:
             return False
         if bool(getattr(editor, "_cut_boundary_prescan_completed", False)):
@@ -917,7 +977,7 @@ class HomeSidebarMixin:
                 or bool(getattr(editor, "_subtitle_generation_completed", False))
             )
         )
-        cut_boundary_pending = self._cut_boundary_scan_pending(editor)
+        cut_boundary_pending = self._cut_boundary_scan_pending(editor) or self._cut_boundary_log_pending(blob)
         cut_boundary_done = self._cut_boundary_scan_completed(editor, blob)
         cached_stages = self._pipeline_cached_stage_keys(blob)
         completed.update(cached_stages)

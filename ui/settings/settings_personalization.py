@@ -22,7 +22,12 @@ from core.personalization.ground_truth_import import (
     pair_ground_truth_assets,
     resolve_ambiguous_matches,
 )
-from core.personalization.idle_trainer import enqueue_default_training_jobs, recover_interrupted_training_jobs
+from core.personalization.idle_trainer import (
+    enqueue_default_training_jobs,
+    enqueue_full_training_jobs,
+    format_training_queue_status_summary,
+    recover_interrupted_training_jobs,
+)
 from core.personalization.lora_rule_learning import (
     apply_split_rule_update_review,
     build_split_rule_update_review,
@@ -111,6 +116,8 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         self._pending_queue_batch_silent = False
         self._pending_queue_batch_started = 0
         self._pending_queue_batch_limit = 64
+        self._pending_queue_batch_manual_full = False
+        self._pending_queue_batch_stop_requested = False
         self._pending_queue_batch_timer = QTimer(self)
         self._pending_queue_batch_timer.setSingleShot(True)
         self._pending_queue_batch_timer.timeout.connect(self._drain_pending_jobs_step)
@@ -168,10 +175,16 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         self.btn_add_learning_folder.clicked.connect(self._add_folder)
         quick_row.addWidget(self.btn_add_learning_folder)
 
-        self.btn_start_auto_learning = QPushButton("자동 학습 등록")
+        self.btn_start_auto_learning = QPushButton("학습 시작")
         self.btn_start_auto_learning.setStyleSheet(_compact_button_style("primary"))
-        self.btn_start_auto_learning.clicked.connect(self._start_auto_learning)
+        self.btn_start_auto_learning.clicked.connect(self._start_full_learning)
         quick_row.addWidget(self.btn_start_auto_learning)
+
+        self.btn_stop_full_learning = QPushButton("학습 종료")
+        self.btn_stop_full_learning.setStyleSheet(_compact_button_style("toolbar"))
+        self.btn_stop_full_learning.clicked.connect(self._stop_full_learning)
+        self.btn_stop_full_learning.setEnabled(False)
+        quick_row.addWidget(self.btn_stop_full_learning)
         layout.addLayout(quick_row)
 
         list_title = QLabel("<b>자동 pair 확인</b>")
@@ -219,7 +232,7 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         layout.addLayout(manage_row)
 
         self.auto_note = QLabel(
-            "규칙 재학습, 코퍼스 갱신, 낮은 점수 정리, ZIP/검색 인덱스 갱신은 홈/편집 대기 시간에 자동으로 처리됩니다."
+            "평소에는 홈/편집 대기 시간에 조용히 자동 학습합니다. '학습 시작'은 전체 큐를 즉시 다시 돌리고, '학습 종료'는 수동 학습을 멈춘 뒤 백그라운드 자동 학습으로 돌립니다."
         )
         self.auto_note.setWordWrap(True)
         layout.addWidget(self.auto_note)
@@ -288,7 +301,7 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
             f"가져온 입력 {len(self._staged_inputs)}개 · 자동 pair {len(self._paired_assets)}개 · 확인 필요 {len(self._ambiguous_assets)}개"
         )
 
-        queue_summary = " · ".join(f"{_queue_status_label(key)} {value}개" for key, value in sorted(queue_counts.items())) or "대기 작업 없음"
+        queue_summary = format_training_queue_status_summary(queue_items)
         waiting_summary = " · ".join(
             f"{_queue_job_type_label(key)} {value}개"
             for key, value in sorted(waiting_type_counts.items(), key=lambda item: (_queue_job_type_label(item[0]), item[0]))
@@ -466,9 +479,12 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         self._pending_queue_batch_active = True
         self._pending_queue_batch_silent = bool(silent)
         self._pending_queue_batch_started = 0
+        self._pending_queue_batch_stop_requested = False
         if self.btn_run_queue is not None:
             self.btn_run_queue.setEnabled(False)
             self.btn_run_queue.setText("실행 중...")
+        if self._pending_queue_batch_manual_full:
+            self._set_full_learning_buttons_active(True)
         self._drain_pending_jobs_step()
         return True
 
@@ -513,6 +529,95 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         if unresolved:
             lines.append(f"확인이 필요한 ambiguous pair {len(unresolved)}개는 제외했습니다.")
         QMessageBox.information(self, "자동 학습 등록 완료", "\n".join(lines))
+
+    def _set_full_learning_buttons_active(self, active: bool):
+        self.btn_start_auto_learning.setEnabled(not active)
+        self.btn_start_auto_learning.setText("학습 중..." if active else "학습 시작")
+        if self.btn_stop_full_learning is not None:
+            self.btn_stop_full_learning.setEnabled(bool(active))
+
+    def _start_full_learning(self):
+        if self._pending_queue_batch_active:
+            QMessageBox.information(self, "안내", "이미 Full 학습을 실행 중입니다.")
+            return
+        trainer = self._trainer()
+        if trainer is None:
+            QMessageBox.information(self, "안내", "개인화 학습 트레이너를 찾을 수 없습니다.")
+            return
+        if hasattr(trainer, "is_busy") and trainer.is_busy():
+            QMessageBox.information(self, "안내", "이미 백그라운드 학습이 실행 중입니다. 잠시 후 다시 시작해 주세요.")
+            return
+
+        self.btn_start_auto_learning.setEnabled(False)
+        self.btn_start_auto_learning.setText("준비 중...")
+        try:
+            resolved = self._resolve_pairs_for_import()
+            selected_pairs = list(resolved.get("pairs") or [])
+            unresolved = list(resolved.get("unresolved") or [])
+            import_result = {"imported_pairs": 0, "truth_rows": 0, "excluded_rows": 0}
+            if selected_pairs:
+                import_result = import_ground_truth_pairs(selected_pairs)
+            current_segments, current_project_path = self._current_editor_segments()
+            accumulate_result = accumulate_personalization_dataset(
+                current_segments=current_segments,
+                current_project_path=current_project_path,
+                trigger="manual_full_learning",
+            )
+            recover_interrupted_training_jobs(reason="manual_full_learning_start")
+            queue_payload = enqueue_full_training_jobs(selected_pairs)
+            waiting_count = sum(
+                1
+                for item in list(queue_payload.get("items") or [])
+                if str(item.get("status") or "") == "waiting"
+            )
+        except Exception as exc:
+            self.btn_start_auto_learning.setEnabled(True)
+            self.btn_start_auto_learning.setText("학습 시작")
+            QMessageBox.warning(self, "Full 학습 시작 오류", str(exc))
+            return
+
+        if waiting_count <= 0:
+            self.btn_start_auto_learning.setEnabled(True)
+            self.btn_start_auto_learning.setText("학습 시작")
+            self._refresh_summary()
+            QMessageBox.information(self, "안내", "실행할 학습 데이터가 없습니다. 영상/SRT pair를 먼저 추가해 주세요.")
+            return
+
+        self._pending_queue_batch_limit = max(1, waiting_count)
+        self._pending_queue_batch_manual_full = True
+        self._pending_queue_batch_stop_requested = False
+        started = self._begin_pending_job_batch(silent=True)
+        self._refresh_summary()
+        if not started:
+            self._pending_queue_batch_manual_full = False
+            self.btn_start_auto_learning.setEnabled(True)
+            self.btn_start_auto_learning.setText("학습 시작")
+            QMessageBox.information(self, "안내", "Full 학습을 시작하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+            return
+
+        self._set_full_learning_buttons_active(True)
+        lines = [
+            f"Full 학습 실행 중: 대기 작업 {waiting_count}개",
+            f"새 pair {int(import_result.get('imported_pairs', 0) or 0)}개 · truth {int(import_result.get('truth_rows', 0) or 0)}행 · 현재 편집 누적 {int(accumulate_result.get('appended_rows', 0) or 0)}개",
+            "학습 종료를 누르면 현재 작업에 중지 신호를 보내고, 남은 작업은 이후 idle 백그라운드 학습으로 이어집니다.",
+        ]
+        if unresolved:
+            lines.append(f"확인이 필요한 ambiguous pair {len(unresolved)}개는 제외했습니다.")
+        self.queue_summary_label.setText("\n".join(lines))
+
+    def _stop_full_learning(self):
+        if not self._pending_queue_batch_active:
+            self._set_full_learning_buttons_active(False)
+            self.queue_summary_label.setText("Full 학습은 실행 중이 아닙니다. 자동 백그라운드 학습 상태로 대기합니다.")
+            return
+        self._pending_queue_batch_stop_requested = True
+        trainer = self._trainer()
+        if trainer is not None and hasattr(trainer, "suspend_for_foreground_activity"):
+            try:
+                trainer.suspend_for_foreground_activity(reason="manual_full_training_stop", hold_ms=0)
+            except Exception:
+                pass
+        self._finish_pending_job_batch("manual_stop")
 
     def _import_ground_truth_pairs(self):
         resolved = self._resolve_pairs_for_import()
@@ -571,6 +676,7 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         if self._pending_queue_batch_active:
             QMessageBox.information(self, "안내", "이미 대기 작업을 백그라운드 실행 중입니다.")
             return
+        self._pending_queue_batch_manual_full = False
         trainer = self._trainer()
         if trainer is None:
             QMessageBox.information(self, "안내", "개인화 학습 트레이너를 찾을 수 없습니다.")
@@ -578,6 +684,7 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         self._pending_queue_batch_active = True
         self._pending_queue_batch_silent = False
         self._pending_queue_batch_started = 0
+        self._pending_queue_batch_stop_requested = False
         if self.btn_run_queue is not None:
             self.btn_run_queue.setEnabled(False)
             self.btn_run_queue.setText("실행 중...")
@@ -585,6 +692,9 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
 
     def _drain_pending_jobs_step(self):
         if not self._pending_queue_batch_active:
+            return
+        if self._pending_queue_batch_stop_requested:
+            self._finish_pending_job_batch("manual_stop")
             return
         trainer = self._trainer()
         if trainer is None:
@@ -597,7 +707,10 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
             self._finish_pending_job_batch("limit_reached")
             return
         if hasattr(trainer, "start_background_run"):
-            result = trainer.start_background_run()
+            try:
+                result = trainer.start_background_run(low_resource=not self._pending_queue_batch_manual_full)
+            except TypeError:
+                result = trainer.start_background_run()
         else:
             result = {"started": False, "reason": "trainer_unavailable"}
         if not bool(result.get("started")):
@@ -610,15 +723,25 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
     def _finish_pending_job_batch(self, reason: str):
         self._pending_queue_batch_active = False
         silent = bool(self._pending_queue_batch_silent)
+        manual_full = bool(self._pending_queue_batch_manual_full)
         self._pending_queue_batch_silent = False
+        self._pending_queue_batch_manual_full = False
+        self._pending_queue_batch_stop_requested = False
         self._pending_queue_batch_timer.stop()
         if self.btn_run_queue is not None:
             self.btn_run_queue.setEnabled(True)
             self.btn_run_queue.setText("대기 실행")
+        self._set_full_learning_buttons_active(False)
         self._refresh_summary()
         started = int(self._pending_queue_batch_started or 0)
+        if reason == "manual_stop":
+            self.queue_summary_label.setText(
+                f"Full 학습 종료: {started}개 작업을 시작했습니다. 남은 작업은 idle 상태에서 백그라운드로 이어집니다."
+            )
+            return
         if silent:
-            self.queue_summary_label.setText(f"대기 작업 자동 실행: {started}개 처리")
+            label = "Full 학습" if manual_full else "대기 작업 자동 실행"
+            self.queue_summary_label.setText(f"{label}: {started}개 처리")
             return
         if reason == "no_pending_job" and started == 0:
             message = "실행할 대기 작업이 없습니다."

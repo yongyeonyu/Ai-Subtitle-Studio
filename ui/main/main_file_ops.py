@@ -21,6 +21,9 @@ class FileOpsMixin:
     """파일/폴더 선택 및 배치·멀티클립 모드 진입 관련 메서드."""
 
     def _prepare_dialog_state(self):
+        pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
+        if callable(pause_lora):
+            pause_lora("file_dialog")
         try:
             fw = QApplication.focusWidget()
             if fw is not None:
@@ -112,6 +115,10 @@ class FileOpsMixin:
         """폴더/NAS/iCloud 공용 큐 모드: 클립을 하나씩 열고 시작 버튼 흐름으로 자동 처리."""
         if not files:
             return
+
+        pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
+        if callable(pause_lora):
+            pause_lora(f"{source}_queue_start", hold_ms=300_000)
 
         if getattr(self, "_queue_mode_starting", False):
             return
@@ -215,6 +222,10 @@ class FileOpsMixin:
     def _show_multiclip_then_batch(self, files, folder=None, show_multiclip=True):
         from ui.project.multiclip_panel import MultiClipEditor
 
+        pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
+        if callable(pause_lora):
+            pause_lora("multiclip_open", hold_ms=300_000)
+
         dlg = MultiClipEditor(files, self, show_multiclip=show_multiclip)
         if dlg.exec():
             self._multiclip_files = list(dlg.sorted_files)
@@ -261,12 +272,33 @@ class FileOpsMixin:
                 QMessageBox.warning(self, "오류", f"삭제 중 오류: {e}")
 
     def _quick_exit(self):
-        self._backup_before_quick_exit()
-        if self.backend:
+        busy_before_exit = False
+        try:
+            busy_before_exit = bool(self._has_active_runtime_work_for_exit())
+        except Exception:
+            pass
+
+        pause_runtime = getattr(self, "_pause_all_runtime_work_for_exit", None)
+        if callable(pause_runtime):
+            pause_runtime(context="앱 종료")
+        elif self.backend:
             try:
-                self.backend.stop(log_context="앱 종료")
+                self.backend.stop(log_context="앱 종료", unload_llm=False)
             except TypeError:
                 self.backend.stop()
+
+        if not busy_before_exit:
+            self._backup_before_quick_exit()
+        else:
+            try:
+                from core.runtime.logger import get_logger
+
+                get_logger().log("⏸️ 종료 전 백업은 생략하고, 진행 중 작업 일시 정지를 우선했습니다.")
+            except Exception:
+                pass
+        schedule_exit = getattr(self, "_schedule_forced_process_exit", None)
+        if callable(schedule_exit):
+            schedule_exit(delay_ms=250)
         QApplication.quit()
 
     def _restore_current_work_mode(self):

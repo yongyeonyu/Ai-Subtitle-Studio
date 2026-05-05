@@ -147,6 +147,7 @@ class LoraVectorRetrieverTests(unittest.TestCase):
     def test_runtime_prompt_uses_scored_lora_retrieval_context(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._seed_vehicle_store(tmpdir)
+            build_lora_retrieval_index(tmpdir)
 
             prompt = build_runtime_lora_prompt(
                 "bmw x5 고속도로 노면 소음 확인",
@@ -163,6 +164,7 @@ class LoraVectorRetrieverTests(unittest.TestCase):
     def test_retrieved_settings_apply_to_similar_media_without_exact_path_match(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._seed_vehicle_store(tmpdir)
+            build_lora_retrieval_index(tmpdir)
 
             override = personalization_settings_override_for_media(
                 "/new_jobs/BMW X5 vehicle review final cut.mp4",

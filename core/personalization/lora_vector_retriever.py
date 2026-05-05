@@ -109,8 +109,9 @@ def retrieve_lora_context(
     limit: int = 16,
     per_kind: int = 5,
     kinds: set[str] | tuple[str, ...] | list[str] | None = None,
+    rebuild_if_stale: bool = True,
 ) -> dict[str, Any]:
-    index = load_lora_retrieval_index(store_dir)
+    index = load_lora_retrieval_index(store_dir, rebuild_if_stale=rebuild_if_stale)
     query = query_text(text, media_path=media_path, media_id=media_id, settings=settings, context=context)
     kind_filter = {str(kind) for kind in kinds} if kinds is not None else None
     cache_key = query_cache_key(

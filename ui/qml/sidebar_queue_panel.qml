@@ -118,13 +118,13 @@ Item {
                     anchors.fill: parent
                     anchors.leftMargin: 10
                     anchors.rightMargin: 10
-                    anchors.topMargin: 9
-                    anchors.bottomMargin: 9
-                    spacing: 6
+                    anchors.topMargin: 7
+                    anchors.bottomMargin: 7
+                    spacing: 4
 
                     Row {
                         width: parent.width
-                        height: 40
+                        height: 22
                         spacing: 8
 
                         Rectangle {
@@ -146,28 +146,15 @@ Item {
                             }
                         }
 
-                        Column {
+                        Item {
                             width: parent.width - orderChip.width - timeBadge.width - 16
-                            anchors.verticalCenter: parent.verticalCenter
-                            spacing: 3
-
-                            Text {
-                                width: parent.width
-                                text: modelData.file || "-"
-                                color: "#F5F7FA"
-                                font.pixelSize: 11
-                                font.bold: true
-                                wrapMode: Text.WrapAnywhere
-                                maximumLineCount: 2
-                                elide: Text.ElideRight
-                            }
                         }
 
                         Rectangle {
                             id: timeBadge
                             width: 84
-                            height: 26
-                            radius: 13
+                            height: 22
+                            radius: 11
                             anchors.verticalCenter: parent.verticalCenter
                             color: modelData.done ? "#173222" : (modelData.error ? "#351C1F" : "#121E24")
                             border.color: modelData.done ? "#286B43" : (modelData.error ? "#6D2E35" : "#31424A")
@@ -193,6 +180,17 @@ Item {
                         height: 1
                         color: currentActive ? "#27414F" : "#1A272D"
                         opacity: 0.9
+                    }
+
+                    Text {
+                        width: parent.width
+                        height: 18
+                        text: modelData.file || "-"
+                        color: "#F5F7FA"
+                        font.pixelSize: 11
+                        font.bold: true
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideMiddle
                     }
 
                     Row {

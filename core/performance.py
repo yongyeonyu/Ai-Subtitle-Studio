@@ -12,7 +12,6 @@ import json
 import os
 import platform
 import subprocess
-import sys
 import tempfile
 import threading
 from functools import lru_cache
@@ -164,12 +163,12 @@ def configure_qt_gpu_rendering_before_app() -> None:
     """
     if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
         return
-    under_pytest = "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
-    gpu_default = "0" if under_pytest else "1"
+    # Default off in real app runs too. On macOS, forcing global Qt OpenGL can
+    # crash QtMultimedia/video widgets with Segmentation fault: 11.
+    gpu_default = "0"
     if str(os.environ.get("AI_SUBTITLE_GPU_RENDERING", gpu_default)).lower() not in {"1", "true", "yes", "on"}:
         return
-    force_default = "0" if under_pytest else "1"
-    if str(os.environ.get("AI_SUBTITLE_FORCE_QT_OPENGL", force_default)).lower() not in {"1", "true", "yes", "on"}:
+    if str(os.environ.get("AI_SUBTITLE_FORCE_QT_OPENGL", "0")).lower() not in {"1", "true", "yes", "on"}:
         return
 
     os.environ.setdefault("QT_OPENGL", "desktop")

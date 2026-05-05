@@ -55,6 +55,7 @@ def personalization_settings_override_for_media(
             limit=12,
             per_kind=4,
             kinds=("setting_trials", "best_settings", "audio_preset_lora", "multimodal_lora_context"),
+            rebuild_if_stale=False,
         )
         retrieved_override = runtime_settings_from_retrieved_items(list(retrieved.get("items") or []), min_score=28.0)
         if exact_match:

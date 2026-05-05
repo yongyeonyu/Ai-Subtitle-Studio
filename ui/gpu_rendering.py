@@ -29,9 +29,9 @@ def _running_under_pytest() -> bool:
 
 
 def _gpu_default_enabled(feature_key: str) -> str:
-    if _running_under_pytest():
-        return "0"
-    return "1"
+    # Stability first: macOS QtMultimedia + QOpenGLWidget/QQuickWidget can abort
+    # the whole process before Python can catch it. Keep GPU widgets opt-in.
+    return "0"
 
 
 def gpu_runtime_enabled(feature: str | None = None) -> bool:

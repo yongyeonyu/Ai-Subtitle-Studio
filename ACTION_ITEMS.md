@@ -49,7 +49,7 @@ release_handoff_files:
 
 - No active non-iPad items remain.
 - User-requested exclusion is still in effect for `PHASE4_iPad`.
-- v03.19.00 release work is complete; LoRA automation, vector retrieval, unified bundle storage, gap autosettings, and related refactors are not active backlog.
+- v03.19.00 release work is complete; LoRA automation, vector retrieval, unified uncompressed bundle storage, idle-only low-resource learning, Full learning controls, detailed learning logs, gap autosettings, and related refactors are not active backlog.
 
 ## Parked Work
 
