@@ -21,6 +21,11 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def _cleanup_window(self, window):
+        window.close()
+        window.deleteLater()
+        self.app.processEvents()
+
     def test_idle_countdown_keeps_header_compact(self):
         window = MainWindow()
         try:
@@ -32,7 +37,7 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
             self.assertIn("v", text)
             self.assertGreater(window._post_completion_idle_remaining_ms(), 0)
         finally:
-            window.close()
+            self._cleanup_window(window)
 
     def test_idle_timeout_is_extended_while_editor_is_editing(self):
         window = MainWindow()
@@ -44,7 +49,7 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
             self.assertTrue(window._post_completion_idle_enabled)
             self.assertGreater(window._post_completion_idle_remaining_ms(), 0)
         finally:
-            window.close()
+            self._cleanup_window(window)
 
     def test_general_user_activity_refreshes_personalization_idle_timer_without_post_completion_mode(self):
         window = MainWindow()
@@ -59,14 +64,14 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
             self.assertGreater(int(getattr(trainer, "last_user_activity_ms", 0) or 0), 0)
             self.assertFalse(window._post_completion_idle_enabled)
         finally:
-            window.close()
+            self._cleanup_window(window)
 
     def test_main_window_installs_app_event_filter_for_personalization_idle_tracking(self):
         window = MainWindow()
         try:
             self.assertTrue(bool(getattr(window, "_app_event_filter_installed", False)))
         finally:
-            window.close()
+            self._cleanup_window(window)
 
     def test_main_window_detaches_app_event_filter_on_close(self):
         window = MainWindow()
@@ -75,6 +80,7 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
         window.close()
 
         self.assertFalse(bool(getattr(window, "_app_event_filter_installed", False)))
+        self._cleanup_window(window)
 
     def test_stopping_post_completion_idle_timer_keeps_personalization_event_filter_installed(self):
         window = MainWindow()
@@ -86,7 +92,7 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
 
             self.assertTrue(bool(getattr(window, "_app_event_filter_installed", False)))
         finally:
-            window.close()
+            self._cleanup_window(window)
 
     def test_post_completion_idle_timeout_keeps_personalization_event_filter_installed(self):
         window = MainWindow()
@@ -98,7 +104,7 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
 
             self.assertTrue(bool(getattr(window, "_app_event_filter_installed", False)))
         finally:
-            window.close()
+            self._cleanup_window(window)
 
     def test_auto_toggle_keeps_current_workspace_page(self):
         window = MainWindow()
@@ -111,7 +117,7 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
                 window._toggle_auto_start_enabled()
             self.assertIs(window.stack.currentWidget(), before)
         finally:
-            window.close()
+            self._cleanup_window(window)
 
     def test_saved_project_zoom_is_ignored_and_timeline_fits(self):
         class DummyScrollBar:

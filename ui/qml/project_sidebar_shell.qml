@@ -12,15 +12,6 @@ Item {
     }
 
     Rectangle {
-        width: 2
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
-        color: "#34C759"
-        opacity: 0.9
-    }
-
-    Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
@@ -28,33 +19,6 @@ Item {
         gradient: Gradient {
             GradientStop { position: 0.0; color: "#17252B" }
             GradientStop { position: 1.0; color: "#10181D" }
-        }
-    }
-
-    Column {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: 12
-        spacing: 5
-
-        Text {
-            width: parent.width
-            text: root.panelTitle
-            color: "#EEF5FA"
-            font.pixelSize: 13
-            font.bold: true
-            elide: Text.ElideRight
-        }
-
-        Text {
-            width: parent.width
-            text: root.accentText
-            color: "#78D79B"
-            font.pixelSize: 9
-            font.bold: true
-            opacity: 0.88
-            elide: Text.ElideRight
         }
     }
 

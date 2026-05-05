@@ -1,5 +1,5 @@
 <!--
-Document-Version: 03.18.00
+Document-Version: 03.19.00
 Phase: PHASE3
 Last-Updated: 2026-05-05
 Updated-By: Codex
@@ -11,7 +11,7 @@ AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
 Last Updated: 2026-05-05
 Phase: PHASE3
-App Version: 03.18.00
+App Version: 03.19.00
 Structure Document: File_structure.txt
 Note: This file is an actual tree map and excludes cache-only Python bytecode folders.
 ================================================================================
@@ -113,12 +113,21 @@ ai_subtitle_studio/
 │   │   ├── ground_truth_import.py
 │   │   ├── idle_trainer.py
 │   │   ├── llm_review_exchange.py
+│   │   ├── lora_context_classifier.py
 │   │   ├── lora_models.py
 │   │   ├── lora_optimizer.py
 │   │   ├── lora_retention.py
+│   │   ├── lora_retrieval_config.py
+│   │   ├── lora_retrieval_index.py
+│   │   ├── lora_retrieval_scoring.py
+│   │   ├── lora_retrieval_utils.py
 │   │   ├── lora_rule_learning.py
 │   │   ├── lora_storage.py
+│   │   ├── lora_store_bundle.py
+│   │   ├── lora_store_common.py
+│   │   ├── lora_store_records.py
 │   │   ├── lora_trial_scoring.py
+│   │   ├── lora_vector_retriever.py
 │   │   ├── runtime_lora_context.py
 │   │   ├── runtime_personalization.py
 │   │   ├── text_lora_dataset.py
@@ -142,6 +151,7 @@ ai_subtitle_studio/
 │   │   ├── project_model_settings.py
 │   │   ├── project_phase1b.py
 │   │   ├── project_snapshot.py
+│   │   ├── project_srt.py
 │   │   └── subtitle_status.py
 │   ├── roughcut/
 │   │   ├── __init__.py
@@ -222,23 +232,6 @@ ai_subtitle_studio/
 │   ├── video_codec.py
 │   └── work_mode.py
 ├── dataset/
-│   ├── lora_personalization/
-│   │   ├── trained_adapters/
-│   │   ├── audio_preset_lora.jsonl
-│   │   ├── best_settings.json
-│   │   ├── dedupe_index.json
-│   │   ├── excluded_parentheticals.jsonl
-│   │   ├── learned_line_break_rules.json
-│   │   ├── learned_split_rules.json
-│   │   ├── lora_data_bundle.json
-│   │   ├── manifest.json
-│   │   ├── prompt_trials.jsonl
-│   │   ├── setting_trials.jsonl
-│   │   ├── text_lora_corpus.jsonl
-│   │   ├── text_lora_corpus_manifest.json
-│   │   ├── training_queue.json
-│   │   ├── truth_table.jsonl
-│   │   └── voice_lora_bridge.jsonl
 │   ├── personalization/
 │   │   ├── trained_adapters/
 │   │   │   └── personal_text_lora/
@@ -250,7 +243,6 @@ ai_subtitle_studio/
 │   │   ├── text_lora_training_plan.json
 │   │   ├── voice_lora_bridge.jsonl
 │   │   └── voice_lora_profile_manifest.json
-│   ├── video_preview_cache/  (not expanded)
 │   ├── audio_presets.json
 │   ├── auto_tracker.json
 │   ├── correction_memory.json
@@ -261,9 +253,8 @@ ai_subtitle_studio/
 │   ├── subtitle_rule.json
 │   ├── time_history.json
 │   └── user_settings.json
-├── output/  (not expanded)
-├── projects/  (not expanded)
 ├── tests/
+│   ├── conftest.py
 │   ├── test_accuracy_policy.py
 │   ├── test_ai_settings_runtime_apply.py
 │   ├── test_audio_presets.py
@@ -285,9 +276,11 @@ ai_subtitle_studio/
 │   ├── test_individual_queue_context.py
 │   ├── test_live_microphone_session.py
 │   ├── test_llm_correction_guard.py
+│   ├── test_lora_gap_autosettings.py
 │   ├── test_lora_personalization_storage.py
 │   ├── test_lora_rule_learning.py
 │   ├── test_lora_trial_scoring.py
+│   ├── test_lora_vector_retriever.py
 │   ├── test_media_processor_overlap.py
 │   ├── test_media_queue_order.py
 │   ├── test_model_manager.py
@@ -424,6 +417,8 @@ ai_subtitle_studio/
 │   ├── settings/
 │   │   ├── __init__.py
 │   │   ├── gap_simulator.py
+│   │   ├── personalization_learning_actions.py
+│   │   ├── personalization_learning_info.py
 │   │   ├── qml_panel.py
 │   │   ├── settings_advanced.py
 │   │   ├── settings_ai.py
@@ -494,5 +489,6 @@ ai_subtitle_studio/
 ├── RELEASE_v03.16.00.md
 ├── RELEASE_v03.17.00.md
 ├── RELEASE_v03.18.00.md
+├── RELEASE_v03.19.00.md
 ├── requirements-mac.txt
 └── requirements-windows.txt

@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-03.18.00-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v03.18.00-30D158?style=for-the-badge)](RELEASE_v03.18.00.md)
+[![App Version](https://img.shields.io/badge/app-03.19.00-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v03.19.00-30D158?style=for-the-badge)](RELEASE_v03.19.00.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-555?style=for-the-badge)](#)
@@ -16,7 +16,7 @@ Accuracy-first desktop subtitle production for long-form video, rough cuts, spea
 
 AI Subtitle Studio is built for one primary outcome: produce highly accurate subtitles on the first pass, even when that takes longer than a fast draft. The goal is to reduce manual correction time by combining STT, audio preprocessing, VAD, cut-boundary alignment, LLM cleanup, subtitle timing rules, and project-aware editing in one desktop workflow.
 
-Current development is in PHASE3. The current release extends the personalization foundation with GPU/QML rendering groundwork, lighter project data, automatic subtitle-video output support, a lighter playback/export direction, and richer LoRA workflows that can store transcript-aligned voice clips for future voice-adapter training.
+Current development is in PHASE3. The current release turns LoRA personalization into an automated local learning system: video/SRT pairs can feed ground-truth tables, bracketed editorial notes are excluded from speech learning, multimodal context is classified, runtime LoRA data is retrieved through scored/vectorized search, and learned gap settings can be applied from the Gap dialog.
 
 ## Core Workflows
 
@@ -30,7 +30,7 @@ Current development is in PHASE3. The current release extends the personalizatio
 - Roughcut draft generation from subtitle and scene structure.
 - Subtitle video output after subtitle generation.
 - GPU/QML timeline, overlay, editor, settings, and project-panel migration foundations.
-- Text and voice LoRA personalization data management, including LLM review JSON exchange and transcript-aligned WAV clip manifests.
+- Text, voice, multimodal, and settings LoRA personalization data management, including LLM review JSON exchange, transcript-aligned WAV clip manifests, unified local bundle storage, vectorized runtime retrieval, and Gap autosettings.
 
 All core algorithms should be shared across single-file, multiclip, folder queue, iCloud, and NAS modes.
 
@@ -102,9 +102,9 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `03.18.00` |
-| Latest release checkpoint | `v03.18.00` |
-| Handoff document version | `03.18.00` |
+| App version in code | `03.19.00` |
+| Latest release checkpoint | `v03.19.00` |
+| Handoff document version | `03.19.00` |
 | Active phase | `PHASE3` |
 | Next planned phase | `PHASE4_iPad (parked)` |
 | Product priority | Accuracy before speed |
@@ -136,7 +136,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v03.18.00.md`](RELEASE_v03.18.00.md). Older release notes remain in the repository as history, but handoff documents should only summarize the latest state and the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v03.19.00.md`](RELEASE_v03.19.00.md). Older release notes remain in the repository as history, but handoff documents should only summarize the latest state and the immediately previous release relationship.
 
 ## Security
 

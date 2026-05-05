@@ -7,7 +7,7 @@ import subprocess
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.personalization.text_lora_dataset import (
@@ -513,64 +513,98 @@ def build_voice_lora_training_plan(
     return plan
 
 
-def _extract_voice_lora_clips(items: list[dict[str, Any]], *, timeout_sec: float = 30.0) -> dict[str, Any]:
+def _extract_voice_lora_clips(
+    items: list[dict[str, Any]],
+    *,
+    timeout_sec: float = 30.0,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     extracted = 0
     already_ready = 0
     skipped = 0
+    cancelled = False
     errors: list[dict[str, Any]] = []
-    for item in items:
-        output_path = _item_audio_path(item)
-        if output_path is not None and output_path.exists():
-            item["audio_ready"] = True
-            item["audio_exists"] = True
-            item["audio_status"] = "already_ready"
-            already_ready += 1
-            continue
-        if not bool(item.get("source_exists")):
-            item["audio_ready"] = False
-            item["audio_status"] = "missing_source_media"
-            skipped += 1
-            continue
-        command = list(item.get("extraction_command") or [])
-        if not command or not output_path:
-            item["audio_ready"] = False
-            item["audio_status"] = "missing_extraction_command"
-            skipped += 1
-            continue
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+    total = len(items)
+
+    def emit_progress(processed: int) -> None:
+        if progress_callback is None:
+            return
         try:
-            completed = subprocess.run(
-                command,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=max(1.0, float(timeout_sec)),
-                **hidden_subprocess_kwargs(),
-            )
-        except Exception as exc:
-            item["audio_ready"] = False
-            item["audio_status"] = "error"
-            item["extraction_error"] = str(exc)
-            errors.append({"audio_path": str(output_path), "error": str(exc)})
-            continue
-        if completed.returncode == 0 and output_path.exists():
-            item["audio_ready"] = True
-            item["audio_exists"] = True
-            item["audio_status"] = "extracted"
-            item["audio_extracted"] = True
-            extracted += 1
-        else:
-            item["audio_ready"] = False
-            item["audio_status"] = "failed"
-            errors.append(
+            progress_callback(
                 {
-                    "audio_path": str(output_path),
-                    "returncode": completed.returncode,
-                    "stderr": (completed.stderr or "")[-500:],
+                    "processed": int(processed),
+                    "total": int(total),
+                    "extracted": int(extracted),
+                    "already_ready": int(already_ready),
+                    "skipped": int(skipped),
+                    "errors": int(len(errors)),
+                    "cancelled": bool(cancelled),
                 }
             )
-    return {"extracted": extracted, "already_ready": already_ready, "skipped": skipped, "errors": errors}
+        except Exception:
+            return
+
+    for index, item in enumerate(items, start=1):
+        try:
+            if cancel_callback is not None and bool(cancel_callback()):
+                cancelled = True
+                break
+            output_path = _item_audio_path(item)
+            if output_path is not None and output_path.exists():
+                item["audio_ready"] = True
+                item["audio_exists"] = True
+                item["audio_status"] = "already_ready"
+                already_ready += 1
+                continue
+            if not bool(item.get("source_exists")):
+                item["audio_ready"] = False
+                item["audio_status"] = "missing_source_media"
+                skipped += 1
+                continue
+            command = list(item.get("extraction_command") or [])
+            if not command or not output_path:
+                item["audio_ready"] = False
+                item["audio_status"] = "missing_extraction_command"
+                skipped += 1
+                continue
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                completed = subprocess.run(
+                    command,
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=max(1.0, float(timeout_sec)),
+                    **hidden_subprocess_kwargs(),
+                )
+            except Exception as exc:
+                item["audio_ready"] = False
+                item["audio_status"] = "error"
+                item["extraction_error"] = str(exc)
+                errors.append({"audio_path": str(output_path), "error": str(exc)})
+                continue
+            if completed.returncode == 0 and output_path.exists():
+                item["audio_ready"] = True
+                item["audio_exists"] = True
+                item["audio_status"] = "extracted"
+                item["audio_extracted"] = True
+                extracted += 1
+            else:
+                item["audio_ready"] = False
+                item["audio_status"] = "failed"
+                errors.append(
+                    {
+                        "audio_path": str(output_path),
+                        "returncode": completed.returncode,
+                        "stderr": (completed.stderr or "")[-500:],
+                    }
+                )
+        finally:
+            if index == total or index % 25 == 0:
+                emit_progress(index)
+    return {"extracted": extracted, "already_ready": already_ready, "skipped": skipped, "errors": errors, "cancelled": cancelled}
 
 
 def save_voice_lora_training_plan(
@@ -578,6 +612,8 @@ def save_voice_lora_training_plan(
     plan_path: str | Path | None = None,
     dataset_manifest_path: str | Path | None = None,
     extract_audio: bool = False,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
     **kwargs,
 ) -> dict[str, Any]:
     plan = build_voice_lora_training_plan(**kwargs)
@@ -587,7 +623,11 @@ def save_voice_lora_training_plan(
     manifest_target.parent.mkdir(parents=True, exist_ok=True)
     extraction_result = {"extracted": 0, "already_ready": 0, "skipped": 0, "errors": []}
     if extract_audio:
-        extraction_result = _extract_voice_lora_clips(list(plan.get("items") or []))
+        extraction_result = _extract_voice_lora_clips(
+            list(plan.get("items") or []),
+            progress_callback=progress_callback,
+            cancel_callback=cancel_callback,
+        )
         plan["last_extraction"] = {"created_at": _now(), **extraction_result}
     _refresh_voice_lora_audio_readiness(plan)
     target.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -619,6 +659,7 @@ def save_voice_lora_training_plan(
         "stored_audio_items": int(plan_stats.get("stored_audio_items", 0) or 0),
         "audio_dataset_ready_speakers": int(plan_stats.get("audio_dataset_ready_speakers", 0) or 0),
         "extraction_errors": int(len(list(extraction_result.get("errors") or []))),
+        "cancelled": bool(extraction_result.get("cancelled")),
         "output_dir": str(plan.get("output_dir") or ""),
     }
 

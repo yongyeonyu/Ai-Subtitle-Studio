@@ -1,14 +1,19 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PyQt6.QtCore import QCoreApplication, QObject
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PyQt6.QtCore import QObject
+from PyQt6.QtWidgets import QApplication
 
 from core.personalization.idle_trainer import (
     PersonalizationIdleTrainer,
     enqueue_default_training_jobs,
+    recover_interrupted_training_jobs,
     run_training_queue_once,
 )
 from core.personalization.lora_models import TruthTableRow
@@ -29,15 +34,25 @@ class _DummyOwner(QObject):
         super().__init__()
         self.backend = None
         self._auto_processing_active = False
+        self._current_work_mode = "editor"
+        self.stack = None
 
     def _is_editor_actively_editing(self):
         return False
 
 
+class _DummyStack:
+    def __init__(self, index: int):
+        self._index = index
+
+    def currentIndex(self):
+        return self._index
+
+
 class PersonalizationIdleRuntimeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = QCoreApplication.instance() or QCoreApplication([])
+        cls.app = QApplication.instance() or QApplication([])
 
     def test_idle_trainer_queue_controls_pause_resume_and_clear(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -122,6 +137,40 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            paths["multimodal_lora_context"].write_text(
+                json.dumps(
+                    {
+                        "schema": "ai_subtitle_studio.multimodal_lora_context.v1",
+                        "task": "subtitle_generation_context",
+                        "source": "unit_test",
+                        "media_id": "media-001",
+                        "media_profile": {
+                            "has_audio": True,
+                            "has_video": True,
+                            "audio": {"sample_rate": 48000, "channels": 2},
+                            "video": {"fps": 29.97},
+                        },
+                        "subtitle_profile": {
+                            "excluded_parenthetical_ratio": 0.3,
+                            "reading_speed": {"avg_cps": 12.5, "max_cps": 17.0},
+                        },
+                        "candidate_context": {"candidate_count": 2, "candidate_disagreement_ratio": 0.22},
+                        "context_classification": {
+                            "scene_environment": {"label": "car"},
+                            "topic": {"primary": "vehicle_review"},
+                            "microphone_environment": {
+                                "mic_type": "builtin_or_far",
+                                "noise_level": "high",
+                                "noise_sources": ["engine", "traffic"],
+                            },
+                            "training_focus": ["handle_low_rumble", "protect_brand_model_names"],
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             (paths["root"] / "clip_a.mp4").write_bytes(b"fake media")
 
             processed = []
@@ -144,16 +193,77 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             queue_items = list(load_training_queue(tmpdir).get("items") or [])
             self.assertTrue(queue_items)
             self.assertTrue(all(str(item.get("status") or "") == "complete" for item in queue_items))
+            self.assertEqual(queue_items[0]["payload"]["checkpoint"]["stage"], "completed")
+            self.assertIn("checkpoint_history", queue_items[0]["payload"])
             self.assertTrue((paths["root"] / "text_lora_training_plan.json").exists())
             self.assertTrue((paths["root"] / "voice_lora_profile_manifest.json").exists())
             self.assertTrue((paths["root"] / "learned_split_rules.json").exists())
             self.assertGreater(len(paths["setting_trials"].read_text(encoding="utf-8").strip().splitlines()), 0)
             self.assertGreater(len(paths["prompt_trials"].read_text(encoding="utf-8").strip().splitlines()), 0)
+            setting_trials = [
+                json.loads(line)
+                for line in paths["setting_trials"].read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            prompt_trials = [
+                json.loads(line)
+                for line in paths["prompt_trials"].read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertTrue(any((row.get("metrics") or {}).get("multimodal_context_rows") == 1 for row in setting_trials))
+            self.assertTrue(any((row.get("metrics") or {}).get("scene_environment") == "car" for row in setting_trials))
+            self.assertTrue(any((row.get("metrics") or {}).get("topic") == "vehicle_review" for row in setting_trials))
+            self.assertTrue(any(row.get("prompt_template_id") == "subtitle_qa_multimodal_context_v1" for row in prompt_trials))
 
             best_settings = load_best_settings(tmpdir)
             self.assertIn("media-001", dict(best_settings.get("by_media_id") or {}))
+            self.assertEqual(best_settings.get("global_recommended_defaults"), {})
 
     def test_voice_profile_job_fails_when_audio_sources_are_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            paths = store_paths(tmpdir)
+            (paths["root"] / "voice_lora_bridge.jsonl").write_text(
+                json.dumps(
+                    {
+                        "speaker": "00",
+                        "duration_frames": 180,
+                        "clip_path": str(paths["root"] / "missing.mp4"),
+                        "project_path": "/Users/test/Projects/clip_a.json",
+                        "text": "안녕하세요.",
+                        "start_sec": 0.0,
+                        "end_sec": 2.0,
+                        "duration_sec": 2.0,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            save_training_queue(
+                [
+                    {
+                        "job_id": "voice-job",
+                        "job_type": "build_voice_profiles",
+                        "media_id": "global",
+                        "status": "waiting",
+                        "priority": 1,
+                        "payload": {"extract_audio": True},
+                    }
+                ],
+                tmpdir,
+            )
+
+            result = run_training_queue_once(tmpdir)
+
+            self.assertTrue(result["processed"])
+            self.assertEqual(result["outcome"]["status"], "failed")
+            self.assertIn("voice_audio_extraction_incomplete", result["outcome"]["result"]["reason"])
+            queue_item = load_training_queue(tmpdir)["items"][0]
+            self.assertEqual(queue_item["status"], "failed")
+            self.assertIn("stored 0/1", queue_item["last_error"])
+
+    def test_voice_profile_queue_job_defers_audio_extraction_by_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             initialize_lora_personalization_store(tmpdir)
             paths = store_paths(tmpdir)
@@ -190,11 +300,11 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             result = run_training_queue_once(tmpdir)
 
             self.assertTrue(result["processed"])
-            self.assertEqual(result["outcome"]["status"], "failed")
-            self.assertIn("voice_audio_extraction_incomplete", result["outcome"]["result"]["reason"])
+            self.assertEqual(result["outcome"]["status"], "complete")
+            self.assertEqual(result["outcome"]["result"]["reason"], "audio_extraction_deferred")
             queue_item = load_training_queue(tmpdir)["items"][0]
-            self.assertEqual(queue_item["status"], "failed")
-            self.assertIn("stored 0/1", queue_item["last_error"])
+            self.assertEqual(queue_item["status"], "complete")
+            self.assertEqual(queue_item["last_error"], "")
 
     def test_idle_trainer_poll_starts_background_job_when_idle(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -219,6 +329,32 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
                 trainer._poll_timer.stop()
                 trainer.deleteLater()
 
+    def test_idle_trainer_runs_only_on_home_or_editor_idle_context(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            enqueue_default_training_jobs([], store_dir=tmpdir)
+
+            owner = _DummyOwner()
+            owner._current_work_mode = "roughcut"
+            trainer = PersonalizationIdleTrainer(owner, store_dir=tmpdir)
+            trainer._poll_timer.stop()
+            trainer.idle_window_ms = 0
+            trainer.last_user_activity_ms = 0
+            try:
+                trainer._poll()
+                self.assertIsNone(trainer._worker_thread)
+
+                owner.stack = _DummyStack(0)
+                trainer._poll()
+                worker = trainer._worker_thread
+                self.assertIsNotNone(worker)
+                worker.join(timeout=2.0)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(load_training_queue(tmpdir)["items"][0]["status"], "complete")
+            finally:
+                trainer._poll_timer.stop()
+                trainer.deleteLater()
+
     def test_paused_jobs_are_not_processed_until_resumed(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             initialize_lora_personalization_store(tmpdir)
@@ -237,6 +373,91 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
                 resumed = run_training_queue_once(tmpdir)
                 self.assertTrue(resumed["processed"])
                 self.assertEqual(str(resumed.get("outcome", {}).get("status", "")), "complete")
+            finally:
+                trainer._poll_timer.stop()
+                trainer.deleteLater()
+
+    def test_reenqueue_preserves_completed_checkpoint_for_resume(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            enqueue_default_training_jobs([], store_dir=tmpdir)
+            first = run_training_queue_once(tmpdir)
+            self.assertTrue(first["processed"])
+            completed_item = load_training_queue(tmpdir)["items"][0]
+            self.assertEqual(completed_item["status"], "complete")
+            self.assertEqual(completed_item["payload"]["checkpoint"]["stage"], "completed")
+
+            enqueue_default_training_jobs([], store_dir=tmpdir)
+
+            restored_item = load_training_queue(tmpdir)["items"][0]
+            self.assertEqual(restored_item["status"], "complete")
+            self.assertEqual(restored_item["payload"]["checkpoint"]["stage"], "completed")
+
+    def test_interrupted_in_progress_jobs_are_recovered_as_waiting(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            save_training_queue(
+                [
+                    {
+                        "job_id": "stale-job",
+                        "job_type": "optimize_prompts",
+                        "media_id": "media-001",
+                        "media_path": "/tmp/clip.mp4",
+                        "subtitle_path": "/tmp/clip.srt",
+                        "status": "in_progress",
+                        "priority": 1,
+                        "progress": 0.1,
+                        "attempts": 1,
+                        "last_error": "",
+                        "created_at": "2026-05-05T10:00:00",
+                        "updated_at": "2026-05-05T10:00:00",
+                    }
+                ],
+                tmpdir,
+            )
+
+            result = recover_interrupted_training_jobs(tmpdir, reason="unit_test")
+
+            self.assertEqual(result["recovered"], 1)
+            queue_item = load_training_queue(tmpdir)["items"][0]
+            self.assertEqual(queue_item["status"], "waiting")
+            self.assertEqual(queue_item["progress"], 0.0)
+            self.assertEqual(queue_item["attempts"], 1)
+            self.assertIn("interrupted_unit_test", queue_item["last_error"])
+            self.assertEqual(queue_item["payload"]["checkpoint"]["stage"], "recovered_after_interruption")
+            self.assertTrue(queue_item["payload"]["checkpoint"]["resumable"])
+
+    def test_shutdown_recovers_active_job_for_resume(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            save_training_queue(
+                [
+                    {
+                        "job_id": "shutdown-job",
+                        "job_type": "optimize_settings",
+                        "media_id": "media-001",
+                        "media_path": "/tmp/clip.mp4",
+                        "subtitle_path": "/tmp/clip.srt",
+                        "status": "in_progress",
+                        "priority": 1,
+                        "progress": 0.45,
+                        "attempts": 1,
+                        "last_error": "midpoint",
+                        "payload": {"checkpoint": {"stage": "candidate_eval"}},
+                    }
+                ],
+                tmpdir,
+            )
+
+            owner = _DummyOwner()
+            trainer = PersonalizationIdleTrainer(owner, store_dir=tmpdir)
+            trainer._poll_timer.stop()
+            try:
+                result = trainer.shutdown(timeout_sec=0.1)
+                self.assertFalse(result["busy"])
+                queue_item = load_training_queue(tmpdir)["items"][0]
+                self.assertEqual(queue_item["status"], "waiting")
+                self.assertEqual(queue_item["payload"]["checkpoint"]["stage"], "recovered_after_interruption")
             finally:
                 trainer._poll_timer.stop()
                 trainer.deleteLater()

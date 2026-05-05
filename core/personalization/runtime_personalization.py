@@ -2,27 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.personalization.lora_retrieval_config import RUNTIME_SETTING_KEYS as _RUNTIME_SETTING_KEYS
 from core.personalization.lora_storage import (
     load_best_settings,
     load_learned_rules,
     personalization_path_lookup_keys,
 )
-
-
-_RUNTIME_SETTING_KEYS = {
-    "selected_audio_ai",
-    "stt_quality_preset",
-    "subtitle_quality_enabled",
-    "subtitle_quality_auto_check_after_generate",
-    "subtitle_quality_auto_correct_enabled",
-    "split_length_threshold",
-    "sub_max_cps",
-    "sub_gap_break_sec",
-    "selected_model",
-    "selected_llm_provider",
-    "roughcut_llm_model",
-    "roughcut_llm_provider",
-}
+from core.personalization.lora_vector_retriever import retrieve_lora_context, runtime_settings_from_retrieved_items
 
 
 def personalization_settings_override_for_media(
@@ -35,10 +21,12 @@ def personalization_settings_override_for_media(
     override: dict[str, Any] = dict(best_settings.get("global_recommended_defaults") or {})
     media_key = str(media_id or "").strip()
     path_keys = personalization_path_lookup_keys(media_path)
+    exact_match = False
 
     if media_key and media_key in dict(best_settings.get("by_media_id") or {}):
         payload = dict((best_settings.get("by_media_id") or {}).get(media_key) or {})
         override.update(dict(payload.get("config") or {}))
+        exact_match = True
 
     if path_keys:
         by_path = dict(best_settings.get("by_media_path") or {})
@@ -56,6 +44,26 @@ def personalization_settings_override_for_media(
                     break
         if matched_payload is not None:
             override.update(dict(matched_payload.get("config") or {}))
+            exact_match = True
+
+    try:
+        retrieved = retrieve_lora_context(
+            f"{media_key} {media_path}",
+            media_path=media_path,
+            media_id=media_key,
+            store_dir=store_dir,
+            limit=12,
+            per_kind=4,
+            kinds=("setting_trials", "best_settings", "audio_preset_lora", "multimodal_lora_context"),
+        )
+        retrieved_override = runtime_settings_from_retrieved_items(list(retrieved.get("items") or []), min_score=28.0)
+        if exact_match:
+            for key, value in retrieved_override.items():
+                override.setdefault(key, value)
+        else:
+            override.update(retrieved_override)
+    except Exception:
+        pass
 
     try:
         learned_split = load_learned_rules("split", store_dir)

@@ -34,6 +34,10 @@ class GroundTruthImportTests(unittest.TestCase):
                         "오늘은 그러니까",
                         "여기까지 할게요.",
                         "",
+                        "4",
+                        "00:00:10,000 --> 00:00:12,000",
+                        "{자료화면} 실제 발화입니다.",
+                        "",
                     ]
                 ),
                 encoding="utf-8",
@@ -41,14 +45,25 @@ class GroundTruthImportTests(unittest.TestCase):
 
             result = build_truth_table_records_from_srt(media_path, subtitle_path, media_id="media-001")
 
-            self.assertEqual(result["stats"]["segments_total"], 3)
-            self.assertEqual(result["stats"]["truth_rows"], 2)
-            self.assertEqual(result["stats"]["excluded_parenthetical_rows"], 2)
+            self.assertEqual(result["stats"]["segments_total"], 4)
+            self.assertEqual(result["stats"]["truth_rows"], 3)
+            self.assertEqual(result["stats"]["excluded_parenthetical_rows"], 3)
             self.assertEqual(result["stats"]["skipped_empty_text"], 1)
             self.assertEqual(result["truth_rows"][0]["speech_training_text"], "안녕하세요!")
             self.assertEqual(result["truth_rows"][0]["excluded_parenthetical_text"], "박수")
             self.assertEqual(result["truth_rows"][1]["detected_split_rule"], "그러니까")
             self.assertEqual(result["truth_rows"][1]["line_break_pattern"], "8|8")
+            self.assertEqual(result["truth_rows"][2]["speech_training_text"], "실제 발화입니다.")
+            self.assertEqual(result["truth_rows"][2]["excluded_parenthetical_text"], "자료화면")
+            self.assertEqual(len(result["voice_bridge_rows"]), 3)
+            self.assertEqual(result["voice_bridge_rows"][0]["text"], "안녕하세요!")
+            self.assertEqual(result["voice_bridge_rows"][0]["clip_path"], str(media_path))
+            self.assertEqual(len(result["multimodal_context_rows"]), 1)
+            context = result["multimodal_context_rows"][0]
+            self.assertEqual(context["task"], "subtitle_generation_context")
+            self.assertEqual(context["generation_targets"]["do_not_learn_as_spoken_text"], ["()", "[]", "{}"])
+            self.assertEqual(context["subtitle_profile"]["speech_segments"], 3)
+            self.assertGreaterEqual(context["subtitle_profile"]["excluded_parenthetical_ratio"], 0.5)
 
     def test_pair_ground_truth_assets_uses_exact_then_normalized_basename(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -71,6 +86,62 @@ class GroundTruthImportTests(unittest.TestCase):
             self.assertEqual(by_match_type[str(media_dir / "클립 01.mp4")], "exact")
             self.assertEqual(by_match_type[str(media_dir / "Episode-02.mov")], "normalized")
             self.assertEqual(pairs["unmatched_subtitle_paths"], [str(subtitle_dir / "orphan.srt")])
+
+    def test_ground_truth_context_classifies_environment_mic_and_topic(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            media_path = root / "BMW X5 차량 시승 리뷰.MP4"
+            subtitle_path = root / "BMW X5 차량 시승 리뷰.srt"
+            media_path.write_bytes(b"video")
+            subtitle_path.write_text(
+                "\n".join(
+                    [
+                        "1",
+                        "00:00:01,000 --> 00:00:03,000",
+                        "오늘은 BMW X5 시승을 하면서 주행감과 실내 공간을 봅니다.",
+                        "",
+                        "2",
+                        "00:00:04,000 --> 00:00:06,000",
+                        "(엔진음) 고속도로에서 노면 소음도 확인해 볼게요.",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = build_truth_table_records_from_srt(media_path, subtitle_path, media_id="bmw-x5")
+
+            classification = result["classification"]
+            self.assertEqual(classification["scene_environment"]["label"], "car")
+            self.assertEqual(classification["topic"]["primary"], "vehicle_review")
+            self.assertIn("engine", classification["microphone_environment"]["noise_sources"])
+            self.assertIn("protect_brand_model_names", classification["training_focus"])
+            context = result["multimodal_context_rows"][0]
+            self.assertEqual(context["context_classification"]["topic"]["primary"], "vehicle_review")
+
+    def test_excluded_parenthetical_text_does_not_drive_context_classification(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            media_path = root / "neutral clip.mp4"
+            subtitle_path = root / "neutral clip.srt"
+            media_path.write_bytes(b"video")
+            subtitle_path.write_text(
+                "\n".join(
+                    [
+                        "1",
+                        "00:00:01,000 --> 00:00:03,000",
+                        "좋아요. (BMW X5 차량 시승 리뷰)",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = build_truth_table_records_from_srt(media_path, subtitle_path, media_id="neutral")
+
+            self.assertEqual(result["truth_rows"][0]["speech_training_text"], "좋아요.")
+            self.assertEqual(result["truth_rows"][0]["excluded_parenthetical_text"], "BMW X5 차량 시승 리뷰")
+            self.assertNotEqual(result["classification"]["topic"]["primary"], "vehicle_review")
 
     def test_import_ground_truth_pairs_writes_truth_table_store(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -100,12 +171,18 @@ class GroundTruthImportTests(unittest.TestCase):
             self.assertEqual(result["imported_pairs"], 1)
             self.assertEqual(result["truth_rows"], 1)
             self.assertEqual(result["excluded_rows"], 1)
+            self.assertEqual(result["voice_bridge_rows"], 1)
+            self.assertEqual(result["multimodal_context_rows"], 1)
 
             paths = store_paths(store_dir)
             truth_lines = paths["truth_table"].read_text(encoding="utf-8").strip().splitlines()
             excluded_lines = paths["excluded_parentheticals"].read_text(encoding="utf-8").strip().splitlines()
+            voice_lines = paths["voice_lora_bridge"].read_text(encoding="utf-8").strip().splitlines()
+            context_lines = paths["multimodal_lora_context"].read_text(encoding="utf-8").strip().splitlines()
             self.assertEqual(len(truth_lines), 1)
             self.assertEqual(len(excluded_lines), 1)
+            self.assertEqual(len(voice_lines), 1)
+            self.assertEqual(len(context_lines), 1)
 
     def test_resolve_ambiguous_matches_uses_user_choice_callback(self):
         ambiguous = [

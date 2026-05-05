@@ -141,8 +141,8 @@ class MainWindow(
         _offscreen_test = str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen"
         if not _offscreen_test:
             QTimer.singleShot(0, self._warmup_local_llm_models)
+            QTimer.singleShot(900, self._check_required_models_on_startup)
             QTimer.singleShot(1200, self._preflight_selected_local_llm_models)
-        QTimer.singleShot(900, self._check_required_models_on_startup)
 
         self._cloud_sync_manager = CloudSyncManager(
             get_icloud_path(), self._on_files_detected, self._is_app_busy
@@ -1379,9 +1379,23 @@ class MainWindow(
         if self._editor_widget and hasattr(self._editor_widget, "video_player"):
             self._editor_widget.video_player.resizeEvent(None)
 
+    def _shutdown_personalization_idle_trainer(self, *, timeout_sec: float = 3.0):
+        trainer = getattr(self, "_personalization_idle_trainer", None)
+        if trainer is None:
+            return {"stopped": True, "busy": False}
+        try:
+            result = trainer.shutdown(timeout_sec=timeout_sec)
+        except Exception as exc:
+            get_logger().log(f"⚠️ 개인화 학습 종료 처리 실패: {exc}")
+            return {"stopped": False, "busy": True}
+        if bool(result.get("busy")):
+            get_logger().log("⚠️ 개인화 학습 작업이 아직 종료 중입니다. 현재 클립 처리가 끝나면 대기 상태로 복구됩니다.")
+        return result
+
     def closeEvent(self, event):
         try:
             self._detach_app_event_filter()
         except Exception:
             pass
+        self._shutdown_personalization_idle_trainer(timeout_sec=3.0)
         super().closeEvent(event)

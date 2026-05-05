@@ -598,11 +598,13 @@ class HomeSidebarMixin:
             dot_color = "#FF453A" if dirty else "#34C759"
             tooltip = "저장되지 않은 변경사항이 있습니다." if dirty else "저장된 상태입니다."
         label.setTextFormat(Qt.TextFormat.RichText)
+        label.setWordWrap(False)
+        label.setMinimumHeight(22)
         from core.runtime.config import APP_VERSION
         label.setText(
-            f"<span style='color:{dot_color}; font-size:13px;'>●</span> "
-            f"<span style='color:#FFFFFF; font-size:14px; font-weight:700;'>AI Subtitle Studio</span> "
-            f"<span style='color:#D1D1D6; font-size:11px; font-weight:600;'>v{APP_VERSION}</span>"
+            f"<span style='color:{dot_color}; font-size:12px;'>●</span> "
+            f"<span style='color:#FFFFFF; font-size:13px; font-weight:700;'>AI Subtitle Studio</span> "
+            f"<span style='color:#D1D1D6; font-size:10px; font-weight:600;'>v{APP_VERSION}</span>"
         )
         label.setToolTip(tooltip)
 
@@ -713,7 +715,11 @@ class HomeSidebarMixin:
         subtitle_llm = str(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "기본")) or "기본")
         subtitle_llm_label = "미사용" if not self._subtitle_llm_enabled(settings) else getattr(self, "_short_model_name", lambda s: s)(subtitle_llm)
         vad_model, _vad_role = getattr(self, "_vad_model_name", lambda s: ("기본", ""))(settings)
-        roughcut_llm, _roughcut_role = getattr(self, "_roughcut_llm_name", lambda s, l: ("기본", ""))(settings, subtitle_llm)
+        roughcut_llm, _roughcut_role = getattr(
+            self,
+            "_roughcut_llm_name",
+            lambda settings_arg, subtitle_arg: ("기본", ""),
+        )(settings, subtitle_llm)
         stt1_model = getattr(self, "_short_model_name", lambda s: s)(settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "기본")))
         stt2_model = "미사용"
         if settings.get("stt_ensemble_enabled"):

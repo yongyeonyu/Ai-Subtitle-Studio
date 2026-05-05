@@ -32,6 +32,7 @@ from core.project.project_context import (
 )
 from core.project.subtitle_status import subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
+from core.project.project_srt import parse_srt_to_segments
 from core.project.project_model_settings import (
     build_model_settings_snapshot,
     extract_model_settings,
@@ -232,7 +233,7 @@ def create_project(
 
     segments = []
     if srt_path and os.path.exists(srt_path):
-        raw_segs = _parse_srt_to_segments(srt_path)
+        raw_segs = parse_srt_to_segments(srt_path)
         for seg in raw_segs:
             clip_id = ""
             cl_start = seg["start"]
@@ -895,7 +896,7 @@ def merge_srt_to_project(filepath: str) -> int | None:
         if not os.path.exists(srt_path):
             continue
 
-        raw_segs = _parse_srt_to_segments(srt_path)
+        raw_segs = parse_srt_to_segments(srt_path)
         offset = clip["timeline_start"]
 
         for seg in raw_segs:
@@ -964,69 +965,3 @@ def _read_json(filepath: str) -> dict:
 
 def _write_json(filepath: str, data: dict):
     write_project_file(filepath, data)
-
-
-def _parse_srt_to_segments(srt_path: str) -> list:
-    """SRT → 세그먼트 리스트"""
-    import re
-    segments = []
-    content = ""
-    for enc in ["utf-8-sig", "utf-8", "cp949", "euc-kr"]:
-        try:
-            with open(srt_path, "r", encoding=enc) as f:
-                content = f.read()
-            break
-        except UnicodeDecodeError:
-            continue
-
-    if not content:
-        return segments
-
-    content = content.replace("\r\n", "\n").replace("\r", "\n")
-    blocks = re.split(r"\n\s*\n", content.strip())
-    ts_re = re.compile(
-        r"(\d{2}:\d{2}:\d{2}[,.]\d{2,3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{2,3})"
-    )
-
-    def srt_to_sec(ts):
-        h, m, s = ts.replace(",", ".").split(":")
-        return int(h) * 3600 + int(m) * 60 + float(s)
-
-    idx = 0
-    for block in blocks:
-        lines = block.strip().split("\n")
-        if len(lines) < 2:
-            continue
-
-        ts_line_idx = None
-        for i, line in enumerate(lines):
-            if ts_re.search(line):
-                ts_line_idx = i
-                break
-        if ts_line_idx is None:
-            continue
-
-        match = ts_re.search(lines[ts_line_idx])
-        if not match:
-            continue
-
-        text_lines = lines[ts_line_idx + 1:]
-        text = "\n".join(text_lines).strip()
-        if not text:
-            continue
-
-        idx += 1
-        try:
-            segments.append({
-                "index": idx,
-                "start": srt_to_sec(match.group(1)),
-                "end": srt_to_sec(match.group(2)),
-                "text": text,
-                "tags": [],
-                "llm_note": "",
-                "srt_synced": True
-            })
-        except Exception:
-            continue
-
-    return segments

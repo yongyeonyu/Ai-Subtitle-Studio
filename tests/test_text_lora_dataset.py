@@ -10,6 +10,7 @@ from core.personalization.text_lora_dataset import (
     export_text_lora_dataset,
     load_project_segment_pairs,
 )
+from core.personalization.lora_storage import load_training_queue
 from core.personalization.text_lora_runner import (
     build_text_lora_training_plan,
     build_voice_lora_profile_manifest,
@@ -112,10 +113,12 @@ class TextLoraDatasetTests(unittest.TestCase):
                             "start": 1.0,
                             "end": 2.0,
                             "text": "BMW 드라이빙센터예요",
+                            "quality": {"confidence_score": 96, "confidence_label": "green"},
+                            "audio_profile": {"environment": "indoor", "noise_level": "low"},
                             "stt_selected_source": "STT2",
                             "stt_candidates": [
-                                {"source": "STT1", "text": "bmw 드라이빙 센터에요"},
-                                {"source": "STT2", "text": "bmw 드라이빙센터에요"},
+                                {"source": "STT1", "text": "bmw 드라이빙 센터에요", "confidence": 0.71},
+                                {"source": "STT2", "text": "bmw 드라이빙센터에요", "confidence": 0.94},
                             ],
                         }
                     ]
@@ -129,7 +132,11 @@ class TextLoraDatasetTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["input"], "bmw 드라이빙센터에요")
         self.assertEqual(result["items"][0]["output"], "BMW 드라이빙센터예요")
         self.assertEqual(result["items"][0]["meta"]["selected_source"], "STT2")
+        self.assertEqual(result["items"][0]["meta"]["candidate_context"]["candidate_count"], 2)
+        self.assertEqual(result["items"][0]["meta"]["generation_context"]["quality"]["confidence_score"], 96)
         self.assertGreater(result["items"][0]["meta"]["delta_ratio"], 0.08)
+        self.assertEqual(len(result["context_items"]), 1)
+        self.assertEqual(result["context_items"][0]["candidate_context"]["selected_source"], "STT2")
 
     def test_build_dataset_includes_current_editor_segments(self):
         payload = build_text_lora_dataset(
@@ -150,6 +157,7 @@ class TextLoraDatasetTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["stats"]["project_segment_pairs"], 1)
+        self.assertEqual(payload["stats"]["multimodal_context_items"], 1)
         project_rows = [item for item in payload["items"] if item["source"] == "current_editor_segment_pair"]
         self.assertEqual(len(project_rows), 1)
         self.assertEqual(project_rows[0]["input"], "엑사원 모델입니다")
@@ -182,6 +190,75 @@ class TextLoraDatasetTests(unittest.TestCase):
         self.assertGreaterEqual(payload["stats"]["project_pairs_filtered_short_input"], 1)
         self.assertGreaterEqual(payload["stats"]["project_pairs_filtered_low_delta"], 1)
 
+    def test_project_segment_learning_excludes_editorial_brackets(self):
+        payload = build_text_lora_dataset(
+            current_segments=[
+                {
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "BMW 드라이빙센터예요 [화면 설명] {편집 메모}",
+                    "speaker": "me",
+                    "_clip_file": "/tmp/source.mp4",
+                    "stt_selected_source": "STT1",
+                    "stt_candidates": [
+                        {"source": "STT1", "text": "bmw 드라이빙 센터에요 (자동차 설명)"},
+                    ],
+                },
+                {
+                    "start": 3.0,
+                    "end": 4.0,
+                    "text": "(웃음) [효과음] {자료화면}",
+                    "stt_selected_source": "STT1",
+                    "stt_candidates": [{"source": "STT1", "text": "(웃음)"}],
+                },
+            ],
+            current_project_path="/tmp/current_project.json",
+            project_paths=[],
+        )
+
+        self.assertEqual(payload["stats"]["project_segment_pairs"], 1)
+        self.assertEqual(payload["stats"]["project_pairs_filtered_editorial_only"], 1)
+        row = [item for item in payload["items"] if item["source"] == "current_editor_segment_pair"][0]
+        self.assertEqual(row["input"], "bmw 드라이빙 센터에요")
+        self.assertEqual(row["output"], "BMW 드라이빙센터예요")
+        self.assertNotIn("화면 설명", row["output"])
+        self.assertNotIn("자동차 설명", row["input"])
+        self.assertEqual(len(payload["voice_items"]), 1)
+        self.assertEqual(payload["voice_items"][0]["text"], "BMW 드라이빙센터예요")
+
+    def test_project_segment_context_classifies_scene_microphone_and_topic(self):
+        payload = build_text_lora_dataset(
+            current_segments=[
+                {
+                    "start": 10.0,
+                    "end": 13.0,
+                    "text": "BMW X5 차량 리뷰에서 고속도로 주행 소음을 확인합니다",
+                    "speaker": "me",
+                    "_clip_file": "/tmp/BMW_X5_drive_review.mp4",
+                    "audio_profile": {
+                        "environment": "car",
+                        "mic_present": False,
+                        "noise_level": "high",
+                        "low_rumble": True,
+                    },
+                    "stt_selected_source": "STT1",
+                    "stt_candidates": [
+                        {"source": "STT1", "text": "bmw x5 차량 리뷰에서 고속도로 주행 소음을 확인합니다"},
+                        {"source": "STT2", "text": "bmw x5 차량 리브에서 고속도로 소음을 확인합니다"},
+                    ],
+                }
+            ],
+            current_project_path="/tmp/vehicle_project.json",
+            project_paths=[],
+        )
+
+        context = payload["context_items"][0]["context_classification"]
+        self.assertEqual(context["scene_environment"]["label"], "car")
+        self.assertEqual(context["topic"]["primary"], "vehicle_review")
+        self.assertEqual(context["microphone_environment"]["mic_type"], "builtin_or_far")
+        self.assertEqual(context["microphone_environment"]["noise_level"], "high")
+        self.assertIn("handle_low_rumble", context["training_focus"])
+
     def test_accumulate_personalization_dataset_appends_once_and_builds_voice_bridge(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             from core.personalization import text_lora_dataset as mod
@@ -192,6 +269,7 @@ class TextLoraDatasetTests(unittest.TestCase):
             mod.TEXT_LORA_CORPUS_PATH = root / "text_lora_corpus.jsonl"
             mod.TEXT_LORA_CORPUS_MANIFEST_PATH = root / "text_lora_corpus_manifest.json"
             mod.VOICE_LORA_BRIDGE_PATH = root / "voice_lora_bridge.jsonl"
+            mod.MULTIMODAL_LORA_CONTEXT_PATH = root / "multimodal_lora_context.jsonl"
             runner_mod.TEXT_LORA_DATASET_DIR = root
             runner_mod.TEXT_LORA_CORPUS_PATH = root / "text_lora_corpus.jsonl"
             runner_mod.TEXT_LORA_CORPUS_MANIFEST_PATH = root / "text_lora_corpus_manifest.json"
@@ -228,20 +306,31 @@ class TextLoraDatasetTests(unittest.TestCase):
 
             self.assertEqual(first["appended_rows"], 1)
             self.assertEqual(first["voice_bridge_rows"], 1)
+            self.assertEqual(first["multimodal_context_rows"], 1)
+            self.assertTrue((first["auto_maintenance"] or {}).get("queued"))
             self.assertEqual(second["appended_rows"], 0)
             self.assertEqual(second["voice_bridge_rows"], 0)
+            self.assertEqual(second["multimodal_context_rows"], 0)
+            self.assertFalse((second["auto_maintenance"] or {}).get("queued"))
 
             corpus_lines = (root / "text_lora_corpus.jsonl").read_text(encoding="utf-8").strip().splitlines()
             bridge_lines = (root / "voice_lora_bridge.jsonl").read_text(encoding="utf-8").strip().splitlines()
+            context_lines = (root / "multimodal_lora_context.jsonl").read_text(encoding="utf-8").strip().splitlines()
             self.assertEqual(len(corpus_lines), 1)
             self.assertEqual(len(bridge_lines), 1)
+            self.assertEqual(len(context_lines), 1)
             bridge_row = json.loads(bridge_lines[0])
             self.assertEqual(bridge_row["start_frame"], 90)
             self.assertEqual(bridge_row["end_frame"], 120)
             self.assertEqual(bridge_row["start_sec"], 3.0)
             self.assertEqual(bridge_row["end_sec"], 4.0)
             self.assertEqual(bridge_row["speaker"], "01")
+            context_row = json.loads(context_lines[0])
+            self.assertEqual(context_row["task"], "editor_segment_generation_context")
+            self.assertEqual(context_row["candidate_context"]["selected_source"], "STT1")
             self.assertTrue((root / "text_lora_corpus_manifest.json").exists())
+            queued_types = {str(item.get("job_type") or "") for item in list(load_training_queue(root).get("items") or [])}
+            self.assertEqual(queued_types, {"analyze_truth_table", "build_text_training_plan", "build_voice_profiles"})
 
             plan = build_text_lora_training_plan(corpus_path=root / "text_lora_corpus.jsonl")
             self.assertEqual(plan["stats"]["usable_text_rows"], 1)

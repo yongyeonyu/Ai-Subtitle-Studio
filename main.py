@@ -1,5 +1,6 @@
 # Version: 03.09.02
 # Phase: PHASE1-B
+# ruff: noqa: E402
 import sys
 import os
 import socket
@@ -50,7 +51,6 @@ def main():
     app = QApplication(sys.argv)
     configure_qt_runtime()
     cleaned_preview_jobs = cleanup_stale_preview_proxy_processes(timeout_sec=0.2)
-    app.aboutToQuit.connect(lambda: cleanup_app_runtime_processes(logger=get_logger(), timeout_sec=0.2))
 
     app.setStyleSheet(f"""
         QWidget {{
@@ -80,6 +80,11 @@ def main():
     """)
 
     win = MainWindow()
+    def _shutdown_runtime_in_order():
+        win._shutdown_personalization_idle_trainer(timeout_sec=3.0)
+        cleanup_app_runtime_processes(logger=get_logger(), timeout_sec=0.2)
+
+    app.aboutToQuit.connect(_shutdown_runtime_in_order)
     if cleaned_preview_jobs:
         get_logger().log(f"🧹 이전 미리보기 프록시 ffmpeg {cleaned_preview_jobs}개 정리 완료")
 

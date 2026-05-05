@@ -14,12 +14,27 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt
 from core.project.data_manager import save_settings, save_default_settings
+from core.personalization.runtime_personalization import personalization_settings_override_for_media
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, _create_bottom_buttons
 from ui.settings.qml_panel import create_settings_header
 from ui.style import button_style, settings_dialog_stylesheet
 
 
 from ui.settings.gap_simulator import GapSimulatorWidget
+
+
+_LORA_GAP_SLIDERS = {
+    "continuous_threshold": ("slider_cont", 10.0, "연속자막 기준"),
+    "gap_push_rate": ("slider_push", 100.0, "자막간격 조정"),
+    "single_subtitle_end": ("slider_single", 10.0, "단일자막 유지"),
+    "split_length_threshold": ("slider_split", 1.0, "분할 기준 글자 수"),
+    "sub_min_duration": ("slider_min_dur", 10.0, "초단문 무시"),
+    "sub_max_duration": ("slider_max_dur", 10.0, "최대 자막 길이"),
+    "sub_max_cps": ("slider_cps", 1.0, "최대 CPS"),
+    "sub_dedup_window": ("slider_dedup", 10.0, "말더듬 환각 제거"),
+    "sub_gap_break_sec": ("slider_gap_break", 10.0, "강제 줄바꿈 무음"),
+}
+
 
 class GapSettingsDialog(QDialog):
     def __init__(self, settings: dict, parent=None):
@@ -48,9 +63,34 @@ class GapSettingsDialog(QDialog):
         if self._qml_header is not None:
             layout.addWidget(self._qml_header)
         else:
-            h1 = QHBoxLayout(); h1.addWidget(QLabel("<b style='font-size: 15px;'>자막 간격 시뮬레이터</b>")); h1.addStretch(); layout.addLayout(h1)
-        self.simulator = GapSimulatorWidget(); layout.addWidget(self.simulator)
-        sep0 = QFrame(); sep0.setFixedHeight(1); sep0.setStyleSheet("background-color: #24313A; margin: 6px 0;"); layout.addWidget(sep0)
+            h1 = QHBoxLayout()
+            h1.addWidget(QLabel("<b style='font-size: 15px;'>자막 간격 시뮬레이터</b>"))
+            h1.addStretch()
+            layout.addLayout(h1)
+        self.simulator = GapSimulatorWidget()
+        layout.addWidget(self.simulator)
+        sep0 = QFrame()
+        sep0.setFixedHeight(1)
+        sep0.setStyleSheet("background-color: #24313A; margin: 6px 0;")
+        layout.addWidget(sep0)
+
+        auto_row = QFrame()
+        auto_row.setStyleSheet("QFrame { background: #12202A; border: 1px solid #2B3C48; border-radius: 10px; }")
+        auto_layout = QHBoxLayout(auto_row)
+        auto_layout.setContentsMargins(10, 6, 8, 6)
+        auto_layout.setSpacing(8)
+        auto_title = QLabel("<b>LoRA 간격</b>")
+        auto_title.setStyleSheet("color: #DCE3EA; background: transparent;")
+        auto_hint = QLabel("학습 데이터가 있으면 현재 영상에 맞는 간격 값을 반영합니다.")
+        auto_hint.setStyleSheet("color: #8FA1AF; font-size: 12px; background: transparent;")
+        self.btn_lora_gap_auto = QPushButton("자동설정")
+        self.btn_lora_gap_auto.setFixedHeight(30)
+        self.btn_lora_gap_auto.setStyleSheet(button_style("primary", font_size="13px", padding="5px 14px"))
+        self.btn_lora_gap_auto.clicked.connect(self._on_lora_gap_auto_apply)
+        auto_layout.addWidget(auto_title)
+        auto_layout.addWidget(auto_hint, 1)
+        auto_layout.addWidget(self.btn_lora_gap_auto)
+        layout.addWidget(auto_row)
 
         # [v01.00.10] 파라미터 폼 전체를 QScrollArea로 감싸 화면 넘침 방지
         scroll_container = QWidget()
@@ -69,29 +109,38 @@ class GapSettingsDialog(QDialog):
         # ==========================================
         # 👈 [왼쪽 단] 파라미터 튜닝
         # ==========================================
-        h2 = QHBoxLayout(); h2.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>파라미터 튜닝</b>")); h2.addStretch(); left_col.addLayout(h2)
+        h2 = QHBoxLayout()
+        h2.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>파라미터 튜닝</b>"))
+        h2.addStretch()
+        left_col.addLayout(h2)
         form1 = QFormLayout()
         form1.setVerticalSpacing(3)
         form1.setHorizontalSpacing(8)
         
-        self.slider_cont = QSlider(Qt.Orientation.Horizontal); self.slider_cont.setRange(0, 50)
-        cur_cont = int(self.result.get("continuous_threshold", 2.0) * 10); self.slider_cont.setValue(cur_cont)
+        self.slider_cont = QSlider(Qt.Orientation.Horizontal)
+        self.slider_cont.setRange(0, 50)
+        cur_cont = int(self.result.get("continuous_threshold", 2.0) * 10)
+        self.slider_cont.setValue(cur_cont)
         self.lbl_cont = QLabel(f"{cur_cont/10.0:.1f} 초")
         form1.addRow("연속자막 기준:", self._create_slider_row(self.slider_cont, self.lbl_cont, "continuous_threshold", 10.0, lambda v: f"{v:.1f} 초", 
             "<b>[설명]</b> 두 자막 사이의 무음 구간이 이 시간보다 짧으면 '연속된 대화'로 판정하여 간격을 조절합니다.<br><br>"
             "[+] 넓게: 멀리 떨어진 자막도 연속으로 묶여 당기기/미루기가 적용됩니다.<br>"
             "[-] 좁게: 아주 짧은 간격의 자막에만 간격 조절이 빡빡하게 적용됩니다."))
         
-        self.slider_push = QSlider(Qt.Orientation.Horizontal); self.slider_push.setRange(0, 100)
-        cur_push = int(self.result.get("gap_push_rate", 0.7) * 100); self.slider_push.setValue(cur_push)
+        self.slider_push = QSlider(Qt.Orientation.Horizontal)
+        self.slider_push.setRange(0, 100)
+        cur_push = int(self.result.get("gap_push_rate", 0.7) * 100)
+        self.slider_push.setValue(cur_push)
         self.lbl_push = QLabel(f"{cur_push} %")
         form1.addRow("자막간격 조정:", self._create_slider_row(self.slider_push, self.lbl_push, "gap_push_rate", 100.0, lambda v: f"{int(v*100)} %", 
             "<b>[설명]</b> 무음 구간을 앞/뒤 자막 중 어느 쪽이 더 많이 차지할지 비율을 결정합니다.<br><br>"
             "[+] 높음: 앞 자막이 화면에 길게 유지되며(미루기), 뒷 자막은 제시간에 뜹니다.<br>"
             "[-] 낮음: 앞 자막이 일찍 끝나고, 뒷 자막이 빈 공간을 채우며 일찍 뜹니다(당기기)."))
 
-        self.slider_single = QSlider(Qt.Orientation.Horizontal); self.slider_single.setRange(0, 20)
-        cur_single = int(self.result.get("single_subtitle_end", 0.2) * 10); self.slider_single.setValue(cur_single)
+        self.slider_single = QSlider(Qt.Orientation.Horizontal)
+        self.slider_single.setRange(0, 20)
+        cur_single = int(self.result.get("single_subtitle_end", 0.2) * 10)
+        self.slider_single.setValue(cur_single)
         self.lbl_single = QLabel(f"{cur_single/10.0:.1f} 초")
         form1.addRow("단일자막 유지:", self._create_slider_row(self.slider_single, self.lbl_single, "single_subtitle_end", 10.0, lambda v: f"{v:.1f} 초", 
             "<b>[설명]</b> 연속 판정이 끊어졌을 때, 자막이 화면에 단독으로 머무는 꼬리 시간입니다.<br><br>"
@@ -99,66 +148,87 @@ class GapSettingsDialog(QDialog):
             "[-] 짧게: 단독 자막이 오디오가 끝나자마자 칼같이 바로 사라집니다."))
 
         left_col.addLayout(form1)
-        sep1 = QFrame(); sep1.setFixedHeight(1); sep1.setStyleSheet("background-color: #24313A; margin: 8px 0;"); left_col.addWidget(sep1)
+        sep1 = QFrame()
+        sep1.setFixedHeight(1)
+        sep1.setStyleSheet("background-color: #24313A; margin: 8px 0;")
+        left_col.addWidget(sep1)
 
-        h3 = QHBoxLayout(); h3.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>자막 분할 및 삭제 기준</b>")); h3.addStretch(); right_col.addLayout(h3)
+        h3 = QHBoxLayout()
+        h3.addWidget(QLabel("<b style='font-size: 14px; color: #34C759;'>자막 분할 및 삭제 기준</b>"))
+        h3.addStretch()
+        right_col.addLayout(h3)
         form3 = QFormLayout()
         form3.setVerticalSpacing(3)
         form3.setHorizontalSpacing(8)
 
-        self.slider_split = QSlider(Qt.Orientation.Horizontal); self.slider_split.setRange(5, 50)
-        cur_split = int(self.result.get("split_length_threshold", 10)); self.slider_split.setValue(cur_split)
+        self.slider_split = QSlider(Qt.Orientation.Horizontal)
+        self.slider_split.setRange(5, 50)
+        cur_split = int(self.result.get("split_length_threshold", 10))
+        self.slider_split.setValue(cur_split)
         self.lbl_split = QLabel(f"{cur_split} 자")
         form3.addRow("분할 기준 글자 수:", self._create_slider_row(self.slider_split, self.lbl_split, "split_length_threshold", 1.0, lambda v: f"{int(v)} 자", 
             "<b>[설명]</b> AI가 문장을 나눌 때 목표로 하는 한 줄당 글자 수 기준입니다.<br><br>"
             "[+] 길게: 한 줄에 들어가는 글자가 많아져 자막의 호흡이 길어집니다.<br>"
             "[-] 짧게: 자막이 짧은 단어 위주로 화면에 잘게 쪼개져 표시됩니다."))
         
-        self.slider_min_dur = QSlider(Qt.Orientation.Horizontal); self.slider_min_dur.setRange(0, 10)
-        cur_min_dur = int(self.result.get("sub_min_duration", 0.3) * 10); self.slider_min_dur.setValue(cur_min_dur)
+        self.slider_min_dur = QSlider(Qt.Orientation.Horizontal)
+        self.slider_min_dur.setRange(0, 10)
+        cur_min_dur = int(self.result.get("sub_min_duration", 0.3) * 10)
+        self.slider_min_dur.setValue(cur_min_dur)
         self.lbl_min_dur = QLabel(f"{cur_min_dur/10.0:.1f} 초")
         form3.addRow("초단문 무시 (삭제):", self._create_slider_row(self.slider_min_dur, self.lbl_min_dur, "sub_min_duration", 10.0, lambda v: f"{v:.1f} 초", 
             "<b>[설명]</b> 헛기침이나 노이즈 파편 자막을 원천적으로 삭제하는 기준 시간입니다.<br><br>"
             "[+] 길게: 웬만한 노이즈는 다 지워지나, '네', '아' 같은 정상 대답도 삭제될 수 있습니다.<br>"
             "[-] 짧게: 짧은 감탄사나 작은 숨소리도 전부 화면에 표시됩니다."))
         
-        self.slider_cps = QSlider(Qt.Orientation.Horizontal); self.slider_cps.setRange(5, 30)
-        cur_cps = int(self.result.get("sub_max_cps", 12)); self.slider_cps.setValue(cur_cps)
+        self.slider_cps = QSlider(Qt.Orientation.Horizontal)
+        self.slider_cps.setRange(5, 30)
+        cur_cps = int(self.result.get("sub_max_cps", 12))
+        self.slider_cps.setValue(cur_cps)
         self.lbl_cps = QLabel(f"{cur_cps} 자/초")
         form3.addRow("최대 발음 속도 (CPS):", self._create_slider_row(self.slider_cps, self.lbl_cps, "sub_max_cps", 1.0, lambda v: f"{int(v)} 자/초", 
             "<b>[설명]</b> 1초에 뱉을 수 있는 물리적 최대 글자 수입니다.<br><br>"
             "[+] 관대하게: 기계적인 환각(랩하듯 쏟아내는 오류)이 안 지워지고 그대로 표시됩니다.<br>"
             "[-] 엄격하게: 말이 조금만 빨라도 환각으로 간주해 억울하게 삭제될 수 있습니다."))
 
-        self.slider_max_dur = QSlider(Qt.Orientation.Horizontal); self.slider_max_dur.setRange(10, 120)
-        cur_max_dur = int(self.result.get("sub_max_duration", 6.0) * 10); self.slider_max_dur.setValue(cur_max_dur)
+        self.slider_max_dur = QSlider(Qt.Orientation.Horizontal)
+        self.slider_max_dur.setRange(10, 120)
+        cur_max_dur = int(self.result.get("sub_max_duration", 6.0) * 10)
+        self.slider_max_dur.setValue(cur_max_dur)
         self.lbl_max_dur = QLabel(f"{cur_max_dur/10.0:.1f} 초")
         form3.addRow("최대 자막 길이:", self._create_slider_row(self.slider_max_dur, self.lbl_max_dur, "sub_max_duration", 10.0, lambda v: f"{v:.1f} 초",
             "<b>[설명]</b> 한 자막이 화면에 유지되는 최대 목표 시간입니다.<br><br>"
             "[+] 길게: 호흡이 긴 문장을 한 자막에 더 오래 유지합니다.<br>"
             "[-] 짧게: 긴 문장을 word timestamp 기준으로 더 자주 나눕니다."))
 
-        self.slider_dedup = QSlider(Qt.Orientation.Horizontal); self.slider_dedup.setRange(1, 20)
-        cur_dedup = int(self.result.get("sub_dedup_window", 0.5) * 10); self.slider_dedup.setValue(cur_dedup)
+        self.slider_dedup = QSlider(Qt.Orientation.Horizontal)
+        self.slider_dedup.setRange(1, 20)
+        cur_dedup = int(self.result.get("sub_dedup_window", 0.5) * 10)
+        self.slider_dedup.setValue(cur_dedup)
         self.lbl_dedup = QLabel(f"{cur_dedup/10.0:.1f} 초")
         form3.addRow("말더듬 환각 제거:", self._create_slider_row(self.slider_dedup, self.lbl_dedup, "sub_dedup_window", 10.0, lambda v: f"{v:.1f} 초", 
             "<b>[설명]</b> 같은 단어가 이 시간 내에 반복되면 앵무새 오류로 보고 잘라냅니다.<br><br>"
             "[+] 넓게: 비슷한 단어가 연달아 나올 때 정상 문장도 삭제될 위험이 커집니다.<br>"
             "[-] 좁게: 진짜로 더듬은 말이 자연스럽게 화면에 그대로 표시됩니다."))
 
-        self.slider_gap_break = QSlider(Qt.Orientation.Horizontal); self.slider_gap_break.setRange(5, 50)
-        cur_gap_break = int(self.result.get("sub_gap_break_sec", 1.5) * 10); self.slider_gap_break.setValue(cur_gap_break)
+        self.slider_gap_break = QSlider(Qt.Orientation.Horizontal)
+        self.slider_gap_break.setRange(5, 50)
+        cur_gap_break = int(self.result.get("sub_gap_break_sec", 1.5) * 10)
+        self.slider_gap_break.setValue(cur_gap_break)
         self.lbl_gap_break = QLabel(f"{cur_gap_break/10.0:.1f} 초")
         form3.addRow("강제 줄바꿈 무음:", self._create_slider_row(self.slider_gap_break, self.lbl_gap_break, "sub_gap_break_sec", 10.0, lambda v: f"{v:.1f} 초", 
             "<b>[설명]</b> 대사 중간이라도 이 시간만큼 조용하면 앞뒤 문맥 무시하고 강제로 줄바꿈합니다.<br><br>"
             "[+] 길게: 호흡이 긴 대사라도 끊기지 않고 한 줄에 자연스럽게 합쳐집니다.<br>"
             "[-] 짧게: 오디오가 살짝만 비어도 자막이 잘게 파편화되어 분리됩니다."))
 
-        right_col.addLayout(form3); right_col.addStretch()
+        right_col.addLayout(form3)
+        right_col.addStretch()
         left_col.addStretch()
 
         two_col_layout.addLayout(left_col, 1)
-        v_sep = QFrame(); v_sep.setFrameShape(QFrame.Shape.VLine); v_sep.setStyleSheet("background-color: #24313A; margin: 0 8px;")
+        v_sep = QFrame()
+        v_sep.setFrameShape(QFrame.Shape.VLine)
+        v_sep.setStyleSheet("background-color: #24313A; margin: 0 8px;")
         two_col_layout.addWidget(v_sep)
         two_col_layout.addLayout(right_col, 1)
 
@@ -188,6 +258,71 @@ class GapSettingsDialog(QDialog):
             s.valueChanged.connect(self._update_simulator)
         
         self._update_simulator()
+
+    def _current_media_path(self) -> str:
+        owner = self.parent()
+        for candidate in (owner, getattr(owner, "window", lambda: None)()):
+            if candidate is None:
+                continue
+            editor_getter = getattr(candidate, "_active_editor", None)
+            if callable(editor_getter):
+                try:
+                    editor = editor_getter()
+                except Exception:
+                    editor = None
+            else:
+                editor = candidate
+            media_path = str(
+                getattr(editor, "media_path", "")
+                or getattr(getattr(editor, "sm", None), "current_file", "")
+                or getattr(candidate, "media_path", "")
+                or ""
+            )
+            if media_path:
+                return media_path
+        return ""
+
+    def _coerce_slider_value(self, slider: QSlider, key: str, value, multiplier: float) -> int | None:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        if key == "gap_push_rate" and numeric > 1.0:
+            numeric /= 100.0
+        slider_value = int(round(numeric * multiplier))
+        return max(slider.minimum(), min(slider.maximum(), slider_value))
+
+    def _on_lora_gap_auto_apply(self):
+        media_path = self._current_media_path()
+        try:
+            recommended = personalization_settings_override_for_media(media_path)
+        except Exception as e:
+            QMessageBox.warning(self, "LoRA 자동설정 실패", str(e))
+            return
+
+        applied: list[str] = []
+        for key, (slider_attr, multiplier, label) in _LORA_GAP_SLIDERS.items():
+            if key not in recommended:
+                continue
+            slider = getattr(self, slider_attr, None)
+            if slider is None:
+                continue
+            slider_value = self._coerce_slider_value(slider, key, recommended.get(key), multiplier)
+            if slider_value is None:
+                continue
+            slider.setValue(slider_value)
+            applied.append(label)
+
+        if not applied:
+            QMessageBox.information(self, "LoRA 자동설정", "아직 적용할 수 있는 LoRA 간격 학습값이 없습니다.")
+            return
+
+        self._collect_data()
+        QMessageBox.information(
+            self,
+            "LoRA 자동설정 완료",
+            "학습된 LoRA 값을 간격 설정에 반영했습니다.\n\n" + " · ".join(applied),
+        )
 
     def _update_simulator(self, *args):
         self.simulator.cont_thresh = self.slider_cont.value() / 10.0
@@ -250,7 +385,8 @@ class GapSettingsDialog(QDialog):
     def _on_reset(self):
         for s, k, m in self.sliders_info:
             d = DEFAULT_ADV_SETTINGS.get(k)
-            if d is not None: s.setValue(int(d * m))
+            if d is not None:
+                s.setValue(int(d * m))
 
     def _collect_data(self):
         self.result["continuous_threshold"] = self.slider_cont.value() / 10.0
@@ -263,6 +399,16 @@ class GapSettingsDialog(QDialog):
         self.result["sub_dedup_window"] = self.slider_dedup.value() / 10.0
         self.result["sub_gap_break_sec"] = self.slider_gap_break.value() / 10.0
 
-    def _on_save(self): self._collect_data(); save_settings(self.result); self.accept()
-    def _on_save_default(self): self._collect_data(); save_default_settings(self.result); QMessageBox.information(self, "완료", "기본값 저장 완료!")
-    def _on_ok(self): self._collect_data(); self.accept()
+    def _on_save(self):
+        self._collect_data()
+        save_settings(self.result)
+        self.accept()
+
+    def _on_save_default(self):
+        self._collect_data()
+        save_default_settings(self.result)
+        QMessageBox.information(self, "완료", "기본값 저장 완료!")
+
+    def _on_ok(self):
+        self._collect_data()
+        self.accept()
