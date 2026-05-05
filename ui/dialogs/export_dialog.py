@@ -284,7 +284,7 @@ class _RenderWorker(QThread):
             if p.get("fast", False):
                 enc.extend(["-q:v", "15"])
                 
-            cmd=["ffmpeg","-y","-f","concat","-safe","0","-i",concat,"-vf",f"format=yuva444p10le"]+enc+[output]
+            cmd=["ffmpeg","-y","-f","concat","-safe","0","-i",concat,"-vf","format=yuva444p10le"]+enc+[output]
             subprocess.run(cmd, capture_output=True)
             self.done.emit(True,output)
         finally: shutil.rmtree(wd,ignore_errors=True)
@@ -721,7 +721,7 @@ class ExportDialog(QDialog):
                         shutil.copy2(msg, dest_file) # 이름이 같으면 기본적으로 덮어쓰기 작동!
                         get_logger().log(f"✅ iCloud 복사(덮어쓰기) 성공: {dest_file}")
                     else:
-                        get_logger().log(f"ℹ️ 이미 iCloud 드롭존 내에서 작업 중입니다. (복사 생략)")
+                        get_logger().log("ℹ️ 이미 iCloud 드롭존 내에서 작업 중입니다. (복사 생략)")
                         
                     result_msg += f"\n\n☁️ iCloud 백업 완료:\n{dest_dir}"
                 except Exception as e:

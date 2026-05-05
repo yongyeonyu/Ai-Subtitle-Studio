@@ -26,6 +26,7 @@ from core.cut_boundary import (
 from core.project.project_context import (
     STT_SEGMENT_METADATA_KEYS,
     build_editor_state,
+    project_segments_to_editor,
     project_stt_preview_segments,
     sanitize_workspace_state,
 )
@@ -46,6 +47,7 @@ from core.frame_time import frame_to_sec, normalize_fps
 from core.work_mode import normalize_work_mode
 
 PROJECT_SCHEMA_VERSION = "03.00.26"
+PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.vector.v1"
 
 __all__ = [
     "PROJECTS_DIR",
@@ -163,6 +165,32 @@ def _copy_missing_stt_metadata(target: dict, source: dict | None) -> None:
             target[key] = source.get(key)
 
 
+def _vector_segment_count(project: dict) -> int:
+    rows = (
+        ((project.get("editor_state", {}) or {}).get("rendering", {}) or {})
+        .get("subtitle_canvas", {})
+        or {}
+    ).get("segments")
+    return len(rows) if isinstance(rows, list) else 0
+
+
+def _prune_project_payload_for_vector_storage(project: dict) -> dict:
+    """Remove legacy duplicate subtitle arrays; vector canvas is the source of truth."""
+    project["storage_schema"] = PROJECT_STORAGE_SCHEMA
+    project.pop("segments", None)
+    subtitles = project.setdefault("subtitles", {})
+    subtitles.pop("segments", None)
+    subtitles["storage"] = "editor_state.rendering.subtitle_canvas"
+    subtitles["segment_count"] = _vector_segment_count(project)
+    editor_state = project.get("editor_state")
+    if isinstance(editor_state, dict):
+        editor_subtitles = editor_state.setdefault("subtitles", {})
+        editor_subtitles["storage"] = "vector_canvas"
+        editor_subtitles["segments"] = []
+        editor_subtitles["segment_count"] = _vector_segment_count(project)
+    return project
+
+
 # ─────────────────────────────────────────────
 # 프로젝트 생성
 # ─────────────────────────────────────────────
@@ -238,6 +266,7 @@ def create_project(
         "version": PROJECT_SCHEMA_VERSION,
         "phase": "PHASE2",
         "project_name": name,
+        "storage_schema": PROJECT_STORAGE_SCHEMA,
         "created_at": now,
         "updated_at": now,
 
@@ -254,7 +283,8 @@ def create_project(
 
         "subtitles": {
             "srt_path": srt_path or "",
-            "segments": segments
+            "storage": "editor_state.rendering.subtitle_canvas",
+            "segment_count": len(segments),
         },
 
         "editor_state": build_editor_state(
@@ -335,6 +365,7 @@ def create_project(
         primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
     )
     _augment_project_frame_metadata(project)
+    _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)
     return filepath
 
@@ -440,6 +471,7 @@ def save_project(
         if explicit_stt_preview_update
         else project_stt_preview_segments(project)
     )
+    new_segs = None
     if segments is not None:
         from core.cut_boundary import magnetize_segments_to_cut_boundaries
 
@@ -451,7 +483,7 @@ def save_project(
             primary_fps=primary_fps,
         )
         new_segs = []
-        existing_subtitle_segments = (project.get("subtitles", {}) or {}).get("segments", []) or []
+        existing_subtitle_segments = project_segments_to_editor(project)
         existing_by_id, existing_by_time = _existing_segment_matchers(existing_subtitle_segments)
 
         for i, seg in enumerate(segments):
@@ -522,7 +554,10 @@ def save_project(
             new_segs.append(new_seg)
 
         project.setdefault("subtitles", {})
-        project["subtitles"]["segments"] = new_segs
+        project["subtitles"]["storage"] = "editor_state.rendering.subtitle_canvas"
+        project["subtitles"]["segment_count"] = len(new_segs)
+
+    project_segment_rows = new_segs if new_segs is not None else project_segments_to_editor(project)
 
     if voice_activity_segments is not None:
         project.setdefault("analysis", {})
@@ -540,7 +575,7 @@ def save_project(
                 for item in sorted(project.get("media", []), key=lambda item: item.get("order", 0))
                 if item.get("path")
             ],
-            segments=segments,
+            segments=project_segment_rows,
             workspace=workspace or project.get("workspace", {}) or {},
             clip_boundaries=[
                 {
@@ -558,23 +593,10 @@ def save_project(
         )
     elif media_paths is not None:
         clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
-        existing_segments = [
-            {
-                "start": seg.get("timeline_start", seg.get("start", 0.0)),
-                "end": seg.get("timeline_end", seg.get("end", 0.0)),
-                "text": seg.get("text", ""),
-                "speaker": seg.get("speaker", "00"),
-                "quality": seg.get("quality", {}),
-                "quality_history": seg.get("quality_history", []),
-                "quality_candidates": seg.get("quality_candidates", []),
-                **{key: seg.get(key) for key in STT_SEGMENT_METADATA_KEYS if key in seg},
-            }
-            for seg in (project.get("subtitles", {}) or {}).get("segments", [])
-        ]
         project["editor_state"] = build_editor_state(
             mode="multiclip" if len(media_paths) > 1 else "single",
             media_files=list(media_paths or []),
-            segments=existing_segments,
+            segments=project_segment_rows,
             workspace=workspace or project.get("workspace", {}) or {},
             clip_boundaries=[
                 {
@@ -598,16 +620,7 @@ def save_project(
                 for item in sorted(project.get("media", []), key=lambda item: item.get("order", 0))
                 if item.get("path")
             ],
-            segments=segments if segments is not None else [
-                {
-                    "start": seg.get("timeline_start", seg.get("start", 0.0)),
-                    "end": seg.get("timeline_end", seg.get("end", 0.0)),
-                    "text": seg.get("text", ""),
-                    "speaker": seg.get("speaker", "00"),
-                    **{key: seg.get(key) for key in STT_SEGMENT_METADATA_KEYS if key in seg},
-                }
-                for seg in (project.get("subtitles", {}) or {}).get("segments", [])
-            ],
+            segments=project_segment_rows,
             workspace=workspace or project.get("workspace", {}) or {},
             clip_boundaries=[
                 {
@@ -631,19 +644,7 @@ def save_project(
                 for item in sorted(project.get("media", []), key=lambda item: item.get("order", 0))
                 if item.get("path")
             ],
-            segments=[
-                {
-                    "start": seg.get("timeline_start", seg.get("start", 0.0)),
-                    "end": seg.get("timeline_end", seg.get("end", 0.0)),
-                    "text": seg.get("text", ""),
-                    "speaker": seg.get("speaker", "00"),
-                    "quality": seg.get("quality", {}),
-                    "quality_history": seg.get("quality_history", []),
-                    "quality_candidates": seg.get("quality_candidates", []),
-                    **{key: seg.get(key) for key in STT_SEGMENT_METADATA_KEYS if key in seg},
-                }
-                for seg in (project.get("subtitles", {}) or {}).get("segments", [])
-            ],
+            segments=project_segment_rows,
             workspace=workspace or project.get("workspace", {}) or {},
             clip_boundaries=[
                 {
@@ -707,6 +708,7 @@ def save_project(
         provisional_boundaries=existing_provisional_cut_boundaries,
     )
     _augment_project_frame_metadata(project)
+    _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)
 
 
@@ -844,15 +846,7 @@ def add_media_to_project(filepath: str, new_paths: list):
         }
         for c in clips
     ]
-    existing_segments = [
-        {
-            "start": seg.get("timeline_start", seg.get("start", 0.0)),
-            "end": seg.get("timeline_end", seg.get("end", 0.0)),
-            "text": seg.get("text", ""),
-            "speaker": seg.get("speaker", "00"),
-        }
-        for seg in (project.get("subtitles", {}) or {}).get("segments", [])
-    ]
+    existing_segments = project_segments_to_editor(project)
     project["editor_state"] = build_editor_state(
         mode="multiclip" if len(project["media"]) > 1 else "single",
         media_files=[item["path"] for item in sorted(project["media"], key=lambda item: item.get("order", 0))],
@@ -869,6 +863,7 @@ def add_media_to_project(filepath: str, new_paths: list):
         ],
         cut_boundaries=project_cut_boundaries(project),
         provisional_cut_boundaries=project_cut_provisional_boundaries(project),
+        primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
     )
     project.setdefault("roughcut_state", {})
 
@@ -876,6 +871,7 @@ def add_media_to_project(filepath: str, new_paths: list):
     _sanitize_project_workspace_fields(project)
     sync_project_cut_boundaries(project, settings=project.get("user_settings", {}))
     _augment_project_frame_metadata(project)
+    _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)
 
 
@@ -945,12 +941,14 @@ def merge_srt_to_project(filepath: str) -> int | None:
         ],
         cut_boundaries=project_cut_boundaries(project),
         provisional_cut_boundaries=project_cut_provisional_boundaries(project),
+        primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
     )
     project.setdefault("roughcut_state", {})
     project["updated_at"] = datetime.now().isoformat()
     _sanitize_project_workspace_fields(project)
     sync_project_cut_boundaries(project, settings=project.get("user_settings", {}))
     _augment_project_frame_metadata(project)
+    _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)
 
     return len(all_segments)

@@ -1124,8 +1124,17 @@ class MainWindow(
                         gc.collect()
                     except Exception:
                         pass
+                    try:
+                        import torch
+
+                        if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+                            torch.mps.empty_cache()
+                        if hasattr(torch, "cuda") and torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    except Exception:
+                        pass
                     if stopped_runtime:
-                        get_logger().log("🧹 에디터 모드: 자막 생성 완료 후 AI/STT/LLM 모델을 모두 종료해 메모리를 확보했습니다.")
+                        get_logger().log("🧹 에디터 모드: AI/STT/LLM 모델을 종료하고 GPU/런타임 메모리를 정리했습니다.")
                 finally:
                     self._editor_ai_release_in_progress = False
 

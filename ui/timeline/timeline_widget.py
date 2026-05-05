@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 from ui.timeline.timeline_constants import CANVAS_H, FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
 from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_global import GlobalCanvas
+from ui.timeline.timeline_scenegraph import TimelineSceneGraphLayer
 from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker
 from ui.style import button_style
 from core.frame_time import normalize_fps, snap_sec_to_frame
@@ -163,6 +164,7 @@ class TimelineWidget(QWidget):
         self._playhead_overlay.setGeometry(self.scroll.viewport().rect())
         self._playhead_overlay.raise_()
         self.canvas._external_playhead_overlay = True
+        self._scenegraph_layer = self._create_scenegraph_layer()
 
         self.global_canvas = GlobalCanvas()
         lay.addWidget(self.global_canvas)
@@ -218,6 +220,7 @@ class TimelineWidget(QWidget):
         self._vp.timeout.connect(self._sync_vp)
         self.scroll.horizontalScrollBar().valueChanged.connect(self._schedule_vp_sync)
         self.scroll.horizontalScrollBar().valueChanged.connect(lambda *_: self._sync_playhead_overlay())
+        self.scroll.horizontalScrollBar().valueChanged.connect(lambda *_: self._sync_scenegraph_layer())
 
         self._target_scroll_x = 0.0
         self._current_scroll_x = 0.0
@@ -245,6 +248,7 @@ class TimelineWidget(QWidget):
             "}"
         )
         self._focus_border.hide()
+        self._sync_scenegraph_layer()
         self._sync_focus_border()
 
     def stop_waveform_workers(self, timeout_ms: int = 1200):
@@ -269,6 +273,12 @@ class TimelineWidget(QWidget):
 
     def closeEvent(self, event):
         self.stop_waveform_workers()
+        layer = getattr(self, "_scenegraph_layer", None)
+        if layer is not None:
+            try:
+                layer.delete_later()
+            except Exception:
+                pass
         super().closeEvent(event)
 
     def set_frame_rate(self, fps: float):
@@ -278,6 +288,63 @@ class TimelineWidget(QWidget):
             self.canvas.set_frame_rate(fps)
         if hasattr(self, "global_canvas"):
             setattr(self.global_canvas, "frame_rate", fps)
+        self._sync_scenegraph_layer()
+
+    def _create_scenegraph_layer(self):
+        try:
+            if not TimelineSceneGraphLayer.enabled():
+                self.canvas._scenegraph_subtitle_rendering = False
+                return None
+            layer = TimelineSceneGraphLayer(self.scroll.viewport())
+            self.canvas._scenegraph_subtitle_rendering = True
+            return layer
+        except Exception:
+            self.canvas._scenegraph_subtitle_rendering = False
+            return None
+
+    def _timeline_speaker_settings(self) -> dict:
+        owner = self.parent()
+        while owner is not None and not hasattr(owner, "settings"):
+            owner = owner.parent()
+        return getattr(owner, "settings", {}) if owner is not None else {}
+
+    def _sync_scenegraph_layer(self):
+        layer = getattr(self, "_scenegraph_layer", None)
+        if layer is None:
+            return
+        canvas = getattr(self, "canvas", None)
+        viewport = self.scroll.viewport() if hasattr(self, "scroll") else None
+        if canvas is None or viewport is None:
+            return
+        try:
+            layer.set_geometry(viewport.rect())
+            pps = max(0.001, float(getattr(canvas, "pps", 1.0) or 1.0))
+            scroll_x = int(self.scroll.horizontalScrollBar().value())
+            visible_start = max(0.0, scroll_x / pps)
+            visible_end = max(visible_start, (scroll_x + max(1, viewport.width())) / pps)
+            active = not bool(getattr(canvas, "_edit_active", False))
+            canvas._scenegraph_subtitle_rendering = bool(active)
+            if not active:
+                layer.set_visible(False)
+                return
+            layer.set_state(
+                segments=list(getattr(canvas, "segments", []) or []),
+                pps=pps,
+                fps=float(canvas._get_fps() if hasattr(canvas, "_get_fps") else getattr(self, "video_fps", 30.0)),
+                scroll_x=scroll_x,
+                visible_start_sec=visible_start,
+                visible_end_sec=visible_end,
+                active_start=getattr(canvas, "active_seg_start", None),
+                active_line=getattr(canvas, "active_seg_line", None),
+                hover_line=getattr(canvas, "_hover_line", None),
+                quality_filter=str(getattr(canvas, "quality_filter", "all") or "all"),
+                speaker_settings=self._timeline_speaker_settings(),
+            )
+            layer.set_visible(True)
+            layer.raise_()
+            self._playhead_overlay.raise_()
+        except RuntimeError:
+            pass
 
     def snap_sec_to_frame(self, sec: float) -> float:
         return snap_sec_to_frame(sec, getattr(self, "video_fps", getattr(self.canvas, "frame_rate", 30.0)))
@@ -358,6 +425,7 @@ class TimelineWidget(QWidget):
         if self.canvas.width() != target_w:
             self.canvas.setFixedWidth(target_w)
         self.canvas.update()
+        self._sync_scenegraph_layer()
         self._sync_playhead_overlay()
 
         new_scroll = int(float(anchor_sec) * new_pps - float(anchor_view_x))
@@ -404,6 +472,7 @@ class TimelineWidget(QWidget):
         super().resizeEvent(ev)
         self._sync_focus_border()
         self._sync_playhead_overlay()
+        self._sync_scenegraph_layer()
         self._schedule_vp_sync()
         if bool(getattr(self, "_fit_to_view_locked", False)):
             self.schedule_fit_to_view()
@@ -549,6 +618,7 @@ class TimelineWidget(QWidget):
             self.canvas.setFixedWidth(target_w)
         self.canvas.update_segments(segs, active_sec, dur)
         self.global_canvas.update_segments(segs, dur)
+        self._sync_scenegraph_layer()
         if _keep_view_x is not None and not fit_view:
             self._restore_subtitle_resize_view()
         if _preserve_scroll_x is not None and not fit_view:
@@ -783,10 +853,14 @@ class TimelineWidget(QWidget):
 
     def set_boundary_times(self, times: list[float]):
         self.canvas.boundary_times = times or []
+        if hasattr(self.canvas, "_scan_boundary_hit_cache"):
+            self.canvas._scan_boundary_hit_cache = None
         self.canvas.update()
 
     def set_scan_boundary_times(self, times: list[float]):
         self.canvas.scan_boundary_times = times or []
+        if hasattr(self.canvas, "_scan_boundary_hit_cache"):
+            self.canvas._scan_boundary_hit_cache = None
         self.canvas.update()
 
     def _update_smooth_scroll(self):
@@ -978,6 +1052,7 @@ class TimelineWidget(QWidget):
     def _sync_vp(self):
         start_frac, end_frac = self._viewport_fracs_for_selected_clip()
         self.global_canvas.update_viewport(start_frac, end_frac)
+        self._sync_scenegraph_layer()
 
     def _on_global_seek(self, frac):
         if self.canvas.total_duration > 0:
@@ -1030,6 +1105,7 @@ class TimelineWidget(QWidget):
         if self.canvas.width() != target_w:
             self.canvas.setFixedWidth(target_w)
         self.canvas.update()
+        self._sync_scenegraph_layer()
 
         fit_start_sec = 0.0
         if not is_multiclip and self._selected_clip_idx >= 0 and self._selected_clip_duration > 0:
@@ -1053,6 +1129,7 @@ class TimelineWidget(QWidget):
             end_frac = max(start_frac, min(1.0, (fit_start_sec + dur) / total_for_view))
         self.global_canvas.update_viewport(start_frac, end_frac)
         self.global_canvas.update()
+        self._sync_scenegraph_layer()
         self._sync_playhead_overlay()
 
     def zoom_in(self):

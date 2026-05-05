@@ -1,5 +1,5 @@
 <!--
-Document-Version: 03.17.00
+Document-Version: 03.18.00
 Phase: PARKED_ONLY
 Last-Updated: 2026-05-05
 Updated-By: Codex
@@ -19,8 +19,8 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "03.17.00"
-document_version: "03.17.00"
+app_version: "03.18.00"
+document_version: "03.18.00"
 phase: "PARKED_ONLY"
 next_phase: "PHASE4_iPad"
 commit_policy: "Commit only when the user explicitly asks."
@@ -49,6 +49,7 @@ release_handoff_files:
 
 - No active non-iPad items remain.
 - User-requested exclusion is still in effect for `PHASE4_iPad`.
+- v03.18.00 release work is complete; GPU/QML foundations, lightweight project data, LoRA voice-data storage, and related refactors are not active backlog.
 
 ## Parked Work
 

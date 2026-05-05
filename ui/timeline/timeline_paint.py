@@ -4,6 +4,8 @@
 ui/timeline_paint.py
 Timeline paint mixin
 """
+from bisect import bisect_left, bisect_right
+
 import numpy as np
 from PyQt6.QtCore import QPoint, QRect, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygon
@@ -42,7 +44,6 @@ from ui.timeline.timeline_analysis import (
     SUBTITLE_STATUS_COLORS,
     analysis_markers_for_widget,
     roughcut_major_markers_for_widget,
-    subtitle_detection_color,
     subtitle_review_state,
 )
 from ui.timeline.speaker_labels import (
@@ -814,126 +815,128 @@ class TimelinePaintMixin:
                         p.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
                         p.setFont(QFont(config.FONT, 8))
 
-        _draw_stt_preview_lane(stt1_preview_segments, STT1_TOP, STT1_BOT, "#173524", "#34C759", "#D7FFE4")
-        _draw_stt_preview_lane(stt2_preview_segments, STT2_TOP, STT2_BOT, "#1A3148", "#64D2FF", "#BDEBFF")
+        scenegraph_subtitles = bool(getattr(self, "_scenegraph_subtitle_rendering", False)) and not bool(getattr(self, "_edit_active", False))
+        if not scenegraph_subtitles:
+            _draw_stt_preview_lane(stt1_preview_segments, STT1_TOP, STT1_BOT, "#173524", "#34C759", "#D7FFE4")
+            _draw_stt_preview_lane(stt2_preview_segments, STT2_TOP, STT2_BOT, "#1A3148", "#64D2FF", "#BDEBFF")
 
-        seg_font = QFont(config.FONT, 9); p.setFont(seg_font)
-        for seg in final_stt_segments:
-            if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
-                continue
-            x1, x2 = self._x(seg["start"]), self._x(seg["end"]); sw = max(2, x2 - x1)
-            if x2 < clip_left or x1 > clip_right:
-                continue
-            compact_seg = sw < 24
-            rect = QRect(x1 + 1, subtitle_top, max(2, sw - 2), subtitle_bot - subtitle_top)
-            is_active = self._is_active_segment(seg) if hasattr(self, "_is_active_segment") else (
-                self.active_seg_start is not None and abs(seg["start"] - self.active_seg_start) < 0.001
-            )
-            is_hover = self._hover_line == seg.get("line")
-            is_stt_pending = bool(seg.get("stt_pending"))
-            spk_color = _speaker_color(seg)
-            visual_style = subtitle_segment_visual_style(
-                seg,
-                active=is_active,
-                hover=is_hover,
-                quality_filter=getattr(self, "quality_filter", "all"),
-            )
-            if overview_mode and compact_seg:
+            seg_font = QFont(config.FONT, 9); p.setFont(seg_font)
+            for seg in final_stt_segments:
+                if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
+                    continue
+                x1, x2 = self._x(seg["start"]), self._x(seg["end"]); sw = max(2, x2 - x1)
+                if x2 < clip_left or x1 > clip_right:
+                    continue
+                compact_seg = sw < 24
+                rect = QRect(x1 + 1, subtitle_top, max(2, sw - 2), subtitle_bot - subtitle_top)
+                is_active = self._is_active_segment(seg) if hasattr(self, "_is_active_segment") else (
+                    self.active_seg_start is not None and abs(seg["start"] - self.active_seg_start) < 0.001
+                )
+                is_hover = self._hover_line == seg.get("line")
+                is_stt_pending = bool(seg.get("stt_pending"))
+                spk_color = _speaker_color(seg)
+                visual_style = subtitle_segment_visual_style(
+                    seg,
+                    active=is_active,
+                    hover=is_hover,
+                    quality_filter=getattr(self, "quality_filter", "all"),
+                )
+                if overview_mode and compact_seg:
+                    fill = QColor(visual_style["fill"])
+                    border = QColor(visual_style["border"])
+                    p.fillRect(rect, fill)
+                    p.setPen(QPen(border, 1))
+                    p.drawRect(rect)
+                    speaker_rect = QRect(rect.x(), speaker_top, rect.width(), speaker_bot - speaker_top)
+                    p.fillRect(speaker_rect, spk_color.darker(135))
+                    continue
                 fill = QColor(visual_style["fill"])
                 border = QColor(visual_style["border"])
+                bw = 2 if (is_active or is_hover) and not compact_seg else 1
+
                 p.fillRect(rect, fill)
-                p.setPen(QPen(border, 1))
+                p.setPen(QPen(border, bw))
                 p.drawRect(rect)
+                p.setFont(seg_font)
+                text_rect = QRect(rect.x() + 10, rect.y() + 6, max(8, rect.width() - 20), rect.height() - 12)
+                is_editing = (self._edit_active and self._edit_line == seg.get("line"))
+
+                if is_editing:
+                    disp_text = self._edit_text
+                    preedit = getattr(self, '_ime_preedit', '')
+                    cur = self._edit_cursor
+                    if preedit:
+                        disp_text = disp_text[:cur] + preedit + disp_text[cur:]
+                    lines = disp_text.split('\n')
+                    fm = p.fontMetrics()
+                    line_h = fm.height()
+                    tx0 = text_rect.x(); ty0 = text_rect.y() + fm.ascent()
+                    p.fillRect(text_rect, QColor("#123A24"))
+                    vis_cur = cur + len(preedit)
+                    r = 0; c = vis_cur
+                    for i, line in enumerate(lines):
+                        if c <= len(line): r = i; break
+                        c -= (len(line) + 1)
+                    curr_y = ty0
+                    for i, line in enumerate(lines):
+                        p.setPen(QColor("#FFFF88"))
+                        if preedit and i == r:
+                            pre_start = c - len(preedit)
+                            p.drawText(tx0, curr_y, line)
+                            pre_w_start = fm.horizontalAdvance(line[:pre_start])
+                            pre_w_end = fm.horizontalAdvance(line[:c])
+                            p.setPen(QColor("#FFFF00"))
+                            p.drawText(tx0 + pre_w_start, curr_y, preedit)
+                            p.setPen(QPen(QColor("#FFFF00"), 1))
+                            p.drawLine(tx0 + pre_w_start, curr_y + 1, tx0 + pre_w_end, curr_y + 1)
+                        else:
+                            p.drawText(tx0, curr_y, line)
+                        if self._cursor_vis and i == r:
+                            cx = tx0 + fm.horizontalAdvance(line[:c])
+                            cursor_top = curr_y - fm.ascent()
+                            cursor_bot = cursor_top + line_h
+                            p.setPen(QPen(QColor("#FFFFFF"), 1))
+                            p.drawLine(cx, cursor_top, cx, cursor_bot)
+                        curr_y += line_h + 4
+                else:
+                    if rect.width() >= 44:
+                        text_color = visual_style.get("text", "")
+                        p.setPen(QColor(text_color) if text_color else (QColor("#8A8F98") if is_stt_pending else QColor("#DCE3EA")))
+                        seg_text = str(seg.get("text", "") or "")
+                        if rect.width() < 164:
+                            seg_text = p.fontMetrics().elidedText(seg_text.replace("\n", " "), Qt.TextElideMode.ElideRight, text_rect.width())
+                            p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, seg_text)
+                        else:
+                            p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, seg_text)
+                        selected_source = final_stt_selection_source(seg)
+                        if selected_source and rect.width() >= 104:
+                            is_llm_choice = bool(str(seg.get("stt_ensemble_llm_selected_source", "") or "").strip())
+                            badge_rect = QRect(rect.right() - 42, rect.y() + 6, 38, 18)
+                            badge_fill = QColor("#5A4600" if is_llm_choice else "#174A2A")
+                            badge_border = QColor("#FFCC00" if is_llm_choice else "#34C759")
+                            badge_text_color = QColor("#FFF2A8" if is_llm_choice else "#D7FFE4")
+                            p.fillRect(badge_rect, badge_fill)
+                            p.setPen(QPen(badge_border, 1))
+                            p.drawRect(badge_rect)
+                            p.setPen(badge_text_color)
+                            p.setFont(QFont(config.FONT, 7, QFont.Weight.Bold))
+                            p.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, "선택")
+                            p.setFont(seg_font)
                 speaker_rect = QRect(rect.x(), speaker_top, rect.width(), speaker_bot - speaker_top)
-                p.fillRect(speaker_rect, spk_color.darker(135))
-                continue
-            fill = QColor(visual_style["fill"])
-            border = QColor(visual_style["border"])
-            bw = 2 if (is_active or is_hover) and not compact_seg else 1
+                if compact_seg:
+                    p.fillRect(speaker_rect, spk_color.darker(135))
+                else:
+                    p.setPen(QPen(QColor("#2D3942"), 1))
+                    p.setBrush(QColor("#1B2429"))
+                    p.drawRect(speaker_rect)
+                if not compact_seg and speaker_rect.width() >= 42:
+                    self._draw_speaker_names(p, speaker_rect, spk_color, _speaker_names(seg))
 
-            p.fillRect(rect, fill)
-            p.setPen(QPen(border, bw))
-            p.drawRect(rect)
-            p.setFont(seg_font)
-            text_rect = QRect(rect.x() + 10, rect.y() + 6, max(8, rect.width() - 20), rect.height() - 12)
-            is_editing = (self._edit_active and self._edit_line == seg.get("line"))
-
-            if is_editing:
-                disp_text = self._edit_text
-                preedit = getattr(self, '_ime_preedit', '')
-                cur = self._edit_cursor
-                if preedit:
-                    disp_text = disp_text[:cur] + preedit + disp_text[cur:]
-                lines = disp_text.split('\n')
-                fm = p.fontMetrics()
-                line_h = fm.height()
-                tx0 = text_rect.x(); ty0 = text_rect.y() + fm.ascent()
-                p.fillRect(text_rect, QColor("#123A24"))
-                vis_cur = cur + len(preedit)
-                r = 0; c = vis_cur
-                for i, line in enumerate(lines):
-                    if c <= len(line): r = i; break
-                    c -= (len(line) + 1)
-                curr_y = ty0
-                for i, line in enumerate(lines):
-                    p.setPen(QColor("#FFFF88"))
-                    if preedit and i == r:
-                        pre_start = c - len(preedit)
-                        p.drawText(tx0, curr_y, line)
-                        pre_w_start = fm.horizontalAdvance(line[:pre_start])
-                        pre_w_end = fm.horizontalAdvance(line[:c])
-                        p.setPen(QColor("#FFFF00"))
-                        p.drawText(tx0 + pre_w_start, curr_y, preedit)
-                        p.setPen(QPen(QColor("#FFFF00"), 1))
-                        p.drawLine(tx0 + pre_w_start, curr_y + 1, tx0 + pre_w_end, curr_y + 1)
-                    else:
-                        p.drawText(tx0, curr_y, line)
-                    if self._cursor_vis and i == r:
-                        cx = tx0 + fm.horizontalAdvance(line[:c])
-                        cursor_top = curr_y - fm.ascent()
-                        cursor_bot = cursor_top + line_h
-                        p.setPen(QPen(QColor("#FFFFFF"), 1))
-                        p.drawLine(cx, cursor_top, cx, cursor_bot)
-                    curr_y += line_h + 4
-            else:
-                if rect.width() >= 44:
-                    text_color = visual_style.get("text", "")
-                    p.setPen(QColor(text_color) if text_color else (QColor("#8A8F98") if is_stt_pending else QColor("#DCE3EA")))
-                    seg_text = str(seg.get("text", "") or "")
-                    if rect.width() < 164:
-                        seg_text = p.fontMetrics().elidedText(seg_text.replace("\n", " "), Qt.TextElideMode.ElideRight, text_rect.width())
-                        p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, seg_text)
-                    else:
-                        p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, seg_text)
-                    selected_source = final_stt_selection_source(seg)
-                    if selected_source and rect.width() >= 104:
-                        is_llm_choice = bool(str(seg.get("stt_ensemble_llm_selected_source", "") or "").strip())
-                        badge_rect = QRect(rect.right() - 42, rect.y() + 6, 38, 18)
-                        badge_fill = QColor("#5A4600" if is_llm_choice else "#174A2A")
-                        badge_border = QColor("#FFCC00" if is_llm_choice else "#34C759")
-                        badge_text_color = QColor("#FFF2A8" if is_llm_choice else "#D7FFE4")
-                        p.fillRect(badge_rect, badge_fill)
-                        p.setPen(QPen(badge_border, 1))
-                        p.drawRect(badge_rect)
-                        p.setPen(badge_text_color)
-                        p.setFont(QFont(config.FONT, 7, QFont.Weight.Bold))
-                        p.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, "선택")
-                        p.setFont(seg_font)
-            speaker_rect = QRect(rect.x(), speaker_top, rect.width(), speaker_bot - speaker_top)
-            if compact_seg:
-                p.fillRect(speaker_rect, spk_color.darker(135))
-            else:
-                p.setPen(QPen(QColor("#2D3942"), 1))
-                p.setBrush(QColor("#1B2429"))
-                p.drawRect(speaker_rect)
-            if not compact_seg and speaker_rect.width() >= 42:
-                self._draw_speaker_names(p, speaker_rect, spk_color, _speaker_names(seg))
-
-            if sw >= SEGMENT_HANDLE_MIN_WIDTH:
-                lh = self._hover_handle_matches(seg, "left")
-                rh = self._hover_handle_matches(seg, "right")
-                self._draw_handle(p, x1, True, QColor("#44FF88") if lh else QColor("#888888"))
-                self._draw_handle(p, x2, False, QColor("#44FF88") if rh else QColor("#888888"))
+                if sw >= SEGMENT_HANDLE_MIN_WIDTH:
+                    lh = self._hover_handle_matches(seg, "left")
+                    rh = self._hover_handle_matches(seg, "right")
+                    self._draw_handle(p, x1, True, QColor("#44FF88") if lh else QColor("#888888"))
+                    self._draw_handle(p, x2, False, QColor("#44FF88") if rh else QColor("#888888"))
 
         llm_review = dict(getattr(self, "llm_review_segment", {}) or {})
         if llm_review.get("active"):
@@ -1054,29 +1057,56 @@ class TimelinePaintMixin:
         boundary_lane_h = max(18, SEG_TOP - boundary_lane_top - 7)
         boundary_top = int(boundary_lane_top + 3)
         boundary_bot = int(boundary_lane_top + boundary_lane_h - 3)
+
+        def _visible_time_items(items, sec_getter, *, keep_index: bool = False):
+            rows = list(items or [])
+            if len(rows) < 64:
+                visible_rows = []
+                for idx, item in enumerate(rows):
+                    try:
+                        sec = float(sec_getter(item))
+                    except Exception:
+                        continue
+                    visible_rows.append((idx, item, sec))
+                if keep_index:
+                    return visible_rows
+                return [(item, sec) for _idx, item, sec in visible_rows]
+
+            timed = []
+            for idx, item in enumerate(rows):
+                try:
+                    sec = float(sec_getter(item))
+                except Exception:
+                    continue
+                if sec < 0.0:
+                    continue
+                timed.append((sec, idx, item))
+            timed.sort(key=lambda row: (row[0], row[1]))
+            secs = [row[0] for row in timed]
+            pad = max(0.02, 12.0 / max(0.001, float(getattr(self, "pps", 1.0) or 1.0)))
+            start_idx = bisect_left(secs, visible_start_sec - pad)
+            end_idx = bisect_right(secs, visible_end_sec + pad)
+            if keep_index:
+                return [(idx, item, sec) for sec, idx, item in timed[start_idx:end_idx]]
+            return [(item, sec) for sec, _idx, item in timed[start_idx:end_idx]]
+
         if getattr(self, "boundary_times", None):
             pen_confirmed_boundary = QPen(QColor("#8E8E93"), 1, Qt.PenStyle.DashLine)
-            for bt in list(getattr(self, "boundary_times", []) or []):
-                bx = self._x(bt)
+            for bt, sec in _visible_time_items(getattr(self, "boundary_times", []) or [], lambda item: float(item or 0.0)):
+                bx = self._x(sec)
                 if bx < clip_left or bx > clip_right:
                     continue
                 p.setPen(pen_confirmed_boundary)
                 p.drawLine(bx, boundary_top, bx, boundary_bot)
         if getattr(self, "scan_boundary_times", None):
             hover_scan_boundary_idx = getattr(self, "_hover_scan_boundary_idx", None)
-            for idx, bt in enumerate(list(getattr(self, "scan_boundary_times", []) or [])):
-                if isinstance(bt, dict):
-                    try:
-                        sec = float(bt.get("timeline_sec", bt.get("time", bt.get("start", 0.0))) or 0.0)
-                    except Exception:
-                        continue
-                    verified = cut_boundary_scan_marker_verified(bt)
-                else:
-                    try:
-                        sec = float(bt or 0.0)
-                    except Exception:
-                        continue
-                    verified = False
+            for idx, bt, sec in _visible_time_items(
+                getattr(self, "scan_boundary_times", []) or [],
+                lambda item: self._scan_boundary_sec(item) if hasattr(self, "_scan_boundary_sec") else (
+                    item.get("timeline_sec", item.get("time", item.get("start", 0.0))) if isinstance(item, dict) else item
+                ),
+                keep_index=True,
+            ):
                 visual = scan_boundary_marker_visual(bt, hover=(hover_scan_boundary_idx == idx))
                 pen_style = Qt.PenStyle.DotLine if visual["style"] == "dot" else Qt.PenStyle.SolidLine
                 pen_boundary = QPen(QColor(visual["color"]), int(visual["width"]), pen_style)
@@ -1100,7 +1130,10 @@ class TimelinePaintMixin:
             listening_line = getattr(self, "_listening_line", None)
             if listening_line is None and getattr(self, "_edit_active", False):
                 listening_line = getattr(self, "_edit_line", None)
-            seg = next((s for s in self.segments if s.get("line") == listening_line), None)
+            if hasattr(self, "_segment_for_line") and listening_line is not None:
+                seg = self._segment_for_line(listening_line)
+            else:
+                seg = next((s for s in self.segments if s.get("line") == listening_line), None)
             if seg:
                 sx1 = self._x(float(seg.get("start", 0.0) or 0.0))
                 sx2 = self._x(float(seg.get("end", seg.get("start", 0.0)) or seg.get("start", 0.0) or 0.0))

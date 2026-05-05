@@ -95,7 +95,7 @@ def ensure_nas_mounted(folder_path):
             if os.path.exists(vol_path):
                 get_logger().log(f"  ✅ NAS 마운트 완료: {vol_path}")
                 return True
-        get_logger().log(f"  ❌ NAS 마운트 실패. 경로를 확인해주세요.")
+        get_logger().log("  ❌ NAS 마운트 실패. 경로를 확인해주세요.")
         return False
     return True
 

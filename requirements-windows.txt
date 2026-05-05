@@ -32,3 +32,7 @@ faster-whisper>=1.0.0
 ctranslate2>=4.4.0
 deepfilternet>=0.5.6
 clearvoice>=0.1.2
+## 선택: 가장 가벼운 편집 미리보기 백엔드. mpv/libmpv 설치가 필요할 수 있음
+python-mpv>=1.0.7
+## 선택: mpv 사용 불가 시 대체 백엔드. VLC 설치가 필요할 수 있음
+python-vlc>=3.0.20123

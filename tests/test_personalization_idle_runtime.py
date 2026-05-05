@@ -1,6 +1,8 @@
 import json
 import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from PyQt6.QtCore import QCoreApplication, QObject
 
@@ -15,6 +17,7 @@ from core.personalization.lora_storage import (
     initialize_lora_personalization_store,
     load_best_settings,
     load_training_queue,
+    save_training_queue,
     store_paths,
 )
 from core.personalization.lora_trial_scoring import record_setting_trial_result
@@ -110,7 +113,7 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
                     {
                         "speaker": "00",
                         "duration_frames": 180,
-                        "clip_path": "/Users/test/Movies/clip_a.mp4",
+                        "clip_path": str(paths["root"] / "clip_a.mp4"),
                         "project_path": "/Users/test/Projects/clip_a.json",
                         "text": "안녕하세요.",
                     },
@@ -119,11 +122,17 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            (paths["root"] / "clip_a.mp4").write_bytes(b"fake media")
 
             processed = []
-            for _ in range(5):
-                result = run_training_queue_once(tmpdir)
-                processed.append(result)
+            def fake_run(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"RIFFfake wav data")
+                return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            with patch("core.personalization.text_lora_runner.subprocess.run", side_effect=fake_run):
+                for _ in range(5):
+                    result = run_training_queue_once(tmpdir)
+                    processed.append(result)
 
             self.assertTrue(all(item.get("processed") for item in processed))
             self.assertEqual(
@@ -143,6 +152,49 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
 
             best_settings = load_best_settings(tmpdir)
             self.assertIn("media-001", dict(best_settings.get("by_media_id") or {}))
+
+    def test_voice_profile_job_fails_when_audio_sources_are_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            paths = store_paths(tmpdir)
+            (paths["root"] / "voice_lora_bridge.jsonl").write_text(
+                json.dumps(
+                    {
+                        "speaker": "00",
+                        "duration_frames": 180,
+                        "clip_path": str(paths["root"] / "missing.mp4"),
+                        "project_path": "/Users/test/Projects/clip_a.json",
+                        "text": "안녕하세요.",
+                        "start_sec": 0.0,
+                        "end_sec": 2.0,
+                        "duration_sec": 2.0,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            save_training_queue(
+                [
+                    {
+                        "job_id": "voice-job",
+                        "job_type": "build_voice_profiles",
+                        "media_id": "global",
+                        "status": "waiting",
+                        "priority": 1,
+                    }
+                ],
+                tmpdir,
+            )
+
+            result = run_training_queue_once(tmpdir)
+
+            self.assertTrue(result["processed"])
+            self.assertEqual(result["outcome"]["status"], "failed")
+            self.assertIn("voice_audio_extraction_incomplete", result["outcome"]["result"]["reason"])
+            queue_item = load_training_queue(tmpdir)["items"][0]
+            self.assertEqual(queue_item["status"], "failed")
+            self.assertIn("stored 0/1", queue_item["last_error"])
 
     def test_idle_trainer_poll_starts_background_job_when_idle(self):
         with tempfile.TemporaryDirectory() as tmpdir:

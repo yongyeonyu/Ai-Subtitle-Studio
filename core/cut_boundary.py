@@ -15,11 +15,6 @@ CUT_SEGMENT_SCHEMA = "cut_boundary_segments.v1"
 MIN_SLICE_SEC = 0.02
 
 
-def cut_boundary_enabled(settings: dict[str, Any] | None) -> bool:
-    settings = settings or {}
-    return bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True)))
-
-
 def normalize_cut_boundaries(
     boundaries: list[dict[str, Any]] | None,
     *,

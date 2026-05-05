@@ -7,10 +7,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core.personalization.lora_storage import LORA_PERSONALIZATION_DIR
-from core.runtime import config
+from core.personalization.lora_storage import LORA_PERSONALIZATION_DIR, refresh_unified_lora_data_bundle
 from core.project.data_manager import CORRECTION_FILE
 from core.project.project_manager import PROJECTS_DIR, load_project
+from core.project.project_context import project_segments_to_editor
 from core.frame_time import normalize_fps, sec_to_frame
 from core.subtitle_quality.correction_memory import load_correction_memory
 from core.subtitle_quality.wrong_answer_memory import load_wrong_answer_memory
@@ -153,6 +153,9 @@ def _segment_rows_for_lora(
         speaker = str(seg.get("speaker", seg.get("spk", "")) or "")
         clip_path = str(seg.get("_clip_file", seg.get("clip_file", "")) or "")
         clip_idx = seg.get("_clip_idx", seg.get("clip_idx"))
+        start_sec = float(seg.get("start", 0.0) or 0.0)
+        end_sec = float(seg.get("end", start_sec) or start_sec)
+        duration_sec = max(0.0, end_sec - start_sec)
         voice_rows.append(
             {
                 "schema": "ai_subtitle_studio.voice_lora_bridge.v1",
@@ -165,6 +168,9 @@ def _segment_rows_for_lora(
                 "speaker": speaker,
                 "clip_path": clip_path,
                 "clip_idx": clip_idx,
+                "start_sec": round(start_sec, 3),
+                "end_sec": round(end_sec, 3),
+                "duration_sec": round(duration_sec, 3),
                 "start_frame": start_frame,
                 "end_frame": end_frame,
                 "fps": fps,
@@ -189,18 +195,15 @@ def _segment_rows_for_lora(
                     "segment_index": index,
                     "selected_source": selected_source,
                     "candidate_count": len(list(seg.get("stt_candidates") or [])),
-                    "start": float(seg.get("start", 0.0) or 0.0),
-                    "end": float(seg.get("end", 0.0) or 0.0),
+                    "start": start_sec,
+                    "end": end_sec,
                     "start_frame": start_frame,
                     "end_frame": end_frame,
                     "fps": fps,
                     "speaker": speaker,
                     "clip_path": clip_path,
                     "clip_idx": clip_idx,
-                    "duration_sec": round(
-                        max(0.0, float(seg.get("end", 0.0) or 0.0) - float(seg.get("start", 0.0) or 0.0)),
-                        3,
-                    ),
+                    "duration_sec": round(duration_sec, 3),
                     "duration_frames": max(0, end_frame - start_frame),
                     "delta_ratio": round(float(delta), 4),
                     "char_delta": abs(len(output) - len(input_text)),
@@ -239,11 +242,7 @@ def load_project_segment_pairs(
         if not isinstance(payload, dict):
             continue
         files_scanned += 1
-        segments = (
-            ((payload.get("editor_state") or {}).get("subtitles") or {}).get("segments")
-            or (payload.get("subtitles") or {}).get("segments")
-            or []
-        )
+        segments = project_segments_to_editor(payload)
         result = _segment_rows_for_lora(
             segments,
             project_path=str(payload.get("_project_path", "") or ""),
@@ -267,11 +266,7 @@ def load_project_segment_pairs(
         except Exception:
             continue
         files_scanned += 1
-        segments = (
-            ((payload.get("editor_state") or {}).get("subtitles") or {}).get("segments")
-            or (payload.get("subtitles") or {}).get("segments")
-            or []
-        )
+        segments = project_segments_to_editor(payload)
         result = _segment_rows_for_lora(
             segments,
             project_path=str(path),
@@ -631,6 +626,10 @@ def accumulate_personalization_dataset(
         ],
     }
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        refresh_unified_lora_data_bundle(TEXT_LORA_DATASET_DIR, force=True)
+    except Exception:
+        pass
     return {
         "corpus_path": str(corpus_path),
         "voice_bridge_path": str(bridge_path),

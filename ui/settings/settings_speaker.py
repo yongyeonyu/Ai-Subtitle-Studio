@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.settings.settings_common import DATASET_DIR, _create_bottom_buttons
+from ui.settings.qml_panel import create_settings_header
 from ui.style import button_style, label_style, settings_dialog_stylesheet
 
 
@@ -53,6 +54,14 @@ class SpeakerDialog(QDialog):
         self._preview.playingChanged.connect(self._on_preview_playing_changed)
 
         layout = QVBoxLayout(self)
+        self._qml_header = create_settings_header(
+            self,
+            title="화자 설정",
+            subtitle="화자 ID, 색상, 목소리 학습 데이터를 QML 패널 헤더 아래에서 관리합니다.",
+            badge="QML",
+        )
+        if self._qml_header is not None:
+            layout.addWidget(self._qml_header)
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(0)

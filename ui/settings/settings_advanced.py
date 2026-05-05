@@ -13,6 +13,7 @@ from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt, QTimer
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, CUSTOM_DEFAULTS_FILE, _create_bottom_buttons
+from ui.settings.qml_panel import create_settings_header
 from ui.style import button_style, label_style, settings_dialog_stylesheet
 from core.audio import audio_presets as _audio_presets
 from core.audio.audio_presets import apply_audio_preset
@@ -52,6 +53,14 @@ class AdvancedSettingsDialog(QDialog):
         self.sliders_info = [] 
 
         layout = QVBoxLayout(self)
+        self._qml_header = create_settings_header(
+            self,
+            title="오디오 & Whisper 상세 튜닝",
+            subtitle="VAD, 노이즈 처리, Whisper, ffmpeg 파라미터를 QML 패널 헤더로 정리합니다.",
+            badge="QML",
+        )
+        if self._qml_header is not None:
+            layout.addWidget(self._qml_header)
         preset_layout = QHBoxLayout()
         preset_lbl = QLabel("오디오 프리셋:")
         preset_lbl.setStyleSheet(label_style("accent", 13, bold=True))

@@ -54,6 +54,7 @@ class CloudUIMixin:
             return
         folder = os.path.dirname(files_list[0]) if files_list else None
         self._is_auto_pipeline = True
+        self._auto_export_subtitle_video = True
         self._auto_audio_tune_per_file = True
         if hasattr(self, "_set_runtime_quality_override_for_scope"):
             self._set_runtime_quality_override_for_scope(self._auto_quality_scope_for_files(files_list))
@@ -233,7 +234,7 @@ class CloudUIMixin:
             return
         local_path = get_local_path(nas_url)
         self._is_auto_pipeline = False
-        self._auto_export_subtitle_video = False
+        self._auto_export_subtitle_video = True
         dlg = NasFolderDialog(local_path, self, excluded_folders=get_nas_excluded_folders())
         if dlg.exec():
             set_nas_excluded_folders(sorted(dlg.excluded_folders))
@@ -245,7 +246,7 @@ class CloudUIMixin:
                     self.show_home()
                 return
             if dlg.selected_files:
-                self._auto_export_subtitle_video = bool(getattr(dlg, "export_subtitle_video", False))
+                self._auto_export_subtitle_video = True
                 if hasattr(self, "_set_runtime_quality_override_for_scope"):
                     self._set_runtime_quality_override_for_scope("nas")
                 if hasattr(self, "_start_queue_mode"):

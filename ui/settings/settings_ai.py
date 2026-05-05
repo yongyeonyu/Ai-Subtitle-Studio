@@ -17,6 +17,7 @@ from ui.settings.settings_common import (
     DEFAULT_ADV_SETTINGS, DEFAULT_WHISPER_MODELS, WINDOWS_WHISPER_MODELS,
     _fetch_models, _create_bottom_buttons, filter_available_whisper_models,
 )
+from ui.settings.qml_panel import create_settings_header
 from ui.style import label_style, settings_button_style, settings_dialog_stylesheet, line_icon
 from core.llm.provider_registry import cloud_model_items
 from core.llm.secure_keys import get_api_key, set_api_key
@@ -68,6 +69,14 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.audio_presets = _audio_presets.load_audio_presets()
 
         layout = QVBoxLayout(self)
+        self._qml_header = create_settings_header(
+            self,
+            title="AI 엔진 설정",
+            subtitle="자막 검수, 러프컷, 모델/API, 자동 설정을 SceneGraph 헤더로 구성합니다.",
+            badge="QML",
+        )
+        if self._qml_header is not None:
+            layout.addWidget(self._qml_header)
         self.tabs = QTabWidget()
         editor_tab, editor_form = self._make_tab_form()
         roughcut_tab, roughcut_form = self._make_tab_form()

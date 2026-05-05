@@ -44,7 +44,7 @@ class FolderDialog(QDialog):
         self.selected_files = []
         self.saved_only = False
         self.processing_mode = "individual"
-        self.export_subtitle_video = False
+        self.export_subtitle_video = True
         self.stt_quality_preset = normalize_stt_quality_key(load_settings().get("stt_quality_preset", "precise"))
         self.show_auto_detect = bool(show_auto_detect)
         self.excluded_folders = set(os.path.normpath(p) for p in (excluded_folders or []))
@@ -82,9 +82,14 @@ class FolderDialog(QDialog):
         mode_lbl.setStyleSheet("QLabel { color:#FFFFFF; background:transparent; font-weight:bold; }")
         option_layout.addWidget(mode_lbl)
         option_layout.addSpacing(18)
-        self.export_video_chk = QCheckBox("자막영상 출력")
-        self.export_video_chk.setToolTip("자막 생성 후 투명 자막 MOV까지 자동으로 출력합니다.")
-        self.export_video_chk.setStyleSheet("QCheckBox { color: #FFFFFF; background: transparent; }")
+        self.export_video_chk = QCheckBox("자막영상 출력 (항상)")
+        self.export_video_chk.setChecked(True)
+        self.export_video_chk.setEnabled(False)
+        self.export_video_chk.setToolTip("SRT 저장 후 투명 자막 MOV를 항상 자동으로 출력합니다.")
+        self.export_video_chk.setStyleSheet(
+            "QCheckBox { color: #FFFFFF; background: transparent; }"
+            "QCheckBox:disabled { color: #CCCCCC; background: transparent; }"
+        )
         option_layout.addWidget(self.export_video_chk)
         option_layout.addSpacing(18)
         quality_lbl = QLabel("자막품질")
@@ -407,7 +412,7 @@ class FolderDialog(QDialog):
         self.selected_files = []
         self.excluded_folders = set()
         self.processing_mode = "individual"
-        self.export_subtitle_video = bool(self.export_video_chk.isChecked())
+        self.export_subtitle_video = True
         self.stt_quality_preset = normalize_stt_quality_key(self.combo_subtitle_quality.currentData() or "precise")
 
         def collect(parent):

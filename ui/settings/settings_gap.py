@@ -15,6 +15,7 @@ from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, _create_bottom_buttons
+from ui.settings.qml_panel import create_settings_header
 from ui.style import button_style, settings_dialog_stylesheet
 
 
@@ -38,7 +39,16 @@ class GapSettingsDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
         
-        h1 = QHBoxLayout(); h1.addWidget(QLabel("<b style='font-size: 15px;'>자막 간격 시뮬레이터</b>")); h1.addStretch(); layout.addLayout(h1)
+        self._qml_header = create_settings_header(
+            self,
+            title="자막 간격 시뮬레이터",
+            subtitle="간격/분할/삭제 기준을 GPU SceneGraph 헤더와 함께 조정합니다.",
+            badge="QML",
+        )
+        if self._qml_header is not None:
+            layout.addWidget(self._qml_header)
+        else:
+            h1 = QHBoxLayout(); h1.addWidget(QLabel("<b style='font-size: 15px;'>자막 간격 시뮬레이터</b>")); h1.addStretch(); layout.addLayout(h1)
         self.simulator = GapSimulatorWidget(); layout.addWidget(self.simulator)
         sep0 = QFrame(); sep0.setFixedHeight(1); sep0.setStyleSheet("background-color: #24313A; margin: 6px 0;"); layout.addWidget(sep0)
 

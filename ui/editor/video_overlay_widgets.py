@@ -7,13 +7,13 @@ from __future__ import annotations
 import json
 import os
 
-from PyQt6.QtWidgets import QLabel, QSizePolicy, QGraphicsView, QGraphicsScene, QGraphicsItem
-from PyQt6.QtCore import Qt, QRectF, QSizeF
+from PyQt6.QtWidgets import QLabel, QSizePolicy, QGraphicsView, QGraphicsScene, QGraphicsItem, QWidget
+from PyQt6.QtCore import Qt, QRectF, QSizeF, QUrl
 from PyQt6.QtGui import QFont, QColor, QPainter, QFontMetrics, QBrush, QPixmap, QFontDatabase
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 
 from core.runtime import config
-from ui.gpu_rendering import gpu_backend_name, make_accelerated_viewport
+from ui.gpu_rendering import gpu_backend_name, make_accelerated_viewport, scenegraph_enabled
 
 
 def _available_font_family(preferred: str, fallback: str = "Apple SD Gothic Neo") -> str:
@@ -296,7 +296,7 @@ class VideoSurfaceView(QGraphicsView):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        viewport = make_accelerated_viewport(self)
+        viewport = make_accelerated_viewport(self, feature="video")
         if viewport is not None:
             self.setViewport(viewport)
             self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
@@ -317,6 +317,82 @@ class VideoSurfaceView(QGraphicsView):
         rect = QRectF(0, 0, self.viewport().width(), self.viewport().height())
         self._scene.setSceneRect(rect)
         self.set_video_display_rect(rect)
+
+
+class SubtitleQuickOverlay(QWidget):
+    """QML/SceneGraph subtitle overlay for the video preview."""
+
+    @classmethod
+    def create(cls, parent=None):
+        if not scenegraph_enabled("video"):
+            return None
+        qml_path = os.path.join(os.path.dirname(__file__), "video_subtitle_overlay.qml")
+        if not os.path.exists(qml_path):
+            return None
+        try:
+            return cls(qml_path, parent)
+        except Exception:
+            return None
+
+    def __init__(self, qml_path: str, parent=None):
+        super().__init__(parent)
+        try:
+            from PyQt6.QtQuickWidgets import QQuickWidget
+        except Exception as exc:
+            raise RuntimeError("QQuickWidget is unavailable") from exc
+        self._text = ""
+        self._style = _load_export_dialog_style()
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAutoFillBackground(False)
+        self._quick = QQuickWidget(self)
+        self._quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+        self._quick.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._quick.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._quick.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._quick.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self._quick.setClearColor(QColor(0, 0, 0, 0))
+        self._quick.setSource(QUrl.fromLocalFile(qml_path))
+        if self._quick.status() == QQuickWidget.Status.Error:
+            raise RuntimeError("video subtitle QML failed to load")
+        self._quick.show()
+        self._sync_root()
+        self.hide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._quick.setGeometry(self.rect())
+
+    def set_text(self, text: str):
+        text = str(text or "")
+        if self._text == text:
+            return
+        self._text = text
+        self.setVisible(bool(text))
+        self._sync_root()
+
+    def text(self) -> str:
+        return self._text
+
+    def set_export_style(self, style: dict | None):
+        next_style = dict(style or {})
+        if self._style == next_style:
+            return
+        self._style = next_style
+        self._sync_root()
+
+    def _sync_root(self):
+        try:
+            root = self._quick.rootObject()
+            if root is None:
+                return
+            root.setProperty("subtitleText", self._text)
+            root.setProperty("styleData", dict(self._style or {}))
+        except Exception:
+            pass
+
 
 class SubtitleLabel(QLabel):
     """비디오 프리뷰 위에 출력 설정을 반영해 그리는 자막 overlay."""

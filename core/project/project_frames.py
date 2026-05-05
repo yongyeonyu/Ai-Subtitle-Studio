@@ -51,6 +51,88 @@ def _clip_frame_fields(timeline_start: float, timeline_end: float, fps: float, t
     }
 
 
+def _clip_for_timeline_time(clips: list[dict], timeline_sec: float) -> tuple[int, dict | None]:
+    for idx, clip in enumerate(clips):
+        start = float(clip.get("timeline_start", 0.0) or 0.0)
+        end = float(clip.get("timeline_end", start) or start)
+        if start <= timeline_sec < end - 0.000001:
+            return idx, clip
+    return (len(clips) - 1, clips[-1]) if clips else (-1, None)
+
+
+def _augment_vector_subtitle_canvas(project: dict, clips: list[dict], primary_fps: float) -> None:
+    editor_state = project.get("editor_state")
+    if not isinstance(editor_state, dict):
+        return
+    rendering = editor_state.get("rendering")
+    if not isinstance(rendering, dict):
+        return
+    canvas = rendering.get("subtitle_canvas")
+    if not isinstance(canvas, dict):
+        return
+    rows = canvas.get("segments")
+    if not isinstance(rows, list):
+        return
+
+    coordinate_space = canvas.setdefault("coordinate_space", {})
+    old_canvas_fps = normalize_fps(coordinate_space.get("timeline_frame_rate") or primary_fps)
+    coordinate_space["x"] = "timeline_frame"
+    coordinate_space["time_unit"] = "frame"
+    coordinate_space["timeline_frame_rate"] = primary_fps
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        timing = row.setdefault("time", {})
+        if not isinstance(timing, dict):
+            timing = {}
+            row["time"] = timing
+        old_fps = normalize_fps(timing.get("timeline_frame_rate") or old_canvas_fps)
+        old_start_frame = timing.get("start_frame")
+        old_end_frame = timing.get("end_frame")
+        if old_start_frame is not None:
+            timeline_start = frame_to_sec(old_start_frame, old_fps)
+        else:
+            timeline_start = float(timing.get("start_sec", 0.0) or 0.0)
+        if old_end_frame is not None:
+            timeline_end = frame_to_sec(old_end_frame, old_fps)
+        else:
+            timeline_end = float(timing.get("end_sec", timeline_start) or timeline_start)
+
+        start_frame = sec_to_frame(timeline_start, primary_fps)
+        end_frame = max(start_frame, sec_to_frame(max(timeline_start, timeline_end), primary_fps))
+        timing.pop("start_sec", None)
+        timing.pop("end_sec", None)
+        timing.update(
+            {
+                "unit": "frame",
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "timeline_frame_rate": primary_fps,
+            }
+        )
+
+        clip_idx, clip = _clip_for_timeline_time(clips, timeline_start)
+        meta = row.setdefault("meta", {})
+        if not isinstance(meta, dict):
+            meta = {}
+            row["meta"] = meta
+        if clip is None:
+            meta["source_frame_rate"] = primary_fps
+            continue
+
+        source_fps = normalize_fps(clip.get("fps") or clip.get("source_frame_rate") or primary_fps)
+        offset = float(clip.get("timeline_start", 0.0) or 0.0)
+        meta["clip_local_start_frame"] = sec_to_frame(max(0.0, timeline_start - offset), source_fps)
+        meta["clip_local_end_frame"] = sec_to_frame(max(0.0, timeline_end - offset), source_fps)
+        meta["source_frame_rate"] = source_fps
+        clip_ref = row.setdefault("clip", {})
+        if isinstance(clip_ref, dict):
+            clip_ref["index"] = clip_idx
+            if clip.get("source_path"):
+                clip_ref["file"] = str(clip.get("source_path") or "")
+
+
 def _augment_project_frame_metadata(project: dict, probe_func: ProbeFunc | None = None):
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", []) or []
     first_info = {}
@@ -161,6 +243,7 @@ def _augment_project_frame_metadata(project: dict, probe_func: ProbeFunc | None 
     editor_state = project.get("editor_state")
     if isinstance(editor_state, dict):
         editor_state["frame_timebase"] = dict(project["timeline"]["timebase"])
+        _augment_vector_subtitle_canvas(project, clips, primary_fps)
         editor_subtitles = editor_state.get("subtitles", {}) or {}
         for seg in editor_subtitles.get("segments", []) or []:
             existing_start_frame = seg.get("start_frame", seg.get("timeline_start_frame"))

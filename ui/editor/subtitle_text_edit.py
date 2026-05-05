@@ -1,17 +1,18 @@
 # Version: 03.10.02
 # Phase: PHASE2
 
+import os
 import re
 
 from PyQt6.QtWidgets import QTextEdit
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QMimeData, QRect
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QMimeData, QRect, QUrl
 from PyQt6.QtGui import (
     QTextCursor, QTextCharFormat, QColor, QFont,
     QSyntaxHighlighter, QTextDocument, QKeyEvent, QTextBlockUserData
 )
 from core.runtime import config
 from ui.editor.timestamp_area import TimestampArea
-from ui.gpu_rendering import gpu_backend_name, make_accelerated_viewport
+from ui.gpu_rendering import gpu_backend_name, make_accelerated_viewport, scenegraph_enabled
 
 class SubtitleBlockData(QTextBlockUserData):
     def __init__(
@@ -172,7 +173,7 @@ class SubtitleTextEdit(QTextEdit):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        accelerated_viewport = make_accelerated_viewport(self)
+        accelerated_viewport = make_accelerated_viewport(self, feature="editor")
         if accelerated_viewport is not None:
             self.setViewport(accelerated_viewport)
         self.render_backend = gpu_backend_name()
@@ -208,6 +209,11 @@ class SubtitleTextEdit(QTextEdit):
         self._key_press_time = {} 
         self.cursorPositionChanged.connect(self.cursor_moved.emit)
         self._update_margin()
+        self._quick_layer = self._create_quick_layer()
+        if self._quick_layer is not None:
+            self.textChanged.connect(self._sync_quick_layer)
+            self.cursorPositionChanged.connect(self._sync_quick_layer)
+            self._sync_quick_layer()
 
     def focusInEvent(self, event):
         if self._selection_locked:
@@ -250,6 +256,7 @@ class SubtitleTextEdit(QTextEdit):
             self.setReadOnly(False)
             self.viewport().unsetCursor()
             self.setStyleSheet(self._base_stylesheet)
+        self._sync_quick_layer()
 
     def is_selection_locked(self) -> bool:
         return bool(self._selection_locked)
@@ -293,6 +300,53 @@ class SubtitleTextEdit(QTextEdit):
     def _update_margin(self):
         self.setViewportMargins(self.timestampArea.sizeHint().width(), 0, 0, 0)
 
+    def _create_quick_layer(self):
+        if not scenegraph_enabled("editor"):
+            return None
+        qml_path = os.path.join(os.path.dirname(__file__), "subtitle_text_editor.qml")
+        if not os.path.exists(qml_path):
+            return None
+        try:
+            from PyQt6.QtQuickWidgets import QQuickWidget
+        except Exception:
+            return None
+        try:
+            layer = QQuickWidget(self)
+            layer.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+            layer.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            layer.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop, True)
+            layer.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            layer.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            layer.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+            layer.setClearColor(QColor(0, 0, 0, 0))
+            layer.setSource(QUrl.fromLocalFile(qml_path))
+            if layer.status() == QQuickWidget.Status.Error:
+                layer.deleteLater()
+                return None
+            layer.setGeometry(self.rect())
+            layer.show()
+            layer.raise_()
+            return layer
+        except Exception:
+            return None
+
+    def _sync_quick_layer(self):
+        layer = getattr(self, "_quick_layer", None)
+        if layer is None:
+            return
+        try:
+            root = layer.rootObject()
+            if root is None:
+                return
+            root.setProperty("lineCount", int(self.document().blockCount()))
+            root.setProperty("currentLine", int(self.textCursor().blockNumber()))
+            root.setProperty("locked", bool(self._selection_locked))
+            root.setProperty("renderBackend", f"{self.render_backend}+qml")
+        except RuntimeError:
+            self._quick_layer = None
+        except Exception:
+            pass
+
     def resizeEvent(self, e):
         super().resizeEvent(e)
         cr = self.contentsRect()
@@ -308,6 +362,10 @@ class SubtitleTextEdit(QTextEdit):
         doc.rootFrame().setFrameFormat(root_fmt)
         
         doc.blockSignals(False) # 💡 [신호 복구]
+        layer = getattr(self, "_quick_layer", None)
+        if layer is not None:
+            layer.setGeometry(self.rect())
+            layer.raise_()
 
     def createMimeDataFromSelection(self) -> QMimeData:
         return super().createMimeDataFromSelection()

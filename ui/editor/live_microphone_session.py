@@ -5,7 +5,6 @@ import os
 import tempfile
 import time
 import wave
-from collections import deque
 
 import numpy as np
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal

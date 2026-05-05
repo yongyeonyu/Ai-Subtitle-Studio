@@ -314,7 +314,7 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
 
             if cache_valid:
                 self._notify_stage(f"♻️ [VAD] {vad_model.upper()} 캐시 재사용")
-                get_logger().log(f"  └ ♻️ [VAD 캐시] 이전 분석 결과를 재사용합니다.")
+                get_logger().log("  └ ♻️ [VAD 캐시] 이전 분석 결과를 재사용합니다.")
                 vad_segments = cache_data.get("timestamps", [])
 
                 import wave

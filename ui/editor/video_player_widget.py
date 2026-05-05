@@ -23,9 +23,11 @@ from core.frame_time import build_frame_time_map, normalize_fps, snap_sec_to_fra
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail
 from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args
+from ui.editor.video_playback_backend import create_video_backend
 from ui.editor.video_overlay_widgets import (
     ThumbnailLabel,
     SubtitleLabel,
+    SubtitleQuickOverlay,
     VideoSurfaceView,
 )
 
@@ -118,7 +120,7 @@ class VideoPlayerWidget(QWidget):
         self._proxy_build_src: str = ""
         self._proxy_build_dst: str = ""
 
-        self.media_player = QMediaPlayer(self)
+        self.media_player = create_video_backend(self)
         self.audio_output = None
 
         self.vocal_player = QMediaPlayer(self)
@@ -157,7 +159,7 @@ class VideoPlayerWidget(QWidget):
     def _ensure_audio_outputs(self) -> None:
         """Create Qt audio outputs lazily to avoid startup crashes on some macOS audio setups."""
         try:
-            if self.audio_output is None:
+            if bool(getattr(self.media_player, "uses_qt_audio", False)) and self.audio_output is None:
                 self.audio_output = QAudioOutput(self)
                 self.media_player.setAudioOutput(self.audio_output)
             if self.vocal_audio_output is None:
@@ -270,9 +272,13 @@ class VideoPlayerWidget(QWidget):
         self.video_stack = QStackedWidget()
         self.video_stack.setParent(self.video_container)
         
-        self.video_widget = VideoSurfaceView()
+        if hasattr(self.media_player, "create_video_widget"):
+            self.video_widget = self.media_player.create_video_widget()
+        else:
+            self.video_widget = VideoSurfaceView()
         self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.media_player.setVideoOutput(self.video_widget.video_item)
+        if hasattr(self.video_widget, "video_item"):
+            self.media_player.setVideoOutput(self.video_widget.video_item)
         self.video_stack.addWidget(self.video_widget)
         
         self.thumb_label = ThumbnailLabel()
@@ -281,6 +287,10 @@ class VideoPlayerWidget(QWidget):
         self.sub_label = SubtitleLabel(self.video_container)
         self.sub_label.setVisible(False)
         self.sub_label.raise_()
+        self.quick_subtitle_overlay = SubtitleQuickOverlay.create(self.video_container)
+        if self.quick_subtitle_overlay is not None:
+            self.quick_subtitle_overlay.setVisible(False)
+            self.quick_subtitle_overlay.raise_()
 
         layout.addWidget(self.video_container, stretch=1)
 
@@ -491,6 +501,14 @@ class VideoPlayerWidget(QWidget):
             self.sub_label.setParent(self.video_container)
             self.sub_label.setGeometry(rect)
         self.sub_label.raise_()
+        quick_overlay = getattr(self, "quick_subtitle_overlay", None)
+        if quick_overlay is not None:
+            try:
+                quick_overlay.setParent(self.video_container)
+                quick_overlay.setGeometry(video_rect)
+                quick_overlay.raise_()
+            except Exception:
+                pass
         item = self._scene_subtitle_item()
         if item is not None:
             item.set_rect(QRectF(video_rect))
@@ -536,7 +554,10 @@ class VideoPlayerWidget(QWidget):
         item = self._scene_subtitle_item()
         if item is not None:
             item.set_text(text)
-        elif hasattr(self, "sub_label"):
+        quick_overlay = getattr(self, "quick_subtitle_overlay", None)
+        if quick_overlay is not None:
+            quick_overlay.set_text(text)
+        elif item is None and hasattr(self, "sub_label"):
             try:
                 self.sub_label.setVisible(bool(text))
                 self.sub_label.raise_()
@@ -551,6 +572,9 @@ class VideoPlayerWidget(QWidget):
         item = self._scene_subtitle_item()
         if item is not None:
             item.set_export_style(style or {})
+        quick_overlay = getattr(self, "quick_subtitle_overlay", None)
+        if quick_overlay is not None:
+            quick_overlay.set_export_style(style or {})
 
     def _displayed_video_rect(self, bounds):
         aspect = max(0.01, float(getattr(self, "_source_aspect", 16 / 9) or (16 / 9)))

@@ -434,28 +434,34 @@ class SinglePipelineMixin:
             preview_opt_queue = queue.Queue()
             preview_opt_sentinel = object()
 
-            def _emit_processed_preview(chunk_segs, _label="STT"):
+            def _emit_processed_preview(
+                chunk_segs,
+                _label="STT",
+                _vad_segs=vad_segs,
+                _cut_boundaries=pipeline_cut_boundaries,
+                _provisional_cut_boundaries=pipeline_provisional_cut_boundaries,
+            ):
                 from core.pipeline.stt_preview_optimizer import optimize_stt_preview_segments
 
                 preview = optimize_stt_preview_segments(
                     chunk_segs,
                     source_label=str(_label or "STT"),
-                    vad_segments=vad_segs,
-                    cut_boundaries=pipeline_cut_boundaries,
-                    provisional_cut_boundaries=pipeline_provisional_cut_boundaries,
+                    vad_segments=_vad_segs,
+                    cut_boundaries=_cut_boundaries,
+                    provisional_cut_boundaries=_provisional_cut_boundaries,
                 )
                 if preview and self._active:
                     self._ui_emit("_sig_preview_stt_segments", preview)
 
-            def _preview_stt_segments(chunk_segs, _label="STT"):
+            def _preview_stt_segments(chunk_segs, _label="STT", _preview_opt_queue=preview_opt_queue):
                 if not chunk_segs or not self._active:
                     return
-                preview_opt_queue.put(([dict(seg) for seg in chunk_segs or []], str(_label or "STT")))
+                _preview_opt_queue.put(([dict(seg) for seg in chunk_segs or []], str(_label or "STT")))
 
-            def do_preview_optimize():
+            def do_preview_optimize(_preview_opt_queue=preview_opt_queue, _preview_opt_sentinel=preview_opt_sentinel):
                 while self._active:
-                    item = preview_opt_queue.get()
-                    if item is preview_opt_sentinel:
+                    item = _preview_opt_queue.get()
+                    if item is _preview_opt_sentinel:
                         break
                     try:
                         chunk_segs, label = item
@@ -463,35 +469,45 @@ class SinglePipelineMixin:
                     except Exception as exc:
                         get_logger().log(f"  ⚠️ STT 후보 자막 후처리 오류: {exc}")
 
-            def do_transcribe():
+            def do_transcribe(
+                _chunk_dir=chunk_dir,
+                _opt_queue=opt_queue,
+                _preview_opt_queue=preview_opt_queue,
+                _preview_opt_sentinel=preview_opt_sentinel,
+            ):
                 try:
                     if hasattr(self, "video_processor"):
                         self.video_processor.stage_callback = (
                             lambda status, qi=queue_index: self._ui_emit("_sig_update_queue", qi, status, "", "", "")
                         )
                     for chunk_segs, c_idx, t_total in self.video_processor.transcribe(
-                        chunk_dir,
+                        _chunk_dir,
                         is_fast_mode=False,
                         preview_callback=_preview_stt_segments,
                     ):
                         if not self._active:
                             break
-                        opt_queue.put((chunk_segs, c_idx, t_total))
+                        _opt_queue.put((chunk_segs, c_idx, t_total))
                 finally:
                     if hasattr(self, "video_processor"):
                         self.video_processor.stage_callback = None
-                    preview_opt_queue.put(preview_opt_sentinel)
-                    opt_queue.put(_SENTINEL)
+                    _preview_opt_queue.put(_preview_opt_sentinel)
+                    _opt_queue.put(_SENTINEL)
 
-            def _do_optimize_impl():
+            def _do_optimize_impl(
+                _opt_queue=opt_queue,
+                _t_diarize=t_diarize,
+                _vad_segs=vad_segs,
+                _auto_collected_segs=auto_collected_segs,
+            ):
                 from core.engine.subtitle_engine import apply_final_gap_settings, optimize_segments
                 from core.engine.subtitle_timing import align_stt_candidates_to_subtitle_segments
 
                 total_files = len(self.files_to_process)
 
-                if t_diarize and t_diarize.is_alive():
+                if _t_diarize and _t_diarize.is_alive():
                     get_logger().log("\n⏳ [안내] 화자 분리 연산 대기 중...")
-                    t_diarize.join()
+                    _t_diarize.join()
 
                 try:
                     s = load_settings()
@@ -576,9 +592,9 @@ class SinglePipelineMixin:
                                         }
                                     )
                             else:
-                                opt = optimize_segments(chunk_segs, vad_segments=vad_segs, llm_progress_callback=_llm_progress)
+                                opt = optimize_segments(chunk_segs, vad_segments=_vad_segs, llm_progress_callback=_llm_progress)
                         else:
-                            opt = optimize_segments(chunk_segs, vad_segments=vad_segs, llm_progress_callback=_llm_progress)
+                            opt = optimize_segments(chunk_segs, vad_segments=_vad_segs, llm_progress_callback=_llm_progress)
                     except Exception as e:
                         get_logger().log(f"  ❌ 최적화 오류: {e}")
                         opt = chunk_segs
@@ -600,7 +616,7 @@ class SinglePipelineMixin:
                         include_provisional=False,
                     )
                     opt = self._split_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
-                    opt = self._align_subtitle_segments_to_vad(opt, vad_segs, context="에디터")
+                    opt = self._align_subtitle_segments_to_vad(opt, _vad_segs, context="에디터")
 
                     if self.max_speakers > 1 and self._speaker_map:
                         from core.audio.diarize import get_speaker_for_segment
@@ -661,7 +677,7 @@ class SinglePipelineMixin:
                     )
                     opt = self._split_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
                     opt = align_stt_candidates_to_subtitle_segments(opt)
-                    auto_collected_segs.extend([dict(seg) for seg in opt])
+                    _auto_collected_segs.extend([dict(seg) for seg in opt])
 
                     if not self._active or not self._ui_is_alive():
                         return
@@ -673,7 +689,7 @@ class SinglePipelineMixin:
                         pass
 
                 while self._active:
-                    item = opt_queue.get()
+                    item = _opt_queue.get()
                     if not self._ui_is_alive():
                         self._active = False
                         break
@@ -776,9 +792,9 @@ class SinglePipelineMixin:
                 nonlocal_final = self._split_by_saved_cut_boundaries(nonlocal_final, context="자동모드 최종 자막")
                 nonlocal_final = align_stt_candidates_to_subtitle_segments(nonlocal_final)
 
-                def _auto_proceed():
+                def _auto_proceed(_final_segments=nonlocal_final):
                     nonlocal final_segments
-                    final_segments = nonlocal_final
+                    final_segments = _final_segments
                     action_state[0] = "next"
                     edit_event.set()
 

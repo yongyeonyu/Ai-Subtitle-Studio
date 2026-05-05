@@ -13,7 +13,7 @@ atexit.register(_mac_safe_exit)
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
     QPushButton, QLabel, QMessageBox, QLineEdit, QComboBox,
-    QToolButton, QCheckBox, QApplication
+    QToolButton, QCheckBox, QApplication, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QEvent
 from PyQt6.QtGui import QKeySequence, QShortcut, QTextCursor, QIcon
@@ -516,13 +516,16 @@ class EditorWidget(
             and not getattr(canvas, "_inline_commit_in_progress", False)
         )
         if live_canvas_edit:
-            cached = getattr(self, "_cached_segs", None)
-            visible_text = str(new_text or "").replace("\u2028", "\n")
-            if cached is not None:
-                for seg in cached:
-                    if int(seg.get("line", -999999)) == int(line_num):
-                        seg["text"] = visible_text
-                        break
+            if hasattr(self, "_update_subtitle_memory_line_text"):
+                self._update_subtitle_memory_line_text(line_num, new_text)
+            else:
+                cached = getattr(self, "_cached_segs", None)
+                visible_text = str(new_text or "").replace("\u2028", "\n")
+                if cached is not None:
+                    for seg in cached:
+                        if int(seg.get("line", -999999)) == int(line_num):
+                            seg["text"] = visible_text
+                            break
             return
         if block.text() == new_text: return
         old_text = block.text()
@@ -538,13 +541,16 @@ class EditorWidget(
             self.text_edit.update_margins()
             if hasattr(self.text_edit, 'timestampArea'): self.text_edit.timestampArea.update()
         self._inline_updating = False
-        cached = getattr(self, "_cached_segs", None)
-        if cached is not None:
+        if hasattr(self, "_update_subtitle_memory_line_text"):
+            self._update_subtitle_memory_line_text(line_num, new_text)
+        else:
+            cached = getattr(self, "_cached_segs", None)
             visible_text = str(new_text or "").replace("\u2028", "\n")
-            for seg in cached:
-                if int(seg.get("line", -999999)) == int(line_num):
-                    seg["text"] = visible_text
-                    break
+            if cached is not None:
+                for seg in cached:
+                    if int(seg.get("line", -999999)) == int(line_num):
+                        seg["text"] = visible_text
+                        break
         self._refresh_video_subtitle_context()
 
     def _on_lock_changed(self, locked: bool):
@@ -1056,7 +1062,8 @@ class EditorWidget(
         btn.setIcon(self._make_line_icon(icon_name))
         btn.setIconSize(QSize(24, 24))
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        btn.setMinimumSize(92, 58)
+        btn.setFixedSize(92, 58)
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         btn.setStyleSheet(tool_button_style("toolbar"))
         return btn
 

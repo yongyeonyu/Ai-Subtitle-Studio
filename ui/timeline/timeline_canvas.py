@@ -65,7 +65,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         configure_lightweight_paint(self, opaque=True)
-        configure_opengl_widget(self)
+        configure_opengl_widget(self, "timeline")
         self.render_backend = gpu_backend_name("timeline")
         self.focus_mode = "segment"
         self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
@@ -135,6 +135,13 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._render_epoch = 0
         self._paint_index_cache: dict[str, dict] = {}
         self._paint_last_visible_counts: dict[str, int] = {}
+        self._line_segment_index_cache_key = None
+        self._line_segment_index_cache: dict[int, dict] = {}
+        self._editable_segments_cache_key = None
+        self._editable_segments_cache: list[tuple[int, dict]] = []
+        self._diamond_pairs_cache_key = None
+        self._diamond_pairs_cache: dict[str, object] = {}
+        self._scan_boundary_hit_cache = None
 
     # ---------------------------------------------------------
     # State / Utility
@@ -144,7 +151,11 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.update()
 
     def set_frame_rate(self, fps: float):
-        self.frame_rate = normalize_fps(fps)
+        normalized = normalize_fps(fps)
+        if abs(float(getattr(self, "frame_rate", 0.0) or 0.0) - normalized) < 0.0001:
+            return
+        self.frame_rate = normalized
+        self._invalidate_render_cache()
 
     def _invalidate_marker_caches(self):
         self._analysis_markers_cache_key = None
@@ -156,6 +167,13 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._render_epoch = int(getattr(self, "_render_epoch", 0) or 0) + 1
         self._paint_index_cache = {}
         self._paint_last_visible_counts = {}
+        self._line_segment_index_cache_key = None
+        self._line_segment_index_cache = {}
+        self._editable_segments_cache_key = None
+        self._editable_segments_cache = []
+        self._diamond_pairs_cache_key = None
+        self._diamond_pairs_cache = {}
+        self._scan_boundary_hit_cache = None
 
     def begin_mic_visualization(self, line_num: int | None = None):
         self._is_listening = True
@@ -204,6 +222,52 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
                 visible.append(item)
         return visible
 
+    def _drag_forced_visible_segments(self, start_sec: float, end_sec: float) -> list[dict]:
+        forced: list[dict] = []
+        for item in (
+            getattr(self, "_drag_seg", None),
+            getattr(self, "_drag_adj_l", None),
+            getattr(self, "_drag_adj_r", None),
+        ):
+            if isinstance(item, dict):
+                forced.append(item)
+
+        pair = getattr(self, "_drag_diamond_pair", None)
+        if pair is not None:
+            for idx in pair:
+                try:
+                    item = self.segments[int(idx)]
+                except Exception:
+                    item = None
+                if isinstance(item, dict):
+                    forced.append(item)
+
+        visible: list[dict] = []
+        seen: set[int] = set()
+        for item in forced:
+            marker = id(item)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            item_start, item_end = self._paint_item_bounds(item)
+            if item_end >= start_sec and item_start <= end_sec:
+                visible.append(item)
+        return visible
+
+    def _merge_forced_visible_segments(self, visible: list, start_sec: float, end_sec: float) -> list:
+        if not (
+            getattr(self, "_drag_seg", None) is not None
+            or getattr(self, "_drag_diamond_pair", None) is not None
+        ):
+            return visible
+        merged = list(visible or [])
+        seen = {id(item) for item in merged}
+        for item in self._drag_forced_visible_segments(start_sec, end_sec):
+            if id(item) not in seen:
+                merged.append(item)
+                seen.add(id(item))
+        return merged
+
     def _visible_items_for_paint(
         self,
         items,
@@ -219,8 +283,10 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         if not rows:
             self._paint_last_visible_counts[str(cache_name)] = 0
             return []
-        if len(rows) < 64 or getattr(self, "_drag_seg", None) is not None:
+        if len(rows) < 64:
             visible = self._linear_visible_items_for_paint(rows, start_sec, end_sec)
+            if str(cache_name or "") == "segments":
+                visible = self._merge_forced_visible_segments(visible, start_sec, end_sec)
             self._paint_last_visible_counts[str(cache_name)] = len(visible)
             return visible
 
@@ -229,45 +295,98 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         cache = dict(getattr(self, "_paint_index_cache", {}).get(cache_name) or {})
         if cache.get("sig") != sig:
             by_start = []
-            by_end = []
+            max_span = 0.0
             for idx, row in enumerate(rows):
                 if not isinstance(row, dict):
                     continue
                 start, end = self._paint_item_bounds(row)
+                max_span = max(max_span, max(0.0, end - start))
                 by_start.append((start, end, idx, row))
-                by_end.append((end, start, idx, row))
             by_start.sort(key=lambda item: (item[0], item[1], item[2]))
-            by_end.sort(key=lambda item: (item[0], item[1], item[2]))
             cache = {
                 "sig": sig,
                 "by_start": by_start,
                 "starts": [item[0] for item in by_start],
-                "by_end": by_end,
-                "ends": [item[0] for item in by_end],
+                "max_span": max_span,
             }
             self._paint_index_cache[cache_name] = cache
 
         starts = list(cache.get("starts") or [])
-        ends = list(cache.get("ends") or [])
         by_start = list(cache.get("by_start") or [])
-        by_end = list(cache.get("by_end") or [])
         if not by_start:
             self._paint_last_visible_counts[cache_name] = 0
             return []
 
-        start_side_count = bisect_right(starts, end_sec)
-        end_side_index = bisect_left(ends, start_sec)
-        end_side_count = max(0, len(by_end) - end_side_index)
-
-        if start_side_count <= end_side_count:
-            candidates = by_start[:start_side_count]
-            visible = [row for start, end, _idx, row in candidates if end >= start_sec and start <= end_sec]
-        else:
-            candidates = by_end[end_side_index:]
-            visible = [row for end, start, _idx, row in candidates if end >= start_sec and start <= end_sec]
-            visible.sort(key=lambda row: self._paint_item_bounds(row)[0])
+        max_span = max(0.0, float(cache.get("max_span", 0.0) or 0.0))
+        start_index = bisect_left(starts, max(0.0, start_sec - max_span))
+        end_index = bisect_right(starts, end_sec)
+        candidates = by_start[start_index:end_index]
+        visible = [
+            row
+            for _start, _end, _idx, row in candidates
+            if self._paint_item_bounds(row)[1] >= start_sec
+            and self._paint_item_bounds(row)[0] <= end_sec
+        ]
+        if cache_name == "segments":
+            visible = self._merge_forced_visible_segments(visible, start_sec, end_sec)
         self._paint_last_visible_counts[cache_name] = len(visible)
         return visible
+
+    def _items_near_x_for_hit(self, items, cache_name: str, x: int | float, *, pad_px: int = 24) -> list:
+        pps = max(0.001, float(getattr(self, "pps", 1.0) or 1.0))
+        center_sec = max(0.0, float(x or 0.0) / pps)
+        pad_sec = max(0.02, float(pad_px or 0) / pps)
+        return self._visible_items_for_paint(items, cache_name, center_sec, center_sec, pad_sec=pad_sec)
+
+    def _segments_near_x_for_hit(self, x: int | float, *, pad_px: int = 24) -> list[dict]:
+        return self._items_near_x_for_hit(getattr(self, "segments", []) or [], "segments", x, pad_px=pad_px)
+
+    def _gaps_near_x_for_hit(self, x: int | float, *, pad_px: int = 24) -> list[dict]:
+        return self._items_near_x_for_hit(getattr(self, "gap_segments", []) or [], "gaps", x, pad_px=pad_px)
+
+    def _multiclip_boxes_near_x_for_hit(self, x: int | float, *, pad_px: int = 24) -> list[dict]:
+        return self._items_near_x_for_hit(getattr(self, "_multiclip_boxes", []) or [], "multiclip_boxes", x, pad_px=pad_px)
+
+    def _segment_index_cache_key(self) -> tuple:
+        return (
+            int(getattr(self, "_render_epoch", 0) or 0),
+            id(getattr(self, "segments", None)),
+            len(getattr(self, "segments", []) or []),
+        )
+
+    def _segment_for_line(self, line_num: int):
+        key = self._segment_index_cache_key()
+        if self._line_segment_index_cache_key != key:
+            index: dict[int, dict] = {}
+            for seg in list(getattr(self, "segments", []) or []):
+                if not isinstance(seg, dict):
+                    continue
+                try:
+                    line = int(seg.get("line", -999999))
+                except Exception:
+                    continue
+                index.setdefault(line, seg)
+            self._line_segment_index_cache_key = key
+            self._line_segment_index_cache = index
+        try:
+            return self._line_segment_index_cache.get(int(line_num))
+        except Exception:
+            return None
+
+    def _active_segment_candidates(self) -> list[dict]:
+        active_line = getattr(self, "active_seg_line", None)
+        if active_line is not None:
+            seg = self._segment_for_line(int(active_line))
+            return [seg] if isinstance(seg, dict) else []
+
+        active = getattr(self, "active_seg_start", None)
+        if active is None:
+            return []
+        try:
+            center = float(active)
+        except Exception:
+            return []
+        return self._visible_items_for_paint(self.segments, "segments", center, center, pad_sec=0.55)
 
     def _refresh_voice_activity_segments(self):
         try:
@@ -463,9 +582,10 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         if seg is None and sec is not None:
             try:
                 target = float(sec)
+                candidates = self._visible_items_for_paint(self.segments, "segments", target, target, pad_sec=0.55)
                 seg = next(
                     (
-                        item for item in self.segments
+                        item for item in candidates
                         if abs(float(item.get("start", 0.0) or 0.0) - target) < 0.001
                     ),
                     None,
@@ -473,7 +593,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
                 if seg is None:
                     seg = next(
                         (
-                            item for item in self.segments
+                            item for item in candidates
                             if float(item.get("start", 0.0) or 0.0) <= target < float(item.get("end", 0.0) or 0.0)
                         ),
                         None,
@@ -559,7 +679,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         return QRect(x1 + (x2 - x1) // 2 - (ICON_SZ // 2), SEG_TOP + 22, ICON_SZ, ICON_SZ)
 
     def _seg_at(self, x):
-        for seg in self.segments:
+        candidates = self._segments_near_x_for_hit(x, pad_px=12) if hasattr(self, "_segments_near_x_for_hit") else self.segments
+        for seg in candidates:
             if bool(seg.get("stt_pending") or seg.get("_live_stt_preview") or seg.get("_live_subtitle_preview")):
                 continue
             if self._x(seg["start"]) <= x <= self._x(seg["end"]):
@@ -574,21 +695,24 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             x2 = self._x(float(seg.get("end", 0.0) or 0.0))
         except Exception:
             return QRect()
-        left = max(0, min(x1, x2) - int(margin))
+        frame_px = int(max(2.0, (1.0 / max(1.0, float(self._get_fps()))) * max(1.0, float(self.pps or 1.0))))
+        margin = int(margin) + frame_px
+        left = max(0, min(x1, x2) - margin)
         right = min(max(self.width(), self.total_width()), max(x1, x2) + int(margin))
         top = 0 if full_height else max(0, SEG_TOP - 18)
         bottom = CANVAS_H if full_height else CANVAS_H
         return QRect(left, top, max(1, right - left), max(1, bottom - top))
 
     def _segment_repaint_rect_for_line(self, line_num: int, *, margin: int = 34) -> QRect:
-        seg = next((s for s in self.segments if int(s.get("line", -999999)) == int(line_num)), None)
+        seg = self._segment_for_line(int(line_num)) if hasattr(self, "_segment_for_line") else next((s for s in self.segments if int(s.get("line", -999999)) == int(line_num)), None)
         return self._segment_repaint_rect(seg, margin=margin)
 
     def _active_segment_repaint_rect(self) -> QRect:
         if getattr(self, "active_seg_start", None) is None and getattr(self, "active_seg_line", None) is None:
             return QRect()
         dirty = QRect()
-        for seg in self.segments:
+        candidates = self._active_segment_candidates() if hasattr(self, "_active_segment_candidates") else self.segments
+        for seg in candidates:
             if self._is_active_segment(seg):
                 rect = self._segment_repaint_rect(seg, margin=48)
                 dirty = rect if dirty.isNull() else dirty.united(rect)
@@ -599,6 +723,16 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             self.update(rect.intersected(QRect(0, 0, max(1, self.width()), max(1, self.height()))))
         else:
             self.update()
+        self._notify_scenegraph_layer()
+
+    def _notify_scenegraph_layer(self):
+        owner = self.parent()
+        while owner is not None:
+            sync = getattr(owner, "_sync_scenegraph_layer", None)
+            if callable(sync):
+                sync()
+                return
+            owner = owner.parent()
 
     def _get_prev_seg(self, seg):
         segs = self._editable_segments_sorted()
@@ -617,14 +751,25 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             return None
 
     def _editable_segments_sorted(self):
-        return sorted(
-            [
-                s for s in self.segments
-                if not s.get("is_gap")
-                and not bool(s.get("stt_pending") or s.get("_live_stt_preview") or s.get("_live_subtitle_preview"))
-            ],
-            key=lambda s: (float(s.get("start", 0.0) or 0.0), float(s.get("end", 0.0) or 0.0)),
-        )
+        key = self._segment_index_cache_key()
+        if self._editable_segments_cache_key != key:
+            editable: list[tuple[int, dict]] = []
+            for raw_idx, seg in enumerate(self.segments):
+                if not isinstance(seg, dict):
+                    continue
+                if seg.get("is_gap") or bool(seg.get("stt_pending") or seg.get("_live_stt_preview") or seg.get("_live_subtitle_preview")):
+                    continue
+                editable.append((raw_idx, seg))
+            editable.sort(key=lambda item: (float(item[1].get("start", 0.0) or 0.0), float(item[1].get("end", 0.0) or 0.0), int(item[0])))
+            self._editable_segments_cache_key = key
+            self._editable_segments_cache = editable
+        return [seg for _idx, seg in list(self._editable_segments_cache or [])]
+
+    def _editable_segments_with_indices_sorted(self):
+        key = self._segment_index_cache_key()
+        if self._editable_segments_cache_key != key:
+            self._editable_segments_sorted()
+        return list(self._editable_segments_cache or [])
 
     def _get_fps(self):
         if float(getattr(self, "frame_rate", 0.0) or 0.0) > 0:

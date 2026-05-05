@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args
+from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args, lossless_video_encode_args, roughcut_render_mode
 
 from .models import EDLSegment
 
@@ -19,6 +19,7 @@ class RenderCommandPlan:
     concat_file_path: str
     concat_command: tuple[str, ...]
     output_path: str
+    render_mode: str = "copy"
     warnings: tuple[str, ...] = ()
     segment_manifest: tuple[dict, ...] = ()
 
@@ -45,12 +46,51 @@ def _renderable_segments(edl_segments: Iterable[EDLSegment]) -> list[EDLSegment]
     return [segment for segment in edl_segments if segment.action in allowed and segment.source_end > segment.source_start]
 
 
+def _faststart_args(output_path: str | Path) -> tuple[str, ...]:
+    suffix = Path(output_path).suffix.lower()
+    return ("-movflags", "+faststart") if suffix in {".mp4", ".m4v", ".mov"} else ()
+
+
 def build_ffmpeg_extract_command(
     segment: EDLSegment,
     output_path: str | Path,
     ffmpeg_binary: str = "ffmpeg",
+    render_mode: str | None = None,
 ) -> tuple[str, ...]:
     duration = max(0.0, segment.source_end - segment.source_start)
+    mode = roughcut_render_mode(render_mode)
+    if mode == "copy":
+        return (
+            ffmpeg_binary,
+            "-y",
+            "-ss",
+            f"{segment.source_start:.3f}",
+            "-i",
+            segment.source_path,
+            "-t",
+            f"{duration:.3f}",
+            "-map",
+            "0",
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
+            _safe_path(output_path),
+        )
+    if mode == "lossless":
+        return (
+            ffmpeg_binary,
+            "-y",
+            *ffmpeg_hwdecode_args(),
+            "-i",
+            segment.source_path,
+            "-ss",
+            f"{segment.source_start:.3f}",
+            "-t",
+            f"{duration:.3f}",
+            *lossless_video_encode_args(output_path),
+            _safe_path(output_path),
+        )
     return (
         ffmpeg_binary,
         "-y",
@@ -74,7 +114,26 @@ def build_ffmpeg_concat_command(
     concat_file_path: str | Path,
     output_path: str | Path,
     ffmpeg_binary: str = "ffmpeg",
+    render_mode: str | None = None,
 ) -> tuple[str, ...]:
+    mode = roughcut_render_mode(render_mode)
+    if mode in {"copy", "lossless"}:
+        return (
+            ffmpeg_binary,
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            _safe_path(concat_file_path),
+            "-map",
+            "0",
+            "-c",
+            "copy",
+            *_faststart_args(output_path),
+            _safe_path(output_path),
+        )
     return (
         ffmpeg_binary,
         "-y",
@@ -90,6 +149,7 @@ def build_ffmpeg_concat_command(
         "aac",
         "-b:a",
         "192k",
+        *_faststart_args(output_path),
         _safe_path(output_path),
     )
 
@@ -104,8 +164,11 @@ def build_ffmpeg_subtitle_burnin_command(
     subtitle_path: str | Path,
     output_path: str | Path,
     ffmpeg_binary: str = "ffmpeg",
+    render_mode: str | None = "lossless",
 ) -> tuple[str, ...]:
     output = _validate_output_path(output_path, [str(input_path)])
+    mode = roughcut_render_mode(render_mode)
+    encode_args = hevc_encode_args(quality="balanced") if mode == "preview_hevc" else lossless_video_encode_args(output_path)
     return (
         ffmpeg_binary,
         "-y",
@@ -114,9 +177,8 @@ def build_ffmpeg_subtitle_burnin_command(
         _safe_path(input_path),
         "-vf",
         f"subtitles='{_subtitle_filter_path(subtitle_path)}'",
-        *hevc_encode_args(quality="balanced"),
-        "-c:a",
-        "copy",
+        *encode_args,
+        *_faststart_args(output_path),
         output,
     )
 
@@ -126,8 +188,10 @@ def build_concat_render_plan(
     output_path: str | Path,
     temp_dir: str | Path,
     ffmpeg_binary: str = "ffmpeg",
+    render_mode: str | None = None,
 ) -> RenderCommandPlan:
     """Build a no-execution ffmpeg concat plan for roughcut keep/highlight segments."""
+    mode = roughcut_render_mode(render_mode)
     segments = _renderable_segments(edl_segments)
     source_paths = {segment.source_path for segment in segments}
     output = _validate_output_path(output_path, source_paths)
@@ -140,15 +204,25 @@ def build_concat_render_plan(
     extract_commands = []
     for index, segment in enumerate(segments, start=1):
         suffix = Path(segment.source_path).suffix or ".mp4"
+        if mode == "lossless":
+            suffix = Path(output).suffix or ".mkv"
         part_path = temp / f"roughcut_part_{index:04d}{suffix}"
-        extract_commands.append(build_ffmpeg_extract_command(segment, part_path, ffmpeg_binary=ffmpeg_binary))
+        extract_commands.append(
+            build_ffmpeg_extract_command(
+                segment,
+                part_path,
+                ffmpeg_binary=ffmpeg_binary,
+                render_mode=mode,
+            )
+        )
 
     return RenderCommandPlan(
         temp_dir=str(temp),
         extract_commands=tuple(extract_commands),
         concat_file_path=str(concat_file),
-        concat_command=build_ffmpeg_concat_command(concat_file, output, ffmpeg_binary=ffmpeg_binary),
+        concat_command=build_ffmpeg_concat_command(concat_file, output, ffmpeg_binary=ffmpeg_binary, render_mode=mode),
         output_path=output,
+        render_mode=mode,
         warnings=tuple(warnings),
         segment_manifest=tuple(_render_segment_manifest(segments)),
     )

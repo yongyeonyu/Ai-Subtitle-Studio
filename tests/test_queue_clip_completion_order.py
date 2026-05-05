@@ -46,7 +46,7 @@ class _Tracker:
 
 
 class QueueClipCompletionOrderTests(unittest.TestCase):
-    def test_queue_clip_marks_complete_after_srt_and_project_save(self):
+    def test_queue_clip_always_exports_video_after_srt_and_project_save(self):
         operations = []
         with tempfile.TemporaryDirectory() as tmp:
             media_path = os.path.join(tmp, "clip_a.mp4")
@@ -60,16 +60,18 @@ class QueueClipCompletionOrderTests(unittest.TestCase):
                 patch("core.project.project_manager.create_project", side_effect=lambda **_kwargs: operations.append("create_project") or project_path),
                 patch("core.project.project_manager.save_project", side_effect=lambda **_kwargs: operations.append("project")),
                 patch("ui.dialogs.export_dialog._load_es", return_value={"icloud": False}),
+                patch("core.renderer.render_subtitle_mov", side_effect=lambda *_args, **_kwargs: operations.append("render") or True),
                 patch("core.auto_tracker.AutoTracker", return_value=_Tracker()),
             ):
                 ok = backend._save_and_export(media_path, 0, [{"start": 0.0, "end": 1.0, "text": "hello"}], True)
 
             statuses = [args[1] for args in ui._sig_update_queue.emissions]
             self.assertTrue(ok)
-            self.assertEqual(operations, ["srt", "create_project", "project"])
+            self.assertEqual(operations, ["srt", "create_project", "project", "render"])
             self.assertEqual(statuses[-1], "✅ 완료")
             self.assertLess(statuses.index("💾 SRT 저장 중"), statuses.index("📦 프로젝트 저장 중"))
-            self.assertLess(statuses.index("📦 프로젝트 저장 중"), statuses.index("✅ 완료"))
+            self.assertLess(statuses.index("📦 프로젝트 저장 중"), statuses.index("🎥 자막영상출력(mov)"))
+            self.assertLess(statuses.index("🎥 자막영상출력(mov)"), statuses.index("✅ 완료"))
 
     def test_queue_clip_video_export_finishes_before_complete_status(self):
         operations = []
@@ -77,7 +79,7 @@ class QueueClipCompletionOrderTests(unittest.TestCase):
             media_path = os.path.join(tmp, "clip_b.mp4")
             open(media_path, "wb").close()
             project_path = os.path.join(tmp, "clip_b.ai_project.json")
-            ui = _Ui(export_video=True)
+            ui = _Ui(export_video=False)
             backend = _Backend(ui, media_path)
 
             with (

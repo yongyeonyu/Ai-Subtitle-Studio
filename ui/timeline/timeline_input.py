@@ -4,6 +4,8 @@
 ui/timeline_input.py
 Timeline input mixin
 """
+from bisect import bisect_left, bisect_right
+
 from PyQt6.QtCore import QPoint, QRect, Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon, QPainter, QPixmap, QPolygon
 
@@ -92,11 +94,15 @@ class TimelineInputMixin:
             self._handle_edit_key(ev); ev.accept(); return
 
         if ev.key() in (Qt.Key.Key_F2, Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.active_seg_start is not None:
-            seg = next((
-                s for s in self.segments
-                if not self._is_stt_preview_segment(s)
-                and abs(s["start"] - self.active_seg_start) < 0.5
-            ), None)
+            candidates = self._active_segment_candidates() if hasattr(self, "_active_segment_candidates") else self.segments
+            seg = next(
+                (
+                    s for s in candidates
+                    if not self._is_stt_preview_segment(s)
+                    and abs(s["start"] - self.active_seg_start) < 0.5
+                ),
+                None,
+            )
             if seg: self.start_inline_edit(seg.get("line", 0), seg["start"])
             ev.accept(); return
 
@@ -125,7 +131,7 @@ class TimelineInputMixin:
             return
 
         target = None
-        for seg in reversed(self.segments):
+        for seg in reversed(self._editable_segments_sorted() if hasattr(self, "_editable_segments_sorted") else self.segments):
             if self._is_stt_preview_segment(seg):
                 continue
             if seg["start"] < self.playhead_sec - 0.1:
@@ -139,7 +145,7 @@ class TimelineInputMixin:
             return
 
         target = None
-        for seg in self.segments:
+        for seg in self._editable_segments_sorted() if hasattr(self, "_editable_segments_sorted") else self.segments:
             if self._is_stt_preview_segment(seg):
                 continue
             if seg["start"] > self.playhead_sec + 0.1:
@@ -150,7 +156,8 @@ class TimelineInputMixin:
 
     def _emit_smart_split_at_playhead(self):
         sec = self._snap_to_frame(self.playhead_sec)
-        seg = find_segment_at([s for s in self.segments if not self._is_stt_preview_segment(s)], sec, skip_gap=True)
+        candidates = self._visible_items_for_paint(self.segments, "segments", sec, sec, pad_sec=0.02) if hasattr(self, "_visible_items_for_paint") else self.segments
+        seg = find_segment_at([s for s in candidates if not self._is_stt_preview_segment(s)], sec, skip_gap=True)
         if not seg: return
         if sec <= seg["start"] + 0.05 or sec >= seg["end"] - 0.05: return
         mid = (seg["start"] + seg["end"]) / 2.0
@@ -189,7 +196,8 @@ class TimelineInputMixin:
     def _hit_multiclip_box(self, x: int):
         if not self._multiclip_boxes:
             return None
-        for box in self._multiclip_boxes:
+        boxes = self._multiclip_boxes_near_x_for_hit(x, pad_px=12) if hasattr(self, "_multiclip_boxes_near_x_for_hit") else self._multiclip_boxes
+        for box in boxes:
             bx1, bx2 = self._x(box["start"]), self._x(box["end"])
             if bx1 <= x <= bx2:
                 return box
@@ -237,7 +245,8 @@ class TimelineInputMixin:
         return QRect(left, top, max(1, right - left), max(1, bottom - top))
 
     def _speaker_lane_seg_at(self, x: int, y: int):
-        for seg in self.segments:
+        candidates = self._segments_near_x_for_hit(x, pad_px=14) if hasattr(self, "_segments_near_x_for_hit") else self.segments
+        for seg in candidates:
             if self._is_stt_preview_segment(seg):
                 continue
             if self._speaker_lane_hit_rect_for_seg(seg).contains(x, y):
@@ -251,7 +260,8 @@ class TimelineInputMixin:
             lane_source = "STT2"
         else:
             return None
-        for seg in self.segments:
+        candidates = self._segments_near_x_for_hit(x, pad_px=12) if hasattr(self, "_segments_near_x_for_hit") else self.segments
+        for seg in candidates:
             if not self._is_stt_preview_segment(seg):
                 continue
             source = self._stt_preview_source(seg)
@@ -271,7 +281,8 @@ class TimelineInputMixin:
     def _gap_at(self, x: int, y: int):
         if not (SEG_TOP <= y <= SEG_BOT):
             return None
-        for gap in getattr(self, "gap_segments", []) or []:
+        candidates = self._gaps_near_x_for_hit(x, pad_px=12) if hasattr(self, "_gaps_near_x_for_hit") else getattr(self, "gap_segments", []) or []
+        for gap in candidates:
             try:
                 gx1 = self._x(float(gap.get("start", 0.0) or 0.0))
                 gx2 = self._x(float(gap.get("end", 0.0) or 0.0))
@@ -315,8 +326,32 @@ class TimelineInputMixin:
             return None
         best = None
         best_dist = max(1, int(margin)) + 1
-        for idx, item in enumerate(list(getattr(self, "scan_boundary_times", []) or [])):
-            sec = self._scan_boundary_sec(item)
+        items = list(getattr(self, "scan_boundary_times", []) or [])
+        if len(items) >= 64:
+            key = (id(getattr(self, "scan_boundary_times", None)), len(items), int(getattr(self, "_render_epoch", 0) or 0))
+            cache = getattr(self, "_scan_boundary_hit_cache", None)
+            if not cache or cache.get("key") != key:
+                rows = []
+                for idx, item in enumerate(items):
+                    sec = self._scan_boundary_sec(item)
+                    if sec is None or sec <= 0.0:
+                        continue
+                    rows.append((float(sec), int(idx), item))
+                rows.sort(key=lambda row: (row[0], row[1]))
+                cache = {"key": key, "rows": rows, "secs": [row[0] for row in rows]}
+                self._scan_boundary_hit_cache = cache
+            rows = list(cache.get("rows") or [])
+            secs = list(cache.get("secs") or [])
+            pps = max(0.001, float(getattr(self, "pps", 1.0) or 1.0))
+            center = float(x or 0.0) / pps
+            pad = max(0.02, (int(margin) + 8) / pps)
+            start_idx = bisect_left(secs, center - pad)
+            end_idx = bisect_right(secs, center + pad)
+            candidates = ((idx, item, sec) for sec, idx, item in rows[start_idx:end_idx])
+        else:
+            candidates = ((idx, item, self._scan_boundary_sec(item)) for idx, item in enumerate(items))
+
+        for idx, item, sec in candidates:
             if sec is None or sec <= 0.0:
                 continue
             bx = self._x(sec)
@@ -379,7 +414,8 @@ class TimelineInputMixin:
 
     def _handle_drag_at(self, x: int, y: int):
         point = QPoint(x, y)
-        for seg in self.segments:
+        candidates = self._segments_near_x_for_hit(x, pad_px=HANDLE_R + 8) if hasattr(self, "_segments_near_x_for_hit") else self.segments
+        for seg in candidates:
             if self._is_stt_preview_segment(seg):
                 continue
             x1, x2 = self._x(seg["start"]), self._x(seg["end"])
@@ -403,21 +439,35 @@ class TimelineInputMixin:
         return QRect(int(bx - r), int(DIAMOND_Y - r), r * 2, r * 2)
 
     def _diamond_pairs(self):
-        editable = []
-        for raw_idx, seg in enumerate(self.segments):
-            if self._is_stt_preview_segment(seg) or bool(seg.get("is_gap")):
-                continue
-            if "start" not in seg or "end" not in seg:
-                continue
-            editable.append((raw_idx, seg))
-        editable.sort(key=lambda item: (float(item[1].get("start", 0.0) or 0.0), int(item[0])))
+        key = self._segment_index_cache_key() if hasattr(self, "_segment_index_cache_key") else (
+            id(getattr(self, "segments", None)),
+            len(getattr(self, "segments", []) or []),
+        )
+        if getattr(self, "_diamond_pairs_cache_key", None) == key:
+            return list((getattr(self, "_diamond_pairs_cache", {}) or {}).get("pairs") or [])
+
+        if hasattr(self, "_editable_segments_with_indices_sorted"):
+            editable = self._editable_segments_with_indices_sorted()
+        else:
+            editable = []
+            for raw_idx, seg in enumerate(self.segments):
+                if self._is_stt_preview_segment(seg) or bool(seg.get("is_gap")):
+                    continue
+                if "start" not in seg or "end" not in seg:
+                    continue
+                editable.append((raw_idx, seg))
+            editable.sort(key=lambda item: (float(item[1].get("start", 0.0) or 0.0), int(item[0])))
 
         pairs = []
+        ends = []
         for left, right in zip(editable, editable[1:]):
             left_idx, s1 = left
             right_idx, s2 = right
             if abs(float(s1.get("end", 0.0) or 0.0) - float(s2.get("start", 0.0) or 0.0)) < 0.05:
                 pairs.append((left_idx, right_idx, s1, s2))
+                ends.append(float(s1.get("end", 0.0) or 0.0))
+        self._diamond_pairs_cache_key = key
+        self._diamond_pairs_cache = {"pairs": pairs, "ends": ends}
         return pairs
 
     def _diamond_pair_for_index(self, pair_idx):
@@ -429,7 +479,19 @@ class TimelineInputMixin:
         return None
 
     def _diamond_index_at(self, x: int, y: int, *, margin: int = 5):
-        for pair_idx, (_, _, s1, _) in enumerate(self._diamond_pairs()):
+        pairs = self._diamond_pairs()
+        if len(pairs) >= 64:
+            cache = getattr(self, "_diamond_pairs_cache", {}) or {}
+            ends = list(cache.get("ends") or [])
+            pps = max(0.001, float(getattr(self, "pps", 1.0) or 1.0))
+            center = float(x or 0.0) / pps
+            pad = max(0.02, (int(margin) + 8) / pps)
+            start_idx = bisect_left(ends, center - pad)
+            end_idx = bisect_right(ends, center + pad)
+            candidates = ((idx, pairs[idx]) for idx in range(start_idx, min(end_idx, len(pairs))))
+        else:
+            candidates = enumerate(pairs)
+        for pair_idx, (_, _, s1, _) in candidates:
             if self._diamond_hit_rect(self._x(s1["end"]), margin=margin).contains(x, y):
                 return pair_idx
         return None
@@ -613,7 +675,7 @@ class TimelineInputMixin:
             if ev.button() == Qt.MouseButton.RightButton:
                 self._show_mic_menu(ev.globalPosition().toPoint()); return
             if ev.button() == Qt.MouseButton.LeftButton:
-                seg = next((s for s in self.segments if s.get("line") == self._edit_line), None)
+                seg = self._segment_for_line(self._edit_line) if hasattr(self, "_segment_for_line") else next((s for s in self.segments if s.get("line") == self._edit_line), None)
                 is_inside = False
                 if seg and SEG_TOP <= y <= SEG_BOT:
                     x1, x2 = self._x(seg["start"]), self._x(seg["end"])
@@ -718,10 +780,12 @@ class TimelineInputMixin:
             self._drag_diamond_pair = (left_idx, right_idx)
             self._drag_diamond_orig = s1["end"]; self._drag_x0 = x
             self._clear_active_gaps_for_segment_drag()
+            self._drag_snap_candidates_cache = self._drag_snap_candidates()
             self._drag_last_paint_rect = self._drag_visual_rect()
             self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor)); return
 
-        for g in self.gap_segments:
+        gap_candidates = self._gaps_near_x_for_hit(x, pad_px=ICON_SZ + 10) if hasattr(self, "_gaps_near_x_for_hit") else self.gap_segments
+        for g in gap_candidates:
             gx1, gx2 = self._x(g["start"]), self._x(g["end"])
             if self._plus_rect(gx1, gx2).adjusted(-5, -5, 5, 5).contains(x, y):
                 if g.get("active"): self.gap_to_segs.emit(g["start"], g["end"])
@@ -729,13 +793,14 @@ class TimelineInputMixin:
                 return
 
         if SEG_TOP <= y <= SEG_BOT:
-            for g in self.gap_segments:
+            for g in gap_candidates:
                 if g.get("active"): continue
                 gx1, gx2 = self._x(g["start"]), self._x(g["end"])
                 if gx2 - gx1 >= ICON_SZ + 8 and self._plus_rect(gx1, gx2).contains(x, y):
                     g["active"] = True; self.update(); self.gap_activated.emit(g["start"], g["end"]); return
 
-        for s in self.segments:
+        active_candidates = self._active_segment_candidates() if hasattr(self, "_active_segment_candidates") else self.segments
+        for s in active_candidates:
             if self._is_stt_preview_segment(s):
                 continue
             x1, x2 = self._x(s["start"]), self._x(s["end"])
@@ -774,6 +839,7 @@ class TimelineInputMixin:
         self._drag_adj_orig_start_r = self._drag_adj_r["start"] if self._drag_adj_r else 0.0
         self._drag_adj_orig_end_r = self._drag_adj_r["end"] if self._drag_adj_r else 0.0
         self._clear_active_gaps_for_segment_drag()
+        self._drag_snap_candidates_cache = self._drag_snap_candidates()
         self._drag_last_paint_rect = self._drag_visual_rect()
         if edge != "center": self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
 
@@ -816,6 +882,22 @@ class TimelineInputMixin:
         guide_x = getattr(self, "_drag_guide_x", None)
         if guide_x is not None:
             rect = rect.united(QRect(int(guide_x) - 4, 0, 8, self.height()))
+        if hasattr(self, "_segment_repaint_rect"):
+            related = [
+                getattr(self, "_drag_seg", None),
+                getattr(self, "_drag_adj_l", None),
+                getattr(self, "_drag_adj_r", None),
+            ]
+            pair = getattr(self, "_drag_diamond_pair", None)
+            if pair is not None:
+                for idx in pair:
+                    try:
+                        related.append(self.segments[int(idx)])
+                    except Exception:
+                        pass
+            for seg in related:
+                if isinstance(seg, dict):
+                    rect = rect.united(self._segment_repaint_rect(seg, margin=64, full_height=False))
         return rect.adjusted(-4, -4, 4, 4).intersected(QRect(0, 0, self.width(), self.height()))
 
     def _update_drag_visual_rect(self, before: QRect):
@@ -825,6 +907,8 @@ class TimelineInputMixin:
             self.update(dirty)
         else:
             self.update()
+        if hasattr(self, "_notify_scenegraph_layer"):
+            self._notify_scenegraph_layer()
         self._drag_last_paint_rect = after
 
     def mouseDoubleClickEvent(self, ev):
@@ -849,18 +933,14 @@ class TimelineInputMixin:
             self.diamond_merge.emit(s1.get("line", 0), s2.get("line", 0)); return
 
         if SEG_TOP <= y <= SEG_BOT:
-            seg = next((
-                s for s in self.segments
-                if not self._is_stt_preview_segment(s)
-                and self._x(s["start"]) <= x <= self._x(s["end"])
-            ), None)
+            seg = self._seg_at(x)
             if seg: self.seg_double_clicked.emit(seg.get("line", 0), seg["start"])
 
     def mouseMoveEvent(self, ev):
         x, y = ev.pos().x(), ev.pos().y()
 
         if self._edit_active:
-            seg = next((s for s in self.segments if s.get("line") == self._edit_line), None)
+            seg = self._segment_for_line(self._edit_line) if hasattr(self, "_segment_for_line") else next((s for s in self.segments if s.get("line") == self._edit_line), None)
             if seg and SEG_TOP <= y <= SEG_BOT and self._x(seg["start"]) + HANDLE_R < x < self._x(seg["end"]) - HANDLE_R:
                 self.setCursor(Qt.CursorShape.IBeamCursor)
             else: self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -945,7 +1025,8 @@ class TimelineInputMixin:
 
         hover_handle = bool(new_hh); hover_center = False
         if not hover_handle:
-            for s in self.segments:
+            active_candidates = self._active_segment_candidates() if hasattr(self, "_active_segment_candidates") else self.segments
+            for s in active_candidates:
                 if self._is_stt_preview_segment(s):
                     continue
                 x1, x2 = self._x(s["start"]), self._x(s["end"])
@@ -965,6 +1046,7 @@ class TimelineInputMixin:
         if getattr(self, '_is_scrubbing', False): self._is_scrubbing = False; return
 
         if getattr(self, '_drag_edge', None) == "diamond":
+            dirty = getattr(self, "_drag_last_paint_rect", None) or self._drag_visual_rect()
             pair = getattr(self, "_drag_diamond_pair", None)
             if pair is not None and pair[1] < len(self.segments):
                 s2 = self.segments[pair[1]]
@@ -972,12 +1054,15 @@ class TimelineInputMixin:
             self.drag_finished.emit()
             self._drag_seg = self._drag_edge = self._drag_adj_l = self._drag_adj_r = None
             self._drag_diamond_idx = None; self._drag_diamond_pair = None; self._clear_drag_guides(); self.unsetCursor()
+            self._drag_snap_candidates_cache = []
             self.gap_segments = _build_gaps(self.segments, self.total_duration)
             if hasattr(self, "_invalidate_render_cache"):
                 self._invalidate_render_cache()
-            self.update(); return
+            self._update_dirty_rect(dirty.adjusted(-8, -8, 8, 8))
+            return
 
         if self._drag_seg:
+            dirty = getattr(self, "_drag_last_paint_rect", None) or self._drag_visual_rect()
             edge = str(self._drag_edge) if self._drag_edge else ""
             self.seg_time_changed.emit(self._drag_seg.get("line", 0), self._drag_seg["start"], self._drag_seg["end"], edge)
             if self._drag_adj_l and self._drag_edge == "square_left":
@@ -985,17 +1070,21 @@ class TimelineInputMixin:
             self.drag_finished.emit()
             self._drag_seg = self._drag_edge = self._drag_adj_l = self._drag_adj_r = None
             self._clear_drag_guides(); self.unsetCursor()
+            self._drag_snap_candidates_cache = []
             self.gap_segments = _build_gaps(self.segments, self.total_duration)
             if hasattr(self, "_invalidate_render_cache"):
                 self._invalidate_render_cache()
-            self.update()
+            self._update_dirty_rect(dirty.adjusted(-8, -8, 8, 8))
 
     def _apply_drag(self, delta):
         if delta == 0: return
         before_rect = getattr(self, "_drag_last_paint_rect", None) or self._drag_visual_rect()
         edge = getattr(self, '_drag_edge', None)
         self._clear_drag_guides(update=False)
-        snap_candidates = self._drag_snap_candidates()
+        snap_candidates = list(getattr(self, "_drag_snap_candidates_cache", []) or [])
+        if not snap_candidates:
+            snap_candidates = self._drag_snap_candidates()
+            self._drag_snap_candidates_cache = snap_candidates
         snap_threshold = self._drag_snap_threshold_sec()
 
         if edge == "diamond":

@@ -65,6 +65,7 @@ def render_from_edl(
     *,
     dry_run: bool = False,
     ffmpeg_path: str | None = None,
+    render_mode: str | None = None,
 ) -> RenderExecutionResult:
     """Render a roughcut from EDL data through the existing concat plan."""
     source = str(Path(input_path).expanduser()) if input_path else ""
@@ -76,7 +77,13 @@ def render_from_edl(
     if not segments:
         raise ValueError("edl must contain at least one renderable segment")
     binary = ffmpeg_path or ffmpeg_binary()
-    plan = build_concat_render_plan(segments, output_path=output_path, temp_dir=temp_dir, ffmpeg_binary=binary)
+    plan = build_concat_render_plan(
+        segments,
+        output_path=output_path,
+        temp_dir=temp_dir,
+        ffmpeg_binary=binary,
+        render_mode=render_mode,
+    )
     return run_render_plan(plan, dry_run=dry_run)
 
 

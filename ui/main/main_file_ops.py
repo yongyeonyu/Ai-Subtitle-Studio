@@ -88,7 +88,7 @@ class FileOpsMixin:
         set_last_folder(os.path.dirname(paths[0]))
         self._add_recent_folder(os.path.dirname(paths[0]))
         self._is_auto_pipeline = False
-        self._auto_export_subtitle_video = False
+        self._auto_export_subtitle_video = True
         self._auto_audio_tune_per_file = True
         if hasattr(self, "_clear_runtime_quality_override"):
             self._clear_runtime_quality_override()
@@ -120,6 +120,7 @@ class FileOpsMixin:
         try:
             self._is_auto_pipeline = True
             self._is_queue_mode = True
+            self._auto_export_subtitle_video = True
             self._auto_audio_tune_per_file = True
             self._current_project_path = None
             self._project_boundary_times = []
@@ -147,7 +148,7 @@ class FileOpsMixin:
         set_last_folder(folder)
         self._add_recent_folder(folder)
         self._is_auto_pipeline = False
-        self._auto_export_subtitle_video = False
+        self._auto_export_subtitle_video = True
         self._auto_audio_tune_per_file = True
         if hasattr(self, "_clear_runtime_quality_override"):
             self._clear_runtime_quality_override()
@@ -160,7 +161,7 @@ class FileOpsMixin:
         if dlg.exec() and getattr(dlg, "saved_only", False):
             return
         if dlg.result() and dlg.selected_files:
-            self._auto_export_subtitle_video = bool(getattr(dlg, "export_subtitle_video", False))
+            self._auto_export_subtitle_video = True
             self._start_queue_mode(dlg.selected_files, folder=folder, source="folder")
 
     def _open_recent(self, folder):
@@ -173,7 +174,7 @@ class FileOpsMixin:
         set_last_folder(folder)
         self._add_recent_folder(folder)
         self._is_auto_pipeline = False
-        self._auto_export_subtitle_video = False
+        self._auto_export_subtitle_video = True
         self._auto_audio_tune_per_file = True
         if hasattr(self, "_clear_runtime_quality_override"):
             self._clear_runtime_quality_override()

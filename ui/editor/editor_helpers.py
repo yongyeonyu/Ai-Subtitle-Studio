@@ -6,6 +6,8 @@ ui/editor_helpers.py
 - delete_block_safely, insert_gap_after, merge_adjacent_gaps_around 추가
 - is_gap_block, make_gap_ud 유틸 추가
 """
+from bisect import bisect_right
+
 from PyQt6.QtGui import QTextCursor
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 
@@ -21,6 +23,72 @@ def find_segment_at(segs, sec, skip_gap=True):
         if seg["start"] <= sec < seg["end"]:
             return seg
     return None
+
+
+def build_segment_lookup(segs) -> dict:
+    """Build an in-memory lookup table for playback/editor subtitle sync."""
+    ordered = sorted(
+        [dict(seg) for seg in list(segs or []) if isinstance(seg, dict)],
+        key=lambda seg: (float(seg.get("start", 0.0) or 0.0), int(seg.get("line", 0) or 0)),
+    )
+    visible = [
+        seg for seg in ordered
+        if not seg.get("is_gap") and str(seg.get("text", "") or "").strip()
+    ]
+    line_map = {
+        int(seg.get("line", -1)): seg
+        for seg in ordered
+        if int(seg.get("line", -1)) >= 0
+    }
+    return {
+        "segments": ordered,
+        "starts": [float(seg.get("start", 0.0) or 0.0) for seg in ordered],
+        "visible_segments": visible,
+        "visible_starts": [float(seg.get("start", 0.0) or 0.0) for seg in visible],
+        "line_map": line_map,
+        "line_numbers": sorted(line_map.keys()),
+    }
+
+
+def find_segment_at_lookup(lookup: dict | None, sec: float, skip_gap=True):
+    """Binary-search a segment lookup table for the segment containing sec."""
+    if not isinstance(lookup, dict):
+        return None
+    segments = lookup.get("visible_segments" if skip_gap else "segments") or []
+    starts = lookup.get("visible_starts" if skip_gap else "starts") or []
+    if not segments or not starts:
+        return None
+    try:
+        now = float(sec)
+    except Exception:
+        now = 0.0
+    idx = bisect_right(starts, now) - 1
+    if 0 <= idx < len(segments):
+        seg = segments[idx]
+        try:
+            if float(seg.get("start", 0.0) or 0.0) <= now < float(seg.get("end", 0.0) or 0.0):
+                return seg
+        except Exception:
+            return None
+    return None
+
+
+def find_segment_for_line_lookup(lookup: dict | None, line_num: int):
+    """Return the nearest segment at or before a QTextDocument line number."""
+    if not isinstance(lookup, dict):
+        return None
+    line_map = lookup.get("line_map") or {}
+    line_numbers = lookup.get("line_numbers") or []
+    if not line_numbers:
+        return None
+    try:
+        line = int(line_num)
+    except Exception:
+        line = 0
+    idx = bisect_right(line_numbers, line) - 1
+    if idx < 0:
+        return None
+    return line_map.get(int(line_numbers[idx]))
 
 
 def get_sub_block_indices(doc, line_num, start_sec, tol=0.05):

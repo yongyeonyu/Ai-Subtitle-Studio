@@ -474,14 +474,6 @@ class EditorActionsMixin:
         return bool(saved_count or combined_saved)
 
     def _auto_export_saved_subtitle_videos(self):
-        try:
-            main_w = self.window()
-            enabled = bool(getattr(main_w, "_auto_export_subtitle_video", False))
-        except Exception:
-            enabled = False
-        if not enabled:
-            return
-
         outputs = list(getattr(self, "_last_saved_srt_outputs", []) or [])
         if not outputs:
             return

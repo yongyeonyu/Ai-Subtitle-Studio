@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
 )
 from PyQt6.QtCore import Qt
+from ui.settings.qml_panel import create_settings_header
 from ui.style import button_style, label_style, settings_dialog_stylesheet
 
 class ExportDialog(QDialog):
@@ -18,6 +19,14 @@ class ExportDialog(QDialog):
         self.setStyleSheet(settings_dialog_stylesheet())
         
         layout = QVBoxLayout(self)
+        self._qml_header = create_settings_header(
+            self,
+            title="자막 파일 출력",
+            subtitle="SRT 저장과 후속 자동 영상 출력을 위한 설정 패널입니다.",
+            badge="QML",
+        )
+        if self._qml_header is not None:
+            layout.addWidget(self._qml_header)
         
         layout.addWidget(QLabel(f"<b>현재 불러온 자막 수: {len(self.subtitles)}개</b>"))
         

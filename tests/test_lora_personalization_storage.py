@@ -10,6 +10,13 @@ from core.personalization.lora_models import (
     TrialRecord,
     TruthTableRow,
 )
+from core.personalization.llm_review_exchange import (
+    LLM_REVIEW_REQUEST_SCHEMA,
+    LLM_REVIEW_RESULT_SCHEMA,
+    export_llm_review_request,
+    import_llm_review_result,
+)
+from core.personalization.lora_retention import prune_low_value_personalization_data
 from core.personalization.lora_storage import (
     append_excluded_parentheticals,
     append_prompt_trials,
@@ -22,8 +29,10 @@ from core.personalization.lora_storage import (
     load_learned_rules,
     load_training_queue,
     refresh_lora_personalization_manifest,
+    refresh_unified_lora_data_bundle,
     save_best_settings,
     save_learned_rules,
+    save_retention_policy,
     save_training_queue,
     store_paths,
 )
@@ -47,8 +56,47 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertTrue(paths["excluded_parentheticals"].exists())
             self.assertTrue(paths["dedupe_index"].exists())
             self.assertTrue(paths["trained_adapters"].exists())
+            self.assertTrue(paths["retention_policy"].exists())
+            self.assertTrue(paths["retention_history"].exists())
+            self.assertTrue(paths["unified_lora_data"].exists())
+            self.assertIn("llm_review_request", paths)
+            self.assertIn("llm_review_result", paths)
             self.assertEqual(manifest["counts"]["truth_table_rows"], 0)
             self.assertEqual(manifest["counts"]["queue_items"], 0)
+            self.assertEqual(manifest["counts"]["llm_review_request_files"], 0)
+            self.assertEqual(manifest["counts"]["llm_review_result_files"], 0)
+            self.assertEqual(manifest["counts"]["retention_history_rows"], 0)
+            self.assertEqual(manifest["counts"]["unified_lora_data_records"], 0)
+
+    def test_manifest_counts_voice_audio_only_when_wav_exists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            paths = store_paths(tmpdir)
+            audio_path = paths["voice_lora_clips"] / "me" / "clip.wav"
+            paths["voice_lora_training_plan"].write_text(
+                json.dumps(
+                    {
+                        "schema": "ai_subtitle_studio.voice_lora_training_plan.v1",
+                        "items": [
+                            {
+                                "speaker": "me",
+                                "audio_ready": True,
+                                "audio_path": str(audio_path),
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            missing_manifest = refresh_lora_personalization_manifest(tmpdir)
+            self.assertEqual(missing_manifest["counts"]["voice_lora_stored_audio_items"], 0)
+
+            audio_path.parent.mkdir(parents=True, exist_ok=True)
+            audio_path.write_bytes(b"RIFFfake wav data")
+            ready_manifest = refresh_lora_personalization_manifest(tmpdir)
+            self.assertEqual(ready_manifest["counts"]["voice_lora_stored_audio_items"], 1)
 
     def test_models_and_appenders_dedupe_rows(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -115,6 +163,13 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertEqual(manifest["counts"]["excluded_parenthetical_rows"], 1)
             self.assertEqual(manifest["counts"]["setting_trial_rows"], 1)
             self.assertEqual(manifest["counts"]["prompt_trial_rows"], 1)
+            self.assertEqual(manifest["counts"]["unified_lora_data_records"], 4)
+
+            bundle = json.loads(store_paths(tmpdir)["unified_lora_data"].read_text(encoding="utf-8"))
+            self.assertEqual(bundle["schema"], "ai_subtitle_studio.lora_unified_data_bundle.v1")
+            self.assertEqual(bundle["counts"]["unified_training_records"], 4)
+            self.assertEqual(len(bundle["sections"]["truth_table"]), 1)
+            self.assertEqual({row["kind"] for row in bundle["records"]}, {"truth_table", "excluded_parentheticals", "setting_trials", "prompt_trials"})
 
             dedupe = load_dedupe_index(tmpdir)
             self.assertEqual(len(dedupe["entries"]["truth_table"]), 1)
@@ -190,6 +245,197 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertEqual(manifest["counts"]["queue_items"], 1)
             self.assertEqual(manifest["counts"]["learned_split_rules"], 1)
             self.assertEqual(manifest["counts"]["learned_line_break_rules"], 1)
+
+    def test_retention_prunes_lowest_score_trial_and_low_frequency_rules(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            save_retention_policy(
+                {
+                    "enabled": True,
+                    "jsonl": {
+                        "setting_trials": {"min_keep": 4, "max_rows": 100, "remove_per_training": 1},
+                        "prompt_trials": {"min_keep": 64, "max_rows": 100, "remove_per_training": 0},
+                        "truth_table": {"min_keep": 512, "max_rows": 12000, "remove_per_training": 0},
+                        "excluded_parentheticals": {"min_keep": 512, "max_rows": 4000, "remove_per_training": 0},
+                    },
+                    "rules": {
+                        "split": {"max_items": 2},
+                        "line_break": {"max_items": 256},
+                    },
+                },
+                tmpdir,
+            )
+            trials = [
+                TrialRecord(
+                    trial_type="setting",
+                    media_id=f"media-{index}",
+                    media_path=f"/tmp/{index}.mp4",
+                    subtitle_path=f"/tmp/{index}.srt",
+                    config={"candidate": index},
+                    status="complete",
+                    score=score,
+                ).to_record()
+                for index, score in enumerate([92.0, 25.0, 70.0, 55.0, 88.0], start=1)
+            ]
+            append_setting_trials(trials, tmpdir)
+            split_rules = [
+                LearnedRuleEntry(rule_text="강한 규칙", rule_type="split_rule", frequency=20, confidence=0.95).to_record(),
+                LearnedRuleEntry(rule_text="약한 규칙", rule_type="split_rule", frequency=1, confidence=0.2).to_record(),
+                LearnedRuleEntry(rule_text="중간 규칙", rule_type="split_rule", frequency=5, confidence=0.75).to_record(),
+            ]
+            save_learned_rules("split", split_rules, tmpdir)
+
+            result = prune_low_value_personalization_data(
+                store_dir=tmpdir,
+                trigger="training_job:optimize_settings",
+                appended_counts={"setting_trials": 1},
+            )
+
+            self.assertEqual(result["removed"]["setting_trials"], 1)
+            self.assertEqual(result["removed"]["split_rules"], 1)
+            paths = store_paths(tmpdir)
+            remaining_trials = [
+                json.loads(line)
+                for line in paths["setting_trials"].read_text(encoding="utf-8").strip().splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(len(remaining_trials), 4)
+            self.assertNotIn(25.0, [float(row.get("score", 0.0) or 0.0) for row in remaining_trials])
+            remaining_rules = load_learned_rules("split", tmpdir)["items"]
+            self.assertEqual(len(remaining_rules), 2)
+            self.assertNotIn("약한 규칙", [row.get("rule_text") for row in remaining_rules])
+            manifest = refresh_lora_personalization_manifest(tmpdir)
+            self.assertEqual(manifest["counts"]["retention_history_rows"], 1)
+
+    def test_retention_noop_protects_small_datasets(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            trial = TrialRecord(
+                trial_type="setting",
+                media_id="small-media",
+                media_path="/tmp/small.mp4",
+                subtitle_path="/tmp/small.srt",
+                config={"candidate": "small"},
+                status="complete",
+                score=12.0,
+            ).to_record()
+            append_setting_trials([trial], tmpdir)
+
+            result = prune_low_value_personalization_data(
+                store_dir=tmpdir,
+                trigger="training_job:optimize_settings",
+                appended_counts={"setting_trials": 1},
+            )
+
+            self.assertEqual(result["total_removed"], 0)
+            paths = store_paths(tmpdir)
+            lines = paths["setting_trials"].read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(len(lines), 1)
+            manifest = refresh_lora_personalization_manifest(tmpdir)
+            self.assertEqual(manifest["counts"]["retention_history_rows"], 0)
+
+    def test_unified_lora_bundle_can_be_forced_and_tracks_record_counts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            append_prompt_trials(
+                [
+                    TrialRecord(
+                        trial_type="prompt",
+                        media_id="bundle-media",
+                        media_path="/tmp/bundle.mp4",
+                        subtitle_path="/tmp/bundle.srt",
+                        config={"provider": "inherit"},
+                        prompt_template_id="bundle_prompt",
+                        prompt_text="Keep the subtitle concise.",
+                        status="complete",
+                        score=91.0,
+                    ).to_record()
+                ],
+                tmpdir,
+            )
+
+            result = refresh_unified_lora_data_bundle(tmpdir, force=True)
+            self.assertTrue(result["exists"])
+            self.assertTrue(result["refreshed"])
+            self.assertEqual(result["record_count"], 1)
+            payload = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(payload["records"][0]["kind"], "prompt_trials")
+            self.assertEqual(payload["sections"]["prompt_trials"][0]["prompt_template_id"], "bundle_prompt")
+
+    def test_llm_review_json_export_and_import_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            truth_row = TruthTableRow(
+                media_id="media-llm",
+                media_path="/tmp/llm.mp4",
+                subtitle_path="/tmp/llm.srt",
+                segment_id="seg-1",
+                start_sec=1.0,
+                end_sec=2.5,
+                raw_ground_truth_text="근데 이건 좋아요.",
+                speech_training_text="근데 이건 좋아요.",
+                detected_split_rule="근데",
+            ).to_record()
+            append_truth_table_rows([truth_row], tmpdir)
+
+            export_result = export_llm_review_request(store_dir=tmpdir, max_rows_per_section=5)
+            paths = store_paths(tmpdir)
+            request_payload = json.loads(paths["llm_review_request"].read_text(encoding="utf-8"))
+
+            self.assertEqual(export_result["schema"], LLM_REVIEW_REQUEST_SCHEMA)
+            self.assertEqual(request_payload["schema"], LLM_REVIEW_REQUEST_SCHEMA)
+            self.assertEqual(request_payload["return_json_template"]["schema"], LLM_REVIEW_RESULT_SCHEMA)
+            self.assertIn("ChatGPT", request_payload["workflow"]["supported_reviewers"])
+            self.assertEqual(len(request_payload["data"]["truth_table_recent_rows"]), 1)
+
+            result_payload = {
+                "schema": LLM_REVIEW_RESULT_SCHEMA,
+                "review_id": export_result["review_id"],
+                "accepted_split_rules": [
+                    {
+                        "rule_text": "근데",
+                        "confidence": 0.92,
+                        "examples": ["근데 이건 좋아요."],
+                        "reason": "truth table에서 반복 가능한 접속 표현입니다.",
+                    }
+                ],
+                "accepted_line_break_rules": [
+                    {
+                        "rule_text": "12|8",
+                        "confidence": 0.81,
+                        "examples": ["첫 줄 예시\n둘째 줄"],
+                    }
+                ],
+                "prompt_trials": [
+                    {
+                        "prompt_template_id": "manual_llm_review",
+                        "prompt_text": "Keep spoken Korean style while avoiding invented content.",
+                        "score": 88.5,
+                        "reason": "보수적 검토 프롬프트",
+                    }
+                ],
+                "setting_recommendations": {
+                    "global_recommended_defaults": {"audio_preset": "clear_voice"},
+                },
+                "notes": ["반복 검증 필요"],
+            }
+
+            import_result = import_llm_review_result(result_payload, store_dir=tmpdir)
+            self.assertEqual(import_result["inserted_split_rules"], 1)
+            self.assertEqual(import_result["inserted_line_break_rules"], 1)
+            self.assertEqual(import_result["appended_prompt_trials"], 1)
+            self.assertTrue(import_result["settings_updated"])
+            self.assertTrue(paths["llm_review_result"].exists())
+
+            split_rules = load_learned_rules("split", tmpdir)["items"]
+            line_break_rules = load_learned_rules("line_break", tmpdir)["items"]
+            self.assertEqual(split_rules[0]["metadata"]["source"], "manual_llm_review")
+            self.assertEqual(line_break_rules[0]["metadata"]["source"], "manual_llm_review")
+            self.assertEqual(load_best_settings(tmpdir)["global_recommended_defaults"]["audio_preset"], "clear_voice")
+
+            manifest = refresh_lora_personalization_manifest(tmpdir)
+            self.assertEqual(manifest["counts"]["prompt_trial_rows"], 1)
+            self.assertEqual(manifest["counts"]["llm_review_request_files"], 1)
+            self.assertEqual(manifest["counts"]["llm_review_result_files"], 1)
 
 
 if __name__ == "__main__":

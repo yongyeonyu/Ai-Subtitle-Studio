@@ -8,7 +8,6 @@ from core.personalization.lora_models import (
     ExcludedParentheticalRow,
     TruthTableRow,
     line_break_pattern_for_text,
-    normalize_text,
     stable_hash,
 )
 from core.personalization.lora_storage import append_excluded_parentheticals, append_truth_table_rows
@@ -21,7 +20,7 @@ MEDIA_EXTENSIONS = {
     ".mp4", ".mov", ".mkv", ".avi", ".wmv", ".mxf",
 }
 SUBTITLE_EXTENSIONS = {".srt"}
-OPEN_TO_CLOSE = {"(": ")", "[": "]", "{": "}", "(": ")", "（": "）", "【": "】"}
+OPEN_TO_CLOSE = {"(": ")", "[": "]", "{": "}", "（": "）", "【": "】"}
 CLOSE_TO_OPEN = {value: key for key, value in OPEN_TO_CLOSE.items()}
 
 

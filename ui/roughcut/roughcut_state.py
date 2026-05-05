@@ -18,6 +18,7 @@ from core.project.project_context import (
 from core.project.project_io import read_project_file
 from core.project.project_manager import save_project
 from core.settings import load_settings
+from core.video_codec import roughcut_render_mode
 from core.roughcut import (
     build_edl_segments,
     build_concat_render_plan,
@@ -263,11 +264,13 @@ class RoughcutStateMixin:
         except Exception:
             outputs["retimed_srt"] = ""
         try:
-            output_path = self._default_output_path("_roughcut.mp4")
+            media_path = self._media_path()
+            source_suffix = Path(media_path).suffix if media_path else ".mp4"
+            output_path = self._default_output_path(f"_roughcut{source_suffix or '.mp4'}")
             temp_dir = Path(tempfile.gettempdir()) / "ai_subtitle_studio_roughcut"
-            plan = build_concat_render_plan(result.edl_segments, output_path, temp_dir)
+            plan = build_concat_render_plan(result.edl_segments, output_path, temp_dir, render_mode=roughcut_render_mode())
             srt_path = self._default_output_path("_roughcut.srt")
-            subtitled_path = self._default_output_path("_roughcut_subtitled.mp4")
+            subtitled_path = output_path.with_name(f"{output_path.stem}_subtitled{output_path.suffix or '.mp4'}")
             outputs["render_plan"] = asdict(plan)
             outputs["subtitle_burnin_command"] = build_ffmpeg_subtitle_burnin_command(output_path, srt_path, subtitled_path)
         except Exception:

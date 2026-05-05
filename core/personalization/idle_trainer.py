@@ -9,6 +9,7 @@ from PyQt6.QtCore import QDateTime, QObject, QTimer
 
 from core.personalization.lora_models import TrainingQueueItem, stable_hash
 from core.personalization.lora_optimizer import optimize_prompts_for_media, optimize_settings_for_media
+from core.personalization.lora_retention import prune_low_value_personalization_data
 from core.personalization.lora_rule_learning import learn_rules_from_truth_table, load_truth_table_rows
 from core.personalization.lora_storage import (
     clear_training_queue,
@@ -19,7 +20,11 @@ from core.personalization.lora_storage import (
     upsert_training_queue_items,
 )
 from core.runtime.logger import get_logger
-from core.personalization.text_lora_runner import save_text_lora_training_plan, save_voice_lora_profile_manifest
+from core.personalization.text_lora_runner import (
+    save_text_lora_training_plan,
+    save_voice_lora_profile_manifest,
+    save_voice_lora_training_plan,
+)
 
 
 def _group_truth_rows_by_media(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -125,11 +130,29 @@ def run_training_job(
         )
         return {"status": "complete", "score": float(result.get("usable_rows", 0) or 0), "result": result}
     if job_type == "build_voice_profiles":
-        result = save_voice_lora_profile_manifest(
+        profile_result = save_voice_lora_profile_manifest(
             bridge_path=store_root / "voice_lora_bridge.jsonl",
             manifest_path=store_root / "voice_lora_profile_manifest.json",
         )
-        return {"status": "complete", "score": float(result.get("speaker_profiles", 0) or 0), "result": result}
+        plan_result = save_voice_lora_training_plan(
+            bridge_path=store_root / "voice_lora_bridge.jsonl",
+            plan_path=store_root / "voice_lora_training_plan.json",
+            dataset_manifest_path=store_root / "voice_lora_dataset_manifest.json",
+            extract_audio=True,
+        )
+        result = {"profile": profile_result, "training_plan": plan_result}
+        usable = int(plan_result.get("usable_voice_rows", 0) or 0)
+        stored = int(plan_result.get("stored_audio_items", 0) or 0)
+        errors = int(plan_result.get("extraction_errors", 0) or 0)
+        skipped = int(plan_result.get("extraction_skipped", 0) or 0)
+        status = "complete"
+        if usable > 0 and stored < usable and (errors > 0 or skipped > 0):
+            status = "failed" if stored == 0 else "partial"
+            result["reason"] = (
+                f"voice_audio_extraction_incomplete: stored {stored}/{usable}, "
+                f"errors {errors}, skipped {skipped}"
+            )
+        return {"status": status, "score": float(stored if usable else 0), "result": result}
     if job_type == "optimize_settings":
         media_rows = grouped_rows.get(media_id, [])
         if not media_rows:
@@ -177,19 +200,40 @@ def run_training_queue_once(store_dir: str | Path | None = None) -> dict[str, An
     try:
         outcome = run_training_job(target, store_dir=store_dir)
         payload = load_training_queue(store_dir)
+        outcome_status = str(outcome.get("status") or "complete")
+        outcome_reason = str((outcome.get("result") or {}).get("reason") or "")
         payload = _update_job(
             payload,
             job_id,
-            status=str(outcome.get("status") or "complete"),
-            progress=1.0 if str(outcome.get("status") or "") == "complete" else 0.0,
+            status=outcome_status,
+            progress=1.0 if outcome_status in {"complete", "partial"} else 0.0,
             score=outcome.get("score"),
-            last_error="" if str(outcome.get("status") or "") != "failed" else str((outcome.get("result") or {}).get("reason") or ""),
+            last_error="" if outcome_status == "complete" else outcome_reason,
         )
         _save_queue_payload(payload, store_dir)
+        prune_result: dict[str, Any] = {}
+        if outcome_status == "complete":
+            appended_counts: dict[str, int] = {}
+            result_payload = dict(outcome.get("result") or {})
+            if job_type == "optimize_settings":
+                appended_counts["setting_trials"] = int(result_payload.get("trial_count", 0) or 0)
+            elif job_type == "optimize_prompts":
+                appended_counts["prompt_trials"] = int(result_payload.get("trial_count", 0) or 0)
+            try:
+                prune_result = prune_low_value_personalization_data(
+                    store_dir=store_dir,
+                    trigger=f"training_job:{job_type}",
+                    appended_counts=appended_counts,
+                )
+                outcome["retention"] = prune_result
+            except Exception as prune_exc:
+                get_logger().log(f"⚠️ [개인화 학습] 낮은 점수 정리 실패: {prune_exc}")
         refresh_lora_personalization_manifest(store_dir)
         summary_bits = [f"status={outcome.get('status', 'complete')}"]
         if outcome.get("score") is not None:
             summary_bits.append(f"score={float(outcome.get('score') or 0.0):.2f}")
+        if int(prune_result.get("total_removed", 0) or 0) > 0:
+            summary_bits.append(f"pruned={int(prune_result.get('total_removed', 0) or 0)}")
         reason = str((outcome.get("result") or {}).get("best_reason") or (outcome.get("result") or {}).get("reason") or "").strip()
         if reason:
             summary_bits.append(reason)

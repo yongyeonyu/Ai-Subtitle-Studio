@@ -68,7 +68,6 @@ def transcribe_microphone_once(profile: str = "quality") -> LiveSTTResult:
 
     with tempfile.TemporaryDirectory(prefix="ai_subtitle_live_stt_") as td:
         raw_wav = os.path.join(td, "mic_raw.wav")
-        clean_wav = os.path.join(td, "mic_clean.wav")
         with open(raw_wav, "wb") as f:
             f.write(audio.get_wav_data(convert_rate=16000, convert_width=2))
 

@@ -237,52 +237,35 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
             project_path = self._save_project_for_queue_clip(target_file, srt_path, final_segments)
             get_logger().log(f"📦 프로젝트 저장 완료: {os.path.basename(project_path)}")
 
-            is_video_export = False
             export_settings = {}
             try:
-                try:
-                    from ui.dialogs.export_dialog import _load_es
-                except ImportError:
-                    from ui.dialogs.export_dialog import _load_es
+                from ui.dialogs.export_dialog import _load_es
                 export_settings = _load_es()
-                is_video_export = bool(
-                    getattr(self.ui, "_auto_export_subtitle_video", False)
-                    or export_settings.get("icloud", False)
-                )
-            except Exception:
-                pass
+            except Exception as exc:
+                get_logger().log(f"⚠️ 자막영상 출력 설정 로드 실패, 기본값으로 렌더링합니다: {exc}")
 
-            base_name = os.path.splitext(os.path.basename(target_file))[0]
             current_idx = queue_index + 1
             total_cnt = len(self.files_to_process)
-
-            if not is_video_export and getattr(self.ui, "_is_auto_pipeline", False):
-                self._send_ntfy_notification(
-                    title=f"📝 {config.APP_NAME} 알림",
-                    message=f"[{current_idx}/{total_cnt}] {base_name}.srt 생성 완료!\n🎯 다음 작업으로 넘어갑니다.",
-                    tags="memo,sparkles",
-                )
 
             self._emit_queue_status(queue_index, "💾 SRT 저장됨", "", "", "")
 
             # ── STEP 6: MOV 렌더링 ──
-            if is_video_export:
-                try:
-                    get_logger().log(
-                        "\n  [STEP 6] 🎥 투명 자막 영상(MOV) 백그라운드 렌더링 중..."
-                    )
-                    self._emit_queue_status(queue_index, "🎥 자막영상출력(mov)", "", "", "")
-                    render_ok = self._run_background_render(
-                        srt_path, target_file, export_settings, current_idx, total_cnt
-                    )
-                    if not render_ok:
-                        self._emit_queue_status(queue_index, "❌ 자막영상출력 실패", "", "", "")
-                        return False
-                except Exception as e:
-                    get_logger().log(f"❌ MOV 렌더링 오류: {e}")
-                    get_logger().log(traceback.format_exc())
+            try:
+                get_logger().log(
+                    "\n  [STEP 6] 🎥 투명 자막 영상(MOV) 백그라운드 렌더링 중..."
+                )
+                self._emit_queue_status(queue_index, "🎥 자막영상출력(mov)", "", "", "")
+                render_ok = self._run_background_render(
+                    srt_path, target_file, export_settings, current_idx, total_cnt
+                )
+                if not render_ok:
                     self._emit_queue_status(queue_index, "❌ 자막영상출력 실패", "", "", "")
                     return False
+            except Exception as e:
+                get_logger().log(f"❌ MOV 렌더링 오류: {e}")
+                get_logger().log(traceback.format_exc())
+                self._emit_queue_status(queue_index, "❌ 자막영상출력 실패", "", "", "")
+                return False
 
             try:
                 from core.auto_tracker import AutoTracker

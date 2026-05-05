@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import subprocess
+import sys
 import tempfile
 import threading
 from functools import lru_cache
@@ -156,12 +157,19 @@ def configure_qt_runtime() -> None:
 
 
 def configure_qt_gpu_rendering_before_app() -> None:
-    """Apply Qt OpenGL setup only when the user explicitly opts in."""
+    """Apply Qt OpenGL setup before QApplication is created.
+
+    Normal app launches default to GPU compositing/OpenGL. Tests and offscreen
+    runs remain conservative unless the caller explicitly opts in with env vars.
+    """
     if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
         return
-    if str(os.environ.get("AI_SUBTITLE_GPU_RENDERING", "0")).lower() not in {"1", "true", "yes", "on"}:
+    under_pytest = "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
+    gpu_default = "0" if under_pytest else "1"
+    if str(os.environ.get("AI_SUBTITLE_GPU_RENDERING", gpu_default)).lower() not in {"1", "true", "yes", "on"}:
         return
-    if str(os.environ.get("AI_SUBTITLE_FORCE_QT_OPENGL", "0")).lower() not in {"1", "true", "yes", "on"}:
+    force_default = "0" if under_pytest else "1"
+    if str(os.environ.get("AI_SUBTITLE_FORCE_QT_OPENGL", force_default)).lower() not in {"1", "true", "yes", "on"}:
         return
 
     os.environ.setdefault("QT_OPENGL", "desktop")

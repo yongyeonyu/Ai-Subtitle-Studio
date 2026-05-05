@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QVBoxLayout,
-    QWidget,
 )
 
 from core.personalization.ground_truth_import import (
@@ -23,6 +22,12 @@ from core.personalization.ground_truth_import import (
     resolve_ambiguous_matches,
 )
 from core.personalization.idle_trainer import enqueue_default_training_jobs
+from core.personalization.llm_review_exchange import (
+    LLM_REVIEW_RESULT_SCHEMA,
+    export_llm_review_request,
+    import_llm_review_result_file,
+)
+from core.personalization.lora_retention import prune_low_value_personalization_data
 from core.personalization.lora_rule_learning import (
     apply_split_rule_update_review,
     build_split_rule_update_review,
@@ -34,6 +39,7 @@ from core.personalization.lora_storage import (
     initialize_lora_personalization_store,
     load_training_queue,
     refresh_lora_personalization_manifest,
+    refresh_unified_lora_data_bundle,
     store_paths,
 )
 from core.personalization.text_lora_dataset import (
@@ -49,12 +55,67 @@ from core.personalization.text_lora_dataset import (
 )
 from core.personalization.text_lora_runner import (
     TEXT_LORA_TRAINING_PLAN_PATH,
+    VOICE_LORA_DATASET_MANIFEST_PATH,
     VOICE_LORA_PROFILE_MANIFEST_PATH,
+    VOICE_LORA_TRAINING_PLAN_PATH,
     save_text_lora_training_plan,
     save_voice_lora_profile_manifest,
+    save_voice_lora_training_plan,
 )
 from core.runtime import config
 from ui.style import button_style, settings_dialog_stylesheet
+
+
+class _VoiceLoraDatasetWorker(QThread):
+    completed = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def run(self) -> None:
+        try:
+            profile_result = save_voice_lora_profile_manifest()
+            plan_result = save_voice_lora_training_plan(extract_audio=True)
+            bundle_result = refresh_unified_lora_data_bundle(force=True)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.completed.emit(
+            {
+                "profile": profile_result,
+                "plan": plan_result,
+                "bundle": bundle_result,
+            }
+        )
+
+
+def _lora_learning_help_text() -> str:
+    return "\n".join(
+        [
+            "LoRA / 개인화 학습 메뉴 설명",
+            "",
+            "1. ground-truth pair 가져오기",
+            "   완성된 미디어와 SRT를 pair로 가져와 truth table을 만듭니다. 이 데이터가 사용자의 자막 스타일, 줄바꿈, 괄호 처리, 말투 유지 기준의 기준점입니다.",
+            "",
+            "2. 규칙 재학습과 대기 작업",
+            "   truth table에서 split rule, line-break rule, setting trial, prompt trial을 갱신합니다. idle training queue는 앱을 사용하지 않을 때 남은 최적화 작업을 이어서 처리합니다.",
+            "",
+            "3. LLM/ChatGPT/Gemini 활용 가능 지점",
+            "   LLM은 LoRA adapter 바이너리 자체를 직접 검증하기보다는, 학습 근거 JSON을 보고 '이 규칙이 타당한가', '프롬프트가 더 좋아질 수 있는가', '애매한 괄호/줄바꿈 판단이 있는가'를 검토하는 데 유용합니다.",
+            "",
+            "4. 권장 워크플로우",
+            "   'LLM 검토 JSON 내보내기'로 요청 JSON을 만든 뒤 ChatGPT/Gemini에 붙여 넣고, 반드시 JSON만 반환하게 합니다. 반환된 JSON을 'LLM 결과 JSON 가져오기'로 반영하면 검토된 split/line-break rule, prompt trial, setting 추천이 저장소에 병합됩니다.",
+            "",
+            "5. 진화형 데이터 정리",
+            "   새 개인화 학습이 완료되면 낮은 점수 trial과 낮은 빈도/낮은 confidence 규칙을 조금씩 정리합니다. 작은 데이터셋은 보호하고, 충분히 쌓인 뒤부터 오래되고 낮은 점수인 항목을 먼저 밀어냅니다.",
+            "",
+            "6. 통합 LoRA 데이터 파일",
+            "   여러 JSON/JSONL shard는 빠른 저장을 위해 유지하되, 학습/백업/LLM 검토에 바로 쓸 수 있는 단일 lora_data_bundle.json도 함께 생성합니다.",
+            "",
+            "7. 목소리 LoRA 준비",
+            "   영상 자막 구간의 화자, 프레임, 텍스트를 이용해 voice_lora_bridge와 voice_lora_training_plan을 만들고, 필요하면 구간별 WAV 음성 클립도 저장합니다. 실제 음성 LoRA는 텍스트 LoRA와 별도 adapter이며, 내 목소리처럼 사용 허가된 화자 음성만 학습 대상으로 삼아야 합니다.",
+            "",
+            "주의: JSON에는 자막 텍스트와 로컬 파일 경로가 들어갈 수 있습니다. 외부 채팅 서비스에 붙여 넣기 전에 민감한 내용은 제거해 주세요.",
+        ]
+    )
 
 
 class PersonalizationLearningDialog(QDialog):
@@ -73,6 +134,7 @@ class PersonalizationLearningDialog(QDialog):
         self._pending_queue_batch_timer = QTimer(self)
         self._pending_queue_batch_timer.setSingleShot(True)
         self._pending_queue_batch_timer.timeout.connect(self._drain_pending_jobs_step)
+        self._voice_lora_worker: _VoiceLoraDatasetWorker | None = None
 
         initialize_lora_personalization_store()
 
@@ -88,6 +150,12 @@ class PersonalizationLearningDialog(QDialog):
         )
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
+
+        self.help_box = QPlainTextEdit()
+        self.help_box.setReadOnly(True)
+        self.help_box.setMaximumHeight(210)
+        self.help_box.setPlainText(_lora_learning_help_text())
+        layout.addWidget(self.help_box)
 
         if not config.IS_MAC:
             warn = QLabel("현재 학습 실행 흐름은 macOS 우선 구축 기준입니다.")
@@ -194,6 +262,37 @@ class PersonalizationLearningDialog(QDialog):
         rule_row.addWidget(self.btn_close)
         layout.addLayout(rule_row)
 
+        llm_row = QHBoxLayout()
+        llm_row.setSpacing(8)
+        self.btn_export_llm_review = QPushButton("LLM 검토 JSON 내보내기")
+        self.btn_export_llm_review.setStyleSheet(button_style("toolbar"))
+        self.btn_export_llm_review.clicked.connect(self._export_llm_review_json)
+        llm_row.addWidget(self.btn_export_llm_review)
+
+        self.btn_import_llm_review = QPushButton("LLM 결과 JSON 가져오기")
+        self.btn_import_llm_review.setStyleSheet(button_style("toolbar"))
+        self.btn_import_llm_review.clicked.connect(self._import_llm_review_json)
+        llm_row.addWidget(self.btn_import_llm_review)
+
+        self.btn_prune_low_value = QPushButton("낮은 점수 정리")
+        self.btn_prune_low_value.setStyleSheet(button_style("toolbar"))
+        self.btn_prune_low_value.clicked.connect(self._prune_low_value_now)
+        llm_row.addWidget(self.btn_prune_low_value)
+
+        self.btn_refresh_unified_lora = QPushButton("통합 LoRA 데이터 갱신")
+        self.btn_refresh_unified_lora.setStyleSheet(button_style("toolbar"))
+        self.btn_refresh_unified_lora.clicked.connect(self._refresh_unified_lora_data_now)
+        llm_row.addWidget(self.btn_refresh_unified_lora)
+        layout.addLayout(llm_row)
+
+        voice_row = QHBoxLayout()
+        voice_row.setSpacing(8)
+        self.btn_build_voice_lora = QPushButton("목소리 LoRA 데이터 생성")
+        self.btn_build_voice_lora.setStyleSheet(button_style("primary"))
+        self.btn_build_voice_lora.clicked.connect(self._build_voice_lora_dataset_now)
+        voice_row.addWidget(self.btn_build_voice_lora)
+        layout.addLayout(voice_row)
+
         inspect_title = QLabel("<b>inspection</b>")
         layout.addWidget(inspect_title)
         self.inspect_box = QPlainTextEdit()
@@ -232,6 +331,10 @@ class PersonalizationLearningDialog(QDialog):
                     f"setting trials {counts.get('setting_trial_rows', 0)}개 · prompt trials {counts.get('prompt_trial_rows', 0)}개",
                     f"learned split rules {counts.get('learned_split_rules', 0)}개 · learned line break rules {counts.get('learned_line_break_rules', 0)}개 · "
                     f"queue {counts.get('queue_items', 0)}개 · dedupe {counts.get('dedupe_entry_count', 0)}개",
+                    f"LLM 검토 JSON: 요청 {counts.get('llm_review_request_files', 0)}개 · 결과 {counts.get('llm_review_result_files', 0)}개",
+                    f"retention 정리 이력 {counts.get('retention_history_rows', 0)}개",
+                    f"통합 LoRA bundle {counts.get('unified_lora_data_records', 0)}개 record · {counts.get('unified_lora_data_bytes', 0)} bytes",
+                    f"목소리 LoRA bridge {counts.get('voice_lora_bridge_rows', 0)}개 · profile {counts.get('voice_lora_profile_count', 0)}명 · training item {counts.get('voice_lora_training_items', 0)}개 · 저장 WAV {counts.get('voice_lora_stored_audio_items', 0)}개",
                 ]
             )
         )
@@ -258,6 +361,10 @@ class PersonalizationLearningDialog(QDialog):
                     f"[Split Rule Review] needs_update={review.get('needs_update')} / top_n={review.get('top_n')}",
                     f"current: {', '.join(review.get('current_rules', [])[:8])}",
                     f"proposed: {', '.join(review.get('proposed_rules', [])[:8])}",
+                    f"[LLM Review] request={self._store_paths().get('llm_review_request')} / result={self._store_paths().get('llm_review_result')}",
+                    "[Retention] 새 학습 후 낮은 점수 trial과 낮은 빈도 rule을 점진 정리합니다.",
+                    f"[Unified Bundle] {self._store_paths().get('unified_lora_data')}",
+                    f"[Voice LoRA] {self._store_paths().get('voice_lora_training_plan')}",
                 ]
             )
         )
@@ -392,6 +499,7 @@ class PersonalizationLearningDialog(QDialog):
         )
         plan_result = save_text_lora_training_plan()
         voice_result = save_voice_lora_profile_manifest()
+        voice_plan_result = save_voice_lora_training_plan()
         self._refresh_summary()
         QMessageBox.information(
             self,
@@ -402,6 +510,7 @@ class PersonalizationLearningDialog(QDialog):
                     f"학습 데이터셋: {int((export_result.get('stats') or {}).get('total_items', 0) or 0)}개",
                     f"코퍼스 누적: 텍스트 {int(accumulate_result.get('appended_rows', 0) or 0)}개 / 음성 {int(accumulate_result.get('voice_bridge_rows', 0) or 0)}개",
                     f"학습 프레임 row: {int(plan_result.get('usable_rows', 0) or 0)}개 / 음성 프로필 수: {int(voice_result.get('speaker_profiles', 0) or 0)}개",
+                    f"목소리 LoRA item: {int(voice_plan_result.get('usable_voice_rows', 0) or 0)}개 / 저장 WAV {int(voice_plan_result.get('stored_audio_items', 0) or 0)}개 / backend: {voice_plan_result.get('backend', '')}",
                 ]
             ),
         )
@@ -519,6 +628,168 @@ class PersonalizationLearningDialog(QDialog):
             f"split rules {result.get('rule_count', 0)}개 반영\nbackup: {result.get('backup_path', '')}",
         )
 
+    def _export_llm_review_json(self):
+        default_path = str(self._store_paths().get("llm_review_request", "llm_review_request.json"))
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "LLM 검토 요청 JSON 저장",
+            default_path,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            result = export_llm_review_request(output_path=path)
+        except Exception as exc:
+            QMessageBox.warning(self, "LLM 검토 JSON 저장 오류", str(exc))
+            return
+        self._refresh_summary()
+        QMessageBox.information(
+            self,
+            "LLM 검토 JSON 저장 완료",
+            "\n".join(
+                [
+                    f"저장 위치: {result.get('path', path)}",
+                    f"review_id: {result.get('review_id', '')}",
+                    "",
+                    "사용 방법:",
+                    "1. 이 JSON 전체를 ChatGPT/Gemini에 붙여 넣습니다.",
+                    f"2. 반환은 반드시 schema={LLM_REVIEW_RESULT_SCHEMA} JSON 하나만 받습니다.",
+                    "3. 반환 JSON을 'LLM 결과 JSON 가져오기'로 다시 불러옵니다.",
+                    "",
+                    "민감한 자막/경로가 있으면 외부 채팅에 입력하기 전에 JSON에서 제거해 주세요.",
+                ]
+            ),
+        )
+
+    def _import_llm_review_json(self):
+        default_path = str(self._store_paths().get("llm_review_result", "llm_review_result.json"))
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "LLM 결과 JSON 선택",
+            default_path,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            result = import_llm_review_result_file(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "LLM 결과 JSON 오류", str(exc))
+            return
+        self._refresh_summary()
+        QMessageBox.information(
+            self,
+            "LLM 결과 반영 완료",
+            "\n".join(
+                [
+                    f"split rule 추가: {int(result.get('inserted_split_rules', 0) or 0)}개",
+                    f"line-break rule 추가: {int(result.get('inserted_line_break_rules', 0) or 0)}개",
+                    f"prompt trial 추가: {int(result.get('appended_prompt_trials', 0) or 0)}개",
+                    f"setting 추천 반영: {'예' if result.get('settings_updated') else '아니오'}",
+                    f"저장 위치: {result.get('result_path', '')}",
+                ]
+            ),
+        )
+
+    def _prune_low_value_now(self):
+        try:
+            result = prune_low_value_personalization_data(trigger="manual_settings_dialog")
+        except Exception as exc:
+            QMessageBox.warning(self, "낮은 점수 정리 오류", str(exc))
+            return
+        self._refresh_summary()
+        removed = dict(result.get("removed") or {})
+        if removed:
+            details = " · ".join(f"{key} {value}개" for key, value in sorted(removed.items()))
+        else:
+            details = "정리할 낮은 점수 항목이 없습니다. 작은 데이터셋은 보호됩니다."
+        QMessageBox.information(
+            self,
+            "낮은 점수 정리 완료",
+            "\n".join(
+                [
+                    f"총 정리: {int(result.get('total_removed', 0) or 0)}개",
+                    details,
+                ]
+            ),
+        )
+
+    def _refresh_unified_lora_data_now(self):
+        try:
+            result = refresh_unified_lora_data_bundle(force=True)
+        except Exception as exc:
+            QMessageBox.warning(self, "통합 LoRA 데이터 갱신 오류", str(exc))
+            return
+        self._refresh_summary()
+        QMessageBox.information(
+            self,
+            "통합 LoRA 데이터 갱신 완료",
+            "\n".join(
+                [
+                    f"저장 위치: {result.get('path', '')}",
+                    f"통합 record: {int(result.get('record_count', 0) or 0)}개",
+                    f"파일 크기: {int(result.get('size_bytes', 0) or 0)} bytes",
+                ]
+            ),
+        )
+
+    def _build_voice_lora_dataset_now(self):
+        if self._voice_lora_worker is not None and self._voice_lora_worker.isRunning():
+            QMessageBox.information(self, "안내", "목소리 LoRA 데이터 생성이 이미 백그라운드에서 실행 중입니다.")
+            return
+        worker = _VoiceLoraDatasetWorker(self)
+        worker.completed.connect(self._voice_lora_dataset_done)
+        worker.failed.connect(self._voice_lora_dataset_failed)
+        worker.finished.connect(self._voice_lora_dataset_worker_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._voice_lora_worker = worker
+        self.btn_build_voice_lora.setEnabled(False)
+        self.btn_build_voice_lora.setText("목소리 LoRA 생성 중...")
+        self.queue_summary_label.setText("목소리 LoRA WAV 클립을 백그라운드에서 저장 중입니다.")
+        worker.start()
+
+    def _voice_lora_dataset_done(self, payload):
+        profile_result = dict((payload or {}).get("profile") or {})
+        plan_result = dict((payload or {}).get("plan") or {})
+        self._refresh_summary()
+        usable = int(plan_result.get("usable_voice_rows", 0) or 0)
+        stored = int(plan_result.get("stored_audio_items", 0) or 0)
+        errors = int(plan_result.get("extraction_errors", 0) or 0)
+        skipped = int(plan_result.get("extraction_skipped", 0) or 0)
+        message_lines = [
+            f"화자 프로필: {int(profile_result.get('speaker_profiles', 0) or 0)}명",
+            f"학습 item: {usable}개",
+            f"새로 저장한 WAV: {int(plan_result.get('extracted_clips', 0) or 0)}개 / 기존 WAV: {int(plan_result.get('already_ready_clips', 0) or 0)}개",
+            f"저장된 음성 item: {stored}개 / 준비 완료 화자: {int(plan_result.get('audio_dataset_ready_speakers', 0) or 0)}명",
+            f"추출 오류: {errors}개 / 건너뜀: {skipped}개",
+            f"backend: {plan_result.get('backend', '')}",
+            f"plan: {plan_result.get('plan_path', '')}",
+            "실제 음성 adapter 학습은 저장된 WAV + transcript manifest를 voice backend에 연결해 실행합니다.",
+        ]
+        message_box = QMessageBox.warning if usable > 0 and stored < usable and (errors > 0 or skipped > 0) else QMessageBox.information
+        message_box(
+            self,
+            "목소리 LoRA 데이터 생성 완료",
+            "\n".join(message_lines),
+        )
+
+    def _voice_lora_dataset_failed(self, message: str):
+        self._refresh_summary()
+        QMessageBox.warning(self, "목소리 LoRA 데이터 생성 오류", str(message or "알 수 없는 오류"))
+
+    def _voice_lora_dataset_worker_finished(self):
+        self._voice_lora_worker = None
+        self.btn_build_voice_lora.setEnabled(True)
+        self.btn_build_voice_lora.setText("목소리 LoRA 데이터 생성")
+
+    def closeEvent(self, event):
+        if self._voice_lora_worker is not None and self._voice_lora_worker.isRunning():
+            QMessageBox.information(self, "안내", "목소리 LoRA 데이터 생성이 끝난 뒤 창을 닫을 수 있습니다.")
+            event.ignore()
+            return
+        super().closeEvent(event)
+
     def _delete_personalization_assets(self):
         reply = QMessageBox.question(
             self,
@@ -539,6 +810,8 @@ class PersonalizationLearningDialog(QDialog):
             VOICE_LORA_BRIDGE_PATH,
             TEXT_LORA_TRAINING_PLAN_PATH,
             VOICE_LORA_PROFILE_MANIFEST_PATH,
+            VOICE_LORA_TRAINING_PLAN_PATH,
+            VOICE_LORA_DATASET_MANIFEST_PATH,
         ):
             target = Path(path)
             try:
@@ -556,6 +829,8 @@ class PersonalizationLearningDialog(QDialog):
                     deleted += 1
             for key, path in store.items():
                 if key in {"root", "trained_adapters"}:
+                    continue
+                if path.is_dir():
                     continue
                 if path.exists():
                     path.unlink()

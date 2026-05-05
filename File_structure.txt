@@ -1,9 +1,9 @@
 <!--
-Document-Version: 03.17.00
+Document-Version: 03.18.00
 Phase: PHASE3
 Last-Updated: 2026-05-05
 Updated-By: Codex
-Scope: Actual project filesystem map. `.git/`, `venv/`, `__pycache__/`, and `.pytest_cache/` are intentionally not expanded.
+Scope: Actual project filesystem map. `.git/`, `venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, and large runtime cache/output folders are intentionally not expanded.
 Role-Description-Rule: Tree entries are generated from actual paths; review notes are removed.
 -->
 ================================================================================
@@ -11,7 +11,7 @@ AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
 Last Updated: 2026-05-05
 Phase: PHASE3
-App Version: 03.17.00
+App Version: 03.18.00
 Structure Document: File_structure.txt
 Note: This file is an actual tree map and excludes cache-only Python bytecode folders.
 ================================================================================
@@ -112,8 +112,10 @@ ai_subtitle_studio/
 │   ├── personalization/
 │   │   ├── ground_truth_import.py
 │   │   ├── idle_trainer.py
+│   │   ├── llm_review_exchange.py
 │   │   ├── lora_models.py
 │   │   ├── lora_optimizer.py
+│   │   ├── lora_retention.py
 │   │   ├── lora_rule_learning.py
 │   │   ├── lora_storage.py
 │   │   ├── lora_trial_scoring.py
@@ -221,12 +223,25 @@ ai_subtitle_studio/
 │   └── work_mode.py
 ├── dataset/
 │   ├── lora_personalization/
+│   │   ├── trained_adapters/
 │   │   ├── audio_preset_lora.jsonl
+│   │   ├── best_settings.json
+│   │   ├── dedupe_index.json
+│   │   ├── excluded_parentheticals.jsonl
+│   │   ├── learned_line_break_rules.json
+│   │   ├── learned_split_rules.json
+│   │   ├── lora_data_bundle.json
+│   │   ├── manifest.json
+│   │   ├── prompt_trials.jsonl
+│   │   ├── setting_trials.jsonl
 │   │   ├── text_lora_corpus.jsonl
 │   │   ├── text_lora_corpus_manifest.json
+│   │   ├── training_queue.json
+│   │   ├── truth_table.jsonl
 │   │   └── voice_lora_bridge.jsonl
 │   ├── personalization/
 │   │   ├── trained_adapters/
+│   │   │   └── personal_text_lora/
 │   │   ├── audio_preset_lora.jsonl
 │   │   ├── text_lora_corpus.jsonl
 │   │   ├── text_lora_corpus_manifest.json
@@ -235,7 +250,7 @@ ai_subtitle_studio/
 │   │   ├── text_lora_training_plan.json
 │   │   ├── voice_lora_bridge.jsonl
 │   │   └── voice_lora_profile_manifest.json
-│   ├── video_preview_cache/
+│   ├── video_preview_cache/  (not expanded)
 │   ├── audio_presets.json
 │   ├── auto_tracker.json
 │   ├── correction_memory.json
@@ -246,54 +261,8 @@ ai_subtitle_studio/
 │   ├── subtitle_rule.json
 │   ├── time_history.json
 │   └── user_settings.json
-├── output/
-├── projects/
-│   ├── .roughcut_thumbnail_cache/
-│   ├── 프로젝트백업/
-│   ├── DJI_20260217224203_0075_D.json
-│   ├── DJI_20260217224203_0075_D_1.json
-│   ├── DJI_20260217224203_0075_D_2.json
-│   ├── DJI_20260217224203_0075_D_3.json
-│   ├── DJI_20260217224203_0075_D_4.json
-│   ├── DJI_20260217224203_0075_D_5.json
-│   ├── DJI_20260217224203_0075_D_6.json
-│   ├── DJI_20260217224203_0075_D_7.json
-│   ├── DJI_20260217224203_0075_D_8.json
-│   ├── DJI_20260217224203_0075_D_9.json
-│   ├── DJI_20260217224602_0076_D.json
-│   ├── DJI_20260217225132_0079_D.json
-│   ├── DJI_20260217225132_0079_D_1.json
-│   ├── DJI_20260217225132_0079_D_2.json
-│   ├── DJI_20260217225132_0079_D_3.json
-│   ├── DJI_20260327161015_0047_D.json
-│   ├── DJI_20260327165141_0053_D.json
-│   ├── DJI_20260501125450_0062_D.json
-│   ├── DJI_20260501125450_0062_D_1.json
-│   ├── DJI_20260501125450_0062_D_2.json
-│   ├── DJI_20260501125450_0062_D_3.json
-│   ├── DJI_20260501125450_0062_D_4.json
-│   ├── DJI_20260501131210_0064_D.json
-│   ├── DJI_20260501131535_0065_D.json
-│   ├── DJI_20260501131535_0065_D_1.json
-│   ├── DJI_20260501132559_0066_D.json
-│   ├── DJI_20260501134759_0068_D.json
-│   ├── DJI_20260501134759_0068_D_1.json
-│   ├── DJI_20260501135538_0069_D.json
-│   ├── DJI_20260501135538_0069_D_1.json
-│   ├── DJI_20260501142042_0071_D.json
-│   ├── DJI_20260501142221_0072_D.json
-│   ├── DJI_20260501142221_0072_D_1.json
-│   ├── IMG_8755.json
-│   ├── IMG_8755_1.json
-│   ├── IMG_8757.json
-│   ├── IMG_8758.json
-│   ├── IMG_8758_1.json
-│   ├── IMG_8759.json
-│   ├── 내 프로젝트 (3).json
-│   ├── 내 프로젝트 (4)-1.json
-│   ├── 내 프로젝트 (4).json
-│   ├── 내 프로젝트 (4)_1.json
-│   └── 내 프로젝트 (4)_2.json
+├── output/  (not expanded)
+├── projects/  (not expanded)
 ├── tests/
 │   ├── test_accuracy_policy.py
 │   ├── test_ai_settings_runtime_apply.py
@@ -304,6 +273,7 @@ ai_subtitle_studio/
 │   ├── test_cp03_cp04_status_ui.py
 │   ├── test_cp08_cp10_home_timeline.py
 │   ├── test_cp11_multiclip_offset.py
+│   ├── test_editor_auto_export.py
 │   ├── test_editor_roughcut_draft.py
 │   ├── test_editor_stt_mode.py
 │   ├── test_export_dialog_controls.py
@@ -394,6 +364,7 @@ ai_subtitle_studio/
 │   │   ├── live_microphone_session.py
 │   │   ├── quality_candidate_dialog.py
 │   │   ├── subtitle_text_edit.py
+│   │   ├── subtitle_text_editor.qml
 │   │   ├── timeline_scan_cut_patches.py
 │   │   ├── timeline_scan_cut_relative_base.py
 │   │   ├── timeline_scan_cut_relative_refine.py
@@ -401,7 +372,9 @@ ai_subtitle_studio/
 │   │   ├── timestamp_area.py
 │   │   ├── undo_manager.py
 │   │   ├── video_overlay_widgets.py
-│   │   └── video_player_widget.py
+│   │   ├── video_playback_backend.py
+│   │   ├── video_player_widget.py
+│   │   └── video_subtitle_overlay.qml
 │   ├── help/
 │   │   ├── __init__.py
 │   │   ├── help_content.py
@@ -424,6 +397,8 @@ ai_subtitle_studio/
 │   │   └── workspace_restore.py
 │   ├── qml/
 │   │   ├── project_info_overlay.qml
+│   │   ├── project_sidebar_shell.qml
+│   │   ├── settings_panel_header.qml
 │   │   ├── sidebar_queue_panel.qml
 │   │   └── timeline_playhead_overlay.qml
 │   ├── queue/
@@ -449,6 +424,7 @@ ai_subtitle_studio/
 │   ├── settings/
 │   │   ├── __init__.py
 │   │   ├── gap_simulator.py
+│   │   ├── qml_panel.py
 │   │   ├── settings_advanced.py
 │   │   ├── settings_ai.py
 │   │   ├── settings_common.py
@@ -471,6 +447,8 @@ ai_subtitle_studio/
 │   │   ├── timeline_inline_edit.py
 │   │   ├── timeline_input.py
 │   │   ├── timeline_paint.py
+│   │   ├── timeline_scenegraph.py
+│   │   ├── timeline_scenegraph.qml
 │   │   ├── timeline_waveform.py
 │   │   └── timeline_widget.py
 │   ├── __init__.py
@@ -515,5 +493,6 @@ ai_subtitle_studio/
 ├── RELEASE_v03.15.00.md
 ├── RELEASE_v03.16.00.md
 ├── RELEASE_v03.17.00.md
+├── RELEASE_v03.18.00.md
 ├── requirements-mac.txt
 └── requirements-windows.txt

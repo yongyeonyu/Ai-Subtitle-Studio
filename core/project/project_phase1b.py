@@ -13,11 +13,16 @@ from typing import Any
 from core.project.project_context import (
     STT_SEGMENT_METADATA_KEYS,
     build_editor_state,
+    project_segments_to_editor,
     project_stt_preview_segments,
     sanitize_workspace_state,
 )
 from core.project.project_io import read_project_file, write_project_file
-from core.project.project_manager import build_model_settings_snapshot, _augment_project_frame_metadata
+from core.project.project_manager import (
+    _prune_project_payload_for_vector_storage,
+    build_model_settings_snapshot,
+    _augment_project_frame_metadata,
+)
 from core.cut_boundary import cut_boundary_enabled, project_cut_boundaries, split_segments_by_cut_boundaries, sync_project_cut_boundaries
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 
@@ -160,14 +165,18 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
             enabled=cut_boundary_enabled(editor_settings or data.get('user_settings', {})),
         )
     data['project_meta'] = _project_meta(owner)
+    existing_segments = project_segments_to_editor(data)
+    normalized_segments = _normalize_segments_for_legacy(segments, existing_segments)
     subtitles = dict(data.get('subtitles', {}) or {})
     subtitles['srt_path'] = _safe_abs(srt_path) or subtitles.get('srt_path')
-    subtitles['segments'] = _normalize_segments_for_legacy(segments, subtitles.get('segments'))
+    subtitles.pop('segments', None)
+    subtitles['storage'] = 'editor_state.rendering.subtitle_canvas'
+    subtitles['segment_count'] = len(normalized_segments)
     data['subtitles'] = subtitles
     data['editor_state'] = build_editor_state(
         mode=mode,
         media_files=media_files,
-        segments=segments or subtitles.get('segments') or [],
+        segments=normalized_segments,
         workspace=data['workspace'],
         clip_boundaries=list(getattr(owner, '_multiclip_boundaries', []) or []),
         stt_preview_segments=project_stt_preview_segments(data),
@@ -181,6 +190,7 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
         ]
     _augment_project_frame_metadata(data)
     sync_project_cut_boundaries(data, settings=editor_settings or data.get('user_settings', {}))
+    _prune_project_payload_for_vector_storage(data)
     write_project_file(project_path, data)
     return project_path
 

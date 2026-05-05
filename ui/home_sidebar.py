@@ -862,7 +862,6 @@ class HomeSidebarMixin:
         blob = self._pipeline_status_blob()
         blob_lower = str(blob or "").lower()
         editor = self._active_editor()
-        generation_running = self._is_subtitle_generation_running()
         state_value = str(getattr(getattr(editor, "sm", None), "state", "") or "") if editor is not None else ""
         queue_done = False
         try:

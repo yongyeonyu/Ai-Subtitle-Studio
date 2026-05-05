@@ -19,6 +19,7 @@ from core.project.project_io import read_project_file, write_project_file
 PROJECTS_DIR = os.path.join(config.BASE_DIR, 'projects')
 os.makedirs(PROJECTS_DIR, exist_ok=True)
 PROJECT_SCHEMA_VERSION = '03.00.26'
+PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.vector.v1"
 
 
 def _safe_name(name: str) -> str:
@@ -213,6 +214,7 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
     )
     payload = {
         'version': PROJECT_SCHEMA_VERSION,
+        'storage_schema': PROJECT_STORAGE_SCHEMA,
         'phase': 'PHASE2',
         'mode': mode,
         'project_path': os.path.abspath(project_path),
@@ -220,7 +222,11 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         'saved_at': datetime.now().isoformat(timespec='seconds'),
         'media_files': media_files,
         'srt_path': os.path.abspath(srt_path) if srt_path else None,
-        'segments': _normalized_segments(segments or [], primary_fps=primary_fps),
+        'subtitles': {
+            'storage': 'editor_state.rendering.subtitle_canvas',
+            'segment_count': len(segments or []),
+            'srt_path': os.path.abspath(srt_path) if srt_path else '',
+        },
         'ui_state': editor_state.get('workspace', {}),
         'editor_state': editor_state,
         'project_meta': {

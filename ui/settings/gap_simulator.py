@@ -400,7 +400,7 @@ class GapSimulatorWidget(GapSimulatorBase):
         self.setFixedHeight(462)
         self.setStyleSheet("background: #0F1518; border: 1px solid #24313A; border-radius: 8px;")
         configure_lightweight_paint(self, opaque=True)
-        configure_opengl_widget(self)
+        configure_opengl_widget(self, "settings")
         self.render_backend = gpu_backend_name()
         self.setMouseTracking(True)
         self.hover_rects = []

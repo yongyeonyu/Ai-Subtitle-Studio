@@ -44,7 +44,7 @@ class _AcceptedFolderDialog:
         self.saved_only = False
         self.selected_files = ["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"]
         self.processing_mode = "individual"
-        self.export_subtitle_video = True
+        self.export_subtitle_video = False
 
     def exec(self):
         return True
@@ -113,7 +113,7 @@ class MulticlipPanelTests(unittest.TestCase):
         self.assertEqual(owner._multiclip_files, ["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"])
         self.assertEqual(owner.backend.calls, [(["/tmp/clip_a.mp4", "/tmp/clip_b.mp4"], "/tmp/work")])
 
-    def test_folder_dialog_individual_mode_opens_editor_pipeline_and_preserves_export_flag(self):
+    def test_folder_dialog_individual_mode_opens_editor_pipeline_and_forces_export(self):
         owner = _DummyFolderWindow()
         owner._multiclip_files = ["/tmp/stale_a.mp4", "/tmp/stale_b.mp4"]
         owner._multiclip_boundaries = [{"file": "/tmp/stale_a.mp4"}]
@@ -189,6 +189,11 @@ class MulticlipPanelTests(unittest.TestCase):
                     [regular_quality.itemText(i) for i in range(regular_quality.count())],
                     ["빠름", "보통", "높음"],
                 )
+                self.assertTrue(regular.export_video_chk.isChecked())
+                self.assertFalse(regular.export_video_chk.isEnabled())
+                regular.export_video_chk.setChecked(False)
+                regular._collect_state()
+                self.assertTrue(regular.export_subtitle_video)
             finally:
                 regular.close()
                 nas.close()

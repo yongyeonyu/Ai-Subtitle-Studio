@@ -462,11 +462,11 @@ class MulticlipPipelineMixin:
                         except Exception:
                             clip_offset = 0.0
 
-                        def _llm_progress(payload):
+                        def _llm_progress(payload, _clip_offset=clip_offset):
                             data = dict(payload or {})
                             if data.get("active"):
-                                data["start"] = float(data.get("start", 0.0) or 0.0) + clip_offset
-                                data["end"] = float(data.get("end", data.get("start", 0.0)) or data.get("start", 0.0) or 0.0) + clip_offset
+                                data["start"] = float(data.get("start", 0.0) or 0.0) + _clip_offset
+                                data["end"] = float(data.get("end", data.get("start", 0.0)) or data.get("start", 0.0) or 0.0) + _clip_offset
                             self._ui_emit("_sig_set_llm_review_segment", data)
 
                         optimized = optimize_segments(

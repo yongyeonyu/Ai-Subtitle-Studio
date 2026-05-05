@@ -19,6 +19,7 @@ from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_scan_cut_core import EditorScanCutCoreMixin
 from ui.editor.editor_helpers import (
     find_segment_at, get_sub_block_indices,
+    find_segment_at_lookup,
     make_gap_ud, delete_block_safely, insert_gap_after,
 )
 
@@ -140,6 +141,46 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                 self.text_edit.ensureCursorVisible()
             self._sync_lock = False
 
+    def _playback_can_move_editor_cursor(self) -> bool:
+        """Allow playback follow unless the user is actively editing/selecting."""
+        if not hasattr(self, "text_edit"):
+            return False
+        if self._timeline_lock_edit_enabled():
+            return False
+        canvas = getattr(getattr(self, "timeline", None), "canvas", None)
+        if bool(getattr(canvas, "_edit_active", False)):
+            return False
+        popup = getattr(self, "editor_popup", None)
+        try:
+            if popup is not None and popup.is_visible():
+                return False
+        except Exception:
+            pass
+        try:
+            if self.text_edit.textCursor().hasSelection():
+                return False
+        except Exception:
+            return False
+        return True
+
+    def _segment_at_playback_sec(self, sec: float, *, skip_gap: bool = True):
+        cache = getattr(self, "_subtitle_memory_cache", None)
+        seg = find_segment_at_lookup(cache, sec, skip_gap=skip_gap)
+        if seg is not None:
+            return seg
+        segs = getattr(self, '_cached_segs', None)
+        if segs is None:
+            if hasattr(self, "_rebuild_subtitle_memory_cache"):
+                cache = self._rebuild_subtitle_memory_cache()
+                seg = find_segment_at_lookup(cache, sec, skip_gap=skip_gap)
+                if seg is not None:
+                    return seg
+                segs = list(cache.get("segments") or [])
+            else:
+                segs = self._get_current_segments()
+                self._cached_segs = segs
+        return find_segment_at(segs, sec, skip_gap=skip_gap)
+
     # ---------------------------------------------------------
     # Timeline Segment Events
     # ---------------------------------------------------------
@@ -225,11 +266,9 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                         self._last_sync_clip_idx = _cidx
                         self.video_player.set_context_segments(list(ctx.get('local_segments', []) or []))
 
-        segs = getattr(self, '_cached_segs', None) or self._get_current_segments()
-        seg = find_segment_at(segs, current_sec, skip_gap=True)
+        seg = self._segment_at_playback_sec(current_sec, skip_gap=True)
         if seg and self._active_seg_start != seg["start"]:
-            editing_active = bool(getattr(self.timeline.canvas, '_edit_active', False)) if hasattr(self.timeline, 'canvas') else False
-            can_move_editor = (not self.text_edit.hasFocus()) and (not editing_active)
+            can_move_editor = self._playback_can_move_editor_cursor()
             if can_move_editor:
                 self._last_play_cursor_sync_at = now_mono
                 self._last_editor_autoscroll_at = now_mono
@@ -241,8 +280,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                     self._sync_cursor_to_seg(seg, ensure_visible=False, move_cursor=False)
         elif seg:
             last_scroll_at = float(getattr(self, '_last_editor_autoscroll_at', 0.0) or 0.0)
-            editing_active = bool(getattr(self.timeline.canvas, '_edit_active', False)) if hasattr(self.timeline, 'canvas') else False
-            if (not self.text_edit.hasFocus()) and (not editing_active) and (now_mono - last_scroll_at) >= 0.25:
+            if self._playback_can_move_editor_cursor() and (now_mono - last_scroll_at) >= 0.25:
                 self._last_editor_autoscroll_at = now_mono
                 self._sync_cursor_to_seg(seg, ensure_visible=True, move_cursor=True)
         local_display_sec = self._global_to_local_sec(current_sec)

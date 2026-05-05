@@ -85,7 +85,8 @@ class RoughcutTitlePanel(QWidget):
         top.addWidget(title, stretch=1)
         copy_btn = QPushButton("복사")
         copy_btn.setStyleSheet(button_style("toolbar", font_size="10px", padding="4px 8px"))
-        copy_btn.clicked.connect(lambda _checked=False, text=title.text(), btn=copy_btn: self._copy_title(text, btn))
+        title_text = title.text()
+        copy_btn.clicked.connect(lambda _checked=False, text=title_text, btn=copy_btn: self._copy_title(text, btn))
         top.addWidget(copy_btn)
         lay.addLayout(top)
 

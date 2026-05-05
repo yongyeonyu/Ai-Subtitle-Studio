@@ -243,7 +243,7 @@ class CoreBackendFast(CoreBackend):
                     _flush()
                     break
 
-                chunk_segs, _c_idx, t_total = item
+                chunk_segs, c_idx, t_total = item
                 last_t_total = t_total
 
                 total_files = len(self.files_to_process)

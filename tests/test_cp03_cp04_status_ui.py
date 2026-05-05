@@ -98,6 +98,10 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
             }
             for status, expected in cases.items():
                 self.assertEqual(rail._stage_text(EDITOR_MODE, editor_for(status)), expected)
+            rail.state_button.setText("에디터 | 검토")
+            initial_hint = rail.sizeHint().width()
+            rail.state_button.setText("자막 생성 | 매우 긴 처리 상태 텍스트")
+            self.assertEqual(rail.sizeHint().width(), initial_hint)
             stale_label = QLabel("자막 생성 중")
             completed_editor = SimpleNamespace(
                 status_lbl=stale_label,
@@ -1167,7 +1171,8 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 with open(project_path, "r", encoding="utf-8") as f:
                     saved_project = json.load(f)
                 self.assertEqual(saved_project.get("roughcut_state"), {})
-                self.assertEqual(saved_project.get("subtitles", {}).get("segments"), [])
+                self.assertNotIn("segments", saved_project.get("subtitles", {}))
+                self.assertEqual(saved_project.get("subtitles", {}).get("storage"), "editor_state.rendering.subtitle_canvas")
                 self.assertEqual(saved_project.get("analysis", {}).get("cut_boundaries"), [])
                 self.assertEqual(saved_project.get("analysis", {}).get("cut_boundary_provisional_boundaries"), [])
                 self.assertEqual(saved_project.get("editor_state", {}).get("analysis", {}).get("cut_boundaries"), [])

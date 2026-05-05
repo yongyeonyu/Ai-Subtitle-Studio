@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtMultimedia import QMediaPlayer
 
 from core.runtime import config
+from ui.editor.video_playback_backend import choose_video_backend
 from ui.editor.video_player_widget import VideoPlayerWidget
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
 
@@ -73,6 +74,35 @@ class VideoPlayerWidgetTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_video_backend_auto_stays_qt_under_tests(self):
+        with patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}, clear=True):
+            choice = choose_video_backend("auto")
+
+        self.assertEqual(choice.name, "qt")
+        self.assertEqual(choice.reason, "test_or_offscreen_safe")
+
+    def test_video_backend_prefers_mpv_when_available(self):
+        with patch.dict(os.environ, {"AI_SUBTITLE_VIDEO_BACKEND": "auto"}, clear=True), \
+             patch("ui.editor.video_playback_backend._running_under_pytest", return_value=False), \
+             patch("ui.editor.video_playback_backend._offscreen_qt", return_value=False), \
+             patch("ui.editor.video_playback_backend._mpv_available", return_value=True), \
+             patch("ui.editor.video_playback_backend._vlc_available", return_value=True):
+            choice = choose_video_backend()
+
+        self.assertEqual(choice.name, "mpv")
+        self.assertEqual(choice.reason, "preferred_lightweight_gpu_backend")
+
+    def test_video_backend_uses_vlc_when_mpv_is_unavailable(self):
+        with patch.dict(os.environ, {"AI_SUBTITLE_VIDEO_BACKEND": "auto"}, clear=True), \
+             patch("ui.editor.video_playback_backend._running_under_pytest", return_value=False), \
+             patch("ui.editor.video_playback_backend._offscreen_qt", return_value=False), \
+             patch("ui.editor.video_playback_backend._mpv_available", return_value=False), \
+             patch("ui.editor.video_playback_backend._vlc_available", return_value=True):
+            choice = choose_video_backend()
+
+        self.assertEqual(choice.name, "vlc")
+        self.assertEqual(choice.reason, "libvlc_fallback")
 
     def test_frame_step_buttons_emit_single_frame_direction(self):
         widget = VideoPlayerWidget()

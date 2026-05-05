@@ -19,6 +19,7 @@ from core.roughcut import (
     save_markdown_guide,
     save_retimed_srt,
 )
+from core.video_codec import roughcut_render_mode
 
 
 class _RoughcutRenderWorker(QObject):
@@ -112,11 +113,13 @@ class RoughcutExportMixin:
             self.preview_summary_lbl.setText("렌더 계획에는 원본 영상 경로가 필요합니다.")
             self.render_status_lbl.setText("원본 없음")
             return None
-        output_path = self._default_output_path("_roughcut.mp4")
+        source_suffix = Path(media_path).suffix or ".mp4"
+        output_path = self._default_output_path(f"_roughcut{source_suffix}")
         temp_dir = Path(tempfile.gettempdir()) / "ai_subtitle_studio_roughcut"
         result = self._result_with_user_edits(self._result)
+        render_mode = roughcut_render_mode()
         try:
-            plan = build_concat_render_plan(result.edl_segments, output_path, temp_dir)
+            plan = build_concat_render_plan(result.edl_segments, output_path, temp_dir, render_mode=render_mode)
         except Exception as exc:
             self.preview_summary_lbl.setText(f"렌더 계획 생성 실패: {exc}")
             self.render_status_lbl.setText("계획 실패")
@@ -127,9 +130,9 @@ class RoughcutExportMixin:
 
     def _render_plan_payload(self, plan, result) -> dict:
         media_path = self._media_path()
-        output_path = self._default_output_path("_roughcut.mp4")
+        output_path = Path(getattr(plan, "output_path", "") or self._default_output_path("_roughcut.mp4"))
         srt_path = self._default_output_path("_roughcut.srt")
-        subtitled_path = self._default_output_path("_roughcut_subtitled.mp4")
+        subtitled_path = output_path.with_name(f"{output_path.stem}_subtitled{output_path.suffix or '.mp4'}")
         return {
             "edl": edl_to_dict(
                 result.edl_segments,
@@ -139,6 +142,7 @@ class RoughcutExportMixin:
             ),
             "render_plan": asdict(plan),
             "subtitle_burnin_command": build_ffmpeg_subtitle_burnin_command(output_path, srt_path, subtitled_path),
+            "render_mode": getattr(plan, "render_mode", roughcut_render_mode()),
             "roughcut_export_style": dict(getattr(self, "_roughcut_export_style", {}) or {}),
         }
 
@@ -171,7 +175,10 @@ class RoughcutExportMixin:
         mode = "검증" if dry_run else ("복구" if retry else "렌더")
         self.render_status_lbl.setText(f"{mode} 중")
         self.preview_summary_lbl.setText(f"러프컷 {mode} 실행 중")
-        self._append_render_log(f"{mode} 시작: {len(plan.extract_commands)}개 추출 + concat")
+        self._append_render_log(
+            f"{mode} 시작: {len(plan.extract_commands)}개 추출 + concat "
+            f"(mode={getattr(plan, 'render_mode', 'copy')})"
+        )
         for warning in getattr(plan, "warnings", ()) or ():
             self._append_render_log(f"주의: {warning}")
 

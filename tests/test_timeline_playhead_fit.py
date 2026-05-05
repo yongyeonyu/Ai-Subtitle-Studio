@@ -14,6 +14,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QTextEdit, QWidget
 
 from ui.editor.editor_segments import EditorSegmentsMixin
+from ui.editor.editor_helpers import build_segment_lookup
 from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.editor.editor_widget import EditorWidget
 from ui.editor.subtitle_text_edit import SubtitleBlockData
@@ -790,6 +791,129 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             editor.video_player.set_subtitle_display_time.assert_called_once_with(2.1)
             editor.video_player.refresh_subtitle_context.assert_not_called()
             self.assertGreater(float(getattr(editor, "_last_editor_autoscroll_at", 0.0)), 0.0)
+        finally:
+            editor.text_edit.close()
+
+    def test_playing_segment_boundary_moves_focused_editor_cursor(self):
+        editor = _PlaybackEditor()
+        playing_state = object()
+        player = SimpleNamespace(
+            PlaybackState=SimpleNamespace(PlayingState=playing_state),
+            playbackState=Mock(return_value=playing_state),
+            position=Mock(return_value=4200),
+            duration=Mock(return_value=10000),
+        )
+        editor.video_player = SimpleNamespace(
+            media_player=player,
+            refresh_subtitle_context=Mock(),
+            set_subtitle_display_time=Mock(),
+        )
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock()),
+            follow_playhead=Mock(),
+            set_active=Mock(),
+            set_playhead=Mock(),
+        )
+        editor.editor_popup = SimpleNamespace(is_visible=Mock(return_value=False))
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("첫 줄\n둘째 줄\n셋째 줄")
+        editor.text_edit.hasFocus = Mock(return_value=True)
+        editor._highlighter = SimpleNamespace(set_current_line=Mock())
+        editor._active_seg_start = 0.0
+        editor._segments = [
+            {"start": 4.0, "end": 5.0, "line": 2, "text": "셋째 줄"},
+        ]
+
+        try:
+            editor._sync_playhead()
+
+            self.assertEqual(editor.text_edit.textCursor().blockNumber(), 2)
+            editor._highlighter.set_current_line.assert_called_once_with(2)
+            editor.timeline.canvas.set_active.assert_called_once_with(4.0)
+        finally:
+            editor.text_edit.close()
+
+    def test_playing_segment_boundary_keeps_user_text_selection(self):
+        editor = _PlaybackEditor()
+        playing_state = object()
+        player = SimpleNamespace(
+            PlaybackState=SimpleNamespace(PlayingState=playing_state),
+            playbackState=Mock(return_value=playing_state),
+            position=Mock(return_value=4200),
+            duration=Mock(return_value=10000),
+        )
+        editor.video_player = SimpleNamespace(
+            media_player=player,
+            refresh_subtitle_context=Mock(),
+            set_subtitle_display_time=Mock(),
+        )
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock()),
+            follow_playhead=Mock(),
+            set_active=Mock(),
+            set_playhead=Mock(),
+        )
+        editor.editor_popup = SimpleNamespace(is_visible=Mock(return_value=False))
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("첫 줄\n둘째 줄\n셋째 줄")
+        cursor = QTextCursor(editor.text_edit.document().findBlockByNumber(0))
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+        editor.text_edit.setTextCursor(cursor)
+        editor._highlighter = SimpleNamespace(set_current_line=Mock())
+        editor._active_seg_start = 0.0
+        editor._segments = [
+            {"start": 4.0, "end": 5.0, "line": 2, "text": "셋째 줄"},
+        ]
+
+        try:
+            editor._sync_playhead()
+
+            self.assertTrue(editor.text_edit.textCursor().hasSelection())
+            self.assertEqual(editor.text_edit.textCursor().blockNumber(), 0)
+            editor._highlighter.set_current_line.assert_called_once_with(2)
+            editor.timeline.canvas.set_active.assert_called_once_with(4.0)
+        finally:
+            editor.text_edit.close()
+
+    def test_playback_sync_uses_memory_segment_lookup_without_document_scan(self):
+        editor = _PlaybackEditor()
+        playing_state = object()
+        player = SimpleNamespace(
+            PlaybackState=SimpleNamespace(PlayingState=playing_state),
+            playbackState=Mock(return_value=playing_state),
+            position=Mock(return_value=4200),
+            duration=Mock(return_value=10000),
+        )
+        editor.video_player = SimpleNamespace(
+            media_player=player,
+            refresh_subtitle_context=Mock(),
+            set_subtitle_display_time=Mock(),
+        )
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock()),
+            follow_playhead=Mock(),
+            set_active=Mock(),
+            set_playhead=Mock(),
+        )
+        editor.editor_popup = SimpleNamespace(is_visible=Mock(return_value=False))
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("첫 줄\n둘째 줄\n셋째 줄")
+        editor._highlighter = SimpleNamespace(set_current_line=Mock())
+        editor._active_seg_start = 0.0
+        editor._cached_segs = None
+        editor._segments = []
+        editor._subtitle_memory_cache = build_segment_lookup([
+            {"start": 0.0, "end": 1.0, "line": 0, "text": "첫 줄"},
+            {"start": 4.0, "end": 5.0, "line": 2, "text": "셋째 줄"},
+        ])
+        editor._get_current_segments = Mock(side_effect=AssertionError("document scan should not run during playback"))
+
+        try:
+            editor._sync_playhead()
+
+            editor._get_current_segments.assert_not_called()
+            self.assertEqual(editor.text_edit.textCursor().blockNumber(), 2)
+            editor.timeline.canvas.set_active.assert_called_once_with(4.0)
         finally:
             editor.text_edit.close()
 

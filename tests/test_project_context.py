@@ -11,6 +11,7 @@ from core.project.project_io import read_project_file, write_project_file
 from core.project.project_manager import extract_model_settings, load_project, merge_project_model_settings, save_project
 from core.project.project_phase1b import enrich_existing_project_file
 from core.project.project_context import (
+    SUBTITLE_CANVAS_VECTOR_SCHEMA,
     build_editor_state,
     project_cut_boundary_segments,
     project_cut_boundary_provisional_segments,
@@ -26,6 +27,10 @@ from core.project.project_context import (
     segment_signature,
 )
 from core.cut_boundary import split_segments_by_cut_boundaries
+
+
+def _state_segments(state: dict) -> list[dict]:
+    return project_segments_to_editor({"editor_state": state})
 
 
 class ProjectContextTests(unittest.TestCase):
@@ -47,7 +52,14 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(state["mode"], "multiclip")
         self.assertEqual(len(state["multiclip"]["boundaries"]), 2)
         self.assertEqual(state["single_clip"]["source_path"], "")
-        self.assertEqual(state["subtitles"]["segments"][1]["speaker"], "02")
+        self.assertEqual(state["subtitles"]["storage"], "vector_canvas")
+        self.assertEqual(state["subtitles"]["segments"], [])
+        self.assertEqual(_state_segments(state)[1]["speaker"], "02")
+        vector_canvas = state["rendering"]["subtitle_canvas"]
+        self.assertEqual(vector_canvas["schema"], SUBTITLE_CANVAS_VECTOR_SCHEMA)
+        self.assertEqual(vector_canvas["renderer"]["active_surface"], "timeline-qopenglwidget")
+        self.assertEqual(vector_canvas["segments"][1]["text"], "둘째 자막")
+        self.assertEqual(vector_canvas["segments"][1]["clip"]["index"], 1)
         self.assertEqual(state["workspace"]["last_playhead"], 10.0)
 
     def test_workspace_zoom_and_scroll_are_not_persisted(self):
@@ -69,6 +81,23 @@ class ProjectContextTests(unittest.TestCase):
             project_workspace({"editor_state": {"workspace": state["workspace"]}}),
             {"last_playhead": 10.0},
         )
+
+    def test_vector_canvas_uses_project_video_fps_for_frame_coordinates(self):
+        state = build_editor_state(
+            mode="single",
+            media_files=["/tmp/a.mp4"],
+            segments=[
+                {"start": 2.0, "end": 3.0, "text": "fps 기준 자막", "speaker": "01"},
+            ],
+            primary_fps=24.0,
+        )
+
+        vector_canvas = state["rendering"]["subtitle_canvas"]
+        vector_segment = vector_canvas["segments"][0]
+        self.assertEqual(vector_canvas["coordinate_space"]["timeline_frame_rate"], 24.0)
+        self.assertEqual(vector_segment["time"]["timeline_frame_rate"], 24.0)
+        self.assertEqual(vector_segment["time"]["start_frame"], 48)
+        self.assertEqual(vector_segment["time"]["end_frame"], 72)
 
     def test_project_io_roundtrip_preserves_stt_unicode_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -149,6 +178,43 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(segments[0]["_clip_idx"], 1)
         self.assertEqual(segments[0]["speaker"], "03")
 
+    def test_project_segments_to_editor_can_restore_from_vector_canvas_layer(self):
+        project = {
+            "editor_state": {
+                "mode": "single",
+                "media_files": ["/tmp/a.mp4"],
+                "rendering": {
+                    "subtitle_canvas": {
+                        "schema": SUBTITLE_CANVAS_VECTOR_SCHEMA,
+                        "coordinate_space": {
+                            "timeline_frame_rate": 24.0,
+                        },
+                        "segments": [
+                            {
+                                "line": 0,
+                                "time": {
+                                    "unit": "frame",
+                                    "start_frame": 48,
+                                    "end_frame": 72,
+                                    "timeline_frame_rate": 24.0,
+                                },
+                                "text": "벡터 자막",
+                                "speaker": "04",
+                                "clip": {"index": 0, "file": "/tmp/a.mp4"},
+                            }
+                        ],
+                    },
+                },
+            }
+        }
+
+        segment = project_segments_to_editor(project)[0]
+        self.assertEqual(segment["text"], "벡터 자막")
+        self.assertEqual(segment["speaker"], "04")
+        self.assertAlmostEqual(segment["start"], 2.0)
+        self.assertAlmostEqual(segment["end"], 3.0)
+        self.assertEqual(segment["_clip_file"], "/tmp/a.mp4")
+
     def test_editor_state_preserves_quality_metadata(self):
         state = build_editor_state(
             mode="single",
@@ -166,7 +232,7 @@ class ProjectContextTests(unittest.TestCase):
             ],
         )
 
-        segment = state["subtitles"]["segments"][0]
+        segment = _state_segments(state)[0]
         self.assertEqual(segment["quality"]["confidence_label"], "red")
         self.assertEqual(segment["quality_history"][0]["confidence_label"], "gray")
         self.assertEqual(segment["quality_candidates"][0]["candidate_id"], "c1")
@@ -205,7 +271,7 @@ class ProjectContextTests(unittest.TestCase):
             ],
         )
 
-        segment = state["subtitles"]["segments"][0]
+        segment = _state_segments(state)[0]
         self.assertEqual(segment["stt_selected_source"], "STT2")
         self.assertEqual(segment["stt_candidates"][1]["text"], "후보2")
         preview = state["stt"]["preview_segments"][0]
@@ -243,7 +309,7 @@ class ProjectContextTests(unittest.TestCase):
             ],
         )
 
-        pending, confirmed = state["subtitles"]["segments"]
+        pending, confirmed = _state_segments(state)
         self.assertEqual(pending["subtitle_review_state"], "pending")
         self.assertEqual(pending["subtitle_status_color"], "#FFCC00")
         self.assertEqual(pending["subtitle_status_schema"], "subtitle_status.v1")
@@ -396,7 +462,8 @@ class ProjectContextTests(unittest.TestCase):
 
         timebase = loaded["timeline"]["timebase"]
         clip = loaded["timeline"]["tracks"][0]["clips"][0]
-        segment = loaded["subtitles"]["segments"][0]
+        self.assertNotIn("segments", loaded["subtitles"])
+        segment = project_segments_to_editor(loaded)[0]
         self.assertEqual(timebase["unit"], "frame")
         self.assertEqual(timebase["canonical_unit"], "frame")
         self.assertTrue(timebase["seconds_are_derived"])
@@ -416,7 +483,7 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(segment["frame_range"]["unit"], "frame")
         self.assertEqual(segment["frame_range"]["start"], 24)
         self.assertEqual(loaded["editor_state"]["frame_timebase"]["unit"], "frame")
-        editor_segment = loaded["editor_state"]["subtitles"]["segments"][0]
+        editor_segment = project_segments_to_editor(loaded)[0]
         self.assertEqual(editor_segment["start_frame"], 24)
         self.assertEqual(editor_segment["end_frame"], 36)
 
@@ -604,7 +671,7 @@ class ProjectContextTests(unittest.TestCase):
                 )
             loaded = load_project(str(path))
 
-        first, second = loaded["subtitles"]["segments"]
+        first, second = project_segments_to_editor(loaded)
         self.assertEqual(first["subtitle_review_state"], "pending")
         self.assertEqual(first["subtitle_status_color"], "#FFCC00")
         self.assertEqual(first["stt_candidates"][0]["stt_score_color"], "#52C759")
@@ -706,7 +773,7 @@ class ProjectContextTests(unittest.TestCase):
             )
             loaded = load_project(str(path))
 
-        segment = loaded["subtitles"]["segments"][0]
+        segment = project_segments_to_editor(loaded)[0]
         self.assertEqual(segment["stt_selected_source"], "STT2")
         self.assertEqual(segment["stt_candidates"][0]["source"], "STT1")
         tracks = loaded["editor_state"]["stt"]["candidate_tracks"]
@@ -861,7 +928,7 @@ class ProjectContextTests(unittest.TestCase):
                 )
             loaded = load_project(str(path))
 
-        segment = loaded["subtitles"]["segments"][0]
+        segment = project_segments_to_editor(loaded)[0]
         self.assertEqual(segment["start_frame"], 24)
         self.assertEqual(segment["end_frame"], 36)
         self.assertAlmostEqual(segment["start"], 1.0, places=6)
@@ -907,7 +974,7 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(clip_b["timeline_start_frame"], 48)
         self.assertEqual(clip_b["timeline_end_frame"], 120)
         self.assertEqual(clip_b["source_frame_count"], 90)
-        segment = loaded["subtitles"]["segments"][0]
+        segment = project_segments_to_editor(loaded)[0]
         self.assertEqual(segment["start_frame"], 48)
         self.assertEqual(segment["end_frame"], 72)
         self.assertEqual(segment["clip_local_start_frame"], 0)

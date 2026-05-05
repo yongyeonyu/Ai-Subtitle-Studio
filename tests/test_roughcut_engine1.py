@@ -333,12 +333,33 @@ class RoughCutEngine1Tests(unittest.TestCase):
 
         self.assertEqual(len(plan.extract_commands), len(edl))
         self.assertEqual(plan.extract_commands[0][0], "ffmpeg")
-        self.assertIn("-c:v", plan.extract_commands[0])
-        self.assertIn(plan.extract_commands[0][plan.extract_commands[0].index("-c:v") + 1], {"hevc_videotoolbox", "libx265"})
-        self.assertIn("-c:v", plan.concat_command)
-        self.assertIn(plan.concat_command[plan.concat_command.index("-c:v") + 1], {"hevc_videotoolbox", "libx265"})
+        self.assertEqual(plan.render_mode, "copy")
+        self.assertIn("-c", plan.extract_commands[0])
+        self.assertEqual(plan.extract_commands[0][plan.extract_commands[0].index("-c") + 1], "copy")
+        self.assertIn("-c", plan.concat_command)
+        self.assertEqual(plan.concat_command[plan.concat_command.index("-c") + 1], "copy")
         self.assertIn("roughcut_concat.txt", plan.concat_file_path)
         self.assertEqual(plan.concat_command[-1], "/tmp/out.mp4")
+
+    def test_renderer_skeleton_supports_lossless_mezzanine_mode(self):
+        chapter = ChapterMetadata("chapter_0001", "소개", 0.0, 4.0)
+        decision = build_edit_decisions([chapter], phrases=[], gaps=[])[0]
+        edl = build_edl_segments("/tmp/source.mp4", [decision], [chapter])
+        plan = build_concat_render_plan(
+            edl,
+            "/tmp/out.mkv",
+            "/tmp/roughcut_temp",
+            ffmpeg_binary="ffmpeg",
+            render_mode="lossless",
+        )
+
+        self.assertEqual(plan.render_mode, "lossless")
+        self.assertIn("-c:v", plan.extract_commands[0])
+        self.assertEqual(plan.extract_commands[0][plan.extract_commands[0].index("-c:v") + 1], "ffv1")
+        self.assertIn("-c:a", plan.extract_commands[0])
+        self.assertEqual(plan.extract_commands[0][plan.extract_commands[0].index("-c:a") + 1], "flac")
+        self.assertIn("-c", plan.concat_command)
+        self.assertEqual(plan.concat_command[plan.concat_command.index("-c") + 1], "copy")
 
     def test_renderer_skeleton_refuses_source_overwrite(self):
         chapter = ChapterMetadata("chapter_0001", "소개", 0.0, 4.0)
@@ -360,7 +381,9 @@ class RoughCutEngine1Tests(unittest.TestCase):
         self.assertIn("-vf", command)
         self.assertIn("subtitles=", command[command.index("-vf") + 1])
         self.assertIn("-c:v", command)
-        self.assertIn(command[command.index("-c:v") + 1], {"hevc_videotoolbox", "libx265"})
+        self.assertEqual(command[command.index("-c:v") + 1], "libx264")
+        self.assertIn("-crf", command)
+        self.assertEqual(command[command.index("-crf") + 1], "0")
         self.assertEqual(command[-1], "/tmp/roughcut_subtitled.mp4")
 
     def test_subtitle_retimer_clips_and_maps_to_output_time(self):
@@ -450,6 +473,7 @@ class RoughCutEngine1Tests(unittest.TestCase):
             self.assertTrue(concat_path.exists())
             self.assertIn("roughcut_part_0001.mp4", concat_path.read_text(encoding="utf-8"))
             self.assertTrue(result.dry_run)
+            self.assertEqual(result.executed_commands[0][result.executed_commands[0].index("-c") + 1], "copy")
             self.assertEqual(result.return_codes, (0, 0))
 
 

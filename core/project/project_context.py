@@ -59,6 +59,23 @@ NON_PERSISTED_WORKSPACE_KEYS = {
     "timeline_pps",
 }
 
+EDITOR_STATE_SCHEMA = "ai_subtitle_studio.editor_state.v2"
+SUBTITLE_CANVAS_VECTOR_SCHEMA = "subtitle_canvas.vector.v2"
+
+VECTOR_SEGMENT_META_KEYS = (
+    "quality",
+    "quality_history",
+    "quality_candidates",
+    "quality_stale",
+    "words",
+    "original_text",
+    "dictated_text",
+    "clip_local_start_frame",
+    "clip_local_end_frame",
+    "source_frame_rate",
+    *STT_SEGMENT_METADATA_KEYS,
+)
+
 
 def sanitize_workspace_state(workspace: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(workspace, dict):
@@ -259,7 +276,10 @@ def project_stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]
 def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
     editor_state = project.get("editor_state", {}) or {}
     editor_subtitles = editor_state.get("subtitles", {}) or {}
-    raw_segments = editor_subtitles.get("segments")
+    vector_canvas = ((editor_state.get("rendering", {}) or {}).get("subtitle_canvas", {}) or {})
+    raw_segments = _segments_from_subtitle_canvas_vector(vector_canvas)
+    if not isinstance(raw_segments, list):
+        raw_segments = editor_subtitles.get("segments")
     if not isinstance(raw_segments, list):
         raw_segments = project.get("segments")
     if not isinstance(raw_segments, list):
@@ -276,12 +296,18 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
         start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
         end = _safe_float(seg.get("end", seg.get("timeline_end", start)), start)
         frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+        segment_fps = normalize_fps(
+            seg.get("timeline_frame_rate")
+            or frame_range.get("timeline_frame_rate")
+            or seg.get("frame_rate")
+            or primary_fps
+        )
         start_frame = seg.get("start_frame", seg.get("timeline_start_frame", frame_range.get("start")))
         end_frame = seg.get("end_frame", seg.get("timeline_end_frame", frame_range.get("end")))
         if start_frame is not None:
-            start = frame_to_sec(start_frame, primary_fps)
+            start = frame_to_sec(start_frame, segment_fps)
         if end_frame is not None:
-            end = frame_to_sec(end_frame, primary_fps)
+            end = frame_to_sec(end_frame, segment_fps)
         clip_file = str(seg.get("_clip_file", "") or "")
         clip_idx = seg.get("_clip_idx")
 
@@ -313,26 +339,34 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
             "original_text": str(seg.get("original_text", "") or ""),
             "dictated_text": str(seg.get("dictated_text", "") or ""),
         }
+        if seg.get("id"):
+            item["id"] = str(seg.get("id") or "")
+        if seg.get("index") is not None:
+            item["index"] = _safe_int(seg.get("index"), idx + 1)
         if start_frame is not None:
             item["start_frame"] = _safe_int(start_frame)
             item["timeline_start_frame"] = _safe_int(start_frame)
         if end_frame is not None:
             item["end_frame"] = _safe_int(end_frame)
             item["timeline_end_frame"] = _safe_int(end_frame)
-        item["frame_rate"] = primary_fps
-        item["timeline_frame_rate"] = primary_fps
+        item["frame_rate"] = segment_fps
+        item["timeline_frame_rate"] = segment_fps
         item["frame_range"] = {
             "unit": "frame",
             "start": item.get("start_frame"),
             "end": item.get("end_frame"),
-            "timeline_frame_rate": primary_fps,
+            "timeline_frame_rate": segment_fps,
         }
         if clip_idx is not None:
             item["_clip_idx"] = int(clip_idx)
         if clip_file:
             item["_clip_file"] = clip_file
-        if seg.get("words"):
-            item["words"] = list(seg.get("words") or [])
+        if "words" in seg:
+            words = seg.get("words")
+            item["words"] = list(words or []) if isinstance(words, list) else words
+        for key in ("clip_local_start_frame", "clip_local_end_frame", "source_frame_rate"):
+            if key in seg:
+                item[key] = seg.get(key)
         for key in ("quality", "quality_history", "quality_candidates", "quality_stale"):
             if key in seg:
                 value = seg.get(key)
@@ -380,7 +414,7 @@ def build_editor_state(
         primary_fps=fps,
     )
     return {
-        "schema": "ai_subtitle_studio.editor_state.v1",
+        "schema": EDITOR_STATE_SCHEMA,
         "mode": mode,
         "media_files": [os.path.abspath(path) for path in media_files if path],
         "single_clip": {
@@ -395,8 +429,16 @@ def build_editor_state(
             "cut_boundary_provisional_boundaries": provisional_cut_boundary_rows if mode == "multiclip" else [],
         },
         "subtitles": {
-            "segments": normalized_segments,
+            "storage": "vector_canvas",
+            "segments": [],
+            "segment_count": len(normalized_segments),
             "segment_signature": segment_signature(normalized_segments),
+        },
+        "rendering": {
+            "subtitle_canvas": build_subtitle_canvas_vector_state(
+                normalized_segments,
+                primary_fps=fps,
+            ),
         },
         "stt": {
             "schema": "stt_candidates.v1",
@@ -536,6 +578,174 @@ def segment_signature(segments: list[dict[str, Any]]) -> str:
         )
     payload = json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _vector_style_ref(seg: dict[str, Any]) -> str:
+    if bool(seg.get("stt_pending")):
+        return "subtitle.stt_pending"
+    review_state = str(seg.get("subtitle_review_state", "") or "")
+    if review_state:
+        return f"subtitle.{review_state}"
+    quality = seg.get("quality") if isinstance(seg.get("quality"), dict) else {}
+    label = str(quality.get("confidence_label", "") or "")
+    return f"subtitle.quality.{label}" if label else "subtitle.default"
+
+
+def build_subtitle_canvas_vector_state(
+    segments: list[dict[str, Any]],
+    *,
+    primary_fps: float = 30.0,
+) -> dict[str, Any]:
+    """Build a semantic vector layer for future GPU/scene-graph subtitle canvas rendering."""
+    fps = normalize_fps(primary_fps or 30.0)
+    objects: list[dict[str, Any]] = []
+    for idx, seg in enumerate(segments or []):
+        if not isinstance(seg, dict) or seg.get("is_gap"):
+            continue
+        start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
+        end = _safe_float(seg.get("end", seg.get("timeline_end", start)), start)
+        frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+        local_fps = normalize_fps(
+            seg.get("timeline_frame_rate")
+            or frame_range.get("timeline_frame_rate")
+            or seg.get("frame_rate")
+            or seg.get("source_frame_rate")
+            or fps
+        )
+        start_frame = seg.get("start_frame", seg.get("timeline_start_frame", frame_range.get("start")))
+        end_frame = seg.get("end_frame", seg.get("timeline_end_frame", frame_range.get("end")))
+        if start_frame is None:
+            start_frame = sec_to_frame(start, local_fps)
+        if end_frame is None:
+            end_frame = sec_to_frame(max(start, end), local_fps)
+        start_frame = _safe_int(start_frame)
+        end_frame = max(start_frame, _safe_int(end_frame, start_frame))
+        clip: dict[str, Any] = {}
+        if seg.get("_clip_idx") is not None:
+            clip["index"] = int(seg.get("_clip_idx") or 0)
+        if seg.get("_clip_file"):
+            clip["file"] = str(seg.get("_clip_file") or "")
+        obj = {
+            "id": str(seg.get("id") or f"subtitle_vector_{idx + 1:04d}"),
+            "kind": "subtitle_segment",
+            "source_index": int(seg.get("index", idx + 1) or idx + 1),
+            "line": int(seg.get("line", idx) or idx),
+            "time": {
+                "unit": "frame",
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "timeline_frame_rate": local_fps,
+            },
+            "text": str(seg.get("text", "") or ""),
+            "speaker": str(seg.get("speaker", seg.get("spk", "00")) or "00"),
+            "speaker_list": list(seg.get("speaker_list", []) or []),
+            "style_ref": _vector_style_ref(seg),
+            "flags": {
+                "stt_pending": bool(seg.get("stt_pending", False)),
+                "stt_mode": bool(seg.get("stt_mode", False)),
+            },
+        }
+        if clip:
+            obj["clip"] = clip
+        status = {
+            key: seg.get(key)
+            for key in ("subtitle_review_state", "subtitle_status_color", "subtitle_status_score")
+            if seg.get(key) not in (None, "")
+        }
+        if status:
+            obj["status"] = status
+        meta = {
+            key: seg.get(key)
+            for key in VECTOR_SEGMENT_META_KEYS
+            if key in seg and seg.get(key) not in (None, "", [], {})
+        }
+        if meta:
+            obj["meta"] = meta
+        objects.append(obj)
+    return {
+        "schema": SUBTITLE_CANVAS_VECTOR_SCHEMA,
+        "coordinate_space": {
+            "x": "timeline_frame",
+            "y": "lane_unit",
+            "time_unit": "frame",
+            "timeline_frame_rate": fps,
+        },
+        "renderer": {
+            "preferred": "qt-scenegraph-gpu",
+            "active_surface": "timeline-qopenglwidget",
+            "fallback": "",
+        },
+        "segments": objects,
+        "segment_signature": segment_signature(segments or []),
+    }
+
+
+def _segments_from_subtitle_canvas_vector(vector_canvas: dict[str, Any]) -> list[dict[str, Any]] | None:
+    if not isinstance(vector_canvas, dict):
+        return None
+    if str(vector_canvas.get("schema", "") or "") != SUBTITLE_CANVAS_VECTOR_SCHEMA:
+        return None
+    rows = vector_canvas.get("segments")
+    if not isinstance(rows, list):
+        return None
+    fps = normalize_fps(
+        ((vector_canvas.get("coordinate_space", {}) or {}).get("timeline_frame_rate"))
+        or 30.0
+    )
+    out: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        timing = row.get("time", {}) if isinstance(row.get("time"), dict) else {}
+        local_fps = normalize_fps(timing.get("timeline_frame_rate") or fps)
+        start_frame = timing.get("start_frame")
+        end_frame = timing.get("end_frame")
+        start = frame_to_sec(start_frame, local_fps) if start_frame is not None else _safe_float(timing.get("start_sec"))
+        end = frame_to_sec(end_frame, local_fps) if end_frame is not None else _safe_float(timing.get("end_sec"), start)
+        item = {
+            "line": int(row.get("line", idx) or idx),
+            "start": start,
+            "end": max(start, end),
+            "text": str(row.get("text", "") or ""),
+            "speaker": str(row.get("speaker", "00") or "00"),
+            "speaker_list": list(row.get("speaker_list", []) or []),
+        }
+        if row.get("id"):
+            item["id"] = str(row.get("id") or "")
+        if row.get("source_index") is not None:
+            item["index"] = _safe_int(row.get("source_index"), idx + 1)
+        if start_frame is not None:
+            item["start_frame"] = _safe_int(start_frame)
+            item["timeline_start_frame"] = item["start_frame"]
+        if end_frame is not None:
+            item["end_frame"] = _safe_int(end_frame)
+            item["timeline_end_frame"] = item["end_frame"]
+        item["frame_rate"] = local_fps
+        item["timeline_frame_rate"] = local_fps
+        item["frame_range"] = {
+            "unit": "frame",
+            "start": item.get("start_frame"),
+            "end": item.get("end_frame"),
+            "timeline_frame_rate": local_fps,
+        }
+        flags = row.get("flags", {}) if isinstance(row.get("flags"), dict) else {}
+        item["stt_pending"] = bool(flags.get("stt_pending", False))
+        item["stt_mode"] = bool(flags.get("stt_mode", False))
+        clip = row.get("clip", {}) if isinstance(row.get("clip"), dict) else {}
+        if clip.get("index") is not None:
+            item["_clip_idx"] = int(clip.get("index") or 0)
+        if clip.get("file"):
+            item["_clip_file"] = str(clip.get("file") or "")
+        status = row.get("status", {}) if isinstance(row.get("status"), dict) else {}
+        for key in ("subtitle_review_state", "subtitle_status_color", "subtitle_status_score"):
+            if key in status:
+                item[key] = status.get(key)
+        meta = row.get("meta", {}) if isinstance(row.get("meta"), dict) else {}
+        for key in VECTOR_SEGMENT_META_KEYS:
+            if key in meta:
+                item[key] = meta.get(key)
+        out.append(item)
+    return out
 
 
 def _normalize_editor_segments(segments: list[dict[str, Any]], *, primary_fps: float = 30.0) -> list[dict[str, Any]]:

@@ -27,7 +27,7 @@ class GlobalCanvas(GlobalCanvasBase):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         configure_lightweight_paint(self, opaque=True)
-        configure_opengl_widget(self)
+        configure_opengl_widget(self, "timeline")
         self.render_backend = gpu_backend_name("timeline")
 
         self.segments = []

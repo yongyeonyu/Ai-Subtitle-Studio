@@ -144,7 +144,10 @@ class EditorMulticlipOpsMixin:
                         self._queue_timer.stop()
                 except Exception:
                     pass
-            self._cached_segs = segs
+            if hasattr(self, "_rebuild_subtitle_memory_cache"):
+                self._rebuild_subtitle_memory_cache(segs)
+            else:
+                self._cached_segs = segs
             total_dur = segs[-1]['end'] if segs else 0.0
             if hasattr(self, 'video_player') and self.video_player.total_time > 0:
                 total_dur = max(total_dur, self.video_player.total_time)

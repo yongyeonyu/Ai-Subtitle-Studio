@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 
 def ffmpeg_hwdecode_args() -> tuple[str, ...]:
@@ -40,3 +41,64 @@ def hevc_encode_args(*, quality: str = "balanced") -> tuple[str, ...]:
     else:
         args.extend(["-crf", "23"])
     return tuple(args)
+
+
+def roughcut_render_mode(mode: str | None = None) -> str:
+    """Return roughcut export mode.
+
+    `copy` keeps original compressed packets when possible. It is the fastest and
+    has zero generation loss, but cuts are constrained by codec/container rules.
+    `lossless` decodes only the kept ranges and writes a lossless mezzanine.
+    `preview_hevc` keeps the previous small-preview HEVC behavior.
+    """
+    value = str(mode or os.environ.get("AI_SUBTITLE_ROUGHCUT_RENDER_MODE", "copy") or "copy").strip().lower()
+    if value in {"stream_copy", "stream-copy", "remux", "passthrough"}:
+        return "copy"
+    if value in {"lossless", "ffv1", "x264_lossless", "mezzanine"}:
+        return "lossless"
+    if value in {"preview", "hevc", "preview_hevc"}:
+        return "preview_hevc"
+    return "copy"
+
+
+def lossless_video_encode_args(output_path: str | os.PathLike[str] | None = None) -> tuple[str, ...]:
+    """Build lossless ffmpeg video/audio args suitable for roughcut mezzanines."""
+    suffix = Path(str(output_path or "")).suffix.lower()
+    if suffix in {".mkv", ".matroska", ""}:
+        return (
+            "-c:v",
+            "ffv1",
+            "-level",
+            "3",
+            "-g",
+            "1",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "flac",
+        )
+    if suffix in {".mov", ".mp4", ".m4v"}:
+        return (
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "alac",
+        )
+    return (
+        "-c:v",
+        "ffv1",
+        "-level",
+        "3",
+        "-g",
+        "1",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "flac",
+    )

@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from core.personalization.text_lora_dataset import (
     build_text_lora_dataset,
@@ -12,6 +13,8 @@ from core.personalization.text_lora_dataset import (
 from core.personalization.text_lora_runner import (
     build_text_lora_training_plan,
     build_voice_lora_profile_manifest,
+    build_voice_lora_training_plan,
+    save_voice_lora_training_plan,
 )
 
 
@@ -235,6 +238,8 @@ class TextLoraDatasetTests(unittest.TestCase):
             bridge_row = json.loads(bridge_lines[0])
             self.assertEqual(bridge_row["start_frame"], 90)
             self.assertEqual(bridge_row["end_frame"], 120)
+            self.assertEqual(bridge_row["start_sec"], 3.0)
+            self.assertEqual(bridge_row["end_sec"], 4.0)
             self.assertEqual(bridge_row["speaker"], "01")
             self.assertTrue((root / "text_lora_corpus_manifest.json").exists())
 
@@ -245,6 +250,156 @@ class TextLoraDatasetTests(unittest.TestCase):
             voice_manifest = build_voice_lora_profile_manifest(bridge_path=root / "voice_lora_bridge.jsonl")
             self.assertEqual(len(voice_manifest["speaker_profiles"]), 1)
             self.assertEqual(voice_manifest["speaker_profiles"][0]["speaker"], "01")
+
+            voice_plan = build_voice_lora_training_plan(
+                bridge_path=root / "voice_lora_bridge.jsonl",
+                output_dir=root / "trained_adapters" / "personal_voice_lora",
+            )
+            self.assertEqual(voice_plan["stats"]["usable_voice_items"], 1)
+            self.assertEqual(voice_plan["items"][0]["speaker"], "01")
+            self.assertEqual(voice_plan["items"][0]["start_sec"], 3.0)
+            self.assertEqual(voice_plan["items"][0]["duration_sec"], 1.0)
+            self.assertIn("-ss", voice_plan["items"][0]["extraction_command"])
+
+            saved = save_voice_lora_training_plan(
+                bridge_path=root / "voice_lora_bridge.jsonl",
+                output_dir=root / "trained_adapters" / "personal_voice_lora",
+                plan_path=root / "voice_lora_training_plan.json",
+                dataset_manifest_path=root / "voice_lora_dataset_manifest.json",
+            )
+            self.assertEqual(saved["usable_voice_rows"], 1)
+            self.assertTrue((root / "voice_lora_training_plan.json").exists())
+            self.assertTrue((root / "voice_lora_dataset_manifest.json").exists())
+
+    def test_voice_lora_training_plan_extracts_and_marks_saved_audio(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "source.mp4"
+            source.write_bytes(b"fake media")
+            bridge = root / "voice_lora_bridge.jsonl"
+            bridge.write_text(
+                json.dumps(
+                    {
+                        "text": "안녕하세요 테스트 음성입니다",
+                        "clip_path": str(source),
+                        "speaker": "me",
+                        "start_sec": 1.0,
+                        "end_sec": 2.5,
+                        "duration_sec": 1.5,
+                        "fps": 30.0,
+                        "start_frame": 30,
+                        "end_frame": 75,
+                        "project_path": str(root / "project.json"),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            plan_path = root / "voice_lora_training_plan.json"
+            manifest_path = root / "voice_lora_dataset_manifest.json"
+
+            def fake_run(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"RIFFfake wav data")
+                return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            with patch("core.personalization.text_lora_runner.subprocess.run", side_effect=fake_run):
+                result = save_voice_lora_training_plan(
+                    bridge_path=bridge,
+                    output_dir=root / "trained_adapters" / "personal_voice_lora",
+                    plan_path=plan_path,
+                    dataset_manifest_path=manifest_path,
+                    extract_audio=True,
+                )
+
+            self.assertEqual(result["usable_voice_rows"], 1)
+            self.assertEqual(result["extracted_clips"], 1)
+            self.assertEqual(result["stored_audio_items"], 1)
+            self.assertEqual(result["extraction_errors"], 0)
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            item = plan["items"][0]
+            self.assertTrue(item["audio_ready"])
+            self.assertTrue(Path(item["audio_path"]).exists())
+            self.assertEqual(plan["stats"]["stored_audio_items"], 1)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["stats"]["stored_audio_items"], 1)
+            self.assertEqual(manifest["extraction"]["extracted"], 1)
+
+    def test_voice_lora_training_plan_reports_missing_source_without_ffmpeg(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            bridge = root / "voice_lora_bridge.jsonl"
+            bridge.write_text(
+                json.dumps(
+                    {
+                        "text": "원본 파일이 없는 음성입니다",
+                        "clip_path": str(root / "missing.mp4"),
+                        "speaker": "me",
+                        "start_sec": 0.0,
+                        "end_sec": 2.0,
+                        "duration_sec": 2.0,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch("core.personalization.text_lora_runner.subprocess.run") as mocked_run:
+                result = save_voice_lora_training_plan(
+                    bridge_path=bridge,
+                    output_dir=root / "trained_adapters" / "personal_voice_lora",
+                    plan_path=root / "voice_lora_training_plan.json",
+                    dataset_manifest_path=root / "voice_lora_dataset_manifest.json",
+                    extract_audio=True,
+                )
+
+            mocked_run.assert_not_called()
+            self.assertEqual(result["usable_voice_rows"], 1)
+            self.assertEqual(result["stored_audio_items"], 0)
+            self.assertEqual(result["extraction_skipped"], 1)
+            plan = json.loads((root / "voice_lora_training_plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(plan["items"][0]["audio_status"], "missing_source_media")
+
+    def test_voice_lora_training_plan_records_ffmpeg_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "source.mp4"
+            source.write_bytes(b"fake media")
+            bridge = root / "voice_lora_bridge.jsonl"
+            bridge.write_text(
+                json.dumps(
+                    {
+                        "text": "실패 테스트 음성입니다",
+                        "clip_path": str(source),
+                        "speaker": "me",
+                        "start_sec": 0.0,
+                        "end_sec": 2.0,
+                        "duration_sec": 2.0,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            def fake_run(_command, **_kwargs):
+                return type("Completed", (), {"returncode": 1, "stdout": "", "stderr": "decode failed"})()
+
+            with patch("core.personalization.text_lora_runner.subprocess.run", side_effect=fake_run):
+                result = save_voice_lora_training_plan(
+                    bridge_path=bridge,
+                    output_dir=root / "trained_adapters" / "personal_voice_lora",
+                    plan_path=root / "voice_lora_training_plan.json",
+                    dataset_manifest_path=root / "voice_lora_dataset_manifest.json",
+                    extract_audio=True,
+                )
+
+            self.assertEqual(result["stored_audio_items"], 0)
+            self.assertEqual(result["extraction_errors"], 1)
+            plan = json.loads((root / "voice_lora_training_plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(plan["items"][0]["audio_status"], "failed")
+            self.assertFalse(Path(plan["items"][0]["audio_path"]).exists())
 
 
 if __name__ == "__main__":

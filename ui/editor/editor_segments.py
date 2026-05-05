@@ -17,6 +17,7 @@ from core.project.data_manager import save_correction as _dm_save_correction
 
 # 수정 — 절대 import로 통일 (editor_widget.py, editor_timeline_video.py와 동일)
 from ui.editor.subtitle_text_edit import SubtitleBlockData
+from ui.editor.editor_helpers import build_segment_lookup, find_segment_for_line_lookup
 from ui.editor.editor_roughcut_draft import EditorRoughcutDraftMixin
 
 class EditorSegmentsMixin(EditorRoughcutDraftMixin):
@@ -32,19 +33,75 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
     def _mark_dirty(self):
         if hasattr(self, "_has_unsaved_changes") and not self._has_unsaved_changes():
             return
+        started_editing = False
         if hasattr(self, "sm"):
             if hasattr(self.sm, "start_editing") and not getattr(self.sm, "is_locked", False):
                 self.sm.start_editing()
+                started_editing = True
             else:
                 self.sm.is_dirty = True
         else:
             self._is_dirty = True
+        if started_editing and hasattr(self, "_request_editor_mode_runtime_release"):
+            self._request_editor_mode_runtime_release()
         try:
             main_w = self.window()
             if hasattr(main_w, "_refresh_saved_status_label"):
                 main_w._refresh_saved_status_label(is_dirty=True)
         except Exception:
             pass
+
+    def _request_editor_mode_runtime_release(self):
+        try:
+            import time
+
+            now = time.monotonic()
+            if now < float(getattr(self, "_next_editor_runtime_release_at", 0.0) or 0.0):
+                return
+            self._next_editor_runtime_release_at = now + 3.0
+            main_w = self.window()
+            release = getattr(main_w, "_release_ai_models_for_editor_mode", None)
+            if callable(release):
+                QTimer.singleShot(0, release)
+        except Exception:
+            pass
+
+    def _rebuild_subtitle_memory_cache(self, segments: list[dict] | None = None) -> dict:
+        segs = list(segments if segments is not None else self._get_current_segments())
+        self._cached_segs = segs
+        cache = build_segment_lookup(segs)
+        self._subtitle_memory_cache = cache
+        return cache
+
+    def _subtitle_memory_segments(self) -> list[dict]:
+        cache = getattr(self, "_subtitle_memory_cache", None)
+        if not isinstance(cache, dict):
+            cached = getattr(self, "_cached_segs", None)
+            cache = build_segment_lookup(cached) if cached is not None else self._rebuild_subtitle_memory_cache()
+            self._subtitle_memory_cache = cache
+        return list(cache.get("segments") or [])
+
+    def _subtitle_memory_visible_segments(self) -> list[dict]:
+        cache = getattr(self, "_subtitle_memory_cache", None)
+        if not isinstance(cache, dict):
+            cached = getattr(self, "_cached_segs", None)
+            cache = build_segment_lookup(cached) if cached is not None else self._rebuild_subtitle_memory_cache()
+            self._subtitle_memory_cache = cache
+        return list(cache.get("visible_segments") or [])
+
+    def _update_subtitle_memory_line_text(self, line_num: int, text: str) -> None:
+        visible_text = str(text or "").replace("\u2028", "\n")
+        for seg in list(getattr(self, "_cached_segs", []) or []):
+            if int(seg.get("line", -999999)) == int(line_num):
+                seg["text"] = visible_text
+                break
+        cache = getattr(self, "_subtitle_memory_cache", None)
+        if isinstance(cache, dict):
+            seg = (cache.get("line_map") or {}).get(int(line_num))
+            if isinstance(seg, dict):
+                seg["text"] = visible_text
+            # Keep visible playback lookup in sync with text becoming empty/non-empty.
+            self._subtitle_memory_cache = build_segment_lookup(getattr(self, "_cached_segs", []) or [])
 
     def _finalize_edit(self):
         self.text_edit.update_margins()
@@ -589,7 +646,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             self._reload_segments_from_list(current, preserve_view=True)
             self._update_timeline_with_confirmed_and_preview(current)
         else:
-            self._cached_segs = current
+            self._rebuild_subtitle_memory_cache(current)
             if hasattr(self, "reload_segments"):
                 self.reload_segments()
 
@@ -1114,7 +1171,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             self.text_edit.timestampArea.update()
 
         try:
-            self._cached_segs = self._get_current_segments()
+            self._rebuild_subtitle_memory_cache()
         except Exception:
             pass
         if hasattr(self, "_mark_dirty"):
@@ -1170,24 +1227,27 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         if hasattr(self, "_timeline_lock_edit_enabled") and self._timeline_lock_edit_enabled():
             return
         line_num = self.text_edit.textCursor().blockNumber()
-        # [크PD] 캐시 사용 — 커서 이동마다 전체 문서 재파싱 방지
-        segs = getattr(self, '_cached_segs', None) or self._get_current_segments()
-        for seg in reversed(segs):
-            if seg["line"] <= line_num:
-                if self._active_seg_start != seg["start"]:
-                    if hasattr(self, 'video_player'): self.video_player.pause_video()
-                    self._active_seg_start = seg["start"]
-                    self.timeline.set_active(seg["start"])
-                    self.timeline.set_playhead(seg["start"])
-                    self.timeline.center_to_sec((seg["start"] + seg["end"]) / 2, smooth=True)
-                    self._highlighter.set_current_line(line_num)
-                    tip = self._quality_tooltip(seg)
-                    if tip:
-                        self.text_edit.setToolTip(tip)
-                    else:
-                        self.text_edit.setToolTip("")
-                    if hasattr(self, 'video_player'): self.video_player.seek(seg["start"])
-                break
+        cache = getattr(self, "_subtitle_memory_cache", None)
+        if not isinstance(cache, dict):
+            cached = getattr(self, "_cached_segs", None)
+            cache = build_segment_lookup(cached) if cached is not None else self._rebuild_subtitle_memory_cache()
+            self._subtitle_memory_cache = cache
+        seg = find_segment_for_line_lookup(cache, line_num)
+        if not seg:
+            return
+        if self._active_seg_start != seg["start"]:
+            if hasattr(self, 'video_player'): self.video_player.pause_video()
+            self._active_seg_start = seg["start"]
+            self.timeline.set_active(seg["start"])
+            self.timeline.set_playhead(seg["start"])
+            self.timeline.center_to_sec((seg["start"] + seg["end"]) / 2, smooth=True)
+            self._highlighter.set_current_line(line_num)
+            tip = self._quality_tooltip(seg)
+            if tip:
+                self.text_edit.setToolTip(tip)
+            else:
+                self.text_edit.setToolTip("")
+            if hasattr(self, 'video_player'): self.video_player.seek(seg["start"])
 
     def _on_esc_pressed(self):
         if hasattr(self.timeline, 'canvas'): self.timeline.canvas.update()
@@ -1197,7 +1257,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
     # ---------------------------------------------------------
     def _redraw_timeline(self):
         segs = self._get_current_segments()
-        self._cached_segs = segs  # [크PD] 캐시 저장
+        self._rebuild_subtitle_memory_cache(segs)
         timeline_segs = segs
         preview = list(getattr(self, "_live_stt_preview_segments", []) or [])
         if preview:
@@ -1227,9 +1287,9 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                     _ctx = self._resolve_active_context(global_sec=_gsec)
                     self.video_player.set_context_segments(list(_ctx.get('local_segments', []) or []))
                 except Exception:
-                    self.video_player.set_context_segments(segs)
+                    self.video_player.set_context_segments(self._subtitle_memory_visible_segments())
             else:
-                self.video_player.set_context_segments(segs)
+                self.video_player.set_context_segments(self._subtitle_memory_visible_segments())
 
         # ✅ 최초 로드 시 화면에 맞춤
         if getattr(self, '_needs_fit_view', False) and segs and hasattr(self.timeline, "fit_to_view"):
@@ -1253,10 +1313,11 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             pass
 
     def _video_subtitle_context_for_player(self):
-        segs = getattr(self, '_cached_segs', None)
-        if segs is None:
-            segs = self._get_current_segments()
-            self._cached_segs = segs
+        cache = getattr(self, "_subtitle_memory_cache", None)
+        if not isinstance(cache, dict):
+            cached = getattr(self, "_cached_segs", None)
+            cache = build_segment_lookup(cached) if cached is not None else self._rebuild_subtitle_memory_cache()
+            self._subtitle_memory_cache = cache
         try:
             _mc_boxes = list(getattr(self.timeline.canvas, '_multiclip_boxes', []) or []) if hasattr(self, 'timeline') else []
             if _mc_boxes and hasattr(self, '_resolve_active_context'):
@@ -1266,10 +1327,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                     return list(ctx.get('local_segments', []) or [])
         except Exception:
             pass
-        return [
-            s for s in list(segs or [])
-            if not s.get('is_gap') and str(s.get('text', '') or '').strip()
-        ]
+        return list(cache.get("visible_segments") or [])
 
     def _schedule_timeline(self):
         if getattr(self, '_inline_updating', False): return

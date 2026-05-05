@@ -167,7 +167,11 @@ class UndoManager:
         if hasattr(editor.text_edit, 'timestampArea'):
             editor.text_edit.timestampArea.update()
         editor._live_stt_preview_segments = [dict(seg) for seg in list(state.live_stt_preview_segments or [])]
-        editor._cached_segs = [dict(seg) for seg in list(state.cached_segments or [])]
+        cached_segments = [dict(seg) for seg in list(state.cached_segments or [])]
+        if hasattr(editor, "_rebuild_subtitle_memory_cache"):
+            editor._rebuild_subtitle_memory_cache(cached_segments)
+        else:
+            editor._cached_segs = cached_segments
         if hasattr(editor, "timeline") and hasattr(editor.timeline, "update_segments"):
             confirmed = [dict(seg) for seg in list(state.cached_segments or []) if not seg.get("is_gap")]
             preview = [dict(seg) for seg in list(state.live_stt_preview_segments or [])]
