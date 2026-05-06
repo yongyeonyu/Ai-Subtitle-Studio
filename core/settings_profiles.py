@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import os
 from copy import deepcopy
 from typing import Any
 
 from core.audio.stt_quality_presets import normalize_stt_quality_key
 from core.autopilot_policy import apply_autopilot_runtime_policy, autopilot_runtime_defaults
+from core.json_file import read_json_file
 from core.mode_policy import apply_mode_runtime_settings, mode_to_stt_quality, selected_mode_from_settings
 from core.runtime import config
 
@@ -24,6 +24,7 @@ UI_ENGINE_DEFAULTS: dict[str, Any] = {
     "selected_llm_provider": "ollama",
     "auto_start_mode": "balanced",
     "stt_quality_preset": "balanced",
+    "editor_auto_save_interval_sec": 300,
     "audio_preset": "",
     "vad_threshold": 0.5,
     "vad_min_speech": 0.25,
@@ -590,26 +591,14 @@ def folder_settings_path(dataset_dir: str | None = None) -> str:
 
 def load_custom_defaults(dataset_dir: str | None = None) -> dict[str, Any]:
     path = custom_defaults_path(dataset_dir)
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return dict(data) if isinstance(data, dict) else {}
-    except FileNotFoundError:
-        return {}
-    except Exception:
-        return {}
+    data = read_json_file(path, default={}, expected_type=dict, context="custom_defaults", log_errors=False)
+    return dict(data) if isinstance(data, dict) else {}
 
 
 def load_folder_settings(dataset_dir: str | None = None) -> dict[str, Any]:
     path = folder_settings_path(dataset_dir)
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return dict(data) if isinstance(data, dict) else {}
-    except FileNotFoundError:
-        return {}
-    except Exception:
-        return {}
+    data = read_json_file(path, default={}, expected_type=dict, context="folder_settings", log_errors=False)
+    return dict(data) if isinstance(data, dict) else {}
 
 
 def hardcoded_default_settings(

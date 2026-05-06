@@ -39,6 +39,14 @@ class _ImmediateThread:
         return None
 
 
+class _Signal:
+    def __init__(self):
+        self.calls = []
+
+    def emit(self, *args):
+        self.calls.append(args)
+
+
 class _DummyUi:
     def __init__(self):
         self._runtime_settings_override = None
@@ -174,6 +182,27 @@ class IndividualQueueContextTests(unittest.TestCase):
         self.assertEqual(result, ("/tmp/chunks", []))
         self.assertEqual(backend.video_processor.tune_calls, [{}])
         self.assertIsNone(backend.video_processor._auto_audio_tune_overrides)
+
+    def test_audio_extract_publishes_runtime_auto_tune_to_sidebar(self):
+        ui = _DummyUi()
+        ui._sig_runtime_audio_tune = _Signal()
+        backend = CoreBackend(ui)
+        backend.video_processor = _FakeVideoProcessor()
+        backend._auto_audio_tune_settings_for_file = lambda _target: {
+            "selected_audio_ai": "clearvoice",
+            "selected_vad": "ten_vad",
+        }
+        backend._validate_audio_extract_result = lambda result, *_args, **_kwargs: result
+
+        result = backend._get_audio_extract_result("/tmp/clip_with_tune.mp4")
+
+        self.assertEqual(result, ("/tmp/chunks", []))
+        self.assertEqual(backend.video_processor.tune_calls, [{"selected_audio_ai": "clearvoice", "selected_vad": "ten_vad"}])
+        self.assertEqual(len(ui._sig_runtime_audio_tune.calls), 1)
+        target_file, payload = ui._sig_runtime_audio_tune.calls[0]
+        self.assertEqual(target_file, "/tmp/clip_with_tune.mp4")
+        self.assertEqual(payload["tune"]["selected_audio_ai"], "clearvoice")
+        self.assertEqual(payload["tune"]["selected_vad"], "ten_vad")
 
     def test_prefetch_only_warms_audio_cache_without_reusing_chunks(self):
         calls = []

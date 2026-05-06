@@ -91,6 +91,7 @@ class BackgroundPrefetchManager:
         self._thread: threading.Thread | None = None
         self._last_key = ""
         self._last_request_mono = 0.0
+        self._generation = 0
         self.last_result: dict[str, Any] = {}
 
     def request(
@@ -122,18 +123,28 @@ class BackgroundPrefetchManager:
                 return {**plan, "queued": False, "reason": "throttled"}
             if self._thread is not None and self._thread.is_alive():
                 return {**plan, "queued": False, "reason": "busy"}
+            generation = int(self._generation)
             self._last_key = key
             self._last_request_mono = now
             self._thread = threading.Thread(
                 target=self._run_prefetch,
-                args=(plan, settings),
+                args=(generation, plan, settings),
                 daemon=True,
                 name="background-prefetch",
             )
             self._thread.start()
         return {**plan, "queued": True, "reason": "started"}
 
-    def _run_prefetch(self, plan: dict[str, Any], settings: dict[str, Any]) -> None:
+    def clear(self) -> None:
+        with self._lock:
+            self._generation += 1
+            self._last_key = ""
+            self._last_request_mono = 0.0
+            self.last_result = {}
+            if self._thread is not None and not self._thread.is_alive():
+                self._thread = None
+
+    def _run_prefetch(self, generation: int, plan: dict[str, Any], settings: dict[str, Any]) -> None:
         result = dict(plan)
         lora_results = []
         candidate_results = []
@@ -191,7 +202,8 @@ class BackgroundPrefetchManager:
         result["candidate_prefetch_count"] = len(candidate_results)
         result["completed_at_mono"] = round(time.monotonic(), 3)
         with self._lock:
-            self.last_result = result
+            if int(generation) == int(self._generation):
+                self.last_result = result
 
 
 __all__ = [

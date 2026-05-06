@@ -5,9 +5,9 @@ core/path_manager.py
 [수정] 들여쓰기 에러(IndentationError) 해결 및 음성 파일 확장자 지원 추가
 """
 import os
-import json
 import subprocess
 import time
+from core.json_file import read_json_file, write_json_file_atomic
 from core.runtime.logger import get_logger
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -31,19 +31,17 @@ DEFAULT_SETTINGS = {
 }
 
 def load_settings():
-    if os.path.exists(SETTINGS_FILE):
-        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            for k, v in DEFAULT_SETTINGS.items():
-                if k not in data:
-                    data[k] = v
-            return data
+    data = read_json_file(SETTINGS_FILE, default={}, expected_type=dict, context="folder_settings")
+    if isinstance(data, dict) and data:
+        for k, v in DEFAULT_SETTINGS.items():
+            if k not in data:
+                data[k] = v
+        return data
     return DEFAULT_SETTINGS.copy()
 
 def save_settings(settings):
     os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
-    with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(settings, f, ensure_ascii=False, indent=2)
+    write_json_file_atomic(SETTINGS_FILE, settings, indent=2)
     try:
         from core.settings import load_settings as _load_user_settings, save_settings as _save_user_settings
 

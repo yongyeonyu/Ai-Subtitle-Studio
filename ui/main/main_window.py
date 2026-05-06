@@ -84,6 +84,7 @@ class MainWindow(
     _sig_update_project_boundary_times = pyqtSignal(list)
     _sig_set_llm_review_segment = pyqtSignal(dict)
     _sig_editor_processing_stage = pyqtSignal(str)
+    _sig_runtime_audio_tune = pyqtSignal(str, object)
 
     def __init__(self):
         super().__init__()
@@ -125,6 +126,10 @@ class MainWindow(
         self._lora_foreground_busy_reason = ""
         self._fast_exit_requested = False
         self._fast_exit_pause_logged = False
+        self._workspace_sidebar_locked_width = 0
+        self._runtime_auto_audio_file = ""
+        self._runtime_auto_audio_tune = {}
+        self._runtime_auto_audio_decision = {}
 
         settings = load_settings()
         self._auto_start_on = settings.get("auto_start_enabled", True)
@@ -263,24 +268,54 @@ class MainWindow(
         if splitter is None or sidebar is None:
             return
         profile = self._current_responsive_profile()
-        if profile.name == "desktop":
-            try:
-                sidebar.setMinimumWidth(0)
-                sidebar.setMaximumWidth(16777215)
-            except Exception:
-                pass
-            return
         total = max(1, int(self.width() or 0) - (MAIN_PANEL_GAP * 2))
         if not bool(getattr(self, "_log_visible", True)):
             splitter.setSizes([0, total])
             return
-        sidebar_w = responsive_sidebar_width(total, profile)
         try:
             sidebar.setMinimumWidth(profile.sidebar_min_width)
             sidebar.setMaximumWidth(profile.sidebar_max_width)
         except Exception:
             pass
+        locked_w = int(getattr(self, "_workspace_sidebar_locked_width", 0) or 0)
+        if locked_w > 0:
+            sidebar_w = max(profile.sidebar_min_width, min(profile.sidebar_max_width, locked_w))
+            splitter.setSizes([sidebar_w, max(1, total - sidebar_w)])
+            return
+        if profile.name == "desktop":
+            try:
+                sizes = list(splitter.sizes())
+            except Exception:
+                sizes = []
+            current_w = int(sizes[0]) if len(sizes) >= 2 and int(sizes[0]) > 0 else 0
+            sidebar_w = current_w or responsive_sidebar_width(total, profile)
+            sidebar_w = max(profile.sidebar_min_width, min(profile.sidebar_max_width, sidebar_w))
+            if current_w != sidebar_w:
+                splitter.setSizes([sidebar_w, max(1, total - sidebar_w)])
+            return
+        sidebar_w = responsive_sidebar_width(total, profile)
         splitter.setSizes([sidebar_w, max(1, total - sidebar_w)])
+
+    def _lock_workspace_sidebar_width(self, width: int | None = None) -> int:
+        splitter = getattr(self, "workspace_splitter", None)
+        if splitter is None or not bool(getattr(self, "_log_visible", True)):
+            self._workspace_sidebar_locked_width = 0
+            return 0
+        profile = self._current_responsive_profile()
+        try:
+            sizes = list(splitter.sizes())
+        except Exception:
+            sizes = []
+        current_w = int(sizes[0]) if len(sizes) >= 2 and int(sizes[0]) > 0 else 0
+        total = max(1, sum(sizes) if sizes else int(self.width() or 0) - (MAIN_PANEL_GAP * 2))
+        target = int(width or current_w or responsive_sidebar_width(total, profile))
+        target = max(profile.sidebar_min_width, min(profile.sidebar_max_width, target))
+        self._workspace_sidebar_locked_width = target
+        self._apply_responsive_workspace_layout()
+        return target
+
+    def _unlock_workspace_sidebar_width(self) -> None:
+        self._workspace_sidebar_locked_width = 0
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -889,6 +924,7 @@ class MainWindow(
         self._sig_update_project_boundary_times.connect(self._on_project_boundary_times_updated)
         self._sig_set_llm_review_segment.connect(self._do_set_llm_review_segment)
         self._sig_editor_processing_stage.connect(self._do_editor_processing_stage)
+        self._sig_runtime_audio_tune.connect(self._set_runtime_audio_tune_display)
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self):
@@ -1101,7 +1137,7 @@ class MainWindow(
     def _restore_normal_cursor(self, *widgets) -> None:
         app = QApplication.instance()
         if app is not None:
-            for _ in range(12):
+            for _ in range(32):
                 try:
                     if QApplication.overrideCursor() is None:
                         break
@@ -1120,6 +1156,22 @@ class MainWindow(
                         targets.append(viewport)
                 except Exception:
                     pass
+            for attr_name in ("timeline", "video_player", "text_edit", "canvas", "global_canvas"):
+                child = getattr(widget, attr_name, None)
+                if child is not None:
+                    targets.append(child)
+                    child_viewport_getter = getattr(child, "viewport", None)
+                    if callable(child_viewport_getter):
+                        try:
+                            child_viewport = child_viewport_getter()
+                            if child_viewport is not None:
+                                targets.append(child_viewport)
+                        except Exception:
+                            pass
+                    for nested_name in ("canvas", "global_canvas"):
+                        nested_child = getattr(child, nested_name, None)
+                        if nested_child is not None:
+                            targets.append(nested_child)
             for target in targets:
                 if target is None:
                     continue
@@ -1127,6 +1179,112 @@ class MainWindow(
                     target.unsetCursor()
                 except Exception:
                     pass
+
+    def _clear_runtime_memory_caches(self, *, include_gpu: bool = True) -> None:
+        try:
+            gc.collect()
+        except Exception:
+            pass
+        if not include_gpu:
+            return
+        try:
+            import torch
+
+            if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+                torch.mps.empty_cache()
+            if hasattr(torch, "cuda") and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        try:
+            import mlx.core as mx
+
+            clear_cache = getattr(mx, "clear_cache", None)
+            if callable(clear_cache):
+                clear_cache()
+        except Exception:
+            pass
+
+    def _force_editor_idle_after_generation(self, editor=None, *, reason: str = "generation_complete") -> dict:
+        target_editor = editor if editor is not None else getattr(self, "_editor_widget", None)
+        widgets = [self, target_editor]
+        if target_editor is not None:
+            for attr_name in (
+                "_is_ai_processing",
+                "_auto_quality_review_pending",
+                "_auto_quality_review_scheduled",
+                "_live_editor_preview_pending",
+            ):
+                try:
+                    setattr(target_editor, attr_name, False)
+                except Exception:
+                    pass
+            try:
+                target_editor._subtitle_generation_completed = True
+            except Exception:
+                pass
+            for timer_name in ("_spinner_timer", "_cut_boundary_scan_timer"):
+                try:
+                    timer = getattr(target_editor, timer_name, None)
+                    if timer is not None and hasattr(timer, "stop"):
+                        timer.stop()
+                except Exception:
+                    pass
+            for method_name in ("_clear_processing_indicators", "_safe_enable_start_btn"):
+                method = getattr(target_editor, method_name, None)
+                if callable(method):
+                    try:
+                        method()
+                    except Exception:
+                        pass
+            try:
+                state_manager = getattr(target_editor, "sm", None)
+                if state_manager is not None and (
+                    bool(getattr(state_manager, "is_locked", False))
+                    or str(getattr(state_manager, "state", "") or "") == "ST_PROC"
+                ):
+                    state_manager.complete_ai()
+            except Exception:
+                pass
+            timeline = getattr(target_editor, "timeline", None)
+            if timeline is not None:
+                widgets.append(timeline)
+                try:
+                    timeline.set_playhead_busy(False)
+                except Exception:
+                    pass
+                try:
+                    timeline.set_playback_center_lock(False)
+                except Exception:
+                    pass
+            video_player = getattr(target_editor, "video_player", None)
+            if video_player is not None:
+                widgets.append(video_player)
+                try:
+                    video_player.set_scan_cut_active(False)
+                except Exception:
+                    pass
+            try:
+                manager = getattr(target_editor, "_background_prefetch_manager", None)
+                clear = getattr(manager, "clear", None)
+                if callable(clear):
+                    clear()
+                target_editor._last_background_prefetch_request = {}
+                target_editor._last_background_prefetch_gate_key = ""
+                target_editor._last_background_prefetch_gate_at = 0.0
+            except Exception:
+                pass
+        try:
+            self._auto_processing_active = False
+        except Exception:
+            pass
+        self._restore_normal_cursor(*widgets)
+        for delay_ms in (0, 80, 240, 700):
+            try:
+                QTimer.singleShot(delay_ms, lambda saved_widgets=tuple(widgets): self._restore_normal_cursor(*saved_widgets))
+            except Exception:
+                pass
+        return {"idle": True, "reason": reason}
 
     def _restore_normal_cursor_for_exit(self):
         self._restore_normal_cursor(self, getattr(self, "_editor_widget", None))
@@ -1150,7 +1308,7 @@ class MainWindow(
                 self._schedule_post_generation_gc(editor=editor, delay_ms=2200)
                 return
             try:
-                gc.collect()
+                self._clear_runtime_memory_caches(include_gpu=True)
             except Exception:
                 pass
 
@@ -1713,7 +1871,10 @@ class MainWindow(
             self._auto_processing_active = False
         except Exception:
             pass
-        self._restore_normal_cursor(self, target_editor)
+        try:
+            self._force_editor_idle_after_generation(target_editor, reason=reason)
+        except Exception:
+            self._restore_normal_cursor(self, target_editor)
         self._schedule_post_generation_gc(editor=target_editor)
         get_logger().log(f"🧹 후처리 정리 완료: {reason}")
         if hasattr(self, "_refresh_saved_status_label"):

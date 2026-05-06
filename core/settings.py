@@ -4,9 +4,10 @@
 core/settings.py
 앱 전체 설정 로딩/저장 통합 모듈
 """
-import os, json
+import os
 from core.runtime import config
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
+from core.json_file import read_json_file, write_json_file_atomic
 from core.settings_profiles import hardcoded_default_settings, materialize_user_settings
 
 SETTINGS_PATH = os.path.join(config.DATASET_DIR, "user_settings.json")
@@ -32,35 +33,18 @@ def runtime_settings_override() -> dict:
 
 def _persist_materialized_settings(settings: dict) -> None:
     settings_path = _settings_path()
-    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
-    try:
-        with open(settings_path, "r", encoding="utf-8") as f:
-            current = json.load(f)
-    except Exception:
-        current = None
+    current = read_json_file(settings_path, default=None, expected_type=dict, context="설정", log_errors=False)
     if current == settings:
         return
-    with open(settings_path, "w", encoding="utf-8") as f:
-        json.dump(settings, f, ensure_ascii=False, indent=2)
+    write_json_file_atomic(settings_path, settings, indent=2)
 
 
 def load_settings() -> dict:
     base = hardcoded_default_settings()
     loaded_data = {}
-    try:
-        with open(_settings_path(), "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            loaded_data = data
-    except FileNotFoundError:
-        loaded_data = {}
-    except Exception as e:
-        try:
-            from core.runtime.logger import get_logger
-            get_logger().log(f"⚠️ 설정 로드 실패: {e}")
-        except Exception:
-            pass
-        loaded_data = {}
+    data = read_json_file(_settings_path(), default={}, expected_type=dict, context="설정")
+    if isinstance(data, dict):
+        loaded_data = data
     if loaded_data:
         base.update(loaded_data)
     materialized = materialize_user_settings(base)
@@ -80,10 +64,8 @@ def load_settings() -> dict:
 
 def save_settings(data: dict):
     settings_path = _settings_path()
-    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
     materialized = materialize_user_settings(data if isinstance(data, dict) else {})
-    with open(settings_path, "w", encoding="utf-8") as f:
-        json.dump(materialized, f, ensure_ascii=False, indent=2)
+    write_json_file_atomic(settings_path, materialized, indent=2)
 
 
 def get_model_key(settings: dict | None = None) -> str:

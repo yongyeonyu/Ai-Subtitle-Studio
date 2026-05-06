@@ -128,6 +128,7 @@ class CoreBackendFast(CoreBackend):
             tune = dict(updated.get("audio_preset_auto_tune") or {})
             if hasattr(self.video_processor, "set_auto_audio_tune_overrides"):
                 self.video_processor.set_auto_audio_tune_overrides(tune)
+            self._publish_auto_audio_tune_for_sidebar(target_file, tune, decision=decision)
             try:
                 append_audio_lora_record(decision, target_file)
             except Exception as record_exc:

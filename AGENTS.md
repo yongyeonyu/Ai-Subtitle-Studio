@@ -1,6 +1,6 @@
 <!--
-Document-Version: 03.23.00
-Phase: STABLE_EDITOR_FRAMES_RELEASED
+Document-Version: 03.23.01
+Phase: RUNTIME_EDITOR_STABILITY_RELEASED
 Last-Updated: 2026-05-07
 Updated-By: Codex
 Purpose: Agent bootstrap and handoff rules only.
@@ -61,10 +61,10 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 ## Current Continuation Facts
 
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- Current app version in code: `03.23.00`
-- Current handoff document version: `03.23.00`
-- Latest release checkpoint: `v03.23.00`
-- Current phase: `STABLE_EDITOR_FRAMES_RELEASED`
+- Current app version in code: `03.23.01`
+- Current handoff document version: `03.23.01`
+- Latest release checkpoint: `v03.23.01`
+- Current phase: `RUNTIME_EDITOR_STABILITY_RELEASED`
 - Next planned phase: none.
 - Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping Fast mode responsive and safe from obvious hallucinations.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
@@ -74,10 +74,12 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Editor layout state: the editor text pane, video preview, and timeline are mounted inside stable render frames so Start/status changes do not resize the major editor surfaces.
 - Fast quality state: Fast mode stays lightweight but selectively rechecks low-score STT1 spans with the secondary STT model when configured, preserving minimum quality without rerunning the full High stack.
 - Playback state: post-generation quality review, roughcut draft work, prefetch, cleanup, and model release are deferred or throttled while video playback is active.
+- Runtime stability state: user, folder, custom-default, and project JSON writes use safe atomic replacement; settings load can recover from `.bak` backups after partial-write JSON errors.
+- Dashboard runtime state: automatic audio-filter and VAD choices selected for the current file are surfaced in the sidebar pipeline dashboard with an auto marker and tooltip context.
 - GPU state: GPU rendering can be selected by frame or for the whole editor through settings while OpenGL widgets and global Qt OpenGL remain conservative opt-ins.
 - Idle learning state: automatic LoRA/personalization learning starts only after Home has been idle for five minutes, ramps from Lite to Heavy, and mouse/key input requests a quick stop. The app indicator blinks blue while learning is active.
 - Dashboard state: the sidebar engine dashboard shows ten stages: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
-- Verification state: full test suite and static checks passed for this release: `915 passed, 2 subtests passed`.
+- Verification state: full test suite and static checks passed for this release: `931 passed, 1 warning, 2 subtests passed`.
 
 ## Collaboration Rules
 

@@ -138,11 +138,29 @@ class EditorPipelineMixin:
             active_backend = main_w.backend
         if active_backend is not None:
             active_backend.stop(log_context="작업 중지")
+        try:
+            unlock_sidebar = getattr(main_w, "_unlock_workspace_sidebar_width", None)
+            if callable(unlock_sidebar):
+                unlock_sidebar()
+        except Exception:
+            pass
         QTimer.singleShot(1000, self._safe_enable_start_btn)
 
     def _start_pipeline(self, is_restart=False):
         main_w = self.window()
         layout_snapshot = self._snapshot_start_layout()
+        lock_sidebar = getattr(main_w, "_lock_workspace_sidebar_width", None)
+        if callable(lock_sidebar):
+            try:
+                lock_sidebar()
+            except Exception:
+                pass
+        clear_runtime_audio = getattr(main_w, "_set_runtime_audio_tune_display", None)
+        if callable(clear_runtime_audio):
+            try:
+                clear_runtime_audio("", {"tune": {}})
+            except Exception:
+                pass
         if hasattr(main_w, "_stop_post_completion_idle_timer"):
             main_w._stop_post_completion_idle_timer()
         try:
@@ -322,8 +340,14 @@ class EditorPipelineMixin:
         else:
             self.sm.complete_ai()
         self._clear_processing_indicators()
-        get_logger().log("✅ 자막 생성 완료 (EditorPipeline 확정)")
         main_w = self.window()
+        try:
+            force_idle = getattr(main_w, "_force_editor_idle_after_generation", None)
+            if callable(force_idle):
+                force_idle(self, reason="subtitle_generation_complete")
+        except Exception:
+            pass
+        get_logger().log("✅ 자막 생성 완료 (EditorPipeline 확정)")
         if hasattr(main_w, "sync_menu_from_editor"):
             main_w.sync_menu_from_editor(self)
         if hasattr(main_w, "_refresh_saved_status_label"):
@@ -357,6 +381,9 @@ class EditorPipelineMixin:
             QTimer.singleShot(450, self._schedule_post_generation_model_release)
         # E fix: 자막 생성 완료 후 타임라인/캔버스 재동기화
         QTimer.singleShot(200, self._post_completion_sync)
+        unlock_sidebar = getattr(main_w, "_unlock_workspace_sidebar_width", None)
+        if callable(unlock_sidebar):
+            QTimer.singleShot(1300, unlock_sidebar)
 
     def _schedule_post_generation_model_release(self):
         """자막 생성 완료 후 남아 있는 AI/STT/LLM 모델 언로드를 예약한다."""

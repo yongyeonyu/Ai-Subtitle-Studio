@@ -25,6 +25,7 @@ import shutil
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
+from core.json_file import read_json_file, write_json_file_atomic
 from core.settings_profiles import hardcoded_default_settings, materialize_user_settings
 
 # 수정 — 설정 경로를 앱 공통 경로(config.DATASET_DIR)로 통일
@@ -55,21 +56,12 @@ def load_settings() -> dict:
 
     # 1. 기본값(config + custom_defaults.json) 불러오기
     defaults = hardcoded_default_settings(dataset_dir=DATASET_DIR, include_custom_defaults=False)
-    if os.path.exists(CUSTOM_DEFAULTS_FILE):
-        try:
-            with open(CUSTOM_DEFAULTS_FILE, 'r', encoding='utf-8') as f:
-                custom_defaults = json.load(f)
-                if isinstance(custom_defaults, dict):
-                    defaults.update(custom_defaults)
-        except: pass
+    custom_defaults = read_json_file(CUSTOM_DEFAULTS_FILE, default={}, expected_type=dict, context="custom_defaults")
+    if isinstance(custom_defaults, dict):
+        defaults.update(custom_defaults)
 
     # 2. 사용자 설정(user_settings.json) 불러오기
-    user_settings = {}
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                user_settings = json.load(f)
-        except: pass
+    user_settings = read_json_file(SETTINGS_FILE, default={}, expected_type=dict, context="설정")
 
     # 3. 💡 [병합] 기본값 위에 사용자 설정을 덮어씌움
     merged_settings = defaults.copy()
@@ -89,15 +81,13 @@ def load_settings() -> dict:
 def save_settings(settings: dict) -> None:
     os.makedirs(DATASET_DIR, exist_ok=True)
     materialized = materialize_user_settings(settings if isinstance(settings, dict) else {})
-    with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(materialized, f, ensure_ascii=False, indent=4)
+    write_json_file_atomic(SETTINGS_FILE, materialized, indent=4)
 
 # 💡 [요청 2] 기본값으로 저장 -> custom_defaults.json에 저장
 def save_default_settings(settings: dict) -> None:
     os.makedirs(DATASET_DIR, exist_ok=True)
     materialized = materialize_user_settings(settings if isinstance(settings, dict) else {})
-    with open(CUSTOM_DEFAULTS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(materialized, f, ensure_ascii=False, indent=4)
+    write_json_file_atomic(CUSTOM_DEFAULTS_FILE, materialized, indent=4)
     get_logger().log("⭐ 현재 설정을 시스템 기본값(custom_defaults)으로 저장했습니다.")
 
 # ── 교정사전 ──────────────────────────────────────────────────────────────

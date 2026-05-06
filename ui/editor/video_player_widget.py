@@ -1118,6 +1118,26 @@ class VideoPlayerWidget(QWidget):
         self._refresh_provider_segments(force=True)
         self._refresh_subtitle_now()
 
+    def preview_seek(self, sec: float):
+        """Lightweight seek for timeline scrubbing.
+
+        This updates the media position and visible subtitle without forcing the
+        subtitle provider or thumbnail pipeline on every mouse-move event.
+        """
+        sec = self.snap_sec_to_frame(sec)
+        self.current_time = sec
+        self.current_frame = self.frame_for_sec(sec)
+        self.set_subtitle_display_time(sec, refresh=False)
+        self._pending_seek_sec = None
+        if sec > 0.05:
+            self._hide_thumbnail()
+        pos_ms = self.position_ms_for_frame(self.current_frame)
+        if self._media_source_loaded:
+            self.media_player.setPosition(pos_ms)
+        if getattr(self, 'has_vocal_track', False) and self._media_source_loaded:
+            self.vocal_player.setPosition(pos_ms)
+        self._refresh_subtitle_now()
+
     def frame_step_seek(self, sec: float):
         """Frame-exact manual seek used by < / > and scan buttons."""
         try:

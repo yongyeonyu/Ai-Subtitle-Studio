@@ -270,10 +270,15 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             return
         player = self.video_player.media_player
         if player.playbackState() != player.PlaybackState.PlayingState:
-            if hasattr(self.timeline, "set_playback_center_lock"):
-                self.timeline.set_playback_center_lock(False)
-            self._reset_playhead_smoothing(getattr(self.timeline.canvas, "playhead_sec", 0.0))
+            self._set_playhead_timer_interval(80)
+            if not bool(getattr(self, "_playhead_idle_synced", False)):
+                if hasattr(self.timeline, "set_playback_center_lock"):
+                    self.timeline.set_playback_center_lock(False)
+                self._reset_playhead_smoothing(getattr(self.timeline.canvas, "playhead_sec", 0.0))
+                self._playhead_idle_synced = True
             return
+        self._playhead_idle_synced = False
+        self._set_playhead_timer_interval(16)
         dur_ms = player.duration()
         if dur_ms <= 0:
             return
@@ -331,6 +336,17 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             self.video_player.refresh_subtitle_context()
 
 
+    def _set_playhead_timer_interval(self, interval_ms: int) -> None:
+        timer = getattr(self, "_playhead_timer", None)
+        if timer is None:
+            return
+        try:
+            interval_ms = max(16, int(interval_ms))
+            if int(timer.interval()) != interval_ms:
+                timer.setInterval(interval_ms)
+        except Exception:
+            pass
+
 
     def _on_scrub(self, sec):
         if hasattr(self, "_scan_should_block_user_timeline_input") and self._scan_should_block_user_timeline_input():
@@ -342,19 +358,110 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
 
         sec = self._snap_to_frame(sec)
         self._reset_playhead_smoothing(sec)
+        self._playhead_idle_synced = False
         self.timeline.set_playhead(sec)
-        if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
+        self._pending_scrub_sec = sec
+        self._schedule_scrub_preview(sec)
+        self._schedule_scrub_settle()
+
+    def _make_scrub_timer(self):
+        try:
+            return QTimer(self)
+        except TypeError:
+            return QTimer()
+
+    def _ensure_scrub_timers(self) -> None:
+        if not hasattr(self, "_scrub_preview_timer"):
+            timer = self._make_scrub_timer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._apply_pending_scrub_preview)
+            self._scrub_preview_timer = timer
+        if not hasattr(self, "_scrub_settle_timer"):
+            timer = self._make_scrub_timer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._apply_settled_scrub)
+            self._scrub_settle_timer = timer
+
+    def _schedule_scrub_preview(self, sec: float) -> None:
+        self._ensure_scrub_timers()
+        now = time.monotonic()
+        interval = max(0.030, float(getattr(self, "_scrub_preview_interval_sec", 0.075) or 0.075))
+        last = float(getattr(self, "_last_scrub_preview_at", 0.0) or 0.0)
+        if now - last >= interval:
+            self._apply_scrub_preview(sec)
+            return
+        delay_ms = max(1, int((interval - (now - last)) * 1000))
+        try:
+            self._scrub_preview_timer.start(delay_ms)
+        except Exception:
+            pass
+
+    def _schedule_scrub_settle(self) -> None:
+        self._ensure_scrub_timers()
+        delay_ms = max(80, int(getattr(self, "_scrub_settle_delay_ms", 180) or 180))
+        try:
+            self._scrub_settle_timer.start(delay_ms)
+        except Exception:
+            pass
+
+    def _apply_pending_scrub_preview(self) -> None:
+        sec = getattr(self, "_pending_scrub_sec", None)
+        if sec is None:
+            return
+        self._apply_scrub_preview(float(sec))
+
+    def _preview_seek_video_player(self, sec: float) -> None:
+        player = getattr(self, "video_player", None)
+        if player is None:
+            return
+        if hasattr(player, "preview_seek"):
+            player.preview_seek(sec)
+        elif hasattr(player, "frame_step_seek"):
+            player.frame_step_seek(sec)
+        elif hasattr(player, "seek_direct"):
+            player.seek_direct(sec)
+
+    def _apply_scrub_preview(self, sec: float) -> None:
+        sec = self._snap_to_frame(sec)
+        self._last_scrub_preview_at = time.monotonic()
+
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None)
+        boxes = list(getattr(canvas, "_multiclip_boxes", []) or [])
+        if boxes and hasattr(self, "_resolve_active_context") and hasattr(self, "_apply_active_context"):
             ctx = self._resolve_active_context(global_sec=sec)
-            self._apply_active_context(ctx, autoplay=False, show_thumbnail=True)
-        elif hasattr(self, 'video_player'):
-            self.video_player.pause_video()
-            self.video_player.seek_direct(sec)
-        segs = getattr(self, '_cached_segs', None) or self._get_current_segments()
-        self._schedule_background_prefetch(sec, segs)
-        seg = find_segment_at(segs, sec, skip_gap=False)
+            clip_file = str(ctx.get("clip_file", "") or "")
+            current_path = str(getattr(getattr(self, "video_player", None), "_current_source_path", "") or "")
+            same_source = bool(clip_file and current_path) and os.path.normpath(clip_file) == os.path.normpath(current_path)
+            if same_source:
+                if hasattr(self.timeline, "canvas"):
+                    self.timeline.canvas._active_clip_idx = int(ctx.get("clip_idx", 0) or 0)
+                self._preview_seek_video_player(float(ctx.get("local_sec", sec) or 0.0))
+            else:
+                self._apply_active_context(ctx, autoplay=False, show_thumbnail=False)
+        else:
+            self._preview_seek_video_player(sec)
+
+        local_display_sec = self._global_to_local_sec(sec) if hasattr(self, "_global_to_local_sec") else sec
+        player = getattr(self, "video_player", None)
+        if player is not None and hasattr(player, "set_subtitle_display_time"):
+            player.set_subtitle_display_time(local_display_sec)
+
+    def _apply_settled_scrub(self) -> None:
+        sec = getattr(self, "_pending_scrub_sec", None)
+        if sec is None:
+            return
+        sec = self._snap_to_frame(float(sec))
+        self._apply_scrub_preview(sec)
+        segs = getattr(self, "_cached_segs", None)
+        if segs is not None:
+            self._schedule_background_prefetch(sec, segs)
+        else:
+            self._schedule_background_prefetch(sec, [])
+        seg = self._segment_at_playback_sec(sec, skip_gap=False)
         if seg and self._active_seg_start != seg["start"]:
-            self._sync_cursor_to_seg(seg)
-            self.timeline.center_to_sec(sec, smooth=True)
+            self._sync_cursor_to_seg(seg, ensure_visible=False, move_cursor=False)
+        self._pending_scrub_sec = None
 
     def _manual_global_sec_from_player(self) -> float:
         fps = self._current_frame_fps()

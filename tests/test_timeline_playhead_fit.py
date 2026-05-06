@@ -89,6 +89,12 @@ class _AutoQualityEditor:
         self.review_calls.append(auto_correct)
 
 
+class _FakeScrubTimer:
+    def __init__(self):
+        self.start = Mock()
+        self.isActive = Mock(return_value=False)
+
+
 class _FakeWaveformWorker(QObject):
     ready = pyqtSignal(object, float)
 
@@ -242,6 +248,80 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             editor.timeline.set_active.assert_called_once_with(3.0)
         finally:
             editor.text_edit.close()
+
+    def test_scrub_updates_playhead_immediately_and_uses_lightweight_preview_seek(self):
+        editor = _ClickEditor()
+        editor.video_fps = 30.0
+        editor._active_seg_start = None
+        editor.applied_contexts = []
+        editor._scrub_preview_timer = _FakeScrubTimer()
+        editor._scrub_settle_timer = _FakeScrubTimer()
+        editor.timeline = SimpleNamespace(
+            set_playhead=Mock(),
+            canvas=SimpleNamespace(playhead_sec=0.0, _multiclip_boxes=[]),
+        )
+        editor.video_player = SimpleNamespace(
+            preview_seek=Mock(),
+            set_subtitle_display_time=Mock(),
+        )
+
+        with patch("ui.editor.editor_timeline_video.time.monotonic", return_value=10.0):
+            editor._on_scrub(3.0)
+
+        editor.timeline.set_playhead.assert_called_once_with(3.0)
+        editor.video_player.preview_seek.assert_called_once_with(3.0)
+        self.assertEqual(editor.applied_contexts, [])
+        editor._scrub_settle_timer.start.assert_called_once()
+
+    def test_scrub_throttles_video_seek_during_fast_mouse_moves(self):
+        editor = _ClickEditor()
+        editor.video_fps = 30.0
+        editor._active_seg_start = None
+        editor.applied_contexts = []
+        editor._last_scrub_preview_at = 10.0
+        editor._scrub_preview_timer = _FakeScrubTimer()
+        editor._scrub_settle_timer = _FakeScrubTimer()
+        editor.timeline = SimpleNamespace(
+            set_playhead=Mock(),
+            canvas=SimpleNamespace(playhead_sec=0.0, _multiclip_boxes=[]),
+        )
+        editor.video_player = SimpleNamespace(
+            preview_seek=Mock(),
+            set_subtitle_display_time=Mock(),
+        )
+
+        with patch("ui.editor.editor_timeline_video.time.monotonic", return_value=10.01):
+            editor._on_scrub(4.0)
+
+        editor.timeline.set_playhead.assert_called_once_with(4.0)
+        editor.video_player.preview_seek.assert_not_called()
+        editor._scrub_preview_timer.start.assert_called_once()
+        editor._scrub_settle_timer.start.assert_called_once()
+
+    def test_settled_scrub_syncs_active_segment_without_recentering_timeline(self):
+        editor = _ClickEditor()
+        editor.video_fps = 30.0
+        editor._pending_scrub_sec = 4.0
+        editor._active_seg_start = None
+        editor._cached_segs = [{"line": 2, "start": 4.0, "end": 5.0, "text": "셋째 줄"}]
+        editor._apply_scrub_preview = Mock()
+        editor._schedule_background_prefetch = Mock()
+        editor._sync_cursor_to_seg = Mock()
+        editor.timeline = SimpleNamespace(
+            center_to_sec=Mock(),
+            canvas=SimpleNamespace(playhead_sec=4.0, _multiclip_boxes=[]),
+        )
+
+        editor._apply_settled_scrub()
+
+        editor._apply_scrub_preview.assert_called_once_with(4.0)
+        editor._schedule_background_prefetch.assert_called_once()
+        editor._sync_cursor_to_seg.assert_called_once_with(
+            editor._cached_segs[0],
+            ensure_visible=False,
+            move_cursor=False,
+        )
+        editor.timeline.center_to_sec.assert_not_called()
 
     def test_lock_edit_allows_canvas_inline_edit(self):
         editor = _ClickEditor()
@@ -841,6 +921,32 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         canvas.set_active.assert_called_once_with(4.0)
         editor.timeline.set_active.assert_not_called()
         editor.timeline.set_playhead.assert_not_called()
+
+    def test_paused_playhead_sync_uses_idle_timer_interval(self):
+        editor = _DummyTimelineVideoEditor()
+        playing_state = object()
+        paused_state = object()
+        player = SimpleNamespace(
+            PlaybackState=SimpleNamespace(PlayingState=playing_state),
+            playbackState=Mock(return_value=paused_state),
+        )
+        editor.video_player = SimpleNamespace(media_player=player)
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(playhead_sec=4.8),
+            set_playback_center_lock=Mock(),
+        )
+        editor._playhead_timer = SimpleNamespace(
+            interval=Mock(side_effect=[16, 80]),
+            setInterval=Mock(),
+        )
+        editor._reset_playhead_smoothing = Mock()
+
+        editor._sync_playhead()
+        editor._sync_playhead()
+
+        editor._playhead_timer.setInterval.assert_called_once_with(80)
+        editor.timeline.set_playback_center_lock.assert_called_once_with(False)
+        editor._reset_playhead_smoothing.assert_called_once_with(4.8)
 
     def test_playing_segment_boundary_moves_editor_immediately(self):
         editor = _PlaybackEditor()

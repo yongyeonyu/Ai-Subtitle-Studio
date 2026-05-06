@@ -83,6 +83,55 @@ class SettingsMaterializationTests(unittest.TestCase):
                 finally:
                     config.DATASET_DIR = original_dataset_dir
 
+    def test_load_settings_recovers_from_backup_when_user_settings_is_partial_json(self):
+        from core import settings as settings_module
+
+        original_dataset_dir = config.DATASET_DIR
+        original_override = settings_module.runtime_settings_override()
+        with tempfile.TemporaryDirectory() as tmp:
+            user_path = Path(tmp, "user_settings.json")
+            user_path.write_text('{"selected_model"', encoding="utf-8")
+            user_path.with_suffix(user_path.suffix + ".bak").write_text(
+                json.dumps({"selected_model": "backup-model", "selected_llm_provider": "ollama", "restored_marker": True}),
+                encoding="utf-8",
+            )
+            try:
+                config.DATASET_DIR = tmp
+                settings_module.clear_runtime_settings_override()
+
+                loaded = settings_module.load_settings()
+                repaired = json.loads(user_path.read_text(encoding="utf-8"))
+
+                self.assertTrue(loaded["restored_marker"])
+                self.assertEqual(repaired["selected_model"], "backup-model")
+            finally:
+                config.DATASET_DIR = original_dataset_dir
+                settings_module.set_runtime_settings_override(original_override or None)
+
+    def test_save_settings_writes_atomic_json_and_backup(self):
+        from core import settings as settings_module
+
+        original_dataset_dir = config.DATASET_DIR
+        original_override = settings_module.runtime_settings_override()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                config.DATASET_DIR = tmp
+                settings_module.clear_runtime_settings_override()
+
+                settings_module.save_settings({"selected_model": "atomic-model", "selected_llm_provider": "ollama"})
+
+                user_path = Path(tmp, "user_settings.json")
+                backup_path = Path(tmp, "user_settings.json.bak")
+                saved = json.loads(user_path.read_text(encoding="utf-8"))
+                backup = json.loads(backup_path.read_text(encoding="utf-8"))
+
+                self.assertEqual(saved["selected_model"], "atomic-model")
+                self.assertEqual(backup["selected_model"], "atomic-model")
+                self.assertEqual(list(Path(tmp).glob(".tmp-*.json")), [])
+            finally:
+                config.DATASET_DIR = original_dataset_dir
+                settings_module.set_runtime_settings_override(original_override or None)
+
     def test_path_manager_mirrors_folder_settings_to_user_settings(self):
         from core import path_manager
 

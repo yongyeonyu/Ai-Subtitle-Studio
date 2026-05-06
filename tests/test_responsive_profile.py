@@ -77,6 +77,34 @@ class ResponsiveProfileTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_desktop_workspace_layout_preserves_current_sidebar_width(self):
+        window = MainWindow()
+        try:
+            window.resize(1600, 900)
+            window.show()
+            self.app.processEvents()
+            window.workspace_splitter.setSizes([210, 1390])
+            self.app.processEvents()
+            initial_width = window.workspace_splitter.sizes()[0]
+            self.assertGreaterEqual(initial_width, 204)
+
+            window._apply_responsive_workspace_layout()
+            self.app.processEvents()
+
+            self.assertEqual(window.workspace_splitter.sizes()[0], initial_width)
+            locked = window._lock_workspace_sidebar_width()
+            self.assertEqual(locked, initial_width)
+
+            window.workspace_splitter.setSizes([204, 1396])
+            window._apply_responsive_workspace_layout()
+            self.app.processEvents()
+
+            self.assertEqual(window.workspace_splitter.sizes()[0], initial_width)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_tablet_settings_dialog_clamps_oversized_min_width(self):
         parent = QWidget()
         dialog = QDialog(parent)

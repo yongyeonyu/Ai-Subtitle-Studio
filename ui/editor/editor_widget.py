@@ -45,6 +45,9 @@ from ui.editor.editor_stt_mode import EditorSTTModeMixin
 
 DATASET_DIR   = "dataset"
 SETTINGS_FILE = os.path.join(DATASET_DIR, "user_settings.json")
+DEFAULT_EDITOR_AUTO_SAVE_INTERVAL_SEC = 300
+MIN_EDITOR_AUTO_SAVE_INTERVAL_SEC = 120
+MAX_EDITOR_AUTO_SAVE_INTERVAL_SEC = 1800
 
 
 class EditorWidget(
@@ -74,6 +77,19 @@ class EditorWidget(
     _JUNK_NO_BRACKET_3PART_END= re.compile(r'\d{1,3}[:\.]\d{2}[:\.]\d{2,3}\s*$')
     _JUNK_START_RE            = re.compile(r'^\s*\d{1,3}[:\.]\d{2}(?:[:\.]\d+)?\s+')
     _auto_start_next = False
+
+    def _auto_save_interval_ms(self) -> int:
+        settings = getattr(self, "settings", {}) or {}
+        raw_value = settings.get(
+            "editor_auto_save_interval_sec",
+            settings.get("auto_save_interval_sec", DEFAULT_EDITOR_AUTO_SAVE_INTERVAL_SEC),
+        )
+        try:
+            interval_sec = float(raw_value)
+        except Exception:
+            interval_sec = float(DEFAULT_EDITOR_AUTO_SAVE_INTERVAL_SEC)
+        interval_sec = max(MIN_EDITOR_AUTO_SAVE_INTERVAL_SEC, min(MAX_EDITOR_AUTO_SAVE_INTERVAL_SEC, interval_sec))
+        return int(interval_sec * 1000)
 
     def __init__(
         self,
@@ -108,7 +124,7 @@ class EditorWidget(
 
         self._auto_save_timer = QTimer(self)
         self._auto_save_timer.timeout.connect(self._on_auto_save)
-        self._auto_save_timer.start(60000)
+        self._auto_save_timer.start(self._auto_save_interval_ms())
 
         self._status_anim_idx = 0
         self._status_frames = {
@@ -325,7 +341,10 @@ class EditorWidget(
         if self.sm.is_locked: return
         if hasattr(self, "_has_unsaved_changes"):
             try:
-                self._has_unsaved_changes()
+                if not self._has_unsaved_changes():
+                    if getattr(self.sm, "is_dirty", False) and hasattr(self, "_mark_save_completed"):
+                        self._mark_save_completed(touch_saved_time=False)
+                    return
             except Exception:
                 pass
         if self.sm.is_dirty:

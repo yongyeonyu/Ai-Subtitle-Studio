@@ -267,6 +267,46 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 window.deleteLater()
                 self.app.processEvents()
 
+    def test_sidebar_pipeline_shows_runtime_auto_audio_and_vad_selection(self):
+        window = MainWindow()
+        try:
+            base_settings = {
+                "selected_audio_ai": "deepfilter",
+                "selected_whisper_model": "whisper-large-v3",
+                "stt_ensemble_enabled": False,
+                "selected_vad": "silero",
+                "selected_model": "사용 안함 (Whisper 단독 진행)",
+                "roughcut_llm_enabled": False,
+            }
+            window._set_runtime_audio_tune_display(
+                "/tmp/current_clip.mp4",
+                {
+                    "tune": {
+                        "selected_audio_ai": "clearvoice",
+                        "selected_vad": "ten_vad",
+                        "vad_post_stt_align_enabled": True,
+                    },
+                    "decision": {"audio_tune_reason": "잡음 대응"},
+                },
+            )
+
+            effective = window._settings_with_runtime_audio_tune(base_settings)
+            rows = {stage: model for _key, stage, model in window._pipeline_rows(effective)}
+
+            self.assertEqual(rows["음성"], "ClearVoice 자동")
+            self.assertEqual(rows["VAD"], "TEN VAD 자동")
+
+            window._refresh_sidebar_engine_info(settings=base_settings)
+            html = window.sidebar_settings_label.text()
+            self.assertIn("ClearVoice 자동", html)
+            self.assertIn("TEN VAD 자동", html)
+            self.assertIn("current_clip.mp4", window.sidebar_settings_label.toolTip())
+            self.assertIn("잡음 대응", window.sidebar_settings_label.toolTip())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_pipeline_roughcut_completion_marks_final_stage_green(self):
         window = MainWindow()
         try:

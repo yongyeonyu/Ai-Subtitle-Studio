@@ -1,6 +1,6 @@
 <!--
-Document-Version: 03.23.00
-Phase: STABLE_EDITOR_FRAMES_RELEASED
+Document-Version: 03.23.01
+Phase: RUNTIME_EDITOR_STABILITY_RELEASED
 Last-Updated: 2026-05-07
 Updated-By: Codex
 Purpose: Remaining work queue only.
@@ -19,9 +19,9 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "03.23.00"
-document_version: "03.23.00"
-phase: "STABLE_EDITOR_FRAMES_RELEASED"
+app_version: "03.23.01"
+document_version: "03.23.01"
+phase: "RUNTIME_EDITOR_STABILITY_RELEASED"
 next_phase: null
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
@@ -54,13 +54,17 @@ release_handoff_files:
 
 ## Completion Snapshot
 
-The v03.23.00 Stable Editor Frames release completed the prior queue:
+The v03.23.01 Runtime Editor Stability release completed the prior queue:
 
 - Fast mode selective low-score STT2 rescue and lightweight overlap/review policy.
 - Post-generation busy cursor cleanup and playback-safe deferral of review, roughcut, prefetch, cleanup, and model-release work.
 - Removal of the duplicate subtitle-review Mode selector.
 - Stable editor text/video/timeline render frames and start-layout restoration.
 - Frame-based and whole-editor GPU rendering policy with conservative OpenGL opt-ins.
+- Runtime display of the current file's automatic audio-filter and VAD choices in the sidebar engine dashboard.
+- Safer settings/project JSON save and load paths using atomic replacement, backup recovery, and process-level project caching.
+- Longer, cheaper editor autosave intervals and post-generation idle cleanup that clears background prefetch, cursors, and runtime memory caches.
+- Throttled timeline scrub/video preview seeks so moving the playhead is lighter on the editor.
 - Tests and release handoff documentation.
 
 Future work should start from a new user request rather than this completed backlog.

@@ -659,13 +659,16 @@ class HomeSidebarMixin:
         return text
 
     def _audio_model_name(self, settings: dict) -> str:
-        return {
+        label = {
             "deepfilter": "DeepFilter",
             "rnnoise": "RNNoise",
             "resemble_enhance": "Resemble",
             "clearvoice": "ClearVoice",
             "none": "미사용",
         }.get(settings.get("selected_audio_ai", "none"), "미사용")
+        if bool(settings.get("_runtime_auto_audio_ai_selected")):
+            return f"{label} 자동"
+        return label
 
     def _vad_model_name(self, settings: dict) -> tuple[str, str]:
         vad_model = {
@@ -675,7 +678,10 @@ class HomeSidebarMixin:
             "pyannote": "Pyannote",
             "none": "미사용",
         }.get(settings.get("selected_vad", "none"), "미사용")
-        if vad_model == "미사용":
+        vad_disabled = vad_model == "미사용"
+        if bool(settings.get("_runtime_auto_vad_selected")):
+            vad_model = f"{vad_model} 자동"
+        if vad_disabled:
             return vad_model, "검수 안 함"
         if settings.get("vad_pre_split_enabled", False):
             return vad_model, "STT 선분할"
@@ -1199,14 +1205,14 @@ class HomeSidebarMixin:
         )
 
     def _current_engine_info_text(self) -> str:
-        settings = _runtime_load_settings()
+        settings = self._settings_with_runtime_audio_tune(_runtime_load_settings())
         return self._pipeline_info_html(settings)
 
     def _refresh_sidebar_engine_info(self, text=None, settings: dict | None = None):
         label = getattr(self, "sidebar_settings_label", None)
         if label is None:
             return
-        settings = dict(settings or _runtime_load_settings())
+        settings = self._settings_with_runtime_audio_tune(dict(settings or _runtime_load_settings()))
         formatted = self._pipeline_info_html(settings)
         label.setTextFormat(Qt.TextFormat.RichText)
         label.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
@@ -1217,9 +1223,60 @@ class HomeSidebarMixin:
             pass
         label.linkActivated.connect(self._on_sidebar_model_link)
         label.setText(formatted)
-        label.setToolTip(self._pipeline_info_plain(settings))
+        tooltip = self._pipeline_info_plain(settings)
+        runtime_tip = self._runtime_audio_tune_tooltip()
+        if runtime_tip:
+            tooltip = f"{tooltip}\n{runtime_tip}"
+        label.setToolTip(tooltip)
         self._sync_sidebar_preset_panel(settings)
         self._sync_subtitle_quality_combos(settings.get("stt_quality_preset"))
+
+    def _settings_with_runtime_audio_tune(self, settings: dict | None) -> dict:
+        out = dict(settings or {})
+        tune = dict(getattr(self, "_runtime_auto_audio_tune", {}) or {})
+        if not tune:
+            return out
+        if "selected_audio_ai" in tune:
+            out["selected_audio_ai"] = tune.get("selected_audio_ai")
+            out["_runtime_auto_audio_ai_selected"] = True
+        if "selected_vad" in tune:
+            out["selected_vad"] = tune.get("selected_vad")
+            out["_runtime_auto_vad_selected"] = True
+        for key in (
+            "vad_pre_split_enabled",
+            "vad_post_stt_align_enabled",
+            "vad_threshold",
+            "ten_vad_threshold",
+            "vad_min_speech",
+            "vad_min_silence",
+            "vad_speech_pad",
+        ):
+            if key in tune:
+                out[key] = tune.get(key)
+        return out
+
+    def _runtime_audio_tune_tooltip(self) -> str:
+        tune = dict(getattr(self, "_runtime_auto_audio_tune", {}) or {})
+        if not tune:
+            return ""
+        media_path = str(getattr(self, "_runtime_auto_audio_file", "") or "")
+        file_name = os.path.basename(media_path) if media_path else "현재 파일"
+        decision = dict(getattr(self, "_runtime_auto_audio_decision", {}) or {})
+        reason = str(decision.get("audio_tune_reason") or decision.get("reason") or "").strip()
+        if reason:
+            return f"오토 오디오 적용: {file_name}\n근거: {reason}"
+        return f"오토 오디오 적용: {file_name}"
+
+    def _set_runtime_audio_tune_display(self, media_path: str = "", payload=None):
+        payload = dict(payload or {}) if isinstance(payload, dict) else {}
+        if "tune" in payload or "settings" in payload:
+            tune = dict(payload.get("tune") or payload.get("settings") or {})
+        else:
+            tune = dict(payload or {})
+        self._runtime_auto_audio_file = str(media_path or "")
+        self._runtime_auto_audio_tune = tune
+        self._runtime_auto_audio_decision = dict(payload.get("decision") or {})
+        self._refresh_sidebar_engine_info()
 
     def _apply_ai_settings(self, settings: dict):
         _runtime_save_settings(settings)

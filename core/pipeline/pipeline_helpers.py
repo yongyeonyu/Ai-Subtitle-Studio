@@ -462,12 +462,32 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
         tune = self._auto_audio_tune_settings_for_file(target_file)
         if hasattr(self.video_processor, "set_auto_audio_tune_overrides"):
             self.video_processor.set_auto_audio_tune_overrides(tune)
+        self._publish_auto_audio_tune_for_sidebar(target_file, tune)
         if cached:
             return self._validate_audio_extract_result(cached, target_file)
         return self._validate_audio_extract_result(
             self.video_processor.extract_audio(target_file),
             target_file,
         )
+
+    def _publish_auto_audio_tune_for_sidebar(self, target_file: str, tune: dict | None, *, decision: dict | None = None) -> None:
+        ui = getattr(self, "ui", None)
+        if ui is None:
+            return
+        payload = {"tune": dict(tune or {}), "decision": dict(decision or {})}
+        signal = getattr(ui, "_sig_runtime_audio_tune", None)
+        if signal is not None and hasattr(signal, "emit"):
+            try:
+                signal.emit(str(target_file or ""), payload)
+                return
+            except Exception:
+                pass
+        setter = getattr(ui, "_set_runtime_audio_tune_display", None)
+        if callable(setter):
+            try:
+                setter(str(target_file or ""), payload)
+            except Exception:
+                pass
 
     def _auto_audio_tune_enabled(self) -> bool:
         try:

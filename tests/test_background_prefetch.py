@@ -60,6 +60,20 @@ class BackgroundPrefetchTests(unittest.TestCase):
         self.assertEqual(manager.last_result["candidate_prefetch_count"], 1)
         self.assertEqual(manager.last_result["lora_prefetch_count"], 0)
 
+    def test_clear_ignores_late_prefetch_result(self):
+        manager = BackgroundPrefetchManager()
+        plan = build_background_prefetch_plan(
+            media_path="",
+            current_sec=1.0,
+            segments=[{"start": 0.0, "end": 2.0, "text": "늦은 결과"}],
+            settings={},
+        )
+
+        manager.clear()
+        manager._run_prefetch(0, plan, {"background_prefetch_lora_enabled": False, "background_prefetch_candidates_enabled": False})
+
+        self.assertEqual(manager.last_result, {})
+
     def test_editor_background_prefetch_uses_cached_segments_without_document_scan(self):
         editor = _PrefetchEditor()
         editor.settings = {

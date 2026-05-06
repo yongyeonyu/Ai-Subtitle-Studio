@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.project.project_io import read_project_file, write_project_file
+from core.project.project_io import clear_project_file_cache, read_project_file, write_project_file
 from core.project.project_manager import extract_model_settings, load_project, merge_project_model_settings, save_project
 from core.project.project_phase1b import enrich_existing_project_file
 from core.project.project_context import (
@@ -117,6 +117,62 @@ class ProjectContextTests(unittest.TestCase):
 
         self.assertEqual(loaded["project_name"], "테스트")
         self.assertEqual(loaded["analysis"]["stt_candidate_tracks"]["STT2"][0]["text"], "안녕 하세요")
+
+    def test_project_io_reuses_memory_cache_for_heavy_project_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            payload = {
+                "project_name": "large",
+                "editor_state": {
+                    "rendering": {
+                        "subtitle_canvas": {
+                            "segments": [
+                                {"start": i * 1.0, "end": i * 1.0 + 0.5, "text": f"row {i}"}
+                                for i in range(250)
+                            ]
+                        }
+                    }
+                },
+            }
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            clear_project_file_cache(str(path))
+
+            with patch("core.project.project_io.json.load", wraps=json.load) as load_mock:
+                first = read_project_file(str(path))
+                second = read_project_file(str(path))
+
+            self.assertIs(first, second)
+            self.assertEqual(load_mock.call_count, 1)
+            self.assertEqual(second["editor_state"]["rendering"]["subtitle_canvas"]["segments"][42]["text"], "row 42")
+
+    def test_project_io_write_primes_memory_cache_without_reparse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            clear_project_file_cache(str(path))
+            payload = {"project_name": "cached-save", "workspace": {"last_playhead": 12.0}}
+
+            write_project_file(str(path), payload)
+            with patch("core.project.project_io.json.load", wraps=json.load) as load_mock:
+                loaded = read_project_file(str(path))
+
+            self.assertIs(loaded, payload)
+            self.assertEqual(load_mock.call_count, 0)
+
+    def test_project_io_reloads_cache_when_project_file_changes_on_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            clear_project_file_cache(str(path))
+            path.write_text(json.dumps({"project_name": "first"}), encoding="utf-8")
+
+            with patch("core.project.project_io._project_file_signature", side_effect=[(1, 10), (2, 11)]), \
+                 patch("core.project.project_io.json.load", wraps=json.load) as load_mock:
+                first = read_project_file(str(path))
+                path.write_text(json.dumps({"project_name": "second", "changed": True}), encoding="utf-8")
+                second = read_project_file(str(path))
+
+            self.assertEqual(first["project_name"], "first")
+            self.assertEqual(second["project_name"], "second")
+            self.assertEqual(load_mock.call_count, 2)
 
     def test_save_project_strips_legacy_workspace_zoom_state(self):
         with tempfile.TemporaryDirectory() as tmp:
