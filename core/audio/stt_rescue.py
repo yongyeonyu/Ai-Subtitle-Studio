@@ -132,6 +132,43 @@ def find_low_score_recheck_ranges(
     return candidates
 
 
+def find_primary_low_score_recheck_ranges(
+    primary_segments: list[dict[str, Any]],
+    settings: dict[str, Any] | None = None,
+) -> list[SttRecheckRange]:
+    """Find STT1-only low-score ranges for selective secondary recheck.
+
+    Fast mode should not pay the cost of full STT1/STT2 ensemble. This finder
+    lets the caller run STT2 only for the short primary spans that are already
+    below the configured rescue threshold.
+    """
+    limit = threshold(settings)
+    candidates: list[SttRecheckRange] = []
+    for primary in primary_segments or []:
+        if not _text(primary):
+            continue
+        p_score = _score(primary)
+        if p_score > limit:
+            continue
+        start = max(0.0, _as_float(primary.get("start")))
+        end = max(_as_float(primary.get("end")), start + 0.1)
+        candidates.append(
+            SttRecheckRange(
+                start=round(start, 3),
+                end=round(end, 3),
+                primary_score=round(p_score, 2),
+                secondary_score=0.0,
+                primary_text=_text(primary),
+                secondary_text="",
+                primary=dict(primary),
+                secondary={},
+            )
+        )
+        if len(candidates) >= max_recheck_segments(settings):
+            break
+    return candidates
+
+
 def rescue_audio_filter() -> str:
     """Speech-focused ffmpeg chain for short recheck clips."""
     return (
@@ -191,6 +228,7 @@ __all__ = [
     "DEFAULT_RECHECK_THRESHOLD",
     "SttRecheckRange",
     "enabled",
+    "find_primary_low_score_recheck_ranges",
     "find_low_score_recheck_ranges",
     "mark_rescue_segments",
     "max_recheck_segments",

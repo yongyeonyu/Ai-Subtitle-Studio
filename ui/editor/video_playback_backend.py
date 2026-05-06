@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,6 +18,7 @@ from PyQt6.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtWidgets import QWidget
 
+from core.runtime import config
 from core.platform_compat import is_windows
 
 
@@ -32,6 +34,28 @@ class VideoBackendChoice:
 
 def _env_text(name: str) -> str:
     return str(os.environ.get(name, "") or "").strip().lower()
+
+
+def _render_settings() -> dict:
+    path = os.path.join(config.DATASET_DIR, "user_settings.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return dict(data) if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _settings_requested_video_backend() -> str:
+    settings = _render_settings()
+    for key in ("editor_video_backend", "video_playback_backend", "preview_video_backend"):
+        value = str(settings.get(key, "") or "").strip().lower()
+        if value:
+            return value
+    scope = str(settings.get("editor_rendering_gpu_scope", settings.get("gpu_rendering_scope", "")) or "").strip().lower()
+    if scope in {"0", "false", "no", "off", "none", "disabled", "끄기", "끔"}:
+        return "qt"
+    return ""
 
 
 def _running_under_pytest() -> bool:
@@ -64,7 +88,7 @@ def choose_video_backend(preferred: str | None = None) -> VideoBackendChoice:
     `AI_SUBTITLE_VIDEO_BACKEND` can be `auto`, `mpv`, `vlc`, or `qt`.
     Tests and offscreen runs deliberately stay on Qt unless explicitly forced.
     """
-    requested = str(preferred or os.environ.get("AI_SUBTITLE_VIDEO_BACKEND", "auto") or "auto").strip().lower()
+    requested = str(preferred or os.environ.get("AI_SUBTITLE_VIDEO_BACKEND", "") or _settings_requested_video_backend() or "auto").strip().lower()
     if requested in {"qtmultimedia", "qtmedia"}:
         requested = "qt"
     if requested not in {"auto", "mpv", "vlc", "qt"}:

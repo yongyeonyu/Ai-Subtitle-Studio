@@ -1353,8 +1353,17 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             if hasattr(self, 'video_player'):
                 self.video_player.seek(added_end)
             self._focus_editor_block_for_processing_segment(focused_payload, prefer_last=True)
-            if self.settings.get("subtitle_quality_auto_check_after_generate") and hasattr(self, "_run_quality_review"):
-                QTimer.singleShot(300, lambda: self._run_quality_review(auto_correct=bool(self.settings.get("subtitle_quality_auto_correct_enabled", False))))
+            if self.settings.get("subtitle_quality_auto_check_after_generate"):
+                scheduler = getattr(self, "_schedule_auto_quality_review", None)
+                if callable(scheduler):
+                    scheduler(delay_ms=900)
+                elif hasattr(self, "_run_quality_review"):
+                    QTimer.singleShot(
+                        900,
+                        lambda: self._run_quality_review(
+                            auto_correct=bool(self.settings.get("subtitle_quality_auto_correct_enabled", False))
+                        ),
+                    )
 
     # ---------------------------------------------------------
     # Segment I/O

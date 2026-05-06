@@ -47,6 +47,21 @@ class STTRescueTests(unittest.TestCase):
             )
         )
 
+    def test_finds_primary_only_low_score_ranges_for_fast_selective_stt2(self):
+        ranges = stt_rescue.find_primary_low_score_recheck_ranges(
+            [
+                {"start": 0.0, "end": 1.2, "text": "저점 후보", "stt_score": 42},
+                {"start": 2.0, "end": 3.0, "text": "정상 문장", "stt_score": 91},
+            ],
+            {"stt_low_score_recheck_threshold": 54},
+        )
+
+        self.assertEqual(len(ranges), 1)
+        self.assertAlmostEqual(ranges[0].start, 0.0)
+        self.assertAlmostEqual(ranges[0].end, 1.2)
+        self.assertEqual(ranges[0].best_original_score, 42)
+        self.assertEqual(ranges[0].secondary_text, "")
+
     def test_mark_rescue_segments_preserves_original_scores(self):
         item = stt_rescue.find_low_score_recheck_ranges(
             [{"start": 0, "end": 1, "text": "원본1", "stt_score": 30}],

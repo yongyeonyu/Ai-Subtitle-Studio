@@ -1,7 +1,7 @@
 <!--
-Document-Version: 03.22.00
-Phase: MODE_AUTOPILOT_RELEASED
-Last-Updated: 2026-05-06
+Document-Version: 03.23.00
+Phase: STABLE_EDITOR_FRAMES_RELEASED
+Last-Updated: 2026-05-07
 Updated-By: Codex
 Purpose: Agent bootstrap and handoff rules only.
 -->
@@ -61,19 +61,23 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 ## Current Continuation Facts
 
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- Current app version in code: `03.22.00`
-- Current handoff document version: `03.22.00`
-- Latest release checkpoint: `v03.22.00`
-- Current phase: `MODE_AUTOPILOT_RELEASED`
+- Current app version in code: `03.23.00`
+- Current handoff document version: `03.23.00`
+- Latest release checkpoint: `v03.23.00`
+- Current phase: `STABLE_EDITOR_FRAMES_RELEASED`
 - Next planned phase: none.
 - Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping Fast mode responsive and safe from obvious hallucinations.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
 - Cross-platform rule: macOS and Windows must remain supported, including Korean paths, spaces, backslashes, subprocess handling, ffmpeg/ffprobe, faster-whisper workers, and PyQt6 runtime behavior.
 - Release state: Fast, Auto, and High are now the single user-facing Mode controls. Legacy `balanced`, `normal`, `보통`, and `균형` settings map to Auto; legacy `fast` and `precise` settings are preserved as Fast and High when no explicit `subtitle_mode` exists.
-- Completion state: subtitle generation and editor save now clear foreground busy UI before deferred learning starts; editor-save truth/text LoRA work is queued for Home-idle processing.
+- Completion state: subtitle generation, editor save, quality review, and cleanup paths clear foreground busy UI before deferred learning starts; editor-save truth/text LoRA work is queued for Home-idle processing.
+- Editor layout state: the editor text pane, video preview, and timeline are mounted inside stable render frames so Start/status changes do not resize the major editor surfaces.
+- Fast quality state: Fast mode stays lightweight but selectively rechecks low-score STT1 spans with the secondary STT model when configured, preserving minimum quality without rerunning the full High stack.
+- Playback state: post-generation quality review, roughcut draft work, prefetch, cleanup, and model release are deferred or throttled while video playback is active.
+- GPU state: GPU rendering can be selected by frame or for the whole editor through settings while OpenGL widgets and global Qt OpenGL remain conservative opt-ins.
 - Idle learning state: automatic LoRA/personalization learning starts only after Home has been idle for five minutes, ramps from Lite to Heavy, and mouse/key input requests a quick stop. The app indicator blinks blue while learning is active.
 - Dashboard state: the sidebar engine dashboard shows ten stages: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
-- Verification state: full test suite and static checks passed for this release.
+- Verification state: full test suite and static checks passed for this release: `915 passed, 2 subtests passed`.
 
 ## Collaboration Rules
 

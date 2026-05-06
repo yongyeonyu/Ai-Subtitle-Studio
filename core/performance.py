@@ -120,6 +120,29 @@ def _safe_bool(value: Any, default: bool = True) -> bool:
     return bool(value)
 
 
+def _qt_gpu_rendering_settings_request() -> tuple[bool | None, bool | None]:
+    try:
+        from core.runtime import config as runtime_config
+
+        settings_path = Path(runtime_config.DATASET_DIR) / "user_settings.json"
+    except Exception:
+        settings_path = PROJECT_ROOT / "dataset" / "user_settings.json"
+    try:
+        with open(settings_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        settings = dict(data) if isinstance(data, dict) else {}
+    except Exception:
+        return None, None
+    scope = str(settings.get("editor_rendering_gpu_scope", settings.get("gpu_rendering_scope", "")) or "").strip().lower()
+    gpu_requested = True if scope in {"all", "whole", "full", "global", "전체"} else None
+    force_requested = None
+    if "editor_rendering_force_qt_opengl" in settings:
+        force_requested = _safe_bool(settings.get("editor_rendering_force_qt_opengl"), False)
+    elif "force_qt_opengl" in settings:
+        force_requested = _safe_bool(settings.get("force_qt_opengl"), False)
+    return gpu_requested, force_requested
+
+
 def mark_runtime_scheduler_start(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     """Start a gentle resource ramp for foreground processing.
 
@@ -549,9 +572,22 @@ def configure_qt_gpu_rendering_before_app() -> None:
     # Default off in real app runs too. On macOS, forcing global Qt OpenGL can
     # crash QtMultimedia/video widgets with Segmentation fault: 11.
     gpu_default = "0"
-    if str(os.environ.get("AI_SUBTITLE_GPU_RENDERING", gpu_default)).lower() not in {"1", "true", "yes", "on"}:
+    settings_gpu, settings_force = _qt_gpu_rendering_settings_request()
+    gpu_value = os.environ.get("AI_SUBTITLE_GPU_RENDERING")
+    gpu_requested = (
+        str(gpu_value if gpu_value is not None else gpu_default).lower() in {"1", "true", "yes", "on"}
+        if gpu_value is not None or settings_gpu is None
+        else bool(settings_gpu)
+    )
+    if not gpu_requested:
         return
-    if str(os.environ.get("AI_SUBTITLE_FORCE_QT_OPENGL", "0")).lower() not in {"1", "true", "yes", "on"}:
+    force_value = os.environ.get("AI_SUBTITLE_FORCE_QT_OPENGL")
+    force_requested = (
+        str(force_value if force_value is not None else "0").lower() in {"1", "true", "yes", "on"}
+        if force_value is not None or settings_force is None
+        else bool(settings_force)
+    )
+    if not force_requested:
         return
 
     os.environ.setdefault("QT_OPENGL", "desktop")

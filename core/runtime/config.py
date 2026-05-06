@@ -1,5 +1,5 @@
-# Version: 03.22.00
-# Phase: PHASE5_ModeAutopilot
+# Version: 03.23.00
+# Phase: PHASE6_StableEditorFrames
 
 
 # === OS / Platform Detection ===
@@ -12,7 +12,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.22.00"
+APP_VERSION = "03.23.00"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"

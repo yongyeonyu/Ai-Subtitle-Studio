@@ -104,6 +104,18 @@ class VideoPlayerWidgetTests(unittest.TestCase):
         self.assertEqual(choice.name, "vlc")
         self.assertEqual(choice.reason, "libvlc_fallback")
 
+    def test_video_backend_can_be_forced_by_render_settings(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("ui.editor.video_playback_backend._settings_requested_video_backend", return_value="qt"), \
+             patch("ui.editor.video_playback_backend._running_under_pytest", return_value=False), \
+             patch("ui.editor.video_playback_backend._offscreen_qt", return_value=False), \
+             patch("ui.editor.video_playback_backend._mpv_available", return_value=True), \
+             patch("ui.editor.video_playback_backend._vlc_available", return_value=True):
+            choice = choose_video_backend()
+
+        self.assertEqual(choice.name, "qt")
+        self.assertEqual(choice.reason, "forced")
+
     def test_frame_step_buttons_emit_single_frame_direction(self):
         widget = VideoPlayerWidget()
         emitted = []

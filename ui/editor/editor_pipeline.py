@@ -221,6 +221,23 @@ class EditorPipelineMixin:
                 }
             except Exception:
                 pass
+        stable_frames = {}
+        for attr in ("editor_frame", "video_frame", "timeline_frame"):
+            frame = getattr(self, attr, None)
+            if frame is None:
+                continue
+            try:
+                safe_height = max(int(frame.height()), int(frame.minimumHeight()), int(frame.minimumSizeHint().height()))
+                stable_frames[attr] = {
+                    "minimum_width": int(frame.minimumWidth()),
+                    "minimum_height": int(frame.minimumHeight()),
+                    "maximum_height": int(frame.maximumHeight()),
+                    "height": safe_height,
+                }
+            except Exception:
+                pass
+        if stable_frames:
+            snap["stable_frames"] = stable_frames
         return snap
 
     def _restore_start_layout(self, snap: dict | None) -> None:
@@ -254,8 +271,22 @@ class EditorPipelineMixin:
                     panel.setVisible(bool(panel_state.get("visible", panel.isVisible())))
                 except Exception:
                     pass
+            for attr, frame_state in dict((snap or {}).get("stable_frames") or {}).items():
+                frame = getattr(self, attr, None)
+                if frame is None or not isinstance(frame_state, dict):
+                    continue
+                try:
+                    if hasattr(frame, "refresh_render_policy"):
+                        frame.refresh_render_policy()
+                    frame.setMinimumWidth(int(frame_state.get("minimum_width", frame.minimumWidth())))
+                    frame.setMinimumHeight(int(frame_state.get("minimum_height", frame.minimumHeight())))
+                    if attr == "timeline_frame":
+                        frame.setFixedHeight(int(frame_state.get("height", frame.height())))
+                    frame.updateGeometry()
+                except Exception:
+                    pass
 
-        for delay in (0, 60, 180, 360):
+        for delay in (0, 60, 180, 360, 720, 1200):
             QTimer.singleShot(delay, _restore_once)
 
     def _prepare_cut_boundaries_before_start(self):

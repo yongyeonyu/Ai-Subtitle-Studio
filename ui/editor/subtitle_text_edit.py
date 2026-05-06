@@ -188,7 +188,7 @@ class SubtitleTextEdit(QTextEdit):
         accelerated_viewport = make_accelerated_viewport(self, feature="editor")
         if accelerated_viewport is not None:
             self.setViewport(accelerated_viewport)
-        self.render_backend = gpu_backend_name()
+        self.render_backend = gpu_backend_name("editor")
         self.setFont(QFont(config.FONT, 13))
         self._base_stylesheet = (
             "QTextEdit { background: #11181C; color: #DDE3EA; border: none; "

@@ -132,8 +132,18 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertLess(balanced["whisper_chunk_overlap_sec"], precise["whisper_chunk_overlap_sec"])
         self.assertEqual(precise["whisper_chunk_overlap_sec"], 3.0)
 
-    def test_quality_review_forces_precise_overlap(self):
+    def test_quality_review_keeps_fast_overlap_short(self):
         overlap = self.processor._chunk_overlap_sec({
+            "subtitle_mode": "fast",
+            "whisper_chunk_overlap_sec": 0.5,
+            "subtitle_quality_auto_check_after_generate": True,
+        })
+
+        self.assertEqual(overlap, 0.5)
+
+    def test_quality_review_forces_precise_overlap_outside_fast_mode(self):
+        overlap = self.processor._chunk_overlap_sec({
+            "subtitle_mode": "auto",
             "whisper_chunk_overlap_sec": 0.5,
             "subtitle_quality_auto_check_after_generate": True,
         })

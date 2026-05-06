@@ -186,14 +186,25 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             settings = dict(getattr(self, "settings", {}) or {})
             if not settings.get("background_prefetch_enabled", True):
                 return
-            if segments is None:
-                segments = getattr(self, "_cached_segs", None)
-            if segments is None:
-                segments = []
             media_path = str(getattr(self, "media_path", "") or "")
             if not media_path:
                 player = getattr(self, "video_player", None)
                 media_path = str(getattr(player, "path", "") or getattr(player, "media_path", "") or "")
+            bucket_sec = max(1.0, float(settings.get("background_prefetch_bucket_sec", 6.0) or 6.0))
+            min_interval = max(0.1, float(settings.get("background_prefetch_min_interval_sec", 0.75) or 0.75))
+            now_mono = time.monotonic()
+            key = f"{os.path.abspath(str(media_path or ''))}|{int(float(current_sec or 0.0) // bucket_sec)}"
+            if (
+                key == str(getattr(self, "_last_background_prefetch_gate_key", "") or "")
+                and now_mono - float(getattr(self, "_last_background_prefetch_gate_at", 0.0) or 0.0) < min_interval
+            ):
+                return
+            self._last_background_prefetch_gate_key = key
+            self._last_background_prefetch_gate_at = now_mono
+            if segments is None:
+                segments = getattr(self, "_cached_segs", None)
+            if segments is None:
+                segments = []
             manager = getattr(self, "_background_prefetch_manager", None)
             if manager is None:
                 from core.pipeline.background_prefetch import BackgroundPrefetchManager

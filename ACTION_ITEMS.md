@@ -1,7 +1,7 @@
 <!--
-Document-Version: 03.22.00
-Phase: MODE_AUTOPILOT_RELEASED
-Last-Updated: 2026-05-06
+Document-Version: 03.23.00
+Phase: STABLE_EDITOR_FRAMES_RELEASED
+Last-Updated: 2026-05-07
 Updated-By: Codex
 Purpose: Remaining work queue only.
 -->
@@ -19,9 +19,9 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "03.22.00"
-document_version: "03.22.00"
-phase: "MODE_AUTOPILOT_RELEASED"
+app_version: "03.23.00"
+document_version: "03.23.00"
+phase: "STABLE_EDITOR_FRAMES_RELEASED"
 next_phase: null
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
@@ -54,14 +54,13 @@ release_handoff_files:
 
 ## Completion Snapshot
 
-The v03.22.00 Mode Autopilot release completed the prior queue:
+The v03.23.00 Stable Editor Frames release completed the prior queue:
 
-- P0 completion stability, post-generation cleanup, and deferred editor-save LoRA learning.
-- Home-idle personalization learning with Lite/Heavy ramping and blue app-indicator status.
-- Fast/Auto/High Mode policy, backward compatibility, and single Mode controls across primary flows.
-- Fast safety guards, Auto adaptive policy snapshots, and High full-accuracy policy activation.
-- Ten-step engine dashboard with per-step values and explanations.
-- Mode-specific audio, VAD, preflight, validation, scheduler, and cleanup policy fields.
+- Fast mode selective low-score STT2 rescue and lightweight overlap/review policy.
+- Post-generation busy cursor cleanup and playback-safe deferral of review, roughcut, prefetch, cleanup, and model-release work.
+- Removal of the duplicate subtitle-review Mode selector.
+- Stable editor text/video/timeline render frames and start-layout restoration.
+- Frame-based and whole-editor GPU rendering policy with conservative OpenGL opt-ins.
 - Tests and release handoff documentation.
 
 Future work should start from a new user request rather than this completed backlog.

@@ -82,6 +82,31 @@ class BackgroundPrefetchTests(unittest.TestCase):
         editor._get_current_segments.assert_not_called()
         self.assertEqual(editor._last_background_prefetch_request["segment_count"], 1)
 
+    def test_editor_background_prefetch_throttles_before_copying_segments(self):
+        class ExplodingSegments:
+            def __iter__(self):
+                raise AssertionError("segments should not be copied while prefetch is throttled")
+
+        editor = _PrefetchEditor()
+        editor.settings = {
+            "background_prefetch_enabled": True,
+            "background_prefetch_lora_enabled": False,
+            "background_prefetch_candidates_enabled": False,
+            "background_prefetch_bucket_sec": 6.0,
+            "background_prefetch_min_interval_sec": 10.0,
+        }
+        editor.media_path = "/tmp/video.mp4"
+        manager = Mock()
+        manager.request.return_value = {"queued": True, "segment_count": 1}
+        editor._background_prefetch_manager = manager
+        editor._cached_segs = [{"start": 9.0, "end": 11.0, "text": "캐시"}]
+
+        editor._schedule_background_prefetch(10.0)
+        editor._cached_segs = ExplodingSegments()
+        editor._schedule_background_prefetch(10.2)
+
+        manager.request.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

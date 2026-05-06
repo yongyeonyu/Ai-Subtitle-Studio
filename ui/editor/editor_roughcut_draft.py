@@ -30,6 +30,13 @@ class EditorRoughcutDraftMixin:
         except Exception:
             return False
 
+    def _roughcut_playback_active(self) -> bool:
+        try:
+            player = getattr(getattr(self, "video_player", None), "media_player", None)
+            return bool(player and player.playbackState() == player.PlaybackState.PlayingState)
+        except Exception:
+            return False
+
     def _set_roughcut_draft_status(self, status: str, count: int | None = None):
         self._roughcut_draft_status = str(status or "idle")
         if count is not None:
@@ -57,6 +64,12 @@ class EditorRoughcutDraftMixin:
     def _run_post_generation_roughcut_draft(self):
         if not self._roughcut_draft_runtime_enabled():
             self._set_roughcut_draft_status("disabled")
+            return
+        if self._roughcut_playback_active():
+            timer = getattr(self, "_roughcut_draft_timer", None)
+            if timer is not None:
+                self._set_roughcut_draft_status("queued")
+                timer.start(2200)
             return
         thread = getattr(self, "_roughcut_draft_thread", None)
         if thread is not None and thread.is_alive():

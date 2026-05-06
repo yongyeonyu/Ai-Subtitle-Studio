@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-03.22.00-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v03.22.00-30D158?style=for-the-badge)](RELEASE_v03.22.00.md)
+[![App Version](https://img.shields.io/badge/app-03.23.00-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v03.23.00-30D158?style=for-the-badge)](RELEASE_v03.23.00.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-555?style=for-the-badge)](#)
@@ -16,7 +16,7 @@ Accuracy-first desktop subtitle production for long-form video, rough cuts, spea
 
 AI Subtitle Studio is built for one primary outcome: produce highly accurate subtitles on the first pass, even when that takes longer than a fast draft. The goal is to reduce manual correction time by combining STT, audio preprocessing, VAD, cut-boundary alignment, LLM cleanup, subtitle timing rules, LoRA personalization, and project-aware editing in one desktop workflow.
 
-Current development has completed the v03.22.00 Mode Autopilot release. The app now exposes one user-facing Mode control: `Fast`, `Auto`, and `High`. Fast uses the lightest safe subtitle path and cheap hallucination guards; Auto is the default adaptive path that starts light and escalates uncertain sections; High activates the full accuracy stack. Editor-save learning is deferred to Home-idle processing so generation completion returns the UI to an interactive state before LoRA work begins.
+Current development has completed the v03.23.00 Stable Editor Frames release. The app now exposes one user-facing Mode control: `Fast`, `Auto`, and `High`. Fast uses the lightest safe subtitle path and selectively rechecks weak STT spans when needed; Auto is the default adaptive path that starts light and escalates uncertain sections; High activates the full accuracy stack. Editor-save learning is deferred to Home-idle processing, post-generation review work waits while video is playing, and the editor text/video/timeline surfaces sit inside stable render frames so Start/status changes do not resize the main workspace.
 
 ## Core Workflows
 
@@ -25,6 +25,7 @@ Current development has completed the v03.22.00 Mode Autopilot release. The app 
 - Multiclip editing when explicitly selected from multiclip flows.
 - iCloud and NAS background processing.
 - Fast/Auto/High Mode policy shared across single-file, multiclip, folder queue, iCloud, and NAS workflows.
+- Stable editor text, video, and timeline render frames with frame-based or whole-editor GPU rendering policy.
 - Ten-step engine dashboard: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
 - STT1/STT2 candidate comparison with persistent project metadata.
 - Cut-boundary assisted subtitle timing.
@@ -103,10 +104,10 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `03.22.00` |
-| Latest release checkpoint | `v03.22.00` |
-| Handoff document version | `03.22.00` |
-| Active phase | `MODE_AUTOPILOT_RELEASED` |
+| App version in code | `03.23.00` |
+| Latest release checkpoint | `v03.23.00` |
+| Handoff document version | `03.23.00` |
+| Active phase | `STABLE_EDITOR_FRAMES_RELEASED` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
 | Supported target platforms | macOS and Windows |
@@ -137,7 +138,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v03.22.00.md`](RELEASE_v03.22.00.md). Older release notes remain in the repository as history, but handoff documents should only summarize the latest state and the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v03.23.00.md`](RELEASE_v03.23.00.md). Older release notes remain in the repository as history, but handoff documents should only summarize the latest state and the immediately previous release relationship.
 
 ## Security
 

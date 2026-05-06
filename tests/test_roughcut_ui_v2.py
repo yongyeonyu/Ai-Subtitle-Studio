@@ -100,6 +100,11 @@ class RoughcutUiV2Tests(unittest.TestCase):
         })
         try:
             self.assertEqual([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())], ["자막 검수", "중분류", "모델/API", "자동 설정"])
+            editor_tab = dialog.tabs.widget(0)
+            editor_labels = [label.text().replace("&", "") for label in editor_tab.findChildren(QLabel)]
+            self.assertNotIn("Mode", editor_labels)
+            self.assertNotIn("Mode:", editor_labels)
+            self.assertIsNone(dialog.combo_stt_quality_preset.parent())
             self.assertEqual(dialog.combo_stt_quality_preset.currentData(), "balanced")
             collected = dialog._collect_settings()
             self.assertTrue(collected["settings_simplified_ui_enabled"])

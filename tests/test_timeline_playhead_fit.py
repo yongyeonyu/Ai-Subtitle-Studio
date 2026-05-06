@@ -72,6 +72,23 @@ class _PipelineFitEditor(EditorPipelineMixin):
     pass
 
 
+class _AutoQualityEditor:
+    _schedule_auto_quality_review = EditorWidget._schedule_auto_quality_review
+    _run_scheduled_auto_quality_review = EditorWidget._run_scheduled_auto_quality_review
+
+    def __init__(self):
+        self.settings = {"subtitle_quality_auto_correct_enabled": True}
+        self.sm = SimpleNamespace(is_locked=False)
+        self.playing = False
+        self.review_calls = []
+
+    def _is_video_playback_active(self):
+        return bool(self.playing)
+
+    def _run_quality_review(self, auto_correct=None):
+        self.review_calls.append(auto_correct)
+
+
 class _FakeWaveformWorker(QObject):
     ready = pyqtSignal(object, float)
 
@@ -94,6 +111,28 @@ class TimelinePlayheadFitTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_auto_quality_review_defers_while_video_is_playing(self):
+        editor = _AutoQualityEditor()
+        callbacks = []
+
+        with patch("ui.editor.editor_widget.QTimer.singleShot", side_effect=lambda delay, cb: callbacks.append((delay, cb))):
+            editor._schedule_auto_quality_review(delay_ms=10)
+            self.assertEqual(callbacks[0][0], 10)
+
+            editor.playing = True
+            callbacks.pop(0)[1]()
+
+            self.assertEqual(editor.review_calls, [])
+            self.assertTrue(editor._auto_quality_review_pending)
+            self.assertTrue(editor._auto_quality_review_scheduled)
+            self.assertEqual(callbacks[-1][0], 1800)
+
+            editor.playing = False
+            callbacks.pop()[1]()
+
+        self.assertEqual(editor.review_calls, [True])
+        self.assertFalse(editor._auto_quality_review_pending)
 
     def test_text_selection_moves_timeline_playhead_to_segment_start(self):
         editor = _DummyEditor()

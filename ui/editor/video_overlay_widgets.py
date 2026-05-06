@@ -300,7 +300,7 @@ class VideoSurfaceView(QGraphicsView):
         if viewport is not None:
             self.setViewport(viewport)
             self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
-        self.render_backend = gpu_backend_name()
+        self.render_backend = gpu_backend_name("video")
         self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontSavePainterState, True)
         self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing, True)
         self.setCacheMode(QGraphicsView.CacheModeFlag.CacheNone)

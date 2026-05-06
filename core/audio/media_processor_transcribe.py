@@ -321,6 +321,135 @@ class VideoProcessorTranscribeMixin:
         updated["STT2"].sort(key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
         get_logger().log(f"  ✅ [STT 재검사] {len(applied_ranges)}개 저점 구간을 재인식 결과로 교체했습니다.")
         return updated
+
+    def _selective_secondary_recheck_enabled(self, settings: dict, primary_model: str) -> bool:
+        if not stt_rescue.enabled(settings):
+            return False
+        if bool(settings.get("stt_ensemble_enabled", False)):
+            return False
+        enabled_value = settings.get("stt_selective_secondary_recheck_enabled")
+        if enabled_value is None:
+            try:
+                from core.mode_policy import selected_mode_from_settings
+
+                enabled_value = selected_mode_from_settings(settings) == "fast"
+            except Exception:
+                enabled_value = False
+        if not bool(enabled_value):
+            return False
+        secondary_model = str(settings.get("selected_whisper_model_secondary") or "").strip()
+        if not secondary_model or secondary_model == str(primary_model or "").strip():
+            return False
+        return True
+
+    def _recheck_primary_low_score_with_secondary(
+        self,
+        chunk_dir: str,
+        chunk_segs: list[dict],
+        settings: dict,
+        vad_strict: list[dict],
+        primary_model: str,
+    ) -> list[dict]:
+        if not chunk_segs or not self._selective_secondary_recheck_enabled(settings, primary_model):
+            return chunk_segs
+        secondary_model = str(settings.get("selected_whisper_model_secondary") or "").strip()
+        try:
+            from core.audio.stt_candidate_scorer import annotate_stt_candidates
+
+            scored_primary = annotate_stt_candidates(
+                [dict(seg) for seg in chunk_segs if isinstance(seg, dict)],
+                source="STT1",
+                vad_segments=vad_strict,
+                settings=settings,
+            )
+        except Exception as exc:
+            get_logger().log(f"  ⚠️ [Fast STT2 재검사] STT1 점수 계산 실패: {exc}")
+            return chunk_segs
+
+        ranges = stt_rescue.find_primary_low_score_recheck_ranges(scored_primary, settings)
+        if not ranges:
+            return scored_primary
+
+        threshold = stt_rescue.threshold(settings)
+        get_logger().log(
+            f"  🔁 [Fast STT2 재검사] STT1 {threshold:.0f}점 이하 구간 {len(ranges)}개만 STT2로 확인"
+        )
+        self._notify_stage(f"⏳ [Fast] 저점 구간 {len(ranges)}개 STT2 확인 중")
+
+        rescue_dir = os.path.join(chunk_dir, "_fast_stt2_recheck")
+        os.makedirs(rescue_dir, exist_ok=True)
+        prepared: list[dict] = []
+        for idx, item in enumerate(ranges):
+            clip = self._prepare_recheck_clip(item, rescue_dir, idx, settings)
+            if clip:
+                prepared.append(clip)
+        if not prepared:
+            return scored_primary
+
+        overrides = {
+            "stt_ensemble_enabled": False,
+            "stt_candidate_scoring_enabled": True,
+            "stt_quality_preset": "precise",
+            "stt_rescue_whisper_mode": True,
+            "stt_selective_secondary_recheck_enabled": False,
+            "w_none_temp_max": 0.0,
+            "whisper_chunk_overlap_sec": 0.0,
+        }
+        rescue_segments = self._collect_transcribe_result(
+            rescue_dir,
+            secondary_model,
+            is_single=False,
+            label="Fast-STT2",
+            settings_overrides=overrides,
+        )
+        if not rescue_segments:
+            return scored_primary
+
+        try:
+            rescue_segments = annotate_stt_candidates(
+                rescue_segments,
+                source="STT2",
+                peer_segments=scored_primary,
+                vad_segments=vad_strict,
+                settings=settings,
+            )
+        except Exception as exc:
+            get_logger().log(f"  ⚠️ [Fast STT2 재검사] STT2 점수 계산 실패: {exc}")
+
+        applied_ranges: list[stt_rescue.SttRecheckRange] = []
+        applied_segments: list[dict] = []
+        for clip in prepared:
+            item = clip["range"]
+            start = float(clip["start"])
+            end = float(clip["end"])
+            subset = [
+                dict(seg)
+                for seg in rescue_segments
+                if self._segment_overlaps_range(seg, start, end)
+            ]
+            if not stt_rescue.replacement_is_better(subset, item, settings):
+                continue
+            marked = stt_rescue.mark_rescue_segments(subset, item)
+            for seg in marked:
+                seg["stt_selected_source"] = "STT2"
+                seg["stt_ensemble_source"] = "STT2_SELECTIVE_RECHECK"
+                seg["stt_preview_source"] = "STT2"
+                seg["stt_source"] = "STT2"
+            applied_ranges.append(item)
+            applied_segments.extend(marked)
+
+        if not applied_segments:
+            get_logger().log("  ↩️ [Fast STT2 재검사] 개선된 저점 구간이 없어 STT1 결과를 유지합니다.")
+            return scored_primary
+
+        def _keep_existing(seg: dict) -> bool:
+            return not any(self._segment_overlaps_range(seg, item.start, item.end) for item in applied_ranges)
+
+        updated = [seg for seg in scored_primary if _keep_existing(seg)] + applied_segments
+        updated.sort(key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
+        get_logger().log(f"  ✅ [Fast STT2 재검사] 저점 구간 {len(applied_ranges)}개를 STT2 결과로 보강했습니다.")
+        return updated
+
     def transcribe_ensemble(
         self,
         chunk_dir: str,
@@ -645,6 +774,13 @@ class VideoProcessorTranscribeMixin:
                         dedup_window=float(s.get("sub_dedup_window", 0.5) or 0.5),
                         vad_segments=vad_strict,
                     )
+                    chunk_segs = self._recheck_primary_low_score_with_secondary(
+                        chunk_dir,
+                        chunk_segs,
+                        s,
+                        vad_strict,
+                        target_model,
+                    )
 
                     if chunk_segs:
                         prev_end = chunk_segs[-1]["end"]
@@ -690,6 +826,13 @@ class VideoProcessorTranscribeMixin:
                         previous_end=prev_end,
                         dedup_window=float(s.get("sub_dedup_window", 0.5) or 0.5),
                         vad_segments=vad_strict,
+                    )
+                    chunk_segs = self._recheck_primary_low_score_with_secondary(
+                        chunk_dir,
+                        chunk_segs,
+                        s,
+                        vad_strict,
+                        target_model,
                     )
 
                     if chunk_segs:

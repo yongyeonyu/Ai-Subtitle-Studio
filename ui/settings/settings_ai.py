@@ -112,7 +112,6 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             self.combo_audio_preset.addItem(f"{name} - {desc}" if desc else name, name)
         self.combo_audio_preset.setMinimumWidth(280)
 
-        self._build_simple_operation_section(editor_form, settings)
         self._build_subtitle_quality_section(editor_form, settings)
 
         # 1. 모델 관리

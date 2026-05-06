@@ -31,6 +31,7 @@ from ui.responsive_profile import responsive_profile_for_size
 from ui.style import button_style, label_style, line_icon, tool_button_style
 from ui.editor.editor_popup_qt import EditorPopup
 from ui.editor.video_player_widget import VideoPlayerWidget
+from ui.editor.stable_render_frame import StableRenderFrame
 from ui.editor.subtitle_text_edit import SubtitleTextEdit, SubtitleHighlighter, SubtitleBlockData
 from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.editor.editor_actions import EditorActionsMixin
@@ -96,6 +97,9 @@ class EditorWidget(
         self.settings       = _dm_load_settings()
         self._quality_filter_key = "all"
         self._quality_summary = None
+        self._auto_quality_review_pending = False
+        self._auto_quality_review_scheduled = False
+        self._auto_quality_review_defer_logged = False
         self.selected_model = self.settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
 
         self.sm = SubtitleStateManager()
@@ -343,14 +347,24 @@ class EditorWidget(
         root = QVBoxLayout(self); root.setContentsMargins(2, 2, 2, 2); root.setSpacing(2)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
         self.splitter.setHandleWidth(3)
         self.splitter.setStyleSheet("QSplitter::handle { background: #2D3942; width: 1px; margin: 0 1px; }")
-        editor_wrap = QWidget(); editor_wrap.setMinimumWidth(260); editor_wrap.setStyleSheet("background: #151C20; border: none; border-radius: 0px;")
+        editor_wrap = StableRenderFrame(
+            "EditorTextFrame",
+            render_feature="editor",
+            min_width=260,
+            min_height=260,
+        )
+        editor_wrap.setStyleSheet("QFrame#EditorTextFrame { background: #151C20; border: none; border-radius: 0px; }")
         self._editor_wrap = editor_wrap
+        self.editor_frame = editor_wrap
         editor_wrap.installEventFilter(self)
-        ew_layout   = QVBoxLayout(editor_wrap); ew_layout.setContentsMargins(8, 8, 8, 8); ew_layout.setSpacing(6)
+        ew_layout = editor_wrap.content_layout
+        ew_layout.setContentsMargins(8, 8, 8, 8)
+        ew_layout.setSpacing(6)
 
-        self.text_edit = SubtitleTextEdit()
+        self.text_edit = SubtitleTextEdit(editor_wrap)
         self.text_edit._parent_widget = self
         self.text_edit.enter_pressed.connect(self._on_enter_pressed)
         self.text_edit.backspace_merged.connect(self._on_backspace_merged)
@@ -381,7 +395,14 @@ class EditorWidget(
         self._editor_focus_border.hide()
         self._sync_editor_focus_border()
         self.splitter.addWidget(editor_wrap)
-        self.video_player = VideoPlayerWidget()
+        self.video_frame = StableRenderFrame(
+            "EditorVideoFrame",
+            render_feature="video",
+            min_width=320,
+            min_height=260,
+        )
+        self.video_frame.setStyleSheet("QFrame#EditorVideoFrame { background: #000000; border: none; border-radius: 0px; }")
+        self.video_player = VideoPlayerWidget(self.video_frame)
         if hasattr(self.video_player, "set_subtitle_provider"):
             self.video_player.set_subtitle_provider(self._video_subtitle_context_for_player)
         if hasattr(self.video_player, "frame_step_requested"):
@@ -389,7 +410,8 @@ class EditorWidget(
         if hasattr(self.video_player, "scan_cut_requested"):
             self.video_player.scan_cut_requested.connect(self._on_scan_cut_requested)
         self.video_player.setStyleSheet("background: #000000; border: none; border-radius: 0px;")
-        self.splitter.addWidget(self.video_player)
+        self.video_frame.add_content(self.video_player)
+        self.splitter.addWidget(self.video_frame)
         self.splitter.setStretchFactor(0, 63); self.splitter.setStretchFactor(1, 37)
         self.splitter.setCollapsible(0, False); self.splitter.setCollapsible(1, False)
         root.addWidget(self.splitter, stretch=1)
@@ -446,7 +468,17 @@ class EditorWidget(
         if hasattr(self.timeline, 'provisional_cut_boundary_delete_requested'): self.timeline.provisional_cut_boundary_delete_requested.connect(self._on_provisional_cut_boundary_delete_requested)
         if hasattr(self.timeline, 'sig_smart_split'):         self.timeline.sig_smart_split.connect(self._on_smart_split)
             
-        root.addWidget(self.timeline)
+        timeline_height = max(1, self.timeline.minimumSizeHint().height(), self.timeline.sizeHint().height())
+        self.timeline_frame = StableRenderFrame(
+            "EditorTimelineFrame",
+            render_feature="timeline",
+            min_width=1,
+            min_height=timeline_height,
+            fixed_height=True,
+        )
+        self.timeline_frame.setStyleSheet("QFrame#EditorTimelineFrame { background: transparent; border: none; }")
+        self.timeline_frame.add_content(self.timeline)
+        root.addWidget(self.timeline_frame)
         self._internal_button_bar = self._build_buttons()
         self._internal_button_bar.setFixedHeight(0)
         self._internal_button_bar.setVisible(False)
@@ -760,6 +792,39 @@ class EditorWidget(
         if hasattr(self, "status_lbl"):
             self.status_lbl.setText("에디터 | 검사 중" if running else "에디터 | 검사 완료")
 
+    def _is_video_playback_active(self) -> bool:
+        try:
+            player = getattr(getattr(self, "video_player", None), "media_player", None)
+            return bool(player and player.playbackState() == player.PlaybackState.PlayingState)
+        except Exception:
+            return False
+
+    def _schedule_auto_quality_review(self, delay_ms: int = 900) -> None:
+        self._auto_quality_review_pending = True
+        if bool(getattr(self, "_auto_quality_review_scheduled", False)):
+            return
+        self._auto_quality_review_scheduled = True
+        QTimer.singleShot(max(0, int(delay_ms)), self._run_scheduled_auto_quality_review)
+
+    def _run_scheduled_auto_quality_review(self) -> None:
+        self._auto_quality_review_scheduled = False
+        if not bool(getattr(self, "_auto_quality_review_pending", False)):
+            return
+        try:
+            locked = bool(getattr(getattr(self, "sm", None), "is_locked", False))
+        except Exception:
+            locked = False
+        if locked or self._is_video_playback_active():
+            if self._is_video_playback_active() and not bool(getattr(self, "_auto_quality_review_defer_logged", False)):
+                self._auto_quality_review_defer_logged = True
+                get_logger().log("[자막 품질] 재생 중이라 자동 품질 검사를 잠시 미룹니다.")
+            self._auto_quality_review_scheduled = True
+            QTimer.singleShot(1800 if self._is_video_playback_active() else 700, self._run_scheduled_auto_quality_review)
+            return
+        self._auto_quality_review_pending = False
+        self._auto_quality_review_defer_logged = False
+        self._run_quality_review(auto_correct=bool(self.settings.get("subtitle_quality_auto_correct_enabled", False)))
+
     def _run_quality_review(self, auto_correct: bool | None = None):
         from core.subtitle_quality.quality_pipeline import run_subtitle_quality_pipeline
 
@@ -794,6 +859,14 @@ class EditorWidget(
             QMessageBox.warning(self, "품질 검사 오류", str(exc))
         finally:
             self._set_quality_running(False)
+            self._auto_quality_review_pending = False
+            self._auto_quality_review_defer_logged = False
+            try:
+                restorer = getattr(self.window(), "_restore_normal_cursor", None)
+                if callable(restorer):
+                    restorer(self)
+            except Exception:
+                pass
 
     def _apply_quality_result(self, result, *, auto_correct: bool = False):
         self._quality_summary = getattr(result, "summary", None)

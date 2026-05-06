@@ -561,7 +561,18 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             overlap = float(settings.get("whisper_chunk_overlap_sec", _OVERLAP_SEC))
         except (TypeError, ValueError):
             overlap = _OVERLAP_SEC
-        if settings.get("subtitle_quality_enabled") or settings.get("subtitle_quality_auto_check_after_generate"):
+        try:
+            from core.mode_policy import selected_mode_from_settings
+
+            mode = selected_mode_from_settings(settings)
+        except Exception:
+            mode = str(settings.get("subtitle_mode") or settings.get("simple_operation_mode") or "").strip().lower()
+        quality_review_enabled = bool(
+            settings.get("subtitle_quality_enabled")
+            or settings.get("subtitle_quality_auto_check_after_generate")
+        )
+        long_quality_overlap = bool(settings.get("subtitle_quality_long_overlap_enabled", mode != "fast"))
+        if quality_review_enabled and long_quality_overlap:
             overlap = max(overlap, 3.0)
         return max(0.0, min(8.0, overlap))
 

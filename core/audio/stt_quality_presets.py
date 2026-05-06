@@ -149,6 +149,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
             "description": "속도 우선, STT/LLM 경량 조합",
             "settings": {
                 "selected_whisper_model": _fast_model(),
+                "selected_whisper_model_secondary": secondary_model,
                 "selected_model": "사용 안함 (Whisper 단독 진행)",
                 "stt_ensemble_enabled": False,
                 "stt_ensemble_llm_judge_enabled": False,

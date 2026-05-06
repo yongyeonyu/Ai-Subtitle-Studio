@@ -1098,17 +1098,63 @@ class MainWindow(
                 pass
         return False
 
-    def _restore_normal_cursor_for_exit(self):
+    def _restore_normal_cursor(self, *widgets) -> None:
         app = QApplication.instance()
-        if app is None:
-            return
-        for _ in range(8):
-            try:
-                if QApplication.overrideCursor() is None:
+        if app is not None:
+            for _ in range(12):
+                try:
+                    if QApplication.overrideCursor() is None:
+                        break
+                    QApplication.restoreOverrideCursor()
+                except Exception:
                     break
-                QApplication.restoreOverrideCursor()
+        for widget in widgets:
+            if widget is None:
+                continue
+            targets = [widget]
+            viewport_getter = getattr(widget, "viewport", None)
+            if callable(viewport_getter):
+                try:
+                    viewport = viewport_getter()
+                    if viewport is not None:
+                        targets.append(viewport)
+                except Exception:
+                    pass
+            for target in targets:
+                if target is None:
+                    continue
+                try:
+                    target.unsetCursor()
+                except Exception:
+                    pass
+
+    def _restore_normal_cursor_for_exit(self):
+        self._restore_normal_cursor(self, getattr(self, "_editor_widget", None))
+
+    def _is_editor_video_playing(self, editor=None) -> bool:
+        editor = editor if editor is not None else getattr(self, "_editor_widget", None)
+        try:
+            player = getattr(getattr(editor, "video_player", None), "media_player", None)
+            return bool(player and player.playbackState() == player.PlaybackState.PlayingState)
+        except Exception:
+            return False
+
+    def _schedule_post_generation_gc(self, *, editor=None, delay_ms: int = 1600) -> None:
+        if bool(getattr(self, "_post_generation_gc_scheduled", False)):
+            return
+        self._post_generation_gc_scheduled = True
+
+        def _run_gc():
+            self._post_generation_gc_scheduled = False
+            if self._is_editor_video_playing(editor):
+                self._schedule_post_generation_gc(editor=editor, delay_ms=2200)
+                return
+            try:
+                gc.collect()
             except Exception:
-                break
+                pass
+
+        QTimer.singleShot(max(0, int(delay_ms)), _run_gc)
 
     def _schedule_forced_process_exit(self, *, delay_ms: int = 250):
         if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
@@ -1350,6 +1396,19 @@ class MainWindow(
         if not force and (self._is_editor_ai_busy(editor) or self._is_backend_ai_busy()):
             return
         if not force and self._is_editor_actively_editing():
+            return
+        if self._is_editor_video_playing(editor) and not getattr(self, "_fast_exit_requested", False):
+            if not bool(getattr(self, "_editor_ai_release_retry_scheduled", False)):
+                self._editor_ai_release_retry_scheduled = True
+
+                def _retry_release():
+                    self._editor_ai_release_retry_scheduled = False
+                    self._release_ai_models_for_editor_mode(
+                        force=force,
+                        preserve_roughcut_status=preserve_roughcut_status,
+                    )
+
+                QTimer.singleShot(2200, _retry_release)
             return
 
         self._editor_ai_release_in_progress = True
@@ -1637,14 +1696,25 @@ class MainWindow(
                 target_editor._subtitle_generation_completed = True
             except Exception:
                 pass
+            try:
+                target_editor._is_ai_processing = False
+            except Exception:
+                pass
+            try:
+                state_manager = getattr(target_editor, "sm", None)
+                if state_manager is not None and (
+                    bool(getattr(state_manager, "is_locked", False))
+                    or str(getattr(state_manager, "state", "") or "") == "ST_PROC"
+                ):
+                    state_manager.complete_ai()
+            except Exception:
+                pass
         try:
             self._auto_processing_active = False
         except Exception:
             pass
-        try:
-            gc.collect()
-        except Exception:
-            pass
+        self._restore_normal_cursor(self, target_editor)
+        self._schedule_post_generation_gc(editor=target_editor)
         get_logger().log(f"🧹 후처리 정리 완료: {reason}")
         if hasattr(self, "_refresh_saved_status_label"):
             self._refresh_saved_status_label()

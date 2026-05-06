@@ -29,6 +29,8 @@ class ModePolicyTests(unittest.TestCase):
         self.assertEqual(fast["stt_quality_preset"], "fast")
         self.assertEqual(fast["cut_boundary_level"], "off")
         self.assertFalse(fast["stt_ensemble_enabled"])
+        self.assertTrue(fast["stt_selective_secondary_recheck_enabled"])
+        self.assertLessEqual(fast["stt_low_score_recheck_max_segments"], 16)
         self.assertIn("사용 안함", fast["selected_model"])
 
         self.assertEqual(auto["stt_quality_preset"], "balanced")

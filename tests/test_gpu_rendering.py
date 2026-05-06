@@ -55,6 +55,38 @@ class GpuRenderingSafetyTests(unittest.TestCase):
             self.assertTrue(gpu_widgets_enabled())
             self.assertEqual(gpu_backend_name(), "opengl-widget")
 
+    def test_settings_can_enable_gpu_by_frame(self):
+        from ui.gpu_rendering import gpu_runtime_enabled, gpu_widgets_enabled
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("ui.gpu_rendering._running_under_pytest", return_value=False), \
+             patch(
+                 "ui.gpu_rendering._render_settings",
+                 return_value={
+                     "editor_rendering_gpu_scope": "frame",
+                     "editor_rendering_gpu_frames": ["timeline"],
+                 },
+             ):
+            self.assertTrue(gpu_runtime_enabled("timeline"))
+            self.assertTrue(gpu_widgets_enabled("timeline"))
+            self.assertFalse(gpu_runtime_enabled("editor"))
+
+    def test_settings_can_enable_gpu_for_all_frames_without_opengl_widgets(self):
+        from ui.gpu_rendering import gpu_runtime_enabled, gpu_widgets_enabled
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("ui.gpu_rendering._running_under_pytest", return_value=False), \
+             patch(
+                 "ui.gpu_rendering._render_settings",
+                 return_value={
+                     "editor_rendering_gpu_scope": "all",
+                     "editor_rendering_opengl_widgets_enabled": False,
+                 },
+             ):
+            self.assertTrue(gpu_runtime_enabled("editor"))
+            self.assertTrue(gpu_runtime_enabled("video"))
+            self.assertFalse(gpu_widgets_enabled("editor"))
+
     def test_timeline_widgets_use_explicit_gpu_rendering_without_global_experimental_flag(self):
         from ui.gpu_rendering import gpu_backend_name, gpu_widgets_enabled
 
@@ -158,6 +190,15 @@ class GpuRenderingSafetyTests(unittest.TestCase):
             },
             clear=True,
         ):
+            configure_qt_gpu_rendering_before_app()
+            self.assertEqual(os.environ.get("QT_OPENGL"), "desktop")
+            self.assertEqual(os.environ.get("QSG_RHI_BACKEND"), "opengl")
+
+    def test_qt_global_opengl_setup_can_use_all_frame_settings(self):
+        from core.performance import configure_qt_gpu_rendering_before_app
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("core.performance._qt_gpu_rendering_settings_request", return_value=(True, True)):
             configure_qt_gpu_rendering_before_app()
             self.assertEqual(os.environ.get("QT_OPENGL"), "desktop")
             self.assertEqual(os.environ.get("QSG_RHI_BACKEND"), "opengl")
