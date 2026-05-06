@@ -27,10 +27,11 @@ from core.media_queue_order import MEDIA_QUEUE_EXTENSIONS, ordered_child_paths
 from core.settings import load_settings, save_settings
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
-    apply_stt_quality_preset,
     load_stt_quality_presets,
     normalize_stt_quality_key,
 )
+from core.mode_policy import stt_quality_to_mode
+from core.settings_simplifier import apply_simple_operation_mode
 
 
 class FolderDialog(QDialog):
@@ -92,11 +93,11 @@ class FolderDialog(QDialog):
         )
         option_layout.addWidget(self.export_video_chk)
         option_layout.addSpacing(18)
-        quality_lbl = QLabel("자막품질")
+        quality_lbl = QLabel("Mode")
         quality_lbl.setStyleSheet("QLabel { color: #FFFFFF; background: transparent; font-weight: bold; }")
         option_layout.addWidget(quality_lbl)
         self.combo_subtitle_quality = QComboBox()
-        self.combo_subtitle_quality.setToolTip("선택한 자막품질 프리셋을 이번 처리와 전체 설정에 적용합니다.")
+        self.combo_subtitle_quality.setToolTip("선택한 Mode를 이번 처리와 전체 설정에 적용합니다.")
         for key in STT_QUALITY_PRESET_ORDER:
             preset = load_stt_quality_presets().get(key, {})
             self.combo_subtitle_quality.addItem(str(preset.get("label") or key), key)
@@ -456,7 +457,7 @@ class FolderDialog(QDialog):
         self._persist_subtitle_quality()
 
     def _persist_subtitle_quality(self):
-        settings = apply_stt_quality_preset(load_settings(), self.stt_quality_preset)
+        settings = apply_simple_operation_mode(load_settings(), stt_quality_to_mode(self.stt_quality_preset))
         save_settings(settings)
         parent = self.parent()
         if parent is not None and hasattr(parent, "_apply_ai_settings"):

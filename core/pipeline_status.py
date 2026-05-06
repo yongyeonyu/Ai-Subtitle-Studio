@@ -15,6 +15,8 @@ STAGE_LABELS = {
     "vad": "VAD",
     "subtitle_llm": "자막 LLM",
     "roughcut_llm": "러프컷 LLM",
+    "lora": "LoRA",
+    "deep_learning": "딥러닝",
 }
 
 STAGE_ORDER = [
@@ -26,6 +28,8 @@ STAGE_ORDER = [
     "vad",
     "subtitle_llm",
     "roughcut_llm",
+    "lora",
+    "deep_learning",
 ]
 
 
@@ -77,6 +81,12 @@ def _stage_keys_from_blob(blob: str, *, stt_ensemble_enabled: bool = False) -> s
 
     if any(token in blob for token in ("[vad]", "silero", "ten_vad", "ten vad", "검수", "위치 재계산", "음성 섹터")):
         return {"vad"}
+
+    if any(token in blob for token in ("[lora]", "lora", "개인화", "텍스트 lora", "lo-ra")):
+        return {"lora"}
+
+    if any(token in blob for token in ("[딥러닝]", "deep learning", "deep-learning", "deep subtitle", "deep policy")):
+        return {"deep_learning"}
 
     if any(token in blob for token in ("[stt", "whisper", "stt", "자막 생성")):
         keys = {"stt1"}

@@ -464,8 +464,9 @@ class SignalHandlersMixin:
                 settings = load_settings()
                 candidates = [
                     ("자막 LLM", settings.get("selected_model", "")),
-                    ("러프컷 LLM", settings.get("roughcut_llm_model", "")),
                 ]
+                if bool(settings.get("roughcut_llm_enabled")):
+                    candidates.append(("러프컷 LLM", settings.get("roughcut_llm_model", "")))
                 seen = set()
                 for context, model in candidates:
                     name = str(model or "").strip()

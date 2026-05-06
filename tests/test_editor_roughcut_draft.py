@@ -36,6 +36,13 @@ def _segments(count: int = 7) -> list[dict]:
 
 class EditorRoughcutDraftTests(unittest.TestCase):
     def test_completion_schedules_roughcut_before_editor_model_release(self):
+        class _Timer:
+            def __init__(self):
+                self.stop_count = 0
+
+            def stop(self):
+                self.stop_count += 1
+
         class _State:
             def __init__(self):
                 self.completed = False
@@ -67,6 +74,9 @@ class EditorRoughcutDraftTests(unittest.TestCase):
                 self.roughcut_schedule_count = 0
                 self.post_sync_count = 0
                 self._main = main
+                self._spinner_timer = _Timer()
+                self._last_live_processing_stage = "자막 LLM 검수 중"
+                self._next_live_processing_stage_at = 123.0
 
             def window(self):
                 return self._main
@@ -90,6 +100,9 @@ class EditorRoughcutDraftTests(unittest.TestCase):
             editor._set_process_completed()
 
             self.assertTrue(editor.sm.completed)
+            self.assertEqual(editor._spinner_timer.stop_count, 1)
+            self.assertEqual(editor._last_live_processing_stage, "")
+            self.assertEqual(editor._next_live_processing_stage_at, 0.0)
             self.assertEqual([delay for delay, _callback in scheduled[:3]], [350, 450, 200])
 
             scheduled[0][1]()
@@ -103,6 +116,48 @@ class EditorRoughcutDraftTests(unittest.TestCase):
             scheduled[-1][1]()
 
         self.assertEqual(main.release_calls, [(True, True)])
+
+    def test_late_processing_stage_after_completion_is_ignored(self):
+        class _Timer:
+            def __init__(self):
+                self.stop_count = 0
+
+            def stop(self):
+                self.stop_count += 1
+
+        class _State:
+            state = "ST_COMP"
+            is_locked = False
+
+            def __init__(self):
+                self.custom_statuses = []
+
+            def set_custom_status(self, msg):
+                self.custom_statuses.append(msg)
+
+        class _Label:
+            def __init__(self):
+                self.text = None
+
+            def setText(self, text):
+                self.text = text
+
+        class _Editor(EditorPipelineMixin):
+            def __init__(self):
+                self.sm = _State()
+                self.status_lbl = _Label()
+                self._spinner_timer = _Timer()
+                self._last_live_processing_stage = "자막 생성 중"
+                self._next_live_processing_stage_at = 123.0
+
+        editor = _Editor()
+
+        editor.set_live_processing_stage("자막 LLM 검수 중 (10/10)")
+
+        self.assertEqual(editor.sm.custom_statuses, [])
+        self.assertIsNone(editor.status_lbl.text)
+        self.assertEqual(editor._spinner_timer.stop_count, 1)
+        self.assertEqual(editor._last_live_processing_stage, "")
 
     def test_fast_recognition_forces_editor_draft_off(self):
         self.assertFalse(

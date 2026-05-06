@@ -1,6 +1,6 @@
 <!--
-Document-Version: 03.21.00
-Phase: COMPLETE
+Document-Version: 03.22.00
+Phase: MODE_AUTOPILOT_RELEASED
 Last-Updated: 2026-05-06
 Updated-By: Codex
 Scope: Actual project filesystem map. `.git/`, `venv/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.codex_work/`, and large runtime cache/output folders are intentionally not expanded.
@@ -10,8 +10,8 @@ Role-Description-Rule: Tree entries are generated from actual paths; review note
 AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
 Last Updated: 2026-05-06
-Phase: COMPLETE
-App Version: 03.21.00
+Phase: MODE_AUTOPILOT_RELEASED
+App Version: 03.22.00
 Structure Document: File_structure.txt
 Note: This file is an actual tree map and excludes cache-only Python bytecode folders, virtualenvs, local Codex scratch files, secrets, and large runtime output/cache folders.
 ================================================================================
@@ -114,6 +114,7 @@ ai_subtitle_studio/
 │   │   ├── deep_policy_learning.py
 │   │   ├── deep_runtime_adaptation.py
 │   │   ├── deep_subtitle_policy.py
+│   │   ├── deferred_editor_learning.py
 │   │   ├── editor_truth_capture.py
 │   │   ├── editor_truth_memory.py
 │   │   ├── golden_regression.py
@@ -224,6 +225,8 @@ ai_subtitle_studio/
 │   ├── __init__.py
 │   ├── accuracy_policy.py
 │   ├── auto_tracker.py
+│   ├── autopilot_cache.py
+│   ├── autopilot_policy.py
 │   ├── backend_fast.py
 │   ├── cloud_sync.py
 │   ├── cut_boundary.py
@@ -240,6 +243,7 @@ ai_subtitle_studio/
 │   ├── media_fingerprint.py
 │   ├── media_info.py
 │   ├── media_queue_order.py
+│   ├── mode_policy.py
 │   ├── model_manager.py
 │   ├── notifier.py
 │   ├── path_manager.py
@@ -258,11 +262,31 @@ ai_subtitle_studio/
 │   ├── video_codec.py
 │   └── work_mode.py
 ├── dataset
+│   ├── lora_personalization
+│   │   └── [runtime data not expanded]
+│   ├── personalization
+│   │   ├── trained_adapters
+│   │   │   └── personal_text_lora
+│   │   ├── audio_preset_lora.jsonl
+│   │   ├── text_lora_corpus.jsonl
+│   │   ├── text_lora_corpus_manifest.json
+│   │   ├── text_lora_dataset.jsonl
+│   │   ├── text_lora_manifest.json
+│   │   ├── text_lora_training_plan.json
+│   │   ├── voice_lora_bridge.jsonl
+│   │   └── voice_lora_profile_manifest.json
+│   ├── video_preview_cache
+│   │   └── [runtime data not expanded]
 │   ├── audio_presets.json
+│   ├── correction_memory.json
 │   ├── custom_defaults.json
 │   ├── dataset_correction.json
+│   ├── folder_settings.json
 │   ├── golden_subtitle_suite.json
-│   └── model_registry.json
+│   ├── model_registry.json
+│   ├── subtitle_rule.json
+│   ├── time_history.json
+│   └── user_settings.json
 ├── tests
 │   ├── conftest.py
 │   ├── test_accuracy_policy.py
@@ -270,6 +294,7 @@ ai_subtitle_studio/
 │   ├── test_audio_presets.py
 │   ├── test_auto_batch_editor_activation.py
 │   ├── test_auto_status_labels.py
+│   ├── test_autopilot_policy_cache.py
 │   ├── test_background_prefetch.py
 │   ├── test_correction_memory.py
 │   ├── test_cp03_cp04_status_ui.py
@@ -309,6 +334,7 @@ ai_subtitle_studio/
 │   ├── test_media_fingerprint.py
 │   ├── test_media_processor_overlap.py
 │   ├── test_media_queue_order.py
+│   ├── test_mode_policy.py
 │   ├── test_model_manager.py
 │   ├── test_multiclip_panel.py
 │   ├── test_ollama_provider.py
@@ -498,9 +524,7 @@ ai_subtitle_studio/
 │   ├── queue_widget.py
 │   ├── responsive_profile.py
 │   └── style.py
-├── voice_data
-│   ├── spk2_goodrain.wav
-│   └── spk3_voice.wav
+├── .env
 ├── .gitignore
 ├── ACTION_ITEMS.md
 ├── AGENTS.md
@@ -534,5 +558,6 @@ ai_subtitle_studio/
 ├── RELEASE_v03.19.00.md
 ├── RELEASE_v03.20.00.md
 ├── RELEASE_v03.21.00.md
+├── RELEASE_v03.22.00.md
 ├── requirements-mac.txt
 └── requirements-windows.txt

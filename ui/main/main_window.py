@@ -119,7 +119,7 @@ class MainWindow(
         self._required_model_check_done = False
         self._personalization_learning_dialogs = []
         self._post_completion_idle_enabled = False
-        self._post_completion_idle_ms = 600_000
+        self._post_completion_idle_ms = 300_000
         self._app_event_filter_installed = False
         self._lora_foreground_busy_until_ms = 0
         self._lora_foreground_busy_reason = ""
@@ -1595,6 +1595,60 @@ class MainWindow(
         if trainer is None:
             return {}
         return trainer.clear_pending_jobs(keep_completed=keep_completed)
+
+    def _post_generation_resource_cleanup(self, *, reason: str = "generation_complete", editor=None):
+        """Return the UI to an interactive state and detach clip-owned work."""
+        for backend_name in ("backend", "backend_fast"):
+            backend = getattr(self, backend_name, None)
+            if backend is None:
+                continue
+            try:
+                lock = getattr(backend, "_prefetch_lock", None)
+                if lock is not None:
+                    with lock:
+                        backend._prefetch_generation = int(getattr(backend, "_prefetch_generation", 0) or 0) + 1
+                        getattr(backend, "_prefetch_cache", {}).clear()
+                        getattr(backend, "_prefetch_threads", {}).clear()
+            except Exception:
+                pass
+            vp = getattr(backend, "video_processor", None)
+            if vp is not None:
+                for method_name in ("clear_fast_mode_overrides", "clear_auto_audio_tune_overrides"):
+                    method = getattr(vp, method_name, None)
+                    if callable(method):
+                        try:
+                            method()
+                        except Exception:
+                            pass
+                try:
+                    vp.stage_callback = None
+                except Exception:
+                    pass
+        target_editor = editor if editor is not None else getattr(self, "_editor_widget", None)
+        if target_editor is not None:
+            for method_name in ("_clear_processing_indicators", "_safe_enable_start_btn"):
+                method = getattr(target_editor, method_name, None)
+                if callable(method):
+                    try:
+                        method()
+                    except Exception:
+                        pass
+            try:
+                target_editor._subtitle_generation_completed = True
+            except Exception:
+                pass
+        try:
+            self._auto_processing_active = False
+        except Exception:
+            pass
+        try:
+            gc.collect()
+        except Exception:
+            pass
+        get_logger().log(f"🧹 후처리 정리 완료: {reason}")
+        if hasattr(self, "_refresh_saved_status_label"):
+            self._refresh_saved_status_label()
+        return {"cleaned": True, "reason": reason}
 
     def _is_user_activity_event(self, event) -> bool:
         if not getattr(self, "_post_completion_idle_enabled", False):

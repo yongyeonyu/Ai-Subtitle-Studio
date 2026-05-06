@@ -58,8 +58,8 @@ Item {
 
     Column {
         anchors.fill: parent
-        anchors.margins: 10
-        spacing: 9
+        anchors.margins: 7
+        spacing: 6
 
         Text {
             width: parent.width
@@ -76,7 +76,7 @@ Item {
             height: parent.height - y
             clip: true
             model: root.queueItems
-            spacing: 6
+            spacing: 4
             boundsBehavior: Flickable.StopAtBounds
             rightMargin: queueScroll.visible ? 4 : 0
             ScrollBar.vertical: ScrollBar {
@@ -108,7 +108,7 @@ Item {
                 property color statusColor: modelData.done ? "#55D97A" : (modelData.error ? "#FF6B78" : (currentActive ? "#FFD84D" : "#9DB0BB"))
                 property string timeText: modelData.eta || "-"
                 width: list.width - (list.contentHeight > list.height ? 8 : 0)
-                height: 86
+                height: 76
                 color: modelData.done ? "#13261D" : (modelData.error ? "#291719" : (currentActive ? "#17242C" : "#121A1E"))
                 border.color: modelData.done ? "#286B43" : (modelData.error ? "#6D2E35" : (currentActive ? "#FFD84D" : "#1D2A31"))
                 border.width: currentActive ? 2 : 1
@@ -116,21 +116,21 @@ Item {
 
                 Column {
                     anchors.fill: parent
-                    anchors.leftMargin: 10
-                    anchors.rightMargin: 10
-                    anchors.topMargin: 7
-                    anchors.bottomMargin: 7
-                    spacing: 4
+                    anchors.leftMargin: 8
+                    anchors.rightMargin: 8
+                    anchors.topMargin: 5
+                    anchors.bottomMargin: 5
+                    spacing: 3
 
                     Row {
                         width: parent.width
-                        height: 22
-                        spacing: 8
+                        height: 20
+                        spacing: 6
 
                         Rectangle {
                             id: orderChip
-                            width: 34
-                            height: 20
+                            width: 30
+                            height: 18
                             radius: 0
                             anchors.verticalCenter: parent.verticalCenter
                             color: "transparent"
@@ -146,13 +146,13 @@ Item {
                         }
 
                         Item {
-                            width: Math.max(0, parent.width - orderChip.width - timeBadge.width - 16)
+                            width: Math.max(0, parent.width - orderChip.width - timeBadge.width - 12)
                         }
 
                         Rectangle {
                             id: timeBadge
-                            width: 108
-                            height: 22
+                            width: 104
+                            height: 20
                             radius: 0
                             anchors.verticalCenter: parent.verticalCenter
                             color: "transparent"
@@ -182,7 +182,7 @@ Item {
 
                     Text {
                         width: parent.width
-                        height: 18
+                        height: 17
                         text: modelData.file || "-"
                         color: "#F5F7FA"
                         font.pixelSize: 11
@@ -193,7 +193,7 @@ Item {
 
                     Row {
                         width: parent.width
-                        height: 16
+                        height: 17
                         spacing: 6
 
                         Rectangle {
@@ -206,6 +206,8 @@ Item {
 
                         Text {
                             width: parent.width - 14
+                            height: parent.height
+                            anchors.verticalCenter: parent.verticalCenter
                             text: queueCard.statusText
                             color: queueCard.statusColor
                             font.pixelSize: 9

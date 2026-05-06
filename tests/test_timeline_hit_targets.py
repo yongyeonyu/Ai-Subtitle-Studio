@@ -935,13 +935,13 @@ class TimelineHitTargetTests(unittest.TestCase):
             calls = []
 
             with patch(
-                "core.personalization.text_lora_dataset.accumulate_personalization_dataset",
-                side_effect=lambda **kwargs: calls.append(kwargs) or {"appended_rows": 1, "voice_bridge_rows": 1},
+                "core.personalization.deferred_editor_learning.enqueue_deferred_editor_learning",
+                side_effect=lambda segments, **kwargs: calls.append({"segments": segments, **kwargs}) or {"queued": True},
             ):
                 editor._confirm_review_segment(0)
 
             self.assertEqual(len(calls), 1)
-            seg = calls[0]["current_segments"][0]
+            seg = calls[0]["segments"][0]
             self.assertEqual(seg["text"], "수정한 자막")
             self.assertEqual(seg["stt_selected_source"], "STT1")
             self.assertEqual(calls[0]["trigger"], "manual_confirm_segment")

@@ -1,6 +1,6 @@
 <!--
-Document-Version: 03.21.00
-Phase: COMPLETE
+Document-Version: 03.22.00
+Phase: MODE_AUTOPILOT_RELEASED
 Last-Updated: 2026-05-06
 Updated-By: Codex
 Purpose: Agent bootstrap and handoff rules only.
@@ -61,20 +61,24 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 ## Current Continuation Facts
 
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- Current app version in code: `03.21.00`
-- Current handoff document version: `03.21.00`
-- Latest release checkpoint: `v03.21.00`
-- Current phase: `COMPLETE`
+- Current app version in code: `03.22.00`
+- Current handoff document version: `03.22.00`
+- Latest release checkpoint: `v03.22.00`
+- Current phase: `MODE_AUTOPILOT_RELEASED`
 - Next planned phase: none.
-- Product priority: generate highly accurate subtitles on the first pass, even if processing takes longer.
+- Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping Fast mode responsive and safe from obvious hallucinations.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
 - Cross-platform rule: macOS and Windows must remain supported, including Korean paths, spaces, backslashes, subprocess handling, ffmpeg/ffprobe, faster-whisper workers, and PyQt6 runtime behavior.
-- Queue state: `ACTION_ITEMS.md` has no active or parked items after the accuracy automation, LoRA/deep-learning runtime policies, dynamic scheduling, recovery/fingerprint safeguards, roughcut fixes, and iPad/tablet readiness release.
+- Release state: Fast, Auto, and High are now the single user-facing Mode controls. Legacy `balanced`, `normal`, `보통`, and `균형` settings map to Auto; legacy `fast` and `precise` settings are preserved as Fast and High when no explicit `subtitle_mode` exists.
+- Completion state: subtitle generation and editor save now clear foreground busy UI before deferred learning starts; editor-save truth/text LoRA work is queued for Home-idle processing.
+- Idle learning state: automatic LoRA/personalization learning starts only after Home has been idle for five minutes, ramps from Lite to Heavy, and mouse/key input requests a quick stop. The app indicator blinks blue while learning is active.
+- Dashboard state: the sidebar engine dashboard shows ten stages: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
+- Verification state: full test suite and static checks passed for this release.
 
 ## Collaboration Rules
 
 - Reply to the user in Korean unless they explicitly request another language.
-- Use formal, respectful Korean honorific language when replying to the user.
+- Use formal, respectful Korean honorifics when replying to the user.
 - Keep repository documentation written in English unless the file is source data or user-visible Korean copy.
 - Implement requested changes directly when the request is clear.
 - Preserve existing user changes. Do not revert unrelated dirty files.
@@ -93,7 +97,10 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 
 ## Runtime And UI Rules
 
-- Audio preset, VAD, preprocessing, subtitle quality, and LLM selection must flow through shared services where possible.
+- Audio preset, VAD, preprocessing, Mode, and LLM selection must flow through shared services where possible.
+- Mode is user-facing as `Fast`, `Auto`, and `High`; old STT quality keys remain compatibility storage where needed.
+- Direct user controls for STT1, STT2, subtitle LLM, roughcut LLM, audio model list, and VAD model list must remain available.
+- LoRA or personalization learning must not start on the Editor screen. It should start only after the Home screen has been idle long enough, and user mouse or keyboard input should stop it quickly.
 - Project save/load logic must use shared project I/O helpers so STT1/STT2, subtitle segments, timeline metadata, and model settings persist consistently.
 - Folder queue processing must enqueue individual files for sequential processing. Folder selection must not silently become multiclip editing.
 - iCloud and NAS are the only background-watch processing modes.
@@ -112,7 +119,7 @@ For code changes, choose verification proportional to risk. Common checks:
 
 ```bash
 venv/bin/python -m pytest -q
-python3 -m compileall -q main.py core ui tests
+venv/bin/python -m compileall -q main.py core ui tests
 git diff --check -- .
 ```
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import threading
 import time
 from collections import defaultdict
@@ -29,6 +30,10 @@ from core.personalization.text_lora_runner import (
     save_voice_lora_profile_manifest,
     save_voice_lora_training_plan,
 )
+from core.personalization.deferred_editor_learning import (
+    DEFERRED_EDITOR_LEARNING_JOB_TYPE,
+    run_deferred_editor_learning_job,
+)
 
 
 QUEUE_STATUS_LABELS = {
@@ -48,6 +53,7 @@ QUEUE_JOB_TYPE_LABELS = {
     "build_retrieval_index": "검색 인덱스",
     "optimize_settings": "설정 최적화",
     "optimize_prompts": "프롬프트 최적화",
+    DEFERRED_EDITOR_LEARNING_JOB_TYPE: "에디터 저장 학습",
 }
 LOW_RESOURCE_POLL_INTERVAL_MS = 30_000
 LOW_RESOURCE_IDLE_WINDOW_MS = 300_000
@@ -57,6 +63,7 @@ LOW_RESOURCE_PROGRESS_SAVE_INTERVAL_SEC = 3.0
 LOW_RESOURCE_PROGRESS_BUCKET_STEP = 25
 MANUAL_PROGRESS_BUCKET_STEP = 10
 LOW_RESOURCE_INDEX_DEFERRED_REASON = "low_resource_index_refresh_deferred"
+LOW_RESOURCE_TO_HEAVY_IDLE_MS = 900_000
 AUDIO_EXTRACTION_JOB_TYPES = {"build_voice_profiles", "build_stt1_whisper_adapter"}
 
 
@@ -481,6 +488,9 @@ def run_training_job(
     job_label = _queue_job_type_label(job_type)
     media_label = _media_log_label(job.get("media_path") or media_id or "global")
 
+    if job_type == DEFERRED_EDITOR_LEARNING_JOB_TYPE:
+        get_logger().log(f"🧠 [LoRA 학습] {job_label}: 저장된 에디터 자막을 Home-idle에서 반영 중")
+        return run_deferred_editor_learning_job(job, store_dir=store_dir)
     if job_type == "analyze_truth_table":
         get_logger().log(f"🧠 [LoRA 학습] {job_label}: truth table 규칙 분석 중")
         result = learn_rules_from_truth_table(store_dir)
@@ -886,6 +896,8 @@ class PersonalizationIdleTrainer(QObject):
         self._suspended_until_ms = 0
         self._suspend_reason = ""
         self._last_auto_learning_status_log = ""
+        self._current_learning_mode = ""
+        self._current_low_resource = True
         recover_interrupted_training_jobs(self.store_dir, reason="trainer_startup")
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(LOW_RESOURCE_POLL_INTERVAL_MS)
@@ -910,8 +922,37 @@ class PersonalizationIdleTrainer(QObject):
         thread = self._worker_thread
         return bool(thread is not None and thread.is_alive())
 
+    def learning_status(self) -> dict[str, Any]:
+        busy = self.is_busy() or bool(self._current_learning_mode)
+        mode = str(self._current_learning_mode or ("lite" if self._current_low_resource else "heavy"))
+        if not busy:
+            mode = ""
+        return {
+            "active": busy,
+            "mode": mode,
+            "low_resource": bool(self._current_low_resource),
+            "blink_interval_ms": 1000 if mode == "lite" else 100,
+            "tooltip": (
+                "Lite learning is running. Mouse or keyboard input stops learning."
+                if mode == "lite"
+                else (
+                    "Heavy learning is running. Mouse or keyboard input stops learning."
+                    if mode == "heavy"
+                    else "Learning is idle."
+                )
+            ),
+        }
+
     def last_run_result(self) -> dict[str, Any]:
         return dict(self._last_run_result or {})
+
+    def _notify_learning_status_changed(self) -> None:
+        refresher = getattr(self.owner, "_refresh_saved_status_label", None)
+        if callable(refresher):
+            try:
+                refresher()
+            except Exception:
+                pass
 
     def _log_auto_learning_status(self, context: str) -> None:
         summary = format_training_queue_status_summary(load_training_queue(self.store_dir))
@@ -950,15 +991,29 @@ class PersonalizationIdleTrainer(QObject):
         if self.is_busy():
             return {"started": False, "reason": "busy"}
         self._stop_requested.clear()
-        result = self._process_next_job_once(low_resource=low_resource)
-        return {"started": bool(result.get("processed")), "result": result}
+        self._current_low_resource = bool(low_resource)
+        self._current_learning_mode = "lite" if low_resource else "heavy"
+        self._notify_learning_status_changed()
+        try:
+            result = self._process_next_job_once(low_resource=low_resource)
+            return {"started": bool(result.get("processed")), "result": result}
+        finally:
+            self._current_learning_mode = ""
+            gc.collect()
+            self._notify_learning_status_changed()
 
     def _background_run_once(self, *, low_resource: bool = True) -> None:
         try:
+            self._current_low_resource = bool(low_resource)
+            self._current_learning_mode = "lite" if low_resource else "heavy"
+            self._notify_learning_status_changed()
             self._process_next_job_once(low_resource=low_resource)
         finally:
             self._last_job_finished_ms = QDateTime.currentMSecsSinceEpoch()
             self._log_auto_learning_status("백그라운드 완료")
+            self._current_learning_mode = ""
+            gc.collect()
+            self._notify_learning_status_changed()
 
     def start_background_run(self, *, low_resource: bool = True) -> dict[str, Any]:
         with self._worker_lock:
@@ -975,6 +1030,7 @@ class PersonalizationIdleTrainer(QObject):
                 name="personalization-idle-trainer",
             )
             self._worker_thread.start()
+            self._notify_learning_status_changed()
             return {"started": True, "reason": "background"}
 
     def suspend_for_foreground_activity(
@@ -992,6 +1048,8 @@ class PersonalizationIdleTrainer(QObject):
         self._suspended_until_ms = max(int(self._suspended_until_ms or 0), now + max(0, hold))
         self._suspend_reason = str(reason or "foreground_activity")
         self._stop_requested.set()
+        gc.collect()
+        self._notify_learning_status_changed()
         return {
             "suspended": True,
             "busy": self.is_busy(),
@@ -1071,12 +1129,17 @@ class PersonalizationIdleTrainer(QObject):
             return False
         return (now - int(self.last_user_activity_ms or 0)) >= int(self.idle_window_ms)
 
+    def _auto_learning_low_resource(self) -> bool:
+        now = QDateTime.currentMSecsSinceEpoch()
+        idle_for = now - int(self.last_user_activity_ms or 0)
+        return idle_for < int(self.idle_window_ms + LOW_RESOURCE_TO_HEAVY_IDLE_MS)
+
     def _poll(self) -> None:
         if self.is_busy():
             return
         if not self._owner_idle():
             return
-        self.start_background_run()
+        self.start_background_run(low_resource=self._auto_learning_low_resource())
 
 
 __all__ = [

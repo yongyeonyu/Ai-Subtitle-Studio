@@ -26,16 +26,14 @@ from core.audio import audio_presets as _audio_presets
 from core.audio.preset_auto_classifier import auto_classify_media_presets, apply_auto_classified_presets
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
-    apply_stt_quality_preset,
     load_stt_quality_presets,
     normalize_stt_quality_key,
     stt_quality_label,
 )
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
+from core.mode_policy import mode_to_stt_quality, selected_mode_from_settings, stt_quality_to_mode
 from core.settings_simplifier import (
     apply_simple_operation_mode,
-    normalize_simple_operation_mode,
-    simple_operation_mode_items,
     simple_operation_mode_summary,
 )
 from ui.settings.settings_roughcut import SettingsRoughcutMixin
@@ -381,6 +379,10 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
 
         self.chk_stt_ensemble_llm = QCheckBox("LLM 후보 판정 사용")
         self.chk_stt_ensemble_llm.setChecked(bool(settings.get("stt_ensemble_llm_judge_enabled", True)))
+        ai_form.addRow("STT1 음성 모델:", self.combo_whisper)
+        ai_form.addRow("STT2 사용:", self.chk_stt_ensemble)
+        ai_form.addRow("STT2 음성 모델:", self.combo_whisper_secondary)
+        ai_form.addRow("STT 후보 판정:", self.chk_stt_ensemble_llm)
 
         # 5. 음성 처리 AI
         self.combo_audio = QComboBox()
@@ -407,11 +409,16 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self._fit_model_combo(self.combo_vad)
         self.chk_vad_post_align = QCheckBox("VAD로 STT/앙상블 자막 위치 재계산")
         self.chk_vad_post_align.setChecked(bool(settings.get("vad_post_stt_align_enabled", True)))
-        self._sync_stt_quality_preset_combo(settings.get("stt_quality_preset", "precise"))
+        audio_section = QLabel("음성/VAD")
+        audio_section.setStyleSheet(label_style("text", 13, bold=True) + "padding: 10px 5px 2px 5px;")
+        ai_form.addRow("", audio_section)
+        ai_form.addRow("음성 처리 모델:", self.combo_audio)
+        ai_form.addRow("VAD 모델:", self.combo_vad)
+        ai_form.addRow("VAD 보정:", self.chk_vad_post_align)
+        self._sync_stt_quality_preset_combo(mode_to_stt_quality(selected_mode_from_settings(settings)))
         self._sync_audio_preset_combo(settings.get("audio_preset", ""))
         self._sync_auto_preset_button_state()
         self._update_editor_roughcut_draft_state()
-        self.combo_stt_quality_preset.currentIndexChanged.connect(self._on_stt_quality_preset_changed)
         self.combo_audio_preset.currentIndexChanged.connect(self._on_audio_preset_changed)
 
         self._build_auto_settings_section(auto_form, settings)
@@ -421,30 +428,27 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         layout.addLayout(_create_bottom_buttons(self, self._on_ok, save_callback=self._on_save, save_def_callback=self._on_save_default))   
 
     def _build_simple_operation_section(self, form: QFormLayout, settings: dict):
-        section = QLabel("작업 모드")
+        section = QLabel("Mode")
         section.setStyleSheet(label_style("text", 13, bold=True) + "padding: 10px 5px 2px 5px;")
         form.addRow("", section)
 
         mode_layout = QVBoxLayout()
         mode_layout.setContentsMargins(0, 0, 0, 0)
         mode_layout.setSpacing(6)
-        self.combo_simple_operation_mode = QComboBox()
-        for mode, label, summary in simple_operation_mode_items():
-            self.combo_simple_operation_mode.addItem(f"{label} - {summary}", mode)
-        current_mode = normalize_simple_operation_mode(settings.get("simple_operation_mode", "auto"))
-        self._set_combo_data(self.combo_simple_operation_mode, current_mode)
-        self.combo_simple_operation_mode.currentIndexChanged.connect(self._on_simple_operation_mode_changed)
-        mode_layout.addWidget(self.combo_simple_operation_mode)
+        current_mode = selected_mode_from_settings(settings)
+        self._sync_stt_quality_preset_combo(mode_to_stt_quality(current_mode))
+        self.combo_stt_quality_preset.currentIndexChanged.connect(self._on_stt_quality_preset_changed)
+        mode_layout.addWidget(self.combo_stt_quality_preset)
 
         self.lbl_simple_operation_summary = QLabel(simple_operation_mode_summary(current_mode))
         self.lbl_simple_operation_summary.setWordWrap(True)
         self.lbl_simple_operation_summary.setStyleSheet(label_style("muted", 11))
         mode_layout.addWidget(self.lbl_simple_operation_summary)
 
-        form.addRow("모드:", mode_layout)
+        form.addRow("Mode:", mode_layout)
 
     def _on_simple_operation_mode_changed(self, *args):
-        mode = self.combo_simple_operation_mode.currentData() or "auto"
+        mode = stt_quality_to_mode(self.combo_stt_quality_preset.currentData() or "balanced")
         if hasattr(self, "lbl_simple_operation_summary"):
             self.lbl_simple_operation_summary.setText(simple_operation_mode_summary(mode))
         self.result_settings = apply_simple_operation_mode(self.result_settings, mode)
@@ -875,7 +879,10 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
 
     def _on_stt_quality_preset_changed(self, *args):
         preset_key = self.combo_stt_quality_preset.currentData() or "precise"
-        self.result_settings = apply_stt_quality_preset(self.result_settings, preset_key)
+        mode = stt_quality_to_mode(preset_key)
+        if hasattr(self, "lbl_simple_operation_summary"):
+            self.lbl_simple_operation_summary.setText(simple_operation_mode_summary(mode))
+        self.result_settings = apply_simple_operation_mode(self.result_settings, mode)
         self._set_combo_by_data_value(self.combo_whisper, self.result_settings.get("selected_whisper_model"))
         self._set_llm_combo_by_name(self.result_settings.get("selected_model", ""))
         self._update_editor_roughcut_draft_state()
@@ -1020,24 +1027,27 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         res = dict(self.result_settings)
         m_data = self.combo_llm.currentData() or {}
         provider = (m_data.get('details', {}) or {}).get('provider', 'ollama')
+        selected_llm_name = m_data.get('name') or self.combo_llm.currentText()
+        subtitle_llm_user_selected = bool(
+            str(selected_llm_name or "").strip()
+            and "사용 안함" not in str(selected_llm_name or "")
+            and str(provider or "").strip().lower() != "none"
+        )
         google_key_saved = set_api_key("google", self.input_api_key.text().strip())
         openai_key_saved = set_api_key("openai", self.input_openai_api_key.text().strip())
         huggingface_token_saved = set_api_key("huggingface", self.input_huggingface_token.text().strip())
         auto_start_mode = normalize_stt_quality_key(self.combo_auto_start_mode.currentData() or "precise")
         auto_start_enabled = bool(self.chk_auto_start_enabled.isChecked())
         auto_correct_enabled = bool(self.chk_subtitle_quality_auto_correct.isChecked())
-        simple_mode = normalize_simple_operation_mode(
-            self.combo_simple_operation_mode.currentData()
-            if hasattr(self, "combo_simple_operation_mode")
-            else res.get("simple_operation_mode", "auto")
-        )
+        simple_mode = stt_quality_to_mode(self.combo_stt_quality_preset.currentData() or "balanced")
         chunk_time_limit = 99999 if self.chk_chunk_all.isChecked() else self.slider_chunk.value()
         if bool(res.get("subtitle_bundle_autopilot_enabled", True)):
             chunk_time_limit = int(res.get("subtitle_bundle_target_sec", res.get("chunk_time_limit", 180)) or 180)
 
         res.update({
-            "selected_model": m_data.get('name') or self.combo_llm.currentText(),
+            "selected_model": selected_llm_name,
             "selected_llm_provider": provider,
+            "subtitle_llm_user_selected": subtitle_llm_user_selected,
             "selected_whisper_model": self.combo_whisper.currentText().replace(" (실험)", ""),
             "stt_ensemble_enabled": bool(self.chk_stt_ensemble.isChecked()),
             "selected_whisper_model_secondary": self.combo_whisper_secondary.currentText().replace(" (실험)", ""),
@@ -1070,6 +1080,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "review_recheck_buffer_sec": round(float(self.spin_quality_recheck_buffer.value()), 2),
             "settings_simplified_ui_enabled": True,
             "simple_operation_mode": simple_mode,
+            "subtitle_mode": simple_mode,
             **self._collect_roughcut_llm_settings(),
             "auto_start_mode": auto_start_mode,
             "auto_start_enabled": auto_start_enabled,

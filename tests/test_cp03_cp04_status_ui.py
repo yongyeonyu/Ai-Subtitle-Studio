@@ -69,6 +69,28 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         self.assertFalse(home._saved_status_blink_timer.isActive())
         self.assertIn("#34C759", home.saved_status_label.text())
 
+    def test_saved_status_blue_blink_for_lite_and_heavy_learning(self):
+        state_manager = SimpleNamespace(state="ST_SAVED", is_locked=False, is_dirty=False)
+        editor = SimpleNamespace(sm=state_manager, _is_ai_processing=False)
+        home = _DummyHome(editor)
+
+        home._personalization_idle_trainer = SimpleNamespace(
+            learning_status=lambda: {"active": True, "mode": "lite", "blink_interval_ms": 1000}
+        )
+        home._refresh_saved_status_label(is_dirty=False)
+        self.assertTrue(home._saved_status_blink_timer.isActive())
+        self.assertEqual(home._saved_status_blink_timer.interval(), 1000)
+        self.assertIn("#0A84FF", home.saved_status_label.text())
+        self.assertIn("Lite learning", home.saved_status_label.toolTip())
+
+        home._personalization_idle_trainer = SimpleNamespace(
+            learning_status=lambda: {"active": True, "mode": "heavy", "blink_interval_ms": 100}
+        )
+        home._refresh_saved_status_label(is_dirty=False)
+        self.assertEqual(home._saved_status_blink_timer.interval(), 100)
+        self.assertIn("#0A84FF", home.saved_status_label.text())
+        self.assertIn("Heavy learning", home.saved_status_label.toolTip())
+
     def test_status_rail_uses_green_flash_and_short_korean_stages(self):
         rail = StatusRail()
         try:

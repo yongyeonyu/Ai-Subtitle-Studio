@@ -43,6 +43,23 @@ class SettingsMaterializationTests(unittest.TestCase):
                 config.DATASET_DIR = original_dataset_dir
                 settings_module.set_runtime_settings_override(original_override or None)
 
+    def test_materialization_preserves_user_selected_subtitle_quality(self):
+        from core.settings_profiles import materialize_user_settings
+
+        materialized = materialize_user_settings(
+            {
+                "simple_operation_mode": "auto",
+                "auto_start_mode": "precise",
+                "stt_quality_preset": "precise",
+            }
+        )
+
+        self.assertEqual(materialized["simple_operation_mode"], "high")
+        self.assertEqual(materialized["subtitle_mode"], "high")
+        self.assertEqual(materialized["auto_start_mode"], "precise")
+        self.assertEqual(materialized["stt_quality_preset"], "precise")
+        self.assertTrue(materialized["autopilot_enabled"])
+
     def test_project_data_manager_save_writes_materialized_settings(self):
         from core.project import data_manager
 

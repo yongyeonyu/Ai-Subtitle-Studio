@@ -17,11 +17,14 @@ from ui.style import label_style, line_icon, tool_button_style
 
 MENU_BAR_HEIGHT = 54
 MENU_BUTTON_HEIGHT = 44
-MENU_SMALL_WIDTH = 54
-MENU_ACTION_WIDTH = 92
+MENU_SMALL_WIDTH = 48
+MENU_ACTION_WIDTH = 78
+MENU_WIDE_WIDTH = 62
+MENU_CACHE_WIDTH = 82
 MENU_SMALL_ICON = 17
 MENU_WIDE_ICON = 16
 MENU_ACTION_ICON = 18
+MENU_TEXT_UNDER_ICON_PADDING = "8px 5px 4px 5px"
 
 
 class StatusRail(QWidget):
@@ -305,7 +308,7 @@ class GlobalMenuBar(QWidget):
         self.btn_auto_start = self._wide_button("자동", "sliders", self._toggle_auto_start)
         self.btn_help = self._wide_button("도움말", "help", self._open_help)
         self.btn_log = self._wide_button("사이드바", "terminal", self._toggle_log)
-        self.btn_cache_clear = self._wide_button("캐쉬삭제", "trash", self._clear_cache, min_width=96)
+        self.btn_cache_clear = self._wide_button("캐쉬삭제", "trash", self._clear_cache, min_width=MENU_CACHE_WIDTH)
         right.addWidget(self.btn_cache_clear)
         right.addWidget(self.btn_auto_start)
         right.addWidget(self.btn_help)
@@ -330,12 +333,12 @@ class GlobalMenuBar(QWidget):
         btn.setFixedHeight(MENU_BUTTON_HEIGHT)
         btn.setFixedWidth(MENU_SMALL_WIDTH)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(tool_button_style("toolbar"))
+        btn.setStyleSheet(tool_button_style("toolbar", padding=MENU_TEXT_UNDER_ICON_PADDING))
         btn.clicked.connect(slot)
         self._tool_buttons.append(btn)
         return btn
 
-    def _wide_button(self, text, icon_name, slot, *, kind="toolbar", min_width=72):
+    def _wide_button(self, text, icon_name, slot, *, kind="toolbar", min_width=MENU_WIDE_WIDTH):
         btn = QToolButton()
         btn.setText(text)
         btn.setIcon(line_icon(icon_name, "#FF3B30" if kind == "danger" else "#A9B0B7", 22))
@@ -344,7 +347,7 @@ class GlobalMenuBar(QWidget):
         btn.setFixedHeight(MENU_BUTTON_HEIGHT)
         btn.setFixedWidth(min_width)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(tool_button_style(kind))
+        btn.setStyleSheet(tool_button_style(kind, padding=MENU_TEXT_UNDER_ICON_PADDING))
         btn.setProperty("expandedMinWidth", min_width)
         btn.clicked.connect(slot)
         self._tool_buttons.append(btn)
@@ -359,7 +362,7 @@ class GlobalMenuBar(QWidget):
         btn.setFixedHeight(MENU_BUTTON_HEIGHT)
         btn.setFixedWidth(MENU_ACTION_WIDTH)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(tool_button_style("toolbar"))
+        btn.setStyleSheet(tool_button_style("toolbar", padding=MENU_TEXT_UNDER_ICON_PADDING))
         btn.clicked.connect(slot)
         self._tool_buttons.append(btn)
         return btn
@@ -421,13 +424,13 @@ class GlobalMenuBar(QWidget):
             self.btn_stt_mode.setText("STT")
             self.btn_stt_mode.setIcon(line_icon("mic", stt_color, 22))
             self.btn_stt_mode.setToolTip("STT 모드 ON" if stt_on else "STT 모드 OFF")
-            self.btn_stt_mode.setStyleSheet(tool_button_style("toolbar", checked=stt_on))
+            self.btn_stt_mode.setStyleSheet(tool_button_style("toolbar", checked=stt_on, padding=MENU_TEXT_UNDER_ICON_PADDING))
         main = self.main_window
         auto_on = bool(getattr(main, "_auto_start_on", True))
         self.btn_auto_start.setText("자동")
         auto_color = "#34C759" if auto_on else "#8B949E"
         self.btn_auto_start.setIcon(line_icon("auto", auto_color, 22))
-        self.btn_auto_start.setStyleSheet(tool_button_style("toolbar", checked=auto_on))
+        self.btn_auto_start.setStyleSheet(tool_button_style("toolbar", checked=auto_on, padding=MENU_TEXT_UNDER_ICON_PADDING))
         self.btn_auto_start.setToolTip("자동시작 ON" if auto_on else "자동시작 OFF")
         log_visible = bool(getattr(main, "_log_visible", True))
         self.btn_log.setText("사이드바")
@@ -447,12 +450,12 @@ class GlobalMenuBar(QWidget):
                     btn.setIconSize(QSize(MENU_ACTION_ICON, MENU_ACTION_ICON))
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setFixedHeight(profile.menu_button_height)
-                    btn.setFixedWidth(MENU_ACTION_WIDTH)
+                    btn.setFixedWidth(max(profile.touch_target, MENU_ACTION_WIDTH))
                 elif btn in (self.btn_auto_start, self.btn_help, self.btn_log, self.btn_cache_clear):
                     btn.setIconSize(QSize(MENU_WIDE_ICON, MENU_WIDE_ICON))
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setFixedHeight(profile.menu_button_height)
-                    btn.setFixedWidth(max(profile.touch_target, int(btn.property("expandedMinWidth") or 72)))
+                    btn.setFixedWidth(max(profile.touch_target, int(btn.property("expandedMinWidth") or MENU_WIDE_WIDTH)))
                 else:
                     btn.setIconSize(QSize(MENU_SMALL_ICON, MENU_SMALL_ICON))
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)

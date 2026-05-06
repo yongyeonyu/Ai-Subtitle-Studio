@@ -8,7 +8,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core import media_info
-from core.performance import adaptive_llm_worker_count, adaptive_worker_count, bounded_worker_count, ffprobe_worker_count
+from core.performance import (
+    adaptive_llm_worker_count,
+    adaptive_worker_count,
+    bounded_worker_count,
+    ffprobe_worker_count,
+    mark_runtime_scheduler_start,
+)
 
 
 class PerformanceMediaCacheTest(unittest.TestCase):
@@ -17,6 +23,7 @@ class PerformanceMediaCacheTest(unittest.TestCase):
 
     def tearDown(self):
         media_info.clear_media_probe_cache_memory()
+        mark_runtime_scheduler_start({"runtime_scheduler_ramp_up_enabled": False})
 
     def test_probe_media_reuses_memory_and_disk_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -141,6 +148,41 @@ class PerformanceMediaCacheTest(unittest.TestCase):
         self.assertEqual(workers, 2)
         self.assertFalse(meta["auto_enabled"])
         self.assertEqual(meta["reason"], "manual_compat")
+
+    def test_runtime_scheduler_ramp_up_starts_with_one_worker(self):
+        snapshot = {
+            "system": "Darwin",
+            "logical_cores": 8,
+            "physical_cores": 4,
+            "performance_cores": 4,
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 12 * 1024 ** 3,
+            "available_memory_ratio": 0.75,
+            "cpu_load_ratio": 0.1,
+            "on_battery": False,
+            "user_active": False,
+        }
+        settings = {
+            "runtime_scheduler_auto_enabled": True,
+            "runtime_scheduler_ramp_up_enabled": True,
+            "runtime_scheduler_ramp_initial_sec": 60.0,
+            "runtime_scheduler_ramp_step_sec": 60.0,
+        }
+        with patch("core.performance.hardware_profile", return_value=snapshot), \
+             patch("core.performance.current_resource_snapshot", return_value=snapshot):
+            mark_runtime_scheduler_start(settings)
+            workers, meta = adaptive_worker_count(
+                task="cut_pioneer",
+                settings=settings,
+                requested=4,
+                workload=20,
+                minimum=1,
+                maximum=4,
+            )
+
+        self.assertEqual(workers, 1)
+        self.assertEqual(meta["ramp"]["phase"], "warmup")
+        self.assertIn("ramp_up_warmup", meta["reductions"])
 
 
 if __name__ == "__main__":

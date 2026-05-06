@@ -100,7 +100,7 @@ class RoughcutUiV2Tests(unittest.TestCase):
         })
         try:
             self.assertEqual([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())], ["자막 검수", "중분류", "모델/API", "자동 설정"])
-            self.assertEqual(dialog.combo_simple_operation_mode.currentData(), "auto")
+            self.assertEqual(dialog.combo_stt_quality_preset.currentData(), "balanced")
             collected = dialog._collect_settings()
             self.assertTrue(collected["settings_simplified_ui_enabled"])
             self.assertTrue(collected["subtitle_bundle_autopilot_enabled"])
@@ -113,10 +113,10 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertTrue(collected["llm_workers_auto_enabled"])
             self.assertFalse(collected["subtitle_quality_enabled"])
             self.assertEqual(collected["review_auto_correct_apply_threshold"], 94)
-            self.assertTrue(collected["roughcut_llm_enabled"])
-            self.assertTrue(collected["roughcut_llm_use_override"])
-            self.assertEqual(collected["roughcut_llm_provider"], "openai")
-            self.assertEqual(collected["roughcut_llm_model"], "gpt-roughcut")
+            self.assertFalse(collected["roughcut_llm_enabled"])
+            self.assertFalse(collected["roughcut_llm_use_override"])
+            self.assertEqual(collected["roughcut_llm_provider"], "none")
+            self.assertEqual(collected["roughcut_llm_model"], "사용 안함")
             self.assertEqual(collected["roughcut_llm_prompt"], "")
             self.assertEqual(collected["roughcut_llm_threads"], 3)
             self.assertTrue(collected["roughcut_llm_threads_auto_enabled"])
@@ -174,18 +174,16 @@ class RoughcutUiV2Tests(unittest.TestCase):
             try:
                 labels = [dialog.combo_auto_start_mode.itemText(i) for i in range(dialog.combo_auto_start_mode.count())]
                 values = [dialog.combo_auto_start_mode.itemData(i) for i in range(dialog.combo_auto_start_mode.count())]
-                self.assertEqual(labels, ["빠름", "보통", "높음"])
+                self.assertEqual(labels, ["Fast", "Auto", "High"])
                 self.assertEqual(values, ["fast", "balanced", "precise"])
                 self.assertEqual(dialog.combo_auto_start_mode.currentData(), "precise")
 
-                for idx in range(dialog.combo_simple_operation_mode.count()):
-                    if dialog.combo_simple_operation_mode.itemData(idx) == "balanced":
-                        dialog.combo_simple_operation_mode.setCurrentIndex(idx)
-                        break
+                self.assertFalse(hasattr(dialog, "combo_simple_operation_mode"))
                 collected = dialog._collect_settings()
 
                 self.assertEqual(collected["auto_start_mode"], "balanced")
-                self.assertEqual(collected["simple_operation_mode"], "balanced")
+                self.assertEqual(collected["simple_operation_mode"], "auto")
+                self.assertFalse(collected["operation_mode_choices_visible"])
                 saved = save_mock.call_args.args[0]
                 self.assertEqual(saved["auto_start_mode"], "balanced")
                 self.assertEqual(saved["icloud_stt_quality_preset"], "balanced")
@@ -200,7 +198,8 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertTrue(dialog._manual_gap_scroll_area.isHidden())
             dialog._collect_data()
             self.assertTrue(dialog.result["subtitle_bundle_autopilot_enabled"])
-            self.assertEqual(dialog.result["simple_operation_mode"], "precise")
+            self.assertEqual(dialog.result["simple_operation_mode"], "high")
+            self.assertFalse(dialog.result["operation_mode_choices_visible"])
         finally:
             dialog.close()
 

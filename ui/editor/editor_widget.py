@@ -260,6 +260,14 @@ class EditorWidget(
         self._is_ai_processing = is_locked
         self._is_dirty         = is_dirty
 
+        if not is_locked and hasattr(self, "_spinner_timer"):
+            try:
+                self._spinner_timer.stop()
+            except RuntimeError:
+                pass
+            except Exception:
+                pass
+
         if hasattr(self, 'status_lbl'):
             self.status_lbl.setText(lbl_txt)
         if hasattr(self, 'btn_start'):

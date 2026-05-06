@@ -14,6 +14,7 @@ import platform
 import subprocess
 import tempfile
 import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,8 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _JSON_WRITE_LOCK = threading.Lock()
+_RAMP_LOCK = threading.Lock()
+_RUNTIME_RAMP_STARTED_AT = 0.0
 
 
 def _positive_int(value: Any, default: int = 0) -> int:
@@ -115,6 +118,74 @@ def _safe_bool(value: Any, default: bool = True) -> bool:
     if isinstance(value, str):
         return value.strip().lower() not in {"0", "false", "off", "no", "끔", "아니오"}
     return bool(value)
+
+
+def mark_runtime_scheduler_start(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Start a gentle resource ramp for foreground processing.
+
+    The pipeline starts at one worker, then gradually allows more parallel work
+    after the app proves stable. This keeps the start button responsive and
+    avoids waking ffmpeg/STT/LLM work all at once.
+    """
+    global _RUNTIME_RAMP_STARTED_AT
+    settings = dict(settings or {})
+    enabled = _safe_bool(settings.get("runtime_scheduler_ramp_up_enabled"), True)
+    now = time.monotonic()
+    with _RAMP_LOCK:
+        _RUNTIME_RAMP_STARTED_AT = now if enabled else 0.0
+    return {
+        "schema": "ai_subtitle_studio.runtime_scheduler_ramp.v1",
+        "enabled": enabled,
+        "started_at_monotonic": _RUNTIME_RAMP_STARTED_AT,
+        "initial_sec": max(0.0, float(settings.get("runtime_scheduler_ramp_initial_sec", 45.0) or 45.0)),
+        "step_sec": max(1.0, float(settings.get("runtime_scheduler_ramp_step_sec", 60.0) or 60.0)),
+    }
+
+
+def runtime_scheduler_ramp_elapsed() -> float:
+    with _RAMP_LOCK:
+        started = float(_RUNTIME_RAMP_STARTED_AT or 0.0)
+    if started <= 0.0:
+        return 0.0
+    return max(0.0, time.monotonic() - started)
+
+
+def _ramp_worker_cap(
+    settings: dict[str, Any] | None,
+    *,
+    task: str,
+    current_cap: int,
+) -> tuple[int, dict[str, Any]]:
+    settings = dict(settings or {})
+    current_cap = max(1, int(current_cap or 1))
+    if not _safe_bool(settings.get("runtime_scheduler_ramp_up_enabled"), True):
+        return current_cap, {"enabled": False, "cap": current_cap, "reason": "disabled"}
+    elapsed = runtime_scheduler_ramp_elapsed()
+    if elapsed <= 0.0:
+        return current_cap, {"enabled": False, "cap": current_cap, "reason": "not_started"}
+
+    initial_sec = max(0.0, float(settings.get("runtime_scheduler_ramp_initial_sec", 45.0) or 45.0))
+    step_sec = max(1.0, float(settings.get("runtime_scheduler_ramp_step_sec", 60.0) or 60.0))
+    task_text = str(task or "worker").strip().lower()
+    if elapsed < initial_sec:
+        cap = 1
+        phase = "warmup"
+    else:
+        cap = 2 + int((elapsed - initial_sec) // step_sec)
+        phase = "ramping"
+    if task_text in {"llm", "subtitle_llm", "roughcut_llm"} or "llm" in task_text:
+        # Local model runners are the easiest thing to destabilize on MacBook
+        # Air-class machines, so they ramp one step slower than CPU workers.
+        cap = max(1, cap - 1)
+    cap = max(1, min(current_cap, cap))
+    return cap, {
+        "enabled": True,
+        "cap": cap,
+        "elapsed_sec": round(elapsed, 3),
+        "initial_sec": initial_sec,
+        "step_sec": step_sec,
+        "phase": phase,
+    }
 
 
 def _available_memory_bytes() -> int:
@@ -304,6 +375,10 @@ def adaptive_worker_count(
     workers = max(minimum, min(base - reduction, workload, max_cap))
     if task_text == "stt" and workload >= 2 and not reasons:
         workers = min(workers, 2)
+    ramp_cap, ramp_meta = _ramp_worker_cap(settings, task=task_text, current_cap=workers)
+    if ramp_meta.get("enabled") and ramp_cap < workers:
+        workers = max(minimum, ramp_cap)
+        reasons.append(f"ramp_up_{ramp_meta.get('phase', 'active')}")
     meta = {
         "schema": "ai_subtitle_studio.runtime_scheduler.v1",
         "task": task_text,
@@ -313,6 +388,7 @@ def adaptive_worker_count(
         "workload": workload,
         "reason": "resource_adaptive",
         "reductions": sorted(set(reasons)),
+        "ramp": ramp_meta,
         "resource": snapshot,
     }
     return workers, meta
@@ -395,6 +471,10 @@ def adaptive_llm_worker_count(
     if task_text == "roughcut":
         maximum = _positive_int(settings.get("roughcut_llm_threads_resource_max"), 0) or min(maximum, 4)
     workers = max(1, min(int(base), int(maximum), workload))
+    ramp_cap, ramp_meta = _ramp_worker_cap(settings, task=f"{task_text}_llm", current_cap=workers)
+    if ramp_meta.get("enabled") and ramp_cap < workers:
+        workers = max(1, ramp_cap)
+        reduction_reasons.append(f"ramp_up_{ramp_meta.get('phase', 'active')}")
     meta = {
         "auto_enabled": True,
         "provider": provider_text or "ollama",
@@ -404,6 +484,7 @@ def adaptive_llm_worker_count(
         "workers": workers,
         "reason": "resource_adaptive",
         "reductions": sorted(set(reduction_reasons)),
+        "ramp": ramp_meta,
         "resource": snapshot,
     }
     return workers, meta

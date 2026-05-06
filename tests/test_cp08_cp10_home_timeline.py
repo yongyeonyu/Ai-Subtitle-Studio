@@ -26,6 +26,13 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
         window.deleteLater()
         self.app.processEvents()
 
+    def test_post_completion_idle_default_is_five_minutes(self):
+        window = MainWindow()
+        try:
+            self.assertEqual(window._post_completion_idle_ms, 300_000)
+        finally:
+            self._cleanup_window(window)
+
     def test_idle_countdown_keeps_header_compact(self):
         window = MainWindow()
         try:

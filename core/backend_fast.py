@@ -10,6 +10,8 @@ core/backend_fast.py
 import os
 import threading
 import time
+from core.autopilot_policy import compact_progress_event, speaker_preflight_decision, stage_prewarm_decision
+from core.performance import mark_runtime_scheduler_start
 from core.runtime import config
 from core.runtime.logger import get_logger
 from .pipeline.backend_core import CoreBackend
@@ -47,6 +49,20 @@ class CoreBackendFast(CoreBackend):
 
         self._active = True
         set_runtime_settings_override(getattr(self.ui, "_runtime_settings_override", None))
+        try:
+            loaded_settings = load_settings()
+            ramp_meta = mark_runtime_scheduler_start(loaded_settings)
+            progress = compact_progress_event(
+                stage="diagnostic",
+                lane="auto",
+                reason="AutoPilot",
+                next_stage="audio_extract",
+                resource_state="ramp warmup" if ramp_meta.get("enabled") else "",
+            )
+            get_logger().log(f"🧭 [AutoPilot] {progress['label']}")
+            self._autopilot_next_prewarm = stage_prewarm_decision("diagnostic", 0.8, loaded_settings)
+        except Exception:
+            pass
         self.files_to_process = list(files)
         self.current_folder = folder
         self.is_auto_start = True
@@ -142,6 +158,21 @@ class CoreBackendFast(CoreBackend):
         chunk_dir, vad_segs = res
         if hasattr(self.ui, '_sig_set_vad_segments'):
             self.ui._sig_set_vad_segments.emit(vad_segs)
+        try:
+            speaker_preflight = speaker_preflight_decision(
+                vad_segs,
+                media_duration_sec=float(getattr(self, "_video_durations", {}).get(target_file, 0.0) or 0.0),
+                settings=load_settings(),
+            )
+            self._autopilot_speaker_preflight = speaker_preflight
+            get_logger().log(
+                "🗣️ [AutoPilot 화자] "
+                f"{speaker_preflight.get('lane')} · "
+                f"{speaker_preflight.get('estimated_speaker_count')}명 예상 · "
+                f"confidence {float(speaker_preflight.get('confidence', 0.0) or 0.0):.2f}"
+            )
+        except Exception:
+            pass
 
         # ── STEP 2: ETA 계산 + STT 시작 ──
         try:

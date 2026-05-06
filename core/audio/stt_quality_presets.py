@@ -9,9 +9,9 @@ from core.runtime import config
 
 STT_QUALITY_PRESET_ORDER = ("fast", "balanced", "precise")
 STT_QUALITY_PRESET_LABELS = {
-    "fast": "빠름",
-    "balanced": "보통",
-    "precise": "높음",
+    "fast": "Fast",
+    "balanced": "Auto",
+    "precise": "High",
 }
 STT_QUALITY_USER_PRESET_KEY = "stt_quality_user_presets"
 STT_QUALITY_SAVED_SETTING_KEYS = {
@@ -22,6 +22,7 @@ STT_QUALITY_SAVED_SETTING_KEYS = {
     "stt_candidate_scoring_enabled",
     "selected_model",
     "selected_llm_provider",
+    "subtitle_llm_user_selected",
     "scan_cut_boundary_level",
     "cut_boundary_level",
     "scan_cut_level",
@@ -199,10 +200,14 @@ def normalize_stt_quality_key(value: str | None) -> str:
         "빠른 인식": "fast",
         "빠른인식": "fast",
         "fast": "fast",
+        "auto": "balanced",
+        "자동": "balanced",
+        "normal": "balanced",
         "보통": "balanced",
         "균형": "balanced",
         "balance": "balanced",
         "balanced": "balanced",
+        "high": "precise",
         "높음": "precise",
         "정확도 우선": "precise",
         "quality": "precise",
@@ -210,7 +215,7 @@ def normalize_stt_quality_key(value: str | None) -> str:
         "정밀인식": "precise",
         "precise": "precise",
     }
-    return aliases.get(key, "precise")
+    return aliases.get(key, "balanced")
 
 
 def apply_stt_quality_preset(settings: dict, preset_key: str) -> dict:

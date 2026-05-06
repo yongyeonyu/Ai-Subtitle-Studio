@@ -327,39 +327,23 @@ class EditorActionsMixin:
         self._mark_save_completed(touch_saved_time=True)
         self._sync_queue_saved_state()
         try:
-            from core.personalization.editor_truth_capture import capture_editor_truth_records
+            from core.personalization.deferred_editor_learning import enqueue_deferred_editor_learning
 
             settings = dict(getattr(self, "settings", {}) or {})
             saved_outputs = list(getattr(self, "_last_saved_srt_outputs", []) or [])
             first_subtitle_path = str(saved_outputs[0][0]) if saved_outputs else ""
-            result = capture_editor_truth_records(
+            queued = enqueue_deferred_editor_learning(
                 [dict(seg) for seg in list(segs or []) if not seg.get("is_gap")],
                 media_path=str(getattr(self, "media_path", "") or ""),
                 subtitle_path=first_subtitle_path,
                 project_path=str(getattr(main_w, "_current_project_path", "") or ""),
                 trigger="manual_save",
                 settings=settings,
-                enabled=bool(settings.get("editor_truth_capture_enabled", True)),
-                min_chars=int(settings.get("editor_truth_capture_min_chars", 2) or 2),
-                max_chars=int(settings.get("editor_truth_capture_max_chars", 240) or 240),
-                refresh_bundle=False,
             )
-            appended = int(result.get("appended_rows", 0) or 0)
-            excluded = int(result.get("excluded_parenthetical_rows", 0) or 0)
-            if appended or excluded:
-                get_logger().log(f"🧠 [LoRA truth] 저장 자막 반영: truth {appended}개 / 제외문구 {excluded}개")
+            if queued.get("queued"):
+                get_logger().log("🧠 [LoRA] 저장 자막 학습은 Home-idle 큐로 넘겼습니다.")
         except Exception as e:
-            get_logger().log(f"⚠️ LoRA 정답 라벨 누적 실패(저장): {e}")
-        try:
-            from core.personalization.text_lora_dataset import accumulate_personalization_dataset
-
-            accumulate_personalization_dataset(
-                current_segments=[dict(seg) for seg in list(segs or []) if not seg.get("is_gap")],
-                current_project_path=str(getattr(main_w, "_current_project_path", "") or ""),
-                trigger="manual_save",
-            )
-        except Exception as e:
-            get_logger().log(f"⚠️ 개인화 데이터 누적 실패(저장): {e}")
+            get_logger().log(f"⚠️ 개인화 학습 큐 등록 실패(저장): {e}")
         return True
 
     # ---------------------------------------------------------

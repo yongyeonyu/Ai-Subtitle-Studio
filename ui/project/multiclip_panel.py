@@ -23,11 +23,12 @@ from core.path_manager import get_last_folder
 from core.settings import load_settings, save_settings
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
-    apply_stt_quality_preset,
     load_stt_quality_presets,
     normalize_stt_quality_key,
     stt_quality_label,
 )
+from core.mode_policy import stt_quality_to_mode
+from core.settings_simplifier import apply_simple_operation_mode
 from ui.project.multiclip_cards import AddCard, ClipCard, ClipContainer
 
 
@@ -68,7 +69,7 @@ class MultiClipEditor(QDialog):
         header.addWidget(self.header_lbl)
         header.addStretch()
 
-        quality_lbl = QLabel("자막품질")
+        quality_lbl = QLabel("Mode")
         quality_lbl.setStyleSheet("color:#C8D1D8; font-size:12px; font-weight:700;")
         header.addWidget(quality_lbl)
         self.combo_subtitle_quality = QComboBox()
@@ -76,7 +77,7 @@ class MultiClipEditor(QDialog):
             preset = load_stt_quality_presets().get(key, {})
             self.combo_subtitle_quality.addItem(str(preset.get("label") or stt_quality_label(key)), key)
         self.combo_subtitle_quality.setFixedWidth(92)
-        self.combo_subtitle_quality.setToolTip("멀티클립에 적용할 자막품질 프리셋")
+        self.combo_subtitle_quality.setToolTip("멀티클립에 적용할 Mode")
         self.combo_subtitle_quality.setStyleSheet(
             "QComboBox { background:#172028; color:#F5F7FA; border:1px solid #2A3943; "
             "border-radius:4px; padding:4px 18px 4px 8px; font-weight:700; } "
@@ -165,9 +166,9 @@ class MultiClipEditor(QDialog):
         if parent is not None:
             settings = getattr(parent, "settings", None)
             if isinstance(settings, dict) and settings:
-                return apply_stt_quality_preset(dict(settings), self.stt_quality_preset)
+                return apply_simple_operation_mode(dict(settings), stt_quality_to_mode(self.stt_quality_preset))
         try:
-            return apply_stt_quality_preset(dict(load_settings()), self.stt_quality_preset)
+            return apply_simple_operation_mode(dict(load_settings()), stt_quality_to_mode(self.stt_quality_preset))
         except Exception:
             return {}
 
@@ -182,7 +183,7 @@ class MultiClipEditor(QDialog):
 
     def _on_subtitle_quality_changed(self, *args):
         self.stt_quality_preset = normalize_stt_quality_key(self.combo_subtitle_quality.currentData() or "precise")
-        settings = apply_stt_quality_preset(load_settings(), self.stt_quality_preset)
+        settings = apply_simple_operation_mode(load_settings(), stt_quality_to_mode(self.stt_quality_preset))
         save_settings(settings)
         parent = self.parent()
         if parent is not None and hasattr(parent, "_apply_ai_settings"):
@@ -232,7 +233,7 @@ class MultiClipEditor(QDialog):
             stt2 = self._display_model_name(settings.get("selected_whisper_model_secondary", ""))
         subtitle_llm = self._display_model_name(settings.get("selected_model", ""))
         return (
-            f"자막품질 <b>{stt_quality_label(settings.get('stt_quality_preset'))}</b>  |  "
+            f"Mode <b>{stt_quality_label(settings.get('stt_quality_preset'))}</b>  |  "
             f"오토 오디오 <b>클립 시작 시 자동 결정</b>  |  "
             f"컷 경계 <b>{self._cut_boundary_label(settings)}</b><br>"
             f"현재 음성 <b>{audio_model}</b>  |  STT1 <b>{stt1}</b>  |  "

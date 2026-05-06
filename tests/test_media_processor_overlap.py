@@ -152,6 +152,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             self.processor._load_all_settings = lambda: {
                 "selected_whisper_model": "primary",
                 "selected_whisper_model_secondary": "secondary",
+                "stt_workers_auto_enabled": False,
                 "vad_post_stt_align_enabled": False,
             }
 
@@ -186,6 +187,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             self.processor._load_all_settings = lambda: {
                 "selected_whisper_model": "primary",
                 "selected_whisper_model_secondary": "secondary",
+                "stt_workers_auto_enabled": False,
                 "vad_post_stt_align_enabled": False,
             }
 

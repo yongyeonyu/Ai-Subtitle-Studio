@@ -9,6 +9,7 @@ import os
 import threading
 import time
 
+from core.autopilot_policy import apply_autopilot_runtime_policy, hybrid_cut_boundary_decision
 from core.cut_boundary_audio import AUDIO_GAIN_LINE_COLOR, is_audio_gain_boundary
 from core.media_fingerprint import media_fingerprint_digest
 from core.project.project_io import read_project_file, write_project_file
@@ -676,7 +677,7 @@ class PipelineCutBoundaryMixin:
                 verify_media_cut_boundary_rows,
             )
 
-            settings = load_settings()
+            settings = apply_autopilot_runtime_policy(load_settings())
             try:
                 scan_profile = cut_boundary_scan_profile(settings)
             except Exception:
@@ -737,11 +738,14 @@ class PipelineCutBoundaryMixin:
                 styled["status"] = "provisional"
                 styled["verified"] = False
                 if is_audio_gain_boundary(styled):
-                    styled["line_color"] = str(styled.get("line_color") or AUDIO_GAIN_LINE_COLOR)
+                    decision = hybrid_cut_boundary_decision(styled, settings)
+                    styled["autopilot_cut_boundary_decision"] = decision
+                    styled["line_color"] = str(styled.get("line_color") or decision.get("line_color") or AUDIO_GAIN_LINE_COLOR)
                     styled["line_style"] = str(styled.get("line_style") or "dash")
                     styled["provisional_type"] = "audio_gain"
                     styled.setdefault("source", "audio_gain_provisional")
                 else:
+                    styled["autopilot_cut_boundary_decision"] = hybrid_cut_boundary_decision(styled, settings)
                     styled["line_color"] = "gray"
                     styled["line_style"] = "dotted"
                     styled.setdefault("source", "visual_provisional")

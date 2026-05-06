@@ -7,10 +7,60 @@ from core.personalization.editor_truth_capture import (
     build_editor_truth_records,
     capture_editor_truth_records,
 )
-from core.personalization.lora_storage import load_training_queue, store_paths
+from core.personalization.deferred_editor_learning import (
+    DEFERRED_EDITOR_LEARNING_JOB_TYPE,
+    enqueue_deferred_editor_learning,
+)
+from core.personalization.idle_trainer import run_training_queue_once
+from core.personalization.lora_storage import initialize_lora_personalization_store, load_training_queue, store_paths
 
 
 class EditorTruthCaptureTests(unittest.TestCase):
+    def test_deferred_editor_learning_runs_from_idle_queue(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            root = Path(tmpdir)
+            media_path = root / "clip.mp4"
+            subtitle_path = root / "clip.srt"
+            project_path = root / "project.assproj"
+            media_path.write_bytes(b"video")
+            subtitle_path.write_text("", encoding="utf-8")
+
+            segments = [
+                {
+                    "line": 0,
+                    "start": 1.0,
+                    "end": 2.5,
+                    "text": "안녕하세요, 오늘 갑니다.",
+                    "original_text": "안녕하세요 오늘 감니다",
+                    "stt_selected_source": "STT1",
+                    "stt_candidates": [{"source": "STT1", "text": "안녕 하세요 오늘 감니다", "score": 0.82}],
+                }
+            ]
+
+            queued = enqueue_deferred_editor_learning(
+                segments,
+                media_path=str(media_path),
+                subtitle_path=str(subtitle_path),
+                project_path=str(project_path),
+                trigger="manual_save",
+                settings={"editor_truth_capture_enabled": True},
+                store_dir=tmpdir,
+            )
+            self.assertTrue(queued["queued"])
+            queue = load_training_queue(tmpdir)
+            self.assertEqual(queue["items"][0]["job_type"], DEFERRED_EDITOR_LEARNING_JOB_TYPE)
+
+            result = run_training_queue_once(tmpdir, low_resource=True)
+
+            self.assertTrue(result["processed"])
+            self.assertEqual(result["outcome"]["status"], "complete")
+            paths = store_paths(tmpdir)
+            self.assertTrue(paths["truth_table"].read_text(encoding="utf-8").strip())
+            self.assertTrue(paths["text_lora_corpus"].read_text(encoding="utf-8").strip())
+            updated_queue = load_training_queue(tmpdir)
+            self.assertEqual(updated_queue["items"][0]["status"], "complete")
+
     def test_capture_editor_save_appends_truth_rows_and_dedupes(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

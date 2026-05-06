@@ -372,6 +372,7 @@ class QueueMixin:
                         ) or "?"
                         e_str = self._format_queue_clock(elapsed)
                         self.queue_table.setItem(idx, 4, mk(f"{e_str} / {x_str}"))
+                    self._finalize_queue_if_all_rows_done()
             if info_txt:
                 self.queue_table.setItem(idx, 2, mk(info_txt))
             if len_txt:
@@ -442,6 +443,12 @@ class QueueMixin:
                         state_manager.complete_auto_mode() if bool(getattr(editor, "is_auto_start", False)) else state_manager.complete_ai()
                     except Exception:
                         pass
+            clearer = getattr(editor, "_clear_processing_indicators", None)
+            if callable(clearer):
+                try:
+                    clearer()
+                except Exception:
+                    pass
             if hasattr(self, "sync_menu_from_editor"):
                 self.sync_menu_from_editor(editor)
             if hasattr(self, "_refresh_saved_status_label"):
@@ -462,6 +469,23 @@ class QueueMixin:
             return
         if hasattr(self, "sync_menu_from_editor"):
             self.sync_menu_from_editor(editor)
+
+    def _finalize_queue_if_all_rows_done(self):
+        row_count = self.queue_table.rowCount()
+        if row_count <= 0:
+            return
+        row_statuses = []
+        for row in range(row_count):
+            item = self.queue_table.item(row, 0)
+            row_statuses.append(str(item.text() if item else ""))
+        if not row_statuses or not all(self._queue_status_flags(st)[0] for st in row_statuses):
+            return
+        total = int(getattr(self, "_total_files", row_count) or row_count)
+        self._current_file_idx = total
+        self._real_pct = 100
+        if hasattr(self, "_live_timer"):
+            self._live_timer.stop()
+        self.queue_header_lbl.setText(f"큐 리스트 : ({total}/{total}) - 100% 완료")
 
     def _update_live_queue_header(self):
         active_backend = None

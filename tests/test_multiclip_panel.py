@@ -89,11 +89,11 @@ class MulticlipPanelTests(unittest.TestCase):
             self.assertTrue(hasattr(dlg, "current_settings_lbl"))
             label_texts = [label.text() for label in dlg.findChildren(QLabel)]
             self.assertIn("현재 적용될 설정", label_texts)
-            self.assertIn("자막품질", dlg.current_settings_lbl.text())
+            self.assertIn("Mode", dlg.current_settings_lbl.text())
             self.assertIn("오토 오디오", dlg.current_settings_lbl.text())
             quality_combos = [
                 combo for combo in dlg.findChildren(QComboBox)
-                if [combo.itemText(i) for i in range(combo.count())] == ["빠름", "보통", "높음"]
+                if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High"]
             ]
             self.assertTrue(quality_combos)
         finally:
@@ -187,7 +187,7 @@ class MulticlipPanelTests(unittest.TestCase):
                 self.assertIsNotNone(nas_quality)
                 self.assertEqual(
                     [regular_quality.itemText(i) for i in range(regular_quality.count())],
-                    ["빠름", "보통", "높음"],
+                    ["Fast", "Auto", "High"],
                 )
                 self.assertTrue(regular.export_video_chk.isChecked())
                 self.assertFalse(regular.export_video_chk.isEnabled())

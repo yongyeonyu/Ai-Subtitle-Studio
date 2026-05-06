@@ -1,6 +1,6 @@
 <!--
-Document-Version: 03.21.00
-Phase: COMPLETE
+Document-Version: 03.22.00
+Phase: MODE_AUTOPILOT_RELEASED
 Last-Updated: 2026-05-06
 Updated-By: Codex
 Purpose: Remaining work queue only.
@@ -19,10 +19,10 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "03.21.00"
-document_version: "03.21.00"
-phase: "COMPLETE"
-next_phase: ""
+app_version: "03.22.00"
+document_version: "03.22.00"
+phase: "MODE_AUTOPILOT_RELEASED"
+next_phase: null
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
 run_all_exclusions: []
@@ -46,8 +46,22 @@ release_handoff_files:
 
 ## Active Work
 
-- No active items remain.
+- None.
 
 ## Parked Work
 
 - None.
+
+## Completion Snapshot
+
+The v03.22.00 Mode Autopilot release completed the prior queue:
+
+- P0 completion stability, post-generation cleanup, and deferred editor-save LoRA learning.
+- Home-idle personalization learning with Lite/Heavy ramping and blue app-indicator status.
+- Fast/Auto/High Mode policy, backward compatibility, and single Mode controls across primary flows.
+- Fast safety guards, Auto adaptive policy snapshots, and High full-accuracy policy activation.
+- Ten-step engine dashboard with per-step values and explanations.
+- Mode-specific audio, VAD, preflight, validation, scheduler, and cleanup policy fields.
+- Tests and release handoff documentation.
+
+Future work should start from a new user request rather than this completed backlog.

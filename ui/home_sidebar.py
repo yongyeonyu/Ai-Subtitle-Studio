@@ -20,12 +20,13 @@ from core.path_manager import load_settings as _path_load_settings, save_setting
 from core.pipeline_status import generation_stage_keys, generation_stage_keys_all
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
-    apply_stt_quality_preset,
     load_stt_quality_presets,
     normalize_stt_quality_key,
     save_stt_quality_user_preset,
     stt_quality_label,
 )
+from core.mode_policy import stt_quality_to_mode
+from core.settings_simplifier import apply_simple_operation_mode
 from ui.home_sidebar_presets import sync_sidebar_preset_panel
 from ui.style import line_icon
 
@@ -293,7 +294,7 @@ class HomeSidebarMixin:
             return "fast"
         if scope == "nas":
             return "balanced"
-        return "precise"
+        return "balanced"
 
     def _subtitle_quality_key_for_scope(self, scope: str | None = None) -> str:
         scope = str(scope or "workspace").strip().lower()
@@ -353,7 +354,7 @@ class HomeSidebarMixin:
             combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         combo.setCursor(Qt.CursorShape.PointingHandCursor)
         combo.setStyleSheet(self._sidebar_subtitle_quality_combo_style())
-        combo.setToolTip("자막품질 프리셋")
+        combo.setToolTip("Mode")
         combo.currentIndexChanged.connect(self._on_subtitle_quality_combo_changed)
         self._register_subtitle_quality_combo(combo)
         self._sync_subtitle_quality_combos_for_scope(scope)
@@ -361,14 +362,14 @@ class HomeSidebarMixin:
 
     def _apply_subtitle_quality_preset(self, preset_key: str | None, *, announce: bool = False):
         key = normalize_stt_quality_key(preset_key)
-        settings = apply_stt_quality_preset(_runtime_load_settings(), key)
+        settings = apply_simple_operation_mode(_runtime_load_settings(), stt_quality_to_mode(key))
         self._apply_ai_settings(settings)
         self._sync_subtitle_quality_combos_for_scope("workspace", key)
         if announce:
             try:
                 from core.runtime.logger import get_logger
 
-                get_logger().log(f"💾 자막품질 저장: {stt_quality_label(key)}")
+                get_logger().log(f"💾 Mode 저장: {stt_quality_label(key)}")
             except Exception:
                 pass
         return settings
@@ -391,7 +392,7 @@ class HomeSidebarMixin:
         try:
             from core.runtime.logger import get_logger
 
-            get_logger().log(f"💾 자막품질 프리셋 저장: {stt_quality_label(key)}")
+            get_logger().log(f"💾 Mode 프리셋 저장: {stt_quality_label(key)}")
         except Exception:
             pass
 
@@ -404,7 +405,7 @@ class HomeSidebarMixin:
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(3)
 
-        label = QLabel("자막품질", row)
+        label = QLabel("Mode", row)
         label.setFixedWidth(54)
         label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         label.setStyleSheet("color:#00D46A; font-size:10px; font-weight:800; background:transparent; border:none;")
@@ -419,7 +420,7 @@ class HomeSidebarMixin:
         save_btn.setIconSize(QSize(9, 9))
         save_btn.setFixedSize(44, 22)
         save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        save_btn.setToolTip("현재 자막품질 설정 저장")
+        save_btn.setToolTip("현재 Mode 설정 저장")
         save_btn.setStyleSheet(
             "QPushButton { background:#24313A; color:#F5F7FA; border:1px solid #344652; "
             "border-radius:4px; padding:0 4px; font-size:9px; font-weight:800; } "
@@ -434,9 +435,7 @@ class HomeSidebarMixin:
 
     def _settings_for_subtitle_quality_scope(self, scope: str | None) -> dict:
         key = self._subtitle_quality_key_for_scope(scope)
-        settings = apply_stt_quality_preset(_runtime_load_settings(), key)
-        settings["stt_quality_preset"] = key
-        return settings
+        return apply_simple_operation_mode(_runtime_load_settings(), stt_quality_to_mode(key))
 
     def _set_runtime_quality_override_for_scope(self, scope: str | None):
         self._runtime_settings_override = self._settings_for_subtitle_quality_scope(scope)
@@ -577,10 +576,16 @@ class HomeSidebarMixin:
         if getattr(self, "sidebar_settings_label", None) is not None:
             self._refresh_sidebar_engine_info()
 
-    def _sync_saved_status_blink_timer(self, active: bool):
+    def _sync_saved_status_blink_timer(self, active: bool, *, interval_ms: int = 1000):
         self._ensure_saved_status_blink_timer()
         timer = self._saved_status_blink_timer
+        try:
+            interval = max(100, int(interval_ms or 1000))
+        except Exception:
+            interval = 1000
         if active:
+            if int(timer.interval()) != interval:
+                timer.setInterval(interval)
             if not timer.isActive():
                 self._saved_status_blink_on = True
                 timer.start()
@@ -601,10 +606,29 @@ class HomeSidebarMixin:
             self._last_saved_status_time = self._current_status_time_text()
 
         generating = self._is_subtitle_generation_running()
-        self._sync_saved_status_blink_timer(generating)
+        trainer = getattr(self, "_personalization_idle_trainer", None)
+        learning_status = {}
+        if trainer is not None:
+            status_getter = getattr(trainer, "learning_status", None)
+            if callable(status_getter):
+                try:
+                    learning_status = dict(status_getter() or {})
+                except Exception:
+                    learning_status = {}
+        learning = bool(learning_status.get("active")) and not generating
+        blink_interval = int(learning_status.get("blink_interval_ms", 1000) or 1000) if learning else 1000
+        self._sync_saved_status_blink_timer(generating or learning, interval_ms=1000 if generating else blink_interval)
         if generating:
             dot_color = "#FF453A" if bool(getattr(self, "_saved_status_blink_on", True)) else "#5A1F24"
             tooltip = "자막 생성 중입니다."
+        elif learning:
+            dot_color = "#0A84FF" if bool(getattr(self, "_saved_status_blink_on", True)) else "#06335F"
+            mode = str(learning_status.get("mode") or "lite").lower()
+            tooltip = (
+                "Heavy learning is running. Mouse or keyboard input stops learning."
+                if mode == "heavy"
+                else "Lite learning is running. Mouse or keyboard input stops learning."
+            )
         else:
             dot_color = "#FF453A" if dirty else "#34C759"
             tooltip = "저장되지 않은 변경사항이 있습니다." if dirty else "저장된 상태입니다."
@@ -737,6 +761,17 @@ class HomeSidebarMixin:
             stt2_model = getattr(self, "_short_model_name", lambda s: s)(settings.get("selected_whisper_model_secondary", ""))
 
         cut_label = self._cut_boundary_sidebar_label(settings)
+        lora_buckets = settings.get("subtitle_lora_quality_buckets")
+        if isinstance(lora_buckets, (list, tuple)) and lora_buckets:
+            lora_label = "/".join(str(item) for item in lora_buckets)
+        elif bool(settings.get("editor_lora_runtime_enabled", settings.get("subtitle_bundle_lora_enabled", True))):
+            lora_label = "선택 적용"
+        else:
+            lora_label = "미사용"
+        if bool(settings.get("deep_subtitle_policy_enabled", True)) or bool(settings.get("deep_segment_setting_policy_enabled", True)):
+            deep_label = "선택 적용" if settings.get("simple_operation_mode") == "auto" else "사용"
+        else:
+            deep_label = "미사용"
 
         return [
             ("cut_boundary", "컷 경계", cut_label),
@@ -747,6 +782,8 @@ class HomeSidebarMixin:
             ("vad", "VAD", vad_model),
             ("subtitle_llm", "자막 LLM", subtitle_llm_label),
             ("roughcut_llm", "러프컷 LLM", roughcut_llm),
+            ("lora", "LoRA", lora_label),
+            ("deep_learning", "딥러닝", deep_label),
         ]
     def _pipeline_status_blob(self) -> str:
         parts = []
@@ -1036,9 +1073,13 @@ class HomeSidebarMixin:
             completed.add("subtitle_llm")
         if not roughcut_enabled:
             completed.add("roughcut_llm")
+        if not bool(settings.get("editor_lora_runtime_enabled", settings.get("subtitle_bundle_lora_enabled", True))):
+            completed.add("lora")
+        if not (bool(settings.get("deep_subtitle_policy_enabled", True)) or bool(settings.get("deep_segment_setting_policy_enabled", True))):
+            completed.add("deep_learning")
 
         if generation_done:
-            completed.update({"preprocess", "audio", "stt1"})
+            completed.update({"preprocess", "audio", "stt1", "lora", "deep_learning"})
             if cut_boundary_enabled:
                 completed.add("cut_boundary")
             if stt2_enabled:
@@ -1048,7 +1089,7 @@ class HomeSidebarMixin:
             if subtitle_llm_enabled:
                 completed.add("subtitle_llm")
         elif explicit_save_done:
-            completed.update({"preprocess", "audio", "stt1"})
+            completed.update({"preprocess", "audio", "stt1", "lora", "deep_learning"})
             if cut_boundary_enabled:
                 completed.add("cut_boundary")
             if stt2_enabled:
@@ -1058,11 +1099,11 @@ class HomeSidebarMixin:
             if subtitle_llm_enabled:
                 completed.add("subtitle_llm")
         else:
-            later_than_cut = {"preprocess", "audio", "stt1", "stt2", "vad", "subtitle_llm"}
-            later_than_preprocess = {"audio", "stt1", "stt2", "vad", "subtitle_llm"}
-            later_than_audio = {"stt1", "stt2", "vad", "subtitle_llm"}
-            later_than_stt = {"vad", "subtitle_llm"}
-            later_than_vad = {"subtitle_llm"}
+            later_than_cut = {"preprocess", "audio", "stt1", "stt2", "vad", "subtitle_llm", "lora", "deep_learning"}
+            later_than_preprocess = {"audio", "stt1", "stt2", "vad", "subtitle_llm", "lora", "deep_learning"}
+            later_than_audio = {"stt1", "stt2", "vad", "subtitle_llm", "lora", "deep_learning"}
+            later_than_stt = {"vad", "subtitle_llm", "lora", "deep_learning"}
+            later_than_vad = {"subtitle_llm", "lora", "deep_learning"}
 
             if cut_boundary_enabled and stage_now & later_than_cut and not cut_boundary_pending:
                 completed.add("cut_boundary")
@@ -1079,8 +1120,12 @@ class HomeSidebarMixin:
                     completed.add("stt2")
             if vad_enabled and stage_now & later_than_vad and "vad" not in stage_now:
                 completed.add("vad")
-            if roughcut_started:
+            if stage_now & {"deep_learning"}:
+                completed.add("lora")
+            if stage_now & {"lora", "deep_learning"}:
                 completed.update({"preprocess", "audio", "stt1"})
+            if roughcut_started:
+                completed.update({"preprocess", "audio", "stt1", "lora", "deep_learning"})
                 if cut_boundary_enabled:
                     completed.add("cut_boundary")
                 if stt2_enabled:
@@ -1303,6 +1348,10 @@ class HomeSidebarMixin:
         settings = dict(_runtime_load_settings())
         if updates:
             settings.update(updates)
+        if "selected_model" in updates or "selected_llm_provider" in updates:
+            model = str(settings.get("selected_model") or "").strip()
+            provider = str(settings.get("selected_llm_provider") or "").strip().lower()
+            settings["subtitle_llm_user_selected"] = bool(model and "사용 안함" not in model and provider != "none")
         key = normalize_stt_quality_key(settings.get("stt_quality_preset") or "precise")
         settings = save_stt_quality_user_preset(settings, key)
         self._apply_ai_settings(settings)

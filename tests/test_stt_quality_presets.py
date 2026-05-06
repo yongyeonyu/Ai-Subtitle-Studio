@@ -15,7 +15,7 @@ class STTQualityPresetTests(unittest.TestCase):
         presets = load_stt_quality_presets()
 
         self.assertEqual(list(presets), ["fast", "balanced", "precise"])
-        self.assertEqual([presets[key]["label"] for key in presets], ["빠름", "보통", "높음"])
+        self.assertEqual([presets[key]["label"] for key in presets], ["Fast", "Auto", "High"])
 
     def test_apply_fast_preset_uses_whisper_only_and_speed_settings(self):
         settings = {"selected_model": "exaone3.5:7.8b", "w_beam_size": 8}
@@ -63,7 +63,7 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertEqual(normalize_stt_quality_key("높음"), "precise")
         self.assertEqual(normalize_stt_quality_key("빠른 인식"), "fast")
         self.assertEqual(normalize_stt_quality_key("정밀인식"), "precise")
-        self.assertEqual(normalize_stt_quality_key(""), "precise")
+        self.assertEqual(normalize_stt_quality_key(""), "balanced")
 
     def test_saved_user_preset_overrides_stage_settings_without_audio(self):
         settings = apply_stt_quality_preset({}, "balanced")

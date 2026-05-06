@@ -8,6 +8,8 @@ Mixin 상속: PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMixin
 import os
 import threading
 
+from core.autopilot_policy import compact_progress_event, stage_prewarm_decision
+from core.performance import mark_runtime_scheduler_start
 from core.runtime.logger import get_logger
 from core.audio.media_processor import VideoProcessor
 from core.personalization.runtime_personalization import merged_runtime_override
@@ -179,6 +181,30 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
             pause_lora("pipeline_start", hold_ms=300_000)
         self._active = True
         set_runtime_settings_override(getattr(self.ui, "_runtime_settings_override", None))
+        try:
+            loaded_settings = load_settings()
+            ramp_meta = mark_runtime_scheduler_start(loaded_settings)
+            if ramp_meta.get("enabled"):
+                get_logger().log(
+                    "🐢 [리소스] 시작 램프업: 1개 워커로 예열 후 "
+                    f"{int(float(ramp_meta.get('step_sec', 60) or 60))}초마다 단계적으로 증설"
+                )
+            progress = compact_progress_event(
+                stage="diagnostic",
+                lane="auto",
+                reason="AutoPilot",
+                next_stage="audio_extract",
+                resource_state="ramp warmup",
+            )
+            get_logger().log(f"🧭 [AutoPilot] {progress['label']}")
+            try:
+                self._ui_emit("_sig_editor_processing_stage", f"🧭 {progress['label']}")
+            except Exception:
+                pass
+            prewarm = stage_prewarm_decision("diagnostic", 0.8, loaded_settings)
+            self._autopilot_next_prewarm = prewarm
+        except Exception:
+            pass
         self.files_to_process = list(files)
         self.current_folder = folder
         self.is_icloud = bool(is_icloud)

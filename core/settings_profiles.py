@@ -5,6 +5,9 @@ import os
 from copy import deepcopy
 from typing import Any
 
+from core.audio.stt_quality_presets import normalize_stt_quality_key
+from core.autopilot_policy import apply_autopilot_runtime_policy, autopilot_runtime_defaults
+from core.mode_policy import apply_mode_runtime_settings, mode_to_stt_quality, selected_mode_from_settings
 from core.runtime import config
 
 
@@ -19,6 +22,8 @@ UI_ENGINE_DEFAULTS: dict[str, Any] = {
     "selected_whisper_model": getattr(config, "WHISPER_MODEL", "large-v3"),
     "selected_model": getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"),
     "selected_llm_provider": "ollama",
+    "auto_start_mode": "balanced",
+    "stt_quality_preset": "balanced",
     "audio_preset": "",
     "vad_threshold": 0.5,
     "vad_min_speech": 0.25,
@@ -52,9 +57,9 @@ UI_ENGINE_DEFAULTS: dict[str, Any] = {
     "subtitle_bundle_autopilot_enabled": True,
     "subtitle_bundle_lora_enabled": True,
     "subtitle_bundle_lora_blend": 0.35,
-    "subtitle_bundle_target_sec": 180,
-    "subtitle_bundle_min_sec": 90,
-    "subtitle_bundle_max_sec": 300,
+    "subtitle_bundle_target_sec": 240,
+    "subtitle_bundle_min_sec": 120,
+    "subtitle_bundle_max_sec": 420,
     "subtitle_bundle_use_confirmed_cuts": True,
     "subtitle_bundle_use_provisional_cuts": True,
     "subtitle_bundle_confirmed_cut_min_sec": 45,
@@ -64,21 +69,24 @@ UI_ENGINE_DEFAULTS: dict[str, Any] = {
     "background_prefetch_before_sec": 18.0,
     "background_prefetch_after_sec": 72.0,
     "background_prefetch_segment_limit": 10,
-    "background_prefetch_lora_enabled": True,
-    "background_prefetch_lora_limit": 4,
-    "background_prefetch_lora_retrieval_limit": 4,
-    "background_prefetch_candidates_enabled": True,
-    "background_prefetch_candidate_limit": 8,
+    "background_prefetch_lora_enabled": False,
+    "background_prefetch_lora_limit": 2,
+    "background_prefetch_lora_retrieval_limit": 2,
+    "background_prefetch_candidates_enabled": False,
+    "background_prefetch_candidate_limit": 4,
     "background_prefetch_bucket_sec": 6.0,
     "background_prefetch_min_interval_sec": 0.75,
+    "runtime_scheduler_ramp_up_enabled": True,
+    "runtime_scheduler_ramp_initial_sec": 45.0,
+    "runtime_scheduler_ramp_step_sec": 60.0,
     "subtitle_cut_boundary_guard_enabled": True,
     "subtitle_cut_boundary_allow_high_confidence_crossing": True,
     "subtitle_cut_boundary_high_confidence_score": 96.0,
     "prefetch_ahead": 3,
     "io_workers": 6,
     "segment_lora_min_score": 28.0,
-    "segment_lora_retrieval_limit": 24,
-    "segment_lora_retrieval_per_kind": 4,
+    "segment_lora_retrieval_limit": 8,
+    "segment_lora_retrieval_per_kind": 2,
     "deep_subtitle_policy_enabled": True,
     "deep_segment_setting_policy_enabled": True,
     "deep_subtitle_reranker_enabled": True,
@@ -98,20 +106,20 @@ UI_ENGINE_DEFAULTS: dict[str, Any] = {
     "deep_sequence_max_shift_sec": 0.18,
     "deep_sequence_bridge_gap_sec": 0.3,
     "deep_segment_setting_exploration_rate": 0.04,
-    "deep_policy_event_logging_enabled": True,
-    "deep_policy_event_max_rows_per_run": 512,
+    "deep_policy_event_logging_enabled": False,
+    "deep_policy_event_max_rows_per_run": 128,
     "deep_policy_hard_case_margin": 0.08,
     "deep_hard_case_mining_enabled": True,
     "hardcase_training_queue_enabled": True,
-    "hardcase_training_queue_max_items_per_run": 128,
+    "hardcase_training_queue_max_items_per_run": 48,
     "stt_lattice_selector_enabled": True,
     "stt_lattice_min_confidence": 0.62,
     "stt_lattice_replace_margin": 0.14,
     "stt_lattice_min_match_score": 0.42,
     "stt_lattice_require_word_timestamps": True,
     "stt_lattice_persist_enabled": True,
-    "stt_lattice_artifact_candidate_limit": 64,
-    "stt_lattice_artifact_word_limit": 128,
+    "stt_lattice_artifact_candidate_limit": 16,
+    "stt_lattice_artifact_word_limit": 64,
     "llm_confidence_gate_enabled": True,
     "llm_confidence_gate_min_lora_score": 82.0,
     "llm_confidence_gate_max_compact_ratio": 1.45,
@@ -129,13 +137,13 @@ UI_ENGINE_DEFAULTS: dict[str, Any] = {
     "llm_verifier_enabled": True,
     "llm_verifier_min_similarity": 0.86,
     "llm_verifier_max_length_delta_ratio": 0.16,
-    "llm_verifier_max_chunks": 8,
+    "llm_verifier_max_chunks": 4,
     "llm_verifier_preserve_numbers": True,
     "llm_verifier_preserve_proper_nouns": True,
     "llm_verifier_preserve_interjections": True,
     "llm_verifier_block_added_content_tokens": True,
     "accuracy_decision_graph_enabled": True,
-    "accuracy_graph_persist_enabled": True,
+    "accuracy_graph_persist_enabled": False,
     "subtitle_accuracy_metrics_enabled": True,
     "subtitle_output_selector_enabled": True,
     "subtitle_context_consistency_enabled": True,
@@ -162,17 +170,17 @@ UI_ENGINE_DEFAULTS: dict[str, Any] = {
     "editor_truth_capture_max_chars": 240,
     "editor_truth_runtime_apply_enabled": True,
     "editor_truth_runtime_min_similarity": 0.94,
-    "editor_truth_runtime_pattern_limit": 200,
+    "editor_truth_runtime_pattern_limit": 80,
     "user_edit_metrics_enabled": True,
     "user_edit_metrics_deep_event_enabled": True,
     "user_edit_metrics_hard_case_score": 24.0,
     "user_edit_metrics_text_ratio_hard": 0.18,
     "user_edit_metrics_timing_shift_hard_sec": 0.3,
-    "runtime_quality_self_review_enabled": True,
-    "deep_quality_event_logging_enabled": True,
+    "runtime_quality_self_review_enabled": False,
+    "deep_quality_event_logging_enabled": False,
     "deep_quality_event_all_segments": False,
     "deep_quality_event_min_score": 85.0,
-    "subtitle_decision_explanation_logging_enabled": True,
+    "subtitle_decision_explanation_logging_enabled": False,
     "uncertainty_first_enabled": True,
     "uncertainty_first_process_order": "easy_first",
     "uncertainty_first_easy_score": 18.0,
@@ -192,6 +200,7 @@ UI_ENGINE_DEFAULTS: dict[str, Any] = {
     "lora_user_settings_exploration_rate": 0.12,
     "lora_user_settings_exploration_min_truth_rows": 12,
     "lora_user_settings_exploration_max_bundles": 1,
+    **autopilot_runtime_defaults(),
 }
 
 
@@ -241,7 +250,7 @@ PATH_SETTING_DEFAULTS: dict[str, Any] = {
     "recent_folders": [],
     "auto_detect_enabled": False,
     "nas_excluded_folders": [],
-    "auto_start_mode": "precise",
+    "auto_start_mode": "balanced",
     "auto_start_enabled": True,
     "icloud_stt_quality_preset": "fast",
     "nas_stt_quality_preset": "balanced",
@@ -256,6 +265,44 @@ LLM_PROMPT_DEFAULTS: dict[str, Any] = {
     "default_llm_prompt": getattr(config, "DEFAULT_LLM_PROMPT", ""),
     "editor_roughcut_draft_prompt": "",
     "roughcut_llm_prompt": "",
+}
+
+SPEED_SAFE_AUTO_PROFILE_VERSION = "03.21.auto_speed_safe.v1"
+SPEED_SAFE_AUTO_DEFAULTS: dict[str, Any] = {
+    "stt_ensemble_enabled": False,
+    "stt_ensemble_llm_judge_enabled": False,
+    "stt_low_score_recheck_max_segments": 80,
+    "whisper_chunk_overlap_sec": 1.5,
+    "chunk_time_limit": 240,
+    "subtitle_bundle_target_sec": 240,
+    "subtitle_bundle_min_sec": 120,
+    "subtitle_bundle_max_sec": 420,
+    "scan_cut_level": "low",
+    "cut_boundary_level": "low",
+    "scan_cut_boundary_level": "low",
+    "segment_lora_retrieval_limit": 8,
+    "segment_lora_retrieval_per_kind": 2,
+    "editor_truth_runtime_pattern_limit": 80,
+    "stt_lattice_artifact_candidate_limit": 16,
+    "stt_lattice_artifact_word_limit": 64,
+    "llm_verifier_max_chunks": 4,
+    "accuracy_graph_persist_enabled": False,
+    "deep_policy_event_logging_enabled": False,
+    "deep_policy_event_max_rows_per_run": 128,
+    "deep_quality_event_logging_enabled": False,
+    "subtitle_decision_explanation_logging_enabled": False,
+    "background_prefetch_lora_enabled": False,
+    "background_prefetch_lora_limit": 2,
+    "background_prefetch_lora_retrieval_limit": 2,
+    "background_prefetch_candidates_enabled": False,
+    "background_prefetch_candidate_limit": 4,
+    "background_prefetch_segment_limit": 4,
+    "runtime_scheduler_ramp_up_enabled": True,
+    "runtime_scheduler_ramp_initial_sec": 45.0,
+    "runtime_scheduler_ramp_step_sec": 60.0,
+    "runtime_quality_self_review_enabled": False,
+    "hardcase_training_queue_max_items_per_run": 48,
+    **autopilot_runtime_defaults(),
 }
 
 
@@ -590,9 +637,19 @@ def materialize_user_settings(
     *,
     dataset_dir: str | None = None,
 ) -> dict[str, Any]:
+    input_settings = dict(settings or {}) if isinstance(settings, dict) else {}
+    input_model = str(input_settings.get("selected_model", "") or "").strip()
+    input_has_user_llm = bool(
+        "selected_model" in input_settings
+        and input_model
+        and "사용 안함" not in input_model
+        and "subtitle_llm_user_selected" not in input_settings
+    )
     out = hardcoded_default_settings(dataset_dir=dataset_dir)
-    if isinstance(settings, dict):
-        out.update(deepcopy(settings))
+    if input_settings:
+        out.update(deepcopy(input_settings))
+    if input_has_user_llm:
+        out["subtitle_llm_user_selected"] = True
     out["user_prompt"] = ""
     out["llm_prompt"] = ""
     out["editor_roughcut_draft_prompt"] = ""
@@ -601,7 +658,23 @@ def materialize_user_settings(
     out["_settings_schema"] = USER_SETTINGS_SCHEMA
     out["_settings_storage"] = "dataset/user_settings.json"
     out["_auto_managed_by_lora"] = sorted(LORA_AUTO_MANAGED_SETTING_KEYS)
-    return out
+    simple_mode = selected_mode_from_settings(out)
+    if simple_mode == "auto":
+        quality_preset = normalize_stt_quality_key(out.get("stt_quality_preset") or out.get("auto_start_mode") or "balanced")
+        auto_start_mode = normalize_stt_quality_key(out.get("auto_start_mode") or quality_preset)
+        out["simple_operation_mode"] = "auto"
+        out["subtitle_mode"] = "auto"
+        out.update(deepcopy(SPEED_SAFE_AUTO_DEFAULTS))
+        out["stt_quality_preset"] = quality_preset
+        out["auto_start_mode"] = auto_start_mode
+        out["_speed_safe_auto_profile"] = SPEED_SAFE_AUTO_PROFILE_VERSION
+    else:
+        quality_preset = mode_to_stt_quality(simple_mode)
+        out["simple_operation_mode"] = simple_mode
+        out["subtitle_mode"] = simple_mode
+        out["stt_quality_preset"] = quality_preset
+        out["auto_start_mode"] = quality_preset
+    return apply_mode_runtime_settings(apply_autopilot_runtime_policy(out))
 
 
 def is_lora_auto_managed_setting(key: str) -> bool:

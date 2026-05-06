@@ -42,10 +42,13 @@ _TRANSIENT_CONNECTION_FRAGMENTS = (
     "timeout",
 )
 _FALLBACK_MODEL_PREFERENCES = (
-    "exaone3.5:7.8b",
+    "llama3.2:1b",
+    "gemma2:2b",
+    "llama3.2:latest",
+    "exaone3.5:2.4b",
     "qwen2.5:7b",
     "gemma2:9b",
-    "gemma2:2b",
+    "exaone3.5:7.8b",
 )
 
 

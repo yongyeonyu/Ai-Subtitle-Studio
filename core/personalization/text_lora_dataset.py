@@ -19,6 +19,7 @@ from core.personalization.lora_storage import (
     LORA_INTERNAL_CACHE_DIR,
     LORA_PERSONALIZATION_DIR,
     refresh_unified_lora_data_bundle,
+    store_paths,
     upsert_training_queue_items,
 )
 from core.project.data_manager import CORRECTION_FILE
@@ -799,6 +800,7 @@ def _enqueue_auto_maintenance_jobs(
     appended_rows: int,
     voice_bridge_rows: int,
     multimodal_context_rows: int,
+    store_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     changed_rows = int(appended_rows or 0) + int(voice_bridge_rows or 0) + int(multimodal_context_rows or 0)
     if changed_rows <= 0:
@@ -853,7 +855,7 @@ def _enqueue_auto_maintenance_jobs(
             payload=payload,
         ).to_record(),
     ]
-    result = upsert_training_queue_items(jobs, _personalization_store_dir())
+    result = upsert_training_queue_items(jobs, store_dir or _personalization_store_dir())
     return {"queued": True, "batch_id": batch_id, "items": len(list(result.get("items") or []))}
 
 
@@ -862,16 +864,19 @@ def accumulate_personalization_dataset(
     current_segments: list[dict[str, Any]] | None = None,
     current_project_path: str = "",
     trigger: str = "manual",
+    refresh_bundle: bool = True,
+    store_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     payload = build_text_lora_dataset(
         project_paths=[],
         current_segments=current_segments,
         current_project_path=current_project_path,
     )
-    corpus_path = TEXT_LORA_CORPUS_PATH
-    bridge_path = VOICE_LORA_BRIDGE_PATH
-    context_path = MULTIMODAL_LORA_CONTEXT_PATH
-    manifest_path = TEXT_LORA_CORPUS_MANIFEST_PATH
+    path_map = store_paths(store_dir) if store_dir else {}
+    corpus_path = path_map.get("text_lora_corpus", TEXT_LORA_CORPUS_PATH)
+    bridge_path = path_map.get("voice_lora_bridge", VOICE_LORA_BRIDGE_PATH)
+    context_path = path_map.get("multimodal_lora_context", MULTIMODAL_LORA_CONTEXT_PATH)
+    manifest_path = path_map.get("text_lora_corpus_manifest", TEXT_LORA_CORPUS_MANIFEST_PATH)
     corpus_path.parent.mkdir(parents=True, exist_ok=True)
     bridge_path.parent.mkdir(parents=True, exist_ok=True)
     context_path.parent.mkdir(parents=True, exist_ok=True)
@@ -950,10 +955,11 @@ def accumulate_personalization_dataset(
         ],
     }
     _write_json_atomic(manifest_path, manifest)
-    try:
-        refresh_unified_lora_data_bundle(_personalization_store_dir(), force=True)
-    except Exception:
-        pass
+    if refresh_bundle:
+        try:
+            refresh_unified_lora_data_bundle(store_dir or _personalization_store_dir(), force=True)
+        except Exception:
+            pass
     maintenance_result = _enqueue_auto_maintenance_jobs(
         trigger=trigger,
         text_total_rows=len(existing_dataset),
@@ -962,6 +968,7 @@ def accumulate_personalization_dataset(
         appended_rows=appended,
         voice_bridge_rows=voice_appended,
         multimodal_context_rows=context_appended,
+        store_dir=store_dir,
     )
     return {
         "corpus_path": str(corpus_path),

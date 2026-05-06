@@ -1,5 +1,5 @@
-# Version: 03.21.00
-# Phase: PHASE4_iPad
+# Version: 03.22.00
+# Phase: PHASE5_ModeAutopilot
 
 
 # === OS / Platform Detection ===
@@ -12,7 +12,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.21.00"
+APP_VERSION = "03.22.00"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -85,28 +85,49 @@ DEFAULT_ADV_SETTINGS = {
     "split_length_threshold": 10,
     "llm_threads_auto_enabled": True,
     "llm_workers_auto_enabled": True,
-    "llm_workers":      6,
-    "llm_threads_resource_max": 6,
+    "runtime_scheduler_ramp_up_enabled": True,
+    "runtime_scheduler_ramp_initial_sec": 45.0,
+    "runtime_scheduler_ramp_step_sec": 60.0,
+    "autopilot_enabled": True,
+    "autopilot_single_user_mode": True,
+    "operation_mode_choices_visible": False,
+    "autopilot_internal_lanes_enabled": True,
+    "autopilot_speaker_preflight_enabled": True,
+    "autopilot_stage_prewarm_enabled": True,
+    "autopilot_stage_prewarm_start_progress": 0.72,
+    "autopilot_progress_events_enabled": True,
+    "cut_boundary_policy_mode": "hybrid",
+    "cut_boundary_user_level_visible": False,
+    "cut_boundary_hybrid_enabled": True,
+    "cut_boundary_hybrid_fast_level": "low",
+    "cut_boundary_hybrid_escalate_level": "medium",
+    "cut_boundary_audio_provisional_color": "#39FF14",
+    "autopilot_cache_enabled": True,
+    "autopilot_stage_cache_enabled": True,
+    "autopilot_negative_cache_enabled": True,
+    "autopilot_compressed_diagnostics_enabled": True,
+    "llm_workers":      4,
+    "llm_threads_resource_max": 4,
     "local_ollama_llm_max_workers": 2,
     "sub_gap_break_sec":  1.5,
     "sub_min_duration":   0.2,
     "sub_max_cps":        12,
     "sub_dedup_window":   0.5,
     "accuracy_first_mode": True,
-    "auto_start_mode": "precise",
-    "stt_quality_preset": "precise",
-    "stt_ensemble_enabled": True,
+    "auto_start_mode": "balanced",
+    "stt_quality_preset": "balanced",
+    "stt_ensemble_enabled": False,
     "stt_candidate_scoring_enabled": True,
     "stt_low_score_recheck_enabled": True,
     "stt_low_score_recheck_threshold": 60,
     "stt_low_score_recheck_padding_sec": 0.8,
-    "stt_low_score_recheck_max_segments": 240,
+    "stt_low_score_recheck_max_segments": 80,
     "selected_whisper_model_secondary": (
         "youngouk/ghost613-turbo-korean-4bit-mlx"
         if IS_MAC else
         "ghost613/faster-whisper-large-v3-turbo-korean"
     ),
-    "stt_ensemble_llm_judge_enabled": True,
+    "stt_ensemble_llm_judge_enabled": False,
     "vad_post_stt_align_enabled": True,
     "vad_post_stt_max_shift_sec": 0.7,
     "vad_post_stt_edge_pad_sec": 0.04,
@@ -120,14 +141,14 @@ DEFAULT_ADV_SETTINGS = {
     "audio_chunk_routing_enabled": True,
     "audio_chunk_route_vad_enabled": True,
     "audio_chunk_profile_sec": 30.0,
-    "whisper_chunk_overlap_sec": 3.0,
-    "chunk_time_limit": 180,
+    "whisper_chunk_overlap_sec": 1.5,
+    "chunk_time_limit": 240,
     "subtitle_bundle_autopilot_enabled": True,
     "subtitle_bundle_lora_enabled": True,
     "subtitle_bundle_lora_blend": 0.35,
-    "subtitle_bundle_target_sec": 180,
-    "subtitle_bundle_min_sec": 90,
-    "subtitle_bundle_max_sec": 300,
+    "subtitle_bundle_target_sec": 240,
+    "subtitle_bundle_min_sec": 120,
+    "subtitle_bundle_max_sec": 420,
     "subtitle_bundle_use_confirmed_cuts": True,
     "subtitle_bundle_use_provisional_cuts": True,
     "subtitle_bundle_confirmed_cut_min_sec": 45,

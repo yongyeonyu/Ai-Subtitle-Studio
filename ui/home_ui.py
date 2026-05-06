@@ -377,7 +377,7 @@ class HomeUIMixin(HomeSidebarMixin):
                 scope="nas" if is_nas else "icloud",
             )
             quality_combo.setAttribute(Qt.WidgetAttribute.WA_NoMousePropagation, True)
-            quality_combo.setToolTip("자막품질 프리셋")
+            quality_combo.setToolTip("Mode")
             header_row.addWidget(quality_combo)
         header_row.addWidget(wd_lbl)
         layout.addLayout(header_row)

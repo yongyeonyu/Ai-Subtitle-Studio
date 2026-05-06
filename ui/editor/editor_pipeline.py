@@ -107,6 +107,18 @@ class EditorPipelineMixin:
             self._spinner_idx = (self._spinner_idx + 1) % len(self._spinner_frames)
         except RuntimeError: pass
 
+    def _clear_processing_indicators(self):
+        self._last_live_processing_stage = ""
+        self._next_live_processing_stage_at = 0.0
+        try:
+            timer = getattr(self, "_spinner_timer", None)
+            if timer is not None:
+                timer.stop()
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
+
     def _safe_enable_start_btn(self):
         try:
             if hasattr(self, 'btn_start') and self.btn_start:
@@ -118,7 +130,7 @@ class EditorPipelineMixin:
         if hasattr(main_w, "_stop_post_completion_idle_timer"):
             main_w._stop_post_completion_idle_timer()
         self.sm.stop_processing("작업이 중지되었습니다.")
-        if hasattr(self, '_spinner_timer'): self._spinner_timer.stop()
+        self._clear_processing_indicators()
         active_backend = None
         if hasattr(main_w, "backend_fast") and getattr(main_w.backend_fast, "_active", False):
             active_backend = main_w.backend_fast
@@ -278,7 +290,7 @@ class EditorPipelineMixin:
             self.sm.complete_auto_mode()
         else:
             self.sm.complete_ai()
-        if hasattr(self, '_spinner_timer'): self._spinner_timer.stop()
+        self._clear_processing_indicators()
         get_logger().log("✅ 자막 생성 완료 (EditorPipeline 확정)")
         main_w = self.window()
         if hasattr(main_w, "sync_menu_from_editor"):
@@ -288,15 +300,26 @@ class EditorPipelineMixin:
         if hasattr(main_w, "_start_post_completion_idle_timer"):
             main_w._start_post_completion_idle_timer()
         try:
-            from core.personalization.text_lora_dataset import accumulate_personalization_dataset
+            from core.personalization.deferred_editor_learning import enqueue_deferred_editor_learning
 
-            accumulate_personalization_dataset(
-                current_segments=[dict(seg) for seg in list(self._get_current_segments() or []) if not seg.get("is_gap")],
-                current_project_path=str(getattr(main_w, "_current_project_path", "") or ""),
+            queued = enqueue_deferred_editor_learning(
+                [dict(seg) for seg in list(self._get_current_segments() or []) if not seg.get("is_gap")],
+                media_path=str(getattr(self, "media_path", "") or ""),
+                subtitle_path="",
+                project_path=str(getattr(main_w, "_current_project_path", "") or ""),
                 trigger="generation_complete",
+                settings=dict(getattr(self, "settings", {}) or {}),
             )
+            if queued.get("queued"):
+                get_logger().log("🧠 [LoRA] 생성 완료 학습은 Home-idle 큐로 넘겼습니다.")
         except Exception as exc:
-            get_logger().log(f"⚠️ 개인화 데이터 누적 실패(생성완료): {exc}")
+            get_logger().log(f"⚠️ 개인화 학습 큐 등록 실패(생성완료): {exc}")
+        try:
+            cleanup = getattr(main_w, "_post_generation_resource_cleanup", None)
+            if callable(cleanup):
+                cleanup(reason="subtitle_generation_complete", editor=self)
+        except Exception:
+            pass
         if hasattr(self, "_schedule_post_generation_roughcut_draft"):
             QTimer.singleShot(350, lambda: self._schedule_post_generation_roughcut_draft(force=True))
         if hasattr(main_w, "_release_ai_models_for_editor_mode"):
@@ -943,8 +966,8 @@ class EditorPipelineMixin:
         if hasattr(self, 'insert_partial_segments'):
             self._partial_signals.done.connect(self.insert_partial_segments)
         def on_finished():
-            if hasattr(self, '_spinner_timer'): self._spinner_timer.stop()
             self.sm.complete_ai()
+            self._clear_processing_indicators()
             if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
                 self.timeline.canvas.re_recog_zone = None
                 self.timeline.canvas.re_recog_progress = None
@@ -1246,7 +1269,20 @@ class EditorPipelineMixin:
             return
         message = str(text or "").strip()
         if not message:
+            self._clear_processing_indicators()
             return
+        try:
+            sm = getattr(self, "sm", None)
+            if sm is not None:
+                state = str(getattr(sm, "state", "") or "")
+                is_locked = bool(getattr(sm, "is_locked", False))
+                if state != "ST_PROC" or not is_locked:
+                    self._clear_processing_indicators()
+                    return
+        except RuntimeError:
+            return
+        except Exception:
+            pass
         now = time.monotonic()
         if (
             message == str(getattr(self, "_last_live_processing_stage", "") or "")
@@ -1296,6 +1332,6 @@ class EditorPipelineMixin:
         if is_final or "에러" in text or "실패" in text:
             if "완료" in text: self.sm.complete_ai()
             else: self.sm.stop_processing(text)
-            if hasattr(self, '_spinner_timer'): self._spinner_timer.stop()
+            self._clear_processing_indicators()
         else:
             self.sm.set_custom_status(text)

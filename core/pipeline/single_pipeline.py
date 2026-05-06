@@ -10,6 +10,7 @@ import traceback
 import queue
 import time
 
+from core.autopilot_policy import speaker_preflight_decision
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.settings import load_settings, get_model_key
@@ -451,6 +452,21 @@ class SinglePipelineMixin:
 
             chunk_dir, vad_segs = res
             self._ui_emit("_sig_set_vad_segments", vad_segs)
+            try:
+                speaker_preflight = speaker_preflight_decision(
+                    vad_segs,
+                    media_duration_sec=float((startup_diagnostic.get("media", {}) or {}).get("duration_sec", 0.0) or 0.0),
+                    settings=load_settings(),
+                )
+                self._autopilot_speaker_preflight = speaker_preflight
+                get_logger().log(
+                    "🗣️ [AutoPilot 화자] "
+                    f"{speaker_preflight.get('lane')} · "
+                    f"{speaker_preflight.get('estimated_speaker_count')}명 예상 · "
+                    f"confidence {float(speaker_preflight.get('confidence', 0.0) or 0.0):.2f}"
+                )
+            except Exception:
+                pass
 
             get_logger().log("\n  [STT] Whisper 인식 → [자막 LLM] 교정/분리 파이프라인 가동...")
 

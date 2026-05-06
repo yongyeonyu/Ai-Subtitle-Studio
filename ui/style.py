@@ -154,7 +154,7 @@ def settings_button_style(kind="toolbar", *, font_size="12px", min_width=72, min
     )
 
 
-def tool_button_style(kind="toolbar", *, checked=False):
+def tool_button_style(kind="toolbar", *, checked=False, padding: str = "6px 8px"):
     bg = COLORS["surface_alt"]
     border = COLORS["separator"]
     color = COLORS["text"]
@@ -173,7 +173,7 @@ def tool_button_style(kind="toolbar", *, checked=False):
     return (
         "QToolButton { "
         f"background: {bg}; color: {color}; border: 1px solid {border}; "
-        "border-radius: 7px; padding: 6px 8px; font-size: 11px; font-weight: 600; "
+        f"border-radius: 7px; padding: {padding}; font-size: 11px; font-weight: 600; "
         "} "
         f"QToolButton:hover {{ background: {COLORS['control_hover']}; border-color: #465663; }} "
         "QToolButton:disabled { color: #666C72; background: #151A1E; border-color: #222A31; }"

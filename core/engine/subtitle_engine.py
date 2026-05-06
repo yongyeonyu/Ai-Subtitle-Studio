@@ -1138,9 +1138,12 @@ def _process_one(args: tuple) -> list[dict]:
 
     segment_settings, segment_lora = _segment_lora_runtime({**seg, "text": text}, runtime_settings, rules, threshold)
 
+    candidate_selected = False
     if seg.get("stt_candidates") and duration >= 0.35:
-        selected_decision = _select_stt_candidate_text(seg, model, user_prompt, api_key, segment_settings, rules)
+        candidate_settings = {**dict(segment_settings or {}), **dict(runtime_settings or _get_user_settings() or {})}
+        selected_decision = _select_stt_candidate_text(seg, model, user_prompt, api_key, candidate_settings, rules)
         if selected_decision:
+            candidate_selected = True
             selected_text = str(selected_decision.get("text", "") or "").strip()
             selected_source = str(selected_decision.get("source", "") or "").strip().upper()
             seg = {
@@ -1165,7 +1168,9 @@ def _process_one(args: tuple) -> list[dict]:
     gap_break_sec = _setting_float(segment_settings, "sub_gap_break_sec", _GAP_BREAK_SEC)
 
     # 💡 [환각 방지] 너무 짧은 자막은 LLM 교정을 생략합니다.
-    if duration < _LLM_SKIP_DUR or len(text.replace(" ", "")) <= (threshold - 5):
+    if duration < _LLM_SKIP_DUR or len(text.replace(" ", "")) <= (threshold - 5) or (
+        candidate_selected and len(text.replace(" ", "").replace("\n", "")) <= threshold
+    ):
         return [_attach_lora_and_deep_timing({**seg, "text": _clean(text, corrections)}, segment_lora, segment_settings)]
 
     words = seg.get("words", [])
@@ -1342,9 +1347,12 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
     duration = float(seg.get("end", 0.0) or 0.0) - float(seg.get("start", 0.0) or 0.0)
     segment_settings, segment_lora = _segment_lora_runtime({**seg, "text": text}, runtime_settings, rules, threshold)
 
+    candidate_selected = False
     if seg.get("stt_candidates") and duration >= 0.35:
-        selected_decision = _select_stt_candidate_text(seg, model, user_prompt, api_key, segment_settings, rules)
+        candidate_settings = {**dict(segment_settings or {}), **dict(runtime_settings or _get_user_settings() or {})}
+        selected_decision = _select_stt_candidate_text(seg, model, user_prompt, api_key, candidate_settings, rules)
         if selected_decision:
+            candidate_selected = True
             text = str(selected_decision.get("text", "") or "").strip()
             seg = {
                 **seg,
@@ -1383,7 +1391,9 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
     if str(seg.get("text", "") or "").strip() != cleaned_text:
         segment_settings, segment_lora = _segment_lora_runtime({**seg, "text": cleaned_text}, runtime_settings, rules, threshold)
     threshold = _setting_int(segment_settings, "split_length_threshold", threshold)
-    if "사용 안함" in str(model or ""):
+    if "사용 안함" in str(model or "") or (
+        candidate_selected and len(cleaned_text.replace(" ", "").replace("\n", "")) <= threshold
+    ):
         return [_attach_lora_and_deep_timing({**seg, "text": cleaned_text}, segment_lora, segment_settings)]
     if duration < _LLM_SKIP_DUR or len(cleaned_text.replace(" ", "")) <= (threshold - 5):
         return [_attach_lora_and_deep_timing({**seg, "text": cleaned_text}, segment_lora, segment_settings)]

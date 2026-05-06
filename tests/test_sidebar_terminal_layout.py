@@ -144,7 +144,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIsNone(preset_panel)
             quality_combo = getattr(window, "sidebar_subtitle_quality_combo", None)
             self.assertIsNotNone(quality_combo)
-            self.assertEqual([quality_combo.itemText(i) for i in range(quality_combo.count())], ["빠름", "보통", "높음"])
+            self.assertEqual([quality_combo.itemText(i) for i in range(quality_combo.count())], ["Fast", "Auto", "High"])
             self.assertGreaterEqual(quality_combo.view().minimumWidth(), 104)
             self.assertIn("QAbstractItemView::item", quality_combo.styleSheet())
             quality_row = window.home_page.findChild(QWidget, "SidebarSubtitleQualityRow")
@@ -155,7 +155,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertGreaterEqual(window.sidebar_settings_label.parentWidget().minimumHeight(), 166)
             quality_combos = [
                 combo for combo in window.home_page.findChildren(QComboBox)
-                if [combo.itemText(i) for i in range(combo.count())] == ["빠름", "보통", "높음"]
+                if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High"]
             ]
             self.assertGreaterEqual(len(quality_combos), 3)
             self.assertGreaterEqual(window.sidebar_terminal_panel.maximumHeight(), 180)
@@ -178,6 +178,19 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 }
             )
             self.assertIn("font-family:Menlo, Monaco, Consolas, monospace", html)
+            rows = window._pipeline_rows({"selected_audio_ai": "deepfilter", "selected_vad": "silero"})
+            self.assertEqual([row[0] for row in rows], [
+                "cut_boundary",
+                "preprocess",
+                "audio",
+                "stt1",
+                "stt2",
+                "vad",
+                "subtitle_llm",
+                "roughcut_llm",
+                "lora",
+                "deep_learning",
+            ])
             self.assertIn("font-weight:400", html)
             self.assertIn("model:stt1", html)
             self.assertNotIn("model:audio", html)
@@ -232,7 +245,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 combos = {
                     str(combo.property("subtitleQualityScope") or "workspace"): combo
                     for combo in window.home_page.findChildren(QComboBox)
-                    if [combo.itemText(i) for i in range(combo.count())] == ["빠름", "보통", "높음"]
+                    if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High"]
                 }
                 self.assertEqual(combos["icloud"].currentData(), "fast")
                 self.assertEqual(combos["nas"].currentData(), "balanced")
@@ -374,7 +387,18 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(current, set())
             self.assertEqual(
                 completed,
-                {"cut_boundary", "preprocess", "audio", "stt1", "stt2", "vad", "subtitle_llm", "roughcut_llm"},
+                {
+                    "cut_boundary",
+                    "preprocess",
+                    "audio",
+                    "stt1",
+                    "stt2",
+                    "vad",
+                    "subtitle_llm",
+                    "roughcut_llm",
+                    "lora",
+                    "deep_learning",
+                },
             )
         finally:
             window.close()
@@ -417,6 +441,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                     "vad",
                     "subtitle_llm",
                     "roughcut_llm",
+                    "lora",
+                    "deep_learning",
                 },
             )
         finally:
@@ -577,7 +603,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             completed = window._pipeline_completed_stage_keys(settings, current)
 
             self.assertEqual(current, set())
-            for key in ("cut_boundary", "preprocess", "audio", "stt1", "stt2", "vad", "subtitle_llm"):
+            for key in ("cut_boundary", "preprocess", "audio", "stt1", "stt2", "vad", "subtitle_llm", "lora", "deep_learning"):
                 self.assertNotIn(key, completed)
         finally:
             window.close()

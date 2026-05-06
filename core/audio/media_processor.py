@@ -23,7 +23,7 @@ from core.audio.media_processor_audio import VideoProcessorAudioHelpersMixin
 from core.audio.media_processor_transcribe import VideoProcessorTranscribeMixin
 from core.audio.media_processor_vad import VideoProcessorVadMixin
 from core.llm.secure_keys import get_api_key  # noqa: F401 - patched by audio helper tests/runtime hooks
-from core.performance import bounded_worker_count
+from core.performance import adaptive_worker_count, bounded_worker_count
 from core.media_fingerprint import media_fingerprint_digest
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.runtime import config
@@ -613,7 +613,17 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         if not grouped:
             return
 
-        max_workers = max(1, min(self.io_workers, len(grouped)))
+        settings = self._load_all_settings()
+        max_workers, scheduler = adaptive_worker_count(
+            task="io",
+            settings=settings,
+            requested=self.io_workers,
+            workload=len(grouped),
+            minimum=1,
+            maximum=max(1, min(self.io_workers, len(grouped))),
+        )
+        if scheduler.get("ramp", {}).get("enabled"):
+            get_logger().log(f"  🐢 [전처리] 청크 생성 램프업: {max_workers}개 워커")
 
         def _one(idx_seg):
             idx, seg = idx_seg
@@ -651,7 +661,16 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             return False
 
         ffmpeg = ffmpeg_binary()
-        max_workers = max(1, min(self.io_workers, len(grouped)))
+        max_workers, scheduler = adaptive_worker_count(
+            task="io",
+            settings=settings,
+            requested=self.io_workers,
+            workload=len(grouped),
+            minimum=1,
+            maximum=max(1, min(self.io_workers, len(grouped))),
+        )
+        if scheduler.get("ramp", {}).get("enabled"):
+            get_logger().log(f"  🐢 [전처리] 직접 청크 추출 램프업: {max_workers}개 워커")
         progress_lock = threading.Lock()
         done_count = 0
         next_log_pct = 0

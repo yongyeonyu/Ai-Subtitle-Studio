@@ -320,6 +320,15 @@ def _retrieved_lora_context_lines(
     lines = [
         f"- LoRA 검색 인덱스: {int(result.get('index_doc_count', 0) or 0)}개 기억에서 {score_model} 방식으로 현재 자막과 가까운 근거를 점수화해 사용",
     ]
+    query_summary = dict(result.get("query_facets") or {})
+    query_bits = [
+        f"scene={query_summary.get('scene') or '-'}",
+        f"topic={query_summary.get('topic') or '-'}",
+        f"mic={query_summary.get('mic_type') or '-'}",
+        f"noise={query_summary.get('noise_level') or '-'}",
+    ]
+    if any(not bit.endswith("=-") for bit in query_bits):
+        lines.append("- 현재 검색 facet: " + ", ".join(query_bits))
 
     examples: list[str] = []
     contexts: list[str] = []

@@ -133,20 +133,20 @@ DEFAULT_ADV_SETTINGS = {
     "accuracy_first_mode": True,
     "settings_simplified_ui_enabled": True,
     "simple_operation_mode": "auto",
-    "auto_start_mode": "precise",
-    "stt_quality_preset": "precise",
-    "stt_ensemble_enabled": True,
+    "auto_start_mode": "balanced",
+    "stt_quality_preset": "balanced",
+    "stt_ensemble_enabled": False,
     "stt_candidate_scoring_enabled": True,
     "stt_low_score_recheck_enabled": True,
     "stt_low_score_recheck_threshold": 60,
     "stt_low_score_recheck_padding_sec": 0.8,
-    "stt_low_score_recheck_max_segments": 240,
+    "stt_low_score_recheck_max_segments": 80,
     "selected_whisper_model_secondary": (
         "youngouk/ghost613-turbo-korean-4bit-mlx"
         if config.IS_MAC else
         "ghost613/faster-whisper-large-v3-turbo-korean"
     ),
-    "stt_ensemble_llm_judge_enabled": True,
+    "stt_ensemble_llm_judge_enabled": False,
     "vad_post_stt_align_enabled": True,
     "vad_post_stt_max_shift_sec": 0.7,
     "vad_post_stt_edge_pad_sec": 0.04,
