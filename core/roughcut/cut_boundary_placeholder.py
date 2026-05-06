@@ -308,6 +308,7 @@ def build_topicless_middle_segments(
     - 컷이 생기면 frame 기준으로 A/B/C split
     - start/end 초는 frame_to_sec(frame, fps) 결과만 저장
     """
+    from core.cut_boundary_middle import coalesce_topicless_middle_boundary_frames
     from core.frame_time import sec_to_frame
 
     cut_list = list(cut_boundaries or [])
@@ -321,13 +322,28 @@ def build_topicless_middle_segments(
     except Exception:
         duration_frame = 0
 
-    cut_frames: list[int] = []
+    cut_rows: list[dict] = []
     for row in cut_list:
         frame = _topicless_frame_from_boundary(row, fps)
         if frame is not None and frame > 0:
-            cut_frames.append(int(frame))
+            if isinstance(row, dict):
+                cut_rows.append(dict(row))
+            else:
+                cut_rows.append({"timeline_frame": int(frame), "frame": int(frame), "fps": fps})
 
-    cut_frames = sorted(set(cut_frames))
+    try:
+        from core.settings import load_settings
+
+        settings = dict(load_settings() or {})
+    except Exception:
+        settings = {}
+
+    cut_frames = coalesce_topicless_middle_boundary_frames(
+        cut_rows,
+        fps=fps,
+        duration_frame=duration_frame,
+        settings=settings,
+    )
 
     # 핵심: 컷이 없어도 duration을 알면 전체 A 주제없음 생성
     if not cut_frames:

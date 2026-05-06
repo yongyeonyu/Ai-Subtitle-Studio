@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QTool
 from core.runtime import config
 from core.pipeline_status import generation_stage_label, process_mode_label
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
+from ui.responsive_profile import responsive_profile_for_size
 from ui.style import label_style, line_icon, tool_button_style
 
 MENU_BAR_HEIGHT = 54
@@ -247,6 +248,7 @@ class GlobalMenuBar(QWidget):
         self.editor = None
         self.status_rail = None
         self._tool_buttons = []
+        self._responsive_profile = responsive_profile_for_size(0, 0)
         self.setFixedHeight(MENU_BAR_HEIGHT)
         self.setObjectName("GlobalMenuBar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -380,6 +382,9 @@ class GlobalMenuBar(QWidget):
         self.refresh()
 
     def refresh(self):
+        profile = self._current_responsive_profile()
+        if self.height() != profile.menu_bar_height:
+            self.setFixedHeight(profile.menu_bar_height)
         editor = self._active_editor()
         has_editor = editor is not None
         mode = normalize_work_mode(getattr(self.main_window, "_current_work_mode", EDITOR_MODE))
@@ -435,24 +440,40 @@ class GlobalMenuBar(QWidget):
             if compact:
                 btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
                 btn.setIconSize(QSize(MENU_WIDE_ICON, MENU_WIDE_ICON))
-                btn.setFixedHeight(MENU_BUTTON_HEIGHT)
-                btn.setFixedWidth(max(36, btn.iconSize().width() + 16))
+                btn.setFixedHeight(profile.menu_button_height)
+                btn.setFixedWidth(max(profile.touch_target, btn.iconSize().width() + 16))
             else:
                 if btn in (self.btn_start, self.btn_undo, self.btn_redo, self.btn_save):
                     btn.setIconSize(QSize(MENU_ACTION_ICON, MENU_ACTION_ICON))
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-                    btn.setFixedHeight(MENU_BUTTON_HEIGHT)
+                    btn.setFixedHeight(profile.menu_button_height)
                     btn.setFixedWidth(MENU_ACTION_WIDTH)
                 elif btn in (self.btn_auto_start, self.btn_help, self.btn_log, self.btn_cache_clear):
                     btn.setIconSize(QSize(MENU_WIDE_ICON, MENU_WIDE_ICON))
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-                    btn.setFixedHeight(MENU_BUTTON_HEIGHT)
-                    btn.setFixedWidth(int(btn.property("expandedMinWidth") or 72))
+                    btn.setFixedHeight(profile.menu_button_height)
+                    btn.setFixedWidth(max(profile.touch_target, int(btn.property("expandedMinWidth") or 72)))
                 else:
                     btn.setIconSize(QSize(MENU_SMALL_ICON, MENU_SMALL_ICON))
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-                    btn.setFixedHeight(MENU_BUTTON_HEIGHT)
-                    btn.setFixedWidth(MENU_SMALL_WIDTH)
+                    btn.setFixedHeight(profile.menu_button_height)
+                    btn.setFixedWidth(max(profile.touch_target, MENU_SMALL_WIDTH))
+
+    def _current_responsive_profile(self):
+        win = self.window()
+        try:
+            override = str(win.property("responsive_profile_override") or "")
+        except Exception:
+            override = ""
+        try:
+            width = int(win.width())
+            height = int(win.height())
+        except Exception:
+            width = int(self.width() or 0)
+            height = int(self.height() or 0)
+        profile = responsive_profile_for_size(width, height, override=override)
+        self._responsive_profile = profile
+        return profile
 
     def _sync_start_icon(self):
         text = str(self.btn_start.text() or "")
@@ -469,11 +490,12 @@ class GlobalMenuBar(QWidget):
 
     def _should_icon_only(self):
         win = self.window()
+        profile = self._current_responsive_profile()
         try:
             screen_w = win.screen().availableGeometry().width()
-            return self.width() <= 760 or win.width() <= int(screen_w * 0.55)
+            return self.width() <= profile.menu_icon_only_width or win.width() <= int(screen_w * 0.55)
         except Exception:
-            return self.width() <= 760
+            return self.width() <= profile.menu_icon_only_width
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

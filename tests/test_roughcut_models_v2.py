@@ -10,8 +10,10 @@ from core.roughcut import (
     build_roughcut_prompt,
     merge_roughcut_settings,
     roughcut_result_from_dict,
+    resolve_roughcut_context_policy,
     resolve_roughcut_llm_config,
     run_roughcut_llm_action,
+    trim_roughcut_payload_for_context,
 )
 
 
@@ -118,6 +120,7 @@ class RoughCutModelsV2Tests(unittest.TestCase):
             "roughcut_llm_model": "exaone-test",
             "roughcut_llm_prompt": "custom roughcut prompt",
             "roughcut_llm_temperature": 1.5,
+            "roughcut_llm_threads_auto_enabled": False,
             "roughcut_llm_threads": 7,
         })
         self.assertEqual(override.provider, "ollama")
@@ -125,8 +128,57 @@ class RoughCutModelsV2Tests(unittest.TestCase):
         self.assertEqual(override.prompt, DEFAULT_ROUGHCUT_PROMPT_V1)
         self.assertEqual(override.temperature, 1.0)
         self.assertEqual(override.threads, 7)
+        self.assertTrue(override.context_policy["auto_enabled"])
         self.assertIn("중분류 A/B/C/D", DEFAULT_ROUGHCUT_PROMPT_V1)
         self.assertIn("단순한 말 끊김", DEFAULT_ROUGHCUT_PROMPT_V1)
+
+    def test_roughcut_context_policy_uses_lora_deep_auto_rows(self):
+        payload = {
+            "chunks": [
+                {"start": float(index * 3), "end": float(index * 3 + 2), "text": f"row {index}"}
+                for index in range(140)
+            ],
+            "cut_boundaries": [{"time": 30.0}, {"time": 60.0}, {"time": 90.0}, {"time": 120.0}],
+        }
+
+        policy = resolve_roughcut_context_policy(
+            {
+                "roughcut_llm_rows_auto_enabled": True,
+                "roughcut_llm_rows_lora_enabled": True,
+                "roughcut_llm_rows_lora_blend": 0.25,
+                "roughcut_llm_max_context_rows": 96,
+                "roughcut_llm_chunk_rows": 10,
+                "roughcut_llm_lookahead_rows": 6,
+                "roughcut_llm_rows_exploration_rate": 0.0,
+            },
+            payload=payload,
+        )
+
+        self.assertTrue(policy["auto_enabled"])
+        self.assertGreaterEqual(policy["max_context_rows"], 96)
+        self.assertLessEqual(policy["max_context_rows"], 160)
+        self.assertGreaterEqual(policy["chunk_rows"], 8)
+        self.assertIn("lora_blend", policy["reason"])
+
+        trimmed = trim_roughcut_payload_for_context(payload, policy)
+        self.assertLessEqual(len(trimmed["chunks"]), policy["max_context_rows"])
+        self.assertIn("_roughcut_context_policy", trimmed)
+
+    def test_roughcut_context_policy_keeps_manual_compat_when_auto_disabled(self):
+        policy = resolve_roughcut_context_policy(
+            {
+                "roughcut_llm_rows_auto_enabled": False,
+                "roughcut_llm_max_context_rows": 5,
+                "roughcut_llm_chunk_rows": 3,
+                "roughcut_llm_lookahead_rows": 2,
+            },
+            subtitle_rows=[{"text": "a"} for _ in range(12)],
+        )
+
+        self.assertFalse(policy["auto_enabled"])
+        self.assertEqual(policy["max_context_rows"], 5)
+        self.assertEqual(policy["chunk_rows"], 3)
+        self.assertEqual(policy["lookahead_rows"], 2)
 
 
 if __name__ == "__main__":

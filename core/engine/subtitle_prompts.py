@@ -3,6 +3,7 @@
 """Prompt templates and builders for subtitle LLM splitting."""
 
 from core.engine.subtitle_settings import _get_user_settings
+from core.engine.llm_candidate_policy import format_candidate_options_for_prompt
 from core.personalization.runtime_lora_context import build_runtime_lora_prompt
 from core.runtime import config
 from core.subtitle_quality.llm_guarded_corrector import build_conservative_prompt
@@ -41,17 +42,20 @@ def _build_llm_prompt(
     user_prompt: str,
     conservative: bool = False,
     settings: dict | None = None,
+    candidate_options: list[dict] | None = None,
 ) -> str:
     end_words = ", ".join(rules.get("end_words", []))
     start_words = ", ".join(rules.get("start_words", []))
+    effective_settings = settings if settings is not None else _get_user_settings()
+    system_prompt = str(effective_settings.get("default_llm_prompt") or DEFAULT_SYSTEM_PROMPT)
     if user_prompt.strip():
         combined_prompt = (
-            f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n"
-            f"[사용자 추가 지시문]\n{user_prompt.strip()}\n\n"
+            f"{system_prompt.strip()}\n\n"
+            f"[사용자 추가 지시문 - LoRA보다 후순위]\n{user_prompt.strip()}\n\n"
             f"{_HARDCODED_LLM_RULES.strip()}"
         )
     else:
-        combined_prompt = f"{DEFAULT_SYSTEM_PROMPT.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
+        combined_prompt = f"{system_prompt.strip()}\n\n{_HARDCODED_LLM_RULES.strip()}"
     if conservative:
         combined_prompt = build_conservative_prompt(combined_prompt)
     prompt = (
@@ -61,7 +65,10 @@ def _build_llm_prompt(
         .replace("{start_words}", start_words)
         .replace("{text}", text)
     )
-    lora_prompt = build_runtime_lora_prompt(text, rules, settings if settings is not None else _get_user_settings())
+    lora_prompt = build_runtime_lora_prompt(text, rules, effective_settings)
     if lora_prompt:
         prompt = f"{prompt}\n\n{lora_prompt}"
+    candidate_prompt = format_candidate_options_for_prompt(candidate_options)
+    if candidate_prompt:
+        prompt = f"{prompt}\n\n{candidate_prompt}"
     return prompt

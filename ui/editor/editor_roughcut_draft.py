@@ -126,13 +126,14 @@ class EditorRoughcutDraftMixin:
                 get_logger().log(f"⚠️ 에디터 러프컷 로컬 초안 생성 실패: {exc}")
             return
         try:
-            from core.roughcut import editor_roughcut_draft_llm_allowed
+            from core.roughcut import editor_roughcut_draft_llm_allowed, resolve_roughcut_context_policy
 
             if not editor_roughcut_draft_llm_allowed(segments, settings):
-                max_rows = int(settings.get("roughcut_llm_max_context_rows", 80) or 80)
+                policy = resolve_roughcut_context_policy(settings, subtitle_rows=list(segments or []))
+                max_rows = int(policy.get("max_context_rows", settings.get("roughcut_llm_max_context_rows", 80)) or 80)
                 get_logger().log(
                     "⏩ 긴 영상 러프컷: 자막 row가 "
-                    f"{len(segments)}개라 LLM 초안({max_rows}개 제한)을 건너뛰고 로컬 세그먼트를 즉시 생성합니다."
+                    f"{len(segments)}개라 자동 문맥 정책({max_rows}개 제한)으로 LLM 초안을 건너뛰고 로컬 세그먼트를 즉시 생성합니다."
                 )
                 emit_candidate(None, "local_after_generation_long_video")
                 return

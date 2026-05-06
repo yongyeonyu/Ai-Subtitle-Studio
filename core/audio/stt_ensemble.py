@@ -381,6 +381,7 @@ def _candidate_payload(source: str, segment: dict) -> dict:
         "avg_logprob": segment.get("avg_logprob"),
         "no_speech_prob": segment.get("no_speech_prob"),
         "compression_ratio": segment.get("compression_ratio"),
+        "words": _words_from_segment(segment),
     }
 
 

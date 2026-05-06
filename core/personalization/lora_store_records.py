@@ -27,7 +27,12 @@ def load_training_queue(store_dir: str | Path | None = None) -> dict[str, Any]:
     return read_json(paths["training_queue"], default_queue())
 
 
-def save_training_queue(items: list[dict[str, Any]], store_dir: str | Path | None = None) -> dict[str, Any]:
+def save_training_queue(
+    items: list[dict[str, Any]],
+    store_dir: str | Path | None = None,
+    *,
+    refresh_manifest: bool = True,
+) -> dict[str, Any]:
     paths = store_paths(store_dir)
     payload = {
         "schema": "ai_subtitle_studio.personalization_training_queue.v1",
@@ -35,7 +40,8 @@ def save_training_queue(items: list[dict[str, Any]], store_dir: str | Path | Non
         "items": list(items or []),
     }
     write_json(paths["training_queue"], payload)
-    refresh_lora_personalization_manifest(store_dir)
+    if refresh_manifest:
+        refresh_lora_personalization_manifest(store_dir)
     return payload
 
 
@@ -274,6 +280,14 @@ def append_multimodal_lora_context_rows(
 ) -> dict[str, Any]:
     initialize_lora_personalization_store(store_dir)
     return _append_unique_rows("multimodal_lora_context", rows, store_dir)
+
+
+def append_deep_policy_events(
+    rows: list[dict[str, Any]],
+    store_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    initialize_lora_personalization_store(store_dir)
+    return _append_unique_rows("deep_policy_events", rows, store_dir)
 
 
 def compact_lora_personalization_store(store_dir: str | Path | None = None) -> dict[str, Any]:

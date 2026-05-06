@@ -15,6 +15,7 @@ from core.personalization.lora_models import (
     line_break_pattern_for_text,
     stable_hash,
 )
+from core.personalization.subtitle_style_profile import build_subtitle_style_profile
 from core.personalization.lora_storage import (
     append_excluded_parentheticals,
     append_multimodal_lora_context_rows,
@@ -459,6 +460,14 @@ def build_truth_table_records_from_srt(
         previous_end = _safe_float(subtitle_segments[index - 2].get("end")) if index > 1 else 0.0
         next_start = _safe_float(subtitle_segments[index].get("start")) if index < len(subtitle_segments) else 0.0
         position_ratio = round(start_sec / media_duration_sec, 4) if media_duration_sec > 0 else 0.0
+        style_profile = build_subtitle_style_profile(
+            raw_text=raw_text,
+            speech_text=speech_text,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            previous_end_sec=previous_end if index > 1 else None,
+            next_start_sec=next_start if index < len(subtitle_segments) else None,
+        )
         truth_rows.append(
             TruthTableRow(
                 media_id=media_id,
@@ -487,6 +496,7 @@ def build_truth_table_records_from_srt(
                     "segment_position_ratio": position_ratio,
                     "gap_before_sec": round(max(0.0, start_sec - previous_end), 3) if index > 1 else 0.0,
                     "gap_after_sec": round(max(0.0, next_start - end_sec), 3) if index < len(subtitle_segments) else 0.0,
+                    "style_profile": style_profile,
                 },
             ).to_record()
         )

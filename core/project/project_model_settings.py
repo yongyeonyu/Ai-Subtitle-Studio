@@ -30,7 +30,19 @@ MODEL_SETTING_KEYS = (
     "roughcut_llm_max_context_rows",
     "roughcut_llm_chunk_rows",
     "roughcut_llm_lookahead_rows",
+    "roughcut_llm_rows_auto_enabled",
+    "roughcut_llm_rows_lora_enabled",
+    "roughcut_llm_rows_lora_blend",
+    "roughcut_llm_rows_exploration_rate",
+    "roughcut_llm_context_min_rows",
+    "roughcut_llm_context_max_rows",
+    "roughcut_llm_chunk_min_rows",
+    "roughcut_llm_chunk_max_rows",
+    "roughcut_llm_lookahead_min_rows",
+    "roughcut_llm_lookahead_max_rows",
+    "roughcut_llm_threads_auto_enabled",
     "roughcut_llm_threads",
+    "roughcut_llm_threads_resource_max",
 )
 
 

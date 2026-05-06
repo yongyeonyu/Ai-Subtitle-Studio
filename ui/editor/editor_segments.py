@@ -5,7 +5,7 @@ ui/editor_segments.py
 EditorWidget의 자막 에디터 조작, 큐 처리, 세그먼트 I/O 메서드 모음.
 [수정] core 폴더 이동에 따른 데이터 매니저 경로 및 상대 경로 최적화 완료
 """
-import hashlib, json, re, threading
+import hashlib, json, re, threading, time
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
 
@@ -132,7 +132,8 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
 
     def _quality_tooltip(self, seg: dict) -> str:
         quality = dict(seg.get("quality") or {})
-        if not quality:
+        stage_confidence = dict(seg.get("subtitle_stage_confidence") or {})
+        if not quality and not stage_confidence:
             return ""
         score = quality.get("confidence_score")
         label = str(quality.get("confidence_label") or "gray")
@@ -141,7 +142,21 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         candidates = len(seg.get("quality_candidates") or [])
         stale = " / stale" if seg.get("quality_stale") else ""
         score_text = "-" if score is None else f"{float(score):.1f}"
-        return f"품질 {label}{stale} · {score_text}점\n사유: {reason or flags or 'ok'}\n후보: {candidates}개"
+        lines = [f"품질 {label}{stale} · {score_text}점", f"사유: {reason or flags or 'ok'}", f"후보: {candidates}개"]
+        stages = dict(stage_confidence.get("stages") or {})
+        if stages:
+            names = {"cut": "컷", "stt": "STT", "llm": "LLM", "lora": "LoRA", "final": "최종"}
+            stage_bits = []
+            for key in list(stage_confidence.get("stage_order") or ["cut", "stt", "llm", "lora", "final"]):
+                item = dict(stages.get(key) or {})
+                if not item:
+                    continue
+                stage_score = item.get("score")
+                stage_score_text = "-" if stage_score is None else f"{float(stage_score):.0f}"
+                stage_bits.append(f"{names.get(key, key)} {item.get('label', 'gray')} {stage_score_text}")
+            if stage_bits:
+                lines.append("단계 신뢰도: " + " · ".join(stage_bits))
+        return "\n".join(lines)
 
     # ---------------------------------------------------------
     # Segment Queue
@@ -236,6 +251,96 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                 pass
         self._flush_live_editor_preview_queue()
 
+    def _focus_editor_block_for_processing_segment(self, payload: dict | None, *, prefer_last: bool = False) -> bool:
+        if not hasattr(self, "text_edit"):
+            return False
+        data = dict(payload or {})
+        doc = self.text_edit.document()
+        target_block = None
+        target_start = None
+        try:
+            line = int(data.get("line", -1))
+        except Exception:
+            line = -1
+        if line >= 0:
+            block = doc.findBlockByNumber(line)
+            if block.isValid():
+                target_block = block
+
+        try:
+            requested_start = float(data.get("start", 0.0) or 0.0)
+        except Exception:
+            requested_start = 0.0
+        requested_text = str(data.get("text", "") or "").replace("\u2028", "\n").strip()
+        requested_flat = re.sub(r"\s+", " ", requested_text).strip()
+
+        if target_block is None and (requested_start > 0.0 or requested_flat):
+            candidates = []
+            block = doc.begin()
+            while block.isValid():
+                block_data = block.userData()
+                block_start = None
+                if isinstance(block_data, SubtitleBlockData):
+                    try:
+                        block_start = float(getattr(block_data, "start_sec", 0.0) or 0.0)
+                    except Exception:
+                        block_start = None
+                block_flat = re.sub(r"\s+", " ", str(block.text() or "").replace("\u2028", "\n")).strip()
+                time_diff = abs((block_start if block_start is not None else 0.0) - requested_start)
+                text_match = bool(requested_flat and block_flat and (block_flat == requested_flat or requested_flat.startswith(block_flat) or block_flat.startswith(requested_flat)))
+                if (block_start is not None and time_diff <= 0.18) or text_match:
+                    live_bonus = 0 if bool(getattr(block_data, "live_preview", False)) else 1
+                    text_bonus = 0 if text_match else 1
+                    candidates.append((live_bonus, text_bonus, time_diff, block.blockNumber(), block, block_start))
+                block = block.next()
+            if candidates:
+                candidates.sort(key=lambda item: item[:4])
+                _live_bonus, _text_bonus, _time_diff, _line, target_block, target_start = candidates[0]
+
+        if target_block is None and prefer_last:
+            target_block = doc.lastBlock()
+        if target_block is None or not target_block.isValid():
+            return False
+
+        block_data = target_block.userData()
+        if target_start is None and isinstance(block_data, SubtitleBlockData):
+            try:
+                target_start = float(getattr(block_data, "start_sec", 0.0) or 0.0)
+            except Exception:
+                target_start = None
+        if target_start is None:
+            target_start = requested_start
+
+        prev_sync = bool(getattr(self, "_sync_lock", False))
+        self._sync_lock = True
+        try:
+            cursor = QTextCursor(target_block)
+            self.text_edit.setTextCursor(cursor)
+            self.text_edit.ensureCursorVisible()
+        finally:
+            self._sync_lock = prev_sync
+
+        line_num = target_block.blockNumber()
+        highlighter = getattr(self, "_highlighter", None)
+        if highlighter is not None and hasattr(highlighter, "set_current_line"):
+            try:
+                highlighter.set_current_line(line_num)
+            except Exception:
+                pass
+        try:
+            self._last_editor_autoscroll_at = time.monotonic()
+        except Exception:
+            pass
+        if target_start is not None:
+            self._active_seg_start = float(target_start)
+            timeline = getattr(self, "timeline", None)
+            if timeline is not None and hasattr(timeline, "set_active"):
+                try:
+                    timeline.set_active(float(target_start))
+                except Exception:
+                    pass
+        return True
+
     def _has_live_editor_preview_overlap(self, seg: dict, *, prefer_primary: bool = False) -> bool:
         try:
             start = float(seg.get("start", 0.0) or 0.0)
@@ -284,6 +389,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         prev_sync = bool(getattr(self, "_sync_lock", False))
         self._inline_updating = True
         self._sync_lock = True
+        focused_payload = None
         doc.blockSignals(True)
         try:
             cursor = QTextCursor(doc)
@@ -318,6 +424,12 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                 stored["start"] = start_sec
                 stored["stt_preview_source"] = source
                 self._live_editor_preview_segments.append(stored)
+                focused_payload = {
+                    "line": cursor.block().blockNumber(),
+                    "start": start_sec,
+                    "end": stored.get("end", start_sec),
+                    "text": text,
+                }
             cursor.endEditBlock()
         finally:
             doc.blockSignals(False)
@@ -334,6 +446,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         except Exception:
             pass
         self._set_live_preview_status(drafts)
+        self._focus_editor_block_for_processing_segment(focused_payload, prefer_last=True)
 
     def _clean_live_editor_preview_text(self, text: str) -> str:
         text = str(text or "")
@@ -1105,6 +1218,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
 
         if doc.lastBlock().text().strip(): cur.insertText("\n")
         added_end = self._segment_queue[-1]['end'] if self._segment_queue else 0.0
+        focused_payload = None
 
         # 💡 [여기서부터 수정: 화자 분리 로직]
         spk1_id = self.settings.get("spk1_id", "00")
@@ -1169,6 +1283,12 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             }))
             cur.insertText(parts[0])
             cur.block().setUserData(SubtitleBlockData(current_spk, start_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs))
+            focused_payload = {
+                "line": cur.block().blockNumber(),
+                "start": start_sec,
+                "end": seg.get("end", start_sec),
+                "text": parts[0],
+            }
             
             # 💡 두 번째 줄부터의 처리 (- 기호 유무로 완벽 통제)
             for p_idx in range(1, len(parts)):
@@ -1232,6 +1352,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                 self.timeline.set_playhead(added_end); self.timeline.center_to_sec(added_end, smooth=True)
             if hasattr(self, 'video_player'):
                 self.video_player.seek(added_end)
+            self._focus_editor_block_for_processing_segment(focused_payload, prefer_last=True)
             if self.settings.get("subtitle_quality_auto_check_after_generate") and hasattr(self, "_run_quality_review"):
                 QTimer.singleShot(300, lambda: self._run_quality_review(auto_correct=bool(self.settings.get("subtitle_quality_auto_correct_enabled", False))))
 

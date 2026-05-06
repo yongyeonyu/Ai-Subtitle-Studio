@@ -813,6 +813,49 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         queue._refresh_sidebar_queue_cache()
         self.assertEqual(queue._sidebar_queue_cache_items[0]["eta"], "00:05 / 57:31")
 
+    def test_zero_or_unknown_queue_eta_displays_unavailable(self):
+        class DummyTimer:
+            def start(self, _interval):
+                pass
+
+            def stop(self):
+                pass
+
+        class DummyBackend:
+            def __init__(self):
+                self._active = True
+                self.pipeline_start_time = 100.0
+
+        class DummyQueue(QueueMixin):
+            def __init__(self):
+                self.queue_table = QTableWidget(0, 5)
+                self.queue_header_lbl = QLabel("")
+                self._live_timer = DummyTimer()
+                self.backend = DummyBackend()
+                self.backend_fast = None
+
+            def _show_bottom_queue_table(self):
+                pass
+
+            def _sync_sidebar_queue_panel(self):
+                pass
+
+        queue = DummyQueue()
+        queue.init_queue_list(["/tmp/clip_a.mp4"])
+
+        with patch("ui.queue_widget.time.time", return_value=100.0):
+            queue.update_queue_status(0, "[음성] ClearVoice 음성 향상 중", "00:00", "", "00:00")
+
+        self.assertEqual(queue.queue_table.item(0, 4).text(), "00:00 / 예상불가")
+
+        with patch("ui.queue_widget.time.time", return_value=105.0):
+            queue._update_live_queue_header()
+
+        self.assertEqual(queue.queue_table.item(0, 4).text(), "00:05 / 예상불가")
+        queue._refresh_sidebar_queue_cache()
+        self.assertEqual(queue._sidebar_queue_cache_items[0]["eta"], "00:05 / 예상불가")
+        self.assertEqual(queue._queue_card_time_text("11:11 / 00:00", "-"), "11:11 / 예상불가")
+
     def test_restart_queue_eta_metadata_restarts_media_duration_probe(self):
         from ui.main.main_window import MainWindow
 

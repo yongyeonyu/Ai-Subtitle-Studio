@@ -29,6 +29,8 @@ from .models import (
     subtitles_from_dicts,
 )
 from .roughcut_settings import merge_roughcut_settings
+from .roughcut_context_policy import resolve_roughcut_context_policy
+from .roughcut_llm_config import resolve_roughcut_llm_config
 from .subtitle_retimer import format_srt, retime_subtitles_for_edl
 
 
@@ -74,11 +76,10 @@ def editor_roughcut_draft_llm_allowed(
     settings: dict[str, Any] | None,
 ) -> bool:
     merged = merge_roughcut_settings(settings or {})
-    try:
-        max_rows = max(1, int(merged.get("roughcut_llm_max_context_rows", 80) or 80))
-    except Exception:
-        max_rows = 80
-    row_count = len(_subtitle_prompt_rows(segments))
+    rows = _subtitle_prompt_rows(segments)
+    policy = resolve_roughcut_context_policy(merged, subtitle_rows=rows)
+    max_rows = max(1, int(policy.get("max_context_rows", 80) or 80))
+    row_count = len(rows)
     return row_count <= max_rows
 
 
@@ -87,6 +88,10 @@ def build_editor_roughcut_draft_prompt(
     *,
     settings: dict[str, Any] | None = None,
 ) -> str:
+    rows = _subtitle_prompt_rows(segments)
+    policy = resolve_roughcut_context_policy(settings or {}, subtitle_rows=rows)
+    max_rows = max(1, int(policy.get("max_context_rows", 80) or 80))
+    scoped_rows = rows[:max_rows]
     body = {
         "prompt_id": "editor_post_generation_roughcut_draft_v1",
         "language": "ko",
@@ -108,7 +113,12 @@ def build_editor_roughcut_draft_prompt(
                 ]
             },
         },
-        "subtitle_rows": _subtitle_prompt_rows(segments),
+        "subtitle_rows": scoped_rows,
+        "_roughcut_context_policy": {
+            key: value
+            for key, value in dict(policy).items()
+            if key not in {"deep_summary"}
+        },
     }
     return json.dumps(body, ensure_ascii=False, indent=2)
 
@@ -120,14 +130,17 @@ def run_editor_roughcut_llm_draft(
     timeout: int = 45,
 ) -> dict[str, Any] | None:
     settings = settings or {}
-    model = str(settings.get("selected_model", "") or "").strip()
-    if not model or "사용 안함" in model:
+    rows = _subtitle_prompt_rows(segments)
+    llm_config = resolve_roughcut_llm_config(settings, subtitle_rows=rows)
+    model = str(llm_config.model or "").strip()
+    provider = str(llm_config.provider or "").strip().lower()
+    if not llm_config.enabled or not model or "사용 안함" in model or provider == "none":
         return None
     prompt = build_editor_roughcut_draft_prompt(segments, settings=settings)
     try:
-        if "Gemini" in model:
+        if provider in {"google", "gemini"} or "gemini" in model.lower():
             return _call_gemini_json(model, prompt)
-        if is_openai_model(model):
+        if provider == "openai" or is_openai_model(model):
             return _call_openai_json(model, prompt, timeout=timeout)
         return _call_ollama_json(model, prompt, timeout=timeout)
     except Exception as exc:

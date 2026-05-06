@@ -1,5 +1,5 @@
-# Version: 03.20.00
-# Phase: PHASE3
+# Version: 03.21.00
+# Phase: PHASE4_iPad
 
 
 # === OS / Platform Detection ===
@@ -12,7 +12,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.20.00"
+APP_VERSION = "03.21.00"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -54,20 +54,11 @@ DEFAULT_FOLDER = ""
 OLLAMA_MODEL = "exaone3.5:7.8b"
 
 DEFAULT_LLM_PROMPT = (
-    "당신은 한국어 유튜브/브이로그 자막을 검수하는 전문 자막 QA 편집자입니다.\n"
-    "아래 '원본 텍스트'는 이미 STT가 들은 발화입니다. 들리지 않은 말을 보태지 말고, 원문의 단어·순서·말투·의미를 최대한 보존하세요.\n"
-    "역할은 번역/요약/각색이 아니라 자막 검수입니다. 시청자가 읽기 편하도록 띄어쓰기, 명백한 오탈자, 최소 문장부호, 자연스러운 줄 분리만 수행하세요.\n"
-    "[기본 규칙]\n"
-    "1. 맞춤법보다 원문 보존이 우선입니다. 확실한 띄어쓰기와 명백한 STT 오탈자만 교정하세요.\n"
-    "2. 고유명사, 행사명, 브랜드명, 숫자, 영어 표기는 추측해서 바꾸지 말고 원문을 우선 유지하세요.\n"
-    "3. 없는 사실, 설명, 주어, 목적어, 감정 표현을 추가하지 마세요. 문맥상 그럴듯해도 들린 내용이 아니면 금지입니다.\n"
-    "4. '~했고요', '~거든요', '~잖아', '아', '어', '뭐' 같은 구어체·머뭇거림·감탄은 의미가 있으면 살리고 문어체로 고치지 마세요.\n"
-    "5. 반복 발화는 실제 말버릇이면 유지하되, STT 환각처럼 같은 문구가 비정상적으로 반복되면 새 문장을 만들지 말고 원문 범위 안에서 최소 정리하세요.\n"
-    "6. 마침표(.)는 모두 제거하고, 쉼표(,) / 느낌표(!) / 물결(~)은 의미가 바뀌지 않을 때만 최소로 사용하세요.\n"
-    "7. 한 줄당 글자 수가 약 {threshold}자(±5자 오차 허용)가 되도록 시청자가 읽기 편한 호흡과 어절 단위에서 나누세요.\n"
-    "8. 문장을 나눌 때는 가능한 한 다음 단어들 뒤({end_words})나, 다음 단어들 앞({start_words})에서 나누세요.\n"
-    "9. 원본 텍스트가 5자 이하이고 문맥과 무관한 파편/환각으로 보일 때만 결과 리스트에서 제외하세요. 확실하지 않으면 유지하세요.\n"
-    "10. 절대 부가 설명이나 인사말을 넣지 말고, 오직 분리된 결과 문자열만 출력하세요.\n\n"
+    "너는 한국어 유튜브 자막 QA 편집자다.\n"
+    "원문에 없는 말은 절대 추가하지 말고, 단어·순서·말투·의미를 보존한다.\n"
+    "LoRA/ground truth 컨텍스트가 있으면 사용자 프롬프트보다 우선 적용한다.\n"
+    "작업은 오탈자 최소 교정, 자연스러운 줄바꿈, 읽기 쉬운 호흡 정리뿐이다.\n"
+    "출력은 요청된 JSON 형식만 반환한다.\n\n"
 )
 
 # ── ⚙️ 고급 상세 설정 ──
@@ -92,7 +83,10 @@ DEFAULT_ADV_SETTINGS = {
     "w_none_comp":      1.6,
     "w_none_temp_max":  0.4,
     "split_length_threshold": 10,
+    "llm_threads_auto_enabled": True,
+    "llm_workers_auto_enabled": True,
     "llm_workers":      6,
+    "llm_threads_resource_max": 6,
     "local_ollama_llm_max_workers": 2,
     "sub_gap_break_sec":  1.5,
     "sub_min_duration":   0.2,
@@ -120,11 +114,28 @@ DEFAULT_ADV_SETTINGS = {
     "subtitle_quality_auto_check_after_generate": True,
     "subtitle_quality_auto_correct_enabled": True,
     "editor_lora_runtime_enabled": True,
+    "editor_truth_capture_enabled": True,
+    "editor_truth_capture_min_chars": 2,
+    "editor_truth_capture_max_chars": 240,
     "audio_chunk_routing_enabled": True,
     "audio_chunk_route_vad_enabled": True,
     "audio_chunk_profile_sec": 30.0,
     "whisper_chunk_overlap_sec": 3.0,
     "chunk_time_limit": 180,
+    "subtitle_bundle_autopilot_enabled": True,
+    "subtitle_bundle_lora_enabled": True,
+    "subtitle_bundle_lora_blend": 0.35,
+    "subtitle_bundle_target_sec": 180,
+    "subtitle_bundle_min_sec": 90,
+    "subtitle_bundle_max_sec": 300,
+    "subtitle_bundle_use_confirmed_cuts": True,
+    "subtitle_bundle_use_provisional_cuts": True,
+    "subtitle_bundle_confirmed_cut_min_sec": 45,
+    "subtitle_bundle_provisional_cut_min_sec": 120,
+    "subtitle_bundle_boundary_snap_window_sec": 1.0,
+    "subtitle_cut_boundary_guard_enabled": True,
+    "subtitle_cut_boundary_allow_high_confidence_crossing": True,
+    "subtitle_cut_boundary_high_confidence_score": 96.0,
     "vad_pre_split_enabled": False,
     "review_vad_before_stt_enabled": True,
     "review_vad_strict_mode": True,
@@ -166,9 +177,21 @@ DEFAULT_ROUGHCUT_SETTINGS = {
     "roughcut_llm_api_key_mode": "inherit",
     "roughcut_llm_temperature": 0.2,
     "roughcut_llm_max_context_rows": 80,
-    "roughcut_llm_chunk_rows": 12,
+    "roughcut_llm_chunk_rows": 11,
     "roughcut_llm_lookahead_rows": 8,
+    "roughcut_llm_rows_auto_enabled": True,
+    "roughcut_llm_rows_lora_enabled": True,
+    "roughcut_llm_rows_lora_blend": 0.30,
+    "roughcut_llm_rows_exploration_rate": 0.05,
+    "roughcut_llm_context_min_rows": 48,
+    "roughcut_llm_context_max_rows": 160,
+    "roughcut_llm_chunk_min_rows": 8,
+    "roughcut_llm_chunk_max_rows": 18,
+    "roughcut_llm_lookahead_min_rows": 4,
+    "roughcut_llm_lookahead_max_rows": 12,
+    "roughcut_llm_threads_auto_enabled": True,
     "roughcut_llm_threads": 4,
+    "roughcut_llm_threads_resource_max": 4,
     "roughcut_llm_prompt": "",
     "roughcut_llm_prompt_id": "roughcut_page3b_v1",
     "roughcut_llm_token_budget": 4096,

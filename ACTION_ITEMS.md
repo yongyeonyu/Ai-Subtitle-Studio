@@ -1,7 +1,7 @@
 <!--
-Document-Version: 03.20.00
-Phase: PARKED_ONLY
-Last-Updated: 2026-05-05
+Document-Version: 03.21.00
+Phase: COMPLETE
+Last-Updated: 2026-05-06
 Updated-By: Codex
 Purpose: Remaining work queue only.
 -->
@@ -19,14 +19,13 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "03.20.00"
-document_version: "03.20.00"
-phase: "PARKED_ONLY"
-next_phase: "PHASE4_iPad"
+app_version: "03.21.00"
+document_version: "03.21.00"
+phase: "COMPLETE"
+next_phase: ""
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
-run_all_exclusions:
-  - "PHASE4_iPad"
+run_all_exclusions: []
 root_forbidden_files:
   - "create_all*"
   - "_backup*"
@@ -47,23 +46,8 @@ release_handoff_files:
 
 ## Active Work
 
-- No active non-iPad items remain.
-- User-requested exclusion is still in effect for `PHASE4_iPad`.
-- v03.20.00 release work is complete; LoRA automation, vector retrieval, unified uncompressed bundle storage, STT1 adapter planning, quality-tier runtime policy, live editor previews, idle-only low-resource learning, Full learning controls, detailed learning logs, gap autosettings, editor responsiveness, and related refactors are not active backlog.
+- No active items remain.
 
 ## Parked Work
 
-### PHASE4_iPad
-
-Status: parked
-Reason: only iPad-specific scope remains, and the user-requested exclusion for iPad work is still in effect.
-
-Parked identifiers:
-
-- `iPad-1`
-- `iPad-2`
-- `iPad-3`
-- `iPad-4`
-- `iPad-5`
-- `iPad-6`
-- `iPad-7`
+- None.

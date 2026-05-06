@@ -265,17 +265,18 @@ class TextLoraDatasetTests(unittest.TestCase):
             from core.personalization import text_lora_runner as runner_mod
 
             root = Path(tmpdir)
-            mod.TEXT_LORA_DATASET_DIR = root
-            mod.TEXT_LORA_CORPUS_PATH = root / "text_lora_corpus.jsonl"
-            mod.TEXT_LORA_CORPUS_MANIFEST_PATH = root / "text_lora_corpus_manifest.json"
-            mod.VOICE_LORA_BRIDGE_PATH = root / "voice_lora_bridge.jsonl"
-            mod.MULTIMODAL_LORA_CONTEXT_PATH = root / "multimodal_lora_context.jsonl"
-            runner_mod.TEXT_LORA_DATASET_DIR = root
-            runner_mod.TEXT_LORA_CORPUS_PATH = root / "text_lora_corpus.jsonl"
-            runner_mod.TEXT_LORA_CORPUS_MANIFEST_PATH = root / "text_lora_corpus_manifest.json"
-            runner_mod.VOICE_LORA_BRIDGE_PATH = root / "voice_lora_bridge.jsonl"
-            runner_mod.TEXT_LORA_TRAINING_PLAN_PATH = root / "text_lora_training_plan.json"
-            runner_mod.VOICE_LORA_PROFILE_MANIFEST_PATH = root / "voice_lora_profile_manifest.json"
+            cache = root / ".cache"
+            mod.TEXT_LORA_DATASET_DIR = cache
+            mod.TEXT_LORA_CORPUS_PATH = cache / "text_lora_corpus.jsonl"
+            mod.TEXT_LORA_CORPUS_MANIFEST_PATH = cache / "text_lora_corpus_manifest.json"
+            mod.VOICE_LORA_BRIDGE_PATH = cache / "voice_lora_bridge.jsonl"
+            mod.MULTIMODAL_LORA_CONTEXT_PATH = cache / "multimodal_lora_context.jsonl"
+            runner_mod.TEXT_LORA_DATASET_DIR = cache
+            runner_mod.TEXT_LORA_CORPUS_PATH = cache / "text_lora_corpus.jsonl"
+            runner_mod.TEXT_LORA_CORPUS_MANIFEST_PATH = cache / "text_lora_corpus_manifest.json"
+            runner_mod.VOICE_LORA_BRIDGE_PATH = cache / "voice_lora_bridge.jsonl"
+            runner_mod.TEXT_LORA_TRAINING_PLAN_PATH = cache / "text_lora_training_plan.json"
+            runner_mod.VOICE_LORA_PROFILE_MANIFEST_PATH = cache / "voice_lora_profile_manifest.json"
 
             segments = [
                 {
@@ -313,9 +314,9 @@ class TextLoraDatasetTests(unittest.TestCase):
             self.assertEqual(second["multimodal_context_rows"], 0)
             self.assertFalse((second["auto_maintenance"] or {}).get("queued"))
 
-            corpus_lines = (root / "text_lora_corpus.jsonl").read_text(encoding="utf-8").strip().splitlines()
-            bridge_lines = (root / "voice_lora_bridge.jsonl").read_text(encoding="utf-8").strip().splitlines()
-            context_lines = (root / "multimodal_lora_context.jsonl").read_text(encoding="utf-8").strip().splitlines()
+            corpus_lines = (cache / "text_lora_corpus.jsonl").read_text(encoding="utf-8").strip().splitlines()
+            bridge_lines = (cache / "voice_lora_bridge.jsonl").read_text(encoding="utf-8").strip().splitlines()
+            context_lines = (cache / "multimodal_lora_context.jsonl").read_text(encoding="utf-8").strip().splitlines()
             self.assertEqual(len(corpus_lines), 1)
             self.assertEqual(len(bridge_lines), 1)
             self.assertEqual(len(context_lines), 1)
@@ -328,20 +329,20 @@ class TextLoraDatasetTests(unittest.TestCase):
             context_row = json.loads(context_lines[0])
             self.assertEqual(context_row["task"], "editor_segment_generation_context")
             self.assertEqual(context_row["candidate_context"]["selected_source"], "STT1")
-            self.assertTrue((root / "text_lora_corpus_manifest.json").exists())
+            self.assertTrue((cache / "text_lora_corpus_manifest.json").exists())
             queued_types = {str(item.get("job_type") or "") for item in list(load_training_queue(root).get("items") or [])}
             self.assertEqual(queued_types, {"analyze_truth_table", "build_text_training_plan", "build_voice_profiles"})
 
-            plan = build_text_lora_training_plan(corpus_path=root / "text_lora_corpus.jsonl")
+            plan = build_text_lora_training_plan(corpus_path=cache / "text_lora_corpus.jsonl")
             self.assertEqual(plan["stats"]["usable_text_rows"], 1)
             self.assertIn("backend", plan)
 
-            voice_manifest = build_voice_lora_profile_manifest(bridge_path=root / "voice_lora_bridge.jsonl")
+            voice_manifest = build_voice_lora_profile_manifest(bridge_path=cache / "voice_lora_bridge.jsonl")
             self.assertEqual(len(voice_manifest["speaker_profiles"]), 1)
             self.assertEqual(voice_manifest["speaker_profiles"][0]["speaker"], "01")
 
             voice_plan = build_voice_lora_training_plan(
-                bridge_path=root / "voice_lora_bridge.jsonl",
+                bridge_path=cache / "voice_lora_bridge.jsonl",
                 output_dir=root / "trained_adapters" / "personal_voice_lora",
             )
             self.assertEqual(voice_plan["stats"]["usable_voice_items"], 1)
@@ -351,14 +352,14 @@ class TextLoraDatasetTests(unittest.TestCase):
             self.assertIn("-ss", voice_plan["items"][0]["extraction_command"])
 
             saved = save_voice_lora_training_plan(
-                bridge_path=root / "voice_lora_bridge.jsonl",
+                bridge_path=cache / "voice_lora_bridge.jsonl",
                 output_dir=root / "trained_adapters" / "personal_voice_lora",
-                plan_path=root / "voice_lora_training_plan.json",
-                dataset_manifest_path=root / "voice_lora_dataset_manifest.json",
+                plan_path=cache / "voice_lora_training_plan.json",
+                dataset_manifest_path=cache / "voice_lora_dataset_manifest.json",
             )
             self.assertEqual(saved["usable_voice_rows"], 1)
-            self.assertTrue((root / "voice_lora_training_plan.json").exists())
-            self.assertTrue((root / "voice_lora_dataset_manifest.json").exists())
+            self.assertTrue((cache / "voice_lora_training_plan.json").exists())
+            self.assertTrue((cache / "voice_lora_dataset_manifest.json").exists())
 
     def test_voice_lora_training_plan_extracts_and_marks_saved_audio(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -4,12 +4,12 @@ import os
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtGui import QWheelEvent, QTextCursor
-from PyQt6.QtCore import QPoint, QPointF, Qt
+from PyQt6.QtCore import QObject, QPoint, QPointF, Qt, pyqtSignal
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QTextEdit, QWidget
 
@@ -70,6 +70,24 @@ class _InlineEditEditor:
 
 class _PipelineFitEditor(EditorPipelineMixin):
     pass
+
+
+class _FakeWaveformWorker(QObject):
+    ready = pyqtSignal(object, float)
+
+    def __init__(self, path: str, parent=None):
+        super().__init__(parent)
+        self.path = str(path or "")
+        self.started = False
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        return None
+
+    def wait(self, *_args, **_kwargs):
+        return True
 
 
 class TimelinePlayheadFitTests(unittest.TestCase):
@@ -547,6 +565,37 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             timeline.canvas.update.assert_not_called()
             self.assertEqual(timeline._playhead_overlay._sec, 2.5)
             self.assertIs(timeline._playhead_overlay.parent(), timeline.scroll.viewport())
+        finally:
+            timeline.close()
+
+    def test_loading_new_single_waveform_clears_stale_duration_and_applies_ready_duration(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.canvas.total_duration = 44.0 * 60.0
+            timeline.global_canvas.total_duration = 44.0 * 60.0
+            timeline.canvas._multiclip_boxes = [{"start": 0.0, "end": 44.0 * 60.0, "index": 1}]
+            timeline._selected_clip_idx = 0
+            timeline._selected_clip_duration = 44.0 * 60.0
+            timeline._selected_clip_label = "1"
+            timeline._waveform_path = "/tmp/old.mp4"
+
+            with patch("ui.timeline.timeline_widget.WaveformWorker", _FakeWaveformWorker):
+                timeline.load_waveform("/tmp/new.mp4", force=True)
+
+                self.assertEqual(timeline.canvas.total_duration, 0.0)
+                self.assertEqual(timeline.global_canvas.total_duration, 0.0)
+                self.assertEqual(timeline.canvas._multiclip_boxes, [])
+                self.assertEqual(timeline._selected_clip_idx, -1)
+
+                worker = timeline._wf_worker
+                self.assertIsNotNone(worker)
+                self.assertTrue(worker.started)
+
+                worker.ready.emit([0.0, 0.5, 0.2], 24.0 * 60.0)
+                self.app.processEvents()
+
+            self.assertEqual(timeline.canvas.total_duration, 24.0 * 60.0)
+            self.assertEqual(timeline.global_canvas.total_duration, 24.0 * 60.0)
         finally:
             timeline.close()
 

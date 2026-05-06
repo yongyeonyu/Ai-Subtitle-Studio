@@ -12,6 +12,7 @@ from core.personalization.lora_storage import (
     save_learned_rules,
     store_paths,
 )
+from core.personalization.subtitle_style_profile import build_subtitle_style_profile
 from core.runtime import config
 
 
@@ -62,15 +63,48 @@ def analyze_truth_table_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     char_counts: list[float] = []
     cps_values: list[float] = []
     durations: list[float] = []
+    tone_counts: Counter[str] = Counter()
+    parenthetical_policy_counts: Counter[str] = Counter()
+    brand_counts: Counter[str] = Counter()
+    previous_gaps: list[float] = []
+    next_gaps: list[float] = []
+    wave_rows = 0
     multiline_rows = 0
 
     for row in rows or []:
         speech_text = str(row.get("speech_training_text") or "")
+        raw_text = str(row.get("raw_ground_truth_text") or speech_text)
         if speech_text:
             char_counts.append(float(row.get("char_count", 0) or 0))
             cps_values.append(float(row.get("cps", 0.0) or 0.0))
             durations.append(float(row.get("duration_sec", 0.0) or 0.0))
         media_ref = str(row.get("media_id") or row.get("media_path") or "")
+        style_profile = row.get("style_profile") if isinstance(row.get("style_profile"), dict) else {}
+        if not style_profile and speech_text:
+            style_profile = build_subtitle_style_profile(
+                raw_text=raw_text,
+                speech_text=speech_text,
+                start_sec=float(row.get("start_sec", 0.0) or 0.0),
+                end_sec=float(row.get("end_sec", 0.0) or 0.0),
+                previous_end_sec=None,
+                next_start_sec=None,
+            )
+        tone_label = str(((style_profile.get("tone") or {}).get("label")) or "").strip()
+        if tone_label:
+            tone_counts[tone_label] += 1
+        parenthetical_policy = str(((style_profile.get("parenthetical_policy") or {}).get("policy")) or "").strip()
+        if parenthetical_policy:
+            parenthetical_policy_counts[parenthetical_policy] += 1
+        if bool((style_profile.get("wave_marks") or {}).get("uses_wave")):
+            wave_rows += 1
+        for token in list(((style_profile.get("brand_name_policy") or {}).get("tokens")) or []):
+            if str(token or "").strip():
+                brand_counts[str(token).strip()] += 1
+        timing = dict(style_profile.get("timing_padding") or {})
+        if timing.get("previous_gap_sec") is not None:
+            previous_gaps.append(float(timing.get("previous_gap_sec") or 0.0))
+        if timing.get("next_gap_sec") is not None:
+            next_gaps.append(float(timing.get("next_gap_sec") or 0.0))
 
         line_break_pattern = str(row.get("line_break_pattern") or "").strip()
         if line_break_pattern:
@@ -133,6 +167,23 @@ def analyze_truth_table_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             {"pattern": pattern, "frequency": count}
             for pattern, count in punctuation_counts.most_common(10)
         ],
+        "style_profile": {
+            "top_tone_labels": [
+                {"label": label, "frequency": count}
+                for label, count in tone_counts.most_common(8)
+            ],
+            "parenthetical_policies": [
+                {"policy": policy, "frequency": count}
+                for policy, count in parenthetical_policy_counts.most_common(5)
+            ],
+            "wave_mark_ratio": round(wave_rows / max(1, len(rows or [])), 4),
+            "brand_name_tokens": [
+                {"token": token, "frequency": count}
+                for token, count in brand_counts.most_common(12)
+            ],
+            "previous_gap_p50": _percentile(previous_gaps, 50),
+            "next_gap_p50": _percentile(next_gaps, 50),
+        },
     }
     return {
         "split_items": split_items,
@@ -219,7 +270,7 @@ def apply_split_rule_update_review(
     if not pattern.search(source):
         raise ValueError("DEFAULT_SPLIT_RULES block not found in config.py")
 
-    backup_dir = store_paths(store_dir)["root"] / "config_backups"
+    backup_dir = store_paths(store_dir)["cache_root"] / "config_backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     backup_path = backup_dir / f"config.py.{timestamp}.bak"

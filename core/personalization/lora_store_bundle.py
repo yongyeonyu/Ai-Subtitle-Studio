@@ -8,6 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from core.personalization.lora_models import iso_now
+from core.personalization.lora_quality_buckets import (
+    LORA_ALL_BUCKETS,
+    LORA_BUCKET_FILENAMES,
+    LORA_BUCKET_HIGH,
+    LORA_BUCKET_LABELS,
+    LORA_BUCKET_PENDING_DELETE,
+    lora_bucket_for_row,
+)
 from core.personalization.lora_store_common import (
     BUNDLE_JSON_SECTION_KEYS,
     BUNDLE_JSONL_SECTION_KEYS,
@@ -34,6 +42,14 @@ from core.personalization.lora_store_common import (
 
 LORA_ARCHIVE_COMPRESSION_NAME = "stored_no_compression"
 LORA_ARCHIVE_COMPRESSION_LEVEL = 0
+_LORA_BUCKET_PATH_KEYS = {
+    "high": "lora_data_high",
+    "medium": "lora_data_medium",
+    "low": "lora_data_low",
+    "pending_delete": "lora_data_pending_delete",
+}
+_LEGACY_CACHE_DIR_NAMES = ("config_backups",)
+_ROOT_METADATA_FILE_NAMES = (".DS_Store",)
 
 
 def _bundle_record_count(payload: dict[str, Any]) -> int:
@@ -55,9 +71,169 @@ def _iter_lora_archive_attachment_files(paths: dict[str, Path]) -> list[Path]:
     return sorted(files)
 
 
-def _write_unified_lora_archive(path: Path, payload: dict[str, Any], paths: dict[str, Path]) -> None:
+def _bucket_archive_path(paths: dict[str, Path], bucket: str | None = None) -> Path:
+    key = _LORA_BUCKET_PATH_KEYS.get(str(bucket or LORA_BUCKET_HIGH), _LORA_BUCKET_PATH_KEYS[LORA_BUCKET_HIGH])
+    return paths[key]
+
+
+def _bucket_archive_paths(paths: dict[str, Path]) -> dict[str, Path]:
+    return {bucket: _bucket_archive_path(paths, bucket) for bucket in LORA_ALL_BUCKETS}
+
+
+def _cleanup_stale_unified_lora_temp_files(path: Path) -> int:
+    removed = 0
+    parent = path.parent
+    if not parent.exists():
+        return removed
+    for item in parent.glob(f"{path.name}.*.tmp"):
+        if not item.is_file():
+            continue
+        try:
+            item.unlink()
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def _cleanup_all_lora_temp_files(paths: dict[str, Path]) -> int:
+    removed = 0
+    for path in _bucket_archive_paths(paths).values():
+        removed += _cleanup_stale_unified_lora_temp_files(path)
+    legacy_zip = paths.get("legacy_unified_lora_zip")
+    if legacy_zip is not None:
+        removed += _cleanup_stale_unified_lora_temp_files(legacy_zip)
+    return removed
+
+
+def _legacy_cache_conflict_path(conflicts_dir: Path, relative: Path) -> Path:
+    target = conflicts_dir / relative
+    if not target.exists():
+        return target
+    return target.with_name(f"{target.stem}.{uuid.uuid4().hex}{target.suffix}")
+
+
+def _move_legacy_cache_file(legacy_path: Path, target_path: Path, conflicts_dir: Path) -> str:
+    if not legacy_path.exists() or legacy_path == target_path:
+        return ""
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    if target_path.exists():
+        conflict_path = _legacy_cache_conflict_path(conflicts_dir, Path(legacy_path.name))
+        conflict_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            legacy_path.replace(conflict_path)
+            return "conflicted"
+        except OSError:
+            return ""
+    try:
+        legacy_path.replace(target_path)
+        return "moved"
+    except OSError:
+        try:
+            shutil.copy2(legacy_path, target_path)
+            legacy_path.unlink()
+            return "copied"
+        except OSError:
+            return ""
+
+
+def _move_legacy_cache_dir(legacy_dir: Path, target_dir: Path, conflicts_dir: Path) -> tuple[int, int]:
+    if not legacy_dir.exists() or legacy_dir == target_dir:
+        return 0, 0
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    if not target_dir.exists():
+        try:
+            legacy_dir.replace(target_dir)
+            moved_files = sum(1 for item in target_dir.rglob("*") if item.is_file())
+            return moved_files, 0
+        except OSError:
+            target_dir.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    conflicted = 0
+    for item in sorted(legacy_dir.rglob("*")):
+        if item.is_dir():
+            continue
+        try:
+            relative = item.relative_to(legacy_dir)
+        except ValueError:
+            continue
+        target = target_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            conflict_path = _legacy_cache_conflict_path(conflicts_dir / legacy_dir.name, relative)
+            conflict_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                item.replace(conflict_path)
+                conflicted += 1
+            except OSError:
+                continue
+            continue
+        try:
+            item.replace(target)
+            moved += 1
+        except OSError:
+            try:
+                shutil.copy2(item, target)
+                item.unlink()
+                moved += 1
+            except OSError:
+                continue
+    try:
+        shutil.rmtree(legacy_dir)
+    except OSError:
+        pass
+    return moved, conflicted
+
+
+def _migrate_legacy_lora_cache_layout(paths: dict[str, Path]) -> dict[str, int]:
+    root = paths["root"]
+    cache_root = paths["cache_root"]
+    cache_root.mkdir(parents=True, exist_ok=True)
+    conflicts_dir = cache_root / "legacy_root_conflicts"
+    migrated_files = 0
+    conflicted_files = 0
+
+    for key in dict.fromkeys(("manifest", *UNIFIED_LORA_BUNDLE_SOURCE_KEYS)):
+        target = paths.get(key)
+        if target is None:
+            continue
+        legacy = root / target.name
+        result = _move_legacy_cache_file(legacy, target, conflicts_dir)
+        if result in {"moved", "copied"}:
+            migrated_files += 1
+        elif result == "conflicted":
+            conflicted_files += 1
+
+    for dir_name in (paths["trained_adapters"].name, *_LEGACY_CACHE_DIR_NAMES):
+        moved, conflicted = _move_legacy_cache_dir(root / dir_name, cache_root / dir_name, conflicts_dir)
+        migrated_files += moved
+        conflicted_files += conflicted
+
+    for file_name in _ROOT_METADATA_FILE_NAMES:
+        try:
+            (root / file_name).unlink()
+        except OSError:
+            pass
+
+    removed_tmp_files = _cleanup_all_lora_temp_files(paths)
+    return {
+        "migrated_files": migrated_files,
+        "conflicted_files": conflicted_files,
+        "removed_tmp_files": removed_tmp_files,
+    }
+
+
+def _write_unified_lora_archive(
+    path: Path,
+    payload: dict[str, Any],
+    paths: dict[str, Path],
+    *,
+    bucket: str = LORA_BUCKET_HIGH,
+    include_attachments: bool = False,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    attachment_files = _iter_lora_archive_attachment_files(paths)
+    _cleanup_stale_unified_lora_temp_files(path)
+    attachment_files = _iter_lora_archive_attachment_files(paths) if include_attachments else []
     attachment_bytes = 0
     for item in attachment_files:
         try:
@@ -69,6 +245,8 @@ def _write_unified_lora_archive(path: Path, payload: dict[str, Any], paths: dict
         "updated_at": iso_now(),
         "payload_file": UNIFIED_LORA_ARCHIVE_PAYLOAD_NAME,
         "payload_schema": str(payload.get("schema") or ""),
+        "quality_bucket": bucket,
+        "quality_bucket_label": LORA_BUCKET_LABELS.get(bucket, bucket),
         "record_count": _bundle_record_count(payload),
         "attachment_files": len(attachment_files),
         "attachment_bytes": attachment_bytes,
@@ -126,7 +304,10 @@ def _restore_unified_lora_archive_attachments(path: Path, paths: dict[str, Path]
                 relative = Path(name[len("attachments/") :])
                 if relative.is_absolute() or ".." in relative.parts:
                     continue
-                target = paths["root"] / relative
+                if relative.parts and relative.parts[0] == paths["trained_adapters"].name:
+                    target = paths["cache_root"] / relative
+                else:
+                    target = paths["root"] / relative
                 try:
                     resolved_target = target.resolve()
                 except OSError:
@@ -145,6 +326,9 @@ def _existing_unified_lora_data_path(paths: dict[str, Path]) -> Path:
     target = paths["unified_lora_data"]
     if target.exists():
         return target
+    legacy_zip = paths.get("legacy_unified_lora_zip")
+    if legacy_zip is not None and legacy_zip.exists():
+        return legacy_zip
     legacy = paths.get("legacy_unified_lora_data")
     if legacy is not None and legacy.exists():
         return legacy
@@ -152,18 +336,138 @@ def _existing_unified_lora_data_path(paths: dict[str, Path]) -> Path:
 
 
 def _remove_legacy_unified_lora_json(paths: dict[str, Path]) -> None:
-    legacy = paths.get("legacy_unified_lora_data")
-    if legacy is None or not legacy.exists():
-        return
-    try:
-        legacy.unlink()
-    except OSError:
-        pass
+    for key in ("legacy_unified_lora_data", "legacy_unified_lora_zip"):
+        legacy = paths.get(key)
+        if legacy is None or not legacy.exists():
+            continue
+        try:
+            legacy.unlink()
+        except OSError:
+            pass
+
+
+def _merge_unified_lora_payloads(payloads: list[dict[str, Any]]) -> dict[str, Any]:
+    valid_payloads = [
+        dict(payload)
+        for payload in list(payloads or [])
+        if isinstance(payload, dict) and str(payload.get("schema") or "") == "ai_subtitle_studio.lora_unified_data_bundle.v1"
+    ]
+    if not valid_payloads:
+        return {}
+    if len(valid_payloads) == 1:
+        return valid_payloads[0]
+
+    merged_sections: dict[str, Any] = {}
+    for key in BUNDLE_JSONL_SECTION_KEYS:
+        rows: list[dict[str, Any]] = []
+        for payload in valid_payloads:
+            section_rows = ((payload.get("sections") or {}).get(key) or [])
+            rows.extend(dict(row) for row in list(section_rows) if isinstance(row, dict))
+        merged_sections[key] = rows
+
+    for key in BUNDLE_JSON_SECTION_KEYS:
+        if key in {"learned_split_rules", "learned_line_break_rules"}:
+            base = _default_json_section(key)
+            items: list[dict[str, Any]] = []
+            for payload in valid_payloads:
+                section = dict((payload.get("sections") or {}).get(key) or {})
+                items.extend(dict(item) for item in list(section.get("items") or []) if isinstance(item, dict))
+            base["items"] = items
+            merged_sections[key] = base
+            continue
+        for payload in valid_payloads:
+            section = (payload.get("sections") or {}).get(key)
+            if isinstance(section, dict) and section:
+                merged_sections[key] = dict(section)
+                break
+        else:
+            merged_sections[key] = _default_json_section(key)
+
+    records = [
+        {"kind": kind, "record": row}
+        for kind in (
+            "truth_table",
+            "excluded_parentheticals",
+            "setting_trials",
+            "prompt_trials",
+            "voice_lora_bridge",
+            "stt1_whisper_adapter_dataset",
+            "text_lora_dataset",
+            "text_lora_corpus",
+            "audio_preset_lora",
+            "multimodal_lora_context",
+            "deep_policy_events",
+        )
+        for row in merged_sections.get(kind, [])
+    ]
+    counts = _bundle_counts_from_rows(
+        truth_rows=merged_sections["truth_table"],
+        excluded_rows=merged_sections["excluded_parentheticals"],
+        setting_trials=merged_sections["setting_trials"],
+        prompt_trials=merged_sections["prompt_trials"],
+        retention_history=merged_sections["retention_history"],
+        voice_bridge_rows=merged_sections["voice_lora_bridge"],
+        stt1_whisper_adapter_dataset_rows=merged_sections["stt1_whisper_adapter_dataset"],
+        text_lora_dataset_rows=merged_sections["text_lora_dataset"],
+        text_lora_corpus_rows=merged_sections["text_lora_corpus"],
+        audio_preset_rows=merged_sections["audio_preset_lora"],
+        multimodal_context_rows=merged_sections["multimodal_lora_context"],
+        deep_policy_event_rows=merged_sections["deep_policy_events"],
+        voice_training_plan=dict(merged_sections.get("voice_lora_training_plan") or {}),
+        stt1_whisper_adapter_plan=dict(merged_sections.get("stt1_whisper_adapter_training_plan") or {}),
+        stt1_whisper_runtime_manifest=dict(merged_sections.get("stt1_whisper_adapter_runtime_manifest") or {}),
+        retrieval_index={},
+    )
+    first = valid_payloads[0]
+    return {
+        "schema": "ai_subtitle_studio.lora_unified_data_bundle.v1",
+        "updated_at": iso_now(),
+        "storage_mode": "quality_bucketed_zip_bundle",
+        "bundle_role": "merged_user_managed_lora_learning_files",
+        "archive_format": str(first.get("archive_format") or "zip"),
+        "archive_compression": LORA_ARCHIVE_COMPRESSION_NAME,
+        "archive_compression_level": LORA_ARCHIVE_COMPRESSION_LEVEL,
+        "archive_payload_file": UNIFIED_LORA_ARCHIVE_PAYLOAD_NAME,
+        "store_dir": str(first.get("store_dir") or ""),
+        "managed_file": str(first.get("managed_file") or ""),
+        "quality_bucket": "merged",
+        "quality_bucket_label": "상/중/하/삭제예정 통합",
+        "quality_buckets": {
+            str(payload.get("quality_bucket") or ""): dict(payload.get("counts") or {})
+            for payload in valid_payloads
+            if payload.get("quality_bucket")
+        },
+        "internal_cache_files": dict(first.get("internal_cache_files") or {}),
+        "counts": counts,
+        "sections": merged_sections,
+        "records": records,
+        "notes": [
+            "This payload was merged from quality-bucket LoRA ZIP files.",
+            "Runtime retrieval resolves conflicts by score index before applying settings.",
+        ],
+    }
+
+
+def _explicit_bundle_source_paths(bundle_path: str | Path) -> list[Path]:
+    selected = Path(bundle_path)
+    bucket_names = set(LORA_BUCKET_FILENAMES.values())
+    if selected.name not in bucket_names:
+        return [selected]
+    siblings = [selected.parent / LORA_BUCKET_FILENAMES[bucket] for bucket in LORA_ALL_BUCKETS]
+    existing = [path for path in siblings if path.exists()]
+    return existing or [selected]
 
 
 def load_unified_lora_data_bundle(bundle_path: str | Path | None = None, store_dir: str | Path | None = None) -> dict[str, Any]:
     paths = store_paths(store_dir)
-    source_path = Path(bundle_path) if bundle_path else _existing_unified_lora_data_path(paths)
+    if bundle_path:
+        payloads = [_read_unified_lora_payload(path, {}) for path in _explicit_bundle_source_paths(bundle_path)]
+        return _merge_unified_lora_payloads([payload for payload in payloads if isinstance(payload, dict)])
+    bucket_paths = [path for path in _bucket_archive_paths(paths).values() if path.exists()]
+    if bucket_paths:
+        payloads = [_read_unified_lora_payload(path, {}) for path in bucket_paths]
+        return _merge_unified_lora_payloads([payload for payload in payloads if isinstance(payload, dict)])
+    source_path = _existing_unified_lora_data_path(paths)
     payload = _read_unified_lora_payload(source_path, {})
     return payload if isinstance(payload, dict) else {}
 
@@ -193,6 +497,7 @@ def _bundle_counts_from_rows(
     text_lora_corpus_rows: list[dict[str, Any]],
     audio_preset_rows: list[dict[str, Any]],
     multimodal_context_rows: list[dict[str, Any]],
+    deep_policy_event_rows: list[dict[str, Any]] | None = None,
     retention_history: list[dict[str, Any]] | None = None,
     voice_training_plan: dict[str, Any] | None = None,
     stt1_whisper_adapter_plan: dict[str, Any] | None = None,
@@ -222,6 +527,7 @@ def _bundle_counts_from_rows(
         "text_lora_corpus_rows": len(text_lora_corpus_rows),
         "audio_preset_lora_rows": len(audio_preset_rows),
         "multimodal_lora_context_rows": len(multimodal_context_rows),
+        "deep_policy_event_rows": len(deep_policy_event_rows or []),
         "lora_retrieval_index_docs": int(retrieval_index.get("doc_count", 0) or 0),
         "unified_training_records": (
             len(truth_rows)
@@ -234,6 +540,7 @@ def _bundle_counts_from_rows(
             + len(text_lora_corpus_rows)
             + len(audio_preset_rows)
             + len(multimodal_context_rows)
+            + len(deep_policy_event_rows or [])
         ),
     }
 
@@ -251,6 +558,7 @@ def _bundle_counts_from_cache(paths: dict[str, Path]) -> dict[str, int]:
         text_lora_corpus_rows=read_jsonl(paths["text_lora_corpus"]),
         audio_preset_rows=read_jsonl(paths["audio_preset_lora"]),
         multimodal_context_rows=read_jsonl(paths["multimodal_lora_context"]),
+        deep_policy_event_rows=read_jsonl(paths["deep_policy_events"]),
         voice_training_plan=read_json(paths["voice_lora_training_plan"], {}),
         stt1_whisper_adapter_plan=read_json(paths["stt1_whisper_adapter_training_plan"], {}),
         stt1_whisper_runtime_manifest=read_json(paths["stt1_whisper_adapter_runtime_manifest"], {}),
@@ -258,12 +566,35 @@ def _bundle_counts_from_cache(paths: dict[str, Path]) -> dict[str, int]:
     )
 
 
-def _build_unified_lora_data_bundle(paths: dict[str, Path]) -> dict[str, Any]:
-    jsonl_sections = {key: read_jsonl(paths[key]) for key in BUNDLE_JSONL_SECTION_KEYS}
+def _filter_rows_for_bucket(kind: str, rows: list[dict[str, Any]], bucket: str | None) -> list[dict[str, Any]]:
+    if not bucket:
+        return [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+    return [dict(row) for row in list(rows or []) if isinstance(row, dict) and lora_bucket_for_row(kind, row) == bucket]
+
+
+def _filter_json_section_for_bucket(key: str, payload: dict[str, Any], bucket: str | None) -> dict[str, Any]:
+    if not bucket:
+        return dict(payload or {})
+    if key in {"learned_split_rules", "learned_line_break_rules"}:
+        out = dict(payload or _default_json_section(key))
+        out["items"] = _filter_rows_for_bucket(key, list(out.get("items") or []), bucket)
+        return out
+    if key == "best_settings" and bucket != LORA_BUCKET_HIGH:
+        return default_best_settings()
+    if key == "lora_retrieval_index":
+        return {}
+    return dict(payload or {})
+
+
+def _build_unified_lora_data_bundle(paths: dict[str, Path], *, bucket: str | None = None) -> dict[str, Any]:
+    jsonl_sections = {
+        key: _filter_rows_for_bucket(key, read_jsonl(paths[key]), bucket)
+        for key in BUNDLE_JSONL_SECTION_KEYS
+    }
     voice_training_plan = read_json(paths["voice_lora_training_plan"], {})
     stt1_whisper_adapter_plan = read_json(paths["stt1_whisper_adapter_training_plan"], {})
     stt1_whisper_runtime_manifest = read_json(paths["stt1_whisper_adapter_runtime_manifest"], {})
-    retrieval_index = read_json(paths["lora_retrieval_index"], {})
+    retrieval_index = {}
     records = [
         {"kind": kind, "record": row}
         for kind in (
@@ -277,15 +608,24 @@ def _build_unified_lora_data_bundle(paths: dict[str, Path]) -> dict[str, Any]:
             "text_lora_corpus",
             "audio_preset_lora",
             "multimodal_lora_context",
+            "deep_policy_events",
         )
         for row in jsonl_sections.get(kind, [])
     ]
     sections = {
         **jsonl_sections,
         "training_queue": read_json(paths["training_queue"], default_queue()),
-        "learned_split_rules": read_json(paths["learned_split_rules"], default_learned_rules("ai_subtitle_studio.learned_split_rules.v1")),
-        "learned_line_break_rules": read_json(paths["learned_line_break_rules"], default_learned_rules("ai_subtitle_studio.learned_line_break_rules.v1")),
-        "best_settings": read_json(paths["best_settings"], default_best_settings()),
+        "learned_split_rules": _filter_json_section_for_bucket(
+            "learned_split_rules",
+            read_json(paths["learned_split_rules"], default_learned_rules("ai_subtitle_studio.learned_split_rules.v1")),
+            bucket,
+        ),
+        "learned_line_break_rules": _filter_json_section_for_bucket(
+            "learned_line_break_rules",
+            read_json(paths["learned_line_break_rules"], default_learned_rules("ai_subtitle_studio.learned_line_break_rules.v1")),
+            bucket,
+        ),
+        "best_settings": _filter_json_section_for_bucket("best_settings", read_json(paths["best_settings"], default_best_settings()), bucket),
         "retention_policy": read_json(paths["retention_policy"], default_retention_policy()),
         "llm_review_request": read_json(paths["llm_review_request"], {}),
         "llm_review_result": read_json(paths["llm_review_result"], {}),
@@ -300,17 +640,21 @@ def _build_unified_lora_data_bundle(paths: dict[str, Path]) -> dict[str, Any]:
         "text_lora_training_plan": read_json(paths["text_lora_training_plan"], {}),
         "lora_retrieval_index": retrieval_index,
     }
+    managed_path = _bucket_archive_path(paths, bucket or LORA_BUCKET_HIGH)
+    bucket_label = LORA_BUCKET_LABELS.get(str(bucket or ""), "전체")
     return {
         "schema": "ai_subtitle_studio.lora_unified_data_bundle.v1",
         "updated_at": iso_now(),
-        "storage_mode": "single_file_managed_zip_bundle",
-        "bundle_role": "primary_user_managed_lora_learning_file",
+        "storage_mode": "quality_bucketed_zip_bundle",
+        "bundle_role": "quality_bucket_user_managed_lora_learning_file",
         "archive_format": "zip",
         "archive_compression": LORA_ARCHIVE_COMPRESSION_NAME,
         "archive_compression_level": LORA_ARCHIVE_COMPRESSION_LEVEL,
         "archive_payload_file": UNIFIED_LORA_ARCHIVE_PAYLOAD_NAME,
         "store_dir": str(paths["root"]),
-        "managed_file": str(paths["unified_lora_data"]),
+        "managed_file": str(managed_path),
+        "quality_bucket": str(bucket or "all"),
+        "quality_bucket_label": bucket_label,
         "internal_cache_files": {key: str(paths[key]) for key in UNIFIED_LORA_BUNDLE_SOURCE_KEYS if key in paths},
         "counts": _bundle_counts_from_rows(
             truth_rows=jsonl_sections["truth_table"],
@@ -324,6 +668,7 @@ def _build_unified_lora_data_bundle(paths: dict[str, Path]) -> dict[str, Any]:
             text_lora_corpus_rows=jsonl_sections["text_lora_corpus"],
             audio_preset_rows=jsonl_sections["audio_preset_lora"],
             multimodal_context_rows=jsonl_sections["multimodal_lora_context"],
+            deep_policy_event_rows=jsonl_sections["deep_policy_events"],
             voice_training_plan=voice_training_plan,
             stt1_whisper_adapter_plan=stt1_whisper_adapter_plan,
             stt1_whisper_runtime_manifest=stt1_whisper_runtime_manifest,
@@ -332,7 +677,8 @@ def _build_unified_lora_data_bundle(paths: dict[str, Path]) -> dict[str, Any]:
         "sections": sections,
         "records": records,
         "notes": [
-            "This payload is stored inside the primary single-file ZIP LoRA personalization learning artifact.",
+            "This payload is stored inside one of four quality-bucket LoRA personalization learning ZIP files.",
+            "Buckets are recomputed from the current score index, so pending-delete rows can be promoted after their score improves.",
             "The app may rebuild internal cache shard files from this file for fast append, pruning, and UI inspection.",
             "Use sections for exact restore/review and records for flat training-data scans.",
         ],
@@ -345,26 +691,59 @@ def refresh_unified_lora_data_bundle(
     force: bool = False,
 ) -> dict[str, Any]:
     paths = store_paths(store_dir)
-    target = paths["unified_lora_data"]
-    needs_refresh = bool(force or not target.exists())
+    migration = _migrate_legacy_lora_cache_layout(paths)
+    targets = _bucket_archive_paths(paths)
+    existing_targets = [path for path in targets.values() if path.exists()]
+    needs_refresh = bool(force or len(existing_targets) != len(targets))
     if not needs_refresh:
         try:
-            needs_refresh = _source_max_mtime(paths) > float(target.stat().st_mtime)
+            oldest_target_mtime = min(float(path.stat().st_mtime) for path in targets.values())
+            needs_refresh = _source_max_mtime(paths) > oldest_target_mtime
         except OSError:
             needs_refresh = True
     counts: dict[str, Any] = {}
+    bucket_files: dict[str, Any] = {}
     if needs_refresh:
-        payload = _build_unified_lora_data_bundle(paths)
-        counts = dict(payload.get("counts") or {})
-        _write_unified_lora_archive(target, payload, paths)
+        for bucket, target in targets.items():
+            payload = _build_unified_lora_data_bundle(paths, bucket=bucket)
+            bucket_counts = dict(payload.get("counts") or {})
+            bucket_files[bucket] = {
+                **bundle_file_info(target),
+                "quality_bucket": bucket,
+                "quality_bucket_label": LORA_BUCKET_LABELS.get(bucket, bucket),
+                "record_count": int(bucket_counts.get("unified_training_records", 0) or 0),
+                "counts": bucket_counts,
+            }
+            _write_unified_lora_archive(
+                target,
+                payload,
+                paths,
+                bucket=bucket,
+                include_attachments=bucket == LORA_BUCKET_HIGH,
+            )
+            bucket_files[bucket].update(bundle_file_info(target))
+        counts = _bundle_counts_from_cache(paths)
         _remove_legacy_unified_lora_json(paths)
+    if not bucket_files:
+        bucket_files = {
+            bucket: {
+                **bundle_file_info(path),
+                "quality_bucket": bucket,
+                "quality_bucket_label": LORA_BUCKET_LABELS.get(bucket, bucket),
+                "record_count": _bundle_record_count(_read_unified_lora_payload(path, {})) if path.exists() else 0,
+            }
+            for bucket, path in targets.items()
+        }
     if not counts:
         counts = _bundle_counts_from_cache(paths)
+    target = paths["unified_lora_data"]
     return {
         **bundle_file_info(target),
         "refreshed": needs_refresh,
+        "removed_tmp_files": int(migration.get("removed_tmp_files", 0) or 0),
         "counts": counts,
         "record_count": int(counts.get("unified_training_records", 0) or 0),
+        "bucket_files": bucket_files,
     }
 
 
@@ -376,10 +755,12 @@ def _should_restore_from_existing_bundle(paths: dict[str, Path]) -> bool:
     bundle_path = _existing_unified_lora_data_path(paths)
     if not bundle_path.exists():
         return False
+    if _cache_record_count(paths) > 0:
+        return False
     payload = _read_unified_lora_payload(bundle_path, {})
     if not isinstance(payload, dict) or str(payload.get("schema") or "") != "ai_subtitle_studio.lora_unified_data_bundle.v1":
         return False
-    return _bundle_record_count(payload) > 0 and _cache_record_count(paths) == 0
+    return _bundle_record_count(payload) > 0
 
 
 def _default_json_section(key: str) -> dict[str, Any]:
@@ -432,12 +813,19 @@ def restore_lora_personalization_store_from_bundle(
     store_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     paths = store_paths(store_dir)
-    source_path = Path(bundle_path) if bundle_path else _existing_unified_lora_data_path(paths)
-    payload = _read_unified_lora_payload(source_path, {})
+    paths["root"].mkdir(parents=True, exist_ok=True)
+    paths["cache_root"].mkdir(parents=True, exist_ok=True)
+    if bundle_path:
+        source_paths = _explicit_bundle_source_paths(bundle_path)
+    else:
+        bucket_paths = [path for path in _bucket_archive_paths(paths).values() if path.exists()]
+        source_paths = bucket_paths if bucket_paths else [_existing_unified_lora_data_path(paths)]
+    source_path = source_paths[0]
+    payloads = [_read_unified_lora_payload(path, {}) for path in source_paths]
+    payload = _merge_unified_lora_payloads([item for item in payloads if isinstance(item, dict)])
     if not isinstance(payload, dict) or str(payload.get("schema") or "") != "ai_subtitle_studio.lora_unified_data_bundle.v1":
         raise ValueError(f"Unsupported LoRA learning bundle: {source_path}")
 
-    paths["root"].mkdir(parents=True, exist_ok=True)
     restored_attachment_files = _restore_unified_lora_archive_attachments(source_path, paths)
     sections = dict(payload.get("sections") or {})
 
@@ -466,6 +854,59 @@ def restore_lora_personalization_store_from_bundle(
         "restored_json_keys": restored_json_keys,
         "restored_attachment_files": restored_attachment_files,
         "record_count": int((manifest.get("counts") or {}).get("unified_lora_data_records", 0) or 0),
+        "manifest": manifest,
+    }
+
+
+def delete_pending_lora_data(store_dir: str | Path | None = None) -> dict[str, Any]:
+    paths = store_paths(store_dir)
+    initialize_lora_personalization_store(store_dir)
+    removed: dict[str, int] = {}
+
+    for key in BUNDLE_JSONL_SECTION_KEYS:
+        rows = read_jsonl(paths[key])
+        kept = [row for row in rows if lora_bucket_for_row(key, row) != LORA_BUCKET_PENDING_DELETE]
+        if len(kept) != len(rows):
+            write_jsonl(paths[key], kept)
+            removed[key] = len(rows) - len(kept)
+
+    for key in ("learned_split_rules", "learned_line_break_rules"):
+        payload = read_json(paths[key], _default_json_section(key))
+        items = [dict(item) for item in list((payload or {}).get("items") or []) if isinstance(item, dict)]
+        kept_items = [item for item in items if lora_bucket_for_row(key, item) != LORA_BUCKET_PENDING_DELETE]
+        if len(kept_items) != len(items):
+            payload = dict(payload or _default_json_section(key))
+            payload["items"] = kept_items
+            payload["updated_at"] = iso_now()
+            write_json(paths[key], payload)
+            removed[key] = len(items) - len(kept_items)
+
+    pending_zip = _bucket_archive_path(paths, LORA_BUCKET_PENDING_DELETE)
+    removed_pending_zip = False
+    try:
+        if pending_zip.exists():
+            pending_zip.unlink()
+            removed_pending_zip = True
+    except OSError:
+        removed_pending_zip = False
+
+    _rebuild_dedupe_index_from_cache(paths)
+    bundle_result = refresh_unified_lora_data_bundle(store_dir, force=True)
+    try:
+        if pending_zip.exists():
+            pending_zip.unlink()
+            removed_pending_zip = True
+    except OSError:
+        pass
+    manifest = refresh_lora_personalization_manifest(store_dir, refresh_bundle=False)
+    return {
+        "schema": "ai_subtitle_studio.lora_pending_delete_cleanup_result.v1",
+        "updated_at": iso_now(),
+        "removed": removed,
+        "total_removed": sum(int(value or 0) for value in removed.values()),
+        "removed_pending_zip": removed_pending_zip,
+        "pending_zip": str(pending_zip),
+        "bundle": bundle_result,
         "manifest": manifest,
     }
 
@@ -510,6 +951,8 @@ def reset_lora_personalization_store(store_dir: str | Path | None = None) -> dic
 def initialize_lora_personalization_store(store_dir: str | Path | None = None) -> dict[str, Any]:
     paths = store_paths(store_dir)
     paths["root"].mkdir(parents=True, exist_ok=True)
+    paths["cache_root"].mkdir(parents=True, exist_ok=True)
+    _migrate_legacy_lora_cache_layout(paths)
     paths["trained_adapters"].mkdir(parents=True, exist_ok=True)
     if _should_restore_from_existing_bundle(paths):
         return restore_lora_personalization_store_from_bundle(_existing_unified_lora_data_path(paths), store_dir)["manifest"]
@@ -527,11 +970,21 @@ def initialize_lora_personalization_store(store_dir: str | Path | None = None) -
         write_json(paths["dedupe_index"], default_dedupe_index())
     if not paths["retention_policy"].exists():
         write_json(paths["retention_policy"], default_retention_policy())
-    return refresh_lora_personalization_manifest(store_dir)
+    bucket_archives_missing = not all(path.exists() for path in _bucket_archive_paths(paths).values())
+    defer_legacy_zip_migration = bucket_archives_missing and paths["legacy_unified_lora_zip"].exists()
+    return refresh_lora_personalization_manifest(
+        store_dir,
+        refresh_bundle=bucket_archives_missing and not defer_legacy_zip_migration,
+    )
 
 
-def refresh_lora_personalization_manifest(store_dir: str | Path | None = None) -> dict[str, Any]:
+def refresh_lora_personalization_manifest(
+    store_dir: str | Path | None = None,
+    *,
+    refresh_bundle: bool = True,
+) -> dict[str, Any]:
     paths = store_paths(store_dir)
+    _migrate_legacy_lora_cache_layout(paths)
     voice_training_plan = read_json(paths["voice_lora_training_plan"], {})
     stt1_whisper_adapter_plan = read_json(paths["stt1_whisper_adapter_training_plan"], {})
     stt1_whisper_runtime_manifest = read_json(paths["stt1_whisper_adapter_runtime_manifest"], {})
@@ -545,6 +998,7 @@ def refresh_lora_personalization_manifest(store_dir: str | Path | None = None) -
         "text_lora_corpus_rows": len(read_jsonl(paths["text_lora_corpus"])),
         "audio_preset_lora_rows": len(read_jsonl(paths["audio_preset_lora"])),
         "multimodal_lora_context_rows": len(read_jsonl(paths["multimodal_lora_context"])),
+        "deep_policy_event_rows": len(read_jsonl(paths["deep_policy_events"])),
         "queue_items": len(list((read_json(paths["training_queue"], default_queue()) or {}).get("items") or [])),
         "learned_split_rules": len(list((read_json(paths["learned_split_rules"], {}) or {}).get("items") or [])),
         "learned_line_break_rules": len(list((read_json(paths["learned_line_break_rules"], {}) or {}).get("items") or [])),
@@ -571,12 +1025,39 @@ def refresh_lora_personalization_manifest(store_dir: str | Path | None = None) -
             "lora_retrieval_index_bytes": int(bundle_file_info(paths["lora_retrieval_index"]).get("size_bytes", 0) or 0),
         }
     )
-    bundle_info = refresh_unified_lora_data_bundle(store_dir)
+    if refresh_bundle:
+        bundle_info = refresh_unified_lora_data_bundle(store_dir)
+    else:
+        bundle_info = {
+            **bundle_file_info(paths["unified_lora_data"]),
+            "refreshed": False,
+            "counts": {},
+            "record_count": 0,
+            "bucket_files": {
+                bucket: {
+                    **bundle_file_info(path),
+                    "quality_bucket": bucket,
+                    "quality_bucket_label": LORA_BUCKET_LABELS.get(bucket, bucket),
+                }
+                for bucket, path in _bucket_archive_paths(paths).items()
+            },
+        }
     bundle_counts = dict(bundle_info.get("counts") or {})
+    bucket_files = dict(bundle_info.get("bucket_files") or {})
+    if not bucket_files:
+        bucket_files = {
+            bucket: {
+                **bundle_file_info(path),
+                "quality_bucket": bucket,
+                "quality_bucket_label": LORA_BUCKET_LABELS.get(bucket, bucket),
+            }
+            for bucket, path in _bucket_archive_paths(paths).items()
+        }
+    existing_bucket_infos = [dict(info) for info in bucket_files.values() if bool(dict(info).get("exists"))]
     counts.update(
         {
-            "unified_lora_data_files": 1 if bool(bundle_info.get("exists")) else 0,
-            "unified_lora_data_bytes": int(bundle_info.get("size_bytes", 0) or 0),
+            "unified_lora_data_files": len(existing_bucket_infos),
+            "unified_lora_data_bytes": sum(int(info.get("size_bytes", 0) or 0) for info in existing_bucket_infos),
             "unified_lora_data_records": int(
                 bundle_counts.get("unified_training_records", 0)
                 or counts.get("truth_table_rows", 0)
@@ -589,6 +1070,7 @@ def refresh_lora_personalization_manifest(store_dir: str | Path | None = None) -
                 + counts.get("text_lora_corpus_rows", 0)
                 + counts.get("audio_preset_lora_rows", 0)
                 + counts.get("multimodal_lora_context_rows", 0)
+                + counts.get("deep_policy_event_rows", 0)
             ),
         }
     )
@@ -599,10 +1081,16 @@ def refresh_lora_personalization_manifest(store_dir: str | Path | None = None) -
         "files": {key: str(value) for key, value in paths.items() if key != "root"},
         "counts": counts,
         "primary_lora_learning_file": str(paths["unified_lora_data"]),
+        "lora_learning_files": {
+            bucket: str(_bucket_archive_path(paths, bucket))
+            for bucket in LORA_ALL_BUCKETS
+        },
+        "lora_learning_file_info": bucket_files,
         "notes": [
             "PHASE3 ground-truth personalization storage root",
-            "lora_data_bundle.zip is the primary user-managed single-file learning artifact",
-            "internal JSON/JSONL shard files are cache files that can be rebuilt from the bundle",
+            "LoRA learning data is split into high/medium/low/pending-delete user-managed ZIP files",
+            "high subtitle quality uses all LoRA buckets; balanced quality uses only high-score LoRA",
+            "internal JSON/JSONL shard files live under .cache and can be rebuilt from the bundle",
             "source media is referenced in place by default",
         ],
     }

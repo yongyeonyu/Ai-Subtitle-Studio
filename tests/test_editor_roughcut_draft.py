@@ -120,13 +120,13 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertFalse(
             editor_roughcut_draft_llm_allowed(
                 _segments(12),
-                {"roughcut_llm_max_context_rows": 5},
+                {"roughcut_llm_rows_auto_enabled": False, "roughcut_llm_max_context_rows": 5},
             )
         )
         self.assertTrue(
             editor_roughcut_draft_llm_allowed(
                 _segments(5),
-                {"roughcut_llm_max_context_rows": 5},
+                {"roughcut_llm_rows_auto_enabled": False, "roughcut_llm_max_context_rows": 5},
             )
         )
 
@@ -150,6 +150,7 @@ class EditorRoughcutDraftTests(unittest.TestCase):
                 self.settings = {
                     "editor_roughcut_draft_enabled": True,
                     "selected_model": "gemma4:e4b",
+                    "roughcut_llm_rows_auto_enabled": False,
                     "roughcut_llm_max_context_rows": 5,
                     "roughcut_major_min_subtitle_count": 1,
                     "editor_roughcut_draft_max_major_segments": 10,
@@ -196,6 +197,36 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertIn("단순한 말 끊김", payload["editor_instructions"])
         self.assertIn("10개 이하", payload["editor_instructions"])
         self.assertIn("공백 없이", payload["editor_instructions"])
+
+    def test_editor_draft_llm_uses_roughcut_specific_model_gate(self):
+        from core.roughcut.editor_draft import run_editor_roughcut_llm_draft
+
+        with mock.patch("core.roughcut.editor_draft._call_ollama_json") as call_ollama:
+            disabled = run_editor_roughcut_llm_draft(
+                _segments(3),
+                settings={
+                    "selected_model": "exaone3.5:7.8b",
+                    "roughcut_llm_enabled": False,
+                },
+            )
+
+        self.assertIsNone(disabled)
+        call_ollama.assert_not_called()
+
+        with mock.patch("core.roughcut.editor_draft._call_ollama_json", return_value={"major_segments": []}) as call_ollama:
+            enabled = run_editor_roughcut_llm_draft(
+                _segments(3),
+                settings={
+                    "selected_model": "사용 안함",
+                    "roughcut_llm_enabled": True,
+                    "roughcut_llm_use_override": True,
+                    "roughcut_llm_provider": "ollama",
+                    "roughcut_llm_model": "roughcut-local",
+                },
+            )
+
+        self.assertEqual(enabled, {"major_segments": []})
+        self.assertEqual(call_ollama.call_args.args[0], "roughcut-local")
 
     def test_builds_major_segments_with_subtitle_rows_as_minor_groups(self):
         result = build_editor_roughcut_draft_result(

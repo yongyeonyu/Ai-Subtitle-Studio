@@ -38,6 +38,12 @@ from core.project.project_model_settings import (
     extract_model_settings,
     merge_project_model_settings,
 )
+from core.project.recovery_state import (
+    attach_recovery_state_to_project,
+    build_recovery_checkpoint,
+    merge_recovery_checkpoint,
+    refresh_project_recovery_state,
+)
 from core.project.project_frames import (
     _augment_project_frame_metadata as _augment_project_frame_metadata_impl,
     _clip_frame_fields as _clip_frame_fields_impl,
@@ -359,6 +365,23 @@ def create_project(
         project.setdefault("history", {})
         project["history"]["previous_base_project"] = archived_path
 
+    if media_paths:
+        try:
+            attach_recovery_state_to_project(
+                project,
+                build_recovery_checkpoint(
+                    media_path=list(media_paths or [""])[0],
+                    project_path=filepath,
+                    stage="queued",
+                    status="saved",
+                    detail="project_created",
+                    segments=segments,
+                    settings=user_settings or {},
+                ),
+            )
+        except Exception:
+            pass
+
     _sanitize_project_workspace_fields(project)
     sync_project_cut_boundaries(
         project,
@@ -387,6 +410,7 @@ def save_project(
     voice_activity_segments: Optional[List[dict]] = None,
     stt_preview_segments: Optional[List[dict]] = None,
     provisional_cut_boundaries: Optional[List[dict]] = None,
+    recovery_state: Optional[dict] = None,
 ):
     """기존 프로젝트 JSON 업데이트"""
     if not os.path.exists(filepath):
@@ -701,6 +725,101 @@ def save_project(
             if isinstance(rows, list)
         }
 
+    if segments is not None:
+        try:
+            from core.engine.subtitle_accuracy_graph import persist_subtitle_accuracy_graph
+
+            media_items = list(project.get("media") or [])
+            primary_media_path = ""
+            if media_items and isinstance(media_items[0], dict):
+                primary_media_path = str(media_items[0].get("path") or "")
+            graph_result = persist_subtitle_accuracy_graph(
+                list(segments or []),
+                user_settings if user_settings is not None else project.get("user_settings", {}),
+                media_path=primary_media_path,
+                project_path=filepath,
+            )
+            project.setdefault("analysis", {})
+            project["analysis"]["subtitle_accuracy_graph_schema"] = graph_result.get("schema")
+            project["analysis"]["subtitle_accuracy_graph_path"] = graph_result.get("path", "")
+            project["analysis"]["subtitle_accuracy_graph_summary"] = graph_result.get("summary", {})
+            project["analysis"]["subtitle_accuracy_graph_segment_count"] = graph_result.get("segment_count", 0)
+            if project.get("editor_state"):
+                project["editor_state"].setdefault("analysis", {})
+                project["editor_state"]["analysis"]["subtitle_accuracy_graph_path"] = graph_result.get("path", "")
+                project["editor_state"]["analysis"]["subtitle_accuracy_graph_summary"] = graph_result.get("summary", {})
+        except Exception:
+            pass
+        try:
+            from core.audio.stt_lattice import persist_stt_lattice_artifact
+
+            media_items = list(project.get("media") or [])
+            primary_media_path = ""
+            if media_items and isinstance(media_items[0], dict):
+                primary_media_path = str(media_items[0].get("path") or "")
+            lattice_result = persist_stt_lattice_artifact(
+                list(segments or []),
+                user_settings if user_settings is not None else project.get("user_settings", {}),
+                media_path=primary_media_path,
+                project_path=filepath,
+            )
+            project.setdefault("analysis", {})
+            project["analysis"]["stt_lattice_schema"] = lattice_result.get("schema")
+            project["analysis"]["stt_lattice_artifact_path"] = lattice_result.get("path", "")
+            project["analysis"]["stt_lattice_summary"] = lattice_result.get("summary", {})
+            project["analysis"]["stt_lattice_segment_count"] = lattice_result.get("segment_count", 0)
+            if project.get("editor_state"):
+                project["editor_state"].setdefault("analysis", {})
+                project["editor_state"]["analysis"]["stt_lattice_artifact_path"] = lattice_result.get("path", "")
+                project["editor_state"]["analysis"]["stt_lattice_summary"] = lattice_result.get("summary", {})
+        except Exception:
+            pass
+
+    try:
+        media_items = list(project.get("media") or [])
+        primary_media_path = ""
+        if media_items and isinstance(media_items[0], dict):
+            primary_media_path = str(media_items[0].get("path") or "")
+        existing_recovery = (
+            (project.get("analysis", {}) or {}).get("recovery_state")
+            or ((project.get("editor_state", {}) or {}).get("analysis", {}) or {}).get("recovery_state")
+            or {}
+        )
+        settings_for_recovery = user_settings if user_settings is not None else project.get("user_settings", {})
+        artifacts = {}
+        if srt_path is not None:
+            artifacts["srt_path"] = srt_path
+        if isinstance(recovery_state, dict) and recovery_state:
+            checkpoint = dict(recovery_state)
+            if checkpoint.get("schema") != "ai_subtitle_studio.recovery_state.v1":
+                checkpoint = build_recovery_checkpoint(
+                    media_path=primary_media_path,
+                    project_path=filepath,
+                    stage=str(checkpoint.get("stage", "save") or "save"),
+                    status=str(checkpoint.get("status", "saved") or "saved"),
+                    detail=str(checkpoint.get("detail", "") or ""),
+                    segments=project_segment_rows,
+                    artifacts=dict(checkpoint.get("artifacts", {}) or artifacts),
+                    settings=settings_for_recovery,
+                    previous_state=existing_recovery if isinstance(existing_recovery, dict) else None,
+                )
+            checkpoint = merge_recovery_checkpoint(existing_recovery, checkpoint)
+        else:
+            checkpoint = build_recovery_checkpoint(
+                media_path=primary_media_path,
+                project_path=filepath,
+                stage="save",
+                status="saved",
+                detail="project_saved",
+                segments=project_segment_rows,
+                artifacts=artifacts,
+                settings=settings_for_recovery,
+                previous_state=existing_recovery if isinstance(existing_recovery, dict) else None,
+            )
+        attach_recovery_state_to_project(project, checkpoint)
+    except Exception:
+        pass
+
     _sanitize_project_workspace_fields(project)
     sync_project_cut_boundaries(
         project,
@@ -745,6 +864,10 @@ def load_project(filepath: str) -> dict | None:
     project["version"] = PROJECT_SCHEMA_VERSION
     project["phase"] = "PHASE2"
     project.setdefault("roughcut_state", {})
+    try:
+        refresh_project_recovery_state(project)
+    except Exception:
+        pass
     return project
 
 

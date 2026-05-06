@@ -20,6 +20,7 @@ from PyQt6.QtGui import QPixmap, QImage
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from core.runtime import config
 from core.frame_time import build_frame_time_map, normalize_fps, snap_sec_to_frame
+from core.media_fingerprint import media_file_fingerprint
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail
 from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args
@@ -661,10 +662,13 @@ class VideoPlayerWidget(QWidget):
     def _proxy_path_for(self, path: str) -> str:
         root = os.path.join(config.DATASET_DIR, "video_preview_cache")
         os.makedirs(root, exist_ok=True)
-        digest = hashlib.sha1(os.path.abspath(path).encode("utf-8")).hexdigest()[:16]
+        digest = hashlib.sha1(self._proxy_source_fingerprint(path).encode("utf-8")).hexdigest()[:20]
         base = os.path.splitext(os.path.basename(path))[0]
         safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in base)[:48]
         return os.path.join(root, f"{safe}_{digest}_preview_720p_hevc.mp4")
+
+    def _proxy_source_fingerprint(self, path: str) -> str:
+        return media_file_fingerprint(path, sample_bytes=1024 * 1024, include_samples=True)
 
     def _playback_path_for(self, path: str) -> str:
         self._proxy_original_path = path

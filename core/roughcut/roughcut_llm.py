@@ -9,6 +9,7 @@ from typing import Any
 from .roughcut_prompts import build_roughcut_prompt, validate_roughcut_action_response
 from .roughcut_llm_config import resolve_roughcut_llm_config
 from .roughcut_settings import merge_roughcut_settings
+from .roughcut_context_policy import trim_roughcut_payload_for_context
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,16 +39,19 @@ def run_roughcut_llm_action(
 ) -> RoughCutLLMActionResult:
     """Run a PAGE 3-B roughcut LLM action, falling back to local pipeline data."""
     roughcut_settings = merge_roughcut_settings(settings)
-    llm_config = resolve_roughcut_llm_config(settings)
+    llm_config = resolve_roughcut_llm_config(settings, payload=payload)
+    scoped_payload = trim_roughcut_payload_for_context(payload, llm_config.context_policy)
     prompt = build_roughcut_prompt(
         action,
-        payload,
+        scoped_payload,
         prompt_id=str(roughcut_settings.get("roughcut_llm_prompt_id") or ""),
         token_budget=int(roughcut_settings.get("roughcut_llm_token_budget", 4096) or 4096),
         user_prompt=llm_config.prompt,
     )
     if not llm_config.enabled:
         return RoughCutLLMActionResult(action=action, ok=False, used_llm=False, prompt=prompt, error="llm_disabled")
+    if llm_client is None:
+        llm_client = _default_roughcut_llm_client(llm_config)
     if llm_client is None:
         return RoughCutLLMActionResult(action=action, ok=False, used_llm=False, prompt=prompt, error="llm_client_missing")
     try:
@@ -59,6 +63,25 @@ def run_roughcut_llm_action(
         return RoughCutLLMActionResult(action=action, ok=True, used_llm=True, data=data, prompt=prompt)
     except Exception as exc:
         return RoughCutLLMActionResult(action=action, ok=False, used_llm=True, prompt=prompt, error=str(exc))
+
+
+def _default_roughcut_llm_client(llm_config):
+    provider = str(getattr(llm_config, "provider", "") or "").strip().lower()
+    model = str(getattr(llm_config, "model", "") or "").strip()
+    if not model or "사용 안함" in model or provider == "none":
+        return None
+
+    def _client(prompt: str):
+        from .editor_draft import _call_gemini_json, _call_ollama_json, _call_openai_json
+
+        timeout = 180
+        if provider in {"google", "gemini"} or "gemini" in model.lower():
+            return _call_gemini_json(model, prompt)
+        if provider == "openai":
+            return _call_openai_json(model, prompt, timeout=timeout)
+        return _call_ollama_json(model, prompt, timeout=timeout)
+
+    return _client
 
 
 __all__ = ["RoughCutLLMActionResult", "run_roughcut_llm_action"]

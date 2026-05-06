@@ -21,6 +21,24 @@ class _NoopThread:
         return None
 
 
+class _ImmediateThread:
+    def __init__(self, target=None, *args, **kwargs):
+        self._target = target
+        self._alive = False
+
+    def start(self):
+        self._alive = True
+        if self._target is not None:
+            self._target()
+        self._alive = False
+
+    def is_alive(self):
+        return self._alive
+
+    def join(self, timeout=None):
+        return None
+
+
 class _DummyUi:
     def __init__(self):
         self._runtime_settings_override = None
@@ -156,6 +174,53 @@ class IndividualQueueContextTests(unittest.TestCase):
         self.assertEqual(result, ("/tmp/chunks", []))
         self.assertEqual(backend.video_processor.tune_calls, [{}])
         self.assertIsNone(backend.video_processor._auto_audio_tune_overrides)
+
+    def test_prefetch_only_warms_audio_cache_without_reusing_chunks(self):
+        calls = []
+
+        class _PrefetchVideoProcessor:
+            def set_auto_audio_tune_overrides(self, overrides):
+                pass
+
+            def extract_audio(self, target_file, **kwargs):
+                calls.append((target_file, dict(kwargs)))
+                return ("/tmp/stale_chunks", [])
+
+            def stop_transcribe(self):
+                pass
+
+        ui = _DummyUi()
+        backend = CoreBackend(ui)
+        backend._active = True
+        backend._auto_audio_tune_settings_for_file = lambda _target: {}
+
+        with patch("core.pipeline.pipeline_helpers.VideoProcessor", _PrefetchVideoProcessor), patch(
+            "core.pipeline.pipeline_helpers.threading.Thread",
+            _ImmediateThread,
+        ):
+            backend._prefetch_audio_for_file("/tmp/prefetch.mp4")
+
+        self.assertEqual(calls, [("/tmp/prefetch.mp4", {"prefetch_only": True})])
+        self.assertIsNone(backend._prefetch_cache.get("/tmp/prefetch.mp4"))
+
+    def test_queue_clip_save_does_not_clear_missing_analysis_metadata(self):
+        ui = _DummyUi()
+        ui._editor_widget = None
+        ui._current_project_path = "/tmp/project.json"
+        backend = CoreBackend(ui)
+
+        with patch("core.project.project_manager.save_project") as save_project:
+            project_path = backend._save_project_for_queue_clip(
+                "/tmp/source.mp4",
+                "/tmp/source.srt",
+                [{"start": 0.0, "end": 1.0, "text": "hello"}],
+            )
+
+        self.assertEqual(project_path, "/tmp/project.json")
+        kwargs = save_project.call_args.kwargs
+        self.assertIsNone(kwargs["voice_activity_segments"])
+        self.assertIsNone(kwargs["stt_preview_segments"])
+        self.assertIsNone(kwargs["provisional_cut_boundaries"])
 
 
 if __name__ == "__main__":

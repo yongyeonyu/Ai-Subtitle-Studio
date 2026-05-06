@@ -8,6 +8,7 @@ from ui.timeline.timeline_paint import (
     SEGMENT_TEXT_KIND_STYLES,
     segment_text_kind,
     scan_boundary_marker_visual,
+    subtitle_confidence_chips,
     subtitle_segment_visual_style,
     stt_preview_visual_style,
 )
@@ -169,6 +170,28 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertEqual(subtitle_review_state(seg), "confirmed")
         self.assertEqual(style["fill"], "#203A2A")
         self.assertEqual(style["border"], "#34C759")
+
+    def test_subtitle_confidence_chips_map_stage_labels_to_colors(self):
+        chips = subtitle_confidence_chips(
+            {
+                "subtitle_stage_confidence": {
+                    "stage_order": ["cut", "stt", "llm", "lora", "final"],
+                    "stages": {
+                        "cut": {"label": "red", "score": 40},
+                        "stt": {"label": "yellow", "score": 70},
+                        "llm": {"label": "green", "score": 92},
+                        "lora": {"label": "gray", "score": None},
+                        "final": {"label": "green", "score": 90},
+                    },
+                }
+            }
+        )
+
+        self.assertEqual([chip["stage"] for chip in chips], ["cut", "stt", "llm", "lora", "final"])
+        self.assertEqual(chips[0]["color"], "#FF453A")
+        self.assertEqual(chips[1]["color"], "#FFCC00")
+        self.assertEqual(chips[2]["color"], "#34C759")
+        self.assertEqual(chips[3]["color"], "#8E8E93")
 
     def test_analysis_voice_and_silence_markers_use_distinct_colors(self):
         markers = editor_analysis_markers(
@@ -467,6 +490,26 @@ class TimelineSegmentColorTests(unittest.TestCase):
 
         self.assertEqual(provisional, {"color": "#00FFFF", "width": 2, "style": "solid"})
         self.assertEqual(verified, {"color": "#8E8E93", "width": 1, "style": "dot"})
+
+    def test_scan_boundary_visual_uses_audio_gain_neon_green_hint(self):
+        style = scan_boundary_marker_visual(
+            {
+                "timeline_sec": 1.2,
+                "status": "provisional",
+                "source": "audio_gain_provisional",
+                "line_color": "#39FF14",
+                "line_style": "dash",
+            }
+        )
+
+        self.assertEqual(style, {"color": "#39FF14", "width": 3, "style": "dash"})
+
+    def test_scan_boundary_visual_honors_gray_dotted_provisional_style(self):
+        style = scan_boundary_marker_visual(
+            {"timeline_sec": 1.2, "status": "provisional", "line_color": "gray", "line_style": "dotted"}
+        )
+
+        self.assertEqual(style, {"color": "#8E8E93", "width": 2, "style": "dot"})
 
     def test_scan_boundary_hover_still_uses_cyan_highlight(self):
         style = scan_boundary_marker_visual({"timeline_sec": 1.2, "status": "verified"}, hover=True)

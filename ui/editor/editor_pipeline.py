@@ -1032,8 +1032,19 @@ class EditorPipelineMixin:
                 audio_for_diarization = media_path
                 try:
                     base_name = os.path.splitext(os.path.basename(media_path))[0]
-                    cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
-                    raw_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}.wav")
+                    cleaned_wav = str(getattr(backend.video_processor, "last_cleaned_wav", "") or "")
+                    raw_wav = str(getattr(backend.video_processor, "last_raw_wav", "") or "")
+                    if (not cleaned_wav or not os.path.exists(cleaned_wav)) and hasattr(backend.video_processor, "_audio_work_paths"):
+                        try:
+                            audio_paths = backend.video_processor._audio_work_paths(media_path)
+                            cleaned_wav = str(audio_paths.get("cleaned_wav") or cleaned_wav)
+                            raw_wav = str(audio_paths.get("raw_wav") or raw_wav)
+                        except Exception:
+                            pass
+                    if not cleaned_wav:
+                        cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
+                    if not raw_wav:
+                        raw_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}.wav")
                     if os.path.exists(cleaned_wav):
                         audio_for_diarization = cleaned_wav
                     elif os.path.exists(raw_wav):

@@ -207,6 +207,47 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
         except Exception:
             pass
 
+        stt_preview_segments = None
+        voice_activity_segments = None
+        provisional_cut_boundaries = None
+        if editor is not None:
+            live_preview = list(getattr(editor, "_live_stt_preview_segments", []) or [])
+            if live_preview:
+                stt_preview_segments = live_preview
+            try:
+                canvas = getattr(getattr(editor, "timeline", None), "canvas", None)
+                if canvas is not None:
+                    if hasattr(canvas, "_refresh_voice_activity_segments"):
+                        canvas._refresh_voice_activity_segments()
+                    voice_rows = list(getattr(canvas, "voice_activity_segments", []) or [])
+                    provisional_rows = list(getattr(canvas, "scan_boundary_times", []) or [])
+                    if voice_rows:
+                        voice_activity_segments = voice_rows
+                    if provisional_rows:
+                        provisional_cut_boundaries = provisional_rows
+            except Exception:
+                pass
+            if provisional_cut_boundaries is None:
+                auto_rows = list(getattr(editor, "_auto_cut_boundary_scan_lines", []) or [])
+                if auto_rows:
+                    provisional_cut_boundaries = auto_rows
+
+        try:
+            from core.project.recovery_state import build_recovery_checkpoint
+
+            recovery_state = build_recovery_checkpoint(
+                media_path=target_file,
+                project_path=project_path,
+                stage="complete",
+                status="complete",
+                detail="queue_clip_completed",
+                segments=list(final_segments or []),
+                artifacts={"srt_path": srt_path},
+                settings=settings,
+            )
+        except Exception:
+            recovery_state = None
+
         save_project(
             filepath=project_path,
             media_paths=[target_file],
@@ -215,9 +256,10 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
             user_settings=settings,
             workspace=workspace,
             active_work_mode=EDITOR_MODE,
-            voice_activity_segments=[],
-            stt_preview_segments=[],
-            provisional_cut_boundaries=[],
+            voice_activity_segments=voice_activity_segments,
+            stt_preview_segments=stt_preview_segments,
+            provisional_cut_boundaries=provisional_cut_boundaries,
+            recovery_state=recovery_state,
         )
         return project_path
 
@@ -377,14 +419,10 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
                 tune = self._auto_audio_tune_settings_for_file(target_file)
                 if hasattr(vp, "set_auto_audio_tune_overrides"):
                     vp.set_auto_audio_tune_overrides(tune)
-                res = self._validate_audio_extract_result(
-                    vp.extract_audio(target_file),
-                    target_file,
-                    context="오디오 선추출",
-                )
+                vp.extract_audio(target_file, prefetch_only=True)
                 with self._prefetch_lock:
                     if current_generation == self._prefetch_generation:
-                        self._prefetch_cache[target_file] = res
+                        self._prefetch_cache[target_file] = None
             except Exception as e:
                 get_logger().log(
                     f"⚠️ 오디오 선추출 실패: {os.path.basename(target_file)} / {e}"

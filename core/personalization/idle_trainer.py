@@ -56,6 +56,7 @@ LOW_RESOURCE_INDEX_REFRESH_INTERVAL_SEC = 1_800.0
 LOW_RESOURCE_PROGRESS_SAVE_INTERVAL_SEC = 3.0
 LOW_RESOURCE_PROGRESS_BUCKET_STEP = 25
 MANUAL_PROGRESS_BUCKET_STEP = 10
+LOW_RESOURCE_INDEX_DEFERRED_REASON = "low_resource_index_refresh_deferred"
 AUDIO_EXTRACTION_JOB_TYPES = {"build_voice_profiles", "build_stt1_whisper_adapter"}
 
 
@@ -379,8 +380,17 @@ def _job_from_payload(payload: dict[str, Any], job_id: str) -> dict[str, Any]:
     return {}
 
 
-def _save_queue_payload(payload: dict[str, Any], store_dir: str | Path | None = None) -> dict[str, Any]:
-    return save_training_queue(list(payload.get("items") or []), store_dir)
+def _save_queue_payload(
+    payload: dict[str, Any],
+    store_dir: str | Path | None = None,
+    *,
+    refresh_manifest: bool = True,
+) -> dict[str, Any]:
+    return save_training_queue(
+        list(payload.get("items") or []),
+        store_dir,
+        refresh_manifest=refresh_manifest,
+    )
 
 
 def _lora_index_refresh_due(
@@ -468,7 +478,6 @@ def run_training_job(
     rows = load_truth_table_rows(store_dir)
     grouped_rows = _group_truth_rows_by_media(rows)
     paths = store_paths(store_dir)
-    store_root = paths["root"]
     job_label = _queue_job_type_label(job_type)
     media_label = _media_log_label(job.get("media_path") or media_id or "global")
 
@@ -479,8 +488,8 @@ def run_training_job(
     if job_type == "build_text_training_plan":
         get_logger().log(f"🧠 [LoRA 학습] {job_label}: text LoRA 학습계획 생성 중")
         result = save_text_lora_training_plan(
-            corpus_path=store_root / "text_lora_corpus.jsonl",
-            plan_path=store_root / "text_lora_training_plan.json",
+            corpus_path=paths["text_lora_corpus"],
+            plan_path=paths["text_lora_training_plan"],
             output_dir=paths["trained_adapters"] / "personal_text_lora",
         )
         return {"status": "complete", "score": float(result.get("usable_rows", 0) or 0), "result": result}
@@ -492,13 +501,13 @@ def run_training_job(
             f"{' + WAV 클립' if extract_audio else ''} 생성 중"
         )
         profile_result = save_voice_lora_profile_manifest(
-            bridge_path=store_root / "voice_lora_bridge.jsonl",
-            manifest_path=store_root / "voice_lora_profile_manifest.json",
+            bridge_path=paths["voice_lora_bridge"],
+            manifest_path=paths["voice_lora_profile_manifest"],
         )
         plan_result = save_voice_lora_training_plan(
-            bridge_path=store_root / "voice_lora_bridge.jsonl",
-            plan_path=store_root / "voice_lora_training_plan.json",
-            dataset_manifest_path=store_root / "voice_lora_dataset_manifest.json",
+            bridge_path=paths["voice_lora_bridge"],
+            plan_path=paths["voice_lora_training_plan"],
+            dataset_manifest_path=paths["voice_lora_dataset_manifest"],
             extract_audio=extract_audio,
             progress_callback=progress_callback if extract_audio else None,
             cancel_callback=cancel_callback,
@@ -657,7 +666,7 @@ def run_training_queue_once(
             resumable=True,
         ),
     )
-    _save_queue_payload(payload, store_dir)
+    _save_queue_payload(payload, store_dir, refresh_manifest=not low_resource)
 
     if callable(cancel_callback):
         try:
@@ -677,7 +686,7 @@ def run_training_queue_once(
                         resumable=True,
                     ),
                 )
-                _save_queue_payload(payload, store_dir)
+                _save_queue_payload(payload, store_dir, refresh_manifest=not low_resource)
                 get_logger().log(f"⏸️ [LoRA 학습] 일시정지: {mode_label} · {_queue_job_type_label(job_type)}")
                 return {"processed": False, "job_id": job_id, "reason": "cancelled_before_job_run"}
         except Exception:
@@ -736,7 +745,7 @@ def run_training_queue_once(
                 resumable=True,
             ),
         )
-        _save_queue_payload(progress_payload, store_dir)
+        _save_queue_payload(progress_payload, store_dir, refresh_manifest=not low_resource)
         if bucket_changed:
             get_logger().log(
                 f"🧠 [LoRA 학습] 진행: {progress_label} "
@@ -746,13 +755,13 @@ def run_training_queue_once(
             )
 
     try:
-        if low_resource and job_type == "build_retrieval_index" and not _lora_index_refresh_due(store_dir):
+        if low_resource and job_type == "build_retrieval_index":
             outcome = {
                 "status": "skipped",
                 "score": None,
-                "result": {"reason": "low_resource_index_cooldown"},
+                "result": {"reason": LOW_RESOURCE_INDEX_DEFERRED_REASON},
             }
-            get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 생략: 저전력 쿨다운")
+            get_logger().log("🧠 [LoRA 학습] 검색 인덱스/ZIP 갱신 생략: 저전력 자동에서는 수동/Full 학습 때 처리")
         else:
             outcome = run_training_job(
                 target,
@@ -783,7 +792,7 @@ def run_training_queue_once(
                 resumable=outcome_status in {"waiting", "failed"},
             ),
         )
-        _save_queue_payload(payload, store_dir)
+        _save_queue_payload(payload, store_dir, refresh_manifest=not low_resource)
         prune_result: dict[str, Any] = {}
         if outcome_status == "complete":
             appended_counts: dict[str, int] = {}
@@ -805,7 +814,13 @@ def run_training_queue_once(
             else:
                 outcome["retention"] = {"skipped": True, "reason": "low_resource_idle"}
             try:
-                if (not low_resource) or _lora_index_refresh_due(store_dir):
+                if low_resource:
+                    outcome["retrieval_index"] = {
+                        "skipped": True,
+                        "reason": LOW_RESOURCE_INDEX_DEFERRED_REASON,
+                    }
+                    get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 생략: 저전력 자동")
+                elif _lora_index_refresh_due(store_dir):
                     get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 중")
                     retrieval_index = build_lora_retrieval_index(store_dir)
                     outcome["retrieval_index"] = {
@@ -817,10 +832,10 @@ def run_training_queue_once(
                     )
                 else:
                     outcome["retrieval_index"] = {"skipped": True, "reason": "low_resource_cooldown"}
-                    get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 생략: 저전력 쿨다운")
+                    get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 생략: 쿨다운")
             except Exception as index_exc:
                 get_logger().log(f"⚠️ [개인화 학습] LoRA 검색 인덱스 갱신 실패: {index_exc}")
-        refresh_lora_personalization_manifest(store_dir)
+        refresh_lora_personalization_manifest(store_dir, refresh_bundle=not low_resource)
         summary_bits = [f"status={outcome.get('status', 'complete')}"]
         if outcome.get("score") is not None:
             summary_bits.append(f"score={float(outcome.get('score') or 0.0):.2f}")
@@ -848,8 +863,8 @@ def run_training_queue_once(
                 resumable=True,
             ),
         )
-        _save_queue_payload(payload, store_dir)
-        refresh_lora_personalization_manifest(store_dir)
+        _save_queue_payload(payload, store_dir, refresh_manifest=not low_resource)
+        refresh_lora_personalization_manifest(store_dir, refresh_bundle=not low_resource)
         get_logger().log(f"⚠️ [개인화 학습] 실패: {job_type} / {exc}")
         return {"processed": True, "job_id": job_id, "outcome": {"status": "failed", "result": {"reason": str(exc)}}}
 

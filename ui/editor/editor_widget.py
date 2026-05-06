@@ -27,6 +27,7 @@ from core.state_manager import SubtitleStateManager
 from ui.timeline.timeline_widget import TimelineWidget
 from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
 from ui.timeline.speaker_labels import current_speaker_settings
+from ui.responsive_profile import responsive_profile_for_size
 from ui.style import button_style, label_style, line_icon, tool_button_style
 from ui.editor.editor_popup_qt import EditorPopup
 from ui.editor.video_player_widget import VideoPlayerWidget
@@ -701,6 +702,11 @@ class EditorWidget(
         self.btn_quality_candidates.setStyleSheet(button_style("toolbar", font_size="11px", padding="5px 9px"))
         self.btn_quality_candidates.clicked.connect(self._show_quality_candidates_for_current_line)
         row.addWidget(self.btn_quality_candidates)
+        self.btn_subtitle_why = QPushButton("근거")
+        self.btn_subtitle_why.setToolTip("현재 자막의 LoRA/STT/LLM/컷 경계 선택 근거")
+        self.btn_subtitle_why.setStyleSheet(button_style("toolbar", font_size="11px", padding="5px 9px"))
+        self.btn_subtitle_why.clicked.connect(self._show_subtitle_why_for_current_line)
+        row.addWidget(self.btn_subtitle_why)
         row.addStretch()
         self.quality_summary_lbl = QLabel("품질 미검사")
         self.quality_summary_lbl.setToolTip("전체 품질 요약")
@@ -901,6 +907,80 @@ class EditorWidget(
         except Exception:
             pass
 
+    def _show_subtitle_why_for_current_line(self):
+        from ui.editor.subtitle_why_dialog import SubtitleWhyDialog
+
+        line = self.text_edit.textCursor().blockNumber()
+        seg = self._segment_for_line(line)
+        if not seg:
+            QMessageBox.information(self, "생성 근거", "현재 줄에서 확인할 자막을 찾지 못했습니다.")
+            return
+        dialog = SubtitleWhyDialog(seg, index=line, parent=self)
+        if dialog.exec() == 1 and getattr(dialog, "selected_action", ""):
+            self._handle_one_click_fix_action(line, str(dialog.selected_action))
+
+    def _handle_one_click_fix_action(self, line: int, action: str):
+        from core.engine.subtitle_one_click_fix import (
+            build_one_click_fix_request,
+            reapply_similar_subtitle_style,
+            subtitle_source_text_without_llm,
+        )
+
+        seg = self._segment_for_line(int(line)) or {}
+        if not seg:
+            return
+        if action == "restore_source_no_llm":
+            restored = subtitle_source_text_without_llm(seg)
+            if not restored:
+                QMessageBox.information(self, "원문 복구", "복구할 원문/STT 후보가 없습니다.")
+                return
+            self._replace_segment_text_by_line(
+                int(line),
+                restored,
+                {"candidate_id": action, "source": "one_click_fix", "reason": "LLM 없이 원문 기준 복구"},
+            )
+            return
+        if action == "reapply_similar_style":
+            updated, meta = reapply_similar_subtitle_style(str(seg.get("text", "") or ""), getattr(self, "settings", {}) or {})
+            if not updated or updated == str(seg.get("text", "") or ""):
+                QMessageBox.information(self, "스타일 재적용", str(meta.get("reason") or "적용할 유사 스타일을 찾지 못했습니다."))
+                return
+            self._replace_segment_text_by_line(
+                int(line),
+                updated,
+                {"candidate_id": action, "source": "one_click_fix", "reason": str(meta.get("reason") or "비슷한 자막 스타일 재적용")},
+            )
+            return
+        request = build_one_click_fix_request(action, seg, reason="one_click_fix")
+        if action == "re_recognize_region" and hasattr(self, "_re_recognize_segment"):
+            self._re_recognize_segment(float(seg.get("start", 0.0) or 0.0))
+            return
+        if action == "recheck_cut_only":
+            try:
+                if hasattr(self, "video_player") and hasattr(self.video_player, "seek"):
+                    self.video_player.seek(float(seg.get("start", 0.0) or 0.0))
+                if hasattr(self, "_on_scan_cut_requested"):
+                    self._on_scan_cut_requested(1)
+                    return
+            except Exception:
+                pass
+        self._mark_one_click_fix_request(int(line), request)
+        QMessageBox.information(self, "빠른 수정", f"{request.get('label')} 요청을 현재 자막에 표시했습니다.")
+
+    def _mark_one_click_fix_request(self, line: int, request: dict):
+        for seg in list(getattr(self, "_cached_segs", []) or []):
+            if int(seg.get("line", -1) or -1) == int(line):
+                seg["_one_click_fix_request"] = dict(request)
+                quality = dict(seg.get("quality") or {})
+                flags = list(quality.get("flags") or [])
+                if "one_click_fix_requested" not in flags:
+                    flags.append("one_click_fix_requested")
+                quality["flags"] = flags
+                quality["one_click_fix_request"] = dict(request)
+                seg["quality"] = quality
+                break
+        self._mark_dirty()
+
     def _replace_segment_text_by_line(self, line: int, text: str, candidate: dict | None = None):
         block = self.text_edit.document().findBlockByNumber(int(line))
         if not block.isValid():
@@ -1084,7 +1164,8 @@ class EditorWidget(
         super().resizeEvent(event)
         QTimer.singleShot(0, self._position_video_expand_button)
         QTimer.singleShot(0, self._sync_editor_focus_border)
-        is_compact = self.width() < 1100
+        profile = responsive_profile_for_size(self.width(), self.height())
+        is_compact = self.width() < profile.editor_compact_width
         top_font = "10px" if is_compact else "11px"
         for btn, full_t, comp_t, _ in getattr(self, '_top_btns', []):
             btn.setText(comp_t if is_compact else full_t); btn.setStyleSheet(button_style("toolbar", font_size=top_font, padding="6px 8px"))

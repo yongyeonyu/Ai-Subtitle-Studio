@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from core.personalization.lora_models import iso_now, stable_hash
+from core.personalization.lora_quality_buckets import lora_bucket_for_row, lora_score_for_row
 from core.personalization.lora_retrieval_config import (
     INDEX_JSON_SOURCE_KEYS,
     INDEX_JSONL_SOURCE_KEYS,
@@ -25,7 +26,6 @@ from core.personalization.lora_retrieval_utils import (
     path_leaf_terms,
     read_json,
     read_jsonl,
-    safe_float,
     strip_editorial_brackets,
     term_counts,
     vectorize_lora_text,
@@ -92,14 +92,18 @@ def _payload_for_kind(kind: str, row: dict[str, Any]) -> dict[str, Any]:
                 "cps": row.get("cps"),
                 "duration_sec": row.get("duration_sec"),
                 "detected_split_rule": json_preview(row.get("detected_split_rule")),
+                "style_profile": json_preview(row.get("style_profile") or row.get("subtitle_style_profile") or {}),
             }
         )
     elif kind in {"text_lora_dataset", "text_lora_corpus"}:
+        meta = row.get("meta") or row.get("metadata") or {}
+        meta = meta if isinstance(meta, dict) else {}
         payload.update(
             {
                 "input": strip_editorial_brackets(row.get("input")),
                 "output": strip_editorial_brackets(row.get("output")),
-                "meta": json_preview(row.get("meta") or row.get("metadata") or {}),
+                "meta": json_preview(meta),
+                "style_profile": json_preview(meta.get("style_profile") or {}),
             }
         )
     elif kind == "excluded_parentheticals":
@@ -125,6 +129,7 @@ def _payload_for_kind(kind: str, row: dict[str, Any]) -> dict[str, Any]:
                 "classification_summary": classification_summary(row.get("context_classification") or {}),
                 "media_profile": json_preview(row.get("media_profile") or {}),
                 "subtitle_profile": json_preview(row.get("subtitle_profile") or {}),
+                "subtitle_style_profile": json_preview(row.get("subtitle_style_profile") or {}),
                 "candidate_context": json_preview(row.get("candidate_context") or {}),
                 "generation_targets": json_preview(row.get("generation_targets") or {}),
             }
@@ -138,6 +143,17 @@ def _payload_for_kind(kind: str, row: dict[str, Any]) -> dict[str, Any]:
                 "audio_profile": json_preview(row.get("audio_profile") or {}),
                 "features": json_preview(row.get("features") or {}),
                 "audio_tune_settings": json_preview(row.get("audio_tune_settings") or row.get("settings") or {}),
+            }
+        )
+    elif kind == "deep_policy_events":
+        payload.update(
+            {
+                "event_type": json_preview(row.get("event_type")),
+                "text": strip_editorial_brackets(row.get("text")),
+                "decision": json_preview(row.get("decision") or {}),
+                "features": json_preview(row.get("features") or {}),
+                "applied_settings": json_preview(row.get("applied_settings") or {}),
+                "hard_case": bool(row.get("hard_case")),
             }
         )
     elif kind == "voice_lora_bridge":
@@ -176,32 +192,7 @@ def _payload_for_kind(kind: str, row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _quality_for_doc(kind: str, row: dict[str, Any]) -> float:
-    if kind in {"truth_table", "text_lora_corpus"}:
-        return 0.82
-    if kind == "stt1_whisper_adapter_dataset":
-        return max(0.45, min(0.95, safe_float(row.get("train_weight"), 0.78) / 1.25))
-    if kind == "text_lora_dataset":
-        return 0.74
-    if kind == "multimodal_lora_context":
-        return 0.76
-    if kind == "voice_lora_bridge":
-        duration = safe_float(row.get("duration_sec"), 0.0)
-        return max(0.45, min(0.82, duration / 12.0))
-    if kind == "excluded_parentheticals":
-        return 0.9
-    if kind in {"setting_trials", "prompt_trials"}:
-        score = safe_float(row.get("score"), 0.0)
-        metrics = dict(row.get("metrics") or {})
-        score = max(score, safe_float(metrics.get("final_score"), 0.0))
-        return max(0.0, min(1.0, score / 100.0))
-    if kind == "audio_preset_lora":
-        return max(0.0, min(1.0, safe_float(row.get("confidence"), 0.0)))
-    if kind.startswith("learned_"):
-        return max(0.0, min(1.0, safe_float(row.get("confidence"), 0.0)))
-    if kind == "best_settings":
-        score = safe_float(row.get("score"), 78.0)
-        return max(0.0, min(1.0, score / 100.0))
-    return 0.55
+    return max(0.0, min(1.0, lora_score_for_row(kind, row) / 100.0))
 
 
 def _created_at_for_doc(row: dict[str, Any]) -> str:
@@ -220,18 +211,22 @@ def _document_text(kind: str, row: dict[str, Any]) -> str:
                     str(row.get("line_break_pattern") or ""),
                     str(row.get("punctuation_pattern") or ""),
                     str(row.get("detected_split_rule") or ""),
+                    *flatten_search_text(row.get("style_profile") or row.get("subtitle_style_profile") or {}),
                     *flatten_search_text(row.get("extra") or {}),
                 ]
             )
         )[:LORA_RETRIEVAL_MAX_TEXT_CHARS]
     if kind in {"text_lora_dataset", "text_lora_corpus"}:
+        meta = row.get("meta") or row.get("metadata") or {}
+        meta = meta if isinstance(meta, dict) else {}
         return norm_text(
             " ".join(
                 [
                     *common,
                     strip_editorial_brackets(row.get("input")),
                     strip_editorial_brackets(row.get("output")),
-                    *flatten_search_text(row.get("meta") or row.get("metadata") or {}),
+                    *flatten_search_text(meta),
+                    *flatten_search_text(meta.get("style_profile") or {}),
                 ]
             )
         )[:LORA_RETRIEVAL_MAX_TEXT_CHARS]
@@ -270,6 +265,7 @@ def _document_text(kind: str, row: dict[str, Any]) -> str:
                     *flatten_search_text(row.get("context_classification") or {}),
                     *flatten_search_text(row.get("media_profile") or {}),
                     *flatten_search_text(row.get("subtitle_profile") or {}),
+                    *flatten_search_text(row.get("subtitle_style_profile") or {}),
                     *flatten_search_text(row.get("candidate_context") or {}),
                     *flatten_search_text(row.get("generation_targets") or {}),
                 ]
@@ -287,6 +283,21 @@ def _document_text(kind: str, row: dict[str, Any]) -> str:
                     *flatten_search_text(row.get("features") or {}),
                     *flatten_search_text(row.get("audio_tune_settings") or {}),
                     *flatten_search_text(row.get("candidate_scores") or []),
+                ]
+            )
+        )[:LORA_RETRIEVAL_MAX_TEXT_CHARS]
+    if kind == "deep_policy_events":
+        return norm_text(
+            " ".join(
+                [
+                    *common,
+                    "deep policy decision subtitle rerank timing stt setting sequence hard case active learning",
+                    strip_editorial_brackets(row.get("text")),
+                    str(row.get("event_type") or ""),
+                    *flatten_search_text(row.get("decision") or {}),
+                    *flatten_search_text(row.get("features") or {}),
+                    *flatten_search_text(row.get("applied_settings") or {}),
+                    *flatten_search_text(row.get("metadata") or {}),
                 ]
             )
         )[:LORA_RETRIEVAL_MAX_TEXT_CHARS]
@@ -331,11 +342,16 @@ def _make_doc(kind: str, row: dict[str, Any], ordinal: int) -> dict[str, Any] | 
         doc_id = stable_hash({"kind": kind, "ordinal": ordinal, "text": text})[:24]
     payload = _payload_for_kind(kind, row)
     counts = term_counts(text)
+    quality_score = max(0.0, min(100.0, lora_score_for_row(kind, row)))
+    quality_bucket = lora_bucket_for_row(kind, row)
     return {
         "doc_id": f"{kind}:{doc_id}",
         "kind": kind,
         "created_at": _created_at_for_doc(row),
         "quality": round(_quality_for_doc(kind, row), 4),
+        "quality_score": round(quality_score, 4),
+        "quality_bucket": quality_bucket,
+        "score_index": round(quality_score, 4),
         "media_id": str(row.get("media_id") or ""),
         "media_path": media_path,
         "media_lookup_keys": media_keys[:6],

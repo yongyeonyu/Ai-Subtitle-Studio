@@ -6,12 +6,12 @@ ffprobe 기반 미디어 정보 조회 유틸 + metadata cache
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from core.media_fingerprint import media_fingerprint_digest
 from core.performance import atomic_write_json, ffprobe_worker_count, media_probe_cache_dir
 from core.platform_compat import ffprobe_binary, hidden_subprocess_kwargs
 
@@ -32,14 +32,8 @@ def _copy_result(info: dict) -> dict:
 
 def _fingerprint(filepath: str) -> tuple[str, Path] | tuple[None, None]:
     try:
-        path = Path(filepath).expanduser()
-        stat = path.stat()
-        raw = "|".join([
-            str(path.resolve()),
-            str(stat.st_size),
-            str(stat.st_mtime_ns),
-        ])
-        digest = hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+        Path(filepath).expanduser().stat()
+        digest = media_fingerprint_digest(filepath, sample_bytes=512 * 1024, include_samples=True)
         return digest, media_probe_cache_dir() / f"{digest}.json"
     except Exception:
         return None, None

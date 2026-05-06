@@ -9,14 +9,21 @@ ui/settings_gap.py  ─  ⏱️ 자막 간격/분할 설정
 """
 from PyQt6.QtWidgets import (
     QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QPushButton, QSlider, QFrame, QMessageBox, QToolTip
+    QLabel, QPushButton, QSlider, QFrame, QMessageBox, QToolTip, QCheckBox, QComboBox
 )
 from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt
 from core.project.data_manager import save_settings, save_default_settings
 from core.personalization.runtime_personalization import personalization_settings_override_for_media
+from core.settings_simplifier import (
+    apply_simple_operation_mode,
+    normalize_simple_operation_mode,
+    simple_operation_mode_items,
+    simple_operation_mode_summary,
+)
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, _create_bottom_buttons
 from ui.settings.qml_panel import create_settings_header
+from ui.settings.tablet_dialog import apply_tablet_dialog_profile
 from ui.style import button_style, settings_dialog_stylesheet
 
 
@@ -41,6 +48,7 @@ class GapSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("자막 간격 시뮬레이터")
         self.setMinimumWidth(1180)
+        apply_tablet_dialog_profile(self)
         # [v01.00.10] 화면 넘침 방지: 최대 높이를 현재 화면의 90%로 제한
         from PyQt6.QtWidgets import QApplication as _QApp, QScrollArea
         screen_h = _QApp.primaryScreen().availableGeometry().height()
@@ -49,6 +57,7 @@ class GapSettingsDialog(QDialog):
         self.setStyleSheet(settings_dialog_stylesheet())
         self.result = dict(settings)
         self.sliders_info = []
+        self._simplified_ui_enabled = bool(self.result.get("settings_simplified_ui_enabled", True))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -91,6 +100,34 @@ class GapSettingsDialog(QDialog):
         auto_layout.addWidget(auto_hint, 1)
         auto_layout.addWidget(self.btn_lora_gap_auto)
         layout.addWidget(auto_row)
+
+        simple_row = QFrame()
+        simple_row.setStyleSheet("QFrame { background: #101B23; border: 1px solid #263945; border-radius: 10px; }")
+        simple_layout = QHBoxLayout(simple_row)
+        simple_layout.setContentsMargins(10, 7, 8, 7)
+        simple_layout.setSpacing(8)
+        simple_title = QLabel("<b>자동 모드</b>")
+        simple_title.setStyleSheet("color: #DCE3EA; background: transparent;")
+        self.combo_simple_operation_mode = QComboBox()
+        for mode, label, summary in simple_operation_mode_items():
+            self.combo_simple_operation_mode.addItem(f"{label} - {summary}", mode)
+        current_mode = normalize_simple_operation_mode(self.result.get("simple_operation_mode", "auto"))
+        for idx in range(self.combo_simple_operation_mode.count()):
+            if self.combo_simple_operation_mode.itemData(idx) == current_mode:
+                self.combo_simple_operation_mode.setCurrentIndex(idx)
+                break
+        self.lbl_simple_operation_summary = QLabel(simple_operation_mode_summary(current_mode))
+        self.lbl_simple_operation_summary.setWordWrap(True)
+        self.lbl_simple_operation_summary.setStyleSheet("color: #8FA1AF; font-size: 12px; background: transparent;")
+        self.chk_show_manual_gap_settings = QCheckBox("상세값 보기")
+        self.chk_show_manual_gap_settings.setChecked(not self._simplified_ui_enabled)
+        self.chk_show_manual_gap_settings.setStyleSheet("color: #DCE3EA; background: transparent;")
+        self.combo_simple_operation_mode.currentIndexChanged.connect(self._on_simple_operation_mode_changed)
+        simple_layout.addWidget(simple_title)
+        simple_layout.addWidget(self.combo_simple_operation_mode, 0)
+        simple_layout.addWidget(self.lbl_simple_operation_summary, 1)
+        simple_layout.addWidget(self.chk_show_manual_gap_settings)
+        layout.addWidget(simple_row)
 
         # [v01.00.10] 파라미터 폼 전체를 QScrollArea로 감싸 화면 넘침 방지
         scroll_container = QWidget()
@@ -239,6 +276,7 @@ class GapSettingsDialog(QDialog):
         scroll_area.setWidgetResizable(True)
         scroll_area.setWidget(scroll_container)
         scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self._manual_gap_scroll_area = scroll_area
         layout.addWidget(scroll_area, stretch=1)
 
         layout.addLayout(_create_bottom_buttons(self, self._on_ok, self._on_reset, self._on_save, save_def_callback=self._on_save_default))
@@ -258,6 +296,19 @@ class GapSettingsDialog(QDialog):
             s.valueChanged.connect(self._update_simulator)
         
         self._update_simulator()
+        self.chk_show_manual_gap_settings.toggled.connect(self._on_gap_detail_toggled)
+        self._on_gap_detail_toggled(self.chk_show_manual_gap_settings.isChecked())
+
+    def _on_simple_operation_mode_changed(self, *args):
+        mode = self.combo_simple_operation_mode.currentData() or "auto"
+        if hasattr(self, "lbl_simple_operation_summary"):
+            self.lbl_simple_operation_summary.setText(simple_operation_mode_summary(mode))
+
+    def _on_gap_detail_toggled(self, checked: bool):
+        if hasattr(self, "_manual_gap_scroll_area"):
+            self._manual_gap_scroll_area.setVisible(bool(checked))
+        if hasattr(self, "simulator"):
+            self.simulator.setVisible(bool(checked))
 
     def _current_media_path(self) -> str:
         owner = self.parent()
@@ -389,6 +440,12 @@ class GapSettingsDialog(QDialog):
                 s.setValue(int(d * m))
 
     def _collect_data(self):
+        if bool(self.result.get("settings_simplified_ui_enabled", True)) and hasattr(self, "chk_show_manual_gap_settings") and not self.chk_show_manual_gap_settings.isChecked():
+            self.result = apply_simple_operation_mode(
+                self.result,
+                self.combo_simple_operation_mode.currentData() if hasattr(self, "combo_simple_operation_mode") else self.result.get("simple_operation_mode", "auto"),
+            )
+            return
         self.result["continuous_threshold"] = self.slider_cont.value() / 10.0
         self.result["gap_push_rate"] = self.slider_push.value() / 100.0
         self.result["single_subtitle_end"] = self.slider_single.value() / 10.0

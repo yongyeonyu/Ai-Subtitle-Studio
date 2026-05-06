@@ -131,11 +131,10 @@ Item {
                             id: orderChip
                             width: 34
                             height: 20
-                            radius: 10
+                            radius: 0
                             anchors.verticalCenter: parent.verticalCenter
-                            color: currentActive ? "#244455" : "#17262D"
-                            border.color: currentActive ? "#7CC5FF" : "#31424A"
-                            border.width: 1
+                            color: "transparent"
+                            border.width: 0
 
                             Text {
                                 anchors.centerIn: parent
@@ -147,23 +146,22 @@ Item {
                         }
 
                         Item {
-                            width: parent.width - orderChip.width - timeBadge.width - 16
+                            width: Math.max(0, parent.width - orderChip.width - timeBadge.width - 16)
                         }
 
                         Rectangle {
                             id: timeBadge
-                            width: 84
+                            width: 108
                             height: 22
-                            radius: 11
+                            radius: 0
                             anchors.verticalCenter: parent.verticalCenter
-                            color: modelData.done ? "#173222" : (modelData.error ? "#351C1F" : "#121E24")
-                            border.color: modelData.done ? "#286B43" : (modelData.error ? "#6D2E35" : "#31424A")
-                            border.width: 1
+                            color: "transparent"
+                            border.width: 0
 
                             Text {
                                 anchors.fill: parent
-                                anchors.leftMargin: 8
-                                anchors.rightMargin: 8
+                                anchors.leftMargin: 0
+                                anchors.rightMargin: 0
                                 text: queueCard.timeText
                                 color: queueCard.statusColor
                                 font.pixelSize: 9

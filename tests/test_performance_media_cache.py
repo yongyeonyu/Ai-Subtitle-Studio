@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core import media_info
-from core.performance import bounded_worker_count, ffprobe_worker_count
+from core.performance import adaptive_llm_worker_count, adaptive_worker_count, bounded_worker_count, ffprobe_worker_count
 
 
 class PerformanceMediaCacheTest(unittest.TestCase):
@@ -57,6 +57,90 @@ class PerformanceMediaCacheTest(unittest.TestCase):
         self.assertGreaterEqual(bounded_worker_count(kind="io"), 1)
         self.assertLessEqual(ffprobe_worker_count(99), 8)
         self.assertEqual(ffprobe_worker_count(0), 1)
+
+    def test_adaptive_llm_workers_keep_api_single_and_local_bounded(self):
+        api_workers, api_meta = adaptive_llm_worker_count(
+            settings={"llm_threads_auto_enabled": True},
+            workload=50,
+            provider="openai",
+            model="gpt-test",
+            task="subtitle",
+        )
+        local_workers, local_meta = adaptive_llm_worker_count(
+            settings={"llm_threads_auto_enabled": True, "llm_threads_resource_max": 3},
+            workload=50,
+            provider="ollama",
+            model="exaone3.5:7.8b",
+            task="subtitle",
+        )
+
+        self.assertEqual(api_workers, 1)
+        self.assertEqual(api_meta["reason"], "api_single_worker")
+        self.assertGreaterEqual(local_workers, 1)
+        self.assertLessEqual(local_workers, 3)
+        self.assertEqual(local_meta["reason"], "resource_adaptive")
+
+    def test_runtime_scheduler_reduces_workers_for_user_active_battery_pressure(self):
+        snapshot = {
+            "system": "Darwin",
+            "machine": "arm64",
+            "logical_cores": 8,
+            "physical_cores": 4,
+            "performance_cores": 4,
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 3 * 1024 ** 3,
+            "available_memory_ratio": 0.18,
+            "cpu_load_1m": 6.8,
+            "cpu_load_ratio": 0.85,
+            "on_battery": True,
+            "battery_percent": 42,
+            "user_idle_seconds": 1.2,
+            "user_active": True,
+        }
+        with patch("core.performance.hardware_profile", return_value=snapshot), \
+             patch("core.performance.current_resource_snapshot", return_value=snapshot):
+            workers, meta = adaptive_worker_count(
+                task="cut_pioneer",
+                settings={"runtime_scheduler_auto_enabled": True},
+                requested=4,
+                workload=20,
+                minimum=1,
+                maximum=4,
+            )
+
+        self.assertEqual(workers, 1)
+        self.assertEqual(meta["reason"], "resource_adaptive")
+        self.assertIn("battery_power", meta["reductions"])
+        self.assertIn("user_active", meta["reductions"])
+        self.assertIn("high_cpu_load", meta["reductions"])
+
+    def test_runtime_scheduler_preserves_manual_compat_when_auto_disabled(self):
+        snapshot = {
+            "system": "Darwin",
+            "logical_cores": 8,
+            "physical_cores": 4,
+            "performance_cores": 4,
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 12 * 1024 ** 3,
+            "available_memory_ratio": 0.75,
+            "cpu_load_ratio": 0.1,
+            "on_battery": False,
+            "user_active": False,
+        }
+        with patch("core.performance.hardware_profile", return_value=snapshot), \
+             patch("core.performance.current_resource_snapshot", return_value=snapshot):
+            workers, meta = adaptive_worker_count(
+                task="stt",
+                settings={"stt_workers_auto_enabled": False},
+                requested=2,
+                workload=2,
+                minimum=1,
+                maximum=2,
+            )
+
+        self.assertEqual(workers, 2)
+        self.assertFalse(meta["auto_enabled"])
+        self.assertEqual(meta["reason"], "manual_compat")
 
 
 if __name__ == "__main__":

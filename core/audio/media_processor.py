@@ -8,6 +8,7 @@ media_processor.py  ─  잼민이 PD v25 (VAD 섹터 그룹화 + 무음 로깅 
 3. Whisper는 기본적으로 고정 오버랩 청크를 인식하고, VAD는 검수/선택 선분할 신호로만 사용
 """
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -17,11 +18,13 @@ import time  # noqa: F401 - compatibility hook for heartbeat tests/runtime patch
 from concurrent.futures import ThreadPoolExecutor
 from core.audio.audio_presets import apply_audio_preset, auto_audio_settings_only
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
+from core.settings_profiles import materialize_user_settings
 from core.audio.media_processor_audio import VideoProcessorAudioHelpersMixin
 from core.audio.media_processor_transcribe import VideoProcessorTranscribeMixin
 from core.audio.media_processor_vad import VideoProcessorVadMixin
 from core.llm.secure_keys import get_api_key  # noqa: F401 - patched by audio helper tests/runtime hooks
 from core.performance import bounded_worker_count
+from core.media_fingerprint import media_fingerprint_digest
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.runtime import config
 from core.runtime.logger import get_logger
@@ -33,7 +36,7 @@ from core.subtitle_quality.vad_alignment_checker import (
 _CHUNK_DURATION = 30
 _OVERLAP_SEC = 3.0
 _VAD_CACHE_VERSION = 3
-_AUDIO_CACHE_VERSION = 2
+_AUDIO_CACHE_VERSION = 3
 
 
 class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMixin, VideoProcessorVadMixin):
@@ -94,7 +97,15 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             yield chunk_segs, idx, total
 
     # 💡 오디오 추출/정제 엔진 (is_single_segment 파라미터 추가)
-    def extract_audio(self, video_path: str, target_start_sec=0.0, target_end_sec=None, is_single_segment=False):
+    def extract_audio(
+        self,
+        video_path: str,
+        target_start_sec=0.0,
+        target_end_sec=None,
+        is_single_segment=False,
+        *,
+        prefetch_only: bool = False,
+    ):
         os.makedirs(config.OUTPUT_DIR, exist_ok=True)
         s = self._load_all_settings()
         audio_ai = s.get("selected_audio_ai", "deepfilter")
@@ -104,11 +115,24 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         master_filter = self._build_ffmpeg_preprocess_filter(s)
         active_filter = self._build_audio_cleanup_filter(audio_ai, s)
 
-        base_name = os.path.splitext(os.path.basename(video_path))[0]
-        chunk_dir = os.path.join(config.OUTPUT_DIR, f"{base_name}_chunks")
-        raw_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_raw.wav")
-        cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
+        audio_paths = self._audio_work_paths(
+            video_path,
+            target_start_sec=target_start_sec,
+            target_end_sec=target_end_sec,
+            is_single_segment=is_single_segment,
+        )
+        base_name = audio_paths["base_name"]
+        work_dir = audio_paths["work_dir"]
+        chunk_dir = audio_paths["chunk_dir"]
+        raw_wav = audio_paths["raw_wav"]
+        cleaned_wav = audio_paths["cleaned_wav"]
         cleaned_meta = f"{cleaned_wav}.meta.json"
+        os.makedirs(work_dir, exist_ok=True)
+        self.last_audio_work_dir = work_dir
+        self.last_chunk_dir = chunk_dir
+        self.last_raw_wav = raw_wav
+        self.last_cleaned_wav = cleaned_wav
+        self.last_audio_paths = dict(audio_paths)
         
         is_partial = target_start_sec > 0.0 or target_end_sec is not None
         cache_config = self._audio_cache_config(
@@ -127,7 +151,7 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         vad_post_align_enabled = bool(s.get("vad_post_stt_align_enabled", True))
         direct_start, direct_end = self._direct_chunk_span(video_path, target_start_sec, target_end_sec)
         direct_span = max(0.0, direct_end - direct_start)
-        if self._can_direct_extract_stt_chunks(
+        if not prefetch_only and self._can_direct_extract_stt_chunks(
             s,
             audio_ai=audio_ai,
             vad_model=vad_model,
@@ -212,21 +236,21 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                 if audio_ai == "rnnoise":
                     self._notify_stage("⏳ [음성] RNNoise 빠른 노이즈 제거 중")
                     get_logger().log("  └ [음성] RNNoise 빠른 노이즈 제거 중...")
-                    rnnoise_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_rnnoise.wav")
+                    rnnoise_wav = os.path.join(work_dir, f"{base_name}_rnnoise.wav")
                     if self._apply_rnnoise(raw_wav, rnnoise_wav) and os.path.exists(rnnoise_wav):
                         ai_wav = rnnoise_wav
                         audio_filter_applied = True
                 elif audio_ai == "resemble_enhance":
                     self._notify_stage("⏳ [음성] Resemble Enhance 음성 향상 중")
                     get_logger().log("  └ [음성] Resemble Enhance 음성 향상 중...")
-                    resemble_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_resemble.wav")
+                    resemble_wav = os.path.join(work_dir, f"{base_name}_resemble.wav")
                     if self._apply_resemble_enhance(raw_wav, resemble_wav) and os.path.exists(resemble_wav):
                         ai_wav = resemble_wav
                         audio_filter_applied = True
                 elif audio_ai == "clearvoice":
                     self._notify_stage("⏳ [음성] ClearVoice 음성 향상 중")
                     get_logger().log("  └ [음성] ClearVoice 음성 향상 중...")
-                    clearvoice_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_clearvoice.wav")
+                    clearvoice_wav = os.path.join(work_dir, f"{base_name}_clearvoice.wav")
                     if self._apply_clearvoice(raw_wav, clearvoice_wav) and os.path.exists(clearvoice_wav):
                         ai_wav = clearvoice_wav
                         audio_filter_applied = True
@@ -253,6 +277,10 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                     return chunk_dir, []
                 self._write_cleaned_audio_cache_meta(cleaned_meta, cache_config)
                 if os.path.exists(raw_wav): os.remove(raw_wav)
+
+        if prefetch_only:
+            get_logger().log("  └ ♻️ [전처리] 오디오 선추출은 cleaned cache까지만 준비하고 STT 청크는 실제 처리에서 분할합니다")
+            return "", []
 
         vad_segments = []
         vad_requested = vad_model != "none" and vad_pre_split_enabled
@@ -291,7 +319,7 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         if vad_model != "none":
             # ✅ VAD 캐시 경로
             vad_cache_path = os.path.join(
-                config.OUTPUT_DIR,
+                work_dir,
                 f"{base_name}_vad_cache.json"
             )
 
@@ -416,7 +444,7 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         """user_settings.json 로드 (오류 시 로그 남김). Legacy override hook 지원."""
         settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
 
-        data = dict(getattr(config, "DEFAULT_ADV_SETTINGS", {}) or {})
+        data = materialize_user_settings({})
         if not os.path.exists(settings_path):
             pass
         else:
@@ -459,6 +487,58 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
 
     def set_auto_audio_tune_overrides(self, overrides: dict | None):
         self._auto_audio_tune_overrides = dict(overrides or {}) if overrides else None
+
+    def _safe_audio_base_name(self, video_path: str) -> str:
+        base_name = os.path.splitext(os.path.basename(str(video_path or "")))[0]
+        safe = "".join(ch if ch.isalnum() or ch in "._- " else "_" for ch in base_name).strip(" ._")
+        return (safe or "media")[:96]
+
+    def _audio_work_paths(
+        self,
+        video_path: str,
+        *,
+        target_start_sec=0.0,
+        target_end_sec=None,
+        is_single_segment=False,
+    ) -> dict:
+        """Return collision-safe audio artifact paths for one concrete media fingerprint."""
+        base_name = self._safe_audio_base_name(video_path)
+        try:
+            source_digest = media_fingerprint_digest(video_path, sample_bytes=512 * 1024, include_samples=True)[:20]
+        except Exception:
+            source_digest = hashlib.sha1(os.path.abspath(str(video_path or "")).encode("utf-8", errors="ignore")).hexdigest()[:20]
+
+        hard_cuts = []
+        for item in list(getattr(self, "hard_cut_boundaries", []) or []):
+            try:
+                if isinstance(item, dict):
+                    sec = float(item.get("timeline_sec", item.get("time", item.get("start", 0.0))) or 0.0)
+                else:
+                    sec = float(item)
+                if sec > 0.0:
+                    hard_cuts.append(round(sec, 3))
+            except Exception:
+                continue
+
+        chunk_payload = {
+            "start": round(float(target_start_sec or 0.0), 3),
+            "end": None if target_end_sec is None else round(float(target_end_sec or 0.0), 3),
+            "single": bool(is_single_segment),
+            "hard_cuts": sorted(set(hard_cuts)),
+        }
+        chunk_digest = hashlib.sha1(
+            json.dumps(chunk_payload, ensure_ascii=False, sort_keys=True).encode("utf-8", errors="ignore")
+        ).hexdigest()[:12]
+        work_dir = os.path.join(config.OUTPUT_DIR, "_audio_fingerprint", f"{base_name}_{source_digest}")
+        return {
+            "base_name": base_name,
+            "source_digest": source_digest,
+            "chunk_digest": chunk_digest,
+            "work_dir": work_dir,
+            "chunk_dir": os.path.join(work_dir, f"{base_name}_{chunk_digest}_chunks"),
+            "raw_wav": os.path.join(work_dir, f"{base_name}_raw.wav"),
+            "cleaned_wav": os.path.join(work_dir, f"{base_name}_cleaned.wav"),
+        }
 
     def _ffmpeg_trim_to_wav(self, src_wav: str, out_wav: str, start_sec: float, duration_sec: float) -> bool:
         result = subprocess.run(

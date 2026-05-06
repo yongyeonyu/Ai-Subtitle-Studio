@@ -66,6 +66,73 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
         finally:
             self._cleanup_window(window)
 
+    def test_mouse_move_interrupts_busy_personalization_training_immediately(self):
+        window = MainWindow()
+        try:
+            trainer = getattr(window, "_personalization_idle_trainer", None)
+            self.assertIsNotNone(trainer)
+            with (
+                patch.object(trainer, "is_busy", return_value=True),
+                patch.object(trainer, "suspend_for_foreground_activity", return_value={"suspended": True}) as suspend,
+            ):
+                event = QEvent(QEvent.Type.MouseMove)
+                window.eventFilter(window, event)
+
+            suspend.assert_called_once_with(reason="user_input_interrupt", hold_ms=0)
+        finally:
+            self._cleanup_window(window)
+
+    def test_key_press_notifies_registered_personalization_stop_targets(self):
+        window = MainWindow()
+        try:
+            class StopTarget:
+                def __init__(self):
+                    self.called = 0
+
+                def _request_stop_for_user_input(self):
+                    self.called += 1
+                    return True
+
+            target = StopTarget()
+            window._register_personalization_learning_dialog(target)
+
+            event = QEvent(QEvent.Type.KeyPress)
+            window.eventFilter(window, event)
+
+            self.assertEqual(target.called, 1)
+        finally:
+            self._cleanup_window(window)
+
+    def test_personalization_dialog_defers_expensive_summary_until_visible(self):
+        from ui.settings.settings_personalization import PersonalizationLearningDialog
+
+        with patch("ui.settings.settings_personalization.initialize_lora_personalization_store") as init_store, \
+             patch("ui.settings.settings_personalization.build_text_lora_dataset") as build_dataset, \
+             patch("ui.settings.settings_personalization.refresh_lora_personalization_manifest") as refresh_manifest:
+            dialog = PersonalizationLearningDialog(None)
+            try:
+                self.assertIn("불러오는 중", dialog.summary_label.text())
+                init_store.assert_not_called()
+                build_dataset.assert_not_called()
+                refresh_manifest.assert_not_called()
+            finally:
+                dialog.close()
+                dialog.deleteLater()
+                self.app.processEvents()
+
+    def test_lora_learning_info_dialog_defers_payload_build_until_event_loop(self):
+        from ui.settings.personalization_learning_info import PersonalizationLearningInfoDialog
+
+        with patch("ui.settings.personalization_learning_info.build_learning_info_payload") as build_payload:
+            dialog = PersonalizationLearningInfoDialog(None)
+            try:
+                self.assertIn("불러오는 중", dialog.header_label.text())
+                build_payload.assert_not_called()
+            finally:
+                dialog.close()
+                dialog.deleteLater()
+                self.app.processEvents()
+
     def test_main_window_installs_app_event_filter_for_personalization_idle_tracking(self):
         window = MainWindow()
         try:

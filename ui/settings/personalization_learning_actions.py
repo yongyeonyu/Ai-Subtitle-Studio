@@ -13,6 +13,7 @@ from core.personalization.llm_review_exchange import (
 )
 from core.personalization.lora_retention import prune_low_value_personalization_data
 from core.personalization.lora_storage import (
+    delete_pending_lora_data,
     initialize_lora_personalization_store,
     refresh_unified_lora_data_bundle,
     reset_lora_personalization_store,
@@ -178,13 +179,50 @@ class PersonalizationLearningActionsMixin:
                     f"학습 record: {int(result.get('record_count', 0) or 0)}개",
                     f"검색 인덱스: {int(index_result.get('doc_count', 0) or 0)}개 기억",
                     f"파일 크기: {int(result.get('size_bytes', 0) or 0)} bytes",
-                    "이 ZIP 파일 하나로 개인화 학습 데이터를 백업/이동할 수 있습니다.",
+                    "상/중/하/삭제예정 ZIP 버킷으로 개인화 학습 데이터를 백업/이동할 수 있습니다.",
+                ]
+            ),
+        )
+
+    def _delete_pending_lora_data_now(self):
+        reply = QMessageBox.question(
+            self,
+            "삭제예정 LoRA 정리",
+            "\n".join(
+                [
+                    "현재 점수 기준으로 '삭제예정' 버킷에 남아 있는 LoRA 학습 항목만 삭제합니다.",
+                    "점수가 올라가 상/중/하로 이동한 항목은 삭제하지 않습니다.",
+                    "계속하시겠습니까?",
+                ]
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            result = delete_pending_lora_data()
+            index_result = build_lora_retrieval_index(force=True)
+        except Exception as exc:
+            QMessageBox.warning(self, "삭제예정 LoRA 정리 오류", str(exc))
+            return
+        self._refresh_summary()
+        removed = dict(result.get("removed") or {})
+        details = " · ".join(f"{key} {value}개" for key, value in sorted(removed.items())) if removed else "삭제할 삭제예정 항목이 없습니다."
+        QMessageBox.information(
+            self,
+            "삭제예정 LoRA 정리 완료",
+            "\n".join(
+                [
+                    f"총 삭제: {int(result.get('total_removed', 0) or 0)}개",
+                    details,
+                    f"검색 인덱스: {int(index_result.get('doc_count', 0) or 0)}개 기억",
                 ]
             ),
         )
 
     def _import_unified_lora_data_now(self):
-        default_path = str(self._store_paths().get("unified_lora_data", "lora_data_bundle.zip"))
+        default_path = str(self._store_paths().get("unified_lora_data", "lora_data_high.zip"))
         path, _ = QFileDialog.getOpenFileName(
             self,
             "LoRA ZIP 학습 파일 선택",
@@ -198,7 +236,7 @@ class PersonalizationLearningActionsMixin:
             "LoRA ZIP 학습 파일 불러오기",
             "\n".join(
                 [
-                    "선택한 lora_data_bundle.zip에서 내부 학습 cache를 다시 만듭니다.",
+                    "선택한 LoRA ZIP에서 내부 학습 cache를 다시 만듭니다.",
                     "예전 lora_data_bundle.json도 호환 불러오기를 지원합니다.",
                     "현재 개인화 학습 shard는 이 파일 내용으로 교체됩니다.",
                     "계속하시겠습니까?",
@@ -371,7 +409,7 @@ class PersonalizationLearningActionsMixin:
             "\n".join(
                 [
                     "LoRA 개인화 학습 데이터를 모두 삭제하고 빈 상태로 다시 시작합니다.",
-                    "삭제 대상: lora_data_bundle.zip, truth table, learned rules, queue, text/voice LoRA cache, voice clips, trained adapter 산출물",
+                    "삭제 대상: LoRA ZIP 버킷 4개, truth table, learned rules, queue, text/voice LoRA cache, voice clips, trained adapter 산출물",
                     "원본 영상/SRT 파일과 교정사전 원본은 삭제하지 않습니다.",
                     "계속하시겠습니까?",
                 ]

@@ -1,0 +1,19 @@
+{
+  "schema": "ai_subtitle_studio.golden_subtitle_suite_manifest.v1",
+  "description": "Golden subtitle regression suite. Add stable video/SRT cases here before release gating.",
+  "thresholds": {
+    "final_score_min": 88.0,
+    "character_error_rate_max": 0.08,
+    "eojeol_error_rate_max": 0.16,
+    "timing_overlap_score_min": 0.82,
+    "line_break_match_score_min": 0.70,
+    "segment_split_merge_f1_min": 0.80,
+    "cps_violation_rate_max": 0.10,
+    "hallucination_proxy_rate_max": 0.02
+  },
+  "pre_release_gate": {
+    "enabled": false,
+    "fail_on_regression": true
+  },
+  "cases": []
+}

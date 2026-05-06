@@ -115,12 +115,14 @@ def subtitle_review_state(seg: dict, *, threshold: float | None = None) -> str:
     score = subtitle_detection_score(seg, selected_source)
     candidate_scores = _stt_candidate_scores(seg)
     label = str(quality.get("confidence_label") or "").strip().lower()
+    auto_review_severity = str(seg.get("subtitle_auto_review_severity") or "").strip().lower()
+    stage_confidence_label = str(seg.get("subtitle_confidence_label") or "").strip().lower()
 
     if score is not None and score < threshold:
         return "recheck"
     if not selected_source and candidate_scores and max(candidate_scores) < threshold:
         return "recheck"
-    if label == "red":
+    if label == "red" or auto_review_severity == "red" or stage_confidence_label == "red":
         return "recheck"
 
     candidates = [

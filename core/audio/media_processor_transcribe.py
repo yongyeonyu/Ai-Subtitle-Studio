@@ -13,6 +13,7 @@ import wave
 from concurrent.futures import ThreadPoolExecutor
 
 from core.audio import stt_rescue
+from core.performance import adaptive_worker_count
 from core.platform_compat import ffmpeg_binary
 from core.runtime.logger import get_logger
 from core.subtitle_quality.candidate_ranker import rank_overlap_candidates
@@ -370,8 +371,18 @@ class VideoProcessorTranscribeMixin:
                     errors[label] = exc
 
         try:
-            get_logger().log("  🧵 [STT 앙상블] STT1/STT2 독립 스레드 병렬 처리")
-            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="stt-ensemble") as executor:
+            stt_workers, scheduler_meta = adaptive_worker_count(
+                task="stt",
+                settings=s,
+                requested=2,
+                workload=2,
+                minimum=1,
+                maximum=2,
+            )
+            reductions = ",".join(scheduler_meta.get("reductions") or [])
+            suffix = f" ({reductions})" if reductions else ""
+            get_logger().log(f"  🧵 [STT 앙상블] 리소스 자동 스케줄러: {stt_workers}개 워커{suffix}")
+            with ThreadPoolExecutor(max_workers=stt_workers, thread_name_prefix="stt-ensemble") as executor:
                 futures = [
                     executor.submit(_run, "STT1", primary_model),
                     executor.submit(_run, "STT2", secondary_model),

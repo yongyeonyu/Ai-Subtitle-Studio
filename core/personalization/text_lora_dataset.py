@@ -11,7 +11,16 @@ from typing import Any
 from core.personalization.ground_truth_import import extract_parenthetical_segments
 from core.personalization.lora_context_classifier import classify_lora_context
 from core.personalization.lora_models import TrainingQueueItem, stable_hash
-from core.personalization.lora_storage import LORA_PERSONALIZATION_DIR, refresh_unified_lora_data_bundle, upsert_training_queue_items
+from core.personalization.subtitle_style_profile import (
+    build_subtitle_style_profile,
+    subtitle_style_search_terms,
+)
+from core.personalization.lora_storage import (
+    LORA_INTERNAL_CACHE_DIR,
+    LORA_PERSONALIZATION_DIR,
+    refresh_unified_lora_data_bundle,
+    upsert_training_queue_items,
+)
 from core.project.data_manager import CORRECTION_FILE
 from core.project.project_manager import PROJECTS_DIR, load_project
 from core.project.project_context import project_segments_to_editor
@@ -20,7 +29,8 @@ from core.subtitle_quality.correction_memory import load_correction_memory
 from core.subtitle_quality.wrong_answer_memory import load_wrong_answer_memory
 
 
-TEXT_LORA_DATASET_DIR = Path(LORA_PERSONALIZATION_DIR)
+TEXT_LORA_STORE_DIR = Path(LORA_PERSONALIZATION_DIR)
+TEXT_LORA_DATASET_DIR = Path(LORA_INTERNAL_CACHE_DIR)
 TEXT_LORA_DATASET_PATH = TEXT_LORA_DATASET_DIR / "text_lora_dataset.jsonl"
 TEXT_LORA_MANIFEST_PATH = TEXT_LORA_DATASET_DIR / "text_lora_manifest.json"
 TEXT_LORA_CORPUS_PATH = TEXT_LORA_DATASET_DIR / "text_lora_corpus.jsonl"
@@ -49,6 +59,12 @@ TEXT_LORA_HALLUCINATION_INSTRUCTION = (
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _personalization_store_dir() -> Path:
+    if TEXT_LORA_DATASET_DIR.name == ".cache":
+        return TEXT_LORA_DATASET_DIR.parent
+    return TEXT_LORA_DATASET_DIR
 
 
 def _normalize_text(text: Any) -> str:
@@ -255,10 +271,12 @@ def _segment_rows_for_lora(
     voice_rows: list[dict[str, Any]] = []
     context_rows: list[dict[str, Any]] = []
     filtered = {"short_input": 0, "short_output": 0, "too_long": 0, "low_delta": 0, "editorial_only": 0}
-    for index, seg in enumerate(segments or [], start=1):
+    source_segments = list(segments or [])
+    for index, seg in enumerate(source_segments, start=1):
         if not isinstance(seg, dict):
             continue
-        raw_output = _normalize_text(seg.get("text"))
+        raw_style_text = str(seg.get("text") or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        raw_output = _normalize_text(raw_style_text)
         output = _speech_training_text(seg.get("text"))
         if not output:
             if raw_output:
@@ -276,12 +294,28 @@ def _segment_rows_for_lora(
         start_sec = float(seg.get("start", 0.0) or 0.0)
         end_sec = float(seg.get("end", start_sec) or start_sec)
         duration_sec = max(0.0, end_sec - start_sec)
+        previous_seg = source_segments[index - 2] if index > 1 and isinstance(source_segments[index - 2], dict) else None
+        next_seg = source_segments[index] if index < len(source_segments) and isinstance(source_segments[index], dict) else None
+        previous_end_sec = float(previous_seg.get("end", previous_seg.get("timeline_end", start_sec)) or start_sec) if previous_seg else None
+        next_start_sec = float(next_seg.get("start", next_seg.get("timeline_start", end_sec)) or end_sec) if next_seg else None
+        speech_style_text = str(extract_parenthetical_segments(raw_style_text).get("speech_training_text") or output)
+        style_profile = build_subtitle_style_profile(
+            raw_text=raw_style_text,
+            speech_text=speech_style_text,
+            input_text=input_text,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            previous_end_sec=previous_end_sec,
+            next_start_sec=next_start_sec,
+        )
+        style_terms = subtitle_style_search_terms(style_profile)
         selected_index = int(candidate_context.get("selected_index", -1) or -1)
         candidate_rows = list(candidate_context.get("candidates") or [])
         selected_raw_input = ""
         if 0 <= selected_index < len(candidate_rows):
             selected_raw_input = str(candidate_rows[selected_index].get("raw_text") or "")
         generation_context = _extract_known_context_fields(seg)
+        generation_context["style_profile"] = _json_safe(style_profile)
         context_classification = classify_lora_context(
             texts=[raw_output, output, input_text, selected_raw_input],
             file_hints=[project_name, project_path, clip_path],
@@ -320,6 +354,8 @@ def _segment_rows_for_lora(
                 "candidate_context": candidate_context,
                 "generation_context": generation_context,
                 "context_classification": context_classification,
+                "style_profile": _json_safe(style_profile),
+                "style_search_terms": style_terms,
             }
         )
         context_row = {
@@ -346,6 +382,8 @@ def _segment_rows_for_lora(
             "candidate_context": candidate_context,
             "generation_context": generation_context,
             "context_classification": context_classification,
+            "subtitle_style_profile": _json_safe(style_profile),
+            "style_search_terms": style_terms,
             "excluded_parenthetical_policy": {
                 "remove_from_learning_text": ["()", "[]", "{}"],
                 "input_raw": selected_raw_input,
@@ -396,6 +434,8 @@ def _segment_rows_for_lora(
                     "char_delta": abs(len(output) - len(input_text)),
                     "generation_context": generation_context,
                     "context_classification": context_classification,
+                    "style_profile": _json_safe(style_profile),
+                    "style_search_terms": style_terms,
                 },
             }
         )
@@ -813,7 +853,7 @@ def _enqueue_auto_maintenance_jobs(
             payload=payload,
         ).to_record(),
     ]
-    result = upsert_training_queue_items(jobs, TEXT_LORA_DATASET_DIR)
+    result = upsert_training_queue_items(jobs, _personalization_store_dir())
     return {"queued": True, "batch_id": batch_id, "items": len(list(result.get("items") or []))}
 
 
@@ -906,11 +946,12 @@ def accumulate_personalization_dataset(
             "() / [] / {} 안의 사용자 설명 자막 제외",
             "추후 음성 LoRA 연결용 frame/text/speaker bridge 포함",
             "STT 후보/품질/오디오/VAD/타이밍 context는 multimodal_lora_context에 함께 누적",
+            "줄바꿈/말투/괄호 제거/문장부호/물결/브랜드 표기/타이밍 여백 style_profile 포함",
         ],
     }
     _write_json_atomic(manifest_path, manifest)
     try:
-        refresh_unified_lora_data_bundle(TEXT_LORA_DATASET_DIR, force=True)
+        refresh_unified_lora_data_bundle(_personalization_store_dir(), force=True)
     except Exception:
         pass
     maintenance_result = _enqueue_auto_maintenance_jobs(
@@ -938,6 +979,7 @@ def accumulate_personalization_dataset(
 
 __all__ = [
     "TEXT_LORA_DATASET_DIR",
+    "TEXT_LORA_STORE_DIR",
     "TEXT_LORA_DATASET_PATH",
     "TEXT_LORA_MANIFEST_PATH",
     "TEXT_LORA_CORPUS_PATH",

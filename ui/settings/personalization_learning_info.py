@@ -1,39 +1,21 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QTabWidget, QVBoxLayout
 
 from core.personalization.lora_storage import (
     LORA_PERSONALIZATION_DIR,
-    load_unified_lora_data_bundle,
     refresh_lora_personalization_manifest,
     store_paths,
 )
-from core.personalization.lora_vector_retriever import lora_retrieval_index_summary
-from core.personalization.text_lora_dataset import (
-    MULTIMODAL_LORA_CONTEXT_PATH,
-    TEXT_LORA_CORPUS_MANIFEST_PATH,
-    TEXT_LORA_CORPUS_PATH,
-    TEXT_LORA_DATASET_PATH,
-    TEXT_LORA_MANIFEST_PATH,
-)
-from core.personalization.text_lora_runner import (
-    TEXT_LORA_TRAINING_PLAN_PATH,
-    VOICE_LORA_DATASET_MANIFEST_PATH,
-    VOICE_LORA_PROFILE_MANIFEST_PATH,
-    VOICE_LORA_TRAINING_PLAN_PATH,
-)
-from core.personalization.stt1_whisper_adapter_runner import (
-    STT1_WHISPER_ADAPTER_DATASET_MANIFEST_PATH,
-    STT1_WHISPER_ADAPTER_DATASET_PATH,
-    STT1_WHISPER_ADAPTER_RUNTIME_MANIFEST_PATH,
-    STT1_WHISPER_ADAPTER_TRAINING_PLAN_PATH,
-)
+from ui.settings.tablet_dialog import apply_tablet_dialog_profile
 from ui.style import button_style, settings_dialog_stylesheet
 
 
@@ -95,8 +77,8 @@ def lora_learning_help_text() -> str:
             "진화형 데이터 정리",
             "   새 개인화 학습이 완료되면 낮은 점수 trial과 낮은 빈도/낮은 confidence 규칙을 조금씩 정리합니다. 작은 데이터셋은 보호하고, 충분히 쌓인 뒤부터 오래되고 낮은 점수인 항목을 먼저 밀어냅니다.",
             "",
-            "통합 LoRA 데이터 파일",
-            "   lora_data_bundle.zip 하나가 사용자가 관리하는 대표 학습 파일입니다. 내부 JSON/JSONL shard는 빠른 append와 UI 확인을 위한 cache이며, ZIP 파일에서 다시 만들 수 있습니다.",
+            "LoRA 데이터 파일",
+            "   lora_data_high/medium/low/pending_delete.zip 4개가 점수 기준 버킷 파일입니다. 자막품질 높음은 전체 버킷을, 보통은 상 버킷만 사용합니다.",
             "",
             "STT1 Whisper adapter 준비",
             "   ground truth pair와 context를 이용해 STT1 전용 Whisper adapter dataset/plan/runtime manifest를 따로 만듭니다. 검색형 LoRA는 그대로 유지하고, 준비된 adapter 산출물이 있을 때만 STT1 모델로 자동 연결합니다.",
@@ -146,6 +128,36 @@ def _jsonl_count_and_tail(path: str | Path, *, limit: int = 24) -> dict[str, Any
     return {"count": total, "rows": list(rows)}
 
 
+def _jsonl_tail(path: str | Path, *, limit: int = 24, max_bytes: int = 256 * 1024) -> list[dict[str, Any]]:
+    target = Path(path)
+    if not target.exists():
+        return []
+    try:
+        size = int(target.stat().st_size)
+        with target.open("rb") as handle:
+            if size > max_bytes:
+                handle.seek(-max_bytes, 2)
+                handle.readline()
+            data = handle.read()
+    except Exception:
+        return []
+
+    rows: deque[dict[str, Any]] = deque(maxlen=max(0, int(limit)))
+    for raw_line in data.decode("utf-8", errors="ignore").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except Exception:
+            payload = {"_raw": preview_text(line, 180)}
+        if isinstance(payload, dict):
+            rows.append(payload)
+        else:
+            rows.append({"value": payload})
+    return list(rows)
+
+
 def preview_text(value: Any, limit: int = 120) -> str:
     text = " ".join(str(value or "").strip().split())
     if len(text) <= limit:
@@ -192,6 +204,33 @@ def _file_info(path: str | Path) -> dict[str, Any]:
         "mtime": _format_epoch(stat.st_mtime),
         "size_bytes": int(stat.st_size),
         "path": str(target),
+    }
+
+
+def _load_cached_manifest(paths: dict[str, Path]) -> dict[str, Any]:
+    manifest = _read_json_payload(paths["manifest"], {})
+    if isinstance(manifest, dict) and manifest.get("counts"):
+        return manifest
+    try:
+        return refresh_lora_personalization_manifest(LORA_PERSONALIZATION_DIR, refresh_bundle=False)
+    except Exception:
+        return manifest if isinstance(manifest, dict) else {}
+
+
+def _fast_retrieval_index_summary(paths: dict[str, Path], counts: dict[str, Any]) -> dict[str, Any]:
+    info = _file_info(paths["lora_retrieval_index"])
+    return {
+        "path": str(paths["lora_retrieval_index"]),
+        "exists": bool(info.get("exists")),
+        "current": "not_checked",
+        "updated_at": info.get("mtime", "-"),
+        "score_model": "-",
+        "doc_count": int(counts.get("lora_retrieval_index_docs", 0) or 0),
+        "kind_counts": {},
+        "bm25_terms": 0,
+        "query_cache_entries": 0,
+        "hash_dim": 0,
+        "size_bytes": int(info.get("size_bytes", 0) or 0),
     }
 
 
@@ -368,20 +407,18 @@ def _queue_detail_lines(queue_payload: dict[str, Any], *, limit: int = 18) -> li
 
 
 def build_learning_info_payload() -> dict[str, str]:
-    manifest = refresh_lora_personalization_manifest()
     paths = store_paths(LORA_PERSONALIZATION_DIR)
-    text_corpus_manifest = _read_json_payload(TEXT_LORA_CORPUS_MANIFEST_PATH, {})
-    text_training_plan = _read_json_payload(TEXT_LORA_TRAINING_PLAN_PATH, {})
-    voice_profile_manifest = _read_json_payload(VOICE_LORA_PROFILE_MANIFEST_PATH, {})
-    voice_training_plan = _read_json_payload(VOICE_LORA_TRAINING_PLAN_PATH, {})
-    voice_dataset_manifest = _read_json_payload(VOICE_LORA_DATASET_MANIFEST_PATH, {})
+    manifest = _load_cached_manifest(paths)
+    text_corpus_manifest = _read_json_payload(paths["text_lora_corpus_manifest"], {})
+    text_training_plan = _read_json_payload(paths["text_lora_training_plan"], {})
+    voice_profile_manifest = _read_json_payload(paths["voice_lora_profile_manifest"], {})
+    voice_training_plan = _read_json_payload(paths["voice_lora_training_plan"], {})
+    voice_dataset_manifest = _read_json_payload(paths["voice_lora_dataset_manifest"], {})
     split_rules = _read_json_payload(paths["learned_split_rules"], {})
     line_break_rules = _read_json_payload(paths["learned_line_break_rules"], {})
     best_settings = _read_json_payload(paths["best_settings"], {})
     queue_payload = _read_json_payload(paths["training_queue"], {})
     retention_policy = _read_json_payload(paths["retention_policy"], {})
-    bundle_payload = load_unified_lora_data_bundle()
-    retrieval_summary = lora_retrieval_index_summary()
     llm_request = _read_json_payload(paths["llm_review_request"], {})
     llm_result = _read_json_payload(paths["llm_review_result"], {})
 
@@ -392,31 +429,52 @@ def build_learning_info_payload() -> dict[str, str]:
         "prompt_trials": paths["prompt_trials"],
         "retention_history": paths["retention_history"],
         "voice_lora_bridge": paths["voice_lora_bridge"],
-        "stt1_whisper_adapter_dataset": STT1_WHISPER_ADAPTER_DATASET_PATH,
-        "text_lora_dataset": TEXT_LORA_DATASET_PATH,
-        "text_lora_corpus": TEXT_LORA_CORPUS_PATH,
-        "audio_preset_lora": paths["root"] / "audio_preset_lora.jsonl",
+        "stt1_whisper_adapter_dataset": paths["stt1_whisper_adapter_dataset"],
+        "text_lora_dataset": paths["text_lora_dataset"],
+        "text_lora_corpus": paths["text_lora_corpus"],
+        "audio_preset_lora": paths["audio_preset_lora"],
         "multimodal_lora_context": paths["multimodal_lora_context"],
     }
-    jsonl = {key: _jsonl_count_and_tail(path) for key, path in jsonl_sources.items()}
+    counts = dict(manifest.get("counts") or {})
+    retrieval_summary = _fast_retrieval_index_summary(paths, counts)
+    jsonl_count_keys = {
+        "truth_table": "truth_table_rows",
+        "excluded_parentheticals": "excluded_parenthetical_rows",
+        "setting_trials": "setting_trial_rows",
+        "prompt_trials": "prompt_trial_rows",
+        "retention_history": "retention_history_rows",
+        "voice_lora_bridge": "voice_lora_bridge_rows",
+        "stt1_whisper_adapter_dataset": "stt1_whisper_adapter_dataset_rows",
+        "text_lora_dataset": "text_lora_dataset_rows",
+        "text_lora_corpus": "text_lora_corpus_rows",
+        "audio_preset_lora": "audio_preset_lora_rows",
+        "multimodal_lora_context": "multimodal_lora_context_rows",
+    }
+    jsonl = {
+        key: {
+            "count": int(counts.get(jsonl_count_keys.get(key, ""), 0) or 0),
+            "rows": _jsonl_tail(path),
+        }
+        for key, path in jsonl_sources.items()
+    }
 
     file_sources = {
         "manifest": paths["manifest"],
         "truth_table": paths["truth_table"],
         "excluded_parentheticals": paths["excluded_parentheticals"],
-        "text_lora_dataset": TEXT_LORA_DATASET_PATH,
-        "text_lora_manifest": TEXT_LORA_MANIFEST_PATH,
-        "text_lora_corpus": TEXT_LORA_CORPUS_PATH,
-        "text_lora_corpus_manifest": TEXT_LORA_CORPUS_MANIFEST_PATH,
-        "text_lora_training_plan": TEXT_LORA_TRAINING_PLAN_PATH,
+        "text_lora_dataset": paths["text_lora_dataset"],
+        "text_lora_manifest": paths["text_lora_manifest"],
+        "text_lora_corpus": paths["text_lora_corpus"],
+        "text_lora_corpus_manifest": paths["text_lora_corpus_manifest"],
+        "text_lora_training_plan": paths["text_lora_training_plan"],
         "voice_lora_bridge": paths["voice_lora_bridge"],
-        "voice_lora_profile_manifest": VOICE_LORA_PROFILE_MANIFEST_PATH,
-        "voice_lora_training_plan": VOICE_LORA_TRAINING_PLAN_PATH,
-        "voice_lora_dataset_manifest": VOICE_LORA_DATASET_MANIFEST_PATH,
-        "stt1_whisper_adapter_dataset": STT1_WHISPER_ADAPTER_DATASET_PATH,
-        "stt1_whisper_adapter_dataset_manifest": STT1_WHISPER_ADAPTER_DATASET_MANIFEST_PATH,
-        "stt1_whisper_adapter_training_plan": STT1_WHISPER_ADAPTER_TRAINING_PLAN_PATH,
-        "stt1_whisper_adapter_runtime_manifest": STT1_WHISPER_ADAPTER_RUNTIME_MANIFEST_PATH,
+        "voice_lora_profile_manifest": paths["voice_lora_profile_manifest"],
+        "voice_lora_training_plan": paths["voice_lora_training_plan"],
+        "voice_lora_dataset_manifest": paths["voice_lora_dataset_manifest"],
+        "stt1_whisper_adapter_dataset": paths["stt1_whisper_adapter_dataset"],
+        "stt1_whisper_adapter_dataset_manifest": paths["stt1_whisper_adapter_dataset_manifest"],
+        "stt1_whisper_adapter_training_plan": paths["stt1_whisper_adapter_training_plan"],
+        "stt1_whisper_adapter_runtime_manifest": paths["stt1_whisper_adapter_runtime_manifest"],
         "learned_split_rules": paths["learned_split_rules"],
         "learned_line_break_rules": paths["learned_line_break_rules"],
         "setting_trials": paths["setting_trials"],
@@ -428,9 +486,12 @@ def build_learning_info_payload() -> dict[str, str]:
         "llm_review_request": paths["llm_review_request"],
         "llm_review_result": paths["llm_review_result"],
         "unified_lora_data": paths["unified_lora_data"],
+        "lora_data_medium": paths["lora_data_medium"],
+        "lora_data_low": paths["lora_data_low"],
+        "lora_data_pending_delete": paths["lora_data_pending_delete"],
         "lora_retrieval_index": paths["lora_retrieval_index"],
-        "audio_preset_lora": paths["root"] / "audio_preset_lora.jsonl",
-        "multimodal_lora_context": MULTIMODAL_LORA_CONTEXT_PATH,
+        "audio_preset_lora": paths["audio_preset_lora"],
+        "multimodal_lora_context": paths["multimodal_lora_context"],
     }
     labels = {
         "manifest": "전체 manifest",
@@ -459,7 +520,10 @@ def build_learning_info_payload() -> dict[str, str]:
         "retention_history": "정리 기록",
         "llm_review_request": "LLM 검토 요청",
         "llm_review_result": "LLM 검토 결과",
-        "unified_lora_data": "LoRA ZIP 학습 파일",
+        "unified_lora_data": "LoRA ZIP 상",
+        "lora_data_medium": "LoRA ZIP 중",
+        "lora_data_low": "LoRA ZIP 하",
+        "lora_data_pending_delete": "LoRA ZIP 삭제예정",
         "lora_retrieval_index": "LoRA 검색 인덱스",
         "audio_preset_lora": "audio preset LoRA",
         "multimodal_lora_context": "영상/음성/자막 context",
@@ -477,7 +541,6 @@ def build_learning_info_payload() -> dict[str, str]:
     latest_data = data_rows[0] if data_rows else {}
     latest_any = file_rows[0] if file_rows else {}
 
-    counts = dict(manifest.get("counts") or {})
     voice_stats = dict((voice_training_plan or {}).get("stats") or {})
     text_stats = dict((text_training_plan or {}).get("stats") or {})
     corpus_stats = dict((text_corpus_manifest or {}).get("stats") or {})
@@ -491,7 +554,7 @@ def build_learning_info_payload() -> dict[str, str]:
         f"- 최근 학습 데이터 변경: {latest_data.get('label', '-')} · {latest_data.get('mtime', '-')}",
         f"- 정보 화면 갱신: {latest_any.get('mtime', '-')}",
         f"- manifest updated_at: {manifest.get('updated_at', '-')}",
-        f"- LoRA ZIP updated_at: {bundle_payload.get('updated_at', '-')}",
+        f"- LoRA ZIP 파일 수정: {_file_info(paths['unified_lora_data']).get('mtime', '-')}",
         "",
         "[학습 규모]",
         f"- ground truth: {counts.get('truth_table_rows', 0)}행",
@@ -509,7 +572,7 @@ def build_learning_info_payload() -> dict[str, str]:
         "",
         "[저장 위치]",
         f"- 루트: {paths['root']}",
-        f"- LoRA ZIP 학습 파일: {paths['unified_lora_data']}",
+        f"- LoRA ZIP 학습 파일: {paths['unified_lora_data']} 외 상/중/하/삭제예정 버킷",
         f"- LoRA 검색 인덱스: {paths['lora_retrieval_index']}",
     ]
 
@@ -596,7 +659,13 @@ class PersonalizationLearningInfoDialog(QDialog):
         self.setWindowTitle("LoRA 학습 정보")
         self.setMinimumWidth(720)
         self.setMinimumHeight(560)
+        apply_tablet_dialog_profile(self)
         self.setStyleSheet(settings_dialog_stylesheet())
+        self._refresh_thread: threading.Thread | None = None
+        self._refresh_result: dict[str, Any] | None = None
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(50)
+        self._refresh_timer.timeout.connect(self._poll_refresh)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -633,7 +702,8 @@ class PersonalizationLearningInfoDialog(QDialog):
         bottom_row.addWidget(self.btn_close)
         layout.addLayout(bottom_row)
 
-        self._refresh_info()
+        self._set_loading_state()
+        QTimer.singleShot(0, self._refresh_info)
 
     def _make_text_box(self) -> QPlainTextEdit:
         box = QPlainTextEdit()
@@ -642,11 +712,41 @@ class PersonalizationLearningInfoDialog(QDialog):
         box.setMinimumHeight(360)
         return box
 
+    def _set_loading_state(self) -> None:
+        message = "LoRA 학습 정보를 빠르게 불러오는 중입니다..."
+        self.header_label.setText(message)
+        self.summary_box.setPlainText(message)
+        self.updates_box.setPlainText(message)
+        self.learning_box.setPlainText(message)
+        self.review_box.setPlainText(message)
+
     def _refresh_info(self) -> None:
-        try:
-            payload = build_learning_info_payload()
-        except Exception as exc:
-            message = f"LoRA 학습 정보를 읽는 중 오류가 발생했습니다.\n{exc}"
+        if self._refresh_thread is not None and self._refresh_thread.is_alive():
+            return
+        self._set_loading_state()
+        self.btn_refresh.setEnabled(False)
+        self._refresh_result = None
+
+        def worker() -> None:
+            try:
+                self._refresh_result = {"ok": True, "payload": build_learning_info_payload()}
+            except Exception as exc:
+                self._refresh_result = {"ok": False, "error": str(exc)}
+
+        self._refresh_thread = threading.Thread(target=worker, name="personalization-learning-info-refresh", daemon=True)
+        self._refresh_thread.start()
+        self._refresh_timer.start()
+
+    def _poll_refresh(self) -> None:
+        thread = self._refresh_thread
+        if thread is not None and thread.is_alive() and self._refresh_result is None:
+            return
+        self._refresh_timer.stop()
+        self.btn_refresh.setEnabled(True)
+        result = self._refresh_result or {}
+        self._refresh_result = None
+        if not result.get("ok"):
+            message = f"LoRA 학습 정보를 읽는 중 오류가 발생했습니다.\n{result.get('error', 'unknown error')}"
             self.header_label.setText("학습 정보를 불러오지 못했습니다.")
             self.summary_box.setPlainText(message)
             self.updates_box.setPlainText(message)
@@ -654,6 +754,7 @@ class PersonalizationLearningInfoDialog(QDialog):
             self.review_box.setPlainText(message)
             return
 
+        payload = dict(result.get("payload") or {})
         self.header_label.setText(str(payload.get("header") or ""))
         self.summary_box.setPlainText(str(payload.get("summary") or ""))
         self.updates_box.setPlainText(str(payload.get("updates") or ""))

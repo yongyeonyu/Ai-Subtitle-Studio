@@ -13,6 +13,7 @@ Item {
 
         Item {
             id: segItem
+            property var confidenceChips: modelData.confidenceChips || []
             x: modelData.x - root.viewportX
             y: modelData.y
             width: Math.max(2, modelData.w)
@@ -35,7 +36,7 @@ Item {
                 anchors.right: parent.right
                 anchors.rightMargin: 10
                 anchors.top: parent.top
-                anchors.topMargin: 5
+                anchors.topMargin: (segItem.confidenceChips.length > 0 && parent.width >= 72) ? 12 : 5
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: 5
                 text: modelData.text
@@ -47,6 +48,19 @@ Item {
                 verticalAlignment: parent.width < 164 ? Text.AlignVCenter : Text.AlignTop
                 clip: true
                 visible: parent.width >= 44
+            }
+
+            Repeater {
+                model: parent.width >= 72 ? segItem.confidenceChips : []
+
+                Rectangle {
+                    x: 5 + (index * (Math.max(6, Math.min(18, (segItem.width - 10) / Math.max(1, segItem.confidenceChips.length))) + 2))
+                    y: 3
+                    width: Math.max(6, Math.min(18, (segItem.width - 10) / Math.max(1, segItem.confidenceChips.length)))
+                    height: 4
+                    color: modelData.color || "#8E8E93"
+                    radius: 1
+                }
             }
 
             Rectangle {

@@ -147,6 +147,7 @@ def personalization_settings_override_for_media(
             f"{media_key} {media_path}",
             media_path=media_path,
             media_id=media_key,
+            settings={"stt_quality_preset": quality_key},
             store_dir=store_dir,
             limit=12,
             per_kind=4,
@@ -155,11 +156,7 @@ def personalization_settings_override_for_media(
         )
         retrieved_items = list(retrieved.get("items") or [])
         retrieved_override = runtime_settings_from_retrieved_items(retrieved_items, min_score=28.0)
-        if exact_match:
-            for key, value in retrieved_override.items():
-                override.setdefault(key, value)
-        else:
-            override.update(retrieved_override)
+        override.update(retrieved_override)
     except Exception:
         pass
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,7 @@ from core.personalization.lora_storage import (
     refresh_unified_lora_data_bundle,
     store_paths,
 )
+from core.personalization.lora_store_common import read_json
 from core.personalization.lora_vector_retriever import build_lora_retrieval_index
 from core.personalization.text_lora_dataset import (
     accumulate_personalization_dataset,
@@ -62,6 +64,7 @@ from ui.settings.personalization_learning_info import (
     PersonalizationLearningInfoDialog,
     preview_text as _preview_text,
 )
+from ui.settings.tablet_dialog import apply_tablet_dialog_profile
 from ui.style import button_style, settings_dialog_stylesheet
 
 
@@ -109,6 +112,7 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         self.setWindowTitle("개인화 학습")
         self.setMinimumWidth(640)
         self.setMinimumHeight(520)
+        apply_tablet_dialog_profile(self)
         self.setStyleSheet(settings_dialog_stylesheet())
         self.setAcceptDrops(True)
         self._staged_inputs: list[str] = []
@@ -123,9 +127,20 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         self._pending_queue_batch_timer = QTimer(self)
         self._pending_queue_batch_timer.setSingleShot(True)
         self._pending_queue_batch_timer.timeout.connect(self._drain_pending_jobs_step)
+        self._summary_refresh_timer = QTimer(self)
+        self._summary_refresh_timer.setInterval(80)
+        self._summary_refresh_timer.timeout.connect(self._poll_summary_refresh)
+        self._summary_refresh_thread: threading.Thread | None = None
+        self._summary_refresh_result: dict | None = None
         self._voice_lora_worker: VoiceLoraDatasetWorker | None = None
-
-        initialize_lora_personalization_store()
+        self._personalization_store_initialized = False
+        owner = self.parent()
+        if owner is not None and hasattr(owner, "_register_personalization_learning_dialog"):
+            try:
+                owner._register_personalization_learning_dialog(self)
+                self.destroyed.connect(lambda *_: owner._unregister_personalization_learning_dialog(self))
+            except Exception:
+                pass
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -227,6 +242,11 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         self.btn_import_unified_lora.clicked.connect(self._import_unified_lora_data_now)
         manage_row.addWidget(self.btn_import_unified_lora)
 
+        self.btn_delete_pending_lora = QPushButton("삭제예정 LoRA 비우기")
+        self.btn_delete_pending_lora.setStyleSheet(_compact_button_style("danger"))
+        self.btn_delete_pending_lora.clicked.connect(self._delete_pending_lora_data_now)
+        manage_row.addWidget(self.btn_delete_pending_lora)
+
         self.btn_reset_all = QPushButton("처음부터 다시 학습")
         self.btn_reset_all.setStyleSheet(_compact_button_style("danger"))
         self.btn_reset_all.clicked.connect(self._reset_lora_learning_store_now)
@@ -253,22 +273,175 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         layout.addLayout(bottom_row)
 
         self._refresh_pair_preview()
-        self._refresh_summary()
+        self._set_summary_loading()
+        QTimer.singleShot(80, self._refresh_summary_deferred)
 
     def _store_paths(self):
         return store_paths(LORA_PERSONALIZATION_DIR)
 
-    def _refresh_summary(self):
-        trainer = self._trainer()
-        if trainer is None or not (hasattr(trainer, "is_busy") and trainer.is_busy()):
-            recover_interrupted_training_jobs(reason="settings_refresh")
-        current_segments, current_project_path = self._current_editor_segments()
-        payload = build_text_lora_dataset(
-            current_segments=current_segments,
-            current_project_path=current_project_path,
+    def _manifest_fast(self) -> dict:
+        try:
+            manifest = read_json(self._store_paths().get("manifest"), {})
+        except Exception:
+            manifest = {}
+        return manifest if isinstance(manifest, dict) else {}
+
+    def _set_summary_loading(self):
+        self.summary_label.setText("학습 데이터: 불러오는 중...")
+        self.path_label.setText(
+            f"가져온 입력 {len(self._staged_inputs)}개 · 자동 pair {len(self._paired_assets)}개 · 확인 필요 {len(self._ambiguous_assets)}개"
         )
-        legacy_stats = payload.get("stats", {}) or {}
-        manifest = refresh_lora_personalization_manifest()
+        self.queue_summary_label.setText("자동 학습 상태: 확인 중...")
+
+    def _ensure_personalization_store(self):
+        if self._personalization_store_initialized:
+            return None
+        manifest = initialize_lora_personalization_store()
+        self._personalization_store_initialized = True
+        return manifest
+
+    def _refresh_summary_deferred(self):
+        if not self.isVisible():
+            return
+        self._start_summary_refresh_async()
+
+    def _summary_snapshot(
+        self,
+        *,
+        current_segments: list[dict],
+        current_project_path: str,
+        trainer_busy: bool,
+        include_inspect: bool,
+    ) -> dict:
+        manifest = self._manifest_fast()
+        counts = dict(manifest.get("counts") or {})
+        queue_payload = load_training_queue()
+        queue_items = list(queue_payload.get("items") or [])
+        queue_counts: dict[str, int] = {}
+        waiting_type_counts: dict[str, int] = {}
+        running_lines: list[str] = []
+        for item in queue_items:
+            status = str(item.get("status") or "waiting")
+            queue_counts[status] = int(queue_counts.get(status, 0) or 0) + 1
+            if status == "waiting":
+                job_type = str(item.get("job_type") or "")
+                waiting_type_counts[job_type] = int(waiting_type_counts.get(job_type, 0) or 0) + 1
+            if status == "in_progress":
+                progress = max(0.0, min(1.0, float(item.get("progress", 0.0) or 0.0)))
+                detail = _preview_text(item.get("last_error"), 82)
+                line = f"{_queue_job_type_label(item.get('job_type'))} {progress * 100:.0f}%"
+                if detail:
+                    line += f" · {detail}"
+                running_lines.append(line)
+
+        queue_summary = format_training_queue_status_summary(queue_items)
+        waiting_summary = " · ".join(
+            f"{_queue_job_type_label(key)} {value}개"
+            for key, value in sorted(waiting_type_counts.items(), key=lambda item: (_queue_job_type_label(item[0]), item[0]))
+        )
+        queue_lines = [f"자동 학습 상태: {queue_summary}"]
+        if running_lines:
+            queue_lines.append("실행중: " + " · ".join(running_lines[:2]))
+        if waiting_summary:
+            queue_lines.append(f"다음 자동 처리: {waiting_summary}")
+
+        inspect_text = ""
+        if include_inspect:
+            review = build_split_rule_update_review()
+            paths = self._store_paths()
+            inspect_text = "\n".join(
+                [
+                    f"[Current Project] {current_project_path or '-'}",
+                    f"[Queue] {queue_summary}",
+                    f"[Split Rule Review] needs_update={review.get('needs_update')} / top_n={review.get('top_n')}",
+                    f"current: {', '.join(review.get('current_rules', [])[:8])}",
+                    f"proposed: {', '.join(review.get('proposed_rules', [])[:8])}",
+                    f"[LLM Review] request={paths.get('llm_review_request')} / result={paths.get('llm_review_result')}",
+                    "[Retention] 새 학습 후 낮은 점수 trial과 낮은 빈도 rule을 점진 정리합니다.",
+                    f"[LoRA ZIP Files] 상={paths.get('unified_lora_data')} / 중={paths.get('lora_data_medium')} / 하={paths.get('lora_data_low')} / 삭제예정={paths.get('lora_data_pending_delete')}",
+                    f"[LoRA Retrieval Index] {paths.get('lora_retrieval_index')}",
+                    f"[Voice LoRA] {paths.get('voice_lora_training_plan')}",
+                ]
+            )
+
+        return {
+            "ok": True,
+            "summary_text": (
+                "학습 데이터: "
+                f"truth {counts.get('truth_table_rows', 0)}행 · "
+                f"설명 제외 {counts.get('excluded_parenthetical_rows', 0)}행 · "
+                f"규칙 {counts.get('learned_split_rules', 0)}개/{counts.get('learned_line_break_rules', 0)}개 · "
+                f"context {counts.get('multimodal_lora_context_rows', 0)}행 · "
+                f"목소리 {counts.get('voice_lora_bridge_rows', 0)}구간 · "
+                f"STT1 adapter {counts.get('stt1_whisper_adapter_training_items', 0)}개 · "
+                f"코퍼스 {int(counts.get('text_lora_corpus_rows', counts.get('text_lora_dataset_rows', 0)) or 0)}개"
+            ),
+            "path_text": (
+                f"가져온 입력 {len(self._staged_inputs)}개 · "
+                f"자동 pair {len(self._paired_assets)}개 · "
+                f"확인 필요 {len(self._ambiguous_assets)}개"
+            ),
+            "queue_text": "\n".join(queue_lines),
+            "inspect_text": inspect_text,
+        }
+
+    def _apply_summary_snapshot(self, snapshot: dict):
+        if not isinstance(snapshot, dict):
+            return
+        if not bool(snapshot.get("ok", False)):
+            detail = str(snapshot.get("error") or "알 수 없는 오류")
+            self.summary_label.setText(f"학습 데이터: 불러오기 실패 · {detail}")
+            self.queue_summary_label.setText("자동 학습 상태: 확인 실패")
+            return
+        self._personalization_store_initialized = True
+        self.summary_label.setText(str(snapshot.get("summary_text") or ""))
+        self.path_label.setText(str(snapshot.get("path_text") or ""))
+        self.queue_summary_label.setText(str(snapshot.get("queue_text") or ""))
+        if self.inspect_box is not None and snapshot.get("inspect_text"):
+            self.inspect_box.setPlainText(str(snapshot.get("inspect_text") or ""))
+
+    def _start_summary_refresh_async(self):
+        if self._summary_refresh_thread is not None and self._summary_refresh_thread.is_alive():
+            return
+        trainer = self._trainer()
+        trainer_busy = bool(hasattr(trainer, "is_busy") and trainer.is_busy()) if trainer is not None else False
+        current_segments, current_project_path = self._current_editor_segments()
+        current_segments = [dict(seg) for seg in list(current_segments or []) if isinstance(seg, dict)]
+        include_inspect = self.inspect_box is not None
+        self._summary_refresh_result = None
+
+        def _worker():
+            try:
+                self._summary_refresh_result = self._summary_snapshot(
+                    current_segments=current_segments,
+                    current_project_path=current_project_path,
+                    trainer_busy=trainer_busy,
+                    include_inspect=include_inspect,
+                )
+            except Exception as exc:
+                self._summary_refresh_result = {"ok": False, "error": str(exc)}
+
+        self._summary_refresh_thread = threading.Thread(
+            target=_worker,
+            name="personalization-summary-refresh",
+            daemon=True,
+        )
+        self._summary_refresh_thread.start()
+        self._summary_refresh_timer.start()
+
+    def _poll_summary_refresh(self):
+        thread = self._summary_refresh_thread
+        if thread is not None and thread.is_alive() and self._summary_refresh_result is None:
+            return
+        self._summary_refresh_timer.stop()
+        result = self._summary_refresh_result
+        self._summary_refresh_result = None
+        if result is not None and self.isVisible():
+            self._apply_summary_snapshot(result)
+
+    def _refresh_summary(self):
+        current_segments, current_project_path = self._current_editor_segments()
+        manifest = self._manifest_fast()
         counts = dict(manifest.get("counts") or {})
         queue_payload = load_training_queue()
         queue_items = list(queue_payload.get("items") or [])
@@ -297,7 +470,7 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
             f"context {counts.get('multimodal_lora_context_rows', 0)}행 · "
             f"목소리 {counts.get('voice_lora_bridge_rows', 0)}구간 · "
             f"STT1 adapter {counts.get('stt1_whisper_adapter_training_items', 0)}개 · "
-            f"코퍼스 {int(legacy_stats.get('total_items', 0) or 0)}개"
+            f"코퍼스 {int(counts.get('text_lora_corpus_rows', counts.get('text_lora_dataset_rows', 0)) or 0)}개"
         )
 
         self.path_label.setText(
@@ -328,7 +501,7 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
                         f"proposed: {', '.join(review.get('proposed_rules', [])[:8])}",
                         f"[LLM Review] request={self._store_paths().get('llm_review_request')} / result={self._store_paths().get('llm_review_result')}",
                         "[Retention] 새 학습 후 낮은 점수 trial과 낮은 빈도 rule을 점진 정리합니다.",
-                        f"[LoRA ZIP File] {self._store_paths().get('unified_lora_data')}",
+                        f"[LoRA ZIP Files] 상={self._store_paths().get('unified_lora_data')} / 중={self._store_paths().get('lora_data_medium')} / 하={self._store_paths().get('lora_data_low')} / 삭제예정={self._store_paths().get('lora_data_pending_delete')}",
                         f"[LoRA Retrieval Index] {self._store_paths().get('lora_retrieval_index')}",
                         f"[Voice LoRA] {self._store_paths().get('voice_lora_training_plan')}",
                     ]
@@ -396,6 +569,13 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
     def _trainer(self):
         owner = self.parent()
         return getattr(owner, "_personalization_idle_trainer", None) if owner is not None else None
+
+    def _request_stop_for_user_input(self) -> bool:
+        if not self._pending_queue_batch_active:
+            return False
+        self._pending_queue_batch_stop_requested = True
+        self._finish_pending_job_batch("user_input_interrupt")
+        return True
 
     def _prompt_subtitle_choice_for_ambiguous(self, media_path: str, candidates: list[str], match_type: str) -> str | None:
         labels = ["건너뛰기"]
@@ -525,7 +705,7 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
             f"pair {import_result.get('imported_pairs', 0)}개를 자동 학습에 등록했습니다.",
             f"truth {import_result.get('truth_rows', 0)}행 · 설명 제외 {import_result.get('excluded_rows', 0)}행 · voice seed {import_result.get('voice_bridge_rows', 0)}개 · context {import_result.get('multimodal_context_rows', 0)}개",
             f"현재 편집 데이터 누적: text {int(accumulate_result.get('appended_rows', 0) or 0)}개 · voice {int(accumulate_result.get('voice_bridge_rows', 0) or 0)}개 · context {int(accumulate_result.get('multimodal_context_rows', 0) or 0)}개",
-            f"검색 인덱스: {int(index_result.get('doc_count', 0) or 0)}개 기억 · LoRA ZIP {int(bundle_result.get('record_count', 0) or 0)}개",
+            f"검색 인덱스: {int(index_result.get('doc_count', 0) or 0)}개 기억 · LoRA ZIP 버킷 {int(bundle_result.get('record_count', 0) or 0)}개",
             f"자동 처리 대기: {len(list(jobs.get('items') or []))}개",
             "이후 규칙 재학습, 설정/프롬프트 최적화, 낮은 점수 정리, ZIP/검색 인덱스 갱신은 홈/편집 화면에서 앱이 한가할 때 이어서 처리됩니다.",
         ]
@@ -742,6 +922,11 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         if reason == "manual_stop":
             self.queue_summary_label.setText(
                 f"Full 학습 종료: {started}개 작업을 시작했습니다. 남은 작업은 idle 상태에서 백그라운드로 이어집니다."
+            )
+            return
+        if reason == "user_input_interrupt":
+            self.queue_summary_label.setText(
+                "사용자 입력이 감지되어 LoRA 학습 중지 신호를 보냈습니다. 남은 작업은 다시 idle 상태가 되면 이어집니다."
             )
             return
         if silent:

@@ -12,9 +12,12 @@ LORA_POLICY_FULL = "full"
 STT1_MINIMAL_LORA_SETTING_KEYS = frozenset(
     {
         "selected_audio_ai",
+        "selected_vad",
         "selected_whisper_model",
+        "stt_candidate_scoring_enabled",
         "continuous_threshold",
         "gap_push_rate",
+        "gap_pull_rate",
         "single_subtitle_end",
         "split_length_threshold",
         "sub_min_duration",

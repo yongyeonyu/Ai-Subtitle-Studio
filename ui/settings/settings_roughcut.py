@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QSpinBox
+from PyQt6.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit
 
 from core.roughcut import merge_roughcut_settings
 from ui.style import label_style
@@ -59,34 +59,10 @@ class SettingsRoughcutMixin:
         key_temp_row.addWidget(self.spin_roughcut_temperature)
         self._hidden_roughcut_key_temp_row = key_temp_row
 
-        rows_layout = QHBoxLayout()
-        self.spin_roughcut_context_rows = QSpinBox()
-        self.spin_roughcut_context_rows.setRange(1, 500)
-        self.spin_roughcut_context_rows.setValue(int(roughcut_settings.get("roughcut_llm_max_context_rows", 80) or 80))
-        self.spin_roughcut_chunk_rows = QSpinBox()
-        self.spin_roughcut_chunk_rows.setRange(1, 100)
-        self.spin_roughcut_chunk_rows.setValue(int(roughcut_settings.get("roughcut_llm_chunk_rows", 12) or 12))
-        self.spin_roughcut_lookahead_rows = QSpinBox()
-        self.spin_roughcut_lookahead_rows.setRange(0, 100)
-        self.spin_roughcut_lookahead_rows.setValue(int(roughcut_settings.get("roughcut_llm_lookahead_rows", 8) or 8))
-        for label, widget in (
-            ("문맥", self.spin_roughcut_context_rows),
-            ("묶음", self.spin_roughcut_chunk_rows),
-            ("다음", self.spin_roughcut_lookahead_rows),
-        ):
-            rows_layout.addWidget(QLabel(label))
-            rows_layout.addWidget(widget)
-        form.addRow("자막 row:", rows_layout)
-
-        prompt_info = QLabel("컷 경계 결과를 기준으로 중분류 A-Z 구간을 만듭니다.")
+        prompt_info = QLabel("자막 row 문맥/묶음/다음 범위는 LoRA·딥러닝·컷 경계 밀도로 자동 최적화합니다.")
         prompt_info.setWordWrap(True)
         prompt_info.setStyleSheet(label_style("muted", 11))
         form.addRow("러프컷 프롬프트:", prompt_info)
-
-        self.spin_roughcut_llm_threads = QSpinBox()
-        self.spin_roughcut_llm_threads.setRange(1, 16)
-        self.spin_roughcut_llm_threads.setValue(int(roughcut_settings.get("roughcut_llm_threads", 4) or 4))
-        form.addRow("러프컷 LLM 처리 스레드:", self.spin_roughcut_llm_threads)
 
     def _update_editor_roughcut_draft_state(self):
         return
@@ -145,9 +121,8 @@ class SettingsRoughcutMixin:
             "roughcut_llm_model": self.input_roughcut_llm_model.text().strip() if enabled else "사용 안함",
             "roughcut_llm_api_key_mode": self.combo_roughcut_api_key_mode.currentData() or "inherit",
             "roughcut_llm_temperature": round(float(self.spin_roughcut_temperature.value()), 2),
-            "roughcut_llm_max_context_rows": int(self.spin_roughcut_context_rows.value()),
-            "roughcut_llm_chunk_rows": int(self.spin_roughcut_chunk_rows.value()),
-            "roughcut_llm_lookahead_rows": int(self.spin_roughcut_lookahead_rows.value()),
+            "roughcut_llm_rows_auto_enabled": True,
+            "roughcut_llm_rows_lora_enabled": True,
             "roughcut_llm_prompt": "",
-            "roughcut_llm_threads": int(self.spin_roughcut_llm_threads.value()),
+            "roughcut_llm_threads_auto_enabled": True,
         }

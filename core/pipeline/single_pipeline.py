@@ -14,6 +14,16 @@ from core.runtime import config
 from core.runtime.logger import get_logger
 from core.settings import load_settings, get_model_key
 from core.time_history import get_expected_time, add_history
+from core.personalization.subtitle_bundle_policy import (
+    resolve_subtitle_bundle_policy,
+    should_flush_subtitle_bundle,
+)
+from core.pipeline.startup_diagnostics import (
+    attach_expected_processing_time,
+    build_startup_diagnostic,
+    format_startup_diagnostic_log,
+    persist_startup_diagnostic,
+)
 
 _SENTINEL = object()
 
@@ -27,9 +37,29 @@ def _should_flush_final_subtitle_buffer(
     chunk_time_limit: int,
     *,
     stt_ensemble_enabled: bool,
+    settings: dict | None = None,
+    buffer_segments: list[dict] | None = None,
+    cut_boundaries: list | None = None,
+    provisional_cut_boundaries: list | None = None,
+    media_duration_sec: float | None = None,
 ) -> bool:
+    if settings is None and not buffer_segments and not cut_boundaries and not provisional_cut_boundaries:
+        # Backward-compatible live-preview behavior for legacy callers/tests.
+        try:
+            return float(current_duration or 0.0) > 0.0
+        except Exception:
+            return False
     try:
-        return float(current_duration or 0.0) > 0.0
+        flush, _policy = should_flush_subtitle_bundle(
+            current_duration,
+            chunk_time_limit,
+            settings=settings,
+            segments=buffer_segments,
+            cut_boundaries=cut_boundaries,
+            provisional_cut_boundaries=provisional_cut_boundaries,
+            media_duration_sec=media_duration_sec,
+        )
+        return bool(flush)
     except Exception:
         return False
 
@@ -40,11 +70,21 @@ def _should_flush_live_subtitle_buffer(
     *,
     stt_ensemble_enabled: bool,
     individual_queue_mode: bool,
+    settings: dict | None = None,
+    buffer_segments: list[dict] | None = None,
+    cut_boundaries: list | None = None,
+    provisional_cut_boundaries: list | None = None,
+    media_duration_sec: float | None = None,
 ) -> bool:
     return _should_flush_final_subtitle_buffer(
         current_duration,
         chunk_time_limit,
         stt_ensemble_enabled=stt_ensemble_enabled,
+        settings=settings,
+        buffer_segments=buffer_segments,
+        cut_boundaries=cut_boundaries,
+        provisional_cut_boundaries=provisional_cut_boundaries,
+        media_duration_sec=media_duration_sec,
     )
 
 
@@ -309,6 +349,7 @@ class SinglePipelineMixin:
                 self.video_processor.stage_callback = (
                     lambda status, qi=queue_index: self._emit_processing_stage(qi, status)
                 )
+            startup_diagnostic = {}
             try:
                 # ✅ 순서 고정:
                 # 컷 경계/주제없음 중분류가 먼저 확정된 뒤 STT1/STT2가 시작되어야 한다.
@@ -326,6 +367,42 @@ class SinglePipelineMixin:
                 pipeline_provisional_cut_boundaries = [
                     dict(row) for row in list(cut_boundary_snapshot.get("provisional_cut_boundaries", []) or [])
                 ]
+
+                try:
+                    diagnostic_settings = load_settings()
+                    startup_diagnostic = build_startup_diagnostic(
+                        target_file,
+                        settings=diagnostic_settings,
+                        cut_boundaries=pipeline_cut_boundaries,
+                        provisional_cut_boundaries=pipeline_provisional_cut_boundaries,
+                        speaker_count_hint=getattr(self, "max_speakers", None),
+                    )
+                    diag_duration = float(
+                        ((startup_diagnostic.get("media", {}) or {}).get("duration_sec", 0.0))
+                        or 0.0
+                    )
+                    if diag_duration > 0:
+                        self._video_durations[target_file] = diag_duration
+                    diag_model_key = "QUALITY:" + get_model_key(diagnostic_settings)
+                    startup_diagnostic = attach_expected_processing_time(
+                        startup_diagnostic,
+                        get_expected_time(diag_model_key, diag_duration),
+                    )
+                    if not hasattr(self, "_startup_diagnostics"):
+                        self._startup_diagnostics = {}
+                    self._startup_diagnostics[target_file] = dict(startup_diagnostic)
+                    for line in format_startup_diagnostic_log(startup_diagnostic):
+                        get_logger().log(line)
+                    ui_for_diag = self._ui_object()
+                    project_path_for_diag = (
+                        str(getattr(ui_for_diag, "_current_project_path", "") or "")
+                        if ui_for_diag is not None
+                        else ""
+                    )
+                    persist_startup_diagnostic(project_path_for_diag, startup_diagnostic)
+                except Exception as exc:
+                    startup_diagnostic = {}
+                    get_logger().log(f"  ⚠️ [시작 진단] 자동 진단 실패: {exc}")
 
                 # ✅ 컷 경계는 STT 입력 청크의 절대 경계다.
                 # media_processor가 오디오 청크를 만들기 전에 hard cut을 주입한다.
@@ -381,13 +458,21 @@ class SinglePipelineMixin:
                 s = load_settings()
                 model_key = "QUALITY:" + get_model_key(s)
 
-                if target_file in getattr(self, "_video_durations", {}):
+                diag_duration = float(
+                    ((startup_diagnostic.get("media", {}) or {}).get("duration_sec", 0.0))
+                    or 0.0
+                )
+                if diag_duration > 0:
+                    video_duration_sec = diag_duration
+                elif target_file in getattr(self, "_video_durations", {}):
                     video_duration_sec = self._video_durations[target_file]
                 else:
                     chunks = [f for f in os.listdir(chunk_dir) if f.endswith(".wav")]
                     video_duration_sec = len(chunks) * 30.0
 
-                expected_time = get_expected_time(model_key, video_duration_sec)
+                expected_time = float(startup_diagnostic.get("estimated_processing_sec", 0.0) or 0.0)
+                if expected_time <= 0:
+                    expected_time = get_expected_time(model_key, video_duration_sec)
                 if expected_time > 0:
                     self._ui_emit(
                         "_sig_update_queue",
@@ -396,7 +481,7 @@ class SinglePipelineMixin:
                 else:
                     self._ui_emit(
                         "_sig_update_queue",
-                        queue_index, "자막 생성 중", "예상불가 (학습 중)", "", "",
+                        queue_index, "자막 생성 중", "예상불가", "", "",
                     )
                 process_start_time = time.time()
             except Exception:
@@ -406,9 +491,20 @@ class SinglePipelineMixin:
             opt_queue = queue.Queue()
             base_name = os.path.splitext(os.path.basename(target_file))[0]
 
-            # 교체 (m4a 안전 fallback)
-            cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
-            raw_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}.wav")
+            # Fingerprint-scoped audio paths prevent same-name media collisions.
+            cleaned_wav = str(getattr(self.video_processor, "last_cleaned_wav", "") or "")
+            raw_wav = str(getattr(self.video_processor, "last_raw_wav", "") or "")
+            if (not cleaned_wav or not os.path.exists(cleaned_wav)) and hasattr(self.video_processor, "_audio_work_paths"):
+                try:
+                    audio_paths = self.video_processor._audio_work_paths(target_file)
+                    cleaned_wav = str(audio_paths.get("cleaned_wav") or cleaned_wav)
+                    raw_wav = str(audio_paths.get("raw_wav") or raw_wav)
+                except Exception:
+                    pass
+            if not cleaned_wav:
+                cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
+            if not raw_wav:
+                raw_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}.wav")
             if os.path.exists(cleaned_wav):
                 audio_for_diarization = cleaned_wav
             elif os.path.exists(raw_wav):
@@ -529,19 +625,32 @@ class SinglePipelineMixin:
                     except Exception:
                         api_key = ""
                     user_prompt = s.get("custom_prompt", "")
-                    chunk_time_limit = int(s.get("chunk_time_limit", 60))
+                    bundle_policy = resolve_subtitle_bundle_policy(
+                        s,
+                        media_duration_sec=video_duration_sec,
+                    )
+                    chunk_time_limit = int(float(bundle_policy.get("target_sec", s.get("chunk_time_limit", 180)) or 180))
                     stt_ensemble_enabled = bool(s.get("stt_ensemble_enabled", False))
                 except Exception:
+                    s = {}
                     model_name = ""
                     api_key = ""
                     user_prompt = ""
-                    chunk_time_limit = 60
+                    bundle_policy = resolve_subtitle_bundle_policy({"chunk_time_limit": 180})
+                    chunk_time_limit = 180
                     stt_ensemble_enabled = False
 
-                is_gemini = "Gemini" in model_name
                 seg_buffer = []
                 last_c_idx = 0
                 last_t_total = 1
+                pending_bundle_policy = {}
+
+                get_logger().log(
+                    "  🧠 [자막 묶음] 자동 단위 "
+                    f"{int(float(bundle_policy.get('target_sec', chunk_time_limit) or chunk_time_limit))}초 "
+                    f"(최대 {int(float(bundle_policy.get('max_sec', 300) or 300))}초, "
+                    "컷 경계 우선)"
+                )
 
                 if stt_ensemble_enabled:
                     get_logger().log(
@@ -550,56 +659,32 @@ class SinglePipelineMixin:
                     )
 
                 def _flush_buffer():
-                    nonlocal seg_buffer
+                    nonlocal seg_buffer, pending_bundle_policy
                     if not seg_buffer:
                         return
                     chunk_segs = seg_buffer
+                    active_bundle_policy = dict(pending_bundle_policy or {})
+                    if not active_bundle_policy:
+                        active_bundle_policy = resolve_subtitle_bundle_policy(
+                            s,
+                            segments=chunk_segs,
+                            cut_boundaries=pipeline_cut_boundaries,
+                            provisional_cut_boundaries=pipeline_provisional_cut_boundaries,
+                            media_duration_sec=video_duration_sec,
+                        )
                     seg_buffer = []
+                    pending_bundle_policy = {}
 
                     try:
                         def _llm_progress(payload):
                             self._ui_emit("_sig_set_llm_review_segment", dict(payload or {}))
 
                         self._emit_processing_stage(queue_index, "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중")
-                        if is_gemini and len(chunk_segs) > 1:
-                            from core.engine.subtitle_engine import ask_gemini_to_split
-                            from core.utils import load_subtitle_rules
-
-                            chunk_start = chunk_segs[0]["start"]
-                            chunk_end = chunk_segs[-1]["end"]
-                            full_text = " ".join([seg["text"] for seg in chunk_segs])
-                            rules = load_subtitle_rules()
-                            _llm_progress(
-                                {
-                                    "active": True,
-                                    "idx": 0,
-                                    "total": 1,
-                                    "start": chunk_start,
-                                    "end": chunk_end,
-                                    "text": full_text,
-                                    "line": int(chunk_segs[0].get("line", -1) or -1),
-                                }
-                            )
-                            res_chunks = ask_gemini_to_split(
-                                full_text, 15, rules, model_name, user_prompt, api_key
-                            )
-                            if res_chunks and len(res_chunks) > 0:
-                                opt = []
-                                dur = (chunk_end - chunk_start) / len(res_chunks)
-                                for i, txt in enumerate(res_chunks):
-                                    opt.append(
-                                        {
-                                            "start": round(chunk_start + i * dur, 3),
-                                            "end": round(
-                                                chunk_start + (i + 1) * dur, 3
-                                            ),
-                                            "text": txt,
-                                        }
-                                    )
-                            else:
-                                opt = optimize_segments(chunk_segs, vad_segments=_vad_segs, llm_progress_callback=_llm_progress)
-                        else:
-                            opt = optimize_segments(chunk_segs, vad_segments=_vad_segs, llm_progress_callback=_llm_progress)
+                        opt = optimize_segments(
+                            chunk_segs,
+                            vad_segments=_vad_segs,
+                            llm_progress_callback=_llm_progress,
+                        )
                     except Exception as e:
                         get_logger().log(f"  ❌ 최적화 오류: {e}")
                         opt = chunk_segs
@@ -673,6 +758,12 @@ class SinglePipelineMixin:
                                 del seg["text_list"]
                         opt = grouped_opt
 
+                    if opt:
+                        opt[0]["_subtitle_bundle_policy"] = {
+                            **active_bundle_policy,
+                            "output_segment_count": len(opt),
+                        }
+
                     opt = apply_final_gap_settings(opt, force=True)
                     opt = self._magnetize_by_saved_cut_boundaries(
                         opt,
@@ -735,12 +826,31 @@ class SinglePipelineMixin:
                     buffer_end = seg_buffer[-1]["end"]
                     current_duration = buffer_end - buffer_start
 
+                    flush_policy = resolve_subtitle_bundle_policy(
+                        s,
+                        segments=seg_buffer,
+                        cut_boundaries=pipeline_cut_boundaries,
+                        provisional_cut_boundaries=pipeline_provisional_cut_boundaries,
+                        current_duration=current_duration,
+                        media_duration_sec=video_duration_sec,
+                    )
                     if _should_flush_live_subtitle_buffer(
                         current_duration,
                         chunk_time_limit,
                         stt_ensemble_enabled=stt_ensemble_enabled,
                         individual_queue_mode=bool(getattr(self, "_individual_queue_mode", False)),
+                        settings=s,
+                        buffer_segments=seg_buffer,
+                        cut_boundaries=pipeline_cut_boundaries,
+                        provisional_cut_boundaries=pipeline_provisional_cut_boundaries,
+                        media_duration_sec=video_duration_sec,
                     ):
+                        pending_bundle_policy = dict(flush_policy)
+                        get_logger().log(
+                            "  🧠 [자막 묶음] "
+                            f"{flush_policy.get('reason', 'target')} 기준으로 "
+                            f"{flush_policy.get('duration_sec', round(current_duration, 1))}초 묶음 처리"
+                        )
                         _flush_buffer()
 
                 self._ui_emit("_sig_update_status", last_t_total, last_t_total)

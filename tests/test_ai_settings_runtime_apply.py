@@ -86,8 +86,9 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             label_texts = [label.text() for label in dialog.findChildren(QLabel)]
             self.assertFalse(any("자막 정확도 프리셋" in text for text in label_texts))
             self.assertFalse(any("오디오 프리셋" in text for text in label_texts))
-            self.assertTrue(any("LoRA 교정:" in text for text in label_texts))
-            self.assertTrue(any("적용 데이터:" in text for text in label_texts))
+            self.assertFalse(any("LoRA 교정:" in text for text in label_texts))
+            self.assertFalse(any("적용 데이터:" in text for text in label_texts))
+            self.assertTrue(any("자동 관리:" in text for text in label_texts))
             widget_texts = []
             for widget in dialog.findChildren(QWidget):
                 text_getter = getattr(widget, "text", None)

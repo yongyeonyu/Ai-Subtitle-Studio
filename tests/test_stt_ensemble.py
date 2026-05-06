@@ -137,6 +137,8 @@ class STTEnsembleTests(unittest.TestCase):
         self.assertEqual(merged[0]["text"], "방금 보여 봐")
         self.assertEqual(merged[0]["stt_ensemble_word_rover"]["replaced"], 1)
         self.assertEqual([w["stt_word_source"] for w in merged[0]["words"]], ["STT2", "STT1", "STT1"])
+        self.assertTrue(merged[0]["stt_candidates"][0]["words"])
+        self.assertTrue(merged[0]["stt_candidates"][1]["words"])
 
     def test_word_level_rover_keeps_protected_number_from_primary(self):
         merged = merge_stt_outputs(

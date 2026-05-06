@@ -362,6 +362,24 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             finally:
                 config.OUTPUT_DIR = old_output_dir
 
+    def test_audio_work_paths_are_scoped_by_media_fingerprint_for_same_basename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path_a = os.path.join(tmp, "a", "same.mp4")
+            path_b = os.path.join(tmp, "b", "same.mp4")
+            os.makedirs(os.path.dirname(path_a), exist_ok=True)
+            os.makedirs(os.path.dirname(path_b), exist_ok=True)
+            with open(path_a, "wb") as f:
+                f.write(b"first-media")
+            with open(path_b, "wb") as f:
+                f.write(b"second-media")
+
+            paths_a = self.processor._audio_work_paths(path_a)
+            paths_b = self.processor._audio_work_paths(path_b)
+
+            self.assertNotEqual(paths_a["work_dir"], paths_b["work_dir"])
+            self.assertNotEqual(paths_a["cleaned_wav"], paths_b["cleaned_wav"])
+            self.assertTrue(paths_a["chunk_dir"].endswith("_chunks"))
+
     def test_selected_vad_does_not_pre_split_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             old_output_dir = config.OUTPUT_DIR
@@ -723,7 +741,15 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                     "whisper_chunk_overlap_sec": 0.0,
                     "direct_ffmpeg_chunk_extract": False,
                 }
-                self.processor._run_media_command = lambda *args, **kwargs: True
+                def fake_run(cmd, *args, **kwargs):
+                    with wave.open(cmd[-1], "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(16000)
+                        wf.writeframes(b"\x00\x00" * int(16000 * 70))
+                    return True
+
+                self.processor._run_media_command = fake_run
                 self.processor._write_grouped_chunks_parallel = (
                     lambda _wav, _dir, grouped: captured.setdefault("grouped", [dict(row) for row in grouped])
                 )

@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import sys
 
+from core.cut_boundary_audio import detect_audio_gain_boundary_rows
+from core.performance import adaptive_worker_count
+
 
 def build_auto_grid_scan_helpers(deps: dict):
     normalize_fps = deps["normalize_fps"]
@@ -109,7 +112,15 @@ def build_auto_grid_scan_helpers(deps: dict):
             min_gap_sec = float(settings.get("scan_cut_auto_min_gap_sec", 8.0))
             min_gap_frames = max(1, int(round(min_gap_sec * fps)))
             pioneer_step_sec = max(0.25, float(sample_step_sec or 2.0))
-            follower_workers = max(1, min(4, int(settings.get("scan_cut_verify_workers", 4) or 4)))
+            follower_requested = int(settings.get("scan_cut_verify_workers", 4) or 4)
+            follower_workers, follower_scheduler = adaptive_worker_count(
+                task="cut_follower",
+                settings=settings,
+                requested=follower_requested,
+                workload=max(1, len(provisional_rows or [])),
+                minimum=1,
+                maximum=4,
+            )
 
             def verified_progress_callback(payload):
                 if not callable(progress_callback):
@@ -353,9 +364,72 @@ def build_auto_grid_scan_helpers(deps: dict):
         pioneer_strict_multiplier = float(settings.get("scan_cut_pioneer_strict_multiplier", 1.04) or 1.04)
         effective_threshold = _cb_level_effective_threshold(level, float(threshold or 24.0)) * pioneer_strict_multiplier
         min_gap_sec = _cb_level_min_gap_sec(level)
-        pioneer_workers = max(1, min(4, int(settings.get("scan_cut_pioneer_workers", 4) or 4)))
+        pioneer_requested = int(settings.get("scan_cut_pioneer_workers", 4) or 4)
+        pioneer_workers, pioneer_scheduler = adaptive_worker_count(
+            task="cut_pioneer",
+            settings=settings,
+            requested=pioneer_requested,
+            workload=max(1, int(duration / max(0.25, scan_interval_sec))),
+            minimum=1,
+            maximum=4,
+        )
         gpu_refine_enabled = bool(settings.get("scan_cut_pioneer_gpu_refine_enabled", True))
         cuda_available = _cb_cuda_available() if gpu_refine_enabled else False
+        audio_gain_enabled = bool(settings.get("scan_cut_audio_gain_enabled", True))
+
+        def _settings_float(key: str, default: float) -> float:
+            try:
+                return float(settings.get(key, default) or default)
+            except Exception:
+                return float(default)
+
+        def _settings_int(key: str, default: int) -> int:
+            try:
+                return int(settings.get(key, default) or default)
+            except Exception:
+                return int(default)
+
+        audio_gain_window_sec = max(
+            0.50,
+            _settings_float("scan_cut_audio_gain_window_sec", max(1.0, scan_interval_sec)),
+        )
+        audio_gain_threshold_db = max(1.0, _settings_float("scan_cut_audio_gain_threshold_db", 10.0))
+        audio_gain_min_gap_sec = max(0.0, _settings_float("scan_cut_audio_gain_min_gap_sec", min_gap_sec))
+        audio_gain_sample_rate = max(1000, _settings_int("scan_cut_audio_gain_sample_rate", 4000))
+        audio_gain_context_windows = max(1, _settings_int("scan_cut_audio_gain_context_windows", 2))
+        audio_gain_timeout_sec = max(1.0, _settings_float("scan_cut_audio_gain_timeout_sec", 45.0))
+        audio_gain_max_candidates = max(1, _settings_int("scan_cut_audio_gain_max_candidates", 240))
+
+        def _scan_audio_gain_rows():
+            if not audio_gain_enabled:
+                return []
+            try:
+                return detect_audio_gain_boundary_rows(
+                    str(filepath),
+                    clip_offset=float(clip_offset or 0.0),
+                    clip_idx=int(clip_idx or 0),
+                    fps=fps,
+                    duration_sec=duration,
+                    threshold_db=audio_gain_threshold_db,
+                    min_gap_sec=audio_gain_min_gap_sec,
+                    window_sec=audio_gain_window_sec,
+                    sample_rate=audio_gain_sample_rate,
+                    context_windows=audio_gain_context_windows,
+                    timeout_sec=audio_gain_timeout_sec,
+                    max_candidates=audio_gain_max_candidates,
+                )
+            except Exception:
+                return []
+
+        def _emit_audio_gain_rows(rows):
+            if not callable(found_callback):
+                return
+            current_rows = list(rows or [])
+            for row in current_rows:
+                try:
+                    found_callback(dict(row), current_rows)
+                except Exception:
+                    pass
 
         def _scan_range(worker_idx: int, start_frame: int, end_frame: int):
             worker_cap = cv2.VideoCapture(str(filepath))
@@ -453,8 +527,10 @@ def build_auto_grid_scan_helpers(deps: dict):
             return rows_local
 
         if pioneer_workers <= 1 or duration <= scan_interval_sec * 2.0:
+            audio_rows = list(_scan_audio_gain_rows() or [])
+            _emit_audio_gain_rows(audio_rows)
             rows = _scan_range(0, 0, frame_count)
-            normalized = normalize_cut_boundaries(rows or [], primary_fps=fps)
+            normalized = normalize_cut_boundaries([*(rows or []), *audio_rows], primary_fps=fps)
             if callable(completion_callback):
                 try:
                     completion_callback(
@@ -473,14 +549,29 @@ def build_auto_grid_scan_helpers(deps: dict):
 
         shard_size = max(step_frames, int(frame_count / pioneer_workers))
         futures = []
+        audio_future = None
+        audio_rows = []
         merged = []
         completed_workers = 0
-        with ThreadPoolExecutor(max_workers=pioneer_workers, thread_name_prefix="cut-boundary-pioneer") as executor:
+        worker_count = pioneer_workers + (1 if audio_gain_enabled else 0)
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="cut-boundary-pioneer") as executor:
+            if audio_gain_enabled:
+                audio_future = executor.submit(_scan_audio_gain_rows)
             for worker_idx in range(pioneer_workers):
                 start_frame = worker_idx * shard_size
                 end_frame = frame_count if worker_idx == pioneer_workers - 1 else min(frame_count, (worker_idx + 1) * shard_size)
                 futures.append(executor.submit(_scan_range, worker_idx, start_frame, end_frame))
-            for future in as_completed(futures):
+            wait_futures = list(futures)
+            if audio_future is not None:
+                wait_futures.append(audio_future)
+            for future in as_completed(wait_futures):
+                if audio_future is not None and future is audio_future:
+                    try:
+                        audio_rows.extend(list(future.result() or []))
+                    except Exception:
+                        audio_rows[:] = []
+                    _emit_audio_gain_rows(audio_rows)
+                    continue
                 completed_workers += 1
                 try:
                     merged.extend(list(future.result() or []))
@@ -501,11 +592,13 @@ def build_auto_grid_scan_helpers(deps: dict):
                     except Exception:
                         pass
 
-        if merged:
-            for row in merged:
+        combined_rows = [*list(merged or []), *list(audio_rows or [])]
+        if combined_rows:
+            for row in combined_rows:
                 try:
                     row["refine_pending"] = True
-                    row["refine_backend"] = "gpu_async" if cuda_available else "async_cpu"
+                    if row.get("source") != "audio_gain_provisional":
+                        row["refine_backend"] = "gpu_async" if cuda_available else "async_cpu"
                 except Exception:
                     pass
         if callable(progress_callback):
@@ -515,12 +608,12 @@ def build_auto_grid_scan_helpers(deps: dict):
                     "percent": 100,
                     "timestamp": duration,
                     "duration": duration,
-                    "detected": len(merged),
+                    "detected": len(combined_rows),
                     "worker_idx": 0,
                 })
             except Exception:
                 pass
-        return normalize_cut_boundaries(merged or [], primary_fps=fps)
+        return normalize_cut_boundaries(combined_rows or [], primary_fps=fps)
 
 
     def verify_media_cut_boundary_rows(
@@ -563,7 +656,15 @@ def build_auto_grid_scan_helpers(deps: dict):
             fps = normalize_fps(fps)
             min_gap_sec = float(settings.get("scan_cut_auto_min_gap_sec", 8.0))
             min_gap_frames = max(1, int(round(min_gap_sec * fps)))
-            follower_workers = max(1, min(4, int(settings.get("scan_cut_verify_workers", 4) or 4)))
+            follower_requested = int(settings.get("scan_cut_verify_workers", 4) or 4)
+            follower_workers, follower_scheduler = adaptive_worker_count(
+                task="cut_follower",
+                settings=settings,
+                requested=follower_requested,
+                workload=max(1, len(provisional_rows or [])),
+                minimum=1,
+                maximum=4,
+            )
             follower_backend = "mps" if sys.platform == "darwin" and _mps_available() else "cpu"
             verified_rows = []
 

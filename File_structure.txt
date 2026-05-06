@@ -1,7 +1,7 @@
 <!--
-Document-Version: 03.20.00
-Phase: PHASE3
-Last-Updated: 2026-05-05
+Document-Version: 03.21.00
+Phase: COMPLETE
+Last-Updated: 2026-05-06
 Updated-By: Codex
 Scope: Actual project filesystem map. `.git/`, `venv/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.codex_work/`, and large runtime cache/output folders are intentionally not expanded.
 Role-Description-Rule: Tree entries are generated from actual paths; review notes are removed.
@@ -9,18 +9,505 @@ Role-Description-Rule: Tree entries are generated from actual paths; review note
 ================================================================================
 AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
-Last Updated: 2026-05-05
-Phase: PHASE3
-App Version: 03.20.00
+Last Updated: 2026-05-06
+Phase: COMPLETE
+App Version: 03.21.00
 Structure Document: File_structure.txt
 Note: This file is an actual tree map and excludes cache-only Python bytecode folders, virtualenvs, local Codex scratch files, secrets, and large runtime output/cache folders.
 ================================================================================
 
 ai_subtitle_studio/
+├── assets
+│   └── icons
+│       ├── ui
+│       │   ├── ai.svg
+│       │   ├── auto.svg
+│       │   ├── cancel.svg
+│       │   ├── check.svg
+│       │   ├── clock.svg
+│       │   ├── cloud.svg
+│       │   ├── edit.svg
+│       │   ├── export.svg
+│       │   ├── file.svg
+│       │   ├── fit.svg
+│       │   ├── folder.svg
+│       │   ├── help.svg
+│       │   ├── home.svg
+│       │   ├── llm.svg
+│       │   ├── mic.svg
+│       │   ├── minus.svg
+│       │   ├── more.svg
+│       │   ├── nas.svg
+│       │   ├── next.svg
+│       │   ├── play.svg
+│       │   ├── plus.svg
+│       │   ├── power.svg
+│       │   ├── prev.svg
+│       │   ├── project.svg
+│       │   ├── redo.svg
+│       │   ├── refresh.svg
+│       │   ├── review.svg
+│       │   ├── roughcut.svg
+│       │   ├── save.svg
+│       │   ├── search.svg
+│       │   ├── settings.svg
+│       │   ├── shortform.svg
+│       │   ├── sliders.svg
+│       │   ├── speaker.svg
+│       │   ├── stop.svg
+│       │   ├── subtitle.svg
+│       │   ├── terminal.svg
+│       │   ├── timeline.svg
+│       │   ├── trash.svg
+│       │   ├── undo.svg
+│       │   └── video.svg
+│       ├── app_icon.svg
+│       └── README.md
+├── core
+│   ├── audio
+│   │   ├── __init__.py
+│   │   ├── audio_preset_data.py
+│   │   ├── audio_presets.py
+│   │   ├── diarize.py
+│   │   ├── live_stt.py
+│   │   ├── media_processor.py
+│   │   ├── media_processor_audio.py
+│   │   ├── media_processor_transcribe.py
+│   │   ├── media_processor_vad.py
+│   │   ├── preset_auto_classifier.py
+│   │   ├── resemble_enhance_runner.py
+│   │   ├── stt_candidate_scorer.py
+│   │   ├── stt_ensemble.py
+│   │   ├── stt_lattice.py
+│   │   ├── stt_quality_presets.py
+│   │   ├── stt_rescue.py
+│   │   ├── stt_vad.py
+│   │   ├── whisper_coreml.py
+│   │   ├── whisper_faster.py
+│   │   ├── whisper_mlx.py
+│   │   ├── whisper_transformers.py
+│   │   ├── whisper_worker.py
+│   │   └── worker_threads.py
+│   ├── engine
+│   │   ├── __init__.py
+│   │   ├── llm_candidate_policy.py
+│   │   ├── llm_correction_guard.py
+│   │   ├── srt_writer.py
+│   │   ├── subtitle_accuracy_graph.py
+│   │   ├── subtitle_accuracy_pipeline.py
+│   │   ├── subtitle_engine.py
+│   │   ├── subtitle_one_click_fix.py
+│   │   ├── subtitle_prompts.py
+│   │   ├── subtitle_settings.py
+│   │   ├── subtitle_timing.py
+│   │   ├── subtitle_uncertainty.py
+│   │   ├── subtitle_why.py
+│   │   └── word_resegmenter.py
+│   ├── llm
+│   │   ├── __init__.py
+│   │   ├── gemini_provider.py
+│   │   ├── ollama_provider.py
+│   │   ├── openai_provider.py
+│   │   ├── provider_registry.py
+│   │   └── secure_keys.py
+│   ├── personalization
+│   │   ├── deep_policy_learning.py
+│   │   ├── deep_runtime_adaptation.py
+│   │   ├── deep_subtitle_policy.py
+│   │   ├── editor_truth_capture.py
+│   │   ├── editor_truth_memory.py
+│   │   ├── golden_regression.py
+│   │   ├── ground_truth_import.py
+│   │   ├── idle_trainer.py
+│   │   ├── llm_review_exchange.py
+│   │   ├── lora_context_classifier.py
+│   │   ├── lora_models.py
+│   │   ├── lora_optimizer.py
+│   │   ├── lora_quality_buckets.py
+│   │   ├── lora_retention.py
+│   │   ├── lora_retrieval_config.py
+│   │   ├── lora_retrieval_index.py
+│   │   ├── lora_retrieval_scoring.py
+│   │   ├── lora_retrieval_utils.py
+│   │   ├── lora_rule_learning.py
+│   │   ├── lora_runtime_policy.py
+│   │   ├── lora_storage.py
+│   │   ├── lora_store_bundle.py
+│   │   ├── lora_store_common.py
+│   │   ├── lora_store_records.py
+│   │   ├── lora_trial_scoring.py
+│   │   ├── lora_vector_retriever.py
+│   │   ├── runtime_lora_context.py
+│   │   ├── runtime_personalization.py
+│   │   ├── settings_autopilot.py
+│   │   ├── stt1_whisper_adapter_runner.py
+│   │   ├── subtitle_bundle_policy.py
+│   │   ├── subtitle_lora_runtime.py
+│   │   ├── subtitle_style_profile.py
+│   │   ├── text_lora_dataset.py
+│   │   ├── text_lora_runner.py
+│   │   └── user_edit_metrics.py
+│   ├── pipeline
+│   │   ├── __init__.py
+│   │   ├── backend_core.py
+│   │   ├── background_prefetch.py
+│   │   ├── cut_boundary_helpers.py
+│   │   ├── multiclip_pipeline.py
+│   │   ├── pipeline_helpers.py
+│   │   ├── single_pipeline.py
+│   │   ├── startup_diagnostics.py
+│   │   ├── stt_preview_optimizer.py
+│   │   └── topicless_segments.py
+│   ├── project
+│   │   ├── __init__.py
+│   │   ├── data_manager.py
+│   │   ├── ipad_exchange.py
+│   │   ├── project_context.py
+│   │   ├── project_frames.py
+│   │   ├── project_io.py
+│   │   ├── project_manager.py
+│   │   ├── project_model_settings.py
+│   │   ├── project_phase1b.py
+│   │   ├── project_snapshot.py
+│   │   ├── project_srt.py
+│   │   ├── recovery_state.py
+│   │   └── subtitle_status.py
+│   ├── roughcut
+│   │   ├── __init__.py
+│   │   ├── boundary_refiner.py
+│   │   ├── chapter_segmenter.py
+│   │   ├── cut_boundary_placeholder.py
+│   │   ├── edit_decision_engine.py
+│   │   ├── editor_draft.py
+│   │   ├── edl_generator.py
+│   │   ├── frame_sampler.py
+│   │   ├── gap_detector.py
+│   │   ├── guide_writer.py
+│   │   ├── major_segmenter.py
+│   │   ├── models.py
+│   │   ├── pipeline.py
+│   │   ├── render_executor.py
+│   │   ├── renderer.py
+│   │   ├── renderer_skeleton.py
+│   │   ├── roughcut_context_policy.py
+│   │   ├── roughcut_llm.py
+│   │   ├── roughcut_llm_config.py
+│   │   ├── roughcut_pipeline.py
+│   │   ├── roughcut_prompts.py
+│   │   ├── roughcut_settings.py
+│   │   ├── scene_change_detector.py
+│   │   ├── semantic_chunker.py
+│   │   ├── story_mapper.py
+│   │   ├── subtitle_retimer.py
+│   │   ├── thumbnail_cache.py
+│   │   ├── title_suggester.py
+│   │   ├── topic_detector.py
+│   │   └── transcript_packer.py
+│   ├── runtime
+│   │   ├── __init__.py
+│   │   ├── config.py
+│   │   └── logger.py
+│   ├── subtitle_quality
+│   │   ├── __init__.py
+│   │   ├── candidate_generator.py
+│   │   ├── candidate_ranker.py
+│   │   ├── confidence_checker.py
+│   │   ├── correction_memory.py
+│   │   ├── hallucination_detector.py
+│   │   ├── llm_guarded_corrector.py
+│   │   ├── models.py
+│   │   ├── quality_pipeline.py
+│   │   ├── recheck_engine.py
+│   │   ├── timestamp_regrouper.py
+│   │   ├── vad_alignment_checker.py
+│   │   └── wrong_answer_memory.py
+│   ├── __init__.py
+│   ├── accuracy_policy.py
+│   ├── auto_tracker.py
+│   ├── backend_fast.py
+│   ├── cloud_sync.py
+│   ├── cut_boundary.py
+│   ├── cut_boundary_audio.py
+│   ├── cut_boundary_auto.py
+│   ├── cut_boundary_auto_profile.py
+│   ├── cut_boundary_auto_scan.py
+│   ├── cut_boundary_auto_utils.py
+│   ├── cut_boundary_auto_verify.py
+│   ├── cut_boundary_fps.py
+│   ├── cut_boundary_fusion.py
+│   ├── cut_boundary_middle.py
+│   ├── frame_time.py
+│   ├── media_fingerprint.py
+│   ├── media_info.py
+│   ├── media_queue_order.py
+│   ├── model_manager.py
+│   ├── notifier.py
+│   ├── path_manager.py
+│   ├── performance.py
+│   ├── pipeline_status.py
+│   ├── platform_compat.py
+│   ├── renderer.py
+│   ├── settings.py
+│   ├── settings_profiles.py
+│   ├── settings_simplifier.py
+│   ├── srt_parser.py
+│   ├── state_manager.py
+│   ├── subtitle_existing.py
+│   ├── time_history.py
+│   ├── utils.py
+│   ├── video_codec.py
+│   └── work_mode.py
+├── dataset
+│   ├── audio_presets.json
+│   ├── custom_defaults.json
+│   ├── dataset_correction.json
+│   ├── golden_subtitle_suite.json
+│   └── model_registry.json
+├── tests
+│   ├── conftest.py
+│   ├── test_accuracy_policy.py
+│   ├── test_ai_settings_runtime_apply.py
+│   ├── test_audio_presets.py
+│   ├── test_auto_batch_editor_activation.py
+│   ├── test_auto_status_labels.py
+│   ├── test_background_prefetch.py
+│   ├── test_correction_memory.py
+│   ├── test_cp03_cp04_status_ui.py
+│   ├── test_cp08_cp10_home_timeline.py
+│   ├── test_cp11_multiclip_offset.py
+│   ├── test_cut_boundary_audio.py
+│   ├── test_cut_boundary_fusion.py
+│   ├── test_cut_boundary_middle.py
+│   ├── test_deep_policy_learning.py
+│   ├── test_deep_runtime_adaptation.py
+│   ├── test_deep_subtitle_policy.py
+│   ├── test_diarize_dependencies.py
+│   ├── test_editor_auto_export.py
+│   ├── test_editor_roughcut_draft.py
+│   ├── test_editor_stt_mode.py
+│   ├── test_editor_truth_capture.py
+│   ├── test_editor_truth_memory.py
+│   ├── test_export_dialog_controls.py
+│   ├── test_fingerprint_caches.py
+│   ├── test_gap_simulator.py
+│   ├── test_golden_regression.py
+│   ├── test_gpu_rendering.py
+│   ├── test_ground_truth_import.py
+│   ├── test_help_dialog.py
+│   ├── test_huggingface_token.py
+│   ├── test_individual_queue_context.py
+│   ├── test_ipad_exchange.py
+│   ├── test_live_microphone_session.py
+│   ├── test_llm_candidate_policy.py
+│   ├── test_llm_correction_guard.py
+│   ├── test_lora_gap_autosettings.py
+│   ├── test_lora_personalization_storage.py
+│   ├── test_lora_rule_learning.py
+│   ├── test_lora_settings_autopilot.py
+│   ├── test_lora_trial_scoring.py
+│   ├── test_lora_vector_retriever.py
+│   ├── test_media_fingerprint.py
+│   ├── test_media_processor_overlap.py
+│   ├── test_media_queue_order.py
+│   ├── test_model_manager.py
+│   ├── test_multiclip_panel.py
+│   ├── test_ollama_provider.py
+│   ├── test_performance_media_cache.py
+│   ├── test_personalization_idle_runtime.py
+│   ├── test_pipeline_audio_extract_guard.py
+│   ├── test_pipeline_cut_boundary_cache.py
+│   ├── test_pipeline_status.py
+│   ├── test_preset_auto_classifier.py
+│   ├── test_project_context.py
+│   ├── test_project_segment_reload.py
+│   ├── test_quality_candidate_ranker.py
+│   ├── test_queue_clip_completion_order.py
+│   ├── test_recovery_state.py
+│   ├── test_responsive_profile.py
+│   ├── test_roughcut_candidates.py
+│   ├── test_roughcut_contract.py
+│   ├── test_roughcut_engine1.py
+│   ├── test_roughcut_major_boundary.py
+│   ├── test_roughcut_models_v2.py
+│   ├── test_roughcut_thumbnail_cache.py
+│   ├── test_roughcut_title_suggester.py
+│   ├── test_roughcut_ui_v2.py
+│   ├── test_roughcut_v2_output_compat.py
+│   ├── test_settings_materialization.py
+│   ├── test_settings_simplifier.py
+│   ├── test_sidebar_terminal_layout.py
+│   ├── test_single_pipeline_ui_guard.py
+│   ├── test_startup_diagnostics.py
+│   ├── test_stt_candidate_scorer.py
+│   ├── test_stt_ensemble.py
+│   ├── test_stt_lattice.py
+│   ├── test_stt_preview_optimizer.py
+│   ├── test_stt_quality_presets.py
+│   ├── test_stt_rescue.py
+│   ├── test_subtitle_accuracy_graph.py
+│   ├── test_subtitle_accuracy_pipeline.py
+│   ├── test_subtitle_boundary_alignment.py
+│   ├── test_subtitle_bundle_policy.py
+│   ├── test_subtitle_engine_settings.py
+│   ├── test_subtitle_line_breaks.py
+│   ├── test_subtitle_one_click_fix.py
+│   ├── test_subtitle_quality_models.py
+│   ├── test_subtitle_quality_pipeline.py
+│   ├── test_subtitle_rules_runtime.py
+│   ├── test_subtitle_style_profile.py
+│   ├── test_subtitle_text_edit_keys.py
+│   ├── test_subtitle_uncertainty.py
+│   ├── test_subtitle_why.py
+│   ├── test_tablet_viewport_smoke.py
+│   ├── test_text_lora_dataset.py
+│   ├── test_timeline_hit_targets.py
+│   ├── test_timeline_layout_constants.py
+│   ├── test_timeline_playhead_fit.py
+│   ├── test_timeline_render_cache.py
+│   ├── test_timeline_segment_colors.py
+│   ├── test_timeline_speaker_labels.py
+│   ├── test_video_player_widget.py
+│   ├── test_whisper_coreml.py
+│   ├── test_whisper_model_catalog.py
+│   ├── test_windows_platform_compat.py
+│   └── test_word_resegmenter.py
+├── ui
+│   ├── dialogs
+│   │   ├── __init__.py
+│   │   ├── export_dialog.py
+│   │   ├── folder_dialog.py
+│   │   └── message_box.py
+│   ├── editor
+│   │   ├── __init__.py
+│   │   ├── editor_actions.py
+│   │   ├── editor_helpers.py
+│   │   ├── editor_lifecycle.py
+│   │   ├── editor_multiclip_context.py
+│   │   ├── editor_multiclip_ops.py
+│   │   ├── editor_pipeline.py
+│   │   ├── editor_popup_qt.py
+│   │   ├── editor_roughcut_draft.py
+│   │   ├── editor_scan_cut_core.py
+│   │   ├── editor_segments.py
+│   │   ├── editor_speaker_ops.py
+│   │   ├── editor_stt_mode.py
+│   │   ├── editor_timeline_video.py
+│   │   ├── editor_video_controls.py
+│   │   ├── editor_widget.py
+│   │   ├── live_microphone_session.py
+│   │   ├── quality_candidate_dialog.py
+│   │   ├── subtitle_text_edit.py
+│   │   ├── subtitle_text_editor.qml
+│   │   ├── subtitle_why_dialog.py
+│   │   ├── timeline_scan_cut_patches.py
+│   │   ├── timeline_scan_cut_relative_base.py
+│   │   ├── timeline_scan_cut_relative_refine.py
+│   │   ├── timeline_scan_cut_resume.py
+│   │   ├── timestamp_area.py
+│   │   ├── undo_manager.py
+│   │   ├── video_overlay_widgets.py
+│   │   ├── video_playback_backend.py
+│   │   ├── video_player_widget.py
+│   │   └── video_subtitle_overlay.qml
+│   ├── help
+│   │   ├── __init__.py
+│   │   ├── help_content.py
+│   │   └── help_dialog.py
+│   ├── log
+│   │   ├── __init__.py
+│   │   └── terminal_log_widget.py
+│   ├── main
+│   │   ├── __init__.py
+│   │   ├── bottom_work_panel.py
+│   │   ├── main_file_ops.py
+│   │   ├── main_signals.py
+│   │   ├── main_window.py
+│   │   └── workspace_stack.py
+│   ├── project
+│   │   ├── clip_order_dialog.py
+│   │   ├── multiclip_cards.py
+│   │   ├── multiclip_panel.py
+│   │   ├── project_panel.py
+│   │   └── workspace_restore.py
+│   ├── qml
+│   │   ├── project_info_overlay.qml
+│   │   ├── project_sidebar_shell.qml
+│   │   ├── settings_panel_header.qml
+│   │   ├── sidebar_queue_panel.qml
+│   │   └── timeline_playhead_overlay.qml
+│   ├── queue
+│   │   ├── __init__.py
+│   │   ├── queue_panel_widget.py
+│   │   └── sidebar_queue_panel.py
+│   ├── roughcut
+│   │   ├── __init__.py
+│   │   ├── roughcut_bottom_panel.py
+│   │   ├── roughcut_detail.py
+│   │   ├── roughcut_export.py
+│   │   ├── roughcut_format.py
+│   │   ├── roughcut_log_panel.py
+│   │   ├── roughcut_major_panel.py
+│   │   ├── roughcut_preview.py
+│   │   ├── roughcut_state.py
+│   │   ├── roughcut_style_panel.py
+│   │   ├── roughcut_table.py
+│   │   ├── roughcut_table_panel.py
+│   │   ├── roughcut_title_panel.py
+│   │   ├── roughcut_topicless.py
+│   │   └── roughcut_widget.py
+│   ├── settings
+│   │   ├── __init__.py
+│   │   ├── gap_simulator.py
+│   │   ├── personalization_learning_actions.py
+│   │   ├── personalization_learning_info.py
+│   │   ├── qml_panel.py
+│   │   ├── settings_advanced.py
+│   │   ├── settings_ai.py
+│   │   ├── settings_common.py
+│   │   ├── settings_dialog.py
+│   │   ├── settings_export.py
+│   │   ├── settings_gap.py
+│   │   ├── settings_personalization.py
+│   │   ├── settings_roughcut.py
+│   │   ├── settings_speaker.py
+│   │   └── tablet_dialog.py
+│   ├── sidebar
+│   │   ├── __init__.py
+│   │   └── project_sidebar_widget.py
+│   ├── timeline
+│   │   ├── __init__.py
+│   │   ├── speaker_labels.py
+│   │   ├── timeline_analysis.py
+│   │   ├── timeline_canvas.py
+│   │   ├── timeline_constants.py
+│   │   ├── timeline_global.py
+│   │   ├── timeline_inline_edit.py
+│   │   ├── timeline_input.py
+│   │   ├── timeline_paint.py
+│   │   ├── timeline_scenegraph.py
+│   │   ├── timeline_scenegraph.qml
+│   │   ├── timeline_waveform.py
+│   │   └── timeline_widget.py
+│   ├── __init__.py
+│   ├── cloud_ui.py
+│   ├── gpu_rendering.py
+│   ├── home_sidebar.py
+│   ├── home_sidebar_presets.py
+│   ├── home_ui.py
+│   ├── menu_bar.py
+│   ├── queue_widget.py
+│   ├── responsive_profile.py
+│   └── style.py
+├── voice_data
+│   ├── spk2_goodrain.wav
+│   └── spk3_voice.wav
 ├── .gitignore
 ├── ACTION_ITEMS.md
 ├── AGENTS.md
+├── check_list.md
 ├── File_structure.txt
+├── main.bat
+├── main.py
 ├── README.md
 ├── RELEASE_v02.02.00.md
 ├── RELEASE_v02.03.00.md
@@ -46,451 +533,6 @@ ai_subtitle_studio/
 ├── RELEASE_v03.18.00.md
 ├── RELEASE_v03.19.00.md
 ├── RELEASE_v03.20.00.md
-├── assets
-│   ├── icons
-│   │   ├── README.md
-│   │   ├── app_icon.svg
-│   │   ├── ui
-│   │   │   ├── ai.svg
-│   │   │   ├── auto.svg
-│   │   │   ├── cancel.svg
-│   │   │   ├── check.svg
-│   │   │   ├── clock.svg
-│   │   │   ├── cloud.svg
-│   │   │   ├── edit.svg
-│   │   │   ├── export.svg
-│   │   │   ├── file.svg
-│   │   │   ├── fit.svg
-│   │   │   ├── folder.svg
-│   │   │   ├── help.svg
-│   │   │   ├── home.svg
-│   │   │   ├── llm.svg
-│   │   │   ├── mic.svg
-│   │   │   ├── minus.svg
-│   │   │   ├── more.svg
-│   │   │   ├── nas.svg
-│   │   │   ├── next.svg
-│   │   │   ├── play.svg
-│   │   │   ├── plus.svg
-│   │   │   ├── power.svg
-│   │   │   ├── prev.svg
-│   │   │   ├── project.svg
-│   │   │   ├── redo.svg
-│   │   │   ├── refresh.svg
-│   │   │   ├── review.svg
-│   │   │   ├── roughcut.svg
-│   │   │   ├── save.svg
-│   │   │   ├── search.svg
-│   │   │   ├── settings.svg
-│   │   │   ├── shortform.svg
-│   │   │   ├── sliders.svg
-│   │   │   ├── speaker.svg
-│   │   │   ├── stop.svg
-│   │   │   ├── subtitle.svg
-│   │   │   ├── terminal.svg
-│   │   │   ├── timeline.svg
-│   │   │   ├── trash.svg
-│   │   │   ├── undo.svg
-│   │   │   ├── video.svg
-├── check_list.md
-├── checkpoints
-│   ├── MossFormer2_SE_48K
-│   │   ├── .gitattributes
-│   │   ├── README.md
-│   │   ├── last_best_checkpoint
-│   │   ├── last_best_checkpoint.pt
-├── core
-│   ├── __init__.py
-│   ├── accuracy_policy.py
-│   ├── audio
-│   │   ├── __init__.py
-│   │   ├── audio_preset_data.py
-│   │   ├── audio_presets.py
-│   │   ├── diarize.py
-│   │   ├── live_stt.py
-│   │   ├── media_processor.py
-│   │   ├── media_processor_audio.py
-│   │   ├── media_processor_transcribe.py
-│   │   ├── media_processor_vad.py
-│   │   ├── preset_auto_classifier.py
-│   │   ├── resemble_enhance_runner.py
-│   │   ├── stt_candidate_scorer.py
-│   │   ├── stt_ensemble.py
-│   │   ├── stt_quality_presets.py
-│   │   ├── stt_rescue.py
-│   │   ├── stt_vad.py
-│   │   ├── whisper_coreml.py
-│   │   ├── whisper_faster.py
-│   │   ├── whisper_mlx.py
-│   │   ├── whisper_transformers.py
-│   │   ├── whisper_worker.py
-│   │   ├── worker_threads.py
-│   ├── auto_tracker.py
-│   ├── backend_fast.py
-│   ├── cloud_sync.py
-│   ├── cut_boundary.py
-│   ├── cut_boundary_auto.py
-│   ├── cut_boundary_auto_profile.py
-│   ├── cut_boundary_auto_scan.py
-│   ├── cut_boundary_auto_utils.py
-│   ├── cut_boundary_auto_verify.py
-│   ├── cut_boundary_fps.py
-│   ├── engine
-│   │   ├── __init__.py
-│   │   ├── llm_correction_guard.py
-│   │   ├── srt_writer.py
-│   │   ├── subtitle_engine.py
-│   │   ├── subtitle_prompts.py
-│   │   ├── subtitle_settings.py
-│   │   ├── subtitle_timing.py
-│   │   ├── word_resegmenter.py
-│   ├── frame_time.py
-│   ├── llm
-│   │   ├── __init__.py
-│   │   ├── gemini_provider.py
-│   │   ├── ollama_provider.py
-│   │   ├── openai_provider.py
-│   │   ├── provider_registry.py
-│   │   ├── secure_keys.py
-│   ├── media_info.py
-│   ├── media_queue_order.py
-│   ├── model_manager.py
-│   ├── notifier.py
-│   ├── path_manager.py
-│   ├── performance.py
-│   ├── personalization
-│   │   ├── ground_truth_import.py
-│   │   ├── idle_trainer.py
-│   │   ├── llm_review_exchange.py
-│   │   ├── lora_context_classifier.py
-│   │   ├── lora_models.py
-│   │   ├── lora_optimizer.py
-│   │   ├── lora_retention.py
-│   │   ├── lora_retrieval_config.py
-│   │   ├── lora_retrieval_index.py
-│   │   ├── lora_retrieval_scoring.py
-│   │   ├── lora_retrieval_utils.py
-│   │   ├── lora_rule_learning.py
-│   │   ├── lora_runtime_policy.py
-│   │   ├── lora_storage.py
-│   │   ├── lora_store_bundle.py
-│   │   ├── lora_store_common.py
-│   │   ├── lora_store_records.py
-│   │   ├── lora_trial_scoring.py
-│   │   ├── lora_vector_retriever.py
-│   │   ├── runtime_lora_context.py
-│   │   ├── runtime_personalization.py
-│   │   ├── stt1_whisper_adapter_runner.py
-│   │   ├── text_lora_dataset.py
-│   │   ├── text_lora_runner.py
-│   ├── pipeline
-│   │   ├── __init__.py
-│   │   ├── backend_core.py
-│   │   ├── cut_boundary_helpers.py
-│   │   ├── multiclip_pipeline.py
-│   │   ├── pipeline_helpers.py
-│   │   ├── single_pipeline.py
-│   │   ├── stt_preview_optimizer.py
-│   │   ├── topicless_segments.py
-│   ├── pipeline_status.py
-│   ├── platform_compat.py
-│   ├── project
-│   │   ├── __init__.py
-│   │   ├── data_manager.py
-│   │   ├── project_context.py
-│   │   ├── project_frames.py
-│   │   ├── project_io.py
-│   │   ├── project_manager.py
-│   │   ├── project_model_settings.py
-│   │   ├── project_phase1b.py
-│   │   ├── project_snapshot.py
-│   │   ├── project_srt.py
-│   │   ├── subtitle_status.py
-│   ├── renderer.py
-│   ├── roughcut
-│   │   ├── __init__.py
-│   │   ├── boundary_refiner.py
-│   │   ├── chapter_segmenter.py
-│   │   ├── cut_boundary_placeholder.py
-│   │   ├── edit_decision_engine.py
-│   │   ├── editor_draft.py
-│   │   ├── edl_generator.py
-│   │   ├── frame_sampler.py
-│   │   ├── gap_detector.py
-│   │   ├── guide_writer.py
-│   │   ├── major_segmenter.py
-│   │   ├── models.py
-│   │   ├── pipeline.py
-│   │   ├── render_executor.py
-│   │   ├── renderer.py
-│   │   ├── renderer_skeleton.py
-│   │   ├── roughcut_llm.py
-│   │   ├── roughcut_llm_config.py
-│   │   ├── roughcut_pipeline.py
-│   │   ├── roughcut_prompts.py
-│   │   ├── roughcut_settings.py
-│   │   ├── scene_change_detector.py
-│   │   ├── semantic_chunker.py
-│   │   ├── story_mapper.py
-│   │   ├── subtitle_retimer.py
-│   │   ├── thumbnail_cache.py
-│   │   ├── title_suggester.py
-│   │   ├── topic_detector.py
-│   │   ├── transcript_packer.py
-│   ├── runtime
-│   │   ├── __init__.py
-│   │   ├── config.py
-│   │   ├── logger.py
-│   ├── settings.py
-│   ├── srt_parser.py
-│   ├── state_manager.py
-│   ├── subtitle_existing.py
-│   ├── subtitle_quality
-│   │   ├── __init__.py
-│   │   ├── candidate_generator.py
-│   │   ├── candidate_ranker.py
-│   │   ├── confidence_checker.py
-│   │   ├── correction_memory.py
-│   │   ├── hallucination_detector.py
-│   │   ├── llm_guarded_corrector.py
-│   │   ├── models.py
-│   │   ├── quality_pipeline.py
-│   │   ├── recheck_engine.py
-│   │   ├── timestamp_regrouper.py
-│   │   ├── vad_alignment_checker.py
-│   │   ├── wrong_answer_memory.py
-│   ├── time_history.py
-│   ├── utils.py
-│   ├── video_codec.py
-│   ├── work_mode.py
-├── dataset
-│   ├── audio_presets.json
-│   ├── auto_tracker.json
-│   ├── correction_memory.json
-│   ├── custom_defaults.json
-│   ├── dataset_correction.json
-│   ├── folder_settings.json
-│   ├── model_registry.json
-│   ├── personalization
-│   │   ├── audio_preset_lora.jsonl
-│   │   ├── text_lora_corpus.jsonl
-│   │   ├── text_lora_corpus_manifest.json
-│   │   ├── text_lora_dataset.jsonl
-│   │   ├── text_lora_manifest.json
-│   │   ├── text_lora_training_plan.json
-│   │   ├── trained_adapters
-│   │   │   ├── personal_text_lora
-│   │   ├── voice_lora_bridge.jsonl
-│   │   ├── voice_lora_profile_manifest.json
-│   ├── subtitle_rule.json
-│   ├── time_history.json
-│   ├── user_settings.json
-├── main.bat
-├── main.py
+├── RELEASE_v03.21.00.md
 ├── requirements-mac.txt
-├── requirements-windows.txt
-├── tests
-│   ├── conftest.py
-│   ├── test_accuracy_policy.py
-│   ├── test_ai_settings_runtime_apply.py
-│   ├── test_audio_presets.py
-│   ├── test_auto_batch_editor_activation.py
-│   ├── test_auto_status_labels.py
-│   ├── test_correction_memory.py
-│   ├── test_cp03_cp04_status_ui.py
-│   ├── test_cp08_cp10_home_timeline.py
-│   ├── test_cp11_multiclip_offset.py
-│   ├── test_editor_auto_export.py
-│   ├── test_editor_roughcut_draft.py
-│   ├── test_editor_stt_mode.py
-│   ├── test_export_dialog_controls.py
-│   ├── test_gap_simulator.py
-│   ├── test_gpu_rendering.py
-│   ├── test_ground_truth_import.py
-│   ├── test_help_dialog.py
-│   ├── test_huggingface_token.py
-│   ├── test_individual_queue_context.py
-│   ├── test_live_microphone_session.py
-│   ├── test_llm_correction_guard.py
-│   ├── test_lora_gap_autosettings.py
-│   ├── test_lora_personalization_storage.py
-│   ├── test_lora_rule_learning.py
-│   ├── test_lora_trial_scoring.py
-│   ├── test_lora_vector_retriever.py
-│   ├── test_media_processor_overlap.py
-│   ├── test_media_queue_order.py
-│   ├── test_model_manager.py
-│   ├── test_multiclip_panel.py
-│   ├── test_ollama_provider.py
-│   ├── test_performance_media_cache.py
-│   ├── test_personalization_idle_runtime.py
-│   ├── test_pipeline_audio_extract_guard.py
-│   ├── test_pipeline_cut_boundary_cache.py
-│   ├── test_pipeline_status.py
-│   ├── test_preset_auto_classifier.py
-│   ├── test_project_context.py
-│   ├── test_project_segment_reload.py
-│   ├── test_quality_candidate_ranker.py
-│   ├── test_queue_clip_completion_order.py
-│   ├── test_roughcut_candidates.py
-│   ├── test_roughcut_contract.py
-│   ├── test_roughcut_engine1.py
-│   ├── test_roughcut_major_boundary.py
-│   ├── test_roughcut_models_v2.py
-│   ├── test_roughcut_thumbnail_cache.py
-│   ├── test_roughcut_title_suggester.py
-│   ├── test_roughcut_ui_v2.py
-│   ├── test_roughcut_v2_output_compat.py
-│   ├── test_sidebar_terminal_layout.py
-│   ├── test_single_pipeline_ui_guard.py
-│   ├── test_stt_candidate_scorer.py
-│   ├── test_stt_ensemble.py
-│   ├── test_stt_preview_optimizer.py
-│   ├── test_stt_quality_presets.py
-│   ├── test_stt_rescue.py
-│   ├── test_subtitle_boundary_alignment.py
-│   ├── test_subtitle_engine_settings.py
-│   ├── test_subtitle_line_breaks.py
-│   ├── test_subtitle_quality_models.py
-│   ├── test_subtitle_quality_pipeline.py
-│   ├── test_subtitle_rules_runtime.py
-│   ├── test_subtitle_text_edit_keys.py
-│   ├── test_text_lora_dataset.py
-│   ├── test_timeline_hit_targets.py
-│   ├── test_timeline_layout_constants.py
-│   ├── test_timeline_playhead_fit.py
-│   ├── test_timeline_render_cache.py
-│   ├── test_timeline_segment_colors.py
-│   ├── test_timeline_speaker_labels.py
-│   ├── test_video_player_widget.py
-│   ├── test_whisper_coreml.py
-│   ├── test_whisper_model_catalog.py
-│   ├── test_windows_platform_compat.py
-│   ├── test_word_resegmenter.py
-├── ui
-│   ├── __init__.py
-│   ├── cloud_ui.py
-│   ├── dialogs
-│   │   ├── __init__.py
-│   │   ├── export_dialog.py
-│   │   ├── folder_dialog.py
-│   │   ├── message_box.py
-│   ├── editor
-│   │   ├── __init__.py
-│   │   ├── editor_actions.py
-│   │   ├── editor_helpers.py
-│   │   ├── editor_lifecycle.py
-│   │   ├── editor_multiclip_context.py
-│   │   ├── editor_multiclip_ops.py
-│   │   ├── editor_pipeline.py
-│   │   ├── editor_popup_qt.py
-│   │   ├── editor_roughcut_draft.py
-│   │   ├── editor_scan_cut_core.py
-│   │   ├── editor_segments.py
-│   │   ├── editor_speaker_ops.py
-│   │   ├── editor_stt_mode.py
-│   │   ├── editor_timeline_video.py
-│   │   ├── editor_video_controls.py
-│   │   ├── editor_widget.py
-│   │   ├── live_microphone_session.py
-│   │   ├── quality_candidate_dialog.py
-│   │   ├── subtitle_text_edit.py
-│   │   ├── subtitle_text_editor.qml
-│   │   ├── timeline_scan_cut_patches.py
-│   │   ├── timeline_scan_cut_relative_base.py
-│   │   ├── timeline_scan_cut_relative_refine.py
-│   │   ├── timeline_scan_cut_resume.py
-│   │   ├── timestamp_area.py
-│   │   ├── undo_manager.py
-│   │   ├── video_overlay_widgets.py
-│   │   ├── video_playback_backend.py
-│   │   ├── video_player_widget.py
-│   │   ├── video_subtitle_overlay.qml
-│   ├── gpu_rendering.py
-│   ├── help
-│   │   ├── __init__.py
-│   │   ├── help_content.py
-│   │   ├── help_dialog.py
-│   ├── home_sidebar.py
-│   ├── home_sidebar_presets.py
-│   ├── home_ui.py
-│   ├── log
-│   │   ├── __init__.py
-│   │   ├── terminal_log_widget.py
-│   ├── main
-│   │   ├── __init__.py
-│   │   ├── bottom_work_panel.py
-│   │   ├── main_file_ops.py
-│   │   ├── main_signals.py
-│   │   ├── main_window.py
-│   │   ├── workspace_stack.py
-│   ├── menu_bar.py
-│   ├── project
-│   │   ├── clip_order_dialog.py
-│   │   ├── multiclip_cards.py
-│   │   ├── multiclip_panel.py
-│   │   ├── project_panel.py
-│   │   ├── workspace_restore.py
-│   ├── qml
-│   │   ├── project_info_overlay.qml
-│   │   ├── project_sidebar_shell.qml
-│   │   ├── settings_panel_header.qml
-│   │   ├── sidebar_queue_panel.qml
-│   │   ├── timeline_playhead_overlay.qml
-│   ├── queue
-│   │   ├── __init__.py
-│   │   ├── queue_panel_widget.py
-│   │   ├── sidebar_queue_panel.py
-│   ├── queue_widget.py
-│   ├── roughcut
-│   │   ├── __init__.py
-│   │   ├── roughcut_bottom_panel.py
-│   │   ├── roughcut_detail.py
-│   │   ├── roughcut_export.py
-│   │   ├── roughcut_format.py
-│   │   ├── roughcut_log_panel.py
-│   │   ├── roughcut_major_panel.py
-│   │   ├── roughcut_preview.py
-│   │   ├── roughcut_state.py
-│   │   ├── roughcut_style_panel.py
-│   │   ├── roughcut_table.py
-│   │   ├── roughcut_table_panel.py
-│   │   ├── roughcut_title_panel.py
-│   │   ├── roughcut_topicless.py
-│   │   ├── roughcut_widget.py
-│   ├── settings
-│   │   ├── __init__.py
-│   │   ├── gap_simulator.py
-│   │   ├── personalization_learning_actions.py
-│   │   ├── personalization_learning_info.py
-│   │   ├── qml_panel.py
-│   │   ├── settings_advanced.py
-│   │   ├── settings_ai.py
-│   │   ├── settings_common.py
-│   │   ├── settings_dialog.py
-│   │   ├── settings_export.py
-│   │   ├── settings_gap.py
-│   │   ├── settings_personalization.py
-│   │   ├── settings_roughcut.py
-│   │   ├── settings_speaker.py
-│   ├── sidebar
-│   │   ├── __init__.py
-│   │   ├── project_sidebar_widget.py
-│   ├── style.py
-│   ├── timeline
-│   │   ├── __init__.py
-│   │   ├── speaker_labels.py
-│   │   ├── timeline_analysis.py
-│   │   ├── timeline_canvas.py
-│   │   ├── timeline_constants.py
-│   │   ├── timeline_global.py
-│   │   ├── timeline_inline_edit.py
-│   │   ├── timeline_input.py
-│   │   ├── timeline_paint.py
-│   │   ├── timeline_scenegraph.py
-│   │   ├── timeline_scenegraph.qml
-│   │   ├── timeline_waveform.py
-│   │   ├── timeline_widget.py
-├── voice_data
-│   ├── spk2_goodrain.wav
-│   ├── spk3_voice.wav
+└── requirements-windows.txt

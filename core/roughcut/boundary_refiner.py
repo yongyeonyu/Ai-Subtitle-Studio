@@ -11,6 +11,38 @@ from .models import ChapterMetadata, PackedPhrase
 from .scene_change_detector import SceneChange
 
 
+def _scene_change_time_and_score(change) -> tuple[float, float, bool, str] | None:
+    if isinstance(change, dict):
+        if str(change.get("fusion_decision") or "").strip().lower() == "drop_hint":
+            return None
+        for key in ("time", "timeline_sec", "sec", "seconds", "timestamp", "start", "pos"):
+            if key in change:
+                try:
+                    time_sec = float(change.get(key))
+                    if time_sec <= 0.0:
+                        return None
+                    score = float(
+                        change.get(
+                            "fusion_score",
+                            change.get("deep_boundary_score", change.get("score", change.get("topic_shift_score", 0.0))),
+                        )
+                        or 0.0
+                    )
+                    is_cut = bool(change.get("is_cut", True) or change.get("boundary_role") == "roughcut")
+                    source = str(change.get("source") or change.get("detector") or "boundary")
+                    return time_sec, score, is_cut, source
+                except Exception:
+                    return None
+        return None
+    try:
+        is_cut = bool(getattr(change, "is_cut"))
+        cut_time = (float(change.start) + float(change.end)) / 2.0
+        score = float(change.score)
+        return cut_time, score, is_cut, "scene_cut"
+    except Exception:
+        return None
+
+
 @dataclass(frozen=True, slots=True)
 class BoundaryVerification:
     original_time: float
@@ -38,10 +70,15 @@ def _nearest_gap_boundary(time_sec: float, gaps: list[TimelineGap], window: floa
 def _nearest_scene_cut(time_sec: float, scene_changes: list[SceneChange], window: float) -> tuple[float, float, str] | None:
     candidates: list[tuple[float, float, str]] = []
     for change in scene_changes:
-        cut_time = (float(change.start) + float(change.end)) / 2.0
+        normalized = _scene_change_time_and_score(change)
+        if normalized is None:
+            continue
+        cut_time, score, is_cut, source = normalized
+        if not is_cut:
+            continue
         distance = abs(time_sec - cut_time)
         if distance <= window:
-            candidates.append((distance, cut_time, f"scene_cut:{change.score:.2f}"))
+            candidates.append((distance, cut_time, f"{source}:{score:.2f}"))
     return min(candidates, default=None, key=lambda item: item[0])
 
 
@@ -68,7 +105,10 @@ def verify_major_boundary(
     window = max(0.0, float(search_window or 0.0))
     phrase_items = sorted(list(phrases or ()), key=lambda phrase: (phrase.start, phrase.end))
     gap_items = sorted(list(gaps or ()), key=lambda gap: (gap.start, gap.end))
-    scene_items = sorted((change for change in scene_changes or () if change.is_cut), key=lambda change: (change.start, change.end))
+    scene_items = sorted(
+        (change for change in scene_changes or () if _scene_change_time_and_score(change) is not None),
+        key=lambda change: (_scene_change_time_and_score(change) or (0.0, 0.0, False, ""))[0],
+    )
 
     gap_candidate = _nearest_gap_boundary(original, gap_items, window)
     if gap_candidate is not None:

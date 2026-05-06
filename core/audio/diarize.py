@@ -9,8 +9,50 @@ import os
 import time
 import json
 import threading
+import importlib.util
 import numpy as np
 from core.runtime.logger import get_logger
+
+
+_DIARIZE_DEPENDENCIES = (
+    ("torch", "torch"),
+    ("torchaudio", "torchaudio"),
+    ("speechbrain", "speechbrain"),
+    ("sklearn", "scikit-learn"),
+)
+_missing_dependency_notice_logged = False
+
+
+def missing_diarization_packages() -> list[str]:
+    missing = []
+    for module_name, package_name in _DIARIZE_DEPENDENCIES:
+        try:
+            if importlib.util.find_spec(module_name) is None:
+                missing.append(package_name)
+        except (ImportError, ValueError):
+            missing.append(package_name)
+    return missing
+
+
+def diarization_dependencies_available(*, log: bool = False) -> bool:
+    missing = missing_diarization_packages()
+    if missing and log:
+        log_missing_diarization_dependencies(missing)
+    return not missing
+
+
+def log_missing_diarization_dependencies(missing: list[str] | None = None) -> None:
+    global _missing_dependency_notice_logged
+    missing = list(missing or missing_diarization_packages())
+    if not missing or _missing_dependency_notice_logged:
+        return
+    _missing_dependency_notice_logged = True
+    packages = " ".join(missing)
+    get_logger().log(
+        "⚠️ [화자 분리] 선택 화자 수가 2명 이상이지만 필요한 패키지가 없습니다. "
+        f"누락: {packages}. 이번 작업은 단일 화자로 계속 진행합니다. "
+        f"화자 분리가 필요하면 venv/bin/python -m pip install {packages}"
+    )
 
 def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2) -> list[dict]:
     cache_file = f"{os.path.splitext(file_path)[0]}_speaker_cache.json"
@@ -23,13 +65,18 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
                 return speaker_map
         except Exception: pass
 
+    missing = missing_diarization_packages()
+    if missing:
+        log_missing_diarization_dependencies(missing)
+        return []
+
     try:
         import torch
         import torchaudio
         from speechbrain.inference.classifiers import EncoderClassifier
         from sklearn.cluster import KMeans
-    except ImportError:
-        get_logger().log("❌ 필요 모듈이 없습니다. 터미널에서 'pip install speechbrain scikit-learn'을 실행해주세요.")
+    except ImportError as exc:
+        log_missing_diarization_dependencies(missing_diarization_packages() or [str(exc)])
         return []
 
     get_logger().log("⏳ SpeechBrain 화자 분석 AI 로딩 중... (HuggingFace 토큰 불필요! 🚀)")

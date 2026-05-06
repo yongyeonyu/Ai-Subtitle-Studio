@@ -7,45 +7,59 @@ from pathlib import Path
 from typing import Any
 
 from core.personalization.lora_models import iso_now, stable_hash
+from core.personalization.lora_quality_buckets import (
+    LORA_BUCKET_FILENAMES,
+    LORA_BUCKET_HIGH,
+    LORA_BUCKET_LOW,
+    LORA_BUCKET_MEDIUM,
+    LORA_BUCKET_PENDING_DELETE,
+)
 from core.runtime import config
 
 
 LORA_PERSONALIZATION_DIR = Path(config.DATASET_DIR) / "lora_personalization"
-LORA_MANIFEST_PATH = LORA_PERSONALIZATION_DIR / "manifest.json"
-TRUTH_TABLE_PATH = LORA_PERSONALIZATION_DIR / "truth_table.jsonl"
-TRAINING_QUEUE_PATH = LORA_PERSONALIZATION_DIR / "training_queue.json"
-LEARNED_SPLIT_RULES_PATH = LORA_PERSONALIZATION_DIR / "learned_split_rules.json"
-LEARNED_LINE_BREAK_RULES_PATH = LORA_PERSONALIZATION_DIR / "learned_line_break_rules.json"
-SETTING_TRIALS_PATH = LORA_PERSONALIZATION_DIR / "setting_trials.jsonl"
-PROMPT_TRIALS_PATH = LORA_PERSONALIZATION_DIR / "prompt_trials.jsonl"
-BEST_SETTINGS_PATH = LORA_PERSONALIZATION_DIR / "best_settings.json"
-EXCLUDED_PARENTHETICALS_PATH = LORA_PERSONALIZATION_DIR / "excluded_parentheticals.jsonl"
-DEDUPE_INDEX_PATH = LORA_PERSONALIZATION_DIR / "dedupe_index.json"
-TRAINED_ADAPTERS_DIR = LORA_PERSONALIZATION_DIR / "trained_adapters"
-LLM_REVIEW_REQUEST_PATH = LORA_PERSONALIZATION_DIR / "llm_review_request.json"
-LLM_REVIEW_RESULT_PATH = LORA_PERSONALIZATION_DIR / "llm_review_result.json"
-RETENTION_POLICY_PATH = LORA_PERSONALIZATION_DIR / "retention_policy.json"
-RETENTION_HISTORY_PATH = LORA_PERSONALIZATION_DIR / "retention_history.jsonl"
-UNIFIED_LORA_DATA_PATH = LORA_PERSONALIZATION_DIR / "lora_data_bundle.zip"
+LORA_INTERNAL_CACHE_DIR_NAME = ".cache"
+LORA_INTERNAL_CACHE_DIR = LORA_PERSONALIZATION_DIR / LORA_INTERNAL_CACHE_DIR_NAME
+LORA_MANIFEST_PATH = LORA_INTERNAL_CACHE_DIR / "manifest.json"
+TRUTH_TABLE_PATH = LORA_INTERNAL_CACHE_DIR / "truth_table.jsonl"
+TRAINING_QUEUE_PATH = LORA_INTERNAL_CACHE_DIR / "training_queue.json"
+LEARNED_SPLIT_RULES_PATH = LORA_INTERNAL_CACHE_DIR / "learned_split_rules.json"
+LEARNED_LINE_BREAK_RULES_PATH = LORA_INTERNAL_CACHE_DIR / "learned_line_break_rules.json"
+SETTING_TRIALS_PATH = LORA_INTERNAL_CACHE_DIR / "setting_trials.jsonl"
+PROMPT_TRIALS_PATH = LORA_INTERNAL_CACHE_DIR / "prompt_trials.jsonl"
+BEST_SETTINGS_PATH = LORA_INTERNAL_CACHE_DIR / "best_settings.json"
+EXCLUDED_PARENTHETICALS_PATH = LORA_INTERNAL_CACHE_DIR / "excluded_parentheticals.jsonl"
+DEDUPE_INDEX_PATH = LORA_INTERNAL_CACHE_DIR / "dedupe_index.json"
+TRAINED_ADAPTERS_DIR = LORA_INTERNAL_CACHE_DIR / "trained_adapters"
+LLM_REVIEW_REQUEST_PATH = LORA_INTERNAL_CACHE_DIR / "llm_review_request.json"
+LLM_REVIEW_RESULT_PATH = LORA_INTERNAL_CACHE_DIR / "llm_review_result.json"
+RETENTION_POLICY_PATH = LORA_INTERNAL_CACHE_DIR / "retention_policy.json"
+RETENTION_HISTORY_PATH = LORA_INTERNAL_CACHE_DIR / "retention_history.jsonl"
+UNIFIED_LORA_DATA_PATH = LORA_PERSONALIZATION_DIR / LORA_BUCKET_FILENAMES[LORA_BUCKET_HIGH]
+LORA_MEDIUM_DATA_PATH = LORA_PERSONALIZATION_DIR / LORA_BUCKET_FILENAMES[LORA_BUCKET_MEDIUM]
+LORA_LOW_DATA_PATH = LORA_PERSONALIZATION_DIR / LORA_BUCKET_FILENAMES[LORA_BUCKET_LOW]
+LORA_PENDING_DELETE_DATA_PATH = LORA_PERSONALIZATION_DIR / LORA_BUCKET_FILENAMES[LORA_BUCKET_PENDING_DELETE]
 LEGACY_UNIFIED_LORA_DATA_PATH = LORA_PERSONALIZATION_DIR / "lora_data_bundle.json"
+LEGACY_UNIFIED_LORA_ZIP_PATH = LORA_PERSONALIZATION_DIR / "lora_data_bundle.zip"
 UNIFIED_LORA_ARCHIVE_PAYLOAD_NAME = "lora_data_bundle.json"
 UNIFIED_LORA_ARCHIVE_MANIFEST_NAME = "manifest.json"
-VOICE_LORA_BRIDGE_PATH = LORA_PERSONALIZATION_DIR / "voice_lora_bridge.jsonl"
-VOICE_LORA_PROFILE_MANIFEST_PATH = LORA_PERSONALIZATION_DIR / "voice_lora_profile_manifest.json"
-VOICE_LORA_TRAINING_PLAN_PATH = LORA_PERSONALIZATION_DIR / "voice_lora_training_plan.json"
-VOICE_LORA_DATASET_MANIFEST_PATH = LORA_PERSONALIZATION_DIR / "voice_lora_dataset_manifest.json"
-STT1_WHISPER_ADAPTER_DATASET_PATH = LORA_PERSONALIZATION_DIR / "stt1_whisper_adapter_dataset.jsonl"
-STT1_WHISPER_ADAPTER_DATASET_MANIFEST_PATH = LORA_PERSONALIZATION_DIR / "stt1_whisper_adapter_dataset_manifest.json"
-STT1_WHISPER_ADAPTER_TRAINING_PLAN_PATH = LORA_PERSONALIZATION_DIR / "stt1_whisper_adapter_training_plan.json"
-STT1_WHISPER_ADAPTER_RUNTIME_MANIFEST_PATH = LORA_PERSONALIZATION_DIR / "stt1_whisper_adapter_runtime_manifest.json"
-TEXT_LORA_DATASET_PATH = LORA_PERSONALIZATION_DIR / "text_lora_dataset.jsonl"
-TEXT_LORA_MANIFEST_PATH = LORA_PERSONALIZATION_DIR / "text_lora_manifest.json"
-TEXT_LORA_CORPUS_PATH = LORA_PERSONALIZATION_DIR / "text_lora_corpus.jsonl"
-TEXT_LORA_CORPUS_MANIFEST_PATH = LORA_PERSONALIZATION_DIR / "text_lora_corpus_manifest.json"
-TEXT_LORA_TRAINING_PLAN_PATH = LORA_PERSONALIZATION_DIR / "text_lora_training_plan.json"
-AUDIO_PRESET_LORA_PATH = LORA_PERSONALIZATION_DIR / "audio_preset_lora.jsonl"
-MULTIMODAL_LORA_CONTEXT_PATH = LORA_PERSONALIZATION_DIR / "multimodal_lora_context.jsonl"
-LORA_RETRIEVAL_INDEX_PATH = LORA_PERSONALIZATION_DIR / "lora_retrieval_index.json"
+VOICE_LORA_BRIDGE_PATH = LORA_INTERNAL_CACHE_DIR / "voice_lora_bridge.jsonl"
+VOICE_LORA_PROFILE_MANIFEST_PATH = LORA_INTERNAL_CACHE_DIR / "voice_lora_profile_manifest.json"
+VOICE_LORA_TRAINING_PLAN_PATH = LORA_INTERNAL_CACHE_DIR / "voice_lora_training_plan.json"
+VOICE_LORA_DATASET_MANIFEST_PATH = LORA_INTERNAL_CACHE_DIR / "voice_lora_dataset_manifest.json"
+STT1_WHISPER_ADAPTER_DATASET_PATH = LORA_INTERNAL_CACHE_DIR / "stt1_whisper_adapter_dataset.jsonl"
+STT1_WHISPER_ADAPTER_DATASET_MANIFEST_PATH = LORA_INTERNAL_CACHE_DIR / "stt1_whisper_adapter_dataset_manifest.json"
+STT1_WHISPER_ADAPTER_TRAINING_PLAN_PATH = LORA_INTERNAL_CACHE_DIR / "stt1_whisper_adapter_training_plan.json"
+STT1_WHISPER_ADAPTER_RUNTIME_MANIFEST_PATH = LORA_INTERNAL_CACHE_DIR / "stt1_whisper_adapter_runtime_manifest.json"
+TEXT_LORA_DATASET_PATH = LORA_INTERNAL_CACHE_DIR / "text_lora_dataset.jsonl"
+TEXT_LORA_MANIFEST_PATH = LORA_INTERNAL_CACHE_DIR / "text_lora_manifest.json"
+TEXT_LORA_CORPUS_PATH = LORA_INTERNAL_CACHE_DIR / "text_lora_corpus.jsonl"
+TEXT_LORA_CORPUS_MANIFEST_PATH = LORA_INTERNAL_CACHE_DIR / "text_lora_corpus_manifest.json"
+TEXT_LORA_TRAINING_PLAN_PATH = LORA_INTERNAL_CACHE_DIR / "text_lora_training_plan.json"
+AUDIO_PRESET_LORA_PATH = LORA_INTERNAL_CACHE_DIR / "audio_preset_lora.jsonl"
+MULTIMODAL_LORA_CONTEXT_PATH = LORA_INTERNAL_CACHE_DIR / "multimodal_lora_context.jsonl"
+DEEP_POLICY_EVENTS_PATH = LORA_INTERNAL_CACHE_DIR / "deep_policy_events.jsonl"
+LORA_RETRIEVAL_INDEX_PATH = LORA_INTERNAL_CACHE_DIR / "lora_retrieval_index.json"
 
 JSONL_KINDS = {
     "truth_table": TRUTH_TABLE_PATH.name,
@@ -58,6 +72,7 @@ JSONL_KINDS = {
     "text_lora_corpus": TEXT_LORA_CORPUS_PATH.name,
     "audio_preset_lora": AUDIO_PRESET_LORA_PATH.name,
     "multimodal_lora_context": MULTIMODAL_LORA_CONTEXT_PATH.name,
+    "deep_policy_events": DEEP_POLICY_EVENTS_PATH.name,
 }
 
 UNIFIED_LORA_BUNDLE_SOURCE_KEYS = (
@@ -89,6 +104,7 @@ UNIFIED_LORA_BUNDLE_SOURCE_KEYS = (
     "text_lora_training_plan",
     "audio_preset_lora",
     "multimodal_lora_context",
+    "deep_policy_events",
     "lora_retrieval_index",
 )
 BUNDLE_JSONL_SECTION_KEYS = (
@@ -103,6 +119,7 @@ BUNDLE_JSONL_SECTION_KEYS = (
     "text_lora_corpus",
     "audio_preset_lora",
     "multimodal_lora_context",
+    "deep_policy_events",
 )
 BUNDLE_JSON_SECTION_KEYS = (
     "training_queue",
@@ -132,43 +149,51 @@ def store_dir_path(store_dir: str | Path | None = None) -> Path:
 
 def store_paths(store_dir: str | Path | None = None) -> dict[str, Path]:
     root = store_dir_path(store_dir)
+    cache_root = root / LORA_INTERNAL_CACHE_DIR_NAME
     return {
         "root": root,
-        "manifest": root / LORA_MANIFEST_PATH.name,
-        "truth_table": root / TRUTH_TABLE_PATH.name,
-        "training_queue": root / TRAINING_QUEUE_PATH.name,
-        "learned_split_rules": root / LEARNED_SPLIT_RULES_PATH.name,
-        "learned_line_break_rules": root / LEARNED_LINE_BREAK_RULES_PATH.name,
-        "setting_trials": root / SETTING_TRIALS_PATH.name,
-        "prompt_trials": root / PROMPT_TRIALS_PATH.name,
-        "best_settings": root / BEST_SETTINGS_PATH.name,
-        "excluded_parentheticals": root / EXCLUDED_PARENTHETICALS_PATH.name,
-        "dedupe_index": root / DEDUPE_INDEX_PATH.name,
-        "trained_adapters": root / TRAINED_ADAPTERS_DIR.name,
-        "llm_review_request": root / LLM_REVIEW_REQUEST_PATH.name,
-        "llm_review_result": root / LLM_REVIEW_RESULT_PATH.name,
-        "retention_policy": root / RETENTION_POLICY_PATH.name,
-        "retention_history": root / RETENTION_HISTORY_PATH.name,
+        "cache_root": cache_root,
+        "manifest": cache_root / LORA_MANIFEST_PATH.name,
+        "truth_table": cache_root / TRUTH_TABLE_PATH.name,
+        "training_queue": cache_root / TRAINING_QUEUE_PATH.name,
+        "learned_split_rules": cache_root / LEARNED_SPLIT_RULES_PATH.name,
+        "learned_line_break_rules": cache_root / LEARNED_LINE_BREAK_RULES_PATH.name,
+        "setting_trials": cache_root / SETTING_TRIALS_PATH.name,
+        "prompt_trials": cache_root / PROMPT_TRIALS_PATH.name,
+        "best_settings": cache_root / BEST_SETTINGS_PATH.name,
+        "excluded_parentheticals": cache_root / EXCLUDED_PARENTHETICALS_PATH.name,
+        "dedupe_index": cache_root / DEDUPE_INDEX_PATH.name,
+        "trained_adapters": cache_root / TRAINED_ADAPTERS_DIR.name,
+        "llm_review_request": cache_root / LLM_REVIEW_REQUEST_PATH.name,
+        "llm_review_result": cache_root / LLM_REVIEW_RESULT_PATH.name,
+        "retention_policy": cache_root / RETENTION_POLICY_PATH.name,
+        "retention_history": cache_root / RETENTION_HISTORY_PATH.name,
         "unified_lora_data": root / UNIFIED_LORA_DATA_PATH.name,
+        "lora_data_high": root / UNIFIED_LORA_DATA_PATH.name,
+        "lora_data_medium": root / LORA_MEDIUM_DATA_PATH.name,
+        "lora_data_low": root / LORA_LOW_DATA_PATH.name,
+        "lora_data_pending_delete": root / LORA_PENDING_DELETE_DATA_PATH.name,
         "legacy_unified_lora_data": root / LEGACY_UNIFIED_LORA_DATA_PATH.name,
-        "voice_lora_bridge": root / VOICE_LORA_BRIDGE_PATH.name,
-        "voice_lora_profile_manifest": root / VOICE_LORA_PROFILE_MANIFEST_PATH.name,
-        "voice_lora_training_plan": root / VOICE_LORA_TRAINING_PLAN_PATH.name,
-        "voice_lora_dataset_manifest": root / VOICE_LORA_DATASET_MANIFEST_PATH.name,
-        "voice_lora_clips": root / TRAINED_ADAPTERS_DIR.name / "personal_voice_lora" / "clips",
-        "stt1_whisper_adapter_dataset": root / STT1_WHISPER_ADAPTER_DATASET_PATH.name,
-        "stt1_whisper_adapter_dataset_manifest": root / STT1_WHISPER_ADAPTER_DATASET_MANIFEST_PATH.name,
-        "stt1_whisper_adapter_training_plan": root / STT1_WHISPER_ADAPTER_TRAINING_PLAN_PATH.name,
-        "stt1_whisper_adapter_runtime_manifest": root / STT1_WHISPER_ADAPTER_RUNTIME_MANIFEST_PATH.name,
-        "stt1_whisper_adapter_clips": root / TRAINED_ADAPTERS_DIR.name / "personal_stt1_whisper_adapter" / "clips",
-        "text_lora_dataset": root / TEXT_LORA_DATASET_PATH.name,
-        "text_lora_manifest": root / TEXT_LORA_MANIFEST_PATH.name,
-        "text_lora_corpus": root / TEXT_LORA_CORPUS_PATH.name,
-        "text_lora_corpus_manifest": root / TEXT_LORA_CORPUS_MANIFEST_PATH.name,
-        "text_lora_training_plan": root / TEXT_LORA_TRAINING_PLAN_PATH.name,
-        "audio_preset_lora": root / AUDIO_PRESET_LORA_PATH.name,
-        "multimodal_lora_context": root / MULTIMODAL_LORA_CONTEXT_PATH.name,
-        "lora_retrieval_index": root / LORA_RETRIEVAL_INDEX_PATH.name,
+        "legacy_unified_lora_zip": root / LEGACY_UNIFIED_LORA_ZIP_PATH.name,
+        "voice_lora_bridge": cache_root / VOICE_LORA_BRIDGE_PATH.name,
+        "voice_lora_profile_manifest": cache_root / VOICE_LORA_PROFILE_MANIFEST_PATH.name,
+        "voice_lora_training_plan": cache_root / VOICE_LORA_TRAINING_PLAN_PATH.name,
+        "voice_lora_dataset_manifest": cache_root / VOICE_LORA_DATASET_MANIFEST_PATH.name,
+        "voice_lora_clips": cache_root / TRAINED_ADAPTERS_DIR.name / "personal_voice_lora" / "clips",
+        "stt1_whisper_adapter_dataset": cache_root / STT1_WHISPER_ADAPTER_DATASET_PATH.name,
+        "stt1_whisper_adapter_dataset_manifest": cache_root / STT1_WHISPER_ADAPTER_DATASET_MANIFEST_PATH.name,
+        "stt1_whisper_adapter_training_plan": cache_root / STT1_WHISPER_ADAPTER_TRAINING_PLAN_PATH.name,
+        "stt1_whisper_adapter_runtime_manifest": cache_root / STT1_WHISPER_ADAPTER_RUNTIME_MANIFEST_PATH.name,
+        "stt1_whisper_adapter_clips": cache_root / TRAINED_ADAPTERS_DIR.name / "personal_stt1_whisper_adapter" / "clips",
+        "text_lora_dataset": cache_root / TEXT_LORA_DATASET_PATH.name,
+        "text_lora_manifest": cache_root / TEXT_LORA_MANIFEST_PATH.name,
+        "text_lora_corpus": cache_root / TEXT_LORA_CORPUS_PATH.name,
+        "text_lora_corpus_manifest": cache_root / TEXT_LORA_CORPUS_MANIFEST_PATH.name,
+        "text_lora_training_plan": cache_root / TEXT_LORA_TRAINING_PLAN_PATH.name,
+        "audio_preset_lora": cache_root / AUDIO_PRESET_LORA_PATH.name,
+        "multimodal_lora_context": cache_root / MULTIMODAL_LORA_CONTEXT_PATH.name,
+        "deep_policy_events": cache_root / DEEP_POLICY_EVENTS_PATH.name,
+        "lora_retrieval_index": cache_root / LORA_RETRIEVAL_INDEX_PATH.name,
     }
 
 
@@ -321,6 +346,7 @@ def default_retention_policy() -> dict[str, Any]:
         "jsonl": {
             "setting_trials": {"min_keep": 64, "max_rows": 2048, "remove_per_training": 1},
             "prompt_trials": {"min_keep": 64, "max_rows": 2048, "remove_per_training": 1},
+            "deep_policy_events": {"min_keep": 256, "max_rows": 6000, "remove_per_training": 2},
             "truth_table": {"min_keep": 512, "max_rows": 12000, "remove_per_training": 0},
             "excluded_parentheticals": {"min_keep": 512, "max_rows": 4000, "remove_per_training": 0},
         },

@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from core.roughcut.edl_generator import build_edl_segments, edl_to_dict, map_edl_segments_to_clip_sources, save_edl_json
 from core.roughcut.edit_decision_engine import build_edit_decisions, classify_cut_safety
@@ -12,6 +13,7 @@ from core.roughcut.gap_detector import detect_subtitle_gaps
 from core.roughcut.guide_writer import build_markdown_guide, save_markdown_guide
 from core.roughcut.models import ChapterMetadata, PackedPhrase
 from core.roughcut.pipeline import run_roughcut_pipeline
+from core.roughcut.roughcut_llm import RoughCutLLMActionResult
 from core.roughcut.render_executor import run_render_plan, write_concat_file
 from core.roughcut.renderer_skeleton import build_concat_render_plan, build_ffmpeg_subtitle_burnin_command
 from core.roughcut.scene_change_detector import (
@@ -314,6 +316,40 @@ class RoughCutEngine1Tests(unittest.TestCase):
         self.assertTrue(result.edl_segments)
         self.assertIn("## 전체 요약", result.guide_markdown)
         self.assertEqual(result.warnings, ())
+
+    def test_run_roughcut_pipeline_applies_llm_major_segments(self):
+        with mock.patch("core.roughcut.pipeline.run_roughcut_llm_action") as action:
+            action.return_value = RoughCutLLMActionResult(
+                action="propose_major_segment",
+                ok=True,
+                used_llm=True,
+                data={
+                    "major_segments": [
+                        {
+                            "major_id": "A",
+                            "title": "LLM 소개",
+                            "summary": "LLM이 제안한 첫 중분류",
+                            "start": 0.0,
+                            "end": 6.0,
+                            "minor_codes": ["A1"],
+                            "confidence": 0.91,
+                            "status": "confirmed",
+                        }
+                    ]
+                },
+            )
+            result = run_roughcut_pipeline(
+                [
+                    {"start": 0.0, "end": 2.0, "text": "오늘은 목표를 소개합니다", "speaker": "A"},
+                    {"start": 4.0, "end": 6.0, "text": "이어서 설정 방법을 설명합니다", "speaker": "A"},
+                ],
+                media_duration=8.0,
+                source_path="/tmp/source.mp4",
+                settings={"roughcut_llm_enabled": True, "roughcut_llm_model": "dummy"},
+            )
+
+        self.assertEqual(result.segments[0].title, "LLM 소개")
+        self.assertIn("roughcut_llm_applied:1", result.warnings)
 
     def test_run_roughcut_pipeline_handles_empty_input(self):
         result = run_roughcut_pipeline([], use_llm=True)

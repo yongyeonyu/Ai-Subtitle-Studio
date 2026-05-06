@@ -75,6 +75,12 @@ class EditorVideoControlsMixin:
         self.video_fps = normalize_fps(info.get("fps", 0.0) or 30.0)
         if hasattr(self, "timeline") and hasattr(self.timeline, "set_frame_rate"):
             self.timeline.set_frame_rate(self.video_fps)
+        if (
+            hasattr(self, "timeline")
+            and hasattr(self.timeline, "_apply_single_media_duration")
+            and not is_multiclip
+        ):
+            self.timeline._apply_single_media_duration(float(info.get("duration", 0.0) or 0.0))
         if hasattr(self, "video_player") and hasattr(self.video_player, "set_frame_rate"):
             self.video_player.set_frame_rate(self.video_fps)
         width = int(info.get("width", 0) or 0)
@@ -425,6 +431,7 @@ class EditorVideoControlsMixin:
 
     def _accumulate_confirmed_segment_lora(self, line: int, data: SubtitleBlockData, quality: dict):
         try:
+            from core.personalization.editor_truth_capture import capture_editor_truth_records
             from core.personalization.text_lora_dataset import accumulate_personalization_dataset
             from core.runtime.logger import get_logger
 
@@ -437,6 +444,19 @@ class EditorVideoControlsMixin:
             ):
                 return
             main_w = self.window() if hasattr(self, "window") else None
+            settings = dict(getattr(self, "settings", {}) or {})
+            truth_result = capture_editor_truth_records(
+                [seg],
+                media_path=str(getattr(self, "media_path", "") or ""),
+                subtitle_path="",
+                project_path=str(getattr(main_w, "_current_project_path", "") or ""),
+                trigger="manual_confirm_segment",
+                settings=settings,
+                enabled=bool(settings.get("editor_truth_capture_enabled", True)),
+                min_chars=int(settings.get("editor_truth_capture_min_chars", 2) or 2),
+                max_chars=int(settings.get("editor_truth_capture_max_chars", 240) or 240),
+                refresh_bundle=False,
+            )
             result = accumulate_personalization_dataset(
                 current_segments=[seg],
                 current_project_path=str(getattr(main_w, "_current_project_path", "") or ""),
@@ -444,8 +464,13 @@ class EditorVideoControlsMixin:
             )
             appended = int(result.get("appended_rows", 0) or 0)
             voice_appended = int(result.get("voice_bridge_rows", 0) or 0)
-            if appended or voice_appended:
-                get_logger().log(f"🧠 [텍스트 LoRA] 자막 확정 반영: 텍스트 {appended}개 / 음성브릿지 {voice_appended}개")
+            truth_appended = int(truth_result.get("appended_rows", 0) or 0)
+            excluded_appended = int(truth_result.get("excluded_parenthetical_rows", 0) or 0)
+            if appended or voice_appended or truth_appended or excluded_appended:
+                get_logger().log(
+                    "🧠 [텍스트 LoRA] 자막 확정 반영: "
+                    f"truth {truth_appended}개 / 텍스트 {appended}개 / 음성브릿지 {voice_appended}개"
+                )
         except Exception as exc:
             try:
                 from core.runtime.logger import get_logger

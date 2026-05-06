@@ -29,6 +29,7 @@ from ui.timeline.timeline_paint import (
     stt_candidate_selection_state,
     stt_preview_source,
     stt_preview_visual_style,
+    subtitle_confidence_chips,
     subtitle_segment_visual_style,
 )
 
@@ -169,6 +170,7 @@ def build_scenegraph_subtitle_segments(
                 "textColor": text_color,
                 "alpha": alpha,
                 "borderWidth": border_width,
+                "confidenceChips": subtitle_confidence_chips(seg),
                 "speakerY": float(SPEAKER_TOP),
                 "speakerH": float(SPEAKER_BOT - SPEAKER_TOP),
                 "speakerFill": speaker_fill,

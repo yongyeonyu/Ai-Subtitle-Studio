@@ -27,6 +27,7 @@ from ui.main.bottom_work_panel import BottomWorkPanel
 from ui.main.workspace_stack import MainWorkspaceStack
 from ui.sidebar.project_sidebar_widget import ProjectSidebarWidget
 from ui.log.terminal_log_widget import TerminalLogWidget
+from ui.responsive_profile import responsive_profile_for_size, responsive_sidebar_width
 from ui.style import button_style, label_style, line_icon
 
 from ui.project.project_panel import ProjectUIMixin
@@ -116,6 +117,7 @@ class MainWindow(
         self._on_exit_cb = None
         self._local_llm_models = []
         self._required_model_check_done = False
+        self._personalization_learning_dialogs = []
         self._post_completion_idle_enabled = False
         self._post_completion_idle_ms = 600_000
         self._app_event_filter_installed = False
@@ -245,7 +247,47 @@ class MainWindow(
         self.workspace_splitter = workspace_splitter
         self.right_workspace = right_workspace
         self._apply_log_visible(self._log_visible, persist=False)
+        self._apply_responsive_workspace_layout()
         self.show_home()
+
+    def _current_responsive_profile(self):
+        try:
+            override = str(self.property("responsive_profile_override") or "")
+        except Exception:
+            override = ""
+        return responsive_profile_for_size(self.width(), self.height(), override=override)
+
+    def _apply_responsive_workspace_layout(self):
+        splitter = getattr(self, "workspace_splitter", None)
+        sidebar = getattr(self, "home_page", None)
+        if splitter is None or sidebar is None:
+            return
+        profile = self._current_responsive_profile()
+        if profile.name == "desktop":
+            try:
+                sidebar.setMinimumWidth(0)
+                sidebar.setMaximumWidth(16777215)
+            except Exception:
+                pass
+            return
+        total = max(1, int(self.width() or 0) - (MAIN_PANEL_GAP * 2))
+        if not bool(getattr(self, "_log_visible", True)):
+            splitter.setSizes([0, total])
+            return
+        sidebar_w = responsive_sidebar_width(total, profile)
+        try:
+            sidebar.setMinimumWidth(profile.sidebar_min_width)
+            sidebar.setMaximumWidth(profile.sidebar_max_width)
+        except Exception:
+            pass
+        splitter.setSizes([sidebar_w, max(1, total - sidebar_w)])
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._apply_responsive_workspace_layout)
+        menu = getattr(self, "global_menu_bar", None)
+        if menu is not None:
+            QTimer.singleShot(0, menu.refresh)
 
     def _create_sidebar_terminal_panel(self):
         panel = TerminalLogWidget(self.home_page)
@@ -1432,9 +1474,21 @@ class MainWindow(
     def eventFilter(self, obj, event):
         try:
             if self._is_general_user_activity_event(event):
+                immediate_stop = self._is_immediate_personalization_stop_event(event)
                 trainer = getattr(self, "_personalization_idle_trainer", None)
                 if trainer is not None:
                     trainer.note_user_activity()
+                    if immediate_stop:
+                        try:
+                            if trainer.is_busy():
+                                trainer.suspend_for_foreground_activity(
+                                    reason="user_input_interrupt",
+                                    hold_ms=0,
+                                )
+                        except Exception:
+                            pass
+                if immediate_stop:
+                    self._request_personalization_stop_for_user_input()
                 if getattr(self, "_post_completion_idle_enabled", False):
                     self._reset_post_completion_idle_timer()
         except Exception:
@@ -1454,6 +1508,40 @@ class MainWindow(
             QEvent.Type.TouchUpdate,
             QEvent.Type.TouchEnd,
         }
+
+    def _is_immediate_personalization_stop_event(self, event) -> bool:
+        return event.type() in {
+            QEvent.Type.MouseMove,
+            QEvent.Type.KeyPress,
+            QEvent.Type.KeyRelease,
+        }
+
+    def _register_personalization_learning_dialog(self, dialog) -> None:
+        dialogs = [
+            item
+            for item in list(getattr(self, "_personalization_learning_dialogs", []) or [])
+            if item is not None
+        ]
+        if dialog not in dialogs:
+            dialogs.append(dialog)
+        self._personalization_learning_dialogs = dialogs
+
+    def _unregister_personalization_learning_dialog(self, dialog) -> None:
+        self._personalization_learning_dialogs = [
+            item
+            for item in list(getattr(self, "_personalization_learning_dialogs", []) or [])
+            if item is not None and item is not dialog
+        ]
+
+    def _request_personalization_stop_for_user_input(self) -> None:
+        for widget in list(getattr(self, "_personalization_learning_dialogs", []) or []):
+            request_stop = getattr(widget, "_request_stop_for_user_input", None)
+            if not callable(request_stop):
+                continue
+            try:
+                request_stop()
+            except Exception:
+                continue
 
     def _run_personalization_idle_jobs_now(self):
         trainer = getattr(self, "_personalization_idle_trainer", None)
@@ -1624,6 +1712,7 @@ class MainWindow(
             terminal.setVisible(self._log_visible)
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.refresh()
+        self._apply_responsive_workspace_layout()
 
     def _toggle_log(self):
         self._apply_log_visible(not self._log_visible)

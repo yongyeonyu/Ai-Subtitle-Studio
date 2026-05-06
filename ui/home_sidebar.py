@@ -181,16 +181,27 @@ class HomeSidebarMixin:
         formatter = getattr(self, "_queue_card_time_text", None)
         if callable(formatter):
             return formatter(eta_text, duration_text)
+
+        def is_unknown(value) -> bool:
+            text = str(value or "").strip()
+            if text in {"", "-", "?", "0", "0.0", "00:00", "00:00:00", "계산 중", "분석 중..", "예상불가", "학습 중"}:
+                return True
+            parts = [part.strip() for part in text.split(":")]
+            if len(parts) in {2, 3} and all(part.isdigit() for part in parts):
+                seconds = 0
+                for part in parts:
+                    seconds = seconds * 60 + int(part)
+                return seconds <= 0
+            return False
+
         eta = str(eta_text or "-").strip() or "-"
-        if eta in {"?", "계산 중", "분석 중..", "예상불가"}:
-            eta = "-"
         if "/" in eta:
             left, right = [part.strip() for part in eta.split("/", 1)]
             left = left or "00:00"
-            right = "-" if right in {"", "?", "계산 중", "분석 중..", "예상불가"} else right
+            right = "예상불가" if is_unknown(right) else right
             return f"{left} / {right}"
-        if eta == "-":
-            return "-"
+        if is_unknown(eta):
+            return "예상불가"
         return f"00:00 / {eta}"
 
     def _plain_queue_status(self, status: str) -> str:
@@ -861,6 +872,13 @@ class HomeSidebarMixin:
                 "탐색중",
                 "확인 중",
                 "확인중",
+                "임시선",
+                "재배치",
+                "선발대",
+                "후발대",
+                "rollback",
+                "검증 중",
+                "검증중",
                 "waiting",
                 "pending",
                 "running",

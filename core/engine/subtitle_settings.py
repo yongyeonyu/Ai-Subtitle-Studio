@@ -6,6 +6,7 @@ import json
 import os
 from core.llm.ollama_provider import ollama_probe_timeout, resolve_ollama_model_for_request
 from core.llm.openai_provider import is_openai_model
+from core.performance import adaptive_llm_worker_count
 from core.runtime import config
 
 
@@ -85,6 +86,16 @@ def _effective_llm_workers(
     count = max(1, int(segment_count or 1))
     if not _is_local_ollama_model(model):
         return 1, "api"
+    if bool((settings or {}).get("llm_threads_auto_enabled", True)):
+        workers, _meta = adaptive_llm_worker_count(
+            settings=settings or {},
+            requested=configured,
+            workload=count,
+            provider="ollama",
+            model=model,
+            task="subtitle",
+        )
+        return max(1, min(workers, count)), "local_auto"
     local_cap = max(1, _setting_int(settings or {}, "local_ollama_llm_max_workers", local_worker_cap))
     return max(1, min(configured, local_cap, count)), "local"
 

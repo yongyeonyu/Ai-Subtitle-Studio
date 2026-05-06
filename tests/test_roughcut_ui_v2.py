@@ -18,6 +18,7 @@ from core.roughcut.models import (
     RoughCutTitleSuggestion,
 )
 from ui.roughcut.roughcut_widget import RoughcutWidget
+from ui.settings.settings_gap import GapSettingsDialog
 from ui.settings.settings_advanced import AdvancedSettingsDialog
 from ui.settings.settings_ai import SettingsDialog
 
@@ -99,13 +100,17 @@ class RoughcutUiV2Tests(unittest.TestCase):
         })
         try:
             self.assertEqual([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())], ["자막 검수", "중분류", "모델/API", "자동 설정"])
+            self.assertEqual(dialog.combo_simple_operation_mode.currentData(), "auto")
             collected = dialog._collect_settings()
+            self.assertTrue(collected["settings_simplified_ui_enabled"])
+            self.assertTrue(collected["subtitle_bundle_autopilot_enabled"])
             self.assertEqual(collected["user_prompt"], "")
             self.assertFalse(hasattr(dialog, "chk_editor_roughcut_draft_enabled"))
             self.assertTrue(collected["editor_roughcut_draft_enabled"])
             self.assertEqual(collected["editor_roughcut_draft_prompt"], "")
             self.assertEqual(collected["llm_threads"], 5)
-            self.assertEqual(collected["llm_workers"], 5)
+            self.assertTrue(collected["llm_threads_auto_enabled"])
+            self.assertTrue(collected["llm_workers_auto_enabled"])
             self.assertFalse(collected["subtitle_quality_enabled"])
             self.assertEqual(collected["review_auto_correct_apply_threshold"], 94)
             self.assertTrue(collected["roughcut_llm_enabled"])
@@ -114,6 +119,12 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(collected["roughcut_llm_model"], "gpt-roughcut")
             self.assertEqual(collected["roughcut_llm_prompt"], "")
             self.assertEqual(collected["roughcut_llm_threads"], 3)
+            self.assertTrue(collected["roughcut_llm_threads_auto_enabled"])
+            self.assertTrue(collected["roughcut_llm_rows_auto_enabled"])
+            self.assertTrue(collected["roughcut_llm_rows_lora_enabled"])
+            self.assertFalse(hasattr(dialog, "spin_roughcut_context_rows"))
+            self.assertFalse(hasattr(dialog, "spin_roughcut_chunk_rows"))
+            self.assertFalse(hasattr(dialog, "spin_roughcut_lookahead_rows"))
             self.assertNotIn("google_api_key", collected)
             self.assertNotIn("openai_api_key", collected)
         finally:
@@ -141,10 +152,12 @@ class RoughcutUiV2Tests(unittest.TestCase):
         finally:
             dialog.close()
 
-    def test_settings_dialog_reads_legacy_llm_workers_for_editor_threads(self):
+    def test_settings_dialog_hides_manual_llm_thread_control(self):
         dialog = SettingsDialog({"llm_workers": 6})
         try:
-            self.assertEqual(dialog.spin_editor_llm_threads.value(), 6)
+            self.assertFalse(hasattr(dialog, "spin_editor_llm_threads"))
+            collected = dialog._collect_settings()
+            self.assertTrue(collected["llm_threads_auto_enabled"])
         finally:
             dialog.close()
 
@@ -165,16 +178,31 @@ class RoughcutUiV2Tests(unittest.TestCase):
                 self.assertEqual(values, ["fast", "balanced", "precise"])
                 self.assertEqual(dialog.combo_auto_start_mode.currentData(), "precise")
 
-                dialog.combo_auto_start_mode.setCurrentIndex(1)
+                for idx in range(dialog.combo_simple_operation_mode.count()):
+                    if dialog.combo_simple_operation_mode.itemData(idx) == "balanced":
+                        dialog.combo_simple_operation_mode.setCurrentIndex(idx)
+                        break
                 collected = dialog._collect_settings()
 
                 self.assertEqual(collected["auto_start_mode"], "balanced")
+                self.assertEqual(collected["simple_operation_mode"], "balanced")
                 saved = save_mock.call_args.args[0]
                 self.assertEqual(saved["auto_start_mode"], "balanced")
                 self.assertEqual(saved["icloud_stt_quality_preset"], "balanced")
                 self.assertEqual(saved["nas_stt_quality_preset"], "balanced")
             finally:
                 dialog.close()
+
+    def test_gap_dialog_hides_manual_sliders_behind_simple_mode(self):
+        dialog = GapSettingsDialog({"settings_simplified_ui_enabled": True, "simple_operation_mode": "precise"})
+        try:
+            self.assertFalse(dialog.chk_show_manual_gap_settings.isChecked())
+            self.assertTrue(dialog._manual_gap_scroll_area.isHidden())
+            dialog._collect_data()
+            self.assertTrue(dialog.result["subtitle_bundle_autopilot_enabled"])
+            self.assertEqual(dialog.result["simple_operation_mode"], "precise")
+        finally:
+            dialog.close()
 
     def test_fast_preset_disables_editor_roughcut_draft_option(self):
         dialog = SettingsDialog({"editor_roughcut_draft_enabled": True, "stt_quality_preset": "fast"})
@@ -191,6 +219,10 @@ class RoughcutUiV2Tests(unittest.TestCase):
         try:
             tab_names = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
             self.assertIn("시스템", tab_names)
+            self.assertNotIn("Silero", tab_names)
+            self.assertNotIn("DeepFilter", tab_names)
+            self.assertNotIn("Whisper", tab_names)
+            self.assertNotIn("ffmpeg", tab_names)
             self.assertNotIn("LLM 프롬프트", tab_names)
             self.assertNotIn("자막 품질", tab_names)
             self.assertFalse(hasattr(dialog, "edit_user_prompt"))

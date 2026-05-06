@@ -17,6 +17,7 @@ import tempfile
 import wave
 
 from core.llm.secure_keys import get_api_key
+from core.media_fingerprint import media_file_fingerprint, media_fingerprint_digest
 from core.media_info import probe_media
 from core.performance import bounded_worker_count
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs, rnnoise_binary, subprocess_env
@@ -25,7 +26,7 @@ from core.runtime.logger import get_logger
 from core.subtitle_quality.vad_alignment_checker import apply_review_vad_settings, review_vad_config
 
 _VAD_CACHE_VERSION = 3
-_AUDIO_CACHE_VERSION = 2
+_AUDIO_CACHE_VERSION = 3
 
 
 def _runtime_get_logger():
@@ -940,15 +941,21 @@ class VideoProcessorAudioHelpersMixin:
             stat = os.stat(video_path)
             source_size = int(stat.st_size)
             source_mtime_ns = int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
+            source_fingerprint = media_file_fingerprint(video_path, sample_bytes=512 * 1024, include_samples=True)
+            source_fingerprint_digest = media_fingerprint_digest(video_path, sample_bytes=512 * 1024, include_samples=True)
         except Exception:
             source = os.path.abspath(video_path or "")
             source_size = 0
             source_mtime_ns = 0
+            source_fingerprint = source
+            source_fingerprint_digest = ""
         return {
             "version": _AUDIO_CACHE_VERSION,
             "source": source,
             "source_size": source_size,
             "source_mtime_ns": source_mtime_ns,
+            "source_fingerprint": source_fingerprint,
+            "source_fingerprint_digest": source_fingerprint_digest,
             "audio_ai": str(audio_ai or "none"),
             "use_basic_filter": bool(use_basic),
             "master_filter": str(master_filter or "anull"),

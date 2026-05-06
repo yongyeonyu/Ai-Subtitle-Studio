@@ -3,6 +3,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from core.personalization.lora_models import (
     ExcludedParentheticalRow,
@@ -18,13 +19,16 @@ from core.personalization.llm_review_exchange import (
     import_llm_review_result,
 )
 from core.personalization.lora_retention import prune_low_value_personalization_data
+from core.personalization.lora_quality_buckets import LORA_ALL_BUCKETS, LORA_BUCKET_FILENAMES
 from core.personalization.lora_storage import (
     append_excluded_parentheticals,
+    append_deep_policy_events,
     append_multimodal_lora_context_rows,
     append_prompt_trials,
     append_setting_trials,
     append_truth_table_rows,
     compact_lora_personalization_store,
+    delete_pending_lora_data,
     initialize_lora_personalization_store,
     load_best_settings,
     load_dedupe_index,
@@ -44,6 +48,10 @@ from core.personalization.lora_storage import (
 
 
 class LoraPersonalizationStorageTests(unittest.TestCase):
+    def _read_lora_zip_payload(self, path: Path) -> dict:
+        with zipfile.ZipFile(path, "r") as archive:
+            return json.loads(archive.read("lora_data_bundle.json").decode("utf-8"))
+
     def test_initialize_store_creates_phase3_layout(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest = initialize_lora_personalization_store(tmpdir)
@@ -63,12 +71,16 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertTrue(paths["trained_adapters"].exists())
             self.assertTrue(paths["retention_policy"].exists())
             self.assertTrue(paths["retention_history"].exists())
+            self.assertTrue(paths["deep_policy_events"].exists())
             self.assertEqual(paths["lora_retrieval_index"].name, "lora_retrieval_index.json")
             self.assertTrue(paths["stt1_whisper_adapter_dataset"].exists())
             self.assertEqual(paths["stt1_whisper_adapter_dataset"].name, "stt1_whisper_adapter_dataset.jsonl")
             self.assertTrue(paths["unified_lora_data"].exists())
-            self.assertEqual(paths["unified_lora_data"].name, "lora_data_bundle.zip")
+            self.assertEqual(paths["unified_lora_data"].name, "lora_data_high.zip")
             self.assertTrue(zipfile.is_zipfile(paths["unified_lora_data"]))
+            self.assertTrue(paths["cache_root"].exists())
+            visible_root_files = {item.name for item in paths["root"].iterdir() if item.is_file()}
+            self.assertEqual(visible_root_files, set(LORA_BUCKET_FILENAMES.values()))
             with zipfile.ZipFile(paths["unified_lora_data"], "r") as archive:
                 for info in archive.infolist():
                     self.assertEqual(info.compress_type, zipfile.ZIP_STORED)
@@ -80,10 +92,128 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertEqual(manifest["counts"]["llm_review_request_files"], 0)
             self.assertEqual(manifest["counts"]["llm_review_result_files"], 0)
             self.assertEqual(manifest["counts"]["retention_history_rows"], 0)
+            self.assertEqual(manifest["counts"]["deep_policy_event_rows"], 0)
             self.assertEqual(manifest["counts"]["lora_retrieval_index_docs"], 0)
             self.assertEqual(manifest["counts"]["stt1_whisper_adapter_dataset_rows"], 0)
             self.assertEqual(manifest["counts"]["stt1_whisper_adapter_runtime_ready"], 0)
             self.assertEqual(manifest["counts"]["unified_lora_data_records"], 0)
+
+    def test_initialize_migrates_legacy_root_cache_files_and_removes_zip_temps(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            legacy_row = TruthTableRow(
+                media_id="legacy-root-media",
+                media_path="/tmp/legacy-root.mp4",
+                subtitle_path="/tmp/legacy-root.srt",
+                segment_id="legacy-root:1",
+                start_sec=0.0,
+                end_sec=1.5,
+                raw_ground_truth_text="루트 캐시는 숨겨야 합니다.",
+                speech_training_text="루트 캐시는 숨겨야 합니다.",
+            ).to_record()
+            (root / "truth_table.jsonl").write_text(json.dumps(legacy_row, ensure_ascii=False) + "\n", encoding="utf-8")
+            (root / "lora_data_bundle.zip.deadbeef.tmp").write_bytes(b"partial zip")
+            (root / "trained_adapters" / "personal_text_lora").mkdir(parents=True)
+            (root / "trained_adapters" / "personal_text_lora" / "adapter.bin").write_bytes(b"adapter")
+
+            manifest = initialize_lora_personalization_store(tmpdir)
+            paths = store_paths(tmpdir)
+
+            self.assertEqual(manifest["counts"]["truth_table_rows"], 1)
+            self.assertFalse((root / "truth_table.jsonl").exists())
+            self.assertFalse((root / "lora_data_bundle.zip.deadbeef.tmp").exists())
+            self.assertFalse((root / "trained_adapters").exists())
+            self.assertIn("legacy-root-media", paths["truth_table"].read_text(encoding="utf-8"))
+            self.assertTrue((paths["trained_adapters"] / "personal_text_lora" / "adapter.bin").exists())
+            visible_root_files = {item.name for item in root.iterdir() if item.is_file()}
+            self.assertEqual(visible_root_files, set(LORA_BUCKET_FILENAMES.values()))
+
+    def test_initialize_defers_large_legacy_zip_rebucket_when_cache_exists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = store_paths(tmpdir)
+            paths["cache_root"].mkdir(parents=True, exist_ok=True)
+            paths["truth_table"].write_text(
+                json.dumps(
+                    {
+                        "media_id": "defer-legacy",
+                        "media_path": "/tmp/defer-legacy.mp4",
+                        "segment_id": "1",
+                        "speech_training_text": "기존 ZIP은 메뉴 열 때 바로 재작성하지 않습니다.",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            paths["legacy_unified_lora_zip"].write_bytes(b"large legacy zip placeholder")
+
+            manifest = initialize_lora_personalization_store(tmpdir)
+
+            self.assertEqual(manifest["counts"]["truth_table_rows"], 1)
+            self.assertTrue(paths["legacy_unified_lora_zip"].exists())
+            self.assertFalse(paths["unified_lora_data"].exists())
+
+    def test_learning_info_payload_uses_cached_manifest_without_heavy_refresh(self):
+        from ui.settings import personalization_learning_info as info_mod
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = store_paths(tmpdir)
+            paths["cache_root"].mkdir(parents=True, exist_ok=True)
+            paths["manifest"].write_text(
+                json.dumps(
+                    {
+                        "schema": "ai_subtitle_studio.lora_personalization_manifest.v1",
+                        "updated_at": "2026-05-06T00:00:00",
+                        "counts": {
+                            "truth_table_rows": 1,
+                            "excluded_parenthetical_rows": 0,
+                            "setting_trial_rows": 0,
+                            "prompt_trial_rows": 0,
+                            "retention_history_rows": 0,
+                            "voice_lora_bridge_rows": 0,
+                            "stt1_whisper_adapter_dataset_rows": 0,
+                            "text_lora_dataset_rows": 0,
+                            "text_lora_corpus_rows": 0,
+                            "audio_preset_lora_rows": 0,
+                            "multimodal_lora_context_rows": 0,
+                            "learned_split_rules": 0,
+                            "learned_line_break_rules": 0,
+                            "voice_lora_training_items": 0,
+                            "voice_lora_stored_audio_items": 0,
+                            "stt1_whisper_adapter_training_items": 0,
+                            "stt1_whisper_adapter_runtime_ready": 0,
+                            "queue_items": 0,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            paths["truth_table"].write_text(
+                json.dumps(
+                    {
+                        "media_id": "info-fast",
+                        "media_path": "/tmp/info-fast.mp4",
+                        "segment_id": "1",
+                        "speech_training_text": "빠르게 보여줍니다.",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            paths["unified_lora_data"].write_bytes(b"not-read-by-info")
+
+            with (
+                patch.object(info_mod, "LORA_PERSONALIZATION_DIR", Path(tmpdir)),
+                patch.object(info_mod, "store_paths", return_value=paths),
+                patch.object(info_mod, "refresh_lora_personalization_manifest") as refresh_manifest,
+            ):
+                payload = info_mod.build_learning_info_payload()
+
+            refresh_manifest.assert_not_called()
+            self.assertIn("truth 1행", payload["header"])
+            self.assertIn("빠르게 보여줍니다", payload["learning"])
 
     def test_manifest_counts_stt1_adapter_dataset_and_runtime_ready(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -229,6 +359,15 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
                 "subtitle_profile": {"reading_speed": {"avg_cps": 7.5}},
                 "dedupe_hash": "context-media-001",
             }
+            deep_event_row = {
+                "schema": "ai_subtitle_studio.deep_policy_event.v1",
+                "event_type": "subtitle_rerank",
+                "media_id": "media-001",
+                "text": "딥러닝 정책 이벤트",
+                "decision": {"best_score": 0.9},
+                "score": 90.0,
+                "dedupe_hash": "deep-event-media-001",
+            }
 
             truth_result_first = append_truth_table_rows([truth_row], tmpdir)
             truth_result_second = append_truth_table_rows([truth_row], tmpdir)
@@ -236,6 +375,7 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             setting_result = append_setting_trials([setting_trial, setting_trial], tmpdir)
             prompt_result = append_prompt_trials([prompt_trial, prompt_trial], tmpdir)
             context_result = append_multimodal_lora_context_rows([context_row, context_row], tmpdir)
+            deep_event_result = append_deep_policy_events([deep_event_row, deep_event_row], tmpdir)
 
             self.assertEqual(truth_result_first["appended_rows"], 1)
             self.assertEqual(truth_result_second["appended_rows"], 0)
@@ -243,6 +383,7 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertEqual(setting_result["appended_rows"], 1)
             self.assertEqual(prompt_result["appended_rows"], 1)
             self.assertEqual(context_result["appended_rows"], 1)
+            self.assertEqual(deep_event_result["appended_rows"], 1)
 
             manifest = refresh_lora_personalization_manifest(tmpdir)
             self.assertEqual(manifest["counts"]["truth_table_rows"], 1)
@@ -250,15 +391,23 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertEqual(manifest["counts"]["setting_trial_rows"], 1)
             self.assertEqual(manifest["counts"]["prompt_trial_rows"], 1)
             self.assertEqual(manifest["counts"]["multimodal_lora_context_rows"], 1)
-            self.assertEqual(manifest["counts"]["unified_lora_data_records"], 5)
+            self.assertEqual(manifest["counts"]["deep_policy_event_rows"], 1)
+            self.assertEqual(manifest["counts"]["unified_lora_data_records"], 6)
 
             bundle = load_unified_lora_data_bundle(store_dir=tmpdir)
             self.assertEqual(bundle["schema"], "ai_subtitle_studio.lora_unified_data_bundle.v1")
-            self.assertEqual(bundle["counts"]["unified_training_records"], 5)
+            self.assertEqual(bundle["counts"]["unified_training_records"], 6)
             self.assertEqual(len(bundle["sections"]["truth_table"]), 1)
             self.assertEqual(
                 {row["kind"] for row in bundle["records"]},
-                {"truth_table", "excluded_parentheticals", "setting_trials", "prompt_trials", "multimodal_lora_context"},
+                {
+                    "truth_table",
+                    "excluded_parentheticals",
+                    "setting_trials",
+                    "prompt_trials",
+                    "multimodal_lora_context",
+                    "deep_policy_events",
+                },
             )
 
             dedupe = load_dedupe_index(tmpdir)
@@ -486,13 +635,88 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             payload = load_unified_lora_data_bundle(result["path"])
             self.assertEqual(payload["records"][0]["kind"], "prompt_trials")
             self.assertEqual(payload["sections"]["prompt_trials"][0]["prompt_template_id"], "bundle_prompt")
-            self.assertEqual(payload["storage_mode"], "single_file_managed_zip_bundle")
-            self.assertEqual(payload["bundle_role"], "primary_user_managed_lora_learning_file")
+            self.assertEqual(payload["storage_mode"], "quality_bucketed_zip_bundle")
+            self.assertIn(payload["bundle_role"], {"quality_bucket_user_managed_lora_learning_file", "merged_user_managed_lora_learning_files"})
             self.assertEqual(payload["archive_format"], "zip")
             self.assertEqual(payload["archive_compression"], "stored_no_compression")
             self.assertEqual(payload["archive_compression_level"], 0)
             self.assertEqual(payload["sections"]["text_lora_corpus"][0]["output"], "안녕하세요")
             self.assertEqual(payload["sections"]["text_lora_corpus_manifest"]["stats"]["total_items"], 1)
+
+    def test_lora_bucket_archives_split_by_score_and_promote_on_refresh(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            paths = store_paths(tmpdir)
+            append_setting_trials(
+                [
+                    TrialRecord(
+                        trial_type="setting",
+                        media_id=f"bucket-{label}",
+                        media_path=f"/tmp/bucket-{label}.mp4",
+                        subtitle_path=f"/tmp/bucket-{label}.srt",
+                        config={"candidate": label},
+                        status="complete",
+                        score=score,
+                    ).to_record()
+                    for label, score in (("high", 92.0), ("medium", 70.0), ("low", 42.0), ("pending", 12.0))
+                ],
+                tmpdir,
+            )
+
+            result = refresh_unified_lora_data_bundle(tmpdir, force=True)
+            self.assertEqual(set(result["bucket_files"]), set(LORA_ALL_BUCKETS))
+
+            def candidates(path_key: str) -> set[str]:
+                payload = self._read_lora_zip_payload(paths[path_key])
+                return {str((row.get("config") or {}).get("candidate")) for row in payload["sections"]["setting_trials"]}
+
+            self.assertEqual(candidates("lora_data_high"), {"high"})
+            self.assertEqual(candidates("lora_data_medium"), {"medium"})
+            self.assertEqual(candidates("lora_data_low"), {"low"})
+            self.assertEqual(candidates("lora_data_pending_delete"), {"pending"})
+
+            rows = [
+                json.loads(line)
+                for line in paths["setting_trials"].read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            for row in rows:
+                if (row.get("config") or {}).get("candidate") == "pending":
+                    row["score"] = 95.0
+                    row["metrics"] = {"final_score": 95.0}
+            paths["setting_trials"].write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+
+            refresh_unified_lora_data_bundle(tmpdir, force=True)
+            self.assertIn("pending", candidates("lora_data_high"))
+            self.assertNotIn("pending", candidates("lora_data_pending_delete"))
+
+    def test_delete_pending_lora_data_removes_pending_rows_and_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            paths = store_paths(tmpdir)
+            append_setting_trials(
+                [
+                    TrialRecord(
+                        trial_type="setting",
+                        media_id="pending-delete",
+                        media_path="/tmp/pending-delete.mp4",
+                        subtitle_path="/tmp/pending-delete.srt",
+                        config={"candidate": "pending-delete"},
+                        status="complete",
+                        score=8.0,
+                    ).to_record()
+                ],
+                tmpdir,
+            )
+            refresh_unified_lora_data_bundle(tmpdir, force=True)
+            self.assertTrue(paths["lora_data_pending_delete"].exists())
+
+            result = delete_pending_lora_data(tmpdir)
+
+            self.assertEqual(result["total_removed"], 1)
+            self.assertFalse(paths["lora_data_pending_delete"].exists())
+            rows = [line for line in paths["setting_trials"].read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(rows, [])
 
     def test_single_bundle_can_restore_internal_cache_files(self):
         with tempfile.TemporaryDirectory() as source_dir, tempfile.TemporaryDirectory() as restored_dir:

@@ -356,6 +356,44 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_live_stt_preview_autoscrolls_editor_to_latest_draft(self):
+        editor = _ActualSelectionEditor()
+        try:
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "첫 드래프트", "stt_preview_source": "STT1"},
+                {"start": 3.0, "end": 4.0, "text": "둘째 드래프트", "stt_preview_source": "STT1"},
+            ])
+            editor._flush_live_editor_preview_queue()
+
+            self.assertEqual(editor.text_edit.textCursor().blockNumber(), 1)
+            self.assertAlmostEqual(editor._active_seg_start, 3.0)
+            self.assertEqual(editor.timeline.active_calls[-1], 3.0)
+        finally:
+            editor.text_edit.close()
+
+    def test_llm_review_payload_focuses_matching_editor_draft(self):
+        editor = _ActualSelectionEditor()
+        try:
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "첫 드래프트", "stt_preview_source": "STT1"},
+                {"start": 3.0, "end": 4.0, "text": "둘째 드래프트", "stt_preview_source": "STT1"},
+            ])
+            editor._flush_live_editor_preview_queue()
+
+            focused = editor._focus_editor_block_for_processing_segment({
+                "active": True,
+                "start": 1.0,
+                "end": 2.0,
+                "text": "첫 드래프트",
+            })
+
+            self.assertTrue(focused)
+            self.assertEqual(editor.text_edit.textCursor().blockNumber(), 0)
+            self.assertAlmostEqual(editor._active_seg_start, 1.0)
+            self.assertEqual(editor.timeline.active_calls[-1], 1.0)
+        finally:
+            editor.text_edit.close()
+
     def test_final_segment_replaces_overlapping_live_editor_preview(self):
         editor = _ActualSelectionEditor()
         try:
@@ -372,6 +410,21 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             self.assertNotIn("실시간 드래프트", editor_text)
             saved = [seg for seg in editor._get_current_segments() if not seg.get("is_gap")]
             self.assertEqual([seg["text"] for seg in saved], ["최종 자막"])
+        finally:
+            editor.text_edit.close()
+
+    def test_final_live_append_autoscrolls_editor_to_latest_polished_subtitle(self):
+        editor = _ActualSelectionEditor()
+        try:
+            editor.append_segments([
+                {"start": 1.0, "end": 2.0, "text": "첫 최종", "speaker": "00"},
+                {"start": 3.0, "end": 4.0, "text": "둘째 최종", "speaker": "00"},
+            ])
+            editor._flush_queue()
+
+            self.assertEqual(editor.text_edit.textCursor().block().text(), "둘째 최종")
+            self.assertAlmostEqual(editor._active_seg_start, 2.7)
+            self.assertEqual(editor.timeline.active_calls[-1], 2.7)
         finally:
             editor.text_edit.close()
 

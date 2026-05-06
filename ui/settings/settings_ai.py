@@ -18,6 +18,7 @@ from ui.settings.settings_common import (
     _fetch_models, _create_bottom_buttons, filter_available_whisper_models,
 )
 from ui.settings.qml_panel import create_settings_header
+from ui.settings.tablet_dialog import apply_tablet_dialog_profile
 from ui.style import label_style, settings_button_style, settings_dialog_stylesheet, line_icon
 from core.llm.provider_registry import cloud_model_items
 from core.llm.secure_keys import get_api_key, set_api_key
@@ -31,6 +32,12 @@ from core.audio.stt_quality_presets import (
     stt_quality_label,
 )
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
+from core.settings_simplifier import (
+    apply_simple_operation_mode,
+    normalize_simple_operation_mode,
+    simple_operation_mode_items,
+    simple_operation_mode_summary,
+)
 from ui.settings.settings_roughcut import SettingsRoughcutMixin
 from core.path_manager import (
     get_icloud_auto_detect,
@@ -63,6 +70,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         super().__init__(parent)
         self.setWindowTitle("⚙️ AI 엔진 설정")
         self.setMinimumWidth(860)
+        apply_tablet_dialog_profile(self)
         self.setStyleSheet(settings_dialog_stylesheet())
         self.result_settings = dict(settings)
         self.stt_quality_presets = load_stt_quality_presets()
@@ -106,6 +114,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             self.combo_audio_preset.addItem(f"{name} - {desc}" if desc else name, name)
         self.combo_audio_preset.setMinimumWidth(280)
 
+        self._build_simple_operation_section(editor_form, settings)
         self._build_subtitle_quality_section(editor_form, settings)
 
         # 1. 모델 관리
@@ -132,8 +141,8 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.btn_ollama_delete = QPushButton("삭제")
         self._fit_action_button(self.btn_llm_info, 96)
         self._fit_action_button(self.btn_ollama_delete, 78)
-        self.btn_llm_info.setStyleSheet(settings_button_style("toolbar", min_width=82))
-        self.btn_ollama_delete.setStyleSheet(settings_button_style("toolbar", min_width=64))
+        self.btn_llm_info.setStyleSheet(self._settings_button_style("toolbar", min_width=82))
+        self.btn_ollama_delete.setStyleSheet(self._settings_button_style("toolbar", min_width=64))
         self.btn_llm_info.clicked.connect(self._update_model_info)
         self.btn_ollama_delete.clicked.connect(self._delete_current_ollama)
         installed_buttons = QHBoxLayout()
@@ -154,8 +163,8 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.btn_ollama_refresh = QPushButton("새로고침")
         self._fit_action_button(self.btn_ollama_install, 78)
         self._fit_action_button(self.btn_ollama_refresh, 96)
-        self.btn_ollama_install.setStyleSheet(settings_button_style("toolbar", min_width=64))
-        self.btn_ollama_refresh.setStyleSheet(settings_button_style("toolbar", min_width=82))
+        self.btn_ollama_install.setStyleSheet(self._settings_button_style("toolbar", min_width=64))
+        self.btn_ollama_refresh.setStyleSheet(self._settings_button_style("toolbar", min_width=82))
         self.btn_ollama_install.clicked.connect(self._install_selected_ollama)
         self.btn_ollama_refresh.clicked.connect(self._refresh_ollama_models)
         ollama_buttons.addWidget(self.btn_ollama_install)
@@ -178,7 +187,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             (self.btn_registry_required, 96, 82),
         ):
             self._fit_action_button(btn, width)
-            btn.setStyleSheet(settings_button_style("toolbar", min_width=min_width))
+            btn.setStyleSheet(self._settings_button_style("toolbar", min_width=min_width))
         self.btn_registry_install.clicked.connect(self._install_registry_model)
         self.btn_registry_delete.clicked.connect(self._delete_registry_model)
         self.btn_registry_required.clicked.connect(self._check_required_registry_models)
@@ -234,19 +243,13 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.input_huggingface_token.setText(get_api_key("huggingface"))
         ai_form.addRow("Hugging Face Token:", self.input_huggingface_token)
 
-        self.spin_editor_llm_threads = QSpinBox()
-        self.spin_editor_llm_threads.setRange(1, 16)
-        editor_thread_default = DEFAULT_ADV_SETTINGS.get("llm_threads", settings.get("llm_workers", 4))
-        self.spin_editor_llm_threads.setValue(int(settings.get("llm_threads", settings.get("llm_workers", editor_thread_default)) or 4))
-        editor_form.addRow("에디터 LLM 처리 스레드:", self.spin_editor_llm_threads)
-
         self._build_roughcut_llm_section(roughcut_form, settings)
 
         # 3. 자막 묶음 단위 (슬라이더 세팅)
         chunk_layout = QHBoxLayout()
         self.btn_chunk_minus = QPushButton("-")
         self.btn_chunk_minus.setFixedWidth(54)
-        self.btn_chunk_minus.setStyleSheet(settings_button_style("toolbar", min_width=30))
+        self.btn_chunk_minus.setStyleSheet(self._settings_button_style("toolbar", min_width=30))
         self.btn_chunk_minus.clicked.connect(self._on_chunk_minus)
         
         self.slider_chunk = QSlider(Qt.Orientation.Horizontal)
@@ -257,7 +260,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         
         self.btn_chunk_plus = QPushButton("+")
         self.btn_chunk_plus.setFixedWidth(54)
-        self.btn_chunk_plus.setStyleSheet(settings_button_style("toolbar", min_width=30))
+        self.btn_chunk_plus.setStyleSheet(self._settings_button_style("toolbar", min_width=30))
         self.btn_chunk_plus.clicked.connect(self._on_chunk_plus)
         
         self.lbl_chunk_time = QLabel("01분 00초")
@@ -272,13 +275,19 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         chunk_layout.addWidget(self.btn_chunk_plus)
         chunk_layout.addWidget(self.lbl_chunk_time)
         chunk_layout.addWidget(self.chk_chunk_all)
-        editor_form.addRow("자막 묶음 단위:", chunk_layout)
-        self._build_editor_llm_prompt_section(editor_form, settings)
+        self._manual_chunk_layout = chunk_layout
+        if bool(settings.get("settings_simplified_ui_enabled", True)):
+            chunk_hint = QLabel("LoRA·딥러닝·정식/임시 컷 경계가 자막 생성마다 묶음 범위를 자동으로 정합니다.")
+            chunk_hint.setWordWrap(True)
+            chunk_hint.setStyleSheet(label_style("muted", 11))
+            editor_form.addRow("자막 묶음:", chunk_hint)
+        else:
+            editor_form.addRow("자막 묶음 단위:", chunk_layout)
         
-        curr_chunk = int(settings.get("chunk_time_limit", 60))
+        curr_chunk = int(settings.get("chunk_time_limit", settings.get("subtitle_bundle_target_sec", 180)) or 180)
         if curr_chunk >= 99999:
             self.chk_chunk_all.setChecked(True)
-            self.slider_chunk.setValue(60)
+            self.slider_chunk.setValue(int(settings.get("subtitle_bundle_target_sec", 180) or 180))
         else:
             self.chk_chunk_all.setChecked(False)
             self.slider_chunk.setValue(curr_chunk)
@@ -411,6 +420,35 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         layout.addSpacing(10)
         layout.addLayout(_create_bottom_buttons(self, self._on_ok, save_callback=self._on_save, save_def_callback=self._on_save_default))   
 
+    def _build_simple_operation_section(self, form: QFormLayout, settings: dict):
+        section = QLabel("작업 모드")
+        section.setStyleSheet(label_style("text", 13, bold=True) + "padding: 10px 5px 2px 5px;")
+        form.addRow("", section)
+
+        mode_layout = QVBoxLayout()
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+        mode_layout.setSpacing(6)
+        self.combo_simple_operation_mode = QComboBox()
+        for mode, label, summary in simple_operation_mode_items():
+            self.combo_simple_operation_mode.addItem(f"{label} - {summary}", mode)
+        current_mode = normalize_simple_operation_mode(settings.get("simple_operation_mode", "auto"))
+        self._set_combo_data(self.combo_simple_operation_mode, current_mode)
+        self.combo_simple_operation_mode.currentIndexChanged.connect(self._on_simple_operation_mode_changed)
+        mode_layout.addWidget(self.combo_simple_operation_mode)
+
+        self.lbl_simple_operation_summary = QLabel(simple_operation_mode_summary(current_mode))
+        self.lbl_simple_operation_summary.setWordWrap(True)
+        self.lbl_simple_operation_summary.setStyleSheet(label_style("muted", 11))
+        mode_layout.addWidget(self.lbl_simple_operation_summary)
+
+        form.addRow("모드:", mode_layout)
+
+    def _on_simple_operation_mode_changed(self, *args):
+        mode = self.combo_simple_operation_mode.currentData() or "auto"
+        if hasattr(self, "lbl_simple_operation_summary"):
+            self.lbl_simple_operation_summary.setText(simple_operation_mode_summary(mode))
+        self.result_settings = apply_simple_operation_mode(self.result_settings, mode)
+
     def _make_tab_form(self):
         content = QWidget()
         form = QFormLayout(content)
@@ -435,17 +473,23 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
 
     def _fit_action_button(self, button: QPushButton, width: int):
         button.setFixedWidth(width)
-        button.setMinimumHeight(40)
-        button.setMaximumHeight(40)
+        height = int(getattr(self, "_settings_control_height", 40) or 40)
+        button.setMinimumHeight(height)
+        button.setMaximumHeight(height)
         button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
     def _fit_model_combo(self, combo: QComboBox, *, min_contents: int = 24):
         combo.setMinimumContentsLength(min_contents)
         combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        combo.setMinimumHeight(40)
-        combo.setMaximumHeight(40)
+        height = int(getattr(self, "_settings_control_height", 40) or 40)
+        combo.setMinimumHeight(height)
+        combo.setMaximumHeight(height)
         combo.setMaxVisibleItems(14)
         combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def _settings_button_style(self, kind: str = "toolbar", *, min_width: int = 72):
+        height = int(getattr(self, "_settings_control_height", 40) or 40)
+        return settings_button_style(kind, min_width=min_width, min_height=height)
 
     def _set_combo_item_tooltip(self, combo: QComboBox, index: int, text: str):
         if index >= 0:
@@ -580,7 +624,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
                 continue
             btn.blockSignals(True)
             btn.setChecked(self.llm_filter == value)
-            btn.setStyleSheet(settings_button_style("primary" if self.llm_filter == value else "toolbar", min_width=64))
+            btn.setStyleSheet(self._settings_button_style("primary" if self.llm_filter == value else "toolbar", min_width=64))
             btn.blockSignals(False)
 
     def _rebuild_llm_combo(self, preferred_name=""):
@@ -760,29 +804,25 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "subtitle_quality_auto_check_after_generate",
             DEFAULT_ADV_SETTINGS.get("subtitle_quality_auto_check_after_generate", True),
         )))
-        form.addRow("자동 검사:", self.chk_subtitle_quality_auto_check)
-
         self.chk_subtitle_quality_auto_correct = QCheckBox("자동 교정 허용 (LoRA/개인화 적용)")
         self.chk_subtitle_quality_auto_correct.setChecked(bool(settings.get(
             "subtitle_quality_auto_correct_enabled",
             DEFAULT_ADV_SETTINGS.get("subtitle_quality_auto_correct_enabled", True),
         )))
-        form.addRow("LoRA 교정:", self.chk_subtitle_quality_auto_correct)
 
         memory_info = QLabel(
-            "체크하면 줄바꿈, 시작/끝 단어, 사용자 단어, 교정 memory, 오답 memory, 누적 자막 작업 데이터를 "
-            "최종 LLM 프롬프트에 함께 적용합니다."
+            "자동 검사, LoRA 교정, STT 저점 재검사, 자동 적용 점수는 user_settings.json에 저장되고 "
+            "LoRA 점수 인덱스가 더 정확하다고 판단하면 영상별로 자동 적용합니다."
         )
         memory_info.setWordWrap(True)
         memory_info.setStyleSheet(label_style("muted", 11))
-        form.addRow("적용 데이터:", memory_info)
+        form.addRow("자동 관리:", memory_info)
 
         self.chk_stt_low_score_recheck = QCheckBox("STT1/STT2 둘 다 낮은 점수일 때 해당 구간만 재검사")
         self.chk_stt_low_score_recheck.setChecked(bool(settings.get(
             "stt_low_score_recheck_enabled",
             DEFAULT_ADV_SETTINGS.get("stt_low_score_recheck_enabled", True),
         )))
-        form.addRow("저점 재검사:", self.chk_stt_low_score_recheck)
 
         self.spin_stt_low_score_recheck_threshold = QSpinBox()
         self.spin_stt_low_score_recheck_threshold.setRange(0, 100)
@@ -791,7 +831,6 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "stt_low_score_recheck_threshold",
             DEFAULT_ADV_SETTINGS.get("stt_low_score_recheck_threshold", 60),
         ) or 60))
-        form.addRow("재검사 기준 점수:", self.spin_stt_low_score_recheck_threshold)
 
         self.spin_quality_threshold = QSpinBox()
         self.spin_quality_threshold.setRange(70, 100)
@@ -800,7 +839,6 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "review_auto_correct_apply_threshold",
             DEFAULT_ADV_SETTINGS.get("review_auto_correct_apply_threshold", 94),
         ) or 94))
-        form.addRow("자동 적용 최소 점수:", self.spin_quality_threshold)
 
         self.spin_quality_recheck_buffer = QDoubleSpinBox()
         self.spin_quality_recheck_buffer.setRange(0.5, 3.0)
@@ -811,7 +849,6 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "review_recheck_buffer_sec",
             DEFAULT_ADV_SETTINGS.get("review_recheck_buffer_sec", 1.5),
         ) or 1.5))
-        form.addRow("재검사 앞뒤 버퍼:", self.spin_quality_recheck_buffer)
 
     def _set_combo_data(self, combo: QComboBox, value: str):
         for i in range(combo.count()):
@@ -989,6 +1026,15 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         auto_start_mode = normalize_stt_quality_key(self.combo_auto_start_mode.currentData() or "precise")
         auto_start_enabled = bool(self.chk_auto_start_enabled.isChecked())
         auto_correct_enabled = bool(self.chk_subtitle_quality_auto_correct.isChecked())
+        simple_mode = normalize_simple_operation_mode(
+            self.combo_simple_operation_mode.currentData()
+            if hasattr(self, "combo_simple_operation_mode")
+            else res.get("simple_operation_mode", "auto")
+        )
+        chunk_time_limit = 99999 if self.chk_chunk_all.isChecked() else self.slider_chunk.value()
+        if bool(res.get("subtitle_bundle_autopilot_enabled", True)):
+            chunk_time_limit = int(res.get("subtitle_bundle_target_sec", res.get("chunk_time_limit", 180)) or 180)
+
         res.update({
             "selected_model": m_data.get('name') or self.combo_llm.currentText(),
             "selected_llm_provider": provider,
@@ -1002,13 +1048,13 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "google_api_key_saved": bool(google_key_saved),
             "openai_api_key_saved": bool(openai_key_saved),
             "huggingface_token_saved": bool(huggingface_token_saved),
-            "chunk_time_limit": 99999 if self.chk_chunk_all.isChecked() else self.slider_chunk.value(),
+            "chunk_time_limit": chunk_time_limit,
             "llm_cost_filter": self.llm_filter,
             "user_prompt": "",
             "editor_roughcut_draft_enabled": self._editor_roughcut_draft_enabled_setting(),
             "editor_roughcut_draft_prompt": "",
-            "llm_threads": int(self.spin_editor_llm_threads.value()),
-            "llm_workers": int(self.spin_editor_llm_threads.value()),
+            "llm_threads_auto_enabled": True,
+            "llm_workers_auto_enabled": True,
             "audio_preset": "" if self.combo_audio_preset.currentData() == "__default__" else (self.combo_audio_preset.currentData() or ""),
             "stt_quality_preset": self.combo_stt_quality_preset.currentData() or "precise",
             "stt_candidate_scoring_enabled": True,
@@ -1022,11 +1068,21 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "wrong_answer_memory_enabled": auto_correct_enabled,
             "review_auto_correct_apply_threshold": int(self.spin_quality_threshold.value()),
             "review_recheck_buffer_sec": round(float(self.spin_quality_recheck_buffer.value()), 2),
+            "settings_simplified_ui_enabled": True,
+            "simple_operation_mode": simple_mode,
             **self._collect_roughcut_llm_settings(),
             "auto_start_mode": auto_start_mode,
             "auto_start_enabled": auto_start_enabled,
+            "nas_path": self.input_auto_nas_path.text().strip(),
+            "icloud_path": self.input_auto_icloud_path.text().strip(),
+            "icloud_auto_detect": bool(self.chk_auto_icloud_detect.isChecked()),
+            "nas_auto_detect": bool(self.chk_auto_nas_detect.isChecked()),
+            "icloud_stt_quality_preset": auto_start_mode,
+            "nas_stt_quality_preset": auto_start_mode,
         })
+        res = apply_simple_operation_mode(res, simple_mode)
         res = apply_accuracy_first_runtime_settings(res)
+        auto_start_mode = normalize_stt_quality_key(res.get("auto_start_mode", auto_start_mode) or auto_start_mode)
         path_settings = load_path_settings()
         path_settings.update({
             "nas_path": self.input_auto_nas_path.text().strip(),

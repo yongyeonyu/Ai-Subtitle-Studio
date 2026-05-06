@@ -25,6 +25,7 @@ import shutil
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
+from core.settings_profiles import hardcoded_default_settings, materialize_user_settings
 
 # 수정 — 설정 경로를 앱 공통 경로(config.DATASET_DIR)로 통일
 DATASET_DIR = config.DATASET_DIR
@@ -53,7 +54,7 @@ def load_settings() -> dict:
         except: pass
 
     # 1. 기본값(config + custom_defaults.json) 불러오기
-    defaults = dict(getattr(config, "DEFAULT_ADV_SETTINGS", {}) or {})
+    defaults = hardcoded_default_settings(dataset_dir=DATASET_DIR, include_custom_defaults=False)
     if os.path.exists(CUSTOM_DEFAULTS_FILE):
         try:
             with open(CUSTOM_DEFAULTS_FILE, 'r', encoding='utf-8') as f:
@@ -73,22 +74,30 @@ def load_settings() -> dict:
     # 3. 💡 [병합] 기본값 위에 사용자 설정을 덮어씌움
     merged_settings = defaults.copy()
     merged_settings.update(user_settings)
+    materialized = materialize_user_settings(merged_settings)
+    try:
+        if user_settings != materialized:
+            save_settings(materialized)
+    except Exception:
+        pass
 
-    return apply_accuracy_first_runtime_settings(merged_settings)
+    return apply_accuracy_first_runtime_settings(materialized)
 
 # ── 설정 저장 (분리됨) ──────────────────────────────────────────────────────
 
 # 💡 [요청 1] 일반 저장 -> user_settings.json에 저장
 def save_settings(settings: dict) -> None:
     os.makedirs(DATASET_DIR, exist_ok=True)
+    materialized = materialize_user_settings(settings if isinstance(settings, dict) else {})
     with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(settings, f, ensure_ascii=False, indent=4)
+        json.dump(materialized, f, ensure_ascii=False, indent=4)
 
 # 💡 [요청 2] 기본값으로 저장 -> custom_defaults.json에 저장
 def save_default_settings(settings: dict) -> None:
     os.makedirs(DATASET_DIR, exist_ok=True)
+    materialized = materialize_user_settings(settings if isinstance(settings, dict) else {})
     with open(CUSTOM_DEFAULTS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(settings, f, ensure_ascii=False, indent=4)
+        json.dump(materialized, f, ensure_ascii=False, indent=4)
     get_logger().log("⭐ 현재 설정을 시스템 기본값(custom_defaults)으로 저장했습니다.")
 
 # ── 교정사전 ──────────────────────────────────────────────────────────────

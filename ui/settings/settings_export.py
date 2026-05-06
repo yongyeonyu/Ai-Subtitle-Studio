@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from ui.settings.qml_panel import create_settings_header
+from ui.settings.tablet_dialog import apply_tablet_dialog_profile
 from ui.style import button_style, label_style, settings_dialog_stylesheet
 
 class ExportDialog(QDialog):
@@ -16,6 +17,7 @@ class ExportDialog(QDialog):
         self.subtitles = subtitles or []
         self.setWindowTitle("📤 자막 파일 출력")
         self.setMinimumWidth(400)
+        apply_tablet_dialog_profile(self)
         self.setStyleSheet(settings_dialog_stylesheet())
         
         layout = QVBoxLayout(self)

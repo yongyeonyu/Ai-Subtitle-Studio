@@ -1,0 +1,89 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from core.runtime import config
+
+
+class SettingsMaterializationTests(unittest.TestCase):
+    def test_load_settings_materializes_dataset_user_settings(self):
+        from core import settings as settings_module
+
+        original_dataset_dir = config.DATASET_DIR
+        original_override = settings_module.runtime_settings_override()
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "custom_defaults.json").write_text(
+                json.dumps({"custom_default_knob": 123, "llm_threads": 5}),
+                encoding="utf-8",
+            )
+            Path(tmp, "folder_settings.json").write_text(
+                json.dumps({"nas_path": "/Volumes/video", "icloud_stt_quality_preset": "balanced"}),
+                encoding="utf-8",
+            )
+            try:
+                config.DATASET_DIR = tmp
+                settings_module.clear_runtime_settings_override()
+
+                loaded = settings_module.load_settings()
+                saved = json.loads(Path(tmp, "user_settings.json").read_text(encoding="utf-8"))
+
+                self.assertEqual(saved["custom_default_knob"], 123)
+                self.assertEqual(saved["llm_threads"], 5)
+                self.assertIn("default_llm_prompt", saved)
+                self.assertTrue(saved["default_llm_prompt"].startswith("너는 한국어 유튜브 자막 QA 편집자다"))
+                self.assertEqual(saved["user_prompt"], "")
+                self.assertEqual(saved["editor_roughcut_draft_prompt"], "")
+                self.assertIn("selected_audio_ai", saved["_auto_managed_by_lora"])
+                self.assertEqual(saved["nas_path"], "/Volumes/video")
+                self.assertEqual(saved["icloud_stt_quality_preset"], "balanced")
+                self.assertEqual(loaded["custom_default_knob"], 123)
+            finally:
+                config.DATASET_DIR = original_dataset_dir
+                settings_module.set_runtime_settings_override(original_override or None)
+
+    def test_project_data_manager_save_writes_materialized_settings(self):
+        from core.project import data_manager
+
+        original_dataset_dir = config.DATASET_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(data_manager, "DATASET_DIR", tmp),
+                patch.object(data_manager, "SETTINGS_FILE", str(Path(tmp, "user_settings.json"))),
+                patch.object(data_manager, "CUSTOM_DEFAULTS_FILE", str(Path(tmp, "custom_defaults.json"))),
+            ):
+                try:
+                    config.DATASET_DIR = tmp
+                    data_manager.save_settings({"selected_model": "unit-test-model"})
+                    saved = json.loads(Path(tmp, "user_settings.json").read_text(encoding="utf-8"))
+
+                    self.assertEqual(saved["selected_model"], "unit-test-model")
+                    self.assertIn("default_llm_prompt", saved)
+                    self.assertIn("selected_whisper_model", saved)
+                    self.assertIn("nas_path", saved)
+                    self.assertEqual(saved["_settings_storage"], "dataset/user_settings.json")
+                finally:
+                    config.DATASET_DIR = original_dataset_dir
+
+    def test_path_manager_mirrors_folder_settings_to_user_settings(self):
+        from core import path_manager
+
+        original_dataset_dir = config.DATASET_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            folder_path = Path(tmp, "folder_settings.json")
+            user_path = Path(tmp, "user_settings.json")
+            with patch.object(path_manager, "SETTINGS_FILE", str(folder_path)):
+                try:
+                    config.DATASET_DIR = tmp
+                    path_manager.save_settings({"nas_path": "/Volumes/nas", "watch_folders": ["/tmp/media"]})
+                    saved = json.loads(user_path.read_text(encoding="utf-8"))
+
+                    self.assertEqual(saved["nas_path"], "/Volumes/nas")
+                    self.assertEqual(saved["watch_folders"], ["/tmp/media"])
+                finally:
+                    config.DATASET_DIR = original_dataset_dir
+
+
+if __name__ == "__main__":
+    unittest.main()

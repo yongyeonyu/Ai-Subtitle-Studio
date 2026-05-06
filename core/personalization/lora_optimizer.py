@@ -5,8 +5,15 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from core.personalization.lora_storage import load_best_settings, save_best_settings, store_paths
+from core.personalization.lora_models import iso_now, stable_hash
+from core.personalization.lora_storage import (
+    load_best_settings,
+    personalization_path_lookup_keys,
+    save_best_settings,
+    store_paths,
+)
 from core.personalization.lora_trial_scoring import record_prompt_trial_result, record_setting_trial_result
+from core.personalization.settings_autopilot import apply_lora_user_settings_autopilot
 from core.settings import load_settings
 
 
@@ -215,10 +222,189 @@ def _derived_gap_settings(summary: dict[str, Any], base: dict[str, Any], context
     }
 
 
+def _hash_unit(payload: dict[str, Any]) -> float:
+    digest = stable_hash(payload)
+    return int(digest[:8], 16) / 0xFFFFFFFF
+
+
+def _alternate_audio_ai(current: Any, digest: str, offset: int = 0) -> str:
+    choices = ["clearvoice", "deepfilter", "none"]
+    current_text = str(current or "").strip().lower()
+    available = [item for item in choices if item != current_text] or choices
+    index = int(digest[offset : offset + 2] or "0", 16) % len(available)
+    return available[index]
+
+
+def _build_exploration_bundles(
+    existing_bundles: list[dict[str, Any]],
+    *,
+    summary: dict[str, Any],
+    base: dict[str, Any],
+    context: dict[str, Any],
+    exploration_seed: str,
+) -> list[dict[str, Any]]:
+    if not existing_bundles:
+        return []
+    rate = _clamp_float(base.get("lora_user_settings_exploration_rate", 0.12), 0.0, 1.0)
+    min_rows = _clamp_int(base.get("lora_user_settings_exploration_min_truth_rows", 12), 0, 100000)
+    if rate <= 0.0 or int(summary.get("row_count", 0) or 0) < min_rows:
+        return []
+    seed_payload = {
+        "seed": exploration_seed or "global",
+        "row_count": int(summary.get("row_count", 0) or 0),
+        "avg_chars": summary.get("avg_chars"),
+        "scene": context.get("scene_environment"),
+        "topic": context.get("topic"),
+    }
+    if _hash_unit(seed_payload) > rate:
+        return []
+
+    max_bundles = _clamp_int(base.get("lora_user_settings_exploration_max_bundles", 1), 1, 3)
+    digest = stable_hash(seed_payload)
+    baseline = dict(existing_bundles[0].get("settings") or {})
+    out: list[dict[str, Any]] = []
+    for index in range(max_bundles):
+        direction = 1 if int(digest[8 + index : 9 + index] or "0", 16) % 2 else -1
+        spread = 1 + index
+        settings = dict(baseline)
+        settings["selected_audio_ai"] = _alternate_audio_ai(settings.get("selected_audio_ai"), digest, offset=10 + index)
+        settings["stt_quality_preset"] = "balanced" if settings.get("stt_quality_preset") == "precise" else "precise"
+        settings["split_length_threshold"] = _clamp_int(
+            float(settings.get("split_length_threshold", summary.get("avg_chars", 18.0)) or 18.0) + direction * (2 + spread),
+            10,
+            28,
+        )
+        settings["sub_max_cps"] = _clamp_int(
+            float(settings.get("sub_max_cps", summary.get("max_cps", 14.0)) or 14.0) - direction * spread,
+            9,
+            20,
+        )
+        settings["sub_gap_break_sec"] = _clamp_float(
+            float(settings.get("sub_gap_break_sec", 1.5) or 1.5) + direction * (0.18 + index * 0.08),
+            0.6,
+            2.6,
+        )
+        settings["continuous_threshold"] = _clamp_float(
+            max(float(settings.get("continuous_threshold", 2.0) or 2.0), float(settings["sub_gap_break_sec"]) * 1.2),
+            0.7,
+            4.5,
+        )
+        settings["gap_push_rate"] = _clamp_float(
+            float(settings.get("gap_push_rate", 0.7) or 0.7) - direction * 0.08,
+            0.35,
+            0.95,
+        )
+        out.append(
+            {
+                "bundle_id": f"explore_adaptive_{digest[:8]}_{index + 1}",
+                "reason_hint": "LoRA 외 값 탐색으로 촬영 포맷/주제 변화 적응",
+                "settings": settings,
+                "exploration": True,
+            }
+        )
+    return out
+
+
+def _style_cluster_key(summary: dict[str, Any]) -> str:
+    context = dict(summary.get("multimodal_context") or {})
+    scene = str(context.get("scene_environment") or "unknown")
+    topic = str(context.get("topic") or "unknown")
+    mic = str(context.get("mic_type") or "unknown")
+    noise = "+".join(str(item) for item in list(context.get("noise_sources") or [])[:3]) or "none"
+    chars_bucket = _clamp_int(float(summary.get("avg_chars", 0.0) or 0.0), 0, 99)
+    cps_bucket = _clamp_int(float(summary.get("max_cps", 0.0) or 0.0), 0, 99)
+    return f"settings|scene={scene}|topic={topic}|mic={mic}|noise={noise}|chars={chars_bucket}|cps={cps_bucket}"
+
+
+def _audio_profile_key(summary: dict[str, Any]) -> str:
+    context = dict(summary.get("multimodal_context") or {})
+    sample_rate = int(context.get("audio_sample_rate", 0) or 0)
+    channels = int(context.get("audio_channels", 0) or 0)
+    scene = str(context.get("scene_environment") or "unknown")
+    mic = str(context.get("mic_type") or "unknown")
+    noise = "+".join(str(item) for item in list(context.get("noise_sources") or [])[:3]) or "none"
+    return f"audio|sr={sample_rate}|ch={channels}|scene={scene}|mic={mic}|noise={noise}"
+
+
+def _payload_beats_existing(section: dict[str, Any], key: str, payload: dict[str, Any]) -> bool:
+    existing = dict(section.get(key) or {})
+    payload_score = float(payload.get("score", -1.0) or -1.0)
+    existing_score = float(existing.get("score", -1.0) or -1.0)
+    if payload_score > existing_score:
+        return True
+    return payload_score == existing_score and not existing.get("bundle_id")
+
+
+def _upsert_best_setting_facets(
+    *,
+    media_id: str,
+    media_path: str,
+    subtitle_path: str,
+    summary: dict[str, Any],
+    best_config: dict[str, Any],
+    best_score: float,
+    best_reason: str,
+    best_bundle_id: str,
+    store_dir: str | None,
+    autopilot_result: dict[str, Any],
+) -> None:
+    best_settings = load_best_settings(store_dir)
+    payload = {
+        "config": dict(best_config or {}),
+        "score": round(float(best_score or 0.0), 2),
+        "media_id": str(media_id or ""),
+        "media_path": str(media_path or ""),
+        "subtitle_path": str(subtitle_path or ""),
+        "reason": str(best_reason or ""),
+        "bundle_id": str(best_bundle_id or ""),
+        "summary": {
+            "row_count": int(summary.get("row_count", 0) or 0),
+            "avg_chars": summary.get("avg_chars"),
+            "max_cps": summary.get("max_cps"),
+            "multiline_ratio": summary.get("multiline_ratio"),
+            "multimodal_context": dict(summary.get("multimodal_context") or {}),
+        },
+        "updated_at": iso_now(),
+    }
+    touched = False
+    if str(media_id or "").strip():
+        best_settings.setdefault("by_media_id", {})
+        if _payload_beats_existing(best_settings["by_media_id"], str(media_id), payload):
+            best_settings["by_media_id"][str(media_id)] = payload
+            touched = True
+    if str(media_path or "").strip():
+        best_settings.setdefault("by_media_path", {})
+        for path_key in personalization_path_lookup_keys(media_path):
+            if _payload_beats_existing(best_settings["by_media_path"], path_key, payload):
+                best_settings["by_media_path"][path_key] = payload
+                touched = True
+    for section_name, key in (
+        ("by_style_cluster", _style_cluster_key(summary)),
+        ("by_audio_profile", _audio_profile_key(summary)),
+    ):
+        best_settings.setdefault(section_name, {})
+        if _payload_beats_existing(best_settings[section_name], key, payload):
+            best_settings[section_name][key] = payload
+            touched = True
+    if str(media_id or "").strip().lower() == "global":
+        defaults = dict(best_settings.get("global_recommended_defaults") or {})
+        defaults.update(dict(best_config or {}))
+        best_settings["global_recommended_defaults"] = defaults
+        touched = True
+    metadata = dict(best_settings.get("metadata") or {})
+    metadata["last_setting_optimizer_at"] = iso_now()
+    metadata["last_setting_optimizer_media_id"] = str(media_id or "")
+    metadata["last_user_settings_autopilot"] = dict(autopilot_result or {})
+    best_settings["metadata"] = metadata
+    if touched or autopilot_result:
+        save_best_settings(best_settings, store_dir)
+
+
 def build_setting_candidate_bundles(
     rows: list[dict[str, Any]],
     base_settings: dict[str, Any] | None = None,
     multimodal_context: dict[str, Any] | None = None,
+    exploration_seed: str | None = None,
 ) -> list[dict[str, Any]]:
     summary = _truth_summary(rows)
     context = dict(multimodal_context or {})
@@ -239,7 +425,7 @@ def build_setting_candidate_bundles(
             preferred_audio_ai = "clearvoice"
         else:
             preferred_audio_ai = "deepfilter"
-    return [
+    bundles = [
         {
             "bundle_id": "baseline_precise",
             "reason_hint": "영상/음성/자막 context 반영 정확도 우선",
@@ -293,6 +479,16 @@ def build_setting_candidate_bundles(
             },
         },
     ]
+    bundles.extend(
+        _build_exploration_bundles(
+            bundles,
+            summary=summary,
+            base=base,
+            context=context,
+            exploration_seed=str(exploration_seed or context.get("topic") or "global"),
+        )
+    )
+    return bundles
 
 
 def _score_bundle(summary: dict[str, Any], bundle: dict[str, Any]) -> tuple[float, dict[str, Any], str]:
@@ -376,13 +572,23 @@ def optimize_settings_for_media(
 ) -> dict[str, Any]:
     context_summary = _multimodal_context_summary(media_id, store_dir)
     summary = {**_truth_summary(rows), "multimodal_context": context_summary}
-    bundles = build_setting_candidate_bundles(rows, base_settings=base_settings, multimodal_context=context_summary)
+    bundles = build_setting_candidate_bundles(
+        rows,
+        base_settings=base_settings,
+        multimodal_context=context_summary,
+        exploration_seed=f"{media_id}|{media_path}|{subtitle_path}",
+    )
     results = []
     best_score = -1.0
     best_config: dict[str, Any] = {}
     best_reason = ""
+    best_bundle_id = ""
+    best_is_exploration = False
     for bundle in bundles:
         score, metrics, reason = _score_bundle(summary, bundle)
+        bundle_id = str(bundle.get("bundle_id") or "")
+        metrics["bundle_id"] = bundle_id
+        metrics["lora_exploration_candidate"] = bool(bundle.get("exploration"))
         result = record_setting_trial_result(
             media_id=media_id,
             media_path=media_path,
@@ -397,19 +603,40 @@ def optimize_settings_for_media(
             best_score = score
             best_config = dict(bundle.get("settings") or {})
             best_reason = reason
-
-    if str(media_id or "").strip().lower() == "global":
-        best_settings = load_best_settings(store_dir)
-        defaults = dict(best_settings.get("global_recommended_defaults") or {})
-        defaults.update(best_config)
-        best_settings["global_recommended_defaults"] = defaults
-        save_best_settings(best_settings, store_dir)
+            best_bundle_id = bundle_id
+            best_is_exploration = bool(bundle.get("exploration"))
+    autopilot_result = apply_lora_user_settings_autopilot(
+        best_config,
+        score=best_score,
+        media_id=media_id,
+        media_path=media_path,
+        subtitle_path=subtitle_path,
+        reason=best_reason,
+        source="setting_optimizer",
+        store_dir=store_dir,
+        base_settings=base_settings,
+        exploration_bundle_id=best_bundle_id if best_is_exploration else "",
+    )
+    _upsert_best_setting_facets(
+        media_id=media_id,
+        media_path=media_path,
+        subtitle_path=subtitle_path,
+        summary=summary,
+        best_config=best_config,
+        best_score=best_score,
+        best_reason=best_reason,
+        best_bundle_id=best_bundle_id,
+        store_dir=store_dir,
+        autopilot_result=autopilot_result,
+    )
     return {
         "summary": summary,
         "trial_count": len(results),
         "best_score": round(best_score, 2),
         "best_config": best_config,
         "best_reason": best_reason,
+        "best_bundle_id": best_bundle_id,
+        "user_settings_autopilot": autopilot_result,
     }
 
 

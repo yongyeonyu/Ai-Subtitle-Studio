@@ -81,6 +81,44 @@ SUBTITLE_STATE_SEGMENT_COLORS = {
 }
 
 
+STAGE_CONFIDENCE_COLORS = {
+    "green": "#34C759",
+    "yellow": "#FFCC00",
+    "red": "#FF453A",
+    "gray": "#8E8E93",
+}
+
+
+def subtitle_confidence_chips(seg: dict) -> list[dict]:
+    confidence = dict(seg.get("subtitle_stage_confidence") or {})
+    stages = dict(confidence.get("stages") or {})
+    order = list(confidence.get("stage_order") or ["cut", "stt", "llm", "lora", "final"])
+    labels = {
+        "cut": "컷",
+        "stt": "STT",
+        "llm": "LLM",
+        "lora": "LoRA",
+        "final": "최종",
+    }
+    chips = []
+    for stage in order:
+        item = dict(stages.get(stage) or {})
+        if not item:
+            continue
+        label = str(item.get("label") or "gray").strip().lower()
+        chips.append(
+            {
+                "stage": stage,
+                "text": labels.get(stage, str(stage).upper()),
+                "label": label,
+                "score": item.get("score"),
+                "reason": item.get("reason", ""),
+                "color": STAGE_CONFIDENCE_COLORS.get(label, STAGE_CONFIDENCE_COLORS["gray"]),
+            }
+        )
+    return chips
+
+
 def cut_boundary_scan_marker_verified(marker) -> bool:
     if not isinstance(marker, dict):
         return False
@@ -97,6 +135,28 @@ def scan_boundary_marker_visual(marker, *, hover: bool = False) -> dict:
         return {"color": "#00FFFF", "width": 3, "style": "solid"}
     if cut_boundary_scan_marker_verified(marker):
         return {"color": "#8E8E93", "width": 1, "style": "dot"}
+    if isinstance(marker, dict):
+        raw_color = str(marker.get("line_color", "") or "").strip()
+        color_aliases = {
+            "audio_gain": "#39FF14",
+            "green": "#39FF14",
+            "gray": "#8E8E93",
+            "grey": "#8E8E93",
+            "cyan": "#00FFFF",
+            "neon_green": "#39FF14",
+        }
+        color = color_aliases.get(raw_color.lower(), raw_color)
+        if color:
+            raw_style = str(marker.get("line_style", "") or "solid").strip().lower()
+            style_aliases = {
+                "dashed": "dash",
+                "dash": "dash",
+                "dotted": "dot",
+                "dot": "dot",
+            }
+            style = style_aliases.get(raw_style, "solid")
+            width = 3 if color.upper() == "#39FF14" else 2
+            return {"color": color, "width": width, "style": style}
     return {"color": "#00FFFF", "width": 2, "style": "solid"}
 
 
@@ -857,8 +917,21 @@ class TimelinePaintMixin:
                 p.fillRect(rect, fill)
                 p.setPen(QPen(border, bw))
                 p.drawRect(rect)
+                chips = subtitle_confidence_chips(seg)
+                chips_drawn = False
+                if chips and rect.width() >= 72 and rect.height() >= 30 and not compact_seg:
+                    chip_w = max(6, min(18, (rect.width() - 10) // max(1, len(chips))))
+                    chip_h = 4
+                    chip_y = rect.y() + 3
+                    chip_x = rect.x() + 5
+                    for chip in chips[:5]:
+                        chip_rect = QRect(int(chip_x), int(chip_y), int(chip_w), int(chip_h))
+                        p.fillRect(chip_rect, QColor(str(chip.get("color") or "#8E8E93")))
+                        chip_x += chip_w + 2
+                    chips_drawn = True
                 p.setFont(seg_font)
-                text_rect = QRect(rect.x() + 10, rect.y() + 6, max(8, rect.width() - 20), rect.height() - 12)
+                top_pad = 12 if chips_drawn else 6
+                text_rect = QRect(rect.x() + 10, rect.y() + top_pad, max(8, rect.width() - 20), rect.height() - top_pad - 6)
                 is_editing = (self._edit_active and self._edit_line == seg.get("line"))
 
                 if is_editing:
@@ -1108,7 +1181,11 @@ class TimelinePaintMixin:
                 keep_index=True,
             ):
                 visual = scan_boundary_marker_visual(bt, hover=(hover_scan_boundary_idx == idx))
-                pen_style = Qt.PenStyle.DotLine if visual["style"] == "dot" else Qt.PenStyle.SolidLine
+                pen_style = (
+                    Qt.PenStyle.DotLine
+                    if visual["style"] == "dot"
+                    else (Qt.PenStyle.DashLine if visual["style"] == "dash" else Qt.PenStyle.SolidLine)
+                )
                 pen_boundary = QPen(QColor(visual["color"]), int(visual["width"]), pen_style)
                 bx = self._x(sec)
                 if bx < clip_left or bx > clip_right:

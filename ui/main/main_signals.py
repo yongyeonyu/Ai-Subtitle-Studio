@@ -113,6 +113,12 @@ class SignalHandlersMixin:
                     sample = sample[:34] + "..."
                 suffix = f" · {sample}" if sample else ""
                 editor.set_live_processing_stage(f"자막 LLM 검수 중 ({idx}/{total}){suffix}")
+                flusher = getattr(editor, "_flush_live_editor_preview_queue", None)
+                if callable(flusher):
+                    flusher()
+                focuser = getattr(editor, "_focus_editor_block_for_processing_segment", None)
+                if callable(focuser):
+                    focuser(data)
         timeline = getattr(editor, "timeline", None) if editor is not None else None
         canvas = getattr(timeline, "canvas", None) if timeline is not None else None
         setter = getattr(canvas, "set_llm_review_segment", None) if canvas is not None else None

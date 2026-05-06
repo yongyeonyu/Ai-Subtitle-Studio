@@ -23,9 +23,43 @@ from core.llm.ollama_provider import (
     warmup_model as warmup_ollama_model,
 )
 from core.llm.openai_provider import is_openai_model, split_text as openai_split_text
+from core.audio.stt_lattice import select_stt_lattice_text
 from core.engine.llm_correction_guard import safe_llm_chunks, validate_llm_chunks
+from core.engine.llm_candidate_policy import (
+    build_llm_candidate_options,
+    validate_candidate_locked_chunks,
+)
+from core.engine.subtitle_accuracy_pipeline import (
+    append_accuracy_decision,
+    annotate_subtitle_auto_review,
+    annotate_subtitle_completion_report,
+    annotate_subtitle_context_consistency,
+    annotate_subtitle_lora_style_consistency,
+    annotate_subtitle_stage_confidence,
+    llm_gate_decision,
+    llm_minimize_decision,
+    repair_subtitle_context_consistency,
+    rollback_decision,
+    select_best_subtitle_output,
+    subtitle_accuracy_metrics,
+    verify_llm_chunks_for_subtitle,
+)
+from core.engine.subtitle_uncertainty import annotate_uncertainty_first_segments
 from core.subtitle_quality.timestamp_regrouper import regroup_by_word_timestamps
-from core.personalization.runtime_lora_context import runtime_lora_enabled
+from core.personalization.deep_subtitle_policy import (
+    adjust_subtitle_timing as deep_adjust_subtitle_timing,
+    rerank_subtitle_candidates,
+    select_stt_candidate as deep_select_stt_candidate,
+    smooth_subtitle_sequence,
+)
+from core.personalization.deep_policy_learning import record_deep_policy_events_for_segments
+from core.personalization.deep_runtime_adaptation import adapt_runtime_settings_from_deep_events
+from core.personalization.editor_truth_memory import apply_recent_editor_truth_patterns
+from core.personalization.runtime_lora_context import build_runtime_lora_prompt, runtime_lora_enabled
+from core.personalization.subtitle_lora_runtime import (
+    attach_segment_lora_settings,
+    merge_segment_lora_settings,
+)
 from core.engine.subtitle_prompts import _build_llm_prompt
 from core.engine.subtitle_settings import (
     _effective_llm_workers as _effective_llm_workers_impl,
@@ -42,6 +76,7 @@ from core.engine.subtitle_timing import (
     adjust_timing,
     apply_final_gap_settings,
 )
+from core.subtitle_quality.quality_pipeline import run_subtitle_quality_pipeline
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.runtime.logger import get_logger
@@ -350,6 +385,7 @@ def ask_exaone_to_split(
     user_prompt: str,
     conservative: bool = False,
     settings: dict | None = None,
+    candidate_options: list[dict] | None = None,
 ) -> list[str] | None:
     if "사용 안함" in model:
         return None
@@ -357,7 +393,15 @@ def ask_exaone_to_split(
         return None
     model = _resolve_runtime_llm_model(model, logger=get_logger(), context="자막 LLM")
 
-    prompt = _build_llm_prompt(text, threshold, rules, user_prompt, conservative=conservative, settings=settings)
+    prompt = _build_llm_prompt(
+        text,
+        threshold,
+        rules,
+        user_prompt,
+        conservative=conservative,
+        settings=settings,
+        candidate_options=candidate_options,
+    )
 
     try:
         chunks = ollama_split_text(model, prompt) or []
@@ -391,12 +435,25 @@ def ask_openai_to_split(
     api_key: str,
     conservative: bool = False,
     settings: dict | None = None,
+    candidate_options: list[dict] | None = None,
 ) -> list[str] | None:
     if not api_key:
         get_logger().log("❌ API 키가 없습니다. 환경설정에서 OpenAI API Key를 입력해주세요.")
         return None
     try:
-        chunks = openai_split_text(api_key, model_name, _build_llm_prompt(text, threshold, rules, user_prompt, conservative=conservative, settings=settings))
+        chunks = openai_split_text(
+            api_key,
+            model_name,
+            _build_llm_prompt(
+                text,
+                threshold,
+                rules,
+                user_prompt,
+                conservative=conservative,
+                settings=settings,
+                candidate_options=candidate_options,
+            ),
+        )
     except Exception as e:
         get_logger().log(f"[OpenAI 연결/파싱 실패] {e}")
         return None
@@ -414,11 +471,425 @@ def ask_openai_to_split(
     return guarded if guarded else None
 
 
-def _select_stt_candidate_text(seg: dict, model: str, user_prompt: str, api_key: str) -> dict | None:
-    settings = _get_user_settings()
+def _profile_from_settings(settings: dict | None) -> dict:
+    return dict((settings or {}).get("_lora_generation_profile") or {})
+
+
+def _accuracy_graph_enabled(settings: dict | None) -> bool:
+    value = (settings or {}).get("accuracy_decision_graph_enabled", True)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "off", "no", "끔"}
+    return bool(value)
+
+
+def _append_accuracy_decision_for_settings(lora_meta: dict | None, decision: dict | None, settings: dict | None) -> dict:
+    if not _accuracy_graph_enabled(settings):
+        return dict(lora_meta or {})
+    return append_accuracy_decision(lora_meta or {}, decision)
+
+
+def _deep_rerank_chunks(text: str, chunks: list[str] | None, settings: dict | None, lora_meta: dict | None) -> tuple[list[str] | None, dict]:
+    if not chunks:
+        return chunks, dict(lora_meta or {})
+    candidates = [list(chunks)]
+    compact_original = re.sub(r"\s+", "", str(text or ""))
+    compact_chunks = re.sub(r"\s+", "", "".join(str(chunk or "") for chunk in chunks))
+    if compact_original and compact_original != compact_chunks:
+        candidates.append([str(text or "").strip()])
+    ranked, meta = rerank_subtitle_candidates(text, candidates, settings or {}, _profile_from_settings(settings))
+    out_meta = dict(lora_meta or {})
+    if meta:
+        out_meta["_deep_rerank_policy"] = meta
+    return ranked or chunks, out_meta
+
+
+def _apply_llm_confidence_gate(
+    seg: dict,
+    text: str,
+    threshold: int,
+    duration: float,
+    settings: dict | None,
+    lora_meta: dict | None,
+) -> tuple[bool, dict]:
+    decision = llm_gate_decision(
+        seg,
+        settings or {},
+        _profile_from_settings(settings),
+        text=text,
+        threshold=threshold,
+        duration=duration,
+    )
+    out_meta = _append_accuracy_decision_for_settings(lora_meta or {}, decision, settings)
+    out_meta["_llm_gate_policy"] = decision
+    minimize = llm_minimize_decision(seg, settings or {}, decision)
+    out_meta = _append_accuracy_decision_for_settings(out_meta, minimize, settings)
+    out_meta["_llm_minimize_policy"] = minimize
+    if not decision.get("call_llm", True):
+        get_logger().log(
+            f"[LLM-게이트] LoRA/딥러닝 신뢰로 LLM 생략 "
+            f"(score={decision.get('lora_score', 0)}, ratio={decision.get('compact_ratio', 0)}): "
+            f"'{str(text or '')[:15]}...'"
+        )
+    return bool(decision.get("call_llm", True)), out_meta
+
+
+def _verify_llm_chunks(
+    text: str,
+    chunks: list[str] | None,
+    settings: dict | None,
+    lora_meta: dict | None,
+    *,
+    fallback: str,
+    candidate_options: list[dict] | None = None,
+) -> tuple[list[str] | None, dict]:
+    out_meta = dict(lora_meta or {})
+    if not chunks:
+        _verified, decision = verify_llm_chunks_for_subtitle(
+            text,
+            [],
+            settings or {},
+            _profile_from_settings(settings),
+        )
+        out_meta = _append_accuracy_decision_for_settings(out_meta, decision, settings)
+        out_meta["_llm_verifier_policy"] = decision
+        rollback = rollback_decision(str(decision.get("reason") or "empty_chunks"), fallback=fallback)
+        out_meta = _append_accuracy_decision_for_settings(out_meta, rollback, settings)
+        out_meta["_llm_rollback_policy"] = rollback
+        get_logger().log(f"[LLM-롤백] 출력 없음/파싱 실패({decision.get('reason')}), 안전 분할로 복구: '{str(text or '')[:15]}...'")
+        return None, out_meta
+    candidate_checked, candidate_decision = validate_candidate_locked_chunks(
+        text,
+        chunks,
+        candidate_options,
+        settings or {},
+    )
+    out_meta = _append_accuracy_decision_for_settings(out_meta, candidate_decision, settings)
+    out_meta["_llm_candidate_policy"] = candidate_decision
+    if candidate_checked is None:
+        rollback = rollback_decision(str(candidate_decision.get("reason") or "candidate_policy_rejected"), fallback=fallback)
+        out_meta = _append_accuracy_decision_for_settings(out_meta, rollback, settings)
+        out_meta["_llm_rollback_policy"] = rollback
+        get_logger().log(
+            "[LLM-후보잠금] 후보 밖 출력 차단 "
+            f"({candidate_decision.get('reason')}): '{str(text or '')[:15]}...'"
+        )
+        return None, out_meta
+
+    verified, decision = verify_llm_chunks_for_subtitle(
+        text,
+        candidate_checked,
+        settings or {},
+        _profile_from_settings(settings),
+    )
+    out_meta = _append_accuracy_decision_for_settings(out_meta, decision, settings)
+    out_meta["_llm_verifier_policy"] = decision
+    if verified is None and chunks:
+        rollback = rollback_decision(str(decision.get("reason") or "unknown"), fallback=fallback)
+        out_meta = _append_accuracy_decision_for_settings(out_meta, rollback, settings)
+        out_meta["_llm_rollback_policy"] = rollback
+        get_logger().log(f"[LLM-롤백] 검증 실패({decision.get('reason')}), 안전 분할로 복구: '{str(text or '')[:15]}...'")
+    return verified, out_meta
+
+
+def _log_accuracy_metrics(segments: list[dict], settings: dict | None) -> dict:
+    summary = subtitle_accuracy_metrics(segments, settings or {})
+    if summary.get("enabled") and summary.get("total_segments", 0):
+        quality = summary.get("avg_quality_score")
+        quality_text = f", 품질 {quality}" if isinstance(quality, (int, float)) else ""
+        style = summary.get("lora_style_score")
+        style_text = f", LoRA스타일 {style}" if isinstance(style, (int, float)) else ""
+        get_logger().log(
+            "[자막정확도-요약] "
+            f"avg CPS {summary.get('avg_cps', 0)}, "
+            f"LoRA {summary.get('lora_applied_segments', 0)}/{summary.get('total_segments', 0)}, "
+            f"LLM 생략 {summary.get('llm_gate_skipped_segments', 0)}, "
+            f"롤백 {summary.get('llm_verifier_rollbacks', 0)}"
+            f"{quality_text}"
+            f"{style_text}"
+        )
+    return summary
+
+
+def _annotate_context_consistency(segments: list[dict], settings: dict | None) -> list[dict]:
+    rows = annotate_subtitle_context_consistency(segments, settings or {})
+    risky = sum(1 for row in rows if isinstance(row, dict) and row.get("_context_consistency_policy"))
+    if risky:
+        get_logger().log(f"[자막문맥-딥러닝진단] 반복/겹침/순서 위험 {risky}개 표시")
+    rows = annotate_subtitle_lora_style_consistency(rows, settings or {})
+    style_risky = sum(1 for row in rows if isinstance(row, dict) and row.get("_lora_style_policy"))
+    if style_risky:
+        get_logger().log(f"[LoRA스타일-딥러닝진단] 기존 자막 스타일 이탈 위험 {style_risky}개 표시")
+    return rows
+
+
+def _annotate_auto_review(segments: list[dict], settings: dict | None) -> list[dict]:
+    rows = annotate_subtitle_auto_review(segments, settings or {})
+    if not rows:
+        return rows
+    summary = dict(rows[0].get("subtitle_auto_review_summary") or {})
+    issue_count = int(summary.get("issue_count", 0) or 0)
+    if issue_count:
+        severities = dict(summary.get("severity_counts") or {})
+        get_logger().log(
+            "[자동검수-요약] "
+            f"확인 필요 자막 {issue_count}개 "
+            f"(빨강 {int(severities.get('red', 0) or 0)}, 노랑 {int(severities.get('yellow', 0) or 0)}), "
+            f"예상 검수 {summary.get('estimated_review_min', 0)}분"
+        )
+    return rows
+
+
+def _annotate_stage_confidence(segments: list[dict], settings: dict | None) -> list[dict]:
+    rows = annotate_subtitle_stage_confidence(segments, settings or {})
+    if not rows:
+        return rows
+    summary = dict(rows[0].get("subtitle_confidence_summary") or {})
+    counts = dict(summary.get("label_counts") or {})
+    red = int(counts.get("red", 0) or 0)
+    yellow = int(counts.get("yellow", 0) or 0)
+    if red or yellow:
+        get_logger().log(f"[자막신뢰도-단계표시] 빨강 {red}개, 노랑 {yellow}개를 타임라인 표시용으로 저장")
+    return rows
+
+
+def _annotate_completion_report(segments: list[dict], settings: dict | None) -> list[dict]:
+    rows = annotate_subtitle_completion_report(segments, settings or {})
+    if not rows:
+        return rows
+    report = dict(rows[0].get("subtitle_completion_report") or {})
+    if report:
+        get_logger().log(
+            "[완료리포트] "
+            f"자막 {report.get('total_subtitles', 0)}개, "
+            f"빨강 {report.get('red_risk_rows', 0)}개, "
+            f"노랑 {report.get('yellow_risk_rows', 0)}개, "
+            f"LLM 롤백 {report.get('llm_rollback_count', 0)}개, "
+            f"LoRA 적용률 {float(report.get('lora_application_rate', 0.0) or 0.0) * 100:.1f}%, "
+            f"예상 검수 {report.get('estimated_review_min', 0)}분"
+        )
+    return rows
+
+
+def _compact_output_selector_decision(decision: dict | None, *, stage: str = "") -> dict:
+    payload = dict(decision or {})
+    compact_variants = []
+    for item in list(payload.get("variants") or [])[:4]:
+        if not isinstance(item, dict):
+            continue
+        score_meta = dict(item.get("score_meta") or {})
+        metrics = dict(score_meta.get("metrics") or {})
+        compact_variants.append(
+            {
+                "index": item.get("index"),
+                "name": item.get("name"),
+                "score": item.get("score"),
+                "metrics": {
+                    "total_segments": metrics.get("total_segments"),
+                    "avg_cps": metrics.get("avg_cps"),
+                    "avg_quality_score": metrics.get("avg_quality_score"),
+                    "high_cps_segments": metrics.get("high_cps_segments"),
+                    "llm_verifier_rollbacks": metrics.get("llm_verifier_rollbacks"),
+                    "context_consistency_score": metrics.get("context_consistency_score"),
+                    "context_repeat_segments": metrics.get("context_repeat_segments"),
+                    "context_overlap_segments": metrics.get("context_overlap_segments"),
+                    "lora_style_score": metrics.get("lora_style_score"),
+                    "lora_style_drift_segments": metrics.get("lora_style_drift_segments"),
+                },
+            }
+        )
+    return {
+        "schema": payload.get("schema") or "ai_subtitle_studio.subtitle_accuracy_pipeline.v1",
+        "task": payload.get("task") or "output_variant_selector",
+        "stage": stage,
+        "selected_index": payload.get("selected_index"),
+        "selected_name": payload.get("selected_name"),
+        "selected_score": payload.get("selected_score"),
+        "reason": payload.get("reason", ""),
+        "variants": compact_variants,
+    }
+
+
+def _attach_output_selector_policy(segments: list[dict], decision: dict | None, settings: dict | None, *, stage: str = "") -> list[dict]:
+    rows = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+    if not rows or not isinstance(decision, dict) or not decision:
+        return rows
+    payload = dict(decision or {})
+    variants = list(payload.get("variants") or [])
+    if payload.get("task") == "output_variant_selector" and all(
+        isinstance(item, dict) and "score_meta" not in item for item in variants
+    ):
+        compact = dict(payload)
+        compact.setdefault("stage", stage)
+    else:
+        compact = _compact_output_selector_decision(decision, stage=stage)
+    rows[0]["_output_selector_policy"] = compact
+    if _accuracy_graph_enabled(settings):
+        rows[0] = append_accuracy_decision(rows[0], compact)
+    return rows
+
+
+def _attach_context_repair_policy(segments: list[dict], decision: dict | None, settings: dict | None) -> list[dict]:
+    rows = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+    if not rows or not isinstance(decision, dict) or not decision:
+        return rows
+    compact = {
+        "schema": decision.get("schema"),
+        "task": decision.get("task", "context_repair"),
+        "model": decision.get("model"),
+        "applied": bool(decision.get("applied")),
+        "reason": decision.get("reason", ""),
+        "dropped_repeats": decision.get("dropped_repeats", 0),
+        "dropped_empty": decision.get("dropped_empty", 0),
+        "dropped_hallucinations": decision.get("dropped_hallucinations", 0),
+        "shifted_starts": decision.get("shifted_starts", 0),
+        "extended_ends": decision.get("extended_ends", 0),
+        "extended_cps_segments": decision.get("extended_cps_segments", 0),
+        "before_score": decision.get("before_score"),
+        "after_score": decision.get("after_score"),
+    }
+    rows[0]["_context_repair_policy"] = compact
+    if _accuracy_graph_enabled(settings):
+        rows[0] = append_accuracy_decision(rows[0], compact)
+    return rows
+
+
+def _context_repair_output_variant(segments: list[dict], vad_segments: list[dict] | None, settings: dict | None) -> list[dict]:
+    repaired, decision = repair_subtitle_context_consistency(segments, settings or {})
+    if not decision.get("applied"):
+        return []
+    get_logger().log(
+        "[자막문맥-자동복구] "
+        f"반복 삭제 {decision.get('dropped_repeats', 0)}개, "
+        f"겹침 보정 {decision.get('shifted_starts', 0)}개 "
+        f"(score {decision.get('before_score')}→{decision.get('after_score')})"
+    )
+    repaired = _self_review_subtitle_quality(repaired, vad_segments or [], settings or {})
+    repaired = _annotate_context_consistency(repaired, settings or {})
+    return _attach_context_repair_policy(repaired, decision, settings or {})
+
+
+def _source_output_variant(segments: list[dict], vad_segments: list[dict] | None, settings: dict | None) -> list[dict]:
+    source = [
+        dict(seg)
+        for seg in list(segments or [])
+        if isinstance(seg, dict) and str(seg.get("text", "") or "").strip()
+    ]
+    if not source:
+        return []
+    source = adjust_timing(source)
+    source = apply_final_gap_settings(source, settings or {}, force=True)
+    source = align_stt_candidates_to_subtitle_segments(source)
+    source = _self_review_subtitle_quality(source, vad_segments or [], settings or {})
+    return _annotate_context_consistency(source, settings or {})
+
+
+def _apply_output_variant_selector(
+    optimized: list[dict],
+    source_segments: list[dict],
+    vad_segments: list[dict] | None,
+    settings: dict | None,
+    *,
+    stage: str,
+) -> list[dict]:
+    settings = dict(settings or {})
+    enabled = settings.get("subtitle_output_selector_enabled", True)
+    if isinstance(enabled, str):
+        enabled = enabled.strip().lower() not in {"0", "false", "off", "no", "끔"}
+    if not enabled:
+        return optimized
+    repaired = _context_repair_output_variant(optimized, vad_segments or [], settings)
+    source = _source_output_variant(source_segments, vad_segments, settings)
+    variants = [
+        {"name": f"{stage}_optimized", "segments": [dict(seg) for seg in list(optimized or []) if isinstance(seg, dict)]},
+    ]
+    if repaired:
+        variants.append({"name": f"{stage}_context_repaired", "segments": repaired})
+    if source:
+        variants.append({"name": f"{stage}_source_gap_only", "segments": source})
+    selected, decision = select_best_subtitle_output(variants, settings)
+    decision = _compact_output_selector_decision(decision, stage=stage)
+    selected_index = int(decision.get("selected_index", 0) if decision.get("selected_index") is not None else 0)
+    selected_score = decision.get("selected_score")
+    if selected_index > 0:
+        get_logger().log(
+            "[자막출력-딥러닝선택] "
+            f"{decision.get('selected_name')} 후보가 더 안전해서 최종 결과로 선택 "
+            f"(score={selected_score})"
+        )
+    elif decision.get("selected_name"):
+        get_logger().log(
+            "[자막출력-딥러닝선택] "
+            f"{decision.get('selected_name')} 후보 유지 "
+            f"(score={selected_score})"
+        )
+    return _attach_output_selector_policy(selected, decision, settings, stage=stage)
+
+
+def _self_review_subtitle_quality(
+    segments: list[dict],
+    vad_segments: list[dict] | None,
+    settings: dict | None,
+) -> list[dict]:
+    settings = dict(settings or {})
+    value = settings.get("runtime_quality_self_review_enabled", True)
+    if isinstance(value, str):
+        enabled = value.strip().lower() not in {"0", "false", "off", "no", "끔"}
+    else:
+        enabled = bool(value)
+    if not enabled or not segments:
+        return segments
+    try:
+        result = run_subtitle_quality_pipeline(
+            [dict(seg) for seg in segments],
+            vad_segments=list(vad_segments or []),
+            settings=settings,
+            auto_correct=False,
+        )
+    except Exception as exc:
+        get_logger().log(f"[자막품질-자가진단] 실패: {exc}")
+        return segments
+    summary = result.summary
+    get_logger().log(
+        "[자막품질-자가진단] "
+        f"score={summary.overall_score}, "
+        f"green/yellow/red/gray={summary.green_count}/{summary.yellow_count}/{summary.red_count}/{summary.gray_count}, "
+        f"review={summary.needs_review_count}"
+    )
+    return [dict(seg) for seg in result.segments]
+
+
+def _attach_lora_and_deep_timing(row: dict, lora_meta: dict | None, settings: dict | None) -> dict:
+    adjusted, timing_meta = deep_adjust_subtitle_timing(row, settings or {}, _profile_from_settings(settings))
+    merged_meta = dict(lora_meta or {})
+    if timing_meta:
+        merged_meta["_deep_timing_policy"] = timing_meta
+    attached = attach_segment_lora_settings(adjusted, merged_meta)
+    for meta_key in (
+        "_deep_rerank_policy",
+        "_deep_candidate_selector_policy",
+        "_deep_timing_policy",
+        "_editor_truth_runtime_policy",
+        "_stt_lattice_policy",
+        "_llm_gate_policy",
+        "_llm_verifier_policy",
+        "_llm_rollback_policy",
+        "_accuracy_decision_graph",
+    ):
+        if meta_key in merged_meta:
+            attached[meta_key] = merged_meta[meta_key]
+    return attached
+
+
+def _select_stt_candidate_text(
+    seg: dict,
+    model: str,
+    user_prompt: str,
+    api_key: str,
+    settings: dict | None = None,
+    rules: dict | None = None,
+) -> dict | None:
+    settings = settings or _get_user_settings()
     if not settings.get("stt_ensemble_llm_judge_enabled", True):
-        return None
-    if not model or "사용 안함" in model:
         return None
     candidates = [
         c for c in list(seg.get("stt_candidates") or [])
@@ -432,6 +903,28 @@ def _select_stt_candidate_text(seg: dict, model: str, user_prompt: str, api_key:
             seen.add(key)
             unique.append(cand)
     if len(unique) < 2:
+        return None
+    lattice_decision, lattice_meta = select_stt_lattice_text(seg, settings, _profile_from_settings(settings))
+    if lattice_decision:
+        get_logger().log(
+            f"[STT격자-딥러닝판정] 단어 {lattice_meta.get('replacements', 0)}개 교체 "
+            f"confidence={lattice_meta.get('confidence', '-')}: "
+            f"'{str(lattice_decision.get('text', '') or '')[:18]}...'"
+        )
+        return lattice_decision
+    deep_decision = None
+    if not seg.get("stt_ensemble_primary_locked"):
+        deep_decision = deep_select_stt_candidate({**seg, "stt_candidates": unique}, settings, _profile_from_settings(settings))
+    if deep_decision:
+        source = str(deep_decision.get("source", "") or "").strip().upper()
+        label = str(deep_decision.get("label", "") or "").strip()
+        get_logger().log(
+            f"[STT앙상블-딥러닝판정] {label or '-'}({source or '-'}) 선택 "
+            f"score={deep_decision.get('score', '-')} margin={deep_decision.get('margin', '-')}: "
+            f"'{str(deep_decision.get('text', '') or '')[:18]}...'"
+        )
+        return deep_decision
+    if not model or "사용 안함" in model:
         return None
 
     unique = unique[:2]
@@ -454,6 +947,37 @@ def _select_stt_candidate_text(seg: dict, model: str, user_prompt: str, api_key:
     )
     if user_prompt.strip():
         prompt += f"\n\n사용자 지시 참고: {user_prompt.strip()[:500]}"
+    lora_context = build_runtime_lora_prompt(
+        " ".join(
+            [
+                str(seg.get("text", "") or ""),
+                str(seg.get("stt_ensemble_context_prev", "") or ""),
+                str(seg.get("stt_ensemble_context_next", "") or ""),
+                " ".join(str(candidate.get("text", "") or "") for candidate in unique),
+            ]
+        ),
+        rules or {},
+        settings,
+        include_retrieval=False,
+    )
+    if lora_context:
+        prompt += f"\n\n[STT 후보 선택용 LoRA 근거]\n{lora_context}"
+
+    gate_text = " ".join(str(candidate.get("text", "") or "") for candidate in unique)
+    stt_llm_gate = llm_gate_decision(
+        {**seg, "stt_ensemble_needs_llm_review": True},
+        settings,
+        _profile_from_settings(settings),
+        text=gate_text,
+        threshold=max(1, _setting_int(settings, "split_length_threshold", 16)),
+        duration=max(0.0, float(seg.get("end", 0) or 0) - float(seg.get("start", 0) or 0)),
+    )
+    if not stt_llm_gate.get("call_llm", True):
+        get_logger().log(
+            f"[STT앙상블-LLM게이트] LoRA/딥러닝 신뢰로 후보 LLM 생략: "
+            f"'{str(seg.get('text', '') or '')[:18]}...'"
+        )
+        return None
 
     try:
         if "Gemini" in model:
@@ -485,6 +1009,7 @@ def _select_stt_candidate_text(seg: dict, model: str, user_prompt: str, api_key:
         "text": selected,
         "source": selected_source,
         "label": labels[selected_index],
+        "_llm_gate_policy": stt_llm_gate,
     }
 
 
@@ -500,6 +1025,10 @@ def _stt_selection_metadata(seg: dict) -> dict:
         "stt_ensemble_word_rover",
         "stt_ensemble_llm_selected_source",
         "stt_ensemble_llm_selected_label",
+        "stt_ensemble_deep_selected_source",
+        "stt_ensemble_deep_selected_label",
+        "stt_ensemble_deep_selected_score",
+        "stt_ensemble_deep_selected_margin",
         "stt_selected_source",
         "score",
         "stt_score",
@@ -508,8 +1037,46 @@ def _stt_selection_metadata(seg: dict) -> dict:
         "stt_score_label",
         "stt_score_flags",
         "stt_score_components",
+        "_stt_lattice_policy",
+        "_deep_candidate_selector_policy",
+        "_llm_gate_policy",
     )
     return {key: seg[key] for key in keys if key in seg}
+
+
+def _segment_lora_runtime(
+    seg: dict,
+    runtime_settings: dict | None,
+    rules: dict,
+    explicit_threshold: int | None = None,
+) -> tuple[dict, dict]:
+    settings, lora_meta = merge_segment_lora_settings(seg, runtime_settings or _S, rules=rules)
+    if runtime_settings is None and explicit_threshold is not None and "split_length_threshold" not in lora_meta:
+        settings = dict(settings)
+        settings["split_length_threshold"] = explicit_threshold
+    return settings, lora_meta
+
+
+def _smooth_deep_sequence(segments: list[dict], settings: dict | None) -> list[dict]:
+    smoothed, summary = smooth_subtitle_sequence(segments, settings or {})
+    if summary:
+        get_logger().log(
+            "[딥러닝-시퀀스] "
+            f"앞뒤 자막 보정 {summary.get('changed_segments', 0)}개, "
+            f"hard-case {summary.get('hard_cases', 0)}개"
+        )
+    return smoothed
+
+
+def _record_deep_policy_learning(segments: list[dict], settings: dict | None) -> None:
+    try:
+        result = record_deep_policy_events_for_segments(segments, settings or {})
+    except Exception as exc:
+        get_logger().log(f"[딥러닝-학습로그] 저장 실패: {exc}")
+        return
+    appended = int((result or {}).get("appended_rows", 0) or 0)
+    if appended > 0:
+        get_logger().log(f"[딥러닝-학습로그] 정책 결정 {appended}건 저장")
 
 
 def _annotate_stt_candidate_context(segments: list[dict], window: int = 2) -> list[dict]:
@@ -569,8 +1136,10 @@ def _process_one(args: tuple) -> list[dict]:
     # 💡 [추가] duration 정의
     duration = seg.get("end", 0) - seg.get("start", 0)
 
+    segment_settings, segment_lora = _segment_lora_runtime({**seg, "text": text}, runtime_settings, rules, threshold)
+
     if seg.get("stt_candidates") and duration >= 0.35:
-        selected_decision = _select_stt_candidate_text(seg, model, user_prompt, api_key)
+        selected_decision = _select_stt_candidate_text(seg, model, user_prompt, api_key, segment_settings, rules)
         if selected_decision:
             selected_text = str(selected_decision.get("text", "") or "").strip()
             selected_source = str(selected_decision.get("source", "") or "").strip().upper()
@@ -579,12 +1148,25 @@ def _process_one(args: tuple) -> list[dict]:
                 "text": selected_text,
                 "stt_ensemble_llm_selected_source": selected_source,
                 "stt_ensemble_llm_selected_label": str(selected_decision.get("label", "") or ""),
+                "stt_ensemble_deep_selected_source": selected_source if selected_decision.get("selector") else "",
+                "stt_ensemble_deep_selected_label": str(selected_decision.get("label", "") or "") if selected_decision.get("selector") else "",
+                "stt_ensemble_deep_selected_score": selected_decision.get("score") if selected_decision.get("selector") else None,
+                "stt_ensemble_deep_selected_margin": selected_decision.get("margin") if selected_decision.get("selector") else None,
+                "_stt_lattice_policy": selected_decision.get("_stt_lattice_policy") or seg.get("_stt_lattice_policy"),
+                "_deep_candidate_selector_policy": selected_decision.get("_deep_candidate_selector_policy") or seg.get("_deep_candidate_selector_policy"),
+                "_llm_gate_policy": selected_decision.get("_llm_gate_policy") or seg.get("_llm_gate_policy"),
             }
+            if selected_decision.get("words"):
+                seg["words"] = list(selected_decision.get("words") or [])
             text = selected_text
+            segment_settings, segment_lora = _segment_lora_runtime({**seg, "text": text}, runtime_settings, rules, threshold)
+
+    threshold = _setting_int(segment_settings, "split_length_threshold", threshold)
+    gap_break_sec = _setting_float(segment_settings, "sub_gap_break_sec", _GAP_BREAK_SEC)
 
     # 💡 [환각 방지] 너무 짧은 자막은 LLM 교정을 생략합니다.
     if duration < _LLM_SKIP_DUR or len(text.replace(" ", "")) <= (threshold - 5):
-        return [{**seg, "text": _clean(text, corrections)}]
+        return [_attach_lora_and_deep_timing({**seg, "text": _clean(text, corrections)}, segment_lora, segment_settings)]
 
     words = seg.get("words", [])
     if not words:
@@ -601,19 +1183,64 @@ def _process_one(args: tuple) -> list[dict]:
     # 💡 [핵심] 1.0초 미만의 짧은 자막은 LLM에게 교정을 맡기지 않습니다. 
     # AI가 짧은 단어를 보고 문맥을 상상해서 소설을 쓰는 것을 원천 차단합니다.
     if duration < 1.0 or len(text.replace(" ", "")) <= threshold - 5:
-        return [{**seg, "text": _clean(text, corrections)}]
+        return [_attach_lora_and_deep_timing({**seg, "text": _clean(text, corrections)}, segment_lora, segment_settings)]
     # [수정] LLM 호출 분기 부분
+    should_call_llm = False
+    candidate_options = build_llm_candidate_options(text, threshold, rules, segment_settings)
     if "사용 안함" in str(model or ""):
         chunks = None
-    elif "Gemini" in model:
-        chunks = ask_gemini_to_split(text, threshold, rules, model, user_prompt, api_key, conservative=conservative, settings=runtime_settings)
-    elif is_openai_model(model):
-        chunks = ask_openai_to_split(text, threshold, rules, model, user_prompt, api_key, conservative=conservative, settings=runtime_settings)
     else:
-        chunks = ask_exaone_to_split(text, threshold, rules, model, user_prompt, conservative=conservative, settings=runtime_settings)
+        should_call_llm, segment_lora = _apply_llm_confidence_gate(seg, text, threshold, duration, segment_settings, segment_lora)
+        if not should_call_llm:
+            chunks = None
+        elif "Gemini" in model:
+            chunks = ask_gemini_to_split(
+                text,
+                threshold,
+                rules,
+                model,
+                user_prompt,
+                api_key,
+                conservative=conservative,
+                settings=segment_settings,
+                candidate_options=candidate_options,
+            )
+        elif is_openai_model(model):
+            chunks = ask_openai_to_split(
+                text,
+                threshold,
+                rules,
+                model,
+                user_prompt,
+                api_key,
+                conservative=conservative,
+                settings=segment_settings,
+                candidate_options=candidate_options,
+            )
+        else:
+            chunks = ask_exaone_to_split(
+                text,
+                threshold,
+                rules,
+                model,
+                user_prompt,
+                conservative=conservative,
+                settings=segment_settings,
+                candidate_options=candidate_options,
+            )
+        if should_call_llm:
+            chunks, segment_lora = _verify_llm_chunks(
+                text,
+                chunks,
+                segment_settings,
+                segment_lora,
+                fallback="word_timing_split",
+                candidate_options=candidate_options,
+            )
 
 
     if chunks:
+        chunks, segment_lora = _deep_rerank_chunks(text, chunks, segment_settings, segment_lora)
         result   = []
         w_idx    = 0
         cur_start = seg["start"]
@@ -645,14 +1272,19 @@ def _process_one(args: tuple) -> list[dict]:
             
             # 텍스트가 유효할 때만 결과에 추가
             if final_text:
-                result.append({
+                _chunk_settings, chunk_lora = _segment_lora_runtime(
+                    {**seg, "start": t_start, "end": t_end, "text": final_text, "words": chunk_words},
+                    segment_settings,
+                    rules,
+                )
+                result.append(_attach_lora_and_deep_timing({
                     **_stt_selection_metadata(seg),
                     "start":   t_start,
                     "end":     t_end,
                     "text":    final_text,
                     "speaker": spk,
                     "words":   chunk_words,
-                })
+                }, chunk_lora or segment_lora, _chunk_settings))
             cur_start = t_end
             
         # 💡 [불필요한 2차 _clean 루프 완전 삭제] 이미 정리된 텍스트의 길이만 확인합니다.
@@ -672,7 +1304,7 @@ def _process_one(args: tuple) -> list[dict]:
             nw   = words[i + 1]
             gap  = nw["start"] - w["end"]
             clen = sum(len(x["word"].replace(" ", "").replace("\n", "")) for x in buf)
-            flush = (gap >= _GAP_BREAK_SEC
+            flush = (gap >= gap_break_sec
                      or (clen >= threshold and is_natural_break(w["word"], nw["word"], rules))
                      or clen >= int(threshold * _ENFORCE_RATIO))
         else:
@@ -681,14 +1313,14 @@ def _process_one(args: tuple) -> list[dict]:
             t = " ".join(x["word"] for x in buf)
             ct = _clean(t, corrections)
             if ct and len(ct.replace(" ", "").replace("\n", "")) >= 2:
-                result.append({
+                result.append(_attach_lora_and_deep_timing({
                     **_stt_selection_metadata(seg),
                     "start":   buf[0]["start"],
                     "end":     buf[-1]["end"],
                     "text":    ct,
                     "speaker": buf[0].get("speaker", spk),
                     "words":   buf,
-                })
+                }, segment_lora, segment_settings))
             buf = []
             
     if len(result) > 1:
@@ -708,8 +1340,10 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
         return []
 
     duration = float(seg.get("end", 0.0) or 0.0) - float(seg.get("start", 0.0) or 0.0)
+    segment_settings, segment_lora = _segment_lora_runtime({**seg, "text": text}, runtime_settings, rules, threshold)
+
     if seg.get("stt_candidates") and duration >= 0.35:
-        selected_decision = _select_stt_candidate_text(seg, model, user_prompt, api_key)
+        selected_decision = _select_stt_candidate_text(seg, model, user_prompt, api_key, segment_settings, rules)
         if selected_decision:
             text = str(selected_decision.get("text", "") or "").strip()
             seg = {
@@ -717,15 +1351,42 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
                 "text": text,
                 "stt_ensemble_llm_selected_source": str(selected_decision.get("source", "") or "").strip().upper(),
                 "stt_ensemble_llm_selected_label": str(selected_decision.get("label", "") or ""),
+                "stt_ensemble_deep_selected_source": str(selected_decision.get("source", "") or "").strip().upper() if selected_decision.get("selector") else "",
+                "stt_ensemble_deep_selected_label": str(selected_decision.get("label", "") or "") if selected_decision.get("selector") else "",
+                "stt_ensemble_deep_selected_score": selected_decision.get("score") if selected_decision.get("selector") else None,
+                "stt_ensemble_deep_selected_margin": selected_decision.get("margin") if selected_decision.get("selector") else None,
+                "_stt_lattice_policy": selected_decision.get("_stt_lattice_policy") or seg.get("_stt_lattice_policy"),
+                "_deep_candidate_selector_policy": selected_decision.get("_deep_candidate_selector_policy") or seg.get("_deep_candidate_selector_policy"),
+                "_llm_gate_policy": selected_decision.get("_llm_gate_policy") or seg.get("_llm_gate_policy"),
             }
+            if selected_decision.get("words"):
+                seg["words"] = list(selected_decision.get("words") or [])
+            segment_settings, segment_lora = _segment_lora_runtime({**seg, "text": text}, runtime_settings, rules, threshold)
 
     cleaned_text = _clean(text, corrections)
     if not cleaned_text:
         return []
+    truth_text, truth_meta = apply_recent_editor_truth_patterns(cleaned_text, segment_settings)
+    if truth_meta:
+        cleaned_text = truth_text
+        segment_lora = dict(segment_lora or {})
+        segment_lora["_editor_truth_runtime_policy"] = truth_meta
+        segment_lora = append_accuracy_decision(segment_lora, truth_meta)
+        seg = {**seg, "text": cleaned_text}
+        refreshed_settings, refreshed_lora = _segment_lora_runtime({**seg, "text": cleaned_text}, segment_settings, rules, threshold)
+        if refreshed_lora:
+            refreshed_lora = dict(refreshed_lora)
+            refreshed_lora["_editor_truth_runtime_policy"] = truth_meta
+            refreshed_lora = append_accuracy_decision(refreshed_lora, truth_meta)
+            segment_lora = refreshed_lora
+            segment_settings = refreshed_settings
+    if str(seg.get("text", "") or "").strip() != cleaned_text:
+        segment_settings, segment_lora = _segment_lora_runtime({**seg, "text": cleaned_text}, runtime_settings, rules, threshold)
+    threshold = _setting_int(segment_settings, "split_length_threshold", threshold)
     if "사용 안함" in str(model or ""):
-        return [{**seg, "text": cleaned_text}]
+        return [_attach_lora_and_deep_timing({**seg, "text": cleaned_text}, segment_lora, segment_settings)]
     if duration < _LLM_SKIP_DUR or len(cleaned_text.replace(" ", "")) <= (threshold - 5):
-        return [{**seg, "text": cleaned_text}]
+        return [_attach_lora_and_deep_timing({**seg, "text": cleaned_text}, segment_lora, segment_settings)]
 
     words = seg.get("words", [])
     if not words:
@@ -745,15 +1406,58 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
         for word in words:
             word.setdefault("speaker", spk)
 
-    if "Gemini" in model:
-        chunks = ask_gemini_to_split(cleaned_text, threshold, rules, model, user_prompt, api_key, conservative=conservative, settings=runtime_settings)
+    should_call_llm, segment_lora = _apply_llm_confidence_gate(seg, cleaned_text, threshold, duration, segment_settings, segment_lora)
+    candidate_options = build_llm_candidate_options(cleaned_text, threshold, rules, segment_settings)
+    if not should_call_llm:
+        chunks = None
+    elif "Gemini" in model:
+        chunks = ask_gemini_to_split(
+            cleaned_text,
+            threshold,
+            rules,
+            model,
+            user_prompt,
+            api_key,
+            conservative=conservative,
+            settings=segment_settings,
+            candidate_options=candidate_options,
+        )
     elif is_openai_model(model):
-        chunks = ask_openai_to_split(cleaned_text, threshold, rules, model, user_prompt, api_key, conservative=conservative, settings=runtime_settings)
+        chunks = ask_openai_to_split(
+            cleaned_text,
+            threshold,
+            rules,
+            model,
+            user_prompt,
+            api_key,
+            conservative=conservative,
+            settings=segment_settings,
+            candidate_options=candidate_options,
+        )
     else:
-        chunks = ask_exaone_to_split(cleaned_text, threshold, rules, model, user_prompt, conservative=conservative, settings=runtime_settings)
+        chunks = ask_exaone_to_split(
+            cleaned_text,
+            threshold,
+            rules,
+            model,
+            user_prompt,
+            conservative=conservative,
+            settings=segment_settings,
+            candidate_options=candidate_options,
+        )
+    if should_call_llm:
+        chunks, segment_lora = _verify_llm_chunks(
+            cleaned_text,
+            chunks,
+            segment_settings,
+            segment_lora,
+            fallback="original_subtitle",
+            candidate_options=candidate_options,
+        )
 
     if not chunks:
-        return [{**seg, "text": cleaned_text}]
+        return [_attach_lora_and_deep_timing({**seg, "text": cleaned_text}, segment_lora, segment_settings)]
+    chunks, segment_lora = _deep_rerank_chunks(cleaned_text, chunks, segment_settings, segment_lora)
 
     result = []
     w_idx = 0
@@ -782,25 +1486,47 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
             t_end = t_start + 0.1
         final_text = _clean(str(chunk), corrections)
         if final_text:
-            result.append({
+            _chunk_settings, chunk_lora = _segment_lora_runtime(
+                {**seg, "start": t_start, "end": t_end, "text": final_text, "words": chunk_words},
+                segment_settings,
+                rules,
+            )
+            result.append(_attach_lora_and_deep_timing({
                 **_stt_selection_metadata(seg),
                 "start": t_start,
                 "end": t_end,
                 "text": final_text,
                 "speaker": spk,
                 "words": chunk_words,
-            })
+            }, chunk_lora or segment_lora, _chunk_settings))
         cur_start = float(t_end)
 
     if len(result) > 1:
         get_logger().log(f"[분할-LLM] '{cleaned_text[:15]}...' -> {len(result)}조각 분리")
-    return result or [{**seg, "text": cleaned_text}]
+    return result or [_attach_lora_and_deep_timing({**seg, "text": cleaned_text}, segment_lora, segment_settings)]
 
 
 def _enforce_len(segments: list[dict], threshold: int, rules: dict) -> list[dict]:
-    limit  = int(threshold * _ENFORCE_RATIO)
     result = []
+    lora_meta_keys = (
+        "_lora_segment_settings",
+        "_lora_gap_settings",
+        "_lora_generation_profile",
+        "_lora_segment_score",
+        "_lora_segment_doc_count",
+        "_lora_segment_query",
+        "_deep_rerank_policy",
+        "_deep_timing_policy",
+        "_editor_truth_runtime_policy",
+        "_llm_gate_policy",
+        "_llm_verifier_policy",
+        "_llm_rollback_policy",
+        "_accuracy_decision_graph",
+    )
     for seg in segments:
+        segment_settings = dict(seg.get("_lora_segment_settings") or {})
+        segment_threshold = _setting_int(segment_settings, "split_length_threshold", threshold)
+        limit = int(segment_threshold * _ENFORCE_RATIO)
         text = seg.get("text", "")
         if len(text.replace(" ", "").replace("\n", "")) <= limit:
             result.append(seg)
@@ -821,14 +1547,16 @@ def _enforce_len(segments: list[dict], threshold: int, rules: dict) -> list[dict
             flush   = is_last
             if not is_last:
                 nw    = words[i+1]
-                flush = ((clen >= threshold and is_natural_break(w["word"], nw["word"], rules))
+                flush = ((clen >= segment_threshold and is_natural_break(w["word"], nw["word"], rules))
                          or clen >= limit)
             if flush:
                 t = " ".join(x["word"] for x in buf).strip()
                 ct = _clean(t)
                 if ct:
+                    lora_meta = {key: seg[key] for key in lora_meta_keys if key in seg}
                     result.append({
                         **_stt_selection_metadata(seg),
+                        **lora_meta,
                         "start": buf[0]["start"],
                         "end": buf[-1]["end"],
                         "text": ct,
@@ -850,24 +1578,31 @@ def _optimizer_context() -> tuple[dict, list[dict], str, dict, int, str, str, di
 
     s = _get_user_settings()
     loaded_settings = dict(s)
-    threshold = _setting_int(s, "split_length_threshold", 10)
-    _EXAONE_WORKERS = _setting_int(s, "llm_threads", 6, fallback_key="llm_workers")
-    _LOCAL_OLLAMA_WORKER_CAP = _setting_int(s, "local_ollama_llm_max_workers", 2)
-    _GAP_BREAK_SEC = _setting_float(s, "sub_gap_break_sec", 1.5)
-    _MIN_DURATION = _setting_float(s, "sub_min_duration", 0.2)
-    _MAX_DURATION = _setting_float(s, "sub_max_duration", 6.0)
-    _MAX_CPS = _setting_int(s, "sub_max_cps", 12)
-    _DEDUP_WINDOW = _setting_float(s, "sub_dedup_window", 0.5)
+    loaded_settings, adaptation_meta = adapt_runtime_settings_from_deep_events(loaded_settings)
+    if adaptation_meta.get("applied"):
+        changes = dict(adaptation_meta.get("changes") or {})
+        get_logger().log(
+            "[딥러닝-런타임보정] "
+            + ", ".join(f"{key}: {item.get('old')}→{item.get('new')}" for key, item in list(changes.items())[:6])
+        )
+    threshold = _setting_int(loaded_settings, "split_length_threshold", 10)
+    _EXAONE_WORKERS = _setting_int(loaded_settings, "llm_threads", 6, fallback_key="llm_workers")
+    _LOCAL_OLLAMA_WORKER_CAP = _setting_int(loaded_settings, "local_ollama_llm_max_workers", 2)
+    _GAP_BREAK_SEC = _setting_float(loaded_settings, "sub_gap_break_sec", 1.5)
+    _MIN_DURATION = _setting_float(loaded_settings, "sub_min_duration", 0.2)
+    _MAX_DURATION = _setting_float(loaded_settings, "sub_max_duration", 6.0)
+    _MAX_CPS = _setting_int(loaded_settings, "sub_max_cps", 12)
+    _DEDUP_WINDOW = _setting_float(loaded_settings, "sub_dedup_window", 0.5)
 
-    if "user_prompt" in s:
-        user_prompt = s["user_prompt"]
-    elif "llm_prompt" in s:
-        user_prompt = s["llm_prompt"]
+    if "user_prompt" in loaded_settings:
+        user_prompt = loaded_settings["user_prompt"]
+    elif "llm_prompt" in loaded_settings:
+        user_prompt = loaded_settings["llm_prompt"]
 
     if "Gemini" in model:
-        api_key = get_api_key("google") or s.get("google_api_key", "")
+        api_key = get_api_key("google") or loaded_settings.get("google_api_key", "")
     elif is_openai_model(model):
-        api_key = get_api_key("openai") or s.get("openai_api_key", "")
+        api_key = get_api_key("openai") or loaded_settings.get("openai_api_key", "")
     else:
         api_key = ""
 
@@ -890,7 +1625,7 @@ def optimize_stt_candidate_segments(segments: list[dict], vad_segments: list[dic
         return segments
     loaded_settings, rules, _model, corrections, threshold, user_prompt, _api_key, _raw_corr, _settings = _optimizer_context()
     args = [
-        (dict(seg), rules, threshold, corrections, "사용 안함 (STT 후보 규칙 전용)", user_prompt, "", False)
+        (dict(seg), rules, threshold, corrections, "사용 안함 (STT 후보 규칙 전용)", user_prompt, "", False, loaded_settings)
         for seg in segments
         if isinstance(seg, dict)
     ]
@@ -915,7 +1650,16 @@ def optimize_stt_candidate_segments(segments: list[dict], vad_segments: list[dic
         rules=rules,
     )
     optimized = adjust_timing(optimized)
-    optimized = apply_final_gap_settings(optimized, force=True)
+    optimized = _smooth_deep_sequence(optimized, loaded_settings)
+    optimized = apply_final_gap_settings(optimized, loaded_settings, force=True)
+    optimized = _self_review_subtitle_quality(optimized, vad_segments or [], loaded_settings)
+    optimized = _annotate_context_consistency(optimized, loaded_settings)
+    optimized = _apply_output_variant_selector(optimized, [dict(seg) for seg in segments if isinstance(seg, dict)], vad_segments or [], loaded_settings, stage="stt_candidate")
+    optimized = _annotate_auto_review(optimized, loaded_settings)
+    optimized = _annotate_stage_confidence(optimized, loaded_settings)
+    optimized = _annotate_completion_report(optimized, loaded_settings)
+    _log_accuracy_metrics(optimized, loaded_settings)
+    _record_deep_policy_learning(optimized, loaded_settings)
     return optimized
 
 
@@ -958,6 +1702,15 @@ def optimize_segments(
         f"설정 적용: LLM({model}), 간격 설정은 최종 패스에서 적용"
     )
     segments = _annotate_stt_candidate_context([dict(seg) for seg in original_segments])
+    segments, uncertainty_plan = annotate_uncertainty_first_segments(segments, loaded_settings)
+    process_order = list(uncertainty_plan.get("process_order") or range(len(segments)))
+    if uncertainty_plan.get("enabled"):
+        counts = dict(uncertainty_plan.get("bucket_counts") or {})
+        get_logger().log(
+            "[불확실도 스케줄러] "
+            f"빠른확정 {counts.get('easy', 0)}개, 일반 {counts.get('normal', 0)}개, "
+            f"정밀대상 {counts.get('precision', 0)}개 순서로 처리합니다."
+        )
 
     conservative = _quality_conservative_enabled(loaded_settings)
     if conservative:
@@ -970,17 +1723,27 @@ def optimize_segments(
 
     if "사용 안함" in model:
         get_logger().log("⏩ LLM 미사용: 최종 자막은 원본 STT 텍스트를 유지하고 간격 패스만 적용합니다...")
-        for idx, a in enumerate(args):
+        result_map: dict[int, list] = {}
+        for idx in process_order:
+            a = args[idx]
             try:
-                optimized.extend(_process_one_llm_only(a))
+                result_map[idx] = _process_one_llm_only(a)
             except Exception as e:
                 get_logger().log(f"LLM 처리 오류: {e}")
-                optimized.append(segments[idx])
+                result_map[idx] = [segments[idx]]
+        for i in range(len(args)):
+            optimized.extend(result_map.get(i, []))
 
     else:
         max_workers, worker_mode = _effective_llm_workers(model, _EXAONE_WORKERS, loaded_settings, len(args))
         if worker_mode == "api":
             get_logger().log(f"🤖 {short_m} API 안전 모드: {max_workers}개 워커 순차 처리 중...")
+        elif worker_mode == "local_auto":
+            warmup_ollama_model(model, logger=get_logger())
+            get_logger().log(
+                f"{short_m} 리소스 자동 모드: {max_workers}개 워커 병렬 처리 "
+                f"({len(segments)}개, CPU/메모리/작업량 기준)"
+            )
         else:
             warmup_ollama_model(model, logger=get_logger())
             configured_workers = max(1, min(_EXAONE_WORKERS, len(args)))
@@ -993,13 +1756,17 @@ def optimize_segments(
                 get_logger().log(f"{short_m} {max_workers}개 워커 병렬 처리 ({len(segments)}개)...")
 
         if max_workers == 1:
-            for idx, a in enumerate(args):
+            result_map: dict[int, list] = {}
+            for idx in process_order:
+                a = args[idx]
                 try:
                     _emit_llm_progress(llm_progress_callback, active=True, idx=idx, total=len(args), seg=segments[idx])
-                    optimized.extend(_process_one_llm_only(a))
+                    result_map[idx] = _process_one_llm_only(a)
                 except Exception as e:
                     get_logger().log(f"LLM 처리 오류: {e}")
-                    optimized.append(segments[idx])
+                    result_map[idx] = [segments[idx]]
+            for i in range(len(args)):
+                optimized.extend(result_map.get(i, []))
         else:
             try:
                 def _process_with_progress(index: int, arg):
@@ -1007,7 +1774,7 @@ def optimize_segments(
                     return _process_one_llm_only(arg)
 
                 with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="llm") as ex:
-                    futures = {ex.submit(_process_with_progress, i, a): i for i, a in enumerate(args)}
+                    futures = {ex.submit(_process_with_progress, i, args[i]): i for i in process_order}
                     result_map: dict[int, list] = {}
 
                     for fut in as_completed(futures):
@@ -1039,8 +1806,17 @@ def optimize_segments(
                     fallback.append(item)
         optimized = adjust_timing(fallback)
 
+    optimized = _smooth_deep_sequence(optimized, loaded_settings)
     optimized = apply_final_gap_settings(optimized, loaded_settings, force=False)
     optimized = align_stt_candidates_to_subtitle_segments(optimized)
+    optimized = _self_review_subtitle_quality(optimized, vad_segments or [], loaded_settings)
+    optimized = _annotate_context_consistency(optimized, loaded_settings)
+    optimized = _apply_output_variant_selector(optimized, original_segments, vad_segments or [], loaded_settings, stage="llm")
+    optimized = _annotate_auto_review(optimized, loaded_settings)
+    optimized = _annotate_stage_confidence(optimized, loaded_settings)
+    optimized = _annotate_completion_report(optimized, loaded_settings)
+    _log_accuracy_metrics(optimized, loaded_settings)
+    _record_deep_policy_learning(optimized, loaded_settings)
     _emit_llm_progress(llm_progress_callback, active=False)
     get_logger().log(f"━━━ 자막 최적화 완료: {len(optimized)}개 ━━━\n")
     return optimized
@@ -1058,13 +1834,26 @@ def ask_gemini_to_split(
     api_key: str,
     conservative: bool = False,
     settings: dict | None = None,
+    candidate_options: list[dict] | None = None,
 ) -> list[str] | None:
     if not api_key:
         get_logger().log("❌ API 키가 없습니다. 환경설정에서 Google API Key를 입력해주세요.")
         return None
 
     try:
-        chunks = gemini_split_text(api_key, model_name, _build_llm_prompt(text, threshold, rules, user_prompt, conservative=conservative, settings=settings))
+        chunks = gemini_split_text(
+            api_key,
+            model_name,
+            _build_llm_prompt(
+                text,
+                threshold,
+                rules,
+                user_prompt,
+                conservative=conservative,
+                settings=settings,
+                candidate_options=candidate_options,
+            ),
+        )
     except Exception:
         return [text]
 

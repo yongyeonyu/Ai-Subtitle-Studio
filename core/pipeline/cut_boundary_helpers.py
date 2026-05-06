@@ -6,8 +6,11 @@ PipelineCutBoundaryMixin — 컷 경계 자동 분석 · 캐시 · 주제없음 
 """
 import json
 import os
+import threading
 import time
 
+from core.cut_boundary_audio import AUDIO_GAIN_LINE_COLOR, is_audio_gain_boundary
+from core.media_fingerprint import media_fingerprint_digest
 from core.project.project_io import read_project_file, write_project_file
 from core.runtime.logger import get_logger
 from core.settings import load_settings
@@ -115,7 +118,7 @@ class PipelineCutBoundaryMixin:
         os.makedirs(cache_root, exist_ok=True)
 
         payload = {
-            "version": 2,
+            "version": 4,
             "files": [],
             "settings": {
                 "scan_cut_auto_sample_step_sec": settings.get("scan_cut_auto_sample_step_sec", 2.0),
@@ -124,6 +127,10 @@ class PipelineCutBoundaryMixin:
                 "scan_cut_mode": settings.get("scan_cut_mode", ""),
                 "scan_cut_boundary_level": settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")),
                 "scan_cut_grid_mask": settings.get("scan_cut_grid_mask", ""),
+                "scan_cut_audio_gain_enabled": settings.get("scan_cut_audio_gain_enabled", True),
+                "scan_cut_audio_gain_threshold_db": settings.get("scan_cut_audio_gain_threshold_db", 10.0),
+                "scan_cut_audio_gain_window_sec": settings.get("scan_cut_audio_gain_window_sec", None),
+                "scan_cut_audio_gain_min_gap_sec": settings.get("scan_cut_audio_gain_min_gap_sec", None),
             },
         }
 
@@ -134,12 +141,14 @@ class PipelineCutBoundaryMixin:
                     "path": os.path.abspath(p),
                     "size": int(st.st_size),
                     "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))),
+                    "fingerprint_digest": media_fingerprint_digest(p, sample_bytes=256 * 1024, include_samples=True),
                 })
             except Exception:
                 payload["files"].append({
                     "path": os.path.abspath(str(p)),
                     "size": 0,
                     "mtime_ns": 0,
+                    "fingerprint_digest": "",
                 })
 
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -211,7 +220,7 @@ class PipelineCutBoundaryMixin:
             cache_path = self._cut_boundary_cache_path_for_start(files, settings)
 
             payload = {
-                "version": 2,
+                "version": 4,
                 "created_at": time.time(),
                 "cache_type": "cut_boundaries_only",
                 "files": [],
@@ -220,8 +229,12 @@ class PipelineCutBoundaryMixin:
                     "scan_cut_auto_threshold": settings.get("scan_cut_auto_threshold", settings.get("scan_cut_threshold", 24.0)),
                     "scan_cut_threshold": settings.get("scan_cut_threshold", 24.0),
                     "scan_cut_mode": settings.get("scan_cut_mode", ""),
-                "scan_cut_boundary_level": settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")),
-                "scan_cut_grid_mask": settings.get("scan_cut_grid_mask", ""),
+                    "scan_cut_boundary_level": settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")),
+                    "scan_cut_grid_mask": settings.get("scan_cut_grid_mask", ""),
+                    "scan_cut_audio_gain_enabled": settings.get("scan_cut_audio_gain_enabled", True),
+                    "scan_cut_audio_gain_threshold_db": settings.get("scan_cut_audio_gain_threshold_db", 10.0),
+                    "scan_cut_audio_gain_window_sec": settings.get("scan_cut_audio_gain_window_sec", None),
+                    "scan_cut_audio_gain_min_gap_sec": settings.get("scan_cut_audio_gain_min_gap_sec", None),
                 },
                 # ✅ 핵심: 프로젝트 전체가 아니라 컷 경계 데이터만 저장
                 "analysis": {
@@ -236,12 +249,14 @@ class PipelineCutBoundaryMixin:
                         "path": os.path.abspath(str(p)),
                         "size": int(st.st_size),
                         "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))),
+                        "fingerprint_digest": media_fingerprint_digest(p, sample_bytes=256 * 1024, include_samples=True),
                     })
                 except Exception:
                     payload["files"].append({
                         "path": os.path.abspath(str(p)),
                         "size": 0,
                         "mtime_ns": 0,
+                        "fingerprint_digest": "",
                     })
 
             with open(cache_path, "w", encoding="utf-8") as f:
@@ -266,6 +281,25 @@ class PipelineCutBoundaryMixin:
                 get_logger().log("  🎬 [컷 경계] STT 시작 전 자동 분석 완료 대기 중...")
                 thread.join()
                 get_logger().log("  ✅ [컷 경계] STT 시작 전 자동 분석 완료")
+                try:
+                    self._ui_emit("_sig_refresh_cut_boundary_placeholder")
+                except Exception:
+                    pass
+            try:
+                settings = load_settings()
+            except Exception:
+                settings = {}
+            wait_follower = bool(settings.get("cut_boundary_wait_follower_before_stt", True))
+            follower = getattr(self, "_cut_boundary_follower_thread", None)
+            if (
+                wait_follower
+                and follower is not None
+                and follower.is_alive()
+                and follower is not threading.current_thread()
+            ):
+                get_logger().log("  🎬 [컷 경계] STT 시작 전 후발대 rollback 검증 완료 대기 중...")
+                follower.join()
+                get_logger().log("  ✅ [컷 경계] 후발대 rollback 검증 완료 후 STT hard cut 확정")
                 try:
                     self._ui_emit("_sig_refresh_cut_boundary_placeholder")
                 except Exception:
@@ -311,26 +345,60 @@ class PipelineCutBoundaryMixin:
         After full scan:
         - also include last_cut~video_end.
         """
-        cuts = []
+        from core.cut_boundary_middle import coalesce_topicless_middle_boundary_frames
+        from core.frame_time import frame_to_sec, sec_to_frame
+
+        settings = load_settings() or {}
+        fps = 30.0
+        found_fps = False
+        for row in list(detected or []):
+            if not isinstance(row, dict):
+                continue
+            for key in ("fps", "timeline_frame_rate", "frame_rate"):
+                try:
+                    value = float(row.get(key) or 0.0)
+                    if value > 1.0:
+                        fps = value
+                        found_fps = True
+                        break
+                except Exception:
+                    pass
+            if found_fps:
+                break
+        try:
+            from core.frame_time import normalize_fps
+
+            fps = normalize_fps(fps)
+        except Exception:
+            fps = 30.0
+
+        cut_rows = []
         for row in list(detected or []):
             sec = self._cut_boundary_sec_from_row(row)
             if sec is not None and sec > 0.0:
-                cuts.append(round(float(sec), 3))
-
-        cuts = sorted(set(cuts))
-        if not cuts:
-            return []
+                item = dict(row) if isinstance(row, dict) else {"timeline_sec": round(float(sec), 3), "time": round(float(sec), 3)}
+                cut_rows.append(item)
 
         duration = self._cut_boundary_placeholder_duration(files)
-        boundaries = [0.0] + cuts
+        duration_frame = sec_to_frame(duration, fps) if duration > 0.0 else 0
+        cut_frames = coalesce_topicless_middle_boundary_frames(
+            cut_rows,
+            fps=fps,
+            duration_frame=duration_frame,
+            settings=settings,
+        )
+        if not cut_frames:
+            return []
 
-        if done and duration > boundaries[-1]:
-            boundaries.append(round(duration, 3))
+        boundaries = [0] + list(cut_frames)
+
+        if done and duration_frame > boundaries[-1]:
+            boundaries.append(duration_frame)
 
         rows = []
         for i in range(len(boundaries) - 1):
-            start = float(boundaries[i])
-            end = float(boundaries[i + 1])
+            start = frame_to_sec(int(boundaries[i]), fps)
+            end = frame_to_sec(int(boundaries[i + 1]), fps)
             if end <= start:
                 continue
 
@@ -668,9 +736,15 @@ class PipelineCutBoundaryMixin:
                 styled = dict(row or {})
                 styled["status"] = "provisional"
                 styled["verified"] = False
-                styled["line_color"] = "gray"
-                styled["line_style"] = "dotted"
-                styled.setdefault("source", "visual_provisional")
+                if is_audio_gain_boundary(styled):
+                    styled["line_color"] = str(styled.get("line_color") or AUDIO_GAIN_LINE_COLOR)
+                    styled["line_style"] = str(styled.get("line_style") or "dash")
+                    styled["provisional_type"] = "audio_gain"
+                    styled.setdefault("source", "audio_gain_provisional")
+                else:
+                    styled["line_color"] = "gray"
+                    styled["line_style"] = "dotted"
+                    styled.setdefault("source", "visual_provisional")
                 return styled
 
             def _save_detected_now():
@@ -748,6 +822,14 @@ class PipelineCutBoundaryMixin:
                     self._cut_boundary_provisional_rows = [dict(item) for item in provisional_rows]
                     preview_rows = [dict(item) for item in provisional_rows]
                     self._ui_emit("_sig_preview_cut_boundary_scan_lines", preview_rows)
+                    if is_audio_gain_boundary(provisional):
+                        try:
+                            get_logger().log(
+                                f"  🟢 [컷 경계] 음성 임시선 후보: {float(sec):.3f}s "
+                                f"(gain {float(provisional.get('audio_gain_db_delta', 0.0) or 0.0):+.1f}dB)"
+                            )
+                        except Exception:
+                            pass
 
             def _found_verified(row: dict, _current_rows: list[dict]):
                 detected[:] = normalize_cut_boundaries(list(detected) + [dict(row)])

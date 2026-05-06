@@ -125,7 +125,7 @@ def button_style(kind="toolbar", *, font_size=None, padding=None):
     )
 
 
-def settings_button_style(kind="toolbar", *, font_size="12px", min_width=72):
+def settings_button_style(kind="toolbar", *, font_size="12px", min_width=72, min_height=40):
     """Return equal-height QPushButton styles for settings dialogs."""
     bg = COLORS["control"]
     border = COLORS["separator"]
@@ -146,7 +146,7 @@ def settings_button_style(kind="toolbar", *, font_size="12px", min_width=72):
         f"background: {bg}; color: {color}; border: 1px solid {border}; "
         "border-radius: 7px; padding: 0 12px; "
         f"font-size: {_px(font_size)}; font-weight: 700; "
-        "min-height: 40px; max-height: 40px; "
+        f"min-height: {_px(min_height)}; max-height: {_px(min_height)}; "
         f"min-width: {_px(min_width)}; "
         "} "
         f"QPushButton:hover {{ background: {hover}; border-color: #465663; }} "

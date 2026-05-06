@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 
 from ui.settings.settings_common import DATASET_DIR, _create_bottom_buttons
 from ui.settings.qml_panel import create_settings_header
+from ui.settings.tablet_dialog import apply_tablet_dialog_profile
 from ui.style import button_style, label_style, settings_dialog_stylesheet
 
 
@@ -37,6 +38,7 @@ class SpeakerDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("화자 설정")
         self.setMinimumWidth(760)
+        apply_tablet_dialog_profile(self)
         self.setStyleSheet(settings_dialog_stylesheet())
 
         self.result = dict(settings)

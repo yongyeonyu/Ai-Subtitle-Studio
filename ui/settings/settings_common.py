@@ -131,6 +131,8 @@ DEFAULT_ADV_SETTINGS = {
 
     # Accuracy-first subtitle generation defaults.
     "accuracy_first_mode": True,
+    "settings_simplified_ui_enabled": True,
+    "simple_operation_mode": "auto",
     "auto_start_mode": "precise",
     "stt_quality_preset": "precise",
     "stt_ensemble_enabled": True,
@@ -176,7 +178,14 @@ DEFAULT_ADV_SETTINGS = {
     "score_weight_repetition": 0.10,
     "score_weight_context": 0.10,
     "score_weight_memory": 0.05,
-    "score_weight_hallucination_penalty": 0.30
+    "score_weight_hallucination_penalty": 0.30,
+    "runtime_scheduler_auto_enabled": True,
+    "scheduler_reduce_on_battery": True,
+    "scheduler_reduce_on_user_input": True,
+    "stt_workers_auto_enabled": True,
+    "cut_pioneer_workers_auto_enabled": True,
+    "cut_follower_workers_auto_enabled": True,
+    "lora_workers_auto_enabled": True,
 }
 
 CUSTOM_DEFAULTS_FILE = os.path.join(DATASET_DIR, "custom_defaults.json")
@@ -214,25 +223,26 @@ def _fetch_models():
 def _create_bottom_buttons(dialog, accept_callback, reset_callback=None,
                            save_callback=None, save_def_callback=None):
     btn_layout = QHBoxLayout()
+    control_height = int(getattr(dialog, "_settings_control_height", 40) or 40)
 
     if reset_callback:
         btn_reset = QPushButton("전체 초기화")
         btn_reset.setIcon(line_icon("refresh", "#A9B0B7", 18))
-        btn_reset.setStyleSheet(settings_button_style("toolbar", min_width=96))
+        btn_reset.setStyleSheet(settings_button_style("toolbar", min_width=96, min_height=control_height))
         btn_reset.clicked.connect(reset_callback)
         btn_layout.addWidget(btn_reset)
 
     if save_callback:
         btn_save = QPushButton("저장")
         btn_save.setIcon(line_icon("save", "#FFFFFF", 18))
-        btn_save.setStyleSheet(settings_button_style("primary", min_width=96))
+        btn_save.setStyleSheet(settings_button_style("primary", min_width=96, min_height=control_height))
         btn_save.clicked.connect(save_callback)
         btn_layout.addWidget(btn_save)
 
     if save_def_callback:
         btn_def = QPushButton("기본값으로 저장")
         btn_def.setIcon(line_icon("save", "#A9B0B7", 18))
-        btn_def.setStyleSheet(settings_button_style("toolbar", min_width=118))
+        btn_def.setStyleSheet(settings_button_style("toolbar", min_width=118, min_height=control_height))
         btn_def.clicked.connect(save_def_callback)
         btn_layout.addWidget(btn_def)
 
@@ -242,8 +252,8 @@ def _create_bottom_buttons(dialog, accept_callback, reset_callback=None,
     btn_ok     = QPushButton("확인")
     btn_cancel.setIcon(line_icon("cancel", "#A9B0B7", 18))
     btn_ok.setIcon(line_icon("check", "#FFFFFF", 18))
-    btn_cancel.setStyleSheet(settings_button_style("toolbar", min_width=82))
-    btn_ok.setStyleSheet(settings_button_style("primary", min_width=96))
+    btn_cancel.setStyleSheet(settings_button_style("toolbar", min_width=82, min_height=control_height))
+    btn_ok.setStyleSheet(settings_button_style("primary", min_width=96, min_height=control_height))
 
     btn_cancel.clicked.connect(dialog.reject)
     btn_ok.clicked.connect(accept_callback)

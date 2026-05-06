@@ -5,6 +5,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
 
+from core.media_fingerprint import media_fingerprint_digest
 from core.personalization.lora_models import stable_hash
 from core.personalization.lora_retrieval_config import (
     FACET_POINT_WEIGHTS,
@@ -54,6 +55,7 @@ def _kind_boost(kind: str) -> float:
         "setting_trials": 5.0,
         "prompt_trials": 4.0,
         "audio_preset_lora": 5.0,
+        "deep_policy_events": 4.5,
         "voice_lora_bridge": 3.0,
         "stt1_whisper_adapter_dataset": 5.0,
         "excluded_parentheticals": 6.0,
@@ -122,6 +124,15 @@ def _recency_points(doc: dict[str, Any]) -> float:
     return round(max(0.0, min(recency_cap, recency_cap * math.exp(-age_days / 180.0))), 4)
 
 
+def _media_query_fingerprint(media_path: str) -> str:
+    if not media_path:
+        return ""
+    try:
+        return media_fingerprint_digest(media_path, sample_bytes=0, include_samples=False)
+    except Exception:
+        return str(media_path or "")
+
+
 def query_cache_key(
     index: dict[str, Any],
     query: str,
@@ -131,6 +142,7 @@ def query_cache_key(
     settings: dict[str, Any] | None = None,
     context: dict[str, Any] | None = None,
     kinds: set[str] | None = None,
+    quality_buckets: set[str] | frozenset[str] | None = None,
     limit: int = 16,
     per_kind: int = 5,
 ) -> str:
@@ -142,10 +154,12 @@ def query_cache_key(
             "doc_count": index.get("doc_count"),
             "query": query,
             "media_path": media_path,
+            "media_fingerprint_digest": _media_query_fingerprint(media_path),
             "media_id": media_id,
             "settings": json_preview(settings or {}),
             "context": json_preview(context or {}),
             "kinds": sorted(kinds or []),
+            "quality_buckets": sorted(str(bucket) for bucket in (quality_buckets or [])),
             "limit": int(limit or 0),
             "per_kind": int(per_kind or 0),
         }
@@ -160,6 +174,7 @@ def score_lora_docs(
     media_id: str = "",
     query_facets: dict[str, Any] | None = None,
     kinds: set[str] | None = None,
+    quality_buckets: set[str] | frozenset[str] | None = None,
 ) -> list[dict[str, Any]]:
     docs = list(index.get("docs") or [])
     query_vector = vectorize_lora_text(query)
@@ -182,6 +197,8 @@ def score_lora_docs(
         doc = dict(docs[doc_index] or {})
         kind = str(doc.get("kind") or "")
         if kinds is not None and kind not in kinds:
+            continue
+        if quality_buckets is not None and str(doc.get("quality_bucket") or "") not in quality_buckets:
             continue
         quality = max(0.0, min(1.0, safe_float(doc.get("quality"), 0.0)))
         overlap = token_overlap_score(query, str(doc.get("text_preview") or ""))
@@ -234,22 +251,31 @@ def runtime_settings_from_retrieved_items(
     min_score: float = 28.0,
 ) -> dict[str, Any]:
     override: dict[str, Any] = {}
+    priority_by_key: dict[str, tuple[float, float]] = {}
+
+    def apply_override(key: str, value: Any, *, retrieval_score: float, score_index: float) -> None:
+        if key not in RUNTIME_SETTING_KEYS or value in (None, ""):
+            return
+        priority = (float(score_index), float(retrieval_score))
+        if priority >= priority_by_key.get(key, (-1.0, -1.0)):
+            override[key] = value
+            priority_by_key[key] = priority
+
     for item in list(items or []):
         score = safe_float(item.get("retrieval_score"), 0.0)
         if score < min_score:
             continue
+        score_index = safe_float(item.get("score_index"), safe_float(item.get("quality_score"), score))
         kind = str(item.get("kind") or "")
         payload = dict(item.get("payload") or {})
         if kind in {"setting_trials", "best_settings"}:
             config = dict(payload.get("config") or {})
             for key, value in config.items():
-                if key in RUNTIME_SETTING_KEYS and value not in (None, ""):
-                    override[key] = value
+                apply_override(key, value, retrieval_score=score, score_index=score_index)
         elif kind == "audio_preset_lora":
             config = dict(payload.get("audio_tune_settings") or payload.get("settings") or {})
             for key, value in config.items():
-                if key in RUNTIME_SETTING_KEYS and value not in (None, ""):
-                    override[key] = value
+                apply_override(key, value, retrieval_score=score, score_index=score_index)
         elif kind == "multimodal_lora_context":
             summary = dict(payload.get("classification_summary") or {})
             scene = str(summary.get("scene") or "")
@@ -259,12 +285,12 @@ def runtime_settings_from_retrieved_items(
             reading = dict(subtitle_profile.get("reading_speed") or {})
             max_cps = safe_float(reading.get("max_cps"), 0.0)
             if scene in {"car", "outdoor"} or noise_level == "high" or noise_sources.intersection({"engine", "traffic", "wind", "crowd", "music"}):
-                override.setdefault("selected_audio_ai", "clearvoice")
-                override.setdefault("stt_quality_preset", "precise")
-                override.setdefault("subtitle_quality_enabled", True)
+                apply_override("selected_audio_ai", "clearvoice", retrieval_score=score, score_index=score_index)
+                apply_override("stt_quality_preset", "precise", retrieval_score=score, score_index=score_index)
+                apply_override("subtitle_quality_enabled", True, retrieval_score=score, score_index=score_index)
             if max_cps > 0:
-                override.setdefault("sub_max_cps", max(10, min(18, safe_int(max_cps))))
+                apply_override("sub_max_cps", max(10, min(18, safe_int(max_cps))), retrieval_score=score, score_index=score_index)
             excluded_ratio = safe_float(subtitle_profile.get("excluded_parenthetical_ratio"), 0.0)
             if excluded_ratio >= 0.1:
-                override.setdefault("subtitle_quality_auto_correct_enabled", True)
+                apply_override("subtitle_quality_auto_correct_enabled", True, retrieval_score=score, score_index=score_index)
     return {key: value for key, value in override.items() if key in RUNTIME_SETTING_KEYS and value not in (None, "")}

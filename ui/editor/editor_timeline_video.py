@@ -181,6 +181,35 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                 self._cached_segs = segs
         return find_segment_at(segs, sec, skip_gap=skip_gap)
 
+    def _schedule_background_prefetch(self, current_sec: float, segments: list[dict] | None = None) -> None:
+        try:
+            settings = dict(getattr(self, "settings", {}) or {})
+            if not settings.get("background_prefetch_enabled", True):
+                return
+            if segments is None:
+                segments = getattr(self, "_cached_segs", None)
+            if segments is None:
+                segments = []
+            media_path = str(getattr(self, "media_path", "") or "")
+            if not media_path:
+                player = getattr(self, "video_player", None)
+                media_path = str(getattr(player, "path", "") or getattr(player, "media_path", "") or "")
+            manager = getattr(self, "_background_prefetch_manager", None)
+            if manager is None:
+                from core.pipeline.background_prefetch import BackgroundPrefetchManager
+
+                manager = BackgroundPrefetchManager()
+                self._background_prefetch_manager = manager
+            result = manager.request(
+                media_path=media_path,
+                current_sec=float(current_sec or 0.0),
+                segments=[dict(seg) for seg in list(segments or []) if isinstance(seg, dict)],
+                settings=settings,
+            )
+            self._last_background_prefetch_request = result
+        except Exception:
+            pass
+
     # ---------------------------------------------------------
     # Timeline Segment Events
     # ---------------------------------------------------------
@@ -244,6 +273,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         self._playhead_display_sec = current_sec
         self._playhead_anchor_global_sec = current_sec
         self._playhead_anchor_mono = now_mono
+        self._schedule_background_prefetch(current_sec)
         if hasattr(self.timeline, "follow_playhead_centered"):
             self.timeline.follow_playhead_centered(current_sec, smooth=True)
         elif hasattr(self.timeline, "follow_playhead"):
@@ -309,6 +339,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             self.video_player.pause_video()
             self.video_player.seek_direct(sec)
         segs = getattr(self, '_cached_segs', None) or self._get_current_segments()
+        self._schedule_background_prefetch(sec, segs)
         seg = find_segment_at(segs, sec, skip_gap=False)
         if seg and self._active_seg_start != seg["start"]:
             self._sync_cursor_to_seg(seg)

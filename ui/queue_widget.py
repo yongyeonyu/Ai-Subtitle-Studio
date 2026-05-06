@@ -15,6 +15,20 @@ from PyQt6.QtGui import QColor
 class QueueMixin:
     """큐 테이블 관리 (MainWindow에 Mixin으로 결합)"""
 
+    _QUEUE_UNKNOWN_EXPECTED_TEXTS = {
+        "",
+        "-",
+        "?",
+        "0",
+        "0.0",
+        "00:00",
+        "00:00:00",
+        "계산 중",
+        "분석 중..",
+        "예상불가",
+        "학습 중",
+    }
+
     def _format_queue_clock(self, sec) -> str:
         try:
             total = max(0, int(float(sec)))
@@ -49,6 +63,17 @@ class QueueMixin:
             return float((hours * 3600) + (minutes * 60) + seconds)
         return None
 
+    def _queue_expected_time_is_unknown(self, value) -> bool:
+        text = str(value or "").strip()
+        if text in self._QUEUE_UNKNOWN_EXPECTED_TEXTS:
+            return True
+        parsed = self._parse_queue_seconds_value(text)
+        return parsed is not None and parsed <= 0
+
+    def _queue_expected_display_text(self, value) -> str:
+        text = str(value or "").strip()
+        return "예상불가" if self._queue_expected_time_is_unknown(text) else text
+
     def _queue_expected_time_label(self, idx: int, eta_text: str = "", duration_text: str = "") -> str:
         expected = self._expected_seconds.get(idx, 0)
         if expected > 0:
@@ -57,12 +82,12 @@ class QueueMixin:
         if "/" in eta:
             _left, right = [part.strip() for part in eta.split("/", 1)]
             eta = right
-        if eta and eta not in {"-", "?", "계산 중", "분석 중..", "예상불가", "학습 중"}:
+        if eta and not self._queue_expected_time_is_unknown(eta):
             return eta
         duration = str(duration_text or "").strip()
-        if duration and duration not in {"-", "?", "00:00"}:
+        if duration and not self._queue_expected_time_is_unknown(duration):
             return duration
-        return ""
+        return "예상불가"
 
     def clear_queue_list(self, header: str = "큐 리스트 : (0/0) - 0% 완료"):
         table = getattr(self, "queue_table", None)
@@ -157,15 +182,13 @@ class QueueMixin:
 
     def _queue_card_time_text(self, eta_text: str, duration_text: str) -> str:
         eta = str(eta_text or "-").strip() or "-"
-        if eta in {"?", "계산 중", "분석 중..", "예상불가"}:
-            eta = "-"
         if "/" in eta:
             left, right = [part.strip() for part in eta.split("/", 1)]
             left = left or "00:00"
-            right = "-" if right in {"", "?", "계산 중", "분석 중..", "예상불가"} else right
+            right = self._queue_expected_display_text(right)
             return f"{left} / {right}"
-        if eta == "-":
-            return "-"
+        if self._queue_expected_time_is_unknown(eta):
+            return "예상불가"
         return f"00:00 / {eta}"
 
     def _current_queue_active_row(self) -> int:
@@ -355,7 +378,7 @@ class QueueMixin:
                 self.queue_table.setItem(idx, 3, mk(len_txt))
             if time_txt:
                 sec_val = self._parse_queue_seconds_value(time_txt)
-                if sec_val is not None:
+                if sec_val is not None and sec_val > 0:
                     self._expected_seconds[idx] = sec_val
                     if idx not in self._file_complete_times:
                         if incoming_active and idx in self._file_start_times:
@@ -369,7 +392,20 @@ class QueueMixin:
                             self.queue_table.setItem(idx, 4, mk(self._format_queue_clock(sec_val)))
                 else:
                     if idx not in self._file_complete_times:
-                        self.queue_table.setItem(idx, 4, mk(time_txt))
+                        expected_label = (
+                            self._queue_expected_display_text(time_txt)
+                            if self._queue_expected_time_is_unknown(time_txt)
+                            else str(time_txt)
+                        )
+                        if incoming_active and idx in self._file_start_times:
+                            elapsed = max(0.0, time.time() - float(self._file_start_times.get(idx, 0) or 0))
+                            self.queue_table.setItem(
+                                idx,
+                                4,
+                                mk(f"{self._format_queue_clock(elapsed)} / {expected_label}"),
+                            )
+                        else:
+                            self.queue_table.setItem(idx, 4, mk(expected_label))
             self._apply_queue_row_visual_state(idx)
         if hasattr(self, "_sync_sidebar_queue_panel"):
             if hasattr(self, "_refresh_sidebar_queue_cache"):
@@ -485,7 +521,7 @@ class QueueMixin:
                         i,
                         str(tc.text() if tc else ""),
                         str(duration_item.text() if duration_item else ""),
-                    ) or "학습 중"
+                    ) or "예상불가"
                     tc.setText(f"{self._format_queue_clock(ef)} / {expected_label}")
             self._apply_queue_row_visual_state(i)
         if hasattr(self, "_sync_sidebar_queue_panel"):

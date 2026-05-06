@@ -44,6 +44,19 @@ def save_settings(settings):
     os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
     with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
         json.dump(settings, f, ensure_ascii=False, indent=2)
+    try:
+        from core.settings import load_settings as _load_user_settings, save_settings as _save_user_settings
+
+        mirrored = dict(_load_user_settings() or {})
+        for key in DEFAULT_SETTINGS:
+            if key in settings:
+                mirrored[key] = settings[key]
+        _save_user_settings(mirrored)
+    except Exception as e:
+        try:
+            get_logger().log(f"⚠️ folder_settings user_settings 미러링 실패: {e}")
+        except Exception:
+            pass
 
 def get_last_folder(): return load_settings().get("last_folder", "")
 def set_last_folder(path): s = load_settings(); s["last_folder"] = path; save_settings(s)

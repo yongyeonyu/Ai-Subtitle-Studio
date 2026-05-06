@@ -176,6 +176,113 @@ def _config_bits(config: dict[str, Any], limit: int = 5) -> str:
     return ", ".join(bits[:limit])
 
 
+def _compact_profile_settings(settings: dict[str, Any], limit: int = 10) -> str:
+    priority = (
+        "split_length_threshold",
+        "sub_max_cps",
+        "sub_gap_break_sec",
+        "continuous_threshold",
+        "gap_push_rate",
+        "single_subtitle_end",
+        "sub_min_duration",
+        "sub_max_duration",
+        "selected_audio_ai",
+        "stt_quality_preset",
+        "subtitle_quality_enabled",
+        "review_auto_correct_apply_threshold",
+    )
+    bits: list[str] = []
+    for key in priority:
+        if key in settings and settings.get(key) not in (None, ""):
+            bits.append(f"{key}={settings[key]}")
+    for key in sorted(settings):
+        if len(bits) >= limit:
+            break
+        if key in priority or settings.get(key) in (None, ""):
+            continue
+        bits.append(f"{key}={settings[key]}")
+    return ", ".join(bits[:limit])
+
+
+def _generation_profile_lines(settings: dict[str, Any] | None) -> list[str]:
+    profile = dict((settings or {}).get("_lora_generation_profile") or {})
+    if not profile:
+        return []
+    lines = [
+        (
+            "- 자막별 LoRA 프로필: "
+            f"score={float(profile.get('top_score', 0.0) or 0.0):.1f}, "
+            f"docs={int(profile.get('index_doc_count', 0) or 0)}, "
+            f"kinds={', '.join(sorted(dict(profile.get('used_kinds') or {}).keys())) or '-'}"
+        )
+    ]
+    applied = _compact_profile_settings(dict(profile.get("applied_settings") or {}), limit=12)
+    retrieved = _compact_profile_settings(dict(profile.get("retrieved_settings") or {}), limit=12)
+    if applied:
+        lines.append(f"- 이번 자막에 직접 적용할 LoRA 값: {applied}")
+    elif retrieved:
+        lines.append(f"- 검색된 LoRA 설정 후보: {retrieved}")
+    deep_policy = dict(profile.get("_deep_setting_policy") or {})
+    deep_settings = _compact_profile_settings(dict(profile.get("deep_policy_settings") or {}), limit=8)
+    if deep_policy and deep_settings:
+        confidence = float(deep_policy.get("confidence", 0.0) or 0.0)
+        lines.append(f"- 자막별 딥러닝 설정 정책: confidence={confidence:.2f}, {deep_settings}")
+    examples = []
+    for item in list(profile.get("examples") or [])[:5]:
+        if not isinstance(item, dict):
+            continue
+        if item.get("text"):
+            suffix = f", line={item.get('line_break_pattern')}" if item.get("line_break_pattern") else ""
+            examples.append(f"{_norm(item.get('text'))}{suffix}")
+        elif item.get("input") or item.get("output"):
+            examples.append(f"{_norm(item.get('input'))} -> {_norm(item.get('output'))}")
+    if examples:
+        lines.append("- 자막별 유사 ground truth/교정 예시: " + "; ".join(examples))
+    contexts = []
+    for item in list(profile.get("context_hits") or [])[:3]:
+        summary = dict((item or {}).get("summary") or {})
+        bits = [
+            f"scene={summary.get('scene') or '-'}",
+            f"topic={summary.get('topic') or '-'}",
+            f"mic={summary.get('mic_type') or '-'}",
+        ]
+        noise = ", ".join(str(v) for v in list(summary.get("noise_sources") or [])[:3])
+        if noise:
+            bits.append(f"noise={noise}")
+        contexts.append(", ".join(bits))
+    if contexts:
+        lines.append("- 자막별 유사 영상/음성 context: " + "; ".join(contexts))
+    rules = [
+        _norm(item.get("rule_text"))
+        for item in list(profile.get("learned_rules") or [])[:6]
+        if isinstance(item, dict) and _norm(item.get("rule_text"))
+    ]
+    if rules:
+        lines.append("- 자막별 learned rule: " + ", ".join(rules))
+    prompt_hints = [
+        _norm(item.get("prompt_text") or item.get("prompt_template_id"))
+        for item in list(profile.get("prompt_hints") or [])[:3]
+        if isinstance(item, dict) and _norm(item.get("prompt_text") or item.get("prompt_template_id"))
+    ]
+    if prompt_hints:
+        lines.append("- 자막별 프롬프트 trial 근거: " + "; ".join(prompt_hints))
+    exclusions = [
+        _norm(item.get("text"))
+        for item in list(profile.get("exclusions") or [])[:5]
+        if isinstance(item, dict) and _norm(item.get("text"))
+    ]
+    if exclusions:
+        lines.append("- 자막별 제외 문구: " + ", ".join(exclusions))
+    other_hints = [
+        f"{_norm(item.get('kind'))}: {_norm(item.get('text'))}"
+        for item in list(profile.get("other_hints") or [])[:4]
+        if isinstance(item, dict) and _norm(item.get("kind")) and _norm(item.get("text"))
+    ]
+    if other_hints:
+        lines.append("- 자막별 기타 LoRA 근거: " + "; ".join(other_hints))
+    return lines
+
+
 def _retrieved_lora_context_lines(
     text: str,
     settings: dict[str, Any] | None,
@@ -295,6 +402,8 @@ def build_runtime_lora_prompt(
     rules: dict[str, Any] | None,
     settings: dict[str, Any] | None,
     store_dir: str | Path | None = None,
+    *,
+    include_retrieval: bool = True,
 ) -> str:
     if not runtime_lora_enabled(settings):
         return ""
@@ -306,10 +415,11 @@ def build_runtime_lora_prompt(
     correction_hits = search_correction_memory(text, limit=6, min_confidence=0.45)
     wrong_hits = search_wrong_answer_memory(text, limit=6)
     legacy_hits = _legacy_correction_matches(text, limit=6)
-    retrieval_lines = _retrieved_lora_context_lines(text, settings, store_dir=store_dir)
+    retrieval_lines = _retrieved_lora_context_lines(text, settings, store_dir=store_dir) if include_retrieval else []
+    profile_lines = _generation_profile_lines(settings)
 
     lines = [
-        "[텍스트 LoRA/개인화 컨텍스트 - 자동 교정 허용 ON]",
+        "[텍스트 LoRA/개인화 컨텍스트 - 사용자 프롬프트보다 우선]",
         "사용자가 직접 고친 자막 데이터와 규칙을 최우선 참고하되, 원문에 없는 말은 절대 추가하지 마세요.",
         "이 컨텍스트는 최종 자막의 검수, 줄바꿈, 시작/끝 단어, 사용자 단어, 오답 회피에만 사용합니다.",
         "간격 메뉴 값은 시간 생성 지시가 아니라 분리 판단 참고값이며, 실제 시간 보정은 최종 간격 패스에서 적용됩니다.",
@@ -335,6 +445,7 @@ def build_runtime_lora_prompt(
         lines.append("- 오답/환각 memory: " + "; ".join(
             _norm(item.get("phrase")) for item in wrong_hits if _norm(item.get("phrase"))
         ))
+    lines.extend(profile_lines)
     lines.extend(retrieval_lines)
     lines.extend(_learned_rule_summary_lines(store_dir))
     lines.append("위 예시와 충돌하면 원문 무결성, 짧고 자연스러운 한국어 구어체, 사용자 교정 memory 순서로 판단하세요.")

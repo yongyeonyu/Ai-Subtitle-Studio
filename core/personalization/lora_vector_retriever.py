@@ -11,6 +11,7 @@ from core.personalization.lora_retrieval_config import (
     LORA_RETRIEVAL_INDEX_SCHEMA,
     LORA_RETRIEVAL_SCORE_MODEL,
 )
+from core.personalization.lora_quality_buckets import lora_allowed_buckets_for_quality
 from core.personalization.lora_retrieval_index import (
     build_lora_retrieval_index_payload,
     index_is_current,
@@ -109,11 +110,17 @@ def retrieve_lora_context(
     limit: int = 16,
     per_kind: int = 5,
     kinds: set[str] | tuple[str, ...] | list[str] | None = None,
+    quality_buckets: set[str] | tuple[str, ...] | list[str] | frozenset[str] | None = None,
     rebuild_if_stale: bool = True,
 ) -> dict[str, Any]:
     index = load_lora_retrieval_index(store_dir, rebuild_if_stale=rebuild_if_stale)
     query = query_text(text, media_path=media_path, media_id=media_id, settings=settings, context=context)
     kind_filter = {str(kind) for kind in kinds} if kinds is not None else None
+    bucket_filter = (
+        {str(bucket) for bucket in quality_buckets}
+        if quality_buckets is not None
+        else set(lora_allowed_buckets_for_quality(settings if settings is not None else "precise"))
+    )
     cache_key = query_cache_key(
         index,
         query,
@@ -122,6 +129,7 @@ def retrieve_lora_context(
         settings=settings,
         context=context,
         kinds=kind_filter,
+        quality_buckets=bucket_filter,
         limit=limit,
         per_kind=per_kind,
     )
@@ -130,7 +138,18 @@ def retrieve_lora_context(
         return cached
 
     facets = query_facets(query, media_path=media_path, settings=settings, context=context)
-    ranked = score_lora_docs(index, query, media_path=media_path, media_id=media_id, query_facets=facets, kinds=kind_filter)
+    if not bucket_filter:
+        ranked = []
+    else:
+        ranked = score_lora_docs(
+            index,
+            query,
+            media_path=media_path,
+            media_id=media_id,
+            query_facets=facets,
+            kinds=kind_filter,
+            quality_buckets=bucket_filter,
+        )
     selected: list[dict[str, Any]] = []
     kind_counts: dict[str, int] = defaultdict(int)
     seen_docs: set[str] = set()
@@ -156,6 +175,7 @@ def retrieve_lora_context(
         "index_updated_at": index.get("updated_at"),
         "index_doc_count": int(index.get("doc_count", 0) or 0),
         "kind_counts": dict(index.get("kind_counts") or {}),
+        "quality_buckets": sorted(bucket_filter),
         "items": selected,
         "by_kind": {
             kind: [item for item in selected if str(item.get("kind") or "") == kind]
@@ -166,11 +186,15 @@ def retrieve_lora_context(
     return result
 
 
-def lora_retrieval_index_summary(store_dir: str | Path | None = None) -> dict[str, Any]:
+def lora_retrieval_index_summary(
+    store_dir: str | Path | None = None,
+    *,
+    rebuild_if_stale: bool = True,
+) -> dict[str, Any]:
     paths = store_paths(store_dir)
     index = load_lora_retrieval_index(store_dir, rebuild_if_stale=False)
     current = index_is_current(index, paths)
-    if not current:
+    if not current and rebuild_if_stale:
         index = build_lora_retrieval_index(store_dir)
         current = True
     return {

@@ -257,6 +257,55 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             self.assertTrue(result["processed"])
             prune.assert_not_called()
 
+    def test_low_resource_training_defers_retrieval_index_and_zip_job(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            save_training_queue(
+                [
+                    {
+                        "job_id": "index-low-power",
+                        "job_type": "build_retrieval_index",
+                        "media_id": "global",
+                        "media_path": "",
+                        "subtitle_path": "",
+                        "status": "waiting",
+                        "priority": 1,
+                        "progress": 0.0,
+                        "attempts": 0,
+                        "payload": {"force": True},
+                    }
+                ],
+                tmpdir,
+            )
+
+            with (
+                patch("core.personalization.idle_trainer.build_lora_retrieval_index") as build_index,
+                patch("core.personalization.idle_trainer.refresh_unified_lora_data_bundle") as refresh_bundle,
+                patch("core.personalization.lora_store_bundle.refresh_unified_lora_data_bundle") as manifest_bundle,
+            ):
+                result = run_training_queue_once(tmpdir, low_resource=True)
+
+            self.assertTrue(result["processed"])
+            build_index.assert_not_called()
+            refresh_bundle.assert_not_called()
+            manifest_bundle.assert_not_called()
+            item = load_training_queue(tmpdir)["items"][0]
+            self.assertEqual(item["status"], "skipped")
+            self.assertEqual(item["last_error"], "low_resource_index_refresh_deferred")
+
+    def test_low_resource_completed_job_does_not_refresh_retrieval_index_in_app_process(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            enqueue_default_training_jobs([], store_dir=tmpdir)
+
+            with patch("core.personalization.idle_trainer.build_lora_retrieval_index") as build_index:
+                result = run_training_queue_once(tmpdir, low_resource=True)
+
+            self.assertTrue(result["processed"])
+            build_index.assert_not_called()
+            outcome = dict(result.get("outcome") or {})
+            self.assertEqual((outcome.get("retrieval_index") or {}).get("reason"), "low_resource_index_refresh_deferred")
+
     def test_run_training_queue_once_writes_store_local_training_outputs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             initialize_lora_personalization_store(tmpdir)
@@ -285,7 +334,7 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             self.assertEqual(len(list(payload.get("items") or [])), 6)
 
             paths = store_paths(tmpdir)
-            (paths["root"] / "text_lora_corpus.jsonl").write_text(
+            paths["text_lora_corpus"].write_text(
                 json.dumps(
                     {
                         "task": "text_correction",
@@ -299,7 +348,7 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            (paths["root"] / "voice_lora_bridge.jsonl").write_text(
+            paths["voice_lora_bridge"].write_text(
                 json.dumps(
                     {
                         "speaker": "00",
@@ -371,11 +420,11 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             self.assertTrue(all(str(item.get("status") or "") == "complete" for item in queue_items))
             self.assertEqual(queue_items[0]["payload"]["checkpoint"]["stage"], "completed")
             self.assertIn("checkpoint_history", queue_items[0]["payload"])
-            self.assertTrue((paths["root"] / "text_lora_training_plan.json").exists())
-            self.assertTrue((paths["root"] / "voice_lora_profile_manifest.json").exists())
-            self.assertTrue((paths["root"] / "stt1_whisper_adapter_training_plan.json").exists())
-            self.assertTrue((paths["root"] / "stt1_whisper_adapter_runtime_manifest.json").exists())
-            self.assertTrue((paths["root"] / "learned_split_rules.json").exists())
+            self.assertTrue(paths["text_lora_training_plan"].exists())
+            self.assertTrue(paths["voice_lora_profile_manifest"].exists())
+            self.assertTrue(paths["stt1_whisper_adapter_training_plan"].exists())
+            self.assertTrue(paths["stt1_whisper_adapter_runtime_manifest"].exists())
+            self.assertTrue(paths["learned_split_rules"].exists())
             self.assertGreater(len(paths["setting_trials"].read_text(encoding="utf-8").strip().splitlines()), 0)
             self.assertGreater(len(paths["prompt_trials"].read_text(encoding="utf-8").strip().splitlines()), 0)
             setting_trials = [
@@ -507,7 +556,7 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             initialize_lora_personalization_store(tmpdir)
             paths = store_paths(tmpdir)
-            (paths["root"] / "voice_lora_bridge.jsonl").write_text(
+            paths["voice_lora_bridge"].write_text(
                 json.dumps(
                     {
                         "speaker": "00",
@@ -551,7 +600,7 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             initialize_lora_personalization_store(tmpdir)
             paths = store_paths(tmpdir)
-            (paths["root"] / "voice_lora_bridge.jsonl").write_text(
+            paths["voice_lora_bridge"].write_text(
                 json.dumps(
                     {
                         "speaker": "00",

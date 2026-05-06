@@ -492,6 +492,7 @@ def install_topicless_segment_helpers(PipelineHelpersMixin):
 
 
     def _patched_build_cut_boundary_topicless_rows(self, detected, *, files=None, done: bool = False) -> list[dict]:
+        from core.cut_boundary_middle import coalesce_topicless_middle_boundary_frames
         from core.frame_time import sec_to_frame
 
         fps = _pipeline_topicless_fps_from_detected(self, detected, files=files)
@@ -504,13 +505,28 @@ def install_topicless_segment_helpers(PipelineHelpersMixin):
         except Exception:
             duration_frame = 0
 
-        cut_frames = []
+        cut_rows = []
         for row in list(detected or []):
             frame = _pipeline_topicless_frame_from_row(row, fps)
             if frame is not None and frame > 0:
-                cut_frames.append(int(frame))
+                if isinstance(row, dict):
+                    cut_rows.append(dict(row))
+                else:
+                    cut_rows.append({"timeline_frame": int(frame), "frame": int(frame), "fps": fps})
 
-        cut_frames = sorted(set(cut_frames))
+        try:
+            from core.settings import load_settings
+
+            settings = dict(load_settings() or {})
+        except Exception:
+            settings = {}
+
+        cut_frames = coalesce_topicless_middle_boundary_frames(
+            cut_rows,
+            fps=fps,
+            duration_frame=duration_frame,
+            settings=settings,
+        )
 
         # 컷이 없어도 전체 A 생성
         if not cut_frames:

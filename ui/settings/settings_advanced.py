@@ -12,8 +12,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt, QTimer
 from core.project.data_manager import save_settings, save_default_settings
+from core.settings_profiles import is_lora_auto_managed_setting
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, CUSTOM_DEFAULTS_FILE, _create_bottom_buttons
 from ui.settings.qml_panel import create_settings_header
+from ui.settings.tablet_dialog import apply_tablet_dialog_profile
 from ui.style import button_style, label_style, settings_dialog_stylesheet
 from core.audio import audio_presets as _audio_presets
 from core.audio.audio_presets import apply_audio_preset
@@ -43,6 +45,7 @@ class AdvancedSettingsDialog(QDialog):
 
         self.setMinimumWidth(800)
         self.setMinimumHeight(650)
+        apply_tablet_dialog_profile(self)
         
         self.setStyleSheet(settings_dialog_stylesheet())
         self.result = dict(settings)
@@ -51,6 +54,7 @@ class AdvancedSettingsDialog(QDialog):
         if current_preset in self.audio_presets:
             self.result = apply_audio_preset(self.result, current_preset)
         self.sliders_info = [] 
+        self._auto_managed_rows = 0
 
         layout = QVBoxLayout(self)
         self._qml_header = create_settings_header(
@@ -77,9 +81,15 @@ class AdvancedSettingsDialog(QDialog):
                 break
         preset_layout.addWidget(preset_lbl)
         preset_layout.addWidget(self.combo_audio_preset, stretch=1)
-        layout.addLayout(preset_layout)
         self.combo_audio_preset.currentIndexChanged.connect(self._on_audio_preset_changed)
         self.tabs = QTabWidget()
+        auto_note = QLabel(
+            "음성/VAD/Whisper/ffmpeg 세부값은 dataset/user_settings.json에 저장되고 "
+            "영상별 LoRA 추천값이 있으면 자동 적용됩니다. 이 화면에는 사용자가 직접 조절해야 하는 값만 남깁니다."
+        )
+        auto_note.setWordWrap(True)
+        auto_note.setStyleSheet(label_style("muted", 12) + "padding: 6px 4px 10px 4px;")
+        layout.addWidget(auto_note)
         
         # 탭 1: Silero
         tab_silero = QWidget(); form_silero = QFormLayout(tab_silero)
@@ -98,7 +108,8 @@ class AdvancedSettingsDialog(QDialog):
         self._add_slider(form_silero, "vad_window_size", "VAD 분석 단위 (Window Size):", 
                          "<nobr>💡 오디오를 분석하는 샘플 크기입니다.<br>➕ : 더 넓은 문맥 파악, 정확도 약간 상승(속도 저하)<br>➖ : 빠른 처리 (기본값: {default})</nobr>", 
                          256, 2048, DEFAULT_ADV_SETTINGS['vad_window_size'], 1, "{} 샘플")
-        self.tabs.addTab(tab_silero, "Silero")
+        if form_silero.rowCount():
+            self.tabs.addTab(tab_silero, "Silero")
 
         # 탭 2: DeepFilter
         tab_df = QWidget(); form_df = QFormLayout(tab_df)
@@ -129,7 +140,8 @@ class AdvancedSettingsDialog(QDialog):
         self._add_slider(form_df, "w_df_temp_max", "창의성/유추 (Max Temp):", 
                          "<nobr>💡 소음 속 문맥 유추 상상력입니다.<br>➕ : 그럴듯한 문장으로 억지로 지어내려 함 (기본값: {default})<br>➖ : 들리는 대로만 정직하게 적어 오타가 빈발함</nobr>", 
                          0, 10, DEFAULT_ADV_SETTINGS['w_df_temp_max'], 10, "{:.1f}")
-        self.tabs.addTab(tab_df, "DeepFilter")
+        if form_df.rowCount():
+            self.tabs.addTab(tab_df, "DeepFilter")
 
         # 탭 4: Whisper 전용 설정
         tab_whisper = QWidget(); form_whisper = QFormLayout(tab_whisper)
@@ -157,7 +169,8 @@ class AdvancedSettingsDialog(QDialog):
         self._add_slider(form_whisper, "w_none_temp_max", "창의성/유추 (Max Temp):", 
                          "<nobr>💡 발음이 뭉개졌을 때 앞뒤 문맥으로 유추하는 상상력입니다.<br>➕ : 그럴듯한 문장으로 억지로 지어내려 함 (기본값: {default})<br>➖ : 들리는 대로만 정직하게 적어 오타가 빈발함</nobr>", 
                          0, 10, DEFAULT_ADV_SETTINGS['w_none_temp_max'], 10, "{:.1f}")
-        self.tabs.addTab(tab_whisper, "Whisper")
+        if form_whisper.rowCount():
+            self.tabs.addTab(tab_whisper, "Whisper")
 
         # 탭 5: ffmpeg
         tab_ff = QWidget(); form_ff = QFormLayout(tab_ff)
@@ -194,7 +207,8 @@ class AdvancedSettingsDialog(QDialog):
         self._add_slider(form_ff, "none_vol", "전체 볼륨 펌핑 (기본 필터 배수):", 
                          "<nobr>💡 최종 오디오 볼륨을 무식하게 증폭합니다.<br>➕ : 주변 소음도 같이 엄청나게 커져 AI가 혼란스러워함 (기본값: {default})<br>➖ : 소리가 작아 인식률이 떨어질 수 있음</nobr>", 
                          10, 50, DEFAULT_ADV_SETTINGS['none_vol'], 10, "{:.1f} 배")
-        self.tabs.addTab(tab_ff, "ffmpeg")
+        if form_ff.rowCount():
+            self.tabs.addTab(tab_ff, "ffmpeg")
 
         # 탭 6: 시스템
         tab_sys = QWidget(); form_sys = QFormLayout(tab_sys)
@@ -202,25 +216,28 @@ class AdvancedSettingsDialog(QDialog):
         self._add_slider(form_sys, "io_workers", "오디오 파일 복사 병렬 워커:", 
                          "<nobr>💡 안정적인 파일 처리를 위한 CPU 워커 수입니다.<br>➕ : 처리 속도가 빨라지나 램/CPU 점유율이 높아짐 (기본값: {default})<br>➖ : 프로그램 뻗는 현상 방지</nobr>", 
                          1, 16, DEFAULT_ADV_SETTINGS['io_workers'], 1, "{} 개", show_disable=False)
-        self.tabs.addTab(tab_sys, "시스템")
+        if form_sys.rowCount():
+            self.tabs.addTab(tab_sys, "시스템")
 
         layout.addWidget(self.tabs)
         
-        self.chk_disable_all = QCheckBox("🎙️ 오디오 상세 설정 전체 '사용 안 함'")
-        self.chk_disable_all.setStyleSheet(label_style("text", 13, bold=True) + "padding-bottom: 5px;")
-        
-        def toggle_all_disable():
-            is_checked = self.chk_disable_all.isChecked()
-            for slider, key, multiplier, chk_disable in self.sliders_info:
-                if key not in ["io_workers"] and chk_disable is not None:
-                    chk_disable.setChecked(is_checked)
-                    
-        self.chk_disable_all.stateChanged.connect(toggle_all_disable)
-        
-        chk_layout = QHBoxLayout()
-        chk_layout.addStretch()  
-        chk_layout.addWidget(self.chk_disable_all)
-        layout.addLayout(chk_layout)
+        audio_sliders = [row for row in self.sliders_info if row[1] != "io_workers"]
+        if audio_sliders:
+            self.chk_disable_all = QCheckBox("🎙️ 오디오 상세 설정 전체 '사용 안 함'")
+            self.chk_disable_all.setStyleSheet(label_style("text", 13, bold=True) + "padding-bottom: 5px;")
+
+            def toggle_all_disable():
+                is_checked = self.chk_disable_all.isChecked()
+                for slider, key, multiplier, chk_disable in self.sliders_info:
+                    if key not in ["io_workers"] and chk_disable is not None:
+                        chk_disable.setChecked(is_checked)
+
+            self.chk_disable_all.stateChanged.connect(toggle_all_disable)
+
+            chk_layout = QHBoxLayout()
+            chk_layout.addStretch()
+            chk_layout.addWidget(self.chk_disable_all)
+            layout.addLayout(chk_layout)
         # 💡 [교정] save_def_callback이 포함된 새 코드를 함수 안으로 옮겼습니다.
         layout.addLayout(_create_bottom_buttons(self, self._on_ok, self._on_reset, self._on_save, save_def_callback=self._on_save_default))
 
@@ -249,6 +266,10 @@ class AdvancedSettingsDialog(QDialog):
                 chk_disable.setChecked(bool(self.result.get(f"{key}_disabled", False)))
 
     def _add_slider(self, form, key, title, tip_template, min_val, max_val, default_actual, multiplier, format_str, show_disable=True):
+        if is_lora_auto_managed_setting(key):
+            self.result.setdefault(key, DEFAULT_ADV_SETTINGS.get(key, default_actual))
+            self._auto_managed_rows += 1
+            return
         h_layout = QHBoxLayout()
         
         cur_default_actual = DEFAULT_ADV_SETTINGS.get(key, default_actual)

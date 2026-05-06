@@ -145,6 +145,34 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
+    def test_preview_proxy_cache_is_invalidated_when_same_named_file_changes(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.TemporaryDirectory() as tmp, patch.object(config, "DATASET_DIR", tmp):
+                src = os.path.join(tmp, "same_name.mp4")
+                with open(src, "wb") as f:
+                    f.write(b"old forty six minute proxy source" * 4096)
+
+                stale_proxy = widget._proxy_path_for(src)
+                os.makedirs(os.path.dirname(stale_proxy), exist_ok=True)
+                with open(stale_proxy, "wb") as f:
+                    f.write(b"old proxy")
+
+                with open(src, "wb") as f:
+                    f.write(b"new twenty four minute proxy source" * 2048)
+
+                fresh_proxy = widget._proxy_path_for(src)
+                with patch.object(widget, "_start_proxy_build") as start_proxy_build:
+                    playback_path = widget._playback_path_for(src)
+
+                self.assertNotEqual(fresh_proxy, stale_proxy)
+                self.assertEqual(playback_path, src)
+                start_proxy_build.assert_called_once_with(src, fresh_proxy)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
     def test_preview_display_rect_is_capped_to_720p(self):
         widget = VideoPlayerWidget()
         try:

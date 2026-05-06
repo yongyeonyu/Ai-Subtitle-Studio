@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from core.cut_boundary_fusion import build_roughcut_fusion_boundary_rows
+
 from .chapter_segmenter import build_chapters
 from .boundary_refiner import refine_major_boundaries
 from .edit_decision_engine import build_edit_decisions, generate_cut_points
@@ -70,10 +72,22 @@ def _extract_scene_change_time(item) -> float | None:
         return float(item)
 
     if isinstance(item, dict):
-        for key in ("time", "sec", "seconds", "timestamp", "start", "pos"):
+        if item.get("hard_cut_allowed") is False or str(item.get("boundary_role") or "").lower() == "roughcut":
+            return None
+        if str(item.get("fusion_decision") or "").lower() in {"drop_hint", "roughcut_boundary"}:
+            return None
+        for key in ("time", "timeline_sec", "sec", "seconds", "timestamp", "start", "pos"):
             if key in item:
                 try:
                     return float(item[key])
+                except Exception:
+                    return None
+        for key in ("timeline_frame", "frame", "start_frame"):
+            if key in item:
+                try:
+                    fps = float(item.get("fps") or item.get("frame_rate") or 30.0)
+                    if fps > 0.0:
+                        return float(item[key]) / fps
                 except Exception:
                     return None
 
@@ -312,6 +326,83 @@ def _build_cut_boundary_topicless_result(
     )
 
 
+def _as_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _overlap_text_for_range(chunks: Iterable, start: float, end: float) -> str:
+    texts: list[str] = []
+    for chunk in chunks or ():
+        try:
+            if float(chunk.end) > start and float(chunk.start) < end:
+                text = str(getattr(chunk, "text", "") or "").strip()
+                if text:
+                    texts.append(text)
+        except Exception:
+            continue
+    return " ".join(texts)[:240]
+
+
+def _chapters_from_llm_major_segments(
+    llm_data: dict,
+    *,
+    chunks: Iterable,
+    subtitles: Iterable[SubtitleSegment],
+    media_duration: float | None,
+) -> list[ChapterMetadata]:
+    rows = llm_data.get("major_segments") if isinstance(llm_data, dict) else None
+    if not isinstance(rows, list):
+        return []
+    subtitle_items = list(subtitles or ())
+    fallback_end = max((item.end for item in subtitle_items), default=0.0)
+    duration = max(_as_float(media_duration, fallback_end), fallback_end)
+    out: list[ChapterMetadata] = []
+    allowed_status = {"provisional", "reading", "confirmed", "needs_review"}
+
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        start = max(0.0, _as_float(row.get("start"), 0.0))
+        end = _as_float(row.get("end"), start)
+        if duration > 0.0:
+            end = min(duration, end)
+        if end <= start:
+            continue
+        major_id = str(row.get("major_id") or chr(ord("A") + min(idx, 25))).strip() or f"M{idx + 1}"
+        title = str(row.get("title") or f"중분류 {major_id}").strip()
+        summary = str(row.get("summary") or _overlap_text_for_range(chunks, start, end) or title).strip()
+        raw_tags = row.get("tags") or row.get("keywords") or ()
+        tags = tuple(str(tag).strip() for tag in raw_tags if str(tag).strip())[:8] if isinstance(raw_tags, (list, tuple)) else ()
+        confidence = max(0.0, min(1.0, _as_float(row.get("confidence"), 0.72)))
+        status = str(row.get("status") or ("confirmed" if confidence >= 0.72 else "needs_review")).strip()
+        if status not in allowed_status:
+            status = "needs_review"
+        out.append(
+            ChapterMetadata(
+                chapter_id=f"llm_major_{idx + 1:03d}_{major_id}",
+                title=title,
+                start=start,
+                end=end,
+                summary=summary[:240],
+                tags=tags,
+                importance_score=confidence,
+                narrative_function="roughcut_llm_major_segment",
+                story_role="llm_major",
+                story_reason="roughcut_llm",
+                move_recommendation="review_move" if status != "confirmed" else "",
+                role_confidence=confidence,
+                needs_review=status != "confirmed" or confidence < 0.65,
+                major_id=major_id,
+                confidence=confidence,
+                boundary_status=status,
+            )
+        )
+    return sorted(out, key=lambda item: (item.start, item.end))
+
+
 def run_roughcut_pipeline(
     subtitle_segments: Iterable[dict] | Iterable[SubtitleSegment],
     media_duration: float | None = None,
@@ -331,17 +422,24 @@ def run_roughcut_pipeline(
         warnings.append("use_llm=True requested, roughcut LLM is disabled; local heuristics fallback.")
 
     subtitles = _normalize_subtitles(subtitle_segments)
+    boundary_rows = build_roughcut_fusion_boundary_rows(
+        subtitles,
+        scene_changes,
+        media_duration=media_duration,
+        settings=roughcut_settings,
+    )
+    boundary_source = boundary_rows if boundary_rows else scene_changes
 
     # ✅ 컷 경계는 이제 절대 경계다.
     # 1) 자막이 아직 없으면 00:00~첫 컷 placeholder를 먼저 반환한다.
     # 2) 자막이 있으면 모든 자막을 hard cut 기준으로 먼저 분할한다.
     # 3) 이후 LLM/휴리스틱 주제 분석은 이 경계를 넘어갈 수 없다.
-    hard_cuts = _hard_cut_times_from_scene_changes(scene_changes, media_duration)
+    hard_cuts = _hard_cut_times_from_scene_changes(boundary_source, media_duration)
 
     if not subtitles:
         if bool(roughcut_settings.get("roughcut_cut_boundary_topicless_first", True)):
             topicless_result = _build_cut_boundary_topicless_result(
-                scene_changes=scene_changes,
+                scene_changes=boundary_source,
                 media_duration=media_duration,
                 source_path=source_path,
                 warnings=warnings,
@@ -383,7 +481,19 @@ def run_roughcut_pipeline(
             },
             settings=roughcut_settings,
         )
-        if not llm_result.ok:
+        if llm_result.ok:
+            llm_chapters = _chapters_from_llm_major_segments(
+                llm_result.data,
+                chunks=chunks,
+                subtitles=subtitles,
+                media_duration=media_duration,
+            )
+            if llm_chapters:
+                chapters = map_story_roles(llm_chapters)
+                warnings.append(f"roughcut_llm_applied:{len(llm_chapters)}")
+            else:
+                warnings.append("roughcut_llm_fallback:empty_major_segments")
+        else:
             warnings.append(f"roughcut_llm_fallback:{llm_result.error}")
     duration = media_duration if media_duration is not None else max((item.end for item in subtitles), default=0.0)
     gaps = detect_subtitle_gaps(subtitles, media_duration=duration, min_gap=0.1, include_leading=False, include_trailing=False)
@@ -392,7 +502,7 @@ def run_roughcut_pipeline(
             chapters,
             phrases=packed,
             gaps=gaps,
-            scene_changes=scene_changes,
+            scene_changes=boundary_source,
             search_window=float(roughcut_settings.get("roughcut_boundary_refine_window_sec", 1.5) or 1.5),
         )
     roughcut_segments, chapters = build_major_roughcut_segments(

@@ -23,6 +23,7 @@ from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_global import GlobalCanvas
 from ui.timeline.timeline_scenegraph import TimelineSceneGraphLayer
 from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker
+from ui.responsive_profile import responsive_profile_for_size
 from ui.style import button_style
 from core.frame_time import normalize_fps, snap_sec_to_frame
 
@@ -136,6 +137,7 @@ class TimelineWidget(QWidget):
         lock_row.setContentsMargins(0, 0, 0, 0)
         lock_row.addWidget(self.lock_chk)
         lock_row.addStretch()
+        self._zoom_buttons = []
         for text, tip, slot in (
             ("+", "캔버스 확대", self.zoom_in),
             ("-", "캔버스 축소", self.zoom_out),
@@ -146,6 +148,7 @@ class TimelineWidget(QWidget):
             btn.setToolTip(tip)
             btn.setStyleSheet(button_style("toolbar", font_size="11px", padding="2px 6px"))
             btn.clicked.connect(slot)
+            self._zoom_buttons.append(btn)
             lock_row.addWidget(btn)
         lay.addLayout(lock_row)
 
@@ -165,6 +168,7 @@ class TimelineWidget(QWidget):
         self._playhead_overlay.raise_()
         self.canvas._external_playhead_overlay = True
         self._scenegraph_layer = self._create_scenegraph_layer()
+        self._apply_responsive_touch_targets()
 
         self.global_canvas = GlobalCanvas()
         lay.addWidget(self.global_canvas)
@@ -250,6 +254,47 @@ class TimelineWidget(QWidget):
         self._focus_border.hide()
         self._sync_scenegraph_layer()
         self._sync_focus_border()
+
+    def _reset_single_media_context(self, *, clear_duration: bool) -> None:
+        self._waveform_mode = "single"
+        self._selected_clip_idx = -1
+        self._selected_clip_offset = 0.0
+        self._selected_clip_duration = 0.0
+        self._selected_clip_label = ""
+        self._multiclip_fit_done = False
+        if hasattr(self.canvas, "_multiclip_boxes"):
+            self.canvas._multiclip_boxes = []
+        if hasattr(self.canvas, "_active_clip_idx"):
+            self.canvas._active_clip_idx = 0
+        if hasattr(self.global_canvas, "_multiclip_boxes"):
+            self.global_canvas._multiclip_boxes = []
+        if hasattr(self.global_canvas, "_active_clip_idx"):
+            self.global_canvas._active_clip_idx = 0
+        self.global_canvas.set_clip_label("")
+        if clear_duration:
+            self.canvas.total_duration = 0.0
+            self.global_canvas.total_duration = 0.0
+        target_w = self._canvas_width_for_duration(float(getattr(self.canvas, "total_duration", 0.0) or 0.0))
+        if self.canvas.width() != target_w:
+            self.canvas.setFixedWidth(target_w)
+        self._schedule_vp_sync()
+        self._sync_scenegraph_layer()
+        self._sync_playhead_overlay()
+
+    def _apply_single_media_duration(self, dur: float) -> None:
+        self._reset_single_media_context(clear_duration=False)
+        duration = max(0.0, float(dur or 0.0))
+        self.canvas.total_duration = duration
+        self.global_canvas.total_duration = duration
+        target_w = self._canvas_width_for_duration(duration)
+        if self.canvas.width() != target_w:
+            self.canvas.setFixedWidth(target_w)
+        self._schedule_vp_sync()
+        if bool(getattr(self, "_fit_to_view_locked", False)):
+            self.schedule_fit_to_view((0,))
+        else:
+            self._sync_scenegraph_layer()
+            self._sync_playhead_overlay()
 
     def stop_waveform_workers(self, timeout_ms: int = 1200):
         for attr in ("_wf_worker", "_mc_worker"):
@@ -470,12 +515,34 @@ class TimelineWidget(QWidget):
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
+        self._apply_responsive_touch_targets()
         self._sync_focus_border()
         self._sync_playhead_overlay()
         self._sync_scenegraph_layer()
         self._schedule_vp_sync()
         if bool(getattr(self, "_fit_to_view_locked", False)):
             self.schedule_fit_to_view()
+
+    def _current_responsive_profile(self):
+        try:
+            win = self.window()
+            override = str(win.property("responsive_profile_override") or self.property("responsive_profile_override") or "")
+            width = int(win.width() or self.width() or 0)
+            height = int(win.height() or self.height() or 0)
+        except Exception:
+            override = ""
+            width = int(self.width() or 0)
+            height = int(self.height() or 0)
+        return responsive_profile_for_size(width, height, override=override)
+
+    def _apply_responsive_touch_targets(self):
+        profile = self._current_responsive_profile()
+        touch_mode = profile.name != "desktop"
+        for btn in getattr(self, "_zoom_buttons", []) or []:
+            if touch_mode:
+                btn.setFixedSize(profile.touch_target, 44)
+            else:
+                btn.setFixedSize(28, 24)
 
     def paintEvent(self, ev):
         super().paintEvent(ev)
@@ -911,7 +978,13 @@ class TimelineWidget(QWidget):
         if self._waveform_mode == "multi" and not force:
             return
 
-        self._waveform_mode = "single"
+        path = str(path or "")
+        path_changed = path != str(getattr(self, "_waveform_path", "") or "")
+        if path_changed or force:
+            self._reset_single_media_context(clear_duration=True)
+            self.canvas.set_waveform(None)
+            self.global_canvas.set_waveform(None)
+
         self._waveform_path = str(path or "")
 
         if self._mc_worker:
@@ -1009,9 +1082,9 @@ class TimelineWidget(QWidget):
         if sender is not self._wf_worker:
             return
 
+        self._apply_single_media_duration(d)
         self.canvas.set_waveform(wf)
         self.global_canvas.set_waveform(wf)
-        self.global_canvas.total_duration = d
         self.waveform_ready.emit(str(getattr(self, "_waveform_path", "") or ""), float(d or 0.0))
 
     def wheelEvent(self, ev):

@@ -11,6 +11,7 @@ from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon, QPainter, Q
 
 from core.runtime import config
 from ui.editor.editor_helpers import find_segment_at
+from ui.responsive_profile import responsive_profile_for_size
 
 from ui.timeline.speaker_labels import current_speaker_settings, speaker_labels_for_segment
 from ui.timeline.timeline_constants import (
@@ -66,6 +67,24 @@ class TimelineInputMixin:
                 or bool(seg.get("quality_stale"))
             )
         )
+
+    def _current_responsive_profile(self):
+        try:
+            win = self.window()
+            override = str(win.property("responsive_profile_override") or self.property("responsive_profile_override") or "")
+            width = int(win.width() or self.width() or 0)
+            height = int(win.height() or self.height() or 0)
+        except Exception:
+            override = ""
+            width = int(self.width() or 0)
+            height = int(self.height() or 0)
+        return responsive_profile_for_size(width, height, override=override)
+
+    def _touch_hit_slop(self, visual_px: int) -> int:
+        profile = self._current_responsive_profile()
+        if profile.name == "desktop":
+            return 0
+        return max(0, int((profile.touch_target - max(1, int(visual_px))) / 2))
 
     def _is_stt_preview_segment(self, seg: dict) -> bool:
         return bool(seg.get("stt_pending") or seg.get("_live_stt_preview") or seg.get("_live_subtitle_preview"))
@@ -324,6 +343,7 @@ class TimelineInputMixin:
         lane_h = max(18, SEG_TOP - lane_top - 7)
         if not (lane_top <= int(y) <= lane_top + lane_h):
             return None
+        margin = max(int(margin), self._touch_hit_slop(2))
         best = None
         best_dist = max(1, int(margin)) + 1
         items = list(getattr(self, "scan_boundary_times", []) or [])
@@ -414,7 +434,8 @@ class TimelineInputMixin:
 
     def _handle_drag_at(self, x: int, y: int):
         point = QPoint(x, y)
-        candidates = self._segments_near_x_for_hit(x, pad_px=HANDLE_R + 8) if hasattr(self, "_segments_near_x_for_hit") else self.segments
+        touch_slop = self._touch_hit_slop(HANDLE_R)
+        candidates = self._segments_near_x_for_hit(x, pad_px=HANDLE_R + 8 + touch_slop) if hasattr(self, "_segments_near_x_for_hit") else self.segments
         for seg in candidates:
             if self._is_stt_preview_segment(seg):
                 continue
@@ -425,6 +446,16 @@ class TimelineInputMixin:
                 return seg, "square_left"
             if self._handle_polygon(x2, False).containsPoint(point, Qt.FillRule.OddEvenFill):
                 return seg, "square_right"
+            if touch_slop > 0:
+                cy = SEG_TOP + 32
+                target_h = max(HANDLE_R, self._current_responsive_profile().touch_target)
+                top = int(cy - (target_h / 2))
+                left_rect = QRect(int(x1 - touch_slop), top, int(HANDLE_R + touch_slop + 4), target_h)
+                right_rect = QRect(int(x2 - HANDLE_R - 4), top, int(HANDLE_R + touch_slop + 4), target_h)
+                if left_rect.contains(x, y):
+                    return seg, "square_left"
+                if right_rect.contains(x, y):
+                    return seg, "square_right"
         return None
 
     def _handle_hover_at(self, x: int, y: int):
@@ -479,6 +510,7 @@ class TimelineInputMixin:
         return None
 
     def _diamond_index_at(self, x: int, y: int, *, margin: int = 5):
+        margin = max(int(margin), self._touch_hit_slop(10))
         pairs = self._diamond_pairs()
         if len(pairs) >= 64:
             cache = getattr(self, "_diamond_pairs_cache", {}) or {}
@@ -633,7 +665,8 @@ class TimelineInputMixin:
     def _playhead_handle_hit_rect(self) -> QRect:
         handle_r = 7
         px = self._x(float(getattr(self, "playhead_sec", 0.0) or 0.0))
-        return QRect(int(px - handle_r), 2, handle_r * 2, handle_r * 2)
+        slop = self._touch_hit_slop(handle_r * 2)
+        return QRect(int(px - handle_r), 2, handle_r * 2, handle_r * 2).adjusted(-slop, -slop, slop, slop)
 
     def mousePressEvent(self, ev):
         if bool(getattr(self, "_scan_cut_input_locked", False)):

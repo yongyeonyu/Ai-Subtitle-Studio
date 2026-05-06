@@ -11,6 +11,7 @@ from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtTest import QTest
 
 from ui.timeline.timeline_canvas import TimelineCanvas
+from ui.timeline.timeline_widget import TimelineWidget
 from ui.timeline.timeline_constants import (
     ANALYSIS_TOP,
     DIAMOND_Y,
@@ -123,6 +124,17 @@ class TimelineHitTargetTests(unittest.TestCase):
 
         self.assertIsNone(canvas._handle_drag_at(200, handle_y))
 
+    def test_tablet_profile_expands_segment_handle_hit_target(self):
+        canvas = self._canvas()
+        canvas.setProperty("responsive_profile_override", "tablet_landscape")
+        canvas.resize(1180, canvas.height())
+        handle_y = SEG_TOP + 32
+
+        hit = canvas._handle_drag_at(200, handle_y)
+
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit[1], "square_right")
+
     def test_segment_handle_drag_does_not_snap_to_playhead(self):
         canvas = self._canvas()
         canvas.frame_rate = 100.0
@@ -168,6 +180,37 @@ class TimelineHitTargetTests(unittest.TestCase):
 
         self.assertEqual(canvas._diamond_index_at(209, DIAMOND_Y, margin=5), 0)
         self.assertIsNone(canvas._diamond_index_at(211, DIAMOND_Y, margin=5))
+
+    def test_tablet_profile_expands_diamond_hit_target(self):
+        canvas = self._canvas()
+        canvas.setProperty("responsive_profile_override", "tablet_landscape")
+        canvas.resize(1180, canvas.height())
+
+        self.assertEqual(canvas._diamond_index_at(218, DIAMOND_Y, margin=5), 0)
+
+    def test_tablet_profile_expands_scan_boundary_and_playhead_targets(self):
+        canvas = self._canvas()
+        canvas.setProperty("responsive_profile_override", "tablet_landscape")
+        canvas.resize(1180, canvas.height())
+        canvas.scan_boundary_times = [{"timeline_sec": 2.0, "status": "pending"}]
+        canvas.playhead_sec = 1.0
+        boundary_y = RULER_H + WAVE_H + 10
+
+        self.assertIsNotNone(canvas._scan_boundary_hit_at(canvas._x(2.0) + 18, boundary_y, margin=7))
+        self.assertTrue(canvas._playhead_handle_hit_rect().contains(canvas._x(1.0) + 16, 8))
+
+    def test_tablet_profile_expands_timeline_zoom_buttons(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.setProperty("responsive_profile_override", "tablet_landscape")
+            timeline.resize(1180, timeline.height())
+            timeline._apply_responsive_touch_targets()
+
+            for button in timeline._zoom_buttons:
+                self.assertGreaterEqual(button.width(), 48)
+                self.assertGreaterEqual(button.height(), 44)
+        finally:
+            timeline.deleteLater()
 
     def test_diamond_hit_ignores_interleaved_stt_preview_segments(self):
         canvas = self._canvas()

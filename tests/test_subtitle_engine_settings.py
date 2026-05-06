@@ -1,6 +1,7 @@
 # Version: 03.10.03
 # Phase: PHASE2
 import unittest
+import unittest.mock
 import importlib
 import json
 import sys
@@ -9,6 +10,7 @@ from pathlib import Path
 
 from core.runtime import config
 from core.engine import subtitle_engine
+from core.engine.llm_candidate_policy import build_llm_candidate_options
 
 
 class SubtitleEngineSettingsTests(unittest.TestCase):
@@ -56,6 +58,73 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertAlmostEqual(adjusted[0]["end"], 1.2, places=3)
         self.assertAlmostEqual(adjusted[1]["start"], 2.0, places=3)
 
+    def test_final_gap_settings_do_not_pull_across_confirmed_cut_scene(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 2.8,
+                "text": "A",
+                "cut_scene_index": 0,
+                "cut_scene_start": 0.0,
+                "cut_scene_end": 3.0,
+            },
+            {
+                "start": 3.2,
+                "end": 4.0,
+                "text": "B",
+                "cut_scene_index": 1,
+                "cut_scene_start": 3.0,
+            },
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "continuous_threshold": 1.0,
+                "gap_push_rate": 0.8,
+                "gap_pull_rate": 0.2,
+                "single_subtitle_end": 0.4,
+                "sub_min_duration": 0.2,
+            },
+            force=True,
+        )
+
+        self.assertLessEqual(adjusted[0]["end"], 3.0)
+        self.assertAlmostEqual(adjusted[1]["start"], 3.2, places=3)
+        self.assertEqual(adjusted[0]["_cut_boundary_guard_policy"]["action"], "clamped_to_cut_scene")
+
+    def test_final_gap_settings_allows_high_confidence_cut_crossing_exception(self):
+        segments = [
+            {
+                "start": 2.0,
+                "end": 3.2,
+                "text": "강한 근거 자막",
+                "cut_scene_index": 0,
+                "cut_scene_start": 0.0,
+                "cut_scene_end": 3.0,
+                "_lora_generation_profile": {"top_score": 98.0},
+            },
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "single_subtitle_end": 0.0,
+                "sub_min_duration": 0.2,
+                "subtitle_cut_boundary_high_confidence_score": 96.0,
+            },
+            force=True,
+        )
+
+        self.assertAlmostEqual(adjusted[0]["end"], 3.2, places=3)
+        self.assertEqual(
+            adjusted[0]["_cut_boundary_guard_policy"]["action"],
+            "allowed_high_confidence_crossing",
+        )
+        policy = adjusted[0]["_cut_boundary_guard_policy"]
+        self.assertTrue(policy["hard_cut_crossing_exception"])
+        self.assertGreaterEqual(policy["evidence"]["combined_confidence"], policy["evidence"]["threshold"])
+
     def test_final_gap_settings_are_idempotent_when_already_applied(self):
         segments = [
             {"start": 0.0, "end": 1.8, "text": "A", "_final_gap_settings_applied": True},
@@ -69,6 +138,133 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
 
         self.assertAlmostEqual(adjusted[0]["end"], 1.8, places=3)
         self.assertAlmostEqual(adjusted[1]["start"], 1.8, places=3)
+
+    def test_final_gap_settings_use_segment_lora_overrides(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "text": "A",
+                "_lora_gap_settings": {
+                    "continuous_threshold": 3.0,
+                    "gap_push_rate": 1.0,
+                    "single_subtitle_end": 0.0,
+                },
+            },
+            {"start": 3.0, "end": 4.0, "text": "B"},
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {"continuous_threshold": 0.5, "gap_push_rate": 0.0, "single_subtitle_end": 0.0},
+            force=True,
+        )
+
+        self.assertAlmostEqual(adjusted[0]["end"], 3.0, places=3)
+        self.assertAlmostEqual(adjusted[1]["start"], 3.0, places=3)
+
+    def test_final_gap_settings_apply_timing_fusion_evidence(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 2.8,
+                "text": "주행 소음 확인",
+                "words": [
+                    {"word": "주행", "start": 0.22, "end": 0.55},
+                    {"word": "소음", "start": 0.62, "end": 0.95},
+                    {"word": "확인", "start": 1.02, "end": 1.42},
+                ],
+                "voice_activity_segments": [{"start": 0.2, "end": 1.5}],
+                "audio_energy_boundaries": [{"timeline_sec": 0.18}, {"timeline_sec": 1.52}],
+                "_lora_generation_profile": {
+                    "examples": [{"text": "주행 소음 확인", "duration_sec": 1.5, "score": 92.0}],
+                },
+            }
+        ]
+
+        adjusted = subtitle_engine.apply_final_gap_settings(
+            segments,
+            {
+                "subtitle_timing_fusion_enabled": True,
+                "subtitle_timing_fusion_max_shift_sec": 0.4,
+                "subtitle_timing_fusion_boundary_snap_window_sec": 0.15,
+                "sub_min_duration": 0.2,
+                "single_subtitle_end": 0.0,
+            },
+            force=True,
+        )
+
+        policy = adjusted[0].get("_timing_fusion_policy", {})
+        sources = {item.get("source") for item in policy.get("evidence", [])}
+        self.assertGreater(adjusted[0]["start"], 0.0)
+        self.assertLess(adjusted[0]["end"], 2.8)
+        self.assertIn("word_timestamp", sources)
+        self.assertIn("vad", sources)
+        self.assertIn("lora_duration", sources)
+
+    def test_enforce_len_preserves_segment_lora_metadata(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 4.0,
+                "text": "가나 다라 마바 사아",
+                "speaker": "SPEAKER_00",
+                "words": [
+                    {"word": "가나", "start": 0.0, "end": 0.8},
+                    {"word": "다라", "start": 0.9, "end": 1.7},
+                    {"word": "마바", "start": 1.8, "end": 2.6},
+                    {"word": "사아", "start": 2.7, "end": 3.5},
+                ],
+                "_lora_segment_settings": {"split_length_threshold": 4},
+                "_lora_gap_settings": {"sub_gap_break_sec": 1.1},
+                "_lora_generation_profile": {"top_score": 91.0},
+                "_lora_segment_score": 91.0,
+                "_llm_gate_policy": {"task": "llm_gate", "call_llm": False},
+                "_llm_verifier_policy": {"task": "llm_verifier", "accepted": True},
+                "_accuracy_decision_graph": {"schema": "ai_subtitle_studio.subtitle_accuracy_pipeline.v1", "decisions": []},
+            }
+        ]
+
+        result = subtitle_engine._enforce_len(segments, threshold=4, rules={})
+
+        self.assertGreater(len(result), 1)
+        self.assertTrue(all(seg.get("_lora_segment_settings") == {"split_length_threshold": 4} for seg in result))
+        self.assertTrue(all(seg.get("_lora_gap_settings") == {"sub_gap_break_sec": 1.1} for seg in result))
+        self.assertTrue(all(seg.get("_lora_generation_profile") == {"top_score": 91.0} for seg in result))
+        self.assertTrue(all(seg.get("_llm_gate_policy", {}).get("call_llm") is False for seg in result))
+        self.assertTrue(all(seg.get("_llm_verifier_policy", {}).get("accepted") is True for seg in result))
+
+    def test_verify_llm_chunks_blocks_candidate_policy_violations(self):
+        source = "오늘은 행사장에 왔습니다 그리고 촬영을 시작합니다"
+        settings = {
+            "accuracy_decision_graph_enabled": True,
+            "llm_candidate_policy_enabled": True,
+            "llm_candidate_policy_max_edit_ratio": 0.08,
+        }
+        candidates = build_llm_candidate_options(source, threshold=8, settings=settings)
+
+        accepted, accepted_meta = subtitle_engine._verify_llm_chunks(
+            source,
+            candidates[0]["chunks"],
+            settings,
+            {},
+            fallback="safe_split",
+            candidate_options=candidates,
+        )
+        rejected, rejected_meta = subtitle_engine._verify_llm_chunks(
+            source,
+            ["완전히 다른 설명을 새로 추가했습니다"],
+            settings,
+            {},
+            fallback="safe_split",
+            candidate_options=candidates,
+        )
+
+        self.assertEqual(accepted, candidates[0]["chunks"])
+        self.assertTrue(accepted_meta["_llm_candidate_policy"]["accepted"])
+        self.assertIsNone(rejected)
+        self.assertFalse(rejected_meta["_llm_candidate_policy"]["accepted"])
+        self.assertEqual(rejected_meta["_llm_rollback_policy"]["fallback"], "safe_split")
 
     def test_setting_int_uses_fallback_and_default_for_invalid_values(self):
         self.assertEqual(
@@ -104,12 +300,24 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         workers, mode = subtitle_engine._effective_llm_workers(
             "gemma4:e4b",
             configured_workers=6,
-            settings={"local_ollama_llm_max_workers": 2},
+            settings={"llm_threads_auto_enabled": False, "local_ollama_llm_max_workers": 2},
             segment_count=226,
         )
 
         self.assertEqual(mode, "local")
         self.assertEqual(workers, 2)
+
+    def test_local_ollama_workers_can_use_resource_auto_mode(self):
+        workers, mode = subtitle_engine._effective_llm_workers(
+            "gemma4:e4b",
+            configured_workers=6,
+            settings={"llm_threads_auto_enabled": True},
+            segment_count=12,
+        )
+
+        self.assertEqual(mode, "local_auto")
+        self.assertGreaterEqual(workers, 1)
+        self.assertLessEqual(workers, 12)
 
     def test_stt_candidate_optimizer_does_not_call_llm(self):
         segments = [
@@ -132,6 +340,144 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         ask_llm.assert_not_called()
         self.assertTrue(result)
         self.assertTrue(all(seg.get("_final_gap_settings_applied") for seg in result))
+
+    def test_llm_confidence_gate_skips_provider_when_profile_is_strong(self):
+        segment = {
+            "start": 0.0,
+            "end": 2.0,
+            "text": "오늘은 행사장에 왔습니다 바로 시작합니다",
+            "words": [
+                {"word": "오늘은", "start": 0.0, "end": 0.3},
+                {"word": "행사장에", "start": 0.35, "end": 0.8},
+                {"word": "왔습니다", "start": 0.85, "end": 1.2},
+                {"word": "바로", "start": 1.25, "end": 1.5},
+                {"word": "시작합니다", "start": 1.55, "end": 1.9},
+            ],
+        }
+        runtime_settings = {
+            "subtitle_quality_auto_correct_enabled": False,
+            "editor_lora_runtime_enabled": False,
+            "deep_subtitle_policy_enabled": False,
+            "llm_confidence_gate_enabled": True,
+            "llm_confidence_gate_min_lora_score": 82.0,
+            "llm_confidence_gate_max_compact_ratio": 1.45,
+            "split_length_threshold": 16,
+            "sub_max_duration": 6.0,
+            "_lora_generation_profile": {"top_score": 95.0},
+        }
+
+        with unittest.mock.patch("core.engine.subtitle_engine.ask_exaone_to_split") as ask_llm:
+            result = subtitle_engine._process_one_llm_only(
+                (segment, {}, 16, {}, "exaone3.5:7.8b", "", "", False, runtime_settings)
+            )
+
+        ask_llm.assert_not_called()
+        self.assertEqual(len(result), 1)
+        self.assertFalse(result[0].get("_llm_gate_policy", {}).get("call_llm", True))
+
+    def test_llm_confidence_gate_skips_gemini_and_openai_providers(self):
+        segment = {
+            "start": 0.0,
+            "end": 2.0,
+            "text": "오늘은 행사장에 왔습니다 바로 시작합니다",
+            "words": [
+                {"word": "오늘은", "start": 0.0, "end": 0.3},
+                {"word": "행사장에", "start": 0.35, "end": 0.8},
+                {"word": "왔습니다", "start": 0.85, "end": 1.2},
+                {"word": "바로", "start": 1.25, "end": 1.5},
+                {"word": "시작합니다", "start": 1.55, "end": 1.9},
+            ],
+        }
+        runtime_settings = {
+            "subtitle_quality_auto_correct_enabled": False,
+            "editor_lora_runtime_enabled": False,
+            "deep_subtitle_policy_enabled": False,
+            "llm_confidence_gate_enabled": True,
+            "llm_confidence_gate_min_lora_score": 82.0,
+            "llm_confidence_gate_max_compact_ratio": 1.45,
+            "split_length_threshold": 16,
+            "sub_max_duration": 6.0,
+            "_lora_generation_profile": {"top_score": 95.0},
+        }
+
+        with unittest.mock.patch("core.engine.subtitle_engine.ask_gemini_to_split") as ask_gemini:
+            gemini_result = subtitle_engine._process_one_llm_only(
+                (segment, {}, 16, {}, "Gemini 1.5", "", "", False, runtime_settings)
+            )
+        with unittest.mock.patch("core.engine.subtitle_engine.ask_openai_to_split") as ask_openai, \
+                unittest.mock.patch("core.engine.subtitle_engine.is_openai_model", return_value=True):
+            openai_result = subtitle_engine._process_one_llm_only(
+                (segment, {}, 16, {}, "gpt-test", "", "", False, runtime_settings)
+            )
+
+        ask_gemini.assert_not_called()
+        ask_openai.assert_not_called()
+        self.assertFalse(gemini_result[0].get("_llm_gate_policy", {}).get("call_llm", True))
+        self.assertFalse(openai_result[0].get("_llm_gate_policy", {}).get("call_llm", True))
+
+    def test_self_review_quality_attaches_runtime_quality_metadata(self):
+        segments = [
+            {
+                "start": 0.0,
+                "end": 1.4,
+                "text": "좋은 자막",
+                "words": [{"word": "좋은", "start": 0.0, "end": 0.5, "confidence": 0.9}],
+                "asr_metadata": {"avg_logprob": -0.2, "no_speech_prob": 0.01, "compression_ratio": 1.0},
+            }
+        ]
+
+        result = subtitle_engine._self_review_subtitle_quality(
+            segments,
+            [],
+            {"runtime_quality_self_review_enabled": True, "sub_max_cps": 12, "sub_min_duration": 0.2, "sub_max_duration": 6.0},
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertIn("quality", result[0])
+        self.assertIn(result[0]["quality"]["confidence_label"], {"green", "yellow", "red", "gray"})
+
+    def test_output_variant_selector_can_restore_safer_source_variant(self):
+        optimized = [
+            {
+                "start": 0.0,
+                "end": 0.5,
+                "text": "너무긴자막입니다",
+                "quality": {"confidence_score": 45.0, "confidence_label": "red"},
+            }
+        ]
+        source = [
+            {
+                "start": 0.0,
+                "end": 1.8,
+                "text": "안전한 원본 자막",
+                "quality": {"confidence_score": 94.0, "confidence_label": "green"},
+            }
+        ]
+
+        with unittest.mock.patch("core.engine.subtitle_engine._self_review_subtitle_quality", side_effect=lambda rows, *_args, **_kwargs: rows):
+            result = subtitle_engine._apply_output_variant_selector(
+                optimized,
+                source,
+                [],
+                {
+                    "subtitle_output_selector_enabled": True,
+                    "sub_max_cps": 12,
+                    "sub_max_duration": 6.0,
+                    "sub_min_duration": 0.2,
+                    "continuous_threshold": 2.0,
+                    "gap_push_rate": 0.7,
+                    "gap_pull_rate": 0.2,
+                    "single_subtitle_end": 0.2,
+                },
+                stage="unit",
+            )
+
+        self.assertEqual(result[0]["text"], "안전한 원본 자막")
+        self.assertEqual(result[0]["_output_selector_policy"]["selected_index"], 1)
+        self.assertEqual(
+            result[0]["_accuracy_decision_graph"]["decisions"][-1]["task"],
+            "output_variant_selector",
+        )
 
     def test_api_models_use_single_worker(self):
         workers, mode = subtitle_engine._effective_llm_workers(

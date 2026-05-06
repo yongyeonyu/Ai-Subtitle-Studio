@@ -728,6 +728,47 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_cut_boundary_relocation_log_keeps_stage_pending_during_audio(self):
+        window = MainWindow()
+        try:
+            editor = SimpleNamespace(
+                _auto_cut_boundary_scan_active=False,
+                _auto_cut_boundary_scan_lines=[],
+                _cut_boundary_prescan_completed=False,
+                _roughcut_draft_status="idle",
+                _last_roughcut_draft_major_count=None,
+                sm=SimpleNamespace(state="ST_PROC"),
+            )
+            window._active_editor = lambda: editor
+            window._is_subtitle_generation_running = lambda: True
+            window.log_text.setPlainText(
+                "\n".join(
+                    [
+                        "  ▒ [컷 경계] split G 주제없음 frame=32988->86928 time=550.350s->1450.249s fps=59.940",
+                        "  └ [음성] ClearVoice 음성 향상 진행 중... 120초",
+                        "  ▫️ [컷 경계] 임시선 재배치: 610.810s (gray_window_rollback_mps, score 75.8)",
+                        "  └ [음성] ClearVoice 음성 향상 진행 중... 125초",
+                    ]
+                )
+            )
+            settings = {
+                "stt_ensemble_enabled": False,
+                "selected_vad": "none",
+                "roughcut_llm_enabled": False,
+            }
+
+            current = window._pipeline_current_stage_keys(settings)
+            completed = window._pipeline_completed_stage_keys(settings, current)
+
+            self.assertIn("cut_boundary", current)
+            self.assertIn("audio", current)
+            self.assertTrue(window._cut_boundary_log_pending(window._pipeline_status_blob()))
+            self.assertNotIn("cut_boundary", completed)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_pipeline_table_does_not_mark_done_from_queue_header_percent_only(self):
         window = MainWindow()
         try:
