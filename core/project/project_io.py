@@ -12,6 +12,11 @@ from core.json_file import write_json_file_atomic
 
 _PROJECT_FILE_CACHE: dict[str, dict[str, Any]] = {}
 _PROJECT_FILE_CACHE_LOCK = threading.RLock()
+_PROJECT_RUNTIME_KEYS = {
+    "_project_file_path",
+    "_external_subtitle_segments_cache",
+    "_external_stt_tracks_cache",
+}
 
 
 def _project_cache_key(filepath: str) -> str:
@@ -43,9 +48,59 @@ def prime_project_file_cache(filepath: str, project: dict[str, Any]) -> None:
     if not isinstance(project, dict):
         return
     key = _project_cache_key(filepath)
+    project["_project_file_path"] = key
     signature = _project_file_signature(key)
     with _PROJECT_FILE_CACHE_LOCK:
         _PROJECT_FILE_CACHE[key] = {"signature": signature, "project": project}
+
+
+def _attach_project_path(project: dict[str, Any], filepath: str) -> dict[str, Any]:
+    if isinstance(project, dict):
+        project["_project_file_path"] = _project_cache_key(filepath)
+    return project
+
+
+def _project_payload_for_disk(project: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(project if isinstance(project, dict) else {})
+    for key in _PROJECT_RUNTIME_KEYS:
+        payload.pop(key, None)
+    try:
+        from core.project.project_assets import PROJECT_EXTERNAL_STORAGE, project_uses_external_text_assets
+
+        if project_uses_external_text_assets(payload):
+            payload.pop("segments", None)
+            subtitles = dict(payload.get("subtitles", {}) or {})
+            subtitles.pop("segments", None)
+            subtitles["storage"] = PROJECT_EXTERNAL_STORAGE
+            payload["subtitles"] = subtitles
+
+            editor_state = dict(payload.get("editor_state", {}) or {})
+            editor_subtitles = dict(editor_state.get("subtitles", {}) or {})
+            editor_subtitles["segments"] = []
+            editor_subtitles["storage"] = PROJECT_EXTERNAL_STORAGE
+            editor_state["subtitles"] = editor_subtitles
+
+            rendering = dict(editor_state.get("rendering", {}) or {})
+            canvas = dict(rendering.get("subtitle_canvas", {}) or {})
+            canvas["segments"] = []
+            rendering["subtitle_canvas"] = canvas
+            editor_state["rendering"] = rendering
+
+            stt_state = dict(editor_state.get("stt", {}) or {})
+            stt_state["preview_segments"] = []
+            stt_state["candidate_tracks"] = {}
+            editor_state["stt"] = stt_state
+            editor_analysis = dict(editor_state.get("analysis", {}) or {})
+            editor_analysis.pop("stt_candidate_tracks", None)
+            editor_state["analysis"] = editor_analysis
+            payload["editor_state"] = editor_state
+
+            analysis = dict(payload.get("analysis", {}) or {})
+            analysis.pop("stt_candidate_tracks", None)
+            payload["analysis"] = analysis
+    except Exception:
+        pass
+    return payload
 
 
 def read_project_file(filepath: str) -> dict[str, Any]:
@@ -56,11 +111,11 @@ def read_project_file(filepath: str) -> dict[str, Any]:
         cached = _PROJECT_FILE_CACHE.get(key)
         if cached and cached.get("signature") == signature:
             project = cached.get("project")
-            return project if isinstance(project, dict) else {}
+            return _attach_project_path(project, key) if isinstance(project, dict) else {}
 
     with open(key, "r", encoding="utf-8") as handle:
         data = json.load(handle)
-    project = data if isinstance(data, dict) else {}
+    project = _attach_project_path(data if isinstance(data, dict) else {}, key)
     with _PROJECT_FILE_CACHE_LOCK:
         _PROJECT_FILE_CACHE[key] = {"signature": signature, "project": project}
     return project
@@ -72,5 +127,5 @@ def write_project_file(filepath: str, project: dict[str, Any]) -> None:
     folder = os.path.dirname(key)
     if folder:
         os.makedirs(folder, exist_ok=True)
-    write_json_file_atomic(key, project, indent=2, backup=False)
+    write_json_file_atomic(key, _project_payload_for_disk(project), indent=2, backup=False)
     prime_project_file_cache(key, project)

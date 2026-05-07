@@ -1,6 +1,6 @@
 <!--
-Document-Version: 03.23.01
-Phase: RUNTIME_EDITOR_STABILITY_RELEASED
+Document-Version: 03.24.00
+Phase: REFACTOR_QUALITY_RELEASED
 Last-Updated: 2026-05-07
 Updated-By: Codex
 Purpose: Remaining work queue only.
@@ -19,9 +19,9 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "03.23.01"
-document_version: "03.23.01"
-phase: "RUNTIME_EDITOR_STABILITY_RELEASED"
+app_version: "03.24.00"
+document_version: "03.24.00"
+phase: "REFACTOR_QUALITY_RELEASED"
 next_phase: null
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
@@ -54,7 +54,7 @@ release_handoff_files:
 
 ## Completion Snapshot
 
-The v03.23.01 Runtime Editor Stability release completed the prior queue:
+The v03.24.00 Refactor Quality release completed the prior queue:
 
 - Fast mode selective low-score STT2 rescue and lightweight overlap/review policy.
 - Post-generation busy cursor cleanup and playback-safe deferral of review, roughcut, prefetch, cleanup, and model-release work.
@@ -65,6 +65,9 @@ The v03.23.01 Runtime Editor Stability release completed the prior queue:
 - Safer settings/project JSON save and load paths using atomic replacement, backup recovery, and process-level project caching.
 - Longer, cheaper editor autosave intervals and post-generation idle cleanup that clears background prefetch, cursors, and runtime memory caches.
 - Throttled timeline scrub/video preview seeks so moving the playhead is lighter on the editor.
+- Fast/Auto/High subtitle tool-stack routing: Fast = LoRA, Auto = LoRA + Deep, High = LoRA + Deep + LLM.
+- Macro LLM chunking refactor into `core.engine.subtitle_macro_chunks`.
+- Large-file review pass covering 1000+ line source files, with no blocking findings left after the macro-chunk extraction and settings/runtime LLM policy fix.
 - Tests and release handoff documentation.
 
 Future work should start from a new user request rather than this completed backlog.

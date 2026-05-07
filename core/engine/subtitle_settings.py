@@ -27,7 +27,18 @@ def get_local_dataset_corrections() -> dict:
 
 
 def get_selected_llm() -> str:
-    return _get_user_settings().get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
+    settings = _get_user_settings()
+    if settings.get("subtitle_llm_runtime_enabled") is False:
+        return "사용 안함 (모드 정책)"
+    try:
+        from core.mode_policy import MODE_TOOL_STACKS, selected_mode_from_settings
+
+        mode = selected_mode_from_settings(settings)
+        if not bool(MODE_TOOL_STACKS.get(mode, {}).get("llm", False)):
+            return "사용 안함 (모드 정책)"
+    except Exception:
+        pass
+    return settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
 
 
 def _setting_int(settings: dict, key: str, default: int, fallback_key: str | None = None) -> int:

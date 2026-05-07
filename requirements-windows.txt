@@ -14,6 +14,7 @@ requests>=2.31.0
 watchdog>=3.0.0
 python-dotenv>=1.0.0
 packaging>=23.0,<24.0
+orjson>=3.9.0
 soundfile>=0.12.1
 silero-vad>=6.2.1
 ten-vad>=1.0.6.8

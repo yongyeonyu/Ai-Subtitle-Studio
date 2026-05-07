@@ -72,6 +72,13 @@ def subprocess_env(extra: dict | None = None, *, strip_qt: bool = False) -> dict
     env = dict(os.environ)
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
+    try:
+        from core.performance import native_runtime_env_overrides
+
+        for key, value in native_runtime_env_overrides().items():
+            env.setdefault(key, value)
+    except Exception:
+        pass
     for key in (
         "MallocStackLogging",
         "MallocStackLoggingNoCompact",

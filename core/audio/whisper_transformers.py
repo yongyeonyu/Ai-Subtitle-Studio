@@ -149,6 +149,20 @@ except Exception as exc:
     sys.exit(1)
 
 try:
+    try:
+        native_threads = int(float(os.environ.get("AI_SUBTITLE_NATIVE_THREADS", "0") or 0))
+    except Exception:
+        native_threads = 0
+    if native_threads > 0:
+        try:
+            torch.set_num_threads(native_threads)
+        except Exception:
+            pass
+        try:
+            torch.set_num_interop_threads(max(1, min(4, native_threads)))
+        except Exception:
+            pass
+
     if torch.cuda.is_available():
         device = "cuda:0"
         torch_dtype = torch.float16

@@ -15,11 +15,12 @@ import threading
 import time
 import tempfile
 import wave
+from concurrent.futures import ThreadPoolExecutor
 
 from core.llm.secure_keys import get_api_key
 from core.media_fingerprint import media_file_fingerprint, media_fingerprint_digest
 from core.media_info import probe_media
-from core.performance import bounded_worker_count
+from core.performance import adaptive_worker_count, bounded_worker_count
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs, rnnoise_binary, subprocess_env
 from core.runtime import config
 from core.runtime.logger import get_logger
@@ -823,66 +824,133 @@ class VideoProcessorAudioHelpersMixin:
             f"  🧭 [오디오 라우팅] 정확도 우선: 청크 {len(grouped)}개를 각각 분석해 FFmpeg/음성필터/VAD 후보를 결정합니다"
         )
 
-        routes = []
+        routes_by_index: dict[int, dict] = {}
+        route_runtime: dict[int, tuple[dict, str, float]] = {}
         route_vad_segments = []
         route_vad_enabled = bool(settings.get("audio_chunk_route_vad_enabled", settings.get("vad_post_stt_align_enabled", True)))
         failures = 0
+        max_workers, scheduler = adaptive_worker_count(
+            task="io",
+            settings=settings,
+            requested=getattr(self, "io_workers", None),
+            workload=len(grouped),
+            minimum=1,
+            maximum=max(1, min(int(getattr(self, "io_workers", 1) or 1), len(grouped))),
+        )
+        reductions = ",".join(scheduler.get("reductions") or [])
+        if max_workers > 1:
+            suffix = f" ({reductions})" if reductions else ""
+            _runtime_get_logger().log(f"  🧵 [오디오 라우팅] 청크 라우팅 병렬 워커 {max_workers}개{suffix}")
+
+        progress_lock = threading.Lock()
+        done_count = 0
+        next_log_pct = 0
+
+        def _mark_progress():
+            nonlocal done_count, next_log_pct
+            with progress_lock:
+                done_count += 1
+                pct = min(100, int(round((done_count / len(grouped)) * 100)))
+                if pct >= next_log_pct or done_count == len(grouped):
+                    next_log_pct = min(100, pct + 10)
+                    self._notify_stage(f"⏳ [오디오] 청크별 오디오 라우팅 중 {pct}%")
+                    _runtime_get_logger().log(
+                        f"  └ [오디오 라우팅] 청크 처리 진행률 {pct}% ({done_count}/{len(grouped)})"
+                    )
+
+        def _process_one(idx_seg):
+            idx, seg = idx_seg
+            start = max(0.0, float(seg.get("start", 0.0) or 0.0))
+            out = os.path.join(chunk_dir, f"vad_{idx:03d}_{start:.3f}.wav")
+            route = self._classify_chunk_audio_route(media_path, seg, settings, index=idx, tmpdir=tmpdir)
+            chunk_settings = dict(settings)
+            chunk_settings.update(dict(route.get("settings") or {}))
+            ok = self._write_adaptive_chunk_from_media(media_path, out, seg, chunk_settings, tmpdir=tmpdir)
+            route_meta = {
+                "index": idx,
+                "start": round(float(seg.get("start", 0.0) or 0.0), 3),
+                "end": round(float(seg.get("end", 0.0) or 0.0), 3),
+                "path": out,
+                "ok": bool(ok),
+                "audio_strategy": route.get("audio_strategy"),
+                "audio_strategy_label": route.get("audio_strategy_label"),
+                "audio_tune_reason": route.get("audio_tune_reason"),
+                "confidence": route.get("confidence"),
+                "audio_profile": route.get("audio_profile"),
+                "audio_tune_settings": dict(route.get("settings") or {}),
+            }
+            return idx, route_meta, route, chunk_settings, out, start, bool(ok)
+
+        def _store_result(result):
+            nonlocal failures
+            idx, route_meta, route, chunk_settings, out, start, ok = result
+            routes_by_index[idx] = route_meta
+            if ok:
+                route_runtime[idx] = (chunk_settings, out, start)
+            else:
+                failures += 1
+                _runtime_get_logger().log(f"  ⚠️ [오디오 라우팅] 청크 {idx + 1} 생성 실패")
+            return idx, route
+
         with tempfile.TemporaryDirectory(prefix="audio_chunk_route_") as tmpdir:
-            for idx, seg in enumerate(grouped):
-                start = max(0.0, float(seg.get("start", 0.0) or 0.0))
-                out = os.path.join(chunk_dir, f"vad_{idx:03d}_{start:.3f}.wav")
-                route = self._classify_chunk_audio_route(media_path, seg, settings, index=idx, tmpdir=tmpdir)
-                chunk_settings = dict(settings)
-                chunk_settings.update(dict(route.get("settings") or {}))
-                ok = self._write_adaptive_chunk_from_media(media_path, out, seg, chunk_settings, tmpdir=tmpdir)
-                route_meta = {
-                    "index": idx,
-                    "start": round(float(seg.get("start", 0.0) or 0.0), 3),
-                    "end": round(float(seg.get("end", 0.0) or 0.0), 3),
-                    "path": out,
-                    "ok": bool(ok),
-                    "audio_strategy": route.get("audio_strategy"),
-                    "audio_strategy_label": route.get("audio_strategy_label"),
-                    "audio_tune_reason": route.get("audio_tune_reason"),
-                    "confidence": route.get("confidence"),
-                    "audio_profile": route.get("audio_profile"),
-                    "audio_tune_settings": dict(route.get("settings") or {}),
-                }
-                if ok and route_vad_enabled:
-                    vad_model = str(chunk_settings.get("selected_vad", "none") or "none").lower()
-                    if vad_model != "none":
+            route_logs: dict[int, dict] = {}
+            if max_workers <= 1:
+                for item in enumerate(grouped):
+                    idx, route = _store_result(_process_one(item))
+                    route_logs[idx] = route
+                    _mark_progress()
+            else:
+                with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="audio-route") as executor:
+                    futures = [executor.submit(_process_one, item) for item in enumerate(grouped)]
+                    for future in futures:
                         try:
-                            chunk_vad = self._detect_vad_timestamps(
-                                out,
-                                vad_model,
-                                chunk_settings,
-                                target_start_sec=0.0,
-                                target_end_sec=None,
-                                is_single_segment=False,
-                                for_post_stt_align=True,
-                            )
+                            idx, route = _store_result(future.result())
+                            route_logs[idx] = route
+                        except Exception as exc:
+                            failures += 1
+                            _runtime_get_logger().log(f"  ⚠️ [오디오 라우팅] 청크 처리 실패: {exc}")
+                        finally:
+                            _mark_progress()
+
+            for idx in sorted(route_logs):
+                _runtime_get_logger().log(self._route_log_line(idx, grouped[idx], route_logs[idx]))
+
+            if route_vad_enabled:
+                for idx in sorted(route_runtime):
+                    chunk_settings, out, start = route_runtime[idx]
+                    vad_model = str(chunk_settings.get("selected_vad", "none") or "none").lower()
+                    if vad_model == "none":
+                        continue
+                    try:
+                        chunk_vad = self._detect_vad_timestamps(
+                            out,
+                            vad_model,
+                            chunk_settings,
+                            target_start_sec=0.0,
+                            target_end_sec=None,
+                            is_single_segment=False,
+                            for_post_stt_align=True,
+                        )
+                    except Exception:
+                        chunk_vad = []
+                    offset_vad = []
+                    for row in chunk_vad or []:
+                        try:
+                            item = dict(row)
+                            item["start"] = round(start + float(item.get("start", 0.0) or 0.0), 3)
+                            item["end"] = round(start + float(item.get("end", 0.0) or 0.0), 3)
+                            item["source"] = f"chunk_{vad_model}"
+                            item["post_stt_align"] = True
+                            item["vad_word_filter"] = bool(item.get("vad_word_filter", True))
+                            offset_vad.append(item)
                         except Exception:
-                            chunk_vad = []
-                        offset_vad = []
-                        for row in chunk_vad or []:
-                            try:
-                                item = dict(row)
-                                item["start"] = round(start + float(item.get("start", 0.0) or 0.0), 3)
-                                item["end"] = round(start + float(item.get("end", 0.0) or 0.0), 3)
-                                item["source"] = f"chunk_{vad_model}"
-                                item["post_stt_align"] = True
-                                item["vad_word_filter"] = bool(item.get("vad_word_filter", True))
-                                offset_vad.append(item)
-                            except Exception:
-                                continue
-                        if offset_vad:
-                            route_vad_segments.extend(offset_vad)
-                        route_meta["vad_segments"] = len(offset_vad)
-                routes.append(route_meta)
-                _runtime_get_logger().log(self._route_log_line(idx, seg, route))
-                if not ok:
-                    failures += 1
-                    _runtime_get_logger().log(f"  ⚠️ [오디오 라우팅] 청크 {idx + 1} 생성 실패")
+                            continue
+                    if offset_vad:
+                        route_vad_segments.extend(offset_vad)
+                    if idx in routes_by_index:
+                        routes_by_index[idx]["vad_segments"] = len(offset_vad)
+
+        routes = [routes_by_index[idx] for idx in sorted(routes_by_index)]
 
         try:
             with open(os.path.join(chunk_dir, "audio_routes.json"), "w", encoding="utf-8") as f:

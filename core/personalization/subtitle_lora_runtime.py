@@ -11,6 +11,7 @@ from core.personalization.lora_retrieval_config import INDEX_JSON_SOURCE_KEYS, I
 from core.personalization.lora_retrieval_scoring import runtime_settings_from_retrieved_items
 from core.personalization.lora_vector_retriever import retrieve_lora_context
 from core.personalization.runtime_lora_context import runtime_lora_enabled
+from core.personalization.subtitle_pattern_index import match_subtitle_pattern, segment_pattern_features
 
 
 SEGMENT_LORA_GAP_SETTING_KEYS = frozenset(
@@ -28,6 +29,7 @@ SEGMENT_LORA_GAP_SETTING_KEYS = frozenset(
         "sub_dedup_window",
         "sub_gap_break_sec",
         "word_timing_gap_break_sec",
+        "deep_timing_max_shift_sec",
         "chunk_time_limit",
         "subtitle_bundle_target_sec",
         "subtitle_bundle_min_sec",
@@ -71,6 +73,10 @@ SEGMENT_LORA_SETTING_KEYS = frozenset(
         "llm_threads_auto_enabled",
         "llm_workers_auto_enabled",
         "llm_threads_resource_max",
+        "subtitle_llm_macro_chunk_enabled",
+        "subtitle_llm_macro_chunk_min_rows",
+        "subtitle_llm_macro_chunk_max_rows",
+        "subtitle_llm_macro_chunk_use_cut_boundaries",
         "roughcut_llm_threads_auto_enabled",
         "roughcut_llm_threads_resource_max",
         "roughcut_llm_rows_auto_enabled",
@@ -187,6 +193,13 @@ def _clamp_int(value: Any, low: int, high: int) -> int:
     return max(low, min(high, number))
 
 
+def _setting_bool(settings: dict[str, Any] | None, key: str, default: bool = True) -> bool:
+    value = dict(settings or {}).get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "off", "no", "사용 안함", "끔"}
+    return bool(value)
+
+
 def _flatten_summary(value: Any, *, limit: int = 8, max_chars: int = 80) -> list[str]:
     out: list[str] = []
 
@@ -290,7 +303,18 @@ def _segment_topic_summary(segment: dict[str, Any]) -> list[str]:
     return summary[:8]
 
 
-def _segment_query_text(segment: dict[str, Any]) -> str:
+def _segment_query_text(segment: dict[str, Any], settings: dict[str, Any] | None = None) -> str:
+    if _setting_bool(settings, "lora_pattern_query_compact_enabled", True):
+        features = segment_pattern_features(segment)
+        return " ".join(
+            [
+                "subtitle_pattern",
+                f"chars={features.get('char_count', 0)}",
+                f"duration={features.get('duration_sec', 0.0)}",
+                f"cps={features.get('cps', 0.0)}",
+                f"lines={features.get('line_count', 1)}",
+            ]
+        ).strip()
     text = _clean_text(segment.get("text"))
     candidate_texts = _segment_stt_candidate_texts(segment)
     context_bits = []
@@ -317,30 +341,73 @@ def _segment_query_text(segment: dict[str, Any]) -> str:
     return " ".join([text, *context_bits]).strip()
 
 
-def _segment_context(segment: dict[str, Any]) -> dict[str, Any]:
+def _segment_context(segment: dict[str, Any], settings: dict[str, Any] | None = None) -> dict[str, Any]:
     start = _clamp_float(segment.get("start", 0.0), 0.0, 999999.0)
     end = _clamp_float(segment.get("end", start), start, 999999.0)
     duration = max(0.0, end - start)
     text = _clean_text(segment.get("text"))
     chars = _compact_len(text)
+    compact_query = _setting_bool(settings, "lora_pattern_query_compact_enabled", True)
     return {
         "subtitle_segment": {
             "duration_sec": round(duration, 3),
             "char_count": chars,
             "cps": round(chars / max(0.05, duration), 3) if chars and duration else 0.0,
-            "speaker": str(segment.get("speaker") or ""),
+            "speaker": "" if compact_query else str(segment.get("speaker") or ""),
         },
         "subtitle_neighbors": {
-            "previous": _short(segment.get("stt_ensemble_context_prev"), 240),
-            "next": _short(segment.get("stt_ensemble_context_next"), 240),
+            "previous": "" if compact_query else _short(segment.get("stt_ensemble_context_prev"), 240),
+            "next": "" if compact_query else _short(segment.get("stt_ensemble_context_next"), 240),
         },
         "stt_candidate_lattice": {
             "candidate_keys": list(STT_LATTICE_CANDIDATE_KEYS),
-            "candidates": _segment_stt_candidate_texts(segment, limit=12),
+            "candidates": [] if compact_query else _segment_stt_candidate_texts(segment, limit=12),
+            "candidate_count": len(list(collect_stt_lattice_candidates(segment, include_current=False, limit=24) or [])),
         },
         "audio_environment": _segment_audio_summary(segment),
         "cut_boundary": _segment_cut_summary(segment),
         "video_diagnostics": _segment_topic_summary(segment),
+    }
+
+
+def _generation_profile_from_pattern(
+    *,
+    query: str,
+    pattern: dict[str, Any],
+    applied_settings: dict[str, Any],
+) -> dict[str, Any]:
+    score = _clamp_float(pattern.get("score", 0.0), 0.0, 100.0)
+    return {
+        "schema": "ai_subtitle_studio.subtitle_lora_generation_profile.v1",
+        "query": query[:240],
+        "top_score": round(score, 4),
+        "min_score": 0.0,
+        "index_doc_count": 0,
+        "quality_buckets": ["pattern"],
+        "used_kinds": {"subtitle_pattern_index": int(pattern.get("count", 0) or 0)},
+        "retrieved_settings": {},
+        "applied_settings": dict(applied_settings or {}),
+        "examples": [],
+        "setting_sources": [
+            {
+                "kind": "subtitle_pattern_index",
+                "settings": dict(pattern.get("settings") or {}),
+                "score": round(score, 2),
+                "matched_key": pattern.get("matched_key"),
+            }
+        ],
+        "context_hits": [],
+        "exclusions": [],
+        "learned_rules": [],
+        "prompt_hints": [],
+        "style_hints": [],
+        "other_hints": [],
+        "pattern_match": {
+            key: value
+            for key, value in dict(pattern or {}).items()
+            if key not in {"settings"}
+        },
+        "pattern_settings": dict(pattern.get("settings") or {}),
     }
 
 
@@ -675,44 +742,75 @@ def lora_settings_for_subtitle_segment(
     if not runtime_lora_enabled(settings):
         return {}
 
-    query = _segment_query_text(segment)
-    if not query:
-        return {}
-
     min_score = _clamp_float(settings.get("segment_lora_min_score", 28.0), 0.0, 100.0)
-    try:
-        result = retrieve_lora_context(
-            query,
-            media_path=_media_path_for_segment(segment),
-            media_id=str(segment.get("media_id") or segment.get("_media_id") or ""),
-            settings=settings,
-            context=_segment_context(segment),
-            store_dir=store_dir,
-            limit=_setting_int(settings, "segment_lora_retrieval_limit", 24),
-            per_kind=_setting_int(settings, "segment_lora_retrieval_per_kind", 4),
-            kinds=SEGMENT_LORA_KINDS,
-            rebuild_if_stale=False,
-        )
-    except Exception:
-        return {}
+    query = _segment_query_text(segment, settings)
+    pattern = match_subtitle_pattern(segment, settings, store_dir=store_dir)
+    pattern_settings = _filter_segment_settings(dict(pattern.get("settings") or {}))
+    pattern_score = _clamp_float(pattern.get("score", 0.0), 0.0, 100.0)
+    skip_retrieval = bool(
+        pattern_settings
+        and _setting_bool(settings, "lora_pattern_first_enabled", True)
+        and pattern_score >= _clamp_float(settings.get("lora_pattern_skip_text_retrieval_score", 78.0), 0.0, 100.0)
+    )
 
-    items = list(result.get("items") or [])
-    overrides = runtime_settings_from_retrieved_items(items, min_score=min_score)
+    result: dict[str, Any] = {"index_doc_count": 0, "quality_buckets": [], "items": []}
+    items: list[dict[str, Any]] = []
+    if query and not skip_retrieval:
+        try:
+            result = retrieve_lora_context(
+                query,
+                media_path=_media_path_for_segment(segment),
+                media_id=str(segment.get("media_id") or segment.get("_media_id") or ""),
+                settings=settings,
+                context=_segment_context(segment, settings),
+                store_dir=store_dir,
+                limit=_setting_int(settings, "segment_lora_retrieval_limit", 24),
+                per_kind=_setting_int(settings, "segment_lora_retrieval_per_kind", 4),
+                kinds=SEGMENT_LORA_KINDS,
+                rebuild_if_stale=False,
+            )
+        except Exception:
+            result = {"index_doc_count": 0, "quality_buckets": [], "items": []}
+        items = list(result.get("items") or [])
+
+    overrides = dict(pattern_settings)
+    overrides.update(runtime_settings_from_retrieved_items(items, min_score=min_score))
     derived = _derive_gap_settings_from_truth(items, min_score=min_score)
     truth_score = float(derived.pop("_truth_score_index", 0.0) or 0.0)
     for key, value in derived.items():
         overrides.setdefault(key, value)
 
     filtered = _filter_segment_settings(overrides)
-    top_score = max([truth_score, *[float(item.get("retrieval_score", 0.0) or 0.0) for item in items]], default=0.0)
-    profile = _generation_profile_from_items(
-        query=query,
-        result=result,
-        items=items,
-        retrieved_settings=overrides,
-        applied_settings=filtered,
-        min_score=min_score,
-    )
+    top_score = max([pattern_score, truth_score, *[float(item.get("retrieval_score", 0.0) or 0.0) for item in items]], default=0.0)
+    if items:
+        profile = _generation_profile_from_items(
+            query=query,
+            result=result,
+            items=items,
+            retrieved_settings=overrides,
+            applied_settings=filtered,
+            min_score=min_score,
+        )
+        if pattern:
+            profile["pattern_match"] = {
+                key: value
+                for key, value in dict(pattern or {}).items()
+                if key != "settings"
+            }
+            profile["pattern_settings"] = dict(pattern_settings)
+            profile.setdefault("used_kinds", {})["subtitle_pattern_index"] = int(pattern.get("count", 0) or 0)
+    else:
+        profile = _generation_profile_from_pattern(
+            query=query,
+            pattern=pattern,
+            applied_settings=filtered,
+        ) if pattern_settings else {
+            "schema": "ai_subtitle_studio.subtitle_lora_generation_profile.v1",
+            "query": query[:240],
+            "top_score": 0.0,
+            "used_kinds": {},
+            "applied_settings": {},
+        }
     policy_settings, policy_meta = predict_segment_settings(segment, settings, profile)
     for key, value in policy_settings.items():
         if key in SEGMENT_LORA_SETTING_KEYS and value not in (None, ""):

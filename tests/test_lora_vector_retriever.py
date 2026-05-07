@@ -344,7 +344,7 @@ class LoraVectorRetrieverTests(unittest.TestCase):
             self.assertTrue(balanced["items"])
             self.assertTrue(all(item.get("quality_bucket") == "high" for item in balanced["items"]))
             self.assertIn("medium", {str((item["payload"]["config"]).get("candidate")) for item in precise["items"]})
-            self.assertIn("pending", {str((item["payload"]["config"]).get("candidate")) for item in precise["items"]})
+            self.assertNotIn("pending", {str((item["payload"]["config"]).get("candidate")) for item in precise["items"]})
 
     def test_runtime_setting_conflicts_prefer_score_index_over_retrieval_order(self):
         override = runtime_settings_from_retrieved_items(
@@ -431,7 +431,12 @@ class LoraVectorRetrieverTests(unittest.TestCase):
         with patch("core.personalization.subtitle_lora_runtime.retrieve_lora_context", return_value=fake_result) as retrieve:
             override = lora_settings_for_subtitle_segment(
                 segment,
-                {"editor_lora_runtime_enabled": True, "stt_quality_preset": "precise"},
+                {
+                    "editor_lora_runtime_enabled": True,
+                    "stt_quality_preset": "precise",
+                    "lora_pattern_index_enabled": False,
+                    "lora_pattern_query_compact_enabled": False,
+                },
             )
 
         query = retrieve.call_args.args[0]

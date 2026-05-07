@@ -1036,6 +1036,72 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(segment["clip_local_start_frame"], 0)
         self.assertEqual(segment["clip_local_end_frame"], 30)
 
+    def test_save_project_externalizes_subtitles_and_stt_tracks_to_srt_assets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"video")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("core.project.project_manager.probe_media", return_value={"duration": 4.0, "fps": 24.0}):
+                save_project(
+                    str(path),
+                    media_paths=[str(media)],
+                    segments=[
+                        {
+                            "start": 0.0,
+                            "end": 1.0,
+                            "text": "최종 자막",
+                            "speaker": "00",
+                            "stt_selected_source": "STT2",
+                            "stt_candidates": [
+                                {"source": "STT1", "start": 0.0, "end": 1.0, "text": "후보 하나"},
+                                {"source": "STT2", "start": 0.0, "end": 1.0, "text": "후보 둘"},
+                            ],
+                        }
+                    ],
+                    stt_preview_segments=[
+                        {"start": 0.0, "end": 1.0, "text": "후보 하나", "stt_preview_source": "STT1"},
+                        {"start": 0.0, "end": 1.0, "text": "후보 둘", "stt_preview_source": "STT2"},
+                    ],
+                )
+
+            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+            final_srt = path.parent / raw_payload["subtitles"]["srt_path"]
+            stt1_srt = path.parent / raw_payload["asset_storage"]["tracks"]["stt_stt1"]["path"]
+            stt2_srt = path.parent / raw_payload["asset_storage"]["tracks"]["stt_stt2"]["path"]
+
+            self.assertEqual(raw_payload["subtitles"]["storage"], "external_srt")
+            self.assertEqual(raw_payload["editor_state"]["rendering"]["subtitle_canvas"]["segments"], [])
+            self.assertEqual(raw_payload["editor_state"]["stt"]["candidate_tracks"], {})
+            self.assertNotIn("stt_candidate_tracks", raw_payload["analysis"])
+            self.assertTrue(final_srt.exists())
+            self.assertTrue(stt1_srt.exists())
+            self.assertTrue(stt2_srt.exists())
+            self.assertIn("최종 자막", final_srt.read_text(encoding="utf-8"))
+            self.assertNotIn("후보 하나", path.read_text(encoding="utf-8"))
+
+            loaded = load_project(str(path))
+            segment = project_segments_to_editor(loaded)[0]
+            previews = project_stt_preview_segments(loaded)
+
+        self.assertEqual(segment["text"], "최종 자막")
+        self.assertEqual([candidate["source"] for candidate in segment["stt_candidates"]], ["STT1", "STT2"])
+        self.assertEqual([row["text"] for row in previews], ["후보 하나", "후보 둘"])
+
 
 if __name__ == "__main__":
     unittest.main()

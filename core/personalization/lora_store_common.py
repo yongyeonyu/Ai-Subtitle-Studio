@@ -13,6 +13,7 @@ from core.personalization.lora_quality_buckets import (
     LORA_BUCKET_LOW,
     LORA_BUCKET_MEDIUM,
     LORA_BUCKET_PENDING_DELETE,
+    strip_lora_quality_metadata,
 )
 from core.runtime import config
 
@@ -60,6 +61,7 @@ AUDIO_PRESET_LORA_PATH = LORA_INTERNAL_CACHE_DIR / "audio_preset_lora.jsonl"
 MULTIMODAL_LORA_CONTEXT_PATH = LORA_INTERNAL_CACHE_DIR / "multimodal_lora_context.jsonl"
 DEEP_POLICY_EVENTS_PATH = LORA_INTERNAL_CACHE_DIR / "deep_policy_events.jsonl"
 LORA_RETRIEVAL_INDEX_PATH = LORA_INTERNAL_CACHE_DIR / "lora_retrieval_index.json"
+SUBTITLE_PATTERN_INDEX_PATH = LORA_INTERNAL_CACHE_DIR / "subtitle_pattern_index.json"
 
 JSONL_KINDS = {
     "truth_table": TRUTH_TABLE_PATH.name,
@@ -106,6 +108,7 @@ UNIFIED_LORA_BUNDLE_SOURCE_KEYS = (
     "multimodal_lora_context",
     "deep_policy_events",
     "lora_retrieval_index",
+    "subtitle_pattern_index",
 )
 BUNDLE_JSONL_SECTION_KEYS = (
     "truth_table",
@@ -140,6 +143,7 @@ BUNDLE_JSON_SECTION_KEYS = (
     "text_lora_corpus_manifest",
     "text_lora_training_plan",
     "lora_retrieval_index",
+    "subtitle_pattern_index",
 )
 
 
@@ -194,6 +198,7 @@ def store_paths(store_dir: str | Path | None = None) -> dict[str, Path]:
         "multimodal_lora_context": cache_root / MULTIMODAL_LORA_CONTEXT_PATH.name,
         "deep_policy_events": cache_root / DEEP_POLICY_EVENTS_PATH.name,
         "lora_retrieval_index": cache_root / LORA_RETRIEVAL_INDEX_PATH.name,
+        "subtitle_pattern_index": cache_root / SUBTITLE_PATTERN_INDEX_PATH.name,
     }
 
 
@@ -337,18 +342,28 @@ def default_retention_policy() -> dict[str, Any]:
         "schema": "ai_subtitle_studio.personalization_retention_policy.v1",
         "updated_at": iso_now(),
         "enabled": True,
-        "strategy": "evolutionary_low_score_pruning",
+        "strategy": "quality_bucketed_pattern_first_pruning",
+        "auto_delete_pending": True,
+        "sort_kept_rows": True,
+        "protect_min_keep_for_pending": False,
         "notes": [
-            "After new personalization training, remove a small number of low-value rows instead of growing forever.",
-            "Rows with explicit scores are pruned by score first; learned rules are pruned by confidence and frequency.",
+            "After new personalization training, delete pending-delete rows and keep active LoRA rows ordered high/medium/low.",
+            "Rows are scored by explicit quality, compact subtitle-pattern signals, usage, and status.",
+            "Rows without useful pattern payloads are treated as pending-delete so the store stays small and fast.",
             "Minimum keep counts protect small datasets from accidental deletion.",
         ],
         "jsonl": {
+            "truth_table": {"min_keep": 512, "max_rows": 12000, "remove_per_training": 1},
+            "excluded_parentheticals": {"min_keep": 256, "max_rows": 4000, "remove_per_training": 1},
             "setting_trials": {"min_keep": 64, "max_rows": 2048, "remove_per_training": 1},
             "prompt_trials": {"min_keep": 64, "max_rows": 2048, "remove_per_training": 1},
+            "voice_lora_bridge": {"min_keep": 0, "max_rows": 0, "remove_per_training": 0},
+            "stt1_whisper_adapter_dataset": {"min_keep": 128, "max_rows": 4096, "remove_per_training": 1},
+            "text_lora_dataset": {"min_keep": 256, "max_rows": 6000, "remove_per_training": 2},
+            "text_lora_corpus": {"min_keep": 256, "max_rows": 6000, "remove_per_training": 2},
+            "audio_preset_lora": {"min_keep": 64, "max_rows": 2048, "remove_per_training": 1},
+            "multimodal_lora_context": {"min_keep": 128, "max_rows": 4096, "remove_per_training": 2},
             "deep_policy_events": {"min_keep": 256, "max_rows": 6000, "remove_per_training": 2},
-            "truth_table": {"min_keep": 512, "max_rows": 12000, "remove_per_training": 0},
-            "excluded_parentheticals": {"min_keep": 512, "max_rows": 4000, "remove_per_training": 0},
         },
         "rules": {
             "split": {"max_items": 256},
@@ -358,7 +373,7 @@ def default_retention_policy() -> dict[str, Any]:
 
 
 def row_signature(row: dict[str, Any]) -> str:
-    return str(row.get("dedupe_hash") or row.get("signature") or stable_hash(dict(row or {})))
+    return str(row.get("dedupe_hash") or row.get("signature") or stable_hash(strip_lora_quality_metadata(dict(row or {}))))
 
 
 def bundle_file_info(path: Path) -> dict[str, Any]:

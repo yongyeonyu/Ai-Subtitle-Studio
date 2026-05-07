@@ -11,13 +11,18 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
+import importlib.util
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+from core.native_json import dumps_json_bytes
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +62,7 @@ def hardware_profile() -> dict:
     logical = max(1, os.cpu_count() or 1)
     physical = _sysctl_int("hw.physicalcpu") or logical
     performance_cores = _sysctl_int("hw.perflevel0.physicalcpu")
+    efficiency_cores = _sysctl_int("hw.perflevel1.physicalcpu")
     memory_bytes = _sysctl_int("hw.memsize")
 
     if performance_cores <= 0:
@@ -64,13 +70,116 @@ def hardware_profile() -> dict:
         # cores as a stability-first cap for CPU-bound worker defaults.
         performance_cores = physical
 
+    accelerators = {
+        "mlx": importlib.util.find_spec("mlx") is not None,
+        "mlx_whisper": importlib.util.find_spec("mlx_whisper") is not None,
+        "coreml_cli": bool(shutil.which("argmax-cli") or shutil.which("whisperkit-cli")),
+    }
+    if platform.system() == "Darwin" and platform.machine().lower() in {"arm64", "aarch64"}:
+        accelerators["metal_gpu"] = accelerators["mlx"]
+        # Apple Neural Engine access is generally routed through Core ML /
+        # WhisperKit rather than direct Python APIs.
+        accelerators["neural_engine_path"] = accelerators["coreml_cli"]
+
     return {
         "system": platform.system(),
         "machine": platform.machine(),
         "logical_cores": logical,
         "physical_cores": max(1, physical),
         "performance_cores": max(1, performance_cores),
+        "efficiency_cores": max(0, efficiency_cores),
         "memory_bytes": max(0, memory_bytes),
+        "accelerators": accelerators,
+    }
+
+
+def performance_profile(settings: dict[str, Any] | None = None) -> str:
+    settings = dict(settings or {})
+    value = os.environ.get("AI_SUBTITLE_PERFORMANCE_PROFILE")
+    if value is None:
+        value = settings.get("runtime_performance_profile")
+    text = str(value or "balanced").strip().lower()
+    aliases = {
+        "turbo": "max",
+        "maximum": "max",
+        "hardware_max": "max",
+        "full": "max",
+        "eco": "balanced",
+        "safe": "balanced",
+    }
+    return aliases.get(text, text if text in {"balanced", "max"} else "balanced")
+
+
+def hardware_max_profile_enabled(settings: dict[str, Any] | None = None) -> bool:
+    settings = dict(settings or {})
+    explicit = settings.get("runtime_hardware_acceleration_enabled")
+    if explicit is not None and not _safe_bool(explicit, True):
+        return False
+    return performance_profile(settings) == "max"
+
+
+def native_thread_budget(settings: dict[str, Any] | None = None) -> int:
+    settings = dict(settings or {})
+    profile = hardware_profile()
+    logical = max(1, int(profile.get("logical_cores", 1) or 1))
+    physical = max(1, int(profile.get("physical_cores", logical) or logical))
+    perf = max(1, int(profile.get("performance_cores", physical) or physical))
+    if hardware_max_profile_enabled(settings):
+        default = max(perf, physical, logical)
+    else:
+        default = min(max(1, perf), physical)
+    requested = _positive_int(settings.get("runtime_native_threads"), 0)
+    return max(1, min(requested or default, logical))
+
+
+def native_runtime_env_overrides(settings: dict[str, Any] | None = None) -> dict[str, str]:
+    settings = dict(settings or {})
+    if not _safe_bool(settings.get("runtime_native_threads_auto_enabled"), True):
+        return {}
+    budget = native_thread_budget(settings)
+    out = {
+        "AI_SUBTITLE_NATIVE_THREADS": str(budget),
+        "AI_SUBTITLE_NATIVE_JSON": "1" if _safe_bool(settings.get("runtime_native_json_enabled"), True) else "0",
+        "OMP_NUM_THREADS": str(budget),
+        "OPENBLAS_NUM_THREADS": str(budget),
+        "MKL_NUM_THREADS": str(budget),
+        "NUMEXPR_NUM_THREADS": str(budget),
+        "VECLIB_MAXIMUM_THREADS": str(budget),
+        "ACCELERATE_NUM_THREADS": str(budget),
+        "TOKENIZERS_PARALLELISM": "true" if budget >= 4 else "false",
+    }
+    if platform.system() == "Darwin":
+        out.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    return out
+
+
+def configure_native_runtime(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Configure native library thread budgets without importing heavy stacks."""
+    overrides = native_runtime_env_overrides(settings)
+    for key, value in overrides.items():
+        os.environ.setdefault(key, value)
+
+    budget = _positive_int(os.environ.get("AI_SUBTITLE_NATIVE_THREADS"), native_thread_budget(settings))
+    torch_configured = False
+    torch_mod = sys.modules.get("torch")
+    if torch_mod is not None:
+        try:
+            torch_mod.set_num_threads(max(1, budget))
+            torch_configured = True
+        except Exception:
+            pass
+        try:
+            torch_mod.set_num_interop_threads(max(1, min(4, budget)))
+        except Exception:
+            pass
+
+    return {
+        "schema": "ai_subtitle_studio.native_runtime.v1",
+        "profile": performance_profile(settings),
+        "native_threads": budget,
+        "env_keys": sorted(overrides.keys()),
+        "torch_configured": torch_configured,
+        "hardware": hardware_profile(),
     }
 
 
@@ -181,6 +290,8 @@ def _ramp_worker_cap(
 ) -> tuple[int, dict[str, Any]]:
     settings = dict(settings or {})
     current_cap = max(1, int(current_cap or 1))
+    if hardware_max_profile_enabled(settings):
+        return current_cap, {"enabled": False, "cap": current_cap, "reason": "hardware_max_profile"}
     if not _safe_bool(settings.get("runtime_scheduler_ramp_up_enabled"), True):
         return current_cap, {"enabled": False, "cap": current_cap, "reason": "disabled"}
     elapsed = runtime_scheduler_ramp_elapsed()
@@ -333,22 +444,29 @@ def _resource_pressure_reduction(snapshot: dict[str, Any], settings: dict[str, A
     load_ratio = float(snapshot.get("cpu_load_ratio", 0.0) or 0.0)
     available_ratio = float(snapshot.get("available_memory_ratio", 1.0) or 1.0)
     available_gb = float(snapshot.get("available_memory_bytes", 0) or 0) / (1024 ** 3)
-    if load_ratio >= 0.97:
+    max_profile = hardware_max_profile_enabled(settings)
+    very_high_load = 1.15 if max_profile else 0.97
+    high_load = 0.92 if max_profile else 0.72
+    very_low_mem_ratio = 0.10 if max_profile else 0.15
+    low_mem_ratio = 0.16 if max_profile else 0.25
+    very_low_mem_gb = 1.25 if max_profile else 2.0
+    low_mem_gb = 2.5 if max_profile else 4.0
+    if load_ratio >= very_high_load:
         reduction += 2
         reasons.append("very_high_cpu_load")
-    elif load_ratio >= 0.72:
+    elif load_ratio >= high_load:
         reduction += 1
         reasons.append("high_cpu_load")
-    if (available_gb and available_gb < 2.0) or available_ratio < 0.15:
+    if (available_gb and available_gb < very_low_mem_gb) or available_ratio < very_low_mem_ratio:
         reduction += 2
         reasons.append("very_low_memory")
-    elif (available_gb and available_gb < 4.0) or available_ratio < 0.25:
+    elif (available_gb and available_gb < low_mem_gb) or available_ratio < low_mem_ratio:
         reduction += 1
         reasons.append("low_memory")
-    if _safe_bool(settings.get("scheduler_reduce_on_battery"), True) and snapshot.get("on_battery"):
+    if not max_profile and _safe_bool(settings.get("scheduler_reduce_on_battery"), True) and snapshot.get("on_battery"):
         reduction += 1
         reasons.append("battery_power")
-    if _safe_bool(settings.get("scheduler_reduce_on_user_input"), True) and snapshot.get("user_active"):
+    if not max_profile and _safe_bool(settings.get("scheduler_reduce_on_user_input"), True) and snapshot.get("user_active"):
         reduction += 1
         reasons.append("user_active")
     return reduction, reasons
@@ -370,20 +488,30 @@ def adaptive_worker_count(
     auto_key = f"{task_text}_workers_auto_enabled"
     auto_enabled = _safe_bool(settings.get(auto_key, settings.get("runtime_scheduler_auto_enabled", True)), True)
     kind = "io" if task_text in {"io", "lora", "prefetch"} else "cpu"
+    max_profile = hardware_max_profile_enabled(settings)
+    profile = hardware_profile()
+    logical = max(1, int(profile.get("logical_cores", 1) or 1))
+    physical = max(1, int(profile.get("physical_cores", logical) or logical))
     if task_text in {"cut_pioneer", "cut_follower", "stt"}:
-        default_max = 4 if task_text.startswith("cut_") else 2
+        if task_text == "stt":
+            default_max = 2
+        else:
+            default_max = min(logical, max(4, physical)) if max_profile else 4
     elif task_text == "lora":
-        default_max = 4
+        default_max = min(logical, max(4, physical)) if max_profile else 4
     else:
-        default_max = maximum or 8
+        default_max = min(logical, max(8, physical)) if max_profile else (maximum or 8)
     max_cap = max(1, int(maximum or _positive_int(settings.get(f"{task_text}_workers_resource_max"), default_max) or default_max))
     base = bounded_worker_count(requested, kind=kind, minimum=minimum, maximum=max_cap)
+    if max_profile and auto_enabled:
+        base = max(base, min(workload, max_cap, logical))
     base = max(minimum, min(base, workload, max_cap))
     snapshot = current_resource_snapshot()
     if not auto_enabled:
         return base, {
             "schema": "ai_subtitle_studio.runtime_scheduler.v1",
             "task": task_text,
+            "profile": performance_profile(settings),
             "auto_enabled": False,
             "workers": base,
             "requested": requested,
@@ -405,6 +533,7 @@ def adaptive_worker_count(
     meta = {
         "schema": "ai_subtitle_studio.runtime_scheduler.v1",
         "task": task_text,
+        "profile": performance_profile(settings),
         "auto_enabled": True,
         "workers": workers,
         "requested": requested,
@@ -452,6 +581,7 @@ def adaptive_llm_worker_count(
     if is_api:
         meta = {
             "auto_enabled": auto_enabled,
+            "profile": performance_profile(settings),
             "provider": provider_text or "api",
             "model": str(model or ""),
             "task": task_text,
@@ -464,6 +594,7 @@ def adaptive_llm_worker_count(
         workers = max(1, _positive_int(requested, bounded_worker_count(kind="llm", minimum=1, maximum=16)))
         return workers, {
             "auto_enabled": False,
+            "profile": performance_profile(settings),
             "provider": provider_text or "ollama",
             "model": str(model or ""),
             "task": task_text,
@@ -480,6 +611,11 @@ def adaptive_llm_worker_count(
     load_ratio = float(snapshot.get("cpu_load_ratio", 0.0) or 0.0)
 
     base = max(1, min(4 if task_text == "subtitle" else 3, max(1, perf // 2)))
+    if hardware_max_profile_enabled(settings):
+        if memory_gb >= 32 and available_gb >= 12:
+            base = max(base, min(4, logical // 2))
+        elif memory_gb >= 16 and available_gb >= 4:
+            base = max(base, 2)
     if logical >= 12 and memory_gb >= 24 and load_ratio <= 0.55 and available_ratio >= 0.35:
         base += 1
     if workload <= 2:
@@ -500,6 +636,7 @@ def adaptive_llm_worker_count(
         reduction_reasons.append(f"ramp_up_{ramp_meta.get('phase', 'active')}")
     meta = {
         "auto_enabled": True,
+        "profile": performance_profile(settings),
         "provider": provider_text or "ollama",
         "model": str(model or ""),
         "task": task_text,
@@ -528,8 +665,8 @@ def atomic_write_json(path: str | Path, payload: dict) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(dumps_json_bytes(payload, indent=None))
         with _JSON_WRITE_LOCK:
             os.replace(tmp_name, target)
     except Exception:

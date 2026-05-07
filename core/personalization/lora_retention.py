@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import json
 import math
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from core.personalization.lora_models import iso_now, stable_hash
+from core.personalization.lora_quality_buckets import (
+    LORA_BUCKET_PENDING_DELETE,
+    annotate_lora_row_quality,
+    lora_bucket_for_row,
+    lora_row_sort_key,
+    lora_score_for_row,
+    strip_lora_quality_metadata,
+)
 from core.personalization.lora_storage import (
     JSONL_KINDS,
     initialize_lora_personalization_store,
@@ -54,7 +63,7 @@ def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
 
 
 def _row_signature(row: dict[str, Any]) -> str:
-    return str(row.get("signature") or row.get("dedupe_hash") or stable_hash(dict(row or {})))
+    return str(row.get("signature") or row.get("dedupe_hash") or stable_hash(strip_lora_quality_metadata(dict(row or {}))))
 
 
 def _coerce_float(value: Any, default: float = 0.0) -> float:
@@ -92,47 +101,18 @@ def _created_timestamp(row: dict[str, Any], fallback_index: int) -> float:
     return float(fallback_index)
 
 
-def _explicit_score(row: dict[str, Any]) -> float | None:
-    for key in (
-        "score",
-        "quality_score",
-        "confidence_score",
-        "stt_score",
-        "metrics.final_score",
-        "metrics.quality_score",
-        "metadata.score",
-    ):
-        value = _nested_value(row, key)
-        if value is None:
-            continue
-        try:
-            score = float(value)
-        except Exception:
-            continue
-        return score * 100.0 if 0.0 <= score <= 1.0 else score
-    return None
+def _is_pinned(row: dict[str, Any]) -> bool:
+    return bool(row.get("pinned") or _nested_value(row, "metadata.pinned"))
 
 
 def _retention_rank(kind: str, row: dict[str, Any], index: int) -> tuple[float, float, float]:
-    score = _explicit_score(row)
-    if score is None:
-        score = 72.0 if kind == "truth_table" else 55.0
-
-    status = str(row.get("status") or "").strip().lower()
-    if status in {"failed", "error"}:
-        score -= 25.0
-    elif status in {"skipped", "cancelled"}:
-        score -= 12.0
-    elif status in {"complete", "reviewed"}:
-        score += 4.0
-
+    score = lora_score_for_row(kind, row)
     usage = max(
         _coerce_int(row.get("usage_count"), 0),
         _coerce_int(row.get("frequency"), 0),
         _coerce_int(_nested_value(row, "metadata.usage_count"), 0),
     )
-    score += min(12.0, math.log1p(max(0, usage)) * 3.0)
-    if bool(row.get("pinned") or _nested_value(row, "metadata.pinned")):
+    if _is_pinned(row):
         score += 1_000_000.0
 
     return (score, float(usage), _created_timestamp(row, index))
@@ -161,23 +141,53 @@ def _prune_jsonl_kind(
     policy: dict[str, Any],
     appended_rows: int,
     training_event: bool,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool, dict[str, int]]:
+    source_rows = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+    annotated_rows = [annotate_lora_row_quality(kind, row) for row in source_rows]
+    remove_indexes: set[int] = set()
+
+    min_keep = max(0, int(policy.get("min_keep", 0) or 0))
+    auto_delete_pending = bool(policy.get("auto_delete_pending", True))
+    protect_pending_min_keep = bool(policy.get("protect_min_keep_for_pending", False))
+
+    if auto_delete_pending:
+        pending_candidates = sorted(
+            [
+                (index, row)
+                for index, row in enumerate(annotated_rows)
+                if lora_bucket_for_row(kind, row) == LORA_BUCKET_PENDING_DELETE and not _is_pinned(row)
+            ],
+            key=lambda pair: _retention_rank(kind, pair[1], pair[0]),
+        )
+        pending_capacity = max(0, len(annotated_rows) - min_keep) if protect_pending_min_keep else len(annotated_rows)
+        remove_indexes.update(index for index, _row in pending_candidates[:pending_capacity])
+
+    remaining_total = len(annotated_rows) - len(remove_indexes)
     remove_count = _target_remove_count(
-        total_rows=len(rows),
+        total_rows=remaining_total,
         appended_rows=appended_rows,
         policy=policy,
         training_event=training_event,
     )
-    if remove_count <= 0:
-        return rows, []
-    ranked = sorted(
-        enumerate(rows),
-        key=lambda pair: _retention_rank(kind, pair[1], pair[0]),
-    )
-    remove_indexes = {index for index, _row in ranked[:remove_count]}
-    removed = [dict(row) for index, row in enumerate(rows) if index in remove_indexes]
-    kept = [dict(row) for index, row in enumerate(rows) if index not in remove_indexes]
-    return kept, removed
+    if remove_count > 0:
+        ranked = sorted(
+            [
+                (index, row)
+                for index, row in enumerate(annotated_rows)
+                if index not in remove_indexes and not _is_pinned(row)
+            ],
+            key=lambda pair: _retention_rank(kind, pair[1], pair[0]),
+        )
+        capacity = max(0, remaining_total - min_keep)
+        remove_indexes.update(index for index, _row in ranked[: min(remove_count, capacity)])
+
+    removed = [dict(row) for index, row in enumerate(annotated_rows) if index in remove_indexes]
+    kept = [dict(row) for index, row in enumerate(annotated_rows) if index not in remove_indexes]
+    if bool(policy.get("sort_kept_rows", True)):
+        kept = [row for _index, row in sorted(enumerate(kept), key=lambda pair: lora_row_sort_key(kind, pair[1], pair[0]))]
+    bucket_counts = Counter(str(row.get("lora_quality_bucket") or lora_bucket_for_row(kind, row)) for row in kept)
+    changed = bool(removed) or kept != source_rows
+    return kept, removed, changed, dict(bucket_counts)
 
 
 def _rule_rank(item: dict[str, Any], index: int) -> tuple[float, float, float]:
@@ -249,21 +259,32 @@ def prune_low_value_personalization_data(
     appended = dict(appended_counts or {})
     training_event = str(trigger or "").startswith("training") or str(trigger or "").startswith("trial")
     removed: dict[str, list[dict[str, Any]]] = {}
+    changed_counts: dict[str, int] = {}
+    bucket_counts: dict[str, dict[str, int]] = {}
 
     jsonl_policies = dict(policy.get("jsonl") or {})
     for kind, kind_policy in jsonl_policies.items():
         if kind not in JSONL_KINDS or kind not in paths:
             continue
         rows = _read_jsonl(paths[kind])
-        kept, removed_rows = _prune_jsonl_kind(
+        effective_policy = {
+            "auto_delete_pending": bool(policy.get("auto_delete_pending", True)),
+            "sort_kept_rows": bool(policy.get("sort_kept_rows", True)),
+            "protect_min_keep_for_pending": bool(policy.get("protect_min_keep_for_pending", False)),
+            **dict(kind_policy or {}),
+        }
+        kept, removed_rows, changed, kind_bucket_counts = _prune_jsonl_kind(
             kind=kind,
             rows=rows,
-            policy=dict(kind_policy or {}),
+            policy=effective_policy,
             appended_rows=max(0, int(appended.get(kind, 0) or 0)),
             training_event=training_event,
         )
-        if removed_rows:
+        bucket_counts[kind] = kind_bucket_counts
+        if changed:
             _write_jsonl(paths[kind], kept)
+            changed_counts[kind] = len(kept)
+        if removed_rows:
             removed[kind] = removed_rows
 
     rule_policies = dict(policy.get("rules") or {})
@@ -276,9 +297,9 @@ def prune_low_value_personalization_data(
         if removed_rules:
             removed[f"{rule_kind}_rules"] = removed_rules
 
-    if removed:
+    if removed or changed_counts:
         _rebuild_dedupe_index(store_dir)
-    manifest = refresh_lora_personalization_manifest(store_dir)
+    manifest = refresh_lora_personalization_manifest(store_dir, refresh_bundle=False)
     removed_counts = {key: len(value) for key, value in removed.items()}
     total_removed = sum(removed_counts.values())
     if total_removed > 0:
@@ -290,12 +311,14 @@ def prune_low_value_personalization_data(
             "total_removed": total_removed,
         }
         _append_jsonl(paths["retention_history"], history_row)
-        manifest = refresh_lora_personalization_manifest(store_dir)
+        manifest = refresh_lora_personalization_manifest(store_dir, refresh_bundle=False)
     return {
         "enabled": True,
         "trigger": str(trigger or "manual"),
         "removed": removed_counts,
         "total_removed": total_removed,
+        "changed": changed_counts,
+        "bucket_counts": bucket_counts,
         "policy": policy,
         "manifest": manifest,
     }

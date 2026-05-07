@@ -27,6 +27,13 @@ def _compact_text(text: Any, limit: int = 220) -> str:
     return " ".join(str(text or "").split())[: max(0, int(limit or 0))]
 
 
+def _setting_bool(settings: dict[str, Any] | None, key: str, default: bool) -> bool:
+    value = dict(settings or {}).get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "off", "no", "사용 안함", "끔"}
+    return bool(value)
+
+
 def _segment_features(segment: dict[str, Any], settings: dict[str, Any] | None = None) -> dict[str, Any]:
     settings = settings or {}
     start = _safe_float(segment.get("start"), 0.0)
@@ -40,7 +47,7 @@ def _segment_features(segment: dict[str, Any], settings: dict[str, Any] | None =
         "duration_sec": round(duration, 3),
         "char_count": int(char_count),
         "cps": round(char_count / duration, 3),
-        "speaker": str(segment.get("speaker") or ""),
+        "speaker": str(segment.get("speaker") or "") if _setting_bool(settings, "voice_lora_bridge_enabled", False) else "",
         "max_cps_setting": settings.get("sub_max_cps"),
         "split_length_threshold": settings.get("split_length_threshold"),
     }
@@ -263,7 +270,9 @@ def _event_row(
 ) -> dict[str, Any]:
     features = _segment_features(segment, settings)
     hard_case = _hard_case(event_type, decision, features, settings)
-    text = _compact_text(segment.get("text"), 500)
+    store_full_text = _setting_bool(settings, "lora_store_full_text_enabled", True)
+    original_text = _compact_text(segment.get("text"), 500)
+    text = original_text if store_full_text else ""
     row = {
         "schema": DEEP_POLICY_EVENT_SCHEMA,
         "deep_policy_schema": DEEP_POLICY_SCHEMA,
@@ -273,6 +282,7 @@ def _event_row(
         "media_path": str(media_path or segment.get("media_path") or segment.get("_media_path") or ""),
         "segment_id": str(segment.get("segment_id") or segment.get("id") or ""),
         "text": text,
+        "text_hash": stable_hash({"text": original_text})[:16] if original_text else "",
         "decision": dict(decision or {}),
         "features": features,
         "profile": _profile_summary(segment),

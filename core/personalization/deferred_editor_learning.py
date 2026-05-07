@@ -19,6 +19,13 @@ DEFERRED_EDITOR_LEARNING_SCHEMA = "ai_subtitle_studio.deferred_editor_learning.v
 DEFERRED_EDITOR_LEARNING_JOB_TYPE = "capture_editor_learning"
 
 
+def _setting_bool(settings: dict[str, Any] | None, key: str, default: bool) -> bool:
+    value = dict(settings or {}).get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "off", "no", "사용 안함", "끔"}
+    return bool(value)
+
+
 def _safe_segment(segment: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "line",
@@ -70,6 +77,10 @@ def _safe_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
         "editor_truth_capture_max_chars",
         "user_edit_metrics_enabled",
         "user_edit_metrics_deep_event_enabled",
+        "lora_store_full_text_enabled",
+        "lora_pattern_index_enabled",
+        "lora_pattern_autobuild_enabled",
+        "voice_lora_bridge_enabled",
     }
     data = dict(settings or {})
     return {key: data.get(key) for key in keys if key in data}
@@ -194,7 +205,17 @@ def run_deferred_editor_learning_job(
         trigger=trigger,
         refresh_bundle=False,
         store_dir=store_dir,
+        store_full_text=_setting_bool(settings, "lora_store_full_text_enabled", True),
+        voice_lora_bridge_enabled=_setting_bool(settings, "voice_lora_bridge_enabled", False),
     )
+    pattern_result: dict[str, Any] = {"status": "skipped"}
+    if _setting_bool(settings, "lora_pattern_index_enabled", True):
+        try:
+            from core.personalization.subtitle_pattern_index import save_subtitle_pattern_index
+
+            pattern_result = save_subtitle_pattern_index(store_dir, force=True)
+        except Exception as exc:
+            pattern_result = {"status": "error", "error": str(exc)}
     appended = (
         int(truth_result.get("appended_rows", 0) or 0)
         + int(truth_result.get("excluded_parenthetical_rows", 0) or 0)
@@ -209,6 +230,11 @@ def run_deferred_editor_learning_job(
         "result": {
             "truth": truth_result,
             "text_lora": text_result,
+            "subtitle_pattern_index": {
+                "pattern_count": int(pattern_result.get("pattern_count", 0) or 0),
+                "accepted_rows": int(pattern_result.get("accepted_rows", 0) or 0),
+                "status": str(pattern_result.get("status") or "updated"),
+            },
             "appended_total": appended,
             "reason": "deferred_home_idle_editor_learning",
         },

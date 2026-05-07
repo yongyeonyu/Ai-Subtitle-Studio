@@ -14,7 +14,10 @@ from core.performance import (
     bounded_worker_count,
     ffprobe_worker_count,
     mark_runtime_scheduler_start,
+    native_runtime_env_overrides,
+    native_thread_budget,
 )
+from core.native_json import dumps_json_text, loads_json
 
 
 class PerformanceMediaCacheTest(unittest.TestCase):
@@ -183,6 +186,76 @@ class PerformanceMediaCacheTest(unittest.TestCase):
         self.assertEqual(workers, 1)
         self.assertEqual(meta["ramp"]["phase"], "warmup")
         self.assertIn("ramp_up_warmup", meta["reductions"])
+
+    def test_hardware_max_profile_uses_full_cpu_budget_without_user_active_reduction(self):
+        snapshot = {
+            "system": "Darwin",
+            "machine": "arm64",
+            "logical_cores": 10,
+            "physical_cores": 10,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 3 * 1024 ** 3,
+            "available_memory_ratio": 0.18,
+            "cpu_load_1m": 8.5,
+            "cpu_load_ratio": 0.85,
+            "on_battery": True,
+            "battery_percent": 42,
+            "user_idle_seconds": 1.2,
+            "user_active": True,
+        }
+        settings = {
+            "runtime_scheduler_auto_enabled": True,
+            "runtime_hardware_acceleration_enabled": True,
+            "runtime_performance_profile": "max",
+        }
+        with patch("core.performance.hardware_profile", return_value=snapshot), \
+             patch("core.performance.current_resource_snapshot", return_value=snapshot):
+            workers, meta = adaptive_worker_count(
+                task="cut_pioneer",
+                settings=settings,
+                requested=4,
+                workload=20,
+                minimum=1,
+                maximum=4,
+            )
+
+        self.assertEqual(workers, 4)
+        self.assertEqual(meta["profile"], "max")
+        self.assertNotIn("battery_power", meta["reductions"])
+        self.assertNotIn("user_active", meta["reductions"])
+        self.assertEqual(meta["ramp"]["reason"], "hardware_max_profile")
+
+    def test_native_runtime_env_budget_uses_logical_cores_for_max_profile(self):
+        snapshot = {
+            "system": "Darwin",
+            "machine": "arm64",
+            "logical_cores": 10,
+            "physical_cores": 10,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "memory_bytes": 16 * 1024 ** 3,
+            "accelerators": {"mlx": True},
+        }
+        settings = {
+            "runtime_hardware_acceleration_enabled": True,
+            "runtime_performance_profile": "max",
+            "runtime_native_threads_auto_enabled": True,
+        }
+        with patch("core.performance.hardware_profile", return_value=snapshot):
+            self.assertEqual(native_thread_budget(settings), 10)
+            env = native_runtime_env_overrides(settings)
+
+        self.assertEqual(env["AI_SUBTITLE_NATIVE_THREADS"], "10")
+        self.assertEqual(env["OMP_NUM_THREADS"], "10")
+        self.assertEqual(env["AI_SUBTITLE_NATIVE_JSON"], "1")
+
+    def test_native_json_round_trip_preserves_unicode(self):
+        payload = {"text": "안녕하세요", "rows": [{"i": 1}]}
+        encoded = dumps_json_text(payload, indent=2, append_newline=True)
+        self.assertTrue(encoded.endswith("\n"))
+        self.assertEqual(loads_json(encoded), payload)
 
 
 if __name__ == "__main__":

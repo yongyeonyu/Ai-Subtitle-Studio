@@ -431,12 +431,6 @@ def _iter_manifest_plan_docs(paths: dict[str, Path]) -> list[dict[str, Any]]:
             "text_lora_manifest",
             "text_lora_corpus_manifest",
             "text_lora_training_plan",
-            "voice_lora_profile_manifest",
-            "voice_lora_training_plan",
-            "voice_lora_dataset_manifest",
-            "stt1_whisper_adapter_dataset_manifest",
-            "stt1_whisper_adapter_training_plan",
-            "stt1_whisper_adapter_runtime_manifest",
         )
     ):
         payload = read_json(paths[key], {})

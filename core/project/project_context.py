@@ -20,6 +20,11 @@ from core.cut_boundary import (
     normalize_cut_boundaries,
     project_cut_provisional_boundaries,
 )
+from core.project.project_assets import (
+    load_external_stt_tracks,
+    load_external_subtitle_segments,
+    project_uses_external_text_assets,
+)
 
 STT_SEGMENT_METADATA_KEYS = (
     "stt_candidates",
@@ -303,11 +308,38 @@ def project_stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]
                         item = dict(row)
                         item["stt_preview_source"] = str(source)
                         raw_segments.append(item)
+    if (not isinstance(raw_segments, list) or not raw_segments) and project_uses_external_text_assets(project):
+        raw_segments = []
+        for source, rows in load_external_stt_tracks(project).items():
+            for row in rows:
+                item = dict(row)
+                item["stt_preview_source"] = str(source)
+                raw_segments.append(item)
     if not isinstance(raw_segments, list):
         return []
     timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
     primary_fps = normalize_fps(timebase.get("primary_fps", 30.0) or 30.0)
-    return _normalize_stt_preview_segments(raw_segments, primary_fps=primary_fps)
+    normalized = _normalize_stt_preview_segments(raw_segments, primary_fps=primary_fps)
+    _attach_clip_context_from_boundaries(normalized, project_clip_boundaries(project))
+    return normalized
+
+
+def _attach_clip_context_from_boundaries(segments: list[dict[str, Any]], boundaries: list[dict[str, Any]]) -> None:
+    if not segments or not boundaries:
+        return
+    for seg in segments:
+        if not isinstance(seg, dict) or seg.get("_clip_idx") is not None:
+            continue
+        start = _safe_float(seg.get("start", 0.0))
+        for idx, boundary in enumerate(boundaries):
+            boundary_start = _safe_float(boundary.get("start"))
+            boundary_end = _safe_float(boundary.get("end"))
+            is_last = idx == len(boundaries) - 1
+            if boundary_start <= start < boundary_end or (is_last and start <= boundary_end + 0.001):
+                seg["_clip_idx"] = idx
+                if boundary.get("file"):
+                    seg["_clip_file"] = str(boundary.get("file") or "")
+                break
 
 
 def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
@@ -315,6 +347,8 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
     editor_subtitles = editor_state.get("subtitles", {}) or {}
     vector_canvas = ((editor_state.get("rendering", {}) or {}).get("subtitle_canvas", {}) or {})
     raw_segments = _segments_from_subtitle_canvas_vector(vector_canvas)
+    if (not raw_segments) and project_uses_external_text_assets(project):
+        raw_segments = load_external_subtitle_segments(project)
     if not isinstance(raw_segments, list):
         raw_segments = editor_subtitles.get("segments")
     if not isinstance(raw_segments, list):
@@ -414,7 +448,113 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
                 item[key] = seg.get(key)
         item.update({key: value for key, value in subtitle_status_payload(item).items() if value not in (None, "")})
         out.append(item)
+    if out and project_uses_external_text_assets(project):
+        _attach_external_stt_candidates(out, load_external_stt_tracks(project))
+        _attach_lattice_candidates_from_artifact(out, project)
     return out
+
+
+def _candidate_lookup_key(row: dict[str, Any], primary_fps: float) -> tuple[int, int]:
+    frame_range = row.get("frame_range", {}) if isinstance(row.get("frame_range"), dict) else {}
+    start_frame = row.get("start_frame", row.get("timeline_start_frame", frame_range.get("start")))
+    end_frame = row.get("end_frame", row.get("timeline_end_frame", frame_range.get("end")))
+    if start_frame is None:
+        start_frame = sec_to_frame(_safe_float(row.get("start", row.get("timeline_start", 0.0))), primary_fps)
+    if end_frame is None:
+        end_frame = sec_to_frame(_safe_float(row.get("end", row.get("timeline_end", 0.0))), primary_fps)
+    return _safe_int(start_frame), _safe_int(end_frame)
+
+
+def _attach_external_stt_candidates(segments: list[dict[str, Any]], tracks: dict[str, list[dict[str, Any]]]) -> None:
+    if not tracks:
+        return
+    primary_fps = normalize_fps(
+        next(
+            (
+                seg.get("timeline_frame_rate") or seg.get("frame_rate")
+                for seg in segments
+                if isinstance(seg, dict) and (seg.get("timeline_frame_rate") or seg.get("frame_rate"))
+            ),
+            30.0,
+        )
+    )
+    by_frame: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    for source, rows in tracks.items():
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            item = dict(row)
+            item["source"] = str(source)
+            item["stt_preview_source"] = str(source)
+            by_frame.setdefault(_candidate_lookup_key(item, primary_fps), []).append(item)
+    for seg in segments:
+        if not isinstance(seg, dict) or seg.get("stt_candidates"):
+            continue
+        candidates = by_frame.get(_candidate_lookup_key(seg, primary_fps), [])
+        if candidates:
+            seg["stt_candidates"] = [dict(candidate) for candidate in candidates]
+
+
+def _attach_lattice_candidates_from_artifact(segments: list[dict[str, Any]], project: dict[str, Any]) -> None:
+    analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
+    artifact_path = str(
+        analysis.get("stt_lattice_artifact_path")
+        or ((project.get("editor_state", {}) or {}).get("analysis", {}) or {}).get("stt_lattice_artifact_path")
+        or ""
+    )
+    if not artifact_path:
+        return
+    if not os.path.isabs(artifact_path):
+        base = str(project.get("_project_file_path") or project.get("project_path") or "")
+        if base:
+            artifact_path = os.path.join(os.path.dirname(os.path.abspath(base)), artifact_path)
+    if not artifact_path or not os.path.exists(artifact_path):
+        return
+    try:
+        with open(artifact_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return
+    rows = payload.get("segments") if isinstance(payload, dict) else []
+    if not isinstance(rows, list):
+        return
+    by_id: dict[str, dict[str, Any]] = {}
+    by_time: dict[tuple[float, float], dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        segment_id = str(row.get("segment_id", "") or "")
+        if segment_id:
+            by_id[segment_id] = row
+        by_time[(round(_safe_float(row.get("start")), 3), round(_safe_float(row.get("end")), 3))] = row
+
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        row = by_id.get(str(seg.get("id", "") or ""))
+        if row is None:
+            row = by_time.get((round(_safe_float(seg.get("start")), 3), round(_safe_float(seg.get("end")), 3)))
+        if not isinstance(row, dict):
+            continue
+        for candidate in list(row.get("candidate_lattice") or []):
+            if not isinstance(candidate, dict):
+                continue
+            key = str(candidate.get("candidate_key", "") or "")
+            if key in {"", "current"}:
+                continue
+            if key == "stt_candidates" and seg.get("stt_candidates"):
+                continue
+            item = {
+                "source": str(candidate.get("source", "") or ""),
+                "text": str(candidate.get("text", "") or ""),
+                "start": _safe_float(candidate.get("start", seg.get("start", 0.0))),
+                "end": _safe_float(candidate.get("end", seg.get("end", seg.get("start", 0.0)))),
+            }
+            for meta_key in ("score", "confidence", "label", "candidate_role"):
+                if candidate.get(meta_key) not in (None, ""):
+                    item[meta_key] = candidate.get(meta_key)
+            if item["text"]:
+                seg.setdefault(key, []).append(item)
 
 
 def build_editor_state(

@@ -23,6 +23,7 @@ from core.personalization.lora_storage import (
     upsert_training_queue_items,
 )
 from core.personalization.lora_vector_retriever import build_lora_retrieval_index
+from core.personalization.subtitle_pattern_index import save_subtitle_pattern_index
 from core.runtime.logger import get_logger
 from core.personalization.stt1_whisper_adapter_runner import save_stt1_whisper_adapter_training_plan
 from core.personalization.text_lora_runner import (
@@ -50,6 +51,7 @@ QUEUE_JOB_TYPE_LABELS = {
     "build_text_training_plan": "text 학습계획",
     "build_voice_profiles": "목소리 프로필",
     "build_stt1_whisper_adapter": "STT1 어댑터",
+    "build_subtitle_pattern_index": "자막 패턴 인덱스",
     "build_retrieval_index": "검색 인덱스",
     "optimize_settings": "설정 최적화",
     "optimize_prompts": "프롬프트 최적화",
@@ -150,14 +152,14 @@ def enqueue_default_training_jobs(
             media_id="global",
             media_path="",
             subtitle_path="",
-            job_type="build_voice_profiles",
+            job_type="build_subtitle_pattern_index",
             priority=30,
         ).to_record(),
         TrainingQueueItem(
             media_id="global",
             media_path="",
             subtitle_path="",
-            job_type="build_stt1_whisper_adapter",
+            job_type="build_retrieval_index",
             priority=40,
         ).to_record(),
     ]
@@ -247,24 +249,16 @@ def _manual_full_training_jobs(
             media_id="global",
             media_path="",
             subtitle_path="",
-            job_type="build_voice_profiles",
+            job_type="build_subtitle_pattern_index",
             priority=30,
-            payload={"manual_full_training": True, "extract_audio": True},
-        ).to_record(),
-        TrainingQueueItem(
-            media_id="global",
-            media_path="",
-            subtitle_path="",
-            job_type="build_stt1_whisper_adapter",
-            priority=40,
-            payload={"manual_full_training": True, "extract_audio": True},
+            payload={"manual_full_training": True, "force": True},
         ).to_record(),
         TrainingQueueItem(
             media_id="global",
             media_path="",
             subtitle_path="",
             job_type="build_retrieval_index",
-            priority=50,
+            priority=40,
             payload={"manual_full_training": True, "force": True},
         ).to_record(),
     ]
@@ -590,15 +584,24 @@ def run_training_job(
         job_payload = dict(job.get("payload") or {})
         force = bool(job_payload.get("force", True))
         get_logger().log(f"🧠 [LoRA 학습] {job_label}: 벡터 검색 인덱스와 ZIP 갱신 중")
+        pattern_result = save_subtitle_pattern_index(store_dir, force=force)
         index_result = build_lora_retrieval_index(store_dir, force=force)
         bundle_result = refresh_unified_lora_data_bundle(store_dir, force=force)
         result = {
+            "subtitle_pattern_index": pattern_result,
             "retrieval_index": index_result,
             "bundle": bundle_result,
             "doc_count": int(index_result.get("doc_count", 0) or 0),
+            "pattern_count": int(pattern_result.get("pattern_count", 0) or 0),
             "record_count": int(bundle_result.get("record_count", 0) or 0),
         }
         return {"status": "complete", "score": float(result["doc_count"]), "result": result}
+    if job_type == "build_subtitle_pattern_index":
+        job_payload = dict(job.get("payload") or {})
+        force = bool(job_payload.get("force", True))
+        get_logger().log(f"🧠 [LoRA 학습] {job_label}: 원문 없는 자막 패턴 인덱스 생성 중")
+        result = save_subtitle_pattern_index(store_dir, force=force)
+        return {"status": "complete", "score": float(result.get("pattern_count", 0) or 0), "result": result}
     if job_type == "optimize_settings":
         media_rows = grouped_rows.get(media_id, [])
         if not media_rows:

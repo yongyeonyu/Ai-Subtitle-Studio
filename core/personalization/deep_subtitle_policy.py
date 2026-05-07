@@ -25,6 +25,7 @@ _SETTING_KEYS = (
     "sub_dedup_window",
     "sub_gap_break_sec",
     "word_timing_gap_break_sec",
+    "deep_timing_max_shift_sec",
     "chunk_time_limit",
     "subtitle_bundle_target_sec",
     "subtitle_bundle_min_sec",
@@ -169,6 +170,17 @@ def _profile_top_score(profile: dict[str, Any] | None) -> float:
     return _clamp((profile or {}).get("top_score", 0.0), 0.0, 100.0, 0.0) / 100.0
 
 
+def _pattern_settings(profile: dict[str, Any] | None) -> dict[str, Any]:
+    profile = profile or {}
+    settings = profile.get("pattern_settings")
+    if isinstance(settings, dict) and settings:
+        return dict(settings)
+    pattern = profile.get("pattern_match")
+    if isinstance(pattern, dict) and isinstance(pattern.get("settings"), dict):
+        return dict(pattern.get("settings") or {})
+    return {}
+
+
 def _excluded_penalty(text: str, profile: dict[str, Any] | None) -> float:
     compact_text = _compact(text)
     if not compact_text:
@@ -182,6 +194,13 @@ def _excluded_penalty(text: str, profile: dict[str, Any] | None) -> float:
 
 
 def _profile_style_score(text: str, settings: dict[str, Any], profile: dict[str, Any] | None) -> float:
+    pattern = _pattern_settings(profile)
+    if pattern:
+        compact_len = len(_compact(text))
+        target_len = _clamp_int(pattern.get("split_length_threshold", settings.get("split_length_threshold", 16)), 6, 40, 16)
+        if compact_len <= 0:
+            return 0.0
+        return max(0.0, min(1.0, 1.0 - min(1.0, abs(compact_len - target_len) / max(6.0, target_len))))
     examples = _profile_examples(profile)
     if examples:
         example_score = max(text_similarity(text, example) for example in examples)
@@ -240,6 +259,7 @@ def rerank_subtitle_candidates(
         return list(candidate_lists[0] if candidate_lists else []), {}
 
     original = _norm(original_text)
+    pattern_only = _setting_bool(settings, "deep_policy_pattern_only_enabled", False)
     scored: list[tuple[float, int, list[str]]] = []
     seen: set[str] = set()
     for index, chunks in enumerate(list(candidate_lists or [])):
@@ -248,7 +268,16 @@ def rerank_subtitle_candidates(
         if not clean_chunks or key in seen:
             continue
         seen.add(key)
-        scored.append((_candidate_text_score(original, clean_chunks, settings, profile), index, clean_chunks))
+        if pattern_only and _pattern_settings(profile):
+            text = _norm(" ".join(clean_chunks))
+            target_len = _clamp_int(_pattern_settings(profile).get("split_length_threshold", settings.get("split_length_threshold", 16)), 6, 40, 16)
+            line_target = _safe_int(_pattern_settings(profile).get("subtitle_target_line_count"), _safe_int(settings.get("subtitle_target_line_count"), 0))
+            length_score = 1.0 - min(1.0, abs(len(_compact(text)) - target_len) / max(6.0, target_len))
+            line_score = 0.65 if line_target <= 0 else max(0.0, 1.0 - abs(len(clean_chunks) - line_target) / max(1.0, float(line_target)))
+            score = max(0.0, min(1.0, (length_score * 0.74) + (line_score * 0.26)))
+        else:
+            score = _candidate_text_score(original, clean_chunks, settings, profile)
+        scored.append((score, index, clean_chunks))
 
     if not scored:
         return [], {}
@@ -301,6 +330,31 @@ def predict_segment_settings(
         return {}, {}
 
     predicted: dict[str, Any] = {}
+    pattern = _pattern_settings(profile)
+    if pattern and _setting_bool(settings, "deep_policy_pattern_only_enabled", False):
+        for key, value in pattern.items():
+            if key not in _SETTING_KEYS or value in (None, ""):
+                continue
+            if key in {"split_length_threshold", "sub_max_cps"}:
+                predicted[key] = _clamp_int(value, 6, 40 if key == "split_length_threshold" else 24, _safe_int(settings.get(key), 16))
+            elif key == "subtitle_target_line_count":
+                predicted[key] = _clamp_int(value, 1, 3, _safe_int(settings.get(key), 0) or 1)
+            elif key in {"gap_push_rate", "gap_pull_rate"}:
+                predicted[key] = round(_clamp(value, 0.0, 1.0, _safe_float(settings.get(key), 0.5)), 3)
+            elif key == "single_subtitle_end":
+                predicted[key] = round(_clamp(value, 0.0, 2.0, _safe_float(settings.get(key), 0.2)), 3)
+            else:
+                predicted[key] = round(_clamp(value, 0.05, 12.0, _safe_float(settings.get(key), 1.0)), 3)
+        if predicted:
+            return predicted, {
+                "schema": DEEP_POLICY_SCHEMA,
+                "model": f"{DEEP_POLICY_MODEL_ID}:pattern_fast_path",
+                "task": "segment_setting_policy",
+                "confidence": round(max(_profile_top_score(profile), 0.72), 4),
+                "applied_keys": sorted(predicted),
+                "segment_chars": len(_compact(segment.get("text"))),
+                "pattern_only": True,
+            }
     for key in _SETTING_KEYS:
         value = _weighted_setting_from_profile(profile, key)
         if value in (None, ""):
@@ -451,22 +505,23 @@ def select_stt_candidate(
 
     current_text = _norm(segment.get("text"))
     lora_min_similarity = _clamp(settings.get("deep_stt_candidate_lora_min_similarity", 0.86), 0.0, 1.0, 0.86)
-    for candidate in _profile_example_candidates(profile):
-        text = _norm(candidate.get("text"))
-        key = _compact(text)
-        if not key:
-            continue
-        if key in seen and seen_text_by_key.get(key) == text:
-            continue
-        nearest = max(
-            [text_similarity(text, current_text)]
-            + [text_similarity(text, row.get("text")) for row in unique[:6]]
-        )
-        if nearest < lora_min_similarity:
-            continue
-        seen.add(key)
-        seen_text_by_key[key] = text
-        unique.append(candidate)
+    if not (_setting_bool(settings, "deep_policy_pattern_only_enabled", False) and _pattern_settings(profile)):
+        for candidate in _profile_example_candidates(profile):
+            text = _norm(candidate.get("text"))
+            key = _compact(text)
+            if not key:
+                continue
+            if key in seen and seen_text_by_key.get(key) == text:
+                continue
+            nearest = max(
+                [text_similarity(text, current_text)]
+                + [text_similarity(text, row.get("text")) for row in unique[:6]]
+            )
+            if nearest < lora_min_similarity:
+                continue
+            seen.add(key)
+            seen_text_by_key[key] = text
+            unique.append(candidate)
 
     if len(unique) < 2:
         return None

@@ -15,6 +15,7 @@ from typing import Any
 MODE_POLICY_SCHEMA = "ai_subtitle_studio.mode_policy.v1"
 MODE_DASHBOARD_SCHEMA = "ai_subtitle_studio.engine_dashboard.v1"
 MODE_PREFLIGHT_SCHEMA = "ai_subtitle_studio.mode_preflight.v1"
+MODE_TOOL_STACK_SCHEMA = "ai_subtitle_studio.subtitle_tool_stack.v1"
 
 MODE_ORDER = ("fast", "auto", "high")
 MODE_LABELS = {
@@ -46,6 +47,36 @@ ENGINE_DASHBOARD_STEPS = (
     ("deep_learning", "딥러닝"),
 )
 
+MODE_TOOL_STACKS = {
+    "fast": {
+        "label": "LoRA fast path",
+        "tools": ["lora"],
+        "lora": True,
+        "deep_learning": False,
+        "llm": False,
+        "macro_llm": False,
+        "reason": "Fast mode keeps subtitle generation on the LoRA/pattern path and skips Deep/LLM work.",
+    },
+    "auto": {
+        "label": "LoRA + Deep balanced path",
+        "tools": ["lora", "deep_learning"],
+        "lora": True,
+        "deep_learning": True,
+        "llm": False,
+        "macro_llm": False,
+        "reason": "Auto mode lets LoRA settle timing/style first, then Deep handles uncertain STT and split decisions.",
+    },
+    "high": {
+        "label": "LoRA + Deep + LLM quality path",
+        "tools": ["lora", "deep_learning", "llm"],
+        "lora": True,
+        "deep_learning": True,
+        "llm": True,
+        "macro_llm": True,
+        "reason": "High mode adds chunked LLM review after the LoRA/Deep fast pass.",
+    },
+}
+
 
 def _safe_bool(value: Any, default: bool = False) -> bool:
     if value is None:
@@ -75,6 +106,46 @@ def _short_model_name(value: Any) -> str:
     for prefix in ("mlx-community/", "Systran/", "youngouk/", "ghost613/", "o0dimplz0o/"):
         text = text.replace(prefix, "")
     return text.replace("-mlx", "")
+
+
+def _tool_stack_for_mode(mode: Any) -> dict[str, Any]:
+    key = normalize_mode(mode)
+    return {
+        "schema": MODE_TOOL_STACK_SCHEMA,
+        "mode": key,
+        **deepcopy(MODE_TOOL_STACKS[key]),
+    }
+
+
+def _disable_subtitle_llm_settings(
+    out: dict[str, Any],
+    *,
+    mode: str,
+    configured_model: str = "",
+    configured_provider: str = "",
+    preserve_configured_model: bool = False,
+) -> None:
+    has_configured_model = bool(configured_model and "사용 안함" not in configured_model)
+    if preserve_configured_model and has_configured_model:
+        out["selected_model"] = configured_model
+        out["selected_llm_provider"] = configured_provider or "ollama"
+        out["subtitle_llm_user_selected"] = True
+    else:
+        out["selected_model"] = "사용 안함 (Whisper 단독 진행)"
+        out["selected_llm_provider"] = "none"
+        out["subtitle_llm_user_selected"] = False
+    out.update(
+        {
+            "subtitle_llm_runtime_enabled": False,
+            "subtitle_llm_mode_disabled": True,
+            "subtitle_llm_effective_model": "사용 안함 (모드 정책)",
+            "subtitle_llm_macro_chunk_enabled": False,
+            "llm_confidence_gate_enabled": False,
+            "llm_candidate_policy_enabled": False,
+            "llm_minimize_enabled": False,
+            "subtitle_tool_stack_reason": MODE_TOOL_STACKS[mode]["reason"],
+        }
+    )
 
 
 def normalize_mode(value: Any, *, default: str = "auto") -> str:
@@ -201,9 +272,10 @@ def resolve_mode_policy(
     mode = selected_mode_from_settings(settings)
     quality_key = mode_to_stt_quality(mode)
     label = mode_label(mode)
+    tool_stack = _tool_stack_for_mode(mode)
     audio_value, audio_state, audio_reason = _audio_value(settings, mode)
     vad_value, vad_state, vad_reason = _vad_value(settings, mode)
-    subtitle_llm_enabled = _llm_enabled(settings, prefix="subtitle")
+    subtitle_llm_enabled = bool(tool_stack.get("llm")) and _llm_enabled(settings, prefix="subtitle")
     roughcut_llm_enabled = _llm_enabled(settings, prefix="roughcut")
     lora_ok = _safe_bool(lora_available, True)
 
@@ -233,12 +305,12 @@ def resolve_mode_policy(
                 "reason": "Fast mode forces STT2 off and uses safe fast decoder settings.",
             },
             "llm": {
-                "subtitle_enabled": bool(subtitle_llm_enabled),
+                "subtitle_enabled": False,
                 "subtitle_default": False,
                 "lightweight_only": True,
                 "roughcut_enabled": bool(roughcut_llm_enabled),
-                "state": "user-selected" if subtitle_llm_enabled else "skipped",
-                "reason": "Fast mode skips subtitle LLM unless the user explicitly chooses a lightweight model.",
+                "state": "skipped",
+                "reason": "Fast mode is LoRA-only for subtitle post-processing; subtitle LLM is disabled.",
             },
             "lora": {
                 "enabled": lora_ok,
@@ -291,11 +363,11 @@ def resolve_mode_policy(
                 "reason": "High mode enables STT2, diarization, and precise decoder settings.",
             },
             "llm": {
-                "subtitle_enabled": True,
+                "subtitle_enabled": bool(subtitle_llm_enabled),
                 "subtitle_default": True,
                 "lightweight_only": False,
                 "roughcut_enabled": bool(roughcut_llm_enabled),
-                "state": "mode-selected",
+                "state": "mode-selected" if subtitle_llm_enabled else "skipped",
                 "reason": "High mode verifies uncertain output with LLM when available.",
             },
             "lora": {
@@ -349,12 +421,12 @@ def resolve_mode_policy(
                 "reason": "Auto mode starts with STT1 and escalates uncertain spans only.",
             },
             "llm": {
-                "subtitle_enabled": bool(subtitle_llm_enabled),
-                "subtitle_default": "confidence-gated",
+                "subtitle_enabled": False,
+                "subtitle_default": False,
                 "lightweight_only": False,
                 "roughcut_enabled": bool(roughcut_llm_enabled),
-                "state": "sampling-selected" if subtitle_llm_enabled else "skipped",
-                "reason": "Auto mode uses LLM only when confidence gates need it.",
+                "state": "skipped",
+                "reason": "Auto mode stops at LoRA + Deep; subtitle LLM is reserved for High mode.",
             },
             "lora": {
                 "enabled": lora_ok,
@@ -364,9 +436,9 @@ def resolve_mode_policy(
                 "reason": "Auto mode uses high/medium LoRA only when confidence gates find value.",
             },
             "deep_learning": {
-                "enabled": "selective",
+                "enabled": True,
                 "state": "sampling-selected",
-                "reason": "Auto mode applies deep learning selectively to uncertain spans.",
+                "reason": "Auto mode applies Deep after LoRA for uncertain STT, split, and timing decisions.",
             },
             "scheduler": {
                 "resource_start": "lite",
@@ -391,6 +463,7 @@ def resolve_mode_policy(
         "resource": deepcopy(resource_snapshot or {}),
         "user_selected_models": deepcopy(user_selected_models or {}),
         "idle_state": deepcopy(idle_state or {}),
+        "subtitle_tool_stack": tool_stack,
         **policy,
     }
     snapshot["dashboard"] = build_engine_dashboard(snapshot)
@@ -484,6 +557,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
     base_model = str(base.get("selected_model", "") or "").strip()
     base_provider = str(base.get("selected_llm_provider", "") or "").strip()
     base_has_subtitle_llm = bool(base_model and "사용 안함" not in base_model)
+    base_explicit_model = "selected_model" in base and base_has_subtitle_llm
     explicit_subtitle_llm = _safe_bool(base.get("subtitle_llm_user_selected"), False) or (
         base_has_subtitle_llm and "selected_llm_provider" not in base
     )
@@ -492,7 +566,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
     out["simple_operation_mode"] = mode
     out["stt_quality_preset"] = quality_key
     out["auto_start_mode"] = quality_key
-    if explicit_subtitle_llm and base_has_subtitle_llm:
+    if mode == "high" and explicit_subtitle_llm and base_has_subtitle_llm:
         out["selected_model"] = base_model
         out["selected_llm_provider"] = base_provider or "ollama"
         out["subtitle_llm_user_selected"] = True
@@ -500,6 +574,9 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
     if mode == "fast":
         out.update(
             {
+                "editor_lora_runtime_enabled": True,
+                "lora_pattern_first_enabled": True,
+                "lora_pattern_query_compact_enabled": True,
                 "cut_boundary_detection_enabled": False,
                 "cut_boundary_enabled": False,
                 "scan_cut_enabled": False,
@@ -529,12 +606,19 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "background_prefetch_candidates_enabled": False,
             }
         )
-        if not explicit_subtitle_llm:
-            out["selected_model"] = "사용 안함 (Whisper 단독 진행)"
-            out["selected_llm_provider"] = "none"
+        _disable_subtitle_llm_settings(
+            out,
+            mode=mode,
+            configured_model=base_model,
+            configured_provider=base_provider,
+            preserve_configured_model=base_explicit_model,
+        )
     elif mode == "high":
         out.update(
             {
+                "editor_lora_runtime_enabled": True,
+                "lora_pattern_first_enabled": True,
+                "lora_pattern_query_compact_enabled": True,
                 "cut_boundary_detection_enabled": True,
                 "cut_boundary_enabled": True,
                 "scan_cut_enabled": True,
@@ -551,15 +635,27 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "deep_segment_setting_policy_enabled": True,
                 "deep_stt_candidate_selector_enabled": True,
                 "deep_timing_adjustment_enabled": True,
+                "subtitle_llm_macro_chunk_enabled": True,
+                "subtitle_llm_mode_disabled": False,
+                "llm_confidence_gate_enabled": True,
+                "llm_candidate_policy_enabled": True,
+                "llm_minimize_enabled": True,
                 "speaker_diarization_auto_enabled": True,
                 "vad_dual_model_enabled": True,
                 "subtitle_lora_quality_buckets": ["high", "medium", "low"],
                 "runtime_scheduler_ramp_up_enabled": False,
             }
         )
+        out["subtitle_llm_effective_model"] = str(out.get("selected_model", "") or "")
+        out["subtitle_llm_runtime_enabled"] = bool(
+            out["subtitle_llm_effective_model"] and "사용 안함" not in out["subtitle_llm_effective_model"]
+        )
     else:
         out.update(
             {
+                "editor_lora_runtime_enabled": True,
+                "lora_pattern_first_enabled": True,
+                "lora_pattern_query_compact_enabled": True,
                 "cut_boundary_detection_enabled": True,
                 "cut_boundary_enabled": True,
                 "scan_cut_enabled": True,
@@ -569,18 +665,31 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "scan_cut_boundary_level": "low",
                 "scan_cut_audio_gain_enabled": False,
                 "stt_ensemble_enabled": False,
-                "stt_ensemble_llm_judge_enabled": False,
+                "stt_ensemble_llm_judge_enabled": True,
                 "speaker_diarization_auto_enabled": False,
                 "vad_dual_model_enabled": False,
+                "runtime_quality_self_review_enabled": True,
+                "deep_subtitle_policy_enabled": True,
+                "deep_segment_setting_policy_enabled": True,
+                "deep_stt_candidate_selector_enabled": True,
+                "deep_timing_adjustment_enabled": True,
                 "subtitle_lora_quality_buckets": ["high", "medium"],
                 "runtime_scheduler_ramp_up_enabled": True,
                 "runtime_scheduler_ramp_initial_sec": 45.0,
                 "runtime_scheduler_ramp_step_sec": 60.0,
             }
         )
-        if not explicit_subtitle_llm:
-            out["selected_model"] = "사용 안함 (Whisper 단독 진행)"
-            out["selected_llm_provider"] = "none"
+        _disable_subtitle_llm_settings(
+            out,
+            mode=mode,
+            configured_model=base_model,
+            configured_provider=base_provider,
+            preserve_configured_model=base_explicit_model,
+        )
+
+    out["subtitle_tool_stack"] = _tool_stack_for_mode(mode)
+    out["subtitle_tool_stack_label"] = out["subtitle_tool_stack"]["label"]
+    out["subtitle_tool_stack_tools"] = list(out["subtitle_tool_stack"]["tools"])
 
     policy = resolve_mode_policy(out)
     out["mode_policy_snapshot"] = {
@@ -657,6 +766,8 @@ __all__ = [
     "MODE_LABELS",
     "MODE_ORDER",
     "MODE_POLICY_SCHEMA",
+    "MODE_TOOL_STACK_SCHEMA",
+    "MODE_TOOL_STACKS",
     "MODE_PREFLIGHT_SCHEMA",
     "MODE_TO_STT_QUALITY",
     "apply_mode_runtime_settings",

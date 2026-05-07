@@ -11,6 +11,14 @@ import os
 import traceback
 
 
+def _positive_int(value, default=0):
+    try:
+        parsed = int(float(value))
+    except Exception:
+        return default
+    return parsed if parsed > 0 else default
+
+
 def _write_json_line(obj):
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
     sys.stdout.flush()
@@ -72,7 +80,12 @@ def main():
 
     loaded_model = model_path
     try:
-        whisper = WhisperModel(model_path, device=device, compute_type=compute)
+        native_threads = _positive_int(os.environ.get("AI_SUBTITLE_NATIVE_THREADS"), 0)
+        model_kwargs = {}
+        if native_threads:
+            model_kwargs["cpu_threads"] = native_threads
+            model_kwargs["num_workers"] = max(1, min(4, native_threads // 2))
+        whisper = WhisperModel(model_path, device=device, compute_type=compute, **model_kwargs)
         sys.stderr.write("  [FW] model load complete\n")
         sys.stderr.flush()
     except Exception as e:
@@ -81,7 +94,7 @@ def main():
             sys.stderr.write(f"  [FW] model load failed, fallback={fallback_model}\n")
             sys.stderr.flush()
             try:
-                whisper = WhisperModel(fallback_model, device=device, compute_type=compute)
+                whisper = WhisperModel(fallback_model, device=device, compute_type=compute, **model_kwargs)
                 loaded_model = fallback_model
                 sys.stderr.write("  [FW] fallback model load complete\n")
                 sys.stderr.flush()

@@ -1,6 +1,6 @@
 <!--
-Document-Version: 03.23.01
-Phase: RUNTIME_EDITOR_STABILITY_RELEASED
+Document-Version: 03.24.00
+Phase: REFACTOR_QUALITY_RELEASED
 Last-Updated: 2026-05-07
 Updated-By: Codex
 Purpose: Agent bootstrap and handoff rules only.
@@ -61,15 +61,15 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 ## Current Continuation Facts
 
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- Current app version in code: `03.23.01`
-- Current handoff document version: `03.23.01`
-- Latest release checkpoint: `v03.23.01`
-- Current phase: `RUNTIME_EDITOR_STABILITY_RELEASED`
+- Current app version in code: `03.24.00`
+- Current handoff document version: `03.24.00`
+- Latest release checkpoint: `v03.24.00`
+- Current phase: `REFACTOR_QUALITY_RELEASED`
 - Next planned phase: none.
 - Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping Fast mode responsive and safe from obvious hallucinations.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
 - Cross-platform rule: macOS and Windows must remain supported, including Korean paths, spaces, backslashes, subprocess handling, ffmpeg/ffprobe, faster-whisper workers, and PyQt6 runtime behavior.
-- Release state: Fast, Auto, and High are now the single user-facing Mode controls. Legacy `balanced`, `normal`, `보통`, and `균형` settings map to Auto; legacy `fast` and `precise` settings are preserved as Fast and High when no explicit `subtitle_mode` exists.
+- Release state: Fast, Auto, and High are now the single user-facing Mode controls. Fast runs LoRA-only subtitle post-processing, Auto runs LoRA + Deep, and High runs LoRA + Deep + chunked LLM. Legacy `balanced`, `normal`, `보통`, and `균형` settings map to Auto; legacy `fast` and `precise` settings are preserved as Fast and High when no explicit `subtitle_mode` exists.
 - Completion state: subtitle generation, editor save, quality review, and cleanup paths clear foreground busy UI before deferred learning starts; editor-save truth/text LoRA work is queued for Home-idle processing.
 - Editor layout state: the editor text pane, video preview, and timeline are mounted inside stable render frames so Start/status changes do not resize the major editor surfaces.
 - Fast quality state: Fast mode stays lightweight but selectively rechecks low-score STT1 spans with the secondary STT model when configured, preserving minimum quality without rerunning the full High stack.
@@ -78,8 +78,9 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Dashboard runtime state: automatic audio-filter and VAD choices selected for the current file are surfaced in the sidebar pipeline dashboard with an auto marker and tooltip context.
 - GPU state: GPU rendering can be selected by frame or for the whole editor through settings while OpenGL widgets and global Qt OpenGL remain conservative opt-ins.
 - Idle learning state: automatic LoRA/personalization learning starts only after Home has been idle for five minutes, ramps from Lite to Heavy, and mouse/key input requests a quick stop. The app indicator blinks blue while learning is active.
+- Refactor state: `core.engine.subtitle_macro_chunks` owns 10-15 subtitle LLM macro chunk grouping and execution; `subtitle_engine.py` keeps orchestration and final timing/gap passes.
 - Dashboard state: the sidebar engine dashboard shows ten stages: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
-- Verification state: full test suite and static checks passed for this release: `931 passed, 1 warning, 2 subtests passed`.
+- Verification state: full test suite and static checks passed for this release: `943 passed, 1 warning, 2 subtests passed`.
 
 ## Collaboration Rules
 

@@ -18,12 +18,19 @@ os.environ.setdefault(
 os.environ.setdefault("AV_LOG_LEVEL", "16")
 
 from core.runtime import config
-from core.performance import configure_qt_gpu_rendering_before_app, configure_qt_runtime
+from core.performance import configure_native_runtime, configure_qt_gpu_rendering_before_app, configure_qt_runtime
 from core.platform_compat import (
     cleanup_app_child_processes,
     cleanup_app_runtime_processes,
     cleanup_stale_preview_proxy_processes,
 )
+
+try:
+    from core.settings import load_settings as _load_runtime_settings
+
+    _NATIVE_RUNTIME_META = configure_native_runtime(_load_runtime_settings())
+except Exception:
+    _NATIVE_RUNTIME_META = configure_native_runtime()
 
 configure_qt_gpu_rendering_before_app()
 
@@ -61,6 +68,12 @@ def main():
     app = QApplication(sys.argv)
     configure_qt_runtime()
     cleaned_preview_jobs = cleanup_stale_preview_proxy_processes(timeout_sec=0.2)
+    try:
+        profile = _NATIVE_RUNTIME_META.get("profile", "balanced")
+        threads = _NATIVE_RUNTIME_META.get("native_threads", "-")
+        get_logger().log(f"⚙️ 네이티브 런타임 프로필: {profile}, threads={threads}")
+    except Exception:
+        pass
 
     app.setStyleSheet(f"""
         QWidget {{

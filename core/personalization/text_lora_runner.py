@@ -254,6 +254,7 @@ def build_text_lora_training_plan(
             "usable_text_rows": len(usable_rows),
             "source_breakdown": dict(sorted(sources.items())),
             "speaker_breakdown": dict(sorted(speakers.items())),
+            "pattern_first_storage": True,
         },
         "hyperparams": {
             "epochs": int(epochs),
@@ -278,7 +279,7 @@ def build_text_lora_training_plan(
             "mac first subtitle QA text LoRA training scaffold",
             "uses accumulated STT candidate -> final subtitle corpus",
             "preserves spoken style while learning conservative subtitle review corrections",
-            "voice LoRA remains separate but shares frame/speaker bridge",
+            "runtime personalization now prefers compact subtitle pattern indexes before text LoRA",
         ],
     }
     return plan

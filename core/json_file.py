@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import tempfile
 import threading
 import time
 from typing import Any
+
+from core.native_json import dumps_json_bytes, loads_json
 
 
 _JSON_FILE_LOCK = threading.RLock()
@@ -45,8 +46,8 @@ def read_json_file(
 ) -> Any:
     path = str(path or "")
     try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
+        with open(path, "rb") as handle:
+            data = loads_json(handle.read())
         if _matches_type(data, expected_type):
             return data
         if log_errors:
@@ -61,8 +62,8 @@ def read_json_file(
     if restore_backup:
         backup = _backup_path(path)
         try:
-            with open(backup, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
+            with open(backup, "rb") as handle:
+                data = loads_json(handle.read())
             if _matches_type(data, expected_type):
                 write_json_file_atomic(path, data, backup=False)
                 if log_errors:
@@ -86,10 +87,9 @@ def write_json_file_atomic(path: str, data: Any, *, indent: int | None = 2, back
     tmp_path = ""
     with _JSON_FILE_LOCK:
         try:
-            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=directory, prefix=".tmp-", suffix=".json", delete=False) as handle:
+            with tempfile.NamedTemporaryFile("wb", dir=directory, prefix=".tmp-", suffix=".json", delete=False) as handle:
                 tmp_path = handle.name
-                json.dump(data, handle, ensure_ascii=False, indent=indent)
-                handle.write("\n")
+                handle.write(dumps_json_bytes(data, indent=indent, append_newline=True))
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp_path, path)

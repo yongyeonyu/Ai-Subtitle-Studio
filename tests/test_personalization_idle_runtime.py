@@ -162,12 +162,11 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
 
             first_payload = enqueue_full_training_jobs(store_dir=tmpdir)
             first_items = list(first_payload.get("items") or [])
-            self.assertEqual(len(first_items), 9)
+            self.assertEqual(len(first_items), 8)
             self.assertIn("build_retrieval_index", {str(item.get("job_type") or "") for item in first_items})
-            voice_job = next(item for item in first_items if str(item.get("job_type") or "") == "build_voice_profiles")
-            self.assertTrue((voice_job.get("payload") or {}).get("extract_audio"))
-            stt1_job = next(item for item in first_items if str(item.get("job_type") or "") == "build_stt1_whisper_adapter")
-            self.assertTrue((stt1_job.get("payload") or {}).get("extract_audio"))
+            self.assertIn("build_subtitle_pattern_index", {str(item.get("job_type") or "") for item in first_items})
+            self.assertNotIn("build_voice_profiles", {str(item.get("job_type") or "") for item in first_items})
+            self.assertNotIn("build_stt1_whisper_adapter", {str(item.get("job_type") or "") for item in first_items})
 
             first_items[0]["status"] = "complete"
             first_items[0]["progress"] = 1.0
@@ -421,9 +420,8 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             self.assertEqual(queue_items[0]["payload"]["checkpoint"]["stage"], "completed")
             self.assertIn("checkpoint_history", queue_items[0]["payload"])
             self.assertTrue(paths["text_lora_training_plan"].exists())
-            self.assertTrue(paths["voice_lora_profile_manifest"].exists())
-            self.assertTrue(paths["stt1_whisper_adapter_training_plan"].exists())
-            self.assertTrue(paths["stt1_whisper_adapter_runtime_manifest"].exists())
+            self.assertTrue(paths["subtitle_pattern_index"].exists())
+            self.assertGreater(json.loads(paths["subtitle_pattern_index"].read_text(encoding="utf-8"))["pattern_count"], 0)
             self.assertTrue(paths["learned_split_rules"].exists())
             self.assertGreater(len(paths["setting_trials"].read_text(encoding="utf-8").strip().splitlines()), 0)
             self.assertGreater(len(paths["prompt_trials"].read_text(encoding="utf-8").strip().splitlines()), 0)

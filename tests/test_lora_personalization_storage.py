@@ -19,7 +19,13 @@ from core.personalization.llm_review_exchange import (
     import_llm_review_result,
 )
 from core.personalization.lora_retention import prune_low_value_personalization_data
-from core.personalization.lora_quality_buckets import LORA_ALL_BUCKETS, LORA_BUCKET_FILENAMES
+from core.personalization.lora_quality_buckets import (
+    LORA_ALL_BUCKETS,
+    LORA_BUCKET_FILENAMES,
+    LORA_BUCKET_HIGH,
+    LORA_BUCKET_LOW,
+    LORA_BUCKET_MEDIUM,
+)
 from core.personalization.lora_storage import (
     append_excluded_parentheticals,
     append_deep_policy_events,
@@ -83,8 +89,7 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertEqual(visible_root_files, set(LORA_BUCKET_FILENAMES.values()))
             with zipfile.ZipFile(paths["unified_lora_data"], "r") as archive:
                 for info in archive.infolist():
-                    self.assertEqual(info.compress_type, zipfile.ZIP_STORED)
-                    self.assertEqual(info.compress_size, info.file_size)
+                    self.assertEqual(info.compress_type, zipfile.ZIP_DEFLATED)
             self.assertIn("llm_review_request", paths)
             self.assertIn("llm_review_result", paths)
             self.assertEqual(manifest["counts"]["truth_table_rows"], 0)
@@ -540,6 +545,12 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             ]
             self.assertEqual(len(remaining_trials), 4)
             self.assertNotIn(25.0, [float(row.get("score", 0.0) or 0.0) for row in remaining_trials])
+            self.assertEqual([float(row.get("score", 0.0) or 0.0) for row in remaining_trials], [92.0, 88.0, 70.0, 55.0])
+            self.assertEqual(
+                [row.get("lora_quality_bucket") for row in remaining_trials],
+                [LORA_BUCKET_HIGH, LORA_BUCKET_HIGH, LORA_BUCKET_MEDIUM, LORA_BUCKET_LOW],
+            )
+            self.assertTrue(all("lora_value_score" in row for row in remaining_trials))
             remaining_rules = load_learned_rules("split", tmpdir)["items"]
             self.assertEqual(len(remaining_rules), 2)
             self.assertNotIn("약한 규칙", [row.get("rule_text") for row in remaining_rules])
@@ -556,7 +567,7 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
                 subtitle_path="/tmp/small.srt",
                 config={"candidate": "small"},
                 status="complete",
-                score=12.0,
+                score=55.0,
             ).to_record()
             append_setting_trials([trial], tmpdir)
 
@@ -572,6 +583,34 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertEqual(len(lines), 1)
             manifest = refresh_lora_personalization_manifest(tmpdir)
             self.assertEqual(manifest["counts"]["retention_history_rows"], 0)
+
+    def test_retention_auto_deletes_pending_value_rows_even_when_small(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            trial = TrialRecord(
+                trial_type="setting",
+                media_id="pending-small-media",
+                media_path="/tmp/pending-small.mp4",
+                subtitle_path="/tmp/pending-small.srt",
+                config={"candidate": "pending-small"},
+                status="complete",
+                score=12.0,
+            ).to_record()
+            append_setting_trials([trial], tmpdir)
+
+            result = prune_low_value_personalization_data(
+                store_dir=tmpdir,
+                trigger="training_job:optimize_settings",
+                appended_counts={"setting_trials": 1},
+            )
+
+            self.assertEqual(result["removed"]["setting_trials"], 1)
+            self.assertEqual(result["total_removed"], 1)
+            paths = store_paths(tmpdir)
+            rows = [line for line in paths["setting_trials"].read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(rows, [])
+            manifest = refresh_lora_personalization_manifest(tmpdir)
+            self.assertEqual(manifest["counts"]["retention_history_rows"], 1)
 
     def test_unified_lora_bundle_can_be_forced_and_tracks_record_counts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -626,11 +665,10 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
                 names = set(archive.namelist())
                 self.assertIn("manifest.json", names)
                 manifest_payload = json.loads(archive.read("manifest.json").decode("utf-8"))
-                self.assertEqual(manifest_payload["compression"], "stored_no_compression")
-                self.assertEqual(manifest_payload["compression_level"], 0)
+                self.assertEqual(manifest_payload["compression"], "deflated_compact_patterns")
+                self.assertEqual(manifest_payload["compression_level"], 6)
                 for info in archive.infolist():
-                    self.assertEqual(info.compress_type, zipfile.ZIP_STORED)
-                    self.assertEqual(info.compress_size, info.file_size)
+                    self.assertEqual(info.compress_type, zipfile.ZIP_DEFLATED)
             self.assertEqual(result["record_count"], 2)
             payload = load_unified_lora_data_bundle(result["path"])
             self.assertEqual(payload["records"][0]["kind"], "prompt_trials")
@@ -638,8 +676,8 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             self.assertEqual(payload["storage_mode"], "quality_bucketed_zip_bundle")
             self.assertIn(payload["bundle_role"], {"quality_bucket_user_managed_lora_learning_file", "merged_user_managed_lora_learning_files"})
             self.assertEqual(payload["archive_format"], "zip")
-            self.assertEqual(payload["archive_compression"], "stored_no_compression")
-            self.assertEqual(payload["archive_compression_level"], 0)
+            self.assertEqual(payload["archive_compression"], "deflated_compact_patterns")
+            self.assertEqual(payload["archive_compression_level"], 6)
             self.assertEqual(payload["sections"]["text_lora_corpus"][0]["output"], "안녕하세요")
             self.assertEqual(payload["sections"]["text_lora_corpus_manifest"]["stats"]["total_items"], 1)
 
@@ -658,7 +696,7 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
                         status="complete",
                         score=score,
                     ).to_record()
-                    for label, score in (("high", 92.0), ("medium", 70.0), ("low", 42.0), ("pending", 12.0))
+                    for label, score in (("high", 92.0), ("high2", 88.0), ("medium", 70.0), ("low", 42.0), ("pending", 12.0))
                 ],
                 tmpdir,
             )
@@ -666,11 +704,14 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             result = refresh_unified_lora_data_bundle(tmpdir, force=True)
             self.assertEqual(set(result["bucket_files"]), set(LORA_ALL_BUCKETS))
 
-            def candidates(path_key: str) -> set[str]:
+            def candidate_list(path_key: str) -> list[str]:
                 payload = self._read_lora_zip_payload(paths[path_key])
-                return {str((row.get("config") or {}).get("candidate")) for row in payload["sections"]["setting_trials"]}
+                return [str((row.get("config") or {}).get("candidate")) for row in payload["sections"]["setting_trials"]]
 
-            self.assertEqual(candidates("lora_data_high"), {"high"})
+            def candidates(path_key: str) -> set[str]:
+                return set(candidate_list(path_key))
+
+            self.assertEqual(candidate_list("lora_data_high"), ["high", "high2"])
             self.assertEqual(candidates("lora_data_medium"), {"medium"})
             self.assertEqual(candidates("lora_data_low"), {"low"})
             self.assertEqual(candidates("lora_data_pending_delete"), {"pending"})

@@ -184,6 +184,60 @@ def _candidate_context(seg: dict[str, Any], selected_source: str) -> dict[str, A
     }
 
 
+def _compact_candidate_context(context: dict[str, Any]) -> dict[str, Any]:
+    rows = []
+    for item in list(context.get("candidates") or []):
+        if not isinstance(item, dict):
+            continue
+        text = _normalize_text(item.get("text") or item.get("raw_text"))
+        rows.append(
+            {
+                "source": str(item.get("source") or ""),
+                "char_count": len(text.replace(" ", "").replace("\n", "")),
+                "text_hash": stable_hash({"text": text})[:16] if text else "",
+                "confidence": _json_safe(item.get("confidence")),
+                "score": _json_safe(item.get("score")),
+                "avg_logprob": _json_safe(item.get("avg_logprob")),
+                "no_speech_prob": _json_safe(item.get("no_speech_prob")),
+                "compression_ratio": _json_safe(item.get("compression_ratio")),
+            }
+        )
+    return {
+        "selected_source": str(context.get("selected_source") or ""),
+        "selected_index": int(context.get("selected_index", -1) or -1),
+        "candidate_count": int(context.get("candidate_count", len(rows)) or 0),
+        "candidate_sources": list(context.get("candidate_sources") or []),
+        "candidate_disagreement_ratio": context.get("candidate_disagreement_ratio"),
+        "candidates": rows,
+    }
+
+
+def _pattern_features_for_segment(
+    *,
+    output: str,
+    duration_sec: float,
+    previous_end_sec: float | None,
+    next_start_sec: float | None,
+    start_sec: float,
+    end_sec: float,
+    style_profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    style = dict(style_profile or {})
+    line = dict(style.get("line_break") or {})
+    chars = len(str(output or "").replace(" ", "").replace("\n", ""))
+    previous_gap = round(max(0.0, start_sec - previous_end_sec), 3) if previous_end_sec is not None else None
+    next_gap = round(max(0.0, next_start_sec - end_sec), 3) if next_start_sec is not None else None
+    return {
+        "char_count": chars,
+        "duration_sec": round(max(0.0, duration_sec), 3),
+        "cps": round(chars / duration_sec, 3) if chars and duration_sec > 0 else 0.0,
+        "line_count": int(line.get("line_count", 0) or max(1, len([line for line in str(output or "").splitlines() if line.strip()]))),
+        "line_break_pattern": str(line.get("pattern") or ""),
+        "previous_gap_sec": previous_gap,
+        "next_gap_sec": next_gap,
+    }
+
+
 def _extract_known_context_fields(seg: dict[str, Any]) -> dict[str, Any]:
     context: dict[str, Any] = {}
     for key in (
@@ -267,6 +321,8 @@ def _segment_rows_for_lora(
     project_path: str = "",
     project_name: str = "",
     source_tag: str = "project_segment_pair",
+    voice_lora_bridge_enabled: bool = False,
+    store_full_text: bool = True,
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     voice_rows: list[dict[str, Any]] = []
@@ -289,7 +345,7 @@ def _segment_rows_for_lora(
         accepted, reason, delta = _project_pair_quality(input_text, output)
         start_frame, end_frame, fps = _segment_frame_bounds(seg)
         candidate_context = _candidate_context(seg, selected_source)
-        speaker = str(seg.get("speaker", seg.get("spk", "")) or "")
+        speaker = str(seg.get("speaker", seg.get("spk", "")) or "") if voice_lora_bridge_enabled else ""
         clip_path = str(seg.get("_clip_file", seg.get("clip_file", "")) or "")
         clip_idx = seg.get("_clip_idx", seg.get("clip_idx"))
         start_sec = float(seg.get("start", 0.0) or 0.0)
@@ -310,6 +366,15 @@ def _segment_rows_for_lora(
             next_start_sec=next_start_sec,
         )
         style_terms = subtitle_style_search_terms(style_profile)
+        pattern_features = _pattern_features_for_segment(
+            output=output,
+            duration_sec=duration_sec,
+            previous_end_sec=previous_end_sec,
+            next_start_sec=next_start_sec,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            style_profile=style_profile,
+        )
         selected_index = int(candidate_context.get("selected_index", -1) or -1)
         candidate_rows = list(candidate_context.get("candidates") or [])
         selected_raw_input = ""
@@ -331,34 +396,38 @@ def _segment_rows_for_lora(
                 },
             },
         )
-        voice_rows.append(
-            {
-                "schema": "ai_subtitle_studio.voice_lora_bridge.v1",
-                "task": "voice_text_alignment_seed",
-                "source": source_tag,
-                "project_path": project_path,
-                "project_name": project_name,
-                "segment_index": index,
-                "text": output,
-                "speaker": speaker,
-                "clip_path": clip_path,
-                "clip_idx": clip_idx,
-                "start_sec": round(start_sec, 3),
-                "end_sec": round(end_sec, 3),
-                "duration_sec": round(duration_sec, 3),
-                "start_frame": start_frame,
-                "end_frame": end_frame,
-                "fps": fps,
-                "duration_frames": max(0, end_frame - start_frame),
-                "selected_source": selected_source,
-                "input_text": input_text,
-                "candidate_context": candidate_context,
-                "generation_context": generation_context,
-                "context_classification": context_classification,
-                "style_profile": _json_safe(style_profile),
-                "style_search_terms": style_terms,
-            }
-        )
+        if voice_lora_bridge_enabled:
+            voice_rows.append(
+                {
+                    "schema": "ai_subtitle_studio.voice_lora_bridge.v1",
+                    "task": "voice_text_alignment_seed",
+                    "source": source_tag,
+                    "project_path": project_path,
+                    "project_name": project_name,
+                    "segment_index": index,
+                    "text": output if store_full_text else "",
+                    "text_hash": stable_hash({"text": output})[:16],
+                    "speaker": speaker,
+                    "clip_path": clip_path,
+                    "clip_idx": clip_idx,
+                    "start_sec": round(start_sec, 3),
+                    "end_sec": round(end_sec, 3),
+                    "duration_sec": round(duration_sec, 3),
+                    "start_frame": start_frame,
+                    "end_frame": end_frame,
+                    "fps": fps,
+                    "duration_frames": max(0, end_frame - start_frame),
+                    "selected_source": selected_source,
+                    "input_text": input_text if store_full_text else "",
+                    "input_text_hash": stable_hash({"text": input_text})[:16],
+                    "candidate_context": candidate_context if store_full_text else _compact_candidate_context(candidate_context),
+                    "generation_context": generation_context,
+                    "context_classification": context_classification,
+                    "style_profile": _json_safe(style_profile),
+                    "style_search_terms": style_terms,
+                    "pattern_features": pattern_features,
+                }
+            )
         context_row = {
             "schema": "ai_subtitle_studio.multimodal_lora_context.v1",
             "task": "editor_segment_generation_context",
@@ -375,20 +444,23 @@ def _segment_rows_for_lora(
             "start_frame": start_frame,
             "end_frame": end_frame,
             "fps": fps,
-            "input_text": input_text,
-            "final_subtitle_text": output,
+            "input_text": input_text if store_full_text else "",
+            "final_subtitle_text": output if store_full_text else "",
+            "input_text_hash": stable_hash({"text": input_text})[:16],
+            "final_subtitle_text_hash": stable_hash({"text": output})[:16],
             "delta_ratio": round(float(delta), 4),
             "accepted_for_text_lora": bool(accepted),
             "filter_reason": reason,
-            "candidate_context": candidate_context,
+            "candidate_context": candidate_context if store_full_text else _compact_candidate_context(candidate_context),
             "generation_context": generation_context,
             "context_classification": context_classification,
             "subtitle_style_profile": _json_safe(style_profile),
             "style_search_terms": style_terms,
+            "pattern_features": pattern_features,
             "excluded_parenthetical_policy": {
                 "remove_from_learning_text": ["()", "[]", "{}"],
-                "input_raw": selected_raw_input,
-                "output_raw": raw_output,
+                "input_raw": selected_raw_input if store_full_text else "",
+                "output_raw": raw_output if store_full_text else "",
             },
         }
         context_row["signature"] = _segment_context_signature(
@@ -407,6 +479,8 @@ def _segment_rows_for_lora(
         context_rows.append(context_row)
         if not accepted:
             filtered[reason] = int(filtered.get(reason, 0) or 0) + 1
+            continue
+        if not store_full_text:
             continue
         rows.append(
             {
@@ -450,6 +524,8 @@ def load_project_segment_pairs(
     project_payloads: list[dict[str, Any]] | None = None,
     current_segments: list[dict[str, Any]] | None = None,
     current_project_path: str = "",
+    voice_lora_bridge_enabled: bool = False,
+    store_full_text: bool = True,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     voice_items: list[dict[str, Any]] = []
@@ -463,6 +539,8 @@ def load_project_segment_pairs(
             project_path=current_project_path,
             project_name=Path(current_project_path).name if current_project_path else "current_editor",
             source_tag="current_editor_segment_pair",
+            voice_lora_bridge_enabled=voice_lora_bridge_enabled,
+            store_full_text=store_full_text,
         )
         items.extend(result["rows"])
         voice_items.extend(result.get("voice_rows") or [])
@@ -480,6 +558,8 @@ def load_project_segment_pairs(
             project_path=str(payload.get("_project_path", "") or ""),
             project_name=str(payload.get("project_name", "") or ""),
             source_tag="project_segment_pair",
+            voice_lora_bridge_enabled=voice_lora_bridge_enabled,
+            store_full_text=store_full_text,
         )
         items.extend(result["rows"])
         voice_items.extend(result.get("voice_rows") or [])
@@ -505,6 +585,8 @@ def load_project_segment_pairs(
             project_path=str(path),
             project_name=str(payload.get("project_name", "") or path.stem),
             source_tag="project_segment_pair",
+            voice_lora_bridge_enabled=voice_lora_bridge_enabled,
+            store_full_text=store_full_text,
         )
         items.extend(result["rows"])
         voice_items.extend(result.get("voice_rows") or [])
@@ -550,6 +632,8 @@ def build_text_lora_dataset(
     project_payloads: list[dict[str, Any]] | None = None,
     current_segments: list[dict[str, Any]] | None = None,
     current_project_path: str = "",
+    voice_lora_bridge_enabled: bool = False,
+    store_full_text: bool = True,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
@@ -649,6 +733,8 @@ def build_text_lora_dataset(
         project_payloads=project_payloads,
         current_segments=current_segments,
         current_project_path=current_project_path,
+        voice_lora_bridge_enabled=voice_lora_bridge_enabled,
+        store_full_text=store_full_text,
     )
     stats["project_files_scanned"] = int(project_pairs.get("files_scanned", 0) or 0)
     project_filtered = dict(project_pairs.get("filtered") or {})
@@ -704,6 +790,8 @@ def export_text_lora_dataset(
     project_payloads: list[dict[str, Any]] | None = None,
     current_segments: list[dict[str, Any]] | None = None,
     current_project_path: str = "",
+    voice_lora_bridge_enabled: bool = False,
+    store_full_text: bool = True,
 ) -> dict[str, Any]:
     payload = build_text_lora_dataset(
         corrections_path=corrections_path,
@@ -714,6 +802,8 @@ def export_text_lora_dataset(
         project_payloads=project_payloads,
         current_segments=current_segments,
         current_project_path=current_project_path,
+        voice_lora_bridge_enabled=voice_lora_bridge_enabled,
+        store_full_text=store_full_text,
     )
     dataset_target = Path(dataset_path) if dataset_path else TEXT_LORA_DATASET_PATH
     manifest_target = Path(manifest_path) if manifest_path else TEXT_LORA_MANIFEST_PATH
@@ -801,6 +891,7 @@ def _enqueue_auto_maintenance_jobs(
     voice_bridge_rows: int,
     multimodal_context_rows: int,
     store_dir: str | Path | None = None,
+    voice_lora_bridge_enabled: bool = False,
 ) -> dict[str, Any]:
     changed_rows = int(appended_rows or 0) + int(voice_bridge_rows or 0) + int(multimodal_context_rows or 0)
     if changed_rows <= 0:
@@ -845,16 +936,19 @@ def _enqueue_auto_maintenance_jobs(
             priority=25,
             payload=payload,
         ).to_record(),
-        TrainingQueueItem(
-            media_id="global",
-            media_path="",
-            subtitle_path="",
-            job_type="build_voice_profiles",
-            job_id=f"auto-voice-{batch_id}",
-            priority=35,
-            payload=payload,
-        ).to_record(),
     ]
+    if voice_lora_bridge_enabled and int(voice_bridge_total_rows or 0) > 0:
+        jobs.append(
+            TrainingQueueItem(
+                media_id="global",
+                media_path="",
+                subtitle_path="",
+                job_type="build_voice_profiles",
+                job_id=f"auto-voice-{batch_id}",
+                priority=35,
+                payload=payload,
+            ).to_record()
+        )
     result = upsert_training_queue_items(jobs, store_dir or _personalization_store_dir())
     return {"queued": True, "batch_id": batch_id, "items": len(list(result.get("items") or []))}
 
@@ -866,11 +960,15 @@ def accumulate_personalization_dataset(
     trigger: str = "manual",
     refresh_bundle: bool = True,
     store_dir: str | Path | None = None,
+    voice_lora_bridge_enabled: bool = False,
+    store_full_text: bool = True,
 ) -> dict[str, Any]:
     payload = build_text_lora_dataset(
         project_paths=[],
         current_segments=current_segments,
         current_project_path=current_project_path,
+        voice_lora_bridge_enabled=voice_lora_bridge_enabled,
+        store_full_text=store_full_text,
     )
     path_map = store_paths(store_dir) if store_dir else {}
     corpus_path = path_map.get("text_lora_corpus", TEXT_LORA_CORPUS_PATH)
@@ -946,10 +1044,10 @@ def accumulate_personalization_dataset(
         "notes": [
             "텍스트 LoRA 실사용 코퍼스 자동 누적",
             "목표: STT 후보를 최종 자막으로 검수하는 subtitle QA 교정 LoRA",
-            "원문 발화/구어체/고유명사를 보존하고 띄어쓰기·명백한 오탈자·최소 문장부호만 학습",
-            "생성 결과 STT 선택본 -> 최종 자막 pair 저장",
+            "패턴 전용 모드에서는 원문 텍스트 대신 hash/길이/CPS/타이밍 패턴을 저장",
+            "생성 결과 STT 선택본 -> 최종 자막 pair 또는 compact pattern 저장",
             "() / [] / {} 안의 사용자 설명 자막 제외",
-            "추후 음성 LoRA 연결용 frame/text/speaker bridge 포함",
+            "음성 화자 bridge는 voice_lora_bridge_enabled가 켜진 경우에만 생성",
             "STT 후보/품질/오디오/VAD/타이밍 context는 multimodal_lora_context에 함께 누적",
             "줄바꿈/말투/괄호 제거/문장부호/물결/브랜드 표기/타이밍 여백 style_profile 포함",
         ],
@@ -969,6 +1067,7 @@ def accumulate_personalization_dataset(
         voice_bridge_rows=voice_appended,
         multimodal_context_rows=context_appended,
         store_dir=store_dir,
+        voice_lora_bridge_enabled=voice_lora_bridge_enabled,
     )
     return {
         "corpus_path": str(corpus_path),

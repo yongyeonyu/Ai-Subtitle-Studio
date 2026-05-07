@@ -6,12 +6,12 @@ ffprobe 기반 미디어 정보 조회 유틸 + metadata cache
 """
 from __future__ import annotations
 
-import json
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from core.media_fingerprint import media_fingerprint_digest
+from core.native_json import loads_json, read_json_path
 from core.performance import atomic_write_json, ffprobe_worker_count, media_probe_cache_dir
 from core.platform_compat import ffprobe_binary, hidden_subprocess_kwargs
 
@@ -44,7 +44,7 @@ def _read_cache(cache_key: str, cache_path: Path) -> dict | None:
     if cached is not None:
         return _copy_result(cached)
     try:
-        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        payload = read_json_path(cache_path)
     except Exception:
         return None
     if payload.get("schema") != _CACHE_SCHEMA or payload.get("key") != cache_key:
@@ -87,7 +87,7 @@ def probe_media(filepath: str, *, use_cache: bool = True) -> dict:
             text=True, encoding="utf-8", errors="replace", timeout=5,
             **hidden_subprocess_kwargs(),
         )
-        probe = json.loads(proc.stdout)
+        probe = loads_json(proc.stdout or "{}")
         fmt = probe.get("format", {})
         duration = float(fmt.get("duration", 0)) if fmt.get("duration") else 0.0
         streams = probe.get("streams", [])

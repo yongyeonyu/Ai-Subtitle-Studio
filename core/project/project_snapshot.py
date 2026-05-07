@@ -13,6 +13,7 @@ from typing import Any
 from core.runtime import config
 from core.frame_time import normalize_fps, sec_to_frame
 from core.project.project_context import STT_SEGMENT_METADATA_KEYS, build_editor_state, project_stt_preview_segments
+from core.project.project_assets import externalize_project_text_assets, hydrate_project_text_asset_cache
 from core.project.subtitle_status import subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
 
@@ -253,6 +254,12 @@ def build_project_payload(owner, segments: list[dict[str, Any]] | None = None, s
         }
     payload['roughcut_state'] = existing_project.get('roughcut_state', {}) if isinstance(existing_project, dict) else {}
     payload.setdefault('roughcut_state', {})
+    externalize_project_text_assets(
+        project_path,
+        payload,
+        final_segments=segments or [],
+        stt_tracks=stt_tracks if isinstance(stt_tracks, dict) else {},
+    )
     return payload
 
 
@@ -266,4 +273,4 @@ def save_project_snapshot(owner, segments: list[dict[str, Any]] | None = None, s
 
 
 def load_project_snapshot(project_path: str) -> dict[str, Any]:
-    return read_project_file(project_path)
+    return hydrate_project_text_asset_cache(read_project_file(project_path)) or {}

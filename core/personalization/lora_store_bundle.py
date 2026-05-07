@@ -15,6 +15,7 @@ from core.personalization.lora_quality_buckets import (
     LORA_BUCKET_LABELS,
     LORA_BUCKET_PENDING_DELETE,
     lora_bucket_for_row,
+    ranked_lora_rows,
 )
 from core.personalization.lora_store_common import (
     BUNDLE_JSON_SECTION_KEYS,
@@ -40,8 +41,8 @@ from core.personalization.lora_store_common import (
 )
 
 
-LORA_ARCHIVE_COMPRESSION_NAME = "stored_no_compression"
-LORA_ARCHIVE_COMPRESSION_LEVEL = 0
+LORA_ARCHIVE_COMPRESSION_NAME = "deflated_compact_patterns"
+LORA_ARCHIVE_COMPRESSION_LEVEL = 6
 _LORA_BUCKET_PATH_KEYS = {
     "high": "lora_data_high",
     "medium": "lora_data_medium",
@@ -255,7 +256,12 @@ def _write_unified_lora_archive(
     }
     tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_STORED) as archive:
+        with zipfile.ZipFile(
+            tmp_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=LORA_ARCHIVE_COMPRESSION_LEVEL,
+        ) as archive:
             archive.writestr(UNIFIED_LORA_ARCHIVE_MANIFEST_NAME, json.dumps(metadata, ensure_ascii=False, indent=2))
             archive.writestr(UNIFIED_LORA_ARCHIVE_PAYLOAD_NAME, json.dumps(payload, ensure_ascii=False, indent=2))
             for item in attachment_files:
@@ -363,7 +369,7 @@ def _merge_unified_lora_payloads(payloads: list[dict[str, Any]]) -> dict[str, An
         for payload in valid_payloads:
             section_rows = ((payload.get("sections") or {}).get(key) or [])
             rows.extend(dict(row) for row in list(section_rows) if isinstance(row, dict))
-        merged_sections[key] = rows
+        merged_sections[key] = ranked_lora_rows(key, rows)
 
     for key in BUNDLE_JSON_SECTION_KEYS:
         if key in {"learned_split_rules", "learned_line_break_rules"}:
@@ -417,6 +423,7 @@ def _merge_unified_lora_payloads(payloads: list[dict[str, Any]]) -> dict[str, An
         stt1_whisper_adapter_plan=dict(merged_sections.get("stt1_whisper_adapter_training_plan") or {}),
         stt1_whisper_runtime_manifest=dict(merged_sections.get("stt1_whisper_adapter_runtime_manifest") or {}),
         retrieval_index={},
+        subtitle_pattern_index={},
     )
     first = valid_payloads[0]
     return {
@@ -503,11 +510,13 @@ def _bundle_counts_from_rows(
     stt1_whisper_adapter_plan: dict[str, Any] | None = None,
     stt1_whisper_runtime_manifest: dict[str, Any] | None = None,
     retrieval_index: dict[str, Any] | None = None,
+    subtitle_pattern_index: dict[str, Any] | None = None,
 ) -> dict[str, int]:
     voice_training_plan = dict(voice_training_plan or {})
     stt1_whisper_adapter_plan = dict(stt1_whisper_adapter_plan or {})
     stt1_whisper_runtime_manifest = dict(stt1_whisper_runtime_manifest or {})
     retrieval_index = dict(retrieval_index or {})
+    subtitle_pattern_index = dict(subtitle_pattern_index or {})
     return {
         "truth_table_rows": len(truth_rows),
         "excluded_parenthetical_rows": len(excluded_rows),
@@ -529,6 +538,7 @@ def _bundle_counts_from_rows(
         "multimodal_lora_context_rows": len(multimodal_context_rows),
         "deep_policy_event_rows": len(deep_policy_event_rows or []),
         "lora_retrieval_index_docs": int(retrieval_index.get("doc_count", 0) or 0),
+        "subtitle_pattern_index_patterns": int(subtitle_pattern_index.get("pattern_count", 0) or 0),
         "unified_training_records": (
             len(truth_rows)
             + len(excluded_rows)
@@ -563,13 +573,14 @@ def _bundle_counts_from_cache(paths: dict[str, Path]) -> dict[str, int]:
         stt1_whisper_adapter_plan=read_json(paths["stt1_whisper_adapter_training_plan"], {}),
         stt1_whisper_runtime_manifest=read_json(paths["stt1_whisper_adapter_runtime_manifest"], {}),
         retrieval_index=read_json(paths["lora_retrieval_index"], {}),
+        subtitle_pattern_index=read_json(paths["subtitle_pattern_index"], {}),
     )
 
 
 def _filter_rows_for_bucket(kind: str, rows: list[dict[str, Any]], bucket: str | None) -> list[dict[str, Any]]:
     if not bucket:
-        return [dict(row) for row in list(rows or []) if isinstance(row, dict)]
-    return [dict(row) for row in list(rows or []) if isinstance(row, dict) and lora_bucket_for_row(kind, row) == bucket]
+        return ranked_lora_rows(kind, rows)
+    return ranked_lora_rows(kind, rows, bucket=bucket)
 
 
 def _filter_json_section_for_bucket(key: str, payload: dict[str, Any], bucket: str | None) -> dict[str, Any]:
@@ -583,6 +594,8 @@ def _filter_json_section_for_bucket(key: str, payload: dict[str, Any], bucket: s
         return default_best_settings()
     if key == "lora_retrieval_index":
         return {}
+    if key == "subtitle_pattern_index" and bucket != LORA_BUCKET_HIGH:
+        return {}
     return dict(payload or {})
 
 
@@ -595,6 +608,7 @@ def _build_unified_lora_data_bundle(paths: dict[str, Path], *, bucket: str | Non
     stt1_whisper_adapter_plan = read_json(paths["stt1_whisper_adapter_training_plan"], {})
     stt1_whisper_runtime_manifest = read_json(paths["stt1_whisper_adapter_runtime_manifest"], {})
     retrieval_index = {}
+    subtitle_pattern_index = read_json(paths["subtitle_pattern_index"], {}) if bucket == LORA_BUCKET_HIGH else {}
     records = [
         {"kind": kind, "record": row}
         for kind in (
@@ -639,6 +653,7 @@ def _build_unified_lora_data_bundle(paths: dict[str, Path], *, bucket: str | Non
         "text_lora_corpus_manifest": read_json(paths["text_lora_corpus_manifest"], {}),
         "text_lora_training_plan": read_json(paths["text_lora_training_plan"], {}),
         "lora_retrieval_index": retrieval_index,
+        "subtitle_pattern_index": subtitle_pattern_index,
     }
     managed_path = _bucket_archive_path(paths, bucket or LORA_BUCKET_HIGH)
     bucket_label = LORA_BUCKET_LABELS.get(str(bucket or ""), "전체")
@@ -673,6 +688,7 @@ def _build_unified_lora_data_bundle(paths: dict[str, Path], *, bucket: str | Non
             stt1_whisper_adapter_plan=stt1_whisper_adapter_plan,
             stt1_whisper_runtime_manifest=stt1_whisper_runtime_manifest,
             retrieval_index=retrieval_index,
+            subtitle_pattern_index=subtitle_pattern_index,
         ),
         "sections": sections,
         "records": records,
@@ -865,7 +881,7 @@ def delete_pending_lora_data(store_dir: str | Path | None = None) -> dict[str, A
 
     for key in BUNDLE_JSONL_SECTION_KEYS:
         rows = read_jsonl(paths[key])
-        kept = [row for row in rows if lora_bucket_for_row(key, row) != LORA_BUCKET_PENDING_DELETE]
+        kept = ranked_lora_rows(key, [row for row in rows if lora_bucket_for_row(key, row) != LORA_BUCKET_PENDING_DELETE])
         if len(kept) != len(rows):
             write_jsonl(paths[key], kept)
             removed[key] = len(rows) - len(kept)
@@ -873,7 +889,7 @@ def delete_pending_lora_data(store_dir: str | Path | None = None) -> dict[str, A
     for key in ("learned_split_rules", "learned_line_break_rules"):
         payload = read_json(paths[key], _default_json_section(key))
         items = [dict(item) for item in list((payload or {}).get("items") or []) if isinstance(item, dict)]
-        kept_items = [item for item in items if lora_bucket_for_row(key, item) != LORA_BUCKET_PENDING_DELETE]
+        kept_items = ranked_lora_rows(key, [item for item in items if lora_bucket_for_row(key, item) != LORA_BUCKET_PENDING_DELETE])
         if len(kept_items) != len(items):
             payload = dict(payload or _default_json_section(key))
             payload["items"] = kept_items
@@ -1019,10 +1035,13 @@ def refresh_lora_personalization_manifest(
         "stt1_whisper_adapter_runtime_ready": 1 if bool((stt1_whisper_runtime_manifest or {}).get("runtime_ready")) else 0,
     }
     retrieval_index = read_json(paths["lora_retrieval_index"], {})
+    subtitle_pattern_index = read_json(paths["subtitle_pattern_index"], {})
     counts.update(
         {
             "lora_retrieval_index_docs": int((retrieval_index or {}).get("doc_count", 0) or 0),
             "lora_retrieval_index_bytes": int(bundle_file_info(paths["lora_retrieval_index"]).get("size_bytes", 0) or 0),
+            "subtitle_pattern_index_patterns": int((subtitle_pattern_index or {}).get("pattern_count", 0) or 0),
+            "subtitle_pattern_index_bytes": int(bundle_file_info(paths["subtitle_pattern_index"]).get("size_bytes", 0) or 0),
         }
     )
     if refresh_bundle:

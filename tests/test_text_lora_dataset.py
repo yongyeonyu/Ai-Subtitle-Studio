@@ -223,8 +223,8 @@ class TextLoraDatasetTests(unittest.TestCase):
         self.assertEqual(row["output"], "BMW 드라이빙센터예요")
         self.assertNotIn("화면 설명", row["output"])
         self.assertNotIn("자동차 설명", row["input"])
-        self.assertEqual(len(payload["voice_items"]), 1)
-        self.assertEqual(payload["voice_items"][0]["text"], "BMW 드라이빙센터예요")
+        self.assertEqual(len(payload["voice_items"]), 0)
+        self.assertEqual(payload["context_items"][0]["pattern_features"]["line_count"], 1)
 
     def test_project_segment_context_classifies_scene_microphone_and_topic(self):
         payload = build_text_lora_dataset(
@@ -259,7 +259,7 @@ class TextLoraDatasetTests(unittest.TestCase):
         self.assertEqual(context["microphone_environment"]["noise_level"], "high")
         self.assertIn("handle_low_rumble", context["training_focus"])
 
-    def test_accumulate_personalization_dataset_appends_once_and_builds_voice_bridge(self):
+    def test_accumulate_personalization_dataset_appends_once_without_voice_bridge_by_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             from core.personalization import text_lora_dataset as mod
             from core.personalization import text_lora_runner as runner_mod
@@ -306,7 +306,7 @@ class TextLoraDatasetTests(unittest.TestCase):
             )
 
             self.assertEqual(first["appended_rows"], 1)
-            self.assertEqual(first["voice_bridge_rows"], 1)
+            self.assertEqual(first["voice_bridge_rows"], 0)
             self.assertEqual(first["multimodal_context_rows"], 1)
             self.assertTrue((first["auto_maintenance"] or {}).get("queued"))
             self.assertEqual(second["appended_rows"], 0)
@@ -315,28 +315,55 @@ class TextLoraDatasetTests(unittest.TestCase):
             self.assertFalse((second["auto_maintenance"] or {}).get("queued"))
 
             corpus_lines = (cache / "text_lora_corpus.jsonl").read_text(encoding="utf-8").strip().splitlines()
-            bridge_lines = (cache / "voice_lora_bridge.jsonl").read_text(encoding="utf-8").strip().splitlines()
             context_lines = (cache / "multimodal_lora_context.jsonl").read_text(encoding="utf-8").strip().splitlines()
             self.assertEqual(len(corpus_lines), 1)
-            self.assertEqual(len(bridge_lines), 1)
             self.assertEqual(len(context_lines), 1)
-            bridge_row = json.loads(bridge_lines[0])
-            self.assertEqual(bridge_row["start_frame"], 90)
-            self.assertEqual(bridge_row["end_frame"], 120)
-            self.assertEqual(bridge_row["start_sec"], 3.0)
-            self.assertEqual(bridge_row["end_sec"], 4.0)
-            self.assertEqual(bridge_row["speaker"], "01")
             context_row = json.loads(context_lines[0])
             self.assertEqual(context_row["task"], "editor_segment_generation_context")
             self.assertEqual(context_row["candidate_context"]["selected_source"], "STT1")
+            self.assertEqual(context_row["speaker"], "")
+            self.assertEqual(context_row["pattern_features"]["duration_sec"], 1.0)
             self.assertTrue((cache / "text_lora_corpus_manifest.json").exists())
             queued_types = {str(item.get("job_type") or "") for item in list(load_training_queue(root).get("items") or [])}
-            self.assertEqual(queued_types, {"analyze_truth_table", "build_text_training_plan", "build_voice_profiles"})
+            self.assertEqual(queued_types, {"analyze_truth_table", "build_text_training_plan"})
 
             plan = build_text_lora_training_plan(corpus_path=cache / "text_lora_corpus.jsonl")
             self.assertEqual(plan["stats"]["usable_text_rows"], 1)
             self.assertIn("backend", plan)
 
+    def test_voice_bridge_can_be_enabled_for_legacy_voice_exports(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            cache = root / ".cache"
+            cache.mkdir(parents=True, exist_ok=True)
+            bridge_path = cache / "voice_lora_bridge.jsonl"
+            payload = build_text_lora_dataset(
+                current_segments=[
+                    {
+                        "start": 3.0,
+                        "end": 4.0,
+                        "start_frame": 90,
+                        "end_frame": 120,
+                        "timeline_frame_rate": 30.0,
+                        "text": "EXAONE 모델입니다",
+                        "speaker": "01",
+                        "_clip_file": "/tmp/a.mp4",
+                        "stt_selected_source": "STT1",
+                        "stt_candidates": [{"source": "STT1", "text": "엑사원 모델입니다"}],
+                    }
+                ],
+                current_project_path="/tmp/current_project.json",
+                project_paths=[],
+                voice_lora_bridge_enabled=True,
+            )
+
+            self.assertEqual(len(payload["voice_items"]), 1)
+            self.assertEqual(payload["voice_items"][0]["speaker"], "01")
+            self.assertEqual(payload["voice_items"][0]["text"], "EXAONE 모델입니다")
+            bridge_path.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in payload["voice_items"]) + "\n",
+                encoding="utf-8",
+            )
             voice_manifest = build_voice_lora_profile_manifest(bridge_path=cache / "voice_lora_bridge.jsonl")
             self.assertEqual(len(voice_manifest["speaker_profiles"]), 1)
             self.assertEqual(voice_manifest["speaker_profiles"][0]["speaker"], "01")

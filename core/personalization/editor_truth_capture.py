@@ -49,10 +49,14 @@ _SETTING_SNAPSHOT_KEYS = (
     "sub_max_duration",
     "sub_max_cps",
     "sub_gap_break_sec",
+    "word_timing_gap_break_sec",
     "subtitle_bundle_target_sec",
     "subtitle_bundle_min_sec",
     "subtitle_bundle_max_sec",
     "subtitle_bundle_lora_blend",
+    "lora_store_full_text_enabled",
+    "lora_pattern_index_enabled",
+    "voice_lora_bridge_enabled",
 )
 
 
@@ -68,6 +72,13 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except Exception:
         return default
+
+
+def _setting_bool(settings: dict[str, Any] | None, key: str, default: bool) -> bool:
+    value = dict(settings or {}).get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "off", "no", "사용 안함", "끔"}
+    return bool(value)
 
 
 def _json_safe(value: Any) -> Any:
@@ -154,7 +165,7 @@ def _quality_snapshot(seg: dict[str, Any]) -> dict[str, Any]:
     return snapshot
 
 
-def _candidate_snapshot(seg: dict[str, Any]) -> dict[str, Any]:
+def _candidate_snapshot(seg: dict[str, Any], *, include_text: bool = True) -> dict[str, Any]:
     candidates = []
     for item in list(seg.get("stt_candidates") or [])[:8]:
         if not isinstance(item, dict):
@@ -162,14 +173,16 @@ def _candidate_snapshot(seg: dict[str, Any]) -> dict[str, Any]:
         text = str(item.get("text") or item.get("output") or "").strip()
         if not text:
             continue
-        candidates.append(
-            {
-                "source": str(item.get("source") or item.get("label") or "").strip(),
-                "text": text[:240],
-                "score": _json_safe(item.get("score", item.get("stt_score"))),
-                "confidence": _json_safe(item.get("confidence")),
-            }
-        )
+        row = {
+            "source": str(item.get("source") or item.get("label") or "").strip(),
+            "score": _json_safe(item.get("score", item.get("stt_score"))),
+            "confidence": _json_safe(item.get("confidence")),
+            "char_count": len(text.replace(" ", "").replace("\n", "")),
+            "text_hash": stable_hash({"text": text})[:16],
+        }
+        if include_text:
+            row["text"] = text[:240]
+        candidates.append(row)
     snapshot = {
         "selected_source": str(seg.get("stt_selected_source") or "").strip(),
         "llm_selected_source": str(seg.get("stt_ensemble_llm_selected_source") or "").strip(),
@@ -180,6 +193,33 @@ def _candidate_snapshot(seg: dict[str, Any]) -> dict[str, Any]:
         "candidates": candidates,
     }
     return {key: value for key, value in snapshot.items() if value not in (None, "", [], {})}
+
+
+def _pattern_features_for_truth(
+    *,
+    speech_text: str,
+    start_sec: float,
+    end_sec: float,
+    previous_end_sec: float | None,
+    next_start_sec: float | None,
+) -> dict[str, Any]:
+    duration = max(0.0, float(end_sec) - float(start_sec))
+    chars = len(str(speech_text or "").replace(" ", "").replace("\n", ""))
+    previous_gap = None
+    next_gap = None
+    if previous_end_sec is not None:
+        previous_gap = round(max(0.0, float(start_sec) - float(previous_end_sec)), 3)
+    if next_start_sec is not None:
+        next_gap = round(max(0.0, float(next_start_sec) - float(end_sec)), 3)
+    return {
+        "char_count": chars,
+        "duration_sec": round(duration, 3),
+        "cps": round(chars / duration, 3) if chars and duration > 0 else 0.0,
+        "line_count": max(1, len([line for line in str(speech_text or "").splitlines() if line.strip()])),
+        "line_break_pattern": line_break_pattern_for_text(speech_text),
+        "previous_gap_sec": previous_gap,
+        "next_gap_sec": next_gap,
+    }
 
 
 def _hard_case_reasons(seg: dict[str, Any], text: str, edit_metrics: dict[str, Any] | None = None) -> list[str]:
@@ -228,6 +268,7 @@ def build_editor_truth_records(
         "invalid_time": 0,
     }
     settings_payload = _settings_snapshot(settings)
+    store_full_text = _setting_bool(settings, "lora_store_full_text_enabled", True)
 
     source_segments = list(segments or [])
     for index, raw_seg in enumerate(source_segments):
@@ -271,6 +312,21 @@ def build_editor_truth_records(
         segment_id = _segment_id(seg, index, seg_media_path)
         speaker = str(seg.get("speaker") or seg.get("spk") or "").strip()
         source_before_edit = str(seg.get("original_text") or seg.get("dictated_text") or "").strip()
+        pattern_features = _pattern_features_for_truth(
+            speech_text=speech_text,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            previous_end_sec=previous_end_sec,
+            next_start_sec=next_start_sec,
+        )
+        style_profile = build_subtitle_style_profile(
+            raw_text=text,
+            speech_text=speech_text,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            previous_end_sec=previous_end_sec,
+            next_start_sec=next_start_sec,
+        )
         edit_metrics = measure_user_edit_metrics(
             {**seg, "source_before_edit": source_before_edit},
             final_text=text,
@@ -289,17 +345,14 @@ def build_editor_truth_records(
             "edited_in_editor": True,
             "settings_snapshot": settings_payload,
             "quality_snapshot": _quality_snapshot(seg),
-            "stt_candidate_snapshot": _candidate_snapshot(seg),
-            "source_before_edit": source_before_edit,
+            "stt_candidate_snapshot": _candidate_snapshot(seg, include_text=store_full_text),
+            "source_before_edit": source_before_edit if store_full_text else "",
+            "source_before_edit_hash": stable_hash({"text": source_before_edit})[:16] if source_before_edit else "",
+            "store_mode": "full_text" if store_full_text else "compact_pattern",
             "user_edit_metrics": edit_metrics,
-            "style_profile": build_subtitle_style_profile(
-                raw_text=text,
-                speech_text=speech_text,
-                start_sec=start_sec,
-                end_sec=end_sec,
-                previous_end_sec=previous_end_sec,
-                next_start_sec=next_start_sec,
-            ),
+            "style_profile": style_profile,
+            "pattern_features": pattern_features,
+            "speech_text_hash": stable_hash({"speech_text": speech_text})[:16],
             "hard_case": bool(hard_case_reasons),
             "hard_case_reasons": hard_case_reasons,
         }
@@ -314,19 +367,19 @@ def build_editor_truth_records(
                 segment_id=segment_id,
                 start_sec=start_sec,
                 end_sec=end_sec,
-                raw_ground_truth_text=text,
-                speech_training_text=speech_text,
-                excluded_parenthetical_text=str(extracted.get("excluded_parenthetical_text") or ""),
+                raw_ground_truth_text=text if store_full_text else "",
+                speech_training_text=speech_text if store_full_text else "",
+                excluded_parenthetical_text=str(extracted.get("excluded_parenthetical_text") or "") if store_full_text else "",
                 line_break_pattern=line_break_pattern_for_text(speech_text),
                 punctuation_pattern=_punctuation_pattern(text),
                 detected_split_rule=_detect_split_rule(speech_text),
-                speaker_or_voice_hint=speaker,
+                speaker_or_voice_hint=speaker if store_full_text else "",
                 extra=_json_safe(extra),
             ).to_record()
         )
 
         excluded_text = str(extracted.get("excluded_parenthetical_text") or "").strip()
-        if excluded_text:
+        if excluded_text and store_full_text:
             excluded_rows.append(
                 ExcludedParentheticalRow(
                     media_id=media_id,

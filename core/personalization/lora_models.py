@@ -58,12 +58,24 @@ class TruthTableRow:
         created_at = self.created_at or iso_now()
         updated_at = self.updated_at or created_at
         duration_sec = max(0.0, float(self.end_sec) - float(self.start_sec))
+        extra = dict(self.extra or {})
+        pattern_features = extra.get("pattern_features") if isinstance(extra.get("pattern_features"), dict) else {}
         speech_text = normalize_text(self.speech_training_text)
         raw_text = str(self.raw_ground_truth_text or "").strip()
         excluded_text = str(self.excluded_parenthetical_text or "").strip()
         char_count = len(speech_text.replace("\n", ""))
+        if char_count <= 0:
+            try:
+                char_count = max(0, int(float(pattern_features.get("char_count", 0) or 0)))
+            except Exception:
+                char_count = 0
         cps = round(char_count / duration_sec, 3) if duration_sec > 0 else 0.0
-        line_break_pattern = self.line_break_pattern or line_break_pattern_for_text(speech_text)
+        if cps <= 0.0 and pattern_features.get("cps") not in (None, ""):
+            try:
+                cps = round(max(0.0, float(pattern_features.get("cps") or 0.0)), 3)
+            except Exception:
+                cps = 0.0
+        line_break_pattern = self.line_break_pattern or str(pattern_features.get("line_break_pattern") or "") or line_break_pattern_for_text(speech_text)
         punctuation_pattern = self.punctuation_pattern or "".join(
             ch for ch in raw_text if ch in ".,!?~"
         )
@@ -110,7 +122,7 @@ class TruthTableRow:
             "created_at": created_at,
             "updated_at": updated_at,
         }
-        record.update(dict(self.extra or {}))
+        record.update(extra)
         return record
 
 

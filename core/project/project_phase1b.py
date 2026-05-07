@@ -23,6 +23,7 @@ from core.project.project_manager import (
     build_model_settings_snapshot,
     _augment_project_frame_metadata,
 )
+from core.project.project_assets import externalize_project_text_assets
 from core.cut_boundary import cut_boundary_enabled, project_cut_boundaries, split_segments_by_cut_boundaries, sync_project_cut_boundaries
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 
@@ -190,7 +191,14 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
         ]
     _augment_project_frame_metadata(data)
     sync_project_cut_boundaries(data, settings=editor_settings or data.get('user_settings', {}))
+    externalize_project_text_assets(
+        project_path,
+        data,
+        final_segments=project_segments_to_editor(data),
+        stt_tracks=((data.get("editor_state", {}) or {}).get("stt", {}) or {}).get("candidate_tracks") or {},
+    )
     _prune_project_payload_for_vector_storage(data)
+    data["project_path"] = os.path.abspath(project_path)
     write_project_file(project_path, data)
     return project_path
 

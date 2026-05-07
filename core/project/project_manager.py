@@ -30,6 +30,12 @@ from core.project.project_context import (
     project_stt_preview_segments,
     sanitize_workspace_state,
 )
+from core.project.project_assets import (
+    PROJECT_EXTERNAL_STORAGE,
+    externalize_project_text_assets,
+    hydrate_project_text_asset_cache,
+    project_uses_external_text_assets,
+)
 from core.project.subtitle_status import subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
 from core.project.project_srt import parse_srt_to_segments
@@ -181,20 +187,82 @@ def _vector_segment_count(project: dict) -> int:
     return len(rows) if isinstance(rows, list) else 0
 
 
+def _external_text_storage_enabled(project: dict, user_settings: dict | None = None) -> bool:
+    settings = user_settings if isinstance(user_settings, dict) else project.get("user_settings", {})
+    if isinstance(settings, dict) and "project_external_srt_storage_enabled" in settings:
+        return bool(settings.get("project_external_srt_storage_enabled"))
+    return True
+
+
+def _project_stt_candidate_tracks(project: dict) -> dict[str, list[dict]]:
+    stt_state = ((project.get("editor_state", {}) or {}).get("stt", {}) or {})
+    tracks = stt_state.get("candidate_tracks")
+    return tracks if isinstance(tracks, dict) else {}
+
+
+def _externalize_project_payload(
+    filepath: str,
+    project: dict,
+    *,
+    segments: list[dict] | None,
+    user_settings: dict | None = None,
+) -> dict:
+    if not _external_text_storage_enabled(project, user_settings):
+        return project
+    rows = list(segments or [])
+    stt_tracks = _project_stt_candidate_tracks(project)
+    has_subtitles = any(str(row.get("text", "") or "").strip() for row in rows if isinstance(row, dict))
+    has_stt = any(
+        isinstance(track_rows, list) and any(str(row.get("text", "") or "").strip() for row in track_rows if isinstance(row, dict))
+        for track_rows in stt_tracks.values()
+    )
+    if not has_subtitles and not has_stt:
+        project.pop("asset_storage", None)
+        subtitles = project.setdefault("subtitles", {})
+        subtitles.pop("external_track", None)
+        subtitles.pop("external_tracks", None)
+        subtitles["storage"] = "editor_state.rendering.subtitle_canvas"
+        subtitles["segment_count"] = 0
+        editor_state = project.get("editor_state")
+        if isinstance(editor_state, dict):
+            editor_state.setdefault("subtitles", {})["storage"] = "vector_canvas"
+            editor_state.setdefault("subtitles", {})["segments"] = []
+            editor_state.setdefault("subtitles", {})["segment_count"] = 0
+            stt_state = editor_state.setdefault("stt", {})
+            stt_state["preview_segments"] = []
+            stt_state["candidate_tracks"] = {}
+            stt_state.pop("external_tracks", None)
+        analysis = project.get("analysis")
+        if isinstance(analysis, dict):
+            analysis.pop("external_stt_tracks", None)
+        return project
+    return externalize_project_text_assets(
+        filepath,
+        project,
+        final_segments=rows,
+        stt_tracks=stt_tracks,
+    )
+
+
 def _prune_project_payload_for_vector_storage(project: dict) -> dict:
     """Remove legacy duplicate subtitle arrays; vector canvas is the source of truth."""
     project["storage_schema"] = PROJECT_STORAGE_SCHEMA
     project.pop("segments", None)
     subtitles = project.setdefault("subtitles", {})
     subtitles.pop("segments", None)
-    subtitles["storage"] = "editor_state.rendering.subtitle_canvas"
-    subtitles["segment_count"] = _vector_segment_count(project)
+    external = project_uses_external_text_assets(project)
+    subtitles["storage"] = PROJECT_EXTERNAL_STORAGE if external else "editor_state.rendering.subtitle_canvas"
+    if external:
+        track = subtitles.get("external_track") if isinstance(subtitles.get("external_track"), dict) else {}
+        subtitles["segment_count"] = int(track.get("segment_count", subtitles.get("segment_count", 0)) or 0)
+    else:
+        subtitles["segment_count"] = _vector_segment_count(project)
     editor_state = project.get("editor_state")
     if isinstance(editor_state, dict):
         editor_subtitles = editor_state.setdefault("subtitles", {})
-        editor_subtitles["storage"] = "vector_canvas"
+        editor_subtitles["storage"] = PROJECT_EXTERNAL_STORAGE if external else "vector_canvas"
         editor_subtitles["segments"] = []
-        editor_subtitles["segment_count"] = _vector_segment_count(project)
+        editor_subtitles["segment_count"] = subtitles["segment_count"]
     return project
 
 
@@ -389,6 +457,12 @@ def create_project(
         primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
     )
     _augment_project_frame_metadata(project)
+    _externalize_project_payload(
+        filepath,
+        project,
+        segments=project_segments_to_editor(project),
+        user_settings=user_settings or {},
+    )
     _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)
     return filepath
@@ -828,6 +902,12 @@ def save_project(
         provisional_boundaries=existing_provisional_cut_boundaries,
     )
     _augment_project_frame_metadata(project)
+    _externalize_project_payload(
+        filepath,
+        project,
+        segments=project_segments_to_editor(project),
+        user_settings=user_settings if user_settings is not None else project.get("user_settings", {}),
+    )
     _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)
 
@@ -868,6 +948,7 @@ def load_project(filepath: str) -> dict | None:
         refresh_project_recovery_state(project)
     except Exception:
         pass
+    hydrate_project_text_asset_cache(project)
     return project
 
 
@@ -995,6 +1076,12 @@ def add_media_to_project(filepath: str, new_paths: list):
     _sanitize_project_workspace_fields(project)
     sync_project_cut_boundaries(project, settings=project.get("user_settings", {}))
     _augment_project_frame_metadata(project)
+    _externalize_project_payload(
+        filepath,
+        project,
+        segments=project_segments_to_editor(project),
+        user_settings=project.get("user_settings", {}),
+    )
     _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)
 
@@ -1072,6 +1159,12 @@ def merge_srt_to_project(filepath: str) -> int | None:
     _sanitize_project_workspace_fields(project)
     sync_project_cut_boundaries(project, settings=project.get("user_settings", {}))
     _augment_project_frame_metadata(project)
+    _externalize_project_payload(
+        filepath,
+        project,
+        segments=project_segments_to_editor(project),
+        user_settings=project.get("user_settings", {}),
+    )
     _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)
 
@@ -1087,4 +1180,6 @@ def _read_json(filepath: str) -> dict:
 
 
 def _write_json(filepath: str, data: dict):
+    if isinstance(data, dict):
+        data["project_path"] = os.path.abspath(filepath)
     write_project_file(filepath, data)

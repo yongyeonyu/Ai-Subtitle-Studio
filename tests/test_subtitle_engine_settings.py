@@ -415,6 +415,78 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertFalse(gemini_result[0].get("_llm_gate_policy", {}).get("call_llm", True))
         self.assertFalse(openai_result[0].get("_llm_gate_policy", {}).get("call_llm", True))
 
+    def test_optimize_segments_batches_llm_into_macro_chunks(self):
+        segments = [
+            {
+                "start": float(index * 2),
+                "end": float(index * 2 + 1.4),
+                "text": f"테스트 문장 {index} 입니다",
+                "words": [
+                    {"word": "테스트", "start": float(index * 2), "end": float(index * 2 + 0.3)},
+                    {"word": "문장", "start": float(index * 2 + 0.35), "end": float(index * 2 + 0.7)},
+                    {"word": str(index), "start": float(index * 2 + 0.75), "end": float(index * 2 + 0.95)},
+                    {"word": "입니다", "start": float(index * 2 + 1.0), "end": float(index * 2 + 1.3)},
+                ],
+            }
+            for index in range(12)
+        ]
+        settings = {
+            "subtitle_llm_macro_chunk_enabled": True,
+            "subtitle_llm_macro_chunk_min_rows": 10,
+            "subtitle_llm_macro_chunk_max_rows": 15,
+            "subtitle_llm_macro_chunk_use_cut_boundaries": True,
+            "split_length_threshold": 10,
+            "sub_max_duration": 6.0,
+            "llm_confidence_gate_enabled": True,
+            "llm_confidence_gate_min_lora_score": 82.0,
+            "llm_candidate_policy_enabled": False,
+            "editor_lora_runtime_enabled": False,
+            "subtitle_quality_auto_correct_enabled": False,
+            "deep_subtitle_policy_enabled": False,
+            "deep_policy_event_logging_enabled": False,
+            "runtime_quality_self_review_enabled": False,
+            "subtitle_output_selector_enabled": False,
+            "subtitle_context_consistency_enabled": False,
+            "subtitle_auto_review_enabled": False,
+            "accuracy_decision_graph_enabled": False,
+        }
+
+        with (
+            unittest.mock.patch("core.engine.subtitle_engine.get_selected_llm", return_value="exaone3.5:7.8b"),
+            unittest.mock.patch("core.engine.subtitle_engine._get_user_settings", return_value=settings),
+            unittest.mock.patch("core.engine.subtitle_engine._resolve_runtime_llm_model", side_effect=lambda model, **_: model),
+            unittest.mock.patch("core.engine.subtitle_engine._local_ollama_ready", return_value=True),
+            unittest.mock.patch("core.engine.subtitle_engine.warmup_ollama_model"),
+            unittest.mock.patch(
+                "core.engine.subtitle_engine.ollama_split_text",
+                return_value=[str(row["text"]) for row in segments],
+            ) as split_text,
+        ):
+            result = subtitle_engine.optimize_segments(segments)
+
+        self.assertEqual(split_text.call_count, 1)
+        self.assertEqual(len(result), 12)
+        self.assertTrue(any(row.get("_llm_macro_chunk_policy", {}).get("llm_called") for row in result))
+
+    def test_macro_chunk_respects_confirmed_cut_boundaries_after_min_rows(self):
+        rows = [
+            {"start": float(index), "end": float(index) + 0.8, "text": f"문장 {index}"}
+            for index in range(12)
+        ]
+        rows[10]["nearest_confirmed_cut_sec"] = rows[10]["start"]
+        groups = subtitle_engine._build_llm_macro_groups(
+            rows,
+            [True] * len(rows),
+            {
+                "subtitle_llm_macro_chunk_min_rows": 10,
+                "subtitle_llm_macro_chunk_max_rows": 15,
+                "subtitle_llm_macro_chunk_use_cut_boundaries": True,
+                "subtitle_bundle_boundary_snap_window_sec": 0.3,
+            },
+        )
+
+        self.assertEqual([len(group["rows"]) for group in groups], [10, 2])
+
     def test_self_review_quality_attaches_runtime_quality_metadata(self):
         segments = [
             {
