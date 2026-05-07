@@ -8,7 +8,7 @@ from typing import Any
 from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
 from core.stt_mode.models import FINAL_SUBTITLE_SOURCE, canonical_frame_timing
 from core.stt_mode.quality import normalize_protected_terms, normalize_text, split_text_chunks, wrap_subtitle_lines
-from core.stt_mode.settings import setting_float, setting_int, stt_settings
+from core.stt_mode.settings import setting_bool, setting_float, setting_int, stt_settings
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -47,6 +47,15 @@ def _window_bounds(rolling_window: dict[str, Any], raw_segments: list[dict[str, 
     if starts and ends:
         return min(starts), max(ends)
     return 0, sec_to_frame(1.0, fps)
+
+
+def _policy_value(*policies: dict[str, Any] | None, key: str, default: Any = None) -> Any:
+    for policy in policies:
+        if isinstance(policy, dict) and key in policy:
+            value = policy.get(key)
+            if value not in (None, ""):
+                return value
+    return default
 
 
 def _split_by_cut_boundaries(
@@ -138,8 +147,20 @@ def resegment_raw_dictation_window(
         (stt_lora_policy or {}).get("protected_terms") if isinstance(stt_lora_policy, dict) else [],
         (subtitle_style_policy or {}).get("protected_terms") if isinstance(subtitle_style_policy, dict) else [],
     )
-    target_chars_per_line = setting_int(cfg, "stt_mode_target_chars_per_line", 12)
-    max_lines = setting_int(cfg, "stt_mode_max_lines", 2)
+    target_chars_per_line = max(
+        8,
+        _safe_int(
+            _policy_value(subtitle_style_policy, stt_lora_policy, key="target_chars_per_line"),
+            setting_int(cfg, "stt_mode_target_chars_per_line", 12),
+        ),
+    )
+    max_lines = max(
+        1,
+        _safe_int(
+            _policy_value(subtitle_style_policy, stt_lora_policy, key="max_lines"),
+            setting_int(cfg, "stt_mode_max_lines", 2),
+        ),
+    )
     target_chars = max(8, target_chars_per_line * max(1, max_lines))
     chunks = split_text_chunks(text, target_chars=target_chars, protected_terms=protected_terms)
     chunks = [
@@ -156,8 +177,28 @@ def resegment_raw_dictation_window(
     if end_frame <= start_frame:
         end_frame = start_frame + sec_to_frame(max(0.6, len(text) / 8.0), timeline_fps)
 
-    min_dur = setting_float(cfg, "stt_mode_min_subtitle_duration_sec", 0.6)
-    max_dur = setting_float(cfg, "stt_mode_max_subtitle_duration_sec", 5.5)
+    min_dur = max(
+        0.2,
+        float(
+            _policy_value(
+                subtitle_style_policy,
+                stt_lora_policy,
+                key="min_subtitle_duration_sec",
+                default=setting_float(cfg, "stt_mode_min_subtitle_duration_sec", 0.6),
+            )
+        ),
+    )
+    max_dur = max(
+        min_dur,
+        float(
+            _policy_value(
+                subtitle_style_policy,
+                stt_lora_policy,
+                key="max_subtitle_duration_sec",
+                default=setting_float(cfg, "stt_mode_max_subtitle_duration_sec", 5.5),
+            )
+        ),
+    )
     frame_ranges = _allocate_frames_by_text(
         chunks,
         start_frame=start_frame,
@@ -174,7 +215,19 @@ def resegment_raw_dictation_window(
     window_id = str((rolling_window or {}).get("id") or "stt_window")
     out: list[dict[str, Any]] = []
     for idx, (chunk, (seg_start, seg_end)) in enumerate(zip(chunks, frame_ranges), start=1):
-        ranges = _split_by_cut_boundaries(seg_start, seg_end, cut_boundaries=cut_boundaries, fps=timeline_fps)
+        respect_cut_boundaries = bool(
+            _policy_value(
+                stt_lora_policy,
+                subtitle_style_policy,
+                key="respect_cut_boundaries",
+                default=setting_bool(cfg, "stt_mode_respect_cut_boundaries", True),
+            )
+        )
+        ranges = (
+            _split_by_cut_boundaries(seg_start, seg_end, cut_boundaries=cut_boundaries, fps=timeline_fps)
+            if respect_cut_boundaries else
+            [(seg_start, seg_end)]
+        )
         for part_idx, (part_start, part_end) in enumerate(ranges, start=1):
             text_part = chunk if len(ranges) == 1 else chunk
             timing = canonical_frame_timing(

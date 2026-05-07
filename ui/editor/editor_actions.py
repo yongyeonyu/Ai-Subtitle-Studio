@@ -733,8 +733,21 @@ class EditorActionsMixin:
         stt_mode_learning = None
         if getattr(self, "_stt_mode_enabled", False) or getattr(self, "_stt_work_segments", None):
             try:
+                from core.stt_mode.lora_runtime import export_stt_runtime_bundle
                 from core.stt_mode.project_state import build_stt_mode_state, default_stt_mode_learning
 
+                stt_bundle = export_stt_runtime_bundle(
+                    project_path=project_path,
+                    media_path=media_path,
+                    settings=dict(getattr(self, "settings", {}) or {}),
+                    work_segments=list(getattr(self, "_stt_work_segments", []) or []),
+                    raw_segments=list(getattr(self, "_stt_raw_dictation_segments", []) or []),
+                    final_segments=list(getattr(self, "_stt_final_segments", []) or []),
+                    learning_events=list(getattr(self, "_stt_learning_events", []) or []),
+                )
+                if stt_bundle:
+                    self._stt_lora_bundle_info = dict(stt_bundle)
+                    self._stt_adapter_refs = dict(stt_bundle.get("adapter_refs", {}) or {})
                 stt_mode_state = build_stt_mode_state(
                     media_path=media_path,
                     work_segments=list(getattr(self, "_stt_work_segments", []) or []),
@@ -743,6 +756,7 @@ class EditorActionsMixin:
                     final_segments=list(getattr(self, "_stt_final_segments", []) or []),
                     active_work_segment_id=str(getattr(self, "_stt_state_detail", {}).get("segment_id", "") or ""),
                     primary_fps=getattr(getattr(self, "timeline", None), "fps", 30.0),
+                    adapter_refs=dict(getattr(self, "_stt_adapter_refs", {}) or {}),
                 )
                 stt_mode_learning = default_stt_mode_learning(
                     {

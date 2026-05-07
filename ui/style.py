@@ -8,6 +8,7 @@ behavior stay in each widget so existing signal/slot flows remain untouched.
 """
 
 from pathlib import Path
+from collections import OrderedDict
 
 from PyQt6.QtCore import QPointF, Qt, QRectF
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
@@ -36,7 +37,8 @@ COLORS = {
     "separator": "#2D3942",
 }
 
-_LINE_ICON_CACHE = {}
+_LINE_ICON_CACHE_MAX = 256
+_LINE_ICON_CACHE = OrderedDict()
 _ICON_ASSET_DIR = Path(__file__).resolve().parents[1] / "assets" / "icons" / "ui"
 _ICON_ALIASES = {
     "briefcase": "project",
@@ -261,11 +263,15 @@ def line_icon(name, color=None, size=28):
     cache_key = (str(name), str(color), int(size))
     cached = _LINE_ICON_CACHE.get(cache_key)
     if cached is not None:
+        _LINE_ICON_CACHE.move_to_end(cache_key)
         return cached
 
     svg_icon = _svg_icon_from_asset(name, color, size)
     if svg_icon is not None:
         _LINE_ICON_CACHE[cache_key] = svg_icon
+        _LINE_ICON_CACHE.move_to_end(cache_key)
+        while len(_LINE_ICON_CACHE) > _LINE_ICON_CACHE_MAX:
+            _LINE_ICON_CACHE.popitem(last=False)
         return svg_icon
 
     pix = QPixmap(size, size)
@@ -492,7 +498,14 @@ def line_icon(name, color=None, size=28):
     painter.end()
     icon = QIcon(pix)
     _LINE_ICON_CACHE[cache_key] = icon
+    _LINE_ICON_CACHE.move_to_end(cache_key)
+    while len(_LINE_ICON_CACHE) > _LINE_ICON_CACHE_MAX:
+        _LINE_ICON_CACHE.popitem(last=False)
     return icon
+
+
+def clear_line_icon_cache():
+    _LINE_ICON_CACHE.clear()
 
 
 def app_stylesheet():

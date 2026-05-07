@@ -1418,6 +1418,20 @@ def subtitle_auto_review_items(segments: list[dict[str, Any]], settings: dict[st
             reasons.append(_review_reason("llm_rollback", "red", "LLM output was rejected and rolled back.", reason=rollback.get("reason"), fallback=rollback.get("fallback")))
         if _has_decision(segment, "llm_verifier", accepted=False):
             reasons.append(_review_reason("llm_verifier_rejected", "red", "LLM verifier rejected the generated subtitle.", task="llm_verifier"))
+        rewrite_policy = dict(segment.get("_llm_rewrite_policy") or {})
+        if rewrite_policy.get("needs_review"):
+            rewrite_confidence = str(rewrite_policy.get("confidence") or "low").lower()
+            rewrite_severity = "yellow" if rewrite_confidence == "medium" else "red"
+            reasons.append(
+                _review_reason(
+                    "llm_uncertain_rewrite",
+                    rewrite_severity,
+                    "LLM corrected an STT phrase but the rewrite confidence is limited.",
+                    confidence=rewrite_confidence,
+                    similarity=rewrite_policy.get("similarity"),
+                    reason=rewrite_policy.get("reason"),
+                )
+            )
 
         cut_guard = dict(segment.get("_cut_boundary_guard_policy") or {})
         cut_action = str(cut_guard.get("action") or "")
@@ -1451,6 +1465,8 @@ def subtitle_auto_review_items(segments: list[dict[str, Any]], settings: dict[st
             actions.append("compare_stt_candidates")
         if any(reason.get("type") in {"llm_rollback", "llm_verifier_rejected"} for reason in reasons):
             actions.append("check_llm_rollback")
+        if any(reason.get("type") == "llm_uncertain_rewrite" for reason in reasons):
+            actions.append("check_llm_rewrite")
         if any(reason.get("type") == "cut_boundary_crossing" for reason in reasons):
             actions.append("check_cut_boundary")
         if any(reason.get("type") in {"high_cps", "over_max_duration"} for reason in reasons):

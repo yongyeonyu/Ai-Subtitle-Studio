@@ -11,6 +11,7 @@ import signal
 import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from core.runtime import config
@@ -309,29 +310,52 @@ def cleanup_app_runtime_processes(*, logger=None, timeout_sec: float = 0.4) -> d
         "legacy_preview_ffmpeg": 0,
     }
     used_shutdown_helper = False
-    try:
-        from core.llm.ollama_provider import shutdown_local_ollama_runtime
-
-        shutdown_result = shutdown_local_ollama_runtime(
-            None,
-            logger=logger,
-            log_context="앱 종료",
-            timeout_sec=timeout_sec,
-        )
-        used_shutdown_helper = True
-        result["ollama_models"] = len(shutdown_result.get("models", []) or [])
-        result["ollama_processes"] = int(shutdown_result.get("processes", 0) or 0)
-    except Exception:
+    def _cleanup_ollama_runtime() -> tuple[bool, int, int]:
         try:
-            from core.llm.ollama_provider import stop_local_llm_models
+            from core.llm.ollama_provider import shutdown_local_ollama_runtime
 
-            stopped_models = stop_local_llm_models(None, logger=logger, log_context="앱 종료")
-            result["ollama_models"] = len(stopped_models)
+            shutdown_result = shutdown_local_ollama_runtime(
+                None,
+                logger=logger,
+                log_context="앱 종료",
+                timeout_sec=timeout_sec,
+            )
+            return (
+                True,
+                len(shutdown_result.get("models", []) or []),
+                int(shutdown_result.get("processes", 0) or 0),
+            )
         except Exception:
-            pass
+            try:
+                from core.llm.ollama_provider import stop_local_llm_models
 
-    result["child_processes"] = cleanup_app_child_processes(timeout_sec=timeout_sec)
-    result["legacy_preview_ffmpeg"] = cleanup_stale_preview_proxy_processes(timeout_sec=timeout_sec)
+                stopped_models = stop_local_llm_models(None, logger=logger, log_context="앱 종료")
+                return False, len(stopped_models), 0
+            except Exception:
+                return False, 0, 0
+
+    try:
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="runtime-cleanup") as pool:
+            ollama_future = pool.submit(_cleanup_ollama_runtime)
+            child_future = pool.submit(cleanup_app_child_processes, timeout_sec=timeout_sec)
+            preview_future = pool.submit(cleanup_stale_preview_proxy_processes, timeout_sec=timeout_sec)
+
+            try:
+                used_shutdown_helper, result["ollama_models"], result["ollama_processes"] = ollama_future.result()
+            except Exception:
+                used_shutdown_helper, result["ollama_models"], result["ollama_processes"] = _cleanup_ollama_runtime()
+            try:
+                result["child_processes"] = int(child_future.result() or 0)
+            except Exception:
+                result["child_processes"] = int(cleanup_app_child_processes(timeout_sec=timeout_sec) or 0)
+            try:
+                result["legacy_preview_ffmpeg"] = int(preview_future.result() or 0)
+            except Exception:
+                result["legacy_preview_ffmpeg"] = int(cleanup_stale_preview_proxy_processes(timeout_sec=timeout_sec) or 0)
+    except Exception:
+        used_shutdown_helper, result["ollama_models"], result["ollama_processes"] = _cleanup_ollama_runtime()
+        result["child_processes"] = int(cleanup_app_child_processes(timeout_sec=timeout_sec) or 0)
+        result["legacy_preview_ffmpeg"] = int(cleanup_stale_preview_proxy_processes(timeout_sec=timeout_sec) or 0)
     if not used_shutdown_helper:
         result["ollama_processes"] = cleanup_ollama_runtime_processes(timeout_sec=timeout_sec)
     cleaned_processes = int(result["child_processes"]) + int(result["legacy_preview_ffmpeg"])

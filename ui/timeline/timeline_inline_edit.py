@@ -11,6 +11,7 @@ from PyQt6.QtCore import QRect, Qt, QTimer
 from PyQt6.QtGui import QFont, QFontMetrics
 
 from core.runtime import config
+from ui.dialogs.qml_popup import show_context_menu
 from ui.timeline.timeline_constants import HANDLE_R, SEG_TOP
 
 
@@ -332,42 +333,43 @@ class TimelineInlineEditMixin:
         return super().inputMethodQuery(query)
 
     def _show_mic_menu(self, gpos):
-        from PyQt6.QtWidgets import QMenu
-
-        menu = QMenu(self)
-        menu.setStyleSheet(
-            "QMenu { background-color: #2C2C2C; color: #FFFFFF; border: 1px solid #555; "
-            "font-size: 14px; padding: 4px; } "
-            "QMenu::item { padding: 8px 20px; } "
-            "QMenu::item:selected { background-color: #444444; }"
-        )
-
+        items = []
         if self._is_listening:
-            act = menu.addAction("🔴 음성인식 중지")
-            act.triggered.connect(self._stop_listening)
+            items.append({"id": "stop", "label": "음성인식 중지", "danger": True, "accent": "#FF453A"})
         else:
-            act = menu.addAction("🎤 음성으로 입력 (고품질)")
-            act.triggered.connect(lambda: self._start_listening("quality"))
-            fast_act = menu.addAction("⚡ 음성으로 입력 (빠름)")
-            fast_act.triggered.connect(lambda: self._start_listening("fast"))
+            items.extend(
+                [
+                    {"id": "quality", "label": "음성으로 입력 (고품질)", "accent": "#34C759"},
+                    {"id": "fast", "label": "음성으로 입력 (빠름)", "accent": "#5AC8FA"},
+                ]
+            )
 
-        menu.exec(gpos)
+        chosen = show_context_menu(self, gpos, items)
+        if chosen == "stop":
+            self._stop_listening()
+        elif chosen == "quality":
+            self._start_listening("quality")
+        elif chosen == "fast":
+            self._start_listening("fast")
 
     def _show_speaker_learn_menu(self, line_num, gpos):
-        from PyQt6.QtWidgets import QMenu
-
-        menu = QMenu(self)
-        menu.setStyleSheet(
-            "QMenu { background-color: #151C20; color: #F5F7FA; border: 1px solid #2D3942; "
-            "font-size: 13px; padding: 4px; } "
-            "QMenu::item { padding: 7px 22px 7px 10px; border-radius: 4px; } "
-            "QMenu::item:selected { background-color: #1F3A56; }"
-        )
-        learn_menu = menu.addMenu("음성으로 화자 학습")
-        for _spk_i in range(1, 4):
-            _act = learn_menu.addAction(f"화자 {_spk_i}")
-            _act.triggered.connect(lambda checked=False, idx=_spk_i, ln=line_num: self._learn_speaker_from_segment(idx, ln))
-        menu.exec(gpos)
+        items = []
+        for spk_i in range(1, 4):
+            items.append(
+                {
+                    "id": f"speaker_{spk_i}",
+                    "label": f"화자 {spk_i}로 학습",
+                    "accent": "#34C759",
+                }
+            )
+        chosen = show_context_menu(self, gpos, items)
+        if chosen and chosen.startswith("speaker_"):
+            try:
+                spk_idx = int(chosen.rsplit("_", 1)[-1])
+            except Exception:
+                spk_idx = 0
+            if spk_idx > 0:
+                self._learn_speaker_from_segment(spk_idx, line_num)
 
     def _learn_speaker_from_segment(self, spk_idx, line_num=None):
         target_line = self._edit_line if line_num is None else line_num

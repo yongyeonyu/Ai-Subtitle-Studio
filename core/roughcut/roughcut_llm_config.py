@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from core.performance import adaptive_llm_worker_count
+from core.runtime.multi_process import runtime_llm_worker_plan
 
 from .roughcut_prompts import DEFAULT_ROUGHCUT_PROMPT_V1
 from .roughcut_settings import merge_roughcut_settings
@@ -54,7 +54,7 @@ def resolve_roughcut_llm_config(
     max_context_rows = max(1, int(context_policy.get("max_context_rows", 80) or 80))
     chunk_rows = max(1, int(context_policy.get("chunk_rows", 12) or 12))
     lookahead_rows = max(0, int(context_policy.get("lookahead_rows", 8) or 8))
-    threads, _thread_meta = adaptive_llm_worker_count(
+    threads, _thread_meta = runtime_llm_worker_plan(
         settings=merged,
         requested=merged.get("roughcut_llm_threads", 4),
         workload=max(1, max_context_rows // max(1, chunk_rows)),
@@ -73,7 +73,7 @@ def resolve_roughcut_llm_config(
         chunk_rows=chunk_rows,
         lookahead_rows=lookahead_rows,
         threads=threads,
-        prompt=DEFAULT_ROUGHCUT_PROMPT_V1,
+        prompt=str(merged.get("roughcut_llm_prompt") or DEFAULT_ROUGHCUT_PROMPT_V1).strip(),
         context_policy=dict(context_policy),
     )
 

@@ -7,6 +7,7 @@ import json
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QLabel, QTabWidget, QTextEdit, QVBoxLayout, QWidget
 
+from ui.settings.qml_panel import attach_qml_tab_bar
 from ui.roughcut.roughcut_format import fmt_time
 from ui.style import label_style
 
@@ -39,6 +40,7 @@ class RoughcutBottomPanel(QWidget):
         self.tabs.addTab(self.waveform_text, "웨이브폼")
         self.tabs.addTab(self.edl_text, "EDL")
         self.tabs.addTab(self.storyboard_text, "스토리보드")
+        attach_qml_tab_bar(self, root, self.tabs, scope="roughcut", insert_index=1)
         root.addWidget(self.tabs, stretch=1)
 
     def clear(self) -> None:

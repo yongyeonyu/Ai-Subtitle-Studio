@@ -14,9 +14,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 from core.audio import stt_rescue
 from core.audio.runtime_cleanup import clear_audio_model_memory_caches
-from core.performance import adaptive_worker_count
 from core.platform_compat import ffmpeg_binary
 from core.runtime.logger import get_logger
+from core.runtime.multi_process import runtime_parallel_worker_plan
 from core.subtitle_quality.candidate_ranker import rank_overlap_candidates
 from core.subtitle_quality.hallucination_detector import annotate_segment_hallucination_risk
 from core.subtitle_quality.models import attach_asr_metadata
@@ -36,6 +36,73 @@ def _parse_worker_json_line(line: str):
 
 
 class VideoProcessorTranscribeMixin:
+    @staticmethod
+    def _resolve_runtime_whisper_model(model: str, *, log_label: str = "STT") -> tuple[str, bool]:
+        raw = str(model or "").strip()
+        if not raw:
+            return raw, False
+        from core.audio.whisper_transformers import (
+            is_transformers_whisper_model,
+            transformers_whisper_fallback_model,
+            transformers_whisper_runtime_status,
+        )
+
+        if not is_transformers_whisper_model(raw):
+            return raw, False
+        available, reason = transformers_whisper_runtime_status()
+        if available:
+            return raw, False
+        fallback_model = str(transformers_whisper_fallback_model(raw) or "").strip()
+        if fallback_model and fallback_model != raw:
+            get_logger().log(
+                f"  ↩️ [{log_label}] Transformers Whisper 런타임 사용 불가 ({reason}) → {fallback_model} fallback"
+            )
+            return fallback_model, True
+        get_logger().log(f"  ⚠️ [{log_label}] Transformers Whisper 런타임 사용 불가: {reason}")
+        return raw, False
+
+    @staticmethod
+    def _whisper_runtime_accelerator(model: str, settings: dict | None = None) -> str:
+        raw = str(model or "").strip()
+        if not raw:
+            return "cpu"
+        from core.audio.torch_acceleration import torch_acceleration_snapshot
+        from core.audio.whisper_coreml import is_coreml_whisper_model
+        from core.audio.whisper_transformers import is_transformers_whisper_model
+
+        lowered = raw.lower()
+        if is_coreml_whisper_model(raw):
+            return "npu"
+        if "mlx-community/" in lowered or lowered.startswith("mlx:") or lowered.startswith("mlx_"):
+            return "gpu"
+        if is_transformers_whisper_model(raw):
+            torch_snapshot = torch_acceleration_snapshot(settings=settings, task="stt")
+            primary = str(torch_snapshot.get("primary_backend") or "cpu").strip().lower()
+            return "gpu" if primary in {"mps", "cuda"} else "cpu"
+        return "cpu"
+
+    def _ensemble_scheduler_context(
+        self,
+        primary_model: str,
+        secondary_model: str,
+        settings: dict | None,
+    ) -> tuple[str, str, str]:
+        primary_accel = self._whisper_runtime_accelerator(primary_model, settings)
+        secondary_accel = self._whisper_runtime_accelerator(secondary_model, settings)
+        backend_mix = f"STT1={primary_accel.upper()} STT2={secondary_accel.upper()}"
+        return primary_accel, secondary_accel, backend_mix
+
+    @staticmethod
+    def _ensemble_scheduler_suffix(scheduler_meta: dict, backend_mix: str) -> str:
+        details: list[str] = [str(backend_mix or "").strip()]
+        reductions = ",".join(scheduler_meta.get("reductions") or [])
+        if reductions:
+            details.append(reductions)
+        if scheduler_meta.get("accelerator_mix_applied"):
+            details.append(f"mix-floor={scheduler_meta.get('accelerator_mix_floor')}")
+        details = [item for item in details if item]
+        return f" ({', '.join(details)})" if details else ""
+
     def _collect_transcribe_result(
         self,
         chunk_dir: str,
@@ -494,11 +561,14 @@ class VideoProcessorTranscribeMixin:
         raw_secondary_model = s.get("selected_whisper_model_secondary", "")
         primary_model = prefer_npu_whisper_model(raw_primary_model, s, purpose="stt", log_label="STT1")
         secondary_model = prefer_npu_whisper_model(raw_secondary_model, s, purpose="stt", log_label="STT2")
+        primary_model, primary_runtime_fallback = self._resolve_runtime_whisper_model(primary_model, log_label="STT1")
+        secondary_model, secondary_runtime_fallback = self._resolve_runtime_whisper_model(secondary_model, log_label="STT2")
         if (
             secondary_model
             and secondary_model == primary_model
             and str(raw_secondary_model or "").strip()
             and str(raw_secondary_model or "").strip() != str(raw_primary_model or "").strip()
+            and not secondary_runtime_fallback
         ):
             secondary_model = str(raw_secondary_model or "").strip()
             get_logger().log("  ↩️ [STT2] NPU 라우팅이 STT1/STT2를 동일 모델로 만들어 STT2는 원래 모델을 유지합니다.")
@@ -514,10 +584,15 @@ class VideoProcessorTranscribeMixin:
                 preview_callback=preview_callback,
             )
             return
+        primary_accel, secondary_accel, backend_mix = self._ensemble_scheduler_context(
+            primary_model,
+            secondary_model,
+            s,
+        )
 
         get_logger().log(
             "\n🎧 [STT 앙상블] STT1/STT2 병렬 인식 시작 "
-            f"(STT1: {primary_model.split(chr(47))[-1]}, STT2: {secondary_model.split(chr(47))[-1]})"
+            f"(STT1: {primary_model.split(chr(47))[-1]}, STT2: {secondary_model.split(chr(47))[-1]}, {backend_mix})"
         )
         self._notify_stage("⏳ [STT] STT1/STT2 병렬 인식 중")
         results: dict[str, list[dict]] = {"STT1": [], "STT2": []}
@@ -542,16 +617,17 @@ class VideoProcessorTranscribeMixin:
                     errors[label] = exc
 
         try:
-            stt_workers, scheduler_meta = adaptive_worker_count(
-                task="stt",
+            stt_workers, scheduler_meta = runtime_parallel_worker_plan(
                 settings=s,
+                task="stt",
                 requested=2,
                 workload=2,
                 minimum=1,
                 maximum=2,
+                reserve_task="stt",
+                accelerators=[primary_accel, secondary_accel],
             )
-            reductions = ",".join(scheduler_meta.get("reductions") or [])
-            suffix = f" ({reductions})" if reductions else ""
+            suffix = self._ensemble_scheduler_suffix(scheduler_meta, backend_mix)
             get_logger().log(f"  🧵 [STT 앙상블] 리소스 자동 스케줄러: {stt_workers}개 워커{suffix}")
             with ThreadPoolExecutor(max_workers=stt_workers, thread_name_prefix="stt-ensemble") as executor:
                 futures = [
@@ -681,6 +757,7 @@ class VideoProcessorTranscribeMixin:
 
         target_model = model_override or _s.get("selected_whisper_model", self.whisper_model)
         target_model = prefer_npu_whisper_model(target_model, _s, purpose="stt", log_label=log_label)
+        target_model, _used_runtime_fallback = self._resolve_runtime_whisper_model(target_model, log_label=log_label)
         self._notify_stage(f"⏳ [{log_label}] Whisper 인식 중")
         get_logger().log(f"\n🎯 [{log_label}] Whisper 인식 시작 (총 {total}블록, 모델: {target_model.split(chr(47))[-1]})")
 

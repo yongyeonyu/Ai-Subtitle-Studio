@@ -179,8 +179,8 @@ class RoughcutUiV2Tests(unittest.TestCase):
             try:
                 labels = [dialog.combo_auto_start_mode.itemText(i) for i in range(dialog.combo_auto_start_mode.count())]
                 values = [dialog.combo_auto_start_mode.itemData(i) for i in range(dialog.combo_auto_start_mode.count())]
-                self.assertEqual(labels, ["Fast", "Auto", "High"])
-                self.assertEqual(values, ["fast", "balanced", "precise"])
+                self.assertEqual(labels, ["Fast", "Auto", "High", "STT"])
+                self.assertEqual(values, ["fast", "balanced", "precise", "stt"])
                 self.assertEqual(dialog.combo_auto_start_mode.currentData(), "precise")
 
                 self.assertFalse(hasattr(dialog, "combo_simple_operation_mode"))

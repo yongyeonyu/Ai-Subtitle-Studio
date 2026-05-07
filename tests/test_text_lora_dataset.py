@@ -420,15 +420,20 @@ class TextLoraDatasetTests(unittest.TestCase):
                 Path(command[-1]).write_bytes(b"RIFFfake wav data")
                 return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-            with patch("core.personalization.text_lora_runner.subprocess.run", side_effect=fake_run):
+            with (
+                patch("core.personalization.text_lora_runner.runtime_parallel_worker_plan", return_value=(2, {"reserve_cores": 1})) as worker_plan,
+                patch("core.personalization.text_lora_runner.subprocess.run", side_effect=fake_run),
+            ):
                 result = save_voice_lora_training_plan(
                     bridge_path=bridge,
                     output_dir=root / "trained_adapters" / "personal_voice_lora",
                     plan_path=plan_path,
                     dataset_manifest_path=manifest_path,
                     extract_audio=True,
+                    resource_settings={"runtime_manual_lora_full_speed": True},
                 )
 
+            worker_plan.assert_called_once()
             self.assertEqual(result["usable_voice_rows"], 1)
             self.assertEqual(result["extracted_clips"], 1)
             self.assertEqual(result["stored_audio_items"], 1)

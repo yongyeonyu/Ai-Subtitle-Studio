@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.roughcut import build_title_suggestions, default_thumbnail_cache_dir, ensure_thumbnail
+from ui.settings.qml_panel import attach_qml_tab_bar
 from ui.roughcut.roughcut_bottom_panel import RoughcutBottomPanel
 from ui.roughcut.roughcut_export import RoughcutExportMixin
 from ui.roughcut.roughcut_format import TABLE_COLUMNS
@@ -130,6 +131,7 @@ class RoughcutWidget(
         self.main_tabs.addTab(self.major_panel, "중분류")
         self.table = self._build_table()
         self.main_tabs.addTab(self.table, "기존 테이블")
+        attach_qml_tab_bar(self, root, self.main_tabs, scope="roughcut", insert_index=0)
         main_splitter.addWidget(self.main_tabs)
 
         side = QWidget()

@@ -27,6 +27,8 @@ class EditorSTTModeMixin:
         self._stt_final_segments = []
         self._stt_rolling_windows = []
         self._stt_learning_events = []
+        self._stt_adapter_refs = {}
+        self._stt_lora_bundle_info = {}
         self._stt_replay_counts = {}
         self._stt_repeat_timer = QTimer(self)
         self._stt_repeat_timer.setSingleShot(True)
@@ -110,6 +112,97 @@ class EditorSTTModeMixin:
                     self.timeline.canvas.update()
             get_logger().log("🎙️ STT 모드 OFF")
         self._refresh_stt_visuals()
+
+    def _restore_stt_mode_project_state(self, project: dict | None) -> bool:
+        try:
+            from core.mode_policy import selected_mode_from_settings
+            from core.stt_mode.project_state import project_stt_mode_learning, project_stt_mode_state
+        except Exception:
+            return False
+
+        state = project_stt_mode_state(project)
+        learning = project_stt_mode_learning(project)
+        project_settings = dict((project or {}).get("user_settings", {}) or {})
+        should_enable = bool(state) or selected_mode_from_settings(project_settings) == "stt"
+        if not should_enable:
+            return False
+
+        self._stt_work_segments = [dict(row) for row in list(state.get("work_segments", []) or []) if isinstance(row, dict)]
+        self._stt_raw_dictation_segments = [dict(row) for row in list(state.get("raw_dictation_segments", []) or []) if isinstance(row, dict)]
+        self._stt_final_segments = [dict(row) for row in list(state.get("final_segments", []) or []) if isinstance(row, dict)]
+        self._stt_rolling_windows = [dict(row) for row in list(state.get("rolling_windows", []) or []) if isinstance(row, dict)]
+        self._stt_learning_events = [dict(row) for row in list(learning.get("events", []) or []) if isinstance(row, dict)]
+        self._stt_adapter_refs = dict(state.get("adapter_refs", {}) or {})
+        self._stt_lora_bundle_info = {
+            "bundle_id": str(self._stt_adapter_refs.get("stt_lora_bundle") or ""),
+            "adapter_refs": dict(self._stt_adapter_refs),
+        }
+        self._stt_mode_enabled = True
+        try:
+            if hasattr(self, "timeline") and hasattr(self.timeline, "set_vad_segments") and self._stt_work_segments:
+                self.timeline.set_vad_segments(list(self._stt_work_segments))
+        except Exception:
+            pass
+        self._stt_set_state("ready_to_listen", {"restored": True, "total": len(self._stt_work_segments)})
+        self._refresh_stt_visuals()
+        try:
+            self._refresh_video_subtitle_context()
+        except Exception:
+            pass
+        return True
+
+    def _stt_runtime_policy_bundle(self) -> dict:
+        try:
+            from core.stt_mode.lora_runtime import build_stt_runtime_policy_bundle
+
+            bundle_base = os.path.splitext(
+                os.path.basename(
+                    str(getattr(self.window(), "_current_project_path", "") or getattr(self, "media_path", "") or "stt_mode")
+                )
+            )[0]
+            bundle = build_stt_runtime_policy_bundle(
+                settings=dict(getattr(self, "settings", {}) or {}),
+                work_segments=list(getattr(self, "_stt_work_segments", []) or []),
+                raw_segments=list(getattr(self, "_stt_raw_dictation_segments", []) or []),
+                final_segments=list(getattr(self, "_stt_final_segments", []) or []),
+                learning_events=list(getattr(self, "_stt_learning_events", []) or []),
+                bundle_id=f"{bundle_base or 'stt_mode'}_stt_lora",
+            )
+            if bundle:
+                self._stt_lora_bundle_info = dict(bundle)
+                self._stt_adapter_refs = dict(bundle.get("adapter_refs", {}) or {})
+            return bundle
+        except Exception as exc:
+            get_logger().log(f"⚠️ STT LoRA 정책 구성 실패: {exc}")
+            return {}
+
+    def _stt_cut_boundaries(self) -> list[dict]:
+        rows: list[dict] = []
+        seen: set[tuple[str, float]] = set()
+        for source in (
+            list(getattr(self.window(), "_project_boundary_times", []) or []),
+            list(getattr(getattr(getattr(self, "timeline", None), "canvas", None), "scan_boundary_times", []) or []),
+            list(getattr(self, "_auto_cut_boundary_scan_lines", []) or []),
+        ):
+            for item in source:
+                try:
+                    if isinstance(item, dict):
+                        sec = float(item.get("time", item.get("start", item.get("timeline_start", 0.0))) or 0.0)
+                        key = ("dict", round(sec, 3))
+                        payload = dict(item)
+                        payload.setdefault("time", sec)
+                    else:
+                        sec = float(item or 0.0)
+                        key = ("time", round(sec, 3))
+                        payload = {"time": sec}
+                except Exception:
+                    continue
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(payload)
+        rows.sort(key=lambda row: float(row.get("time", row.get("start", row.get("timeline_start", 0.0))) or 0.0))
+        return rows
 
     def _start_stt_vad_detection(self) -> bool:
         if not getattr(self, "_stt_mode_enabled", False):
@@ -376,12 +469,16 @@ class EditorSTTModeMixin:
                 getattr(self, "_stt_raw_dictation_segments", []),
                 raw_segment,
             )
+            runtime_bundle = self._stt_runtime_policy_bundle()
             result = apply_rolling_resegmentation(
                 raw_segments=self._stt_raw_dictation_segments,
                 final_segments=getattr(self, "_stt_final_segments", []),
                 current_raw_id=raw_segment.get("id"),
                 fps=work_segment.get("timeline_frame_rate") or work_segment.get("frame_rate") or 30.0,
                 settings=dict(getattr(self, "settings", {}) or {}),
+                stt_lora_policy=runtime_bundle.get("stt_dictation_resegment_policy"),
+                subtitle_style_policy=runtime_bundle.get("subtitle_style_policy"),
+                cut_boundaries=self._stt_cut_boundaries(),
             )
             self._stt_final_segments = list(result.get("final_segments") or [])
             if result.get("rolling_window"):
@@ -392,6 +489,7 @@ class EditorSTTModeMixin:
                     {
                         "raw_dictation": raw_segment,
                         "generated_count": len(result.get("generated_segments") or []),
+                        "bundle_id": str(runtime_bundle.get("bundle_id") or ""),
                     },
                     project_id=str(getattr(self.window(), "_current_project_path", "") or ""),
                     settings=dict(getattr(self, "settings", {}) or {}),

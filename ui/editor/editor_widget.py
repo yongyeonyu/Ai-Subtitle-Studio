@@ -195,6 +195,8 @@ class EditorWidget(
 
         self._highlighter = SubtitleHighlighter(self.text_edit.document())
         self._update_highlighter_colors()
+        if hasattr(self.text_edit, "_refresh_gpu_document_overlay_mode"):
+            self.text_edit._refresh_gpu_document_overlay_mode()
         self.text_edit.setUndoRedoEnabled(True)
 
         # 단축키
@@ -1426,8 +1428,9 @@ class EditorWidget(
         # ✅ 추가: 시그널 안전 해제
         try:
             if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
-                self.timeline.canvas.sig_split_request.disconnect()
-                self.timeline.canvas.sig_inline_text_changed.disconnect()
+                self.timeline.canvas.sig_split_request.disconnect(self.split_segment_with_text)
+            if hasattr(self, 'timeline'):
+                self.timeline.sig_inline_text_changed.disconnect(self._on_inline_text_changed)
         except (TypeError, RuntimeError):
             pass
 

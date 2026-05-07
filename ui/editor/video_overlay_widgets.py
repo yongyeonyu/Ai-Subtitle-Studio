@@ -43,9 +43,18 @@ class ThumbnailLabel(QLabel):
         self._scaled_cache_size = None
         self.update()
 
+    def clear_pixmap(self):
+        self._pixmap = None
+        self._scaled_cache = None
+        self._scaled_cache_size = None
+        self.clear()
+        self.update()
+
     def paintEvent(self, event):
         if self._pixmap and not self._pixmap.isNull():
             painter = QPainter(self)
+            if not painter.isActive():
+                return
             cache_size = (self.width(), self.height(), self._pixmap.cacheKey())
             if self._scaled_cache is None or self._scaled_cache_size != cache_size:
                 self._scaled_cache = self._pixmap.scaled(
@@ -472,6 +481,8 @@ class SubtitleLabel(QLabel):
         return wrapped or [""]
 
     def paintEvent(self, event):
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
         text = self.text()
         if not text:
             return
@@ -480,6 +491,8 @@ class SubtitleLabel(QLabel):
         text = text.replace('\u2028', '\n')
 
         painter = QPainter(self)
+        if not painter.isActive():
+            return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 

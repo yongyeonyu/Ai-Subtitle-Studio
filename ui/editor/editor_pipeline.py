@@ -9,13 +9,13 @@ ui/editor_pipeline.py
 - 기존 기능 100% 유지
 """
 import os, time, threading, queue
-from PyQt6.QtWidgets import QMenu
 from PyQt6.QtCore import QTimer, QObject, pyqtSignal
 
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.project.project_manager import create_project
 from core.path_manager import get_srt_path
+from ui.dialogs.qml_popup import show_context_menu
 
 
 class PartialSignals(QObject):
@@ -27,6 +27,19 @@ class PartialSignals(QObject):
 
 
 class EditorPipelineMixin:
+    def _reconnect_signal(self, signal, slot) -> bool:
+        if signal is None or not hasattr(signal, "connect") or slot is None:
+            return False
+        try:
+            signal.disconnect(slot)
+        except Exception:
+            pass
+        try:
+            signal.connect(slot)
+            return True
+        except Exception:
+            return False
+
     def _is_video_playing_for_timeline_fit(self) -> bool:
         try:
             player = getattr(getattr(self, "video_player", None), "media_player", None)
@@ -62,18 +75,10 @@ class EditorPipelineMixin:
         except Exception:
             pass
         if hasattr(main_w, "backend") and main_w.backend:
-            try: main_w.backend.sig_chunk_done.disconnect(self.append_segments)
-            except Exception: pass
-            try: main_w.backend.sig_progress.disconnect(self.update_progress)
-            except Exception: pass
-            try: main_w.backend.sig_chunk_done.connect(self.append_segments)
-            except Exception: pass
-            try: main_w.backend.sig_progress.connect(self.update_progress)
-            except Exception: pass
+            self._reconnect_signal(getattr(main_w.backend, "sig_chunk_done", None), self.append_segments)
+            self._reconnect_signal(getattr(main_w.backend, "sig_progress", None), self.update_progress)
             if getattr(self, 'is_batch_mode', False) and hasattr(main_w.backend, 'sig_batch_finished'):
-                try: main_w.backend.sig_batch_finished.disconnect()
-                except Exception: pass
-                main_w.backend.sig_batch_finished.connect(self._on_batch_finished)
+                self._reconnect_signal(getattr(main_w.backend, "sig_batch_finished", None), self._on_batch_finished)
 
     def _on_batch_finished(self):
         self.sm.set_custom_status("✅ 배치 작업이 모두 완료되었습니다.")
@@ -517,14 +522,12 @@ class EditorPipelineMixin:
         for owner in (main_w, self):
             try:
                 sig = getattr(owner, "_sig_refresh_cut_boundary_placeholder", None)
-                if sig is None or not hasattr(sig, "connect"):
+                if sig is None:
                     continue
-                try:
-                    sig.disconnect(self._refresh_cut_boundary_placeholder_from_project)
-                except Exception:
-                    pass
-                sig.connect(self._refresh_cut_boundary_placeholder_from_project)
-                connected = True
+                connected = self._reconnect_signal(
+                    sig,
+                    self._refresh_cut_boundary_placeholder_from_project,
+                ) or connected
             except Exception:
                 pass
 
@@ -758,16 +761,44 @@ class EditorPipelineMixin:
 
 
     def _show_playhead_menu(self, gpos, sec):
-        menu = QMenu(self)
-        menu.setStyleSheet("QMenu { font-size: 13px; }")
-        if hasattr(self, "_add_cut_boundary_level_submenu"):
-            self._add_cut_boundary_level_submenu(menu)
-            menu.addSeparator()
-        act_cur = menu.addAction("🎯 현재 자막 세그먼트만 재인식")
-        act_end = menu.addAction("🚀 현재부터 끝까지 자막 재인식")
-        action = menu.exec(gpos)
-        if action == act_cur: self._re_recognize_segment(sec)
-        elif action == act_end: self._re_recognize_from(sec)
+        items = []
+        try:
+            from core.settings import load_settings
+            from core.cut_boundary import cut_boundary_level
+
+            current = str(cut_boundary_level(load_settings() or {}) or "medium")
+            level_labels = {
+                "off": "컷 경계: 사용안함",
+                "low": "컷 경계: 낮음 - 3초 간격",
+                "medium": "컷 경계: 중간 - 2초 간격",
+            }
+            for level in ("off", "low", "medium"):
+                items.append(
+                    {
+                        "id": f"cut_boundary:{level}",
+                        "label": level_labels[level],
+                        "checked": level == current,
+                        "accent": "#34C759" if level != "off" else "#A9B0B7",
+                    }
+                )
+            items.append({"separator": True})
+        except Exception:
+            pass
+        items.extend(
+            [
+                {"id": "re_segment", "label": "현재 자막 세그먼트만 재인식", "accent": "#5AC8FA"},
+                {"id": "re_from", "label": "현재부터 끝까지 자막 재인식", "accent": "#34C759"},
+            ]
+        )
+        chosen = show_context_menu(self, gpos, items)
+        if not chosen:
+            return
+        if chosen.startswith("cut_boundary:"):
+            self._set_cut_boundary_level_from_menu(chosen.split(":", 1)[1])
+        elif chosen == "re_segment":
+            self._re_recognize_segment(sec)
+        elif chosen == "re_from":
+            self._re_recognize_from(sec)
 
     def _re_recognize_segment(self, sec):
         segs = self._get_current_segments()

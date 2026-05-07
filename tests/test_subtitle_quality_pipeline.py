@@ -97,6 +97,38 @@ class SubtitleQualityPipelineTests(unittest.TestCase):
         self.assertEqual(result.segments[0]["text"], "가격은 123원")
         self.assertIn("quality_candidates", result.segments[0])
 
+    def test_quality_pipeline_marks_uncertain_llm_rewrite_for_review(self):
+        result = run_subtitle_quality_pipeline(
+            [
+                {
+                    "start": 0.0,
+                    "end": 1.3,
+                    "text": "안경쓰신 분들은 그냥 시뮬레이터를 하시는 게 낫습니다",
+                    "words": [{"word": "안경쓰신", "start": 0.0, "end": 0.4}],
+                    "asr_metadata": {
+                        "avg_logprob": -0.2,
+                        "compression_ratio": 1.0,
+                        "no_speech_prob": 0.05,
+                        "word_confidence": 0.91,
+                    },
+                    "_llm_rewrite_policy": {
+                        "changed": True,
+                        "confidence": "medium",
+                        "needs_review": True,
+                        "reason": "uncertain_lexical_rewrite",
+                        "similarity": 0.88,
+                        "score_penalty": 18.0,
+                    },
+                }
+            ],
+            settings={"subtitle_quality_enabled": True, "sub_max_cps": 12},
+        )
+
+        quality = dict(result.segments[0].get("quality") or {})
+        self.assertEqual(quality.get("confidence_label"), "yellow")
+        self.assertIn("llm_uncertain_rewrite", tuple(quality.get("flags") or ()))
+        self.assertGreaterEqual(result.summary.needs_review_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1080,6 +1080,67 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertEqual(rows[0][0][0]["text"], "NPU")
         self.assertEqual(run_coreml.call_args.kwargs["model"], "coreml:large-v3-v20240930_626MB")
 
+    def test_transcribe_falls_back_from_transformers_model_when_runtime_is_unavailable(self):
+        class _Stdout:
+            def __init__(self, lines):
+                self.lines = list(lines)
+
+            def readline(self):
+                return self.lines.pop(0) if self.lines else ""
+
+        class _Proc:
+            def __init__(self, lines):
+                self.stdout = _Stdout(lines)
+
+            def poll(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chunk_dir = os.path.join(tmp, "chunks")
+            os.makedirs(chunk_dir, exist_ok=True)
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000)
+
+            proc = _Proc(
+                [
+                    json.dumps(
+                        {
+                            "task_id": "task-1",
+                            "index": 0,
+                            "result": {
+                                "segments": [{"start": 0.0, "end": 0.5, "text": "fallback", "words": []}],
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    json.dumps({"task_id": "task-1", "done": True}, ensure_ascii=False) + "\n",
+                ]
+            )
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2",
+                "w_none_temp_max": 0.0,
+                "stt_ensemble_enabled": False,
+                "stt_selective_secondary_recheck_enabled": False,
+            }
+
+            with patch.object(config, "IS_MAC", True), \
+                 patch("core.audio.whisper_transformers.transformers_whisper_runtime_status", return_value=(False, "disabled")), \
+                 patch(
+                     "core.audio.whisper_transformers.transformers_whisper_fallback_model",
+                     return_value="mlx-community/whisper-large-v3-turbo",
+                 ), \
+                 patch("core.audio.whisper_mlx.ensure_worker", return_value=proc), \
+                 patch("core.audio.whisper_mlx.submit_task", return_value="task-1"), \
+                 patch("core.audio.whisper_mlx.stop_worker"):
+                rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False))
+
+        self.assertEqual(rows[0][0][0]["text"], "fallback")
+
 
 if __name__ == "__main__":
     unittest.main()

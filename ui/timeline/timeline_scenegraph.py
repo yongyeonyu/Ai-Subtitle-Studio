@@ -233,6 +233,7 @@ class TimelineSceneGraphLayer:
         self.widget.setAttribute(Qt.WidgetAttribute.WA_AlwaysStackOnTop, True)
         self.widget.setSource(QUrl.fromLocalFile(str(QML_PATH)))
         self.widget.setVisible(False)
+        self._last_segment_count = 0
 
     @staticmethod
     def enabled() -> bool:
@@ -264,11 +265,12 @@ class TimelineSceneGraphLayer:
         hover_line: int | None,
         quality_filter: str,
         speaker_settings: dict[str, Any] | None,
-    ) -> None:
+    ) -> int:
         root = self.widget.rootObject()
         if root is None:
+            self._last_segment_count = 0
             self.widget.setVisible(False)
-            return
+            return 0
         data = build_scenegraph_subtitle_segments(
             segments,
             pps=pps,
@@ -281,8 +283,10 @@ class TimelineSceneGraphLayer:
             quality_filter=quality_filter,
             speaker_settings=speaker_settings,
         )
+        self._last_segment_count = len(data)
         root.setProperty("segments", data)
         root.setProperty("pps", float(pps or 1.0))
         root.setProperty("fps", float(normalize_fps(fps)))
         root.setProperty("viewportX", float(scroll_x or 0))
         root.setProperty("fontFamily", str(config.FONT))
+        return self._last_segment_count

@@ -189,9 +189,13 @@ class GlobalCanvas(GlobalCanvasBase):
         key = self._static_key()
         if self._static_cache is not None and self._static_cache_key == key:
             return self._static_cache
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return QPixmap()
         pixmap = QPixmap(max(1, self.width()), max(1, self.height()))
         pixmap.fill(QColor("#0B1115"))
         p = QPainter(pixmap)
+        if not p.isActive():
+            return pixmap
         w = pixmap.width()
         h = pixmap.height()
         mid_y = h // 2
@@ -242,8 +246,14 @@ class GlobalCanvas(GlobalCanvasBase):
         return pixmap
 
     def paintEvent(self, event):
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
         p = QPainter(self)
-        p.drawPixmap(0, 0, self._build_static_cache())
+        if not p.isActive():
+            return
+        static_cache = self._build_static_cache()
+        if not static_cache.isNull():
+            p.drawPixmap(0, 0, static_cache)
 
         w = self.width()
         total = float(self.total_duration or 0.0)

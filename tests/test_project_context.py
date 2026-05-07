@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import core.project.project_io as project_io
 from core.project.project_io import clear_project_file_cache, read_project_file, write_project_file
 from core.project.project_manager import extract_model_settings, load_project, merge_project_model_settings, save_project
 from core.project.project_phase1b import enrich_existing_project_file
@@ -173,6 +174,19 @@ class ProjectContextTests(unittest.TestCase):
             self.assertEqual(first["project_name"], "first")
             self.assertEqual(second["project_name"], "second")
             self.assertEqual(load_mock.call_count, 2)
+
+    def test_project_io_lru_prunes_older_projects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            clear_project_file_cache()
+            paths = []
+            for idx in range(project_io._PROJECT_FILE_CACHE_MAX + 2):
+                path = Path(tmp) / f"project_{idx}.json"
+                path.write_text(json.dumps({"project_name": f"p{idx}"}), encoding="utf-8")
+                read_project_file(str(path))
+                paths.append(str(path))
+
+            self.assertLessEqual(len(project_io._PROJECT_FILE_CACHE), project_io._PROJECT_FILE_CACHE_MAX)
+            self.assertNotIn(project_io._project_cache_key(paths[0]), project_io._PROJECT_FILE_CACHE)
 
     def test_save_project_strips_legacy_workspace_zoom_state(self):
         with tempfile.TemporaryDirectory() as tmp:

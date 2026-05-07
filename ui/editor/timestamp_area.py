@@ -168,7 +168,11 @@ class TimestampArea(QWidget):
         self._hovered_line = -1; self._hovered_delete_line = -1; self.update(); super().leaveEvent(event)
 
     def paintEvent(self, event):
+        if bool(getattr(self, "_shutdown_in_progress", False) or getattr(self.editor, "_shutdown_in_progress", False)):
+            return
         painter = QPainter(self)
+        if not painter.isActive():
+            return
         painter.fillRect(event.rect(), QColor("#11181C"))
         
         _pw = getattr(self.editor, '_parent_widget', None)

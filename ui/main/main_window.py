@@ -36,8 +36,9 @@ from ui.main.main_file_ops import FileOpsMixin
 from ui.main.main_runtime_cleanup import MainRuntimeCleanupMixin
 from ui.main.main_signals import SignalHandlersMixin
 
-from core.runtime import config
 from core.runtime.logger import get_logger
+from core.runtime.memory_manager import RuntimeMemoryManager
+from core.runtime.multi_process import RuntimeResourceCoordinator
 from core.personalization.idle_trainer import FOREGROUND_ACTIVITY_HOLD_MS, PersonalizationIdleTrainer
 from core.cloud_sync import CloudSyncManager
 from core.path_manager import (
@@ -148,11 +149,20 @@ class MainWindow(
         self._post_completion_idle_countdown_timer = QTimer(self)
         self._post_completion_idle_countdown_timer.setInterval(1000)
         self._post_completion_idle_countdown_timer.timeout.connect(self._refresh_post_completion_idle_status)
+        self._runtime_memory_timer = QTimer(self)
+        self._runtime_memory_timer.timeout.connect(self._poll_runtime_memory_manager)
+        self._runtime_memory_manager = None
+        self._runtime_resource_timer = QTimer(self)
+        self._runtime_resource_timer.timeout.connect(self._poll_runtime_resource_coordinator)
+        self._runtime_resource_coordinator = None
+        self._runtime_resource_snapshot = {}
 
         self._build_ui()
         self._connect_signals()
         self._personalization_idle_trainer = PersonalizationIdleTrainer(self)
         self._attach_app_event_filter()
+        self._initialize_runtime_memory_manager(settings)
+        self._initialize_runtime_resource_coordinator(settings)
         _offscreen_test = str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen"
         if not _offscreen_test:
             QTimer.singleShot(0, self._warmup_local_llm_models)
@@ -203,8 +213,14 @@ class MainWindow(
         self.sidebar_settings_label = QLabel("", self.home_page)
         self.sidebar_settings_label.setWordWrap(True)
         self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 9px; font-weight: bold; background: transparent; border: none;")
+        self.sidebar_runtime_label = QLabel("", self.home_page)
+        self.sidebar_runtime_label.setWordWrap(True)
+        self.sidebar_runtime_label.setTextFormat(Qt.TextFormat.RichText)
+        self.sidebar_runtime_label.setStyleSheet("color: #A9B0B7; font-size: 8px; font-weight: bold; background: transparent; border: none;")
         if hasattr(self, "_refresh_sidebar_engine_info"):
             self._refresh_sidebar_engine_info()
+        if hasattr(self, "_refresh_sidebar_runtime_monitor"):
+            self._refresh_sidebar_runtime_monitor()
 
         self.editor_page = QWidget()
         editor_placeholder = QVBoxLayout(self.editor_page)
@@ -257,6 +273,56 @@ class MainWindow(
         self._apply_log_visible(self._log_visible, persist=False)
         self._apply_responsive_workspace_layout()
         self.show_home()
+
+    def _initialize_runtime_memory_manager(self, settings=None):
+        if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
+            return
+        try:
+            manager = RuntimeMemoryManager(settings=dict(settings or {}), logger=get_logger())
+            manager.register_trim_callback("mainwindow", self._handle_runtime_memory_pressure)
+            self._runtime_memory_manager = manager
+            self._runtime_memory_timer.setInterval(int(manager.interval_ms))
+            self._runtime_memory_timer.start()
+        except Exception as exc:
+            try:
+                get_logger().log(f"⚠️ 메모리 관리자 시작 실패: {exc}")
+            except Exception:
+                pass
+
+    def _initialize_runtime_resource_coordinator(self, settings=None):
+        if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
+            return
+        try:
+            coordinator = RuntimeResourceCoordinator(settings=dict(settings or {}), logger=get_logger())
+            self._runtime_resource_coordinator = coordinator
+            self._runtime_resource_timer.setInterval(2500)
+            self._runtime_resource_timer.start()
+            self._poll_runtime_resource_coordinator()
+        except Exception as exc:
+            try:
+                get_logger().log(f"⚠️ 런타임 코디네이터 시작 실패: {exc}")
+            except Exception:
+                pass
+
+    def _poll_runtime_memory_manager(self):
+        manager = getattr(self, "_runtime_memory_manager", None)
+        if manager is None:
+            return
+        try:
+            manager.poll()
+        except Exception:
+            pass
+
+    def _poll_runtime_resource_coordinator(self):
+        coordinator = getattr(self, "_runtime_resource_coordinator", None)
+        if coordinator is None:
+            return
+        try:
+            self._runtime_resource_snapshot = coordinator.poll(window=self)
+            if hasattr(self, "_refresh_sidebar_runtime_monitor"):
+                self._refresh_sidebar_runtime_monitor()
+        except Exception:
+            pass
 
     def _current_responsive_profile(self):
         try:
@@ -1398,4 +1464,4 @@ class MainWindow(
         except Exception:
             pass
         event.accept()
-        self._schedule_forced_process_exit(delay_ms=90)
+        self._schedule_forced_process_exit(delay_ms=60)

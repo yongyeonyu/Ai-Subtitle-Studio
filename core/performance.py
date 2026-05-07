@@ -8,8 +8,6 @@ third-party dependencies so performance features remain safe on Windows builds.
 """
 from __future__ import annotations
 
-import json
-import math
 import os
 import platform
 import shutil
@@ -244,12 +242,7 @@ def distributed_worker_ceiling(
     perf = max(1, int(profile.get("performance_cores", physical) or physical))
     task_text = str(task or "cpu").strip().lower()
 
-    default_reserve = 1 if logical >= 4 else 0
-    try:
-        configured_reserve = int(float(settings.get("runtime_scheduler_reserve_cores", default_reserve)))
-    except (TypeError, ValueError):
-        configured_reserve = default_reserve
-    configured_reserve = max(0, configured_reserve)
+    configured_reserve = runtime_scheduler_reserve_cores(settings, task=task_text)
     reserve = configured_reserve if reserve_cores is None else max(0, int(reserve_cores))
 
     if hardware_max_profile_enabled(settings):
@@ -259,6 +252,57 @@ def distributed_worker_ceiling(
     else:
         ceiling = max(1, physical)
     return max(minimum, min(workload, ceiling))
+
+
+def runtime_scheduler_reserve_cores(
+    settings: dict[str, Any] | None = None,
+    *,
+    task: str = "cpu",
+    exiting: bool = False,
+) -> int:
+    """Return the core reserve that should be kept away from worker pools.
+
+    In `max` profile we prefer full-core usage for CPU/IO fan-out, except for
+    manual LoRA full-learning where we deliberately keep one logical core free
+    so stop/exit stays responsive. When the app is exiting we keep no reserve
+    at all so cleanup can finish immediately.
+    """
+    settings = dict(settings or {})
+    if exiting:
+        return 0
+    profile = hardware_profile()
+    logical = max(1, int(profile.get("logical_cores", 1) or 1))
+    default_reserve = 1 if logical >= 4 else 0
+    try:
+        configured = int(float(settings.get("runtime_scheduler_reserve_cores", default_reserve)))
+    except (TypeError, ValueError):
+        configured = default_reserve
+    configured = max(0, configured)
+    if not hardware_max_profile_enabled(settings):
+        return configured
+    task_text = str(task or "cpu").strip().lower()
+    if task_text in {
+        "manual_lora",
+        "lora_manual",
+        "manual_training",
+        "manual_full_training",
+        "lora_full",
+    }:
+        return 1 if logical > 1 else 0
+    if task_text in {
+        "cpu",
+        "io",
+        "prefetch",
+        "cut_pioneer",
+        "cut_follower",
+        "stt",
+        "lora",
+        "cleanup",
+        "shutdown",
+        "exit",
+    }:
+        return 0
+    return min(configured, 1)
 
 
 def balanced_task_slices(
@@ -299,7 +343,7 @@ def _safe_bool(value: Any, default: bool = True) -> bool:
     return bool(value)
 
 
-def _qt_gpu_rendering_settings_request() -> tuple[bool | None, bool | None]:
+def _qt_gpu_rendering_settings_request() -> tuple[bool | None, bool | None, str]:
     try:
         from core.runtime import config as runtime_config
 
@@ -323,7 +367,16 @@ def _qt_gpu_rendering_settings_request() -> tuple[bool | None, bool | None]:
         force_requested = _safe_bool(settings.get("editor_rendering_force_qt_opengl"), False)
     elif "force_qt_opengl" in settings:
         force_requested = _safe_bool(settings.get("force_qt_opengl"), False)
-    return gpu_requested, force_requested
+    backend = str(
+        settings.get(
+            "editor_rendering_qt_backend",
+            settings.get("gpu_qt_backend", "auto"),
+        )
+        or "auto"
+    ).strip().lower()
+    if backend not in {"auto", "metal", "opengl"}:
+        backend = "auto"
+    return gpu_requested, force_requested, backend
 
 
 def mark_runtime_scheduler_start(settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -448,7 +501,7 @@ def _darwin_battery_state() -> dict[str, Any]:
         if token.endswith("%"):
             percent = _positive_int(token.rstrip("%"), 0)
             break
-    return {"on_battery": bool(on_battery), "battery_percent": percent if percent > 0 else None}
+    return {"on_battery": bool(on_battery), "battery_percent": percent if isinstance(percent, int) and percent > 0 else None}
 
 
 def _darwin_user_idle_seconds() -> float | None:
@@ -565,16 +618,15 @@ def adaptive_worker_count(
     max_profile = hardware_max_profile_enabled(settings)
     profile = hardware_profile()
     logical = max(1, int(profile.get("logical_cores", 1) or 1))
-    physical = max(1, int(profile.get("physical_cores", logical) or logical))
     if task_text in {"cut_pioneer", "cut_follower", "stt"}:
         if task_text == "stt":
             default_max = 2
         else:
-            default_max = min(logical, max(4, physical)) if max_profile else 4
+            default_max = logical if max_profile else 4
     elif task_text == "lora":
-        default_max = min(logical, max(4, physical)) if max_profile else 4
+        default_max = logical if max_profile else 4
     else:
-        default_max = min(logical, max(8, physical)) if max_profile else (maximum or 8)
+        default_max = logical if max_profile else (maximum or 8)
     max_cap = max(1, int(maximum or _positive_int(settings.get(f"{task_text}_workers_resource_max"), default_max) or default_max))
     base = bounded_worker_count(requested, kind=kind, minimum=minimum, maximum=max_cap)
     if max_profile and auto_enabled:
@@ -783,7 +835,7 @@ def configure_qt_gpu_rendering_before_app() -> None:
     # Default off in real app runs too. On macOS, forcing global Qt OpenGL can
     # crash QtMultimedia/video widgets with Segmentation fault: 11.
     gpu_default = "0"
-    settings_gpu, settings_force = _qt_gpu_rendering_settings_request()
+    settings_gpu, settings_force, settings_backend = _qt_gpu_rendering_settings_request()
     gpu_value = os.environ.get("AI_SUBTITLE_GPU_RENDERING")
     gpu_requested = (
         str(gpu_value if gpu_value is not None else gpu_default).lower() in {"1", "true", "yes", "on"}
@@ -798,6 +850,22 @@ def configure_qt_gpu_rendering_before_app() -> None:
         if force_value is not None or settings_force is None
         else bool(settings_force)
     )
+    backend_value = str(os.environ.get("AI_SUBTITLE_QT_GPU_BACKEND", settings_backend or "auto") or "auto").strip().lower()
+    if backend_value not in {"auto", "metal", "opengl"}:
+        backend_value = "auto"
+    if platform.system() == "Darwin" and force_value is None and backend_value != "opengl":
+        force_requested = False
+    if force_requested:
+        backend_value = "opengl"
+    if backend_value == "auto":
+        backend_value = "metal" if platform.system() == "Darwin" else "opengl"
+
+    if backend_value == "metal" and platform.system() == "Darwin":
+        os.environ.setdefault("QSG_RHI_BACKEND", "metal")
+        if str(os.environ.get("QT_QUICK_BACKEND", "") or "").strip().lower() == "hardware":
+            os.environ.pop("QT_QUICK_BACKEND", None)
+        return
+
     if not force_requested:
         return
 

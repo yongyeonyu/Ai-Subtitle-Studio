@@ -11,7 +11,6 @@ from typing import Any, Iterable
 
 from core.cut_boundary_audio import AUDIO_GAIN_LINE_COLOR, is_audio_gain_boundary
 from core.frame_time import normalize_fps, sec_to_frame
-from core.personalization.deep_subtitle_policy import score_cut_boundary
 
 
 CUT_BOUNDARY_FUSION_SCHEMA = "ai_subtitle_studio.cut_boundary_fusion.v1"

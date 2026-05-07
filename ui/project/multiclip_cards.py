@@ -85,6 +85,10 @@ class ClipCard(QFrame):
         except Exception:
             self.thumbnail = None
 
+    def release_resources(self):
+        self.thumbnail = None
+        self.update()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)

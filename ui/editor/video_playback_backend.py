@@ -1,10 +1,10 @@
 # Version: 03.17.00
 # Phase: PHASE3
-"""Selectable lightweight video playback backends for the editor preview.
+"""Selectable video playback backends for the editor preview.
 
-mpv is preferred for real app runs because it is a small FFmpeg-backed player
-with GPU video output. libVLC is kept as a practical cross-platform fallback.
-QtMultimedia remains the test/offscreen-safe backend.
+On macOS we now prefer QtMultimedia for the default editor preview because it
+keeps memory pressure lower than always standing up an external player path.
+mpv/libVLC remain available as explicit opt-ins and practical fallbacks.
 """
 from __future__ import annotations
 
@@ -98,6 +98,8 @@ def choose_video_backend(preferred: str | None = None) -> VideoBackendChoice:
         return VideoBackendChoice("qt", "forced")
     if (requested == "auto") and (_running_under_pytest() or _offscreen_qt()):
         return VideoBackendChoice("qt", "test_or_offscreen_safe")
+    if requested == "auto" and bool(getattr(config, "IS_MAC", False)):
+        return VideoBackendChoice("qt", "mac_low_memory_default")
     if requested in {"auto", "mpv"} and _mpv_available():
         return VideoBackendChoice("mpv", "preferred_lightweight_gpu_backend")
     if requested == "mpv":
@@ -224,10 +226,11 @@ class MpvPlaybackBackend(_BaseExternalBackend):
         import mpv  # type: ignore
 
         wid = int(self._video_widget.winId()) if self._video_widget is not None else 0
+        gpu_api = "metal" if bool(getattr(config, "IS_MAC", False)) else "opengl"
         kwargs = {
             "wid": str(wid) if wid else None,
             "vo": "gpu-next",
-            "gpu_api": "opengl",
+            "gpu_api": gpu_api,
             "hwdec": "auto-safe",
             "osc": False,
             "input_default_bindings": False,

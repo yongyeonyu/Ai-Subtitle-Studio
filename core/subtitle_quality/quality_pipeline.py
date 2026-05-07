@@ -65,7 +65,12 @@ def _summary_for_segments(
             weighted_score += float(score) * duration
             total_duration += duration
         flags = tuple(quality.get("flags") or ())
-        if label in ("red", "gray") or "non_speech_hallucination_risk" in flags or "high_no_speech_prob" in flags:
+        if (
+            label in ("red", "gray")
+            or "non_speech_hallucination_risk" in flags
+            or "high_no_speech_prob" in flags
+            or "llm_uncertain_rewrite" in flags
+        ):
             needs_review += 1
         if "auto_corrected" in flags:
             auto_corrected += 1

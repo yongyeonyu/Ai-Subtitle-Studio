@@ -248,6 +248,12 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         self._eta_thread.start()
 
         get_logger().log(f"🚀 총 {len(self.files_to_process)}개 파일 처리 시작!")
+        try:
+            refresher = getattr(self.ui, "_poll_runtime_resource_coordinator", None)
+            if callable(refresher):
+                refresher()
+        except Exception:
+            pass
         self._pipeline_thread = threading.Thread(
             target=self._run_all, daemon=True, name="pipeline-main"
         )
@@ -302,6 +308,12 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
             self._edit_event.set()
         if hasattr(self, "_start_event"):
             self._start_event.set()
+        try:
+            refresher = getattr(self.ui, "_poll_runtime_resource_coordinator", None)
+            if callable(refresher):
+                refresher()
+        except Exception:
+            pass
 
     # ─── ETA 사전 계산 ───────────────────────────────────
     def _precalculate_etas(self):

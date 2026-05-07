@@ -266,6 +266,12 @@ class MultiClipEditor(QDialog):
             self.container.layout.addWidget(card)
 
         for card in existing.values():
+            try:
+                release_resources = getattr(card, "release_resources", None)
+                if callable(release_resources):
+                    release_resources()
+            except Exception:
+                pass
             card.deleteLater()
 
         self.cards = new_cards

@@ -12,6 +12,7 @@ import threading
 import importlib.util
 import numpy as np
 from core.audio.runtime_cleanup import clear_audio_model_memory_caches
+from core.audio.torch_acceleration import move_torch_model_to_preferred_device
 from core.runtime.logger import get_logger
 
 
@@ -87,16 +88,12 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
             source="speechbrain/spkrec-ecapa-voxceleb", 
             savedir=os.path.join(os.path.expanduser("~"), ".cache", "speechbrain")
         )
-        
-        if torch.backends.mps.is_available():
-            classifier.device = torch.device("mps")
-            classifier.mods.to("mps")
-            get_logger().log("  └ 🚀 Mac 애플 실리콘(MPS) GPU 가속 활성화!")
-        elif torch.cuda.is_available():
-            classifier.device = torch.device("cuda")
-            classifier.mods.to("cuda")
-            get_logger().log("  └ 🚀 CUDA 가속 활성화!")
+
+        device_name = move_torch_model_to_preferred_device(classifier.mods, log_label="화자 분리")
+        if device_name != "cpu":
+            classifier.device = torch.device(device_name)
         else:
+            classifier.device = torch.device("cpu")
             get_logger().log("  └ 💻 CPU 연산 모드")
     except Exception as e:
         get_logger().log(f"❌ 모델 로딩 에러: {e}")

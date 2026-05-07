@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import core.personalization.lora_vector_retriever as lora_vector_retriever
 from core.personalization.lora_models import TrialRecord, TruthTableRow
 from core.personalization.lora_storage import (
     append_excluded_parentheticals,
@@ -303,6 +304,20 @@ class LoraVectorRetrieverTests(unittest.TestCase):
             self.assertEqual(first["items"][0]["kind"], second["items"][0]["kind"])
             self.assertIn("facet", first["items"][0]["score_breakdown"])
             self.assertGreaterEqual(summary["query_cache_entries"], 1)
+
+    def test_query_cache_lru_stays_bounded(self):
+        original_max = lora_vector_retriever.LORA_QUERY_CACHE_MAX
+        try:
+            lora_vector_retriever.LORA_QUERY_CACHE_MAX = 2
+            with tempfile.TemporaryDirectory() as tmpdir:
+                self._seed_vehicle_store(tmpdir)
+                build_lora_retrieval_index(tmpdir)
+                retrieve_lora_context("BMW X5", store_dir=tmpdir, limit=4)
+                retrieve_lora_context("Jeju", store_dir=tmpdir, limit=4)
+                retrieve_lora_context("engine traffic", store_dir=tmpdir, limit=4)
+                self.assertLessEqual(len(lora_vector_retriever._PROCESS_QUERY_CACHE), 2)
+        finally:
+            lora_vector_retriever.LORA_QUERY_CACHE_MAX = original_max
 
     def test_balanced_quality_retrieval_uses_only_high_lora_bucket(self):
         with tempfile.TemporaryDirectory() as tmpdir:

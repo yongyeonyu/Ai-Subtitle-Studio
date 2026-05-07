@@ -29,6 +29,10 @@ DEFAULT_STT_MODE_SETTINGS: dict[str, Any] = {
     "stt_learning_save_text_pairs": True,
     "stt_learning_save_vad_features": True,
     "stt_learning_save_edit_events": True,
+    "stt_lora_bundle_auto_export_enabled": True,
+    "stt_lora_bundle_size_tier": "300MB",
+    "stt_lora_style_learning_enabled": True,
+    "stt_lora_protected_terms": [],
 }
 
 

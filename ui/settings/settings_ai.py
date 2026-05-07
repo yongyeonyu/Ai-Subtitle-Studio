@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                              QGridLayout,
                              QLabel, QComboBox, QMessageBox, QLineEdit, 
                              QSlider, QPushButton, QCheckBox, QTextEdit,
-                             QDoubleSpinBox, QSpinBox, QTabWidget, QWidget,
+                             QDoubleSpinBox, QSpinBox, QTabWidget, QWidget, QFrame,
                              QScrollArea, QSizePolicy)
 from PyQt6.QtCore import Qt
 from core.runtime import config
@@ -17,9 +17,9 @@ from ui.settings.settings_common import (
     DEFAULT_ADV_SETTINGS, DEFAULT_WHISPER_MODELS, WINDOWS_WHISPER_MODELS,
     _fetch_models, _create_bottom_buttons, filter_available_whisper_models,
 )
-from ui.settings.qml_panel import create_settings_header
+from ui.settings.qml_panel import create_qml_tab_bar, create_settings_header, sync_qml_tab_bar
 from ui.settings.tablet_dialog import apply_tablet_dialog_profile
-from ui.style import label_style, settings_button_style, settings_dialog_stylesheet, line_icon
+from ui.style import COLORS, label_style, settings_button_style, settings_dialog_stylesheet, line_icon
 from core.llm.provider_registry import cloud_model_items
 from core.llm.secure_keys import get_api_key, set_api_key
 from core.audio import audio_presets as _audio_presets
@@ -49,6 +49,35 @@ from core.path_manager import (
 )
 
 
+def _ai_settings_panel_stylesheet() -> str:
+    return (
+        "#AiSettingsSectionCard {"
+        f"background: {COLORS['surface']}; border: 1px solid {COLORS['separator']}; border-radius: 16px;"
+        "}"
+        "#AiSettingsSectionTitle {"
+        f"color: {COLORS['text']}; font-size: 18px; font-weight: 900;"
+        "}"
+        "#AiSettingsSectionHint {"
+        f"color: {COLORS['muted']}; font-size: 12px; font-weight: 700;"
+        "}"
+        "#AiModelDownloadPanel {"
+        "background: transparent; border: none;"
+        "}"
+        "#AiRegistryModelStatus, #AiModelInfoLabel {"
+        "background: rgba(0, 122, 255, 0.08);"
+        "border: 1px solid rgba(0, 122, 255, 0.24);"
+        "border-radius: 12px; padding: 10px 12px;"
+        f"color: #D8E9FF;"
+        "}"
+        "#AiApiSectionLabel {"
+        f"color: {COLORS['text']}; font-size: 14px; font-weight: 900;"
+        "}"
+        "#GoogleApiKeyInput, #OpenAiApiKeyInput, #HuggingFaceTokenInput {"
+        "padding-left: 12px; font-size: 13px;"
+        "}"
+    )
+
+
 def _resolve_audio_preset_combo_data(settings: dict | None) -> str:
     resolver = getattr(_audio_presets, "resolve_audio_preset_combo_data", None)
     if callable(resolver):
@@ -71,7 +100,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.setWindowTitle("⚙️ AI 엔진 설정")
         self.setMinimumWidth(860)
         apply_tablet_dialog_profile(self)
-        self.setStyleSheet(settings_dialog_stylesheet())
+        self.setStyleSheet(settings_dialog_stylesheet() + _ai_settings_panel_stylesheet())
         self.result_settings = dict(settings)
         self.stt_quality_presets = load_stt_quality_presets()
         self.audio_presets = _audio_presets.load_audio_presets()
@@ -95,6 +124,23 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.tabs.addTab(ai_tab, "모델/API")
         self.tabs.addTab(auto_tab, "자동 설정")
         self.tabs.setDocumentMode(True)
+        self._qml_tab_bar = create_qml_tab_bar(
+            self,
+            items=[{"title": self.tabs.tabText(i)} for i in range(self.tabs.count())],
+            current_index=self.tabs.currentIndex(),
+            scope="settings",
+        )
+        if self._qml_tab_bar is not None:
+            self.tabs.tabBar().hide()
+            try:
+                root = self._qml_tab_bar.rootObject()
+                if root is not None:
+                    root.tabTriggered.connect(self.tabs.setCurrentIndex)
+                self.tabs.currentChanged.connect(
+                    lambda idx: sync_qml_tab_bar(self._qml_tab_bar, current_index=idx)
+                )
+            except Exception:
+                self._qml_tab_bar = None
 
         self.combo_stt_quality_preset = QComboBox()
         for key, label, summary in simple_operation_mode_items():
@@ -114,20 +160,46 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
 
         self._build_subtitle_quality_section(editor_form, settings)
 
+        self._build_model_management_section(ai_form, settings)
+        self._build_api_keys_section(ai_form)
+        self._build_roughcut_llm_section(roughcut_form, settings)
+        self._build_chunk_bundle_section(editor_form, settings)
+        self._build_stt_support_section(ai_form, settings)
+        self._build_audio_vad_section(ai_form, settings)
+        self._sync_stt_quality_preset_combo(selected_mode_from_settings(settings))
+        self._sync_audio_preset_combo(settings.get("audio_preset", ""))
+        self._sync_auto_preset_button_state()
+        self._update_editor_roughcut_draft_state()
+        self.combo_audio_preset.currentIndexChanged.connect(self._on_audio_preset_changed)
+
+        self._build_auto_settings_section(auto_form, settings)
+
+        if self._qml_tab_bar is not None:
+            layout.addWidget(self._qml_tab_bar)
+        layout.addWidget(self.tabs)
+        layout.addSpacing(10)
+        layout.addLayout(_create_bottom_buttons(self, self._on_ok, save_callback=self._on_save, save_def_callback=self._on_save_default))
+
+    def _build_model_management_section(self, form: QFormLayout, settings: dict):
         # 1. 모델 관리
         self.llm_filter = "all"
         self.models_data = []
+        parent = self.parent()
         if parent is not None and getattr(parent, "_local_llm_models", None):
             self.models_data = [dict(m) for m in parent._local_llm_models]
         if not self.models_data:
             self.models_data = _fetch_models()
 
+        model_card, model_card_layout = self._make_section_card(
+            "모델 관리:",
+            "설치된 LLM, 추천 로컬 모델, 필수 STT 모델을 한 번에 확인하고 정리합니다.",
+        )
         model_panel = QWidget()
         model_panel.setObjectName("AiModelDownloadPanel")
         model_grid = QGridLayout(model_panel)
-        model_grid.setContentsMargins(0, 0, 0, 4)
-        model_grid.setHorizontalSpacing(10)
-        model_grid.setVerticalSpacing(8)
+        model_grid.setContentsMargins(0, 2, 0, 0)
+        model_grid.setHorizontalSpacing(12)
+        model_grid.setVerticalSpacing(10)
         model_grid.setColumnMinimumWidth(0, 132)
         model_grid.setColumnStretch(1, 1)
         model_grid.setColumnStretch(2, 0)
@@ -199,7 +271,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.lbl_registry_model_status = QLabel("")
         self.lbl_registry_model_status.setWordWrap(True)
         self.lbl_registry_model_status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.lbl_registry_model_status.setStyleSheet(label_style("muted", 10) + "padding: 0 2px 2px 2px;")
+        self.lbl_registry_model_status.setObjectName("AiRegistryModelStatus")
         model_grid.addWidget(self.lbl_registry_model_status, 3, 1, 1, 2)
 
         self._reload_ollama_catalog()
@@ -209,39 +281,44 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.lbl_model_info = QLabel()
         self.lbl_model_info.setWordWrap(True)
         self.lbl_model_info.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.lbl_model_info.setStyleSheet(label_style("muted", 10) + "padding: 0 2px 10px 2px;")
+        self.lbl_model_info.setObjectName("AiModelInfoLabel")
         model_grid.addWidget(self.lbl_model_info, 4, 1, 1, 2)
-        ai_form.addRow("모델 관리:", model_panel)
+        model_card_layout.addWidget(model_panel)
+        form.addRow(model_card)
         self.combo_llm.currentIndexChanged.connect(self._update_model_info)
         self._update_model_info()
 
-        api_section = QLabel("클라우드 API 키")
-        api_section.setStyleSheet(label_style("text", 13, bold=True) + "padding: 10px 5px 2px 5px;")
-        ai_form.addRow("", api_section)
+    def _build_api_keys_section(self, form: QFormLayout):
+        api_card, api_card_layout = self._make_section_card(
+            "클라우드 API 키",
+            "Google, OpenAI, Hugging Face 연동 키를 저장하고 교체합니다.",
+        )
+        api_form = self._make_card_form()
 
         self.input_api_key = QLineEdit()
         self.input_api_key.setObjectName("GoogleApiKeyInput")
         self.input_api_key.setPlaceholderText("AI Studio 발급 Google API Key 입력")
         self.input_api_key.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
         self.input_api_key.setText(get_api_key("google"))
-        ai_form.addRow("Google API Key:", self.input_api_key)
+        api_form.addRow("Google API Key:", self.input_api_key)
 
         self.input_openai_api_key = QLineEdit()
         self.input_openai_api_key.setObjectName("OpenAiApiKeyInput")
         self.input_openai_api_key.setPlaceholderText("OpenAI API Key 입력")
         self.input_openai_api_key.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
         self.input_openai_api_key.setText(get_api_key("openai"))
-        ai_form.addRow("OpenAI API Key:", self.input_openai_api_key)
+        api_form.addRow("OpenAI API Key:", self.input_openai_api_key)
 
         self.input_huggingface_token = QLineEdit()
         self.input_huggingface_token.setObjectName("HuggingFaceTokenInput")
         self.input_huggingface_token.setPlaceholderText("Hugging Face HF_TOKEN 입력")
         self.input_huggingface_token.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
         self.input_huggingface_token.setText(get_api_key("huggingface"))
-        ai_form.addRow("Hugging Face Token:", self.input_huggingface_token)
+        api_form.addRow("Hugging Face Token:", self.input_huggingface_token)
+        api_card_layout.addLayout(api_form)
+        form.addRow(api_card)
 
-        self._build_roughcut_llm_section(roughcut_form, settings)
-
+    def _build_chunk_bundle_section(self, form: QFormLayout, settings: dict):
         # 3. 자막 묶음 단위 (슬라이더 세팅)
         chunk_layout = QHBoxLayout()
         self.btn_chunk_minus = QPushButton("-")
@@ -277,9 +354,9 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             chunk_hint = QLabel("LoRA·딥러닝·정식/임시 컷 경계가 자막 생성마다 묶음 범위를 자동으로 정합니다.")
             chunk_hint.setWordWrap(True)
             chunk_hint.setStyleSheet(label_style("muted", 11))
-            editor_form.addRow("자막 묶음:", chunk_hint)
+            form.addRow("자막 묶음:", chunk_hint)
         else:
-            editor_form.addRow("자막 묶음 단위:", chunk_layout)
+            form.addRow("자막 묶음 단위:", chunk_layout)
         
         curr_chunk = int(settings.get("chunk_time_limit", settings.get("subtitle_bundle_target_sec", 180)) or 180)
         if curr_chunk >= 99999:
@@ -290,6 +367,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             self.slider_chunk.setValue(curr_chunk)
         self._update_chunk_display(self.slider_chunk.value())
 
+    def _build_stt_support_section(self, form: QFormLayout, settings: dict):
         # 4. Whisper 모델
         self.combo_whisper = QComboBox()
         w_models = list(DEFAULT_WHISPER_MODELS)
@@ -299,7 +377,8 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             for folder_name in os.listdir(hf_cache_dir):
                 if folder_name.startswith("models--") and "whisper" in folder_name.lower():
                     repo_name = folder_name.replace("models--", "", 1).replace("--", "/", 1)
-                    if repo_name not in w_models: w_models.append(repo_name)
+                    if repo_name not in w_models:
+                        w_models.append(repo_name)
         w_models = filter_available_whisper_models(w_models)
         stt1_models = [
             model for model in w_models
@@ -338,10 +417,6 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             self.combo_whisper.setCurrentIndex(0)
         self.combo_whisper.blockSignals(False)
         self.combo_whisper.setUpdatesEnabled(True)
-        stt_section = QLabel("STT 보조")
-        stt_section.setStyleSheet(label_style("text", 13, bold=True) + "padding: 10px 5px 2px 5px;")
-        ai_form.addRow("", stt_section)
-
         self.chk_stt_ensemble = QCheckBox("STT2 병렬 인식 사용 (STT1 우선, STT2는 누락 보강용)")
         self.chk_stt_ensemble.setChecked(bool(settings.get("stt_ensemble_enabled", False)))
 
@@ -378,11 +453,19 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
 
         self.chk_stt_ensemble_llm = QCheckBox("LLM 후보 판정 사용")
         self.chk_stt_ensemble_llm.setChecked(bool(settings.get("stt_ensemble_llm_judge_enabled", True)))
-        ai_form.addRow("STT1 음성 모델:", self.combo_whisper)
-        ai_form.addRow("STT2 사용:", self.chk_stt_ensemble)
-        ai_form.addRow("STT2 음성 모델:", self.combo_whisper_secondary)
-        ai_form.addRow("STT 후보 판정:", self.chk_stt_ensemble_llm)
+        stt_card, stt_card_layout = self._make_section_card(
+            "STT 보조",
+            "STT1/STT2 조합과 후보 판정 방식을 이 영역에서 관리합니다.",
+        )
+        stt_form = self._make_card_form()
+        stt_form.addRow("STT1 음성 모델:", self.combo_whisper)
+        stt_form.addRow("STT2 사용:", self.chk_stt_ensemble)
+        stt_form.addRow("STT2 음성 모델:", self.combo_whisper_secondary)
+        stt_form.addRow("STT 후보 판정:", self.chk_stt_ensemble_llm)
+        stt_card_layout.addLayout(stt_form)
+        form.addRow(stt_card)
 
+    def _build_audio_vad_section(self, form: QFormLayout, settings: dict):
         # 5. 음성 처리 AI
         self.combo_audio = QComboBox()
         self.audio_map = {
@@ -392,39 +475,38 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "ClearVoice MossFormer2 (음성 향상/실험)": "clearvoice",
             "사용 안함": "none",
         }
-        for k in self.audio_map: self.combo_audio.addItem(k)
+        for k in self.audio_map:
+            self.combo_audio.addItem(k)
         curr_audio = settings.get("selected_audio_ai", "deepfilter")
         for k, v in self.audio_map.items():
-            if v == curr_audio: self.combo_audio.setCurrentText(k); break
+            if v == curr_audio:
+                self.combo_audio.setCurrentText(k)
+                break
         self._fit_model_combo(self.combo_audio)
 
         # 6. VAD
         self.combo_vad = QComboBox()
         self.vad_map = {"Silero (검수용)": "silero", "TEN VAD (저지연/실험)": "ten_vad", "사용 안 함": "none"}
-        for k in self.vad_map: self.combo_vad.addItem(k)
+        for k in self.vad_map:
+            self.combo_vad.addItem(k)
         curr_vad = settings.get("selected_vad", "silero")
         for k, v in self.vad_map.items():
-            if v == curr_vad: self.combo_vad.setCurrentText(k); break
+            if v == curr_vad:
+                self.combo_vad.setCurrentText(k)
+                break
         self._fit_model_combo(self.combo_vad)
         self.chk_vad_post_align = QCheckBox("VAD로 STT/앙상블 자막 위치 재계산")
         self.chk_vad_post_align.setChecked(bool(settings.get("vad_post_stt_align_enabled", True)))
-        audio_section = QLabel("음성/VAD")
-        audio_section.setStyleSheet(label_style("text", 13, bold=True) + "padding: 10px 5px 2px 5px;")
-        ai_form.addRow("", audio_section)
-        ai_form.addRow("음성 처리 모델:", self.combo_audio)
-        ai_form.addRow("VAD 모델:", self.combo_vad)
-        ai_form.addRow("VAD 보정:", self.chk_vad_post_align)
-        self._sync_stt_quality_preset_combo(selected_mode_from_settings(settings))
-        self._sync_audio_preset_combo(settings.get("audio_preset", ""))
-        self._sync_auto_preset_button_state()
-        self._update_editor_roughcut_draft_state()
-        self.combo_audio_preset.currentIndexChanged.connect(self._on_audio_preset_changed)
-
-        self._build_auto_settings_section(auto_form, settings)
-
-        layout.addWidget(self.tabs)
-        layout.addSpacing(10)
-        layout.addLayout(_create_bottom_buttons(self, self._on_ok, save_callback=self._on_save, save_def_callback=self._on_save_default))   
+        audio_card, audio_card_layout = self._make_section_card(
+            "음성/VAD",
+            "노이즈 제거, 음성 향상, VAD 위치 보정 경로를 여기서 묶어 관리합니다.",
+        )
+        audio_form = self._make_card_form()
+        audio_form.addRow("음성 처리 모델:", self.combo_audio)
+        audio_form.addRow("VAD 모델:", self.combo_vad)
+        audio_form.addRow("VAD 보정:", self.chk_vad_post_align)
+        audio_card_layout.addLayout(audio_form)
+        form.addRow(audio_card)
 
     def _build_simple_operation_section(self, form: QFormLayout, settings: dict):
         section = QLabel("Mode")
@@ -466,6 +548,34 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         tab.setWidgetResizable(True)
         tab.setWidget(content)
         return tab, form
+
+    def _make_section_card(self, title: str, hint: str = ""):
+        card = QFrame()
+        card.setObjectName("AiSettingsSectionCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("AiSettingsSectionTitle")
+        layout.addWidget(title_label)
+
+        if hint:
+            hint_label = QLabel(hint)
+            hint_label.setObjectName("AiSettingsSectionHint")
+            hint_label.setWordWrap(True)
+            layout.addWidget(hint_label)
+        return card, layout
+
+    def _make_card_form(self):
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(10)
+        return form
 
     def _model_grid_label(self, text: str):
         label = QLabel(text)
@@ -798,10 +908,6 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         form.addRow("자동시작:", self.chk_auto_start_enabled)
 
     def _build_subtitle_quality_section(self, form: QFormLayout, settings: dict):
-        section = QLabel("자막 품질")
-        section.setStyleSheet(label_style("text", 13, bold=True) + "padding: 10px 5px 2px 5px;")
-        form.addRow("", section)
-
         self.chk_subtitle_quality_auto_check = QCheckBox("자막 생성 후 자동 검사")
         self.chk_subtitle_quality_auto_check.setChecked(bool(settings.get(
             "subtitle_quality_auto_check_after_generate",
@@ -812,14 +918,6 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "subtitle_quality_auto_correct_enabled",
             DEFAULT_ADV_SETTINGS.get("subtitle_quality_auto_correct_enabled", True),
         )))
-
-        memory_info = QLabel(
-            "자동 검사, LoRA 교정, STT 저점 재검사, 자동 적용 점수는 user_settings.json에 저장되고 "
-            "LoRA 점수 인덱스가 더 정확하다고 판단하면 영상별로 자동 적용합니다."
-        )
-        memory_info.setWordWrap(True)
-        memory_info.setStyleSheet(label_style("muted", 11))
-        form.addRow("자동 관리:", memory_info)
 
         self.chk_stt_low_score_recheck = QCheckBox("STT1/STT2 둘 다 낮은 점수일 때 해당 구간만 재검사")
         self.chk_stt_low_score_recheck.setChecked(bool(settings.get(
@@ -947,11 +1045,19 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
     def _update_chunk_display(self, value):
         self.lbl_chunk_time.setText(f"{value // 60:02d}분 {value % 60:02d}초")
 
-    def _on_chunk_minus(self): self.slider_chunk.setValue(max(10, self.slider_chunk.value() - 10))
-    def _on_chunk_plus(self): self.slider_chunk.setValue(min(1800, self.slider_chunk.value() + 10))
+    def _on_chunk_minus(self):
+        self.slider_chunk.setValue(max(10, self.slider_chunk.value() - 10))
+
+    def _on_chunk_plus(self):
+        self.slider_chunk.setValue(min(1800, self.slider_chunk.value() + 10))
+
     def _on_chunk_all_toggled(self, checked):
-        for w in [self.slider_chunk, self.btn_chunk_minus, self.btn_chunk_plus]: w.setEnabled(not checked)
-        self.lbl_chunk_time.setText("전체 진행") if checked else self._update_chunk_display(self.slider_chunk.value())
+        for widget in (self.slider_chunk, self.btn_chunk_minus, self.btn_chunk_plus):
+            widget.setEnabled(not checked)
+        if checked:
+            self.lbl_chunk_time.setText("전체 진행")
+        else:
+            self._update_chunk_display(self.slider_chunk.value())
         self.lbl_chunk_time.setStyleSheet(label_style("accent" if checked else "text", 12, bold=True))
 
     def _update_model_info(self):
@@ -1145,6 +1251,17 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         except Exception:
             pass
 
-    def _on_ok(self): self.result_settings = self._collect_settings(); self.accept()
-    def _on_save(self): self.result_settings = self._collect_settings(); save_settings(self.result_settings); self._notify_runtime_settings_applied(); QMessageBox.information(self, "완료", "저장되었습니다.")
-    def _on_save_default(self): self.result_settings = self._collect_settings(); save_default_settings(self.result_settings); QMessageBox.information(self, "완료", "기본값 저장 완료.")
+    def _on_ok(self):
+        self.result_settings = self._collect_settings()
+        self.accept()
+
+    def _on_save(self):
+        self.result_settings = self._collect_settings()
+        save_settings(self.result_settings)
+        self._notify_runtime_settings_applied()
+        QMessageBox.information(self, "완료", "저장되었습니다.")
+
+    def _on_save_default(self):
+        self.result_settings = self._collect_settings()
+        save_default_settings(self.result_settings)
+        QMessageBox.information(self, "완료", "기본값 저장 완료.")

@@ -31,6 +31,9 @@ LORA_BUCKET_PRIORITY = {
     LORA_BUCKET_LOW: 2,
     LORA_BUCKET_PENDING_DELETE: 3,
 }
+LORA_BUCKET_HIGH_MIN_SCORE = 94.0
+LORA_BUCKET_MEDIUM_MIN_SCORE = 70.0
+LORA_BUCKET_LOW_MIN_SCORE = 45.0
 LORA_QUALITY_METADATA_KEYS = frozenset(
     {
         "lora_value_score",
@@ -181,6 +184,40 @@ def _usage_boost(row: dict[str, Any]) -> float:
     return min(12.0, math.log1p(max(0, usage)) * 3.0)
 
 
+def _is_pinned(row: dict[str, Any]) -> bool:
+    return bool(row.get("pinned") or _nested_value(row, "metadata.pinned"))
+
+
+def _high_bucket_allowed(kind: str, row: dict[str, Any], score: float) -> bool:
+    if score < LORA_BUCKET_HIGH_MIN_SCORE:
+        return False
+    if _is_pinned(row):
+        return True
+    if not _has_training_signal(kind, row):
+        return False
+
+    explicit = _explicit_score(row)
+    pattern_boost = _pattern_signal_boost(row)
+    usage_boost = _usage_boost(row)
+    status = str(row.get("status") or "").strip().lower()
+    reviewed = status == "reviewed"
+    curated_kind = kind in {"truth_table", "excluded_parentheticals"}
+
+    if explicit is not None:
+        if explicit < LORA_BUCKET_HIGH_MIN_SCORE:
+            return False
+        if curated_kind:
+            return reviewed or pattern_boost >= 4.0 or usage_boost >= 4.0 or explicit >= 98.0
+        return reviewed or pattern_boost >= 2.0 or usage_boost >= 2.0 or explicit >= 96.0
+
+    if curated_kind:
+        if kind == "excluded_parentheticals":
+            return score >= 96.0 and (pattern_boost >= 2.0 or usage_boost >= 4.0 or reviewed)
+        return score >= LORA_BUCKET_HIGH_MIN_SCORE and (reviewed or (pattern_boost >= 4.0 and usage_boost >= 2.0) or usage_boost >= 6.0)
+
+    return pattern_boost >= 6.0 and (score >= 96.0 or usage_boost >= 4.0 or reviewed)
+
+
 def strip_lora_quality_metadata(row: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in dict(row or {}).items() if key not in LORA_QUALITY_METADATA_KEYS}
 
@@ -242,17 +279,24 @@ def lora_bucket_for_score(score: Any) -> str:
         value = float(score)
     except Exception:
         value = 0.0
-    if value >= 80.0:
+    if value >= LORA_BUCKET_HIGH_MIN_SCORE:
         return LORA_BUCKET_HIGH
-    if value >= 60.0:
+    if value >= LORA_BUCKET_MEDIUM_MIN_SCORE:
         return LORA_BUCKET_MEDIUM
-    if value >= 35.0:
+    if value >= LORA_BUCKET_LOW_MIN_SCORE:
         return LORA_BUCKET_LOW
     return LORA_BUCKET_PENDING_DELETE
 
 
 def lora_bucket_for_row(kind: str, row: dict[str, Any]) -> str:
-    return lora_bucket_for_score(lora_score_for_row(kind, row))
+    score = lora_score_for_row(kind, row)
+    if _high_bucket_allowed(kind, dict(row or {}), score):
+        return LORA_BUCKET_HIGH
+    if score >= LORA_BUCKET_MEDIUM_MIN_SCORE:
+        return LORA_BUCKET_MEDIUM
+    if score >= LORA_BUCKET_LOW_MIN_SCORE:
+        return LORA_BUCKET_LOW
+    return LORA_BUCKET_PENDING_DELETE
 
 
 def lora_bucket_priority(bucket: str) -> int:
@@ -262,7 +306,7 @@ def lora_bucket_priority(bucket: str) -> int:
 def annotate_lora_row_quality(kind: str, row: dict[str, Any]) -> dict[str, Any]:
     out = dict(row or {})
     score = lora_score_for_row(kind, out)
-    bucket = lora_bucket_for_score(score)
+    bucket = lora_bucket_for_row(kind, out)
     out["lora_value_score"] = round(float(score), 3)
     out["lora_quality_bucket"] = bucket
     if bucket == LORA_BUCKET_PENDING_DELETE:
@@ -274,7 +318,7 @@ def annotate_lora_row_quality(kind: str, row: dict[str, Any]) -> dict[str, Any]:
 
 def lora_row_sort_key(kind: str, row: dict[str, Any], index: int = 0) -> tuple[int, float, float, float, int]:
     score = lora_score_for_row(kind, row)
-    bucket = lora_bucket_for_score(score)
+    bucket = lora_bucket_for_row(kind, row)
     usage = max(
         _coerce_int((row or {}).get("usage_count"), 0),
         _coerce_int((row or {}).get("frequency"), 0),
@@ -323,9 +367,12 @@ __all__ = [
     "LORA_ALL_BUCKETS",
     "LORA_BUCKET_FILENAMES",
     "LORA_BUCKET_HIGH",
+    "LORA_BUCKET_HIGH_MIN_SCORE",
     "LORA_BUCKET_LABELS",
     "LORA_BUCKET_LOW",
+    "LORA_BUCKET_LOW_MIN_SCORE",
     "LORA_BUCKET_MEDIUM",
+    "LORA_BUCKET_MEDIUM_MIN_SCORE",
     "LORA_BUCKET_PENDING_DELETE",
     "LORA_BUCKET_PRIORITY",
     "LORA_QUALITY_METADATA_KEYS",

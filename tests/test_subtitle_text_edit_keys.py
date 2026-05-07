@@ -92,6 +92,16 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
             edit.deleteLater()
             self.app.processEvents()
 
+    def test_quick_layer_marks_qml_segment_overlay_active(self):
+        edit = SubtitleTextEdit()
+        try:
+            edit._quick_layer = object()
+            self.assertTrue(edit._quick_layer_overlay_text_active())
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
 
 if __name__ == "__main__":
     unittest.main()

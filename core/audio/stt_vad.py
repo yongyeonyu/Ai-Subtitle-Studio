@@ -19,6 +19,7 @@ from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.runtime import config
 from core.runtime.logger import get_logger
 from core.audio.runtime_cleanup import clear_audio_model_memory_caches
+from core.audio.torch_acceleration import move_torch_model_to_preferred_device, move_torch_tensor_to_device
 
 
 _STT_VAD_CACHE_VERSION = 3
@@ -170,6 +171,7 @@ def _detect_silero_high_sensitivity(wav_path: str) -> list[dict]:
     get_logger().log("🎙️ STT 모드: 최고 민감도 VAD 음성 구간 탐지 시작")
     model = None
     audio_data = None
+    device_name = "cpu"
     try:
         model, utils = torch.hub.load(
             repo_or_dir="snakers4/silero-vad",
@@ -177,8 +179,10 @@ def _detect_silero_high_sensitivity(wav_path: str) -> list[dict]:
             force_reload=False,
             onnx=False,
         )
+        device_name = move_torch_model_to_preferred_device(model, log_label="STT 모드 VAD")
         get_speech_timestamps, _, read_audio, _, _ = utils
         audio_data = read_audio(wav_path, sampling_rate=16000)
+        audio_data = move_torch_tensor_to_device(audio_data, device_name)
         raw = get_speech_timestamps(
             audio_data,
             model,

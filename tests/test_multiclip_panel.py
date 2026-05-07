@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QComboBox
+from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QComboBox, QMessageBox
 
 from ui.main.main_file_ops import FileOpsMixin
 from ui.project.multiclip_panel import MultiClipEditor
@@ -71,6 +71,57 @@ class _DummyFolderWindow(FileOpsMixin):
         self.batch_calls.append((list(files or []), folder))
 
 
+class _DummyCloudSyncManager:
+    def __init__(self):
+        self._size_cache = {"one": 1}
+        self._in_flight = {"two": 2}
+
+
+class _DummyCacheWindow(FileOpsMixin):
+    def __init__(self):
+        self._cloud_sync_manager = _DummyCloudSyncManager()
+        self.restore_calls = 0
+
+    def _restore_current_work_mode(self):
+        self.restore_calls += 1
+
+
+class _FakeMessageBox:
+    StandardButton = QMessageBox.StandardButton
+    Icon = QMessageBox.Icon
+    last_info = None
+    last_warning = None
+
+    def __init__(self, _parent=None):
+        self.text = ""
+
+    def setWindowTitle(self, _title):
+        pass
+
+    def setText(self, text):
+        self.text = text
+
+    def setStandardButtons(self, _buttons):
+        pass
+
+    def setDefaultButton(self, _button):
+        pass
+
+    def setStyleSheet(self, _style):
+        pass
+
+    def exec(self):
+        return self.StandardButton.Yes
+
+    @classmethod
+    def information(cls, _parent, title, text):
+        cls.last_info = (title, text)
+
+    @classmethod
+    def warning(cls, _parent, title, text):
+        cls.last_warning = (title, text)
+
+
 class MulticlipPanelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -93,7 +144,7 @@ class MulticlipPanelTests(unittest.TestCase):
             self.assertIn("오토 오디오", dlg.current_settings_lbl.text())
             quality_combos = [
                 combo for combo in dlg.findChildren(QComboBox)
-                if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High"]
+                if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High", "STT"]
             ]
             self.assertTrue(quality_combos)
         finally:
@@ -187,7 +238,7 @@ class MulticlipPanelTests(unittest.TestCase):
                 self.assertIsNotNone(nas_quality)
                 self.assertEqual(
                     [regular_quality.itemText(i) for i in range(regular_quality.count())],
-                    ["Fast", "Auto", "High"],
+                    ["Fast", "Auto", "High", "STT"],
                 )
                 self.assertTrue(regular.export_video_chk.isChecked())
                 self.assertFalse(regular.export_video_chk.isEnabled())
@@ -259,6 +310,70 @@ class MulticlipPanelTests(unittest.TestCase):
                 regular.deleteLater()
                 nas.deleteLater()
                 self.app.processEvents()
+
+    def test_clear_cache_removes_reusable_cache_files_only(self):
+        owner = _DummyCacheWindow()
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = os.path.join(tmp, "output")
+            os.makedirs(output_dir, exist_ok=True)
+            cache_dirs = [
+                ".media_probe_cache",
+                "cut_boundary_cache",
+                "waveform_cache",
+                "_analysis_cache",
+                "_audio_fingerprint",
+            ]
+            for rel in cache_dirs:
+                target = os.path.join(output_dir, rel)
+                os.makedirs(target, exist_ok=True)
+                with open(os.path.join(target, "cache.bin"), "w", encoding="utf-8") as fh:
+                    fh.write("cache")
+            cleaned_wav = os.path.join(output_dir, "sample_cleaned.wav")
+            with open(cleaned_wav, "w", encoding="utf-8") as fh:
+                fh.write("wav")
+            with open(f"{cleaned_wav}.meta.json", "w", encoding="utf-8") as fh:
+                fh.write("{}")
+            keep_file = os.path.join(output_dir, "keep.txt")
+            with open(keep_file, "w", encoding="utf-8") as fh:
+                fh.write("keep")
+            temp_waveform = os.path.join(tmp, "ai_subtitle_studio_waveform_cache")
+            os.makedirs(temp_waveform, exist_ok=True)
+            with open(os.path.join(temp_waveform, "wave.npz"), "w", encoding="utf-8") as fh:
+                fh.write("wave")
+            tracker_path = os.path.join(tmp, "auto_tracker.json")
+            with open(tracker_path, "w", encoding="utf-8") as fh:
+                fh.write("{}")
+
+            _FakeMessageBox.last_info = None
+            _FakeMessageBox.last_warning = None
+            with (
+                patch("ui.main.main_file_ops.QMessageBox", _FakeMessageBox),
+                patch("ui.main.main_file_ops.ask_yes_no", return_value=True),
+                patch("ui.main.main_file_ops.show_message") as show_message,
+                patch("ui.main.main_file_ops.tempfile.gettempdir", return_value=tmp),
+                patch("core.runtime.config.OUTPUT_DIR", output_dir),
+                patch("core.auto_tracker.TRACKER_FILE", tracker_path),
+                patch("core.media_info.clear_media_probe_cache_memory") as clear_media_probe_cache_memory,
+                patch("core.project.project_io.clear_project_file_cache") as clear_project_file_cache,
+            ):
+                owner._clear_cache()
+
+            self.assertTrue(os.path.isdir(output_dir))
+            self.assertTrue(os.path.exists(keep_file))
+            self.assertFalse(os.path.exists(cleaned_wav))
+            self.assertFalse(os.path.exists(f"{cleaned_wav}.meta.json"))
+            for rel in cache_dirs:
+                self.assertFalse(os.path.exists(os.path.join(output_dir, rel)))
+            self.assertFalse(os.path.exists(temp_waveform))
+            self.assertFalse(os.path.exists(tracker_path))
+            self.assertEqual(owner._cloud_sync_manager._size_cache, {})
+            self.assertEqual(owner._cloud_sync_manager._in_flight, {})
+            self.assertEqual(owner.restore_calls, 1)
+            clear_media_probe_cache_memory.assert_called_once_with()
+            clear_project_file_cache.assert_called_once_with()
+            show_message.assert_called_once()
+            self.assertIn("재사용 캐쉬", show_message.call_args.kwargs.get("text", "") or show_message.call_args.args[2])
+            self.assertIsNone(_FakeMessageBox.last_warning)
 
 
 if __name__ == "__main__":

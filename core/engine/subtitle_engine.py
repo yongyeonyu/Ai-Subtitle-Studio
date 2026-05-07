@@ -24,7 +24,7 @@ from core.llm.ollama_provider import (
 )
 from core.llm.openai_provider import is_openai_model, split_text as openai_split_text
 from core.audio.stt_lattice import select_stt_lattice_text
-from core.engine.llm_correction_guard import safe_llm_chunks, validate_llm_chunks
+from core.engine.llm_correction_guard import assess_llm_rewrite_policy, safe_llm_chunks, validate_llm_chunks
 from core.engine.llm_candidate_policy import (
     build_llm_candidate_options,
     validate_candidate_locked_chunks,
@@ -884,6 +884,7 @@ def _attach_lora_and_deep_timing(row: dict, lora_meta: dict | None, settings: di
         "_llm_candidate_policy",
         "_llm_verifier_policy",
         "_llm_rollback_policy",
+        "_llm_rewrite_policy",
         "_llm_macro_chunk_policy",
         "_accuracy_decision_graph",
     ):
@@ -1326,6 +1327,10 @@ def _process_one(args: tuple) -> list[dict]:
 
     if chunks:
         chunks, segment_lora = _deep_rerank_chunks(text, chunks, segment_settings, segment_lora)
+        rewrite_policy = assess_llm_rewrite_policy(text, chunks)
+        if rewrite_policy.get("changed"):
+            segment_lora = dict(segment_lora or {})
+            segment_lora["_llm_rewrite_policy"] = rewrite_policy
         result   = []
         w_idx    = 0
         cur_start = seg["start"]
@@ -1534,6 +1539,10 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
     if not chunks:
         return [_attach_lora_and_deep_timing({**seg, "text": cleaned_text}, segment_lora, segment_settings)]
     chunks, segment_lora = _deep_rerank_chunks(cleaned_text, chunks, segment_settings, segment_lora)
+    rewrite_policy = assess_llm_rewrite_policy(cleaned_text, chunks)
+    if rewrite_policy.get("changed"):
+        segment_lora = dict(segment_lora or {})
+        segment_lora["_llm_rewrite_policy"] = rewrite_policy
 
     result = []
     w_idx = 0

@@ -6,6 +6,7 @@ import os
 import socket
 import faulthandler
 import threading
+import warnings
 
 try:
     faulthandler.enable(all_threads=True)
@@ -17,6 +18,12 @@ os.environ.setdefault(
     "qt.multimedia.*=false;qt.multimedia.ffmpeg.*=false;qt.qpa.fonts=false",
 )
 os.environ.setdefault("AV_LOG_LEVEL", "16")
+
+warnings.filterwarnings(
+    "ignore",
+    message=r".*pynvml package is deprecated.*",
+    category=FutureWarning,
+)
 
 from core.runtime import config
 from core.performance import configure_native_runtime, configure_qt_gpu_rendering_before_app, configure_qt_runtime
@@ -35,8 +42,28 @@ except Exception:
 
 configure_qt_gpu_rendering_before_app()
 
+from PyQt6.QtCore import qInstallMessageHandler
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from core.runtime.logger import get_logger
+from ui.dialogs.message_box import install_qmessagebox_hooks, show_message
+
+_QT_APP_SHUTTING_DOWN = False
+_PREV_QT_MESSAGE_HANDLER = None
+
+
+def _qt_message_handler(mode, context, message):
+    text = str(message or "")
+    if _QT_APP_SHUTTING_DOWN:
+        if text.startswith("QObject::disconnect: wildcard call disconnects from destroyed signal of QFFmpeg::"):
+            return
+        if text.startswith("QUnifiedTimer::stopAnimationDriver: driver is not running"):
+            return
+        if text.startswith("QPainter::") and (
+            "Painter not active" in text or "Paint device returned engine == 0" in text
+        ):
+            return
+    if _PREV_QT_MESSAGE_HANDLER is not None:
+        _PREV_QT_MESSAGE_HANDLER(mode, context, message)
 
 _instance_socket = None
 
@@ -48,11 +75,14 @@ def check_single_instance():
         _instance_socket.bind(('127.0.0.1', config.INSTANCE_PORT))
     except socket.error:
         QApplication.instance() or QApplication(sys.argv)
-        msg = QMessageBox()
-        msg.setIcon(QMessageBox.Icon.Warning)
-        msg.setWindowTitle("중복 실행 방지")
-        msg.setText(f"{config.APP_NAME}가 이미 실행 중입니다.\n기존에 열려있는 창을 확인해 주세요.")
-        msg.exec()
+        show_message(
+            None,
+            "중복 실행 방지",
+            f"{config.APP_NAME}가 이미 실행 중입니다.\n기존에 열려있는 창을 확인해 주세요.",
+            icon=QMessageBox.Icon.Warning,
+            buttons=QMessageBox.StandardButton.Ok,
+            default=QMessageBox.StandardButton.Ok,
+        )
         sys.exit(0)
 
 
@@ -62,8 +92,35 @@ if BASE_DIR not in sys.path:
 
 from ui.main.main_window import MainWindow
 from core.path_manager import get_recent_folders, add_recent_folder
+
+
+def _start_ollama_runtime_for_app_launch() -> None:
+    def _run():
+        try:
+            from core.llm.ollama_provider import ensure_ollama_server
+
+            ensure_ollama_server(logger=get_logger(), wait_sec=8.0)
+        except Exception as exc:
+            try:
+                get_logger().log(f"⚠️ 앱 시작: Ollama 자동 실행 실패: {exc}")
+            except Exception:
+                pass
+
+    try:
+        threading.Thread(
+            target=_run,
+            daemon=True,
+            name="app-start-ollama-runtime",
+        ).start()
+    except Exception:
+        _run()
+
+
 def main():
+    global _PREV_QT_MESSAGE_HANDLER
     app = QApplication(sys.argv)
+    install_qmessagebox_hooks()
+    _PREV_QT_MESSAGE_HANDLER = qInstallMessageHandler(_qt_message_handler)
     configure_qt_runtime()
     cleaned_preview_jobs = cleanup_stale_preview_proxy_processes(timeout_sec=0.2)
     try:
@@ -100,8 +157,12 @@ def main():
         }}
     """)
 
+    _start_ollama_runtime_for_app_launch()
+
     win = MainWindow()
     def _shutdown_runtime_in_order():
+        global _QT_APP_SHUTTING_DOWN
+        _QT_APP_SHUTTING_DOWN = True
         cleanup_runtime = getattr(win, "_start_runtime_cleanup_for_app_exit_async", None)
         if callable(cleanup_runtime):
             cleanup_runtime(timeout_sec=0.15)

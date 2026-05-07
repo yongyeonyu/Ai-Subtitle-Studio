@@ -223,11 +223,11 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
 
             first_payload = enqueue_full_training_jobs(store_dir=tmpdir)
             first_items = list(first_payload.get("items") or [])
-            self.assertEqual(len(first_items), 8)
+            self.assertEqual(len(first_items), 10)
             self.assertIn("build_retrieval_index", {str(item.get("job_type") or "") for item in first_items})
             self.assertIn("build_subtitle_pattern_index", {str(item.get("job_type") or "") for item in first_items})
-            self.assertNotIn("build_voice_profiles", {str(item.get("job_type") or "") for item in first_items})
-            self.assertNotIn("build_stt1_whisper_adapter", {str(item.get("job_type") or "") for item in first_items})
+            self.assertIn("build_voice_profiles", {str(item.get("job_type") or "") for item in first_items})
+            self.assertIn("build_stt1_whisper_adapter", {str(item.get("job_type") or "") for item in first_items})
 
             first_items[0]["status"] = "complete"
             first_items[0]["progress"] = 1.0
@@ -305,6 +305,104 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             self.assertTrue(payload.get("resumed_as_low_resource_idle"))
             self.assertTrue(payload.get("audio_extraction_deferred"))
             self.assertEqual(payload["checkpoint"]["reason"], "audio_extraction_deferred")
+
+    def test_manual_full_voice_job_passes_reserved_core_resource_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+
+            with (
+                patch(
+                    "core.personalization.idle_trainer.save_voice_lora_profile_manifest",
+                    return_value={"speaker_profiles": 1},
+                ),
+                patch(
+                    "core.personalization.idle_trainer.manual_lora_runtime_settings",
+                    return_value={
+                        "runtime_manual_lora_full_speed": True,
+                        "runtime_scheduler_reserve_cores": 1,
+                        "runtime_native_threads": 9,
+                    },
+                ),
+                patch(
+                    "core.personalization.idle_trainer.save_voice_lora_training_plan",
+                    return_value={
+                        "usable_voice_rows": 7,
+                        "stored_audio_items": 7,
+                        "extraction_errors": 0,
+                        "extraction_skipped": 0,
+                    },
+                ) as voice_plan,
+            ):
+                result = run_training_job(
+                    {
+                        "job_id": "voice-full",
+                        "job_type": "build_voice_profiles",
+                        "media_id": "global",
+                        "payload": {"manual_full_training": True, "extract_audio": True},
+                    },
+                    store_dir=tmpdir,
+                )
+
+            self.assertEqual(result["status"], "complete")
+            resource_settings = dict(voice_plan.call_args.kwargs["resource_settings"] or {})
+            self.assertTrue(resource_settings.get("runtime_manual_lora_full_speed"))
+            self.assertEqual(resource_settings.get("runtime_scheduler_reserve_cores"), 1)
+            self.assertEqual(resource_settings.get("runtime_native_threads"), 9)
+
+    def test_manual_full_stt1_job_passes_reserved_core_resource_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            append_truth_table_rows(
+                [
+                    TruthTableRow(
+                        media_id="media-001",
+                        media_path="/Users/test/Movies/clip_a.mp4",
+                        subtitle_path="/Users/test/Movies/clip_a.srt",
+                        segment_id="clip_a:1",
+                        start_sec=0.0,
+                        end_sec=2.0,
+                        raw_ground_truth_text="안녕하세요",
+                        speech_training_text="안녕하세요",
+                    ).to_record()
+                ],
+                tmpdir,
+            )
+
+            with (
+                patch(
+                    "core.personalization.idle_trainer.manual_lora_runtime_settings",
+                    return_value={
+                        "runtime_manual_lora_full_speed": True,
+                        "runtime_scheduler_reserve_cores": 1,
+                        "runtime_native_threads": 9,
+                    },
+                ),
+                patch(
+                    "core.personalization.idle_trainer.save_stt1_whisper_adapter_training_plan",
+                    return_value={
+                        "usable_rows": 12,
+                        "audio_ready_items": 12,
+                        "extraction_errors": 0,
+                        "extraction_skipped": 0,
+                        "runtime_ready": True,
+                    },
+                ) as stt1_plan,
+            ):
+                result = run_training_job(
+                    {
+                        "job_id": "stt1-full",
+                        "job_type": "build_stt1_whisper_adapter",
+                        "media_id": "global",
+                        "payload": {"manual_full_training": True, "extract_audio": True},
+                    },
+                    store_dir=tmpdir,
+                )
+
+            self.assertEqual(result["status"], "complete")
+            resource_settings = dict(stt1_plan.call_args.kwargs["resource_settings"] or {})
+            self.assertTrue(resource_settings.get("runtime_manual_lora_full_speed"))
+            self.assertEqual(resource_settings.get("runtime_scheduler_reserve_cores"), 1)
+            self.assertEqual(resource_settings.get("runtime_native_threads"), 9)
 
     def test_low_resource_training_skips_retention_prune(self):
         with tempfile.TemporaryDirectory() as tmpdir:

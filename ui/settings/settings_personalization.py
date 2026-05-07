@@ -39,15 +39,15 @@ from core.personalization.lora_storage import (
     clear_training_queue,
     initialize_lora_personalization_store,
     load_training_queue,
-    refresh_lora_personalization_manifest,
     refresh_unified_lora_data_bundle,
     store_paths,
 )
+from core.personalization.lora_store_bundle import refresh_lora_personalization_manifest  # noqa: F401
 from core.personalization.lora_store_common import read_json
 from core.personalization.lora_vector_retriever import build_lora_retrieval_index
 from core.personalization.text_lora_dataset import (
     accumulate_personalization_dataset,
-    build_text_lora_dataset,
+    build_text_lora_dataset,  # noqa: F401
     export_text_lora_dataset,
 )
 from core.personalization.text_lora_runner import (
@@ -65,15 +65,94 @@ from ui.settings.personalization_learning_info import (
     preview_text as _preview_text,
 )
 from ui.settings.tablet_dialog import apply_tablet_dialog_profile
-from ui.style import button_style, settings_dialog_stylesheet
+from ui.style import COLORS, settings_button_style, settings_dialog_stylesheet
 
 
 def _compact_button_style(kind: str = "toolbar") -> str:
     if kind == "primary":
-        return button_style("primary", font_size="11px", padding="4px 10px") + " QPushButton { min-height: 24px; max-height: 28px; }"
+        return settings_button_style("primary", font_size="13px", min_width=108, min_height=42)
     if kind == "danger":
-        return button_style("danger", font_size="10px", padding="3px 8px") + " QPushButton { min-height: 22px; max-height: 26px; }"
-    return button_style("toolbar", font_size="10px", padding="3px 8px") + " QPushButton { min-height: 22px; max-height: 26px; }"
+        return settings_button_style("danger", font_size="12px", min_width=108, min_height=42)
+    return settings_button_style("toolbar", font_size="12px", min_width=96, min_height=42)
+
+
+def _learning_dialog_stylesheet() -> str:
+    accent = COLORS["accent"]
+    primary = COLORS["primary"]
+    surface = COLORS["surface"]
+    surface_alt = COLORS["surface_alt"]
+    separator = COLORS["separator"]
+    text = COLORS["text"]
+    muted = COLORS["muted"]
+    return (
+        f"#personalizationLearningDialog {{ background: {COLORS['bg']}; }}"
+        "#personalizationHeroCard {"
+        "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #122028, stop:1 #0F171B);"
+        f"border: 1px solid {separator}; border-radius: 16px;"
+        "}"
+        "#personalizationHeroEyebrow {"
+        f"color: {accent}; font-size: 11px; font-weight: 800; letter-spacing: 1px;"
+        "}"
+        "#personalizationHeroTitle {"
+        f"color: {text}; font-size: 28px; font-weight: 900;"
+        "}"
+        "#personalizationHeroSubtitle {"
+        f"color: #D7E1E8; font-size: 14px; font-weight: 600;"
+        "}"
+        "#personalizationRuleHint {"
+        f"color: #AFC1CD; font-size: 12px; font-weight: 700;"
+        "}"
+        "#personalizationInfoPill {"
+        "background: rgba(52, 199, 89, 0.12);"
+        f"border: 1px solid rgba(52, 199, 89, 0.45); color: #DDF9E5;"
+        "border-radius: 10px; padding: 7px 12px; font-size: 12px; font-weight: 800;"
+        "}"
+        "#personalizationSectionCard, #personalizationStatusCard, #personalizationManageCard {"
+        f"background: {surface}; border: 1px solid {separator}; border-radius: 16px;"
+        "}"
+        "#personalizationSectionTitle {"
+        f"color: {text}; font-size: 17px; font-weight: 900;"
+        "}"
+        "#personalizationSectionHint {"
+        f"color: {muted}; font-size: 12px; font-weight: 700;"
+        "}"
+        "#personalizationDropZone {"
+        f"background: {surface_alt}; border: 1px dashed #4E6675; border-radius: 16px;"
+        "}"
+        "#personalizationDropZone QLabel { background: transparent; }"
+        "#personalizationDropTitle {"
+        f"color: {text}; font-size: 17px; font-weight: 900;"
+        "}"
+        "#personalizationDropHint {"
+        f"color: #AFC1CD; font-size: 13px; font-weight: 700;"
+        "}"
+        "#personalizationPairList {"
+        f"background: #0E1519; border: 1px solid #27353E; border-radius: 14px;"
+        "padding: 8px; outline: 0;"
+        "}"
+        "#personalizationPairList::item {"
+        "padding: 8px 10px; border-radius: 10px; margin: 2px 0;"
+        f"color: {text};"
+        "}"
+        "#personalizationPairList::item:selected {"
+        "background: rgba(0, 122, 255, 0.16);"
+        f"border: 1px solid {primary};"
+        "}"
+        "#personalizationQueueLabel {"
+        "background: rgba(0, 122, 255, 0.10);"
+        f"border: 1px solid rgba(0, 122, 255, 0.32); color: #DCEBFF;"
+        "border-radius: 12px; padding: 12px 14px; font-size: 13px; font-weight: 700;"
+        "}"
+        "#personalizationSummaryLabel {"
+        f"color: #F1F6FA; font-size: 13px; font-weight: 700;"
+        "}"
+        "#personalizationPathLabel {"
+        f"color: #AFC1CD; font-size: 12px; font-weight: 700;"
+        "}"
+        "#personalizationAutoNote {"
+        f"color: {muted}; font-size: 12px; font-weight: 700;"
+        "}"
+    )
 
 
 QUEUE_STATUS_LABELS = {
@@ -110,10 +189,11 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("개인화 학습")
-        self.setMinimumWidth(640)
-        self.setMinimumHeight(520)
+        self.setObjectName("personalizationLearningDialog")
+        self.setMinimumWidth(760)
+        self.setMinimumHeight(620)
         apply_tablet_dialog_profile(self)
-        self.setStyleSheet(settings_dialog_stylesheet())
+        self.setStyleSheet(settings_dialog_stylesheet() + _learning_dialog_stylesheet())
         self.setAcceptDrops(True)
         self._staged_inputs: list[str] = []
         self._paired_assets: list[dict] = []
@@ -143,121 +223,180 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
                 pass
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(5)
+        layout.setContentsMargins(18, 18, 18, 16)
+        layout.setSpacing(12)
 
-        title = QLabel("<b style='font-size:15px;'>개인화 학습</b>")
-        layout.addWidget(title)
+        hero_card = QFrame()
+        hero_card.setObjectName("personalizationHeroCard")
+        hero_layout = QVBoxLayout(hero_card)
+        hero_layout.setContentsMargins(18, 16, 18, 16)
+        hero_layout.setSpacing(8)
+
+        hero_eyebrow = QLabel("PERSONALIZATION LAB")
+        hero_eyebrow.setObjectName("personalizationHeroEyebrow")
+        hero_layout.addWidget(hero_eyebrow)
+
+        title = QLabel("개인화 학습")
+        title.setObjectName("personalizationHeroTitle")
+        hero_layout.addWidget(title)
 
         subtitle = QLabel(
-            "영상과 SRT를 함께 넣으면 자막 스타일, 자주 고치는 표현, 줄바꿈 규칙, 목소리 학습 데이터를 자동으로 정리합니다."
+            "영상과 SRT를 함께 넣으면 자막 스타일, 자주 고치는 표현, 줄바꿈 규칙, STT 보정 패턴을 자동으로 정리합니다."
         )
+        subtitle.setObjectName("personalizationHeroSubtitle")
         subtitle.setWordWrap(True)
-        layout.addWidget(subtitle)
+        hero_layout.addWidget(subtitle)
 
-        rule_hint = QLabel("학습 규칙: (), [], {} 안에 있는 설명 자막은 모든 학습 데이터에서 제외합니다.")
+        rule_hint = QLabel("학습 규칙: (), [], {} 안의 설명 자막은 학습 데이터에서 자동 제외합니다.")
+        rule_hint.setObjectName("personalizationRuleHint")
         rule_hint.setWordWrap(True)
-        layout.addWidget(rule_hint)
+        hero_layout.addWidget(rule_hint)
+
+        info_pill = QLabel("영상과 SRT를 한 번에 넣어도 자동 pair를 찾아 학습 큐를 구성합니다.")
+        info_pill.setObjectName("personalizationInfoPill")
+        info_pill.setWordWrap(True)
+        hero_layout.addWidget(info_pill)
+        layout.addWidget(hero_card)
+
+        ingest_card = QFrame()
+        ingest_card.setObjectName("personalizationSectionCard")
+        ingest_layout = QVBoxLayout(ingest_card)
+        ingest_layout.setContentsMargins(16, 16, 16, 16)
+        ingest_layout.setSpacing(10)
+
+        ingest_title = QLabel("입력")
+        ingest_title.setObjectName("personalizationSectionTitle")
+        ingest_layout.addWidget(ingest_title)
+
+        ingest_hint = QLabel("파일이나 폴더를 추가하면 영상과 자막을 묶어서 바로 학습 대기열에 올립니다.")
+        ingest_hint.setObjectName("personalizationSectionHint")
+        ingest_hint.setWordWrap(True)
+        ingest_layout.addWidget(ingest_hint)
 
         self.drop_zone = QFrame()
         self.drop_zone.setObjectName("personalizationDropZone")
-        self.drop_zone.setMinimumHeight(58)
-        self.drop_zone.setMaximumHeight(68)
-        self.drop_zone.setStyleSheet(
-            "#personalizationDropZone { "
-            "background: #121B20; border: 1px dashed #49606E; border-radius: 7px; "
-            "} "
-        )
+        self.drop_zone.setMinimumHeight(96)
         drop_layout = QVBoxLayout(self.drop_zone)
-        drop_layout.setContentsMargins(10, 6, 10, 6)
-        drop_layout.setSpacing(1)
-        drop_title = QLabel("<b style='font-size:13px;'>영상 + SRT 끌어다 놓기</b>")
+        drop_layout.setContentsMargins(18, 14, 18, 14)
+        drop_layout.setSpacing(4)
+        drop_title = QLabel("영상 + SRT 끌어다 놓기")
+        drop_title.setObjectName("personalizationDropTitle")
         drop_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         drop_layout.addWidget(drop_title)
         drop_hint = QLabel("여러 파일이나 폴더를 한 번에 넣어도 자동으로 pair를 찾습니다.")
+        drop_hint.setObjectName("personalizationDropHint")
         drop_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         drop_hint.setWordWrap(True)
         drop_layout.addWidget(drop_hint)
-        layout.addWidget(self.drop_zone)
+        ingest_layout.addWidget(self.drop_zone)
 
         quick_row = QHBoxLayout()
-        quick_row.setSpacing(5)
+        quick_row.setSpacing(8)
         self.btn_add_learning_files = QPushButton("파일 추가")
         self.btn_add_learning_files.setStyleSheet(_compact_button_style("toolbar"))
         self.btn_add_learning_files.clicked.connect(self._add_learning_files)
-        quick_row.addWidget(self.btn_add_learning_files)
+        quick_row.addWidget(self.btn_add_learning_files, 1)
 
         self.btn_add_learning_folder = QPushButton("폴더 추가")
         self.btn_add_learning_folder.setStyleSheet(_compact_button_style("toolbar"))
         self.btn_add_learning_folder.clicked.connect(self._add_folder)
-        quick_row.addWidget(self.btn_add_learning_folder)
+        quick_row.addWidget(self.btn_add_learning_folder, 1)
 
         self.btn_start_auto_learning = QPushButton("학습 시작")
         self.btn_start_auto_learning.setStyleSheet(_compact_button_style("primary"))
         self.btn_start_auto_learning.clicked.connect(self._start_full_learning)
-        quick_row.addWidget(self.btn_start_auto_learning)
+        quick_row.addWidget(self.btn_start_auto_learning, 1)
 
         self.btn_stop_full_learning = QPushButton("학습 종료")
         self.btn_stop_full_learning.setStyleSheet(_compact_button_style("toolbar"))
         self.btn_stop_full_learning.clicked.connect(self._stop_full_learning)
         self.btn_stop_full_learning.setEnabled(False)
-        quick_row.addWidget(self.btn_stop_full_learning)
-        layout.addLayout(quick_row)
+        quick_row.addWidget(self.btn_stop_full_learning, 1)
+        ingest_layout.addLayout(quick_row)
+        layout.addWidget(ingest_card)
 
-        list_title = QLabel("<b>자동 pair 확인</b>")
-        layout.addWidget(list_title)
+        status_card = QFrame()
+        status_card.setObjectName("personalizationStatusCard")
+        status_layout = QVBoxLayout(status_card)
+        status_layout.setContentsMargins(16, 16, 16, 16)
+        status_layout.setSpacing(10)
+
+        list_title = QLabel("자동 pair 확인")
+        list_title.setObjectName("personalizationSectionTitle")
+        status_layout.addWidget(list_title)
         self.pair_list = QListWidget()
-        self.pair_list.setMinimumHeight(54)
-        self.pair_list.setMaximumHeight(84)
-        layout.addWidget(self.pair_list, stretch=1)
+        self.pair_list.setObjectName("personalizationPairList")
+        self.pair_list.setMinimumHeight(118)
+        self.pair_list.setMaximumHeight(190)
+        self.pair_list.setAlternatingRowColors(False)
+        status_layout.addWidget(self.pair_list, stretch=1)
 
         self.queue_summary_label = QLabel("")
+        self.queue_summary_label.setObjectName("personalizationQueueLabel")
         self.queue_summary_label.setWordWrap(True)
-        layout.addWidget(self.queue_summary_label)
+        status_layout.addWidget(self.queue_summary_label)
 
         self.summary_label = QLabel("")
+        self.summary_label.setObjectName("personalizationSummaryLabel")
         self.summary_label.setWordWrap(True)
-        layout.addWidget(self.summary_label)
+        status_layout.addWidget(self.summary_label)
 
         self.path_label = QLabel("")
+        self.path_label.setObjectName("personalizationPathLabel")
         self.path_label.setWordWrap(True)
-        layout.addWidget(self.path_label)
+        status_layout.addWidget(self.path_label)
 
         info_row = QHBoxLayout()
-        info_row.setSpacing(5)
+        info_row.setSpacing(8)
+        info_row.addStretch(1)
         self.btn_learning_info = QPushButton("학습 정보")
         self.btn_learning_info.setStyleSheet(_compact_button_style("primary"))
         self.btn_learning_info.clicked.connect(self._open_learning_info)
         info_row.addWidget(self.btn_learning_info)
+        status_layout.addLayout(info_row)
+        layout.addWidget(status_card)
 
-        layout.addLayout(info_row)
+        manage_card = QFrame()
+        manage_card.setObjectName("personalizationManageCard")
+        manage_layout = QVBoxLayout(manage_card)
+        manage_layout.setContentsMargins(16, 16, 16, 16)
+        manage_layout.setSpacing(10)
 
-        manage_title = QLabel("<b>관리</b>")
-        layout.addWidget(manage_title)
+        manage_title = QLabel("관리")
+        manage_title.setObjectName("personalizationSectionTitle")
+        manage_layout.addWidget(manage_title)
+
+        manage_hint = QLabel("백업 불러오기, 삭제 예정 데이터 정리, 전체 학습 재시작을 여기서 관리합니다.")
+        manage_hint.setObjectName("personalizationSectionHint")
+        manage_hint.setWordWrap(True)
+        manage_layout.addWidget(manage_hint)
+
         manage_row = QHBoxLayout()
-        manage_row.setSpacing(5)
+        manage_row.setSpacing(8)
 
         self.btn_import_unified_lora = QPushButton("LoRA 백업 불러오기")
         self.btn_import_unified_lora.setStyleSheet(_compact_button_style("toolbar"))
         self.btn_import_unified_lora.clicked.connect(self._import_unified_lora_data_now)
-        manage_row.addWidget(self.btn_import_unified_lora)
+        manage_row.addWidget(self.btn_import_unified_lora, 1)
 
         self.btn_delete_pending_lora = QPushButton("삭제예정 LoRA 비우기")
         self.btn_delete_pending_lora.setStyleSheet(_compact_button_style("danger"))
         self.btn_delete_pending_lora.clicked.connect(self._delete_pending_lora_data_now)
-        manage_row.addWidget(self.btn_delete_pending_lora)
+        manage_row.addWidget(self.btn_delete_pending_lora, 1)
 
         self.btn_reset_all = QPushButton("처음부터 다시 학습")
         self.btn_reset_all.setStyleSheet(_compact_button_style("danger"))
         self.btn_reset_all.clicked.connect(self._reset_lora_learning_store_now)
-        manage_row.addWidget(self.btn_reset_all)
-        layout.addLayout(manage_row)
+        manage_row.addWidget(self.btn_reset_all, 1)
+        manage_layout.addLayout(manage_row)
 
         self.auto_note = QLabel(
             "평소에는 홈/편집 대기 시간에 조용히 자동 학습합니다. '학습 시작'은 전체 큐를 즉시 다시 돌리고, '학습 종료'는 수동 학습을 멈춘 뒤 백그라운드 자동 학습으로 돌립니다."
         )
+        self.auto_note.setObjectName("personalizationAutoNote")
         self.auto_note.setWordWrap(True)
-        layout.addWidget(self.auto_note)
+        manage_layout.addWidget(self.auto_note)
+        layout.addWidget(manage_card)
 
         self.advanced_scroll = None
         self.inspect_box = None
@@ -893,7 +1032,10 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
             return
         if hasattr(trainer, "start_background_run"):
             try:
-                result = trainer.start_background_run(low_resource=not self._pending_queue_batch_manual_full)
+                result = trainer.start_background_run(
+                    low_resource=not self._pending_queue_batch_manual_full,
+                    continuous=self._pending_queue_batch_manual_full,
+                )
             except TypeError:
                 result = trainer.start_background_run()
         else:
@@ -919,9 +1061,13 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         self._set_full_learning_buttons_active(False)
         self._refresh_summary()
         started = int(self._pending_queue_batch_started or 0)
+        trainer = self._trainer()
+        queue_summary = trainer.queue_summary() if trainer is not None and hasattr(trainer, "queue_summary") else {}
+        waiting_count = int(queue_summary.get("waiting", 0) or 0)
+        complete_count = int(queue_summary.get("complete", 0) or 0)
         if reason == "manual_stop":
             self.queue_summary_label.setText(
-                f"Full 학습 종료: {started}개 작업을 시작했습니다. 남은 작업은 idle 상태에서 백그라운드로 이어집니다."
+                f"Full 학습 종료: 완료 {complete_count}개 · 남음 {waiting_count}개. 남은 작업은 idle 상태에서 백그라운드로 이어집니다."
             )
             return
         if reason == "user_input_interrupt":
@@ -931,7 +1077,10 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
             return
         if silent:
             label = "Full 학습" if manual_full else "대기 작업 자동 실행"
-            self.queue_summary_label.setText(f"{label}: {started}개 처리")
+            if manual_full:
+                self.queue_summary_label.setText(f"{label}: 완료 {complete_count}개 · 남음 {waiting_count}개")
+            else:
+                self.queue_summary_label.setText(f"{label}: {started}개 처리")
             return
         if reason == "no_pending_job" and started == 0:
             message = "실행할 대기 작업이 없습니다."

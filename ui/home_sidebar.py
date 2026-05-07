@@ -11,7 +11,8 @@ from PyQt6.QtCore import Qt, QTimer, QSize, QDateTime
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QPushButton,
-    QComboBox, QSizePolicy, QMenu,
+    QComboBox, QSizePolicy, QMenu, QDialog,
+    QVBoxLayout, QDialogButtonBox, QPlainTextEdit,
 )
 
 from core.runtime import config
@@ -28,6 +29,7 @@ from core.audio.stt_quality_presets import (
 from core.mode_policy import stt_quality_to_mode
 from core.settings_simplifier import apply_simple_operation_mode
 from ui.home_sidebar_presets import sync_sidebar_preset_panel
+from ui.dialogs.qml_popup import show_context_menu
 from ui.style import line_icon
 
 
@@ -129,54 +131,73 @@ class HomeSidebarMixin:
         except RuntimeError:
             return list(getattr(self, "_sidebar_queue_cache_items", []) or [])
         items = []
-        try:
-            active_row = int(getattr(self, "_current_file_idx", 1) or 1) - 1
-        except Exception:
-            active_row = 0
+        active_row = self._active_queue_row_index()
         try:
             for row in range(table.rowCount()):
                 status_item = table.item(row, 0)
                 file_item = table.item(row, 1)
                 duration_item = table.item(row, 3)
                 eta_item = table.item(row, 4)
-                raw_status = str(status_item.text() if status_item else "-")
-                status = self._plain_queue_status(raw_status)
-                flagger = getattr(self, "_queue_status_flags", None)
-                if callable(flagger):
-                    done, error, status_active = flagger(raw_status)
-                else:
-                    stripped = raw_status.strip()
-                    stage_done_only = "컷 경계" in stripped and "완료" in stripped
-                    done = (
-                        not stage_done_only
-                        and "미완료" not in stripped
-                        and (
-                            stripped in {"완료", "✅기존자막", "기존자막"}
-                            or stripped.startswith("✅")
-                            and "완료" in stripped
-                            or "기존자막" in stripped
-                        )
+                items.append(
+                    self._queue_sidebar_item_payload(
+                        row=row,
+                        active_row=active_row,
+                        raw_status=str(status_item.text() if status_item else "-"),
+                        file_text=str(file_item.text() if file_item else "-"),
+                        eta_text=str(eta_item.text() if eta_item else "-"),
+                        duration_text=str(duration_item.text() if duration_item else "-"),
                     )
-                    error = any(token in status for token in ("오류", "실패", "중단"))
-                    status_active = not done and not error and not any(token in status for token in ("대기", "-"))
-                active = status_active and row == active_row
-                display_status = "완료" if done else status
-                items.append({
-                    "order": str(row + 1),
-                    "status": status,
-                    "statusDisplay": display_status,
-                    "done": done,
-                    "active": active,
-                    "error": error,
-                    "file": str(file_item.text() if file_item else "-"),
-                    "eta": self._queue_sidebar_time_text(
-                        str(eta_item.text() if eta_item else "-"),
-                        str(duration_item.text() if duration_item else "-"),
-                    ),
-                })
+                )
         except RuntimeError:
             return list(getattr(self, "_sidebar_queue_cache_items", []) or [])
         return items
+
+    def _active_queue_row_index(self) -> int:
+        try:
+            return int(getattr(self, "_current_file_idx", 1) or 1) - 1
+        except Exception:
+            return 0
+
+    def _queue_sidebar_item_payload(
+        self,
+        *,
+        row: int,
+        active_row: int,
+        raw_status: str,
+        file_text: str,
+        eta_text: str,
+        duration_text: str,
+    ) -> dict:
+        status = self._plain_queue_status(raw_status)
+        flagger = getattr(self, "_queue_status_flags", None)
+        if callable(flagger):
+            done, error, status_active = flagger(raw_status)
+        else:
+            stripped = raw_status.strip()
+            stage_done_only = "컷 경계" in stripped and "완료" in stripped
+            done = (
+                not stage_done_only
+                and "미완료" not in stripped
+                and (
+                    stripped in {"완료", "✅기존자막", "기존자막"}
+                    or stripped.startswith("✅")
+                    and "완료" in stripped
+                    or "기존자막" in stripped
+                )
+            )
+            error = any(token in status for token in ("오류", "실패", "중단"))
+            status_active = not done and not error and not any(token in status for token in ("대기", "-"))
+        active = status_active and row == active_row
+        return {
+            "order": str(row + 1),
+            "status": status,
+            "statusDisplay": "완료" if done else status,
+            "done": done,
+            "active": active,
+            "error": error,
+            "file": str(file_text or "-"),
+            "eta": self._queue_sidebar_time_text(eta_text, duration_text),
+        }
 
     def _queue_sidebar_time_text(self, eta_text: str, duration_text: str) -> str:
         formatter = getattr(self, "_queue_card_time_text", None)
@@ -752,20 +773,44 @@ class HomeSidebarMixin:
             "medium": "중간",
         }.get(str(level or "medium"), "중간")
 
-    def _pipeline_rows(self, settings: dict) -> list[tuple[str, str, str]]:
-        subtitle_llm = str(settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "기본")) or "기본")
-        subtitle_llm_label = "미사용" if not self._subtitle_llm_enabled(settings) else getattr(self, "_short_model_name", lambda s: s)(subtitle_llm)
-        vad_model, _vad_role = getattr(self, "_vad_model_name", lambda s: ("기본", ""))(settings)
-        roughcut_llm, _roughcut_role = getattr(
-            self,
-            "_roughcut_llm_name",
-            lambda settings_arg, subtitle_arg: ("기본", ""),
-        )(settings, subtitle_llm)
-        stt1_model = getattr(self, "_short_model_name", lambda s: s)(settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "기본")))
+    def _pipeline_model_labels(self, settings: dict) -> dict[str, str]:
+        short_name = getattr(self, "_short_model_name", lambda value: value)
+        subtitle_llm = str(
+            settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "기본"))
+            or "기본"
+        )
+        subtitle_llm_label = (
+            "미사용"
+            if not self._subtitle_llm_enabled(settings)
+            else short_name(subtitle_llm)
+        )
+        vad_model, _ = getattr(self, "_vad_model_name", lambda value: ("기본", ""))(settings)
+        roughcut_resolver = getattr(self, "_roughcut_llm_name", None)
+        roughcut_llm = "기본"
+        if callable(roughcut_resolver):
+            try:
+                roughcut_llm, _ = roughcut_resolver(settings, subtitle_llm)
+            except Exception:
+                roughcut_llm = "기본"
+        stt1_model = short_name(
+            settings.get(
+                "selected_whisper_model",
+                getattr(config, "WHISPER_MODEL", "기본"),
+            )
+        )
         stt2_model = "미사용"
         if settings.get("stt_ensemble_enabled"):
-            stt2_model = getattr(self, "_short_model_name", lambda s: s)(settings.get("selected_whisper_model_secondary", ""))
+            stt2_model = short_name(settings.get("selected_whisper_model_secondary", ""))
+        return {
+            "subtitle_llm": subtitle_llm_label,
+            "roughcut_llm": roughcut_llm,
+            "stt1": stt1_model,
+            "stt2": stt2_model,
+            "vad": vad_model,
+        }
 
+    def _pipeline_rows(self, settings: dict) -> list[tuple[str, str, str]]:
+        model_labels = self._pipeline_model_labels(settings)
         cut_label = self._cut_boundary_sidebar_label(settings)
         lora_buckets = settings.get("subtitle_lora_quality_buckets")
         if isinstance(lora_buckets, (list, tuple)) and lora_buckets:
@@ -783,11 +828,11 @@ class HomeSidebarMixin:
             ("cut_boundary", "컷 경계", cut_label),
             ("preprocess", "전처리", "FFMPEG"),
             ("audio", "음성", getattr(self, "_audio_model_name", lambda s: "기본")(settings)),
-            ("stt1", "STT 1", stt1_model),
-            ("stt2", "STT 2", stt2_model),
-            ("vad", "VAD", vad_model),
-            ("subtitle_llm", "자막 LLM", subtitle_llm_label),
-            ("roughcut_llm", "러프컷 LLM", roughcut_llm),
+            ("stt1", "STT 1", model_labels["stt1"]),
+            ("stt2", "STT 2", model_labels["stt2"]),
+            ("vad", "VAD", model_labels["vad"]),
+            ("subtitle_llm", "자막 LLM", model_labels["subtitle_llm"]),
+            ("roughcut_llm", "러프컷 LLM", model_labels["roughcut_llm"]),
             ("lora", "LoRA", lora_label),
             ("deep_learning", "딥러닝", deep_label),
         ]
@@ -1162,6 +1207,13 @@ class HomeSidebarMixin:
             f"{escape(text)}<span style='color:#8EA4B8; font-weight:400;'>{dropdown_icon}</span></a>"
         )
 
+    def _pipeline_prompt_link(self, key: str) -> str:
+        return (
+            f"<a href='prompt:{escape(key)}' "
+            "style='color:#8EA4B8; text-decoration:none; margin-left:6px; font-size:11px;'>"
+            "&#9881;</a>"
+        )
+
     def _pipeline_info_html(self, settings: dict) -> str:
         rows = []
         model_links = {
@@ -1185,6 +1237,8 @@ class HomeSidebarMixin:
                 if stage in model_links
                 else escape(model)
             )
+            if key in {"subtitle_llm", "roughcut_llm"}:
+                model_html = f"{model_html}&nbsp;{self._pipeline_prompt_link(key)}"
             rows.append(
                 "<tr>"
                 f"<td style='color:{num_color}; padding:1px 6px 1px 0; font-weight:400;{bg_style}'>{idx}</td>"
@@ -1218,7 +1272,7 @@ class HomeSidebarMixin:
         label.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
         label.setOpenExternalLinks(False)
         try:
-            label.linkActivated.disconnect()
+            label.linkActivated.disconnect(self._on_sidebar_model_link)
         except Exception:
             pass
         label.linkActivated.connect(self._on_sidebar_model_link)
@@ -1230,6 +1284,51 @@ class HomeSidebarMixin:
         label.setToolTip(tooltip)
         self._sync_sidebar_preset_panel(settings)
         self._sync_subtitle_quality_combos(settings.get("stt_quality_preset"))
+        self._refresh_sidebar_runtime_monitor()
+
+    def _runtime_monitor_tooltip(self) -> str:
+        snapshot = dict(getattr(self, "_runtime_resource_snapshot", {}) or {})
+        if not snapshot:
+            return "런타임 모니터 대기 중"
+        coordinator = getattr(self, "_runtime_resource_coordinator", None)
+        if coordinator is not None and hasattr(coordinator, "status_plain"):
+            try:
+                return str(coordinator.status_plain(snapshot))
+            except Exception:
+                pass
+        return "런타임 모니터 활성"
+
+    def _refresh_sidebar_runtime_monitor(self):
+        label = getattr(self, "sidebar_runtime_label", None)
+        if label is None:
+            return
+        snapshot = dict(getattr(self, "_runtime_resource_snapshot", {}) or {})
+        if not snapshot:
+            label.setTextFormat(Qt.TextFormat.RichText)
+            label.setText("<div style='color:#6E8594; font-size:8px;'>RUNTIME · initializing…</div>")
+            label.setToolTip("런타임 모니터 대기 중")
+            return
+        coordinator = getattr(self, "_runtime_resource_coordinator", None)
+        if coordinator is not None and hasattr(coordinator, "status_html"):
+            try:
+                html = str(coordinator.status_html(snapshot))
+            except Exception:
+                html = ""
+        else:
+            html = ""
+        if not html:
+            active = ", ".join(str(item) for item in list(snapshot.get("active_labels", []) or [])[:3]) or "idle"
+            html = (
+                "<div style='margin-top:6px; padding-top:5px; border-top:1px solid #22313A;'>"
+                f"<div style='color:#34C759; font-size:8px; font-weight:700;'>RUNTIME · {escape(str(snapshot.get('profile', 'balanced')).upper())}</div>"
+                f"<div style='color:#DCE7F3; font-size:8px;'>CPU {float(snapshot.get('system_cpu_percent', 0.0)):.0f}% · "
+                f"RAM {float(snapshot.get('rss_gb', 0.0)):.2f}GB · FREE {float(snapshot.get('free_memory_gb', 0.0)):.2f}GB</div>"
+                f"<div style='color:#9DB7C8; font-size:8px;'>ACTIVE {escape(active)}</div>"
+                "</div>"
+            )
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setText(html)
+        label.setToolTip(self._runtime_monitor_tooltip())
 
     def _settings_with_runtime_audio_tune(self, settings: dict | None) -> dict:
         out = dict(settings or {})
@@ -1294,6 +1393,125 @@ class HomeSidebarMixin:
             except Exception:
                 pass
         self._refresh_sidebar_engine_info()
+
+    def _sidebar_prompt_config(self, key: str, settings: dict | None = None) -> dict | None:
+        settings = dict(settings or _runtime_load_settings() or {})
+        if key == "subtitle_llm":
+            return {
+                "title": "자막 LLM 프롬프트",
+                "description": "현재 기본 프롬프트는 읽기 전용입니다. 사용자 추가 프롬프트만 저장합니다.",
+                "sections": [
+                    {
+                        "setting_key": "default_llm_prompt",
+                        "label": "기본 프롬프트 (JSON: default_llm_prompt)",
+                        "value": str(settings.get("default_llm_prompt") or getattr(config, "DEFAULT_LLM_PROMPT", "") or ""),
+                        "editable": False,
+                    },
+                    {
+                        "setting_key": "user_prompt",
+                        "label": "사용자 추가 프롬프트 (JSON: user_prompt)",
+                        "value": str(settings.get("user_prompt") or settings.get("llm_prompt") or ""),
+                        "editable": True,
+                        "placeholder": "예: 특정 채널 말투 유지, 특정 용어 우선 보정 등",
+                    },
+                ],
+            }
+        if key == "roughcut_llm":
+            from core.roughcut.editor_draft import DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT
+            from core.roughcut.roughcut_prompts import DEFAULT_ROUGHCUT_PROMPT_V1
+
+            return {
+                "title": "러프컷 LLM 프롬프트",
+                "description": "비워 두면 기본 프롬프트를 사용합니다. 저장 값은 JSON 설정에 반영됩니다.",
+                "sections": [
+                    {
+                        "setting_key": "roughcut_llm_prompt",
+                        "label": "러프컷 액션 프롬프트 (JSON: roughcut_llm_prompt)",
+                        "value": str(settings.get("roughcut_llm_prompt") or ""),
+                        "editable": True,
+                        "placeholder": DEFAULT_ROUGHCUT_PROMPT_V1,
+                    },
+                    {
+                        "setting_key": "editor_roughcut_draft_prompt",
+                        "label": "에디터 러프컷 초안 프롬프트 (JSON: editor_roughcut_draft_prompt)",
+                        "value": str(settings.get("editor_roughcut_draft_prompt") or ""),
+                        "editable": True,
+                        "placeholder": DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT,
+                    },
+                ],
+            }
+        return None
+
+    def _apply_sidebar_prompt_updates(self, updates: dict) -> dict:
+        settings = dict(_runtime_load_settings() or {})
+        settings.update(dict(updates or {}))
+        if "user_prompt" in updates:
+            settings["llm_prompt"] = str(settings.get("user_prompt") or "")
+        self._apply_ai_settings(settings)
+        return settings
+
+    def _open_sidebar_prompt_dialog(self, key: str) -> None:
+        config_payload = self._sidebar_prompt_config(key)
+        if not config_payload:
+            return
+
+        dialog = QDialog(getattr(self, "home_page", None) or self)
+        dialog.setWindowTitle(str(config_payload.get("title") or "LLM 프롬프트"))
+        dialog.resize(880, 720)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        description = QLabel(str(config_payload.get("description") or ""), dialog)
+        description.setWordWrap(True)
+        description.setStyleSheet("color:#AFC7DB; font-size:12px;")
+        layout.addWidget(description)
+
+        editors: dict[str, QPlainTextEdit] = {}
+        for section in list(config_payload.get("sections") or []):
+            label = QLabel(str(section.get("label") or ""), dialog)
+            label.setWordWrap(True)
+            label.setStyleSheet("color:#F5F7FA; font-weight:600; font-size:12px;")
+            layout.addWidget(label)
+
+            editor = QPlainTextEdit(dialog)
+            editor.setObjectName(f"SidebarPromptEditor_{section.get('setting_key')}")
+            editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+            editor.setPlaceholderText(str(section.get("placeholder") or ""))
+            editor.setPlainText(str(section.get("value") or ""))
+            editor.setReadOnly(not bool(section.get("editable", False)))
+            editor.setMinimumHeight(140 if section.get("editable", False) else 220)
+            editor.setStyleSheet(
+                "QPlainTextEdit {"
+                "background:#0F171F; color:#F5F7FA; border:1px solid #2C4458; border-radius:8px; padding:10px;"
+                "font-family:Menlo, Monaco, Consolas, monospace; font-size:12px; }"
+            )
+            layout.addWidget(editor, 1 if not bool(section.get("editable", False)) else 0)
+            editors[str(section.get("setting_key") or "")] = editor
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
+            dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != int(QDialog.DialogCode.Accepted):
+            return
+
+        updates: dict[str, str] = {}
+        for section in list(config_payload.get("sections") or []):
+            if not bool(section.get("editable", False)):
+                continue
+            setting_key = str(section.get("setting_key") or "")
+            editor = editors.get(setting_key)
+            if editor is None:
+                continue
+            updates[setting_key] = editor.toPlainText().strip()
+        if updates:
+            self._apply_sidebar_prompt_updates(updates)
 
     def _whisper_model_items(self) -> list[str]:
         try:
@@ -1423,9 +1641,26 @@ class HomeSidebarMixin:
         return action
 
     def _on_sidebar_model_link(self, href: str):
+        if str(href or "").startswith("prompt:"):
+            self._open_sidebar_prompt_dialog(str(href or "").replace("prompt:", "", 1))
+            return
         key = str(href or "").replace("model:", "", 1)
         settings = _runtime_load_settings()
-        menu = QMenu(getattr(self, "home_page", None))
+        items: list[dict] = []
+        updates_by_id: dict[str, dict] = {}
+
+        def _push_item(item_id: str, label: str, updates: dict, *, checked: bool = False, accent: str = "#34C759", enabled: bool = True, danger: bool = False):
+            items.append(
+                {
+                    "id": item_id,
+                    "label": label,
+                    "checked": checked,
+                    "accent": accent,
+                    "enabled": enabled,
+                    "danger": danger,
+                }
+            )
+            updates_by_id[item_id] = dict(updates or {})
 
         if key == "cut_boundary":
             try:
@@ -1482,11 +1717,13 @@ class HomeSidebarMixin:
                 }
 
             for label, value in choices:
-                self._add_action(
-                    menu,
+                item_id = f"cut_boundary:{value}"
+                _push_item(
+                    item_id,
                     label,
-                    lambda _=False, v=value: self._apply_sidebar_model_selection(_cut_boundary_updates(v)),
+                    _cut_boundary_updates(value),
                     checked=value == current,
+                    accent="#34C759" if value != "off" else "#A9B0B7",
                 )
 
         elif key == "audio":
@@ -1499,22 +1736,24 @@ class HomeSidebarMixin:
             ]
             current = settings.get("selected_audio_ai", "none")
             for label, value in choices:
-                self._add_action(
-                    menu,
+                _push_item(
+                    f"audio:{value}",
                     label,
-                    lambda _=False, v=value: self._apply_sidebar_model_selection({"selected_audio_ai": v}),
+                    {"selected_audio_ai": value},
                     checked=value == current,
+                    accent="#34C759" if value != "none" else "#A9B0B7",
                 )
 
         elif key == "vad":
             choices = [("Silero", "silero"), ("TEN VAD", "ten_vad"), ("미사용", "none")]
             current = settings.get("selected_vad", "silero")
             for label, value in choices:
-                self._add_action(
-                    menu,
+                _push_item(
+                    f"vad:{value}",
                     label,
-                    lambda _=False, v=value: self._apply_sidebar_model_selection({"selected_vad": v}),
+                    {"selected_vad": value},
                     checked=value == current,
+                    accent="#34C759" if value != "none" else "#A9B0B7",
                 )
 
         elif key in {"stt", "stt1", "stt2"}:
@@ -1522,49 +1761,53 @@ class HomeSidebarMixin:
             current1 = settings.get("selected_whisper_model", "")
             current2 = settings.get("selected_whisper_model_secondary", "")
             if key == "stt2":
-                self._add_action(
-                    menu,
+                _push_item(
+                    "stt2:ensemble",
                     "STT2 앙상블 사용",
-                    lambda checked=False: self._apply_sidebar_model_selection({"stt_ensemble_enabled": bool(checked)}),
+                    {"stt_ensemble_enabled": not ensemble},
                     checked=ensemble,
+                    accent="#34C759",
                 )
-                menu.addSeparator()
+                items.append({"separator": True})
             models = self._stt1_model_items() if key in {"stt", "stt1"} else self._stt2_model_items()
-            for model in models:
+            for idx, model in enumerate(models):
                 label = self._short_model_name(model)
                 if key in {"stt", "stt1"}:
-                    self._add_action(
-                        menu,
+                    _push_item(
+                        f"stt1:model:{idx}",
                         label,
-                        lambda _=False, m=model: self._apply_sidebar_model_selection({"selected_whisper_model": m}),
+                        {"selected_whisper_model": model},
                         checked=model == current1,
+                        accent="#5AC8FA",
                     )
                     continue
-                self._add_action(
-                    menu,
+                _push_item(
+                    f"stt2:model:{idx}",
                     label,
-                    lambda _=False, m=model: self._apply_sidebar_model_selection({"selected_whisper_model_secondary": m, "stt_ensemble_enabled": True}),
+                    {"selected_whisper_model_secondary": model, "stt_ensemble_enabled": True},
                     checked=model == current2,
+                    accent="#5AC8FA",
                 )
 
         elif key in {"subtitle_llm", "roughcut_llm"}:
             if key == "roughcut_llm":
-                self._add_action(
-                    menu,
+                _push_item(
+                    "roughcut_llm:none",
                     "사용 안함",
-                    lambda _=False: self._apply_sidebar_model_selection({
+                    {
                         "roughcut_llm_enabled": False,
                         "roughcut_llm_use_override": True,
                         "roughcut_llm_provider": "none",
                         "roughcut_llm_model": "사용 안함",
-                    }),
+                    },
                     checked=not bool(settings.get("roughcut_llm_enabled", False)),
+                    accent="#A9B0B7",
                 )
-                menu.addSeparator()
+                items.append({"separator": True})
 
             current = settings.get("selected_model", "") if key == "subtitle_llm" else settings.get("roughcut_llm_model", "")
             model_items = self._roughcut_llm_items() if key == "roughcut_llm" else self._llm_model_items()
-            for item in model_items:
+            for idx, item in enumerate(model_items):
                 name = str(item.get("name") or "")
                 label = str(item.get("display_name") or name)
                 provider = str((item.get("details", {}) or {}).get("provider") or "ollama")
@@ -1577,12 +1820,14 @@ class HomeSidebarMixin:
                         "roughcut_llm_provider": provider,
                         "roughcut_llm_model": name,
                     }
-                self._add_action(
-                    menu,
+                _push_item(
+                    f"{key}:model:{idx}",
                     label,
-                    lambda _=False, u=updates: self._apply_sidebar_model_selection(u),
+                    updates,
                     checked=name == current,
+                    accent="#34C759",
                 )
 
-        if menu.actions():
-            menu.exec(QCursor.pos())
+        chosen = show_context_menu(getattr(self, "home_page", None), QCursor.pos(), items)
+        if chosen and chosen in updates_by_id:
+            self._apply_sidebar_model_selection(updates_by_id[chosen])

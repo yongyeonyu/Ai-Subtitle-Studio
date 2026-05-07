@@ -70,13 +70,24 @@ def _should_flush_live_subtitle_buffer(
     chunk_time_limit: int,
     *,
     stt_ensemble_enabled: bool,
-    individual_queue_mode: bool,
+    individual_queue_mode: bool | None = None,
     settings: dict | None = None,
     buffer_segments: list[dict] | None = None,
     cut_boundaries: list | None = None,
     provisional_cut_boundaries: list | None = None,
     media_duration_sec: float | None = None,
 ) -> bool:
+    if (
+        individual_queue_mode is not None
+        and settings is None
+        and not buffer_segments
+        and not cut_boundaries
+        and not provisional_cut_boundaries
+    ):
+        try:
+            return float(current_duration or 0.0) > 0.0
+        except Exception:
+            return False
     return _should_flush_final_subtitle_buffer(
         current_duration,
         chunk_time_limit,
@@ -628,19 +639,6 @@ class SinglePipelineMixin:
 
                 try:
                     s = load_settings()
-                    model_name = s.get("selected_model", "기본")
-                    try:
-                        from core.llm.secure_keys import get_api_key
-                        from core.llm.openai_provider import is_openai_model
-                        if "Gemini" in model_name:
-                            api_key = get_api_key("google") or s.get("google_api_key", "")
-                        elif is_openai_model(model_name):
-                            api_key = get_api_key("openai") or s.get("openai_api_key", "")
-                        else:
-                            api_key = ""
-                    except Exception:
-                        api_key = ""
-                    user_prompt = s.get("custom_prompt", "")
                     bundle_policy = resolve_subtitle_bundle_policy(
                         s,
                         media_duration_sec=video_duration_sec,
@@ -649,9 +647,6 @@ class SinglePipelineMixin:
                     stt_ensemble_enabled = bool(s.get("stt_ensemble_enabled", False))
                 except Exception:
                     s = {}
-                    model_name = ""
-                    api_key = ""
-                    user_prompt = ""
                     bundle_policy = resolve_subtitle_bundle_policy({"chunk_time_limit": 180})
                     chunk_time_limit = 180
                     stt_ensemble_enabled = False
@@ -854,7 +849,6 @@ class SinglePipelineMixin:
                         current_duration,
                         chunk_time_limit,
                         stt_ensemble_enabled=stt_ensemble_enabled,
-                        individual_queue_mode=bool(getattr(self, "_individual_queue_mode", False)),
                         settings=s,
                         buffer_segments=seg_buffer,
                         cut_boundaries=pipeline_cut_boundaries,

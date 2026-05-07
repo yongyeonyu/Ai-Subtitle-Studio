@@ -23,11 +23,14 @@ from core.audio.media_processor_audio import VideoProcessorAudioHelpersMixin
 from core.audio.media_processor_transcribe import VideoProcessorTranscribeMixin
 from core.audio.media_processor_vad import VideoProcessorVadMixin
 from core.llm.secure_keys import get_api_key  # noqa: F401 - patched by audio helper tests/runtime hooks
-from core.performance import adaptive_worker_count, bounded_worker_count, distributed_worker_ceiling
+from core.performance import (
+    bounded_worker_count,
+)
 from core.media_fingerprint import media_fingerprint_digest
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.runtime import config
 from core.runtime.logger import get_logger
+from core.runtime.multi_process import runtime_parallel_worker_plan
 from core.subtitle_quality.vad_alignment_checker import (
     review_vad_config,
     review_vad_enabled,
@@ -175,7 +178,13 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             )
             ok = False
             if self._adaptive_audio_routing_enabled(s):
-                ok = self._write_adaptive_grouped_chunks_from_media(video_path, chunk_dir, grouped, s)
+                ok = self._write_adaptive_grouped_chunks_from_media(
+                    video_path,
+                    chunk_dir,
+                    grouped,
+                    s,
+                    precomputed_vad_segments=None,
+                )
             if not ok:
                 ok = self._write_grouped_chunks_from_media_parallel(video_path, chunk_dir, grouped, fused_filter, s)
             if ok:
@@ -354,7 +363,13 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
 
                 grouped = self._build_grouped_chunks(vad_segments, total_dur, settings=s)
                 grouped = self._split_grouped_chunks_at_hard_cuts(grouped, target_start_sec, target_end_sec)
-                if not self._adaptive_audio_routing_enabled(s) or not self._write_adaptive_grouped_chunks_from_media(video_path, chunk_dir, grouped, s):
+                if not self._adaptive_audio_routing_enabled(s) or not self._write_adaptive_grouped_chunks_from_media(
+                    video_path,
+                    chunk_dir,
+                    grouped,
+                    s,
+                    precomputed_vad_segments=vad_segments,
+                ):
                     self._write_grouped_chunks_parallel(cleaned_wav, chunk_dir, grouped)
 
                 try:
@@ -376,7 +391,13 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                 if vad_success and self._adaptive_audio_routing_enabled(s):
                     routed_grouped = self._grouped_chunks_from_existing_wavs(chunk_dir)
                     if routed_grouped:
-                        self._write_adaptive_grouped_chunks_from_media(video_path, chunk_dir, routed_grouped, s)
+                        self._write_adaptive_grouped_chunks_from_media(
+                            video_path,
+                            chunk_dir,
+                            routed_grouped,
+                            s,
+                            precomputed_vad_segments=vad_segments,
+                        )
 
                 # ✅ 캐시 저장
                 if vad_success and not is_partial:
@@ -428,7 +449,13 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                         range_end = min(range_end, max(range_start, float(target_end_sec or range_start)))
                     grouped = self._split_range_with_overlap(range_start, range_end, chunk_sec, overlap_sec)
                     grouped = self._split_grouped_chunks_at_hard_cuts(grouped, range_start, range_end)
-                    if not self._adaptive_audio_routing_enabled(s) or not self._write_adaptive_grouped_chunks_from_media(video_path, chunk_dir, grouped, s):
+                    if not self._adaptive_audio_routing_enabled(s) or not self._write_adaptive_grouped_chunks_from_media(
+                        video_path,
+                        chunk_dir,
+                        grouped,
+                        s,
+                        precomputed_vad_segments=vad_segments,
+                    ):
                         self._write_grouped_chunks_parallel(cleaned_wav, chunk_dir, grouped)
                     get_logger().log(
                         f"    → Whisper 청크 {len(grouped)}개 생성 완료 "
@@ -629,20 +656,14 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
 
         settings = self._load_all_settings()
         workload = len(grouped)
-        worker_ceiling = distributed_worker_ceiling(
-            settings,
-            task="io",
-            workload=workload,
-            reserve_cores=1,
-            minimum=1,
-        )
-        max_workers, scheduler = adaptive_worker_count(
-            task="io",
+        max_workers, scheduler = runtime_parallel_worker_plan(
             settings=settings,
-            requested=self.io_workers,
+            task="io",
             workload=workload,
+            requested=self.io_workers,
             minimum=1,
-            maximum=worker_ceiling,
+            maximum=workload,
+            reserve_task="io",
         )
         if scheduler.get("ramp", {}).get("enabled"):
             get_logger().log(f"  🐢 [전처리] 청크 생성 램프업: {max_workers}개 워커")
@@ -684,20 +705,14 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
 
         ffmpeg = ffmpeg_binary()
         workload = len(grouped)
-        worker_ceiling = distributed_worker_ceiling(
-            settings,
-            task="io",
-            workload=workload,
-            reserve_cores=1,
-            minimum=1,
-        )
-        max_workers, scheduler = adaptive_worker_count(
-            task="io",
+        max_workers, scheduler = runtime_parallel_worker_plan(
             settings=settings,
-            requested=self.io_workers,
+            task="io",
             workload=workload,
+            requested=self.io_workers,
             minimum=1,
-            maximum=worker_ceiling,
+            maximum=workload,
+            reserve_task="io",
         )
         if scheduler.get("ramp", {}).get("enabled"):
             get_logger().log(f"  🐢 [전처리] 직접 청크 추출 램프업: {max_workers}개 워커")

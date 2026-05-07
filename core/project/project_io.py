@@ -6,11 +6,13 @@ from __future__ import annotations
 import json
 import os
 import threading
+from collections import OrderedDict
 from typing import Any
 
 from core.json_file import write_json_file_atomic
 
-_PROJECT_FILE_CACHE: dict[str, dict[str, Any]] = {}
+_PROJECT_FILE_CACHE_MAX = 4
+_PROJECT_FILE_CACHE: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
 _PROJECT_FILE_CACHE_LOCK = threading.RLock()
 _PROJECT_RUNTIME_KEYS = {
     "_project_file_path",
@@ -43,6 +45,15 @@ def clear_project_file_cache(filepath: str | None = None) -> None:
             _PROJECT_FILE_CACHE.clear()
 
 
+def _cache_project_payload(filepath: str, signature: tuple[int, int] | None, project: dict[str, Any]) -> None:
+    key = _project_cache_key(filepath)
+    with _PROJECT_FILE_CACHE_LOCK:
+        _PROJECT_FILE_CACHE[key] = {"signature": signature, "project": project}
+        _PROJECT_FILE_CACHE.move_to_end(key)
+        while len(_PROJECT_FILE_CACHE) > _PROJECT_FILE_CACHE_MAX:
+            _PROJECT_FILE_CACHE.popitem(last=False)
+
+
 def prime_project_file_cache(filepath: str, project: dict[str, Any]) -> None:
     """Pin an already-loaded project payload in the process cache."""
     if not isinstance(project, dict):
@@ -50,8 +61,7 @@ def prime_project_file_cache(filepath: str, project: dict[str, Any]) -> None:
     key = _project_cache_key(filepath)
     project["_project_file_path"] = key
     signature = _project_file_signature(key)
-    with _PROJECT_FILE_CACHE_LOCK:
-        _PROJECT_FILE_CACHE[key] = {"signature": signature, "project": project}
+    _cache_project_payload(key, signature, project)
 
 
 def _attach_project_path(project: dict[str, Any], filepath: str) -> dict[str, Any]:
@@ -110,14 +120,14 @@ def read_project_file(filepath: str) -> dict[str, Any]:
     with _PROJECT_FILE_CACHE_LOCK:
         cached = _PROJECT_FILE_CACHE.get(key)
         if cached and cached.get("signature") == signature:
+            _PROJECT_FILE_CACHE.move_to_end(key)
             project = cached.get("project")
             return _attach_project_path(project, key) if isinstance(project, dict) else {}
 
     with open(key, "r", encoding="utf-8") as handle:
         data = json.load(handle)
     project = _attach_project_path(data if isinstance(data, dict) else {}, key)
-    with _PROJECT_FILE_CACHE_LOCK:
-        _PROJECT_FILE_CACHE[key] = {"signature": signature, "project": project}
+    _cache_project_payload(key, signature, project)
     return project
 
 

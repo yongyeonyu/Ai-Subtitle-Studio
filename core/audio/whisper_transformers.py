@@ -11,6 +11,7 @@ import os  # noqa: F401 - tests patch module os.environ shared by subprocess_env
 import subprocess
 import sys
 import threading
+from functools import lru_cache
 from pathlib import Path
 
 from core.llm.secure_keys import get_api_key
@@ -45,7 +46,7 @@ def is_transformers_whisper_model(model: str) -> bool:
 
 def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple: str = "(0.0,)", log_label: str = "STT"):
     """Run a Transformers ASR worker and stream one JSON line per chunk."""
-    env = _huggingface_env()
+    env = _huggingface_env(strip_qt=True)
     proc = subprocess.Popen(
         [sys.executable, "-u", "-c", _build_worker_script()],
         stdin=subprocess.PIPE,
@@ -72,13 +73,84 @@ def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple:
     return proc
 
 
-def _huggingface_env() -> dict:
-    env = subprocess_env()
+def _merged_pythonwarnings(current: str | None, rule: str) -> str:
+    parts = [p for p in (current or "").split(",") if p]
+    if rule not in parts:
+        parts.append(rule)
+    return ",".join(parts)
+
+
+def _huggingface_env(*, strip_qt: bool = False) -> dict:
+    env = subprocess_env(strip_qt=strip_qt)
     token = env.get("HF_TOKEN") or env.get("HUGGINGFACE_HUB_TOKEN") or get_api_key("huggingface")
     if token:
         env.setdefault("HF_TOKEN", token)
         env.setdefault("HUGGINGFACE_HUB_TOKEN", token)
+    env["PYTHONWARNINGS"] = _merged_pythonwarnings(
+        env.get("PYTHONWARNINGS"),
+        "ignore:The pynvml package is deprecated.:FutureWarning",
+    )
     return env
+
+
+def transformers_whisper_fallback_model(model: str) -> str:
+    requested = str(model or "").strip().lower()
+    if not requested:
+        return ""
+    if "turbo" in requested:
+        return "mlx-community/whisper-large-v3-turbo" if sys.platform == "darwin" else "large-v3-turbo"
+    if "large-v3" in requested or "large" in requested:
+        return "mlx-community/whisper-large-v3-mlx" if sys.platform == "darwin" else "large-v3"
+    return "mlx-community/whisper-large-v3-turbo" if sys.platform == "darwin" else "large-v3-turbo"
+
+
+@lru_cache(maxsize=1)
+def transformers_whisper_runtime_status() -> tuple[bool, str]:
+    try:
+        probe = subprocess.run(
+            [sys.executable, "-u", "-c", _runtime_probe_script()],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=_huggingface_env(strip_qt=True),
+            timeout=20,
+        )
+    except Exception as exc:
+        return False, f"runtime_probe_failed:{exc}"
+
+    payload = None
+    for raw in reversed((probe.stdout or "").splitlines()):
+        raw = str(raw or "").strip()
+        if not raw.startswith("{"):
+            continue
+        try:
+            payload = json.loads(raw)
+            break
+        except Exception:
+            continue
+
+    if isinstance(payload, dict):
+        available = bool(payload.get("available"))
+        reason = str(payload.get("reason") or ("ok" if available else "unavailable"))
+        torch_version = str(payload.get("torch_version") or "").strip()
+        transformers_version = str(payload.get("transformers_version") or "").strip()
+        if available:
+            return True, "ok"
+        detail = reason
+        if torch_version or transformers_version:
+            detail = (
+                f"{reason} "
+                f"(torch={torch_version or '?'} / transformers={transformers_version or '?'})"
+            )
+        return False, detail
+
+    stderr = " ".join(
+        line.strip()
+        for line in (probe.stderr or "").splitlines()
+        if line.strip()
+    )
+    return False, f"runtime_probe_no_result:{stderr[:200] or 'unknown'}"
 
 
 def _format_stderr_log(line: str, log_label: str = "STT") -> str:
@@ -114,6 +186,57 @@ def _attach_stderr_logger(proc, log_label: str = "STT"):
                 get_logger().log(line)
 
     threading.Thread(target=_log_stderr, daemon=True, name="whisper-transformers-stderr").start()
+
+
+def _runtime_probe_script() -> str:
+    return r'''
+import json
+import sys
+
+
+def emit(**payload):
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+try:
+    import torch
+    torch_version = str(getattr(torch, "__version__", ""))
+except Exception as exc:
+    emit(available=False, reason=f"torch_import:{exc}")
+    raise SystemExit(0)
+
+try:
+    import transformers
+    transformers_version = str(getattr(transformers, "__version__", ""))
+except Exception as exc:
+    emit(
+        available=False,
+        reason=f"transformers_import:{exc}",
+        torch_version=torch_version,
+    )
+    raise SystemExit(0)
+
+try:
+    from transformers.utils import is_torch_available
+
+    available = bool(is_torch_available())
+except Exception as exc:
+    emit(
+        available=False,
+        reason=f"transformers_probe:{exc}",
+        torch_version=torch_version,
+        transformers_version=transformers_version,
+    )
+    raise SystemExit(0)
+
+emit(
+    available=available,
+    reason="ok" if available else "transformers_disabled_torch",
+    torch_version=torch_version,
+    transformers_version=transformers_version,
+)
+'''
 
 
 def _build_worker_script() -> str:

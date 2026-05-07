@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.help.help_content import HELP_TABS
+from ui.settings.qml_panel import create_qml_action_bar, create_qml_tab_bar, sync_qml_tab_bar
 from ui.style import COLORS, button_style, label_style, settings_dialog_stylesheet
 
 
@@ -46,16 +47,50 @@ class HelpDialog(QDialog):
         title_box.addWidget(subtitle)
         header.addLayout(title_box)
         header.addStretch()
-        close_btn = QPushButton("닫기")
-        close_btn.setStyleSheet(button_style("toolbar"))
-        close_btn.clicked.connect(self.accept)
-        header.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignTop)
+        qml_close = create_qml_action_bar(
+            self,
+            actions=[{"id": "close", "title": "닫기", "kind": "secondary", "enabled": True}],
+            compact=True,
+            scope="settings",
+        )
+        if qml_close is not None:
+            try:
+                root_obj = qml_close.rootObject()
+                if root_obj is not None:
+                    root_obj.actionTriggered.connect(lambda _action_id: self.accept())
+                header.addWidget(qml_close, alignment=Qt.AlignmentFlag.AlignTop)
+            except Exception:
+                qml_close = None
+        if qml_close is None:
+            close_btn = QPushButton("닫기")
+            close_btn.setStyleSheet(button_style("toolbar"))
+            close_btn.clicked.connect(self.accept)
+            header.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignTop)
         root.addLayout(header)
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         for tab in HELP_TABS:
             self.tabs.addTab(self._build_tab(tab), tab["title"])
+        self._qml_tab_bar = create_qml_tab_bar(
+            self,
+            items=[{"title": self.tabs.tabText(i)} for i in range(self.tabs.count())],
+            current_index=self.tabs.currentIndex(),
+            scope="settings",
+        )
+        if self._qml_tab_bar is not None:
+            self.tabs.tabBar().hide()
+            try:
+                root_obj = self._qml_tab_bar.rootObject()
+                if root_obj is not None:
+                    root_obj.tabTriggered.connect(self.tabs.setCurrentIndex)
+                self.tabs.currentChanged.connect(
+                    lambda idx: sync_qml_tab_bar(self._qml_tab_bar, current_index=idx)
+                )
+            except Exception:
+                self._qml_tab_bar = None
+        if self._qml_tab_bar is not None:
+            root.addWidget(self._qml_tab_bar)
         root.addWidget(self.tabs, stretch=1)
 
     def _build_tab(self, tab):

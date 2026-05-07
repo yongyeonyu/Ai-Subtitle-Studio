@@ -6,12 +6,16 @@ Global bottom menu bar.
 This replaces duplicated sidebar/editor action menus while keeping the editor's
 existing button/state-machine objects alive behind the scenes.
 """
-from PyQt6.QtCore import QSize, Qt, QTimer
+import os
+
+from PyQt6.QtCore import QSize, Qt, QTimer, QUrl
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QWidget
 
 from core.runtime import config
 from core.pipeline_status import generation_stage_label, process_mode_label
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
+from ui.gpu_rendering import scenegraph_enabled
 from ui.responsive_profile import responsive_profile_for_size
 from ui.style import label_style, line_icon, tool_button_style
 
@@ -38,6 +42,10 @@ class StatusRail(QWidget):
         self._flash_timer = QTimer(self)
         self._flash_timer.setInterval(200)
         self._flash_timer.timeout.connect(self._tick_flash)
+        self._quick_mode_text = "에디터"
+        self._quick_stage_text = "검토"
+        self._quick_icon_text = "ED"
+        self._quick_color = "#34C759"
         layout = QGridLayout(self)
         layout.setContentsMargins(0, 2, 0, 4)
         layout.setHorizontalSpacing(0)
@@ -45,6 +53,8 @@ class StatusRail(QWidget):
         self.state_button = self._rail_button("에디터 | 검토", "edit")
         layout.addWidget(self.state_button, 0, 0)
         layout.setColumnStretch(0, 1)
+        self._quick_shell = self._create_quick_shell()
+        self._sync_quick_shell()
 
     def _rail_button(self, text, icon):
         btn = QToolButton()
@@ -213,6 +223,19 @@ class StatusRail(QWidget):
         btn.setText(text)
         btn.setIcon(line_icon(icon, color, 20))
         btn.setStyleSheet(self._state_style(self._flash_on))
+        parts = [segment.strip() for segment in str(text or "").split("|", 1)]
+        self._quick_mode_text = parts[0] if parts else ""
+        self._quick_stage_text = parts[1] if len(parts) > 1 else ""
+        self._quick_icon_text = {
+            "edit": "ED",
+            "roughcut": "RC",
+            "shortform": "SF",
+            "mic": "STT",
+            "ai": "AI",
+            "timeline": "CUT",
+        }.get(str(icon or ""), "AI")
+        self._quick_color = str(color or "#34C759")
+        self._sync_quick_shell()
 
     def _state_style(self, flash=False):
         bg = "#173D28" if flash else "#15331F"
@@ -232,6 +255,7 @@ class StatusRail(QWidget):
         self._flash_left = 6
         self._flash_on = True
         self.state_button.setStyleSheet(self._state_style(True))
+        self._sync_quick_shell()
         self._flash_timer.start()
 
     def _tick_flash(self):
@@ -242,6 +266,59 @@ class StatusRail(QWidget):
             self._flash_timer.stop()
             self._flash_on = False
             self.state_button.setStyleSheet(self._state_style(False))
+        self._sync_quick_shell()
+
+    def _create_quick_shell(self):
+        if not scenegraph_enabled("general"):
+            return None
+        qml_path = os.path.normpath(os.path.join(os.path.dirname(__file__), "qml", "status_rail.qml"))
+        if not os.path.exists(qml_path):
+            return None
+        try:
+            from PyQt6.QtQuickWidgets import QQuickWidget
+        except Exception:
+            return None
+        try:
+            shell = QQuickWidget(self)
+            shell.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+            shell.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            shell.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            shell.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            shell.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+            shell.setClearColor(QColor(0, 0, 0, 0))
+            shell.setSource(QUrl.fromLocalFile(qml_path))
+            if shell.status() == QQuickWidget.Status.Error:
+                shell.deleteLater()
+                return None
+            shell.setGeometry(self.rect())
+            shell.show()
+            shell.raise_()
+            return shell
+        except Exception:
+            return None
+
+    def _sync_quick_shell(self):
+        shell = getattr(self, "_quick_shell", None)
+        if shell is None:
+            return
+        try:
+            root = shell.rootObject()
+            if root is None:
+                return
+            root.setProperty("modeText", str(getattr(self, "_quick_mode_text", "에디터") or "에디터"))
+            root.setProperty("stageText", str(getattr(self, "_quick_stage_text", "대기") or "대기"))
+            root.setProperty("iconText", str(getattr(self, "_quick_icon_text", "AI") or "AI"))
+            root.setProperty("accentColor", QColor(str(getattr(self, "_quick_color", "#34C759") or "#34C759")))
+            root.setProperty("flashOn", bool(getattr(self, "_flash_on", False)))
+        except Exception:
+            pass
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        shell = getattr(self, "_quick_shell", None)
+        if shell is not None:
+            shell.setGeometry(self.rect())
+            shell.raise_()
 
 
 class GlobalMenuBar(QWidget):
@@ -251,6 +328,10 @@ class GlobalMenuBar(QWidget):
         self.editor = None
         self.status_rail = None
         self._tool_buttons = []
+        self._quick_action_buttons = {}
+        self._left_qml_buttons = []
+        self._center_qml_buttons = []
+        self._right_qml_buttons = []
         self._responsive_profile = responsive_profile_for_size(0, 0)
         self.setFixedHeight(MENU_BAR_HEIGHT)
         self.setObjectName("GlobalMenuBar")
@@ -282,6 +363,13 @@ class GlobalMenuBar(QWidget):
             ("STT", "mic", self._toggle_stt_mode, "#FF453A"),
         ]:
             btn = self._small_button(text, icon, slot, color)
+            self._register_qml_button(
+                btn,
+                action_id=f"left_{text}",
+                badge=self._button_badge_text(icon, text),
+                accent=color,
+                section="left",
+            )
             if text == "STT":
                 self.btn_stt_mode = btn
             left.addWidget(btn)
@@ -296,6 +384,10 @@ class GlobalMenuBar(QWidget):
         self.btn_undo = self._action_button("Undo", "undo", self._click_undo)
         self.btn_redo = self._action_button("Redo", "redo", self._click_redo)
         self.btn_save = self._action_button("저장", "save", self._click_save)
+        self._register_qml_button(self.btn_start, action_id="center_start", badge="GO", accent="#34C759", section="center", kind="primary")
+        self._register_qml_button(self.btn_undo, action_id="center_undo", badge="UNDO", accent="#579DFF", section="center")
+        self._register_qml_button(self.btn_redo, action_id="center_redo", badge="REDO", accent="#579DFF", section="center")
+        self._register_qml_button(self.btn_save, action_id="center_save", badge="SAVE", accent="#34C759", section="center")
         for btn in (self.btn_start, self.btn_undo, self.btn_redo, self.btn_save):
             center.addWidget(btn)
         root.addWidget(self.center_group, stretch=0, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -309,11 +401,17 @@ class GlobalMenuBar(QWidget):
         self.btn_help = self._wide_button("도움말", "help", self._open_help)
         self.btn_log = self._wide_button("사이드바", "terminal", self._toggle_log)
         self.btn_cache_clear = self._wide_button("캐쉬삭제", "trash", self._clear_cache, min_width=MENU_CACHE_WIDTH)
+        self.btn_quit = self._wide_button("종료", "power", self._quit, kind="danger")
+        self._register_qml_button(self.btn_cache_clear, action_id="right_cache", badge="CLR", accent="#FF9500", section="right")
+        self._register_qml_button(self.btn_auto_start, action_id="right_auto", badge="AUTO", accent="#34C759", section="right")
+        self._register_qml_button(self.btn_help, action_id="right_help", badge="HELP", accent="#579DFF", section="right")
+        self._register_qml_button(self.btn_log, action_id="right_log", badge="SIDE", accent="#579DFF", section="right")
+        self._register_qml_button(self.btn_quit, action_id="right_quit", badge="QUIT", accent="#FF453A", section="right", kind="danger")
         right.addWidget(self.btn_cache_clear)
         right.addWidget(self.btn_auto_start)
         right.addWidget(self.btn_help)
         right.addWidget(self.btn_log)
-        right.addWidget(self._wide_button("종료", "power", self._quit, kind="danger"))
+        right.addWidget(self.btn_quit)
         root.addWidget(self.right_group, stretch=1, alignment=Qt.AlignmentFlag.AlignRight)
 
         self.engine_label = QLabel("", self)
@@ -321,6 +419,7 @@ class GlobalMenuBar(QWidget):
         self.engine_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         self.engine_label.setStyleSheet(label_style("muted", 10, bold=True))
         self.engine_label.setVisible(False)
+        self._quick_shell = self._create_quick_shell()
 
         self.refresh()
 
@@ -366,6 +465,42 @@ class GlobalMenuBar(QWidget):
         btn.clicked.connect(slot)
         self._tool_buttons.append(btn)
         return btn
+
+    def _button_badge_text(self, icon_name: str, text: str) -> str:
+        icon_name = str(icon_name or "").strip().lower()
+        text = str(text or "").strip()
+        return {
+            "settings": "CFG",
+            "ai": "AI",
+            "speaker": "SPK",
+            "sliders": "CTL",
+            "timeline": "CUT",
+            "video": "VID",
+            "export": "SUB",
+            "mic": "STT",
+            "play": "GO",
+            "undo": "UNDO",
+            "redo": "REDO",
+            "save": "SAVE",
+            "help": "HELP",
+            "terminal": "SIDE",
+            "trash": "CLR",
+            "power": "QUIT",
+        }.get(icon_name, (text[:4] or "UI").upper())
+
+    def _register_qml_button(self, btn, *, action_id: str, badge: str, accent: str, section: str, kind: str = "toolbar"):
+        btn.setProperty("qmlActionId", action_id)
+        btn.setProperty("qmlBadge", badge)
+        btn.setProperty("qmlAccent", accent)
+        btn.setProperty("qmlSection", section)
+        btn.setProperty("qmlKind", kind)
+        self._quick_action_buttons[action_id] = btn
+        if section == "left":
+            self._left_qml_buttons.append(btn)
+        elif section == "center":
+            self._center_qml_buttons.append(btn)
+        else:
+            self._right_qml_buttons.append(btn)
 
     def set_status_rail(self, status_rail):
         self.status_rail = status_rail
@@ -418,6 +553,7 @@ class GlobalMenuBar(QWidget):
         self._sync_start_icon()
         if self.status_rail is not None:
             self.status_rail.refresh_from_editor(editor)
+        self._sync_quick_shell()
         stt_on = bool(getattr(editor, "_stt_mode_enabled", False)) if editor is not None else False
         if hasattr(self, "btn_stt_mode"):
             stt_color = "#FF453A" if stt_on else "#8B949E"
@@ -503,6 +639,10 @@ class GlobalMenuBar(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.refresh()
+        shell = getattr(self, "_quick_shell", None)
+        if shell is not None:
+            shell.setGeometry(self.rect())
+            shell.raise_()
 
     def _active_editor(self):
         editor = self.editor or getattr(self.main_window, "_editor_widget", None)
@@ -628,3 +768,63 @@ class GlobalMenuBar(QWidget):
             self.main_window._quick_exit()
         else:
             self.main_window.close()
+
+    def _create_quick_shell(self):
+        if not scenegraph_enabled("general"):
+            return None
+        qml_path = os.path.normpath(os.path.join(os.path.dirname(__file__), "qml", "global_menu_bar.qml"))
+        if not os.path.exists(qml_path):
+            return None
+        try:
+            from PyQt6.QtQuickWidgets import QQuickWidget
+        except Exception:
+            return None
+        try:
+            shell = QQuickWidget(self)
+            shell.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+            shell.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            shell.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            shell.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+            shell.setClearColor(QColor(0, 0, 0, 0))
+            shell.setSource(QUrl.fromLocalFile(qml_path))
+            if shell.status() == QQuickWidget.Status.Error:
+                shell.deleteLater()
+                return None
+            root = shell.rootObject()
+            if root is not None and hasattr(root, "actionTriggered"):
+                root.actionTriggered.connect(self._handle_quick_action)
+            shell.setGeometry(self.rect())
+            shell.show()
+            shell.raise_()
+            return shell
+        except Exception:
+            return None
+
+    def _handle_quick_action(self, action_id: str):
+        button = self._quick_action_buttons.get(str(action_id or ""))
+        if button is not None and button.isEnabled():
+            button.click()
+
+    def _qml_button_payload(self, btn) -> dict:
+        return {
+            "id": str(btn.property("qmlActionId") or ""),
+            "text": str(btn.text() or ""),
+            "badge": str(btn.property("qmlBadge") or ""),
+            "accent": str(btn.property("qmlAccent") or "#A9B0B7"),
+            "enabled": bool(btn.isEnabled()),
+            "kind": str(btn.property("qmlKind") or "toolbar"),
+        }
+
+    def _sync_quick_shell(self):
+        shell = getattr(self, "_quick_shell", None)
+        if shell is None:
+            return
+        try:
+            root = shell.rootObject()
+            if root is None:
+                return
+            root.setProperty("leftItems", [self._qml_button_payload(btn) for btn in self._left_qml_buttons])
+            root.setProperty("centerItems", [self._qml_button_payload(btn) for btn in self._center_qml_buttons])
+            root.setProperty("rightItems", [self._qml_button_payload(btn) for btn in self._right_qml_buttons])
+        except Exception:
+            pass

@@ -336,11 +336,18 @@ def _retrieved_lora_context_lines(
     prompts: list[str] = []
     exclusions: list[str] = []
     rules: list[str] = []
+    media_refs: list[str] = []
     seen = set()
     for item in items:
         kind = str(item.get("kind") or "")
         payload = dict(item.get("payload") or {})
         score = float(item.get("retrieval_score", 0.0) or 0.0)
+        media_path = _norm(payload.get("media_path"))
+        media_label = _norm(Path(media_path).stem if media_path else payload.get("media_id"))
+        media_key = ("media", media_label)
+        if media_label and media_key not in seen:
+            media_refs.append(media_label)
+            seen.add(media_key)
         if kind in {"text_lora_corpus", "text_lora_dataset"}:
             src = _norm(payload.get("input"))[:72]
             dst = _norm(payload.get("output"))[:72]
@@ -390,6 +397,8 @@ def _retrieved_lora_context_lines(
             if rule:
                 rules.append(f"{rule} (score {score:.1f})")
 
+    if media_refs:
+        lines.append("- 검색된 대표 media: " + "; ".join(media_refs[:3]))
     if examples:
         lines.append("- 검색된 유사 자막/ground truth: " + "; ".join(examples[:5]))
     if contexts:

@@ -7,6 +7,7 @@ MainWindow runtime cleanup / fast-exit responsibilities extracted from main_wind
 import gc
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
@@ -105,6 +106,9 @@ class MainRuntimeCleanupMixin:
                 try:
                     video_player = getattr(editor, "video_player", None)
                     if video_player is not None:
+                        shutdown_backend = getattr(video_player, "shutdown_backend", None)
+                        if callable(shutdown_backend):
+                            shutdown_backend()
                         timer = getattr(video_player, "_ui_timer", None)
                         if timer is not None:
                             timer.stop()
@@ -186,14 +190,16 @@ class MainRuntimeCleanupMixin:
             except Exception:
                 pass
 
-            try:
-                from core.platform_compat import cleanup_app_runtime_processes
+            skip_external_cleanup = bool(getattr(self, "_skip_external_cleanup_in_navigation", False))
+            if not skip_external_cleanup:
+                try:
+                    from core.platform_compat import cleanup_app_runtime_processes
 
-                cleanup_result = cleanup_app_runtime_processes(logger=get_logger(), timeout_sec=timeout_sec)
-                if any(int(v or 0) > 0 for v in cleanup_result.values()):
-                    stopped_any = True
-            except Exception as exc:
-                get_logger().log(f"⚠️ {context} 중 외부 런타임 정리 실패: {exc}")
+                    cleanup_result = cleanup_app_runtime_processes(logger=get_logger(), timeout_sec=timeout_sec)
+                    if any(int(v or 0) > 0 for v in cleanup_result.values()):
+                        stopped_any = True
+                except Exception as exc:
+                    get_logger().log(f"⚠️ {context} 중 외부 런타임 정리 실패: {exc}")
 
             try:
                 gc.collect()
@@ -272,6 +278,42 @@ class MainRuntimeCleanupMixin:
 
     def _clear_runtime_memory_caches(self, *, include_gpu: bool = True) -> None:
         try:
+            from core.media_info import clear_media_probe_cache_memory
+            from core.personalization.lora_vector_retriever import clear_lora_retrieval_caches
+            from core.project.project_io import clear_project_file_cache
+            from ui.style import clear_line_icon_cache
+
+            clear_media_probe_cache_memory()
+            clear_project_file_cache()
+            clear_lora_retrieval_caches()
+            clear_line_icon_cache()
+        except Exception:
+            pass
+        for owner in (self, getattr(self, "backend", None), getattr(self, "backend_fast", None)):
+            if owner is None:
+                continue
+            try:
+                cache = getattr(owner, "_prefetch_cache", None)
+                if isinstance(cache, dict):
+                    cache.clear()
+            except Exception:
+                pass
+            for attr_name in (
+                "_cut_boundary_pipeline_cache",
+                "_auto_audio_tune_cache",
+                "_runtime_auto_audio_tune",
+                "_runtime_auto_audio_decision",
+                "_speaker_map",
+            ):
+                try:
+                    payload = getattr(owner, attr_name, None)
+                    if isinstance(payload, dict):
+                        payload.clear()
+                    elif isinstance(payload, list):
+                        payload.clear()
+                except Exception:
+                    pass
+        try:
             gc.collect()
         except Exception:
             pass
@@ -294,6 +336,58 @@ class MainRuntimeCleanupMixin:
                 clear_cache()
         except Exception:
             pass
+
+    def _shutdown_runtime_memory_manager(self) -> None:
+        try:
+            timer = getattr(self, "_runtime_memory_timer", None)
+            if timer is not None and hasattr(timer, "stop"):
+                timer.stop()
+        except Exception:
+            pass
+        try:
+            manager = getattr(self, "_runtime_memory_manager", None)
+            if manager is not None and hasattr(manager, "stop"):
+                manager.stop()
+        except Exception:
+            pass
+
+    def _shutdown_runtime_resource_coordinator(self) -> None:
+        try:
+            timer = getattr(self, "_runtime_resource_timer", None)
+            if timer is not None and hasattr(timer, "stop"):
+                timer.stop()
+        except Exception:
+            pass
+        try:
+            coordinator = getattr(self, "_runtime_resource_coordinator", None)
+            if coordinator is not None and hasattr(coordinator, "set_exit_mode"):
+                coordinator.set_exit_mode(True)
+        except Exception:
+            pass
+
+    def _handle_runtime_memory_pressure(self, stage: str, snapshot: dict | None = None):
+        stage_text = str(stage or "normal").strip().lower()
+        if stage_text == "normal":
+            return {"stage": "normal", "actions": []}
+        actions: list[str] = []
+        include_gpu = stage_text == "critical"
+        try:
+            self._clear_runtime_memory_caches(include_gpu=include_gpu)
+            actions.append("clear_runtime_memory_caches")
+        except Exception:
+            pass
+        if stage_text == "critical":
+            try:
+                busy = bool(self._is_editor_ai_busy(getattr(self, "_editor_widget", None)) or self._is_backend_ai_busy())
+            except Exception:
+                busy = True
+            if not busy:
+                try:
+                    self._release_ai_models_for_editor_mode(force=True, preserve_roughcut_status=True)
+                    actions.append("release_ai_models")
+                except Exception:
+                    pass
+        return {"stage": stage_text, "actions": actions}
 
     def _force_editor_idle_after_generation(self, editor=None, *, reason: str = "generation_complete") -> dict:
         target_editor = editor if editor is not None else getattr(self, "_editor_widget", None)
@@ -446,6 +540,9 @@ class MainRuntimeCleanupMixin:
         try:
             video_player = getattr(editor, "video_player", None)
             if video_player is not None:
+                shutdown_backend = getattr(video_player, "shutdown_backend", None)
+                if callable(shutdown_backend):
+                    shutdown_backend()
                 timer = getattr(video_player, "_ui_timer", None)
                 if timer is not None:
                     timer.stop()
@@ -547,6 +644,14 @@ class MainRuntimeCleanupMixin:
         context = str(context or "앱 종료").strip() or "앱 종료"
         stopped_any = False
         try:
+            self._shutdown_runtime_memory_manager()
+        except Exception:
+            pass
+        try:
+            self._shutdown_runtime_resource_coordinator()
+        except Exception:
+            pass
+        try:
             self._restore_normal_cursor_for_exit()
         except Exception:
             pass
@@ -572,14 +677,32 @@ class MainRuntimeCleanupMixin:
             stopped_any = self._pause_editor_runtime_for_exit(getattr(self, "_editor_widget", None)) or stopped_any
         except Exception:
             pass
-        for backend_name in ("backend", "backend_fast"):
+        backends = [
+            getattr(self, backend_name, None)
+            for backend_name in ("backend", "backend_fast")
+            if getattr(self, backend_name, None) is not None
+        ]
+        if backends:
             try:
-                stopped_any = self._pause_backend_runtime_for_exit(
-                    getattr(self, backend_name, None),
-                    context=context,
-                ) or stopped_any
+                with ThreadPoolExecutor(max_workers=min(len(backends), 2), thread_name_prefix="exit-backend-pause") as pool:
+                    futures = [
+                        pool.submit(self._pause_backend_runtime_for_exit, backend, context=context)
+                        for backend in backends
+                    ]
+                    for future in futures:
+                        try:
+                            stopped_any = bool(future.result()) or stopped_any
+                        except Exception:
+                            pass
             except Exception:
-                pass
+                for backend in backends:
+                    try:
+                        stopped_any = self._pause_backend_runtime_for_exit(
+                            backend,
+                            context=context,
+                        ) or stopped_any
+                    except Exception:
+                        pass
         try:
             from core.audio.live_stt import stop_live_stt_worker
 
@@ -601,6 +724,7 @@ class MainRuntimeCleanupMixin:
         self._exit_runtime_cleanup_done = True
         stopped_any = False
         try:
+            self._skip_external_cleanup_in_navigation = True
             stopped_any = bool(
                 self._cleanup_runtime_for_navigation(
                     context="앱 종료",
@@ -614,6 +738,8 @@ class MainRuntimeCleanupMixin:
                 get_logger().log(f"⚠️ 앱 종료 런타임 정리 실패: {exc}")
             except Exception:
                 pass
+        finally:
+            self._skip_external_cleanup_in_navigation = False
 
         try:
             from core.platform_compat import cleanup_app_runtime_processes

@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-03.24.01-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v03.24.01-30D158?style=for-the-badge)](RELEASE_v03.24.01.md)
+[![App Version](https://img.shields.io/badge/app-03.24.02-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v03.24.02-30D158?style=for-the-badge)](RELEASE_v03.24.02.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-555?style=for-the-badge)](#)
@@ -16,7 +16,7 @@ Accuracy-first desktop subtitle production for long-form video, rough cuts, spea
 
 AI Subtitle Studio is built for one primary outcome: produce highly accurate subtitles on the first pass, even when that takes longer than a fast draft. The goal is to reduce manual correction time by combining STT, audio preprocessing, VAD, cut-boundary alignment, LLM cleanup, subtitle timing rules, LoRA personalization, and project-aware editing in one desktop workflow.
 
-Current development has completed the v03.24.01 STT Mode Runtime release. The app exposes one user-facing Mode control: `Fast`, `Auto`, `High`, and `STT 모드`. Fast runs LoRA-only subtitle post-processing, Auto runs LoRA + Deep Learning, High adds chunked LLM review after the LoRA/Deep fast pass, and STT Mode is a human-assisted workflow: VAD builds listenable work segments, the user types or uses OS dictation, raw human input is preserved, and LoRA/Deep/rules resegment it into final subtitles without LLM correction.
+Current development has completed the v03.24.02 Runtime Orchestration release. The app keeps one user-facing Mode control: `Fast`, `Auto`, `High`, and `STT 모드`, while expanding the runtime underneath it with stricter LoRA bucket policies, STT-mode LoRA/runtime bundles, broader QML UI coverage, global memory/runtime orchestration, and accelerator-aware scheduling across CPU, GPU, and NPU paths.
 
 ## Core Workflows
 
@@ -110,9 +110,9 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `03.24.01` |
-| Latest release checkpoint | `v03.24.01` |
-| Handoff document version | `03.24.01` |
+| App version in code | `03.24.02` |
+| Latest release checkpoint | `v03.24.02` |
+| Handoff document version | `03.24.02` |
 | Active phase | `STT_MODE_RUNTIME_RELEASED` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
@@ -144,7 +144,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v03.24.01.md`](RELEASE_v03.24.01.md). Older release notes remain in the repository as history, but handoff documents should only summarize the latest state and the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v03.24.02.md`](RELEASE_v03.24.02.md). Older release notes remain in the repository as history, but handoff documents should only summarize the latest state and the immediately previous release relationship.
 
 ## Security
 

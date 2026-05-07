@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -31,8 +31,16 @@ from core.personalization.lora_retrieval_utils import (
 from core.personalization.lora_storage import store_paths
 
 
-_PROCESS_INDEX_CACHE: dict[str, dict[str, Any]] = {}
-_PROCESS_QUERY_CACHE: dict[str, dict[str, Any]] = {}
+_PROCESS_INDEX_CACHE_MAX = 2
+_PROCESS_INDEX_CACHE: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+_PROCESS_QUERY_CACHE: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+
+
+def _cache_index_put(cache_key: str, payload: dict[str, Any]) -> None:
+    _PROCESS_INDEX_CACHE[cache_key] = payload
+    _PROCESS_INDEX_CACHE.move_to_end(cache_key)
+    while len(_PROCESS_INDEX_CACHE) > _PROCESS_INDEX_CACHE_MAX:
+        _PROCESS_INDEX_CACHE.popitem(last=False)
 
 
 def build_lora_retrieval_index(
@@ -44,12 +52,12 @@ def build_lora_retrieval_index(
     index_path = paths["lora_retrieval_index"]
     existing = read_json(index_path, {})
     if not force and index_is_current(existing, paths):
-        _PROCESS_INDEX_CACHE[str(index_path)] = existing
+        _cache_index_put(str(index_path), existing)
         return existing
 
     index = build_lora_retrieval_index_payload(paths)
     write_json(index_path, index)
-    _PROCESS_INDEX_CACHE[str(index_path)] = index
+    _cache_index_put(str(index_path), index)
     _PROCESS_QUERY_CACHE.clear()
     return index
 
@@ -64,11 +72,12 @@ def load_lora_retrieval_index(
     cache_key = str(index_path)
     cached = _PROCESS_INDEX_CACHE.get(cache_key)
     if cached and index_is_current(cached, paths):
+        _PROCESS_INDEX_CACHE.move_to_end(cache_key)
         return cached
 
     index = read_json(index_path, {})
     if index_is_current(index, paths):
-        _PROCESS_INDEX_CACHE[cache_key] = index
+        _cache_index_put(cache_key, index)
         return index
     if rebuild_if_stale:
         return build_lora_retrieval_index(store_dir)
@@ -79,6 +88,7 @@ def _cache_get(cache_key: str) -> dict[str, Any] | None:
     cached = _PROCESS_QUERY_CACHE.get(cache_key)
     if not cached:
         return None
+    _PROCESS_QUERY_CACHE.move_to_end(cache_key)
     result = copy.deepcopy(cached)
     result["cache_hit"] = True
     return result
@@ -92,6 +102,7 @@ def _cache_put(cache_key: str, payload: dict[str, Any]) -> None:
             break
         _PROCESS_QUERY_CACHE.pop(oldest_key, None)
     _PROCESS_QUERY_CACHE[cache_key] = copy.deepcopy(payload)
+    _PROCESS_QUERY_CACHE.move_to_end(cache_key)
 
 
 def clear_lora_retrieval_caches() -> None:

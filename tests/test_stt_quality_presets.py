@@ -11,11 +11,11 @@ from core.audio.stt_quality_presets import (
 
 
 class STTQualityPresetTests(unittest.TestCase):
-    def test_quality_presets_have_three_user_modes(self):
+    def test_quality_presets_have_four_user_modes_including_stt(self):
         presets = load_stt_quality_presets()
 
-        self.assertEqual(list(presets), ["fast", "balanced", "precise"])
-        self.assertEqual([presets[key]["label"] for key in presets], ["Fast", "Auto", "High"])
+        self.assertEqual(list(presets), ["fast", "balanced", "precise", "stt"])
+        self.assertEqual([presets[key]["label"] for key in presets], ["Fast", "Auto", "High", "STT"])
 
     def test_apply_fast_preset_uses_whisper_only_and_speed_settings(self):
         settings = {"selected_model": "exaone3.5:7.8b", "w_beam_size": 8}
@@ -61,9 +61,23 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertEqual(normalize_stt_quality_key("빠름"), "fast")
         self.assertEqual(normalize_stt_quality_key("보통"), "balanced")
         self.assertEqual(normalize_stt_quality_key("높음"), "precise")
+        self.assertEqual(normalize_stt_quality_key("stt 모드"), "stt")
+        self.assertEqual(normalize_stt_quality_key("받아쓰기"), "stt")
         self.assertEqual(normalize_stt_quality_key("빠른 인식"), "fast")
         self.assertEqual(normalize_stt_quality_key("정밀인식"), "precise")
         self.assertEqual(normalize_stt_quality_key(""), "balanced")
+
+    def test_stt_preset_enables_dedicated_stt_mode_defaults(self):
+        applied = apply_stt_quality_preset({}, "stt")
+
+        self.assertEqual(applied["stt_quality_preset"], "stt")
+        self.assertTrue(applied["stt_mode_enabled"])
+        self.assertEqual(applied["stt_mode_text_input_provider"], "manual")
+        self.assertFalse(applied["stt_mode_require_whisper"])
+        self.assertFalse(applied["stt_mode_use_llm"])
+        self.assertTrue(applied["stt_mode_lora_resegment_enabled"])
+        self.assertEqual(applied["stt_mode_vad_models"], ["silero", "ten_vad"])
+        self.assertEqual(applied["selected_model"], "사용 안함 (STT 모드)")
 
     def test_saved_user_preset_overrides_stage_settings_without_audio(self):
         settings = apply_stt_quality_preset({}, "balanced")

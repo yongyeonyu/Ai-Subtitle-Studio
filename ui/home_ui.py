@@ -23,6 +23,7 @@ from core.path_manager import (
 from core.settings import load_settings, save_settings
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE
 from ui.home_sidebar import HomeSidebarMixin
+from ui.sidebar.home_sidebar_nav_widget import HomeSidebarNavWidget
 from ui.style import button_style, label_style, line_icon, tool_button_style
 
 
@@ -65,7 +66,9 @@ class HomeUIMixin(HomeSidebarMixin):
         for attr in (
             "status_rail",
             "saved_status_label",
+            "sidebar_nav_menu",
             "sidebar_settings_label",
+            "sidebar_runtime_label",
             "sidebar_terminal_panel",
             "sidebar_preset_panel",
             "sidebar_subtitle_quality_combo",
@@ -90,6 +93,11 @@ class HomeUIMixin(HomeSidebarMixin):
                             self.sidebar_settings_label = QLabel("", self.home_page)
                             self.sidebar_settings_label.setWordWrap(True)
                             self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 9px; font-weight: bold; background: transparent; border: none;")
+                        elif attr == "sidebar_runtime_label":
+                            self.sidebar_runtime_label = QLabel("", self.home_page)
+                            self.sidebar_runtime_label.setWordWrap(True)
+                            self.sidebar_runtime_label.setTextFormat(Qt.TextFormat.RichText)
+                            self.sidebar_runtime_label.setStyleSheet("color: #A9B0B7; font-size: 8px; font-weight: bold; background: transparent; border: none;")
                         elif attr == "sidebar_terminal_panel" and hasattr(self, "_create_sidebar_terminal_panel"):
                             self._create_sidebar_terminal_panel()
         old_layout = self.home_page.layout()
@@ -120,11 +128,7 @@ class HomeUIMixin(HomeSidebarMixin):
         columns.setSpacing(8)
         left_widget = QWidget(); left_col = QVBoxLayout(left_widget); left_col.setContentsMargins(0, 0, 0, 0); left_col.setSpacing(2 if is_unified else 4)
         if is_unified:
-            sidebar_mode = self._sidebar_active_mode()
-            left_col.addWidget(self._btn("홈", "", self.show_home, active=sidebar_mode == "home", icon_name="home"))
-            left_col.addWidget(self._btn("에디터", "", self._open_editor_screen, active=sidebar_mode == "editor", icon_name="subtitle"))
-            left_col.addWidget(self._btn("러프컷", "", self._open_roughcut_helper, active=sidebar_mode == "roughcut", icon_name="roughcut"))
-            left_col.addWidget(self._btn("숏폼", "", self._open_shortform_maker, icon_name="shortform"))
+            left_col.addWidget(self._ensure_sidebar_nav_menu())
             left_col.addSpacing(2)
             icloud_files, count_str, comp_str = self._get_icloud_files()
             nas_folders, nas_count, nas_comp = self._get_nas_folders()
@@ -205,14 +209,24 @@ class HomeUIMixin(HomeSidebarMixin):
             self.saved_status_label.setTextFormat(Qt.TextFormat.RichText)
         if not hasattr(self, "sidebar_settings_label"):
             self.sidebar_settings_label = QLabel("", self.home_page)
+        if not hasattr(self, "sidebar_runtime_label"):
+            self.sidebar_runtime_label = QLabel("", self.home_page)
         self.sidebar_settings_label.setWordWrap(True)
         self.sidebar_settings_label.setMinimumWidth(0)
         self.sidebar_settings_label.setMinimumHeight(120)
         self.sidebar_settings_label.setTextFormat(Qt.TextFormat.RichText)
         self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 8px; font-weight: bold; background: transparent; border: none;")
+        self.sidebar_runtime_label.setWordWrap(True)
+        self.sidebar_runtime_label.setMinimumWidth(0)
+        self.sidebar_runtime_label.setMinimumHeight(42)
+        self.sidebar_runtime_label.setTextFormat(Qt.TextFormat.RichText)
+        self.sidebar_runtime_label.setStyleSheet("color: #A9B0B7; font-size: 8px; font-weight: bold; background: transparent; border: none;")
         self._refresh_sidebar_engine_info()
+        if hasattr(self, "_refresh_sidebar_runtime_monitor"):
+            self._refresh_sidebar_runtime_monitor()
         lay.addWidget(self._create_sidebar_subtitle_quality_row(card))
         lay.addWidget(self.sidebar_settings_label)
+        lay.addWidget(self.sidebar_runtime_label)
         return card
     def _toggle_sidebar_stt_mode(self):
         self._current_work_mode = EDITOR_MODE
@@ -330,6 +344,64 @@ class HomeUIMixin(HomeSidebarMixin):
         except Exception:
             pass
         QTimer.singleShot(100, action)
+
+    def _sidebar_nav_items(self) -> list[dict]:
+        sidebar_mode = self._sidebar_active_mode()
+        return [
+            {
+                "id": "home",
+                "title": "홈",
+                "badge": "HM",
+                "accent": "#74A9FF",
+                "active": sidebar_mode == "home",
+                "enabled": True,
+            },
+            {
+                "id": "editor",
+                "title": "에디터",
+                "badge": "ED",
+                "accent": "#34C759",
+                "active": sidebar_mode == "editor",
+                "enabled": True,
+            },
+            {
+                "id": "roughcut",
+                "title": "러프컷",
+                "badge": "RC",
+                "accent": "#FF9500",
+                "active": sidebar_mode == "roughcut",
+                "enabled": True,
+            },
+            {
+                "id": "shortform",
+                "title": "숏폼",
+                "badge": "SF",
+                "accent": "#A678F4",
+                "active": False,
+                "enabled": True,
+            },
+        ]
+
+    def _ensure_sidebar_nav_menu(self):
+        panel = getattr(self, "sidebar_nav_menu", None)
+        if not isinstance(panel, HomeSidebarNavWidget):
+            panel = HomeSidebarNavWidget(self.home_page)
+            panel.actionTriggered.connect(self._handle_sidebar_nav_action)
+            self.sidebar_nav_menu = panel
+        panel.set_items(self._sidebar_nav_items())
+        return panel
+
+    def _handle_sidebar_nav_action(self, action_id: str):
+        actions = {
+            "home": self.show_home,
+            "editor": self._open_editor_screen,
+            "roughcut": self._open_roughcut_helper,
+            "shortform": self._open_shortform_maker,
+        }
+        action = actions.get(str(action_id or ""))
+        if action is None:
+            return
+        self._defer_home_action(getattr(self, "sidebar_nav_menu", self.home_page), action)
 
     def _icloud_btn(self, text, file_data, default_cmd, is_nas=False, subtitle="", comp_title=""):
         is_unified = bool(getattr(self, "_unified_dashboard", False))

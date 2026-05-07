@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QPushButton
 )
 from core.runtime import config
+from ui.settings.qml_panel import create_qml_action_bar
 from ui.style import line_icon, settings_button_style
 
 DATASET_DIR = config.DATASET_DIR
@@ -186,7 +187,7 @@ DEFAULT_ADV_SETTINGS = {
     "runtime_scheduler_auto_enabled": True,
     "scheduler_reduce_on_battery": True,
     "scheduler_reduce_on_user_input": True,
-    "runtime_scheduler_reserve_cores": 1,
+    "runtime_scheduler_reserve_cores": 0,
     "runtime_npu_acceleration_enabled": True,
     "stt_npu_prefer_enabled": True,
     "live_stt_npu_prefer_enabled": True,
@@ -194,7 +195,8 @@ DEFAULT_ADV_SETTINGS = {
     "editor_rendering_gpu_scope": "all",
     "editor_rendering_opengl_widgets_enabled": True,
     "editor_rendering_scenegraph_enabled": True,
-    "editor_rendering_force_qt_opengl": True,
+    "editor_rendering_force_qt_opengl": False,
+    "editor_rendering_qt_backend": "auto",
     "stt_workers_auto_enabled": True,
     "cut_pioneer_workers_auto_enabled": True,
     "cut_follower_workers_auto_enabled": True,
@@ -241,6 +243,39 @@ def _create_bottom_buttons(dialog, accept_callback, reset_callback=None,
                            save_callback=None, save_def_callback=None):
     btn_layout = QHBoxLayout()
     control_height = int(getattr(dialog, "_settings_control_height", 40) or 40)
+    actions = []
+
+    if reset_callback:
+        actions.append({"id": "reset", "title": "전체 초기화", "kind": "secondary", "enabled": True})
+    if save_callback:
+        actions.append({"id": "save", "title": "저장", "kind": "primary", "enabled": True})
+    if save_def_callback:
+        actions.append({"id": "save_default", "title": "기본값 저장", "kind": "secondary", "enabled": True})
+    actions.extend(
+        [
+            {"id": "cancel", "title": "취소", "kind": "secondary", "enabled": True},
+            {"id": "ok", "title": "확인", "kind": "primary", "enabled": True},
+        ]
+    )
+
+    qml_bar = create_qml_action_bar(dialog, actions=actions, scope="settings")
+    if qml_bar is not None:
+        callback_map = {
+            "reset": reset_callback,
+            "save": save_callback,
+            "save_default": save_def_callback,
+            "cancel": dialog.reject,
+            "ok": accept_callback,
+        }
+        try:
+            root = qml_bar.rootObject()
+            if root is not None:
+                root.actionTriggered.connect(lambda action_id: (callback_map.get(str(action_id)) or (lambda: None))())
+        except Exception:
+            qml_bar = None
+    if qml_bar is not None:
+        btn_layout.addWidget(qml_bar)
+        return btn_layout
 
     if reset_callback:
         btn_reset = QPushButton("전체 초기화")

@@ -4,9 +4,10 @@
 ui/timeline_widget.py
 Timeline widget container
 """
+import os
 import time
 
-from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPoint, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QBrush
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -18,10 +19,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ui.gpu_rendering import scenegraph_enabled
 from ui.timeline.timeline_constants import CANVAS_H, FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
 from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_global import GlobalCanvas
-from ui.timeline.timeline_scenegraph import TimelineSceneGraphLayer
 from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker
 from ui.responsive_profile import responsive_profile_for_size
 from ui.style import button_style
@@ -38,6 +39,8 @@ class TimelinePlayheadOverlay(QWidget):
         self._scroll_x = 0
         self._center_locked = False
         self._busy = False
+        self._quick = self._create_quick_layer()
+        self._shutdown_in_progress = False
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -48,9 +51,81 @@ class TimelinePlayheadOverlay(QWidget):
         self._scroll_x = max(0, int(scroll_x or 0))
         self._center_locked = bool(center_locked)
         self._busy = bool(busy)
+        if getattr(self, "_quick", None) is not None:
+            self._sync_quick_layer()
+            return
         self.update()
 
+    def _create_quick_layer(self):
+        if not scenegraph_enabled("timeline"):
+            return None
+        qml_path = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "qml", "timeline_playhead_overlay.qml"))
+        if not os.path.exists(qml_path):
+            return None
+        try:
+            from PyQt6.QtQuickWidgets import QQuickWidget
+        except Exception:
+            return None
+        try:
+            quick = QQuickWidget(self)
+            quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+            quick.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            quick.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            quick.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            quick.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+            quick.setClearColor(QColor(0, 0, 0, 0))
+            quick.setSource(QUrl.fromLocalFile(qml_path))
+            if quick.status() == QQuickWidget.Status.Error:
+                quick.deleteLater()
+                return None
+            quick.setGeometry(self.rect())
+            quick.show()
+            self._sync_quick_layer(quick)
+            return quick
+        except Exception:
+            return None
+
+    def _playhead_visual_x(self) -> float:
+        timeline = self._timeline
+        canvas = getattr(timeline, "canvas", None)
+        if canvas is None:
+            return 0.0
+        if self._center_locked:
+            return max(0.0, self.width() / 2.0)
+        return (self._sec * float(getattr(canvas, "pps", 1.0) or 1.0)) - float(self._scroll_x)
+
+    def _sync_quick_layer(self, quick=None):
+        quick = quick or getattr(self, "_quick", None)
+        if quick is None:
+            return
+        timeline = self._timeline
+        canvas = getattr(timeline, "canvas", None)
+        visible = bool(canvas is not None and float(getattr(canvas, "total_duration", 0.0) or 0.0) > 0)
+        line_color = "#4AFF80" if getattr(canvas, "focus_mode", "segment") == "waveform" else "#FF4444"
+        try:
+            root = quick.rootObject()
+            if root is None:
+                return
+            root.setProperty("playheadX", float(self._playhead_visual_x()))
+            root.setProperty("lineColor", str(line_color))
+            root.setProperty("playheadBusy", bool(self._busy))
+            root.setProperty("visiblePlayhead", bool(visible))
+            root.setProperty("centerLocked", bool(self._center_locked))
+        except Exception:
+            pass
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        quick = getattr(self, "_quick", None)
+        if quick is not None:
+            quick.setGeometry(self.rect())
+            self._sync_quick_layer(quick)
+
     def paintEvent(self, event):
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
+        if getattr(self, "_quick", None) is not None:
+            return
         timeline = self._timeline
         canvas = getattr(timeline, "canvas", None)
         if canvas is None or float(getattr(canvas, "total_duration", 0.0) or 0.0) <= 0:
@@ -62,6 +137,8 @@ class TimelinePlayheadOverlay(QWidget):
         if px < -16 or px > self.width() + 16:
             return
         painter = QPainter(self)
+        if not painter.isActive():
+            return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         color = QColor("#4AFF80") if getattr(canvas, "focus_mode", "segment") == "waveform" else QColor("#FF4444")
         painter.setPen(QPen(color, 2))
@@ -252,6 +329,7 @@ class TimelineWidget(QWidget):
             "}"
         )
         self._focus_border.hide()
+        self._shutdown_in_progress = False
         self._sync_scenegraph_layer()
         self._sync_focus_border()
 
@@ -317,11 +395,26 @@ class TimelineWidget(QWidget):
                 setattr(self, attr, None)
 
     def closeEvent(self, event):
+        self._shutdown_in_progress = True
+        setattr(self.canvas, "_shutdown_in_progress", True)
+        setattr(self.global_canvas, "_shutdown_in_progress", True)
         self.stop_waveform_workers()
+        try:
+            self._smooth_scroll_timer.stop()
+        except Exception:
+            pass
         layer = getattr(self, "_scenegraph_layer", None)
         if layer is not None:
             try:
                 layer.delete_later()
+            except Exception:
+                pass
+        overlay = getattr(self, "_playhead_overlay", None)
+        if overlay is not None:
+            try:
+                overlay._shutdown_in_progress = True
+                overlay.hide()
+                overlay.deleteLater()
             except Exception:
                 pass
         super().closeEvent(event)
@@ -336,16 +429,13 @@ class TimelineWidget(QWidget):
         self._sync_scenegraph_layer()
 
     def _create_scenegraph_layer(self):
-        try:
-            if not TimelineSceneGraphLayer.enabled():
-                self.canvas._scenegraph_subtitle_rendering = False
-                return None
-            layer = TimelineSceneGraphLayer(self.scroll.viewport())
-            self.canvas._scenegraph_subtitle_rendering = True
-            return layer
-        except Exception:
-            self.canvas._scenegraph_subtitle_rendering = False
-            return None
+        # Keep the heavy timeline body on the classic painter canvas. Recent
+        # SceneGraph body experiments made the subtitle/canvas surface appear
+        # blank or incomplete in real projects, so we restore the proven
+        # QWidget/QPainter path by default and reserve QML for lighter overlays
+        # like the playhead.
+        self.canvas._scenegraph_subtitle_rendering = False
+        return None
 
     def _timeline_speaker_settings(self) -> dict:
         owner = self.parent()
@@ -368,11 +458,11 @@ class TimelineWidget(QWidget):
             visible_start = max(0.0, scroll_x / pps)
             visible_end = max(visible_start, (scroll_x + max(1, viewport.width())) / pps)
             active = not bool(getattr(canvas, "_edit_active", False))
-            canvas._scenegraph_subtitle_rendering = bool(active)
             if not active:
+                canvas._scenegraph_subtitle_rendering = False
                 layer.set_visible(False)
                 return
-            layer.set_state(
+            rendered_count = layer.set_state(
                 segments=list(getattr(canvas, "segments", []) or []),
                 pps=pps,
                 fps=float(canvas._get_fps() if hasattr(canvas, "_get_fps") else getattr(self, "video_fps", 30.0)),
@@ -385,6 +475,11 @@ class TimelineWidget(QWidget):
                 quality_filter=str(getattr(canvas, "quality_filter", "all") or "all"),
                 speaker_settings=self._timeline_speaker_settings(),
             )
+            if int(rendered_count or 0) <= 0:
+                canvas._scenegraph_subtitle_rendering = False
+                layer.set_visible(False)
+                return
+            canvas._scenegraph_subtitle_rendering = True
             layer.set_visible(True)
             layer.raise_()
             self._playhead_overlay.raise_()
@@ -395,8 +490,9 @@ class TimelineWidget(QWidget):
         return snap_sec_to_frame(sec, getattr(self, "video_fps", getattr(self.canvas, "frame_rate", 30.0)))
 
     def _create_playhead_overlay(self):
-        # QQuickWidget transparency can cover the QWidget viewport with black on macOS.
-        # Keep the playhead separated, but use a native transparent QWidget overlay here.
+        # Keep the playhead isolated from the heavy timeline body; use a QML
+        # overlay when SceneGraph is available and keep QWidget paint fallback
+        # for tests/offscreen paths.
         return TimelinePlayheadOverlay(self, self.scroll.viewport())
 
     def _canvas_width_for_duration(self, dur: float, pps: float | None = None) -> int:
@@ -545,12 +641,16 @@ class TimelineWidget(QWidget):
                 btn.setFixedSize(28, 24)
 
     def paintEvent(self, ev):
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
         super().paintEvent(ev)
         self._sync_focus_border()
         if self._has_timeline_focus():
             from PyQt6.QtGui import QColor, QPainter, QPen
 
             painter = QPainter(self)
+            if not painter.isActive():
+                return
             painter.setPen(QPen(QColor(FOCUS_BORDER_COLOR), FOCUS_BORDER_WIDTH))
             inset = max(1, FOCUS_BORDER_WIDTH // 2)
             left = inset

@@ -32,7 +32,7 @@ class OrderDialog(QDialog):
 
         self.ordered_files: list[str] = []
         self._durations: dict[str, float] = {}
-        self._thumb_cache: dict[str, QPixmap] = {}
+        self._closing = False
 
         for file_path in files:
             self._durations[file_path] = self._get_duration(file_path)
@@ -218,20 +218,24 @@ class OrderDialog(QDialog):
 
             if pixmap.isNull():
                 return None
-            return pixmap
+            return pixmap.scaled(
+                128,
+                72,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
 
         except Exception:
             return None
 
     def _load_next_thumb(self):
-        if not self._thumb_queue:
+        if self._closing or not self._thumb_queue:
             return
 
         path = self._thumb_queue.pop(0)
         pixmap = self._extract_thumbnail(path)
 
         if pixmap:
-            self._thumb_cache[path] = pixmap
             for idx in range(self.list_widget.count()):
                 item = self.list_widget.item(idx)
                 if item.data(Qt.ItemDataRole.UserRole) == path:
@@ -287,3 +291,21 @@ class OrderDialog(QDialog):
         ]
         if self.ordered_files:
             self.accept()
+
+    def _release_thumbnail_icons(self):
+        for idx in range(self.list_widget.count()):
+            item = self.list_widget.item(idx)
+            if item is not None:
+                item.setIcon(QIcon())
+
+    def closeEvent(self, event):
+        self._closing = True
+        try:
+            self._thumb_queue.clear()
+        except Exception:
+            pass
+        try:
+            self._release_thumbnail_icons()
+        except Exception:
+            pass
+        super().closeEvent(event)

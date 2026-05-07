@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt, QTimer
 from core.project.data_manager import save_settings, save_default_settings
 from core.settings_profiles import is_lora_auto_managed_setting
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, CUSTOM_DEFAULTS_FILE, _create_bottom_buttons
-from ui.settings.qml_panel import create_settings_header
+from ui.settings.qml_panel import create_qml_tab_bar, create_settings_header, sync_qml_tab_bar
 from ui.settings.tablet_dialog import apply_tablet_dialog_profile
 from ui.style import button_style, label_style, settings_dialog_stylesheet
 from core.audio import audio_presets as _audio_presets
@@ -219,6 +219,26 @@ class AdvancedSettingsDialog(QDialog):
         if form_sys.rowCount():
             self.tabs.addTab(tab_sys, "시스템")
 
+        self._qml_tab_bar = create_qml_tab_bar(
+            self,
+            items=[{"title": self.tabs.tabText(i)} for i in range(self.tabs.count())],
+            current_index=self.tabs.currentIndex(),
+            scope="settings",
+        )
+        if self._qml_tab_bar is not None:
+            self.tabs.tabBar().hide()
+            try:
+                root = self._qml_tab_bar.rootObject()
+                if root is not None:
+                    root.tabTriggered.connect(self.tabs.setCurrentIndex)
+                self.tabs.currentChanged.connect(
+                    lambda idx: sync_qml_tab_bar(self._qml_tab_bar, current_index=idx)
+                )
+            except Exception:
+                self._qml_tab_bar = None
+
+        if self._qml_tab_bar is not None:
+            layout.addWidget(self._qml_tab_bar)
         layout.addWidget(self.tabs)
         
         audio_sliders = [row for row in self.sliders_info if row[1] != "io_workers"]

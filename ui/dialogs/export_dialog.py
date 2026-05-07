@@ -20,6 +20,7 @@ from PyQt6.QtGui  import QColor, QPixmap, QImage, QFont, QPainter, QBrush, QFont
 from core.runtime import config
 from core.engine.subtitle_engine import save_srt
 from core.runtime.logger import get_logger
+from ui.settings.qml_panel import attach_qml_tab_bar
 from ui.style import button_style, settings_button_style, settings_dialog_stylesheet
 
 # ── 설정 저장 로직 ──
@@ -330,11 +331,10 @@ class ExportDialog(QDialog):
 
     def _build_ui(self):
         root=QVBoxLayout(self); root.setSpacing(8)
-        tabs=QTabWidget()
-        tabs.setStyleSheet(
+        self.tabs=QTabWidget()
+        self.tabs.setStyleSheet(
             "QTabBar::tab { min-height: 34px; max-height: 34px; padding: 0 14px; }"
         )
-        root.addWidget(tabs)
 
         def lrow(lbl,w,lw=130):
             h=QHBoxLayout(); lb=QLabel(lbl); lb.setFixedWidth(lw); h.addWidget(lb)
@@ -343,7 +343,7 @@ class ExportDialog(QDialog):
             return h
 
         # ── 탭1: 출력 ──
-        t1=QWidget(); l1=QVBoxLayout(t1); tabs.addTab(t1,"📁 출력")
+        t1=QWidget(); l1=QVBoxLayout(t1); self.tabs.addTab(t1,"출력")
         self.res_combo=QComboBox(); self.res_combo.addItems(["4K (3840px)","FHD (1920px)"]); self.res_combo.currentIndexChanged.connect(lambda *_: self._refresh_preview()); l1.addLayout(lrow("가로 해상도:",self.res_combo))
         self.quality_combo=QComboBox(); self.quality_combo.addItems(["빠른 렌더링 (Proxy)","고품질 (ProRes 4444)"]); l1.addLayout(lrow("렌더링 품질:",self.quality_combo))
         
@@ -355,7 +355,7 @@ class ExportDialog(QDialog):
             self.icloud_chk.setVisible(False)
 
         # ── 탭2: 텍스트 ──
-        t2=QWidget(); l2=QVBoxLayout(t2); tabs.addTab(t2,"✏️ 텍스트")
+        t2=QWidget(); l2=QVBoxLayout(t2); self.tabs.addTab(t2,"텍스트")
         self.font_combo=QComboBox(); self.font_combo.addItems(sorted(self._fonts.keys())); self.font_combo.currentIndexChanged.connect(lambda *_: self._refresh_preview()); l2.addLayout(lrow("글꼴:",self.font_combo))
         self.sz_combo,sz_h=_combo_pm([10,20,40,60,80,100],60); self.sz_combo.currentTextChanged.connect(self._refresh_preview); l2.addLayout(lrow("텍스트 크기:",sz_h))
         self.align_combo=QComboBox(); self.align_combo.addItems(["가운데","왼쪽","오른쪽"]); self.align_combo.currentIndexChanged.connect(lambda *_: self._refresh_preview()); l2.addLayout(lrow("텍스트 정렬:",self.align_combo))
@@ -365,7 +365,7 @@ class ExportDialog(QDialog):
         l2.addStretch()
 
         # ── 탭3: 효과 ──
-        t3=QWidget(); l3=QVBoxLayout(t3); tabs.addTab(t3,"💫 효과")
+        t3=QWidget(); l3=QVBoxLayout(t3); self.tabs.addTab(t3,"효과")
         self.no_bdr_chk=QCheckBox("테두리 없음"); self.no_bdr_chk.toggled.connect(self._refresh_preview); l3.addWidget(self.no_bdr_chk)
         self._bdr_btn=QPushButton(); self._cb(self._bdr_btn, self._bdr_c); self._bdr_btn.clicked.connect(lambda *a: self._pick("bdr")); l3.addLayout(lrow("테두리 색상:",self._bdr_btn))
         self.bdr_w_combo,bdr_h=_combo_pm(list(range(0,21)),2); self.bdr_w_combo.currentTextChanged.connect(self._refresh_preview); l3.addLayout(lrow("테두리 두께:",bdr_h))
@@ -377,7 +377,9 @@ class ExportDialog(QDialog):
         l3.addStretch()
 
         # ── 탭4: 배경 ──
-        t4=QWidget(); l4=QVBoxLayout(t4); tabs.addTab(t4,"🎨 배경")
+        t4=QWidget(); l4=QVBoxLayout(t4); self.tabs.addTab(t4,"배경")
+        attach_qml_tab_bar(self, root, self.tabs, scope="settings")
+        root.addWidget(self.tabs)
         self.bg_chk=QCheckBox("배경 사용"); self.bg_chk.toggled.connect(self._refresh_preview); l4.addWidget(self.bg_chk)
         self.bg_full_chk=QCheckBox("전체 너비 배경"); self.bg_full_chk.toggled.connect(self._refresh_preview); l4.addWidget(self.bg_full_chk)
         self.bg_col_btn=QPushButton(); self._cb(self.bg_col_btn, self._bg_c); self.bg_col_btn.clicked.connect(lambda *a: self._pick("bg")); l4.addLayout(lrow("배경 색상:",self.bg_col_btn))

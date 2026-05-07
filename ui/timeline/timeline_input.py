@@ -10,6 +10,7 @@ from PyQt6.QtCore import QPoint, QRect, Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon, QPainter, QPixmap, QPolygon
 
 from core.runtime import config
+from ui.dialogs.qml_popup import show_context_menu
 from ui.editor.editor_helpers import find_segment_at
 from ui.responsive_profile import responsive_profile_for_size
 
@@ -389,19 +390,14 @@ class TimelineInputMixin:
         return True
 
     def _show_scan_boundary_menu(self, hit, gpos):
-        from PyQt6.QtWidgets import QMenu
-
         if not hit:
             return
-        menu = QMenu(self)
-        menu.setStyleSheet(
-            "QMenu { background-color: #151C20; color: #F5F7FA; border: 1px solid #2D3942; "
-            "font-size: 13px; padding: 4px; } "
-            "QMenu::item { padding: 7px 22px 7px 10px; border-radius: 4px; } "
-            "QMenu::item:selected { background-color: #1F3A56; }"
+        chosen = show_context_menu(
+            self,
+            gpos,
+            [{"id": "delete", "label": "삭제", "danger": True, "accent": "#FF453A"}],
         )
-        act_delete = menu.addAction("삭제")
-        if menu.exec(gpos) is act_delete:
+        if chosen == "delete":
             self.provisional_cut_boundary_delete_requested.emit(int(hit["index"]), float(hit["sec"]))
 
     def _handle_polygon(self, bx: int, is_left: bool) -> QPolygon:
@@ -560,26 +556,23 @@ class TimelineInputMixin:
         return QIcon(pix)
 
     def _show_speaker_select_menu(self, seg, gpos):
-        from PyQt6.QtWidgets import QMenu
-
-        menu = QMenu(self)
-        menu.setStyleSheet(
-            "QMenu { background-color: #151C20; color: #F5F7FA; border: 1px solid #2D3942; "
-            "font-size: 13px; padding: 4px; } "
-            "QMenu::item { padding: 7px 22px 7px 10px; border-radius: 4px; } "
-            "QMenu::item:selected { background-color: #1F3A56; }"
-        )
         line = int(seg.get("line", 0))
         current = str(seg.get("speaker", seg.get("spk_id", "")) or "")
         if current.startswith("SPEAKER_"):
             current = current.replace("SPEAKER_", "")
+        items = []
         for spk_id, name, color in self._speaker_options():
-            action = menu.addAction(self._speaker_icon(color), name)
-            action.setCheckable(True)
-            action.setChecked(spk_id == current)
-            action.triggered.connect(lambda checked=False, s=spk_id, ln=line: self.speaker_changed.emit(ln, s))
-        if not menu.isEmpty():
-            menu.exec(gpos)
+            items.append(
+                {
+                    "id": spk_id,
+                    "label": name,
+                    "checked": spk_id == current,
+                    "accent": color,
+                }
+            )
+        chosen = show_context_menu(self, gpos, items)
+        if chosen:
+            self.speaker_changed.emit(line, chosen)
 
     def _gap_menu_pivot_sec(self, gap, click_x: int) -> float:
         start = float(gap.get("start", 0.0) or 0.0)
@@ -626,8 +619,6 @@ class TimelineInputMixin:
         return min(silence_ranges, key=lambda item: min(abs(pivot - item[0]), abs(pivot - item[1])))
 
     def _show_gap_generate_menu(self, gap, gpos, click_x: int):
-        from PyQt6.QtWidgets import QMenu
-
         start = self._snap_to_frame(float(gap.get("start", 0.0) or 0.0))
         end = self._snap_to_frame(float(gap.get("end", start) or start))
         if end <= start:
@@ -640,26 +631,18 @@ class TimelineInputMixin:
         scope_start, scope_end = scope
         pivot = self._snap_to_frame(max(scope_start, min(scope_end, pivot)))
         min_span = max(0.02, min(0.1, 1.0 / max(1.0, float(self._get_fps()))))
-
-        menu = QMenu(self)
-        menu.setStyleSheet(
-            "QMenu { background-color: #151C20; color: #F5F7FA; border: 1px solid #2D3942; "
-            "font-size: 13px; padding: 4px; } "
-            "QMenu::item { padding: 7px 22px 7px 10px; border-radius: 4px; } "
-            "QMenu::item:selected { background-color: #1F3A56; }"
-            "QMenu::item:disabled { color: #65717A; }"
+        enabled = scope_end > scope_start + min_span
+        chosen = show_context_menu(
+            self,
+            gpos,
+            [
+                {"id": "to", "label": "여기까지 생성", "enabled": enabled, "accent": "#34C759"},
+                {"id": "from", "label": "여기부터 생성", "enabled": enabled, "accent": "#5AC8FA"},
+            ],
         )
-        act_to = menu.addAction("여기까지 생성")
-        act_from = menu.addAction("여기부터 생성")
-        # 무음 구간 내부에서는 어디를 눌러도 두 동작을 모두 사용할 수 있어야 합니다.
-        # 실제 생성 길이는 에디터 쪽에서 최소 1프레임 이상 되도록 보정합니다.
-        act_to.setEnabled(scope_end > scope_start + min_span)
-        act_from.setEnabled(scope_end > scope_start + min_span)
-
-        chosen = menu.exec(gpos)
-        if chosen is act_to:
+        if chosen == "to":
             self.gap_generate_requested.emit(start, end, pivot, "to")
-        elif chosen is act_from:
+        elif chosen == "from":
             self.gap_generate_requested.emit(start, end, pivot, "from")
 
     def _playhead_handle_hit_rect(self) -> QRect:

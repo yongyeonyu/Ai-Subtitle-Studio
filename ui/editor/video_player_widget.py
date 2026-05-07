@@ -14,8 +14,8 @@ from bisect import bisect_right
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QSizePolicy, QStackedWidget)
-from PyQt6.QtCore import Qt, QTimer, QRectF, QUrl, pyqtSignal
-from PyQt6.QtGui import QPixmap, QImage
+from PyQt6.QtCore import Qt, QTimer, QRectF, QUrl, QEvent, pyqtSignal
+from PyQt6.QtGui import QPixmap, QImage, QColor
 
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from core.runtime import config
@@ -31,6 +31,61 @@ from ui.editor.video_overlay_widgets import (
     SubtitleQuickOverlay,
     VideoSurfaceView,
 )
+from ui.gpu_rendering import scenegraph_enabled
+
+
+class _MirrorLabel(QLabel):
+    text_changed = pyqtSignal(str)
+    visible_changed = pyqtSignal(bool)
+
+    def setText(self, text):
+        next_text = str(text or "")
+        if next_text == self.text():
+            super().setText(next_text)
+            return
+        super().setText(next_text)
+        self.text_changed.emit(next_text)
+
+    def setVisible(self, visible):
+        changed = bool(visible) != self.isVisible()
+        super().setVisible(visible)
+        if changed:
+            self.visible_changed.emit(bool(visible))
+
+
+class _DormantAuxPlayer:
+    backend_name = "dormant"
+    uses_qt_audio = False
+
+    def source(self):
+        return QUrl()
+
+    def playbackState(self):
+        return QMediaPlayer.PlaybackState.PausedState
+
+    def position(self):
+        return 0
+
+    def play(self):
+        return
+
+    def pause(self):
+        return
+
+    def stop(self):
+        return
+
+    def setPosition(self, _position_ms):
+        return
+
+    def setAudioOutput(self, _output):
+        return
+
+    def setVideoOutput(self, _output):
+        return
+
+    def setSource(self, _source=None):
+        return
 
 
 class _WorkerProxy:
@@ -48,17 +103,18 @@ class _WorkerProxy:
         if playing: 
             self.media_player.play()
             if getattr(self.parent_widget, 'has_vocal_track', False):
-                self.parent_widget.vocal_player.setPosition(self.media_player.position())
-                self.parent_widget.vocal_player.play()
+                vocal_player = self.parent_widget._ensure_vocal_player()
+                vocal_player.setPosition(self.media_player.position())
+                vocal_player.play()
         else: 
             self.media_player.pause()
             if getattr(self.parent_widget, 'has_vocal_track', False):
-                self.parent_widget.vocal_player.pause()
+                self.parent_widget._ensure_vocal_player().pause()
 
     def stop(self): 
         self.media_player.stop()
         if getattr(self.parent_widget, 'has_vocal_track', False):
-            self.parent_widget.vocal_player.stop()
+            self.parent_widget._ensure_vocal_player().stop()
 
 
     def seek(self, sec):
@@ -118,11 +174,13 @@ class VideoPlayerWidget(QWidget):
         self._proxy_build_proc = None
         self._proxy_build_src: str = ""
         self._proxy_build_dst: str = ""
+        self._scan_cut_active_direction: int = 0
+        self._shutdown_in_progress = False
 
         self.media_player = create_video_backend(self)
         self.audio_output = None
 
-        self.vocal_player = QMediaPlayer(self)
+        self.vocal_player = _DormantAuxPlayer()
         self.vocal_audio_output = None
         
         self.has_vocal_track = False
@@ -139,7 +197,7 @@ class VideoPlayerWidget(QWidget):
 
         self._build_ui()
         self._provider_refresh_requested = False
-        self._ui_timer = QTimer()
+        self._ui_timer = QTimer(self)
         self._play_ui_interval_ms = int(self._get_video_ui_interval_ms())
         self._idle_ui_interval_ms = max(90, int(self._play_ui_interval_ms * 3))
         self._ui_timer.setInterval(self._idle_ui_interval_ms)
@@ -164,14 +222,50 @@ class VideoPlayerWidget(QWidget):
             if bool(getattr(self.media_player, "uses_qt_audio", False)) and self.audio_output is None:
                 self.audio_output = QAudioOutput(self)
                 self.media_player.setAudioOutput(self.audio_output)
-            if self.vocal_audio_output is None:
+            if self.has_vocal_track and self.vocal_audio_output is None:
+                vocal_player = self._ensure_vocal_player()
                 self.vocal_audio_output = QAudioOutput(self)
-                self.vocal_player.setAudioOutput(self.vocal_audio_output)
+                vocal_player.setAudioOutput(self.vocal_audio_output)
         except Exception:
             # Keep silent fallback instead of crashing the whole app when the local
             # audio device/backend is unstable or reports unsupported channels.
             self.audio_output = None
             self.vocal_audio_output = None
+
+    def _ensure_vocal_player(self) -> QMediaPlayer:
+        player = getattr(self, "vocal_player", None)
+        if isinstance(player, QMediaPlayer):
+            return player
+        player = QMediaPlayer(self)
+        self.vocal_player = player
+        if self.vocal_audio_output is not None:
+            try:
+                player.setAudioOutput(self.vocal_audio_output)
+            except Exception:
+                pass
+        return player
+
+    def _release_vocal_player(self) -> None:
+        player = getattr(self, "vocal_player", None)
+        if isinstance(player, QMediaPlayer):
+            try:
+                player.stop()
+            except Exception:
+                pass
+            try:
+                player.setAudioOutput(None)
+            except Exception:
+                pass
+            try:
+                player.setSource(QUrl())
+            except Exception:
+                pass
+            try:
+                player.deleteLater()
+            except Exception:
+                pass
+        self.vocal_player = _DormantAuxPlayer()
+        self.vocal_audio_output = None
 
     def _ensure_media_source_loaded(self) -> bool:
         path = str(getattr(self, "_pending_media_source_path", "") or "")
@@ -261,17 +355,32 @@ class VideoPlayerWidget(QWidget):
             if callable(cb):
                 cb()
 
-    def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 0, 8, 8)
-        layout.setSpacing(6)
+    def _create_transport_button(
+        self,
+        text: str,
+        *,
+        tooltip: str,
+        width: int | None = None,
+        font_size: int = 12,
+        padding: str = "6px 12px",
+        callback=None,
+    ) -> QPushButton:
+        button = QPushButton(text)
+        button.setToolTip(tooltip)
+        if width is not None:
+            button.setFixedWidth(int(width))
+        button.setStyleSheet(self._control_button_style(font_size=font_size, padding=padding))
+        if callable(callback):
+            button.clicked.connect(callback)
+        return button
 
+    def _build_video_surface_stack(self) -> None:
         self.video_container = QWidget()
         self.video_container.setStyleSheet("background: #000000; border-radius: 4px;")
-        
+
         self.video_stack = QStackedWidget()
         self.video_stack.setParent(self.video_container)
-        
+
         if hasattr(self.media_player, "create_video_widget"):
             self.video_widget = self.media_player.create_video_widget()
         else:
@@ -280,7 +389,7 @@ class VideoPlayerWidget(QWidget):
         if hasattr(self.video_widget, "video_item"):
             self.media_player.setVideoOutput(self.video_widget.video_item)
         self.video_stack.addWidget(self.video_widget)
-        
+
         self.thumb_label = ThumbnailLabel()
         self.video_stack.addWidget(self.thumb_label)
 
@@ -292,8 +401,7 @@ class VideoPlayerWidget(QWidget):
             self.quick_subtitle_overlay.setVisible(False)
             self.quick_subtitle_overlay.raise_()
 
-        layout.addWidget(self.video_container, stretch=1)
-
+    def _build_control_bar(self) -> QWidget:
         ctrl = QWidget()
         ctrl.setFixedHeight(48)
         ctrl.setStyleSheet("background: transparent; border: none;")
@@ -301,53 +409,66 @@ class VideoPlayerWidget(QWidget):
         ctrl_layout.setContentsMargins(0, 0, 0, 0)
         ctrl_layout.setSpacing(8)
 
-        self.btn_scan_prev_cut = QPushButton("<<")
-        self.btn_scan_prev_cut.setToolTip("이전 컷 경계까지 빠르게 탐색")
-        self.btn_scan_prev_cut.setFixedWidth(42)
-        self.btn_scan_prev_cut.setStyleSheet(self._control_button_style(font_size=13, padding="6px 8px"))
-        self.btn_scan_prev_cut.clicked.connect(lambda: self.request_scan_cut(-1))
+        self.btn_scan_prev_cut = self._create_transport_button(
+            "<<",
+            tooltip="이전 컷 경계까지 빠르게 탐색",
+            width=42,
+            font_size=13,
+            padding="6px 8px",
+            callback=lambda: self.request_scan_cut(-1),
+        )
         ctrl_layout.addWidget(self.btn_scan_prev_cut)
 
-        self.btn_prev_frame = QPushButton("<")
-        self.btn_prev_frame.setToolTip("이전 프레임")
-        self.btn_prev_frame.setFixedWidth(34)
-        self.btn_prev_frame.setStyleSheet(self._control_button_style(font_size=14, padding="6px 8px"))
-        self.btn_prev_frame.clicked.connect(lambda: self.request_frame_step(-1))
+        self.btn_prev_frame = self._create_transport_button(
+            "<",
+            tooltip="이전 프레임",
+            width=34,
+            font_size=14,
+            padding="6px 8px",
+            callback=lambda: self.request_frame_step(-1),
+        )
         ctrl_layout.addWidget(self.btn_prev_frame)
 
-        self.btn_play = QPushButton("▶")
-        self.btn_play.setToolTip("재생/일시정지 (Tab)")
-        self.btn_play.setStyleSheet(self._control_button_style(font_size=12, padding="6px 12px"))
-        self.btn_play.clicked.connect(self.toggle_play)
+        self.btn_play = self._create_transport_button(
+            "▶",
+            tooltip="재생/일시정지 (Tab)",
+            callback=self.toggle_play,
+        )
         ctrl_layout.addWidget(self.btn_play)
 
-        self.btn_next_frame = QPushButton(">")
-        self.btn_next_frame.setToolTip("다음 프레임")
-        self.btn_next_frame.setFixedWidth(34)
-        self.btn_next_frame.setStyleSheet(self._control_button_style(font_size=14, padding="6px 8px"))
-        self.btn_next_frame.clicked.connect(lambda: self.request_frame_step(1))
+        self.btn_next_frame = self._create_transport_button(
+            ">",
+            tooltip="다음 프레임",
+            width=34,
+            font_size=14,
+            padding="6px 8px",
+            callback=lambda: self.request_frame_step(1),
+        )
         ctrl_layout.addWidget(self.btn_next_frame)
 
-        self.btn_scan_next_cut = QPushButton(">>")
-        self.btn_scan_next_cut.setToolTip("다음 컷 경계까지 빠르게 탐색")
-        self.btn_scan_next_cut.setFixedWidth(42)
-        self.btn_scan_next_cut.setStyleSheet(self._control_button_style(font_size=13, padding="6px 8px"))
-        self.btn_scan_next_cut.clicked.connect(lambda: self.request_scan_cut(1))
+        self.btn_scan_next_cut = self._create_transport_button(
+            ">>",
+            tooltip="다음 컷 경계까지 빠르게 탐색",
+            width=42,
+            font_size=13,
+            padding="6px 8px",
+            callback=lambda: self.request_scan_cut(1),
+        )
         ctrl_layout.addWidget(self.btn_scan_next_cut)
 
-        self.time_label = QLabel("00:00 / 00:00")
+        self.time_label = _MirrorLabel("00:00 / 00:00")
         self.time_label.setStyleSheet("color: #A9B0B7; font-size: 11px; font-weight: 500; background: transparent; border: none;")
         ctrl_layout.addWidget(self.time_label)
 
         ctrl_layout.addStretch()
 
-        self.info_label = QLabel("영상을 불러오는 중...")
+        self.info_label = _MirrorLabel("영상을 불러오는 중...")
         self.info_label.setWordWrap(True)
         self.info_label.setMaximumHeight(34)
         self.info_label.setStyleSheet("color: #A9B0B7; font-size: 10px; background: transparent; border: none;")
         ctrl_layout.addWidget(self.info_label)
 
-        self.source_name_label = QLabel(ctrl)
+        self.source_name_label = _MirrorLabel(ctrl)
         self.source_name_label.setObjectName("VideoSourceNameLabel")
         self.source_name_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.source_name_label.setWordWrap(False)
@@ -365,6 +486,23 @@ class VideoPlayerWidget(QWidget):
         )
         self.source_name_label.hide()
         ctrl_layout.addWidget(self.source_name_label)
+        return ctrl
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 0, 8, 8)
+        layout.setSpacing(6)
+        self._build_video_surface_stack()
+
+        layout.addWidget(self.video_container, stretch=1)
+        ctrl = self._build_control_bar()
+        self._control_bar_widget = ctrl
+        self._control_bar_widget.installEventFilter(self)
+        for label in (self.time_label, self.info_label, self.source_name_label):
+            label.text_changed.connect(self._sync_quick_control_bar)
+            label.visible_changed.connect(self._sync_quick_control_bar)
+        self._quick_control_bar = self._create_quick_control_bar(ctrl)
+        self._sync_quick_control_bar()
 
         layout.addWidget(ctrl)
         QTimer.singleShot(0, self._layout_video_overlay)
@@ -457,6 +595,7 @@ class VideoPlayerWidget(QWidget):
             direction = int(direction or 0)
         except Exception:
             direction = 0
+        self._scan_cut_active_direction = direction
 
         inactive = self._control_button_style(font_size=13, padding="6px 8px")
         active = (
@@ -476,6 +615,7 @@ class VideoPlayerWidget(QWidget):
             prev_btn.setStyleSheet(active if direction < 0 else inactive)
         if next_btn is not None:
             next_btn.setStyleSheet(active if direction > 0 else inactive)
+        self._sync_quick_control_bar()
 
     def _control_button_style(self, *, font_size=12, padding="6px 12px") -> str:
         return f"""
@@ -545,6 +685,7 @@ class VideoPlayerWidget(QWidget):
 
     def _set_subtitle_overlay_text(self, text: str):
         text = str(text or "")
+        quick_overlay = getattr(self, "quick_subtitle_overlay", None)
         try:
             if self.sub_label.text() != text:
                 self.sub_label.setText(text)
@@ -552,9 +693,10 @@ class VideoPlayerWidget(QWidget):
         except Exception:
             pass
         item = self._scene_subtitle_item()
-        if item is not None:
+        if item is not None and quick_overlay is None:
             item.set_text(text)
-        quick_overlay = getattr(self, "quick_subtitle_overlay", None)
+        elif item is not None:
+            item.set_text("")
         if quick_overlay is not None:
             quick_overlay.set_text(text)
         elif item is None and hasattr(self, "sub_label"):
@@ -569,10 +711,10 @@ class VideoPlayerWidget(QWidget):
             self.sub_label.set_export_style(style or {})
         except Exception:
             pass
-        item = self._scene_subtitle_item()
-        if item is not None:
-            item.set_export_style(style or {})
         quick_overlay = getattr(self, "quick_subtitle_overlay", None)
+        item = self._scene_subtitle_item()
+        if item is not None and quick_overlay is None:
+            item.set_export_style(style or {})
         if quick_overlay is not None:
             quick_overlay.set_export_style(style or {})
 
@@ -621,6 +763,79 @@ class VideoPlayerWidget(QWidget):
         super().resizeEvent(event)
         self._layout_video_overlay()
         self._refresh_source_name_label()
+        self._sync_quick_control_bar()
+
+    def eventFilter(self, obj, event):
+        if obj is getattr(self, "_control_bar_widget", None) and event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            quick = getattr(self, "_quick_control_bar", None)
+            if quick is not None:
+                quick.setGeometry(obj.rect())
+                quick.raise_()
+        return super().eventFilter(obj, event)
+
+    def _create_quick_control_bar(self, parent):
+        if not scenegraph_enabled("video"):
+            return None
+        qml_path = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "qml", "video_control_bar.qml"))
+        if not os.path.exists(qml_path):
+            return None
+        try:
+            from PyQt6.QtQuickWidgets import QQuickWidget
+        except Exception:
+            return None
+        try:
+            quick = QQuickWidget(parent)
+            quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+            quick.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            quick.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            quick.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+            quick.setClearColor(QColor(0, 0, 0, 0))
+            quick.setSource(QUrl.fromLocalFile(qml_path))
+            if quick.status() == QQuickWidget.Status.Error:
+                quick.deleteLater()
+                return None
+            root = quick.rootObject()
+            if root is not None:
+                root.playRequested.connect(self.toggle_play)
+                root.prevFrameRequested.connect(lambda: self.request_frame_step(-1))
+                root.nextFrameRequested.connect(lambda: self.request_frame_step(1))
+                root.prevScanRequested.connect(lambda: self.request_scan_cut(-1))
+                root.nextScanRequested.connect(lambda: self.request_scan_cut(1))
+            quick.setGeometry(parent.rect())
+            quick.show()
+            quick.raise_()
+            return quick
+        except Exception:
+            return None
+
+    def _quick_control_bar_state(self) -> dict:
+        return {
+            "timeText": str(getattr(self.time_label, "text", lambda: "")() or ""),
+            "infoText": str(getattr(self.info_label, "text", lambda: "")() or ""),
+            "sourceNameText": (
+                str(getattr(self.source_name_label, "text", lambda: "")() or "")
+                if not bool(getattr(self.source_name_label, "isHidden", lambda: True)())
+                else ""
+            ),
+            "playText": str(getattr(self.btn_play, "text", lambda: "▶")() or "▶"),
+            "playing": bool(self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState),
+            "scanPrevActive": bool(getattr(self, "_scan_cut_active_direction", 0) < 0),
+            "scanNextActive": bool(getattr(self, "_scan_cut_active_direction", 0) > 0),
+        }
+
+    def _sync_quick_control_bar(self, *_args):
+        quick = getattr(self, "_quick_control_bar", None)
+        if quick is None:
+            return
+        try:
+            root = quick.rootObject()
+            if root is None:
+                return
+            state = self._quick_control_bar_state()
+            for key, value in state.items():
+                root.setProperty(key, value)
+        except Exception:
+            pass
 
     def _get_video_ui_interval_ms(self) -> int:
         try:
@@ -763,14 +978,28 @@ class VideoPlayerWidget(QWidget):
             pass
 
     def _legacy_preview_proxy_enabled(self) -> bool:
+        env_value = str(os.environ.get("AI_SUBTITLE_VIDEO_PREVIEW_PROXY", "") or "").strip().lower()
+        if env_value in {"1", "true", "yes", "on"}:
+            return True
+        if env_value in {"0", "false", "no", "off"}:
+            return False
         try:
             settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
             if os.path.exists(settings_path):
                 with open(settings_path, "r", encoding="utf-8") as f:
-                    return bool(json.load(f).get("video_preview_proxy_enabled", True))
+                    data = json.load(f)
+                if isinstance(data, dict) and "video_preview_proxy_enabled" in data:
+                    value = data.get("video_preview_proxy_enabled")
+                    if isinstance(value, str):
+                        value = value.strip().lower()
+                        if value in {"1", "true", "yes", "on"}:
+                            return True
+                        if value in {"0", "false", "no", "off"}:
+                            return False
+                    return bool(value)
         except Exception:
             pass
-        return True
+        return False
 
 
     def load(self, path, segments=None):
@@ -797,8 +1026,8 @@ class VideoPlayerWidget(QWidget):
             self._pending_seek_sec = self._pending_seek_sec if self._pending_seek_sec is not None else 0.0
             self._media_source_loaded = False
             self._source_ready = True
-            if self.has_vocal_track:
-                self.vocal_player.stop()
+            if self.has_vocal_track or isinstance(getattr(self, "vocal_player", None), QMediaPlayer):
+                self._release_vocal_player()
             if self.audio_output is not None:
                 self.audio_output.setVolume(1.0)
             self.has_vocal_track = False
@@ -909,8 +1138,10 @@ class VideoPlayerWidget(QWidget):
                 pixmap = QPixmap(thumb_path)
                 if not pixmap.isNull():
                     self.thumb_label.set_pixmap(pixmap)
-                try: os.remove(thumb_path)
-                except: pass
+                try:
+                    os.remove(thumb_path)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -960,7 +1191,7 @@ class VideoPlayerWidget(QWidget):
         if self._media_source_loaded:
             self.media_player.setPosition(pos_ms)
         if getattr(self, "has_vocal_track", False) and self._media_source_loaded:
-            self.vocal_player.setPosition(pos_ms)
+            self._ensure_vocal_player().setPosition(pos_ms)
         return pos_ms
 
     def _apply_seek_state(
@@ -1222,7 +1453,7 @@ class VideoPlayerWidget(QWidget):
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
             if getattr(self, 'has_vocal_track', False):
-                self.vocal_player.pause()
+                self._ensure_vocal_player().pause()
         else:
             if bool(getattr(self, "_provider_refresh_requested", False)):
                 self._refresh_provider_segments(force=False)
@@ -1239,17 +1470,17 @@ class VideoPlayerWidget(QWidget):
             if start_sec > 0.05:
                 self.media_player.setPosition(self.position_ms_for_frame(start_frame))
             if getattr(self, 'has_vocal_track', False):
-                self.vocal_player.setPosition(self.media_player.position())
+                self._ensure_vocal_player().setPosition(self.media_player.position())
             self.media_player.play()
             if getattr(self, 'has_vocal_track', False):
-                self.vocal_player.play()
+                self._ensure_vocal_player().play()
         self._update_btn()
 
     def pause_video(self):
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
             if getattr(self, 'has_vocal_track', False):
-                self.vocal_player.pause()
+                self._ensure_vocal_player().pause()
             self._update_btn()
 
     def _update_btn(self):
@@ -1258,6 +1489,7 @@ class VideoPlayerWidget(QWidget):
             return
         self._last_btn_state = is_playing
         self.btn_play.setText("⏸" if is_playing else "▶")
+        self._sync_quick_control_bar()
 
     def _ui_tick(self):
         self._update_btn()
@@ -1292,7 +1524,117 @@ class VideoPlayerWidget(QWidget):
             self._set_subtitle_overlay_text(cur_sub)
 
     def closeEvent(self, event):
-        if hasattr(self, '_ui_timer'): self._ui_timer.stop()
-        if hasattr(self, 'media_player'): self.media_player.stop()
-        if hasattr(self, 'vocal_player'): self.vocal_player.stop()
+        self.shutdown_backend()
         super().closeEvent(event)
+
+    def _release_cached_surfaces(self):
+        self.segments = []
+        self._subtitle_starts = []
+        self._subtitle_cache_idx = -1
+        self._subtitle_provider = None
+        self._subtitle_provider_segments_ref = None
+        self._subtitle_provider_signature = ""
+        self._context_segments_ref = None
+        self._context_segments_signature = ""
+        self._pending_segments = None
+        self._pending_seek_sec = None
+        self._pending_thumb_path = None
+        self._pending_thumb_sec = 0.0
+        self._last_sub = ""
+        self._last_time_label_ms = -250
+        try:
+            self.set_subtitle_display_time(None, refresh=False)
+        except Exception:
+            self._subtitle_display_time_sec = None
+        try:
+            self._set_subtitle_overlay_text("")
+        except Exception:
+            pass
+        try:
+            self.thumb_label.clear_pixmap()
+        except Exception:
+            pass
+        try:
+            self.info_label.setText("")
+            self.source_name_label.setText("")
+        except Exception:
+            pass
+
+    def shutdown_backend(self):
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
+        self._shutdown_in_progress = True
+        try:
+            self.setUpdatesEnabled(False)
+        except Exception:
+            pass
+        for attr in ("_ui_timer", "_frame_step_hold_timer", "_frame_step_hold_start_timer"):
+            timer = getattr(self, attr, None)
+            try:
+                if timer is not None:
+                    timer.stop()
+            except Exception:
+                pass
+        try:
+            proc = getattr(self, "_proxy_build_proc", None)
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+        except Exception:
+            pass
+        self._proxy_build_proc = None
+        self._release_cached_surfaces()
+        for widget_name in ("quick_subtitle_overlay", "_quick_control_bar", "sub_label", "thumb_label", "video_stack"):
+            widget = getattr(self, widget_name, None)
+            try:
+                if widget is not None:
+                    widget.hide()
+                    widget.setUpdatesEnabled(False)
+            except Exception:
+                pass
+        try:
+            self.media_player.durationChanged.disconnect(self._on_duration_changed)
+        except Exception:
+            pass
+        try:
+            self.media_player.mediaStatusChanged.disconnect(self._on_media_status_changed)
+        except Exception:
+            pass
+        seen_players = set()
+        for player_name in ("media_player", "vocal_player", "audio_player"):
+            player = getattr(self, player_name, None)
+            if player is None or id(player) in seen_players:
+                continue
+            seen_players.add(id(player))
+            try:
+                if hasattr(player, "stop"):
+                    player.stop()
+            except Exception:
+                pass
+            try:
+                if hasattr(player, "setVideoOutput"):
+                    player.setVideoOutput(None)
+            except Exception:
+                pass
+            try:
+                if hasattr(player, "setAudioOutput"):
+                    player.setAudioOutput(None)
+            except Exception:
+                pass
+            try:
+                if hasattr(player, "setSource"):
+                    player.setSource(QUrl())
+            except Exception:
+                pass
+        try:
+            self._release_vocal_player()
+        except Exception:
+            pass
+        for output_name in ("audio_output", "vocal_audio_output"):
+            output = getattr(self, output_name, None)
+            if output is None:
+                continue
+            try:
+                output.deleteLater()
+            except Exception:
+                pass
+            setattr(self, output_name, None)

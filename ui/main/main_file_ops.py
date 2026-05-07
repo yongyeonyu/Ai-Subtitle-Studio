@@ -4,7 +4,9 @@
 ui/main/main_file_ops.py
 FileOpsMixin — 파일/폴더 선택 · 배치 시작 · 멀티클립 진입 · 캐시 삭제 · 종료
 """
+import glob
 import os
+import tempfile
 
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
 from PyQt6.QtCore import QTimer
@@ -15,6 +17,40 @@ from core.path_manager import (
 )
 from core.settings import load_settings, save_settings
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
+from ui.dialogs.message_box import ask_yes_no, show_message
+
+
+def _reusable_cache_paths() -> list[str]:
+    from core.runtime import config
+
+    output_dir = os.path.abspath(str(config.OUTPUT_DIR or ""))
+    cache_paths = [
+        os.path.join(output_dir, ".media_probe_cache"),
+        os.path.join(output_dir, "cut_boundary_cache"),
+        os.path.join(output_dir, "waveform_cache"),
+        os.path.join(output_dir, "_analysis_cache"),
+        os.path.join(output_dir, "_audio_fingerprint"),
+        os.path.join(tempfile.gettempdir(), "ai_subtitle_studio_waveform_cache"),
+        os.path.join(tempfile.gettempdir(), "ai_subtitle_studio_roughcut"),
+        os.path.join(tempfile.gettempdir(), "ai_subtitle_studio_roughcut_thumbnails"),
+    ]
+    for pattern in (
+        "*_cleaned.wav",
+        "*_cleaned.wav.meta.json",
+        "*_raw.wav",
+        "*.vad.cache.json",
+        "*.vad.cache.json.gz",
+    ):
+        cache_paths.extend(glob.glob(os.path.join(output_dir, pattern)))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for path in cache_paths:
+        normalized = os.path.abspath(os.path.expanduser(str(path or "")))
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
 
 
 class FileOpsMixin:
@@ -235,41 +271,65 @@ class FileOpsMixin:
                 )
 
     def _clear_cache(self):
-        msg = QMessageBox(self)
-        msg.setWindowTitle("캐쉬 삭제")
-        msg.setText("output 폴더 내의 임시 파일들을 모두 삭제하시겠습니까?")
-        msg.setStandardButtons(
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        msg.setDefaultButton(QMessageBox.StandardButton.No)
-        msg.setStyleSheet("""
-            QMessageBox { background-color: #1a1a1a; color: #FFFFFF; }
-            QPushButton { background-color: #333333; color: #FFFFFF; border: 2px solid #FFFFFF; padding: 6px 16px; border-radius: 4px; font-weight: bold; }
-            QPushButton:hover { background-color: #555555; }
-        """)
-        if msg.exec() == QMessageBox.StandardButton.Yes:
+        if ask_yes_no(
+            self,
+            "캐쉬 삭제",
+            "컷경계, VAD, 음성필터/전처리, 파형 등 재사용 캐쉬 파일을 모두 삭제하시겠습니까?",
+            default_no=True,
+        ):
             import shutil
 
-            output_dir = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "output",
-            )
             try:
-                if os.path.exists(output_dir):
-                    shutil.rmtree(output_dir)
-                    os.makedirs(output_dir, exist_ok=True)
                 from core.auto_tracker import TRACKER_FILE
+                from core.media_info import clear_media_probe_cache_memory
+                from core.personalization.lora_vector_retriever import clear_lora_retrieval_caches
+                from core.project.project_io import clear_project_file_cache
+                from core.runtime import config
+                from ui.style import clear_line_icon_cache
+
+                removed_count = 0
+                for cache_path in _reusable_cache_paths():
+                    if not os.path.lexists(cache_path):
+                        continue
+                    if os.path.isdir(cache_path) and not os.path.islink(cache_path):
+                        shutil.rmtree(cache_path)
+                    else:
+                        os.remove(cache_path)
+                    removed_count += 1
+                os.makedirs(config.OUTPUT_DIR, exist_ok=True)
 
                 if os.path.exists(TRACKER_FILE):
                     os.remove(TRACKER_FILE)
+                    removed_count += 1
+                clear_media_probe_cache_memory()
+                clear_project_file_cache()
+                clear_lora_retrieval_caches()
+                clear_line_icon_cache()
                 if hasattr(self, "_cloud_sync_manager"):
                     mgr = self._cloud_sync_manager
                     mgr._size_cache.clear()
                     mgr._in_flight.clear()
-                QMessageBox.information(self, "완료", "캐쉬 삭제 완료")
+                runtime_cache_clear = getattr(self, "_clear_runtime_memory_caches", None)
+                if callable(runtime_cache_clear):
+                    runtime_cache_clear(include_gpu=False)
+                show_message(
+                    self,
+                    "완료",
+                    f"컷경계/VAD/음성필터/파형 등 재사용 캐쉬 {removed_count}개 삭제 완료",
+                    icon=QMessageBox.Icon.Information,
+                    buttons=QMessageBox.StandardButton.Ok,
+                    default=QMessageBox.StandardButton.Ok,
+                )
                 self._restore_current_work_mode()
             except Exception as e:
-                QMessageBox.warning(self, "오류", f"삭제 중 오류: {e}")
+                show_message(
+                    self,
+                    "오류",
+                    f"삭제 중 오류: {e}",
+                    icon=QMessageBox.Icon.Warning,
+                    buttons=QMessageBox.StandardButton.Ok,
+                    default=QMessageBox.StandardButton.Ok,
+                )
 
     def _quick_exit(self):
         busy_before_exit = False
@@ -306,7 +366,7 @@ class FileOpsMixin:
                 pass
         schedule_exit = getattr(self, "_schedule_forced_process_exit", None)
         if callable(schedule_exit):
-            schedule_exit(delay_ms=90)
+            schedule_exit(delay_ms=60)
         QApplication.quit()
 
     def _restore_current_work_mode(self):

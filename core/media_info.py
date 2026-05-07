@@ -7,6 +7,8 @@ ffprobe 기반 미디어 정보 조회 유틸 + metadata cache
 from __future__ import annotations
 
 import subprocess
+import threading
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -16,7 +18,9 @@ from core.performance import atomic_write_json, ffprobe_worker_count, media_prob
 from core.platform_compat import ffprobe_binary, hidden_subprocess_kwargs
 
 _CACHE_SCHEMA = 1
-_MEM_CACHE: dict[str, dict] = {}
+_MEDIA_PROBE_MEM_CACHE_MAX = 384
+_MEM_CACHE: "OrderedDict[str, dict]" = OrderedDict()
+_MEM_CACHE_LOCK = threading.RLock()
 
 
 def _default_result() -> dict:
@@ -40,9 +44,11 @@ def _fingerprint(filepath: str) -> tuple[str, Path] | tuple[None, None]:
 
 
 def _read_cache(cache_key: str, cache_path: Path) -> dict | None:
-    cached = _MEM_CACHE.get(cache_key)
-    if cached is not None:
-        return _copy_result(cached)
+    with _MEM_CACHE_LOCK:
+        cached = _MEM_CACHE.get(cache_key)
+        if cached is not None:
+            _MEM_CACHE.move_to_end(cache_key)
+            return _copy_result(cached)
     try:
         payload = read_json_path(cache_path)
     except Exception:
@@ -52,15 +58,23 @@ def _read_cache(cache_key: str, cache_path: Path) -> dict | None:
     result = payload.get("result")
     if not isinstance(result, dict):
         return None
-    _MEM_CACHE[cache_key] = _copy_result(result)
+    _cache_put(cache_key, _copy_result(result))
     return _copy_result(result)
+
+
+def _cache_put(cache_key: str, result: dict) -> None:
+    with _MEM_CACHE_LOCK:
+        _MEM_CACHE[cache_key] = _copy_result(result)
+        _MEM_CACHE.move_to_end(cache_key)
+        while len(_MEM_CACHE) > _MEDIA_PROBE_MEM_CACHE_MAX:
+            _MEM_CACHE.popitem(last=False)
 
 
 def _write_cache(cache_key: str, cache_path: Path, result: dict) -> None:
     try:
         payload = {"schema": _CACHE_SCHEMA, "key": cache_key, "result": _copy_result(result)}
         atomic_write_json(cache_path, payload)
-        _MEM_CACHE[cache_key] = _copy_result(result)
+        _cache_put(cache_key, result)
     except Exception:
         pass
 
@@ -135,4 +149,5 @@ def probe_media_many(filepaths: list[str], *, max_workers: int | None = None) ->
 
 
 def clear_media_probe_cache_memory() -> None:
-    _MEM_CACHE.clear()
+    with _MEM_CACHE_LOCK:
+        _MEM_CACHE.clear()

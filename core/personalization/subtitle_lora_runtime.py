@@ -5,7 +5,7 @@ from statistics import median
 from typing import Any
 
 from core.audio.stt_lattice import STT_LATTICE_CANDIDATE_KEYS, collect_stt_lattice_candidates
-from core.engine.subtitle_settings import _setting_float, _setting_int
+from core.engine.subtitle_settings import _setting_int
 from core.personalization.deep_subtitle_policy import predict_segment_settings
 from core.personalization.lora_retrieval_config import INDEX_JSON_SOURCE_KEYS, INDEX_JSONL_SOURCE_KEYS, RUNTIME_SETTING_KEYS
 from core.personalization.lora_retrieval_scoring import runtime_settings_from_retrieved_items

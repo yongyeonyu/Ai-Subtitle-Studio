@@ -29,6 +29,7 @@ _PROBE_FAILED_TTL_SEC = 60.0
 _SERVER_READY_UNTIL = 0.0
 _START_IN_PROGRESS_UNTIL = 0.0
 _SERVER_READY_LOGGED_UNTIL = 0.0
+_APP_STARTED_RUNTIME = False
 _OLLAMA_ROOT_URL = "http://localhost:11434/"
 _GENERATE_RETRY_STATUS_CODES = {500, 502, 503, 504}
 _PROBE_RETRY_STATUS_CODES = {502, 503, 504}
@@ -50,14 +51,19 @@ _FALLBACK_MODEL_PREFERENCES = (
     "gemma2:9b",
     "exaone3.5:7.8b",
 )
+_APP_BUNDLE_OLLAMA_BINS = (
+    "/Applications/Ollama.app/Contents/MacOS/ollama",
+    os.path.expanduser("~/Applications/Ollama.app/Contents/MacOS/ollama"),
+)
 
 
 def _reset_ollama_runtime_state(*, clear_warmed: bool = True) -> None:
-    global _SERVER_READY_UNTIL, _START_IN_PROGRESS_UNTIL, _SERVER_READY_LOGGED_UNTIL
+    global _APP_STARTED_RUNTIME, _SERVER_READY_UNTIL, _START_IN_PROGRESS_UNTIL, _SERVER_READY_LOGGED_UNTIL
 
     _SERVER_READY_UNTIL = 0.0
     _START_IN_PROGRESS_UNTIL = 0.0
     _SERVER_READY_LOGGED_UNTIL = 0.0
+    _APP_STARTED_RUNTIME = False
     if clear_warmed:
         _WARMED.clear()
 
@@ -88,6 +94,7 @@ def _iter_ollama_bins() -> list[str]:
         "/opt/homebrew/bin/ollama",
         "/usr/local/bin/ollama",
         os.path.expanduser("~/.ollama/bin/ollama"),
+        *_APP_BUNDLE_OLLAMA_BINS,
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
         os.path.expandvars(r"%ProgramFiles%\Ollama\ollama.exe"),
     ]
@@ -99,6 +106,8 @@ def _iter_ollama_bins() -> list[str]:
 
 
 def _start_ollama_server_process() -> bool:
+    global _APP_STARTED_RUNTIME
+
     popen_kwargs = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
@@ -112,6 +121,7 @@ def _start_ollama_server_process() -> bool:
     for ollama_bin in _iter_ollama_bins():
         try:
             subprocess.Popen([ollama_bin, "serve"], **popen_kwargs)
+            _APP_STARTED_RUNTIME = True
             return True
         except Exception:
             continue
@@ -119,10 +129,15 @@ def _start_ollama_server_process() -> bool:
     if os.name == "posix" and os.path.exists("/Applications/Ollama.app"):
         try:
             subprocess.Popen(["open", "-a", "Ollama"], **popen_kwargs)
+            _APP_STARTED_RUNTIME = True
             return True
         except Exception:
             pass
     return False
+
+
+def app_started_ollama_runtime() -> bool:
+    return bool(_APP_STARTED_RUNTIME)
 
 
 def restart_ollama_server(logger=None, *, wait_sec: float = 6.0) -> bool:

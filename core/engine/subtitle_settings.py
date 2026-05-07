@@ -6,8 +6,8 @@ import json
 import os
 from core.llm.ollama_provider import ollama_probe_timeout, resolve_ollama_model_for_request
 from core.llm.openai_provider import is_openai_model
-from core.performance import adaptive_llm_worker_count
 from core.runtime import config
+from core.runtime.multi_process import runtime_llm_worker_plan
 
 
 def _get_user_settings():
@@ -98,7 +98,7 @@ def _effective_llm_workers(
     if not _is_local_ollama_model(model):
         return 1, "api"
     if bool((settings or {}).get("llm_threads_auto_enabled", True)):
-        workers, _meta = adaptive_llm_worker_count(
+        workers, _meta = runtime_llm_worker_plan(
             settings=settings or {},
             requested=configured,
             workload=count,

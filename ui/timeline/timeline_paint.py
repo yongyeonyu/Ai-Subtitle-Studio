@@ -386,7 +386,11 @@ def final_stt_selection_source(seg: dict) -> str:
 class TimelinePaintMixin:
 
     def paintEvent(self, event):
+        if bool(getattr(self, "_shutdown_in_progress", False)):
+            return
         p = QPainter(self)
+        if not p.isActive():
+            return
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         total_w = self.total_width()

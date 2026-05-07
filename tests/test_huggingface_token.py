@@ -32,6 +32,13 @@ class HuggingFaceTokenTests(unittest.TestCase):
         self.assertEqual(env["HF_TOKEN"], "hf_env_token")
         self.assertEqual(env["HUGGINGFACE_HUB_TOKEN"], "hf_env_token")
 
+    def test_transformers_worker_env_suppresses_pynvml_futurewarning(self):
+        with patch("core.audio.whisper_transformers.os.environ", {}), \
+                patch("core.audio.whisper_transformers.get_api_key", return_value=""):
+            env = _huggingface_env()
+
+        self.assertIn("The pynvml package is deprecated.", env["PYTHONWARNINGS"])
+
     def test_transformers_stderr_log_includes_stt_label(self):
         line = _format_stderr_log("[transformers] warning", log_label="STT2")
 

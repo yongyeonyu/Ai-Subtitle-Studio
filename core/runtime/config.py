@@ -1,4 +1,4 @@
-# Version: 03.24.01
+# Version: 03.24.02
 # Phase: PHASE8_STTModeRuntimeRelease
 
 
@@ -12,7 +12,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.24.01"
+APP_VERSION = "03.24.02"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -92,7 +92,11 @@ DEFAULT_ADV_SETTINGS = {
     "runtime_scheduler_ramp_up_enabled": True,
     "runtime_scheduler_ramp_initial_sec": 45.0,
     "runtime_scheduler_ramp_step_sec": 60.0,
-    "runtime_scheduler_reserve_cores": 1,
+    "runtime_scheduler_reserve_cores": 0,
+    "runtime_memory_monitor_interval_ms": 15000,
+    "runtime_memory_disk_cache_budget_gb": 12.0,
+    "runtime_memory_tracemalloc_enabled": True,
+    "runtime_memory_tracemalloc_frames": 8,
     "autopilot_enabled": True,
     "autopilot_single_user_mode": True,
     "operation_mode_choices_visible": False,

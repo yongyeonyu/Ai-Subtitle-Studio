@@ -90,6 +90,7 @@ class SubtitleHighlighter(QSyntaxHighlighter):
         super().__init__(document)
         self._edited_lines: set[int] = set()
         self._current_line: int = -1
+        self._gpu_overlay_active = False
         self.speaker_colors = {} 
         self.quality_by_line: dict[int, dict] = {}
         self.quality_filter = "all"
@@ -107,6 +108,13 @@ class SubtitleHighlighter(QSyntaxHighlighter):
 
     def set_quality_filter(self, key: str):
         self.quality_filter = str(key or "all")
+        self.rehighlight()
+
+    def set_gpu_overlay_active(self, active: bool):
+        active = bool(active)
+        if self._gpu_overlay_active == active:
+            return
+        self._gpu_overlay_active = active
         self.rehighlight()
 
     def _quality_color(self, label: str) -> QColor | None:
@@ -131,6 +139,8 @@ class SubtitleHighlighter(QSyntaxHighlighter):
         return label == key
 
     def highlightBlock(self, text: str):
+        if self._gpu_overlay_active:
+            return
         block_num = self.currentBlock().blockNumber()
         quality = dict(self.quality_by_line.get(block_num) or {})
         if quality and len(text) > 0:
@@ -190,24 +200,13 @@ class SubtitleTextEdit(QTextEdit):
             self.setViewport(accelerated_viewport)
         self.render_backend = gpu_backend_name("editor")
         self.setFont(QFont(config.FONT, 13))
-        self._base_stylesheet = (
-            "QTextEdit { background: #11181C; color: #DDE3EA; border: none; "
-            "border-radius: 0px; padding: 10px 12px; line-height: 1.35; }"
-            "QScrollBar:vertical { background: #11181C; border: none; width: 8px; margin: 0px; }"
-            "QScrollBar::handle:vertical { background: #465663; border: none; border-radius: 0px; min-height: 24px; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; border: none; background: transparent; }"
-            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; border: none; }"
-        )
-        self._locked_stylesheet = (
-            "QTextEdit { background: #1C1C1E; color: #8E8E93; border: none; "
-            "border-radius: 0px; padding: 10px 12px; line-height: 1.35; }"
-            "QScrollBar:vertical { background: #11181C; border: none; width: 8px; margin: 0px; }"
-            "QScrollBar::handle:vertical { background: #465663; border: none; border-radius: 0px; min-height: 24px; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; border: none; background: transparent; }"
-            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; border: none; }"
-        )
+        self._base_stylesheet = self._editor_stylesheet("#DDE3EA", "#11181C")
+        self._locked_stylesheet = self._editor_stylesheet("#8E8E93", "#1C1C1E")
+        self._overlay_stylesheet = self._editor_stylesheet("transparent", "#11181C")
+        self._overlay_locked_stylesheet = self._editor_stylesheet("transparent", "#1C1C1E")
         self.setStyleSheet(self._base_stylesheet)
         self._selection_locked = False
+        self._gpu_document_overlay_active = False
         self.setUndoRedoEnabled(True)
         self.setAcceptRichText(False)
         self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
@@ -218,6 +217,7 @@ class SubtitleTextEdit(QTextEdit):
         self._timestamp_update_timer.setSingleShot(True)
         self._timestamp_update_timer.timeout.connect(self._flush_timestamp_area_update)
         self.verticalScrollBar().valueChanged.connect(self._schedule_timestamp_area_update)
+        self.verticalScrollBar().valueChanged.connect(self._schedule_quick_layer_sync)
         self.textChanged.connect(self._schedule_timestamp_area_update)
         self.cursorPositionChanged.connect(self._schedule_timestamp_area_update)
         
@@ -237,6 +237,22 @@ class SubtitleTextEdit(QTextEdit):
             self._schedule_quick_layer_sync()
         else:
             self._quick_layer_timer = None
+        self._refresh_gpu_document_overlay_mode()
+
+    @staticmethod
+    def _editor_stylesheet(text_color: str, background_color: str) -> str:
+        return (
+            "QTextEdit { "
+            f"background: {background_color}; color: {text_color}; border: none; "
+            "border-radius: 0px; padding: 10px 12px; line-height: 1.35; "
+            "selection-background-color: rgba(52, 199, 89, 0.18); "
+            f"selection-color: {text_color}; "
+            "}"
+            "QScrollBar:vertical { background: #11181C; border: none; width: 8px; margin: 0px; }"
+            "QScrollBar::handle:vertical { background: #465663; border: none; border-radius: 0px; min-height: 24px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; border: none; background: transparent; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; border: none; }"
+        )
 
     def _schedule_timestamp_area_update(self):
         timer = getattr(self, "_timestamp_update_timer", None)
@@ -285,6 +301,7 @@ class SubtitleTextEdit(QTextEdit):
         if hasattr(parent, '_undo_mgr'):
             parent._undo_mgr.push_immediate()
         super().focusInEvent(event)
+        self._refresh_gpu_document_overlay_mode()
 
     # 💡 [추가] 에디터 바깥을 클릭 시 다시 켜기
     def focusOutEvent(self, e):
@@ -292,6 +309,7 @@ class SubtitleTextEdit(QTextEdit):
         parent = getattr(self, "_parent_widget", None)
         if parent and hasattr(parent, "space_shortcut"):
             parent.space_shortcut.setEnabled(True)
+        self._refresh_gpu_document_overlay_mode()
 
     def set_selection_locked(self, locked: bool):
         self._selection_locked = bool(locked)
@@ -311,7 +329,7 @@ class SubtitleTextEdit(QTextEdit):
             self.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
             self.setReadOnly(False)
             self.viewport().unsetCursor()
-            self.setStyleSheet(self._base_stylesheet)
+        self._refresh_gpu_document_overlay_mode()
         self._sync_quick_layer()
 
     def is_selection_locked(self) -> bool:
@@ -386,6 +404,102 @@ class SubtitleTextEdit(QTextEdit):
         except Exception:
             return None
 
+    def _quick_layer_overlay_text_active(self) -> bool:
+        return bool(getattr(self, "_quick_layer", None) is not None)
+
+    def _refresh_gpu_document_overlay_mode(self):
+        active = self._quick_layer_overlay_text_active()
+        stylesheet = self._overlay_locked_stylesheet if self._selection_locked else self._overlay_stylesheet
+        if not active:
+            stylesheet = self._locked_stylesheet if self._selection_locked else self._base_stylesheet
+        self._gpu_document_overlay_active = active
+        if self.styleSheet() != stylesheet:
+            self.setStyleSheet(stylesheet)
+        parent = getattr(self, "_parent_widget", None)
+        highlighter = getattr(parent, "_highlighter", None)
+        if highlighter is not None and hasattr(highlighter, "set_gpu_overlay_active"):
+            highlighter.set_gpu_overlay_active(active)
+
+    @staticmethod
+    def _format_quick_line_timecode(start_sec: float) -> str:
+        try:
+            total_ms = max(0, int(round(float(start_sec or 0.0) * 1000.0)))
+        except Exception:
+            total_ms = 0
+        total_sec = total_ms // 1000
+        minutes = total_sec // 60
+        seconds = total_sec % 60
+        millis = total_ms % 1000
+        return f"{minutes:02d}:{seconds:02d}.{millis // 10:02d}"
+
+    def _collect_quick_layer_visible_lines(self) -> list[dict]:
+        if getattr(self, "_quick_layer", None) is None:
+            return []
+        doc = self.document()
+        if doc is None:
+            return []
+        lines: list[dict] = []
+        try:
+            top_cursor = self.cursorForPosition(QPoint(8, 4))
+            bottom_cursor = self.cursorForPosition(QPoint(8, max(4, self.viewport().height() - 8)))
+            start_line = max(0, int(top_cursor.blockNumber()) - 1)
+            end_line = max(start_line, int(bottom_cursor.blockNumber()) + 2)
+        except Exception:
+            start_line = 0
+            end_line = max(0, int(doc.blockCount()) - 1)
+        block = doc.findBlockByNumber(start_line)
+        limit = min(max(start_line, end_line), int(doc.blockCount()) - 1)
+        while block.isValid() and block.blockNumber() <= limit and len(lines) < 384:
+            try:
+                rect = self.cursorRect(QTextCursor(block))
+            except Exception:
+                block = block.next()
+                continue
+            top = int(rect.top())
+            height = max(int(rect.height()), int(self.fontMetrics().height() * 1.35))
+            if top + height < -height:
+                block = block.next()
+                continue
+            if top > self.viewport().height() + height:
+                break
+            ud = block.userData()
+            timestamp = ""
+            accent = "#465663"
+            bg_fill = "transparent"
+            italic = False
+            if isinstance(ud, SubtitleBlockData):
+                if not getattr(ud, "is_gap", False):
+                    timestamp = self._format_quick_line_timecode(getattr(ud, "start_sec", 0.0))
+                if getattr(ud, "live_preview", False):
+                    accent = "#64D2FF"
+                    bg_fill = "#16303C"
+                    italic = True
+                elif getattr(ud, "stt_pending", False):
+                    accent = "#FF9F2F"
+                    bg_fill = "#332414"
+                elif getattr(ud, "is_gap", False):
+                    accent = "#5E5E64"
+            active = block.blockNumber() == self.textCursor().blockNumber()
+            if active:
+                bg_fill = "#1B2C34"
+                accent = "#34C759"
+            text = block.text().replace("\u2028", "\n")
+            lines.append(
+                {
+                    "line": int(block.blockNumber()),
+                    "text": text,
+                    "timestamp": timestamp,
+                    "y": top,
+                    "height": height,
+                    "active": bool(active),
+                    "accent": accent,
+                    "fill": bg_fill,
+                    "italic": bool(italic),
+                }
+            )
+            block = block.next()
+        return lines
+
     def _sync_quick_layer(self):
         layer = getattr(self, "_quick_layer", None)
         if layer is None:
@@ -394,10 +508,10 @@ class SubtitleTextEdit(QTextEdit):
             root = layer.rootObject()
             if root is None:
                 return
-            root.setProperty("lineCount", int(self.document().blockCount()))
-            root.setProperty("currentLine", int(self.textCursor().blockNumber()))
             root.setProperty("locked", bool(self._selection_locked))
-            root.setProperty("renderBackend", f"{self.render_backend}+qml")
+            root.setProperty("editorFocused", bool(self.hasFocus()))
+            root.setProperty("contentLeft", int(self.timestampArea.sizeHint().width()))
+            root.setProperty("visibleLines", self._collect_quick_layer_visible_lines())
         except RuntimeError:
             self._quick_layer = None
         except Exception:
@@ -436,6 +550,7 @@ class SubtitleTextEdit(QTextEdit):
             except Exception:
                 pass
         self._schedule_timestamp_area_update()
+        self._refresh_gpu_document_overlay_mode()
         self._schedule_quick_layer_sync()
 
     def createMimeDataFromSelection(self) -> QMimeData:

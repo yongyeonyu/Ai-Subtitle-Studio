@@ -351,7 +351,23 @@ def default_retention_policy() -> dict[str, Any]:
             "Rows are scored by explicit quality, compact subtitle-pattern signals, usage, and status.",
             "Rows without useful pattern payloads are treated as pending-delete so the store stays small and fast.",
             "Minimum keep counts protect small datasets from accidental deletion.",
+            "Quality-bucket archives use a strict hard size cap, with smaller soft targets to keep runtime bundle reads fast.",
         ],
+        "bundle_budgets": {
+            "hard_max_bytes": 3 * 1024 * 1024 * 1024,
+            "soft_max_bytes_by_bucket": {
+                "high": 1536 * 1024 * 1024,
+                "medium": 640 * 1024 * 1024,
+                "low": 256 * 1024 * 1024,
+                "pending_delete": 96 * 1024 * 1024,
+            },
+            "attachment_soft_max_bytes_by_bucket": {
+                "high": 768 * 1024 * 1024,
+                "medium": 0,
+                "low": 0,
+                "pending_delete": 0,
+            },
+        },
         "jsonl": {
             "truth_table": {"min_keep": 512, "max_rows": 12000, "remove_per_training": 1},
             "excluded_parentheticals": {"min_keep": 256, "max_rows": 4000, "remove_per_training": 1},

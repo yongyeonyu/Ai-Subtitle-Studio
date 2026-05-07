@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import tempfile
+import warnings
 import wave
 from concurrent.futures import ThreadPoolExecutor
 
@@ -22,10 +23,13 @@ from core.audio.runtime_cleanup import clear_audio_model_memory_caches
 from core.llm.secure_keys import get_api_key
 from core.media_fingerprint import media_file_fingerprint, media_fingerprint_digest
 from core.media_info import probe_media
-from core.performance import adaptive_worker_count, bounded_worker_count, distributed_worker_ceiling
+from core.performance import (
+    bounded_worker_count,
+)
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs, rnnoise_binary, subprocess_env
 from core.runtime import config
 from core.runtime.logger import get_logger
+from core.runtime.multi_process import runtime_parallel_worker_plan
 from core.subtitle_quality.vad_alignment_checker import apply_review_vad_settings, review_vad_config
 
 _VAD_CACHE_VERSION = 3
@@ -60,6 +64,15 @@ class VideoProcessorAudioHelpersMixin:
             callback(str(status or ""))
         except Exception:
             pass
+
+    @staticmethod
+    def _vad_segment_intersects_range(segment: dict, start_sec: float, end_sec: float) -> bool:
+        try:
+            seg_start = float(segment.get("start", 0.0) or 0.0)
+            seg_end = float(segment.get("end", 0.0) or 0.0)
+        except Exception:
+            return False
+        return seg_end > float(start_sec or 0.0) and seg_start < float(end_sec or 0.0)
 
     def _run_media_command(self, cmd: list[str], *, label: str, timeout: float | None = None, env: dict | None = None) -> bool:
         if self._should_run_ffmpeg_with_progress(cmd):
@@ -349,7 +362,13 @@ class VideoProcessorAudioHelpersMixin:
     @staticmethod
     def _resemble_enhance_device() -> str:
         try:
-            import torch
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r".*pynvml package is deprecated.*",
+                    category=FutureWarning,
+                )
+                import torch
 
             if getattr(getattr(torch, "backends", None), "mps", None) and torch.backends.mps.is_available():
                 return "mps"
@@ -835,6 +854,8 @@ class VideoProcessorAudioHelpersMixin:
         chunk_dir: str,
         grouped: list[dict],
         settings: dict,
+        *,
+        precomputed_vad_segments: list[dict] | None = None,
     ) -> bool:
         if not grouped:
             return False
@@ -850,20 +871,14 @@ class VideoProcessorAudioHelpersMixin:
         route_vad_enabled = bool(settings.get("audio_chunk_route_vad_enabled", settings.get("vad_post_stt_align_enabled", True)))
         failures = 0
         workload = len(grouped)
-        worker_ceiling = distributed_worker_ceiling(
-            settings,
-            task="io",
-            workload=workload,
-            reserve_cores=1,
-            minimum=1,
-        )
-        max_workers, scheduler = adaptive_worker_count(
-            task="io",
+        max_workers, scheduler = runtime_parallel_worker_plan(
             settings=settings,
+            task="io",
             requested=getattr(self, "io_workers", None),
             workload=workload,
             minimum=1,
-            maximum=worker_ceiling,
+            maximum=workload,
+            reserve_task="io",
         )
         reductions = ",".join(scheduler.get("reductions") or [])
         if max_workers > 1:
@@ -943,7 +958,24 @@ class VideoProcessorAudioHelpersMixin:
             for idx in sorted(route_logs):
                 _runtime_get_logger().log(self._route_log_line(idx, grouped[idx], route_logs[idx]))
 
-            if route_vad_enabled:
+            reuse_precomputed_vad = route_vad_enabled and bool(precomputed_vad_segments)
+            if reuse_precomputed_vad:
+                route_vad_segments = [
+                    dict(row)
+                    for row in list(precomputed_vad_segments or [])
+                    if isinstance(row, dict)
+                ]
+                for idx, seg in enumerate(grouped):
+                    start = max(0.0, float(seg.get("start", 0.0) or 0.0))
+                    end = max(start, float(seg.get("end", start) or start))
+                    vad_count = sum(
+                        1
+                        for row in route_vad_segments
+                        if self._vad_segment_intersects_range(row, start, end)
+                    )
+                    if idx in routes_by_index:
+                        routes_by_index[idx]["vad_segments"] = vad_count
+            elif route_vad_enabled:
                 for idx in sorted(route_runtime):
                     chunk_settings, out, start = route_runtime[idx]
                     vad_model = str(chunk_settings.get("selected_vad", "none") or "none").lower()

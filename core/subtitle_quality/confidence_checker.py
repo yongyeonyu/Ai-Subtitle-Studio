@@ -215,6 +215,25 @@ def _memory_score(segment: dict[str, Any], flags: list[str]) -> float:
     return 75.0
 
 
+def _apply_llm_rewrite_penalty(
+    segment: dict[str, Any],
+    score: float | None,
+    flags: list[str],
+) -> tuple[float | None, str | None]:
+    policy = dict(segment.get("_llm_rewrite_policy") or {})
+    if not policy.get("changed"):
+        return score, None
+    confidence = str(policy.get("confidence") or "").strip().lower()
+    if confidence == "high":
+        _add_flag(flags, "llm_confident_rewrite")
+        return score, None
+
+    _add_flag(flags, "llm_uncertain_rewrite")
+    penalty = _as_float(policy.get("score_penalty"), 18.0) or 18.0
+    adjusted = _clip_score((score if score is not None else 72.0) - penalty)
+    return adjusted, confidence or "low"
+
+
 def _weights(settings: dict[str, Any] | None) -> dict[str, float]:
     settings = settings or {}
     return {
@@ -277,9 +296,16 @@ def evaluate_subtitle_confidence(
         raw = sum(float(value) * max(0.0, weights[key]) for key, value in available.items()) / max(weight_sum, 0.001)
         score = _clip_score(raw - hallucination_penalty * max(0.0, weights["hallucination_penalty"]))
 
+    score, rewrite_confidence = _apply_llm_rewrite_penalty(segment, score, flags)
     label = _label_for_score(score)
     if score is None or "metadata_missing" in flags and word_score <= 35.0:
         label = "gray"
+    elif rewrite_confidence == "medium":
+        score = _clip_score(min(float(score if score is not None else 72.0), 72.0))
+        label = "yellow"
+    elif rewrite_confidence == "low":
+        score = _clip_score(min(float(score if score is not None else 58.0), 58.0))
+        label = "red"
     reasons = [flag for flag in flags if flag]
     if not reasons:
         reasons = ["ok"]

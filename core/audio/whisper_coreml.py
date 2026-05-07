@@ -16,7 +16,7 @@ import sys
 import threading
 
 from core.runtime import config
-from core.platform_compat import hidden_subprocess_kwargs, subprocess_env
+from core.platform_compat import hidden_subprocess_kwargs
 from core.runtime.logger import get_logger
 
 
@@ -91,8 +91,6 @@ def run_whisper(
     selector = coreml_model_selector(model)
     get_logger().log(f"  🧪 [{log_label}] Core ML WhisperKit 실행 준비: {selector}")
     script = _build_worker_script()
-    env = subprocess_env()
-    env.setdefault("WHISPERKIT_CLI", cli)
     task = {
         "chunk_paths": list(chunk_paths or []),
         "model": selector,
@@ -110,8 +108,10 @@ def run_whisper(
             encoding="utf-8",
             errors="replace",
             bufsize=1,
-            env=env,
-            **hidden_subprocess_kwargs(strip_qt=True),
+            **hidden_subprocess_kwargs(
+                strip_qt=True,
+                extra_env={"WHISPERKIT_CLI": cli},
+            ),
         )
         proc.stdin.write(json.dumps(task, ensure_ascii=False) + "\n")
         proc.stdin.flush()

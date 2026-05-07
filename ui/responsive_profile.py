@@ -106,7 +106,6 @@ def responsive_profile_for_size(
         h = w
 
     shortest = min(w, h)
-    longest = max(w, h)
     platform_key = str(platform or "").lower()
     looks_like_ipad = (
         "ipad" in platform_key

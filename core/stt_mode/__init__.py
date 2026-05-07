@@ -29,6 +29,13 @@ from .rolling_resegment import apply_rolling_resegmentation, build_rolling_windo
 from .segment_builder import build_stt_work_segments
 from .status import format_stt_status
 from .vad_ensemble import ensemble_vad_candidates
+from .lora_runtime import (
+    build_stt_dictation_resegment_policy,
+    build_stt_subtitle_style_policy,
+    build_stt_vad_segment_model,
+    collect_stt_protected_terms,
+    export_stt_runtime_bundle,
+)
 
 __all__ = [
     "FINAL_SUBTITLE_SOURCE",
@@ -47,9 +54,14 @@ __all__ = [
     "build_rolling_window",
     "build_stt_mode_state",
     "build_stt_work_segments",
+    "build_stt_dictation_resegment_policy",
+    "build_stt_subtitle_style_policy",
+    "build_stt_vad_segment_model",
+    "collect_stt_protected_terms",
     "create_raw_dictation_segment",
     "ensemble_vad_candidates",
     "exportable_stt_segments",
+    "export_stt_runtime_bundle",
     "format_stt_status",
     "project_stt_mode_learning",
     "project_stt_mode_state",

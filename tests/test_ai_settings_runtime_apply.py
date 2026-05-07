@@ -88,7 +88,7 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             self.assertFalse(any("오디오 프리셋" in text for text in label_texts))
             self.assertFalse(any("LoRA 교정:" in text for text in label_texts))
             self.assertFalse(any("적용 데이터:" in text for text in label_texts))
-            self.assertTrue(any("자동 관리:" in text for text in label_texts))
+            self.assertFalse(any("자동 관리:" in text for text in label_texts))
             widget_texts = []
             for widget in dialog.findChildren(QWidget):
                 text_getter = getattr(widget, "text", None)
@@ -205,6 +205,38 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
                     except RuntimeError:
                         pass
             self.assertNotIn("상세설정", texts)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_prompt_config_uses_json_backed_prompt_fields(self):
+        window = MainWindow()
+        try:
+            subtitle_config = window._sidebar_prompt_config(
+                "subtitle_llm",
+                {
+                    "default_llm_prompt": "기본 자막 프롬프트",
+                    "user_prompt": "추가 자막 프롬프트",
+                },
+            )
+            self.assertEqual(subtitle_config["sections"][0]["setting_key"], "default_llm_prompt")
+            self.assertFalse(subtitle_config["sections"][0]["editable"])
+            self.assertEqual(subtitle_config["sections"][1]["setting_key"], "user_prompt")
+            self.assertTrue(subtitle_config["sections"][1]["editable"])
+
+            roughcut_config = window._sidebar_prompt_config(
+                "roughcut_llm",
+                {
+                    "roughcut_llm_prompt": "러프컷 액션 프롬프트",
+                    "editor_roughcut_draft_prompt": "러프컷 초안 프롬프트",
+                },
+            )
+            self.assertEqual(
+                [section["setting_key"] for section in roughcut_config["sections"]],
+                ["roughcut_llm_prompt", "editor_roughcut_draft_prompt"],
+            )
+            self.assertTrue(all(section["editable"] for section in roughcut_config["sections"]))
         finally:
             window.close()
             window.deleteLater()

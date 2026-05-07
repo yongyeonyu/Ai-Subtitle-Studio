@@ -519,7 +519,7 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
                     status="complete",
                     score=score,
                 ).to_record()
-                for index, score in enumerate([92.0, 25.0, 70.0, 55.0, 88.0], start=1)
+                for index, score in enumerate([97.0, 25.0, 70.0, 55.0, 88.0], start=1)
             ]
             append_setting_trials(trials, tmpdir)
             split_rules = [
@@ -545,10 +545,10 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             ]
             self.assertEqual(len(remaining_trials), 4)
             self.assertNotIn(25.0, [float(row.get("score", 0.0) or 0.0) for row in remaining_trials])
-            self.assertEqual([float(row.get("score", 0.0) or 0.0) for row in remaining_trials], [92.0, 88.0, 70.0, 55.0])
+            self.assertEqual([float(row.get("score", 0.0) or 0.0) for row in remaining_trials], [97.0, 88.0, 70.0, 55.0])
             self.assertEqual(
                 [row.get("lora_quality_bucket") for row in remaining_trials],
-                [LORA_BUCKET_HIGH, LORA_BUCKET_HIGH, LORA_BUCKET_MEDIUM, LORA_BUCKET_LOW],
+                [LORA_BUCKET_HIGH, LORA_BUCKET_MEDIUM, LORA_BUCKET_MEDIUM, LORA_BUCKET_LOW],
             )
             self.assertTrue(all("lora_value_score" in row for row in remaining_trials))
             remaining_rules = load_learned_rules("split", tmpdir)["items"]
@@ -696,7 +696,7 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
                         status="complete",
                         score=score,
                     ).to_record()
-                    for label, score in (("high", 92.0), ("high2", 88.0), ("medium", 70.0), ("low", 42.0), ("pending", 12.0))
+                    for label, score in (("high", 97.0), ("high2", 93.0), ("medium", 74.0), ("low", 48.0), ("pending", 12.0))
                 ],
                 tmpdir,
             )
@@ -711,8 +711,8 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             def candidates(path_key: str) -> set[str]:
                 return set(candidate_list(path_key))
 
-            self.assertEqual(candidate_list("lora_data_high"), ["high", "high2"])
-            self.assertEqual(candidates("lora_data_medium"), {"medium"})
+            self.assertEqual(candidate_list("lora_data_high"), ["high"])
+            self.assertEqual(candidates("lora_data_medium"), {"high2", "medium"})
             self.assertEqual(candidates("lora_data_low"), {"low"})
             self.assertEqual(candidates("lora_data_pending_delete"), {"pending"})
 
@@ -723,13 +723,53 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
             ]
             for row in rows:
                 if (row.get("config") or {}).get("candidate") == "pending":
-                    row["score"] = 95.0
-                    row["metrics"] = {"final_score": 95.0}
+                    row["score"] = 97.0
+                    row["metrics"] = {"final_score": 97.0}
             paths["setting_trials"].write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
 
             refresh_unified_lora_data_bundle(tmpdir, force=True)
             self.assertIn("pending", candidates("lora_data_high"))
             self.assertNotIn("pending", candidates("lora_data_pending_delete"))
+
+    def test_high_bucket_bundle_applies_strict_size_budget_to_keep_top_rows(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            paths = store_paths(tmpdir)
+            retention = json.loads(paths["retention_policy"].read_text(encoding="utf-8"))
+            retention["bundle_budgets"]["soft_max_bytes_by_bucket"]["high"] = 13000
+            retention["bundle_budgets"]["hard_max_bytes"] = 48000
+            paths["retention_policy"].write_text(json.dumps(retention, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            append_setting_trials(
+                [
+                    TrialRecord(
+                        trial_type="setting",
+                        media_id=f"trim-{index}",
+                        media_path=f"/tmp/trim-{index}.mp4",
+                        subtitle_path=f"/tmp/trim-{index}.srt",
+                        config={"candidate": f"trim-{index}"},
+                        status="complete",
+                        score=99.0 - index,
+                        reason=("아주 중요한 상위 데이터 " + str(index) + " ") * 36,
+                        metadata={"usage_count": max(0, 3 - index)},
+                    ).to_record()
+                    for index in range(4)
+                ],
+                tmpdir,
+            )
+
+            result = refresh_unified_lora_data_bundle(tmpdir, force=True)
+            payload = self._read_lora_zip_payload(paths["lora_data_high"])
+            kept_candidates = [str((row.get("config") or {}).get("candidate")) for row in payload["sections"]["setting_trials"]]
+
+            self.assertTrue(result["bucket_files"]["high"]["bundle_budget"]["trimmed_records"] > 0)
+            self.assertLess(len(kept_candidates), 4)
+            self.assertEqual(kept_candidates[0], "trim-0")
+            self.assertIn("bundle_budget", payload)
+            self.assertLessEqual(
+                int(payload["bundle_budget"]["estimated_payload_bytes"]),
+                int(payload["bundle_budget"]["soft_max_bytes"]),
+            )
 
     def test_delete_pending_lora_data_removes_pending_rows_and_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -843,6 +883,10 @@ class LoraPersonalizationStorageTests(unittest.TestCase):
                         end_sec=1.5,
                         raw_ground_truth_text="파일 하나만 있어도 됩니다.",
                         speech_training_text="파일 하나만 있어도 됩니다.",
+                        line_break_pattern="7|7",
+                        punctuation_pattern=".",
+                        detected_split_rule="spoken_pause",
+                        extra={"usage_count": 3, "style_profile": {"tone": "netflix"}, "status": "reviewed"},
                     ).to_record()
                 ],
                 source_dir,

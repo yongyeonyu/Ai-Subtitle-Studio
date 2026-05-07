@@ -13,6 +13,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QLabel, QTextEdit
 
 from core.audio.live_stt import LiveSTTResult
+from core.stt_mode.project_state import build_stt_mode_state, default_stt_mode_learning
 from ui.editor.editor_stt_mode import EditorSTTModeMixin
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 
@@ -58,6 +59,15 @@ class _CanvasStub:
         pass
 
 
+class _TimelineStub:
+    def __init__(self):
+        self.canvas = _CanvasStub()
+        self.vad_segments = []
+
+    def set_vad_segments(self, segments):
+        self.vad_segments = list(segments or [])
+
+
 class _DummyEditor(EditorSTTModeMixin, QObject):
     sig_live_stt_result = pyqtSignal(str)
     sig_stt_vad_segments = pyqtSignal(list)
@@ -65,7 +75,7 @@ class _DummyEditor(EditorSTTModeMixin, QObject):
     def __init__(self):
         super().__init__()
         self.status_lbl = QLabel()
-        self.timeline = SimpleNamespace(canvas=_CanvasStub())
+        self.timeline = _TimelineStub()
         self.text_edit = QTextEdit()
         self.text_edit.setPlainText("대기")
         block = self.text_edit.document().findBlockByNumber(0)
@@ -154,6 +164,43 @@ class EditorSTTModeTests(unittest.TestCase):
             self.assertIsNone(editor._stt_mic_capture_session)
             self.assertEqual(editor.text_edit.toPlainText().strip(), "대기")
             self.assertEqual(editor.text_edit.document().findBlockByNumber(0).userData().stt_pending, False)
+        finally:
+            editor.text_edit.close()
+            editor.text_edit.deleteLater()
+            editor.status_lbl.deleteLater()
+            self.app.processEvents()
+
+    def test_restore_stt_mode_project_state_restores_segments_learning_and_bundle_refs(self):
+        editor = _DummyEditor()
+        state = build_stt_mode_state(
+            work_segments=[{"id": "stt_segment_0001", "start": 0.0, "end": 1.2, "text": "초안"}],
+            raw_dictation_segments=[{"id": "dictation_raw_0001", "text": "원문"}],
+            final_segments=[{"id": "stt_final_0001", "text": "최종"}],
+            rolling_windows=[{"id": "stt_window_0001"}],
+            adapter_refs={"stt_lora_bundle": "sample_stt_lora", "subtitle_style_policy": "sample:subtitle_style_policy"},
+        )
+        learning = default_stt_mode_learning({"events": [{"id": "evt_001", "kind": "dictation_confirmed"}]})
+        project = {
+            "user_settings": {"simple_operation_mode": "stt"},
+            "stt_mode_state": state,
+            "stt_mode_learning": learning,
+        }
+
+        try:
+            restored = editor._restore_stt_mode_project_state(project)
+
+            self.assertTrue(restored)
+            self.assertTrue(editor._stt_mode_enabled)
+            self.assertEqual(editor._stt_work_segments[0]["id"], "stt_segment_0001")
+            self.assertEqual(editor._stt_raw_dictation_segments[0]["text"], "원문")
+            self.assertEqual(editor._stt_final_segments[0]["text"], "최종")
+            self.assertEqual(editor._stt_learning_events[0]["id"], "evt_001")
+            self.assertEqual(editor._stt_adapter_refs["stt_lora_bundle"], "sample_stt_lora")
+            self.assertEqual(editor._stt_lora_bundle_info["bundle_id"], "sample_stt_lora")
+            self.assertEqual(editor.timeline.vad_segments[0]["id"], "stt_segment_0001")
+            self.assertGreaterEqual(editor._refresh_calls, 1)
+            self.assertGreaterEqual(editor._video_context_refreshes, 1)
+            self.assertEqual(editor._stt_state, "ready_to_listen")
         finally:
             editor.text_edit.close()
             editor.text_edit.deleteLater()

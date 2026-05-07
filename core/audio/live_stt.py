@@ -175,12 +175,26 @@ def _select_live_model(settings: dict, profile: str) -> str:
 def _transcribe_local_whisper(wav_path: str, model: str, settings: dict | None = None) -> str:
     from core.audio.npu_acceleration import prefer_npu_whisper_model
     from core.audio.whisper_coreml import is_coreml_whisper_model
-    from core.audio.whisper_transformers import is_transformers_whisper_model
+    from core.audio.whisper_transformers import (
+        is_transformers_whisper_model,
+        transformers_whisper_fallback_model,
+        transformers_whisper_runtime_status,
+    )
 
     effective_model = prefer_npu_whisper_model(model, settings, purpose="live_stt", log_label="LIVE STT")
     if is_coreml_whisper_model(effective_model):
         return _transcribe_coreml(wav_path, effective_model)
     if is_transformers_whisper_model(effective_model):
+        available, reason = transformers_whisper_runtime_status()
+        if not available:
+            fallback_model = str(transformers_whisper_fallback_model(effective_model) or "").strip()
+            get_logger().log(
+                "  ↩️ [LIVE STT] Transformers Whisper 런타임 사용 불가 "
+                f"({reason}) → {fallback_model or '기본 로컬 Whisper'} fallback"
+            )
+            if config.IS_MAC:
+                return _transcribe_mlx(wav_path, fallback_model or "mlx-community/whisper-large-v3-turbo")
+            return _transcribe_faster(wav_path, fallback_model or "large-v3-turbo")
         return _transcribe_transformers(wav_path, effective_model)
     if config.IS_MAC:
         return _transcribe_mlx(wav_path, effective_model)

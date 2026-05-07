@@ -90,8 +90,12 @@ class VideoPlayerWidgetTests(unittest.TestCase):
              patch("ui.editor.video_playback_backend._vlc_available", return_value=True):
             choice = choose_video_backend()
 
-        self.assertEqual(choice.name, "mpv")
-        self.assertEqual(choice.reason, "preferred_lightweight_gpu_backend")
+        if config.IS_MAC:
+            self.assertEqual(choice.name, "qt")
+            self.assertEqual(choice.reason, "mac_low_memory_default")
+        else:
+            self.assertEqual(choice.name, "mpv")
+            self.assertEqual(choice.reason, "preferred_lightweight_gpu_backend")
 
     def test_video_backend_uses_vlc_when_mpv_is_unavailable(self):
         with patch.dict(os.environ, {"AI_SUBTITLE_VIDEO_BACKEND": "auto"}, clear=True), \
@@ -101,8 +105,12 @@ class VideoPlayerWidgetTests(unittest.TestCase):
              patch("ui.editor.video_playback_backend._vlc_available", return_value=True):
             choice = choose_video_backend()
 
-        self.assertEqual(choice.name, "vlc")
-        self.assertEqual(choice.reason, "libvlc_fallback")
+        if config.IS_MAC:
+            self.assertEqual(choice.name, "qt")
+            self.assertEqual(choice.reason, "mac_low_memory_default")
+        else:
+            self.assertEqual(choice.name, "vlc")
+            self.assertEqual(choice.reason, "libvlc_fallback")
 
     def test_video_backend_can_be_forced_by_render_settings(self):
         with patch.dict(os.environ, {}, clear=True), \
@@ -143,7 +151,8 @@ class VideoPlayerWidgetTests(unittest.TestCase):
 
                 proc = Mock()
                 proc.poll.return_value = None
-                with patch("ui.editor.video_player_widget.subprocess.Popen", return_value=proc) as popen:
+                with patch.object(widget, "_preview_proxy_enabled", return_value=True), \
+                     patch("ui.editor.video_player_widget.subprocess.Popen", return_value=proc) as popen:
                     playback_path = widget._playback_path_for(src)
 
                 self.assertEqual(playback_path, src)
@@ -174,12 +183,23 @@ class VideoPlayerWidgetTests(unittest.TestCase):
                     f.write(b"new twenty four minute proxy source" * 2048)
 
                 fresh_proxy = widget._proxy_path_for(src)
-                with patch.object(widget, "_start_proxy_build") as start_proxy_build:
+                with patch.object(widget, "_preview_proxy_enabled", return_value=True), \
+                     patch.object(widget, "_start_proxy_build") as start_proxy_build:
                     playback_path = widget._playback_path_for(src)
 
                 self.assertNotEqual(fresh_proxy, stale_proxy)
                 self.assertEqual(playback_path, src)
                 start_proxy_build.assert_called_once_with(src, fresh_proxy)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_preview_proxy_is_default_off_without_setting(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.TemporaryDirectory() as tmp, patch.object(config, "DATASET_DIR", tmp):
+                self.assertFalse(widget._legacy_preview_proxy_enabled())
         finally:
             widget.close()
             widget.deleteLater()

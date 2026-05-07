@@ -4,7 +4,9 @@ import importlib.util
 import json
 import hashlib
 import subprocess
+import threading
 from collections import defaultdict
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -16,6 +18,7 @@ from core.personalization.text_lora_dataset import (
     TEXT_LORA_DATASET_DIR,
     VOICE_LORA_BRIDGE_PATH,
 )
+from core.runtime.multi_process import runtime_parallel_worker_plan
 
 
 TEXT_LORA_TRAINING_PLAN_PATH = TEXT_LORA_DATASET_DIR / "text_lora_training_plan.json"
@@ -520,6 +523,7 @@ def _extract_voice_lora_clips(
     timeout_sec: float = 30.0,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     cancel_callback: Callable[[], bool] | None = None,
+    resource_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     extracted = 0
     already_ready = 0
@@ -527,6 +531,8 @@ def _extract_voice_lora_clips(
     cancelled = False
     errors: list[dict[str, Any]] = []
     total = len(items)
+    processed = 0
+    pending_items: list[dict[str, Any]] = []
 
     def emit_progress(processed: int) -> None:
         if progress_callback is None:
@@ -546,65 +552,139 @@ def _extract_voice_lora_clips(
         except Exception:
             return
 
-    for index, item in enumerate(items, start=1):
+    for item in items:
+        if cancel_callback is not None and bool(cancel_callback()):
+            cancelled = True
+            break
+        output_path = _item_audio_path(item)
+        if output_path is not None and output_path.exists():
+            item["audio_ready"] = True
+            item["audio_exists"] = True
+            item["audio_status"] = "already_ready"
+            already_ready += 1
+            processed += 1
+            continue
+        if not bool(item.get("source_exists")):
+            item["audio_ready"] = False
+            item["audio_status"] = "missing_source_media"
+            skipped += 1
+            processed += 1
+            continue
+        command = list(item.get("extraction_command") or [])
+        if not command or output_path is None:
+            item["audio_ready"] = False
+            item["audio_status"] = "missing_extraction_command"
+            skipped += 1
+            processed += 1
+            continue
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_items.append(item)
+
+    if processed:
+        emit_progress(processed)
+    if cancelled or not pending_items:
+        emit_progress(processed)
+        return {"extracted": extracted, "already_ready": already_ready, "skipped": skipped, "errors": errors, "cancelled": cancelled}
+
+    worker_settings = dict(resource_settings or {})
+    reserve_task = "manual_lora" if bool(worker_settings.get("runtime_manual_lora_full_speed")) else "lora"
+    max_workers, _scheduler = runtime_parallel_worker_plan(
+        settings=worker_settings,
+        task="lora",
+        workload=len(pending_items),
+        minimum=1,
+        reserve_task=reserve_task,
+    )
+    ffmpeg_single_thread = max_workers > 1
+    state_lock = threading.Lock()
+
+    def run_one(item: dict[str, Any]) -> dict[str, Any]:
+        output_path = _item_audio_path(item)
+        if output_path is None:
+            return {"status": "missing_extraction_command", "item": item}
+        if cancel_callback is not None and bool(cancel_callback()):
+            return {"status": "cancelled", "item": item, "audio_path": str(output_path)}
+        command = list(item.get("extraction_command") or [])
+        if ffmpeg_single_thread and command and "-threads" not in command:
+            command = [command[0], "-threads", "1", *command[1:]]
         try:
-            if cancel_callback is not None and bool(cancel_callback()):
-                cancelled = True
-                break
-            output_path = _item_audio_path(item)
-            if output_path is not None and output_path.exists():
-                item["audio_ready"] = True
-                item["audio_exists"] = True
-                item["audio_status"] = "already_ready"
-                already_ready += 1
-                continue
-            if not bool(item.get("source_exists")):
-                item["audio_ready"] = False
-                item["audio_status"] = "missing_source_media"
-                skipped += 1
-                continue
-            command = list(item.get("extraction_command") or [])
-            if not command or not output_path:
-                item["audio_ready"] = False
-                item["audio_status"] = "missing_extraction_command"
-                skipped += 1
-                continue
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                completed = subprocess.run(
-                    command,
-                    check=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=max(1.0, float(timeout_sec)),
-                    **hidden_subprocess_kwargs(),
-                )
-            except Exception as exc:
-                item["audio_ready"] = False
-                item["audio_status"] = "error"
-                item["extraction_error"] = str(exc)
-                errors.append({"audio_path": str(output_path), "error": str(exc)})
-                continue
-            if completed.returncode == 0 and output_path.exists():
-                item["audio_ready"] = True
-                item["audio_exists"] = True
-                item["audio_status"] = "extracted"
-                item["audio_extracted"] = True
-                extracted += 1
-            else:
-                item["audio_ready"] = False
-                item["audio_status"] = "failed"
-                errors.append(
-                    {
-                        "audio_path": str(output_path),
-                        "returncode": completed.returncode,
-                        "stderr": (completed.stderr or "")[-500:],
+            completed = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=max(1.0, float(timeout_sec)),
+                **hidden_subprocess_kwargs(),
+            )
+        except Exception as exc:
+            return {"status": "error", "item": item, "audio_path": str(output_path), "error": str(exc)}
+        if completed.returncode == 0 and output_path.exists():
+            return {"status": "extracted", "item": item, "audio_path": str(output_path)}
+        return {
+            "status": "failed",
+            "item": item,
+            "audio_path": str(output_path),
+            "returncode": int(completed.returncode),
+            "stderr": (completed.stderr or "")[-500:],
+        }
+
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="voice-lora-extract") as executor:
+        futures: dict[Any, dict[str, Any]] = {}
+        next_index = 0
+        while next_index < len(pending_items) and len(futures) < max_workers:
+            pending = pending_items[next_index]
+            futures[executor.submit(run_one, pending)] = pending
+            next_index += 1
+        while futures:
+            done, _pending = wait(tuple(futures.keys()), return_when=FIRST_COMPLETED)
+            for future in done:
+                item = futures.pop(future, None)
+                try:
+                    outcome = dict(future.result() or {})
+                except Exception as exc:
+                    outcome = {
+                        "status": "error",
+                        "item": item or {},
+                        "audio_path": str(_item_audio_path(item or {}) or ""),
+                        "error": str(exc),
                     }
-                )
-        finally:
-            if index == total or index % 25 == 0:
-                emit_progress(index)
+                status = str(outcome.get("status") or "")
+                target = outcome.get("item") or item or {}
+                with state_lock:
+                    if status == "extracted":
+                        target["audio_ready"] = True
+                        target["audio_exists"] = True
+                        target["audio_status"] = "extracted"
+                        target["audio_extracted"] = True
+                        extracted += 1
+                    elif status == "cancelled":
+                        cancelled = True
+                    elif status == "error":
+                        target["audio_ready"] = False
+                        target["audio_status"] = "error"
+                        target["extraction_error"] = str(outcome.get("error") or "")
+                        errors.append({"audio_path": str(outcome.get("audio_path") or ""), "error": str(outcome.get("error") or "")})
+                    else:
+                        target["audio_ready"] = False
+                        target["audio_status"] = "failed"
+                        errors.append(
+                            {
+                                "audio_path": str(outcome.get("audio_path") or ""),
+                                "returncode": int(outcome.get("returncode", 1) or 1),
+                                "stderr": str(outcome.get("stderr") or ""),
+                            }
+                        )
+                    processed += 1
+                if cancel_callback is not None and bool(cancel_callback()):
+                    cancelled = True
+                if not cancelled and next_index < len(pending_items):
+                    pending = pending_items[next_index]
+                    futures[executor.submit(run_one, pending)] = pending
+                    next_index += 1
+                if processed == total or processed % 25 == 0:
+                    emit_progress(processed)
+    emit_progress(processed)
     return {"extracted": extracted, "already_ready": already_ready, "skipped": skipped, "errors": errors, "cancelled": cancelled}
 
 
@@ -615,6 +695,7 @@ def save_voice_lora_training_plan(
     extract_audio: bool = False,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     cancel_callback: Callable[[], bool] | None = None,
+    resource_settings: dict[str, Any] | None = None,
     **kwargs,
 ) -> dict[str, Any]:
     plan = build_voice_lora_training_plan(**kwargs)
@@ -628,6 +709,7 @@ def save_voice_lora_training_plan(
             list(plan.get("items") or []),
             progress_callback=progress_callback,
             cancel_callback=cancel_callback,
+            resource_settings=resource_settings,
         )
         plan["last_extraction"] = {"created_at": _now(), **extraction_result}
     _refresh_voice_lora_audio_readiness(plan)

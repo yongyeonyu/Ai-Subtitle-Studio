@@ -8,7 +8,10 @@ import math
 import sys
 
 from core.cut_boundary_audio import detect_audio_gain_boundary_rows
-from core.performance import adaptive_worker_count, balanced_task_slices, distributed_worker_ceiling
+from core.performance import (
+    balanced_task_slices,
+)
+from core.runtime.multi_process import runtime_parallel_worker_plan
 
 
 def build_auto_grid_scan_helpers(deps: dict):
@@ -119,20 +122,14 @@ def build_auto_grid_scan_helpers(deps: dict):
                 1,
                 int((frame_count / max(1.0, fps)) / max(0.25, pioneer_step_sec)),
             )
-            follower_maximum = distributed_worker_ceiling(
-                settings,
-                task="cut_follower",
-                workload=follower_workload,
-                reserve_cores=1,
-                minimum=1,
-            )
-            follower_workers, follower_scheduler = adaptive_worker_count(
-                task="cut_follower",
+            follower_workers, follower_scheduler = runtime_parallel_worker_plan(
                 settings=settings,
+                task="cut_follower",
                 requested=follower_requested,
                 workload=follower_workload,
                 minimum=1,
-                maximum=follower_maximum,
+                maximum=follower_workload,
+                reserve_task="cut_follower",
             )
 
             def verified_progress_callback(payload):
@@ -379,20 +376,14 @@ def build_auto_grid_scan_helpers(deps: dict):
         min_gap_sec = _cb_level_min_gap_sec(level)
         pioneer_requested = int(settings.get("scan_cut_pioneer_workers", 4) or 4)
         pioneer_workload = max(1, int(duration / max(0.25, scan_interval_sec)))
-        pioneer_maximum = distributed_worker_ceiling(
-            settings,
-            task="cut_pioneer",
-            workload=pioneer_workload,
-            reserve_cores=1,
-            minimum=1,
-        )
-        pioneer_workers, pioneer_scheduler = adaptive_worker_count(
-            task="cut_pioneer",
+        pioneer_workers, pioneer_scheduler = runtime_parallel_worker_plan(
             settings=settings,
+            task="cut_pioneer",
             requested=pioneer_requested,
             workload=pioneer_workload,
             minimum=1,
-            maximum=pioneer_maximum,
+            maximum=pioneer_workload,
+            reserve_task="cut_pioneer",
         )
         gpu_refine_enabled = bool(settings.get("scan_cut_pioneer_gpu_refine_enabled", True))
         cuda_available = _cb_cuda_available() if gpu_refine_enabled else False
@@ -688,20 +679,14 @@ def build_auto_grid_scan_helpers(deps: dict):
             min_gap_frames = max(1, int(round(min_gap_sec * fps)))
             follower_requested = int(settings.get("scan_cut_verify_workers", 4) or 4)
             follower_workload = max(1, len(provisional_rows or []))
-            follower_maximum = distributed_worker_ceiling(
-                settings,
-                task="cut_follower",
-                workload=follower_workload,
-                reserve_cores=1,
-                minimum=1,
-            )
-            follower_workers, follower_scheduler = adaptive_worker_count(
-                task="cut_follower",
+            follower_workers, follower_scheduler = runtime_parallel_worker_plan(
                 settings=settings,
+                task="cut_follower",
                 requested=follower_requested,
                 workload=follower_workload,
                 minimum=1,
-                maximum=follower_maximum,
+                maximum=follower_workload,
+                reserve_task="cut_follower",
             )
             follower_backend = "mps" if sys.platform == "darwin" and _mps_available() else "cpu"
             verified_rows = []

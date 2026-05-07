@@ -1,0 +1,387 @@
+from __future__ import annotations
+
+import os
+import time
+from pathlib import Path
+from typing import Any
+
+from core.performance import (
+    adaptive_llm_worker_count,
+    adaptive_worker_count,
+    atomic_write_json,
+    current_resource_snapshot,
+    distributed_worker_ceiling,
+    hardware_profile,
+    native_thread_budget,
+    performance_profile,
+    runtime_scheduler_reserve_cores,
+)
+from core.runtime import config
+from core.runtime.memory_manager import process_rss_bytes, runtime_disk_cache_usage
+
+
+def runtime_monitor_dir() -> Path:
+    path = Path(config.OUTPUT_DIR) / "runtime_monitor"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def manual_lora_runtime_settings(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return a manual-LoRA runtime profile with one core reserved for stop/exit."""
+    merged = dict(settings or {})
+    profile = hardware_profile()
+    logical = max(1, int(profile.get("logical_cores", 1) or 1))
+    reserve = 1 if logical > 1 else 0
+    native_threads = max(1, logical - reserve)
+    merged["runtime_performance_profile"] = "max"
+    merged["runtime_hardware_acceleration_enabled"] = True
+    merged["runtime_scheduler_auto_enabled"] = True
+    merged["runtime_scheduler_reserve_cores"] = reserve
+    merged["runtime_native_threads_auto_enabled"] = True
+    merged["runtime_native_threads"] = native_threads
+    merged["runtime_manual_lora_full_speed"] = True
+    return merged
+
+
+def _normalize_accelerator_name(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return "cpu"
+    if raw in {"ane", "ne", "npu", "coreml", "neural_engine", "apple-neural-engine"}:
+        return "npu"
+    if raw in {"gpu", "cuda", "mps", "metal", "mlx"}:
+        return "gpu"
+    return "cpu"
+
+
+def _mixed_accelerator_parallelism_floor(task: str, accelerators: list[str], workload: int) -> int:
+    task_key = str(task or "").strip().lower()
+    if workload <= 1 or task_key not in {
+        "stt",
+        "vad",
+        "diarize",
+        "audio_ml",
+        "ml",
+        "subtitle_llm",
+        "roughcut_llm",
+    }:
+        return 0
+    normalized: list[str] = []
+    for item in accelerators:
+        name = _normalize_accelerator_name(item)
+        if name not in normalized:
+            normalized.append(name)
+    non_cpu = [item for item in normalized if item != "cpu"]
+    if len(non_cpu) >= 2:
+        return max(2, min(int(workload), len(non_cpu) + (1 if "cpu" in normalized else 0)))
+    if len(non_cpu) == 1 and "cpu" in normalized:
+        return min(int(workload), 2)
+    return 0
+
+
+def runtime_acceleration_snapshot(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        accelerators = dict(hardware_profile().get("accelerators", {}) or {})
+    except Exception:
+        accelerators = {}
+    try:
+        from core.audio.npu_acceleration import apple_neural_engine_available
+        from core.audio.torch_acceleration import torch_acceleration_snapshot
+    except Exception:
+        def apple_neural_engine_available() -> bool:  # type: ignore[no-redef]
+            return False
+
+        def torch_acceleration_snapshot(*args, **kwargs) -> dict[str, Any]:  # type: ignore[no-redef]
+            return {}
+
+    torch_snapshot = dict(torch_acceleration_snapshot(settings=settings, task="runtime") or {})
+    ordered_backends = list(torch_snapshot.get("ordered_backends") or [])
+    gpu_available = bool(
+        torch_snapshot.get("gpu_available")
+        or accelerators.get("metal")
+        or accelerators.get("cuda")
+        or accelerators.get("opencl")
+    )
+    npu_available = bool(apple_neural_engine_available())
+    available = {
+        "cpu": True,
+        "gpu": gpu_available,
+        "npu": npu_available,
+    }
+    labels = [name.upper() for name, enabled in available.items() if enabled]
+    return {
+        "available": available,
+        "ordered_backends": ordered_backends,
+        "torch": torch_snapshot,
+        "summary": " + ".join(labels) if labels else "CPU",
+    }
+
+
+def runtime_parallel_worker_plan(
+    *,
+    settings: dict[str, Any] | None = None,
+    task: str,
+    workload: int,
+    requested: Any = None,
+    minimum: int = 1,
+    maximum: int | None = None,
+    reserve_task: str | None = None,
+    accelerators: list[str] | tuple[str, ...] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    settings = dict(settings or {})
+    reserve_key = str(reserve_task or task or "cpu").strip().lower()
+    worker_ceiling = distributed_worker_ceiling(
+        settings,
+        task=reserve_key,
+        workload=workload,
+        reserve_cores=runtime_scheduler_reserve_cores(settings, task=reserve_key),
+        minimum=minimum,
+    )
+    worker_upper_bound = max(1, int(maximum or worker_ceiling))
+    workers, meta = adaptive_worker_count(
+        task=task,
+        settings=settings,
+        requested=requested,
+        workload=workload,
+        minimum=minimum,
+        maximum=worker_upper_bound,
+    )
+    meta = dict(meta or {})
+    accelerator_names = [
+        _normalize_accelerator_name(item)
+        for item in list(accelerators or [])
+        if str(item or "").strip()
+    ]
+    mix_floor = _mixed_accelerator_parallelism_floor(task, accelerator_names, int(workload or 0))
+    if mix_floor > int(workers or 0):
+        workers = min(worker_upper_bound, max(minimum, mix_floor))
+        meta["accelerator_mix_floor"] = int(mix_floor)
+        meta["accelerator_mix_applied"] = True
+    meta["worker_ceiling"] = int(worker_ceiling)
+    meta["reserve_cores"] = int(runtime_scheduler_reserve_cores(settings, task=reserve_key))
+    meta["accelerators"] = accelerator_names
+    meta["coordinator"] = "runtime_parallel_worker_plan"
+    return workers, meta
+
+
+def runtime_llm_worker_plan(
+    *,
+    settings: dict[str, Any] | None = None,
+    workload: int,
+    provider: str = "ollama",
+    model: str = "",
+    task: str = "subtitle",
+    requested: Any = None,
+) -> tuple[int, dict[str, Any]]:
+    workers, meta = adaptive_llm_worker_count(
+        settings=settings,
+        requested=requested,
+        workload=workload,
+        provider=provider,
+        model=model,
+        task=task,
+    )
+    meta = dict(meta or {})
+    meta["coordinator"] = "runtime_llm_worker_plan"
+    return workers, meta
+
+
+class RuntimeResourceCoordinator:
+    def __init__(self, *, settings: dict[str, Any] | None = None, logger: Any = None) -> None:
+        self.settings = dict(settings or {})
+        self.logger = logger
+        self._latest: dict[str, Any] = {}
+        self._exit_mode = False
+        self._last_logged_stage = ""
+        self._last_snapshot_at = 0.0
+        self._last_logged_at = 0.0
+        self._last_system_cpu_percent = 0.0
+        self._last_process_cpu_percent = 0.0
+        self._psutil_process = None
+        try:
+            import psutil  # type: ignore
+
+            self._psutil_process = psutil.Process(os.getpid())
+            psutil.cpu_percent(interval=None)
+            self._psutil_process.cpu_percent(interval=None)
+        except Exception:
+            self._psutil_process = None
+
+    def set_exit_mode(self, active: bool) -> None:
+        self._exit_mode = bool(active)
+
+    def latest_snapshot(self) -> dict[str, Any]:
+        return dict(self._latest or {})
+
+    def poll(self, *, window=None) -> dict[str, Any]:
+        resource = current_resource_snapshot()
+        rss_bytes = process_rss_bytes()
+        disk_usage = runtime_disk_cache_usage()
+        accelerators = runtime_acceleration_snapshot(self.settings)
+        system_cpu = self._sample_system_cpu_percent()
+        process_cpu = self._sample_process_cpu_percent()
+        active = self._active_runtime_labels(window)
+        stage = self._pressure_stage(resource, rss_bytes)
+        snapshot = {
+            "timestamp": round(time.time(), 3),
+            "profile": performance_profile(self.settings),
+            "exit_mode": bool(self._exit_mode),
+            "system_cpu_percent": round(system_cpu, 2),
+            "process_cpu_percent": round(process_cpu, 2),
+            "logical_cores": int(resource.get("logical_cores", hardware_profile().get("logical_cores", 1)) or 1),
+            "physical_cores": int(resource.get("physical_cores", hardware_profile().get("physical_cores", 1)) or 1),
+            "native_thread_budget": int(native_thread_budget(self.settings)),
+            "rss_bytes": int(rss_bytes),
+            "rss_gb": round(rss_bytes / float(1024 ** 3), 4),
+            "free_memory_gb": round(float(resource.get("available_memory_bytes", 0) or 0) / float(1024 ** 3), 4),
+            "free_memory_ratio": round(float(resource.get("available_memory_ratio", 1.0) or 1.0), 4),
+            "disk_cache_gb": round(float(disk_usage.get("total_bytes", 0) or 0) / float(1024 ** 3), 4),
+            "disk_cache_files": int(disk_usage.get("file_count", 0) or 0),
+            "accelerators": accelerators,
+            "pressure_stage": stage,
+            "active_labels": active,
+            "active_label_count": len(active),
+            "resource": resource,
+        }
+        self._latest = snapshot
+        self._last_snapshot_at = time.time()
+        self._write_snapshot(snapshot)
+        self._maybe_log(snapshot)
+        return dict(snapshot)
+
+    def status_html(self, snapshot: dict[str, Any] | None = None) -> str:
+        data = dict(snapshot or self._latest or {})
+        if not data:
+            return ""
+        stage = str(data.get("pressure_stage", "normal") or "normal")
+        color = {"normal": "#34C759", "warning": "#FFD60A", "critical": "#FF453A"}.get(stage, "#34C759")
+        active = ", ".join(str(item) for item in list(data.get("active_labels", []) or [])[:3]) or "idle"
+        accel = str(dict(data.get("accelerators") or {}).get("summary") or "CPU")
+        return (
+            "<div style='margin-top:6px; padding-top:5px; border-top:1px solid #22313A;'>"
+            f"<div style='color:{color}; font-size:8px; font-weight:700;'>RUNTIME · {str(data.get('profile', 'balanced')).upper()}</div>"
+            f"<div style='color:#DCE7F3; font-size:8px;'>CPU {float(data.get('system_cpu_percent', 0.0)):.0f}% · "
+            f"PROC {float(data.get('process_cpu_percent', 0.0)):.0f}% · "
+            f"RAM {float(data.get('rss_gb', 0.0)):.2f}GB</div>"
+            f"<div style='color:#9DB7C8; font-size:8px;'>FREE {float(data.get('free_memory_gb', 0.0)):.2f}GB · "
+            f"CACHE {float(data.get('disk_cache_gb', 0.0)):.2f}GB · THR {int(data.get('native_thread_budget', 0) or 0)} · ACCEL {accel}</div>"
+            f"<div style='color:#9DB7C8; font-size:8px;'>ACTIVE {active}</div>"
+            "</div>"
+        )
+
+    def status_plain(self, snapshot: dict[str, Any] | None = None) -> str:
+        data = dict(snapshot or self._latest or {})
+        if not data:
+            return ""
+        active = ", ".join(str(item) for item in list(data.get("active_labels", []) or [])[:4]) or "idle"
+        accel = str(dict(data.get("accelerators") or {}).get("summary") or "CPU")
+        return (
+            f"runtime={data.get('profile', 'balanced')} "
+            f"cpu={float(data.get('system_cpu_percent', 0.0)):.0f}% "
+            f"proc={float(data.get('process_cpu_percent', 0.0)):.0f}% "
+            f"ram={float(data.get('rss_gb', 0.0)):.2f}GB "
+            f"free={float(data.get('free_memory_gb', 0.0)):.2f}GB "
+            f"cache={float(data.get('disk_cache_gb', 0.0)):.2f}GB "
+            f"accel={accel} "
+            f"active={active}"
+        )
+
+    def _pressure_stage(self, resource: dict[str, Any], rss_bytes: int) -> str:
+        available_ratio = float(resource.get("available_memory_ratio", 1.0) or 1.0)
+        available_gb = float(resource.get("available_memory_bytes", 0) or 0) / float(1024 ** 3)
+        memory_bytes = max(0, int(resource.get("memory_bytes", 0) or 0))
+        rss_ratio = (float(rss_bytes) / float(memory_bytes)) if memory_bytes > 0 else 0.0
+        if self._exit_mode:
+            return "exit"
+        if available_ratio <= 0.12 or available_gb <= 1.5 or rss_ratio >= 0.78:
+            return "critical"
+        if available_ratio <= 0.20 or available_gb <= 3.0 or rss_ratio >= 0.64:
+            return "warning"
+        return "normal"
+
+    def _active_runtime_labels(self, window) -> list[str]:
+        labels: list[str] = []
+        if window is None:
+            return labels
+        try:
+            if bool(getattr(window, "_auto_processing_active", False)):
+                labels.append("auto")
+        except Exception:
+            pass
+        for backend_name, label in (("backend", "pipeline"), ("backend_fast", "fast")):
+            try:
+                backend = getattr(window, backend_name, None)
+                if backend is not None and bool(getattr(backend, "_active", False)):
+                    labels.append(label)
+            except Exception:
+                pass
+        try:
+            editor = getattr(window, "_editor_widget", None)
+            if editor is not None and bool(getattr(editor, "_is_ai_processing", False)):
+                labels.append("editor")
+            if editor is not None and bool(getattr(editor, "_stt_mode_enabled", False)):
+                labels.append("stt")
+        except Exception:
+            pass
+        if self._exit_mode:
+            labels.append("exit")
+        return labels
+
+    def _sample_system_cpu_percent(self) -> float:
+        try:
+            import psutil  # type: ignore
+
+            self._last_system_cpu_percent = float(psutil.cpu_percent(interval=None) or 0.0)
+        except Exception:
+            pass
+        return self._last_system_cpu_percent
+
+    def _sample_process_cpu_percent(self) -> float:
+        proc = self._psutil_process
+        if proc is None:
+            return self._last_process_cpu_percent
+        try:
+            self._last_process_cpu_percent = float(proc.cpu_percent(interval=None) or 0.0)
+        except Exception:
+            pass
+        return self._last_process_cpu_percent
+
+    def _write_snapshot(self, snapshot: dict[str, Any]) -> None:
+        try:
+            atomic_write_json(runtime_monitor_dir() / "latest.json", snapshot)
+        except Exception:
+            pass
+
+    def _maybe_log(self, snapshot: dict[str, Any]) -> None:
+        if self.logger is None:
+            return
+        stage = str(snapshot.get("pressure_stage", "normal") or "normal")
+        now = time.time()
+        if stage == self._last_logged_stage and (now - self._last_logged_at) < 30.0:
+            return
+        self._last_logged_stage = stage
+        self._last_logged_at = now
+        try:
+            self.logger.log(
+                "📊 [Runtime] "
+                f"{str(snapshot.get('profile', 'balanced')).upper()} · "
+                f"CPU {float(snapshot.get('system_cpu_percent', 0.0)):.0f}% · "
+                f"PROC {float(snapshot.get('process_cpu_percent', 0.0)):.0f}% · "
+                f"RAM {float(snapshot.get('rss_gb', 0.0)):.2f}GB · "
+                f"FREE {float(snapshot.get('free_memory_gb', 0.0)):.2f}GB · "
+                f"CACHE {float(snapshot.get('disk_cache_gb', 0.0)):.2f}GB · "
+                f"ACCEL {dict(snapshot.get('accelerators') or {}).get('summary', 'CPU')} · "
+                f"ACTIVE {', '.join(snapshot.get('active_labels', []) or ['idle'])}"
+            )
+        except Exception:
+            pass
+
+
+__all__ = [
+    "RuntimeResourceCoordinator",
+    "manual_lora_runtime_settings",
+    "runtime_acceleration_snapshot",
+    "runtime_llm_worker_plan",
+    "runtime_monitor_dir",
+    "runtime_parallel_worker_plan",
+]

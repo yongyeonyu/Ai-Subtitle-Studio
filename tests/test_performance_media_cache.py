@@ -18,6 +18,7 @@ from core.performance import (
     mark_runtime_scheduler_start,
     native_runtime_env_overrides,
     native_thread_budget,
+    runtime_scheduler_reserve_cores,
 )
 from core.native_json import dumps_json_text, loads_json
 
@@ -64,6 +65,27 @@ class PerformanceMediaCacheTest(unittest.TestCase):
             result = media_info.probe_media_many(["clip1", "clip2", "clip3"], max_workers=3)
 
         self.assertEqual([item["duration"] for item in result], [1.0, 2.0, 3.0])
+
+    def test_probe_media_memory_cache_is_bounded(self):
+        original_max = media_info._MEDIA_PROBE_MEM_CACHE_MAX
+        try:
+            media_info._MEDIA_PROBE_MEM_CACHE_MAX = 3
+            with tempfile.TemporaryDirectory() as tmp:
+                cache_dir = Path(tmp) / "cache"
+                payload = {
+                    "format": {"duration": "1.0"},
+                    "streams": [{"width": 320, "height": 180, "r_frame_rate": "30/1"}],
+                }
+                with patch("core.media_info.media_probe_cache_dir", return_value=cache_dir), \
+                     patch("core.media_info.ffprobe_binary", return_value="ffprobe"), \
+                     patch("core.media_info.subprocess.run", return_value=SimpleNamespace(stdout=json.dumps(payload))):
+                    for idx in range(5):
+                        media = Path(tmp) / f"sample_{idx}.mp4"
+                        media.write_bytes(f"media-{idx}".encode("utf-8"))
+                        media_info.probe_media(str(media))
+            self.assertLessEqual(len(media_info._MEM_CACHE), 3)
+        finally:
+            media_info._MEDIA_PROBE_MEM_CACHE_MAX = original_max
 
     def test_worker_bounds_are_conservative(self):
         self.assertGreaterEqual(bounded_worker_count(kind="io"), 1)
@@ -277,6 +299,58 @@ class PerformanceMediaCacheTest(unittest.TestCase):
             )
 
         self.assertEqual(ceiling, 9)
+
+    def test_runtime_scheduler_reserve_cores_uses_full_budget_for_max_profile(self):
+        snapshot = {
+            "system": "Darwin",
+            "machine": "arm64",
+            "logical_cores": 10,
+            "physical_cores": 8,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "memory_bytes": 16 * 1024 ** 3,
+            "accelerators": {"mlx": True},
+        }
+        settings = {
+            "runtime_hardware_acceleration_enabled": True,
+            "runtime_performance_profile": "max",
+            "runtime_scheduler_reserve_cores": 1,
+        }
+        with patch("core.performance.hardware_profile", return_value=snapshot):
+            self.assertEqual(runtime_scheduler_reserve_cores(settings, task="cut_pioneer"), 0)
+            self.assertEqual(runtime_scheduler_reserve_cores(settings, task="stt"), 0)
+
+    def test_runtime_scheduler_reserve_cores_keeps_one_core_for_manual_lora(self):
+        snapshot = {
+            "system": "Darwin",
+            "machine": "arm64",
+            "logical_cores": 10,
+            "physical_cores": 8,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "memory_bytes": 16 * 1024 ** 3,
+            "accelerators": {"mlx": True},
+        }
+        settings = {
+            "runtime_hardware_acceleration_enabled": True,
+            "runtime_performance_profile": "max",
+            "runtime_scheduler_reserve_cores": 0,
+        }
+        with patch("core.performance.hardware_profile", return_value=snapshot):
+            self.assertEqual(runtime_scheduler_reserve_cores(settings, task="manual_lora"), 1)
+
+    def test_runtime_scheduler_reserve_cores_drops_to_zero_on_exit(self):
+        snapshot = {
+            "system": "Darwin",
+            "machine": "arm64",
+            "logical_cores": 8,
+            "physical_cores": 4,
+            "performance_cores": 4,
+            "memory_bytes": 16 * 1024 ** 3,
+        }
+        settings = {"runtime_scheduler_reserve_cores": 2}
+        with patch("core.performance.hardware_profile", return_value=snapshot):
+            self.assertEqual(runtime_scheduler_reserve_cores(settings, task="cpu", exiting=True), 0)
 
     def test_balanced_task_slices_split_evenly_without_tiny_batches(self):
         self.assertEqual(

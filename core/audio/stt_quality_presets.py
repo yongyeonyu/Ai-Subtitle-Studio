@@ -7,11 +7,12 @@ from copy import deepcopy
 from core.runtime import config
 
 
-STT_QUALITY_PRESET_ORDER = ("fast", "balanced", "precise")
+STT_QUALITY_PRESET_ORDER = ("fast", "balanced", "precise", "stt")
 STT_QUALITY_PRESET_LABELS = {
     "fast": "Fast",
     "balanced": "Auto",
     "precise": "High",
+    "stt": "STT",
 }
 STT_QUALITY_USER_PRESET_KEY = "stt_quality_user_presets"
 STT_QUALITY_SAVED_SETTING_KEYS = {
@@ -54,6 +55,21 @@ STT_QUALITY_SAVED_SETTING_KEYS = {
     "w_none_logprob",
     "w_none_comp",
     "w_none_temp_max",
+    "stt_mode_enabled",
+    "stt_mode_text_input_provider",
+    "stt_mode_vad_models",
+    "stt_mode_vad_ensemble_enabled",
+    "stt_mode_lora_resegment_enabled",
+    "stt_mode_rolling_window_size",
+    "stt_mode_allow_os_dictation",
+    "stt_mode_allow_desktop_mic_optional",
+    "stt_mode_require_whisper",
+    "stt_mode_use_whisper_for_dictation",
+    "stt_mode_use_llm",
+    "stt_lora_bundle_auto_export_enabled",
+    "stt_lora_bundle_size_tier",
+    "stt_lora_style_learning_enabled",
+    "stt_lora_protected_terms",
 }
 
 
@@ -189,6 +205,37 @@ def load_stt_quality_presets() -> dict[str, dict]:
                 **_decoder_settings(0.42, -2.6, 2.4, 0.6, 8, 1.35),
             },
         },
+        "stt": {
+            "label": STT_QUALITY_PRESET_LABELS["stt"],
+            "description": "수동/받아쓰기 STT 전용, VAD + STT LoRA 재분할",
+            "settings": {
+                "selected_whisper_model": quality_model,
+                "selected_whisper_model_secondary": secondary_model,
+                "selected_model": "사용 안함 (STT 모드)",
+                "selected_llm_provider": "none",
+                "subtitle_llm_user_selected": False,
+                "stt_ensemble_enabled": False,
+                "stt_ensemble_llm_judge_enabled": False,
+                "stt_candidate_scoring_enabled": True,
+                "stt_mode_enabled": True,
+                "stt_mode_text_input_provider": "manual",
+                "stt_mode_allow_os_dictation": True,
+                "stt_mode_allow_desktop_mic_optional": True,
+                "stt_mode_require_whisper": False,
+                "stt_mode_use_whisper_for_dictation": False,
+                "stt_mode_use_llm": False,
+                "stt_mode_vad_models": ["silero", "ten_vad"],
+                "stt_mode_vad_ensemble_enabled": True,
+                "stt_mode_lora_resegment_enabled": True,
+                "stt_mode_rolling_window_size": 2,
+                "stt_lora_bundle_auto_export_enabled": True,
+                "stt_lora_bundle_size_tier": "300MB",
+                "stt_lora_style_learning_enabled": True,
+                **_pipeline_mapping(20, 0.0, 1),
+                **_cut_boundary_mapping("low"),
+                **_decoder_settings(0.58, -1.8, 2.2, 0.4, 5, 1.1),
+            },
+        },
     }
 
 
@@ -215,6 +262,11 @@ def normalize_stt_quality_key(value: str | None) -> str:
         "정밀 인식": "precise",
         "정밀인식": "precise",
         "precise": "precise",
+        "stt": "stt",
+        "stt mode": "stt",
+        "stt 모드": "stt",
+        "받아쓰기": "stt",
+        "수동": "stt",
     }
     return aliases.get(key, "balanced")
 

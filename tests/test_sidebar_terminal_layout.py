@@ -64,6 +64,19 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_global_menu_qml_badges_expand_common_actions_to_four_letters(self):
+        window = MainWindow()
+        try:
+            self.assertEqual(window.global_menu_bar.btn_undo.property("qmlBadge"), "UNDO")
+            self.assertEqual(window.global_menu_bar.btn_redo.property("qmlBadge"), "REDO")
+            self.assertEqual(window.global_menu_bar.btn_save.property("qmlBadge"), "SAVE")
+            self.assertEqual(window.global_menu_bar.btn_help.property("qmlBadge"), "HELP")
+            self.assertEqual(window.global_menu_bar.btn_log.property("qmlBadge"), "SIDE")
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_project_info_button_matches_global_ai_button_height(self):
         window = MainWindow()
         try:
@@ -144,7 +157,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIsNone(preset_panel)
             quality_combo = getattr(window, "sidebar_subtitle_quality_combo", None)
             self.assertIsNotNone(quality_combo)
-            self.assertEqual([quality_combo.itemText(i) for i in range(quality_combo.count())], ["Fast", "Auto", "High"])
+            self.assertEqual([quality_combo.itemText(i) for i in range(quality_combo.count())], ["Fast", "Auto", "High", "STT"])
             self.assertGreaterEqual(quality_combo.view().minimumWidth(), 104)
             self.assertIn("QAbstractItemView::item", quality_combo.styleSheet())
             quality_row = window.home_page.findChild(QWidget, "SidebarSubtitleQualityRow")
@@ -155,7 +168,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertGreaterEqual(window.sidebar_settings_label.parentWidget().minimumHeight(), 166)
             quality_combos = [
                 combo for combo in window.home_page.findChildren(QComboBox)
-                if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High"]
+                if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High", "STT"]
             ]
             self.assertGreaterEqual(len(quality_combos), 3)
             self.assertGreaterEqual(window.sidebar_terminal_panel.maximumHeight(), 180)
@@ -193,6 +206,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             ])
             self.assertIn("font-weight:400", html)
             self.assertIn("model:stt1", html)
+            self.assertIn("prompt:subtitle_llm", html)
+            self.assertIn("prompt:roughcut_llm", html)
             self.assertNotIn("model:audio", html)
             self.assertNotIn("model:vad", html)
             self.assertNotIn("DeepFilter<span", html)
@@ -245,7 +260,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 combos = {
                     str(combo.property("subtitleQualityScope") or "workspace"): combo
                     for combo in window.home_page.findChildren(QComboBox)
-                    if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High"]
+                    if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High", "STT"]
                 }
                 self.assertEqual(combos["icloud"].currentData(), "fast")
                 self.assertEqual(combos["nas"].currentData(), "balanced")
@@ -1810,7 +1825,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             with mock.patch("ui.main.main_file_ops.QApplication.quit") as quit_app:
                 window._quick_exit()
 
-            self.assertEqual(events, [("pause", "앱 종료"), ("cleanup_async", 0.15), ("schedule", 90)])
+            self.assertEqual(events, [("pause", "앱 종료"), ("cleanup_async", 0.15), ("schedule", 60)])
             quit_app.assert_called_once()
         finally:
             window.close()

@@ -22,6 +22,7 @@ class OllamaWarmupTest(unittest.TestCase):
         ollama_provider._WARMED.clear()
         ollama_provider._PROBE_OK_UNTIL.clear()
         ollama_provider._PROBE_FAILED_UNTIL.clear()
+        ollama_provider._APP_STARTED_RUNTIME = False
         ollama_provider._SERVER_READY_UNTIL = 0.0
         ollama_provider._START_IN_PROGRESS_UNTIL = 0.0
         ollama_provider._SERVER_READY_LOGGED_UNTIL = 0.0
@@ -145,6 +146,26 @@ class OllamaWarmupTest(unittest.TestCase):
             self.assertFalse(ollama_provider.ensure_ollama_server(logger=logger, wait_sec=0.1))
 
         self.assertIn("실행 파일을 찾을 수 없습니다", "\n".join(logger.lines))
+
+    def test_iter_ollama_bins_includes_macos_app_bundle_binary(self):
+        app_bin = "/Applications/Ollama.app/Contents/MacOS/ollama"
+
+        def fake_exists(path):
+            return path == app_bin
+
+        with mock.patch("core.llm.ollama_provider.shutil.which", return_value=None), \
+             mock.patch("core.llm.ollama_provider.os.path.exists", side_effect=fake_exists):
+            bins = ollama_provider._iter_ollama_bins()
+
+        self.assertEqual(bins, [app_bin])
+
+    def test_start_ollama_server_process_marks_app_managed_runtime(self):
+        with mock.patch("core.llm.ollama_provider._iter_ollama_bins", return_value=["/Applications/Ollama.app/Contents/MacOS/ollama"]), \
+             mock.patch("core.llm.ollama_provider.subprocess.Popen") as popen_mock:
+            self.assertTrue(ollama_provider._start_ollama_server_process())
+
+        popen_mock.assert_called_once()
+        self.assertTrue(ollama_provider.app_started_ollama_runtime())
 
     def test_restart_ollama_server_restarts_runtime_before_skip(self):
         logger = _Logger()

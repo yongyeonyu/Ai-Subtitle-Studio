@@ -310,6 +310,50 @@ class AudioPresetTests(unittest.TestCase):
         self.assertEqual(vad_rows[0]["source"], "chunk_silero")
         self.assertTrue(vad_rows[0]["post_stt_align"])
 
+    def test_adaptive_chunk_audio_routing_reuses_precomputed_vad_segments(self):
+        class CachedVadRoutingProcessor(VideoProcessor):
+            def _classify_chunk_audio_route(self, _media_path, _seg, _settings, *, index, tmpdir):
+                return {
+                    "audio_strategy": "clean_voice",
+                    "audio_strategy_label": "깨끗한 음성",
+                    "confidence": 0.75,
+                    "settings": {"selected_audio_ai": "deepfilter", "selected_vad": "silero"},
+                    "audio_profile": {"environment": "indoor", "noise_level": "low"},
+                }
+
+            def _run_media_command_no_progress(self, cmd, *, label, timeout=None, env=None):
+                with open(cmd[-1], "wb") as f:
+                    f.write(b"wav")
+                return True
+
+            def _detect_vad_timestamps(self, *_args, **_kwargs):
+                raise AssertionError("precomputed VAD segments should bypass chunk-level VAD rescans")
+
+        processor = CachedVadRoutingProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "media.mp4")
+            open(media, "wb").close()
+            chunk_dir = os.path.join(tmp, "chunks")
+            ok = processor._write_adaptive_grouped_chunks_from_media(
+                media,
+                chunk_dir,
+                [{"start": 30.0, "end": 40.0}],
+                {"use_basic_filter": True, "audio_chunk_routing_enabled": True, "audio_chunk_route_vad_enabled": True},
+                precomputed_vad_segments=[
+                    {"start": 30.2, "end": 31.1, "source": "ten_vad", "post_stt_align": True, "vad_word_filter": False}
+                ],
+            )
+            with open(os.path.join(chunk_dir, "vad_strict.json"), "r", encoding="utf-8") as f:
+                vad_rows = json.load(f)
+            with open(os.path.join(chunk_dir, "audio_routes.json"), "r", encoding="utf-8") as f:
+                routes = json.load(f)
+
+        self.assertTrue(ok)
+        self.assertEqual(vad_rows[0]["start"], 30.2)
+        self.assertEqual(vad_rows[0]["end"], 31.1)
+        self.assertEqual(vad_rows[0]["source"], "ten_vad")
+        self.assertEqual(routes[0]["vad_segments"], 1)
+
     def test_ten_vad_flags_merge_into_speech_segments(self):
         processor = VideoProcessor()
 

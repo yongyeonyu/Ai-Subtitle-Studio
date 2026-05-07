@@ -25,6 +25,7 @@ from core.personalization.lora_storage import (
 from core.personalization.lora_store_common import read_jsonl
 from core.personalization.lora_vector_retriever import build_lora_retrieval_index
 from core.personalization.subtitle_pattern_index import save_subtitle_pattern_index
+from core.runtime.multi_process import manual_lora_runtime_settings
 from core.runtime.logger import get_logger
 from core.personalization.stt1_whisper_adapter_runner import save_stt1_whisper_adapter_training_plan
 from core.personalization.text_lora_runner import (
@@ -261,6 +262,22 @@ def _manual_full_training_jobs(
             job_type="build_text_training_plan",
             priority=20,
             payload={"manual_full_training": True},
+        ).to_record(),
+        TrainingQueueItem(
+            media_id="global",
+            media_path="",
+            subtitle_path="",
+            job_type="build_voice_profiles",
+            priority=25,
+            payload={"manual_full_training": True, "extract_audio": True},
+        ).to_record(),
+        TrainingQueueItem(
+            media_id="global",
+            media_path="",
+            subtitle_path="",
+            job_type="build_stt1_whisper_adapter",
+            priority=28,
+            payload={"manual_full_training": True, "extract_audio": True},
         ).to_record(),
         TrainingQueueItem(
             media_id="global",
@@ -577,6 +594,9 @@ def run_training_job(
 ) -> dict[str, Any]:
     job_type = str(job.get("job_type") or "").strip()
     media_id = str(job.get("media_id") or "").strip()
+    job_payload = dict(job.get("payload") or {})
+    manual_full_training = bool(job_payload.get("manual_full_training"))
+    resource_settings = manual_lora_runtime_settings() if manual_full_training else None
     if _cancel_requested(cancel_callback):
         return _cancelled_training_result()
     rows = load_truth_table_rows(store_dir)
@@ -611,8 +631,13 @@ def run_training_job(
             return _cancelled_training_result()
         return {"status": "complete", "score": float(result.get("usable_rows", 0) or 0), "result": result}
     if job_type == "build_voice_profiles":
-        job_payload = dict(job.get("payload") or {})
         extract_audio = bool(job_payload.get("extract_audio"))
+        if resource_settings is not None:
+            get_logger().log(
+                "🧠 [LoRA Full 학습] 풀가동: "
+                f"CPU {int(resource_settings.get('runtime_native_threads', 1) or 1)}코어 사용 · "
+                "종료 반응용 1코어 예약 · GPU/NPU 가속 우선"
+            )
         get_logger().log(
             f"🧠 [LoRA 학습] {job_label}: 목소리 프로필"
             f"{' + WAV 클립' if extract_audio else ''} 생성 중"
@@ -630,6 +655,7 @@ def run_training_job(
             extract_audio=extract_audio,
             progress_callback=progress_callback if extract_audio else None,
             cancel_callback=cancel_callback,
+            resource_settings=resource_settings,
         )
         result = {"profile": profile_result, "training_plan": plan_result}
         if bool(plan_result.get("cancelled")):
@@ -654,8 +680,13 @@ def run_training_job(
     if job_type == "build_stt1_whisper_adapter":
         if not rows:
             return {"status": "skipped", "score": None, "result": {"reason": "missing_truth_rows"}}
-        job_payload = dict(job.get("payload") or {})
         extract_audio = bool(job_payload.get("extract_audio"))
+        if resource_settings is not None:
+            get_logger().log(
+                "🧠 [LoRA Full 학습] 풀가동: "
+                f"CPU {int(resource_settings.get('runtime_native_threads', 1) or 1)}코어 사용 · "
+                "종료 반응용 1코어 예약 · GPU/NPU 가속 우선"
+            )
         get_logger().log(
             f"🧠 [LoRA 학습] {job_label}: STT1 Whisper adapter"
             f"{' + WAV 클립' if extract_audio else ''} 준비 중"
@@ -673,6 +704,7 @@ def run_training_job(
             extract_audio=extract_audio,
             progress_callback=progress_callback if extract_audio else None,
             cancel_callback=cancel_callback,
+            resource_settings=resource_settings,
         )
         if bool(result.get("cancelled")):
             return {"status": "waiting", "score": None, "result": {"reason": "cancelled", **result}}
@@ -1144,12 +1176,17 @@ class PersonalizationIdleTrainer(QObject):
             gc.collect()
             self._notify_learning_status_changed()
 
-    def _background_run_once(self, *, low_resource: bool = True) -> None:
+    def _background_run_once(self, *, low_resource: bool = True, continuous: bool = False) -> None:
         try:
             self._current_low_resource = bool(low_resource)
             self._current_learning_mode = "lite" if low_resource else "heavy"
             self._notify_learning_status_changed()
-            self._process_next_job_once(low_resource=low_resource)
+            while True:
+                result = self._process_next_job_once(low_resource=low_resource)
+                if not bool((result or {}).get("processed")):
+                    break
+                if not continuous or self._stop_requested.is_set() or not self.has_pending_jobs():
+                    break
         finally:
             self._last_job_finished_ms = QDateTime.currentMSecsSinceEpoch()
             self._log_auto_learning_status("백그라운드 완료")
@@ -1157,7 +1194,7 @@ class PersonalizationIdleTrainer(QObject):
             gc.collect()
             self._notify_learning_status_changed()
 
-    def start_background_run(self, *, low_resource: bool = True) -> dict[str, Any]:
+    def start_background_run(self, *, low_resource: bool = True, continuous: bool = False) -> dict[str, Any]:
         with self._worker_lock:
             if self.is_busy():
                 return {"started": False, "reason": "busy"}
@@ -1167,13 +1204,13 @@ class PersonalizationIdleTrainer(QObject):
             self._stop_requested.clear()
             self._worker_thread = threading.Thread(
                 target=self._background_run_once,
-                kwargs={"low_resource": low_resource},
+                kwargs={"low_resource": low_resource, "continuous": continuous},
                 daemon=True,
                 name="personalization-idle-trainer",
             )
             self._worker_thread.start()
             self._notify_learning_status_changed()
-            return {"started": True, "reason": "background"}
+            return {"started": True, "reason": "background", "continuous": bool(continuous)}
 
     def suspend_for_foreground_activity(
         self,

@@ -251,6 +251,12 @@ def apply_project_ui_state(owner, editor, project_path: str) -> None:
     except Exception:
         pass
     try:
+        restore_stt = getattr(editor, "_restore_stt_mode_project_state", None)
+        if callable(restore_stt):
+            restore_stt(data)
+    except Exception:
+        pass
+    try:
         if hasattr(owner, '_log_visible'):
             owner._log_visible = bool(ws.get('terminal_visible', False))
         if hasattr(owner, '_apply_log_visible'):

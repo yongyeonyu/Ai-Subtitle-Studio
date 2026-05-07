@@ -8,12 +8,12 @@ import os
 from PyQt6.QtCore import QTimer, QSettings, QPoint
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtMultimedia import QMediaPlayer
-from PyQt6.QtWidgets import QMenu
 
 from core.media_info import probe_media
 from core.frame_time import normalize_fps
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_helpers import get_sub_block_indices, insert_gap_after
+from ui.dialogs.qml_popup import show_context_menu
 
 
 class EditorVideoControlsMixin:
@@ -322,25 +322,33 @@ class EditorVideoControlsMixin:
         )
 
     def _show_timeline_review_menu(self, seg: dict, gpos: QPoint):
-        menu = QMenu(self)
-        menu.setStyleSheet(
-            "QMenu { background:#151C20; color:#F5F7FA; border:1px solid #2D3942; border-radius:6px; }"
-            "QMenu::item { padding:7px 22px 7px 12px; border-radius:4px; }"
-            "QMenu::item:selected { background-color:#1F3A56; }"
-        )
         quality = dict(seg.get("quality") or {})
         flags = set(str(flag) for flag in (quality.get("flags") or ()))
         manually_confirmed = bool(quality.get("manual_confirmed")) or "manual_confirmed" in flags
-        primary_action = menu.addAction("임시자막" if manually_confirmed else "자막 확정")
-        delete_action = menu.addAction("자막 삭제")
-        chosen = menu.exec(gpos)
+        chosen = show_context_menu(
+            self,
+            gpos,
+            [
+                {
+                    "id": "primary",
+                    "label": "임시자막" if manually_confirmed else "자막 확정",
+                    "accent": "#34C759",
+                },
+                {
+                    "id": "delete",
+                    "label": "자막 삭제",
+                    "danger": True,
+                    "accent": "#FF453A",
+                },
+            ],
+        )
         line = int(seg.get("line", -1))
-        if chosen is primary_action:
+        if chosen == "primary":
             if manually_confirmed:
                 self._mark_review_segment_temporary(line)
             else:
                 self._confirm_review_segment(line)
-        elif chosen is delete_action:
+        elif chosen == "delete":
             self._delete_review_segment(line)
 
     def _set_review_segment_quality(self, line: int, quality: dict, history: list[dict]):

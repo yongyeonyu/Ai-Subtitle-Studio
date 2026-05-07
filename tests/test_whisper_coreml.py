@@ -1,7 +1,7 @@
 # Version: 03.08.07
 # Phase: PHASE2
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from core.audio import whisper_coreml
 
@@ -34,6 +34,21 @@ class WhisperCoreMLTests(unittest.TestCase):
 
         self.assertIsNone(proc)
         self.assertTrue(logger.return_value.log.called)
+
+    def test_run_whisper_starts_worker_with_cli_env(self):
+        proc = Mock()
+        proc.stdin = Mock()
+        proc.stderr = []
+        with patch("core.audio.whisper_coreml.config.IS_MAC", True), \
+                patch("core.audio.whisper_coreml.find_whisperkit_cli", return_value="/opt/homebrew/bin/whisperkit-cli"), \
+                patch("core.audio.whisper_coreml.subprocess.Popen", return_value=proc) as popen:
+            started = whisper_coreml.run_whisper(["/tmp/chunk.wav"], "coreml:large-v3", "ko", log_label="STT2")
+
+        self.assertIs(started, proc)
+        self.assertEqual(
+            popen.call_args.kwargs["env"]["WHISPERKIT_CLI"],
+            "/opt/homebrew/bin/whisperkit-cli",
+        )
 
     def test_coreml_stderr_log_includes_stt_label(self):
         line = whisper_coreml._format_stderr_log("warning", log_label="STT2")

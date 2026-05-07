@@ -191,7 +191,7 @@ def build_editor_roughcut_draft_prompt(
     policy = resolve_roughcut_context_policy(settings or {}, subtitle_rows=rows)
     max_rows = max(1, int(policy.get("max_context_rows", 80) or 80))
     scoped_rows = rows[:max_rows]
-    instructions = DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT
+    instructions = str((settings or {}).get("editor_roughcut_draft_prompt") or DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT).strip()
     if isinstance(chunk_scope, dict):
         instructions += (
             "\n이번 입력은 전체 자막의 일부 구간이다."

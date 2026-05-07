@@ -469,6 +469,14 @@ class FolderDialog(QDialog):
             self._thumb_executor.shutdown(wait=False, cancel_futures=True)
         except Exception:
             pass
+        try:
+            for item in self._file_items.values():
+                if item is not None:
+                    item.setIcon(self.thumb_col, QIcon())
+            self._file_items.clear()
+            self.tree.clear()
+        except Exception:
+            pass
         super().closeEvent(event)
 
 
