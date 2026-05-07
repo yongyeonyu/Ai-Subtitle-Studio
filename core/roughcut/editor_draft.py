@@ -31,6 +31,8 @@ from .models import (
 from .roughcut_settings import merge_roughcut_settings
 from .roughcut_context_policy import resolve_roughcut_context_policy
 from .roughcut_llm_config import resolve_roughcut_llm_config
+from .roughcut_llm import prepare_roughcut_llm_model_for_run
+from .topic_labeler import apply_major_topic_labels
 from .subtitle_retimer import format_srt, retime_subtitles_for_edl
 
 
@@ -74,28 +76,132 @@ def editor_roughcut_draft_enabled(settings: dict[str, Any] | None) -> bool:
 def editor_roughcut_draft_llm_allowed(
     segments: list[dict[str, Any]],
     settings: dict[str, Any] | None,
+    *,
+    cut_boundaries: list[Any] | None = None,
+    provisional_cut_boundaries: list[Any] | None = None,
 ) -> bool:
+    scope = describe_editor_roughcut_llm_scope(
+        segments,
+        settings,
+        cut_boundaries=cut_boundaries,
+        provisional_cut_boundaries=provisional_cut_boundaries,
+    )
+    return str(scope.get("mode") or "") in {"single", "chunked"}
+
+
+def describe_editor_roughcut_llm_scope(
+    segments: list[dict[str, Any]],
+    settings: dict[str, Any] | None,
+    *,
+    cut_boundaries: list[Any] | None = None,
+    provisional_cut_boundaries: list[Any] | None = None,
+) -> dict[str, Any]:
     merged = merge_roughcut_settings(settings or {})
     rows = _subtitle_prompt_rows(segments)
     policy = resolve_roughcut_context_policy(merged, subtitle_rows=rows)
     max_rows = max(1, int(policy.get("max_context_rows", 80) or 80))
+    chunk_rows = max(1, min(max_rows, int(policy.get("chunk_rows", 12) or 12)))
+    lookahead_rows = max(0, min(max_rows - 1, int(policy.get("lookahead_rows", 8) or 8)))
     row_count = len(rows)
-    return row_count <= max_rows
+    if row_count <= 0:
+        return {
+            "mode": "empty",
+            "row_count": 0,
+            "max_context_rows": max_rows,
+            "chunk_rows": chunk_rows,
+            "lookahead_rows": lookahead_rows,
+            "chunks": [],
+            "chunk_count": 0,
+            "policy": dict(policy),
+        }
+    if row_count <= max_rows:
+        return {
+            "mode": "single",
+            "row_count": row_count,
+            "max_context_rows": max_rows,
+            "chunk_rows": chunk_rows,
+            "lookahead_rows": lookahead_rows,
+            "chunks": [
+                {
+                    "index": 0,
+                    "core_start_index": 0,
+                    "core_end_index": row_count - 1,
+                    "prompt_start_index": 0,
+                    "prompt_end_index": row_count - 1,
+                    "core_start_subtitle_id": rows[0]["subtitle_id"],
+                    "core_end_subtitle_id": rows[-1]["subtitle_id"],
+                    "prompt_start_subtitle_id": rows[0]["subtitle_id"],
+                    "prompt_end_subtitle_id": rows[-1]["subtitle_id"],
+                    "source": "single_pass",
+                }
+            ],
+            "chunk_count": 1,
+            "policy": dict(policy),
+        }
+
+    core_ranges = _plan_editor_roughcut_core_ranges(
+        rows,
+        merged,
+        max_rows=max_rows,
+        target_rows=chunk_rows,
+        cut_boundaries=cut_boundaries,
+        provisional_cut_boundaries=provisional_cut_boundaries,
+    )
+    chunks: list[dict[str, Any]] = []
+    for index, chunk in enumerate(core_ranges):
+        core_start = int(chunk["core_start_index"])
+        core_end = int(chunk["core_end_index"])
+        prompt_start = core_start
+        prompt_end = min(row_count - 1, core_end + lookahead_rows)
+        if prompt_end - prompt_start + 1 > max_rows:
+            prompt_end = min(row_count - 1, prompt_start + max_rows - 1)
+        chunks.append(
+            {
+                "index": index,
+                "core_start_index": core_start,
+                "core_end_index": core_end,
+                "prompt_start_index": prompt_start,
+                "prompt_end_index": prompt_end,
+                "core_start_subtitle_id": rows[core_start]["subtitle_id"],
+                "core_end_subtitle_id": rows[core_end]["subtitle_id"],
+                "prompt_start_subtitle_id": rows[prompt_start]["subtitle_id"],
+                "prompt_end_subtitle_id": rows[prompt_end]["subtitle_id"],
+                "source": str(chunk.get("source") or "row_window"),
+            }
+        )
+    return {
+        "mode": "chunked" if len(chunks) > 1 else "single",
+        "row_count": row_count,
+        "max_context_rows": max_rows,
+        "chunk_rows": chunk_rows,
+        "lookahead_rows": lookahead_rows,
+        "chunks": chunks,
+        "chunk_count": len(chunks),
+        "policy": dict(policy),
+    }
 
 
 def build_editor_roughcut_draft_prompt(
     segments: list[dict[str, Any]],
     *,
     settings: dict[str, Any] | None = None,
+    chunk_scope: dict[str, Any] | None = None,
 ) -> str:
     rows = _subtitle_prompt_rows(segments)
     policy = resolve_roughcut_context_policy(settings or {}, subtitle_rows=rows)
     max_rows = max(1, int(policy.get("max_context_rows", 80) or 80))
     scoped_rows = rows[:max_rows]
+    instructions = DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT
+    if isinstance(chunk_scope, dict):
+        instructions += (
+            "\n이번 입력은 전체 자막의 일부 구간이다."
+            "\nchunk_scope.core_start_subtitle_id부터 core_end_subtitle_id까지만 확정 경계 대상으로 본다."
+            "\n앞뒤 문맥은 참고용일 뿐이며 core 범위를 벗어나는 새 구간은 만들지 않는다."
+        )
     body = {
         "prompt_id": "editor_post_generation_roughcut_draft_v1",
         "language": "ko",
-        "editor_instructions": DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT,
+        "editor_instructions": instructions,
         "output_contract": {
             "json_only": True,
             "schema": {
@@ -120,6 +226,24 @@ def build_editor_roughcut_draft_prompt(
             if key not in {"deep_summary"}
         },
     }
+    if isinstance(chunk_scope, dict):
+        body["chunk_scope"] = {
+            key: value
+            for key, value in dict(chunk_scope).items()
+            if key
+            in {
+                "index",
+                "core_start_index",
+                "core_end_index",
+                "prompt_start_index",
+                "prompt_end_index",
+                "core_start_subtitle_id",
+                "core_end_subtitle_id",
+                "prompt_start_subtitle_id",
+                "prompt_end_subtitle_id",
+                "source",
+            }
+        }
     return json.dumps(body, ensure_ascii=False, indent=2)
 
 
@@ -128,6 +252,8 @@ def run_editor_roughcut_llm_draft(
     *,
     settings: dict[str, Any] | None = None,
     timeout: int = 45,
+    cut_boundaries: list[Any] | None = None,
+    provisional_cut_boundaries: list[Any] | None = None,
 ) -> dict[str, Any] | None:
     settings = settings or {}
     rows = _subtitle_prompt_rows(segments)
@@ -136,13 +262,69 @@ def run_editor_roughcut_llm_draft(
     provider = str(llm_config.provider or "").strip().lower()
     if not llm_config.enabled or not model or "사용 안함" in model or provider == "none":
         return None
-    prompt = build_editor_roughcut_draft_prompt(segments, settings=settings)
     try:
-        if provider in {"google", "gemini"} or "gemini" in model.lower():
-            return _call_gemini_json(model, prompt)
-        if provider == "openai" or is_openai_model(model):
-            return _call_openai_json(model, prompt, timeout=timeout)
-        return _call_ollama_json(model, prompt, timeout=timeout)
+        prepare_roughcut_llm_model_for_run(settings, llm_config)
+        scope = describe_editor_roughcut_llm_scope(
+            segments,
+            settings,
+            cut_boundaries=cut_boundaries,
+            provisional_cut_boundaries=provisional_cut_boundaries,
+        )
+        if str(scope.get("mode") or "") == "single":
+            prompt = build_editor_roughcut_draft_prompt(segments, settings=settings)
+            return _call_editor_roughcut_json(provider, model, prompt, timeout=timeout)
+
+        subtitles = _normalize_subtitles(segments)
+        if not subtitles:
+            return None
+        combined_groups: list[dict[str, Any]] = []
+        llm_success_count = 0
+        local_fallback_count = 0
+        for chunk in list(scope.get("chunks") or []):
+            prompt_segments = segments[
+                int(chunk["prompt_start_index"]): int(chunk["prompt_end_index"]) + 1
+            ]
+            core_subtitles = subtitles[
+                int(chunk["core_start_index"]): int(chunk["core_end_index"]) + 1
+            ]
+            prompt_subtitles = _normalize_subtitles(prompt_segments)
+            prompt = build_editor_roughcut_draft_prompt(
+                prompt_segments,
+                settings=settings,
+                chunk_scope=chunk,
+            )
+            payload = None
+            try:
+                payload = _call_editor_roughcut_json(provider, model, prompt, timeout=timeout)
+            except Exception as exc:
+                try:
+                    from core.runtime.logger import get_logger
+
+                    get_logger().log(
+                        "⚠️ 에디터 러프컷 chunk LLM 실패, 해당 구간은 로컬 규칙으로 대체: "
+                        f"{exc}"
+                    )
+                except Exception:
+                    pass
+            groups = _groups_from_chunk_payload(
+                payload,
+                prompt_subtitles=prompt_subtitles,
+                core_subtitles=core_subtitles,
+            )
+            if groups:
+                llm_success_count += 1
+                combined_groups.extend(groups)
+                continue
+            local_fallback_count += 1
+            combined_groups.extend(_local_major_groups_from_subtitles(core_subtitles, settings=settings))
+
+        if not combined_groups or llm_success_count <= 0:
+            return None
+        return _payload_from_major_groups(
+            combined_groups,
+            chunk_count=int(scope.get("chunk_count", 0) or 0),
+            local_fallback_count=local_fallback_count,
+        )
     except Exception as exc:
         try:
             from core.runtime.logger import get_logger
@@ -282,6 +464,7 @@ def build_editor_roughcut_draft_result(
             )
         )
 
+    majors = list(apply_major_topic_labels(majors, subtitles, settings=settings))
     edl = build_edl_segments(source_path, decisions, majors)
     guide = build_markdown_guide(chapters, decisions, edl)
     summary = f"자막 생성 후 초안: 중분류 {len(majors)}개, 자막 {len(subtitles)}개, 길이 {duration:.1f}초"
@@ -714,6 +897,214 @@ def _candidate_outputs(
     return outputs
 
 
+def _call_editor_roughcut_json(provider: str, model: str, prompt: str, *, timeout: int) -> dict[str, Any] | None:
+    if provider in {"google", "gemini"} or "gemini" in model.lower():
+        return _call_gemini_json(model, prompt)
+    if provider == "openai" or is_openai_model(model):
+        return _call_openai_json(model, prompt, timeout=timeout)
+    return _call_ollama_json(model, prompt, timeout=timeout)
+
+
+def _plan_editor_roughcut_core_ranges(
+    rows: list[dict[str, Any]],
+    settings: dict[str, Any],
+    *,
+    max_rows: int,
+    target_rows: int,
+    cut_boundaries: list[Any] | None = None,
+    provisional_cut_boundaries: list[Any] | None = None,
+) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    row_count = len(rows)
+    min_core, target_core, max_core = _roughcut_chunk_bounds(settings, max_rows=max_rows, target_rows=target_rows)
+    confirmed_candidates = _boundary_break_candidates(rows, cut_boundaries or [], source="confirmed")
+    provisional_candidates = _boundary_break_candidates(rows, provisional_cut_boundaries or [], source="provisional")
+    start = 0
+    chunks: list[dict[str, Any]] = []
+    while start < row_count:
+        remaining = row_count - start
+        if remaining <= max_core:
+            end = row_count - 1
+            source = "tail"
+        else:
+            min_end = min(row_count - 1, start + min_core - 1)
+            max_end = min(row_count - 1, start + max_core - 1)
+            target_end = min(row_count - 1, start + target_core - 1)
+            latest_safe_end = row_count - min_core - 1
+            if latest_safe_end >= min_end:
+                target_end = min(target_end, latest_safe_end)
+                max_end = min(max_end, max(min_end, latest_safe_end))
+            choice = _pick_chunk_break_candidate(
+                confirmed_candidates=confirmed_candidates,
+                provisional_candidates=provisional_candidates,
+                min_end=min_end,
+                target_end=target_end,
+                max_end=max_end,
+            )
+            if choice is not None:
+                end = int(choice["end_index"])
+                source = str(choice.get("source") or "boundary")
+            else:
+                end = max(min_end, min(max_end, target_end))
+                source = "row_window"
+        chunks.append(
+            {
+                "core_start_index": start,
+                "core_end_index": end,
+                "source": source,
+            }
+        )
+        start = end + 1
+    return chunks
+
+
+def _roughcut_chunk_bounds(settings: dict[str, Any], *, max_rows: int, target_rows: int) -> tuple[int, int, int]:
+    min_raw = int(settings.get("roughcut_llm_chunk_min_rows", 8) or 8)
+    max_raw = int(settings.get("roughcut_llm_chunk_max_rows", 18) or 18)
+    min_core = max(1, min(max_rows, min_raw))
+    max_core = max(min_core, min(max_rows, max_raw))
+    target_core = max(min_core, min(max_core, int(target_rows or max_rows)))
+    return min_core, target_core, max_core
+
+
+def _boundary_break_candidates(rows: list[dict[str, Any]], boundary_rows: list[Any], *, source: str) -> list[dict[str, Any]]:
+    if len(rows) < 2 or not boundary_rows:
+        return []
+    midpoints = [
+        (
+            idx,
+            (float(rows[idx]["end"]) + float(rows[idx + 1]["start"])) / 2.0,
+        )
+        for idx in range(len(rows) - 1)
+    ]
+    best_by_index: dict[int, dict[str, Any]] = {}
+    for item in list(boundary_rows or []):
+        boundary_time = _boundary_time(item)
+        if boundary_time is None:
+            continue
+        end_index, distance = min(
+            ((idx, abs(midpoint - boundary_time)) for idx, midpoint in midpoints),
+            key=lambda pair: pair[1],
+        )
+        current = best_by_index.get(end_index)
+        if current is None or distance < float(current.get("distance", 999999.0)):
+            best_by_index[end_index] = {
+                "end_index": end_index,
+                "source": source,
+                "distance": distance,
+                "time": boundary_time,
+            }
+    return [best_by_index[index] for index in sorted(best_by_index)]
+
+
+def _pick_chunk_break_candidate(
+    *,
+    confirmed_candidates: list[dict[str, Any]],
+    provisional_candidates: list[dict[str, Any]],
+    min_end: int,
+    target_end: int,
+    max_end: int,
+) -> dict[str, Any] | None:
+    for pool in (confirmed_candidates, provisional_candidates):
+        filtered = [
+            item
+            for item in pool
+            if min_end <= int(item.get("end_index", -1)) <= max_end
+        ]
+        if filtered:
+            return min(
+                filtered,
+                key=lambda item: (
+                    abs(int(item.get("end_index", target_end)) - target_end),
+                    float(item.get("distance", 999999.0)),
+                ),
+            )
+    return None
+
+
+def _groups_from_chunk_payload(
+    payload: dict[str, Any] | None,
+    *,
+    prompt_subtitles: list[SubtitleSegment],
+    core_subtitles: list[SubtitleSegment],
+) -> list[dict[str, Any]]:
+    if not payload or not prompt_subtitles or not core_subtitles:
+        return []
+    groups = _major_groups_from_llm_payload(payload, prompt_subtitles)
+    if not groups:
+        return []
+    core_ids = {
+        _subtitle_id(item, idx)
+        for idx, item in enumerate(core_subtitles)
+    }
+    trimmed: list[dict[str, Any]] = []
+    for group in groups:
+        subtitles = [
+            item
+            for item in list(group.get("subtitles", []) or [])
+            if _subtitle_id(item, 0) in core_ids
+        ]
+        if not subtitles:
+            continue
+        trimmed.append(
+            {
+                **group,
+                "subtitles": subtitles,
+                "title": str(group.get("title") or _title_from_subtitles(subtitles)),
+                "summary": str(group.get("summary") or _summary_from_subtitles(subtitles)),
+            }
+        )
+    return trimmed
+
+
+def _payload_from_major_groups(
+    groups: list[dict[str, Any]],
+    *,
+    chunk_count: int,
+    local_fallback_count: int,
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for index, group in enumerate(groups):
+        subtitles = list(group.get("subtitles", []) or [])
+        if not subtitles:
+            continue
+        rows.append(
+            {
+                "major_id": str(group.get("major_id") or _major_code(index)),
+                "title": str(group.get("title") or _title_from_subtitles(subtitles)),
+                "summary": str(group.get("summary") or _summary_from_subtitles(subtitles)),
+                "start_subtitle_id": _subtitle_id(subtitles[0], 0),
+                "end_subtitle_id": _subtitle_id(subtitles[-1], len(subtitles) - 1),
+                "tags": list(group.get("tags", ()) or ()),
+                "confidence": _confidence(group),
+                "status": str(group.get("status") or "provisional"),
+            }
+        )
+    return {
+        "major_segments": rows,
+        "_chunk_mode": "cut_boundary_windowed",
+        "_chunk_count": int(chunk_count or 0),
+        "_local_fallback_chunks": int(local_fallback_count or 0),
+    }
+
+
+def _boundary_time(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, dict):
+        return None
+    for key in ("timeline_sec", "time", "sec", "timestamp", "start", "at"):
+        candidate = value.get(key)
+        if candidate in (None, ""):
+            continue
+        try:
+            return float(candidate)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _call_ollama_json(model: str, prompt: str, *, timeout: int) -> dict[str, Any] | None:
     body = json.dumps(
         {
@@ -855,6 +1246,7 @@ __all__ = [
     "build_editor_roughcut_candidate_payload",
     "build_editor_roughcut_draft_prompt",
     "build_editor_roughcut_draft_result",
+    "describe_editor_roughcut_llm_scope",
     "editor_roughcut_draft_enabled",
     "editor_roughcut_draft_llm_allowed",
     "is_fast_recognition_mode",

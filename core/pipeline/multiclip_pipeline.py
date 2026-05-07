@@ -50,7 +50,7 @@ class MulticlipPipelineMixin:
         """멀티클립 품질모드 진입점"""
         pause_lora = getattr(self.ui, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
-            pause_lora("multiclip_pipeline_start", hold_ms=300_000)
+            pause_lora("multiclip_pipeline_start")
         self._active = True
         self.files_to_process = list(files)
         self.current_folder = folder

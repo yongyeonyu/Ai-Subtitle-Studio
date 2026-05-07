@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import re
@@ -17,10 +18,11 @@ import tempfile
 import wave
 from concurrent.futures import ThreadPoolExecutor
 
+from core.audio.runtime_cleanup import clear_audio_model_memory_caches
 from core.llm.secure_keys import get_api_key
 from core.media_fingerprint import media_file_fingerprint, media_fingerprint_digest
 from core.media_info import probe_media
-from core.performance import adaptive_worker_count, bounded_worker_count
+from core.performance import adaptive_worker_count, bounded_worker_count, distributed_worker_ceiling
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs, rnnoise_binary, subprocess_env
 from core.runtime import config
 from core.runtime.logger import get_logger
@@ -437,18 +439,35 @@ class VideoProcessorAudioHelpersMixin:
             return self._copy_first_wav_from_dir(out_dir, target_wav)
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
+            clear_audio_model_memory_caches(include_gpu=True)
 
     def _apply_clearvoice(self, source_wav: str, target_wav: str) -> bool:
         if importlib.util.find_spec("clearvoice") is None:
             _runtime_get_logger().log("  ⚠️ ClearVoice 패키지가 설치되어 있지 않습니다: python3.11 -m pip install clearvoice")
             return False
         script = (
+            "import gc\n"
             "import sys\n"
             "from clearvoice import ClearVoice\n"
             "source, target = sys.argv[1], sys.argv[2]\n"
-            "engine = ClearVoice(task='speech_enhancement', model_names=['MossFormer2_SE_48K'])\n"
-            "audio = engine(input_path=source, online_write=False)\n"
-            "engine.write(audio, output_path=target)\n"
+            "engine = None\n"
+            "audio = None\n"
+            "try:\n"
+            "    engine = ClearVoice(task='speech_enhancement', model_names=['MossFormer2_SE_48K'])\n"
+            "    audio = engine(input_path=source, online_write=False)\n"
+            "    engine.write(audio, output_path=target)\n"
+            "finally:\n"
+            "    del audio\n"
+            "    del engine\n"
+            "    gc.collect()\n"
+            "    try:\n"
+            "        import torch\n"
+            "        if hasattr(torch, 'mps') and hasattr(torch.mps, 'empty_cache'):\n"
+            "            torch.mps.empty_cache()\n"
+            "        if hasattr(torch, 'cuda') and torch.cuda.is_available():\n"
+            "            torch.cuda.empty_cache()\n"
+            "    except Exception:\n"
+            "        pass\n"
         )
         heartbeat = self._start_audio_heartbeat("ClearVoice", "음성 향상", interval_sec=5.0)
         try:
@@ -462,6 +481,7 @@ class VideoProcessorAudioHelpersMixin:
                 return False
         finally:
             self._stop_audio_heartbeat(heartbeat)
+            clear_audio_model_memory_caches(include_gpu=True)
         return os.path.exists(target_wav)
 
     @staticmethod
@@ -829,13 +849,21 @@ class VideoProcessorAudioHelpersMixin:
         route_vad_segments = []
         route_vad_enabled = bool(settings.get("audio_chunk_route_vad_enabled", settings.get("vad_post_stt_align_enabled", True)))
         failures = 0
+        workload = len(grouped)
+        worker_ceiling = distributed_worker_ceiling(
+            settings,
+            task="io",
+            workload=workload,
+            reserve_cores=1,
+            minimum=1,
+        )
         max_workers, scheduler = adaptive_worker_count(
             task="io",
             settings=settings,
             requested=getattr(self, "io_workers", None),
-            workload=len(grouped),
+            workload=workload,
             minimum=1,
-            maximum=max(1, min(int(getattr(self, "io_workers", 1) or 1), len(grouped))),
+            maximum=worker_ceiling,
         )
         reductions = ",".join(scheduler.get("reductions") or [])
         if max_workers > 1:
@@ -1253,6 +1281,132 @@ class VideoProcessorAudioHelpersMixin:
         try:
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(cache_config, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _vad_detection_cache_enabled(self, settings: dict) -> bool:
+        value = dict(settings or {}).get("vad_detection_cache_enabled", dict(settings or {}).get("autopilot_stage_cache_enabled", True))
+        if isinstance(value, str):
+            return value.strip().lower() not in {"0", "false", "off", "no", "사용 안함", "끔"}
+        return bool(value)
+
+    def _vad_timestamps_cache_identity(
+        self,
+        wav_path: str,
+        vad_model: str,
+        settings: dict,
+        *,
+        target_start_sec=0.0,
+        target_end_sec=None,
+        is_single_segment=False,
+        for_post_stt_align: bool = False,
+    ) -> dict:
+        try:
+            source = os.path.abspath(str(wav_path or ""))
+            stat = os.stat(source)
+            source_size = int(stat.st_size)
+            source_mtime_ns = int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
+            source_fingerprint = media_file_fingerprint(source, sample_bytes=512 * 1024, include_samples=True)
+            source_digest = media_fingerprint_digest(source, sample_bytes=512 * 1024, include_samples=True)
+        except Exception:
+            source = os.path.abspath(str(wav_path or ""))
+            source_size = 0
+            source_mtime_ns = 0
+            source_fingerprint = source
+            source_digest = hashlib.sha1(source.encode("utf-8", errors="ignore")).hexdigest()
+        return {
+            "version": _VAD_CACHE_VERSION + 1,
+            "source": source,
+            "source_size": source_size,
+            "source_mtime_ns": source_mtime_ns,
+            "source_fingerprint": source_fingerprint,
+            "source_fingerprint_digest": source_digest,
+            "vad_model": str(vad_model or "none").lower(),
+            "vad_cache_config": self._vad_cache_config(settings),
+            "target_start_sec": round(float(target_start_sec or 0.0), 3),
+            "target_end_sec": None if target_end_sec is None else round(float(target_end_sec or 0.0), 3),
+            "is_single_segment": bool(is_single_segment),
+            "for_post_stt_align": bool(for_post_stt_align),
+            "sample_rate": 16000,
+        }
+
+    def _vad_timestamps_cache_path(self, identity: dict) -> str:
+        cache_root = os.path.join(config.OUTPUT_DIR, "_analysis_cache", "vad")
+        os.makedirs(cache_root, exist_ok=True)
+        raw = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        key = hashlib.sha256(raw).hexdigest()[:32]
+        return os.path.join(cache_root, f"vad_timestamps_{key}.json")
+
+    def _load_vad_timestamps_cache(
+        self,
+        wav_path: str,
+        vad_model: str,
+        settings: dict,
+        *,
+        target_start_sec=0.0,
+        target_end_sec=None,
+        is_single_segment=False,
+        for_post_stt_align: bool = False,
+    ) -> list[dict] | None:
+        if not self._vad_detection_cache_enabled(settings):
+            return None
+        identity = self._vad_timestamps_cache_identity(
+            wav_path,
+            vad_model,
+            settings,
+            target_start_sec=target_start_sec,
+            target_end_sec=target_end_sec,
+            is_single_segment=is_single_segment,
+            for_post_stt_align=for_post_stt_align,
+        )
+        cache_path = self._vad_timestamps_cache_path(identity)
+        if not os.path.exists(cache_path):
+            return None
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            if dict(payload.get("identity") or {}) != identity:
+                return None
+            rows = [dict(row) for row in list(payload.get("timestamps") or []) if isinstance(row, dict)]
+            return rows
+        except Exception:
+            return None
+
+    def _write_vad_timestamps_cache(
+        self,
+        wav_path: str,
+        vad_model: str,
+        settings: dict,
+        timestamps: list[dict],
+        *,
+        target_start_sec=0.0,
+        target_end_sec=None,
+        is_single_segment=False,
+        for_post_stt_align: bool = False,
+    ) -> None:
+        if not self._vad_detection_cache_enabled(settings):
+            return
+        try:
+            identity = self._vad_timestamps_cache_identity(
+                wav_path,
+                vad_model,
+                settings,
+                target_start_sec=target_start_sec,
+                target_end_sec=target_end_sec,
+                is_single_segment=is_single_segment,
+                for_post_stt_align=for_post_stt_align,
+            )
+            cache_path = self._vad_timestamps_cache_path(identity)
+            payload = {
+                "schema": "ai_subtitle_studio.vad_timestamps_cache.v1",
+                "created_at": time.time(),
+                "identity": identity,
+                "timestamps": [dict(row) for row in list(timestamps or []) if isinstance(row, dict)],
+            }
+            tmp_path = f"{cache_path}.tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, cache_path)
         except Exception:
             pass
 

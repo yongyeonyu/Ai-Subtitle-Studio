@@ -5,7 +5,7 @@ import os
 import re
 
 from PyQt6.QtWidgets import QTextEdit
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QMimeData, QRect, QUrl
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QMimeData, QRect, QUrl, QTimer
 from PyQt6.QtGui import (
     QTextCursor, QTextCharFormat, QColor, QFont,
     QSyntaxHighlighter, QTextDocument, QKeyEvent, QTextBlockUserData
@@ -98,8 +98,8 @@ class SubtitleHighlighter(QSyntaxHighlighter):
         self._edited_lines.add(line); self.rehighlight()
         
     def set_current_line(self, line: int):
-        if self._current_line != line: 
-            self._current_line = line; self.rehighlight()
+        if self._current_line != line:
+            self._current_line = line
 
     def set_quality_map(self, quality_by_line: dict[int, dict] | None):
         self.quality_by_line = dict(quality_by_line or {})
@@ -214,18 +214,62 @@ class SubtitleTextEdit(QTextEdit):
         self.setCursorWidth(3)
         self.timestampArea = TimestampArea(self)
         self.document().documentLayout().documentSizeChanged.connect(self._update_margin)
-        self.verticalScrollBar().valueChanged.connect(self.timestampArea.update)
-        self.textChanged.connect(self.timestampArea.update)
-        self.cursorPositionChanged.connect(self.timestampArea.update)
+        self._timestamp_update_timer = QTimer(self)
+        self._timestamp_update_timer.setSingleShot(True)
+        self._timestamp_update_timer.timeout.connect(self._flush_timestamp_area_update)
+        self.verticalScrollBar().valueChanged.connect(self._schedule_timestamp_area_update)
+        self.textChanged.connect(self._schedule_timestamp_area_update)
+        self.cursorPositionChanged.connect(self._schedule_timestamp_area_update)
         
         self._key_press_time = {} 
-        self.cursorPositionChanged.connect(self.cursor_moved.emit)
+        self._cursor_moved_timer = QTimer(self)
+        self._cursor_moved_timer.setSingleShot(True)
+        self._cursor_moved_timer.timeout.connect(self._emit_cursor_moved_debounced)
+        self.cursorPositionChanged.connect(self._schedule_cursor_moved)
         self._update_margin()
         self._quick_layer = self._create_quick_layer()
         if self._quick_layer is not None:
-            self.textChanged.connect(self._sync_quick_layer)
-            self.cursorPositionChanged.connect(self._sync_quick_layer)
+            self._quick_layer_timer = QTimer(self)
+            self._quick_layer_timer.setSingleShot(True)
+            self._quick_layer_timer.timeout.connect(self._sync_quick_layer)
+            self.textChanged.connect(self._schedule_quick_layer_sync)
+            self.cursorPositionChanged.connect(self._schedule_quick_layer_sync)
+            self._schedule_quick_layer_sync()
+        else:
+            self._quick_layer_timer = None
+
+    def _schedule_timestamp_area_update(self):
+        timer = getattr(self, "_timestamp_update_timer", None)
+        if timer is None:
+            self._flush_timestamp_area_update()
+            return
+        timer.start(16)
+
+    def _flush_timestamp_area_update(self):
+        area = getattr(self, "timestampArea", None)
+        if area is None:
+            return
+        try:
+            area.update()
+        except RuntimeError:
+            pass
+
+    def _schedule_cursor_moved(self):
+        timer = getattr(self, "_cursor_moved_timer", None)
+        if timer is None:
+            self.cursor_moved.emit()
+            return
+        timer.start(24)
+
+    def _emit_cursor_moved_debounced(self):
+        self.cursor_moved.emit()
+
+    def _schedule_quick_layer_sync(self):
+        timer = getattr(self, "_quick_layer_timer", None)
+        if timer is None:
             self._sync_quick_layer()
+            return
+        timer.start(16)
 
     def focusInEvent(self, event):
         if self._selection_locked:
@@ -378,6 +422,8 @@ class SubtitleTextEdit(QTextEdit):
         if layer is not None:
             layer.setGeometry(self.rect())
             layer.raise_()
+        self._schedule_timestamp_area_update()
+        self._schedule_quick_layer_sync()
 
     def createMimeDataFromSelection(self) -> QMimeData:
         return super().createMimeDataFromSelection()
@@ -577,10 +623,10 @@ class SubtitleTextEdit(QTextEdit):
                 parent.timeline.center_to_sec(start_sec, smooth=True)
             parent._sync_lock = False
         
-        self.document().contentsChanged.emit()
-        
-        if parent and hasattr(parent, "_highlighter"): parent._highlighter.rehighlight()
-        if hasattr(self, 'timestampArea'): self.timestampArea.update()
+        if parent and hasattr(parent, "_highlighter"):
+            parent._highlighter.rehighlight()
+        self._schedule_timestamp_area_update()
+        self._schedule_quick_layer_sync()
     
     def _handle_simple_break(self):
         """Shift + Enter: 동일 자막 세그먼트 내에서 줄바꿈 (구조적 통일)"""
@@ -592,12 +638,12 @@ class SubtitleTextEdit(QTextEdit):
         cur.endEditBlock()
         
         self.setTextCursor(cur)
-        self.document().contentsChanged.emit() # 세그먼트 갱신 신호 발생
-        
         # 💡 UndoManager 스냅샷 즉시 저장 
         parent = getattr(self, "_parent_widget", None)
         if parent and hasattr(parent, "_undo_mgr"):
             parent._undo_mgr.push_immediate()
+        self._schedule_timestamp_area_update()
+        self._schedule_quick_layer_sync()
 
     def _handle_enter(self):
         cur = self.textCursor()

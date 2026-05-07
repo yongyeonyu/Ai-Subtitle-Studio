@@ -1360,9 +1360,13 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window._editor_widget = editor
             window.backend = backend
 
+            def _shutdown_runtime(models, logger=None, **_kwargs):
+                stopped_models.extend(models or [])
+                return {"models": list(models or []), "processes": 1}
+
             with mock.patch("ui.main.main_window.threading.Thread", _ImmediateThread), \
                  mock.patch("ui.main.main_window.load_settings", return_value={"selected_model": "gemma4:e4b"}), \
-                 mock.patch("core.llm.ollama_provider.stop_local_llm_models", side_effect=lambda models, logger=None, **_kwargs: stopped_models.extend(models)):
+                 mock.patch("core.llm.ollama_provider.shutdown_local_ollama_runtime", side_effect=_shutdown_runtime):
                 window._release_ai_models_for_editor_mode()
 
             self.assertFalse(backend.stopped)
@@ -1374,6 +1378,41 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIn("gemma4:e4b", stopped_models)
         finally:
             window.backend = None
+            editor.close()
+            editor.deleteLater()
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_post_generation_cleanup_releases_models_immediately(self):
+        window = MainWindow()
+        editor = QWidget(window)
+        editor.sm = SimpleNamespace(is_locked=False, state="ST_COMP")
+        editor._is_ai_processing = False
+        release_calls = []
+        try:
+            window._editor_widget = editor
+            with (
+                mock.patch.object(
+                    window,
+                    "_release_ai_models_for_editor_mode",
+                    side_effect=lambda **kwargs: release_calls.append(kwargs),
+                ),
+                mock.patch.object(window, "_schedule_post_generation_gc") as schedule_gc,
+            ):
+                result = window._post_generation_resource_cleanup(
+                    reason="subtitle_generation_complete",
+                    editor=editor,
+                )
+
+            self.assertTrue(result["cleaned"])
+            self.assertEqual(
+                release_calls,
+                [{"force": True, "preserve_roughcut_status": True}],
+            )
+            schedule_gc.assert_called_once()
+        finally:
+            window._editor_widget = None
             editor.close()
             editor.deleteLater()
             window.close()
@@ -1396,7 +1435,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
         window._editor_widget = editor
         window.backend = SimpleNamespace(_active=True, video_processor=processor)
         try:
-            with mock.patch("core.llm.ollama_provider.stop_local_llm_models") as stop_llm:
+            with mock.patch("core.llm.ollama_provider.shutdown_local_ollama_runtime") as stop_llm:
                 window._release_ai_models_for_editor_mode()
 
             self.assertFalse(processor.stopped)
@@ -1426,7 +1465,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
         window._editor_widget = editor
         window.backend = SimpleNamespace(video_processor=processor)
         try:
-            with mock.patch("core.llm.ollama_provider.stop_local_llm_models") as stop_llm:
+            with mock.patch("core.llm.ollama_provider.shutdown_local_ollama_runtime") as stop_llm:
                 window._release_ai_models_for_editor_mode()
 
             self.assertFalse(processor.stopped)
@@ -1764,14 +1803,82 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
         try:
             window._has_active_runtime_work_for_exit = lambda: True
             window._pause_all_runtime_work_for_exit = lambda *, context: events.append(("pause", context))
+            window._start_runtime_cleanup_for_app_exit_async = lambda *, timeout_sec: events.append(("cleanup_async", timeout_sec))
             window._backup_before_quick_exit = lambda: events.append(("backup", None))
             window._schedule_forced_process_exit = lambda *, delay_ms: events.append(("schedule", delay_ms))
 
             with mock.patch("ui.main.main_file_ops.QApplication.quit") as quit_app:
                 window._quick_exit()
 
-            self.assertEqual(events, [("pause", "앱 종료"), ("schedule", 250)])
+            self.assertEqual(events, [("pause", "앱 종료"), ("cleanup_async", 0.15), ("schedule", 90)])
             quit_app.assert_called_once()
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_exit_backup_skips_editor_save_when_no_unsaved_changes(self):
+        window = MainWindow()
+
+        class _Editor:
+            def __init__(self):
+                self.save_called = False
+
+            def _has_unsaved_changes(self):
+                return False
+
+            def _on_save(self, **_kwargs):
+                self.save_called = True
+
+        editor = _Editor()
+        try:
+            window._editor_widget = editor
+            window._current_project_path = ""
+
+            window._backup_before_quick_exit(include_project_backup=False)
+
+            self.assertFalse(editor.save_called)
+        finally:
+            window._editor_widget = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_app_exit_cleanup_runs_even_after_fast_exit_pause(self):
+        window = MainWindow()
+        try:
+            window._fast_exit_requested = True
+            cleanup_calls = []
+            runtime_calls = []
+            window._cleanup_runtime_for_navigation = lambda **kwargs: cleanup_calls.append(kwargs) or False
+            window._clear_runtime_memory_caches = lambda **kwargs: None
+            with mock.patch(
+                "core.platform_compat.cleanup_app_runtime_processes",
+                side_effect=lambda **kwargs: runtime_calls.append(kwargs) or {
+                    "ollama_models": 1,
+                    "ollama_processes": 1,
+                    "child_processes": 0,
+                    "legacy_preview_ffmpeg": 0,
+                },
+            ):
+                first = window._cleanup_runtime_for_app_exit(timeout_sec=0.8)
+                second = window._cleanup_runtime_for_app_exit(timeout_sec=0.8)
+
+            self.assertTrue(first)
+            self.assertFalse(second)
+            self.assertEqual(
+                cleanup_calls,
+                [
+                    {
+                        "context": "앱 종료",
+                        "timeout_sec": 0.8,
+                        "force": True,
+                        "stop_active": True,
+                    }
+                ],
+            )
+            self.assertEqual(len(runtime_calls), 1)
+            self.assertEqual(runtime_calls[0]["timeout_sec"], 0.8)
         finally:
             window.close()
             window.deleteLater()

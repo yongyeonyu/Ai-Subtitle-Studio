@@ -39,6 +39,10 @@ ROUGH_CUT_ACTION_SCHEMAS: dict[str, dict[str, Any]] = {
         "required": ["titles"],
         "item_required": ["title", "score", "reason"],
     },
+    "label_major_topics": {
+        "required": ["topics"],
+        "item_required": ["major_id", "topic"],
+    },
 }
 
 

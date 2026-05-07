@@ -4,10 +4,11 @@
 
 from __future__ import annotations
 
+import math
 import sys
 
 from core.cut_boundary_audio import detect_audio_gain_boundary_rows
-from core.performance import adaptive_worker_count
+from core.performance import adaptive_worker_count, balanced_task_slices, distributed_worker_ceiling
 
 
 def build_auto_grid_scan_helpers(deps: dict):
@@ -20,6 +21,7 @@ def build_auto_grid_scan_helpers(deps: dict):
     _cb_level_effective_threshold = deps["_cb_level_effective_threshold"]
     _cb_level_min_gap_sec = deps["_cb_level_min_gap_sec"]
     _cb_cuda_available = deps["_cb_cuda_available"]
+    _auto_downscale_frame_for_compare = deps["_auto_downscale_frame_for_compare"]
     _auto_grid_v3_manual_verify_strict = deps["_auto_grid_v3_manual_verify_strict"]
     _auto_grid_v3_manual_verify_strict_mps = deps["_auto_grid_v3_manual_verify_strict_mps"]
     _mps_available = deps["_mps_available"]
@@ -113,13 +115,24 @@ def build_auto_grid_scan_helpers(deps: dict):
             min_gap_frames = max(1, int(round(min_gap_sec * fps)))
             pioneer_step_sec = max(0.25, float(sample_step_sec or 2.0))
             follower_requested = int(settings.get("scan_cut_verify_workers", 4) or 4)
+            follower_workload = max(
+                1,
+                int((frame_count / max(1.0, fps)) / max(0.25, pioneer_step_sec)),
+            )
+            follower_maximum = distributed_worker_ceiling(
+                settings,
+                task="cut_follower",
+                workload=follower_workload,
+                reserve_cores=1,
+                minimum=1,
+            )
             follower_workers, follower_scheduler = adaptive_worker_count(
                 task="cut_follower",
                 settings=settings,
                 requested=follower_requested,
-                workload=max(1, len(provisional_rows or [])),
+                workload=follower_workload,
                 minimum=1,
-                maximum=4,
+                maximum=follower_maximum,
             )
 
             def verified_progress_callback(payload):
@@ -365,13 +378,21 @@ def build_auto_grid_scan_helpers(deps: dict):
         effective_threshold = _cb_level_effective_threshold(level, float(threshold or 24.0)) * pioneer_strict_multiplier
         min_gap_sec = _cb_level_min_gap_sec(level)
         pioneer_requested = int(settings.get("scan_cut_pioneer_workers", 4) or 4)
+        pioneer_workload = max(1, int(duration / max(0.25, scan_interval_sec)))
+        pioneer_maximum = distributed_worker_ceiling(
+            settings,
+            task="cut_pioneer",
+            workload=pioneer_workload,
+            reserve_cores=1,
+            minimum=1,
+        )
         pioneer_workers, pioneer_scheduler = adaptive_worker_count(
             task="cut_pioneer",
             settings=settings,
             requested=pioneer_requested,
-            workload=max(1, int(duration / max(0.25, scan_interval_sec))),
+            workload=pioneer_workload,
             minimum=1,
-            maximum=4,
+            maximum=pioneer_maximum,
         )
         gpu_refine_enabled = bool(settings.get("scan_cut_pioneer_gpu_refine_enabled", True))
         cuda_available = _cb_cuda_available() if gpu_refine_enabled else False
@@ -446,6 +467,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                     if not ok or frame is None:
                         frame_no += step_frames
                         continue
+                    frame = _auto_downscale_frame_for_compare(frame, cv2, settings=settings)
                     t = frame_no / fps
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                     if worker_idx == 0 and callable(progress_callback):
@@ -547,19 +569,27 @@ def build_auto_grid_scan_helpers(deps: dict):
                     pass
             return normalized
 
-        shard_size = max(step_frames, int(frame_count / pioneer_workers))
         futures = []
         audio_future = None
         audio_rows = []
         merged = []
         completed_workers = 0
-        worker_count = pioneer_workers + (1 if audio_gain_enabled else 0)
+        step_count = max(1, int(math.ceil(frame_count / max(1, step_frames))))
+        step_slices = balanced_task_slices(step_count, pioneer_workers, min_batch_size=1)
+        worker_ranges = [
+            (
+                idx,
+                min(frame_count, start_step * step_frames),
+                min(frame_count, end_step * step_frames),
+            )
+            for idx, (start_step, end_step) in enumerate(step_slices)
+            if end_step > start_step
+        ]
+        worker_count = len(worker_ranges) + (1 if audio_gain_enabled else 0)
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="cut-boundary-pioneer") as executor:
             if audio_gain_enabled:
                 audio_future = executor.submit(_scan_audio_gain_rows)
-            for worker_idx in range(pioneer_workers):
-                start_frame = worker_idx * shard_size
-                end_frame = frame_count if worker_idx == pioneer_workers - 1 else min(frame_count, (worker_idx + 1) * shard_size)
+            for worker_idx, start_frame, end_frame in worker_ranges:
                 futures.append(executor.submit(_scan_range, worker_idx, start_frame, end_frame))
             wait_futures = list(futures)
             if audio_future is not None:
@@ -582,11 +612,11 @@ def build_auto_grid_scan_helpers(deps: dict):
                         completion_callback(
                             {
                                 "clip_idx": int(clip_idx or 0),
-                                "worker_total": int(pioneer_workers),
+                                "worker_total": int(len(worker_ranges)),
                                 "worker_completed": int(completed_workers),
                                 "duration": float(duration or 0.0),
                                 "detected": len(merged),
-                                "done": bool(completed_workers >= pioneer_workers),
+                                "done": bool(completed_workers >= len(worker_ranges)),
                             }
                         )
                     except Exception:
@@ -657,13 +687,21 @@ def build_auto_grid_scan_helpers(deps: dict):
             min_gap_sec = float(settings.get("scan_cut_auto_min_gap_sec", 8.0))
             min_gap_frames = max(1, int(round(min_gap_sec * fps)))
             follower_requested = int(settings.get("scan_cut_verify_workers", 4) or 4)
+            follower_workload = max(1, len(provisional_rows or []))
+            follower_maximum = distributed_worker_ceiling(
+                settings,
+                task="cut_follower",
+                workload=follower_workload,
+                reserve_cores=1,
+                minimum=1,
+            )
             follower_workers, follower_scheduler = adaptive_worker_count(
                 task="cut_follower",
                 settings=settings,
                 requested=follower_requested,
-                workload=max(1, len(provisional_rows or [])),
+                workload=follower_workload,
                 minimum=1,
-                maximum=4,
+                maximum=follower_maximum,
             )
             follower_backend = "mps" if sys.platform == "darwin" and _mps_available() else "cpu"
             verified_rows = []
@@ -786,51 +824,66 @@ def build_auto_grid_scan_helpers(deps: dict):
                 )
                 return {"verified": fixed}
 
-            with ThreadPoolExecutor(max_workers=follower_workers, thread_name_prefix="cut-boundary-follower") as executor:
+            def _apply_verify_result(result):
+                fixed = None
+                provisional_hint = None
+                if isinstance(result, dict) and result.get("verified"):
+                    fixed = result.get("verified")
+                elif isinstance(result, dict) and result.get("provisional"):
+                    provisional_hint = result.get("provisional")
+                elif isinstance(result, dict):
+                    fixed = result
+                if provisional_hint is not None:
+                    if callable(provisional_callback):
+                        try:
+                            provisional_callback(dict(provisional_hint), list(verified_rows))
+                        except Exception:
+                            pass
+                    return
+                if fixed is None:
+                    return
+                duplicate = False
+                for old in verified_rows:
+                    try:
+                        if abs(int(old.get("timeline_frame", -999999)) - int(fixed.get("timeline_frame", -999998))) <= min_gap_frames:
+                            duplicate = True
+                            break
+                    except Exception:
+                        pass
+                if duplicate:
+                    return
+                verified_rows.append(fixed)
+                verified_rows[:] = normalize_cut_boundaries(verified_rows, primary_fps=fps)
+                if callable(found_callback):
+                    try:
+                        found_callback(dict(fixed), list(verified_rows))
+                    except Exception:
+                        pass
+
+            verify_rows = [dict(row) for row in list(provisional_rows or []) if isinstance(row, dict)]
+            batches = balanced_task_slices(len(verify_rows), follower_workers, min_batch_size=2)
+
+            def _verify_batch(start_idx: int, end_idx: int):
+                local_results = []
+                for row in verify_rows[start_idx:end_idx]:
+                    try:
+                        local_results.append(_verify_row(row))
+                    except Exception:
+                        local_results.append(None)
+                return local_results
+
+            with ThreadPoolExecutor(max_workers=max(1, len(batches)), thread_name_prefix="cut-boundary-follower") as executor:
                 future_map = {
-                    executor.submit(_verify_row, dict(row)): dict(row)
-                    for row in list(provisional_rows or [])
-                    if isinstance(row, dict)
+                    executor.submit(_verify_batch, start_idx, end_idx): (start_idx, end_idx)
+                    for start_idx, end_idx in batches
                 }
                 for future in as_completed(future_map):
-                    fixed = None
-                    provisional_hint = None
                     try:
-                        result = future.result()
+                        batch_results = list(future.result() or [])
                     except Exception:
-                        result = None
-                    if isinstance(result, dict) and result.get("verified"):
-                        fixed = result.get("verified")
-                    elif isinstance(result, dict) and result.get("provisional"):
-                        provisional_hint = result.get("provisional")
-                    elif isinstance(result, dict):
-                        fixed = result
-                    if provisional_hint is not None:
-                        if callable(provisional_callback):
-                            try:
-                                provisional_callback(dict(provisional_hint), list(verified_rows))
-                            except Exception:
-                                pass
-                        continue
-                    if fixed is None:
-                        continue
-                    duplicate = False
-                    for old in verified_rows:
-                        try:
-                            if abs(int(old.get("timeline_frame", -999999)) - int(fixed.get("timeline_frame", -999998))) <= min_gap_frames:
-                                duplicate = True
-                                break
-                        except Exception:
-                            pass
-                    if duplicate:
-                        continue
-                    verified_rows.append(fixed)
-                    verified_rows[:] = normalize_cut_boundaries(verified_rows, primary_fps=fps)
-                    if callable(found_callback):
-                        try:
-                            found_callback(dict(fixed), list(verified_rows))
-                        except Exception:
-                            pass
+                        batch_results = []
+                    for result in batch_results:
+                        _apply_verify_result(result)
             return normalize_cut_boundaries(verified_rows, primary_fps=fps)
         finally:
             try:

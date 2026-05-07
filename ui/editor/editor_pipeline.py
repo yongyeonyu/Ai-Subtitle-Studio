@@ -376,9 +376,7 @@ class EditorPipelineMixin:
         except Exception:
             pass
         if hasattr(self, "_schedule_post_generation_roughcut_draft"):
-            QTimer.singleShot(350, lambda: self._schedule_post_generation_roughcut_draft(force=True))
-        if hasattr(main_w, "_release_ai_models_for_editor_mode"):
-            QTimer.singleShot(450, self._schedule_post_generation_model_release)
+            QTimer.singleShot(900, lambda: self._schedule_post_generation_roughcut_draft(force=True))
         # E fix: 자막 생성 완료 후 타임라인/캔버스 재동기화
         QTimer.singleShot(200, self._post_completion_sync)
         unlock_sidebar = getattr(main_w, "_unlock_workspace_sidebar_width", None)

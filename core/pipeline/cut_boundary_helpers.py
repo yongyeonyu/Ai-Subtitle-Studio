@@ -119,7 +119,7 @@ class PipelineCutBoundaryMixin:
         os.makedirs(cache_root, exist_ok=True)
 
         payload = {
-            "version": 4,
+            "version": 5,
             "files": [],
             "settings": {
                 "scan_cut_auto_sample_step_sec": settings.get("scan_cut_auto_sample_step_sec", 2.0),
@@ -128,6 +128,8 @@ class PipelineCutBoundaryMixin:
                 "scan_cut_mode": settings.get("scan_cut_mode", ""),
                 "scan_cut_boundary_level": settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")),
                 "scan_cut_grid_mask": settings.get("scan_cut_grid_mask", ""),
+                "scan_cut_compare_max_width": settings.get("scan_cut_compare_max_width", 1920),
+                "scan_cut_compare_max_height": settings.get("scan_cut_compare_max_height", 1080),
                 "scan_cut_audio_gain_enabled": settings.get("scan_cut_audio_gain_enabled", True),
                 "scan_cut_audio_gain_threshold_db": settings.get("scan_cut_audio_gain_threshold_db", 10.0),
                 "scan_cut_audio_gain_window_sec": settings.get("scan_cut_audio_gain_window_sec", None),
@@ -156,7 +158,7 @@ class PipelineCutBoundaryMixin:
         key = hashlib.sha256(raw).hexdigest()[:24]
         return os.path.join(cache_root, f"cut_boundaries_{key}.json")
 
-    def _load_cut_boundary_cache_for_start(self, project_path: str, files: list[str], settings: dict) -> list[dict]:
+    def _load_cut_boundary_cache_for_start(self, project_path: str, files: list[str], settings: dict) -> list[dict] | None:
         """Load cached cut boundaries and hydrate only project.analysis.cut_boundaries.
 
         IMPORTANT:
@@ -168,12 +170,17 @@ class PipelineCutBoundaryMixin:
 
             cache_path = self._cut_boundary_cache_path_for_start(files, settings)
             if not os.path.exists(cache_path):
-                return []
+                return None
 
             with open(cache_path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
 
             analysis = payload.get("analysis", {}) if isinstance(payload, dict) else {}
+            has_cache_rows = isinstance(analysis, dict) and "cut_boundaries" in analysis
+            has_cache_rows = has_cache_rows or (isinstance(payload, dict) and "cut_boundaries" in payload)
+            payload_cache_type = str(payload.get("cache_type") or "") if isinstance(payload, dict) else ""
+            if not has_cache_rows and payload_cache_type != "cut_boundaries_only":
+                return None
             rows = analysis.get("cut_boundaries", [])
 
             # Backward compatibility with older cache format
@@ -181,8 +188,6 @@ class PipelineCutBoundaryMixin:
                 rows = payload.get("cut_boundaries", []) if isinstance(payload, dict) else []
 
             rows = normalize_cut_boundaries(rows or [])
-            if not rows:
-                return []
 
             # ✅ 핵심: 현재 프로젝트 파일은 그대로 두고 analysis.cut_boundaries만 주입
             if project_path and os.path.exists(project_path):
@@ -202,11 +207,19 @@ class PipelineCutBoundaryMixin:
                 f"  ♻️ [컷 경계] 캐시 재사용: {len(rows)}개 "
                 f"(analysis.cut_boundaries only, {cache_path})"
             )
-            self._ui_emit("_sig_refresh_cut_boundary_placeholder")
+            emitter = getattr(self, "_ui_emit", None)
+            if callable(emitter):
+                emitter("_sig_refresh_cut_boundary_placeholder")
+            counter = getattr(self, "_emit_cut_boundary_count_to_sidebar", None)
+            if callable(counter):
+                try:
+                    counter(len(rows), done=True)
+                except Exception:
+                    pass
             return rows
         except Exception as exc:
             get_logger().log(f"  ⚠️ [컷 경계] 캐시 불러오기 실패: {exc}")
-            return []
+            return None
 
     def _save_cut_boundary_cache_for_start(self, files: list[str], settings: dict, rows: list[dict]) -> None:
         """Save only cut-boundary analysis data for future reuse.
@@ -221,7 +234,7 @@ class PipelineCutBoundaryMixin:
             cache_path = self._cut_boundary_cache_path_for_start(files, settings)
 
             payload = {
-                "version": 4,
+                "version": 5,
                 "created_at": time.time(),
                 "cache_type": "cut_boundaries_only",
                 "files": [],
@@ -232,6 +245,8 @@ class PipelineCutBoundaryMixin:
                     "scan_cut_mode": settings.get("scan_cut_mode", ""),
                     "scan_cut_boundary_level": settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")),
                     "scan_cut_grid_mask": settings.get("scan_cut_grid_mask", ""),
+                    "scan_cut_compare_max_width": settings.get("scan_cut_compare_max_width", 1920),
+                    "scan_cut_compare_max_height": settings.get("scan_cut_compare_max_height", 1080),
                     "scan_cut_audio_gain_enabled": settings.get("scan_cut_audio_gain_enabled", True),
                     "scan_cut_audio_gain_threshold_db": settings.get("scan_cut_audio_gain_threshold_db", 10.0),
                     "scan_cut_audio_gain_window_sec": settings.get("scan_cut_audio_gain_window_sec", None),
@@ -690,7 +705,7 @@ class PipelineCutBoundaryMixin:
                 return []
 
             cached = self._load_cut_boundary_cache_for_start(project_path, files, settings)
-            if cached:
+            if cached is not None:
                 return cached
 
             clip_boundaries = list(getattr(self.ui, "_multiclip_boundaries", []) or [])
@@ -999,6 +1014,7 @@ class PipelineCutBoundaryMixin:
                             provisional_callback=_relocated_provisional_found,
                         )
                     _save_detected_now()
+                    self._save_cut_boundary_cache_for_start(files, settings, detected)
                     try:
                         self._force_cut_boundary_topicless_segments_to_project(
                             project_path,

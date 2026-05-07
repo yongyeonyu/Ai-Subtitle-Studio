@@ -13,7 +13,7 @@ from typing import Any
 
 from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
 from core.work_mode import EDITOR_MODE, normalize_work_mode
-from core.project.subtitle_status import subtitle_status_payload
+from core.project.subtitle_status import recheck_threshold, subtitle_status_payload
 from core.cut_boundary import (
     CUT_BOUNDARY_PROVISIONAL_SCHEMA,
     CUT_BOUNDARY_SCHEMA,
@@ -118,6 +118,14 @@ VECTOR_SEGMENT_META_KEYS = (
     *STT_SEGMENT_METADATA_KEYS,
 )
 
+SUBTITLE_STATUS_PAYLOAD_KEYS = (
+    "subtitle_review_state",
+    "subtitle_status_color",
+    "subtitle_status_schema",
+    "subtitle_status_score",
+    "subtitle_status_source",
+)
+
 
 def sanitize_workspace_state(workspace: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(workspace, dict):
@@ -141,6 +149,23 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _project_segment_status_payload(seg: dict[str, Any], *, threshold: float | None = None) -> dict[str, Any]:
+    if isinstance(seg, dict) and all(key in seg for key in SUBTITLE_STATUS_PAYLOAD_KEYS):
+        state = str(seg.get("subtitle_review_state", "") or "").strip()
+        schema = str(seg.get("subtitle_status_schema", "") or "").strip()
+        if state and schema:
+            return {
+                key: seg.get(key)
+                for key in SUBTITLE_STATUS_PAYLOAD_KEYS
+                if seg.get(key) not in (None, "")
+            }
+    return {
+        key: value
+        for key, value in subtitle_status_payload(seg, threshold=threshold).items()
+        if value not in (None, "")
+    }
 
 
 def project_media_files(project: dict[str, Any]) -> list[str]:
@@ -361,6 +386,7 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
     clip_by_id = {str(clip.get("id", "")): clip for clip in clips if clip.get("id")}
     timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
     primary_fps = normalize_fps(timebase.get("primary_fps", 30.0) or 30.0)
+    status_threshold = recheck_threshold() if raw_segments else None
 
     out = []
     for idx, seg in enumerate(raw_segments or []):
@@ -446,7 +472,7 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
         for key in STT_SEGMENT_METADATA_KEYS:
             if key in seg:
                 item[key] = seg.get(key)
-        item.update({key: value for key, value in subtitle_status_payload(item).items() if value not in (None, "")})
+        item.update(_project_segment_status_payload(item, threshold=status_threshold))
         out.append(item)
     if out and project_uses_external_text_assets(project):
         _attach_external_stt_candidates(out, load_external_stt_tracks(project))
@@ -927,6 +953,7 @@ def _segments_from_subtitle_canvas_vector(vector_canvas: dict[str, Any]) -> list
 
 def _normalize_editor_segments(segments: list[dict[str, Any]], *, primary_fps: float = 30.0) -> list[dict[str, Any]]:
     fps = normalize_fps(primary_fps or 30.0)
+    status_threshold = recheck_threshold() if segments else None
     out = []
     for idx, seg in enumerate(segments or []):
         if seg.get("is_gap"):
@@ -987,7 +1014,7 @@ def _normalize_editor_segments(segments: list[dict[str, Any]], *, primary_fps: f
         for key in STT_SEGMENT_METADATA_KEYS:
             if key in seg:
                 item[key] = seg.get(key)
-        item.update({key: value for key, value in subtitle_status_payload(item).items() if value not in (None, "")})
+        item.update(_project_segment_status_payload(item, threshold=status_threshold))
         out.append(item)
     return out
 
@@ -998,6 +1025,7 @@ def _normalize_stt_preview_segments(
     primary_fps: float = 30.0,
 ) -> list[dict[str, Any]]:
     fps = normalize_fps(primary_fps or 30.0)
+    status_threshold = recheck_threshold() if segments else None
     out = []
     for idx, seg in enumerate(segments or []):
         if not isinstance(seg, dict):
@@ -1035,7 +1063,7 @@ def _normalize_stt_preview_segments(
         for key in STT_SEGMENT_METADATA_KEYS:
             if key in seg and key not in item:
                 item[key] = seg.get(key)
-        item.update({key: value for key, value in subtitle_status_payload(item).items() if value not in (None, "")})
+        item.update(_project_segment_status_payload(item, threshold=status_threshold))
         if start_frame is None:
             start_frame = int(start * fps)
         if end_frame is None:

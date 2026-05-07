@@ -103,7 +103,14 @@ def recheck_threshold() -> float:
         return 60.0
 
 
-def subtitle_review_state(seg: dict, *, threshold: float | None = None) -> str:
+def subtitle_review_state(
+    seg: dict,
+    *,
+    threshold: float | None = None,
+    selected_source: str | None = None,
+    score: float | None = None,
+    candidate_scores: list[float] | None = None,
+) -> str:
     """Return one of confirmed, pending, recheck, conflict."""
     quality = dict(seg.get("quality") or {})
     flags = {str(flag) for flag in (quality.get("flags") or ())}
@@ -111,9 +118,9 @@ def subtitle_review_state(seg: dict, *, threshold: float | None = None) -> str:
         return "confirmed"
 
     threshold = recheck_threshold() if threshold is None else float(threshold)
-    selected_source = _selected_stt_source(seg)
-    score = subtitle_detection_score(seg, selected_source)
-    candidate_scores = _stt_candidate_scores(seg)
+    selected_source = _selected_stt_source(seg) if selected_source is None else str(selected_source or "").strip().upper()
+    score = subtitle_detection_score(seg, selected_source) if score is None else score
+    candidate_scores = _stt_candidate_scores(seg) if candidate_scores is None else list(candidate_scores or [])
     label = str(quality.get("confidence_label") or "").strip().lower()
     auto_review_severity = str(seg.get("subtitle_auto_review_severity") or "").strip().lower()
     stage_confidence_label = str(seg.get("subtitle_confidence_label") or "").strip().lower()
@@ -142,14 +149,15 @@ def subtitle_review_state(seg: dict, *, threshold: float | None = None) -> str:
     return "pending"
 
 
-def subtitle_status_payload(seg: dict) -> dict[str, Any]:
-    state = subtitle_review_state(seg)
+def subtitle_status_payload(seg: dict, *, threshold: float | None = None) -> dict[str, Any]:
     selected_source = _selected_stt_source(seg)
+    score = subtitle_detection_score(seg, selected_source)
+    state = subtitle_review_state(seg, threshold=threshold, selected_source=selected_source, score=score)
     return {
         "subtitle_review_state": state,
         "subtitle_status_color": SUBTITLE_STATUS_COLORS.get(state, ""),
         "subtitle_status_schema": "subtitle_status.v1",
-        "subtitle_status_score": subtitle_detection_score(seg, selected_source),
+        "subtitle_status_score": score,
         "subtitle_status_source": selected_source,
     }
 

@@ -807,6 +807,38 @@ def _selected_grid_delta(prev_gray, cur_gray, positions) -> tuple[float, list[fl
     except Exception:
         return 0.0, []
 
+
+def _cb_compare_resolution(settings: dict | None = None) -> tuple[int, int]:
+    data = dict(settings or {})
+    try:
+        max_w = int(data.get("scan_cut_compare_max_width", 1920) or 1920)
+    except Exception:
+        max_w = 1920
+    try:
+        max_h = int(data.get("scan_cut_compare_max_height", 1080) or 1080)
+    except Exception:
+        max_h = 1080
+    return max(320, max_w), max(180, max_h)
+
+
+def _cb_downscale_frame_for_compare(frame, cv2_mod, *, settings: dict | None = None):
+    try:
+        h, w = frame.shape[:2]
+    except Exception:
+        return frame
+    if w <= 0 or h <= 0:
+        return frame
+    max_w, max_h = _cb_compare_resolution(settings)
+    scale = min(1.0, float(max_w) / float(w), float(max_h) / float(h))
+    if scale >= 0.999:
+        return frame
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    try:
+        return cv2_mod.resize(frame, (new_w, new_h), interpolation=cv2_mod.INTER_AREA)
+    except Exception:
+        return frame
+
 # === CUT_BOUNDARY_GRID_INTERVAL_FIX_V3 ===
 
 def _cb_level_interval_sec(level: str) -> float:
@@ -854,13 +886,14 @@ def _cb_level_min_gap_sec(level: str) -> float:
     }.get(level, 6.0)
 
 
-def _cb_read_gray_at(cap, frame_no: int):
+def _cb_read_gray_at(cap, frame_no: int, *, settings: dict | None = None):
     try:
         import cv2
         cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(frame_no)))
         ok, frame = cap.read()
         if not ok or frame is None:
             return None
+        frame = _cb_downscale_frame_for_compare(frame, cv2, settings=settings)
         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     except Exception:
         return None
@@ -874,6 +907,7 @@ def _cb_refine_cut_time_with_pyramid(
     positions,
     effective_threshold: float,
     level: str,
+    settings: dict | None = None,
 ):
     """Refine candidate time using a backward pyramid.
 
@@ -901,7 +935,7 @@ def _cb_refine_cut_time_with_pyramid(
             local_best = best_time
 
             while t <= end_t + 1e-6:
-                gray = _cb_read_gray_at(cap, int(round(t * fps)))
+                gray = _cb_read_gray_at(cap, int(round(t * fps)), settings=settings)
                 if gray is not None and prev_gray is not None:
                     delta, cell_deltas = _selected_grid_delta(prev_gray, gray, positions)
                     strong_cells = sum(1 for d in cell_deltas if d >= effective_threshold * 0.70)
@@ -1045,6 +1079,7 @@ def detect_media_cut_boundaries(
                 continue
 
             t = frame_no / fps
+            frame = _cb_downscale_frame_for_compare(frame, cv2, settings=kwargs.get("settings"))
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
             if progress_callback:
@@ -1084,6 +1119,7 @@ def detect_media_cut_boundaries(
                         positions=positions,
                         effective_threshold=effective_threshold,
                         level=level,
+                        settings=kwargs.get("settings"),
                     )
 
                     # refine 결과도 min_gap 안쪽이면 버림

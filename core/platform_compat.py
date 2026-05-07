@@ -234,16 +234,70 @@ def _is_ollama_runtime_command(command: str) -> bool:
     return "/ollama.app/contents/macos/ollama" in lowered
 
 
+def _launchctl_has_label(label: str) -> bool:
+    target = str(label or "").strip()
+    if not target:
+        return False
+    try:
+        output = subprocess.check_output(
+            ["launchctl", "list"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return False
+    return any(line.rstrip().endswith(target) for line in output.splitlines())
+
+
+def _stop_managed_ollama_service(*, timeout_sec: float = 0.4) -> int:
+    if is_windows() or not _launchctl_has_label("homebrew.mxcl.ollama"):
+        return 0
+
+    deadline = max(1.5, float(timeout_sec or 0.4) * 6.0)
+    brew = shutil.which("brew")
+    if brew:
+        try:
+            result = subprocess.run(
+                [brew, "services", "stop", "ollama"],
+                capture_output=True,
+                text=True,
+                timeout=deadline,
+                env=subprocess_env(strip_qt=True),
+            )
+            if result.returncode == 0:
+                return 1
+        except Exception:
+            pass
+
+    uid = os.getuid()
+    for domain in (f"gui/{uid}", f"user/{uid}"):
+        try:
+            result = subprocess.run(
+                ["launchctl", "bootout", f"{domain}/homebrew.mxcl.ollama"],
+                capture_output=True,
+                text=True,
+                timeout=deadline,
+                env=subprocess_env(strip_qt=True),
+            )
+            if result.returncode == 0:
+                return 1
+        except Exception:
+            continue
+    return 0
+
+
 def cleanup_ollama_runtime_processes(*, timeout_sec: float = 0.4) -> int:
     """Terminate Ollama server/app processes after unloading models."""
     if is_windows():
         return 0
+    service_stopped = _stop_managed_ollama_service(timeout_sec=timeout_sec)
     targets = [
         pid
         for pid, _ppid, command in _process_table()
         if _is_ollama_runtime_command(command)
     ]
-    return _terminate_pids(targets, timeout_sec=timeout_sec)
+    stopped = _terminate_pids(targets, timeout_sec=timeout_sec)
+    return stopped or service_stopped
 
 
 def cleanup_app_runtime_processes(*, logger=None, timeout_sec: float = 0.4) -> dict[str, int]:
@@ -254,24 +308,39 @@ def cleanup_app_runtime_processes(*, logger=None, timeout_sec: float = 0.4) -> d
         "child_processes": 0,
         "legacy_preview_ffmpeg": 0,
     }
+    used_shutdown_helper = False
     try:
-        from core.llm.ollama_provider import stop_local_llm_models
+        from core.llm.ollama_provider import shutdown_local_ollama_runtime
 
-        stopped_models = stop_local_llm_models(None, logger=logger, log_context="앱 종료")
-        result["ollama_models"] = len(stopped_models)
+        shutdown_result = shutdown_local_ollama_runtime(
+            None,
+            logger=logger,
+            log_context="앱 종료",
+            timeout_sec=timeout_sec,
+        )
+        used_shutdown_helper = True
+        result["ollama_models"] = len(shutdown_result.get("models", []) or [])
+        result["ollama_processes"] = int(shutdown_result.get("processes", 0) or 0)
     except Exception:
-        pass
+        try:
+            from core.llm.ollama_provider import stop_local_llm_models
+
+            stopped_models = stop_local_llm_models(None, logger=logger, log_context="앱 종료")
+            result["ollama_models"] = len(stopped_models)
+        except Exception:
+            pass
 
     result["child_processes"] = cleanup_app_child_processes(timeout_sec=timeout_sec)
     result["legacy_preview_ffmpeg"] = cleanup_stale_preview_proxy_processes(timeout_sec=timeout_sec)
-    result["ollama_processes"] = cleanup_ollama_runtime_processes(timeout_sec=timeout_sec)
+    if not used_shutdown_helper:
+        result["ollama_processes"] = cleanup_ollama_runtime_processes(timeout_sec=timeout_sec)
     cleaned_processes = int(result["child_processes"]) + int(result["legacy_preview_ffmpeg"])
     if cleaned_processes and logger:
         try:
             logger.log(f"🧹 앱 종료: 무거운 런타임 프로세스 {cleaned_processes}개 정리 완료")
         except Exception:
             pass
-    if result["ollama_processes"] and logger:
+    if result["ollama_processes"] and logger and not used_shutdown_helper:
         try:
             logger.log(f"🛑 앱 종료: Ollama 서버/러너 {result['ollama_processes']}개 종료 완료")
         except Exception:

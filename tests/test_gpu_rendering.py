@@ -31,15 +31,15 @@ class GpuRenderingSafetyTests(unittest.TestCase):
             self.assertFalse(gpu_widgets_enabled("timeline"))
             self.assertEqual(gpu_backend_name("timeline"), "qwidget")
 
-    def test_opengl_widgets_are_default_off_in_real_app_runs(self):
+    def test_real_app_defaults_enable_all_ui_gpu(self):
         from ui.gpu_rendering import gpu_backend_name, gpu_widgets_enabled
 
         with patch.dict(os.environ, {}, clear=True), \
              patch("ui.gpu_rendering._running_under_pytest", return_value=False):
-            self.assertFalse(gpu_widgets_enabled())
-            self.assertEqual(gpu_backend_name(), "qwidget")
-            self.assertFalse(gpu_widgets_enabled("video"))
-            self.assertEqual(gpu_backend_name("video"), "qwidget")
+            self.assertTrue(gpu_widgets_enabled())
+            self.assertEqual(gpu_backend_name(), "opengl-widget")
+            self.assertTrue(gpu_widgets_enabled("video"))
+            self.assertEqual(gpu_backend_name("video"), "opengl-widget")
 
     def test_opengl_widgets_require_explicit_opt_in(self):
         from ui.gpu_rendering import gpu_backend_name, gpu_widgets_enabled
@@ -157,6 +157,35 @@ class GpuRenderingSafetyTests(unittest.TestCase):
         ):
             self.assertTrue(scenegraph_enabled("timeline"))
 
+    def test_scenegraph_can_follow_settings_when_gpu_runtime_uses_qwidget_canvas(self):
+        from ui.gpu_rendering import scenegraph_enabled
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("ui.gpu_rendering._running_under_pytest", return_value=False), \
+             patch(
+                 "ui.gpu_rendering._render_settings",
+                 return_value={
+                     "editor_rendering_gpu_scope": "all",
+                     "editor_rendering_opengl_widgets_enabled": False,
+                 },
+             ):
+            self.assertTrue(scenegraph_enabled("timeline"))
+
+    def test_scenegraph_can_be_disabled_explicitly_in_settings(self):
+        from ui.gpu_rendering import scenegraph_enabled
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("ui.gpu_rendering._running_under_pytest", return_value=False), \
+             patch(
+                 "ui.gpu_rendering._render_settings",
+                 return_value={
+                     "editor_rendering_gpu_scope": "all",
+                     "editor_rendering_opengl_widgets_enabled": False,
+                     "editor_rendering_scenegraph_enabled": False,
+                 },
+             ):
+            self.assertFalse(scenegraph_enabled("timeline"))
+
     def test_opengl_widgets_disabled_offscreen_even_when_requested(self):
         from ui.gpu_rendering import gpu_widgets_enabled
 
@@ -171,13 +200,13 @@ class GpuRenderingSafetyTests(unittest.TestCase):
         ):
             self.assertFalse(gpu_widgets_enabled())
 
-    def test_qt_global_opengl_setup_is_default_off(self):
+    def test_qt_global_opengl_setup_follows_all_ui_gpu_defaults(self):
         from core.performance import configure_qt_gpu_rendering_before_app
 
         with patch.dict(os.environ, {}, clear=True):
             configure_qt_gpu_rendering_before_app()
-            self.assertIsNone(os.environ.get("QT_OPENGL"))
-            self.assertIsNone(os.environ.get("QSG_RHI_BACKEND"))
+            self.assertEqual(os.environ.get("QT_OPENGL"), "desktop")
+            self.assertEqual(os.environ.get("QSG_RHI_BACKEND"), "opengl")
 
     def test_qt_global_opengl_setup_requires_explicit_opt_in(self):
         from core.performance import configure_qt_gpu_rendering_before_app

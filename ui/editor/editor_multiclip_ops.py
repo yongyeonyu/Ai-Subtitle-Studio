@@ -141,8 +141,17 @@ class EditorMulticlipOpsMixin:
         prev_suspend_autoseek = bool(getattr(self, "_suspend_append_segments_autoseek", False))
         if preserve_view:
             self._suspend_append_segments_autoseek = True
-        self.text_edit.clear()
+        text_edit = getattr(self, "text_edit", None)
+        timestamp_area = getattr(text_edit, "timestampArea", None) if text_edit is not None else None
+        timeline = getattr(self, "timeline", None)
+        if text_edit is not None and hasattr(text_edit, "setUpdatesEnabled"):
+            text_edit.setUpdatesEnabled(False)
+        if timestamp_area is not None and hasattr(timestamp_area, "setUpdatesEnabled"):
+            timestamp_area.setUpdatesEnabled(False)
+        if timeline is not None and hasattr(timeline, "setUpdatesEnabled"):
+            timeline.setUpdatesEnabled(False)
         try:
+            self.text_edit.clear()
             self.append_segments(segs)
             if preserve_view and hasattr(self, "_flush_queue"):
                 self._flush_queue()
@@ -163,6 +172,12 @@ class EditorMulticlipOpsMixin:
             self._schedule_timeline()
         finally:
             self._suspend_append_segments_autoseek = prev_suspend_autoseek
+            if timeline is not None and hasattr(timeline, "setUpdatesEnabled"):
+                timeline.setUpdatesEnabled(True)
+            if timestamp_area is not None and hasattr(timestamp_area, "setUpdatesEnabled"):
+                timestamp_area.setUpdatesEnabled(True)
+            if text_edit is not None and hasattr(text_edit, "setUpdatesEnabled"):
+                text_edit.setUpdatesEnabled(True)
 
     def _on_clip_delete_requested(self, clip_idx):
         owner = self.window()

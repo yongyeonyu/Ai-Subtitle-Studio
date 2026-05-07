@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from core.mode_policy import (
     ENGINE_DASHBOARD_STEPS,
@@ -116,9 +117,9 @@ class ModePolicyTests(unittest.TestCase):
             }
         )
 
-        with unittest.mock.patch("core.engine.subtitle_settings._get_user_settings", return_value=auto):
+        with mock.patch("core.engine.subtitle_settings._get_user_settings", return_value=auto):
             self.assertIn("사용 안함", subtitle_settings.get_selected_llm())
-        with unittest.mock.patch("core.engine.subtitle_settings._get_user_settings", return_value=high):
+        with mock.patch("core.engine.subtitle_settings._get_user_settings", return_value=high):
             self.assertEqual(subtitle_settings.get_selected_llm(), "custom-llm")
 
     def test_dashboard_has_ten_stable_steps_and_reasons(self):

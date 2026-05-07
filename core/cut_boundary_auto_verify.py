@@ -104,6 +104,7 @@ def build_strict_verify_helpers(deps: dict):
             scale_w=scale_w,
             scale_h=scale_h,
             color_space=color_space,
+            settings=settings,
         )
 
         if not gray_map:
@@ -412,6 +413,7 @@ def build_strict_verify_helpers(deps: dict):
             scale_w=scale_w,
             scale_h=scale_h,
             color_space=color_space,
+            settings=settings,
         )
         if not gray_map:
             return None

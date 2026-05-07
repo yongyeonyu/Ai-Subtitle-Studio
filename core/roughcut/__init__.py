@@ -19,6 +19,7 @@ from .editor_draft import (
     build_editor_roughcut_candidate_payload,
     build_editor_roughcut_draft_prompt,
     build_editor_roughcut_draft_result,
+    describe_editor_roughcut_llm_scope,
     editor_roughcut_draft_enabled,
     editor_roughcut_draft_llm_allowed,
     is_fast_recognition_mode,
@@ -62,7 +63,7 @@ from .models import (
     subtitles_from_dicts,
     roughcut_result_from_dict,
 )
-from .roughcut_llm import RoughCutLLMActionResult, run_roughcut_llm_action
+from .roughcut_llm import RoughCutLLMActionResult, prepare_roughcut_llm_model_for_run, run_roughcut_llm_action
 from .roughcut_llm_config import RoughCutLLMConfig, resolve_roughcut_llm_config
 from .roughcut_context_policy import resolve_roughcut_context_policy, trim_roughcut_payload_for_context
 from .roughcut_prompts import DEFAULT_ROUGHCUT_PROMPT_V1
@@ -73,6 +74,7 @@ from .major_segmenter import build_major_roughcut_segments
 from .transcript_packer import format_packed_transcript, pack_transcript
 from .semantic_chunker import build_semantic_chunks, chunks_to_chapters
 from .story_mapper import STORY_ROLES, classify_story_role, map_story_roles, remap_story_flow
+from .topic_labeler import apply_major_topic_labels
 from .topic_detector import detect_topic_shift, detect_topic_shifts, extract_keywords, topic_shift_score
 
 __all__ = [
@@ -108,10 +110,12 @@ __all__ = [
     "ThumbnailCacheResult",
     "VisualSceneNote",
     "apply_roughcut_order_to_subtitles",
+    "apply_major_topic_labels",
     "build_chapters",
     "build_editor_roughcut_candidate_payload",
     "build_editor_roughcut_draft_prompt",
     "build_editor_roughcut_draft_result",
+    "describe_editor_roughcut_llm_scope",
     "build_major_roughcut_segments",
     "build_semantic_chunks",
     "build_edit_decisions",
@@ -150,6 +154,7 @@ __all__ = [
     "remap_story_flow",
     "map_edl_segments_to_clip_sources",
     "pack_transcript",
+    "prepare_roughcut_llm_model_for_run",
     "render_from_edl",
     "refine_major_boundaries",
     "run_roughcut_pipeline",

@@ -4,9 +4,11 @@
 
 from core.engine.subtitle_settings import _get_user_settings, _setting_float
 from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
+from core.runtime.logger import get_logger
 
 
 TIMING_FUSION_SCHEMA = "ai_subtitle_studio.subtitle_timing_fusion.v1"
+COMMON_SPLIT_GUARD_SCHEMA = "ai_subtitle_studio.common_subtitle_split_guard.v1"
 
 
 def _setting_bool(settings: dict, key: str, default: bool = True) -> bool:
@@ -14,6 +16,22 @@ def _setting_bool(settings: dict, key: str, default: bool = True) -> bool:
     if isinstance(value, str):
         return value.strip().lower() not in {"0", "false", "off", "no", "끔"}
     return bool(value)
+
+
+def _clamp_float(value, lo: float, hi: float, default: float) -> float:
+    try:
+        raw = float(value)
+    except Exception:
+        raw = float(default)
+    return max(lo, min(hi, raw))
+
+
+def _clamp_int(value, lo: int, hi: int, default: int) -> int:
+    try:
+        raw = int(round(float(value)))
+    except Exception:
+        raw = int(default)
+    return max(lo, min(hi, raw))
 
 
 def _segment_scope_key(seg: dict):
@@ -587,6 +605,379 @@ def align_stt_preview_to_subtitle_segments(
     return out
 
 
+def _compact_len(value) -> int:
+    return len(str(value or "").replace(" ", "").replace("\n", ""))
+
+
+def _word_text(word: dict) -> str:
+    return str((word or {}).get("word", "") or "").strip()
+
+
+def _word_chars(words: list[dict]) -> int:
+    return sum(_compact_len(_word_text(word)) for word in words)
+
+
+def _word_duration(words: list[dict]) -> float:
+    if not words:
+        return 0.0
+    start = _as_float(words[0].get("start"), 0.0)
+    end = _as_float(words[-1].get("end"), start)
+    return max(0.0, end - start)
+
+
+def _words_for_common_split(seg: dict) -> list[dict]:
+    words = [
+        dict(word)
+        for word in list(seg.get("words") or [])
+        if isinstance(word, dict)
+        and _word_text(word)
+        and word.get("start") not in (None, "")
+        and word.get("end") not in (None, "")
+    ]
+    if words:
+        return sorted(words, key=lambda item: _as_float(item.get("start"), 0.0))
+
+    tokens = [token for token in str(seg.get("text", "") or "").split() if token.strip()]
+    if not tokens:
+        return []
+    start, end = _time_bounds(seg)
+    end = max(start + 0.05, end)
+    step = max(0.05, (end - start) / max(1, len(tokens)))
+    speaker = seg.get("speaker")
+    return [
+        {
+            "word": token,
+            "start": round(start + idx * step, 3),
+            "end": round(start + (idx + 1) * step, 3),
+            "speaker": speaker,
+        }
+        for idx, token in enumerate(tokens)
+    ]
+
+
+def _is_common_split_break(left_word: dict, right_word: dict | None) -> bool:
+    text = _word_text(left_word)
+    next_text = _word_text(right_word or {})
+    if text.endswith((".", ",", "!", "?", "~", "…", "。", "，")):
+        return True
+    clean = "".join(ch for ch in text if ch.isalnum() or ("가" <= ch <= "힣"))
+    next_clean = "".join(ch for ch in next_text if ch.isalnum() or ("가" <= ch <= "힣"))
+    end_tokens = (
+        "거든요",
+        "거든",
+        "는데요",
+        "는데",
+        "네요",
+        "습니다",
+        "합니다",
+        "했는데",
+        "했고",
+        "하고",
+        "해서",
+        "니까",
+        "라고",
+        "같아요",
+        "같고",
+        "예요",
+        "이에요",
+        "요",
+        "죠",
+        "다",
+        "고",
+    )
+    start_tokens = (
+        "그리고",
+        "그래서",
+        "근데",
+        "그런데",
+        "이번에는",
+        "일단",
+        "여기",
+        "저기",
+        "그러면",
+        "자",
+        "아",
+        "오",
+    )
+    return any(clean.endswith(token) for token in end_tokens) or any(
+        next_clean.startswith(token) for token in start_tokens
+    )
+
+
+def _common_split_policy_settings(settings: dict, seg: dict) -> dict:
+    merged = _segment_gap_settings(settings, seg)
+    threshold = _clamp_int(merged.get("split_length_threshold"), 8, 32, 10)
+    default_target = max(12, min(18, int(round(threshold * 1.6))))
+    target_chars = _clamp_int(
+        merged.get("subtitle_common_split_target_chars"),
+        8,
+        28,
+        default_target,
+    )
+    hard_chars = _clamp_int(
+        merged.get("subtitle_common_split_hard_max_chars"),
+        max(target_chars + 2, 12),
+        40,
+        max(target_chars + 6, int(round(target_chars * 1.5))),
+    )
+    configured_max_duration = _setting_float(merged, "sub_max_duration", 6.0)
+    default_max_duration = min(max(2.4, configured_max_duration), 5.5)
+    hard_duration = _clamp_float(
+        merged.get("subtitle_common_split_hard_max_duration_sec"),
+        2.0,
+        8.0,
+        default_max_duration,
+    )
+    min_duration = _clamp_float(
+        merged.get("subtitle_common_split_min_chunk_duration_sec"),
+        0.08,
+        1.2,
+        max(0.18, _setting_float(merged, "sub_min_duration", 0.2)),
+    )
+    return {
+        "enabled": _setting_bool(merged, "subtitle_common_split_guard_enabled", True),
+        "target_chars": target_chars,
+        "hard_chars": hard_chars,
+        "hard_duration": hard_duration,
+        "min_duration": min_duration,
+    }
+
+
+def _common_split_violation(seg: dict, settings: dict) -> bool:
+    if seg.get("is_gap"):
+        return False
+    policy = _common_split_policy_settings(settings, seg)
+    if not policy["enabled"]:
+        return False
+    text = str(seg.get("text", "") or "").strip()
+    if not text:
+        return False
+    start, end = _time_bounds(seg)
+    duration = max(0.0, end - start)
+    chars = _compact_len(text)
+    if chars > policy["target_chars"]:
+        return True
+    return duration > policy["hard_duration"] + 0.001
+
+
+def _has_common_split_guard_violation(segments: list[dict], settings: dict) -> bool:
+    return any(_common_split_violation(seg, settings) for seg in segments if isinstance(seg, dict))
+
+
+def _best_common_split_index(words: list[dict]) -> int | None:
+    if len(words) < 2:
+        return None
+    total_chars = max(1, _word_chars(words))
+    total_duration = max(0.05, _word_duration(words))
+    best: tuple[float, int] | None = None
+    for idx in range(1, len(words)):
+        left = words[:idx]
+        right = words[idx:]
+        left_chars = _word_chars(left)
+        right_chars = _word_chars(right)
+        left_duration = _word_duration(left)
+        right_duration = _word_duration(right)
+        char_balance = abs(left_chars - right_chars) / total_chars
+        duration_balance = abs(left_duration - right_duration) / total_duration
+        edge_penalty = 0.22 if len(left) == 1 or len(right) == 1 else 0.0
+        natural_bonus = -0.18 if _is_common_split_break(words[idx - 1], words[idx]) else 0.0
+        gap = _as_float(words[idx].get("start"), 0.0) - _as_float(words[idx - 1].get("end"), 0.0)
+        gap_bonus = -0.12 if gap >= 0.28 else 0.0
+        score = char_balance + (duration_balance * 0.45) + edge_penalty + natural_bonus + gap_bonus
+        if best is None or score < best[0]:
+            best = (score, idx)
+    return best[1] if best else None
+
+
+def _split_word_groups_for_common_guard(words: list[dict], policy: dict) -> list[list[dict]]:
+    if len(words) < 2:
+        return [words]
+    total_chars = _word_chars(words)
+    total_duration = _word_duration(words)
+    target_chars = max(1, int(policy["target_chars"]))
+    hard_duration = max(0.05, float(policy["hard_duration"]))
+    target_count = max(
+        1,
+        int((total_chars + target_chars - 1) // target_chars),
+        int((total_duration + hard_duration - 0.001) // hard_duration),
+    )
+    target_count = min(len(words), target_count)
+    groups: list[list[dict]] = [words]
+
+    def group_score(group: list[dict]) -> float:
+        return max(
+            _word_chars(group) / max(1.0, float(policy["target_chars"])),
+            _word_duration(group) / max(0.05, float(policy["hard_duration"])),
+        )
+
+    while len(groups) < target_count:
+        candidates = [
+            (group_score(group), idx)
+            for idx, group in enumerate(groups)
+            if len(group) >= 2
+        ]
+        if not candidates:
+            break
+        _score, group_idx = max(candidates)
+        split_idx = _best_common_split_index(groups[group_idx])
+        if split_idx is None:
+            break
+        group = groups[group_idx]
+        groups[group_idx:group_idx + 1] = [group[:split_idx], group[split_idx:]]
+
+    changed = True
+    while changed:
+        changed = False
+        for idx, group in list(enumerate(groups)):
+            if len(group) < 2:
+                continue
+            if _word_chars(group) <= policy["hard_chars"] and _word_duration(group) <= policy["hard_duration"] + 0.001:
+                continue
+            split_idx = _best_common_split_index(group)
+            if split_idx is None:
+                continue
+            groups[idx:idx + 1] = [group[:split_idx], group[split_idx:]]
+            changed = True
+            break
+    return [group for group in groups if group]
+
+
+def _common_split_row(seg: dict, group: list[dict], policy_meta: dict) -> dict:
+    row = dict(seg)
+    text = " ".join(_word_text(word) for word in group).strip()
+    start = _as_float(group[0].get("start"), _as_float(seg.get("start"), 0.0))
+    end = max(start + 0.05, _as_float(group[-1].get("end"), start + 0.05))
+    row.update(
+        {
+            "start": round(max(0.0, start), 3),
+            "end": round(max(start + 0.05, end), 3),
+            "text": text,
+            "words": [dict(word) for word in group],
+            "_common_split_guard_policy": dict(policy_meta),
+        }
+    )
+    row.pop("_final_gap_settings_applied", None)
+    for key in (
+        "timeline_start",
+        "timeline_end",
+        "timeline_start_frame",
+        "timeline_end_frame",
+        "start_frame",
+        "end_frame",
+        "frame_range",
+    ):
+        row.pop(key, None)
+    return row
+
+
+def _apply_common_subtitle_split_guard(segments: list[dict], settings: dict) -> list[dict]:
+    if not segments:
+        return []
+    output: list[dict] = []
+    split_count = 0
+    clamp_count = 0
+    for seg in segments:
+        row = dict(seg)
+        if not _common_split_violation(row, settings):
+            output.append(row)
+            continue
+        policy = _common_split_policy_settings(settings, row)
+        words = _words_for_common_split(row)
+        if len(words) >= 2:
+            groups = _split_word_groups_for_common_guard(words, policy)
+        else:
+            groups = [words]
+        if len(groups) > 1:
+            start, end = _time_bounds(row)
+            chars = _compact_len(row.get("text", ""))
+            duration = max(0.0, end - start)
+            policy_meta_base = {
+                "schema": COMMON_SPLIT_GUARD_SCHEMA,
+                "task": "common_subtitle_split_guard",
+                "action": "split",
+                "applies_to_modes": ["fast", "auto", "high"],
+                "source_start": round(start, 3),
+                "source_end": round(end, 3),
+                "source_duration_sec": round(duration, 3),
+                "source_chars": chars,
+                "target_chars": policy["target_chars"],
+                "hard_max_chars": policy["hard_chars"],
+                "hard_max_duration_sec": round(policy["hard_duration"], 3),
+                "split_count": len(groups),
+            }
+            for idx, group in enumerate(groups):
+                if not group:
+                    continue
+                output.append(
+                    _common_split_row(
+                        row,
+                        group,
+                        {
+                            **policy_meta_base,
+                            "split_index": idx,
+                        },
+                    )
+                )
+            split_count += max(0, len(groups) - 1)
+            continue
+
+        start, end = _time_bounds(row)
+        duration = max(0.0, end - start)
+        if duration > policy["hard_duration"] + 0.001:
+            old_end = end
+            row["end"] = round(max(start + policy["min_duration"], start + policy["hard_duration"]), 3)
+            row["_common_split_guard_policy"] = {
+                "schema": COMMON_SPLIT_GUARD_SCHEMA,
+                "task": "common_subtitle_split_guard",
+                "action": "clamp_duration",
+                "applies_to_modes": ["fast", "auto", "high"],
+                "source_start": round(start, 3),
+                "source_end": round(old_end, 3),
+                "new_end": row["end"],
+                "hard_max_duration_sec": round(policy["hard_duration"], 3),
+                "reason": "not_enough_words_to_split",
+            }
+            row.pop("_final_gap_settings_applied", None)
+            clamp_count += 1
+        output.append(row)
+    if split_count or clamp_count:
+        get_logger().log(
+            "[공통자막분할] "
+            f"Fast/Auto/High 공통 룰 적용: 분할 {split_count}회, 길이 클램프 {clamp_count}개"
+        )
+    return output
+
+
+def _clamp_common_split_duration_after_gap(seg: dict, settings: dict) -> None:
+    if seg.get("is_gap"):
+        return
+    policy = _common_split_policy_settings(settings, seg)
+    if not policy["enabled"]:
+        return
+    start, end = _time_bounds(seg)
+    if end - start <= policy["hard_duration"] + 0.001:
+        return
+    old_end = end
+    seg["end"] = round(max(start + policy["min_duration"], start + policy["hard_duration"]), 3)
+    current = dict(seg.get("_common_split_guard_policy") or {})
+    if current.get("task") == "common_subtitle_split_guard":
+        current["post_gap_duration_clamped"] = True
+        current["post_gap_old_end"] = round(old_end, 3)
+        current["post_gap_new_end"] = seg["end"]
+    else:
+        current = {
+            "schema": COMMON_SPLIT_GUARD_SCHEMA,
+            "task": "common_subtitle_split_guard",
+            "action": "post_gap_duration_clamp",
+            "applies_to_modes": ["fast", "auto", "high"],
+            "source_start": round(start, 3),
+            "source_end": round(old_end, 3),
+            "new_end": seg["end"],
+            "hard_max_duration_sec": round(policy["hard_duration"], 3),
+        }
+    seg["_common_split_guard_policy"] = current
+
+
 def apply_final_gap_settings(
     segments: list[dict],
     settings: dict | None = None,
@@ -601,10 +992,14 @@ def apply_final_gap_settings(
     if not candidates:
         return []
 
-    if not force and all(seg.get("_final_gap_settings_applied") for seg in candidates):
+    s = dict(settings or _get_user_settings() or {})
+    if (
+        not force
+        and all(seg.get("_final_gap_settings_applied") for seg in candidates)
+        and not _has_common_split_guard_violation(candidates, s)
+    ):
         return candidates
 
-    s = dict(settings or _get_user_settings() or {})
     default_min_duration = max(0.05, _setting_float(s, "sub_min_duration", 0.2))
 
     adj = sorted(candidates, key=lambda x: (float(x.get("start", 0.0) or 0.0), float(x.get("end", 0.0) or 0.0)))
@@ -626,6 +1021,8 @@ def apply_final_gap_settings(
         fused = apply_timing_fusion_policy(seg, seg_settings)
         if fused is not seg:
             seg.update(fused)
+
+    adj = _apply_common_subtitle_split_guard(adj, s)
 
     for idx, cur in enumerate(adj):
         if cur.get("is_gap"):
@@ -679,6 +1076,7 @@ def apply_final_gap_settings(
 
         if float(cur["end"]) <= float(cur["start"]):
             cur["end"] = float(cur["start"]) + min_duration
+        _clamp_common_split_duration_after_gap(cur, s)
         _clamp_to_cut_scene(cur, s, min_duration=min_duration)
         _update_frame_fields(cur, float(cur["start"]), float(cur["end"]))
         cur["_final_gap_settings_applied"] = True

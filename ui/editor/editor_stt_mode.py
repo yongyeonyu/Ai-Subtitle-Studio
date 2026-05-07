@@ -17,12 +17,50 @@ from ui.editor.subtitle_text_edit import SubtitleBlockData
 class EditorSTTModeMixin:
     def _init_stt_mode_state(self):
         self._stt_mode_enabled = False
+        self._stt_state = "disabled"
+        self._stt_state_detail = {}
         self._stt_recording = False
         self._stt_vad_running = False
         self._stt_mic_capture_session = None
+        self._stt_work_segments = []
+        self._stt_raw_dictation_segments = []
+        self._stt_final_segments = []
+        self._stt_rolling_windows = []
+        self._stt_learning_events = []
+        self._stt_replay_counts = {}
         self._stt_repeat_timer = QTimer(self)
         self._stt_repeat_timer.setSingleShot(True)
         self._stt_repeat_timer.timeout.connect(self._finish_stt_repeat_segment)
+
+    def _stt_set_state(self, state: str, detail: dict | None = None) -> None:
+        self._stt_state = str(state or "disabled")
+        self._stt_state_detail = dict(detail or {})
+        try:
+            progress = self._stt_progress_summary()
+            suffix = f" · {progress}" if progress else ""
+            self.status_lbl.setText(f"🎙️ STT: {self._stt_state}{suffix}")
+        except Exception:
+            pass
+
+    def _stt_progress_summary(self) -> str:
+        work = list(getattr(self, "_stt_work_segments", []) or [])
+        total = len(work)
+        if total <= 0:
+            return ""
+        completed = sum(1 for row in work if not row.get("stt_pending") or row.get("stt_mode_status") in {"input_done", "resegmented"})
+        current = getattr(self, "_stt_target_line", None)
+        return f"{completed}/{total} 완료" + (f" · line {current + 1}" if current is not None else "")
+
+    def _stt_input_provider(self) -> str:
+        settings = dict(getattr(self, "settings", {}) or {})
+        provider = str(settings.get("stt_mode_text_input_provider") or "manual").strip().lower()
+        if provider in {"os", "os_dictation", "dictation"}:
+            return "os_dictation"
+        if provider in {"mic", "desktop_mic", "desktop_mic_optional"}:
+            return "desktop_mic_optional"
+        if provider in {"ipad", "future_ipad_dictation"}:
+            return "future_ipad_dictation"
+        return "manual"
 
     def _toggle_stt_mode(self):
         if getattr(self, "_stt_mode_enabled", False):
@@ -51,7 +89,7 @@ class EditorSTTModeMixin:
     def _set_stt_mode_enabled(self, enabled: bool):
         self._stt_mode_enabled = bool(enabled)
         if enabled:
-            self.status_lbl.setText("🎙️ STT 모드 ON")
+            self._stt_set_state("ready_to_listen")
             get_logger().log("🎙️ STT 모드 ON: 시작 버튼을 누르면 VAD-only STT 세그먼트를 생성합니다.")
         else:
             session = getattr(self, "_stt_mic_capture_session", None)
@@ -63,13 +101,13 @@ class EditorSTTModeMixin:
             self._stt_mic_capture_session = None
             self._stt_recording = False
             self._stt_vad_running = False
+            self._stt_set_state("disabled")
             if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
                 try:
                     self.timeline.canvas.end_mic_visualization()
                 except Exception:
                     self.timeline.canvas._is_listening = False
                     self.timeline.canvas.update()
-            self.status_lbl.setText("✏️ STT 모드 OFF")
             get_logger().log("🎙️ STT 모드 OFF")
         self._refresh_stt_visuals()
 
@@ -86,7 +124,7 @@ class EditorSTTModeMixin:
             return True
 
         self._stt_vad_running = True
-        self.status_lbl.setText("🎙️ STT VAD 생성 중...")
+        self._stt_set_state("building_segments")
         get_logger().log("🎙️ STT 모드 시작: 최고 민감도 VAD로 음성 구간만 탐지합니다.")
 
         def _worker():
@@ -109,14 +147,16 @@ class EditorSTTModeMixin:
             return
         if not vad_segs:
             self.status_lbl.setText("⚠️ STT 음성 구간 없음")
+            self._stt_set_state("ready_to_listen", {"empty": True})
             return
+        self._stt_work_segments = [dict(row) for row in vad_segs if isinstance(row, dict)]
         self._create_stt_segments_from_vad(vad_segs)
         try:
             self.timeline.set_vad_segments(vad_segs)
         except Exception:
             pass
         self._mark_dirty()
-        self.status_lbl.setText(f"🎙️ STT 세그먼트 {len(vad_segs)}개")
+        self._stt_set_state("ready_to_listen", {"total": len(vad_segs)})
         self._refresh_stt_visuals()
         try:
             self._auto_save_project(self._get_current_segments())
@@ -175,6 +215,37 @@ class EditorSTTModeMixin:
                 original_text="",
             )
             data.end_sec = max(start + 0.1, end)
+            data.stt_segment_id = str(vad.get("id") or f"stt_segment_{idx + 1:04d}")
+            data.stt_mode_status = str(vad.get("stt_mode_status") or "empty")
+            data.vad_confidence = vad.get("vad_confidence")
+            data.vad_confidence_label = str(vad.get("vad_confidence_label") or "")
+            data.vad_decision = str(vad.get("vad_decision") or "")
+            data.vad_sources = list(vad.get("vad_sources") or [])
+            if data.vad_confidence_label:
+                quality_label = {
+                    "high": "green",
+                    "medium": "yellow",
+                    "low": "red",
+                    "needs_review": "red",
+                }.get(data.vad_confidence_label, "gray")
+                data.quality = {
+                    "confidence_label": quality_label,
+                    "flags": ["stt_vad_confidence"],
+                    "vad_confidence_label": data.vad_confidence_label,
+                    "vad_confidence": data.vad_confidence,
+                }
+            for key in (
+                "start_frame",
+                "end_frame",
+                "timeline_start_frame",
+                "timeline_end_frame",
+                "frame_rate",
+                "timeline_frame_rate",
+                "frame_range",
+                "playback",
+            ):
+                if key in vad:
+                    setattr(data, key, vad.get(key))
             cur.block().setUserData(data)
         if vad_segs:
             end = round(float(vad_segs[-1].get("end", vad_segs[-1].get("start", 0.0)) or 0.0), 2)
@@ -210,8 +281,156 @@ class EditorSTTModeMixin:
             block = block.next()
         return self.text_edit.textCursor().block()
 
+    def _stt_segment_from_block(self, block) -> dict:
+        ud = block.userData()
+        if not isinstance(ud, SubtitleBlockData):
+            return {}
+        start = float(getattr(ud, "start_sec", 0.0) or 0.0)
+        end = self._stt_block_end(block, start)
+        segment = {
+            "id": str(getattr(ud, "stt_segment_id", "") or f"stt_segment_{block.blockNumber() + 1:04d}"),
+            "index": int(block.blockNumber()) + 1,
+            "line": int(block.blockNumber()),
+            "start": start,
+            "end": end,
+            "timeline_start": start,
+            "timeline_end": end,
+            "text": block.text().strip(),
+            "stt_mode": True,
+            "stt_pending": bool(getattr(ud, "stt_pending", False)),
+            "stt_mode_status": str(getattr(ud, "stt_mode_status", "") or "empty"),
+            "vad_confidence": getattr(ud, "vad_confidence", None),
+            "vad_confidence_label": getattr(ud, "vad_confidence_label", ""),
+            "vad_decision": getattr(ud, "vad_decision", ""),
+            "vad_sources": list(getattr(ud, "vad_sources", []) or []),
+        }
+        for key in (
+            "start_frame",
+            "end_frame",
+            "timeline_start_frame",
+            "timeline_end_frame",
+            "frame_rate",
+            "timeline_frame_rate",
+            "frame_range",
+            "playback",
+        ):
+            if hasattr(ud, key):
+                segment[key] = getattr(ud, key)
+        return segment
+
+    def _stt_confirm_current_input(self):
+        block = self._current_stt_block()
+        if not block.isValid():
+            return
+        text = block.text().strip()
+        if not text:
+            self._stt_set_state("input_editing", {"needs_text": True})
+            self.status_lbl.setText("🎙️ STT 입력 필요: 텍스트를 입력한 뒤 Enter")
+            return
+        self._apply_stt_text_to_block(block, text, whisper_used=False, input_provider=self._stt_input_provider())
+        self._stt_advance_to_next_pending_segment()
+
+    def _apply_stt_text_to_block(
+        self,
+        block,
+        text: str,
+        *,
+        whisper_used: bool,
+        input_provider: str,
+    ):
+        ud = block.userData()
+        if not isinstance(ud, SubtitleBlockData):
+            return
+        text = str(text or "").strip()
+        ud.stt_mode = True
+        ud.stt_pending = False
+        ud.dictated_text = text
+        ud.stt_mode_status = "input_done"
+        cur = QTextCursor(self.text_edit.document())
+        cur.beginEditBlock()
+        cur.setPosition(block.position())
+        cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+        cur.removeSelectedText()
+        cur.insertText(text)
+        cur.block().setUserData(ud)
+        cur.endEditBlock()
+        self.text_edit.setTextCursor(cur)
+        self._stt_after_text_applied(cur.block(), text, whisper_used=whisper_used, input_provider=input_provider)
+
+    def _stt_after_text_applied(self, block, text: str, *, whisper_used: bool, input_provider: str):
+        try:
+            from core.stt_mode.dictation_state import create_raw_dictation_segment, upsert_raw_dictation
+            from core.stt_mode.learning_events import create_learning_event
+            from core.stt_mode.rolling_resegment import apply_rolling_resegmentation
+
+            work_segment = self._stt_segment_from_block(block)
+            raw_segment = create_raw_dictation_segment(
+                work_segment,
+                text,
+                input_provider=input_provider,
+                whisper_used=whisper_used,
+                settings=dict(getattr(self, "settings", {}) or {}),
+                raw_index=len(getattr(self, "_stt_raw_dictation_segments", []) or []) + 1,
+            )
+            self._stt_raw_dictation_segments = upsert_raw_dictation(
+                getattr(self, "_stt_raw_dictation_segments", []),
+                raw_segment,
+            )
+            result = apply_rolling_resegmentation(
+                raw_segments=self._stt_raw_dictation_segments,
+                final_segments=getattr(self, "_stt_final_segments", []),
+                current_raw_id=raw_segment.get("id"),
+                fps=work_segment.get("timeline_frame_rate") or work_segment.get("frame_rate") or 30.0,
+                settings=dict(getattr(self, "settings", {}) or {}),
+            )
+            self._stt_final_segments = list(result.get("final_segments") or [])
+            if result.get("rolling_window"):
+                self._stt_rolling_windows.append(dict(result["rolling_window"]))
+            self._stt_learning_events.append(
+                create_learning_event(
+                    "dictation_input_done",
+                    {
+                        "raw_dictation": raw_segment,
+                        "generated_count": len(result.get("generated_segments") or []),
+                    },
+                    project_id=str(getattr(self.window(), "_current_project_path", "") or ""),
+                    settings=dict(getattr(self, "settings", {}) or {}),
+                )
+            )
+            self._sync_stt_work_segment_status(work_segment.get("id"), "resegmented")
+        except Exception as exc:
+            get_logger().log(f"⚠️ STT rolling resegment 실패: {exc}")
+        self._mark_dirty()
+        self._refresh_stt_visuals()
+        self._refresh_video_subtitle_context()
+        self._stt_set_state("input_confirmed")
+
+    def _sync_stt_work_segment_status(self, segment_id: str, status: str) -> None:
+        for row in getattr(self, "_stt_work_segments", []) or []:
+            if str(row.get("id") or "") == str(segment_id or ""):
+                row["stt_pending"] = False
+                row["stt_mode_status"] = status
+                break
+
+    def _stt_advance_to_next_pending_segment(self) -> None:
+        doc = self.text_edit.document()
+        current_line = self.text_edit.textCursor().blockNumber()
+        for start_line in (current_line + 1, 0):
+            block = doc.findBlockByNumber(start_line) if start_line else doc.begin()
+            while block.isValid():
+                ud = block.userData()
+                if isinstance(ud, SubtitleBlockData) and not ud.is_gap and getattr(ud, "stt_pending", False):
+                    self._select_block(block)
+                    self._stt_set_state("next_segment_ready", {"line": block.blockNumber()})
+                    return
+                block = block.next()
+        self._stt_set_state("finished")
+
     def _handle_stt_enter(self):
         if not getattr(self, "_stt_mode_enabled", False):
+            return
+        if self._stt_input_provider() != "desktop_mic_optional":
+            self._stt_confirm_current_input()
             return
         if self._stt_recording:
             self.status_lbl.setText("🎙️ 녹음 종료 대기...")
@@ -221,6 +440,7 @@ class EditorSTTModeMixin:
             return
         self._stt_recording = True
         self._stt_target_line = block.blockNumber()
+        self._stt_set_state("input_editing", {"provider": "desktop_mic_optional"})
         self.status_lbl.setText("🎙️ 녹음 중...")
         if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
             try:
@@ -325,23 +545,9 @@ class EditorSTTModeMixin:
         ud = block.userData()
         if not isinstance(ud, SubtitleBlockData):
             return
-        ud.stt_mode = True
-        ud.stt_pending = False
-        ud.dictated_text = text
-
-        cur = QTextCursor(self.text_edit.document())
-        cur.beginEditBlock()
-        cur.setPosition(block.position())
-        cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
-        cur.removeSelectedText()
-        cur.insertText(text)
-        cur.block().setUserData(ud)
-        cur.endEditBlock()
-        self.text_edit.setTextCursor(cur)
-        self._mark_dirty()
+        self._apply_stt_text_to_block(block, text, whisper_used=True, input_provider="desktop_mic_optional")
         self.status_lbl.setText("✅ STT 적용 완료")
-        self._refresh_stt_visuals()
-        self._refresh_video_subtitle_context()
+        self._stt_advance_to_next_pending_segment()
 
     def _handle_stt_space(self):
         if not getattr(self, "_stt_mode_enabled", False):
@@ -353,6 +559,9 @@ class EditorSTTModeMixin:
         ud = block.userData()
         start = float(getattr(ud, "start_sec", 0.0) or 0.0)
         end = self._stt_block_end(block, start)
+        seg_id = str(getattr(ud, "stt_segment_id", "") or block.blockNumber())
+        self._stt_replay_counts[seg_id] = int(self._stt_replay_counts.get(seg_id, 0) or 0) + 1
+        self._stt_set_state("playing_segment", {"segment_id": seg_id})
         self._play_stt_repeat_segment(start, end)
 
     def _select_block(self, block):
@@ -390,15 +599,35 @@ class EditorSTTModeMixin:
         if hasattr(self, "video_player"):
             self.video_player.pause_video()
             self.video_player.seek(float(getattr(self, "_stt_repeat_start", 0.0) or 0.0))
+        self._stt_set_state("rewind_ready")
 
     def _warn_pending_stt_before_save(self, segs: list[dict]) -> bool:
-        pending = [s for s in segs if s.get("stt_pending")]
-        if not pending:
+        try:
+            from core.stt_mode.export_preflight import run_stt_export_preflight
+
+            final_segments = list(getattr(self, "_stt_final_segments", []) or [])
+            if not final_segments:
+                final_segments = [s for s in segs if not s.get("stt_pending") and str(s.get("text", "") or "").strip()]
+            result = run_stt_export_preflight(
+                final_segments=final_segments,
+                work_segments=list(getattr(self, "_stt_work_segments", []) or []),
+                raw_dictation_segments=list(getattr(self, "_stt_raw_dictation_segments", []) or []),
+                settings=dict(getattr(self, "settings", {}) or {}),
+            )
+            if result.get("status") == "ok":
+                return True
+            pending_count = sum(1 for item in result.get("warnings", []) if item.get("code") == "pending_stt_work_segment")
+            if result.get("status") == "blocked":
+                QMessageBox.warning(self, "STT 내보내기 확인", "STT 결과에 오류가 있어 SRT 저장 전에 확인이 필요합니다.")
+                return False
+        except Exception:
+            pending_count = len([s for s in segs if s.get("stt_pending")])
+        if not pending_count:
             return True
         reply = QMessageBox.warning(
             self,
             "STT 미완료 세그먼트",
-            f"완료 전 STT 세그먼트 {len(pending)}개는 SRT에 저장되지 않습니다.\n계속 저장할까요?",
+            f"완료 전 STT 세그먼트 {pending_count}개는 SRT에 저장되지 않고 프로젝트 상태에만 보존됩니다.\n계속 저장할까요?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )

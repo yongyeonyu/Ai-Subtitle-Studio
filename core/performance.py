@@ -9,6 +9,7 @@ third-party dependencies so performance features remain safe on Windows builds.
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import shutil
@@ -22,7 +23,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from core.json_file import read_json_file
 from core.native_json import dumps_json_bytes
+from core.settings_profiles import hardcoded_default_settings
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -219,6 +222,73 @@ def bounded_worker_count(
     return max(minimum, min(value, cap))
 
 
+def distributed_worker_ceiling(
+    settings: dict[str, Any] | None = None,
+    *,
+    task: str = "cpu",
+    workload: int = 1,
+    reserve_cores: int | None = None,
+    minimum: int = 1,
+) -> int:
+    """Return a UI-safe parallelism ceiling for foreground CPU work.
+
+    In `max` profile we try to use nearly all logical cores, but still keep a
+    small reserve so the UI thread and OS compositor can breathe.
+    """
+    settings = dict(settings or {})
+    workload = max(1, int(workload or 1))
+    minimum = max(1, int(minimum or 1))
+    profile = hardware_profile()
+    logical = max(1, int(profile.get("logical_cores", 1) or 1))
+    physical = max(1, int(profile.get("physical_cores", logical) or logical))
+    perf = max(1, int(profile.get("performance_cores", physical) or physical))
+    task_text = str(task or "cpu").strip().lower()
+
+    default_reserve = 1 if logical >= 4 else 0
+    try:
+        configured_reserve = int(float(settings.get("runtime_scheduler_reserve_cores", default_reserve)))
+    except (TypeError, ValueError):
+        configured_reserve = default_reserve
+    configured_reserve = max(0, configured_reserve)
+    reserve = configured_reserve if reserve_cores is None else max(0, int(reserve_cores))
+
+    if hardware_max_profile_enabled(settings):
+        ceiling = max(1, logical - reserve)
+    elif task_text in {"io", "prefetch"}:
+        ceiling = min(logical, max(4, perf))
+    else:
+        ceiling = max(1, physical)
+    return max(minimum, min(workload, ceiling))
+
+
+def balanced_task_slices(
+    total_items: int,
+    workers: int,
+    *,
+    min_batch_size: int = 1,
+) -> list[tuple[int, int]]:
+    """Split work into contiguous balanced slices with low scheduler overhead."""
+    total = max(0, int(total_items or 0))
+    if total <= 0:
+        return []
+    worker_count = max(1, int(workers or 1))
+    min_batch = max(1, int(min_batch_size or 1))
+    slice_count = min(worker_count, total)
+    while slice_count > 1 and (total // slice_count) < min_batch:
+        slice_count -= 1
+    base = total // slice_count
+    remainder = total % slice_count
+    out: list[tuple[int, int]] = []
+    start = 0
+    for idx in range(slice_count):
+        size = base + (1 if idx < remainder else 0)
+        end = min(total, start + size)
+        if end > start:
+            out.append((start, end))
+        start = end
+    return out
+
+
 def _safe_bool(value: Any, default: bool = True) -> bool:
     if value is None:
         return bool(default)
@@ -234,14 +304,18 @@ def _qt_gpu_rendering_settings_request() -> tuple[bool | None, bool | None]:
         from core.runtime import config as runtime_config
 
         settings_path = Path(runtime_config.DATASET_DIR) / "user_settings.json"
+        dataset_dir = runtime_config.DATASET_DIR
     except Exception:
         settings_path = PROJECT_ROOT / "dataset" / "user_settings.json"
-    try:
-        with open(settings_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        settings = dict(data) if isinstance(data, dict) else {}
-    except Exception:
-        return None, None
+        dataset_dir = str(settings_path.parent)
+    settings = hardcoded_default_settings(
+        dataset_dir=dataset_dir,
+        include_custom_defaults=True,
+        include_folder_settings=False,
+    )
+    data = read_json_file(settings_path, default={}, expected_type=dict, context="qt_gpu_settings", log_errors=False)
+    if isinstance(data, dict):
+        settings.update(data)
     scope = str(settings.get("editor_rendering_gpu_scope", settings.get("gpu_rendering_scope", "")) or "").strip().lower()
     gpu_requested = True if scope in {"all", "whole", "full", "global", "전체"} else None
     force_requested = None

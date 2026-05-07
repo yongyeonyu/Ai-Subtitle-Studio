@@ -36,10 +36,11 @@ class SettingsSimplifierTests(unittest.TestCase):
     def test_operation_mode_aliases_and_items_are_stable(self):
         self.assertEqual(normalize_simple_operation_mode("빠름"), "fast")
         self.assertEqual(normalize_simple_operation_mode("accuracy"), "high")
-        self.assertEqual([item[0] for item in simple_operation_mode_items()], ["fast", "auto", "high"])
+        self.assertEqual(normalize_simple_operation_mode("STT 모드"), "stt")
+        self.assertEqual([item[0] for item in simple_operation_mode_items()], ["fast", "auto", "high", "stt"])
         self.assertEqual(
             [item[0] for item in simple_operation_mode_items(include_advanced=True)],
-            ["fast", "auto", "high"],
+            ["fast", "auto", "high", "stt"],
         )
 
     def test_mode_controls_quality_choice_directly(self):

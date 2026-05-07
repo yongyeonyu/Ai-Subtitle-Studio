@@ -115,6 +115,35 @@ class WindowsPlatformCompatTest(unittest.TestCase):
         killed = [args.args[0] for args in kill.call_args_list]
         self.assertEqual(killed, [201, 202, 203])
 
+    def test_cleanup_ollama_runtime_processes_stops_homebrew_service_before_kill(self):
+        ps_output = "301 1 /opt/homebrew/opt/ollama/bin/ollama serve"
+        launchctl_output = "-\t0\thomebrew.mxcl.ollama"
+
+        with patch("core.platform_compat.is_windows", return_value=False), \
+                patch(
+                    "core.platform_compat.subprocess.check_output",
+                    side_effect=[launchctl_output, ps_output],
+                ), \
+                patch("core.platform_compat.shutil.which", return_value="/opt/homebrew/bin/brew"), \
+                patch(
+                    "core.platform_compat.subprocess.run",
+                    return_value=unittest.mock.Mock(returncode=0),
+                ) as run_mock, \
+                patch("core.platform_compat.os.kill") as kill:
+            stopped = platform_compat.cleanup_ollama_runtime_processes(timeout_sec=0.0)
+
+        self.assertEqual(stopped, 1)
+        brew_calls = [
+            entry
+            for entry in run_mock.call_args_list
+            if entry.args and entry.args[0] == ["/opt/homebrew/bin/brew", "services", "stop", "ollama"]
+        ]
+        self.assertEqual(len(brew_calls), 1)
+        self.assertTrue(brew_calls[0].kwargs.get("capture_output"))
+        self.assertTrue(brew_calls[0].kwargs.get("text"))
+        self.assertIn("env", brew_calls[0].kwargs)
+        kill.assert_has_calls([call(301, signal.SIGTERM)])
+
     def test_faster_whisper_model_name_converts_mlx_to_windows_model(self):
         self.assertEqual(
             _convert_model_name("mlx-community/whisper-large-v3-turbo"),

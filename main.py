@@ -5,6 +5,7 @@ import sys
 import os
 import socket
 import faulthandler
+import threading
 
 try:
     faulthandler.enable(all_threads=True)
@@ -61,9 +62,6 @@ if BASE_DIR not in sys.path:
 
 from ui.main.main_window import MainWindow
 from core.path_manager import get_recent_folders, add_recent_folder
-from core.llm.ollama_provider import ensure_ollama_server
-
-
 def main():
     app = QApplication(sys.argv)
     configure_qt_runtime()
@@ -104,15 +102,34 @@ def main():
 
     win = MainWindow()
     def _shutdown_runtime_in_order():
+        cleanup_runtime = getattr(win, "_start_runtime_cleanup_for_app_exit_async", None)
+        if callable(cleanup_runtime):
+            cleanup_runtime(timeout_sec=0.15)
+            return
         pause_runtime = getattr(win, "_pause_all_runtime_work_for_exit", None)
         if callable(pause_runtime):
             pause_runtime(context="앱 종료")
-        win._shutdown_personalization_idle_trainer(timeout_sec=0.0)
-        if getattr(win, "_fast_exit_requested", False):
-            cleanup_app_child_processes(timeout_sec=0.0)
-            cleanup_stale_preview_proxy_processes(timeout_sec=0.0)
-            return
-        cleanup_app_runtime_processes(logger=get_logger(), timeout_sec=0.05)
+
+        def _fallback_cleanup():
+            try:
+                win._shutdown_personalization_idle_trainer(timeout_sec=0.0)
+            except Exception:
+                pass
+            try:
+                cleanup_app_child_processes(timeout_sec=0.0)
+                cleanup_stale_preview_proxy_processes(timeout_sec=0.0)
+                cleanup_app_runtime_processes(logger=get_logger(), timeout_sec=0.15)
+            except Exception:
+                pass
+
+        try:
+            threading.Thread(
+                target=_fallback_cleanup,
+                daemon=True,
+                name="app-about-to-quit-cleanup",
+            ).start()
+        except Exception:
+            _fallback_cleanup()
 
     app.aboutToQuit.connect(_shutdown_runtime_in_order)
     if cleaned_preview_jobs:
@@ -131,8 +148,6 @@ def main():
     win.show_home()
 
     win.showMaximized()
-
-    ensure_ollama_server(logger=get_logger(), wait_sec=5.0)
 
     sys.exit(app.exec())
 

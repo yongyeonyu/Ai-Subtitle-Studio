@@ -105,7 +105,7 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertNotIn("Mode", editor_labels)
             self.assertNotIn("Mode:", editor_labels)
             self.assertIsNone(dialog.combo_stt_quality_preset.parent())
-            self.assertEqual(dialog.combo_stt_quality_preset.currentData(), "balanced")
+            self.assertEqual(dialog.combo_stt_quality_preset.currentData(), "auto")
             collected = dialog._collect_settings()
             self.assertTrue(collected["settings_simplified_ui_enabled"])
             self.assertTrue(collected["subtitle_bundle_autopilot_enabled"])

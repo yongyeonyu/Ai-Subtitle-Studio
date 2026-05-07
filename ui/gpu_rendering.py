@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import os
 import sys
-import json
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QWidget
 
+from core.json_file import read_json_file
 from core.runtime import config
+from core.settings_profiles import custom_defaults_path, hardcoded_default_settings
 
 
 _FALSE_VALUES = {"0", "false", "no", "off"}
@@ -46,12 +47,30 @@ def _setting_bool(value) -> bool | None:
 
 def _render_settings() -> dict:
     path = os.path.join(config.DATASET_DIR, "user_settings.json")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return dict(data) if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+    custom_path = custom_defaults_path(config.DATASET_DIR)
+    cache_key = []
+    for item in (path, custom_path):
+        try:
+            stat = os.stat(item)
+            cache_key.append((item, int(stat.st_mtime_ns), int(stat.st_size)))
+        except OSError:
+            cache_key.append((item, -1, -1))
+    cache_key = tuple(cache_key)
+    cached_key = getattr(_render_settings, "_cache_key", None)
+    cached_value = getattr(_render_settings, "_cache_value", None)
+    if cache_key == cached_key and isinstance(cached_value, dict):
+        return dict(cached_value)
+    settings = hardcoded_default_settings(
+        dataset_dir=config.DATASET_DIR,
+        include_custom_defaults=True,
+        include_folder_settings=False,
+    )
+    data = read_json_file(path, default={}, expected_type=dict, context="render_settings", log_errors=False)
+    if isinstance(data, dict):
+        settings.update(data)
+    _render_settings._cache_key = cache_key
+    _render_settings._cache_value = dict(settings)
+    return settings
 
 
 def _settings_text(settings: dict, *keys: str) -> str:
@@ -110,6 +129,25 @@ def _settings_opengl_widgets_enabled(feature_key: str) -> bool | None:
     )
 
 
+def _settings_scenegraph_enabled(feature_key: str) -> bool | None:
+    settings = _render_settings()
+    if feature_key:
+        feature_setting = _setting_bool(
+            settings.get(
+                f"editor_rendering_{feature_key}_scenegraph_enabled",
+                settings.get(f"gpu_{feature_key}_scenegraph_enabled"),
+            )
+        )
+        if feature_setting is not None:
+            return feature_setting
+    return _setting_bool(
+        settings.get(
+            "editor_rendering_scenegraph_enabled",
+            settings.get("gpu_scenegraph_enabled"),
+        )
+    )
+
+
 def _running_under_pytest() -> bool:
     return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
 
@@ -150,6 +188,8 @@ def gpu_widgets_enabled(feature: str | None = None) -> bool:
     feature_env = f"AI_SUBTITLE_{feature_key.upper()}_OPENGL_WIDGETS" if feature_key else ""
     if feature_env and feature_env in os.environ:
         return _env_enabled(feature_env, "1")
+    if not feature_key and "AI_SUBTITLE_OPENGL_WIDGETS" in os.environ:
+        return _env_enabled("AI_SUBTITLE_OPENGL_WIDGETS", "1")
     setting = _settings_opengl_widgets_enabled(feature_key)
     if setting is not None:
         return setting
@@ -185,7 +225,12 @@ def scenegraph_enabled(feature: str | None = None) -> bool:
         env_name = f"AI_SUBTITLE_{feature_key.upper()}_SCENEGRAPH"
         if env_name in os.environ:
             return _env_enabled(env_name, "1")
-    return _env_enabled("AI_SUBTITLE_SCENEGRAPH", "1")
+    if "AI_SUBTITLE_SCENEGRAPH" in os.environ:
+        return _env_enabled("AI_SUBTITLE_SCENEGRAPH", "1")
+    setting = _settings_scenegraph_enabled(feature_key)
+    if setting is not None:
+        return setting
+    return not gpu_widgets_enabled(feature_key)
 
 
 def accelerated_widget_base(feature: str | None = None):

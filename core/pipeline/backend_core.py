@@ -178,7 +178,7 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
     def start_pipeline(self, files, folder=None, is_icloud=False, is_auto_start=False):
         pause_lora = getattr(self.ui, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
-            pause_lora("pipeline_start", hold_ms=300_000)
+            pause_lora("pipeline_start")
         self._active = True
         set_runtime_settings_override(getattr(self.ui, "_runtime_settings_override", None))
         try:
@@ -279,12 +279,13 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
                     settings.get("roughcut_llm_model", ""),
                     settings.get("selected_roughcut_llm_model", ""),
                 ]
-                from core.llm.ollama_provider import stop_local_llm_models_async
+                from core.llm.ollama_provider import shutdown_local_ollama_runtime_async
 
-                stop_local_llm_models_async(
+                shutdown_local_ollama_runtime_async(
                     llm_models,
                     logger=get_logger(),
                     log_context=str(log_context or "파이프라인 중단"),
+                    timeout_sec=0.6,
                 )
             except Exception as e:
                 get_logger().log(f"⚠️ LLM 모델 종료 요청 실패: {e}")

@@ -52,6 +52,16 @@ _FALLBACK_MODEL_PREFERENCES = (
 )
 
 
+def _reset_ollama_runtime_state(*, clear_warmed: bool = True) -> None:
+    global _SERVER_READY_UNTIL, _START_IN_PROGRESS_UNTIL, _SERVER_READY_LOGGED_UNTIL
+
+    _SERVER_READY_UNTIL = 0.0
+    _START_IN_PROGRESS_UNTIL = 0.0
+    _SERVER_READY_LOGGED_UNTIL = 0.0
+    if clear_warmed:
+        _WARMED.clear()
+
+
 def is_ollama_server_running(timeout: float = 0.6) -> bool:
     try:
         req = urllib.request.Request(_OLLAMA_ROOT_URL)
@@ -593,6 +603,10 @@ def _get_ollama_running_models(timeout: float = 1.5) -> set[str]:
     return names
 
 
+def running_local_llm_models(timeout: float = 1.5) -> set[str]:
+    return _get_ollama_running_models(timeout=timeout)
+
+
 def _is_local_ollama_model_name(model: str) -> bool:
     text = str(model or "").strip()
     if not text or "사용 안함" in text:
@@ -656,6 +670,57 @@ def stop_local_llm_models_async(
         args=(list(models or []), logger, log_context),
         daemon=True,
         name="ollama-stop-models",
+    )
+    thread.start()
+    return thread
+
+
+def shutdown_local_ollama_runtime(
+    models: list[str] | tuple[str, ...] | set[str] | None = None,
+    logger=None,
+    log_context: str = "런타임 정리",
+    *,
+    timeout_sec: float = 0.6,
+) -> dict[str, Any]:
+    context = str(log_context or "런타임 정리").strip() or "런타임 정리"
+    stopped_models = stop_local_llm_models(models, logger=logger, log_context=context)
+    stopped_processes = 0
+    try:
+        from core.platform_compat import cleanup_ollama_runtime_processes
+
+        stopped_processes = int(
+            cleanup_ollama_runtime_processes(timeout_sec=max(0.1, float(timeout_sec or 0.6))) or 0
+        )
+    except Exception as exc:
+        if logger:
+            logger.log(f"⚠️ {context}: Ollama 서버 종료 실패: {exc}")
+    if stopped_models or stopped_processes:
+        _reset_ollama_runtime_state()
+    if stopped_processes and logger:
+        logger.log(f"🛑 {context}: Ollama 서버/러너 종료 완료 ({stopped_processes}개)")
+    return {
+        "models": list(stopped_models),
+        "processes": stopped_processes,
+    }
+
+
+def shutdown_local_ollama_runtime_async(
+    models: list[str] | tuple[str, ...] | set[str] | None = None,
+    logger=None,
+    log_context: str = "런타임 정리",
+    *,
+    timeout_sec: float = 0.6,
+) -> threading.Thread:
+    thread = threading.Thread(
+        target=shutdown_local_ollama_runtime,
+        kwargs={
+            "models": list(models or []),
+            "logger": logger,
+            "log_context": log_context,
+            "timeout_sec": timeout_sec,
+        },
+        daemon=True,
+        name="ollama-shutdown-runtime",
     )
     thread.start()
     return thread

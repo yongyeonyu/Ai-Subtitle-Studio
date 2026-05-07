@@ -26,6 +26,24 @@ def _setting_bool(settings: dict[str, Any] | None, key: str, default: bool) -> b
     return bool(value)
 
 
+def _cancel_requested(cancel_callback) -> bool:
+    if not callable(cancel_callback):
+        return False
+    try:
+        return bool(cancel_callback())
+    except Exception:
+        return False
+
+
+def _cancelled_result(reason: str = "cancelled") -> dict[str, Any]:
+    return {
+        "schema": DEFERRED_EDITOR_LEARNING_SCHEMA,
+        "status": "waiting",
+        "score": None,
+        "result": {"reason": str(reason or "cancelled"), "cancelled": True},
+    }
+
+
 def _safe_segment(segment: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "line",
@@ -174,6 +192,7 @@ def run_deferred_editor_learning_job(
     job: dict[str, Any],
     *,
     store_dir: str | Path | None = None,
+    cancel_callback=None,
 ) -> dict[str, Any]:
     payload = dict((job or {}).get("payload") or {})
     segments = [dict(seg) for seg in list(payload.get("segments") or []) if isinstance(seg, dict)]
@@ -186,6 +205,8 @@ def run_deferred_editor_learning_job(
     from core.personalization.editor_truth_capture import capture_editor_truth_records
     from core.personalization.text_lora_dataset import accumulate_personalization_dataset
 
+    if _cancel_requested(cancel_callback):
+        return _cancelled_result()
     truth_result = capture_editor_truth_records(
         segments,
         media_path=media_path,
@@ -199,6 +220,8 @@ def run_deferred_editor_learning_job(
         max_chars=int(settings.get("editor_truth_capture_max_chars", 240) or 240),
         refresh_bundle=False,
     )
+    if _cancel_requested(cancel_callback):
+        return _cancelled_result()
     text_result = accumulate_personalization_dataset(
         current_segments=segments,
         current_project_path=project_path,
@@ -208,6 +231,8 @@ def run_deferred_editor_learning_job(
         store_full_text=_setting_bool(settings, "lora_store_full_text_enabled", True),
         voice_lora_bridge_enabled=_setting_bool(settings, "voice_lora_bridge_enabled", False),
     )
+    if _cancel_requested(cancel_callback):
+        return _cancelled_result()
     pattern_result: dict[str, Any] = {"status": "skipped"}
     if _setting_bool(settings, "lora_pattern_index_enabled", True):
         try:
@@ -216,6 +241,8 @@ def run_deferred_editor_learning_job(
             pattern_result = save_subtitle_pattern_index(store_dir, force=True)
         except Exception as exc:
             pattern_result = {"status": "error", "error": str(exc)}
+    if _cancel_requested(cancel_callback):
+        return _cancelled_result()
     appended = (
         int(truth_result.get("appended_rows", 0) or 0)
         + int(truth_result.get("excluded_parenthetical_rows", 0) or 0)

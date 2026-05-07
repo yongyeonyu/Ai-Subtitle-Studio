@@ -1,6 +1,6 @@
 <!--
-Document-Version: 03.24.00
-Phase: REFACTOR_QUALITY_RELEASED
+Document-Version: 03.24.01
+Phase: STT_MODE_RUNTIME_RELEASED
 Last-Updated: 2026-05-07
 Updated-By: Codex
 Purpose: Remaining work queue only.
@@ -19,9 +19,9 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "03.24.00"
-document_version: "03.24.00"
-phase: "REFACTOR_QUALITY_RELEASED"
+app_version: "03.24.01"
+document_version: "03.24.01"
+phase: "STT_MODE_RUNTIME_RELEASED"
 next_phase: null
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
@@ -54,7 +54,7 @@ release_handoff_files:
 
 ## Completion Snapshot
 
-The v03.24.00 Refactor Quality release completed the prior queue:
+The v03.24.01 STT Mode Runtime release completed the prior queue:
 
 - Fast mode selective low-score STT2 rescue and lightweight overlap/review policy.
 - Post-generation busy cursor cleanup and playback-safe deferral of review, roughcut, prefetch, cleanup, and model-release work.

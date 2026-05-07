@@ -32,47 +32,82 @@ class TimestampArea(QWidget):
             return top + line_rect.y(), line_rect.height()
         return top, height
 
+    def _content_probe_point(self, y: int) -> QPoint:
+        margin_left = 0
+        try:
+            margin_left = int(self.editor.viewportMargins().left())
+        except Exception:
+            margin_left = 0
+        return QPoint(max(0, margin_left + 8), max(0, int(y or 0)))
+
+    def _block_top(self, block) -> float:
+        geom = self.editor.document().documentLayout().blockBoundingRect(block)
+        return geom.top() - self.editor.verticalScrollBar().value() + self.editor.viewportMargins().top()
+
+    def _block_at_y(self, y: int):
+        try:
+            cur = self.editor.cursorForPosition(self._content_probe_point(y))
+            block = cur.block()
+        except Exception:
+            block = self.editor.document().begin()
+        if not block.isValid():
+            return block
+        prev_block = block.previous()
+        if prev_block.isValid():
+            try:
+                prev_geom = self.editor.document().documentLayout().blockBoundingRect(prev_block)
+                prev_top = prev_geom.top() - self.editor.verticalScrollBar().value() + self.editor.viewportMargins().top()
+                if prev_top <= y <= prev_top + prev_geom.height():
+                    return prev_block
+            except Exception:
+                pass
+        return block
+
+    def _visible_start_block(self):
+        block = self._block_at_y(0)
+        if block.isValid() and block.previous().isValid():
+            return block.previous()
+        return block if block.isValid() else self.editor.document().begin()
+
     def mousePressEvent(self, event):
         if hasattr(self.editor, "is_selection_locked") and self.editor.is_selection_locked():
             event.accept()
             return
         y, x = event.pos().y(), event.pos().x()
-        block = self.editor.document().begin()
-        while block.isValid():
-            geom = self.editor.document().documentLayout().blockBoundingRect(block)
-            top = geom.top() - self.editor.verticalScrollBar().value() + self.editor.viewportMargins().top()
-            if top > self.editor.viewport().height(): break
-            
-            if top <= y <= top + geom.height():
-                ud = block.userData()
-                if hasattr(ud, 'start_sec') and not getattr(ud, 'is_gap', False):
-                    line_num = block.blockNumber()
-                    
-                    # 마우스 클릭도 첫 줄 높이에 맞춰서 정밀 타격되도록 보정
-                    first_line_top, first_line_height = self._get_first_line_geom(block, top, geom.height())
-                    is_first_line_area = (first_line_top - 5 <= y <= first_line_top + first_line_height + 5)
-                    
-                    if event.button() == Qt.MouseButton.LeftButton:
-                        if 5 <= x <= 25 and is_first_line_area: 
-                            self.editor.timestamp_deleted.emit(line_num)
-                        elif 100 <= x <= 120 and is_first_line_area: 
-                            self._drag_start_line = line_num
-                            self._drag_current_y = y
-                            spk_id = getattr(ud, 'spk_id', '00')
-                            _pw = getattr(self.editor, '_parent_widget', None)
-                            speaker_colors = _pw._highlighter.speaker_colors if _pw and hasattr(_pw, '_highlighter') else {}
-                            self._drag_spk_color = speaker_colors.get(spk_id, config.ACCENT)
-                        else: 
-                            self.editor.timestamp_clicked.emit(line_num, ud.start_sec)
-                        event.accept()
-                    elif event.button() == Qt.MouseButton.RightButton:
-                        if is_first_line_area:
-                            spk_id = getattr(ud, 'spk_id', '00')
-                            gpos = self.mapToGlobal(event.pos())
-                            self.editor.speaker_circle_clicked.emit(line_num, spk_id, gpos)
-                            event.accept()
-                break
-            block = block.next()
+        block = self._block_at_y(y)
+        if not block.isValid():
+            return
+        geom = self.editor.document().documentLayout().blockBoundingRect(block)
+        top = self._block_top(block)
+        if not (top <= y <= top + geom.height()):
+            return
+        ud = block.userData()
+        if hasattr(ud, 'start_sec') and not getattr(ud, 'is_gap', False):
+            line_num = block.blockNumber()
+
+            # 마우스 클릭도 첫 줄 높이에 맞춰서 정밀 타격되도록 보정
+            first_line_top, first_line_height = self._get_first_line_geom(block, top, geom.height())
+            is_first_line_area = (first_line_top - 5 <= y <= first_line_top + first_line_height + 5)
+
+            if event.button() == Qt.MouseButton.LeftButton:
+                if 5 <= x <= 25 and is_first_line_area:
+                    self.editor.timestamp_deleted.emit(line_num)
+                elif 100 <= x <= 120 and is_first_line_area:
+                    self._drag_start_line = line_num
+                    self._drag_current_y = y
+                    spk_id = getattr(ud, 'spk_id', '00')
+                    _pw = getattr(self.editor, '_parent_widget', None)
+                    speaker_colors = _pw._highlighter.speaker_colors if _pw and hasattr(_pw, '_highlighter') else {}
+                    self._drag_spk_color = speaker_colors.get(spk_id, config.ACCENT)
+                else:
+                    self.editor.timestamp_clicked.emit(line_num, ud.start_sec)
+                event.accept()
+            elif event.button() == Qt.MouseButton.RightButton:
+                if is_first_line_area:
+                    spk_id = getattr(ud, 'spk_id', '00')
+                    gpos = self.mapToGlobal(event.pos())
+                    self.editor.speaker_circle_clicked.emit(line_num, spk_id, gpos)
+                    event.accept()
 
     def mouseMoveEvent(self, event):
         if hasattr(self.editor, "is_selection_locked") and self.editor.is_selection_locked():
@@ -80,31 +115,32 @@ class TimestampArea(QWidget):
             event.accept()
             return
         y, x = event.pos().y(), event.pos().x()
-        
+
         if event.buttons() & Qt.MouseButton.LeftButton and self._drag_start_line >= 0:
             self._drag_current_y = y; self.update(); return
 
-        block = self.editor.document().begin()
         hovering, h_line, h_del_line = False, -1, -1
-        
-        while block.isValid():
+        block = self._block_at_y(y)
+        if block.isValid():
             geom = self.editor.document().documentLayout().blockBoundingRect(block)
-            top = geom.top() - self.editor.verticalScrollBar().value() + self.editor.viewportMargins().top()
-            if top > self.editor.viewport().height(): break
-            
+            top = self._block_top(block)
             if top <= y <= top + geom.height():
                 ud = block.userData()
                 if hasattr(ud, 'start_sec') and not getattr(ud, 'is_gap', False):
                     first_line_top, first_line_height = self._get_first_line_geom(block, top, geom.height())
                     is_first_line_area = (first_line_top - 5 <= y <= first_line_top + first_line_height + 5)
-                    
+
                     if is_first_line_area:
-                        if 5 <= x <= 25: hovering = True; h_del_line = block.blockNumber()
-                        elif x <= 120: hovering = True; h_line = block.blockNumber()
+                        if 5 <= x <= 25:
+                            hovering = True
+                            h_del_line = block.blockNumber()
+                        elif x <= 120:
+                            hovering = True
+                            h_line = block.blockNumber()
                     else:
-                        if 25 < x < 100: hovering = True; h_line = block.blockNumber()
-                break
-            block = block.next()
+                        if 25 < x < 100:
+                            hovering = True
+                            h_line = block.blockNumber()
             
         self.setCursor(Qt.CursorShape.PointingHandCursor if hovering else Qt.CursorShape.ArrowCursor)
         if self._hovered_line != h_line or self._hovered_delete_line != h_del_line:
@@ -115,13 +151,14 @@ class TimestampArea(QWidget):
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton and self._drag_start_line >= 0:
-            y = event.pos().y(); drop_line = -1
-            block = self.editor.document().begin()
-            while block.isValid():
+            y = event.pos().y()
+            drop_line = -1
+            block = self._block_at_y(y)
+            if block.isValid():
                 geom = self.editor.document().documentLayout().blockBoundingRect(block)
-                top = geom.top() - self.editor.verticalScrollBar().value() + self.editor.viewportMargins().top()
-                if top <= y <= top + geom.height(): drop_line = block.blockNumber(); break
-                block = block.next()
+                top = self._block_top(block)
+                if top <= y <= top + geom.height():
+                    drop_line = block.blockNumber()
                 
             if drop_line >= 0 and drop_line != self._drag_start_line:
                 self.editor.speaker_circle_dropped.emit(self._drag_start_line, drop_line)
@@ -137,13 +174,13 @@ class TimestampArea(QWidget):
         _pw = getattr(self.editor, '_parent_widget', None)
         speaker_colors = _pw._highlighter.speaker_colors if _pw and hasattr(_pw, '_highlighter') else {}
         current_line = self.editor.textCursor().blockNumber()
-        block = self.editor.document().begin()
+        block = self._visible_start_block()
         
         while block.isValid():
             painter.setFont(self.ts_font) 
             
             geom = self.editor.document().documentLayout().blockBoundingRect(block)
-            top = geom.top() - self.editor.verticalScrollBar().value() + self.editor.viewportMargins().top()
+            top = self._block_top(block)
             height = geom.height()
             if top > self.editor.viewport().height(): break 
                 

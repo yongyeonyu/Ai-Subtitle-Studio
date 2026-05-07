@@ -59,18 +59,31 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                 reset_idle()
             pause_lora = getattr(main_w, "_pause_personalization_for_foreground_activity", None)
             if callable(pause_lora):
-                pause_lora("subtitle_editor_edit", hold_ms=300_000)
+                pause_lora("subtitle_editor_edit")
         except Exception:
             pass
 
     def _request_editor_mode_runtime_release(self):
         self._note_editor_foreground_activity()
 
+    def _invalidate_segment_cache(self) -> None:
+        self._segment_cache_valid = False
+        self._subtitle_memory_cache = None
+        try:
+            self._last_segment_cache_block_count = int(self.text_edit.document().blockCount())
+        except Exception:
+            pass
+
     def _rebuild_subtitle_memory_cache(self, segments: list[dict] | None = None) -> dict:
-        segs = list(segments if segments is not None else self._get_current_segments())
+        segs = list(segments if segments is not None else self._get_current_segments(force_rebuild=True))
         self._cached_segs = segs
         cache = build_segment_lookup(segs)
         self._subtitle_memory_cache = cache
+        self._segment_cache_valid = True
+        try:
+            self._last_segment_cache_block_count = int(self.text_edit.document().blockCount())
+        except Exception:
+            pass
         return cache
 
     def _subtitle_memory_segments(self) -> list[dict]:
@@ -94,20 +107,57 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         for seg in list(getattr(self, "_cached_segs", []) or []):
             if int(seg.get("line", -999999)) == int(line_num):
                 seg["text"] = visible_text
+                if seg.get("quality"):
+                    seg["quality_stale"] = True
                 break
         cache = getattr(self, "_subtitle_memory_cache", None)
         if isinstance(cache, dict):
             seg = (cache.get("line_map") or {}).get(int(line_num))
             if isinstance(seg, dict):
                 seg["text"] = visible_text
+                if seg.get("quality"):
+                    seg["quality_stale"] = True
             # Keep visible playback lookup in sync with text becoming empty/non-empty.
             self._subtitle_memory_cache = build_segment_lookup(getattr(self, "_cached_segs", []) or [])
+        self._segment_cache_valid = True
+        try:
+            self._last_segment_cache_block_count = int(self.text_edit.document().blockCount())
+        except Exception:
+            pass
 
     def _finalize_edit(self):
+        self._invalidate_segment_cache()
         self.text_edit.update_margins()
         if hasattr(self.text_edit, 'timestampArea'):
-            self.text_edit.timestampArea.update()
+            try:
+                self.text_edit._schedule_timestamp_area_update()
+            except Exception:
+                self.text_edit.timestampArea.update()
         self._schedule_timeline()
+
+    def _schedule_cursor_video_seek(self, sec: float, delay_ms: int = 72) -> None:
+        try:
+            self._pending_cursor_video_seek_sec = float(sec or 0.0)
+        except Exception:
+            self._pending_cursor_video_seek_sec = 0.0
+        timer = getattr(self, "_cursor_video_seek_timer", None)
+        if timer is None:
+            self._flush_cursor_video_seek()
+            return
+        timer.start(max(0, int(delay_ms or 0)))
+
+    def _flush_cursor_video_seek(self) -> None:
+        player = getattr(self, "video_player", None)
+        if player is None:
+            return
+        sec = getattr(self, "_pending_cursor_video_seek_sec", None)
+        if sec is None:
+            return
+        self._pending_cursor_video_seek_sec = None
+        try:
+            player.seek(float(sec))
+        except Exception:
+            pass
 
     def _segment_quality_signature(self, seg: dict) -> str:
         payload = {
@@ -1369,7 +1419,17 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
     # Segment I/O
     # ---------------------------------------------------------
 
-    def _get_current_segments(self) -> list[dict]:
+    def _get_current_segments(self, force_rebuild: bool = False) -> list[dict]:
+        if not force_rebuild:
+            cached = getattr(self, "_cached_segs", None)
+            if bool(getattr(self, "_segment_cache_valid", False)) and isinstance(cached, list):
+                try:
+                    block_count = int(self.text_edit.document().blockCount())
+                except Exception:
+                    block_count = int(getattr(self, "_last_segment_cache_block_count", 0) or 0)
+                cached_block_count = int(getattr(self, "_last_segment_cache_block_count", block_count) or block_count)
+                if block_count == cached_block_count:
+                    return [dict(seg) for seg in cached]
         segments = []
         block = self.text_edit.document().begin()
         line_idx = 0
@@ -1407,6 +1467,27 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                         "stt_selected_source": getattr(data, 'stt_selected_source', '') or '',
                         "stt_ensemble_llm_selected_source": getattr(data, 'stt_ensemble_llm_selected_source', '') or '',
                     }
+                    for attr in (
+                        "stt_segment_id",
+                        "stt_mode_status",
+                        "vad_confidence",
+                        "vad_confidence_label",
+                        "vad_decision",
+                        "vad_sources",
+                        "start_frame",
+                        "end_frame",
+                        "timeline_start_frame",
+                        "timeline_end_frame",
+                        "frame_rate",
+                        "timeline_frame_rate",
+                        "frame_range",
+                        "playback",
+                    ):
+                        value = getattr(data, attr, None)
+                        if value not in (None, "", [], {}):
+                            item[attr] = value
+                    if item.get("stt_segment_id") and not item.get("id"):
+                        item["id"] = str(item["stt_segment_id"])
                     if getattr(data, "stt_candidates", None):
                         item["stt_candidates"] = list(getattr(data, "stt_candidates", []) or [])
                     for attr in (
@@ -1479,7 +1560,14 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             if seg.get("quality") and not seg.get("quality_signature"):
                 seg["quality_signature"] = self._segment_quality_signature(seg)
                 
-        return segments
+        self._cached_segs = [dict(seg) for seg in segments]
+        self._subtitle_memory_cache = build_segment_lookup(self._cached_segs)
+        self._segment_cache_valid = True
+        try:
+            self._last_segment_cache_block_count = int(self.text_edit.document().blockCount())
+        except Exception:
+            pass
+        return [dict(seg) for seg in self._cached_segs]
 
     # ---------------------------------------------------------
     # Text Editor Event Handlers
@@ -1647,7 +1735,8 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                 self.text_edit.setToolTip(tip)
             else:
                 self.text_edit.setToolTip("")
-            if hasattr(self, 'video_player'): self.video_player.seek(seg["start"])
+            if hasattr(self, 'video_player'):
+                self._schedule_cursor_video_seek(seg["start"])
 
     def _on_esc_pressed(self):
         if hasattr(self.timeline, 'canvas'): self.timeline.canvas.update()
@@ -1657,7 +1746,8 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
     # ---------------------------------------------------------
     def _redraw_timeline(self):
         segs = self._get_current_segments()
-        self._rebuild_subtitle_memory_cache(segs)
+        if not isinstance(getattr(self, "_subtitle_memory_cache", None), dict):
+            self._rebuild_subtitle_memory_cache(segs)
         timeline_segs = segs
         preview = list(getattr(self, "_live_stt_preview_segments", []) or [])
         if preview:
@@ -1727,11 +1817,11 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                     return list(ctx.get('local_segments', []) or [])
         except Exception:
             pass
-        return list(cache.get("visible_segments") or [])
+        return cache.get("visible_segments") or []
 
     def _schedule_timeline(self):
         if getattr(self, '_inline_updating', False): return
-        if not self._timeline_timer.isActive(): self._timeline_timer.start(150)  # [크PD] 300→150ms 실시간성 개선
+        self._timeline_timer.start(120)
 
     def _on_drag_started(self): 
         # 💡 드래그를 시작하기 직전의 전체 뷰 스냅샷 저장!

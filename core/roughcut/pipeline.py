@@ -19,6 +19,7 @@ from .roughcut_settings import merge_roughcut_settings
 from .semantic_chunker import build_semantic_chunks
 from .story_mapper import map_story_roles
 from .title_suggester import build_title_suggestions
+from .topic_labeler import apply_major_topic_labels
 from .transcript_packer import pack_transcript
 
 
@@ -479,7 +480,7 @@ def run_roughcut_pipeline(
                     for chunk in chunks
                 ],
             },
-            settings=roughcut_settings,
+            settings=settings,
         )
         if llm_result.ok:
             llm_chapters = _chapters_from_llm_major_segments(
@@ -519,6 +520,11 @@ def run_roughcut_pipeline(
     # LLM은 주제없음 placeholder를 overwrite할 수 있지만,
     # hard cut 자체를 병합하거나 무시할 수는 없다.
     roughcut_segments = _clamp_roughcut_segments_to_hard_cuts(roughcut_segments, hard_cuts)
+    roughcut_segments = apply_major_topic_labels(
+        roughcut_segments,
+        subtitles,
+        settings=settings,
+    )
     decisions = build_edit_decisions(chapters, packed, gaps)
     cut_points = generate_cut_points(decisions, packed, gaps)
     edl = build_edl_segments(source_path, decisions, chapters)

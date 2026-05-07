@@ -8,10 +8,37 @@ import os
 import threading
 import time
 
+from PyQt6.QtCore import QTimer
+
 from core.runtime.logger import get_logger
 
 
 class EditorRoughcutDraftMixin:
+    def _schedule_post_roughcut_model_release(self):
+        release = getattr(self, "_release_ai_models_after_roughcut_draft", None)
+        if callable(release):
+            try:
+                QTimer.singleShot(0, release)
+                return
+            except RuntimeError:
+                return
+            except Exception:
+                pass
+        try:
+            main_w = self.window()
+        except RuntimeError:
+            return
+        except Exception:
+            return
+        release = getattr(main_w, "_release_ai_models_for_editor_mode", None)
+        if callable(release):
+            try:
+                QTimer.singleShot(0, lambda: release(force=True, preserve_roughcut_status=True))
+            except RuntimeError:
+                return
+            except Exception:
+                pass
+
     def _draft_settings_snapshot(self) -> dict:
         settings = dict(getattr(self, "settings", {}) or {})
         try:
@@ -96,6 +123,8 @@ class EditorRoughcutDraftMixin:
         if not media_files and media_path:
             media_files = [media_path]
         clip_boundaries = list(getattr(main_w, "_multiclip_boundaries", []) or [])
+        confirmed_cut_boundaries = list(getattr(main_w, "_project_boundary_times", []) or [])
+        provisional_cut_boundaries = list(getattr(self, "_auto_cut_boundary_scan_lines", []) or [])
         editor_mode = "multiclip" if len(media_files) > 1 else "single"
         media_duration = max((float(seg.get("end", 0.0) or 0.0) for seg in segments), default=0.0)
         try:
@@ -139,9 +168,31 @@ class EditorRoughcutDraftMixin:
                 get_logger().log(f"⚠️ 에디터 러프컷 로컬 초안 생성 실패: {exc}")
             return
         try:
-            from core.roughcut import editor_roughcut_draft_llm_allowed, resolve_roughcut_context_policy
+            from core.roughcut import (
+                describe_editor_roughcut_llm_scope,
+                editor_roughcut_draft_llm_allowed,
+                resolve_roughcut_context_policy,
+            )
 
-            if not editor_roughcut_draft_llm_allowed(segments, settings):
+            scope = describe_editor_roughcut_llm_scope(
+                segments,
+                settings,
+                cut_boundaries=confirmed_cut_boundaries,
+                provisional_cut_boundaries=provisional_cut_boundaries,
+            )
+            if str(scope.get("mode") or "") == "chunked":
+                get_logger().log(
+                    "✂️ 긴 영상 러프컷: 자막 row "
+                    f"{len(segments)}개를 컷 경계 기반 {int(scope.get('chunk_count', 0) or 0)}개 chunk로 나눠 "
+                    f"LLM 초안을 순차 생성합니다."
+                )
+
+            if not editor_roughcut_draft_llm_allowed(
+                segments,
+                settings,
+                cut_boundaries=confirmed_cut_boundaries,
+                provisional_cut_boundaries=provisional_cut_boundaries,
+            ):
                 policy = resolve_roughcut_context_policy(settings, subtitle_rows=list(segments or []))
                 max_rows = int(policy.get("max_context_rows", settings.get("roughcut_llm_max_context_rows", 80)) or 80)
                 get_logger().log(
@@ -166,7 +217,12 @@ class EditorRoughcutDraftMixin:
             try:
                 from core.roughcut import run_editor_roughcut_llm_draft
 
-                llm_payload = run_editor_roughcut_llm_draft(segments, settings=settings)
+                llm_payload = run_editor_roughcut_llm_draft(
+                    segments,
+                    settings=settings,
+                    cut_boundaries=confirmed_cut_boundaries,
+                    provisional_cut_boundaries=provisional_cut_boundaries,
+                )
                 if llm_payload is None:
                     self._roughcut_llm_cooldown_until = time.time() + 10.0
                     emit_candidate(None, "local_after_generation_fallback")
@@ -194,6 +250,7 @@ class EditorRoughcutDraftMixin:
         if refinement_source == "failed":
             self._set_roughcut_draft_status("failed")
             self._roughcut_draft_thread = None
+            self._schedule_post_roughcut_model_release()
             return
         self._set_roughcut_draft_status("saving")
         try:
@@ -228,14 +285,27 @@ class EditorRoughcutDraftMixin:
                 candidate["refinement_source"] = refinement_source or "local_capped"
         except Exception:
             pass
-        try:
-            self._auto_save_project(segments)
-        except Exception as exc:
-            get_logger().log(f"⚠️ 러프컷 초안 프로젝트 선저장 실패: {exc}")
         main_w = self.window()
         project_path = str(getattr(main_w, "_current_project_path", "") or "")
         if not project_path:
+            try:
+                from core.path_manager import get_srt_path
+                from core.project.project_manager import create_project
+
+                media_path = str(getattr(self, "media_path", "") or "")
+                if media_path:
+                    project_path = create_project(
+                        name=os.path.splitext(os.path.basename(media_path))[0],
+                        media_paths=[media_path],
+                        srt_path=get_srt_path(media_path),
+                        user_settings=dict(getattr(self, "settings", {}) or {}),
+                    )
+                    main_w._current_project_path = project_path
+            except Exception as exc:
+                get_logger().log(f"⚠️ 러프컷 초안 프로젝트 생성 실패: {exc}")
+        if not project_path:
             self._set_roughcut_draft_status("failed")
+            self._schedule_post_roughcut_model_release()
             return
         try:
             from core.project.project_manager import save_project
@@ -257,6 +327,7 @@ class EditorRoughcutDraftMixin:
                 user_settings=dict(getattr(self, "settings", {}) or {}),
                 roughcut_state=roughcut_state,
                 active_work_mode=EDITOR_MODE,
+                persist_analysis_artifacts=False,
             )
             setattr(main_w, "_editor_roughcut_result", result)
             roughcut = getattr(main_w, "_roughcut_widget", None)
@@ -285,5 +356,6 @@ class EditorRoughcutDraftMixin:
             self._set_roughcut_draft_status("failed")
             get_logger().log(f"⚠️ 러프컷 초안 저장 실패: {exc}")
         finally:
+            self._schedule_post_roughcut_model_release()
             if refinement_source in {"llm_refined", "local_after_generation_fallback"}:
                 self._roughcut_draft_thread = None

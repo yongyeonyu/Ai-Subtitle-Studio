@@ -1,12 +1,17 @@
-# Version: 03.01.28
+# Version: 03.24.01
 # Phase: PHASE2
+import json
 import unittest
+from unittest import mock
 
 from core.roughcut import (
     DEFAULT_ROUGHCUT_PROMPT_V1,
     RoughCutDraftState,
+    RoughCutSegment,
     RoughCutMinorGroup,
+    SubtitleSegment,
     RoughCutTitleSuggestion,
+    apply_major_topic_labels,
     build_roughcut_prompt,
     merge_roughcut_settings,
     roughcut_result_from_dict,
@@ -179,6 +184,160 @@ class RoughCutModelsV2Tests(unittest.TestCase):
         self.assertEqual(policy["max_context_rows"], 5)
         self.assertEqual(policy["chunk_rows"], 3)
         self.assertEqual(policy["lookahead_rows"], 2)
+
+    def test_roughcut_action_unloads_different_subtitle_ollama_before_loading_roughcut(self):
+        settings = {
+            "selected_llm_provider": "ollama",
+            "selected_model": "subtitle-local",
+            "roughcut_llm_enabled": True,
+            "roughcut_llm_use_override": True,
+            "roughcut_llm_provider": "ollama",
+            "roughcut_llm_model": "roughcut-local",
+        }
+
+        with mock.patch("core.roughcut.roughcut_llm.running_local_llm_models", return_value={"subtitle-local"}), \
+             mock.patch("core.roughcut.roughcut_llm.stop_local_llm_models", return_value=["subtitle-local"]) as stop_llm, \
+             mock.patch("core.roughcut.roughcut_llm.warmup_model") as warmup, \
+             mock.patch("core.roughcut.roughcut_llm._clear_runtime_memory_caches") as clear_memory, \
+             mock.patch(
+                 "core.roughcut.roughcut_llm._default_roughcut_llm_client",
+                 return_value=lambda _prompt: {"titles": []},
+             ):
+            result = run_roughcut_llm_action("title_suggestions", {}, settings=settings)
+
+        self.assertTrue(result.ok)
+        self.assertTrue(result.used_llm)
+        stop_llm.assert_called_once()
+        self.assertEqual(stop_llm.call_args.args[0], ["subtitle-local"])
+        self.assertEqual(stop_llm.call_args.kwargs["log_context"], "러프컷 LLM 전환")
+        clear_memory.assert_called_once()
+        warmup.assert_called_once()
+        self.assertEqual(warmup.call_args.args[0], "roughcut-local")
+
+    def test_roughcut_action_keeps_loaded_roughcut_model_for_followup_actions(self):
+        settings = {
+            "selected_llm_provider": "ollama",
+            "selected_model": "subtitle-local",
+            "roughcut_llm_enabled": True,
+            "roughcut_llm_use_override": True,
+            "roughcut_llm_provider": "ollama",
+            "roughcut_llm_model": "roughcut-local",
+        }
+
+        with mock.patch("core.roughcut.roughcut_llm.running_local_llm_models", return_value={"roughcut-local"}), \
+             mock.patch("core.roughcut.roughcut_llm.stop_local_llm_models") as stop_llm, \
+             mock.patch("core.roughcut.roughcut_llm.warmup_model") as warmup, \
+             mock.patch("core.roughcut.roughcut_llm._clear_runtime_memory_caches") as clear_memory, \
+             mock.patch(
+                 "core.roughcut.roughcut_llm._default_roughcut_llm_client",
+                 return_value=lambda _prompt: {"titles": []},
+             ):
+            result = run_roughcut_llm_action("title_suggestions", {}, settings=settings)
+
+        self.assertTrue(result.ok)
+        stop_llm.assert_not_called()
+        clear_memory.assert_not_called()
+        warmup.assert_not_called()
+
+    def test_roughcut_action_does_not_unload_for_cloud_subtitle_model(self):
+        settings = {
+            "selected_llm_provider": "openai",
+            "selected_model": "custom-openai-deployment",
+            "roughcut_llm_enabled": True,
+            "roughcut_llm_use_override": True,
+            "roughcut_llm_provider": "ollama",
+            "roughcut_llm_model": "roughcut-local",
+        }
+
+        with mock.patch("core.roughcut.roughcut_llm.running_local_llm_models") as running, \
+             mock.patch("core.roughcut.roughcut_llm.stop_local_llm_models") as stop_llm, \
+             mock.patch("core.roughcut.roughcut_llm.warmup_model") as warmup, \
+             mock.patch(
+                 "core.roughcut.roughcut_llm._default_roughcut_llm_client",
+                 return_value=lambda _prompt: {"titles": []},
+             ):
+            result = run_roughcut_llm_action("title_suggestions", {}, settings=settings)
+
+        self.assertTrue(result.ok)
+        running.assert_not_called()
+        stop_llm.assert_not_called()
+        warmup.assert_not_called()
+
+    def test_major_topic_labels_use_all_subtitles_for_one_line_major_title(self):
+        captured = {}
+
+        def llm_client(prompt: str):
+            captured["prompt"] = json.loads(prompt)
+            rows = captured["prompt"]["payload"]["major_segments"][0]["subtitle_rows"]
+            self.assertEqual([row["text"] for row in rows], [
+                "오늘은 카메라를 들고 촬영을 시작합니다",
+                "렌즈 선택과 조명 세팅을 먼저 확인합니다",
+                "야간 촬영에서 노이즈를 줄이는 방법을 봅니다",
+            ])
+            return {
+                "topics": [
+                    {
+                        "major_id": "A",
+                        "topic": "야간 촬영 장비 세팅",
+                        "summary": "카메라 렌즈와 조명을 준비해 야간 촬영 품질을 높이는 구간",
+                        "tags": ["카메라", "야간촬영"],
+                    }
+                ]
+            }
+
+        segments = (
+            RoughCutSegment(
+                segment_id="A",
+                major_id="A",
+                start=0.0,
+                end=6.0,
+                subtitle_ids=(0, 1, 2),
+                title="오늘은 카메라를 들고 촬영을 시작합니다",
+            ),
+        )
+        subtitles = (
+            SubtitleSegment(0.0, 1.5, "오늘은 카메라를 들고 촬영을 시작합니다", subtitle_id=0),
+            SubtitleSegment(2.0, 3.5, "렌즈 선택과 조명 세팅을 먼저 확인합니다", subtitle_id=1),
+            SubtitleSegment(4.0, 5.5, "야간 촬영에서 노이즈를 줄이는 방법을 봅니다", subtitle_id=2),
+        )
+
+        labeled = apply_major_topic_labels(
+            segments,
+            subtitles,
+            settings={"roughcut_llm_enabled": True},
+            llm_client=llm_client,
+        )
+
+        self.assertEqual(labeled[0].title, "야간 촬영 장비 세팅")
+        self.assertEqual(labeled[0].summary, "카메라 렌즈와 조명을 준비해 야간 촬영 품질을 높이는 구간")
+        self.assertEqual(labeled[0].tags, ("카메라", "야간촬영"))
+
+    def test_major_topic_labels_do_not_accept_raw_first_subtitle_copy(self):
+        first_text = "오늘은 BMW 차량 외장 디자인을 자세히 살펴보겠습니다"
+        segments = (
+            RoughCutSegment(
+                segment_id="A",
+                major_id="A",
+                start=0.0,
+                end=4.0,
+                subtitle_ids=(0, 1),
+                title=first_text,
+            ),
+        )
+        subtitles = (
+            SubtitleSegment(0.0, 1.5, first_text, subtitle_id=0),
+            SubtitleSegment(2.0, 3.5, "그릴과 헤드램프의 변화 포인트를 비교합니다", subtitle_id=1),
+        )
+
+        labeled = apply_major_topic_labels(
+            segments,
+            subtitles,
+            settings={"roughcut_llm_enabled": True},
+            llm_client=lambda _prompt: {"topics": [{"major_id": "A", "topic": first_text}]},
+        )
+
+        self.assertNotEqual(labeled[0].title, first_text)
+        self.assertTrue(labeled[0].title)
 
 
 if __name__ == "__main__":

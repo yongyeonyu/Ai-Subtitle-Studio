@@ -1,6 +1,6 @@
 <!--
-Document-Version: 03.24.00
-Phase: REFACTOR_QUALITY_RELEASED
+Document-Version: 03.24.01
+Phase: STT_MODE_RUNTIME_RELEASED
 Last-Updated: 2026-05-07
 Updated-By: Codex
 Purpose: Agent bootstrap and handoff rules only.

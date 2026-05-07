@@ -59,6 +59,17 @@ def _darker_hex(hex_color: str, factor: int = 135) -> str:
     return color.darker(int(factor)).name()
 
 
+def _scenegraph_vector_profile(visible_segment_count: int, pps: float) -> str:
+    """Return how aggressively the GPU subtitle layer should collapse segment detail."""
+    count = max(0, int(visible_segment_count or 0))
+    zoom = max(0.0, float(pps or 0.0))
+    if count >= 220 or (count >= 120 and zoom < 18.0):
+        return "minimal"
+    if count >= 96 or (count >= 48 and zoom < 32.0):
+        return "compact"
+    return "full"
+
+
 def build_scenegraph_subtitle_segments(
     segments: list[dict[str, Any]] | None,
     *,
@@ -81,6 +92,7 @@ def build_scenegraph_subtitle_segments(
     fps = normalize_fps(fps or 30.0)
     px_per_frame = max(0.001, float(pps or 1.0) / fps)
     speaker_settings = current_speaker_settings(speaker_settings or {})
+    render_profile = _scenegraph_vector_profile(len(rows), pps)
     visible_start_frame = sec_to_frame(max(0.0, visible_start_sec) - 0.35, fps)
     visible_end_frame = sec_to_frame(max(visible_start_sec, visible_end_sec) + 0.35, fps)
     objects: list[dict[str, Any]] = []
@@ -123,6 +135,8 @@ def build_scenegraph_subtitle_segments(
             border_width = int(visual["border_width"])
             speaker_fill = ""
             speaker_names = ""
+            is_active = False
+            is_hover = False
         else:
             line = seg.get("line")
             is_active = (
@@ -151,11 +165,30 @@ def build_scenegraph_subtitle_segments(
             h = SUBTITLE_BOT - SUBTITLE_TOP
 
         width = max(2.0, float(end_frame - start_frame) * px_per_frame)
+        allow_text = render_profile == "full"
+        if render_profile == "compact" and width >= 184.0 and (is_active or is_hover):
+            allow_text = True
+        show_text = bool(width >= 44.0 and allow_text)
+        show_confidence_chips = bool(
+            not is_preview
+            and render_profile == "full"
+            and width >= 72.0
+            and float(h) >= 30.0
+        )
+        show_speaker_bar = bool(not is_preview and render_profile != "minimal" and width >= 24.0)
+        show_speaker_text = bool(show_speaker_bar and render_profile == "full" and width >= 64.0 and speaker_names)
+        show_handles = bool(
+            not is_preview
+            and render_profile == "full"
+            and width >= SEGMENT_HANDLE_MIN_WIDTH
+        )
+        display_text = str(seg.get("text", "") or "") if show_text else ""
+        chip_rows = subtitle_confidence_chips(seg) if show_confidence_chips else []
         objects.append(
             {
                 "id": str(seg.get("id") or f"sg_seg_{idx}_{start_frame}_{end_frame}"),
                 "line": int(seg.get("line", idx) or idx),
-                "text": str(seg.get("text", "") or ""),
+                "text": display_text,
                 "x": float(start_frame) * px_per_frame,
                 "y": float(y),
                 "w": width,
@@ -170,13 +203,17 @@ def build_scenegraph_subtitle_segments(
                 "textColor": text_color,
                 "alpha": alpha,
                 "borderWidth": border_width,
-                "confidenceChips": subtitle_confidence_chips(seg),
+                "confidenceChips": chip_rows,
                 "speakerY": float(SPEAKER_TOP),
                 "speakerH": float(SPEAKER_BOT - SPEAKER_TOP),
-                "speakerFill": speaker_fill,
-                "speakerText": speaker_names,
-                "showSpeaker": bool(speaker_fill and width >= 42.0),
-                "showHandles": bool(not is_preview and width >= SEGMENT_HANDLE_MIN_WIDTH),
+                "speakerFill": speaker_fill if show_speaker_bar else "",
+                "speakerText": speaker_names if show_speaker_text else "",
+                "showText": show_text,
+                "showConfidenceChips": show_confidence_chips,
+                "showSpeakerBar": show_speaker_bar,
+                "showSpeakerText": show_speaker_text,
+                "showHandles": show_handles,
+                "renderProfile": render_profile,
                 "preview": bool(is_preview),
             }
         )

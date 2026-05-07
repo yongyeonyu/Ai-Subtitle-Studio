@@ -119,6 +119,27 @@ def subtitle_confidence_chips(seg: dict) -> list[dict]:
     return chips
 
 
+def subtitle_render_detail_mode(
+    *,
+    visible_segment_count: int,
+    pps: float,
+    editing: bool = False,
+    scenegraph: bool = False,
+) -> str:
+    """Return a lightweight subtitle paint mode for dense timelines."""
+    if scenegraph:
+        return "gpu"
+    if editing:
+        return "full"
+    count = max(0, int(visible_segment_count or 0))
+    zoom = max(0.0, float(pps or 0.0))
+    if count >= 220 or (count >= 120 and zoom < 18.0):
+        return "ultra"
+    if count >= 80 or (count >= 48 and zoom < 36.0):
+        return "dense"
+    return "full"
+
+
 def cut_boundary_scan_marker_verified(marker) -> bool:
     if not isinstance(marker, dict):
         return False
@@ -436,6 +457,16 @@ class TimelinePaintMixin:
         ]
         stt1_preview_segments = [seg for seg in stt_preview_segments if stt_preview_source(seg) != "STT2"]
         stt2_preview_segments = [seg for seg in stt_preview_segments if stt_preview_source(seg) == "STT2"]
+        scenegraph_subtitles = bool(getattr(self, "_scenegraph_subtitle_rendering", False)) and not bool(getattr(self, "_edit_active", False))
+        subtitle_detail_mode = subtitle_render_detail_mode(
+            visible_segment_count=len(final_stt_segments) + len(stt_preview_segments),
+            pps=float(getattr(self, "pps", 0.0) or 0.0),
+            editing=bool(getattr(self, "_edit_active", False)),
+            scenegraph=scenegraph_subtitles,
+        )
+        dense_segment_mode = subtitle_detail_mode in {"dense", "ultra"}
+        ultra_dense_segment_mode = subtitle_detail_mode == "ultra"
+        self._paint_density_mode = subtitle_detail_mode
 
         def _owner_speaker_settings():
             owner = self.parent()
@@ -852,7 +883,7 @@ class TimelinePaintMixin:
                 p.fillRect(rect, fill_color)
                 p.setPen(QPen(border_color, int(visual["border_width"])))
                 p.drawRect(rect)
-                if rect.width() >= 44:
+                if rect.width() >= 44 and not dense_segment_mode:
                     badge_w = 36 if is_selected and rect.width() >= 90 else 0
                     text_rect = QRect(rect.x() + 8, rect.y() + 5, max(8, rect.width() - 16 - badge_w), rect.height() - 10)
                     p.setPen(text_color)
@@ -875,7 +906,6 @@ class TimelinePaintMixin:
                         p.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
                         p.setFont(QFont(config.FONT, 8))
 
-        scenegraph_subtitles = bool(getattr(self, "_scenegraph_subtitle_rendering", False)) and not bool(getattr(self, "_edit_active", False))
         if not scenegraph_subtitles:
             _draw_stt_preview_lane(stt1_preview_segments, STT1_TOP, STT1_BOT, "#173524", "#34C759", "#D7FFE4")
             _draw_stt_preview_lane(stt2_preview_segments, STT2_TOP, STT2_BOT, "#1A3148", "#64D2FF", "#BDEBFF")
@@ -887,7 +917,7 @@ class TimelinePaintMixin:
                 x1, x2 = self._x(seg["start"]), self._x(seg["end"]); sw = max(2, x2 - x1)
                 if x2 < clip_left or x1 > clip_right:
                     continue
-                compact_seg = sw < 24
+                compact_seg = sw < 24 or dense_segment_mode
                 rect = QRect(x1 + 1, subtitle_top, max(2, sw - 2), subtitle_bot - subtitle_top)
                 is_active = self._is_active_segment(seg) if hasattr(self, "_is_active_segment") else (
                     self.active_seg_start is not None and abs(seg["start"] - self.active_seg_start) < 0.001
@@ -919,7 +949,7 @@ class TimelinePaintMixin:
                 p.drawRect(rect)
                 chips = subtitle_confidence_chips(seg)
                 chips_drawn = False
-                if chips and rect.width() >= 72 and rect.height() >= 30 and not compact_seg:
+                if chips and rect.width() >= 72 and rect.height() >= 30 and not compact_seg and not dense_segment_mode:
                     chip_w = max(6, min(18, (rect.width() - 10) // max(1, len(chips))))
                     chip_h = 4
                     chip_y = rect.y() + 3
@@ -972,7 +1002,7 @@ class TimelinePaintMixin:
                             p.drawLine(cx, cursor_top, cx, cursor_bot)
                         curr_y += line_h + 4
                 else:
-                    if rect.width() >= 44:
+                    if rect.width() >= 44 and not dense_segment_mode:
                         text_color = visual_style.get("text", "")
                         p.setPen(QColor(text_color) if text_color else (QColor("#8A8F98") if is_stt_pending else QColor("#DCE3EA")))
                         seg_text = str(seg.get("text", "") or "")
@@ -982,7 +1012,7 @@ class TimelinePaintMixin:
                         else:
                             p.drawText(text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, seg_text)
                         selected_source = final_stt_selection_source(seg)
-                        if selected_source and rect.width() >= 104:
+                        if selected_source and rect.width() >= 104 and not dense_segment_mode:
                             is_llm_choice = bool(str(seg.get("stt_ensemble_llm_selected_source", "") or "").strip())
                             badge_rect = QRect(rect.right() - 42, rect.y() + 6, 38, 18)
                             badge_fill = QColor("#5A4600" if is_llm_choice else "#174A2A")
@@ -1002,10 +1032,10 @@ class TimelinePaintMixin:
                     p.setPen(QPen(QColor("#2D3942"), 1))
                     p.setBrush(QColor("#1B2429"))
                     p.drawRect(speaker_rect)
-                if not compact_seg and speaker_rect.width() >= 42:
+                if not compact_seg and speaker_rect.width() >= 42 and not dense_segment_mode:
                     self._draw_speaker_names(p, speaker_rect, spk_color, _speaker_names(seg))
 
-                if sw >= SEGMENT_HANDLE_MIN_WIDTH:
+                if sw >= SEGMENT_HANDLE_MIN_WIDTH and not dense_segment_mode and not ultra_dense_segment_mode:
                     lh = self._hover_handle_matches(seg, "left")
                     rh = self._hover_handle_matches(seg, "right")
                     self._draw_handle(p, x1, True, QColor("#44FF88") if lh else QColor("#888888"))

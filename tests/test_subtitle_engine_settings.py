@@ -139,6 +139,60 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertAlmostEqual(adjusted[0]["end"], 1.8, places=3)
         self.assertAlmostEqual(adjusted[1]["start"], 1.8, places=3)
 
+    def test_common_split_guard_applies_to_fast_auto_high_modes(self):
+        text = "여기 안에 들어가 있는 것도 똑같고 저기 방향제도 똑같고 이번에는 동일한 차를 그냥 2대를 만드셨네"
+        tokens = text.split()
+        words = [
+            {
+                "word": token,
+                "start": round(index * (9.9 / len(tokens)), 3),
+                "end": round((index + 1) * (9.9 / len(tokens)), 3),
+            }
+            for index, token in enumerate(tokens)
+        ]
+
+        for mode in ("fast", "auto", "high"):
+            with self.subTest(mode=mode):
+                adjusted = subtitle_engine.apply_final_gap_settings(
+                    [
+                        {
+                            "start": 0.0,
+                            "end": 9.9,
+                            "text": text,
+                            "words": words,
+                            "_final_gap_settings_applied": True,
+                        }
+                    ],
+                    {
+                        "subtitle_mode": mode,
+                        "single_subtitle_end": 0.0,
+                        "split_length_threshold": 10,
+                        "sub_min_duration": 0.2,
+                        "sub_max_duration": 6.0,
+                        "subtitle_common_split_guard_enabled": True,
+                        "subtitle_common_split_target_chars": 16,
+                        "subtitle_common_split_hard_max_chars": 24,
+                        "subtitle_common_split_hard_max_duration_sec": 5.5,
+                    },
+                )
+
+                self.assertGreater(len(adjusted), 1)
+                self.assertEqual(
+                    "".join("".join(seg["text"].split()) for seg in adjusted),
+                    "".join(text.split()),
+                )
+                self.assertTrue(
+                    all(len(seg["text"].replace(" ", "").replace("\n", "")) <= 24 for seg in adjusted)
+                )
+                self.assertTrue(all(seg["end"] - seg["start"] <= 5.5 for seg in adjusted))
+                self.assertTrue(
+                    all(
+                        seg.get("_common_split_guard_policy", {}).get("action") == "split"
+                        for seg in adjusted
+                    )
+                )
+                self.assertTrue(all(seg.get("_final_gap_settings_applied") for seg in adjusted))
+
     def test_final_gap_settings_use_segment_lora_overrides(self):
         segments = [
             {

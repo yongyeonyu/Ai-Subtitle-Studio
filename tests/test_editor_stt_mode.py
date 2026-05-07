@@ -74,6 +74,7 @@ class _DummyEditor(EditorSTTModeMixin, QObject):
         self._mark_dirty_called = 0
         self._refresh_calls = 0
         self._video_context_refreshes = 0
+        self.settings = {"stt_mode_text_input_provider": "desktop_mic_optional"}
         self._init_stt_mode_state()
         self._stt_mode_enabled = True
         self.sig_live_stt_result.connect(self._apply_stt_text_to_current)
@@ -132,10 +133,28 @@ class EditorSTTModeTests(unittest.TestCase):
                 self.assertFalse(editor._stt_recording)
                 self.assertEqual(editor.timeline.canvas.end_calls, 1)
                 self.assertEqual(editor.text_edit.toPlainText().strip(), "마이크 자막")
-                self.assertEqual(editor.status_lbl.text(), "✅ STT 적용 완료")
+                self.assertIn("STT", editor.status_lbl.text())
+                self.assertIn(editor._stt_state, {"finished", "next_segment_ready"})
         finally:
             if os.path.exists(temp_wav.name):
                 os.remove(temp_wav.name)
+            editor.text_edit.close()
+            editor.text_edit.deleteLater()
+            editor.status_lbl.deleteLater()
+            self.app.processEvents()
+
+    def test_default_enter_confirms_manual_text_without_live_mic(self):
+        editor = _DummyEditor()
+        editor.settings = {"stt_mode_text_input_provider": "manual"}
+        try:
+            with patch("ui.editor.live_microphone_session.LiveMicrophoneSession", _FakeMicSession):
+                editor._handle_stt_enter()
+
+            self.assertFalse(editor._stt_recording)
+            self.assertIsNone(editor._stt_mic_capture_session)
+            self.assertEqual(editor.text_edit.toPlainText().strip(), "대기")
+            self.assertEqual(editor.text_edit.document().findBlockByNumber(0).userData().stt_pending, False)
+        finally:
             editor.text_edit.close()
             editor.text_edit.deleteLater()
             editor.status_lbl.deleteLater()

@@ -23,7 +23,7 @@ from core.audio.media_processor_audio import VideoProcessorAudioHelpersMixin
 from core.audio.media_processor_transcribe import VideoProcessorTranscribeMixin
 from core.audio.media_processor_vad import VideoProcessorVadMixin
 from core.llm.secure_keys import get_api_key  # noqa: F401 - patched by audio helper tests/runtime hooks
-from core.performance import adaptive_worker_count, bounded_worker_count
+from core.performance import adaptive_worker_count, bounded_worker_count, distributed_worker_ceiling
 from core.media_fingerprint import media_fingerprint_digest
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.runtime import config
@@ -86,15 +86,18 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
     ):
         _ = (ui_callback, min_spk, max_spk)
 
-        # 오디오 추출 단계로 is_single_segment 전달
-        chunk_dir, vad_segments = self.extract_audio(media_path, target_start_sec, target_end_sec, is_single_segment)
-        
-        if not os.path.exists(chunk_dir) or not os.listdir(chunk_dir):
-            yield [], 1, 1; return
+        try:
+            # 오디오 추출 단계로 is_single_segment 전달
+            chunk_dir, vad_segments = self.extract_audio(media_path, target_start_sec, target_end_sec, is_single_segment)
 
-        # Whisper 단계로 is_single_segment 및 target_end_sec 전달
-        for chunk_segs, idx, total in self.transcribe(chunk_dir, is_fast_mode=False, target_end_sec=target_end_sec, is_single=is_single_segment):
-            yield chunk_segs, idx, total
+            if not os.path.exists(chunk_dir) or not os.listdir(chunk_dir):
+                yield [], 1, 1; return
+
+            # Whisper 단계로 is_single_segment 및 target_end_sec 전달
+            for chunk_segs, idx, total in self.transcribe(chunk_dir, is_fast_mode=False, target_end_sec=target_end_sec, is_single=is_single_segment):
+                yield chunk_segs, idx, total
+        finally:
+            self.release_runtime_models()
 
     # 💡 오디오 추출/정제 엔진 (is_single_segment 파라미터 추가)
     def extract_audio(
@@ -625,13 +628,21 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             return
 
         settings = self._load_all_settings()
+        workload = len(grouped)
+        worker_ceiling = distributed_worker_ceiling(
+            settings,
+            task="io",
+            workload=workload,
+            reserve_cores=1,
+            minimum=1,
+        )
         max_workers, scheduler = adaptive_worker_count(
             task="io",
             settings=settings,
             requested=self.io_workers,
-            workload=len(grouped),
+            workload=workload,
             minimum=1,
-            maximum=max(1, min(self.io_workers, len(grouped))),
+            maximum=worker_ceiling,
         )
         if scheduler.get("ramp", {}).get("enabled"):
             get_logger().log(f"  🐢 [전처리] 청크 생성 램프업: {max_workers}개 워커")
@@ -672,13 +683,21 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             return False
 
         ffmpeg = ffmpeg_binary()
+        workload = len(grouped)
+        worker_ceiling = distributed_worker_ceiling(
+            settings,
+            task="io",
+            workload=workload,
+            reserve_cores=1,
+            minimum=1,
+        )
         max_workers, scheduler = adaptive_worker_count(
             task="io",
             settings=settings,
             requested=self.io_workers,
-            workload=len(grouped),
+            workload=workload,
             minimum=1,
-            maximum=max(1, min(self.io_workers, len(grouped))),
+            maximum=worker_ceiling,
         )
         if scheduler.get("ramp", {}).get("enabled"):
             get_logger().log(f"  🐢 [전처리] 직접 청크 추출 램프업: {max_workers}개 워커")

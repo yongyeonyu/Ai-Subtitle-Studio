@@ -38,6 +38,7 @@ def install_auto_grid_v3(namespace: dict) -> None:
     _auto_gray_delta_mps = verify_utils["_auto_gray_delta_mps"]
     _auto_color_avg_delta_mps = verify_utils["_auto_color_avg_delta_mps"]
     _auto_capture_verify_maps = verify_utils["_auto_capture_verify_maps"]
+    _auto_downscale_frame_for_compare = verify_utils["_auto_downscale_frame_for_compare"]
 
     strict_helpers = build_strict_verify_helpers(
         {
@@ -61,6 +62,7 @@ def install_auto_grid_v3(namespace: dict) -> None:
             "normalize_cut_boundaries": normalize_cut_boundaries,
             "normalize_cut_boundary_level": normalize_cut_boundary_level,
             "_selected_grid_delta": _selected_grid_delta,
+            "_auto_downscale_frame_for_compare": _auto_downscale_frame_for_compare,
             "_cb_level_interval_sec": _cb_level_interval_sec,
             "_cb_level_effective_threshold": _cb_level_effective_threshold,
             "_cb_level_min_gap_sec": _cb_level_min_gap_sec,
@@ -91,5 +93,6 @@ def install_auto_grid_v3(namespace: dict) -> None:
         "_auto_5x5_positions_for_level": _auto_5x5_positions_for_level,
         "_auto_grid_v3_manual_verify_strict": _auto_grid_v3_manual_verify_strict,
         "_auto_grid_v3_manual_verify_strict_mps": _auto_grid_v3_manual_verify_strict_mps,
+        "_auto_downscale_frame_for_compare": _auto_downscale_frame_for_compare,
         "_auto_grid_v3_original_detect_media_cut_boundaries": _auto_grid_v3_original_detect_media_cut_boundaries,
     })

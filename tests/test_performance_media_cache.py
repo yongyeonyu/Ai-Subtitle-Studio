@@ -11,7 +11,9 @@ from core import media_info
 from core.performance import (
     adaptive_llm_worker_count,
     adaptive_worker_count,
+    balanced_task_slices,
     bounded_worker_count,
+    distributed_worker_ceiling,
     ffprobe_worker_count,
     mark_runtime_scheduler_start,
     native_runtime_env_overrides,
@@ -250,6 +252,41 @@ class PerformanceMediaCacheTest(unittest.TestCase):
         self.assertEqual(env["AI_SUBTITLE_NATIVE_THREADS"], "10")
         self.assertEqual(env["OMP_NUM_THREADS"], "10")
         self.assertEqual(env["AI_SUBTITLE_NATIVE_JSON"], "1")
+
+    def test_distributed_worker_ceiling_keeps_one_core_for_ui_in_max_profile(self):
+        snapshot = {
+            "system": "Darwin",
+            "machine": "arm64",
+            "logical_cores": 10,
+            "physical_cores": 8,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "memory_bytes": 16 * 1024 ** 3,
+            "accelerators": {"mlx": True},
+        }
+        settings = {
+            "runtime_hardware_acceleration_enabled": True,
+            "runtime_performance_profile": "max",
+        }
+        with patch("core.performance.hardware_profile", return_value=snapshot):
+            ceiling = distributed_worker_ceiling(
+                settings,
+                task="cut_pioneer",
+                workload=32,
+                reserve_cores=1,
+            )
+
+        self.assertEqual(ceiling, 9)
+
+    def test_balanced_task_slices_split_evenly_without_tiny_batches(self):
+        self.assertEqual(
+            balanced_task_slices(11, 4, min_batch_size=2),
+            [(0, 3), (3, 6), (6, 9), (9, 11)],
+        )
+        self.assertEqual(
+            balanced_task_slices(3, 8, min_batch_size=2),
+            [(0, 3)],
+        )
 
     def test_native_json_round_trip_preserves_unicode(self):
         payload = {"text": "안녕하세요", "rows": [{"i": 1}]}

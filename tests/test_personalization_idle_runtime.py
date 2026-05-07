@@ -17,11 +17,13 @@ from core.personalization.idle_trainer import (
     enqueue_full_training_jobs,
     format_training_queue_status_summary,
     recover_interrupted_training_jobs,
+    run_training_job,
     run_training_queue_once,
 )
 from core.audio.whisper_transformers import is_transformers_whisper_model
 from core.personalization.lora_models import TruthTableRow
 from core.personalization.lora_storage import (
+    append_deep_policy_events,
     append_truth_table_rows,
     initialize_lora_personalization_store,
     load_best_settings,
@@ -115,6 +117,65 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
 
             self.assertEqual(summary, "완료 1개 · 실행중 1개 · 대기 2개")
             self.assertEqual(format_training_queue_status_summary({"items": []}), "대기 작업 없음")
+
+    def test_hard_case_subtitle_policy_job_updates_pattern_index(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            append_deep_policy_events(
+                [
+                    {
+                        "schema": "ai_subtitle_studio.deep_policy_event.v1",
+                        "event_id": "hardcase-001",
+                        "event_type": "llm_rollback",
+                        "media_id": "media-hard",
+                        "media_path": "/tmp/hard.mp4",
+                        "segment_id": "seg-1",
+                        "text": "하드케이스 자막",
+                        "hard_case": True,
+                        "score": 58.0,
+                        "decision": {"reason": "llm_rollback"},
+                        "features": {"duration_sec": 1.2, "cps": 8.0},
+                    }
+                ],
+                tmpdir,
+            )
+
+            result = run_training_job(
+                {
+                    "job_id": "hardcase-001",
+                    "job_type": "hard_case_subtitle_policy",
+                    "media_id": "media-hard",
+                    "payload": {"event_id": "hardcase-001", "hard_case_reasons": ["llm_rollback"]},
+                },
+                store_dir=tmpdir,
+            )
+
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(result["result"]["reason"], "hard_case_policy_indexed")
+            self.assertTrue(store_paths(tmpdir)["subtitle_pattern_index"].exists())
+
+    def test_legacy_unsupported_hard_case_jobs_are_recovered(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            save_training_queue(
+                [
+                    {
+                        "job_id": "hardcase-old",
+                        "job_type": "hard_case_subtitle_policy",
+                        "status": "failed",
+                        "last_error": "unsupported_job_type:hard_case_subtitle_policy",
+                        "payload": {"event_id": "hardcase-old"},
+                    }
+                ],
+                tmpdir,
+            )
+
+            result = recover_interrupted_training_jobs(tmpdir, reason="unit_test")
+            queue = load_training_queue(tmpdir)
+
+            self.assertEqual(result["recovered"], 1)
+            self.assertEqual(queue["items"][0]["status"], "waiting")
+            self.assertIn("now supported", queue["items"][0]["last_error"])
 
     def test_idle_trainer_defaults_to_slow_low_resource_schedule(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -291,6 +352,36 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             item = load_training_queue(tmpdir)["items"][0]
             self.assertEqual(item["status"], "skipped")
             self.assertEqual(item["last_error"], "low_resource_index_refresh_deferred")
+
+    def test_retrieval_index_job_stops_before_next_heavy_step_when_cancelled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            stop_requested = {"value": False}
+
+            def save_pattern_then_stop(*args, **kwargs):
+                stop_requested["value"] = True
+                return {"pattern_count": 3}
+
+            with (
+                patch("core.personalization.idle_trainer.save_subtitle_pattern_index", side_effect=save_pattern_then_stop),
+                patch("core.personalization.idle_trainer.build_lora_retrieval_index") as build_index,
+                patch("core.personalization.idle_trainer.refresh_unified_lora_data_bundle") as refresh_bundle,
+            ):
+                result = run_training_job(
+                    {
+                        "job_id": "index-cancel",
+                        "job_type": "build_retrieval_index",
+                        "media_id": "global",
+                        "payload": {"force": True},
+                    },
+                    store_dir=tmpdir,
+                    cancel_callback=lambda: stop_requested["value"],
+                )
+
+            self.assertEqual(result["status"], "waiting")
+            self.assertTrue((result.get("result") or {}).get("cancelled"))
+            build_index.assert_not_called()
+            refresh_bundle.assert_not_called()
 
     def test_low_resource_completed_job_does_not_refresh_retrieval_index_in_app_process(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -742,6 +833,27 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
                 worker.join(timeout=2.0)
                 self.assertFalse(worker.is_alive())
                 self.assertEqual(load_training_queue(tmpdir)["items"][0]["status"], "complete")
+            finally:
+                trainer._poll_timer.stop()
+                trainer.deleteLater()
+
+    def test_immediate_stop_sets_cancel_signal_for_background_learning(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+
+            owner = _DummyOwner()
+            trainer = PersonalizationIdleTrainer(owner, store_dir=tmpdir)
+            trainer._poll_timer.stop()
+            try:
+                result = trainer.request_immediate_stop(
+                    reason="user_input_interrupt",
+                    hold_ms=0,
+                    join_timeout_sec=0,
+                )
+
+                self.assertTrue(result["stop_requested"])
+                self.assertEqual(result["reason"], "user_input_interrupt")
+                self.assertTrue(trainer._stop_requested.is_set())
             finally:
                 trainer._poll_timer.stop()
                 trainer.deleteLater()

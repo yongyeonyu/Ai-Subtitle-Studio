@@ -2,6 +2,7 @@
 # Phase: PHASE2
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -9,7 +10,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import QApplication
 
-from ui.editor.subtitle_text_edit import SubtitleTextEdit
+from ui.editor.subtitle_text_edit import SubtitleHighlighter, SubtitleTextEdit
 
 
 class SubtitleTextEditKeyTests(unittest.TestCase):
@@ -72,6 +73,20 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
             self.assertEqual(edit.textCursor().position(), 2)
             self.assertTrue(edit.isReadOnly())
             self.assertEqual(edit.focusPolicy(), Qt.FocusPolicy.NoFocus)
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
+    def test_current_line_change_does_not_rehighlight_whole_document(self):
+        edit = SubtitleTextEdit()
+        try:
+            highlighter = SubtitleHighlighter(edit.document())
+            with patch.object(highlighter, "rehighlight") as rehighlight:
+                highlighter.set_current_line(3)
+                highlighter.set_current_line(9)
+            self.assertEqual(highlighter._current_line, 9)
+            rehighlight.assert_not_called()
         finally:
             edit.close()
             edit.deleteLater()

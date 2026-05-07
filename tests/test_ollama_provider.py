@@ -70,6 +70,36 @@ class OllamaWarmupTest(unittest.TestCase):
         self.assertIn("에디터 모드: Ollama 모델 종료/언로드 완료", joined)
         self.assertNotIn("홈 이동: Ollama 모델 종료/언로드 완료", joined)
 
+    def test_shutdown_local_ollama_runtime_unloads_models_and_kills_server(self):
+        logger = _Logger()
+        ollama_provider._WARMED.add("gemma4:e4b")
+        ollama_provider._SERVER_READY_UNTIL = 9.0
+        ollama_provider._START_IN_PROGRESS_UNTIL = 8.0
+        ollama_provider._SERVER_READY_LOGGED_UNTIL = 7.0
+
+        with mock.patch(
+            "core.llm.ollama_provider.stop_local_llm_models",
+            return_value=["gemma4:e4b"],
+        ) as stop_mock, mock.patch(
+            "core.platform_compat.cleanup_ollama_runtime_processes",
+            return_value=2,
+        ) as cleanup_mock:
+            result = ollama_provider.shutdown_local_ollama_runtime(
+                ["gemma4:e4b"],
+                logger=logger,
+                log_context="생성 완료",
+                timeout_sec=0.7,
+            )
+
+        stop_mock.assert_called_once_with(["gemma4:e4b"], logger=logger, log_context="생성 완료")
+        cleanup_mock.assert_called_once_with(timeout_sec=0.7)
+        self.assertEqual(result, {"models": ["gemma4:e4b"], "processes": 2})
+        self.assertEqual(ollama_provider._SERVER_READY_UNTIL, 0.0)
+        self.assertEqual(ollama_provider._START_IN_PROGRESS_UNTIL, 0.0)
+        self.assertEqual(ollama_provider._SERVER_READY_LOGGED_UNTIL, 0.0)
+        self.assertEqual(ollama_provider._WARMED, set())
+        self.assertIn("Ollama 서버/러너 종료 완료", "\n".join(logger.lines))
+
     def test_stop_local_llm_models_skips_cloud_model_names(self):
         with mock.patch("core.llm.ollama_provider._get_ollama_running_models", return_value=set()), \
              mock.patch("core.llm.ollama_provider._post_ollama_json") as post_mock, \

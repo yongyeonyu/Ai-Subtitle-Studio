@@ -13,6 +13,7 @@ import wave
 from concurrent.futures import ThreadPoolExecutor
 
 from core.audio import stt_rescue
+from core.audio.runtime_cleanup import clear_audio_model_memory_caches
 from core.performance import adaptive_worker_count
 from core.platform_compat import ffmpeg_binary
 from core.runtime.logger import get_logger
@@ -76,6 +77,35 @@ class VideoProcessorTranscribeMixin:
                 except (AttributeError, ValueError):
                     pass
         return result
+    def _release_after_transcribe_job(self, log_label: str = "STT") -> None:
+        self.stop_transcribe()
+        clear_audio_model_memory_caches(include_gpu=True)
+        try:
+            get_logger().log(f"🧹 [{log_label}] 음성인식 모델/가속기 메모리 정리 완료")
+        except Exception:
+            pass
+
+    def release_vad_runtime_models(self, *, log_context: str = "VAD") -> None:
+        released = bool(getattr(self, "_vad_loaded", False) or getattr(self, "_vad_model", None) is not None)
+        try:
+            model = getattr(self, "_vad_model", None)
+            if model is not None and hasattr(model, "to"):
+                try:
+                    model.to("cpu")
+                except Exception:
+                    pass
+            self._vad_model = None
+            self._vad_utils = None
+            self._vad_loaded = False
+        except Exception:
+            pass
+        if released:
+            clear_audio_model_memory_caches(include_gpu=True)
+            try:
+                get_logger().log(f"🧹 [{log_context}] VAD 모델/가속기 메모리 정리 완료")
+            except Exception:
+                pass
+
     @staticmethod
     def _whisper_worker_options(settings: dict) -> dict:
         if not bool((settings or {}).get("stt_rescue_whisper_mode", False)):
@@ -458,8 +488,20 @@ class VideoProcessorTranscribeMixin:
         preview_callback=None,
     ):
         s = self._load_all_settings()
-        primary_model = s.get("selected_whisper_model", self.whisper_model)
-        secondary_model = s.get("selected_whisper_model_secondary", "")
+        from core.audio.npu_acceleration import prefer_npu_whisper_model
+
+        raw_primary_model = s.get("selected_whisper_model", self.whisper_model)
+        raw_secondary_model = s.get("selected_whisper_model_secondary", "")
+        primary_model = prefer_npu_whisper_model(raw_primary_model, s, purpose="stt", log_label="STT1")
+        secondary_model = prefer_npu_whisper_model(raw_secondary_model, s, purpose="stt", log_label="STT2")
+        if (
+            secondary_model
+            and secondary_model == primary_model
+            and str(raw_secondary_model or "").strip()
+            and str(raw_secondary_model or "").strip() != str(raw_primary_model or "").strip()
+        ):
+            secondary_model = str(raw_secondary_model or "").strip()
+            get_logger().log("  ↩️ [STT2] NPU 라우팅이 STT1/STT2를 동일 모델로 만들어 STT2는 원래 모델을 유지합니다.")
         if not secondary_model or secondary_model == primary_model:
             yield from self.transcribe(
                 chunk_dir,
@@ -598,6 +640,7 @@ class VideoProcessorTranscribeMixin:
             yield merged, 1, 1
         finally:
             shutil.rmtree(chunk_dir, ignore_errors=True)
+            self._release_after_transcribe_job("STT 앙상블")
     def transcribe(
         self,
         chunk_dir: str,
@@ -634,7 +677,10 @@ class VideoProcessorTranscribeMixin:
                 preview_callback=preview_callback,
             )
             return
+        from core.audio.npu_acceleration import prefer_npu_whisper_model
+
         target_model = model_override or _s.get("selected_whisper_model", self.whisper_model)
+        target_model = prefer_npu_whisper_model(target_model, _s, purpose="stt", log_label=log_label)
         self._notify_stage(f"⏳ [{log_label}] Whisper 인식 중")
         get_logger().log(f"\n🎯 [{log_label}] Whisper 인식 시작 (총 {total}블록, 모델: {target_model.split(chr(47))[-1]})")
 
@@ -857,7 +903,7 @@ class VideoProcessorTranscribeMixin:
                     raise RuntimeError("whisper produced 0 chunks")
 
         finally:
-            self._whisper_proc = None
+            self._release_after_transcribe_job(log_label)
             if cleanup_chunk_dir:
                 shutil.rmtree(chunk_dir, ignore_errors=True)
             if had_error:
@@ -872,6 +918,7 @@ class VideoProcessorTranscribeMixin:
             f"{int(total_sec // 60):02d}분 {int(total_sec % 60):02d}초 ({int(pct)}%)"
         )
     def stop_transcribe(self):
+        had_runtime = bool(getattr(self, "_whisper_proc", None) or getattr(self, "_whisper_runner_proc", None))
         try:
             with getattr(self, "_ensemble_child_lock", threading.Lock()):
                 children = list(getattr(self, "_ensemble_child_processors", []) or [])
@@ -903,6 +950,8 @@ class VideoProcessorTranscribeMixin:
             pass
         finally:
             self._whisper_proc = None
+            if had_runtime:
+                clear_audio_model_memory_caches(include_gpu=True)
     def release_runtime_models(self):
         self.stop_transcribe()
         try:
@@ -918,27 +967,8 @@ class VideoProcessorTranscribeMixin:
                 self._ensemble_child_processors = []
         except Exception:
             pass
-        try:
-            self._vad_model = None
-            self._vad_utils = None
-            self._vad_loaded = False
-        except Exception:
-            pass
-        try:
-            import gc
-
-            gc.collect()
-        except Exception:
-            pass
-        try:
-            import torch
-
-            if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
-                torch.mps.empty_cache()
-            if hasattr(torch, "cuda") and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
+        self.release_vad_runtime_models(log_context="런타임 정리")
+        clear_audio_model_memory_caches(include_gpu=True)
     def _parse_whisper_payload(self, data: dict, item: dict, vad_strict: list,
                            target_end_sec: float = None, is_single: bool = False) -> list[dict]:
         chunk_segs = []

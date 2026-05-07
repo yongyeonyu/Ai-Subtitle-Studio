@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QDateTime, QObject, QTimer
+from PyQt6.QtCore import QDateTime, QObject, QTimer, pyqtSignal
 
 from core.personalization.lora_models import TrainingQueueItem, iso_now, stable_hash
 from core.personalization.lora_optimizer import optimize_prompts_for_media, optimize_settings_for_media
@@ -22,6 +22,7 @@ from core.personalization.lora_storage import (
     store_paths,
     upsert_training_queue_items,
 )
+from core.personalization.lora_store_common import read_jsonl
 from core.personalization.lora_vector_retriever import build_lora_retrieval_index
 from core.personalization.subtitle_pattern_index import save_subtitle_pattern_index
 from core.runtime.logger import get_logger
@@ -46,6 +47,7 @@ QUEUE_STATUS_LABELS = {
     "skipped": "건너뜀",
     "paused": "일시정지",
 }
+HARD_CASE_SUBTITLE_POLICY_JOB_TYPE = "hard_case_subtitle_policy"
 QUEUE_JOB_TYPE_LABELS = {
     "analyze_truth_table": "truth 분석",
     "build_text_training_plan": "text 학습계획",
@@ -56,10 +58,11 @@ QUEUE_JOB_TYPE_LABELS = {
     "optimize_settings": "설정 최적화",
     "optimize_prompts": "프롬프트 최적화",
     DEFERRED_EDITOR_LEARNING_JOB_TYPE: "에디터 저장 학습",
+    HARD_CASE_SUBTITLE_POLICY_JOB_TYPE: "하드케이스 자막 정책",
 }
 LOW_RESOURCE_POLL_INTERVAL_MS = 30_000
-LOW_RESOURCE_IDLE_WINDOW_MS = 300_000
-LOW_RESOURCE_COOLDOWN_MS = 300_000
+LOW_RESOURCE_IDLE_WINDOW_MS = 600_000
+LOW_RESOURCE_COOLDOWN_MS = 600_000
 LOW_RESOURCE_INDEX_REFRESH_INTERVAL_SEC = 1_800.0
 LOW_RESOURCE_PROGRESS_SAVE_INTERVAL_SEC = 3.0
 LOW_RESOURCE_PROGRESS_BUCKET_STEP = 25
@@ -67,6 +70,20 @@ MANUAL_PROGRESS_BUCKET_STEP = 10
 LOW_RESOURCE_INDEX_DEFERRED_REASON = "low_resource_index_refresh_deferred"
 LOW_RESOURCE_TO_HEAVY_IDLE_MS = 900_000
 AUDIO_EXTRACTION_JOB_TYPES = {"build_voice_profiles", "build_stt1_whisper_adapter"}
+FOREGROUND_ACTIVITY_HOLD_MS = 600_000
+
+
+def _cancel_requested(cancel_callback) -> bool:
+    if not callable(cancel_callback):
+        return False
+    try:
+        return bool(cancel_callback())
+    except Exception:
+        return False
+
+
+def _cancelled_training_result(reason: str = "cancelled") -> dict[str, Any]:
+    return {"status": "waiting", "score": None, "result": {"reason": str(reason or "cancelled"), "cancelled": True}}
 
 
 def _queue_status_label(status: Any) -> str:
@@ -430,6 +447,71 @@ def _low_resource_job_copy(job: dict[str, Any]) -> dict[str, Any]:
     return adjusted
 
 
+def _legacy_unsupported_hard_case_error(item: dict[str, Any]) -> bool:
+    if str(item.get("job_type") or "") != HARD_CASE_SUBTITLE_POLICY_JOB_TYPE:
+        return False
+    text_parts = [str(item.get("last_error") or "")]
+    payload = dict(item.get("payload") or {})
+    checkpoint = dict(payload.get("checkpoint") or {})
+    text_parts.append(str(checkpoint.get("reason") or ""))
+    text_parts.append(str(checkpoint.get("stage") or ""))
+    return any(f"unsupported_job_type:{HARD_CASE_SUBTITLE_POLICY_JOB_TYPE}" in part for part in text_parts)
+
+
+def _hard_case_event_exists(job: dict[str, Any], store_dir: str | Path | None = None) -> tuple[bool, str]:
+    payload = dict(job.get("payload") or {})
+    event_id = str(payload.get("event_id") or "").strip()
+    if not event_id:
+        return False, "missing_event_id"
+    try:
+        rows = read_jsonl(store_paths(store_dir)["deep_policy_events"])
+    except Exception:
+        rows = []
+    for row in rows:
+        if str(row.get("event_id") or "") == event_id:
+            return True, event_id
+    return False, event_id
+
+
+def _run_hard_case_subtitle_policy_job(
+    job: dict[str, Any],
+    *,
+    store_dir: str | Path | None = None,
+    cancel_callback=None,
+) -> dict[str, Any]:
+    if _cancel_requested(cancel_callback):
+        return _cancelled_training_result()
+    found, event_id_or_reason = _hard_case_event_exists(job, store_dir)
+    if not found:
+        return {
+            "status": "skipped",
+            "score": None,
+            "result": {
+                "reason": f"hard_case_event_missing:{event_id_or_reason}",
+                "event_id": "" if event_id_or_reason == "missing_event_id" else event_id_or_reason,
+            },
+        }
+
+    payload = dict(job.get("payload") or {})
+    get_logger().log(
+        "🧠 [LoRA 학습] 하드케이스 자막 정책: "
+        f"{event_id_or_reason} 이벤트를 패턴 인덱스에 반영 중"
+    )
+    pattern_result = save_subtitle_pattern_index(store_dir, force=True)
+    if _cancel_requested(cancel_callback):
+        return _cancelled_training_result()
+    return {
+        "status": "complete",
+        "score": float(pattern_result.get("pattern_count", 0) or 0),
+        "result": {
+            "reason": "hard_case_policy_indexed",
+            "event_id": event_id_or_reason,
+            "hard_case_reasons": list(payload.get("hard_case_reasons") or []),
+            "subtitle_pattern_index": pattern_result,
+        },
+    }
+
+
 def recover_interrupted_training_jobs(
     store_dir: str | Path | None = None,
     *,
@@ -460,6 +542,25 @@ def recover_interrupted_training_jobs(
                     "media_path": str(updated.get("media_path") or ""),
                 }
             )
+        elif str(updated.get("status") or "") == "failed" and _legacy_unsupported_hard_case_error(updated):
+            updated["status"] = "waiting"
+            updated["progress"] = 0.0
+            updated["updated_at"] = now
+            updated["last_error"] = f"recovered_{reason}: hard case job type is now supported"
+            updated["payload"] = _checkpoint_payload(
+                updated,
+                "recovered_after_unsupported_job_type",
+                reason=str(reason),
+                previous_status="failed",
+                resumable=True,
+            )
+            recovered.append(
+                {
+                    "job_id": str(updated.get("job_id") or ""),
+                    "job_type": str(updated.get("job_type") or ""),
+                    "media_path": str(updated.get("media_path") or ""),
+                }
+            )
         items.append(updated)
     if not recovered:
         return {"recovered": 0, "items": []}
@@ -476,6 +577,8 @@ def run_training_job(
 ) -> dict[str, Any]:
     job_type = str(job.get("job_type") or "").strip()
     media_id = str(job.get("media_id") or "").strip()
+    if _cancel_requested(cancel_callback):
+        return _cancelled_training_result()
     rows = load_truth_table_rows(store_dir)
     grouped_rows = _group_truth_rows_by_media(rows)
     paths = store_paths(store_dir)
@@ -484,10 +587,18 @@ def run_training_job(
 
     if job_type == DEFERRED_EDITOR_LEARNING_JOB_TYPE:
         get_logger().log(f"🧠 [LoRA 학습] {job_label}: 저장된 에디터 자막을 Home-idle에서 반영 중")
-        return run_deferred_editor_learning_job(job, store_dir=store_dir)
+        return run_deferred_editor_learning_job(job, store_dir=store_dir, cancel_callback=cancel_callback)
+    if job_type == HARD_CASE_SUBTITLE_POLICY_JOB_TYPE:
+        return _run_hard_case_subtitle_policy_job(
+            job,
+            store_dir=store_dir,
+            cancel_callback=cancel_callback,
+        )
     if job_type == "analyze_truth_table":
         get_logger().log(f"🧠 [LoRA 학습] {job_label}: truth table 규칙 분석 중")
         result = learn_rules_from_truth_table(store_dir)
+        if _cancel_requested(cancel_callback):
+            return _cancelled_training_result()
         return {"status": "complete", "score": None, "result": result}
     if job_type == "build_text_training_plan":
         get_logger().log(f"🧠 [LoRA 학습] {job_label}: text LoRA 학습계획 생성 중")
@@ -496,6 +607,8 @@ def run_training_job(
             plan_path=paths["text_lora_training_plan"],
             output_dir=paths["trained_adapters"] / "personal_text_lora",
         )
+        if _cancel_requested(cancel_callback):
+            return _cancelled_training_result()
         return {"status": "complete", "score": float(result.get("usable_rows", 0) or 0), "result": result}
     if job_type == "build_voice_profiles":
         job_payload = dict(job.get("payload") or {})
@@ -508,6 +621,8 @@ def run_training_job(
             bridge_path=paths["voice_lora_bridge"],
             manifest_path=paths["voice_lora_profile_manifest"],
         )
+        if _cancel_requested(cancel_callback):
+            return _cancelled_training_result()
         plan_result = save_voice_lora_training_plan(
             bridge_path=paths["voice_lora_bridge"],
             plan_path=paths["voice_lora_training_plan"],
@@ -520,6 +635,8 @@ def run_training_job(
         if bool(plan_result.get("cancelled")):
             result["reason"] = "cancelled"
             return {"status": "waiting", "score": None, "result": result}
+        if _cancel_requested(cancel_callback):
+            return _cancelled_training_result()
         usable = int(plan_result.get("usable_voice_rows", 0) or 0)
         stored = int(plan_result.get("stored_audio_items", 0) or 0)
         errors = int(plan_result.get("extraction_errors", 0) or 0)
@@ -559,6 +676,8 @@ def run_training_job(
         )
         if bool(result.get("cancelled")):
             return {"status": "waiting", "score": None, "result": {"reason": "cancelled", **result}}
+        if _cancel_requested(cancel_callback):
+            return _cancelled_training_result()
         usable = int(result.get("usable_rows", 0) or 0)
         ready = int(result.get("audio_ready_items", 0) or 0)
         errors = int(result.get("extraction_errors", 0) or 0)
@@ -585,8 +704,14 @@ def run_training_job(
         force = bool(job_payload.get("force", True))
         get_logger().log(f"🧠 [LoRA 학습] {job_label}: 벡터 검색 인덱스와 ZIP 갱신 중")
         pattern_result = save_subtitle_pattern_index(store_dir, force=force)
+        if _cancel_requested(cancel_callback):
+            return _cancelled_training_result()
         index_result = build_lora_retrieval_index(store_dir, force=force)
+        if _cancel_requested(cancel_callback):
+            return _cancelled_training_result()
         bundle_result = refresh_unified_lora_data_bundle(store_dir, force=force)
+        if _cancel_requested(cancel_callback):
+            return _cancelled_training_result()
         result = {
             "subtitle_pattern_index": pattern_result,
             "retrieval_index": index_result,
@@ -601,6 +726,8 @@ def run_training_job(
         force = bool(job_payload.get("force", True))
         get_logger().log(f"🧠 [LoRA 학습] {job_label}: 원문 없는 자막 패턴 인덱스 생성 중")
         result = save_subtitle_pattern_index(store_dir, force=force)
+        if _cancel_requested(cancel_callback):
+            return _cancelled_training_result()
         return {"status": "complete", "score": float(result.get("pattern_count", 0) or 0), "result": result}
     if job_type == "optimize_settings":
         media_rows = grouped_rows.get(media_id, [])
@@ -613,7 +740,10 @@ def run_training_job(
             media_path=str(job.get("media_path") or ""),
             subtitle_path=str(job.get("subtitle_path") or ""),
             store_dir=str(store_dir) if store_dir else None,
+            cancel_callback=cancel_callback,
         )
+        if bool(result.get("cancelled")) or _cancel_requested(cancel_callback):
+            return _cancelled_training_result(str(result.get("reason") or "cancelled"))
         return {"status": "complete", "score": float(result.get("best_score", 0.0) or 0.0), "result": result}
     if job_type == "optimize_prompts":
         media_rows = grouped_rows.get(media_id, [])
@@ -626,7 +756,10 @@ def run_training_job(
             media_path=str(job.get("media_path") or ""),
             subtitle_path=str(job.get("subtitle_path") or ""),
             store_dir=str(store_dir) if store_dir else None,
+            cancel_callback=cancel_callback,
         )
+        if bool(result.get("cancelled")) or _cancel_requested(cancel_callback):
+            return _cancelled_training_result(str(result.get("reason") or "cancelled"))
         return {"status": "complete", "score": float(result.get("best_score", 0.0) or 0.0), "result": result}
     return {"status": "failed", "score": None, "result": {"reason": f"unsupported_job_type:{job_type}"}}
 
@@ -883,6 +1016,8 @@ def run_training_queue_once(
 
 
 class PersonalizationIdleTrainer(QObject):
+    _learning_status_signal = pyqtSignal()
+
     def __init__(self, owner, *, store_dir: str | Path | None = None):
         super().__init__(owner)
         self.owner = owner
@@ -901,6 +1036,7 @@ class PersonalizationIdleTrainer(QObject):
         self._last_auto_learning_status_log = ""
         self._current_learning_mode = ""
         self._current_low_resource = True
+        self._learning_status_signal.connect(self._notify_learning_status_changed_on_main)
         recover_interrupted_training_jobs(self.store_dir, reason="trainer_startup")
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(LOW_RESOURCE_POLL_INTERVAL_MS)
@@ -949,13 +1085,16 @@ class PersonalizationIdleTrainer(QObject):
     def last_run_result(self) -> dict[str, Any]:
         return dict(self._last_run_result or {})
 
-    def _notify_learning_status_changed(self) -> None:
+    def _notify_learning_status_changed_on_main(self) -> None:
         refresher = getattr(self.owner, "_refresh_saved_status_label", None)
         if callable(refresher):
             try:
                 refresher()
             except Exception:
                 pass
+
+    def _notify_learning_status_changed(self) -> None:
+        self._learning_status_signal.emit()
 
     def _log_auto_learning_status(self, context: str) -> None:
         summary = format_training_queue_status_summary(load_training_queue(self.store_dir))
@@ -1058,6 +1197,34 @@ class PersonalizationIdleTrainer(QObject):
             "busy": self.is_busy(),
             "until_ms": int(self._suspended_until_ms or 0),
             "reason": self._suspend_reason,
+        }
+
+    def request_immediate_stop(
+        self,
+        *,
+        reason: str = "user_input_interrupt",
+        hold_ms: int | float | None = 0,
+        join_timeout_sec: float = 0.03,
+    ) -> dict[str, Any]:
+        result = self.suspend_for_foreground_activity(reason=reason, hold_ms=hold_ms)
+        thread = self._worker_thread
+        joined = False
+        if thread is not None and thread.is_alive():
+            try:
+                thread.join(timeout=max(0.0, float(join_timeout_sec)))
+            except (RuntimeError, TypeError, ValueError):
+                pass
+        if thread is not None and not thread.is_alive():
+            joined = True
+            recover_interrupted_training_jobs(self.store_dir, reason=reason)
+            self._current_learning_mode = ""
+            self._last_job_finished_ms = QDateTime.currentMSecsSinceEpoch()
+            gc.collect()
+            self._notify_learning_status_changed()
+        return {
+            **result,
+            "stop_requested": True,
+            "joined": joined,
         }
 
     def shutdown(self, *, timeout_sec: float = 3.0) -> dict[str, Any]:

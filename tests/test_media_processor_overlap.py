@@ -1,5 +1,6 @@
 # Version: 03.09.14
 # Phase: PHASE2
+import json
 import os
 import struct
 import sys
@@ -881,6 +882,9 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             self.assertLessEqual(calls[3]["min_silence"], calls[1]["min_silence"])
             self.assertEqual(timestamps[0]["start"], 0.0)
             self.assertTrue(written)
+            self.assertFalse(self.processor._vad_loaded)
+            self.assertIsNone(self.processor._vad_model)
+            self.assertIsNone(self.processor._vad_utils)
 
     def test_vad_retry_rejects_noisy_micro_segments(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -949,6 +953,132 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             self.assertFalse(success)
             self.assertEqual(timestamps, [])
             self.assertEqual(len(calls), 4)
+            self.assertFalse(self.processor._vad_loaded)
+            self.assertIsNone(self.processor._vad_model)
+            self.assertIsNone(self.processor._vad_utils)
+
+    def test_transcribe_releases_mlx_worker_after_completion(self):
+        class _Stdout:
+            def __init__(self, lines):
+                self.lines = list(lines)
+
+            def readline(self):
+                return self.lines.pop(0) if self.lines else ""
+
+        class _Proc:
+            def __init__(self, lines):
+                self.stdout = _Stdout(lines)
+
+            def poll(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chunk_dir = os.path.join(tmp, "chunks")
+            os.makedirs(chunk_dir, exist_ok=True)
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000)
+
+            lines = [
+                json.dumps(
+                    {
+                        "task_id": "task-1",
+                        "index": 0,
+                        "result": {
+                            "segments": [
+                                {"start": 0.0, "end": 0.5, "text": "테스트", "words": []}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                json.dumps({"task_id": "task-1", "done": True}, ensure_ascii=False) + "\n",
+            ]
+            proc = _Proc(lines)
+            stopped = []
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "mlx-test-model",
+                "w_none_temp_max": 0.0,
+                "stt_ensemble_enabled": False,
+                "stt_selective_secondary_recheck_enabled": False,
+            }
+
+            with patch.object(config, "IS_MAC", True), \
+                 patch("core.audio.whisper_coreml.is_coreml_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_transformers.is_transformers_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_mlx.ensure_worker", return_value=proc), \
+                 patch("core.audio.whisper_mlx.submit_task", return_value="task-1"), \
+                 patch("core.audio.whisper_mlx.stop_worker", side_effect=lambda p: stopped.append(p)):
+                rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False))
+
+        self.assertEqual(rows[0][0][0]["text"], "테스트")
+        self.assertEqual(stopped, [proc])
+        self.assertIsNone(self.processor._whisper_proc)
+        self.assertIsNone(self.processor._whisper_runner_proc)
+
+    def test_transcribe_prefers_coreml_route_for_npu_compatible_model(self):
+        class _Stdout:
+            def __init__(self, lines):
+                self.lines = list(lines)
+
+            def readline(self):
+                return self.lines.pop(0) if self.lines else ""
+
+        class _Proc:
+            def __init__(self, lines):
+                self.stdout = _Stdout(lines)
+                self.returncode = 0
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chunk_dir = os.path.join(tmp, "chunks")
+            os.makedirs(chunk_dir, exist_ok=True)
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000)
+
+            proc = _Proc(
+                [
+                    json.dumps(
+                        {
+                            "backend": "whisperkit-coreml",
+                            "segments": [{"start": 0.0, "end": 0.5, "text": "NPU", "words": []}],
+                            "chunk_path": wav_path,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                ]
+            )
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "mlx-community/whisper-large-v3-mlx",
+                "runtime_npu_acceleration_enabled": True,
+                "stt_npu_prefer_enabled": True,
+                "w_none_temp_max": 0.0,
+                "stt_ensemble_enabled": False,
+                "stt_selective_secondary_recheck_enabled": False,
+            }
+
+            with patch.object(config, "IS_MAC", True), \
+                 patch("core.audio.npu_acceleration.apple_neural_engine_available", return_value=True), \
+                 patch("core.audio.whisper_transformers.is_transformers_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_coreml.run_whisper", return_value=proc) as run_coreml:
+                rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False))
+
+        self.assertEqual(rows[0][0][0]["text"], "NPU")
+        self.assertEqual(run_coreml.call_args.kwargs["model"], "coreml:large-v3-v20240930_626MB")
 
 
 if __name__ == "__main__":

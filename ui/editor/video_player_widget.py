@@ -62,18 +62,14 @@ class _WorkerProxy:
 
 
     def seek(self, sec):
-        if sec > 0.05:
-            self.parent_widget._hide_thumbnail()
         parent = self.parent_widget
-        frame = parent.frame_for_sec(max(0.0, float(sec)))
-        sec = parent.sec_for_frame(frame)
-        parent.current_frame = frame
-        parent.current_time = sec
-        parent._pending_seek_sec = sec
-        pos_ms = parent.position_ms_for_frame(frame)
-        self.media_player.setPosition(pos_ms)
-        if getattr(parent, 'has_vocal_track', False):
-            parent.vocal_player.setPosition(pos_ms)
+        parent._apply_seek_state(
+            sec,
+            remember_pending=True,
+            hide_thumbnail_threshold=0.05,
+            refresh_provider=False,
+            refresh_subtitle=False,
+        )
 
 class VideoPlayerWidget(QWidget):
     frame_step_requested = pyqtSignal(int)
@@ -101,13 +97,15 @@ class VideoPlayerWidget(QWidget):
         self._end_of_media_callback = None
         self._pending_thumb_path: str | None = None
         self._pending_thumb_sec: float = 0.0
-        self._pending_segments: list | None = None
         self._subtitle_starts: list[float] = []
         self._subtitle_cache_idx: int = -1
         self._last_time_label_ms: int = -250
         self._last_provider_refresh_at: float = 0.0
         self._subtitle_provider = None
         self._subtitle_provider_signature = ""
+        self._subtitle_provider_segments_ref = None
+        self._context_segments_ref = None
+        self._context_segments_signature = ""
         self._last_btn_state = None
         self._proxy_original_path: str = ""
         self._proxy_playback_path: str = ""
@@ -140,8 +138,11 @@ class VideoPlayerWidget(QWidget):
             QFontDatabase.addApplicationFont(_pretendard)
 
         self._build_ui()
+        self._provider_refresh_requested = False
         self._ui_timer = QTimer()
-        self._ui_timer.setInterval(int(self._get_video_ui_interval_ms()))
+        self._play_ui_interval_ms = int(self._get_video_ui_interval_ms())
+        self._idle_ui_interval_ms = max(90, int(self._play_ui_interval_ms * 3))
+        self._ui_timer.setInterval(self._idle_ui_interval_ms)
         self._ui_timer.timeout.connect(self._ui_tick)
         self._ui_timer.start()
 
@@ -215,6 +216,7 @@ class VideoPlayerWidget(QWidget):
         # seek/autoplay state, otherwise clip 2+ can start from stale time 0.
         if not self._ensure_media_source_loaded():
             return
+        self._media_source_loaded = True
         self._source_ready = True
         if self._pending_segments is not None:
             self._set_segments(self._pending_segments)
@@ -222,15 +224,12 @@ class VideoPlayerWidget(QWidget):
         if self._pending_seek_sec is not None:
             pending = float(self._pending_seek_sec)
             self._pending_seek_sec = None
-            pending_frame = self.frame_for_sec(pending)
-            pending = self.sec_for_frame(pending_frame)
-            self.current_frame = pending_frame
-            self.current_time = pending
-            self.set_subtitle_display_time(pending, refresh=False)
-            pending_pos_ms = self.position_ms_for_frame(pending_frame)
-            self.media_player.setPosition(pending_pos_ms)
-            if getattr(self, 'has_vocal_track', False):
-                self.vocal_player.setPosition(pending_pos_ms)
+            self._apply_seek_state(
+                pending,
+                remember_pending=False,
+                refresh_provider=False,
+                refresh_subtitle=False,
+            )
         if self._pending_thumb_path:
             path = self._pending_thumb_path
             sec = float(self._pending_thumb_sec)
@@ -946,6 +945,51 @@ class VideoPlayerWidget(QWidget):
     def position_ms_for_sec(self, sec: float) -> int:
         return getattr(self, "frame_time_map", build_frame_time_map(self.total_time, self.frame_rate)).position_ms_for_sec(sec)
 
+    def _normalize_seek_sec(self, sec: float, *, clamp_total: bool = False) -> float:
+        try:
+            sec = max(0.0, float(sec or 0.0))
+        except Exception:
+            sec = 0.0
+        if clamp_total and self.total_time > 0.0:
+            sec = min(sec, max(0.0, float(self.total_time or 0.0)))
+        frame = self.frame_for_sec(sec)
+        return self.sec_for_frame(frame)
+
+    def _sync_media_position_for_frame(self, frame: int) -> int:
+        pos_ms = self.position_ms_for_frame(frame)
+        if self._media_source_loaded:
+            self.media_player.setPosition(pos_ms)
+        if getattr(self, "has_vocal_track", False) and self._media_source_loaded:
+            self.vocal_player.setPosition(pos_ms)
+        return pos_ms
+
+    def _apply_seek_state(
+        self,
+        sec: float,
+        *,
+        clamp_total: bool = False,
+        remember_pending: bool = False,
+        hide_thumbnail_threshold: float | None = None,
+        refresh_provider: bool = False,
+        refresh_subtitle: bool = True,
+        tick_ui: bool = False,
+    ) -> float:
+        snapped_sec = self._normalize_seek_sec(sec, clamp_total=clamp_total)
+        self.current_time = snapped_sec
+        self.current_frame = self.frame_for_sec(snapped_sec)
+        self.set_subtitle_display_time(snapped_sec, refresh=False)
+        self._pending_seek_sec = float(snapped_sec) if remember_pending else None
+        if hide_thumbnail_threshold is not None and snapped_sec > float(hide_thumbnail_threshold):
+            self._hide_thumbnail()
+        self._sync_media_position_for_frame(self.current_frame)
+        if refresh_provider and bool(getattr(self, "_provider_refresh_requested", False)):
+            self._refresh_provider_segments(force=False)
+        if refresh_subtitle:
+            self._refresh_subtitle_now()
+        if tick_ui and hasattr(self, "_ui_tick"):
+            self._ui_tick()
+        return snapped_sec
+
     def current_playback_frame_time(self) -> tuple[int, float]:
         frame_map = getattr(self, "frame_time_map", None)
         if frame_map is None:
@@ -995,12 +1039,20 @@ class VideoPlayerWidget(QWidget):
                 cleaned.append(item)
             except Exception:
                 continue
+        signature = self._segments_signature(cleaned)
+        if signature and signature == getattr(self, "_context_segments_signature", ""):
+            self._context_segments_ref = segments
+            return False
         self.segments = sorted(cleaned, key=lambda s: s["start"])
         self._subtitle_starts = [s["start"] for s in self.segments]
         self._subtitle_cache_idx = -1
+        self._context_segments_ref = segments
+        self._context_segments_signature = signature
+        return True
 
     def set_subtitle_provider(self, provider):
         self._subtitle_provider = provider
+        self._provider_refresh_requested = True
         self._refresh_provider_segments(force=True)
 
     def apply_export_subtitle_style(self, style: dict | None):
@@ -1029,9 +1081,13 @@ class VideoPlayerWidget(QWidget):
         cleaned = list(segments or [])
         signature = self._segments_signature(cleaned)
         if signature and signature == getattr(self, "_subtitle_provider_signature", ""):
+            self._subtitle_provider_segments_ref = segments
+            self._provider_refresh_requested = False
             return
+        self._subtitle_provider_segments_ref = segments
         self._subtitle_provider_signature = signature
         self._set_segments(cleaned)
+        self._provider_refresh_requested = False
         self._refresh_subtitle_now()
 
     def _segments_signature(self, segments: list[dict]) -> str:
@@ -1106,17 +1162,7 @@ class VideoPlayerWidget(QWidget):
 
 
     def seek_direct(self, sec):
-        sec = self.snap_sec_to_frame(sec)
-        self.current_time = sec
-        self.current_frame = self.frame_for_sec(sec)
-        self.set_subtitle_display_time(sec, refresh=False)
-        self._pending_seek_sec = None
-        if self._media_source_loaded:
-            self.media_player.setPosition(self.position_ms_for_frame(self.current_frame))
-        if getattr(self, 'has_vocal_track', False) and self._media_source_loaded:
-            self.vocal_player.setPosition(self.position_ms_for_frame(self.current_frame))
-        self._refresh_provider_segments(force=True)
-        self._refresh_subtitle_now()
+        self._apply_seek_state(sec, remember_pending=False, refresh_provider=True)
 
     def preview_seek(self, sec: float):
         """Lightweight seek for timeline scrubbing.
@@ -1124,62 +1170,31 @@ class VideoPlayerWidget(QWidget):
         This updates the media position and visible subtitle without forcing the
         subtitle provider or thumbnail pipeline on every mouse-move event.
         """
-        sec = self.snap_sec_to_frame(sec)
-        self.current_time = sec
-        self.current_frame = self.frame_for_sec(sec)
-        self.set_subtitle_display_time(sec, refresh=False)
-        self._pending_seek_sec = None
-        if sec > 0.05:
-            self._hide_thumbnail()
-        pos_ms = self.position_ms_for_frame(self.current_frame)
-        if self._media_source_loaded:
-            self.media_player.setPosition(pos_ms)
-        if getattr(self, 'has_vocal_track', False) and self._media_source_loaded:
-            self.vocal_player.setPosition(pos_ms)
-        self._refresh_subtitle_now()
+        self._apply_seek_state(
+            sec,
+            remember_pending=False,
+            hide_thumbnail_threshold=0.05,
+            refresh_provider=False,
+        )
 
     def frame_step_seek(self, sec: float):
         """Frame-exact manual seek used by < / > and scan buttons."""
-        try:
-            sec = max(0.0, float(sec or 0.0))
-        except Exception:
-            sec = 0.0
-
-        if self.total_time > 0.0:
-            sec = min(sec, max(0.0, self.total_time))
-
-        sec = snap_sec_to_frame(sec, self.frame_rate)
-        self.current_time = sec
-        try:
-            self.current_frame = self.frame_time_map.frame_for_sec(sec)
-        except Exception:
-            self.current_frame = int(round(sec * max(1.0, float(self.frame_rate or 30.0))))
-
-        self._pending_seek_sec = None
-        self.set_subtitle_display_time(sec, refresh=False)
-        if self._media_source_loaded:
-            self.media_player.setPosition(self.position_ms_for_frame(self.current_frame))
-        if getattr(self, 'has_vocal_track', False) and self._media_source_loaded:
-            self.vocal_player.setPosition(self.position_ms_for_frame(self.current_frame))
-        self._hide_thumbnail()
-        self._refresh_subtitle_now()
-        if hasattr(self, '_ui_tick'):
-            self._ui_tick()
+        self._apply_seek_state(
+            sec,
+            clamp_total=True,
+            remember_pending=False,
+            hide_thumbnail_threshold=-1.0,
+            refresh_provider=False,
+            tick_ui=True,
+        )
 
     def seek(self, sec: float):
-        sec = self.snap_sec_to_frame(sec)
-        if sec > 0.05:
-            self._hide_thumbnail()
-        self.current_time = sec
-        self.current_frame = self.frame_for_sec(sec)
-        self.set_subtitle_display_time(sec, refresh=False)
-        self._pending_seek_sec = float(sec)
-        if self._media_source_loaded:
-            self.media_player.setPosition(self.position_ms_for_frame(self.current_frame))
-        if getattr(self, 'has_vocal_track', False) and self._media_source_loaded:
-            self.vocal_player.setPosition(self.position_ms_for_frame(self.current_frame))
-        self._refresh_provider_segments(force=True)
-        self._refresh_subtitle_now()
+        self._apply_seek_state(
+            sec,
+            remember_pending=True,
+            hide_thumbnail_threshold=0.05,
+            refresh_provider=True,
+        )
 
 
     def request_scan_cut(self, direction: int):
@@ -1209,7 +1224,8 @@ class VideoPlayerWidget(QWidget):
             if getattr(self, 'has_vocal_track', False):
                 self.vocal_player.pause()
         else:
-            self._refresh_provider_segments(force=True)
+            if bool(getattr(self, "_provider_refresh_requested", False)):
+                self._refresh_provider_segments(force=False)
             start_frame = self.frame_for_sec(max(0.0, float(getattr(self, "current_time", 0.0) or 0.0)))
             last_playable_frame = self._last_playable_frame()
             if self.total_time > 0.0 and start_frame >= last_playable_frame:
@@ -1247,10 +1263,18 @@ class VideoPlayerWidget(QWidget):
         self._update_btn()
         if not getattr(self, '_source_ready', True):
             return
-        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+        is_playing = self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        target_interval = self._play_ui_interval_ms if is_playing else self._idle_ui_interval_ms
+        try:
+            if int(self._ui_timer.interval()) != int(target_interval):
+                self._ui_timer.setInterval(int(target_interval))
+        except Exception:
+            pass
+        if is_playing:
             self.current_playback_frame_time()
         else:
-            self._refresh_provider_segments(force=False)
+            if bool(getattr(self, "_provider_refresh_requested", False)):
+                self._refresh_provider_segments(force=False)
 
         def format_time(sec):
             m, s = divmod(int(sec), 60)

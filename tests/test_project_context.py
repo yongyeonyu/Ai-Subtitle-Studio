@@ -1102,6 +1102,99 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual([candidate["source"] for candidate in segment["stt_candidates"]], ["STT1", "STT2"])
         self.assertEqual([row["text"] for row in previews], ["후보 하나", "후보 둘"])
 
+    def test_project_segments_to_editor_reuses_persisted_subtitle_status(self):
+        project = {
+            "timeline": {"timebase": {"primary_fps": 24.0}, "tracks": [{"clips": []}]},
+            "subtitles": {
+                "segments": [
+                    {
+                        "start": 0.0,
+                        "end": 1.0,
+                        "text": "저장된 상태",
+                        "speaker": "00",
+                        "subtitle_review_state": "confirmed",
+                        "subtitle_status_color": "#34C759",
+                        "subtitle_status_schema": "subtitle_status.v1",
+                        "subtitle_status_score": 0.99,
+                        "subtitle_status_source": "user",
+                    }
+                ]
+            },
+        }
+
+        with patch("core.project.project_context.subtitle_status_payload", side_effect=AssertionError("should not recompute")):
+            segment = project_segments_to_editor(project)[0]
+
+        self.assertEqual(segment["subtitle_review_state"], "confirmed")
+        self.assertEqual(segment["subtitle_status_color"], "#34C759")
+        self.assertEqual(segment["subtitle_status_source"], "user")
+
+    def test_project_stt_preview_segments_reuses_persisted_subtitle_status(self):
+        project = {
+            "timeline": {"timebase": {"primary_fps": 24.0}, "tracks": [{"clips": []}]},
+            "editor_state": {
+                "stt": {
+                    "preview_segments": [
+                        {
+                            "start": 0.0,
+                            "end": 1.0,
+                            "text": "미리보기",
+                            "speaker": "00",
+                            "stt_preview_source": "STT1",
+                            "subtitle_review_state": "pending",
+                            "subtitle_status_color": "#FFCC00",
+                            "subtitle_status_schema": "subtitle_status.v1",
+                            "subtitle_status_score": 0.72,
+                            "subtitle_status_source": "STT1",
+                        }
+                    ]
+                }
+            },
+        }
+
+        with patch("core.project.project_context.subtitle_status_payload", side_effect=AssertionError("should not recompute")):
+            preview = project_stt_preview_segments(project)[0]
+
+        self.assertEqual(preview["subtitle_review_state"], "pending")
+        self.assertEqual(preview["subtitle_status_color"], "#FFCC00")
+        self.assertEqual(preview["subtitle_status_source"], "STT1")
+
+    def test_project_segments_to_editor_resolves_recheck_threshold_once_per_batch(self):
+        project = {
+            "timeline": {"timebase": {"primary_fps": 24.0}, "tracks": [{"clips": []}]},
+            "subtitles": {
+                "segments": [
+                    {"start": 0.0, "end": 1.0, "text": "첫 줄", "speaker": "00", "stt_score": 82},
+                    {"start": 1.0, "end": 2.0, "text": "둘째 줄", "speaker": "00", "stt_score": 79},
+                ]
+            },
+        }
+
+        with patch("core.project.project_context.recheck_threshold", return_value=60.0) as threshold_mock:
+            segments = project_segments_to_editor(project)
+
+        self.assertEqual(len(segments), 2)
+        threshold_mock.assert_called_once()
+
+    def test_project_stt_preview_segments_resolves_recheck_threshold_once_per_batch(self):
+        project = {
+            "timeline": {"timebase": {"primary_fps": 24.0}, "tracks": [{"clips": []}]},
+            "editor_state": {
+                "stt": {
+                    "preview_segments": [
+                        {"start": 0.0, "end": 1.0, "text": "첫 후보", "speaker": "00", "stt_score": 82},
+                        {"start": 1.0, "end": 2.0, "text": "둘째 후보", "speaker": "00", "stt_score": 79},
+                    ]
+                }
+            },
+        }
+
+        with patch("core.project.project_context.recheck_threshold", return_value=60.0) as threshold_mock:
+            previews = project_stt_preview_segments(project)
+
+        self.assertEqual(len(previews), 2)
+        threshold_mock.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

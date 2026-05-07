@@ -11,6 +11,7 @@ import json
 import threading
 import importlib.util
 import numpy as np
+from core.audio.runtime_cleanup import clear_audio_model_memory_caches
 from core.runtime.logger import get_logger
 
 
@@ -99,6 +100,7 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
             get_logger().log("  └ 💻 CPU 연산 모드")
     except Exception as e:
         get_logger().log(f"❌ 모델 로딩 에러: {e}")
+        clear_audio_model_memory_caches(include_gpu=True)
         return []
 
     get_logger().log(f"🧠 목소리 지문(Embedding) 추출 및 분류 시작... (최대 {max_speakers}명)")
@@ -276,6 +278,48 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
         return []
     finally:
         is_running = False
+        try:
+            if "classifier" in locals() and hasattr(classifier, "mods"):
+                classifier.mods.to("cpu")
+        except Exception:
+            pass
+        try:
+            del classifier
+        except Exception:
+            pass
+        try:
+            del signal
+        except Exception:
+            pass
+        try:
+            del chunk
+        except Exception:
+            pass
+        try:
+            del emb
+        except Exception:
+            pass
+        try:
+            del r_sig
+        except Exception:
+            pass
+        try:
+            del ref_emb
+        except Exception:
+            pass
+        try:
+            del embeddings
+        except Exception:
+            pass
+        try:
+            del centroids
+        except Exception:
+            pass
+        try:
+            del kmeans
+        except Exception:
+            pass
+        clear_audio_model_memory_caches(include_gpu=True)
         
     if not speaker_map:
         get_logger().log("⚠️ 2명 이상의 화자를 구분하지 못하여 단일 화자로 처리합니다.")

@@ -1,6 +1,6 @@
 <!--
-Document-Version: 03.24.00
-Phase: REFACTOR_QUALITY_RELEASED
+Document-Version: 03.24.01
+Phase: STT_MODE_RUNTIME_RELEASED
 Last-Updated: 2026-05-07
 Updated-By: Codex
 Scope: Actual project filesystem map. `.git/`, `venv/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.codex_work/`, and large runtime cache/output folders are intentionally not expanded.
@@ -10,8 +10,8 @@ Role-Description-Rule: Tree entries are generated from actual paths; review note
 AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
 Last Updated: 2026-05-07
-Phase: REFACTOR_QUALITY_RELEASED
-App Version: 03.24.00
+Phase: STT_MODE_RUNTIME_RELEASED
+App Version: 03.24.01
 Structure Document: File_structure.txt
 Note: This file is an actual tree map and excludes cache-only Python bytecode folders, virtualenvs, local Codex scratch files, secrets, and large runtime output/cache folders.
 ================================================================================
@@ -207,6 +207,22 @@ ai_subtitle_studio/
 │   │   ├── title_suggester.py
 │   │   ├── topic_detector.py
 │   │   └── transcript_packer.py
+│   ├── stt_mode
+│   │   ├── __init__.py
+│   │   ├── dictation_state.py
+│   │   ├── export_preflight.py
+│   │   ├── finalizer.py
+│   │   ├── learning_events.py
+│   │   ├── lora_bundle.py
+│   │   ├── models.py
+│   │   ├── project_state.py
+│   │   ├── quality.py
+│   │   ├── rolling_resegment.py
+│   │   ├── segment_builder.py
+│   │   ├── settings.py
+│   │   ├── status.py
+│   │   ├── vad_ensemble.py
+│   │   └── vad_provider.py
 │   ├── runtime
 │   │   ├── __init__.py
 │   │   ├── config.py
@@ -571,5 +587,6 @@ ai_subtitle_studio/
 ├── RELEASE_v03.23.00.md
 ├── RELEASE_v03.23.01.md
 ├── RELEASE_v03.24.00.md
+├── RELEASE_v03.24.01.md
 ├── requirements-mac.txt
 └── requirements-windows.txt

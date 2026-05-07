@@ -42,7 +42,7 @@ class CloudUIMixin:
             return
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
-            pause_lora("watchdog_detected_files", hold_ms=300_000)
+            pause_lora("watchdog_detected_files")
         parent = os.path.basename(os.path.dirname(files_list[0])) if files_list else ""
         get_logger().log(f"🚀 자동 처리 큐 진입: {parent} / {len(files_list)}개 파일")
         self._auto_processing_active = True
@@ -57,7 +57,7 @@ class CloudUIMixin:
             return
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
-            pause_lora(f"{self._auto_quality_scope_for_files(files_list)}_auto_start", hold_ms=300_000)
+            pause_lora(f"{self._auto_quality_scope_for_files(files_list)}_auto_start")
         folder = os.path.dirname(files_list[0]) if files_list else None
         self._is_auto_pipeline = True
         self._auto_export_subtitle_video = True
@@ -112,7 +112,7 @@ class CloudUIMixin:
     def start_icloud_sync(self):
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
-            pause_lora("icloud_manual_start", hold_ms=300_000)
+            pause_lora("icloud_manual_start")
         file_data, _pending, _completed = self._get_icloud_files()
         files = [file_path for _name, file_path in file_data if self._auto_media_kind(file_path)]
         if not files:
@@ -236,7 +236,7 @@ class CloudUIMixin:
     def _open_nas_root(self):
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
-            pause_lora("nas_open", hold_ms=300_000)
+            pause_lora("nas_open")
         nas_url = get_nas_path()
         if not nas_url:
             QMessageBox.warning(self, "오류", "NAS 경로가 설정되지 않았습니다")

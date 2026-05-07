@@ -99,6 +99,32 @@ class TimelineRenderCacheTests(unittest.TestCase):
         self.assertEqual(rows[0]["endFrame"], 72)
         self.assertAlmostEqual(rows[0]["x"], 480.0)
         self.assertAlmostEqual(rows[0]["w"], 240.0)
+        self.assertEqual(rows[0]["renderProfile"], "full")
+        self.assertTrue(rows[0]["showText"])
+
+    def test_scenegraph_dense_vector_profile_disables_expensive_segment_decorations(self):
+        segments = [
+            {"start": float(i * 0.6), "end": float(i * 0.6 + 0.45), "text": f"dense {i}", "line": i, "speaker": "00"}
+            for i in range(180)
+        ]
+
+        rows = build_scenegraph_subtitle_segments(
+            segments,
+            pps=12.0,
+            fps=24.0,
+            visible_start_sec=0.0,
+            visible_end_sec=24.0,
+        )
+
+        self.assertTrue(rows)
+        first = rows[0]
+        self.assertEqual(first["renderProfile"], "minimal")
+        self.assertFalse(first["showText"])
+        self.assertFalse(first["showConfidenceChips"])
+        self.assertFalse(first["showSpeakerBar"])
+        self.assertFalse(first["showHandles"])
+        self.assertEqual(first["text"], "")
+        self.assertEqual(first["confidenceChips"], [])
 
     def test_visible_item_index_keeps_dragged_segment_when_cached_position_is_offscreen(self):
         canvas = TimelineCanvas()

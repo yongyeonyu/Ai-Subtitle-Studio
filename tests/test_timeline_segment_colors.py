@@ -9,6 +9,7 @@ from ui.timeline.timeline_paint import (
     segment_text_kind,
     scan_boundary_marker_visual,
     subtitle_confidence_chips,
+    subtitle_render_detail_mode,
     subtitle_segment_visual_style,
     stt_preview_visual_style,
 )
@@ -192,6 +193,28 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertEqual(chips[1]["color"], "#FFCC00")
         self.assertEqual(chips[2]["color"], "#34C759")
         self.assertEqual(chips[3]["color"], "#8E8E93")
+
+    def test_subtitle_render_detail_mode_scales_down_for_dense_timelines(self):
+        self.assertEqual(
+            subtitle_render_detail_mode(visible_segment_count=24, pps=80.0, editing=False, scenegraph=False),
+            "full",
+        )
+        self.assertEqual(
+            subtitle_render_detail_mode(visible_segment_count=96, pps=28.0, editing=False, scenegraph=False),
+            "dense",
+        )
+        self.assertEqual(
+            subtitle_render_detail_mode(visible_segment_count=240, pps=12.0, editing=False, scenegraph=False),
+            "ultra",
+        )
+        self.assertEqual(
+            subtitle_render_detail_mode(visible_segment_count=240, pps=12.0, editing=False, scenegraph=True),
+            "gpu",
+        )
+        self.assertEqual(
+            subtitle_render_detail_mode(visible_segment_count=240, pps=12.0, editing=True, scenegraph=False),
+            "full",
+        )
 
     def test_analysis_voice_and_silence_markers_use_distinct_colors(self):
         markers = editor_analysis_markers(

@@ -432,7 +432,10 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
                         self._prefetch_cache[target_file] = None
             finally:
                 try:
-                    vp.stop_transcribe()
+                    if hasattr(vp, "release_runtime_models"):
+                        vp.release_runtime_models()
+                    else:
+                        vp.stop_transcribe()
                 except Exception:
                     pass
                 with self._prefetch_lock:

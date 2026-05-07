@@ -78,14 +78,28 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
         try:
             trainer = getattr(window, "_personalization_idle_trainer", None)
             self.assertIsNotNone(trainer)
-            with (
-                patch.object(trainer, "is_busy", return_value=True),
-                patch.object(trainer, "suspend_for_foreground_activity", return_value={"suspended": True}) as suspend,
-            ):
+            with patch.object(trainer, "request_immediate_stop", return_value={"suspended": True}) as request_stop:
                 event = QEvent(QEvent.Type.MouseMove)
                 window.eventFilter(window, event)
 
-            suspend.assert_called_once_with(reason="user_input_interrupt", hold_ms=0)
+            request_stop.assert_called_once_with(
+                reason="user_input_interrupt",
+                hold_ms=0,
+                join_timeout_sec=0.03,
+            )
+        finally:
+            self._cleanup_window(window)
+
+    def test_mouse_button_and_wheel_interrupt_personalization_training_immediately(self):
+        window = MainWindow()
+        try:
+            trainer = getattr(window, "_personalization_idle_trainer", None)
+            self.assertIsNotNone(trainer)
+            with patch.object(trainer, "request_immediate_stop", return_value={"suspended": True}) as request_stop:
+                for event_type in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.Wheel):
+                    window.eventFilter(window, QEvent(event_type))
+
+            self.assertEqual(request_stop.call_count, 3)
         finally:
             self._cleanup_window(window)
 

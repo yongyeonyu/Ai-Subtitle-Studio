@@ -48,6 +48,18 @@ def _save_srt_impl(srt_path, segments):
 
 class EditorLifecycleMixin:
 
+    def _schedule_editor_fit_to_view(self, editor, delay_ms: int = 120):
+        if not hasattr(editor, "timeline"):
+            return
+        timeline = editor.timeline
+        try:
+            if hasattr(timeline, "schedule_fit_to_view"):
+                timeline.schedule_fit_to_view((0, delay_ms, max(delay_ms + 140, 260)))
+            elif hasattr(timeline, "fit_to_view"):
+                QTimer.singleShot(max(0, int(delay_ms)), timeline.fit_to_view)
+        except Exception:
+            pass
+
     def _open_srt_in_editor(self, srt_path):
         from core.srt_parser import parse_srt
         from core.subtitle_existing import backup_existing_srt, find_media_for_srt, validate_srt_duration
@@ -76,8 +88,7 @@ class EditorLifecycleMixin:
         if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(True)
         if hasattr(editor, 'timeline') and self._project_boundary_times: editor.timeline.set_boundary_times(self._project_boundary_times)
         self.stack.insertWidget(1, editor); self.stack.setCurrentWidget(editor)
-        if hasattr(editor, 'timeline') and hasattr(editor.timeline, 'fit_to_view'):
-            QTimer.singleShot(0, editor.timeline.fit_to_view)
+        self._schedule_editor_fit_to_view(editor)
         if self._current_project_path:
             self._restore_workspace(editor, self._current_project_path)
             from core.project.project_phase1b import apply_project_ui_state
@@ -93,9 +104,8 @@ class EditorLifecycleMixin:
             if hasattr(editor, '_set_process_completed'):
                 editor._set_process_completed()
             if hasattr(editor, '_redraw_timeline'):
-                editor._redraw_timeline()
-            if hasattr(editor, 'timeline'):
-                editor.timeline.fit_to_view()
+                QTimer.singleShot(0, editor._redraw_timeline)
+            self._schedule_editor_fit_to_view(editor, delay_ms=160)
         except Exception as e:
             from core.runtime.logger import get_logger
             get_logger().log(f'⚠️ reuse 완료 상태 전환 실패: {e}')
@@ -247,8 +257,7 @@ class EditorLifecycleMixin:
         self.stack.insertWidget(1, editor)
         if hasattr(editor, 'timeline'): editor.timeline.set_boundary_times(self._project_boundary_times or [])
         self.stack.setCurrentWidget(editor)
-        if hasattr(editor, 'timeline') and hasattr(editor.timeline, 'fit_to_view'):
-            QTimer.singleShot(0, editor.timeline.fit_to_view)
+        self._schedule_editor_fit_to_view(editor)
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.bind_editor(editor)
         if hasattr(self, "_attach_global_menu_to_editor"):

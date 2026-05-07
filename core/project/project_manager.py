@@ -26,6 +26,7 @@ from core.cut_boundary import (
 from core.project.project_context import (
     STT_SEGMENT_METADATA_KEYS,
     build_editor_state,
+    project_media_files,
     project_segments_to_editor,
     project_stt_preview_segments,
     sanitize_workspace_state,
@@ -50,6 +51,7 @@ from core.project.recovery_state import (
     merge_recovery_checkpoint,
     refresh_project_recovery_state,
 )
+from core.stt_mode.project_state import attach_stt_mode_state
 from core.project.project_frames import (
     _augment_project_frame_metadata as _augment_project_frame_metadata_impl,
     _clip_frame_fields as _clip_frame_fields_impl,
@@ -483,8 +485,11 @@ def save_project(
     active_work_mode: Optional[str] = None,
     voice_activity_segments: Optional[List[dict]] = None,
     stt_preview_segments: Optional[List[dict]] = None,
+    stt_mode_state: Optional[dict] = None,
+    stt_mode_learning: Optional[dict] = None,
     provisional_cut_boundaries: Optional[List[dict]] = None,
     recovery_state: Optional[dict] = None,
+    persist_analysis_artifacts: bool = True,
 ):
     """기존 프로젝트 JSON 업데이트"""
     if not os.path.exists(filepath):
@@ -496,10 +501,23 @@ def save_project(
     project["updated_at"] = datetime.now().isoformat()
 
     # ── 미디어 업데이트 ──
-    if media_paths is not None:
+    current_media_paths = [str(path) for path in list(media_paths or []) if path] if media_paths is not None else None
+    if current_media_paths is not None:
+        existing_media_paths = project_media_files(project)
+        media_changed = (
+            len(existing_media_paths) != len(current_media_paths)
+            or any(
+                os.path.normpath(str(left or "")) != os.path.normpath(str(right or ""))
+                for left, right in zip(existing_media_paths, current_media_paths)
+            )
+        )
+    else:
+        media_changed = False
+
+    if current_media_paths is not None and media_changed:
         clips = []
         cumulative = 0.0
-        for i, path in enumerate(media_paths):
+        for i, path in enumerate(current_media_paths):
             ext = os.path.splitext(path)[1].lower()
             m_type = "audio" if ext in {".wav", ".m4a", ".mp3", ".aac", ".m2a"} else "video"
             info = _get_media_probe(path)
@@ -799,7 +817,7 @@ def save_project(
             if isinstance(rows, list)
         }
 
-    if segments is not None:
+    if persist_analysis_artifacts and segments is not None:
         try:
             from core.engine.subtitle_accuracy_graph import persist_subtitle_accuracy_graph
 
@@ -849,6 +867,8 @@ def save_project(
         except Exception:
             pass
 
+    project["mode"] = "multiclip" if len(project_media_files(project)) > 1 else "single"
+
     try:
         media_items = list(project.get("media") or [])
         primary_media_path = ""
@@ -893,6 +913,13 @@ def save_project(
         attach_recovery_state_to_project(project, checkpoint)
     except Exception:
         pass
+
+    if stt_mode_state is not None or stt_mode_learning is not None:
+        attach_stt_mode_state(
+            project,
+            state=stt_mode_state,
+            learning=stt_mode_learning,
+        )
 
     _sanitize_project_workspace_fields(project)
     sync_project_cut_boundaries(

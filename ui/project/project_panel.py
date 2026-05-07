@@ -6,6 +6,7 @@ Project UI mixin
 """
 import os
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QFileDialog, QDialog, QMessageBox, QInputDialog
 
 from core.runtime.logger import get_logger
@@ -114,17 +115,26 @@ class ProjectUIMixin:
             stt_preview = project_stt_preview_segments(project)
             if stt_preview:
                 editor._live_stt_preview_segments = stt_preview
-            if hasattr(editor, "_redraw_timeline"):
-                editor._redraw_timeline()
             provisional_boundaries = project_cut_boundary_provisional_segments(project)
-            if provisional_boundaries and hasattr(editor, "timeline") and hasattr(editor.timeline, "set_scan_boundary_times"):
-                if hasattr(editor, "_set_auto_cut_boundary_scan_lines"):
-                    editor._set_auto_cut_boundary_scan_lines(provisional_boundaries)
-                else:
-                    editor.timeline.set_scan_boundary_times(provisional_boundaries)
             voice_activity = project_voice_activity_segments(project)
-            if voice_activity and hasattr(editor, "set_voice_activity_segments"):
-                editor.set_voice_activity_segments(voice_activity)
+            if hasattr(editor, "_schedule_timeline"):
+                editor._schedule_timeline()
+
+            def _restore_deferred_state():
+                try:
+                    if hasattr(editor, "_refresh_video_subtitle_context"):
+                        editor._refresh_video_subtitle_context()
+                    if provisional_boundaries and hasattr(editor, "timeline") and hasattr(editor.timeline, "set_scan_boundary_times"):
+                        if hasattr(editor, "_set_auto_cut_boundary_scan_lines"):
+                            editor._set_auto_cut_boundary_scan_lines(provisional_boundaries)
+                        else:
+                            editor.timeline.set_scan_boundary_times(provisional_boundaries)
+                    if voice_activity and hasattr(editor, "set_voice_activity_segments"):
+                        editor.set_voice_activity_segments(voice_activity)
+                except Exception as inner_exc:
+                    get_logger().log(f"⚠️ 프로젝트 지연 상태 복원 실패: {inner_exc}")
+
+            QTimer.singleShot(0, _restore_deferred_state)
         except Exception as e:
             get_logger().log(f"⚠️ 프로젝트 자막 복원 실패: {e}")
         return True
@@ -132,7 +142,7 @@ class ProjectUIMixin:
     def _create_project(self):
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
-            pause_lora("project_create", hold_ms=300_000)
+            pause_lora("project_create")
         name, ok = QInputDialog.getText(self, "프로젝트 만들기", "프로젝트 이름:")
         if not ok or not name.strip():
             return
@@ -176,7 +186,7 @@ class ProjectUIMixin:
     def _open_project(self):
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
-            pause_lora("project_open", hold_ms=300_000)
+            pause_lora("project_open")
         filepath, _ = QFileDialog.getOpenFileName(
             self,
             "프로젝트 열기",

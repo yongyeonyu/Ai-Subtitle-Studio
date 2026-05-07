@@ -157,7 +157,7 @@ def build_title_suggestions(
     llm_result = run_roughcut_llm_action(
         "title_suggestions",
         _result_payload(result),
-        settings=roughcut_settings,
+        settings=settings,
         llm_client=llm_client,
     )
     if llm_result.ok:

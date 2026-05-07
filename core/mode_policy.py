@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""User-facing Fast/Auto/High mode policy.
+"""User-facing Fast/Auto/High/STT mode policy.
 
 The rest of the app still stores the historical STT quality keys in a few
 places (`fast`, `balanced`, `precise`). This module is the compatibility layer:
@@ -17,21 +17,24 @@ MODE_DASHBOARD_SCHEMA = "ai_subtitle_studio.engine_dashboard.v1"
 MODE_PREFLIGHT_SCHEMA = "ai_subtitle_studio.mode_preflight.v1"
 MODE_TOOL_STACK_SCHEMA = "ai_subtitle_studio.subtitle_tool_stack.v1"
 
-MODE_ORDER = ("fast", "auto", "high")
+MODE_ORDER = ("fast", "auto", "high", "stt")
 MODE_LABELS = {
     "fast": "Fast",
     "auto": "Auto",
     "high": "High",
+    "stt": "STT 모드",
 }
 MODE_TO_STT_QUALITY = {
     "fast": "fast",
     "auto": "balanced",
     "high": "precise",
+    "stt": "stt",
 }
 STT_QUALITY_TO_MODE = {
     "fast": "fast",
     "balanced": "auto",
     "precise": "high",
+    "stt": "stt",
 }
 
 ENGINE_DASHBOARD_STEPS = (
@@ -74,6 +77,15 @@ MODE_TOOL_STACKS = {
         "llm": True,
         "macro_llm": True,
         "reason": "High mode adds chunked LLM review after the LoRA/Deep fast pass.",
+    },
+    "stt": {
+        "label": "Human-input STT path",
+        "tools": ["vad", "human_input", "lora", "deep_learning", "rules"],
+        "lora": True,
+        "deep_learning": True,
+        "llm": False,
+        "macro_llm": False,
+        "reason": "STT mode uses VAD work segments plus human dictation, then LoRA/Deep/rules resegment without Whisper or LLM requirements.",
     },
 }
 
@@ -177,6 +189,12 @@ def normalize_mode(value: Any, *, default: str = "auto") -> str:
         "정밀 인식": "high",
         "정밀인식": "high",
         "높음": "high",
+        "stt": "stt",
+        "stt mode": "stt",
+        "stt 모드": "stt",
+        "수동 stt": "stt",
+        "수동": "stt",
+        "받아쓰기": "stt",
     }
     if not text:
         return normalize_mode(default, default="auto") if default != "" else "auto"
@@ -243,6 +261,8 @@ def _audio_value(settings: dict[str, Any], mode: str) -> tuple[str, str, str]:
         return selected, "user-selected", f"사용자가 음성 모델 {selected}을 선택했습니다."
     if mode == "fast":
         return "none", "mode-selected", "Fast mode uses the lightest usable audio path."
+    if mode == "stt":
+        return "none", "mode-selected", "STT mode defaults to human/OS dictation input and does not require audio restoration."
     if mode == "high":
         return "sample-full", "sampling-selected", "High mode samples longer spans before choosing the audio filter."
     return "sample-short", "sampling-selected", "Auto mode samples representative audio before choosing the filter."
@@ -254,6 +274,8 @@ def _vad_value(settings: dict[str, Any], mode: str) -> tuple[str, str, str]:
         return selected, "user-selected", f"사용자가 VAD 모델 {selected}을 선택했습니다."
     if mode == "fast":
         return "silero-lite", "mode-selected", "Fast mode uses one lightweight VAD model."
+    if mode == "stt":
+        return "dual-vad", "mode-selected", "STT mode builds work segments from Silero + TEN VAD ensemble metadata."
     if mode == "high":
         return "dual-vad", "mode-selected", "High mode compares two VAD models where available."
     return "sampled-vad", "sampling-selected", "Auto mode compares VAD candidates on short sample spans."
@@ -279,7 +301,85 @@ def resolve_mode_policy(
     roughcut_llm_enabled = _llm_enabled(settings, prefix="roughcut")
     lora_ok = _safe_bool(lora_available, True)
 
-    if mode == "fast":
+    if mode == "stt":
+        policy = {
+            "stt_mode": {
+                "enabled": True,
+                "workflow": "human_input",
+                "whisper_required": False,
+                "vad_primary": True,
+                "lora_resegment": True,
+                "llm_used": False,
+                "state": "mode-selected",
+                "reason": "STT mode is a human-assisted subtitle input workflow.",
+            },
+            "cut_boundary": {
+                "enabled": True,
+                "audio_provisional_enabled": False,
+                "level": "low",
+                "state": "mode-selected",
+                "value": "낮음",
+                "reason": "STT mode respects cut boundaries while building human input work segments.",
+            },
+            "preprocessing": {
+                "sampling": "vad-only",
+                "state": "mode-selected",
+                "value": "VAD",
+                "reason": "STT mode prepares listenable work segments instead of automatic Whisper transcription.",
+            },
+            "audio_filter": {"selected": audio_value, "state": audio_state, "reason": audio_reason},
+            "vad": {
+                "selected": "dual-vad",
+                "state": "mode-selected",
+                "dual": True,
+                "models": ["silero", "ten_vad"],
+                "reason": vad_reason,
+            },
+            "stt": {
+                "automatic_whisper_pipeline": False,
+                "human_input_provider": "manual",
+                "optional_mic_provider": True,
+                "stt1_profile": "human_input",
+                "stt2_enabled": False,
+                "speaker_diarization": False,
+                "decoder": "manual_dictation",
+                "reason": "STT mode preserves raw human dictation and does not require Whisper.",
+            },
+            "llm": {
+                "subtitle_enabled": False,
+                "subtitle_default": False,
+                "lightweight_only": False,
+                "roughcut_enabled": False,
+                "state": "skipped",
+                "reason": "STT mode does not use LLM for text transformation.",
+            },
+            "lora": {
+                "enabled": lora_ok,
+                "stt_lora_enabled": True,
+                "buckets": ["high", "medium"],
+                "min_score": 58.0,
+                "state": "mode-selected" if lora_ok else "skipped",
+                "reason": "STT mode uses LoRA for raw dictation resegmentation, not speech recognition.",
+            },
+            "deep_learning": {
+                "enabled": True,
+                "state": "mode-selected",
+                "reason": "STT mode uses Deep policy for subtitle split/timing patterns only.",
+            },
+            "scheduler": {
+                "resource_start": "lite",
+                "ramp_up": False,
+                "ramp_down_on_input": True,
+                "reason": "STT mode prioritizes immediate keyboard/dictation responsiveness.",
+            },
+            "cleanup": {
+                "immediate": True,
+                "cancel_prefetch": True,
+                "release_models": True,
+                "reason": "STT mode should keep heavy speech/LLM models unloaded by default.",
+            },
+        }
+    elif mode == "fast":
         policy = {
             "cut_boundary": {
                 "enabled": False,
@@ -454,6 +554,26 @@ def resolve_mode_policy(
             },
         }
 
+    stt_vad_model_enabled = _safe_bool(settings.get("stt_vad_segment_model_enabled"), True)
+    apply_key = f"stt_vad_segment_model_apply_{mode}_mode"
+    stt_vad_model_applies = (
+        mode in {"fast", "auto", "high"}
+        and stt_vad_model_enabled
+        and _safe_bool(settings.get(apply_key), True)
+    )
+    policy["stt_vad_segment_model"] = {
+        "enabled": stt_vad_model_enabled,
+        "apply_to_current_mode": bool(stt_vad_model_applies),
+        "allowed_scope": "vad_boundary_selection",
+        "state": "optional-enabled" if stt_vad_model_applies else "skipped",
+        "reason": "STT-learned VAD boundary model may be shared with automatic modes, but only for boundary selection.",
+    }
+    policy["stt_dictation_lora"] = {
+        "apply_to_auto_modes": _safe_bool(settings.get("stt_dictation_lora_apply_to_auto_modes"), False),
+        "active": bool(mode == "stt"),
+        "reason": "Human dictation resegmentation LoRA is reserved for STT Mode by default.",
+    }
+
     snapshot = {
         "schema": MODE_POLICY_SCHEMA,
         "mode": mode,
@@ -486,6 +606,13 @@ def build_engine_dashboard(
     def section_for(step_key: str) -> dict[str, Any]:
         if step_key in {"stt1", "stt2"}:
             stt = dict(policy.get("stt") or {})
+            if _safe_bool(policy.get("stt_mode", {}).get("enabled"), False) and not _safe_bool(stt.get("automatic_whisper_pipeline"), True):
+                return {
+                    "enabled": False,
+                    "state": "skipped",
+                    "value": "수동 입력" if step_key == "stt1" else "미사용",
+                    "reason": stt.get("reason", "STT mode does not require Whisper."),
+                }
             if step_key == "stt2":
                 enabled = _safe_bool(stt.get("stt2_enabled"), False)
                 return {
@@ -561,7 +688,7 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
     explicit_subtitle_llm = _safe_bool(base.get("subtitle_llm_user_selected"), False) or (
         base_has_subtitle_llm and "selected_llm_provider" not in base
     )
-    out = apply_stt_quality_preset(base, quality_key)
+    out = dict(base) if mode == "stt" else apply_stt_quality_preset(base, quality_key)
     out["subtitle_mode"] = mode
     out["simple_operation_mode"] = mode
     out["stt_quality_preset"] = quality_key
@@ -571,7 +698,52 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
         out["selected_llm_provider"] = base_provider or "ollama"
         out["subtitle_llm_user_selected"] = True
 
-    if mode == "fast":
+    if mode == "stt":
+        out.update(
+            {
+                "stt_mode_enabled": True,
+                "stt_mode_text_input_provider": str(base.get("stt_mode_text_input_provider") or "manual"),
+                "stt_mode_allow_os_dictation": True,
+                "stt_mode_allow_desktop_mic_optional": True,
+                "stt_mode_require_whisper": False,
+                "stt_mode_use_whisper_for_dictation": False,
+                "stt_mode_use_llm": False,
+                "stt_mode_vad_models": ["silero", "ten_vad"],
+                "stt_mode_vad_ensemble_enabled": True,
+                "stt_mode_lora_resegment_enabled": True,
+                "stt_mode_rolling_window_size": 2,
+                "stt_mode_project_compat_enabled": True,
+                "automatic_whisper_pipeline": False,
+                "selected_model": "사용 안함 (STT 모드)",
+                "selected_llm_provider": "none",
+                "subtitle_llm_user_selected": False,
+                "subtitle_llm_runtime_enabled": False,
+                "subtitle_llm_mode_disabled": True,
+                "subtitle_llm_effective_model": "사용 안함 (STT 모드)",
+                "subtitle_llm_macro_chunk_enabled": False,
+                "llm_confidence_gate_enabled": False,
+                "llm_candidate_policy_enabled": False,
+                "llm_minimize_enabled": False,
+                "roughcut_llm_enabled": False,
+                "roughcut_llm_use_override": False,
+                "roughcut_llm_provider": "none",
+                "roughcut_llm_model": "사용 안함",
+                "stt_ensemble_enabled": False,
+                "stt_ensemble_llm_judge_enabled": False,
+                "speaker_diarization_auto_enabled": False,
+                "vad_dual_model_enabled": True,
+                "editor_lora_runtime_enabled": True,
+                "deep_subtitle_policy_enabled": True,
+                "deep_segment_setting_policy_enabled": True,
+                "deep_stt_candidate_selector_enabled": True,
+                "deep_timing_adjustment_enabled": True,
+                "subtitle_lora_quality_buckets": ["high", "medium"],
+                "runtime_scheduler_ramp_up_enabled": False,
+                "background_prefetch_lora_enabled": False,
+                "background_prefetch_candidates_enabled": False,
+            }
+        )
+    elif mode == "fast":
         out.update(
             {
                 "editor_lora_runtime_enabled": True,
@@ -731,6 +903,9 @@ def preflight_mode_decision(
     elif mode == "high":
         route = "high_validation"
         reasons.append("user_mode_high")
+    elif mode == "stt":
+        route = "stt_human_input"
+        reasons.append("user_mode_stt")
 
     return {
         "schema": MODE_PREFLIGHT_SCHEMA,

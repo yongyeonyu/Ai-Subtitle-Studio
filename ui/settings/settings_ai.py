@@ -31,9 +31,11 @@ from core.audio.stt_quality_presets import (
     stt_quality_label,
 )
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
-from core.mode_policy import mode_to_stt_quality, selected_mode_from_settings, stt_quality_to_mode
+from core.mode_policy import mode_to_stt_quality, selected_mode_from_settings
 from core.settings_simplifier import (
     apply_simple_operation_mode,
+    normalize_simple_operation_mode,
+    simple_operation_mode_items,
     simple_operation_mode_summary,
 )
 from ui.settings.settings_roughcut import SettingsRoughcutMixin
@@ -95,10 +97,8 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.tabs.setDocumentMode(True)
 
         self.combo_stt_quality_preset = QComboBox()
-        for key, preset in self.stt_quality_presets.items():
-            desc = preset.get("description", "")
-            label = preset.get("label", key)
-            self.combo_stt_quality_preset.addItem(f"{label} - {desc}" if desc else label, key)
+        for key, label, summary in simple_operation_mode_items():
+            self.combo_stt_quality_preset.addItem(f"{label} - {summary}" if summary else label, key)
         self.combo_stt_quality_preset.setMinimumWidth(280)
 
         self.combo_audio_preset = QComboBox()
@@ -414,7 +414,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         ai_form.addRow("음성 처리 모델:", self.combo_audio)
         ai_form.addRow("VAD 모델:", self.combo_vad)
         ai_form.addRow("VAD 보정:", self.chk_vad_post_align)
-        self._sync_stt_quality_preset_combo(mode_to_stt_quality(selected_mode_from_settings(settings)))
+        self._sync_stt_quality_preset_combo(selected_mode_from_settings(settings))
         self._sync_audio_preset_combo(settings.get("audio_preset", ""))
         self._sync_auto_preset_button_state()
         self._update_editor_roughcut_draft_state()
@@ -435,7 +435,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         mode_layout.setContentsMargins(0, 0, 0, 0)
         mode_layout.setSpacing(6)
         current_mode = selected_mode_from_settings(settings)
-        self._sync_stt_quality_preset_combo(mode_to_stt_quality(current_mode))
+        self._sync_stt_quality_preset_combo(current_mode)
         self.combo_stt_quality_preset.currentIndexChanged.connect(self._on_stt_quality_preset_changed)
         mode_layout.addWidget(self.combo_stt_quality_preset)
 
@@ -447,7 +447,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         form.addRow("Mode:", mode_layout)
 
     def _on_simple_operation_mode_changed(self, *args):
-        mode = stt_quality_to_mode(self.combo_stt_quality_preset.currentData() or "balanced")
+        mode = normalize_simple_operation_mode(self.combo_stt_quality_preset.currentData() or "auto")
         if hasattr(self, "lbl_simple_operation_summary"):
             self.lbl_simple_operation_summary.setText(simple_operation_mode_summary(mode))
         self.result_settings = apply_simple_operation_mode(self.result_settings, mode)
@@ -688,7 +688,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.combo_audio_preset.blockSignals(False)
 
     def _sync_stt_quality_preset_combo(self, preset_key: str):
-        key = normalize_stt_quality_key(preset_key)
+        key = normalize_simple_operation_mode(preset_key)
         self.combo_stt_quality_preset.blockSignals(True)
         for i in range(self.combo_stt_quality_preset.count()):
             if self.combo_stt_quality_preset.itemData(i) == key:
@@ -877,8 +877,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self._update_model_info()
 
     def _on_stt_quality_preset_changed(self, *args):
-        preset_key = self.combo_stt_quality_preset.currentData() or "precise"
-        mode = stt_quality_to_mode(preset_key)
+        mode = normalize_simple_operation_mode(self.combo_stt_quality_preset.currentData() or "auto")
         if hasattr(self, "lbl_simple_operation_summary"):
             self.lbl_simple_operation_summary.setText(simple_operation_mode_summary(mode))
         self.result_settings = apply_simple_operation_mode(self.result_settings, mode)
@@ -1038,7 +1037,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         auto_start_mode = normalize_stt_quality_key(self.combo_auto_start_mode.currentData() or "precise")
         auto_start_enabled = bool(self.chk_auto_start_enabled.isChecked())
         auto_correct_enabled = bool(self.chk_subtitle_quality_auto_correct.isChecked())
-        simple_mode = stt_quality_to_mode(self.combo_stt_quality_preset.currentData() or "balanced")
+        simple_mode = normalize_simple_operation_mode(self.combo_stt_quality_preset.currentData() or "auto")
         chunk_time_limit = 99999 if self.chk_chunk_all.isChecked() else self.slider_chunk.value()
         if bool(res.get("subtitle_bundle_autopilot_enabled", True)):
             chunk_time_limit = int(res.get("subtitle_bundle_target_sec", res.get("chunk_time_limit", 180)) or 180)
@@ -1065,7 +1064,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "llm_threads_auto_enabled": True,
             "llm_workers_auto_enabled": True,
             "audio_preset": "" if self.combo_audio_preset.currentData() == "__default__" else (self.combo_audio_preset.currentData() or ""),
-            "stt_quality_preset": self.combo_stt_quality_preset.currentData() or "precise",
+            "stt_quality_preset": mode_to_stt_quality(simple_mode),
             "stt_candidate_scoring_enabled": True,
             "stt_low_score_recheck_enabled": bool(self.chk_stt_low_score_recheck.isChecked()),
             "stt_low_score_recheck_threshold": int(self.spin_stt_low_score_recheck_threshold.value()),

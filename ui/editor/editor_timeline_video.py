@@ -278,7 +278,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                 self._playhead_idle_synced = True
             return
         self._playhead_idle_synced = False
-        self._set_playhead_timer_interval(16)
+        self._set_playhead_timer_interval(33)
         dur_ms = player.duration()
         if dur_ms <= 0:
             return
@@ -754,6 +754,8 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         self.text_edit.setTextCursor(cur)
         if seg_end is not None and seg_end > seg_start:
             self._remove_live_detection_for_range(seg_start, seg_end)
+        if hasattr(self, "_invalidate_segment_cache"):
+            self._invalidate_segment_cache()
         self._finalize_edit()
 
     def _remove_live_detection_for_range(self, start_sec: float, end_sec: float):

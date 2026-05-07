@@ -1,9 +1,12 @@
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
+from core.audio import stt_vad
 from core.audio.media_processor import VideoProcessor
 from core.pipeline.cut_boundary_helpers import PipelineCutBoundaryMixin
 from core.personalization.lora_models import TruthTableRow
@@ -14,7 +17,15 @@ from ui.timeline.timeline_waveform import load_waveform_cache, save_waveform_cac
 
 
 class _CutCacheOwner(PipelineCutBoundaryMixin):
-    pass
+    def __init__(self):
+        self.emitted = []
+        self.counts = []
+
+    def _ui_emit(self, *args):
+        self.emitted.append(args)
+
+    def _emit_cut_boundary_count_to_sidebar(self, count, *, done=False):
+        self.counts.append((count, done))
 
 
 class FingerprintCacheTests(unittest.TestCase):
@@ -65,6 +76,145 @@ class FingerprintCacheTests(unittest.TestCase):
                 config.OUTPUT_DIR = old_output_dir
 
         self.assertNotEqual(first_path, second_path)
+
+    def test_cut_boundary_cache_path_uses_compare_resolution(self):
+        owner = _CutCacheOwner()
+        old_output_dir = config.OUTPUT_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            config.OUTPUT_DIR = tmp
+            try:
+                media = os.path.join(tmp, "same.mp4")
+                with open(media, "wb") as handle:
+                    handle.write(b"media")
+                default_path = owner._cut_boundary_cache_path_for_start([media], {})
+                low_res_path = owner._cut_boundary_cache_path_for_start(
+                    [media],
+                    {"scan_cut_compare_max_width": 1280, "scan_cut_compare_max_height": 720},
+                )
+            finally:
+                config.OUTPUT_DIR = old_output_dir
+
+        self.assertNotEqual(default_path, low_res_path)
+
+    def test_cut_boundary_cache_reuses_empty_result_as_completed_hit(self):
+        owner = _CutCacheOwner()
+        old_output_dir = config.OUTPUT_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            config.OUTPUT_DIR = tmp
+            try:
+                media = os.path.join(tmp, "no-cuts.mp4")
+                with open(media, "wb") as handle:
+                    handle.write(b"steady shot")
+
+                owner._save_cut_boundary_cache_for_start([media], {}, [])
+                cached = owner._load_cut_boundary_cache_for_start("", [media], {})
+            finally:
+                config.OUTPUT_DIR = old_output_dir
+
+        self.assertEqual(cached, [])
+        self.assertEqual(owner.counts[-1], (0, True))
+
+    def test_vad_timestamp_cache_invalidates_when_wav_is_replaced(self):
+        processor = VideoProcessor()
+        old_output_dir = config.OUTPUT_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            config.OUTPUT_DIR = tmp
+            try:
+                wav = os.path.join(tmp, "sample.wav")
+                with open(wav, "wb") as handle:
+                    handle.write(b"first wav payload")
+                rows = [{"start": 0.0, "end": 1.2, "source": "silero"}]
+                processor._write_vad_timestamps_cache(
+                    wav,
+                    "silero",
+                    {"vad_detection_cache_enabled": True},
+                    rows,
+                    for_post_stt_align=True,
+                )
+                cached = processor._load_vad_timestamps_cache(
+                    wav,
+                    "silero",
+                    {"vad_detection_cache_enabled": True},
+                    for_post_stt_align=True,
+                )
+
+                with open(wav, "wb") as handle:
+                    handle.write(b"second wav payload with changed audio")
+                replaced = processor._load_vad_timestamps_cache(
+                    wav,
+                    "silero",
+                    {"vad_detection_cache_enabled": True},
+                    for_post_stt_align=True,
+                )
+            finally:
+                config.OUTPUT_DIR = old_output_dir
+
+        self.assertEqual(cached, rows)
+        self.assertIsNone(replaced)
+
+    def test_detect_vad_timestamps_returns_cached_rows_without_loading_model(self):
+        processor = VideoProcessor()
+        cached = [{"start": 0.0, "end": 1.0, "source": "silero"}]
+        processor._load_vad_timestamps_cache = lambda *args, **kwargs: list(cached)
+
+        result = processor._detect_vad_timestamps(
+            "/tmp/does-not-need-to-exist.wav",
+            "silero",
+            {"vad_detection_cache_enabled": True},
+            for_post_stt_align=True,
+        )
+
+        self.assertEqual(result, cached)
+
+    def test_stt_vad_uses_media_fingerprint_cache_before_extracting_audio(self):
+        old_output_dir = config.OUTPUT_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            config.OUTPUT_DIR = tmp
+            try:
+                media = os.path.join(tmp, "dictation.mp4")
+                with open(media, "wb") as handle:
+                    handle.write(b"media payload")
+                rows = [{"start": 0.0, "end": 1.0, "stt_mode": True}]
+                stt_vad._write_stt_vad_cache(media, rows)
+
+                with patch("core.audio.stt_vad._extract_stt_vad_wav") as extract:
+                    cached = stt_vad.detect_stt_speech_segments(media)
+            finally:
+                config.OUTPUT_DIR = old_output_dir
+
+        self.assertEqual(cached, rows)
+        extract.assert_not_called()
+
+    def test_stt_vad_releases_silero_model_after_detection(self):
+        class _Model:
+            def __init__(self):
+                self.device = None
+
+            def to(self, device):
+                self.device = device
+
+        model = _Model()
+
+        def get_speech_timestamps(*_args, **_kwargs):
+            return [{"start": 0, "end": 16000}]
+
+        fake_torch = SimpleNamespace(
+            hub=SimpleNamespace(
+                load=lambda **_kwargs: (
+                    model,
+                    (get_speech_timestamps, None, lambda *_args, **_kwargs: [0.0], None, None),
+                )
+            )
+        )
+
+        with patch.dict("sys.modules", {"torch": fake_torch}), \
+             patch("core.audio.stt_vad.clear_audio_model_memory_caches") as clear_memory:
+            rows = stt_vad._detect_silero_high_sensitivity("/tmp/fake.wav")
+
+        self.assertEqual(rows[0]["start"], 0.0)
+        self.assertEqual(rows[0]["end"], 1.0)
+        self.assertEqual(model.device, "cpu")
+        clear_memory.assert_called_once_with(include_gpu=True)
 
     def test_lora_query_cache_invalidates_when_media_fingerprint_changes(self):
         with tempfile.TemporaryDirectory() as tmp:

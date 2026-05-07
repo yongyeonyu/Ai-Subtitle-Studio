@@ -302,6 +302,47 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
+    def test_provider_refresh_rehashes_same_list_reference_to_catch_in_place_mutation(self):
+        widget = VideoPlayerWidget()
+        shared = [{"start": 0.0, "end": 2.0, "text": "현재 자막"}]
+        provider = Mock(return_value=shared)
+        try:
+            widget.set_subtitle_provider(provider)
+            widget.set_subtitle_display_time(0.5)
+            provider.reset_mock()
+            widget._last_provider_refresh_at = 0.0
+            shared[0]["text"] = "수정 자막"
+
+            with patch.object(widget, "_segments_signature", wraps=widget._segments_signature) as signature_mock:
+                widget._provider_refresh_requested = True
+                widget._refresh_provider_segments(force=False)
+
+            provider.assert_called_once()
+            signature_mock.assert_called()
+            self.assertEqual(widget._last_sub, "수정 자막")
+            self.assertEqual(widget.sub_label.text(), "수정 자막")
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_context_segments_refreshes_when_same_list_reference_is_mutated(self):
+        widget = VideoPlayerWidget()
+        shared = [{"start": 0.0, "end": 2.0, "text": "현재 자막"}]
+        try:
+            widget.set_context_segments(shared)
+            widget.set_subtitle_display_time(0.5)
+
+            shared[0]["text"] = "수정 자막"
+            widget.refresh_subtitle_context(shared)
+
+            self.assertEqual(widget._last_sub, "수정 자막")
+            self.assertEqual(widget.sub_label.text(), "수정 자막")
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
     def test_toggle_play_rewinds_to_last_playable_frame_near_end(self):
         widget = VideoPlayerWidget()
         try:

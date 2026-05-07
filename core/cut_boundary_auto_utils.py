@@ -5,7 +5,41 @@
 from __future__ import annotations
 
 
+COMPARE_MAX_WIDTH_1080P = 1920
+COMPARE_MAX_HEIGHT_1080P = 1080
+
+
 def build_auto_grid_verify_utils(get_grid_cells):
+    def _auto_compare_resolution(settings: dict | None = None) -> tuple[int, int]:
+        data = dict(settings or {})
+        try:
+            max_w = int(data.get("scan_cut_compare_max_width", COMPARE_MAX_WIDTH_1080P) or COMPARE_MAX_WIDTH_1080P)
+        except Exception:
+            max_w = COMPARE_MAX_WIDTH_1080P
+        try:
+            max_h = int(data.get("scan_cut_compare_max_height", COMPARE_MAX_HEIGHT_1080P) or COMPARE_MAX_HEIGHT_1080P)
+        except Exception:
+            max_h = COMPARE_MAX_HEIGHT_1080P
+        return max(320, max_w), max(180, max_h)
+
+    def _auto_downscale_frame_for_compare(frame, cv2_mod, *, settings: dict | None = None):
+        try:
+            h, w = frame.shape[:2]
+        except Exception:
+            return frame
+        if w <= 0 or h <= 0:
+            return frame
+        max_w, max_h = _auto_compare_resolution(settings)
+        scale = min(1.0, float(max_w) / float(w), float(max_h) / float(h))
+        if scale >= 0.999:
+            return frame
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+        try:
+            return cv2_mod.resize(frame, (new_w, new_h), interpolation=cv2_mod.INTER_AREA)
+        except Exception:
+            return frame
+
     def _auto_gray_thumb_from_frame(frame, cv2_mod, *, positions, scale_w: int, scale_h: int):
         try:
             h, w = frame.shape[:2]
@@ -227,6 +261,7 @@ def build_auto_grid_verify_utils(get_grid_cells):
         scale_w: int,
         scale_h: int,
         color_space: str,
+        settings: dict | None = None,
     ):
         start_frame = max(0, int(start_frame))
         end_frame = min(int(frame_count) - 1, int(end_frame))
@@ -246,6 +281,7 @@ def build_auto_grid_verify_utils(get_grid_cells):
             ok, frame = cap.read()
             if not ok or frame is None:
                 break
+            frame = _auto_downscale_frame_for_compare(frame, cv2_mod, settings=settings)
 
             gray_map[f] = _auto_gray_thumb_from_frame(
                 frame,
@@ -265,6 +301,8 @@ def build_auto_grid_verify_utils(get_grid_cells):
         return gray_map, color_map
 
     return {
+        "_auto_compare_resolution": _auto_compare_resolution,
+        "_auto_downscale_frame_for_compare": _auto_downscale_frame_for_compare,
         "_auto_gray_thumb_from_frame": _auto_gray_thumb_from_frame,
         "_auto_color_avg_from_frame": _auto_color_avg_from_frame,
         "_auto_delta_bytes": _auto_delta_bytes,

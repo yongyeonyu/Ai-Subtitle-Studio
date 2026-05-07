@@ -30,28 +30,60 @@ Item {
                 radius: 0
             }
 
-            Text {
-                anchors.left: parent.left
-                anchors.leftMargin: 10
-                anchors.right: parent.right
-                anchors.rightMargin: 10
-                anchors.top: parent.top
-                anchors.topMargin: (segItem.confidenceChips.length > 0 && parent.width >= 72) ? 12 : 5
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: 5
-                text: modelData.text
-                color: modelData.textColor
-                font.family: root.fontFamily
-                font.pixelSize: modelData.preview ? 11 : 12
-                elide: parent.width < 164 ? Text.ElideRight : Text.ElideNone
-                wrapMode: parent.width < 164 ? Text.NoWrap : Text.WordWrap
-                verticalAlignment: parent.width < 164 ? Text.AlignVCenter : Text.AlignTop
-                clip: true
-                visible: parent.width >= 44
+            Loader {
+                anchors.fill: parent
+                active: !!modelData.showText
+                sourceComponent: segmentTextComponent
             }
 
+            Loader {
+                anchors.fill: parent
+                active: !!modelData.showConfidenceChips
+                sourceComponent: confidenceChipsComponent
+            }
+
+            Loader {
+                active: !!modelData.showSpeakerBar
+                sourceComponent: speakerBarComponent
+            }
+
+            Loader {
+                active: !!modelData.showHandles
+                sourceComponent: handlesComponent
+            }
+        }
+    }
+
+    Component {
+        id: segmentTextComponent
+
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 10
+            anchors.right: parent.right
+            anchors.rightMargin: 10
+            anchors.top: parent.top
+            anchors.topMargin: (segItem.confidenceChips.length > 0 && parent.width >= 72) ? 12 : 5
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 5
+            text: modelData.text
+            color: modelData.textColor
+            font.family: root.fontFamily
+            font.pixelSize: modelData.preview ? 11 : 12
+            elide: parent.width < 164 ? Text.ElideRight : Text.ElideNone
+            wrapMode: parent.width < 164 ? Text.NoWrap : Text.WordWrap
+            verticalAlignment: parent.width < 164 ? Text.AlignVCenter : Text.AlignTop
+            clip: true
+        }
+    }
+
+    Component {
+        id: confidenceChipsComponent
+
+        Item {
+            anchors.fill: parent
             Repeater {
-                model: parent.width >= 72 ? segItem.confidenceChips : []
+                model: segItem.confidenceChips
 
                 Rectangle {
                     x: 5 + (index * (Math.max(6, Math.min(18, (segItem.width - 10) / Math.max(1, segItem.confidenceChips.length))) + 2))
@@ -62,38 +94,48 @@ Item {
                     radius: 1
                 }
             }
+        }
+    }
 
-            Rectangle {
-                x: 0
-                y: modelData.speakerY - modelData.y
-                width: parent.width
-                height: modelData.speakerH
-                color: modelData.speakerFill
-                border.color: "#2D3942"
-                border.width: 1
-                visible: modelData.showSpeaker
+    Component {
+        id: speakerBarComponent
 
-                Text {
-                    anchors.fill: parent
-                    anchors.leftMargin: 6
-                    anchors.rightMargin: 6
-                    text: modelData.speakerText
-                    color: "#DCE3EA"
-                    font.family: root.fontFamily
-                    font.pixelSize: 10
-                    elide: Text.ElideRight
-                    verticalAlignment: Text.AlignVCenter
-                    clip: true
-                }
+        Rectangle {
+            x: 0
+            y: modelData.speakerY - modelData.y
+            width: parent.width
+            height: modelData.speakerH
+            color: modelData.speakerFill
+            border.color: "#2D3942"
+            border.width: 1
+
+            Text {
+                anchors.fill: parent
+                anchors.leftMargin: 6
+                anchors.rightMargin: 6
+                text: modelData.speakerText
+                color: "#DCE3EA"
+                font.family: root.fontFamily
+                font.pixelSize: 10
+                elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
+                clip: true
+                visible: !!modelData.showSpeakerText
             }
+        }
+    }
 
+    Component {
+        id: handlesComponent
+
+        Item {
+            anchors.fill: parent
             Rectangle {
                 x: -2
                 y: 0
                 width: 4
                 height: parent.height
                 color: "#44FF88"
-                visible: modelData.showHandles
             }
 
             Rectangle {
@@ -102,7 +144,6 @@ Item {
                 width: 4
                 height: parent.height
                 color: "#44FF88"
-                visible: modelData.showHandles
             }
         }
     }

@@ -157,6 +157,13 @@ class EditorWidget(
         self._live_editor_preview_timer.setSingleShot(True)
         self._live_editor_preview_timer.timeout.connect(self._flush_live_editor_preview_queue)
         self._timeline_timer = QTimer(); self._timeline_timer.setSingleShot(True); self._timeline_timer.timeout.connect(self._redraw_timeline)
+        self._video_context_refresh_timer = QTimer(self)
+        self._video_context_refresh_timer.setSingleShot(True)
+        self._video_context_refresh_timer.timeout.connect(self._refresh_video_subtitle_context)
+        self._cursor_video_seek_timer = QTimer(self)
+        self._cursor_video_seek_timer.setSingleShot(True)
+        self._cursor_video_seek_timer.timeout.connect(self._flush_cursor_video_seek)
+        self._pending_cursor_video_seek_sec: float | None = None
         self._nav_timer      = QTimer(); self._nav_timer.setSingleShot(True)
         self._roughcut_draft_timer = QTimer(self)
         self._roughcut_draft_timer.setSingleShot(True)
@@ -226,9 +233,11 @@ class EditorWidget(
         if media_path and not defer_media_load:
             QTimer.singleShot(200, lambda: self._load_video(media_path))
 
+        self._segment_cache_valid = False
+        self._last_segment_cache_block_count = 0
         self._playhead_timer = QTimer()
         self._playhead_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._playhead_timer.setInterval(16)
+        self._playhead_timer.setInterval(33)
         self._playhead_timer.timeout.connect(self._sync_playhead)
         self._playhead_timer.start()
 
@@ -316,11 +325,44 @@ class EditorWidget(
         if self.sm.is_locked: return
         if not hasattr(self, '_app_start_time'): self._app_start_time = time.time()
         if time.time() - self._app_start_time < 1.0: return
+        doc = getattr(getattr(self, "text_edit", None), "document", lambda: None)()
+        current_block_count = int(doc.blockCount()) if doc is not None else 0
+        previous_block_count = int(getattr(self, "_last_segment_cache_block_count", current_block_count) or current_block_count)
+        text_only_cache_refresh = False
+        if current_block_count == previous_block_count and getattr(self, "_cached_segs", None):
+            try:
+                block = self.text_edit.textCursor().block()
+                data = block.userData()
+                if block.isValid() and isinstance(data, SubtitleBlockData):
+                    self._update_subtitle_memory_line_text(block.blockNumber(), block.text())
+                    self._segment_cache_valid = True
+                    text_only_cache_refresh = True
+                else:
+                    self._segment_cache_valid = False
+            except Exception:
+                self._segment_cache_valid = False
+        else:
+            self._segment_cache_valid = False
+        self._last_segment_cache_block_count = current_block_count
         if hasattr(self, "_has_unsaved_changes") and not self._has_unsaved_changes():
             if getattr(self.sm, "is_dirty", False) and hasattr(self, "_mark_save_completed"):
                 self._mark_save_completed(touch_saved_time=False)
             return
         self.sm.start_editing()
+        if text_only_cache_refresh:
+            self._schedule_video_context_refresh()
+        else:
+            self._schedule_timeline()
+
+    def _schedule_video_context_refresh(self, delay_ms: int = 90):
+        timer = getattr(self, "_video_context_refresh_timer", None)
+        if timer is None:
+            try:
+                self._refresh_video_subtitle_context()
+            except Exception:
+                pass
+            return
+        timer.start(max(0, int(delay_ms)))
 
     def _mark_initial_segments_saved(self):
         if getattr(self, "_segment_queue", None):
@@ -353,11 +395,19 @@ class EditorWidget(
                 return
             self.sm.start_autosave()
             try:
-                self.sig_auto_save.emit(segs)
+                if not self._persist_editor_srts(segs, autosave=True):
+                    return
             except Exception as e:
                 get_logger().log(f"⚠️ 자동 저장 실패: {e}")
                 return
-            self._on_save(skip_auto_next=True)
+            self._remember_saved_segments(segs)
+            try:
+                project_path = self._auto_save_project(segs, persist_analysis_artifacts=False)
+            except Exception as e:
+                get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {e}")
+                project_path = ""
+            self._remember_saved_project_file(project_path)
+            self._mark_save_completed(touch_saved_time=True)
 
     # ---------------------------------------------------------
     # UI 빌드
@@ -393,7 +443,6 @@ class EditorWidget(
         self.text_edit.tab_pressed.connect(self._trigger_magnet)
         self.text_edit.selectionChanged.connect(self._on_selection_changed)
         self.text_edit.document().contentsChanged.connect(self._on_text_edited)
-        self.text_edit.document().contentsChanged.connect(self._schedule_timeline)
         self.text_edit.timestamp_clicked.connect(self._on_timeline_seg_clicked)
         self.text_edit.timestamp_deleted.connect(self._on_seg_to_gap)
         self.text_edit.speaker_circle_clicked.connect(self._show_speaker_circle_menu)
@@ -1351,7 +1400,8 @@ class EditorWidget(
         # 💡 누락되었던 자동저장/상태 애니메이션 타이머까지 완벽하게 정지시킵니다.
         timers = [
             '_playhead_timer', '_queue_timer', '_timeline_timer', 
-            '_spinner_timer', '_nav_timer', '_auto_save_timer', '_status_anim_timer'
+            '_spinner_timer', '_nav_timer', '_auto_save_timer', '_status_anim_timer',
+            '_video_context_refresh_timer'
         ]
         for attr in timers:
             t = getattr(self, attr, None)

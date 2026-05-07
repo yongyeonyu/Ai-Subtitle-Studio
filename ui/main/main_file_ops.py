@@ -118,7 +118,7 @@ class FileOpsMixin:
 
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
-            pause_lora(f"{source}_queue_start", hold_ms=300_000)
+            pause_lora(f"{source}_queue_start")
 
         if getattr(self, "_queue_mode_starting", False):
             return
@@ -224,7 +224,7 @@ class FileOpsMixin:
 
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
-            pause_lora("multiclip_open", hold_ms=300_000)
+            pause_lora("multiclip_open")
 
         dlg = MultiClipEditor(files, self, show_multiclip=show_multiclip)
         if dlg.exec():
@@ -287,8 +287,16 @@ class FileOpsMixin:
             except TypeError:
                 self.backend.stop()
 
+        cleanup_runtime_async = getattr(self, "_start_runtime_cleanup_for_app_exit_async", None)
+        if callable(cleanup_runtime_async):
+            cleanup_runtime_async(timeout_sec=0.15)
+        else:
+            cleanup_runtime_sync = getattr(self, "_cleanup_runtime_for_app_exit", None)
+            if callable(cleanup_runtime_sync):
+                cleanup_runtime_sync(timeout_sec=0.15)
+
         if not busy_before_exit:
-            self._backup_before_quick_exit()
+            self._backup_before_quick_exit(include_project_backup=False)
         else:
             try:
                 from core.runtime.logger import get_logger
@@ -298,7 +306,7 @@ class FileOpsMixin:
                 pass
         schedule_exit = getattr(self, "_schedule_forced_process_exit", None)
         if callable(schedule_exit):
-            schedule_exit(delay_ms=250)
+            schedule_exit(delay_ms=90)
         QApplication.quit()
 
     def _restore_current_work_mode(self):
@@ -311,14 +319,20 @@ class FileOpsMixin:
         elif mode == EDITOR_MODE and hasattr(self, "_open_editor_screen") and getattr(self, "_editor_widget", None) is not None:
             self._open_editor_screen()
 
-    def _backup_before_quick_exit(self):
+    def _backup_before_quick_exit(self, *, include_project_backup: bool = True):
         import datetime
         import shutil
 
         editor = getattr(self, "_editor_widget", None)
         if editor is not None:
             try:
-                if hasattr(editor, "_on_save"):
+                should_save = True
+                dirty_checker = getattr(editor, "_has_unsaved_changes", None)
+                if callable(dirty_checker):
+                    should_save = bool(dirty_checker())
+                elif hasattr(editor, "sm"):
+                    should_save = bool(getattr(editor.sm, "is_dirty", False))
+                if should_save and hasattr(editor, "_on_save"):
                     editor._on_save(skip_auto_next=True)
             except Exception as exc:
                 try:
@@ -328,7 +342,7 @@ class FileOpsMixin:
                     pass
 
         project_path = str(getattr(self, "_current_project_path", "") or "")
-        if project_path and os.path.exists(project_path):
+        if include_project_backup and project_path and os.path.exists(project_path):
             try:
                 backup_dir = os.path.join(os.path.dirname(project_path), "프로젝트백업")
                 os.makedirs(backup_dir, exist_ok=True)

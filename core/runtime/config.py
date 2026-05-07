@@ -1,5 +1,5 @@
-# Version: 03.24.00
-# Phase: PHASE7_RefactorQualityRelease
+# Version: 03.24.01
+# Phase: PHASE8_STTModeRuntimeRelease
 
 
 # === OS / Platform Detection ===
@@ -12,7 +12,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.24.00"
+APP_VERSION = "03.24.01"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -83,11 +83,16 @@ DEFAULT_ADV_SETTINGS = {
     "w_none_comp":      1.6,
     "w_none_temp_max":  0.4,
     "split_length_threshold": 10,
+    "subtitle_common_split_guard_enabled": True,
+    "subtitle_common_split_target_chars": 16,
+    "subtitle_common_split_hard_max_chars": 24,
+    "subtitle_common_split_hard_max_duration_sec": 5.5,
     "llm_threads_auto_enabled": True,
     "llm_workers_auto_enabled": True,
     "runtime_scheduler_ramp_up_enabled": True,
     "runtime_scheduler_ramp_initial_sec": 45.0,
     "runtime_scheduler_ramp_step_sec": 60.0,
+    "runtime_scheduler_reserve_cores": 1,
     "autopilot_enabled": True,
     "autopilot_single_user_mode": True,
     "operation_mode_choices_visible": False,
@@ -106,6 +111,10 @@ DEFAULT_ADV_SETTINGS = {
     "autopilot_stage_cache_enabled": True,
     "autopilot_negative_cache_enabled": True,
     "autopilot_compressed_diagnostics_enabled": True,
+    "cut_boundary_cache_enabled": True,
+    "scan_cut_compare_max_width": 1920,
+    "scan_cut_compare_max_height": 1080,
+    "vad_detection_cache_enabled": True,
     "llm_workers":      4,
     "llm_threads_resource_max": 4,
     "local_ollama_llm_max_workers": 2,

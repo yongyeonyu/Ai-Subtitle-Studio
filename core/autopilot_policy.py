@@ -119,6 +119,10 @@ def autopilot_runtime_defaults() -> dict[str, Any]:
         "autopilot_stage_cache_enabled": True,
         "autopilot_negative_cache_enabled": True,
         "autopilot_compressed_diagnostics_enabled": True,
+        "cut_boundary_cache_enabled": True,
+        "scan_cut_compare_max_width": 1920,
+        "scan_cut_compare_max_height": 1080,
+        "vad_detection_cache_enabled": True,
         "autopilot_compact_fast_lane_graph": True,
     }
 

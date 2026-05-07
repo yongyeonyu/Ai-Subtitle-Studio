@@ -21,6 +21,7 @@ import time
 from dataclasses import dataclass
 
 from core.runtime import config
+from core.audio.runtime_cleanup import clear_audio_model_memory_caches
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.settings import load_settings
 from core.runtime.logger import get_logger
@@ -101,14 +102,18 @@ def transcribe_wav_file(
         clean_wav = os.path.join(td, "mic_clean.wav")
         prepared_wav = _prepare_live_wav(str(wav_path), clean_wav)
         model = _select_live_model(settings, profile)
-        text = _transcribe_local_whisper(prepared_wav, model)
-        text = _postprocess_live_text(text)
-        return LiveSTTResult(
-            text=text,
-            engine="local-whisper",
-            model=model,
-            elapsed=time.time() - started,
-        )
+        try:
+            text = _transcribe_local_whisper(prepared_wav, model, settings=settings)
+            text = _postprocess_live_text(text)
+            return LiveSTTResult(
+                text=text,
+                engine="local-whisper",
+                model=model,
+                elapsed=time.time() - started,
+            )
+        finally:
+            stop_live_stt_worker()
+            clear_audio_model_memory_caches(include_gpu=True)
 
 
 def _prepare_live_wav(raw_wav: str, clean_wav: str) -> str:
@@ -149,9 +154,12 @@ def _select_live_model(settings: dict, profile: str) -> str:
         config, "WHISPER_MODEL", "mlx-community/whisper-large-v3-mlx"
     )
     profile = (profile or "quality").lower()
+    from core.audio.npu_acceleration import npu_whisper_routing_enabled, whisper_model_npu_target
 
     if config.IS_MAC:
         if profile == "fast":
+            if npu_whisper_routing_enabled(settings, purpose="live_stt") and whisper_model_npu_target(str(selected)):
+                return str(selected)
             return "mlx-community/whisper-large-v3-turbo"
         if "large" in selected:
             return selected
@@ -164,17 +172,19 @@ def _select_live_model(settings: dict, profile: str) -> str:
     return "large-v3"
 
 
-def _transcribe_local_whisper(wav_path: str, model: str) -> str:
+def _transcribe_local_whisper(wav_path: str, model: str, settings: dict | None = None) -> str:
+    from core.audio.npu_acceleration import prefer_npu_whisper_model
     from core.audio.whisper_coreml import is_coreml_whisper_model
     from core.audio.whisper_transformers import is_transformers_whisper_model
 
-    if is_coreml_whisper_model(model):
-        return _transcribe_coreml(wav_path, model)
-    if is_transformers_whisper_model(model):
-        return _transcribe_transformers(wav_path, model)
+    effective_model = prefer_npu_whisper_model(model, settings, purpose="live_stt", log_label="LIVE STT")
+    if is_coreml_whisper_model(effective_model):
+        return _transcribe_coreml(wav_path, effective_model)
+    if is_transformers_whisper_model(effective_model):
+        return _transcribe_transformers(wav_path, effective_model)
     if config.IS_MAC:
-        return _transcribe_mlx(wav_path, model)
-    return _transcribe_faster(wav_path, model)
+        return _transcribe_mlx(wav_path, effective_model)
+    return _transcribe_faster(wav_path, effective_model)
 
 
 def _transcribe_coreml(wav_path: str, model: str) -> str:

@@ -283,7 +283,23 @@ class VideoProcessorVadMixin:
         *,
         for_post_stt_align: bool = False,
     ) -> list[dict]:
+        requested_vad_model = str(vad_model or "none").lower()
         try:
+            cached = self._load_vad_timestamps_cache(
+                wav_path,
+                requested_vad_model,
+                s,
+                target_start_sec=target_start_sec,
+                target_end_sec=target_end_sec,
+                is_single_segment=is_single_segment,
+                for_post_stt_align=for_post_stt_align,
+            )
+            if cached is not None:
+                label = requested_vad_model.upper()
+                self._notify_stage(f"♻️ [VAD] {label} 음성 위치 캐시 재사용")
+                _runtime_get_logger().log(f"  └ ♻️ [VAD 캐시] {label} 음성 위치 {len(cached)}개 재사용")
+                return cached
+
             if vad_model == "ten_vad":
                 timestamps = self._detect_ten_vad_timestamps(
                     wav_path,
@@ -292,12 +308,23 @@ class VideoProcessorVadMixin:
                     for_post_stt_align=for_post_stt_align,
                 )
                 if timestamps:
-                    return self._filter_vad_timestamps_for_range(
+                    filtered = self._filter_vad_timestamps_for_range(
                         timestamps,
                         target_start_sec,
                         target_end_sec,
                         is_single_segment,
                     )
+                    self._write_vad_timestamps_cache(
+                        wav_path,
+                        requested_vad_model,
+                        s,
+                        filtered,
+                        target_start_sec=target_start_sec,
+                        target_end_sec=target_end_sec,
+                        is_single_segment=is_single_segment,
+                        for_post_stt_align=for_post_stt_align,
+                    )
+                    return filtered
                 _runtime_get_logger().log("  ⚠️ TEN VAD 결과가 없어 Silero VAD로 재시도합니다")
                 vad_model = "silero"
 
@@ -431,14 +458,29 @@ class VideoProcessorVadMixin:
 
             if timestamps and timestamps[0]["start"] < 3.0:
                 timestamps[0]["start"] = 0.0
+            self._write_vad_timestamps_cache(
+                wav_path,
+                requested_vad_model,
+                s,
+                timestamps,
+                target_start_sec=target_start_sec,
+                target_end_sec=target_end_sec,
+                is_single_segment=is_single_segment,
+                for_post_stt_align=for_post_stt_align,
+            )
             return timestamps
         except Exception as e:
             _runtime_get_logger().log(f"⚠️ VAD 후처리 분석 오류: {e}")
             return []
+        finally:
+            release = getattr(self, "release_vad_runtime_models", None)
+            if callable(release) and requested_vad_model != "none":
+                release(log_context="VAD 후처리")
 
     # 💡 [STEP 3] VAD 분할기 (들여쓰기 및 8개 인자 완벽 교정)
     # [core/media_processor.py] _split_with_vad 함수 전체 교체
     def _split_with_vad(self, wav_path: str, chunk_dir: str, vad_model: str, s: dict, target_start_sec=0.0, target_end_sec=None, is_single_segment=False):
+        requested_vad_model = str(vad_model or "none").lower()
         try:
             effective_s = apply_review_vad_settings(s)
             vad_cfg = review_vad_config(s)
@@ -633,3 +675,7 @@ class VideoProcessorVadMixin:
         except Exception as e:
             _runtime_get_logger().log(f"⚠️ VAD 오류: {e}")
             return False, []
+        finally:
+            release = getattr(self, "release_vad_runtime_models", None)
+            if callable(release) and requested_vad_model != "none":
+                release(log_context="VAD 선분할")

@@ -33,6 +33,15 @@ def _clamp_int(value: Any, low: int, high: int) -> int:
     return max(low, min(high, numeric))
 
 
+def _cancel_requested(cancel_callback) -> bool:
+    if not callable(cancel_callback):
+        return False
+    try:
+        return bool(cancel_callback())
+    except Exception:
+        return False
+
+
 def _percentile(values: list[float], ratio: float) -> float:
     values = sorted(float(v) for v in values if v >= 0.0)
     if not values:
@@ -569,6 +578,7 @@ def optimize_settings_for_media(
     subtitle_path: str = "",
     store_dir: str | None = None,
     base_settings: dict[str, Any] | None = None,
+    cancel_callback=None,
 ) -> dict[str, Any]:
     context_summary = _multimodal_context_summary(media_id, store_dir)
     summary = {**_truth_summary(rows), "multimodal_context": context_summary}
@@ -585,6 +595,17 @@ def optimize_settings_for_media(
     best_bundle_id = ""
     best_is_exploration = False
     for bundle in bundles:
+        if _cancel_requested(cancel_callback):
+            return {
+                "summary": summary,
+                "trial_count": len(results),
+                "best_score": round(max(0.0, best_score), 2),
+                "best_config": best_config,
+                "best_reason": best_reason,
+                "best_bundle_id": best_bundle_id,
+                "cancelled": True,
+                "reason": "cancelled",
+            }
         score, metrics, reason = _score_bundle(summary, bundle)
         bundle_id = str(bundle.get("bundle_id") or "")
         metrics["bundle_id"] = bundle_id
@@ -605,6 +626,17 @@ def optimize_settings_for_media(
             best_reason = reason
             best_bundle_id = bundle_id
             best_is_exploration = bool(bundle.get("exploration"))
+    if _cancel_requested(cancel_callback):
+        return {
+            "summary": summary,
+            "trial_count": len(results),
+            "best_score": round(max(0.0, best_score), 2),
+            "best_config": best_config,
+            "best_reason": best_reason,
+            "best_bundle_id": best_bundle_id,
+            "cancelled": True,
+            "reason": "cancelled",
+        }
     autopilot_result = apply_lora_user_settings_autopilot(
         best_config,
         score=best_score,
@@ -722,6 +754,7 @@ def optimize_prompts_for_media(
     media_path: str = "",
     subtitle_path: str = "",
     store_dir: str | None = None,
+    cancel_callback=None,
 ) -> dict[str, Any]:
     context_summary = _multimodal_context_summary(media_id, store_dir)
     summary = {**_truth_summary(rows), "multimodal_context": context_summary}
@@ -731,6 +764,16 @@ def optimize_prompts_for_media(
     best_prompt_id = ""
     best_prompt_text = ""
     for bundle in bundles:
+        if _cancel_requested(cancel_callback):
+            return {
+                "summary": summary,
+                "trial_count": len(results),
+                "best_score": round(max(0.0, best_score), 2),
+                "best_prompt_id": best_prompt_id,
+                "best_prompt_text": best_prompt_text,
+                "cancelled": True,
+                "reason": "cancelled",
+            }
         score, metrics, reason = _score_prompt_bundle(summary, bundle)
         result = record_prompt_trial_result(
             media_id=media_id,
@@ -748,6 +791,16 @@ def optimize_prompts_for_media(
             best_score = score
             best_prompt_id = str(bundle.get("prompt_template_id") or "")
             best_prompt_text = str(bundle.get("prompt_text") or "")
+    if _cancel_requested(cancel_callback):
+        return {
+            "summary": summary,
+            "trial_count": len(results),
+            "best_score": round(max(0.0, best_score), 2),
+            "best_prompt_id": best_prompt_id,
+            "best_prompt_text": best_prompt_text,
+            "cancelled": True,
+            "reason": "cancelled",
+        }
     return {
         "summary": summary,
         "trial_count": len(results),

@@ -9,6 +9,7 @@ ui/editor_actions.py
 import hashlib
 import json
 import os
+import threading
 from PyQt6.QtWidgets import QMessageBox
 
 from core.runtime import config
@@ -271,6 +272,113 @@ class EditorActionsMixin:
         except Exception:
             return list(segs or [])
 
+    def _persist_editor_srts(self, segs: list[dict], *, autosave: bool = False) -> bool:
+        main_w = self.window()
+        multiclip_files = list(getattr(main_w, "_multiclip_files", []) or [])
+        srt_output_segs = self._segments_for_srt_output(segs)
+        saved_any = False
+        if len(multiclip_files) > 1:
+            saved_any = self._save_multiclip_srts(srt_output_segs, multiclip_files)
+        elif getattr(self, "media_path", None):
+            srt_path = get_srt_path(self.media_path)
+            save_srt(srt_output_segs, srt_path)
+            verb = "자동 저장 완료" if autosave else "저장 완료"
+            get_logger().log(f"💾 {verb}: {os.path.basename(srt_path)}")
+            self._last_saved_srt_outputs = [(srt_path, self.media_path)]
+            saved_any = True
+        else:
+            get_logger().log("⚠️ 저장 실패: media_path가 없어 SRT 저장 경로를 만들 수 없습니다.")
+            return False
+        if not saved_any:
+            get_logger().log("⚠️ 저장 실패: 실제로 저장된 자막 파일이 없습니다.")
+            return False
+        return True
+
+    def _schedule_project_analysis_artifacts_refresh(
+        self,
+        project_path: str,
+        segs: list[dict],
+        settings: dict | None = None,
+        *,
+        saved_segments_signature: str = "",
+    ) -> None:
+        project_path = str(project_path or "")
+        if not project_path or not os.path.exists(project_path):
+            return
+        segments = [dict(seg) for seg in list(segs or []) if isinstance(seg, dict)]
+        if not segments:
+            return
+        settings_snapshot = dict(settings or getattr(self, "settings", {}) or {})
+        generation = int(getattr(self, "_project_analysis_refresh_generation", 0) or 0) + 1
+        self._project_analysis_refresh_generation = generation
+
+        def worker() -> None:
+            graph_result = None
+            lattice_result = None
+            try:
+                from core.audio.stt_lattice import persist_stt_lattice_artifact
+                from core.engine.subtitle_accuracy_graph import persist_subtitle_accuracy_graph
+                from core.project.project_io import read_project_file, write_project_file
+
+                try:
+                    project = read_project_file(project_path)
+                except Exception:
+                    project = {}
+                media_items = list(project.get("media") or [])
+                primary_media_path = ""
+                if media_items and isinstance(media_items[0], dict):
+                    primary_media_path = str(media_items[0].get("path") or "")
+                if settings_snapshot.get("accuracy_graph_persist_enabled", True):
+                    graph_result = persist_subtitle_accuracy_graph(
+                        segments,
+                        settings_snapshot,
+                        media_path=primary_media_path,
+                        project_path=project_path,
+                    )
+                if settings_snapshot.get("stt_lattice_persist_enabled", True):
+                    lattice_result = persist_stt_lattice_artifact(
+                        segments,
+                        settings_snapshot,
+                        media_path=primary_media_path,
+                        project_path=project_path,
+                    )
+                if int(getattr(self, "_project_analysis_refresh_generation", 0) or 0) != generation:
+                    return
+                latest = read_project_file(project_path)
+                latest.setdefault("analysis", {})
+                editor_analysis = ((latest.setdefault("editor_state", {}) or {}).setdefault("analysis", {}))
+                if graph_result is not None:
+                    latest["analysis"]["subtitle_accuracy_graph_schema"] = graph_result.get("schema")
+                    latest["analysis"]["subtitle_accuracy_graph_path"] = graph_result.get("path", "")
+                    latest["analysis"]["subtitle_accuracy_graph_summary"] = graph_result.get("summary", {})
+                    latest["analysis"]["subtitle_accuracy_graph_segment_count"] = graph_result.get("segment_count", 0)
+                    editor_analysis["subtitle_accuracy_graph_path"] = graph_result.get("path", "")
+                    editor_analysis["subtitle_accuracy_graph_summary"] = graph_result.get("summary", {})
+                if lattice_result is not None:
+                    latest["analysis"]["stt_lattice_schema"] = lattice_result.get("schema")
+                    latest["analysis"]["stt_lattice_artifact_path"] = lattice_result.get("path", "")
+                    latest["analysis"]["stt_lattice_summary"] = lattice_result.get("summary", {})
+                    latest["analysis"]["stt_lattice_segment_count"] = lattice_result.get("segment_count", 0)
+                    editor_analysis["stt_lattice_artifact_path"] = lattice_result.get("path", "")
+                    editor_analysis["stt_lattice_summary"] = lattice_result.get("summary", {})
+                write_project_file(project_path, latest)
+                if (
+                    saved_segments_signature
+                    and saved_segments_signature == str(getattr(self, "_saved_segments_signature", "") or "")
+                ):
+                    self._saved_project_path = project_path
+                    self._saved_project_signature = self._project_file_dirty_signature(project_path)
+            except Exception as exc:
+                get_logger().log(f"⚠️ 프로젝트 분석 아티팩트 비동기 저장 실패: {exc}")
+
+        thread = threading.Thread(
+            target=worker,
+            name="editor-project-analysis-artifacts",
+            daemon=True,
+        )
+        self._project_analysis_refresh_thread = thread
+        thread.start()
+
     def _on_save(self, *args, skip_auto_next=False):
         self._flush_pending_segment_queue_now()
         segs = self._get_current_segments()
@@ -284,46 +392,36 @@ class EditorActionsMixin:
         self._last_saved_srt_outputs = []
         try:
             main_w = self.window()
-            multiclip_files = list(getattr(main_w, '_multiclip_files', []) or [])
-            srt_output_segs = self._segments_for_srt_output(segs)
-            saved_any = False
-            if len(multiclip_files) > 1:
-                saved_any = self._save_multiclip_srts(srt_output_segs, multiclip_files)
-            elif getattr(self, 'media_path', None):
-                srt_path = get_srt_path(self.media_path)
-                save_srt(srt_output_segs, srt_path)
-                get_logger().log(f"💾 저장 완료: {os.path.basename(srt_path)}")
-                self._last_saved_srt_outputs = [(srt_path, self.media_path)]
-                saved_any = True
-            else:
-                get_logger().log("⚠️ 저장 실패: media_path가 없어 SRT 저장 경로를 만들 수 없습니다.")
-                return False
-            if not saved_any:
-                get_logger().log("⚠️ 저장 실패: 실제로 저장된 자막 파일이 없습니다.")
+            if not self._persist_editor_srts(segs, autosave=False):
                 return False
         except Exception as e:
             get_logger().log(f"⚠️ 저장 실패: {e}")
             return False
-
-        try:
-            self.sig_save.emit(segs)
-        except Exception:
-            pass
 
         if not skip_auto_next:
             self._skip_prev_confirm_once = True
 
         self._remember_saved_segments(segs)
         try:
-            self._auto_save_project(segs)
+            project_path = self._auto_save_project(segs, persist_analysis_artifacts=False)
         except Exception as e:
             get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {e}")
+            project_path = ""
         try:
             if self._should_auto_export_after_editor_save():
                 self._schedule_auto_export_saved_subtitle_videos()
         except Exception as e:
             get_logger().log(f"⚠️ 자막영상 자동 출력 실패: {e}")
-        self._remember_saved_project_file()
+        self._remember_saved_project_file(project_path)
+        try:
+            self._schedule_project_analysis_artifacts_refresh(
+                project_path,
+                segs,
+                dict(getattr(self, "settings", {}) or {}),
+                saved_segments_signature=str(getattr(self, "_saved_segments_signature", "") or ""),
+            )
+        except Exception as e:
+            get_logger().log(f"⚠️ 프로젝트 분석 아티팩트 예약 실패: {e}")
         self._mark_save_completed(touch_saved_time=True)
         self._sync_queue_saved_state()
         try:
@@ -566,14 +664,14 @@ class EditorActionsMixin:
     # ---------------------------------------------------------
     # 프로젝트 자동 저장
     # ---------------------------------------------------------
-    def _auto_save_project(self, segs: list = None):
+    def _auto_save_project(self, segs: list = None, *, persist_analysis_artifacts: bool = False) -> str:
         from core.project.project_manager import (
             save_project, create_project
         )
 
         media_path = getattr(self, 'media_path', None)
         if not media_path:
-            return
+            return ""
         if segs is None:
             try:
                 segs = self._get_current_segments()
@@ -624,8 +722,6 @@ class EditorActionsMixin:
         try:
             if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
                 canvas = self.timeline.canvas
-                if hasattr(canvas, "_refresh_voice_activity_segments"):
-                    canvas._refresh_voice_activity_segments()
                 voice_activity_segments = list(getattr(canvas, "voice_activity_segments", []) or [])
                 provisional_cut_boundaries = list(getattr(canvas, "scan_boundary_times", []) or [])
         except Exception:
@@ -633,6 +729,29 @@ class EditorActionsMixin:
             provisional_cut_boundaries = []
         if not provisional_cut_boundaries:
             provisional_cut_boundaries = list(getattr(self, "_auto_cut_boundary_scan_lines", []) or [])
+        stt_mode_state = None
+        stt_mode_learning = None
+        if getattr(self, "_stt_mode_enabled", False) or getattr(self, "_stt_work_segments", None):
+            try:
+                from core.stt_mode.project_state import build_stt_mode_state, default_stt_mode_learning
+
+                stt_mode_state = build_stt_mode_state(
+                    media_path=media_path,
+                    work_segments=list(getattr(self, "_stt_work_segments", []) or []),
+                    raw_dictation_segments=list(getattr(self, "_stt_raw_dictation_segments", []) or []),
+                    rolling_windows=list(getattr(self, "_stt_rolling_windows", []) or []),
+                    final_segments=list(getattr(self, "_stt_final_segments", []) or []),
+                    active_work_segment_id=str(getattr(self, "_stt_state_detail", {}).get("segment_id", "") or ""),
+                    primary_fps=getattr(getattr(self, "timeline", None), "fps", 30.0),
+                )
+                stt_mode_learning = default_stt_mode_learning(
+                    {
+                        "events": list(getattr(self, "_stt_learning_events", []) or []),
+                        "learning_opt_in": True,
+                    }
+                )
+            except Exception as exc:
+                get_logger().log(f"⚠️ STT 프로젝트 상태 구성 실패: {exc}")
         save_project(
             filepath=project_path,
             media_paths=_media_paths,
@@ -643,16 +762,13 @@ class EditorActionsMixin:
             active_work_mode=workspace['active_work_mode'],
             voice_activity_segments=voice_activity_segments,
             stt_preview_segments=stt_preview_segments,
+            stt_mode_state=stt_mode_state,
+            stt_mode_learning=stt_mode_learning,
             provisional_cut_boundaries=provisional_cut_boundaries,
+            persist_analysis_artifacts=bool(persist_analysis_artifacts),
         )
-        from core.project.project_phase1b import enrich_existing_project_file
-        _owner = locals().get('main_w', self.window() if hasattr(self, 'window') else self)
-        _media_path = getattr(self, 'media_path', '') or ''
-        _srt_path = ''
-        if _media_path:
-            _srt_path = os.path.splitext(_media_path)[0] + '.srt'
-        enrich_existing_project_file(project_path, _owner, self, segs, _srt_path or None)
         get_logger().log(f"📦 프로젝트 저장 완료: {os.path.basename(project_path)}")
+        return project_path
 
     # ---------------------------------------------------------
     # 이전

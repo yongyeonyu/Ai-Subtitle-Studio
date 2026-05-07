@@ -68,7 +68,14 @@ def _attach_stderr_logger(proc, log_label: str = "STT"):
     threading.Thread(target=_log_stderr, daemon=True, name="whisper-coreml-stderr").start()
 
 
-def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple: str = "(0.0,)", log_label: str = "STT"):
+def run_whisper(
+    chunk_paths: list,
+    model: str,
+    language: str,
+    temperature_tuple: str = "(0.0,)",
+    log_label: str = "STT",
+    options: dict | None = None,
+):
     """Run WhisperKit CLI in a subprocess and stream one JSON line per chunk."""
     if not config.IS_MAC:
         return None
@@ -91,6 +98,7 @@ def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple:
         "model": selector,
         "language": str(language or "ko"),
         "cli": cli,
+        "options": dict(options or {}),
     }
     proc = None
     try:
