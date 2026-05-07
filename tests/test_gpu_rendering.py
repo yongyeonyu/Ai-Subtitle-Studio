@@ -232,6 +232,16 @@ class GpuRenderingSafetyTests(unittest.TestCase):
             self.assertEqual(os.environ.get("QT_OPENGL"), "desktop")
             self.assertEqual(os.environ.get("QSG_RHI_BACKEND"), "opengl")
 
+    def test_mac_editor_text_surface_is_gpu_safe_by_default(self):
+        from ui.gpu_rendering import gpu_widgets_enabled, scenegraph_enabled
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("ui.gpu_rendering._running_under_pytest", return_value=False), \
+             patch("ui.gpu_rendering.config.IS_MAC", True):
+            self.assertFalse(gpu_widgets_enabled("editor"))
+            self.assertFalse(scenegraph_enabled("editor"))
+            self.assertTrue(gpu_widgets_enabled("video"))
+
 
 if __name__ == "__main__":
     unittest.main()

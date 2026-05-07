@@ -28,6 +28,21 @@ _FRAME_VALUES = {"frame", "frames", "per-frame", "per_frame", "slot", "slots", "
 _OFF_VALUES = _FALSE_VALUES | {"none", "disabled", "disable", "끄기", "끔"}
 
 
+def _editor_text_gpu_surface_allowed(feature_key: str) -> bool:
+    if feature_key != "editor":
+        return True
+    if not bool(getattr(config, "IS_MAC", False)):
+        return True
+    # Stability override: the editor text surface combines QTextEdit,
+    # QtMultimedia, QOpenGLWidget and optional QQuickWidget overlays in one
+    # window. On macOS this combination can crash natively during resize/editor
+    # initialization, so require an editor-specific opt-in to re-enable it.
+    return (
+        "AI_SUBTITLE_EDITOR_OPENGL_WIDGETS" in os.environ
+        or "AI_SUBTITLE_EDITOR_SCENEGRAPH" in os.environ
+    )
+
+
 def _env_enabled(name: str, default: str = "0") -> bool:
     return str(os.environ.get(name, default)).strip().lower() in _TRUE_VALUES
 
@@ -185,6 +200,8 @@ def gpu_widgets_enabled(feature: str | None = None) -> bool:
     feature_key = str(feature or "").strip().lower()
     if not gpu_runtime_enabled(feature_key):
         return False
+    if not _editor_text_gpu_surface_allowed(feature_key):
+        return False
     feature_env = f"AI_SUBTITLE_{feature_key.upper()}_OPENGL_WIDGETS" if feature_key else ""
     if feature_env and feature_env in os.environ:
         return _env_enabled(feature_env, "1")
@@ -216,6 +233,8 @@ def opengl_partial_update_enabled(feature: str | None = None) -> bool:
 def scenegraph_enabled(feature: str | None = None) -> bool:
     feature_key = str(feature or "").strip().lower()
     if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
+        return False
+    if not _editor_text_gpu_surface_allowed(feature_key):
         return False
     if _running_under_pytest() and f"AI_SUBTITLE_{feature_key.upper()}_SCENEGRAPH" not in os.environ:
         return False

@@ -406,22 +406,35 @@ class SubtitleTextEdit(QTextEdit):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         cr = self.contentsRect()
-        self.timestampArea.setGeometry(QRect(cr.left(), cr.top(), self.timestampArea.sizeHint().width(), cr.height()))
-        
+        try:
+            self.timestampArea.setGeometry(QRect(cr.left(), cr.top(), self.timestampArea.sizeHint().width(), cr.height()))
+        except RuntimeError:
+            return
+        except Exception:
+            pass
+
         # 💡 [신규] 오버스크롤(Overscroll) 적용: 마지막 줄이 화면 중간에 오도록 하단 여백 추가!
         doc = self.document()
-        doc.blockSignals(True)  # 💡 [핵심 추가] 창 크기가 변할 때 '편집 중'으로 넘어가는 오작동 완벽 차단!
-        
-        root_fmt = doc.rootFrame().frameFormat()
-        # 현재 보이는 에디터 화면 높이의 딱 절반( // 2 )만큼 아래쪽에 투명한 쿠션을 깔아줍니다.
-        root_fmt.setBottomMargin(self.viewport().height() // 2)
-        doc.rootFrame().setFrameFormat(root_fmt)
-        
-        doc.blockSignals(False) # 💡 [신호 복구]
+        try:
+            doc.blockSignals(True)  # 💡 [핵심 추가] 창 크기가 변할 때 '편집 중'으로 넘어가는 오작동 완벽 차단!
+            root_fmt = doc.rootFrame().frameFormat()
+            # 현재 보이는 에디터 화면 높이의 딱 절반( // 2 )만큼 아래쪽에 투명한 쿠션을 깔아줍니다.
+            root_fmt.setBottomMargin(max(0, self.viewport().height() // 2))
+            doc.rootFrame().setFrameFormat(root_fmt)
+        finally:
+            try:
+                doc.blockSignals(False) # 💡 [신호 복구]
+            except Exception:
+                pass
         layer = getattr(self, "_quick_layer", None)
         if layer is not None:
-            layer.setGeometry(self.rect())
-            layer.raise_()
+            try:
+                layer.setGeometry(self.rect())
+                QTimer.singleShot(0, layer.raise_)
+            except RuntimeError:
+                self._quick_layer = None
+            except Exception:
+                pass
         self._schedule_timestamp_area_update()
         self._schedule_quick_layer_sync()
 
