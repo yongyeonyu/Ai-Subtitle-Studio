@@ -20,6 +20,37 @@ from core.runtime import config
 from core.runtime.memory_manager import process_rss_bytes, runtime_disk_cache_usage
 
 
+_TRUE_VALUES = {"1", "true", "yes", "on", "enabled", "enable"}
+_FALSE_VALUES = {"0", "false", "no", "off", "disabled", "disable", "끄기", "끔"}
+
+
+def _int_value(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _positive_int(value: Any, default: int = 0) -> int:
+    parsed = _int_value(value, default)
+    return parsed if parsed > 0 else default
+
+
+def _setting_bool(value: Any, default: bool = True) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if not text:
+        return bool(default)
+    if text in _TRUE_VALUES:
+        return True
+    if text in _FALSE_VALUES:
+        return False
+    return bool(default)
+
+
 def runtime_monitor_dir() -> Path:
     path = Path(config.OUTPUT_DIR) / "runtime_monitor"
     path.mkdir(parents=True, exist_ok=True)
@@ -79,7 +110,79 @@ def _mixed_accelerator_parallelism_floor(task: str, accelerators: list[str], wor
     return 0
 
 
+def _cut_boundary_topology_worker_limit(
+    task: str,
+    settings: dict[str, Any],
+    *,
+    workload: int,
+    accelerators: list[str],
+) -> tuple[int, dict[str, Any]]:
+    task_key = str(task or "").strip().lower()
+    if task_key not in {"cut_pioneer", "cut_follower"}:
+        return 0, {}
+
+    workload = max(1, _positive_int(workload, 1))
+    try:
+        profile = dict(hardware_profile() or {})
+    except Exception:
+        profile = {}
+    logical = max(1, int(profile.get("logical_cores", 1) or 1))
+    physical = max(1, int(profile.get("physical_cores", logical) or logical))
+    perf = max(1, int(profile.get("performance_cores", physical) or physical))
+    efficiency = max(0, int(profile.get("efficiency_cores", 0) or 0))
+    max_profile = performance_profile(settings) == "max" and _setting_bool(
+        settings.get("runtime_hardware_acceleration_enabled"),
+        True,
+    )
+
+    if task_key == "cut_follower" and any(name != "cpu" for name in accelerators):
+        return 1, {
+            "reason": "single_gpu_queue",
+            "logical_cores": logical,
+            "performance_cores": perf,
+            "efficiency_cores": efficiency,
+        }
+
+    setting_key = (
+        "scan_cut_pioneer_cpu_max_workers"
+        if task_key == "cut_pioneer"
+        else "scan_cut_follower_cpu_max_workers"
+    )
+    configured = _positive_int(settings.get(setting_key), 0)
+    if configured > 0:
+        limit = configured
+        reason = "configured"
+    elif task_key == "cut_pioneer":
+        if workload <= 40:
+            limit = perf
+            reason = "bench_short_clip_perf_cores"
+        elif workload <= 80:
+            limit = perf + min(efficiency, 2)
+            reason = "bench_medium_clip_perf_plus_efficiency"
+        elif workload <= 160:
+            limit = perf + min(efficiency, 4)
+            reason = "bench_long_clip_balanced_fanout"
+        else:
+            limit = logical
+            reason = "bench_full_fanout"
+    else:
+        extra_efficiency = 2 if max_profile else 0
+        limit = perf + min(efficiency, extra_efficiency)
+        reason = "verify_core_topology"
+
+    limit = max(1, min(workload, logical, int(limit or 1)))
+    return limit, {
+        "reason": reason,
+        "logical_cores": logical,
+        "performance_cores": perf,
+        "efficiency_cores": efficiency,
+        "setting_key": setting_key,
+    }
+
+
 def runtime_acceleration_snapshot(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    settings = dict(settings or {})
+    acceleration_enabled = _setting_bool(settings.get("runtime_hardware_acceleration_enabled"), True)
     try:
         accelerators = dict(hardware_profile().get("accelerators", {}) or {})
     except Exception:
@@ -96,13 +199,32 @@ def runtime_acceleration_snapshot(settings: dict[str, Any] | None = None) -> dic
 
     torch_snapshot = dict(torch_acceleration_snapshot(settings=settings, task="runtime") or {})
     ordered_backends = list(torch_snapshot.get("ordered_backends") or [])
-    gpu_available = bool(
-        torch_snapshot.get("gpu_available")
-        or accelerators.get("metal")
-        or accelerators.get("cuda")
-        or accelerators.get("opencl")
+    hardware_gpu_available = any(
+        bool(accelerators.get(key))
+        for key in (
+            "metal",
+            "metal_gpu",
+            "mlx",
+            "mlx_whisper",
+            "cuda",
+            "cuda_cli",
+            "directml",
+            "openvino",
+        )
     )
-    npu_available = bool(apple_neural_engine_available())
+    gpu_available = bool(
+        acceleration_enabled
+        and (
+            torch_snapshot.get("gpu_available")
+            or hardware_gpu_available
+            or accelerators.get("opencl")
+        )
+    )
+    npu_available = bool(
+        acceleration_enabled
+        and _setting_bool(settings.get("runtime_npu_acceleration_enabled"), True)
+        and apple_neural_engine_available()
+    )
     available = {
         "cpu": True,
         "gpu": gpu_available,
@@ -130,35 +252,63 @@ def runtime_parallel_worker_plan(
 ) -> tuple[int, dict[str, Any]]:
     settings = dict(settings or {})
     reserve_key = str(reserve_task or task or "cpu").strip().lower()
+    minimum_count = max(1, _positive_int(minimum, 1))
+    workload_count = _positive_int(workload, 0)
+    reserve_cores_count = _int_value(runtime_scheduler_reserve_cores(settings, task=reserve_key), 0)
     worker_ceiling = distributed_worker_ceiling(
         settings,
         task=reserve_key,
-        workload=workload,
-        reserve_cores=runtime_scheduler_reserve_cores(settings, task=reserve_key),
-        minimum=minimum,
+        workload=workload_count,
+        reserve_cores=reserve_cores_count,
+        minimum=minimum_count,
     )
-    worker_upper_bound = max(1, int(maximum or worker_ceiling))
-    workers, meta = adaptive_worker_count(
-        task=task,
-        settings=settings,
-        requested=requested,
-        workload=workload,
-        minimum=minimum,
-        maximum=worker_upper_bound,
-    )
-    meta = dict(meta or {})
+    worker_ceiling_count = max(1, _positive_int(worker_ceiling, minimum_count))
+    configured_maximum = _positive_int(maximum, worker_ceiling_count) if maximum is not None else worker_ceiling_count
+    worker_upper_bound = max(minimum_count, min(max(1, configured_maximum), worker_ceiling_count))
+    base_worker_upper_bound = int(worker_upper_bound)
     accelerator_names = [
         _normalize_accelerator_name(item)
         for item in list(accelerators or [])
         if str(item or "").strip()
     ]
-    mix_floor = _mixed_accelerator_parallelism_floor(task, accelerator_names, int(workload or 0))
+    topology_limit, topology_meta = _cut_boundary_topology_worker_limit(
+        task,
+        settings,
+        workload=workload_count,
+        accelerators=accelerator_names,
+    )
+    if topology_limit > 0 and topology_limit < worker_upper_bound:
+        worker_upper_bound = max(minimum_count, int(topology_limit))
+    workers, meta = adaptive_worker_count(
+        task=task,
+        settings=settings,
+        requested=requested,
+        workload=workload_count,
+        minimum=minimum_count,
+        maximum=worker_upper_bound,
+    )
+    workers = max(
+        minimum_count,
+        min(_positive_int(workers, minimum_count), worker_upper_bound, max(1, workload_count or 1)),
+    )
+    meta = dict(meta or {})
+    mix_floor = _mixed_accelerator_parallelism_floor(task, accelerator_names, workload_count)
     if mix_floor > int(workers or 0):
-        workers = min(worker_upper_bound, max(minimum, mix_floor))
-        meta["accelerator_mix_floor"] = int(mix_floor)
-        meta["accelerator_mix_applied"] = True
-    meta["worker_ceiling"] = int(worker_ceiling)
-    meta["reserve_cores"] = int(runtime_scheduler_reserve_cores(settings, task=reserve_key))
+        accelerator_workers = min(worker_upper_bound, max(minimum_count, mix_floor))
+        if accelerator_workers > int(workers or 0):
+            workers = accelerator_workers
+            meta["accelerator_mix_floor"] = int(mix_floor)
+            meta["accelerator_mix_applied"] = True
+        else:
+            meta["accelerator_mix_floor"] = int(mix_floor)
+            meta["accelerator_mix_blocked_by_ceiling"] = True
+    meta["worker_ceiling"] = int(worker_ceiling_count)
+    meta["worker_upper_bound"] = int(worker_upper_bound)
+    if topology_limit > 0:
+        meta["worker_topology_limit"] = int(topology_limit)
+        meta["worker_topology"] = topology_meta
+        meta["worker_topology_applied"] = int(worker_upper_bound) < int(base_worker_upper_bound)
+    meta["reserve_cores"] = int(reserve_cores_count)
     meta["accelerators"] = accelerator_names
     meta["coordinator"] = "runtime_parallel_worker_plan"
     return workers, meta
@@ -197,6 +347,8 @@ class RuntimeResourceCoordinator:
         self._last_logged_at = 0.0
         self._last_system_cpu_percent = 0.0
         self._last_process_cpu_percent = 0.0
+        self._last_disk_usage_at = 0.0
+        self._last_disk_usage: dict[str, Any] = {"total_bytes": 0, "file_count": 0}
         self._psutil_process = None
         try:
             import psutil  # type: ignore
@@ -214,22 +366,26 @@ class RuntimeResourceCoordinator:
         return dict(self._latest or {})
 
     def poll(self, *, window=None) -> dict[str, Any]:
+        now = time.time()
         resource = current_resource_snapshot()
         rss_bytes = process_rss_bytes()
-        disk_usage = runtime_disk_cache_usage()
+        if not self._last_disk_usage or (now - self._last_disk_usage_at) >= 60.0:
+            self._last_disk_usage = runtime_disk_cache_usage()
+            self._last_disk_usage_at = now
+        disk_usage = dict(self._last_disk_usage or {})
         accelerators = runtime_acceleration_snapshot(self.settings)
         system_cpu = self._sample_system_cpu_percent()
         process_cpu = self._sample_process_cpu_percent()
         active = self._active_runtime_labels(window)
         stage = self._pressure_stage(resource, rss_bytes)
         snapshot = {
-            "timestamp": round(time.time(), 3),
+            "timestamp": round(now, 3),
             "profile": performance_profile(self.settings),
             "exit_mode": bool(self._exit_mode),
             "system_cpu_percent": round(system_cpu, 2),
             "process_cpu_percent": round(process_cpu, 2),
-            "logical_cores": int(resource.get("logical_cores", hardware_profile().get("logical_cores", 1)) or 1),
-            "physical_cores": int(resource.get("physical_cores", hardware_profile().get("physical_cores", 1)) or 1),
+            "logical_cores": int(resource.get("logical_cores", 1) or 1),
+            "physical_cores": int(resource.get("physical_cores", 1) or 1),
             "native_thread_budget": int(native_thread_budget(self.settings)),
             "rss_bytes": int(rss_bytes),
             "rss_gb": round(rss_bytes / float(1024 ** 3), 4),
@@ -253,28 +409,31 @@ class RuntimeResourceCoordinator:
         data = dict(snapshot or self._latest or {})
         if not data:
             return ""
-        stage = str(data.get("pressure_stage", "normal") or "normal")
-        color = {"normal": "#34C759", "warning": "#FFD60A", "critical": "#FF453A"}.get(stage, "#34C759")
         active = ", ".join(str(item) for item in list(data.get("active_labels", []) or [])[:3]) or "idle"
-        accel = str(dict(data.get("accelerators") or {}).get("summary") or "CPU")
         return (
             "<div style='margin-top:6px; padding-top:5px; border-top:1px solid #22313A;'>"
-            f"<div style='color:{color}; font-size:8px; font-weight:700;'>RUNTIME · {str(data.get('profile', 'balanced')).upper()}</div>"
             f"<div style='color:#DCE7F3; font-size:8px;'>CPU {float(data.get('system_cpu_percent', 0.0)):.0f}% · "
             f"PROC {float(data.get('process_cpu_percent', 0.0)):.0f}% · "
             f"RAM {float(data.get('rss_gb', 0.0)):.2f}GB</div>"
-            f"<div style='color:#9DB7C8; font-size:8px;'>FREE {float(data.get('free_memory_gb', 0.0)):.2f}GB · "
-            f"CACHE {float(data.get('disk_cache_gb', 0.0)):.2f}GB · THR {int(data.get('native_thread_budget', 0) or 0)} · ACCEL {accel}</div>"
             f"<div style='color:#9DB7C8; font-size:8px;'>ACTIVE {active}</div>"
             "</div>"
         )
+
+    def status_color(self, snapshot: dict[str, Any] | None = None) -> str:
+        data = dict(snapshot or self._latest or {})
+        stage = str(data.get("pressure_stage", "normal") or "normal")
+        return {
+            "normal": "#34C759",
+            "warning": "#FFD60A",
+            "critical": "#FF453A",
+            "exit": "#FF9500",
+        }.get(stage, "#34C759")
 
     def status_plain(self, snapshot: dict[str, Any] | None = None) -> str:
         data = dict(snapshot or self._latest or {})
         if not data:
             return ""
         active = ", ".join(str(item) for item in list(data.get("active_labels", []) or [])[:4]) or "idle"
-        accel = str(dict(data.get("accelerators") or {}).get("summary") or "CPU")
         return (
             f"runtime={data.get('profile', 'balanced')} "
             f"cpu={float(data.get('system_cpu_percent', 0.0)):.0f}% "
@@ -282,7 +441,6 @@ class RuntimeResourceCoordinator:
             f"ram={float(data.get('rss_gb', 0.0)):.2f}GB "
             f"free={float(data.get('free_memory_gb', 0.0)):.2f}GB "
             f"cache={float(data.get('disk_cache_gb', 0.0)):.2f}GB "
-            f"accel={accel} "
             f"active={active}"
         )
 

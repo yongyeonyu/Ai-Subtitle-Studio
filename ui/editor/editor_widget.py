@@ -239,7 +239,7 @@ class EditorWidget(
         self._last_segment_cache_block_count = 0
         self._playhead_timer = QTimer()
         self._playhead_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._playhead_timer.setInterval(33)
+        self._playhead_timer.setInterval(self._playhead_active_interval_ms())
         self._playhead_timer.timeout.connect(self._sync_playhead)
         self._playhead_timer.start()
 
@@ -331,14 +331,16 @@ class EditorWidget(
         current_block_count = int(doc.blockCount()) if doc is not None else 0
         previous_block_count = int(getattr(self, "_last_segment_cache_block_count", current_block_count) or current_block_count)
         text_only_cache_refresh = False
+        text_changed = False
+        edited_line_num = -1
         if current_block_count == previous_block_count and getattr(self, "_cached_segs", None):
             try:
                 block = self.text_edit.textCursor().block()
                 data = block.userData()
                 if block.isValid() and isinstance(data, SubtitleBlockData):
-                    self._update_subtitle_memory_line_text(block.blockNumber(), block.text())
-                    self._segment_cache_valid = True
-                    text_only_cache_refresh = True
+                    edited_line_num = int(block.blockNumber())
+                    text_changed = bool(self._update_subtitle_memory_line_text(edited_line_num, block.text()))
+                    text_only_cache_refresh = bool(getattr(self, "_segment_cache_valid", False))
                 else:
                     self._segment_cache_valid = False
             except Exception:
@@ -346,13 +348,28 @@ class EditorWidget(
         else:
             self._segment_cache_valid = False
         self._last_segment_cache_block_count = current_block_count
-        if hasattr(self, "_has_unsaved_changes") and not self._has_unsaved_changes():
+        if text_only_cache_refresh and not text_changed:
+            try:
+                if getattr(self.sm, "is_dirty", False) and hasattr(self, "_has_unsaved_changes") and not self._has_unsaved_changes():
+                    if hasattr(self, "_mark_save_completed"):
+                        self._mark_save_completed(touch_saved_time=False)
+                return
+            except Exception:
+                return
+        if not text_only_cache_refresh and hasattr(self, "_has_unsaved_changes") and not self._has_unsaved_changes():
             if getattr(self.sm, "is_dirty", False) and hasattr(self, "_mark_save_completed"):
                 self._mark_save_completed(touch_saved_time=False)
             return
         self.sm.start_editing()
+        if hasattr(self, "_note_editor_foreground_activity"):
+            self._note_editor_foreground_activity()
         if text_only_cache_refresh:
-            self._schedule_video_context_refresh()
+            if text_changed and edited_line_num >= 0 and hasattr(self, "_update_timeline_segment_text_line"):
+                self._update_timeline_segment_text_line(edited_line_num, self.text_edit.textCursor().block().text())
+            if bool(getattr(self, "_subtitle_text_visibility_changed", False)):
+                self._schedule_timeline()
+            else:
+                self._schedule_video_context_refresh(32)
         else:
             self._schedule_timeline()
 
@@ -669,7 +686,7 @@ class EditorWidget(
                     if int(seg.get("line", -999999)) == int(line_num):
                         seg["text"] = visible_text
                         break
-        self._refresh_video_subtitle_context()
+        self._schedule_video_context_refresh(24)
 
     def _on_lock_changed(self, locked: bool):
         self._apply_text_editor_lock_state()

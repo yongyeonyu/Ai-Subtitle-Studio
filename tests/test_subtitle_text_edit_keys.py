@@ -92,11 +92,43 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
             edit.deleteLater()
             self.app.processEvents()
 
+    def test_quality_map_can_rehighlight_visible_blocks_only(self):
+        edit = SubtitleTextEdit()
+        try:
+            edit.setPlainText("\n".join(f"line {idx}" for idx in range(20)))
+            highlighter = SubtitleHighlighter(edit.document())
+            with patch.object(highlighter, "rehighlight") as rehighlight, \
+                 patch.object(highlighter, "rehighlightBlock", wraps=highlighter.rehighlightBlock) as rehighlight_block:
+                highlighter.set_quality_map(
+                    {5: {"confidence_label": "red"}, 6: {"confidence_label": "green"}},
+                    visible_lines=range(4, 8),
+                )
+
+            rehighlight.assert_not_called()
+            self.assertGreaterEqual(rehighlight_block.call_count, 2)
+            self.assertEqual(set(highlighter.quality_by_line), {5, 6})
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
     def test_quick_layer_marks_qml_segment_overlay_active(self):
         edit = SubtitleTextEdit()
         try:
             edit._quick_layer = object()
             self.assertTrue(edit._quick_layer_overlay_text_active())
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
+    def test_qml_text_overlay_is_opt_in_even_when_scenegraph_is_available(self):
+        with patch.dict(os.environ, {"AI_SUBTITLE_EDITOR_TEXT_QML": ""}, clear=False), \
+             patch("ui.editor.subtitle_text_edit.scenegraph_enabled", return_value=True):
+            edit = SubtitleTextEdit()
+        try:
+            self.assertIsNone(edit._quick_layer)
+            self.assertFalse(edit._quick_layer_overlay_text_active())
         finally:
             edit.close()
             edit.deleteLater()

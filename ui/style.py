@@ -100,7 +100,8 @@ def button_style(kind="toolbar", *, font_size=None, padding=None):
             f"padding: {padding}; font-size: {_px(font_size)}; font-weight: bold; "
             "border-radius: 7px; min-height: 34px; min-width: 72px; "
             "} "
-            f"QPushButton:hover {{ background: {COLORS['primary_hover']}; }}"
+            f"QPushButton:hover {{ background: {COLORS['primary_hover']}; }} "
+            "QPushButton:pressed { background: #0057B8; border: 1px solid #74A9FF; padding-top: 10px; padding-bottom: 8px; }"
         )
 
     if kind == "danger":
@@ -112,7 +113,8 @@ def button_style(kind="toolbar", *, font_size=None, padding=None):
             f"padding: {padding}; font-size: {_px(font_size)}; font-weight: bold; "
             "border-radius: 7px; min-height: 28px; min-width: 64px; "
             "} "
-            "QPushButton:hover { background: #D70015; }"
+            "QPushButton:hover { background: #D70015; } "
+            "QPushButton:pressed { background: #B80012; border: 1px solid #FF9AA2; padding-top: 7px; padding-bottom: 5px; }"
         )
 
     font_size = font_size or "11px"
@@ -123,7 +125,8 @@ def button_style(kind="toolbar", *, font_size=None, padding=None):
         f"padding: {padding}; font-size: {_px(font_size)}; border-radius: 7px; "
         "min-height: 28px; min-width: 64px; "
         "} "
-        f"QPushButton:hover {{ background: {COLORS['control_hover']}; }}"
+        f"QPushButton:hover {{ background: {COLORS['control_hover']}; }} "
+        f"QPushButton:pressed {{ background: #182026; border-color: {COLORS['primary']}; padding-top: 7px; padding-bottom: 5px; }}"
     )
 
 
@@ -152,6 +155,7 @@ def settings_button_style(kind="toolbar", *, font_size="12px", min_width=72, min
         f"min-width: {_px(min_width)}; "
         "} "
         f"QPushButton:hover {{ background: {hover}; border-color: #465663; }} "
+        "QPushButton:pressed { background: #182026; border-color: #74A9FF; padding-top: 1px; padding-bottom: 0; } "
         "QPushButton:disabled { color: #6F767D; background: #151A1E; border-color: #222A31; }"
     )
 
@@ -178,6 +182,7 @@ def tool_button_style(kind="toolbar", *, checked=False, padding: str = "6px 8px"
         f"border-radius: 7px; padding: {padding}; font-size: 11px; font-weight: 600; "
         "} "
         f"QToolButton:hover {{ background: {COLORS['control_hover']}; border-color: #465663; }} "
+        "QToolButton:pressed { background: #182026; border-color: #74A9FF; padding-top: 7px; padding-bottom: 5px; } "
         "QToolButton:disabled { color: #666C72; background: #151A1E; border-color: #222A31; }"
     )
 
@@ -229,7 +234,8 @@ def settings_dialog_stylesheet():
         f"QPushButton {{ background: {COLORS['control']}; color: {COLORS['text']}; "
         f"border: 1px solid {COLORS['separator']}; border-radius: 7px; "
         "padding: 6px 10px; font-weight: 700; min-height: 28px; min-width: 64px; }"
-        f"QPushButton:hover {{ background: {COLORS['control_hover']}; border-color: #465663; }}"
+        f"QPushButton:hover {{ background: {COLORS['control_hover']}; border-color: #465663; }} "
+        "QPushButton:pressed { background: #182026; border-color: #74A9FF; padding-top: 7px; padding-bottom: 5px; }"
         f"QPushButton:checked {{ background: #1F3A56; border-color: {COLORS['primary']}; color: #D7EBFF; }}"
         "QPushButton:disabled { color: #6F767D; background: #151A1E; border-color: #222A31; }"
         f"QCheckBox {{ color: {COLORS['text']}; background: transparent; spacing: 8px; }}"

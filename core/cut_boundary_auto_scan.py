@@ -6,12 +6,133 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 
 from core.cut_boundary_audio import detect_audio_gain_boundary_rows
 from core.performance import (
     balanced_task_slices,
 )
 from core.runtime.multi_process import runtime_parallel_worker_plan
+
+
+_TRUE_VALUES = {"1", "true", "yes", "on", "enabled", "enable"}
+_FALSE_VALUES = {"0", "false", "no", "off", "disabled", "disable", "끄기", "끔"}
+
+
+def _setting_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if not text:
+        return bool(default)
+    if text in _TRUE_VALUES:
+        return True
+    if text in _FALSE_VALUES:
+        return False
+    return bool(default)
+
+
+def _setting_int(value, default: int) -> int:
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
+    return parsed
+
+
+def _setting_float(value, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def high_cost_visual_scan_skip_meta(
+    filepath,
+    *,
+    width: float,
+    height: float,
+    duration_sec: float,
+    settings: dict | None = None,
+) -> dict:
+    data = dict(settings or {})
+    if not _setting_bool(data.get("scan_cut_high_cost_visual_skip_enabled"), True):
+        return {"skip": False, "reason": "disabled"}
+    pixels = max(0.0, float(width or 0.0)) * max(0.0, float(height or 0.0))
+    duration = max(0.0, float(duration_sec or 0.0))
+    try:
+        size_bytes = float(getattr(filepath, "stat", lambda: None)().st_size)  # type: ignore[union-attr]
+    except Exception:
+        try:
+            import os
+
+            size_bytes = float(os.path.getsize(str(filepath)))
+        except Exception:
+            size_bytes = 0.0
+    bitrate = (size_bytes * 8.0 / duration) if duration > 0.0 else 0.0
+    min_pixels = max(1.0, _setting_float(data.get("scan_cut_high_cost_min_pixels"), 8_000_000.0))
+    min_bitrate = max(1.0, _setting_float(data.get("scan_cut_high_cost_min_bitrate"), 80_000_000.0))
+    skip = pixels >= min_pixels and bitrate >= min_bitrate
+    return {
+        "skip": bool(skip),
+        "reason": "high_cost_4k_hevc_like_media" if skip else "below_threshold",
+        "pixels": int(pixels),
+        "bitrate": int(bitrate),
+        "min_pixels": int(min_pixels),
+        "min_bitrate": int(min_bitrate),
+    }
+
+
+def configure_cut_boundary_cv2_threads(cv2_mod, settings: dict | None = None) -> dict:
+    """Keep OpenCV from multiplying threads inside Python worker pools."""
+    data = dict(settings or {})
+    threads = _setting_int(data.get("scan_cut_cv2_threads_per_worker"), 0)
+    meta = {"requested_threads": threads, "applied": False}
+    if threads <= 0:
+        meta["reason"] = "opencv_auto"
+        return meta
+    threads = max(1, min(8, threads))
+    meta["requested_threads"] = threads
+    try:
+        get_threads = getattr(cv2_mod, "getNumThreads", None)
+        if callable(get_threads):
+            meta["previous_threads"] = int(get_threads() or 0)
+    except Exception:
+        pass
+    try:
+        set_threads = getattr(cv2_mod, "setNumThreads", None)
+        if callable(set_threads):
+            set_threads(threads)
+            meta["applied"] = True
+    except Exception:
+        meta["applied"] = False
+    return meta
+
+
+def cut_follower_verify_backend(
+    settings: dict | None = None,
+    *,
+    platform_name: str | None = None,
+    mps_available=None,
+) -> str:
+    """Choose the strict cut-boundary verifier backend.
+
+    The verifier compares many tiny grid thumbnails. On Apple Silicon, moving
+    those tiny tensors to MPS per candidate is far slower than OpenCV/NumPy on
+    CPU, so MPS stays opt-in for this micro-kernel.
+    """
+    data = dict(settings or {})
+    if not _setting_bool(data.get("scan_cut_follower_mps_enabled"), False):
+        return "cpu"
+    if str(platform_name or sys.platform).strip().lower() != "darwin":
+        return "cpu"
+    try:
+        available = mps_available() if callable(mps_available) else bool(mps_available)
+    except Exception:
+        available = False
+    return "mps" if available else "cpu"
 
 
 def build_auto_grid_scan_helpers(deps: dict):
@@ -44,14 +165,18 @@ def build_auto_grid_scan_helpers(deps: dict):
         sample_mask: str | None = None,
         **kwargs,
     ):
-        settings = dict(kwargs.get("settings") or {})
-        try:
-            from core.settings import load_settings
-            loaded = dict(load_settings() or {})
-            loaded.update(settings)
-            settings = loaded
-        except Exception:
-            pass
+        settings = dict(kwargs.pop("settings", {}) or {})
+        settings_preloaded = bool(kwargs.pop("settings_preloaded", False))
+        if not settings_preloaded:
+            try:
+                from core.settings import load_settings
+                loaded = dict(load_settings() or {})
+                loaded.update(settings)
+                settings = loaded
+            except Exception:
+                pass
+        fallback_kwargs = dict(kwargs)
+        fallback_kwargs["settings"] = settings
 
         if not bool(settings.get("scan_cut_auto_strict_color_avg_enabled", True)):
             return _auto_grid_v3_original_detect_media_cut_boundaries(
@@ -65,7 +190,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                 scan_profile=scan_profile,
                 sample_positions=sample_positions,
                 sample_mask=sample_mask,
-                **kwargs,
+                **fallback_kwargs,
             )
 
         try:
@@ -82,11 +207,16 @@ def build_auto_grid_scan_helpers(deps: dict):
                 scan_profile=scan_profile,
                 sample_positions=sample_positions,
                 sample_mask=sample_mask,
-                **kwargs,
+                **fallback_kwargs,
             )
 
+        configure_cut_boundary_cv2_threads(cv2, settings)
         cap = cv2.VideoCapture(str(filepath))
         if not cap.isOpened():
+            try:
+                cap.release()
+            except Exception:
+                pass
             return _auto_grid_v3_original_detect_media_cut_boundaries(
                 filepath,
                 clip_offset=clip_offset,
@@ -98,7 +228,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                 scan_profile=scan_profile,
                 sample_positions=sample_positions,
                 sample_mask=sample_mask,
-                **kwargs,
+                **fallback_kwargs,
             )
 
         verified_rows = []
@@ -130,6 +260,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                 minimum=1,
                 maximum=follower_workload,
                 reserve_task="cut_follower",
+                accelerators=["cpu"],
             )
 
             def verified_progress_callback(payload):
@@ -143,16 +274,6 @@ def build_auto_grid_scan_helpers(deps: dict):
                     progress_callback(fixed)
                 except Exception:
                     pass
-
-            def row_raw_score(row):
-                for key in ("score", "delta", "window_score"):
-                    try:
-                        value = row.get(key)
-                        if value is not None:
-                            return float(value)
-                    except Exception:
-                        pass
-                return 0.0
 
             def verify_row(row):
                 if not isinstance(row, dict):
@@ -171,25 +292,33 @@ def build_auto_grid_scan_helpers(deps: dict):
 
                 coarse_frame = max(0, int(round(local_sec * fps)))
 
-                verify_cap = cv2.VideoCapture(str(filepath))
-                if not verify_cap.isOpened():
-                    return None
-                try:
-                    verified = _auto_grid_v3_manual_verify_strict(
-                        verify_cap,
-                        cv2,
-                        fps=fps,
-                        frame_count=frame_count,
-                        coarse_frame=coarse_frame,
-                        settings=settings,
-                        scan_profile=scan_profile,
-                        sample_positions=sample_positions,
-                    )
-                finally:
+                thread_state = getattr(verify_row, "_thread_state", None)
+                if thread_state is None:
+                    import threading
+
+                    thread_state = threading.local()
+                    verify_row._thread_state = thread_state
+                    verify_row._caps = []
+                verify_cap = getattr(thread_state, "cap", None)
+                if verify_cap is None or not verify_cap.isOpened():
+                    verify_cap = cv2.VideoCapture(str(filepath))
+                    thread_state.cap = verify_cap
                     try:
-                        verify_cap.release()
+                        verify_row._caps.append(verify_cap)
                     except Exception:
                         pass
+                if not verify_cap.isOpened():
+                    return None
+                verified = _auto_grid_v3_manual_verify_strict(
+                    verify_cap,
+                    cv2,
+                    fps=fps,
+                    frame_count=frame_count,
+                    coarse_frame=coarse_frame,
+                    settings=settings,
+                    scan_profile=scan_profile,
+                    sample_positions=sample_positions,
+                )
 
                 if not verified or not verified.get("passed"):
                     return None
@@ -237,6 +366,17 @@ def build_auto_grid_scan_helpers(deps: dict):
             with ThreadPoolExecutor(max_workers=follower_workers, thread_name_prefix="cut-boundary-follower") as executor:
                 future_map = {}
 
+                def _release_verify_caps():
+                    for verify_cap in list(getattr(verify_row, "_caps", []) or []):
+                        try:
+                            verify_cap.release()
+                        except Exception:
+                            pass
+                    try:
+                        verify_row._caps = []
+                    except Exception:
+                        pass
+
                 def _drain_completed():
                     completed = []
                     for future, provisional in list(future_map.items()):
@@ -261,6 +401,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                                 found_callback(dict(fixed), list(verified_rows))
                             except Exception:
                                 pass
+                    return len(completed)
 
                 def _submit_provisional(row):
                     provisional = dict(row) if isinstance(row, dict) else {}
@@ -275,26 +416,30 @@ def build_auto_grid_scan_helpers(deps: dict):
                     saw_callback = True
                     _submit_provisional(row)
 
-                raw_rows = _auto_grid_v3_original_detect_media_cut_boundaries(
-                    filepath,
-                    clip_offset=clip_offset,
-                    clip_idx=clip_idx,
-                    sample_step_sec=pioneer_step_sec,
-                    threshold=threshold,
-                    progress_callback=verified_progress_callback,
-                    found_callback=verified_found_callback,
-                    scan_profile=scan_profile,
-                    sample_positions=sample_positions,
-                    sample_mask=sample_mask,
-                    **kwargs,
-                )
+                try:
+                    raw_rows = _auto_grid_v3_original_detect_media_cut_boundaries(
+                        filepath,
+                        clip_offset=clip_offset,
+                        clip_idx=clip_idx,
+                        sample_step_sec=pioneer_step_sec,
+                        threshold=threshold,
+                        progress_callback=verified_progress_callback,
+                        found_callback=verified_found_callback,
+                        scan_profile=scan_profile,
+                        sample_positions=sample_positions,
+                        sample_mask=sample_mask,
+                        **fallback_kwargs,
+                    )
 
-                if not saw_callback:
-                    for row in raw_rows or []:
-                        _submit_provisional(row)
+                    if not saw_callback:
+                        for row in raw_rows or []:
+                            _submit_provisional(row)
 
-                while future_map:
-                    _drain_completed()
+                    while future_map:
+                        if not _drain_completed():
+                            time.sleep(0.002)
+                finally:
+                    _release_verify_caps()
 
             return normalize_cut_boundaries(verified_rows, primary_fps=fps)
 
@@ -320,14 +465,18 @@ def build_auto_grid_scan_helpers(deps: dict):
         **kwargs,
     ):
         completion_callback = kwargs.pop("completion_callback", None)
-        settings = dict(kwargs.get("settings") or {})
-        try:
-            from core.settings import load_settings
-            loaded = dict(load_settings() or {})
-            loaded.update(settings)
-            settings = loaded
-        except Exception:
-            pass
+        settings = dict(kwargs.pop("settings", {}) or {})
+        settings_preloaded = bool(kwargs.pop("settings_preloaded", False))
+        if not settings_preloaded:
+            try:
+                from core.settings import load_settings
+                loaded = dict(load_settings() or {})
+                loaded.update(settings)
+                settings = loaded
+            except Exception:
+                pass
+        fallback_kwargs = dict(kwargs)
+        fallback_kwargs["settings"] = settings
 
         try:
             import cv2
@@ -344,16 +493,23 @@ def build_auto_grid_scan_helpers(deps: dict):
                 scan_profile=scan_profile,
                 sample_positions=sample_positions,
                 sample_mask=sample_mask,
-                **kwargs,
+                **fallback_kwargs,
             )
             return normalize_cut_boundaries(rows or [])
 
+        configure_cut_boundary_cv2_threads(cv2, settings)
         cap = cv2.VideoCapture(str(filepath))
         if not cap.isOpened():
+            try:
+                cap.release()
+            except Exception:
+                pass
             return []
         try:
             fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            frame_width = float(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0.0)
+            frame_height = float(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0.0)
         finally:
             try:
                 cap.release()
@@ -384,6 +540,7 @@ def build_auto_grid_scan_helpers(deps: dict):
             minimum=1,
             maximum=pioneer_workload,
             reserve_task="cut_pioneer",
+            accelerators=["cpu"],
         )
         gpu_refine_enabled = bool(settings.get("scan_cut_pioneer_gpu_refine_enabled", True))
         cuda_available = _cb_cuda_available() if gpu_refine_enabled else False
@@ -411,6 +568,7 @@ def build_auto_grid_scan_helpers(deps: dict):
         audio_gain_context_windows = max(1, _settings_int("scan_cut_audio_gain_context_windows", 2))
         audio_gain_timeout_sec = max(1.0, _settings_float("scan_cut_audio_gain_timeout_sec", 45.0))
         audio_gain_max_candidates = max(1, _settings_int("scan_cut_audio_gain_max_candidates", 240))
+        progress_sample_stride = max(1, _settings_int("scan_cut_progress_sample_stride", 4))
 
         def _scan_audio_gain_rows():
             if not audio_gain_enabled:
@@ -443,27 +601,67 @@ def build_auto_grid_scan_helpers(deps: dict):
                 except Exception:
                     pass
 
+        high_cost_skip = high_cost_visual_scan_skip_meta(
+            filepath,
+            width=frame_width,
+            height=frame_height,
+            duration_sec=duration,
+            settings=settings,
+        )
+        if bool(high_cost_skip.get("skip")):
+            audio_rows = list(_scan_audio_gain_rows() or [])
+            _emit_audio_gain_rows(audio_rows)
+            normalized = normalize_cut_boundaries(audio_rows, primary_fps=fps)
+            payload = {
+                "clip_idx": int(clip_idx or 0),
+                "percent": 100,
+                "timestamp": float(duration or 0.0),
+                "duration": float(duration or 0.0),
+                "detected": len(normalized),
+                "done": True,
+                "visual_scan_skipped": True,
+                "skip_meta": high_cost_skip,
+                "scheduler": pioneer_scheduler,
+            }
+            if callable(progress_callback):
+                try:
+                    progress_callback(dict(payload))
+                except Exception:
+                    pass
+            if callable(completion_callback):
+                try:
+                    completion_callback(dict(payload))
+                except Exception:
+                    pass
+            return normalized
+
         def _scan_range(worker_idx: int, start_frame: int, end_frame: int):
             worker_cap = cv2.VideoCapture(str(filepath))
             if not worker_cap.isOpened():
+                try:
+                    worker_cap.release()
+                except Exception:
+                    pass
                 return []
             rows_local = []
             prev_gray = None
             last_emit_t = -999999.0
             try:
                 frame_no = int(start_frame)
+                sample_idx = 0
                 while frame_no < end_frame:
                     worker_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
                     ok, frame = worker_cap.read()
                     if not ok or frame is None:
                         frame_no += step_frames
+                        sample_idx += 1
                         continue
                     frame = _auto_downscale_frame_for_compare(frame, cv2, settings=settings)
                     t = frame_no / fps
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                     if worker_idx == 0 and callable(progress_callback):
                         pass
-                    if callable(progress_callback):
+                    if callable(progress_callback) and (sample_idx == 0 or sample_idx % progress_sample_stride == 0):
                         try:
                             local_total = max(1, int(end_frame - start_frame))
                             local_done = max(0, int(frame_no - start_frame))
@@ -518,6 +716,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                                     pass
                     prev_gray = gray
                     frame_no += step_frames
+                    sample_idx += 1
             finally:
                 try:
                     worker_cap.release()
@@ -554,6 +753,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                             "duration": float(duration or 0.0),
                             "detected": len(normalized),
                             "done": True,
+                            "scheduler": pioneer_scheduler,
                         }
                     )
                 except Exception:
@@ -608,6 +808,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                                 "duration": float(duration or 0.0),
                                 "detected": len(merged),
                                 "done": bool(completed_workers >= len(worker_ranges)),
+                                "scheduler": pioneer_scheduler,
                             }
                         )
                     except Exception:
@@ -651,34 +852,72 @@ def build_auto_grid_scan_helpers(deps: dict):
     ):
         provisional_callback = kwargs.pop("provisional_callback", None)
         settings = dict(settings or {})
-        try:
-            from core.settings import load_settings
-            loaded = dict(load_settings() or {})
-            loaded.update(settings)
-            settings = loaded
-        except Exception:
-            pass
+        settings_preloaded = bool(kwargs.pop("settings_preloaded", False))
+        if not settings_preloaded:
+            try:
+                from core.settings import load_settings
+                loaded = dict(load_settings() or {})
+                loaded.update(settings)
+                settings = loaded
+            except Exception:
+                pass
 
         try:
             import cv2
         except Exception:
             return normalize_cut_boundaries(provisional_rows or [])
 
+        configure_cut_boundary_cv2_threads(cv2, settings)
         cap = cv2.VideoCapture(str(filepath))
         if not cap.isOpened():
+            try:
+                cap.release()
+            except Exception:
+                pass
             return normalize_cut_boundaries(provisional_rows or [])
         try:
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
             fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            frame_width = float(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0.0)
+            frame_height = float(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0.0)
             if fps <= 1.0:
                 fps = 30.0
             fps = normalize_fps(fps)
+            duration = frame_count / fps if fps > 0.0 else 0.0
+            high_cost_skip = high_cost_visual_scan_skip_meta(
+                filepath,
+                width=frame_width,
+                height=frame_height,
+                duration_sec=duration,
+                settings=settings,
+            )
+            if bool(high_cost_skip.get("skip")):
+                rows = []
+                for row in list(provisional_rows or []):
+                    if not isinstance(row, dict):
+                        continue
+                    fixed = dict(row)
+                    fixed["visual_verify_skipped"] = True
+                    fixed["verify_backend"] = "audio_gain_only_high_cost_skip"
+                    fixed["skip_meta"] = dict(high_cost_skip)
+                    rows.append(fixed)
+                    if callable(found_callback):
+                        try:
+                            found_callback(dict(fixed), list(rows))
+                        except Exception:
+                            pass
+                return normalize_cut_boundaries(rows, primary_fps=fps)
             min_gap_sec = float(settings.get("scan_cut_auto_min_gap_sec", 8.0))
             min_gap_frames = max(1, int(round(min_gap_sec * fps)))
             follower_requested = int(settings.get("scan_cut_verify_workers", 4) or 4)
             follower_workload = max(1, len(provisional_rows or []))
+            follower_backend = cut_follower_verify_backend(
+                settings,
+                platform_name=sys.platform,
+                mps_available=_mps_available,
+            )
             follower_workers, follower_scheduler = runtime_parallel_worker_plan(
                 settings=settings,
                 task="cut_follower",
@@ -687,11 +926,11 @@ def build_auto_grid_scan_helpers(deps: dict):
                 minimum=1,
                 maximum=follower_workload,
                 reserve_task="cut_follower",
+                accelerators=[follower_backend],
             )
-            follower_backend = "mps" if sys.platform == "darwin" and _mps_available() else "cpu"
             verified_rows = []
 
-            def _verify_row(row):
+            def _verify_row(row, verify_cap=None):
                 if not isinstance(row, dict):
                     return None
                 try:
@@ -704,13 +943,21 @@ def build_auto_grid_scan_helpers(deps: dict):
                     except Exception:
                         local_sec = 0.0
                 coarse_frame = max(0, int(round(local_sec * fps)))
-                verify_cap = cv2.VideoCapture(str(filepath))
-                if not verify_cap.isOpened():
+                owns_cap = verify_cap is None
+                local_cap = verify_cap if verify_cap is not None else cv2.VideoCapture(str(filepath))
+                if local_cap is None:
+                    return None
+                if not local_cap.isOpened():
+                    if owns_cap:
+                        try:
+                            local_cap.release()
+                        except Exception:
+                            pass
                     return None
                 try:
                     if follower_backend == "mps":
                         verified = _auto_grid_v3_manual_verify_strict_mps(
-                            verify_cap,
+                            local_cap,
                             cv2,
                             fps=fps,
                             frame_count=frame_count,
@@ -721,7 +968,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                         )
                     else:
                         verified = _auto_grid_v3_manual_verify_strict(
-                            verify_cap,
+                            local_cap,
                             cv2,
                             fps=fps,
                             frame_count=frame_count,
@@ -731,10 +978,11 @@ def build_auto_grid_scan_helpers(deps: dict):
                             sample_positions=sample_positions,
                         )
                 finally:
-                    try:
-                        verify_cap.release()
-                    except Exception:
-                        pass
+                    if owns_cap:
+                        try:
+                            local_cap.release()
+                        except Exception:
+                            pass
                 if not verified or not verified.get("passed"):
                     if isinstance(verified, dict) and verified.get("rollback_relocated") and verified.get("provisional_frame") is not None:
                         provisional_frame = int(verified.get("provisional_frame") or coarse_frame)
@@ -850,12 +1098,21 @@ def build_auto_grid_scan_helpers(deps: dict):
 
             def _verify_batch(start_idx: int, end_idx: int):
                 local_results = []
-                for row in verify_rows[start_idx:end_idx]:
+                verify_cap = cv2.VideoCapture(str(filepath))
+                try:
+                    if not verify_cap.isOpened():
+                        return [None for _ in verify_rows[start_idx:end_idx]]
+                    for row in verify_rows[start_idx:end_idx]:
+                        try:
+                            local_results.append(_verify_row(row, verify_cap=verify_cap))
+                        except Exception:
+                            local_results.append(None)
+                    return local_results
+                finally:
                     try:
-                        local_results.append(_verify_row(row))
+                        verify_cap.release()
                     except Exception:
-                        local_results.append(None)
-                return local_results
+                        pass
 
             with ThreadPoolExecutor(max_workers=max(1, len(batches)), thread_name_prefix="cut-boundary-follower") as executor:
                 future_map = {

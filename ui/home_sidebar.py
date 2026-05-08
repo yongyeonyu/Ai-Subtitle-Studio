@@ -657,12 +657,31 @@ class HomeSidebarMixin:
         label.setWordWrap(False)
         label.setMinimumHeight(22)
         from core.runtime.config import APP_VERSION
+        title_color = self._runtime_title_status_color()
         label.setText(
             f"<span style='color:{dot_color}; font-size:12px;'>●</span> "
-            f"<span style='color:#FFFFFF; font-size:13px; font-weight:700;'>AI Subtitle Studio</span> "
+            f"<span style='color:{title_color}; font-size:13px; font-weight:700;'>AI Subtitle Studio</span> "
             f"<span style='color:#D1D1D6; font-size:10px; font-weight:600;'>v{APP_VERSION}</span>"
         )
         label.setToolTip(tooltip)
+
+    def _runtime_title_status_color(self) -> str:
+        snapshot = dict(getattr(self, "_runtime_resource_snapshot", {}) or {})
+        if not snapshot:
+            return "#FFFFFF"
+        coordinator = getattr(self, "_runtime_resource_coordinator", None)
+        if coordinator is not None and hasattr(coordinator, "status_color"):
+            try:
+                return str(coordinator.status_color(snapshot) or "#FFFFFF")
+            except Exception:
+                pass
+        stage = str(snapshot.get("pressure_stage", "normal") or "normal")
+        return {
+            "normal": "#34C759",
+            "warning": "#FFD60A",
+            "critical": "#FF453A",
+            "exit": "#FF9500",
+        }.get(stage, "#34C759")
 
     def _format_engine_info_text(self, text: str) -> str:
         lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
@@ -1305,7 +1324,12 @@ class HomeSidebarMixin:
         snapshot = dict(getattr(self, "_runtime_resource_snapshot", {}) or {})
         if not snapshot:
             label.setTextFormat(Qt.TextFormat.RichText)
-            label.setText("<div style='color:#6E8594; font-size:8px;'>RUNTIME · initializing…</div>")
+            label.setText(
+                "<div style='margin-top:6px; padding-top:5px; border-top:1px solid #22313A;'>"
+                "<div style='color:#6E8594; font-size:8px;'>CPU -- · PROC -- · RAM --</div>"
+                "<div style='color:#9DB7C8; font-size:8px;'>ACTIVE idle</div>"
+                "</div>"
+            )
             label.setToolTip("런타임 모니터 대기 중")
             return
         coordinator = getattr(self, "_runtime_resource_coordinator", None)
@@ -1320,9 +1344,9 @@ class HomeSidebarMixin:
             active = ", ".join(str(item) for item in list(snapshot.get("active_labels", []) or [])[:3]) or "idle"
             html = (
                 "<div style='margin-top:6px; padding-top:5px; border-top:1px solid #22313A;'>"
-                f"<div style='color:#34C759; font-size:8px; font-weight:700;'>RUNTIME · {escape(str(snapshot.get('profile', 'balanced')).upper())}</div>"
                 f"<div style='color:#DCE7F3; font-size:8px;'>CPU {float(snapshot.get('system_cpu_percent', 0.0)):.0f}% · "
-                f"RAM {float(snapshot.get('rss_gb', 0.0)):.2f}GB · FREE {float(snapshot.get('free_memory_gb', 0.0)):.2f}GB</div>"
+                f"PROC {float(snapshot.get('process_cpu_percent', 0.0)):.0f}% · "
+                f"RAM {float(snapshot.get('rss_gb', 0.0)):.2f}GB</div>"
                 f"<div style='color:#9DB7C8; font-size:8px;'>ACTIVE {escape(active)}</div>"
                 "</div>"
             )

@@ -62,7 +62,13 @@ class EditorVideoControlsMixin:
         if is_multiclip and hasattr(self, '_build_local_segments_for_clip'):
             clip_idx = int(getattr(self.timeline.canvas, '_active_clip_idx', getattr(self.window(), '_active_clip_idx', 0)) or 0)
             segs = self._build_local_segments_for_clip(clip_idx, segs)
-        self.video_player.load(path, segs)
+        player_segs = segs
+        if hasattr(self, "_subtitle_context_window_from_segments"):
+            player_segs = self._subtitle_context_window_from_segments(
+                segs,
+                center_sec=self._subtitle_context_center_sec(local=bool(is_multiclip)) if hasattr(self, "_subtitle_context_center_sec") else None,
+            )
+        self.video_player.load(path, player_segs)
         if hasattr(self, "_position_video_expand_button"):
             QTimer.singleShot(400, self._position_video_expand_button)
             QTimer.singleShot(1200, self._position_video_expand_button)

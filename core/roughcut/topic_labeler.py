@@ -16,6 +16,42 @@ def _compact(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
+_TOPIC_PREFIX_RE = re.compile(
+    r"^(?:주제|중분류|중분류\s*주제|토픽|topic|title|제목|라벨|label)\s*[:：\-]\s*",
+    re.IGNORECASE,
+)
+_WEAK_TOPIC_WORDS = {
+    "내용",
+    "대화",
+    "상황",
+    "설명",
+    "영상",
+    "장면",
+    "부분",
+    "이야기",
+    "주제",
+    "일상",
+    "소개",
+    "정리",
+    "확인",
+    "리뷰",
+}
+
+_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("주행 보조 기능", ("크루즈", "차선", "유지", "보조", "반자율", "adas", "스마트"), "vehicle"),
+    ("주행 연비 평가", ("연비", "전비", "효율", "주유", "충전", "리터", "km"), "vehicle"),
+    ("승차감과 정숙성", ("승차감", "정숙", "소음", "진동", "서스", "노면", "방음"), "vehicle"),
+    ("가속 제동 성능", ("가속", "브레이크", "제동", "출력", "토크", "엔진", "모터"), "vehicle"),
+    ("실내 편의 사양", ("실내", "시트", "공간", "센터", "디스플레이", "인포", "수납", "편의"), "vehicle"),
+    ("외관 디자인 특징", ("외관", "외장", "디자인", "전면", "후면", "그릴", "램프", "휠"), "vehicle"),
+    ("차량 시승 평가", ("차량", "자동차", "시승", "운전", "주행", "핸들", "속도"), "vehicle"),
+    ("촬영 장비 세팅", ("카메라", "렌즈", "조명", "촬영", "노이즈", "마이크"), "media"),
+    ("편집 작업 흐름", ("편집", "컷", "타임라인", "자막", "렌더", "프리미어"), "media"),
+    ("상품 비교 평가", ("가격", "비교", "성능", "장점", "단점", "구매", "추천"), "review"),
+    ("캐릭터 장면 설명", ("캐릭터", "장난감", "놀이", "아이", "어린이", "티니핑"), "kids"),
+)
+
+
 def _major_id(segment: RoughCutSegment) -> str:
     return str(segment.major_id or segment.segment_id or "").strip()
 
@@ -46,10 +82,59 @@ def _subtitles_for_segment(segment: RoughCutSegment, subtitles: list[SubtitleSeg
 
 def _topic_from_subtitles(rows: list[SubtitleSegment], fallback: str = "") -> str:
     text = _compact(" ".join(row.text for row in rows if row.text))
+    hinted = _candidate_topic_hint(rows, fallback=fallback)
+    if hinted:
+        return hinted
     keywords = extract_keywords(text, top_k=4)
     if keywords:
-        return " / ".join(keywords[:3])[:42]
+        phrase = " ".join(keywords[:3])
+        if phrase:
+            return f"{phrase} 핵심 내용"[:42]
     return _compact(fallback)[:42]
+
+
+def _candidate_topic_hint(rows: list[SubtitleSegment], fallback: str = "") -> str:
+    text = _compact(" ".join(row.text for row in rows if row.text))
+    search = text.casefold()
+    fallback_text = _compact(fallback)
+
+    scored: list[tuple[int, int, str]] = []
+    broad_fallback: list[tuple[int, int, str]] = []
+    for order, (label, terms, domain) in enumerate(_CATEGORY_RULES):
+        hits = sum(1 for term in terms if term.casefold() in search)
+        if hits <= 0:
+            continue
+        domain_bonus = 0
+        if domain == "vehicle" and any(token in search for token in ("차", "차량", "자동차", "시승", "주행")):
+            domain_bonus = 2
+        elif domain == "media" and any(token in search for token in ("촬영", "영상", "편집", "카메라")):
+            domain_bonus = 1
+        target = broad_fallback if label in {"차량 시승 평가", "상품 비교 평가"} else scored
+        target.append((hits + domain_bonus, -order, label))
+    if scored:
+        scored.sort(reverse=True)
+        return scored[0][2]
+    if broad_fallback:
+        broad_fallback.sort(reverse=True)
+        return broad_fallback[0][2]
+
+    keywords = extract_keywords(text, top_k=5)
+    useful = [keyword for keyword in keywords if keyword not in _WEAK_TOPIC_WORDS]
+    if len(useful) >= 2:
+        return f"{useful[0]} {useful[1]} 핵심 흐름"[:42]
+    if useful:
+        return f"{useful[0]} 주요 내용"[:42]
+    return fallback_text[:42]
+
+
+def _representative_excerpt(rows: list[SubtitleSegment], *, max_rows: int = 3) -> str:
+    texts = [_compact(row.text) for row in rows if _compact(row.text)]
+    if not texts:
+        return ""
+    if len(texts) <= max_rows:
+        return " / ".join(texts)[:360]
+    middle = texts[len(texts) // 2]
+    return " / ".join([texts[0], middle, texts[-1]])[:360]
 
 
 def _looks_like_raw_subtitle_copy(topic: str, rows: list[SubtitleSegment]) -> bool:
@@ -68,10 +153,33 @@ def _looks_like_raw_subtitle_copy(topic: str, rows: list[SubtitleSegment]) -> bo
     return False
 
 
+def _is_weak_topic(topic: str, rows: list[SubtitleSegment]) -> bool:
+    text = _compact(topic)
+    if not text:
+        return True
+    if _looks_like_raw_subtitle_copy(text, rows):
+        return True
+    normalized = re.sub(r"[\s/·,._\-]+", "", text).casefold()
+    if normalized in {word.casefold() for word in _WEAK_TOPIC_WORDS}:
+        return True
+    tokens = extract_keywords(text, top_k=5)
+    if len(text) <= 3 or (len(tokens) <= 1 and len(text) <= 6):
+        return True
+    sentence_markers = ("합니다", "했습니다", "됩니다", "보겠습니다", "같습니다", "있습니다", "입니다")
+    if len(text) >= 18 and any(marker in text for marker in sentence_markers):
+        return True
+    if len(text) > 34 and len(tokens) >= 7:
+        return True
+    return False
+
+
 def _clean_topic(topic: Any) -> str:
     text = _compact(topic)
     text = text.strip("`'\"[](){} ")
+    text = _TOPIC_PREFIX_RE.sub("", text).strip()
     text = re.sub(r"^[\-•*#\d.\s]+", "", text).strip()
+    text = re.split(r"[\n\r]", text, maxsplit=1)[0].strip()
+    text = re.sub(r"\s*[.!?。！？]+$", "", text).strip()
     return text[:42]
 
 
@@ -107,6 +215,7 @@ def _topic_payload(segments: list[RoughCutSegment], subtitles: list[SubtitleSegm
             continue
         rows = _subtitles_for_segment(segment, subtitles)
         rows_by_major[major_id] = rows
+        text = _compact(" ".join(row.text for row in rows if row.text))
         major_rows.append(
             {
                 "major_id": major_id,
@@ -115,15 +224,21 @@ def _topic_payload(segments: list[RoughCutSegment], subtitles: list[SubtitleSegm
                 "start": round(float(segment.start), 3),
                 "end": round(float(segment.end), 3),
                 "subtitle_count": len(rows),
+                "topic_level": "middle_category",
+                "candidate_topic_hint": _candidate_topic_hint(rows, fallback=segment.title or segment.summary or ""),
+                "keywords": list(extract_keywords(text, top_k=8)),
+                "representative_excerpt": _representative_excerpt(rows),
                 "subtitle_rows": _subtitle_rows_payload(rows),
             }
         )
     return (
         {
             "task_instruction": (
-                "최종 확정된 각 중분류의 모든 subtitle_rows를 읽고, 첫 자막을 복사하지 말고 "
-                "해당 묶음 전체의 핵심 주제를 한국어 한 줄 topic으로 작성한다. "
-                "topic은 UI 중분류 라벨로 바로 표시되므로 12~24자 정도의 명사구가 좋다."
+                "최종 확정된 각 중분류의 모든 subtitle_rows를 읽고 중분류 주제(topic_level=middle_category)를 작성한다. "
+                "topic은 첫 자막/마지막 자막/말문을 복사한 문장이 아니라, 묶음 전체를 대표하는 10~22자 한국어 명사구여야 한다. "
+                "candidate_topic_hint와 keywords는 참고만 하되, 자막 전체 근거가 더 정확하면 더 구체적인 중분류 주제로 바꾼다. "
+                "금지: '내용', '대화', '상황', '설명', '영상', '리뷰'처럼 너무 넓은 단어만 쓰기. "
+                "좋은 예: '고속 주행 연비 평가', '주행 보조 기능 확인', '실내 편의 사양 점검', '외관 디자인 특징', '촬영 장비 세팅'."
             ),
             "major_segments": major_rows,
         },
@@ -144,7 +259,7 @@ def _topic_map_from_llm(data: dict[str, Any], rows_by_major: dict[str, list[Subt
             continue
         rows = rows_by_major.get(major_id, [])
         topic = _clean_topic(row.get("topic") or row.get("title"))
-        if _looks_like_raw_subtitle_copy(topic, rows):
+        if _is_weak_topic(topic, rows):
             topic = _topic_from_subtitles(rows, row.get("summary") or "")
         if not topic:
             continue

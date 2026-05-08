@@ -321,6 +321,8 @@ class MainWindow(
             self._runtime_resource_snapshot = coordinator.poll(window=self)
             if hasattr(self, "_refresh_sidebar_runtime_monitor"):
                 self._refresh_sidebar_runtime_monitor()
+            if hasattr(self, "_refresh_saved_status_label"):
+                self._refresh_saved_status_label(is_dirty=getattr(self, "_last_saved_status_dirty", None))
         except Exception:
             pass
 
@@ -1262,7 +1264,11 @@ class MainWindow(
         except Exception:
             self._restore_normal_cursor(self, target_editor)
         try:
-            self._release_ai_models_for_editor_mode(force=True, preserve_roughcut_status=True)
+            self._release_ai_models_for_editor_mode(
+                force=True,
+                preserve_roughcut_status=True,
+                ollama_timeout_sec=1.2,
+            )
         except Exception as exc:
             get_logger().log(f"⚠️ 생성 완료 직후 모델 즉시 종료 실패: {exc}")
         self._schedule_post_generation_gc(editor=target_editor)

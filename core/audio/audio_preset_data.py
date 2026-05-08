@@ -8,6 +8,9 @@ CURATED_AUDIO_PRESET_SPECS = {
     "실내-마이크유": {
         "base": "실내일반",
         "description": "실내 수음 + 외부 마이크 기준의 균형형 프리셋",
+        "overrides": {
+            "ff_chunk": 35,
+        },
     },
     "실내-마이크무": {
         "base": "브이로그실내",
@@ -82,6 +85,7 @@ DEFAULT_AUDIO_APPLY_DATA = {
     "w_length_penalty": 1.0,
     "io_workers": 6,
     "ff_threads": 0,
+    "ffmpeg_filter_threads": 8,
     "ff_ac": 1,
     "ff_ar": 16000,
     "ff_hp": 200,

@@ -383,7 +383,11 @@ class MainRuntimeCleanupMixin:
                 busy = True
             if not busy:
                 try:
-                    self._release_ai_models_for_editor_mode(force=True, preserve_roughcut_status=True)
+                    self._release_ai_models_for_editor_mode(
+                        force=True,
+                        preserve_roughcut_status=True,
+                        ollama_timeout_sec=1.2,
+                    )
                     actions.append("release_ai_models")
                 except Exception:
                     pass
@@ -842,7 +846,13 @@ class MainRuntimeCleanupMixin:
             pass
         return False
 
-    def _release_ai_models_for_editor_mode(self, *, force: bool = False, preserve_roughcut_status: bool = False):
+    def _release_ai_models_for_editor_mode(
+        self,
+        *,
+        force: bool = False,
+        preserve_roughcut_status: bool = False,
+        ollama_timeout_sec: float | None = None,
+    ):
         if getattr(self, "_editor_ai_release_in_progress", False):
             return
         editor = getattr(self, "_editor_widget", None)
@@ -859,6 +869,7 @@ class MainRuntimeCleanupMixin:
                     self._release_ai_models_for_editor_mode(
                         force=force,
                         preserve_roughcut_status=preserve_roughcut_status,
+                        ollama_timeout_sec=ollama_timeout_sec,
                     )
 
                 QTimer.singleShot(2200, _retry_release)
@@ -921,7 +932,11 @@ class MainRuntimeCleanupMixin:
                             models,
                             logger=get_logger(),
                             log_context="에디터 모드",
-                            timeout_sec=0.6,
+                            timeout_sec=(
+                                max(0.1, float(ollama_timeout_sec))
+                                if ollama_timeout_sec is not None
+                                else (1.2 if force else 0.6)
+                            ),
                         )
                         if shutdown_result.get("models") or int(shutdown_result.get("processes", 0) or 0) > 0:
                             stopped_runtime = True

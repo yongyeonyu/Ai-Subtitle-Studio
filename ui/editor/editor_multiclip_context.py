@@ -104,6 +104,9 @@ class EditorMulticlipContextMixin:
         clip_start = float(box.get("start", 0.0))
         local_seek = max(0.0, float(global_sec) - clip_start)
         local_segs = self._build_local_segments_for_clip(clip_idx)
+        player_segs = local_segs
+        if hasattr(self, "_subtitle_context_window_from_segments"):
+            player_segs = self._subtitle_context_window_from_segments(local_segs, center_sec=local_seek)
         fps = self._fps_for_media_path(clip_file)
         if hasattr(self, "_set_editor_frame_rate"):
             self._set_editor_frame_rate(fps)
@@ -113,7 +116,7 @@ class EditorMulticlipContextMixin:
 
         self.video_player.load_clip_context(
             clip_file,
-            local_segs,
+            player_segs,
             seek_sec=local_seek,
             autoplay=autoplay,
             show_thumbnail=show_thumbnail,
@@ -180,8 +183,11 @@ class EditorMulticlipContextMixin:
         if not clip_file:
             return
 
-        local_segments = list(ctx.get('local_segments', []) or [])
         local_sec = float(ctx.get('local_sec', 0.0) or 0.0)
+        local_segments = list(ctx.get('local_segments', []) or [])
+        player_segments = local_segments
+        if hasattr(self, "_subtitle_context_window_from_segments"):
+            player_segments = self._subtitle_context_window_from_segments(local_segments, center_sec=local_sec)
         clip_idx = int(ctx.get('clip_idx', 0) or 0)
         fps = normalize_fps(ctx.get('fps', None) or self._fps_for_media_path(clip_file))
         if hasattr(self, "_set_editor_frame_rate"):
@@ -195,7 +201,7 @@ class EditorMulticlipContextMixin:
 
         self.video_player.set_active_context(
             path=clip_file,
-            segments=local_segments,
+            segments=player_segments,
             seek_sec=local_sec,
             autoplay=autoplay,
             show_thumbnail=show_thumbnail,

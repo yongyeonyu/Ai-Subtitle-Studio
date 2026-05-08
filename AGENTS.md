@@ -1,7 +1,7 @@
 <!--
-Document-Version: 03.24.01
-Phase: STT_MODE_RUNTIME_RELEASED
-Last-Updated: 2026-05-07
+Document-Version: 03.24.03
+Phase: EDITOR_PERFORMANCE_RELEASED
+Last-Updated: 2026-05-08
 Updated-By: Codex
 Purpose: Agent bootstrap and handoff rules only.
 -->
@@ -61,12 +61,12 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 ## Current Continuation Facts
 
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- Current app version in code: `03.24.00`
-- Current handoff document version: `03.24.00`
-- Latest release checkpoint: `v03.24.00`
-- Current phase: `REFACTOR_QUALITY_RELEASED`
+- Current app version in code: `03.24.03`
+- Current handoff document version: `03.24.03`
+- Latest release checkpoint: `v03.24.03`
+- Current phase: `EDITOR_PERFORMANCE_RELEASED`
 - Next planned phase: none.
-- Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping Fast mode responsive and safe from obvious hallucinations.
+- Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping generation startup, cut-boundary scanning, playback, and editor-mode subtitle edits responsive.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
 - Cross-platform rule: macOS and Windows must remain supported, including Korean paths, spaces, backslashes, subprocess handling, ffmpeg/ffprobe, faster-whisper workers, and PyQt6 runtime behavior.
 - Release state: Fast, Auto, and High are now the single user-facing Mode controls. Fast runs LoRA-only subtitle post-processing, Auto runs LoRA + Deep, and High runs LoRA + Deep + chunked LLM. Legacy `balanced`, `normal`, `보통`, and `균형` settings map to Auto; legacy `fast` and `precise` settings are preserved as Fast and High when no explicit `subtitle_mode` exists.
@@ -76,11 +76,14 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Playback state: post-generation quality review, roughcut draft work, prefetch, cleanup, and model release are deferred or throttled while video playback is active.
 - Runtime stability state: user, folder, custom-default, and project JSON writes use safe atomic replacement; settings load can recover from `.bak` backups after partial-write JSON errors.
 - Dashboard runtime state: automatic audio-filter and VAD choices selected for the current file are surfaced in the sidebar pipeline dashboard with an auto marker and tooltip context.
-- GPU state: GPU rendering can be selected by frame or for the whole editor through settings while OpenGL widgets and global Qt OpenGL remain conservative opt-ins.
+- GPU state: GPU rendering can be selected by frame or for the whole editor through settings while OpenGL widgets and global Qt OpenGL remain conservative opt-ins; the timeline playhead overlay currently stays QWidget-backed to avoid QQuickWidget compositing hiding the painter canvas.
 - Idle learning state: automatic LoRA/personalization learning starts only after Home has been idle for five minutes, ramps from Lite to Heavy, and mouse/key input requests a quick stop. The app indicator blinks blue while learning is active.
 - Refactor state: `core.engine.subtitle_macro_chunks` owns 10-15 subtitle LLM macro chunk grouping and execution; `subtitle_engine.py` keeps orchestration and final timing/gap passes.
 - Dashboard state: the sidebar engine dashboard shows ten stages: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
-- Verification state: full test suite and static checks passed for this release: `943 passed, 1 warning, 2 subtests passed`.
+- Editor performance state: subtitle line edits update cached line maps and the affected timeline dirty rectangle instead of rebuilding the full segment lookup; playback/editor sync respects recent manual scrolling and avoids recentering already visible active segments.
+- Runtime scheduling state: cut-boundary pioneer/follower workers use topology-aware CPU planning, OpenCV thread caps, progress throttling, and high-cost visual scan fallback; chunk-level audio routing is disabled by default after benchmarking because it was slower than its quality benefit on the reviewed samples.
+- STT ensemble state: parallel STT1/STT2 runs clone chunk directories per worker and clean them afterward so one worker cannot delete audio chunks still needed by the other.
+- Verification state: full test suite and static checks passed for this release: `1130 passed, 1 warning, 5 subtests passed`.
 
 ## Collaboration Rules
 

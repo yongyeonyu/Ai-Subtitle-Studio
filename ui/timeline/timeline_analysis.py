@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from core.project.subtitle_status import (
@@ -72,6 +73,8 @@ MAJOR_SEGMENT_COLORS = (
     "#A1A1FF",  # Y
     "#C6FF3D",  # Z
 )
+
+_RECHECK_THRESHOLD_CACHE: dict[str, float] = {"value": 60.0, "until": 0.0}
 
 
 def find_roughcut_result(widget: Any):
@@ -211,22 +214,27 @@ def editor_analysis_markers(
     ) -> list[tuple[float, float]]:
         blockers = _merged_ranges(blockers)
         result: list[tuple[float, float]] = []
+        blocker_idx = 0
         for start, end in _merged_ranges(base_ranges):
-            pieces = [(start, end)]
-            for block_start, block_end in blockers:
-                next_pieces: list[tuple[float, float]] = []
-                for piece_start, piece_end in pieces:
-                    if block_end <= piece_start or block_start >= piece_end:
-                        next_pieces.append((piece_start, piece_end))
-                        continue
-                    if block_start > piece_start + 0.05:
-                        next_pieces.append((piece_start, min(block_start, piece_end)))
-                    if block_end < piece_end - 0.05:
-                        next_pieces.append((max(block_end, piece_start), piece_end))
-                pieces = next_pieces
-                if not pieces:
+            cursor = start
+            while blocker_idx < len(blockers) and blockers[blocker_idx][1] <= cursor:
+                blocker_idx += 1
+            scan_idx = blocker_idx
+            while scan_idx < len(blockers):
+                block_start, block_end = blockers[scan_idx]
+                if block_start >= end:
                     break
-            result.extend(pieces)
+                if block_end <= cursor:
+                    scan_idx += 1
+                    continue
+                if block_start > cursor + 0.05:
+                    result.append((cursor, min(block_start, end)))
+                cursor = max(cursor, block_end)
+                if cursor >= end - 0.05:
+                    break
+                scan_idx += 1
+            if cursor < end - 0.05:
+                result.append((cursor, end))
         return _merged_ranges(result)
 
     speech_ranges: list[tuple[float, float]] = []
@@ -376,6 +384,7 @@ def subtitle_detection_segments_for_editor(
     """Build a non-overlapping subtitle detection lane from STT and quality hints."""
     candidates: list[dict] = []
     total_duration = max(0.0, float(total_duration or 0.0))
+    review_threshold = _cached_recheck_threshold()
 
     def add(start, end, kind: str, source: str = "", label: str = "", color: str = "", priority: int = 0, alpha: int = 128, score: float | None = None, selection_state: str = ""):
         start_f = _as_float(start)
@@ -433,7 +442,7 @@ def subtitle_detection_segments_for_editor(
         quality = dict(seg.get("quality") or {})
         flags = {str(flag) for flag in (quality.get("flags") or [])}
         manually_confirmed = bool(quality.get("manual_confirmed")) or "manual_confirmed" in flags
-        review_state = subtitle_review_state(seg)
+        review_state = subtitle_review_state(seg, recheck_threshold=review_threshold)
 
         if manually_confirmed:
             add(
@@ -614,6 +623,16 @@ def _recheck_threshold() -> float:
     return recheck_threshold()
 
 
+def _cached_recheck_threshold() -> float:
+    now = time.monotonic()
+    if now < float(_RECHECK_THRESHOLD_CACHE.get("until", 0.0) or 0.0):
+        return float(_RECHECK_THRESHOLD_CACHE.get("value", 60.0) or 60.0)
+    value = float(_recheck_threshold())
+    _RECHECK_THRESHOLD_CACHE["value"] = value
+    _RECHECK_THRESHOLD_CACHE["until"] = now + 0.75
+    return value
+
+
 def _stt_candidate_scores(seg: dict) -> list[float]:
     scores: list[float] = []
     for candidate in list(seg.get("stt_candidates") or []):
@@ -628,7 +647,7 @@ def _stt_candidate_scores(seg: dict) -> list[float]:
 def subtitle_review_state(seg: dict, *, recheck_threshold: float | None = None) -> str:
     from core.project.subtitle_status import subtitle_review_state as _shared_subtitle_review_state
 
-    threshold = None if recheck_threshold is None else float(recheck_threshold)
+    threshold = _cached_recheck_threshold() if recheck_threshold is None else float(recheck_threshold)
     return _shared_subtitle_review_state(seg, threshold=threshold)
 
 
@@ -660,41 +679,75 @@ def _voice_kind_from_vad(vad: dict) -> str:
 def _resolve_non_overlapping_voice_activity(candidates: list[dict]) -> list[dict]:
     if not candidates:
         return []
-    boundaries = sorted(
-        {
-            round(float(item["start"]), 3)
-            for item in candidates
-        }
-        | {
-            round(float(item["end"]), 3)
-            for item in candidates
-        }
-    )
-    resolved: list[dict] = []
-    for idx in range(len(boundaries) - 1):
-        start = boundaries[idx]
-        end = boundaries[idx + 1]
+    normalized: list[tuple[float, float, dict]] = []
+    for item in candidates:
+        try:
+            start = round(float(item["start"]), 3)
+            end = round(float(item["end"]), 3)
+        except Exception:
+            continue
         if end <= start:
             continue
-        mid = (start + end) / 2.0
-        active = [
-            item for item in candidates
-            if float(item["start"]) <= mid < float(item["end"])
-        ]
-        if not active:
-            continue
-        chosen = max(active, key=lambda item: (int(item.get("priority", 0) or 0), -(float(item.get("end", 0.0)) - float(item.get("start", 0.0)))))
-        item = dict(chosen)
-        item["start"] = start
-        item["end"] = end
-        comparable = (item.get("kind"), item.get("label"), item.get("color"), item.get("source"))
-        if resolved:
-            prev = resolved[-1]
-            prev_key = (prev.get("kind"), prev.get("label"), prev.get("color"), prev.get("source"))
-            if prev_key == comparable and abs(float(prev.get("end", 0.0) or 0.0) - start) < 0.001:
-                prev["end"] = end
-                continue
-        resolved.append(item)
+        normalized.append((start, end, item))
+    if not normalized:
+        return []
+
+    resolved: list[dict] = []
+
+    # Sweep over boundary events instead of scanning every candidate for every
+    # boundary interval. Large subtitle projects can produce thousands of
+    # detection spans during zoom/fit repaints, and the previous nested scan
+    # made that path quadratic before any vector drawing could help.
+    import heapq
+
+    events: list[tuple[float, int, int]] = []
+    for idx, (start, end, _item) in enumerate(normalized):
+        events.append((start, 1, idx))
+        events.append((end, -1, idx))
+    events.sort(key=lambda row: row[0])
+
+    active: set[int] = set()
+    heap: list[tuple[int, float, int]] = []
+    cursor = 0
+    prev_time: float | None = None
+
+    while cursor < len(events):
+        event_time = events[cursor][0]
+        if prev_time is not None and event_time > prev_time and active:
+            while heap and heap[0][2] not in active:
+                heapq.heappop(heap)
+            if heap:
+                chosen_idx = heap[0][2]
+                start = prev_time
+                end = event_time
+                _item_start, _item_end, chosen = normalized[chosen_idx]
+                item = dict(chosen)
+                item["start"] = start
+                item["end"] = end
+                comparable = (item.get("kind"), item.get("label"), item.get("color"), item.get("source"))
+                if resolved:
+                    prev = resolved[-1]
+                    prev_key = (prev.get("kind"), prev.get("label"), prev.get("color"), prev.get("source"))
+                    if prev_key == comparable and abs(float(prev.get("end", 0.0) or 0.0) - start) < 0.001:
+                        prev["end"] = end
+                    else:
+                        resolved.append(item)
+                else:
+                    resolved.append(item)
+
+        while cursor < len(events) and events[cursor][0] == event_time:
+            _time, kind, idx = events[cursor]
+            if kind > 0:
+                start, end, item = normalized[idx]
+                active.add(idx)
+                priority = int(item.get("priority", 0) or 0)
+                duration = max(0.0, end - start)
+                heapq.heappush(heap, (-priority, duration, idx))
+            else:
+                active.discard(idx)
+            cursor += 1
+        prev_time = event_time
+
     return resolved
 
 

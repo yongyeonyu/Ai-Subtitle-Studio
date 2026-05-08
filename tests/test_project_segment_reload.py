@@ -313,6 +313,10 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(stt_previews[0]["text"], "미리보기")
         self.assertEqual(editor.timeline.updated[2], 10.0)
         self.assertEqual(editor._segment_queue, [])
+        self.assertEqual(editor._active_seg_start, 1.0)
+        self.assertEqual(editor.timeline.active_calls[-1], 1.0)
+        self.assertEqual(editor.timeline.playhead_calls[-1], (1.0, True))
+        self.assertEqual(editor.video_player.seek_calls[-1], 1.0)
 
     def test_live_stt_preview_keeps_stt1_and_stt2_overlap_as_separate_lanes(self):
         editor = _LivePreviewEditor()
@@ -356,6 +360,25 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_live_stt_preview_updates_existing_editor_draft_text_in_place(self):
+        editor = _ActualSelectionEditor()
+        try:
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "처음 드래프트", "stt_preview_source": "STT1"}
+            ])
+            editor._flush_live_editor_preview_queue()
+
+            editor.preview_stt_segments([
+                {"start": 1.0, "end": 2.0, "text": "갱신된 실시간 드래프트", "stt_preview_source": "STT1"}
+            ])
+
+            self.assertEqual(editor.text_edit.toPlainText(), "갱신된 실시간 드래프트")
+            self.assertEqual(len(editor._live_editor_preview_segments), 1)
+            self.assertEqual(editor._live_editor_preview_segments[0]["text"], "갱신된 실시간 드래프트")
+            self.assertEqual([seg for seg in editor._get_current_segments() if not seg.get("is_gap")], [])
+        finally:
+            editor.text_edit.close()
+
     def test_live_stt_preview_autoscrolls_editor_to_latest_draft(self):
         editor = _ActualSelectionEditor()
         try:
@@ -391,6 +414,43 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             self.assertEqual(editor.text_edit.textCursor().blockNumber(), 0)
             self.assertAlmostEqual(editor._active_seg_start, 1.0)
             self.assertEqual(editor.timeline.active_calls[-1], 1.0)
+            self.assertEqual(editor.timeline.playhead_calls[-1], (1.0, True))
+            self.assertEqual(editor.video_player.seek_calls[-1], 1.0)
+        finally:
+            editor.text_edit.close()
+
+    def test_processing_segment_focus_still_moves_video_without_editor_block(self):
+        editor = _LivePreviewEditor()
+
+        focused = editor._focus_editor_block_for_processing_segment({
+            "active": True,
+            "start": 4.25,
+            "end": 5.0,
+            "text": "아직 에디터에 없는 처리 중 세그먼트",
+        })
+
+        self.assertFalse(focused)
+        self.assertEqual(editor._active_seg_start, 4.25)
+        self.assertEqual(editor.timeline.active_calls[-1], 4.25)
+        self.assertEqual(editor.timeline.playhead_calls[-1], (4.25, True))
+        self.assertEqual(editor.video_player.seek_calls[-1], 4.25)
+
+    def test_processing_segment_focus_inserts_visible_editor_draft_when_missing(self):
+        editor = _ActualSelectionEditor()
+        try:
+            focused = editor._focus_editor_block_for_processing_segment({
+                "active": True,
+                "start": 7.0,
+                "end": 8.0,
+                "text": "LLM 검수 중인 자막",
+            })
+
+            self.assertTrue(focused)
+            self.assertEqual(editor.text_edit.toPlainText(), "LLM 검수 중인 자막")
+            self.assertEqual(len(editor._live_editor_preview_segments), 1)
+            self.assertEqual(editor.timeline.playhead_calls[-1], (7.0, True))
+            self.assertEqual(editor.video_player.seek_calls[-1], 7.0)
+            self.assertEqual([seg for seg in editor._get_current_segments() if not seg.get("is_gap")], [])
         finally:
             editor.text_edit.close()
 
@@ -518,6 +578,8 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             editor.preview_stt_segments([
                 {"start": 0.0, "end": 1.0, "text": "STT1 선택", "stt_preview_source": "STT1"}
             ])
+            editor.timeline.playhead_calls.clear()
+            editor.video_player.seek_calls.clear()
 
             editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
             editor._flush_queue()

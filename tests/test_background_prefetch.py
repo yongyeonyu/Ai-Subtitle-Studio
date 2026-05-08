@@ -121,6 +121,29 @@ class BackgroundPrefetchTests(unittest.TestCase):
 
         manager.request.assert_called_once()
 
+    def test_editor_background_prefetch_skips_during_playback_by_default(self):
+        playing_state = object()
+        editor = _PrefetchEditor()
+        editor.settings = {
+            "background_prefetch_enabled": True,
+            "background_prefetch_lora_enabled": False,
+            "background_prefetch_candidates_enabled": False,
+        }
+        editor.media_path = "/tmp/video.mp4"
+        editor.video_player = SimpleNamespace(
+            media_player=SimpleNamespace(
+                PlaybackState=SimpleNamespace(PlayingState=playing_state),
+                playbackState=Mock(return_value=playing_state),
+            )
+        )
+        manager = Mock()
+        editor._background_prefetch_manager = manager
+        editor._cached_segs = [{"start": 9.0, "end": 11.0, "text": "캐시"}]
+
+        editor._schedule_background_prefetch(10.0)
+
+        manager.request.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

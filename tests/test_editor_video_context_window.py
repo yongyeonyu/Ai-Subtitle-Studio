@@ -1,0 +1,105 @@
+import unittest
+from types import SimpleNamespace
+
+from ui.editor.editor_helpers import build_segment_lookup
+from ui.editor.editor_segments import EditorSegmentsMixin
+
+
+class _EditorHarness(EditorSegmentsMixin):
+    def __init__(self, segments, playhead_sec=0.0):
+        self.settings = {
+            "editor_video_context_before_sec": 10.0,
+            "editor_video_context_after_sec": 20.0,
+            "editor_video_context_max_segments": 48,
+        }
+        self._active_seg_start = playhead_sec
+        self.timeline = SimpleNamespace(canvas=SimpleNamespace(playhead_sec=playhead_sec))
+        self._cached_segs = list(segments)
+        self._subtitle_memory_cache = build_segment_lookup(self._cached_segs)
+
+
+class _Cursor:
+    def __init__(self, line):
+        self._line = int(line)
+
+    def blockNumber(self):
+        return self._line
+
+
+class _TextEdit:
+    def __init__(self, start_line, end_line, current_line):
+        self._start_line = int(start_line)
+        self._end_line = int(end_line)
+        self._current_line = int(current_line)
+
+    def visible_block_number_range(self, *, pad_before=42, pad_after=96):
+        return self._start_line, self._end_line
+
+    def textCursor(self):
+        return _Cursor(self._current_line)
+
+
+class _Highlighter:
+    def __init__(self):
+        self.quality_map = None
+        self.visible_lines = None
+
+    def set_quality_map(self, quality_map, visible_lines=None):
+        self.quality_map = dict(quality_map)
+        self.visible_lines = list(visible_lines or [])
+
+
+class EditorVideoContextWindowTests(unittest.TestCase):
+    def test_video_context_uses_playhead_window_not_full_subtitle_list(self):
+        segments = [
+            {"start": float(i), "end": float(i) + 0.6, "text": f"seg {i}", "line": i}
+            for i in range(2000)
+        ]
+        editor = _EditorHarness(segments, playhead_sec=500.0)
+
+        window = editor._video_subtitle_context_for_player()
+
+        self.assertLess(len(window), 80)
+        self.assertGreater(len(window), 0)
+        self.assertTrue(any(seg["start"] <= 500.0 < seg["end"] or abs(seg["start"] - 500.0) < 1.0 for seg in window))
+        self.assertGreaterEqual(window[0]["start"], 489.0)
+        self.assertLessEqual(window[-1]["start"], 522.0)
+
+    def test_context_window_caps_dense_local_segments_around_center(self):
+        segments = [
+            {"start": float(i) * 0.2, "end": float(i) * 0.2 + 0.12, "text": f"dense {i}", "line": i}
+            for i in range(2000)
+        ]
+        editor = _EditorHarness([], playhead_sec=0.0)
+
+        window = editor._subtitle_context_window_from_segments(segments, center_sec=120.0)
+
+        self.assertLessEqual(len(window), 48)
+        self.assertTrue(window[0]["start"] <= 120.0 <= window[-1]["end"])
+
+    def test_visible_quality_map_uses_editor_viewport_not_full_document(self):
+        segments = [
+            {
+                "start": float(i),
+                "end": float(i) + 0.5,
+                "text": f"seg {i}",
+                "line": i,
+                "quality": {"confidence_label": "red" if i == 1000 else "green"},
+            }
+            for i in range(2000)
+        ]
+        editor = _EditorHarness(segments, playhead_sec=1000.0)
+        editor.text_edit = _TextEdit(990, 1010, 1000)
+        editor._highlighter = _Highlighter()
+
+        editor._refresh_visible_quality_map()
+
+        self.assertLess(len(editor._highlighter.quality_map), 32)
+        self.assertIn(1000, editor._highlighter.quality_map)
+        self.assertNotIn(10, editor._highlighter.quality_map)
+        self.assertEqual(editor._highlighter.visible_lines[0], 990)
+        self.assertEqual(editor._highlighter.visible_lines[-1], 1010)
+
+
+if __name__ == "__main__":
+    unittest.main()

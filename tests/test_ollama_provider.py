@@ -84,7 +84,10 @@ class OllamaWarmupTest(unittest.TestCase):
         ) as stop_mock, mock.patch(
             "core.platform_compat.cleanup_ollama_runtime_processes",
             return_value=2,
-        ) as cleanup_mock:
+        ) as cleanup_mock, mock.patch(
+            "core.llm.ollama_provider._is_ollama_api_ready",
+            return_value=False,
+        ):
             result = ollama_provider.shutdown_local_ollama_runtime(
                 ["gemma4:e4b"],
                 logger=logger,

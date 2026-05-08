@@ -706,6 +706,10 @@ def shutdown_local_ollama_runtime(
         stopped_processes = int(
             cleanup_ollama_runtime_processes(timeout_sec=max(0.1, float(timeout_sec or 0.6))) or 0
         )
+        if _is_ollama_api_ready(timeout=0.15):
+            stopped_processes += int(
+                cleanup_ollama_runtime_processes(timeout_sec=max(0.2, float(timeout_sec or 0.6))) or 0
+            )
     except Exception as exc:
         if logger:
             logger.log(f"⚠️ {context}: Ollama 서버 종료 실패: {exc}")

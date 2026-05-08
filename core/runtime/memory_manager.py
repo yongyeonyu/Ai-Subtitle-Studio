@@ -171,7 +171,7 @@ class RuntimeMemoryManager:
         self._last_trim_at = 0.0
         self._last_disk_sample_at = 0.0
         self._last_disk_usage = {"total_bytes": 0, "file_count": 0, "total_gb": 0.0, "directories": []}
-        self._trace_enabled = bool(self.settings.get("runtime_memory_tracemalloc_enabled", True))
+        self._trace_enabled = bool(self.settings.get("runtime_memory_tracemalloc_enabled", False))
         self._trace_frames = max(4, int(float(self.settings.get("runtime_memory_tracemalloc_frames", 8) or 8)))
         self._last_trace_snapshot = None
         self._last_leak_report_at = 0.0

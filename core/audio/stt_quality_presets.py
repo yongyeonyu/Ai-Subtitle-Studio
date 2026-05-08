@@ -15,6 +15,17 @@ STT_QUALITY_PRESET_LABELS = {
     "stt": "STT",
 }
 STT_QUALITY_USER_PRESET_KEY = "stt_quality_user_presets"
+BENCHMARK_RUNTIME_ROUTE_KEYS = {
+    "selected_whisper_model",
+    "selected_whisper_model_secondary",
+    "selected_model",
+    "selected_llm_provider",
+    "subtitle_llm_user_selected",
+    "roughcut_llm_enabled",
+    "roughcut_llm_use_override",
+    "roughcut_llm_provider",
+    "roughcut_llm_model",
+}
 STT_QUALITY_SAVED_SETTING_KEYS = {
     "selected_whisper_model",
     "selected_whisper_model_secondary",
@@ -199,7 +210,7 @@ def load_stt_quality_presets() -> dict[str, dict]:
                 "selected_whisper_model_secondary": secondary_model,
                 "stt_ensemble_enabled": True,
                 "stt_ensemble_llm_judge_enabled": True,
-                **_pipeline_mapping(20, 3.0, 2),
+                **_pipeline_mapping(35, 3.0, 2),
                 **_cut_boundary_mapping("medium"),
                 **_roughcut_llm_mapping("exaone3.5:7.8b"),
                 **_decoder_settings(0.42, -2.6, 2.4, 0.6, 8, 1.35),
@@ -275,6 +286,12 @@ def apply_stt_quality_preset(settings: dict, preset_key: str) -> dict:
     presets = load_stt_quality_presets()
     key = normalize_stt_quality_key(preset_key)
     preset = presets[key]
+    benchmark_profile = str(settings.get("benchmark_runtime_profile") or "").strip()
+    benchmark_routes = {
+        route_key: deepcopy(settings[route_key])
+        for route_key in BENCHMARK_RUNTIME_ROUTE_KEYS
+        if benchmark_profile and route_key in settings
+    }
     out = dict(settings)
     out.update(deepcopy(preset.get("settings", {})))
     user_presets = dict(out.get(STT_QUALITY_USER_PRESET_KEY) or {})
@@ -283,6 +300,8 @@ def apply_stt_quality_preset(settings: dict, preset_key: str) -> dict:
         user_settings = user_preset.get("settings", {})
         if isinstance(user_settings, dict):
             out.update(deepcopy(user_settings))
+    if benchmark_routes:
+        out.update(benchmark_routes)
     out["stt_quality_preset"] = key
     return out
 

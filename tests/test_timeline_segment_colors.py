@@ -453,6 +453,53 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertEqual(voice_segments[0]["label"], "음성")
         self.assertEqual(voice_segments[0]["color"], "#34C759")
 
+    def test_subtitle_detection_overlap_resolution_keeps_high_priority_window(self):
+        voice_segments = voice_activity_segments_for_editor(
+            [
+                {
+                    "start": 0.0,
+                    "end": 4.0,
+                    "text": "낮은 우선순위",
+                    "quality": {"confidence_label": "yellow", "confidence_score": 72},
+                },
+                {
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "재검사",
+                    "quality": {"confidence_label": "red", "confidence_score": 31},
+                },
+            ],
+            [],
+            [],
+            4.0,
+        )
+
+        self.assertEqual(
+            [(item["kind"], round(item["start"], 1), round(item["end"], 1)) for item in voice_segments],
+            [
+                ("subtitle_score", 0.0, 1.0),
+                ("recheck", 1.0, 2.0),
+                ("subtitle_score", 2.0, 4.0),
+            ],
+        )
+
+    def test_subtitle_detection_large_dense_input_stays_compact(self):
+        segments = [
+            {
+                "start": i * 0.5,
+                "end": i * 0.5 + 0.5,
+                "text": f"dense {i}",
+                "quality": {"confidence_label": "yellow", "confidence_score": 75},
+            }
+            for i in range(2000)
+        ]
+
+        voice_segments = voice_activity_segments_for_editor(segments, [], [], 1000.0)
+
+        self.assertEqual(len(voice_segments), 1)
+        self.assertEqual(voice_segments[0]["kind"], "subtitle_score")
+        self.assertEqual((voice_segments[0]["start"], voice_segments[0]["end"]), (0.0, 1000.0))
+
     def test_subtitle_detection_score_color_steps_from_red_to_green(self):
         self.assertEqual(subtitle_detection_color(0), "#FF453A")
         self.assertEqual(subtitle_detection_color(50), "#FFCC00")

@@ -91,6 +91,19 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         self.assertIn("#0A84FF", home.saved_status_label.text())
         self.assertIn("Heavy learning", home.saved_status_label.toolTip())
 
+    def test_runtime_pressure_color_moves_to_app_title(self):
+        state_manager = SimpleNamespace(state="ST_SAVED", is_locked=False, is_dirty=False)
+        editor = SimpleNamespace(sm=state_manager, _is_ai_processing=False)
+        home = _DummyHome(editor)
+        home._runtime_resource_snapshot = {"pressure_stage": "warning"}
+        home._runtime_resource_coordinator = SimpleNamespace(status_color=lambda _snapshot: "#FFD60A")
+
+        home._refresh_saved_status_label(is_dirty=False)
+
+        text = home.saved_status_label.text()
+        self.assertIn("AI Subtitle Studio", text)
+        self.assertIn("#FFD60A", text)
+
     def test_status_rail_uses_green_flash_and_short_korean_stages(self):
         rail = StatusRail()
         try:
@@ -276,6 +289,43 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         state_manager.set_custom_status("⏳ LLM 최적화 중")
         state_manager.update_progress(1, 3, 33)
         self.assertIn("LLM", state_manager._status_msg)
+
+    def test_start_pipeline_marks_processing_before_cut_prescan(self):
+        class DummyEditor(EditorPipelineMixin):
+            def __init__(self):
+                self.sm = SubtitleStateManager()
+                self.settings = {}
+                self.is_auto_start = False
+                self.calls = []
+                self.main = SimpleNamespace(
+                    _stop_post_completion_idle_timer=lambda: None,
+                    sync_menu_from_editor=lambda editor=None: self.calls.append(("sync", self.sm.state)),
+                )
+
+            def window(self):
+                return self.main
+
+            def _snapshot_start_layout(self):
+                return {}
+
+            def _prepare_cut_boundaries_before_start(self):
+                self.calls.append(("prescan", self.sm.state, self.sm._button_text, self.sm._status_msg))
+
+            def _execute_pipeline_logic(self, is_restart):
+                self.calls.append(("execute", self.sm.state, self.sm._button_text, self.sm._status_msg))
+
+            def _restore_start_layout(self, snap):
+                self.calls.append(("restore", self.sm.state))
+
+        editor = DummyEditor()
+
+        with patch("core.settings.load_settings", return_value={}):
+            editor._start_pipeline(is_restart=False)
+
+        prescan = [item for item in editor.calls if item[0] == "prescan"][0]
+        self.assertEqual(prescan[1], SubtitleStateManager.ST_PROC)
+        self.assertIn("정지", prescan[2])
+        self.assertIn("시작 준비", prescan[3])
 
     def test_queue_completion_status_completes_editor_state(self):
         class DummyQueue(QueueMixin):

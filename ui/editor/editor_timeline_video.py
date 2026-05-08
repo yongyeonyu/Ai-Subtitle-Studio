@@ -20,6 +20,7 @@ from ui.editor.editor_scan_cut_core import EditorScanCutCoreMixin
 from ui.editor.editor_helpers import (
     find_segment_at, get_sub_block_indices,
     find_segment_at_lookup,
+    build_segment_lookup,
     make_gap_ud, delete_block_safely, insert_gap_after,
 )
 
@@ -37,6 +38,13 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
 
     def _current_frame_fps(self) -> float:
         return normalize_fps(getattr(self, "video_fps", 30.0) or 30.0)
+
+    def _playhead_active_interval_ms(self) -> int:
+        try:
+            settings = getattr(self, "settings", {}) or {}
+            return max(24, min(80, int(settings.get("playhead_active_interval_ms", 45) or 45)))
+        except Exception:
+            return 45
 
     def _snap_to_frame(self, sec: float) -> float:
         return snap_sec_to_frame(sec, self._current_frame_fps())
@@ -134,12 +142,45 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             return
         block = self.text_edit.document().findBlockByNumber(line_num)
         if block.isValid():
+            needs_scroll = bool(ensure_visible and not self._editor_block_visible(block))
+            try:
+                already_on_line = int(self.text_edit.textCursor().blockNumber()) == int(line_num)
+            except Exception:
+                already_on_line = False
+            if already_on_line and not needs_scroll:
+                return
             self._sync_lock = True
-            cur = QTextCursor(block)
-            self.text_edit.setTextCursor(cur)
-            if ensure_visible:
-                self.text_edit.ensureCursorVisible()
-            self._sync_lock = False
+            try:
+                if not already_on_line:
+                    cur = QTextCursor(block)
+                    self.text_edit.setTextCursor(cur)
+                if needs_scroll:
+                    self.text_edit.ensureCursorVisible()
+            finally:
+                self._sync_lock = False
+
+    def _editor_block_visible(self, block, *, margin_px: int = 24) -> bool:
+        text_edit = getattr(self, "text_edit", None)
+        if text_edit is None or not block.isValid():
+            return False
+        try:
+            cursor = QTextCursor(block)
+            rect = text_edit.cursorRect(cursor)
+            viewport = text_edit.viewport()
+            top_limit = -int(margin_px)
+            bottom_limit = int(viewport.height()) + int(margin_px)
+            return rect.top() >= top_limit and rect.bottom() <= bottom_limit
+        except Exception:
+            return False
+
+    def _editor_manual_scroll_recent(self, now_mono: float | None = None, *, hold_sec: float = 1.15) -> bool:
+        now = time.monotonic() if now_mono is None else float(now_mono)
+        text_edit = getattr(self, "text_edit", None)
+        markers = [
+            float(getattr(self, "_last_editor_manual_scroll_at", 0.0) or 0.0),
+            float(getattr(text_edit, "_last_user_scroll_at", 0.0) or 0.0) if text_edit is not None else 0.0,
+        ]
+        return any(marker > 0.0 and (now - marker) < hold_sec for marker in markers)
 
     def _playback_can_move_editor_cursor(self) -> bool:
         """Allow playback follow unless the user is actively editing/selecting."""
@@ -186,6 +227,19 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             settings = dict(getattr(self, "settings", {}) or {})
             if not settings.get("background_prefetch_enabled", True):
                 return
+            player_state = None
+            try:
+                player_state = getattr(getattr(getattr(self, "video_player", None), "media_player", None), "playbackState", lambda: None)()
+                playing_state = getattr(getattr(getattr(self, "video_player", None), "media_player", None), "PlaybackState", None)
+                playing_state = getattr(playing_state, "PlayingState", None)
+            except Exception:
+                player_state = None
+                playing_state = None
+            allow_during_playback = settings.get("background_prefetch_during_playback", False)
+            if isinstance(allow_during_playback, str):
+                allow_during_playback = allow_during_playback.strip().lower() in {"1", "true", "yes", "on"}
+            if playing_state is not None and player_state == playing_state and not bool(allow_during_playback):
+                return
             media_path = str(getattr(self, "media_path", "") or "")
             if not media_path:
                 player = getattr(self, "video_player", None)
@@ -226,8 +280,23 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
     # ---------------------------------------------------------
 
     def _on_timeline_seg_clicked(self, line_num, start_sec):
-        segs = self._get_current_segments()
-        seg = next((s for s in segs if s["line"] == line_num), None)
+        cache = getattr(self, "_subtitle_memory_cache", None)
+        if not isinstance(cache, dict):
+            cached = getattr(self, "_cached_segs", None)
+            if cached is not None:
+                cache = build_segment_lookup(cached)
+            elif hasattr(self, "_rebuild_subtitle_memory_cache"):
+                cache = self._rebuild_subtitle_memory_cache()
+            else:
+                cache = build_segment_lookup(self._get_current_segments())
+            self._subtitle_memory_cache = cache
+        try:
+            seg = (cache.get("line_map") or {}).get(int(line_num))
+        except Exception:
+            seg = None
+        if seg is None:
+            segs = self._get_current_segments()
+            seg = next((s for s in segs if s["line"] == line_num), None)
         lock_edit = self._timeline_lock_edit_enabled()
         if seg:
             if lock_edit:
@@ -238,7 +307,11 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                     self.timeline.set_playhead(seg["start"])
             else:
                 self._sync_cursor_to_seg(seg)
-            self.timeline.center_to_sec((seg["start"] + seg["end"]) / 2, smooth=True)
+            target_center = (seg["start"] + seg["end"]) / 2
+            if hasattr(self.timeline, "ensure_sec_visible"):
+                self.timeline.ensure_sec_visible(target_center, smooth=True, margin_px=96)
+            else:
+                self.timeline.center_to_sec(target_center, smooth=True)
             if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
                 ctx = self._resolve_active_context(global_sec=float(start_sec))
                 self._apply_active_context(ctx, autoplay=False, show_thumbnail=True)
@@ -278,7 +351,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                 self._playhead_idle_synced = True
             return
         self._playhead_idle_synced = False
-        self._set_playhead_timer_interval(33)
+        self._set_playhead_timer_interval(self._playhead_active_interval_ms())
         dur_ms = player.duration()
         if dur_ms <= 0:
             return
@@ -310,12 +383,18 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                     self._cached_clip_bounds = (float(ctx.get('clip_start', 0.0)), float(ctx.get('clip_end', 0.0)))
                     if _cidx != getattr(self, '_last_sync_clip_idx', -1):
                         self._last_sync_clip_idx = _cidx
-                        self.video_player.set_context_segments(list(ctx.get('local_segments', []) or []))
+                        local_segments = list(ctx.get('local_segments', []) or [])
+                        if hasattr(self, "_subtitle_context_window_from_segments"):
+                            local_segments = self._subtitle_context_window_from_segments(
+                                local_segments,
+                                center_sec=float(ctx.get("local_sec", 0.0) or 0.0),
+                            )
+                        self.video_player.set_context_segments(local_segments)
 
         seg = self._segment_at_playback_sec(current_sec, skip_gap=True)
         if seg and self._active_seg_start != seg["start"]:
             can_move_editor = self._playback_can_move_editor_cursor()
-            if can_move_editor:
+            if can_move_editor and not self._editor_manual_scroll_recent(now_mono):
                 self._last_play_cursor_sync_at = now_mono
                 self._last_editor_autoscroll_at = now_mono
                 self._sync_cursor_to_seg(seg, ensure_visible=True, move_cursor=True)
@@ -326,7 +405,11 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                     self._sync_cursor_to_seg(seg, ensure_visible=False, move_cursor=False)
         elif seg:
             last_scroll_at = float(getattr(self, '_last_editor_autoscroll_at', 0.0) or 0.0)
-            if self._playback_can_move_editor_cursor() and (now_mono - last_scroll_at) >= 0.25:
+            if (
+                self._playback_can_move_editor_cursor()
+                and not self._editor_manual_scroll_recent(now_mono)
+                and (now_mono - last_scroll_at) >= 0.60
+            ):
                 self._last_editor_autoscroll_at = now_mono
                 self._sync_cursor_to_seg(seg, ensure_visible=True, move_cursor=True)
         local_display_sec = self._global_to_local_sec(current_sec)
@@ -460,7 +543,13 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             self._schedule_background_prefetch(sec, [])
         seg = self._segment_at_playback_sec(sec, skip_gap=False)
         if seg and self._active_seg_start != seg["start"]:
-            self._sync_cursor_to_seg(seg, ensure_visible=False, move_cursor=False)
+            canvas = getattr(getattr(self, "timeline", None), "canvas", None)
+            move_editor = (
+                not self._timeline_lock_edit_enabled()
+                and not bool(getattr(canvas, "_edit_active", False))
+                and not self._editor_manual_scroll_recent()
+            )
+            self._sync_cursor_to_seg(seg, ensure_visible=move_editor, move_cursor=move_editor)
         self._pending_scrub_sec = None
 
     def _manual_global_sec_from_player(self) -> float:

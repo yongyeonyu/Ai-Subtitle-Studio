@@ -1423,7 +1423,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertTrue(result["cleaned"])
             self.assertEqual(
                 release_calls,
-                [{"force": True, "preserve_roughcut_status": True}],
+                [{"force": True, "preserve_roughcut_status": True, "ollama_timeout_sec": 1.2}],
             )
             schedule_gc.assert_called_once()
         finally:

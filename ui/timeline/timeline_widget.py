@@ -4,10 +4,9 @@
 ui/timeline_widget.py
 Timeline widget container
 """
-import os
 import time
 
-from PyQt6.QtCore import QPoint, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QBrush
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -19,7 +18,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ui.gpu_rendering import scenegraph_enabled
 from ui.timeline.timeline_constants import CANVAS_H, FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
 from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_global import GlobalCanvas
@@ -57,33 +55,10 @@ class TimelinePlayheadOverlay(QWidget):
         self.update()
 
     def _create_quick_layer(self):
-        if not scenegraph_enabled("timeline"):
-            return None
-        qml_path = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "qml", "timeline_playhead_overlay.qml"))
-        if not os.path.exists(qml_path):
-            return None
-        try:
-            from PyQt6.QtQuickWidgets import QQuickWidget
-        except Exception:
-            return None
-        try:
-            quick = QQuickWidget(self)
-            quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
-            quick.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            quick.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-            quick.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-            quick.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-            quick.setClearColor(QColor(0, 0, 0, 0))
-            quick.setSource(QUrl.fromLocalFile(qml_path))
-            if quick.status() == QQuickWidget.Status.Error:
-                quick.deleteLater()
-                return None
-            quick.setGeometry(self.rect())
-            quick.show()
-            self._sync_quick_layer(quick)
-            return quick
-        except Exception:
-            return None
+        # A full-viewport QQuickWidget overlay can composite as an opaque black
+        # surface on macOS/Metal and hide the classic painter timeline canvas.
+        # Keep the playhead on the lightweight QWidget overlay instead.
+        return None
 
     def _playhead_visual_x(self) -> float:
         timeline = self._timeline
@@ -490,9 +465,8 @@ class TimelineWidget(QWidget):
         return snap_sec_to_frame(sec, getattr(self, "video_fps", getattr(self.canvas, "frame_rate", 30.0)))
 
     def _create_playhead_overlay(self):
-        # Keep the playhead isolated from the heavy timeline body; use a QML
-        # overlay when SceneGraph is available and keep QWidget paint fallback
-        # for tests/offscreen paths.
+        # Keep the playhead isolated from the heavy timeline body without using
+        # a full-size QQuickWidget that can cover the classic canvas.
         return TimelinePlayheadOverlay(self, self.scroll.viewport())
 
     def _canvas_width_for_duration(self, dur: float, pps: float | None = None) -> int:
@@ -871,7 +845,35 @@ class TimelineWidget(QWidget):
             self._sync_playhead_overlay()
             return
         if sec is not None and not self._segment_drag_view_freeze_active():
-            self.center_to_sec(sec, smooth=True)
+            self.ensure_sec_visible(sec, smooth=True, margin_px=96)
+
+    def _sec_visible_in_view(self, sec: float, *, margin_px: int = 96) -> bool:
+        try:
+            pps = max(0.001, float(getattr(self.canvas, "pps", 1.0) or 1.0))
+            x = float(sec or 0.0) * pps
+            viewport = self.scroll.viewport()
+            viewport_w = int(viewport.width()) if viewport is not None else int(self.scroll.width())
+            scroll_x = int(self.scroll.horizontalScrollBar().value())
+            margin = max(0, min(int(margin_px), max(0, viewport_w // 3)))
+            return (scroll_x + margin) <= x <= (scroll_x + max(1, viewport_w) - margin)
+        except Exception:
+            return False
+
+    def ensure_sec_visible(self, sec: float, *, smooth: bool = True, margin_px: int = 96) -> None:
+        if bool(getattr(self, "_fit_to_view_locked", False)):
+            self._sync_playhead_overlay()
+            return
+        if self._segment_drag_view_freeze_active():
+            self._restore_segment_drag_view()
+            return
+        sec = self.snap_sec_to_frame(sec)
+        if self._sec_visible_in_view(sec, margin_px=margin_px):
+            self._target_scroll_x = float(self.scroll.horizontalScrollBar().value())
+            self._current_scroll_x = self._target_scroll_x
+            self._sync_playhead_overlay()
+            return
+        self.center_to_sec(sec, smooth=smooth)
+
     def set_playhead(self, sec, *, preserve_center_lock: bool = False):
         sec = self.snap_sec_to_frame(sec)
         if not preserve_center_lock:

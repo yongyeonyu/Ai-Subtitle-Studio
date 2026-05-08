@@ -73,6 +73,12 @@ class AudioPresetTests(unittest.TestCase):
         self.assertGreaterEqual(applied["df_vol"], 4.8)
         self.assertGreaterEqual(applied["ff_treble_boost"], 3.0)
 
+    def test_indoor_external_mic_uses_benchmarked_chunk_length(self):
+        applied = apply_audio_preset({}, "실내-마이크유")
+
+        self.assertEqual(applied["audio_preset"], "실내-마이크유")
+        self.assertEqual(applied["ff_chunk"], 35)
+
     def test_apply_default_audio_preset_restores_audio_fields_only(self):
         applied = apply_default_audio_preset(
             {
@@ -270,6 +276,119 @@ class AudioPresetTests(unittest.TestCase):
         filters = [cmd[cmd.index("-af") + 1] for cmd in processor.commands if "-af" in cmd]
         self.assertTrue(any("highpass=f=120" in value for value in filters))
         self.assertTrue(any("highpass=f=180" in value for value in filters))
+
+    def test_adaptive_chunk_audio_routing_caps_parallel_workers(self):
+        class RoutingProcessor(VideoProcessor):
+            def _classify_chunk_audio_route(self, _media_path, _seg, _settings, *, index, tmpdir):
+                return {
+                    "audio_strategy": "ffmpeg",
+                    "audio_strategy_label": "기본",
+                    "confidence": 0.8,
+                    "settings": {"selected_audio_ai": "none", "selected_vad": "none"},
+                    "audio_profile": {"environment": "indoor", "noise_level": "low"},
+                }
+
+            def _run_media_command_no_progress(self, cmd, *, label, timeout=None, env=None):
+                with open(cmd[-1], "wb") as f:
+                    f.write(b"wav")
+                return True
+
+        class ImmediateFuture:
+            def __init__(self, result):
+                self._result = result
+
+            def result(self):
+                return self._result
+
+        max_workers_seen = []
+        submitted = []
+
+        class CapturingExecutor:
+            def __init__(self, *, max_workers, thread_name_prefix=None):
+                max_workers_seen.append(max_workers)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def submit(self, fn, item):
+                submitted.append(item)
+                return ImmediateFuture(fn(item))
+
+        processor = RoutingProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "media.mp4")
+            open(media, "wb").close()
+            chunk_dir = os.path.join(tmp, "chunks")
+            with mock.patch(
+                "core.audio.media_processor_audio.runtime_parallel_worker_plan",
+                return_value=(8, {"reductions": []}),
+            ), mock.patch("core.audio.media_processor_audio.ThreadPoolExecutor", CapturingExecutor):
+                ok = processor._write_adaptive_grouped_chunks_from_media(
+                    media,
+                    chunk_dir,
+                    [{"start": 0.0, "end": 10.0}, {"start": 10.0, "end": 20.0}, {"start": 20.0, "end": 30.0}],
+                    {
+                        "use_basic_filter": True,
+                        "audio_chunk_routing_enabled": True,
+                        "audio_chunk_route_vad_enabled": False,
+                        "audio_chunk_route_max_workers": 2,
+                    },
+                )
+
+        self.assertTrue(ok)
+        self.assertEqual(max_workers_seen, [2])
+        self.assertEqual(len(submitted), 3)
+
+    def test_adaptive_audio_routing_respects_string_false_settings(self):
+        self.assertFalse(VideoProcessor._adaptive_audio_routing_enabled({"audio_chunk_routing_enabled": "false"}))
+        self.assertFalse(
+            VideoProcessor._adaptive_audio_routing_enabled(
+                {
+                    "audio_chunk_routing_enabled": True,
+                    "audio_chunk_routing_disabled": "true",
+                }
+            )
+        )
+
+    def test_adaptive_chunk_audio_routing_respects_string_false_vad_flag(self):
+        class NoVadRoutingProcessor(VideoProcessor):
+            def _classify_chunk_audio_route(self, _media_path, _seg, _settings, *, index, tmpdir):
+                return {
+                    "audio_strategy": "ffmpeg",
+                    "audio_strategy_label": "기본",
+                    "confidence": 0.8,
+                    "settings": {"selected_audio_ai": "none", "selected_vad": "silero"},
+                    "audio_profile": {"environment": "indoor", "noise_level": "low"},
+                }
+
+            def _run_media_command_no_progress(self, cmd, *, label, timeout=None, env=None):
+                with open(cmd[-1], "wb") as f:
+                    f.write(b"wav")
+                return True
+
+            def _detect_vad_timestamps(self, *_args, **_kwargs):
+                raise AssertionError("string false should disable route VAD")
+
+        processor = NoVadRoutingProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "media.mp4")
+            open(media, "wb").close()
+            chunk_dir = os.path.join(tmp, "chunks")
+            ok = processor._write_adaptive_grouped_chunks_from_media(
+                media,
+                chunk_dir,
+                [{"start": 0.0, "end": 10.0}],
+                {
+                    "use_basic_filter": True,
+                    "audio_chunk_routing_enabled": True,
+                    "audio_chunk_route_vad_enabled": "false",
+                },
+            )
+
+        self.assertTrue(ok)
 
     def test_adaptive_chunk_audio_routing_offsets_chunk_vad_segments(self):
         class VadRoutingProcessor(VideoProcessor):

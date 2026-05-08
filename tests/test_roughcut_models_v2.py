@@ -268,12 +268,17 @@ class RoughCutModelsV2Tests(unittest.TestCase):
 
         def llm_client(prompt: str):
             captured["prompt"] = json.loads(prompt)
-            rows = captured["prompt"]["payload"]["major_segments"][0]["subtitle_rows"]
+            payload = captured["prompt"]["payload"]
+            major = payload["major_segments"][0]
+            rows = major["subtitle_rows"]
             self.assertEqual([row["text"] for row in rows], [
                 "오늘은 카메라를 들고 촬영을 시작합니다",
                 "렌즈 선택과 조명 세팅을 먼저 확인합니다",
                 "야간 촬영에서 노이즈를 줄이는 방법을 봅니다",
             ])
+            self.assertEqual(major["topic_level"], "middle_category")
+            self.assertEqual(major["candidate_topic_hint"], "촬영 장비 세팅")
+            self.assertIn("중분류 주제", payload["task_instruction"])
             return {
                 "topics": [
                     {
@@ -337,7 +342,40 @@ class RoughCutModelsV2Tests(unittest.TestCase):
         )
 
         self.assertNotEqual(labeled[0].title, first_text)
-        self.assertTrue(labeled[0].title)
+        self.assertEqual(labeled[0].title, "외관 디자인 특징")
+
+    def test_major_topic_labels_replace_generic_llm_topic_with_middle_category(self):
+        captured = {}
+        segments = (
+            RoughCutSegment(
+                segment_id="A",
+                major_id="A",
+                start=0.0,
+                end=8.0,
+                subtitle_ids=(0, 1, 2),
+                title="오늘은 이 차량 고속 주행 연비를 확인합니다",
+            ),
+        )
+        subtitles = (
+            SubtitleSegment(0.0, 2.0, "오늘은 이 차량 고속 주행 연비를 확인합니다", subtitle_id=0),
+            SubtitleSegment(2.2, 4.5, "리터당 17.8km가 나왔고 효율이 꽤 좋습니다", subtitle_id=1),
+            SubtitleSegment(5.0, 7.0, "주유 후 같은 구간을 다시 달리면서 수치를 비교합니다", subtitle_id=2),
+        )
+
+        def llm_client(prompt: str):
+            captured["prompt"] = json.loads(prompt)
+            major = captured["prompt"]["payload"]["major_segments"][0]
+            self.assertEqual(major["candidate_topic_hint"], "주행 연비 평가")
+            return {"topics": [{"major_id": "A", "topic": "리뷰"}]}
+
+        labeled = apply_major_topic_labels(
+            segments,
+            subtitles,
+            settings={"roughcut_llm_enabled": True},
+            llm_client=llm_client,
+        )
+
+        self.assertEqual(labeled[0].title, "주행 연비 평가")
 
 
 if __name__ == "__main__":

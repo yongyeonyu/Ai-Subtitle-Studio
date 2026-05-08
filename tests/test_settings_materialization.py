@@ -58,6 +58,8 @@ class SettingsMaterializationTests(unittest.TestCase):
         self.assertEqual(materialized["subtitle_mode"], "high")
         self.assertEqual(materialized["auto_start_mode"], "precise")
         self.assertEqual(materialized["stt_quality_preset"], "precise")
+        self.assertEqual(materialized["runtime_native_threads"], 8)
+        self.assertEqual(materialized["ffmpeg_filter_threads"], 8)
         self.assertTrue(materialized["autopilot_enabled"])
 
     def test_project_data_manager_save_writes_materialized_settings(self):

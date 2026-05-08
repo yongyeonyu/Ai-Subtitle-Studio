@@ -161,6 +161,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
                 command = popen.call_args.args[0]
                 self.assertIn("-c:v", command)
                 self.assertIn(command[command.index("-c:v") + 1], {"hevc_videotoolbox", "libx265"})
+                self.assertIn("force_original_aspect_ratio=decrease", " ".join(command))
         finally:
             widget.close()
             widget.deleteLater()
@@ -195,11 +196,35 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
-    def test_preview_proxy_is_default_off_without_setting(self):
+    def test_high_resolution_preview_waits_for_720p_proxy(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                src = os.path.join(tmp, "sample_4k.mp4")
+                with open(src, "wb") as f:
+                    f.write(b"video")
+
+                widget._source_width = 3840
+                widget._source_height = 2160
+                with patch.object(widget, "_preview_proxy_enabled", return_value=True), \
+                     patch.object(widget, "_wait_for_preview_proxy_enabled", return_value=True), \
+                     patch.object(widget, "_start_proxy_build") as start_proxy_build:
+                    playback_path = widget._playback_path_for(src)
+
+                self.assertEqual(playback_path, "")
+                self.assertFalse(widget._source_ready)
+                start_proxy_build.assert_called_once()
+                self.assertIn("720p", widget.info_label.text())
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_preview_proxy_is_default_on_without_setting(self):
         widget = VideoPlayerWidget()
         try:
             with tempfile.TemporaryDirectory() as tmp, patch.object(config, "DATASET_DIR", tmp):
-                self.assertFalse(widget._legacy_preview_proxy_enabled())
+                self.assertTrue(widget._legacy_preview_proxy_enabled())
         finally:
             widget.close()
             widget.deleteLater()

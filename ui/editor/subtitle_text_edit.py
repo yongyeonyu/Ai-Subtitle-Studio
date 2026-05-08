@@ -3,6 +3,7 @@
 
 import os
 import re
+import time
 
 from PyQt6.QtWidgets import QTextEdit
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QMimeData, QRect, QUrl, QTimer
@@ -102,9 +103,28 @@ class SubtitleHighlighter(QSyntaxHighlighter):
         if self._current_line != line:
             self._current_line = line
 
-    def set_quality_map(self, quality_by_line: dict[int, dict] | None):
-        self.quality_by_line = dict(quality_by_line or {})
-        self.rehighlight()
+    def set_quality_map(self, quality_by_line: dict[int, dict] | None, visible_lines=None):
+        next_map = dict(quality_by_line or {})
+        if next_map == self.quality_by_line:
+            return
+        previous_lines = set(self.quality_by_line.keys())
+        self.quality_by_line = next_map
+        if visible_lines is None:
+            self.rehighlight()
+            return
+        try:
+            line_set = {int(line) for line in visible_lines}
+        except Exception:
+            line_set = set()
+        changed_lines = previous_lines.union(next_map.keys()).union(line_set)
+        if not changed_lines or len(changed_lines) > 900:
+            self.rehighlight()
+            return
+        doc = self.document()
+        for line in sorted(changed_lines):
+            block = doc.findBlockByNumber(int(line))
+            if block.isValid():
+                self.rehighlightBlock(block)
 
     def set_quality_filter(self, key: str):
         self.quality_filter = str(key or "all")
@@ -207,17 +227,24 @@ class SubtitleTextEdit(QTextEdit):
         self.setStyleSheet(self._base_stylesheet)
         self._selection_locked = False
         self._gpu_document_overlay_active = False
+        self._last_user_scroll_at = 0.0
         self.setUndoRedoEnabled(True)
         self.setAcceptRichText(False)
         self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.setCursorWidth(3)
         self.timestampArea = TimestampArea(self)
         self.document().documentLayout().documentSizeChanged.connect(self._update_margin)
+        self._margin_update_timer = QTimer(self)
+        self._margin_update_timer.setSingleShot(True)
+        self._margin_update_timer.timeout.connect(self.update_margins)
         self._timestamp_update_timer = QTimer(self)
         self._timestamp_update_timer.setSingleShot(True)
         self._timestamp_update_timer.timeout.connect(self._flush_timestamp_area_update)
         self.verticalScrollBar().valueChanged.connect(self._schedule_timestamp_area_update)
         self.verticalScrollBar().valueChanged.connect(self._schedule_quick_layer_sync)
+        self.verticalScrollBar().valueChanged.connect(self._schedule_visible_margin_update)
+        self.verticalScrollBar().actionTriggered.connect(self._mark_user_scroll_activity)
+        self.verticalScrollBar().sliderPressed.connect(self._mark_user_scroll_activity)
         self.textChanged.connect(self._schedule_timestamp_area_update)
         self.cursorPositionChanged.connect(self._schedule_timestamp_area_update)
         
@@ -287,6 +314,29 @@ class SubtitleTextEdit(QTextEdit):
             return
         timer.start(16)
 
+    def _schedule_visible_margin_update(self):
+        timer = getattr(self, "_margin_update_timer", None)
+        if timer is None:
+            self.update_margins()
+            return
+        timer.start(32)
+
+    def _mark_user_scroll_activity(self, *_args):
+        now = time.monotonic()
+        self._last_user_scroll_at = now
+        parent = getattr(self, "_parent_widget", None)
+        if parent is not None:
+            try:
+                parent._last_editor_manual_scroll_at = now
+            except Exception:
+                pass
+            refresher = getattr(parent, "_schedule_visible_quality_refresh", None)
+            if callable(refresher):
+                try:
+                    refresher()
+                except Exception:
+                    pass
+
     def focusInEvent(self, event):
         if self._selection_locked:
             event.ignore()
@@ -335,16 +385,70 @@ class SubtitleTextEdit(QTextEdit):
     def is_selection_locked(self) -> bool:
         return bool(self._selection_locked)
 
+    def _visible_margin_line_range(self, block_count: int) -> tuple[int, int]:
+        try:
+            top_cursor = self.cursorForPosition(QPoint(8, 4))
+            bottom_cursor = self.cursorForPosition(QPoint(8, max(4, self.viewport().height() - 8)))
+            start_line = max(0, int(top_cursor.blockNumber()) - 80)
+            end_line = min(block_count - 1, int(bottom_cursor.blockNumber()) + 120)
+        except Exception:
+            start_line = 0
+            end_line = min(block_count - 1, 512)
+        try:
+            current_line = int(self.textCursor().blockNumber())
+            start_line = min(start_line, max(0, current_line - 120))
+            end_line = max(end_line, min(block_count - 1, current_line + 160))
+        except Exception:
+            pass
+        return max(0, start_line), max(0, end_line)
+
+    def visible_block_number_range(self, *, pad_before: int = 24, pad_after: int = 48) -> tuple[int, int]:
+        doc = self.document()
+        block_count = int(doc.blockCount())
+        if block_count <= 0:
+            return 0, 0
+        try:
+            top_cursor = self.cursorForPosition(QPoint(8, 4))
+            bottom_cursor = self.cursorForPosition(QPoint(8, max(4, self.viewport().height() - 8)))
+            start_line = max(0, int(top_cursor.blockNumber()) - int(pad_before))
+            end_line = min(block_count - 1, int(bottom_cursor.blockNumber()) + int(pad_after))
+        except Exception:
+            start_line = 0
+            end_line = min(block_count - 1, 256)
+        try:
+            current_line = int(self.textCursor().blockNumber())
+            start_line = min(start_line, max(0, current_line - int(pad_before)))
+            end_line = max(end_line, min(block_count - 1, current_line + int(pad_after)))
+        except Exception:
+            pass
+        return max(0, start_line), max(0, end_line)
+
+    def visible_block_numbers(self, *, pad_before: int = 24, pad_after: int = 48) -> range:
+        start_line, end_line = self.visible_block_number_range(pad_before=pad_before, pad_after=pad_after)
+        return range(int(start_line), int(end_line) + 1)
+
     def update_margins(self):
         doc = self.document()
         doc.blockSignals(True)  # 💡 [핵심 추가] 여백 조절을 글자 수정으로 오해하지 않게 신호를 차단합니다!
         
         cur = QTextCursor(doc)
         cur.beginEditBlock() 
-        block = doc.begin()
         prev_start = -1.0
-        
-        while block.isValid():
+        block_count = int(doc.blockCount())
+        virtual_threshold = int(os.environ.get("AI_SUBTITLE_EDITOR_MARGIN_VIRTUALIZE_THRESHOLD", "900") or "900")
+        if block_count > virtual_threshold:
+            start_line, end_line = self._visible_margin_line_range(block_count)
+            if start_line > 0:
+                prev_block = doc.findBlockByNumber(start_line - 1)
+                prev_ud = prev_block.userData() if prev_block.isValid() else None
+                if isinstance(prev_ud, SubtitleBlockData) and not prev_ud.is_gap:
+                    prev_start = prev_ud.start_sec
+            block = doc.findBlockByNumber(start_line)
+        else:
+            start_line, end_line = 0, max(0, block_count - 1)
+            block = doc.begin()
+
+        while block.isValid() and block.blockNumber() <= end_line:
             ud = block.userData()
             fmt = block.blockFormat()
             target_margin = 0.0
@@ -375,6 +479,12 @@ class SubtitleTextEdit(QTextEdit):
         self.setViewportMargins(self.timestampArea.sizeHint().width(), 0, 0, 0)
 
     def _create_quick_layer(self):
+        # Keep the subtitle text editor on the native QTextEdit path by default.
+        # QQuickWidget overlays can steal scroll/composition time on macOS/Metal
+        # and make long subtitle navigation feel stuck. It remains available as
+        # an explicit diagnostic opt-in.
+        if str(os.environ.get("AI_SUBTITLE_EDITOR_TEXT_QML", "")).strip().lower() not in {"1", "true", "yes", "on"}:
+            return None
         if not scenegraph_enabled("editor"):
             return None
         qml_path = os.path.join(os.path.dirname(__file__), "subtitle_text_editor.qml")
@@ -609,6 +719,10 @@ class SubtitleTextEdit(QTextEdit):
         super().mouseReleaseEvent(event)
         # 💡 [수정] 왼쪽 버튼 드래그 후 마우스를 뗄 때 팝업을 띄우던 로직을 완전히 제거했습니다.
         # 이제 드래그만 해서는 아무 일도 일어나지 않습니다.
+
+    def wheelEvent(self, event):
+        self._mark_user_scroll_activity()
+        super().wheelEvent(event)
 
     def contextMenuEvent(self, event):
         if self._selection_locked:

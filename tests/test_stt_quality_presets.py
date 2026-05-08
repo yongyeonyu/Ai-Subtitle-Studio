@@ -54,6 +54,8 @@ class STTQualityPresetTests(unittest.TestCase):
         self.assertTrue(precise["stt_ensemble_enabled"])
         self.assertTrue(precise["stt_candidate_scoring_enabled"])
         self.assertTrue(precise["stt_ensemble_llm_judge_enabled"])
+        self.assertEqual(precise["ff_chunk"], 35)
+        self.assertEqual(precise["whisper_chunk_overlap_sec"], 3.0)
         self.assertEqual(precise["roughcut_llm_model"], "exaone3.5:7.8b")
         self.assertEqual(precise["roughcut_llm_provider"], "ollama")
 
@@ -100,6 +102,38 @@ class STTQualityPresetTests(unittest.TestCase):
         user_settings = saved["stt_quality_user_presets"]["balanced"]["settings"]
         self.assertNotIn("selected_audio_ai", user_settings)
         self.assertNotIn("selected_vad", user_settings)
+
+    def test_benchmark_runtime_profile_preserves_explicit_model_routes(self):
+        settings = {
+            "benchmark_runtime_profile": "unit-bench",
+            "selected_whisper_model": "bench-stt",
+            "selected_whisper_model_secondary": "bench-stt2",
+            "selected_model": "bench-subtitle-llm",
+            "selected_llm_provider": "ollama",
+            "subtitle_llm_user_selected": True,
+            "roughcut_llm_enabled": True,
+            "roughcut_llm_use_override": True,
+            "roughcut_llm_provider": "ollama",
+            "roughcut_llm_model": "bench-roughcut-llm",
+            "stt_quality_user_presets": {
+                "precise": {
+                    "label": "High",
+                    "settings": {
+                        "selected_whisper_model": "slow-stt",
+                        "selected_whisper_model_secondary": "slow-stt2",
+                        "selected_model": "slow-subtitle-llm",
+                        "roughcut_llm_model": "slow-roughcut-llm",
+                    },
+                },
+            },
+        }
+
+        applied = apply_stt_quality_preset(settings, "precise")
+
+        self.assertEqual(applied["selected_whisper_model"], "bench-stt")
+        self.assertEqual(applied["selected_whisper_model_secondary"], "bench-stt2")
+        self.assertEqual(applied["selected_model"], "bench-subtitle-llm")
+        self.assertEqual(applied["roughcut_llm_model"], "bench-roughcut-llm")
 
 
 if __name__ == "__main__":

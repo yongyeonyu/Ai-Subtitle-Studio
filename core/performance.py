@@ -71,13 +71,23 @@ def hardware_profile() -> dict:
         # cores as a stability-first cap for CPU-bound worker defaults.
         performance_cores = physical
 
+    is_darwin_arm = platform.system() == "Darwin" and platform.machine().lower() in {"arm64", "aarch64"}
     accelerators = {
         "mlx": importlib.util.find_spec("mlx") is not None,
         "mlx_whisper": importlib.util.find_spec("mlx_whisper") is not None,
+        "torch": importlib.util.find_spec("torch") is not None,
         "coreml_cli": bool(shutil.which("argmax-cli") or shutil.which("whisperkit-cli")),
+        "cuda_cli": bool(shutil.which("nvidia-smi")),
+        "directml": importlib.util.find_spec("torch_directml") is not None,
+        "openvino": importlib.util.find_spec("openvino") is not None,
     }
-    if platform.system() == "Darwin" and platform.machine().lower() in {"arm64", "aarch64"}:
-        accelerators["metal_gpu"] = accelerators["mlx"]
+    if accelerators["cuda_cli"]:
+        accelerators["cuda"] = True
+    if is_darwin_arm:
+        # Metal is hardware-provided on Apple Silicon. MLX availability is
+        # tracked separately because STT model routing still needs mlx-whisper.
+        accelerators["metal"] = True
+        accelerators["metal_gpu"] = True
         # Apple Neural Engine access is generally routed through Core ML /
         # WhisperKit rather than direct Python APIs.
         accelerators["neural_engine_path"] = accelerators["coreml_cli"]
@@ -572,13 +582,21 @@ def _resource_pressure_reduction(snapshot: dict[str, Any], settings: dict[str, A
     available_ratio = float(snapshot.get("available_memory_ratio", 1.0) or 1.0)
     available_gb = float(snapshot.get("available_memory_bytes", 0) or 0) / (1024 ** 3)
     max_profile = hardware_max_profile_enabled(settings)
+    extreme_load = 2.50 if max_profile else 1.50
+    severe_load = 1.60 if max_profile else 1.15
     very_high_load = 1.15 if max_profile else 0.97
     high_load = 0.92 if max_profile else 0.72
     very_low_mem_ratio = 0.10 if max_profile else 0.15
     low_mem_ratio = 0.16 if max_profile else 0.25
     very_low_mem_gb = 1.25 if max_profile else 2.0
     low_mem_gb = 2.5 if max_profile else 4.0
-    if load_ratio >= very_high_load:
+    if load_ratio >= extreme_load:
+        reduction += 4
+        reasons.append("extreme_cpu_load")
+    elif load_ratio >= severe_load:
+        reduction += 3
+        reasons.append("severe_cpu_load")
+    elif load_ratio >= very_high_load:
         reduction += 2
         reasons.append("very_high_cpu_load")
     elif load_ratio >= high_load:

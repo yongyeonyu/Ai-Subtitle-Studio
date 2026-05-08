@@ -2,10 +2,12 @@
 # Phase: PHASE2
 import os
 import unittest
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QRect
+from PyQt6.QtWidgets import QApplication, QScrollArea
 
 from ui.timeline.timeline_scenegraph import build_scenegraph_subtitle_segments
 from ui.timeline.timeline_canvas import TimelineCanvas
@@ -35,6 +37,28 @@ class TimelineRenderCacheTests(unittest.TestCase):
         finally:
             canvas.close()
 
+    def test_viewport_paint_clip_limits_full_canvas_resize_repaint(self):
+        scroll = QScrollArea()
+        canvas = TimelineCanvas()
+        try:
+            scroll.setWidget(canvas)
+            scroll.setWidgetResizable(False)
+            scroll.resize(900, 340)
+            canvas.setFixedWidth(120_000)
+            canvas.setFixedHeight(314)
+            scroll.show()
+            self.app.processEvents()
+            scroll.horizontalScrollBar().setValue(20_000)
+
+            clipped = canvas._viewport_paint_clip(QRect(0, 0, 120_000, 314), pad_px=64)
+
+            self.assertGreaterEqual(clipped.left(), 20_000 - 64)
+            self.assertLessEqual(clipped.width(), scroll.viewport().width() + 128)
+            self.assertLess(clipped.width(), 120_000)
+        finally:
+            scroll.close()
+            canvas.close()
+
     def test_update_segments_invalidates_render_cache(self):
         canvas = TimelineCanvas()
         try:
@@ -57,6 +81,54 @@ class TimelineRenderCacheTests(unittest.TestCase):
             self.assertGreater(canvas._render_epoch, epoch_1)
             for cache in canvas._paint_index_cache.values():
                 self.assertEqual(cache.get("sig", ())[-1], canvas._render_epoch)
+        finally:
+            canvas.close()
+
+    def test_update_segments_does_not_precompute_full_voice_activity_lane(self):
+        canvas = TimelineCanvas()
+        try:
+            segments = [
+                {"start": float(i), "end": float(i) + 0.5, "text": f"seg {i}", "line": i}
+                for i in range(500)
+            ]
+            canvas._refresh_voice_activity_segments = Mock(side_effect=AssertionError("full precompute should stay lazy"))
+
+            canvas.update_segments(segments, active_sec=0.0, total_dur=600.0)
+
+            canvas._refresh_voice_activity_segments.assert_not_called()
+            self.assertEqual(canvas.voice_activity_segments, [])
+        finally:
+            canvas.close()
+
+    def test_visible_voice_activity_cache_uses_only_visible_inputs(self):
+        canvas = TimelineCanvas()
+        try:
+            visible_segments = [
+                {"start": 10.0, "end": 11.0, "text": "visible", "line": 10},
+                {"start": 12.0, "end": 13.0, "text": "visible 2", "line": 11},
+            ]
+            canvas.segments = [
+                {"start": float(i), "end": float(i) + 0.5, "text": f"seg {i}", "line": i}
+                for i in range(1000)
+            ]
+            canvas.total_duration = 2000.0
+            seen = {}
+
+            def fake_detection(segments, vad_segments, gap_segments, total_duration):
+                seen["segments"] = list(segments)
+                return [{"start": 10.0, "end": 13.0, "kind": "speech", "label": "음성", "color": "#34C759"}]
+
+            with patch("ui.timeline.timeline_analysis.subtitle_detection_segments_for_editor", side_effect=fake_detection):
+                markers = canvas.visible_voice_activity_segments_cached(
+                    9.5,
+                    13.5,
+                    visible_segments,
+                    [],
+                    [],
+                )
+
+            self.assertEqual(seen["segments"], visible_segments)
+            self.assertEqual(len(markers), 1)
         finally:
             canvas.close()
 

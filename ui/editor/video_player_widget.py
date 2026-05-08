@@ -166,6 +166,8 @@ class VideoPlayerWidget(QWidget):
         self._proxy_original_path: str = ""
         self._proxy_playback_path: str = ""
         self._source_aspect: float = 16 / 9
+        self._source_width: int = 0
+        self._source_height: int = 0
         self._preview_max_height: int = 720
         self._preview_max_width: int = 1280
         self._pending_media_source_path: str = ""
@@ -842,10 +844,10 @@ class VideoPlayerWidget(QWidget):
             settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
             if os.path.exists(settings_path):
                 with open(settings_path, "r", encoding="utf-8") as f:
-                    return max(24, min(80, int(json.load(f).get("video_ui_interval_ms", 33))))
+                    return max(24, min(80, int(json.load(f).get("video_ui_interval_ms", 50))))
         except Exception:
             pass
-        return 33
+        return 50
 
     def _get_audio_ai_setting(self) -> str:
         """user_settings.json에서 selected_audio_ai를 읽어 반환합니다."""
@@ -871,7 +873,7 @@ class VideoPlayerWidget(QWidget):
         return True
 
     def _preview_proxy_enabled(self) -> bool:
-        return self._legacy_preview_proxy_enabled()
+        return self._legacy_preview_proxy_enabled(default=True)
 
     def _proxy_path_for(self, path: str) -> str:
         root = os.path.join(config.DATASET_DIR, "video_preview_cache")
@@ -895,7 +897,47 @@ class VideoPlayerWidget(QWidget):
             return proxy_path
         if proxy_path:
             self._start_proxy_build(path, proxy_path)
+            if self._source_needs_preview_proxy() and self._wait_for_preview_proxy_enabled():
+                self._proxy_playback_path = ""
+                self._source_ready = False
+                try:
+                    self.info_label.setText("720p 프리뷰 생성 중...")
+                except Exception:
+                    pass
+                return ""
         return path
+
+    def _source_needs_preview_proxy(self) -> bool:
+        try:
+            width = int(getattr(self, "_source_width", 0) or 0)
+            height = int(getattr(self, "_source_height", 0) or 0)
+            return bool(width > int(getattr(self, "_preview_max_width", 1280) or 1280) or height > int(getattr(self, "_preview_max_height", 720) or 720))
+        except Exception:
+            return False
+
+    def _wait_for_preview_proxy_enabled(self) -> bool:
+        env_value = str(os.environ.get("AI_SUBTITLE_VIDEO_PREVIEW_WAIT", "") or "").strip().lower()
+        if env_value in {"1", "true", "yes", "on"}:
+            return True
+        if env_value in {"0", "false", "no", "off"}:
+            return False
+        try:
+            settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
+            if os.path.exists(settings_path):
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and "video_preview_proxy_wait_for_build" in data:
+                    value = data.get("video_preview_proxy_wait_for_build")
+                    if isinstance(value, str):
+                        value = value.strip().lower()
+                        if value in {"1", "true", "yes", "on"}:
+                            return True
+                        if value in {"0", "false", "no", "off"}:
+                            return False
+                    return bool(value)
+        except Exception:
+            pass
+        return True
 
     def _start_proxy_build(self, src: str, dst: str):
         proc = getattr(self, "_proxy_build_proc", None)
@@ -915,7 +957,7 @@ class VideoPlayerWidget(QWidget):
                 "-i",
                 src,
                 "-vf",
-                "scale=w=min(1280\\,iw):h=-2",
+                "scale=w=min(1280\\,iw):h=min(720\\,ih):force_original_aspect_ratio=decrease:force_divisible_by=2",
                 *hevc_encode_args(quality="fast"),
                 "-c:a",
                 "aac",
@@ -971,13 +1013,16 @@ class VideoPlayerWidget(QWidget):
             self._pending_media_source_path = _proxy_path
             self._proxy_playback_path = _proxy_path
             self._media_source_loaded = True
+            self._source_ready = True
             self.info_label.setText("HEVC 프리뷰")
-            if was_playing:
+            pending_autoplay = bool(getattr(self, "_pending_autoplay", False))
+            self._pending_autoplay = False
+            if was_playing or pending_autoplay:
                 self.media_player.play()
         except Exception:
             pass
 
-    def _legacy_preview_proxy_enabled(self) -> bool:
+    def _legacy_preview_proxy_enabled(self, *, default: bool = True) -> bool:
         env_value = str(os.environ.get("AI_SUBTITLE_VIDEO_PREVIEW_PROXY", "") or "").strip().lower()
         if env_value in {"1", "true", "yes", "on"}:
             return True
@@ -999,7 +1044,7 @@ class VideoPlayerWidget(QWidget):
                     return bool(value)
         except Exception:
             pass
-        return False
+        return bool(default)
 
 
     def load(self, path, segments=None):
@@ -1014,6 +1059,8 @@ class VideoPlayerWidget(QWidget):
                 info = probe_media(path)
                 w = float(info.get("width", 0) or 0)
                 h = float(info.get("height", 0) or 0)
+                self._source_width = int(w) if w > 0 else 0
+                self._source_height = int(h) if h > 0 else 0
                 self._rebuild_frame_time_map(
                     duration=float(info.get("duration", 0.0) or self.total_time or 0.0),
                     fps=float(info.get("fps", 0.0) or self.frame_rate or 30.0),
@@ -1021,17 +1068,20 @@ class VideoPlayerWidget(QWidget):
                 self._source_aspect = (w / h) if w > 0 and h > 0 else (16 / 9)
             except Exception:
                 self._source_aspect = 16 / 9
+                self._source_width = 0
+                self._source_height = 0
             playback_path = self._playback_path_for(path)
             self._pending_media_source_path = playback_path
             self._pending_seek_sec = self._pending_seek_sec if self._pending_seek_sec is not None else 0.0
             self._media_source_loaded = False
-            self._source_ready = True
+            self._source_ready = bool(playback_path)
             if self.has_vocal_track or isinstance(getattr(self, "vocal_player", None), QMediaPlayer):
                 self._release_vocal_player()
             if self.audio_output is not None:
                 self.audio_output.setVolume(1.0)
             self.has_vocal_track = False
-            self.info_label.setText("")
+            if playback_path:
+                self.info_label.setText("")
             if self._is_video_file(path) and self._pending_thumb_path is None:
                 self._extract_and_show_thumbnail(path)
             elif not self._is_video_file(path):

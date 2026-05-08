@@ -1,8 +1,8 @@
 # Version: 03.14.03
 # Phase: PHASE2
 import os
+import time
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -318,8 +318,8 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         editor._schedule_background_prefetch.assert_called_once()
         editor._sync_cursor_to_seg.assert_called_once_with(
             editor._cached_segs[0],
-            ensure_visible=False,
-            move_cursor=False,
+            ensure_visible=True,
+            move_cursor=True,
         )
         editor.timeline.center_to_sec.assert_not_called()
 
@@ -386,6 +386,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         )
         editor._cached_segs = [{"line": 0, "start": 0.0, "end": 1.0, "text": "원본"}]
         editor._refresh_video_subtitle_context = Mock()
+        editor._schedule_video_context_refresh = Mock()
 
         try:
             editor._on_inline_text_changed(0, "입력중")
@@ -393,15 +394,82 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertEqual(editor.text_edit.document().findBlockByNumber(0).text(), "원본")
             self.assertEqual(editor._cached_segs[0]["text"], "입력중")
             editor._refresh_video_subtitle_context.assert_not_called()
+            editor._schedule_video_context_refresh.assert_not_called()
 
             editor.timeline.canvas._inline_commit_in_progress = True
             editor._on_inline_text_changed(0, "최종")
 
             self.assertEqual(editor.text_edit.document().findBlockByNumber(0).text(), "최종")
             self.assertEqual(editor._cached_segs[0]["text"], "최종")
-            editor._refresh_video_subtitle_context.assert_called_once()
+            editor._refresh_video_subtitle_context.assert_not_called()
+            editor._schedule_video_context_refresh.assert_called_once_with(24)
         finally:
             editor.text_edit.close()
+
+    def test_line_text_edit_updates_memory_without_full_lookup_rebuild(self):
+        editor = _DummyEditor()
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("원본")
+        block = editor.text_edit.document().findBlockByNumber(0)
+        block.setUserData(SubtitleBlockData("00", 1.0, False))
+        editor._cached_segs = [
+            {
+                "line": 0,
+                "start": 1.0,
+                "end": 2.0,
+                "text": "원본",
+                "quality": {"confidence_label": "green"},
+            }
+        ]
+        editor._refresh_cached_line_map()
+        editor._subtitle_memory_cache = build_segment_lookup(editor._cached_segs)
+
+        try:
+            with patch(
+                "ui.editor.editor_segments.build_segment_lookup",
+                side_effect=AssertionError("plain text edits should not rebuild every segment lookup"),
+            ):
+                changed = editor._update_subtitle_memory_line_text(0, "수정")
+
+            self.assertTrue(changed)
+            self.assertTrue(editor._segment_cache_valid)
+            self.assertFalse(editor._subtitle_text_visibility_changed)
+            self.assertEqual(editor._cached_segs[0]["text"], "수정")
+            self.assertTrue(editor._cached_segs[0]["quality_stale"])
+            self.assertEqual(editor._subtitle_memory_cache["line_map"][0]["text"], "수정")
+            self.assertTrue(editor._subtitle_memory_cache["line_map"][0]["quality_stale"])
+        finally:
+            editor.text_edit.close()
+
+    def test_line_text_edit_repaints_only_timeline_segment_rect(self):
+        editor = _DummyEditor()
+        segment = {
+            "line": 3,
+            "start": 10.0,
+            "end": 11.0,
+            "text": "원본",
+            "quality": {"confidence_label": "yellow"},
+        }
+        dirty_rect = object()
+        canvas = SimpleNamespace(
+            segments=[segment],
+            _segment_visual_style_cache={3: "cached"},
+            _segment_for_line=Mock(return_value=segment),
+            _segment_repaint_rect=Mock(return_value=dirty_rect),
+            _update_dirty_rect=Mock(),
+            update=Mock(),
+        )
+        editor.timeline = SimpleNamespace(canvas=canvas)
+
+        changed = editor._update_timeline_segment_text_line(3, "수정")
+
+        self.assertTrue(changed)
+        self.assertEqual(segment["text"], "수정")
+        self.assertTrue(segment["quality_stale"])
+        self.assertEqual(canvas._segment_visual_style_cache, {})
+        canvas._segment_repaint_rect.assert_called_once_with(segment, margin=72)
+        canvas._update_dirty_rect.assert_called_once_with(dirty_rect)
+        canvas.update.assert_not_called()
 
     def test_fit_to_view_allows_long_timeline_below_default_zoom(self):
         timeline = TimelineWidget()
@@ -598,6 +666,31 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertAlmostEqual(timeline.canvas.pps, fit_pps)
             self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
             self.assertEqual(timeline.canvas.playhead_sec, 210.0)
+        finally:
+            timeline.close()
+
+    def test_set_active_does_not_recenter_when_segment_is_already_visible(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 300.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.pps = 10.0
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, 10.0))
+            self.app.processEvents()
+            timeline.scroll.horizontalScrollBar().setValue(200)
+            current_scroll = timeline.scroll.horizontalScrollBar().value()
+            timeline.center_to_sec = Mock(side_effect=AssertionError("visible segment should not be recentered"))
+
+            timeline.set_active(35.0)
+
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), current_scroll)
+            self.assertEqual(timeline._target_scroll_x, float(current_scroll))
+            self.assertEqual(timeline._current_scroll_x, float(current_scroll))
         finally:
             timeline.close()
 
@@ -1069,6 +1162,45 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_playing_segment_boundary_respects_recent_editor_scroll(self):
+        editor = _PlaybackEditor()
+        playing_state = object()
+        player = SimpleNamespace(
+            PlaybackState=SimpleNamespace(PlayingState=playing_state),
+            playbackState=Mock(return_value=playing_state),
+            position=Mock(return_value=4200),
+            duration=Mock(return_value=10000),
+        )
+        editor.video_player = SimpleNamespace(
+            media_player=player,
+            refresh_subtitle_context=Mock(),
+            set_subtitle_display_time=Mock(),
+        )
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False, set_active=Mock()),
+            follow_playhead=Mock(),
+            set_active=Mock(),
+            set_playhead=Mock(),
+        )
+        editor.editor_popup = SimpleNamespace(is_visible=Mock(return_value=False))
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("첫 줄\n둘째 줄\n셋째 줄")
+        editor._highlighter = SimpleNamespace(set_current_line=Mock())
+        editor._active_seg_start = 0.0
+        editor._last_editor_manual_scroll_at = time.monotonic()
+        editor._segments = [
+            {"start": 4.0, "end": 5.0, "line": 2, "text": "셋째 줄"},
+        ]
+
+        try:
+            editor._sync_playhead()
+
+            self.assertEqual(editor.text_edit.textCursor().blockNumber(), 0)
+            editor._highlighter.set_current_line.assert_called_once_with(2)
+            editor.timeline.canvas.set_active.assert_called_once_with(4.0)
+        finally:
+            editor.text_edit.close()
+
     def test_playback_sync_uses_memory_segment_lookup_without_document_scan(self):
         editor = _PlaybackEditor()
         playing_state = object()
@@ -1108,6 +1240,41 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             editor._get_current_segments.assert_not_called()
             self.assertEqual(editor.text_edit.textCursor().blockNumber(), 2)
             editor.timeline.canvas.set_active.assert_called_once_with(4.0)
+        finally:
+            editor.text_edit.close()
+
+    def test_settled_scrub_moves_editor_cursor_to_playhead_segment(self):
+        editor = _PlaybackEditor()
+        editor.video_fps = 30.0
+        editor.video_player = SimpleNamespace(
+            preview_seek=Mock(),
+            set_subtitle_display_time=Mock(),
+            media_player=None,
+        )
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(playhead_sec=0.0, _edit_active=False),
+            set_active=Mock(),
+            set_playhead=Mock(),
+        )
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("첫 줄\n둘째 줄\n셋째 줄")
+        editor._highlighter = SimpleNamespace(set_current_line=Mock())
+        editor._active_seg_start = 0.0
+        editor._pending_scrub_sec = 4.2
+        editor._schedule_background_prefetch = Mock()
+        editor._subtitle_memory_cache = build_segment_lookup([
+            {"start": 0.0, "end": 1.0, "line": 0, "text": "첫 줄"},
+            {"start": 4.0, "end": 5.0, "line": 2, "text": "셋째 줄"},
+        ])
+        editor._segments = []
+
+        try:
+            editor._apply_settled_scrub()
+
+            self.assertEqual(editor.text_edit.textCursor().blockNumber(), 2)
+            editor.timeline.set_active.assert_called_once_with(4.0)
+            editor.timeline.set_playhead.assert_any_call(4.0)
+            self.assertIsNone(editor._pending_scrub_sec)
         finally:
             editor.text_edit.close()
 
@@ -1194,13 +1361,14 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
-    def test_qml_playhead_overlay_asset_exists_for_gpu_path(self):
-        qml_path = Path(__file__).resolve().parents[1] / "ui" / "qml" / "timeline_playhead_overlay.qml"
-        self.assertTrue(qml_path.exists())
-        text = qml_path.read_text(encoding="utf-8")
-        self.assertIn("playheadX", text)
-        self.assertIn("visiblePlayhead", text)
-        self.assertIn("playheadBusy", text)
+    def test_playhead_overlay_stays_qwidget_to_keep_canvas_visible(self):
+        timeline = TimelineWidget()
+        try:
+            self.assertIsNone(getattr(timeline._playhead_overlay, "_quick", None))
+            self.assertTrue(timeline._playhead_overlay.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+            self.assertIs(timeline._playhead_overlay.parent(), timeline.scroll.viewport())
+        finally:
+            timeline.close()
 
     def test_playhead_busy_state_marks_overlay_and_canvas(self):
         timeline = TimelineWidget()

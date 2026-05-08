@@ -12,6 +12,16 @@ from core.runtime.memory_manager import (
 
 
 class RuntimeMemoryManagerTests(unittest.TestCase):
+    def test_manager_keeps_tracemalloc_off_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = RuntimeMemoryManager(
+                settings={},
+                diagnostics_dir=tmp,
+                cache_paths=[],
+            )
+
+        self.assertFalse(manager._trace_enabled)
+
     def test_runtime_disk_cache_usage_and_prune(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

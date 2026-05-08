@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import threading
 import wave
 from concurrent.futures import ThreadPoolExecutor
@@ -73,7 +74,14 @@ class VideoProcessorTranscribeMixin:
         lowered = raw.lower()
         if is_coreml_whisper_model(raw):
             return "npu"
-        if "mlx-community/" in lowered or lowered.startswith("mlx:") or lowered.startswith("mlx_"):
+        if (
+            "mlx-community/" in lowered
+            or lowered.startswith("mlx:")
+            or lowered.startswith("mlx_")
+            or lowered.endswith("-mlx")
+            or "/mlx-" in lowered
+            or "-mlx-" in lowered
+        ):
             return "gpu"
         if is_transformers_whisper_model(raw):
             torch_snapshot = torch_acceleration_snapshot(settings=settings, task="stt")
@@ -144,6 +152,26 @@ class VideoProcessorTranscribeMixin:
                 except (AttributeError, ValueError):
                     pass
         return result
+
+    @staticmethod
+    def _clone_ensemble_chunk_dir(chunk_dir: str, label: str) -> str:
+        source = os.path.abspath(str(chunk_dir or ""))
+        parent = os.path.dirname(source) or None
+        prefix = f".ensemble_{str(label or 'stt').lower()}_"
+        target = tempfile.mkdtemp(prefix=prefix, dir=parent)
+        ignore = shutil.ignore_patterns(
+            "_stt_recheck",
+            "_fast_stt2_recheck",
+            ".ensemble_*",
+        )
+        try:
+            shutil.rmtree(target, ignore_errors=True)
+            shutil.copytree(source, target, ignore=ignore)
+        except Exception:
+            shutil.rmtree(target, ignore_errors=True)
+            raise
+        return target
+
     def _release_after_transcribe_job(self, log_label: str = "STT") -> None:
         self.stop_transcribe()
         clear_audio_model_memory_caches(include_gpu=True)
@@ -193,6 +221,7 @@ class VideoProcessorTranscribeMixin:
             },
             "hallucination_silence_threshold": 0.6,
         }
+
     @staticmethod
     def _stt_candidate_keep_score(settings: dict | None) -> float:
         try:
@@ -599,11 +628,13 @@ class VideoProcessorTranscribeMixin:
         errors: dict[str, BaseException] = {}
         result_lock = threading.Lock()
         error_lock = threading.Lock()
+        ensemble_chunk_dirs: dict[str, str] = {}
 
         def _run(label: str, model: str):
             try:
+                local_chunk_dir = ensemble_chunk_dirs.get(label, chunk_dir)
                 local_result = self._collect_transcribe_result(
-                    chunk_dir,
+                    local_chunk_dir,
                     model,
                     target_end_sec=target_end_sec,
                     is_single=is_single,
@@ -629,6 +660,8 @@ class VideoProcessorTranscribeMixin:
             )
             suffix = self._ensemble_scheduler_suffix(scheduler_meta, backend_mix)
             get_logger().log(f"  🧵 [STT 앙상블] 리소스 자동 스케줄러: {stt_workers}개 워커{suffix}")
+            for label in ("STT1", "STT2"):
+                ensemble_chunk_dirs[label] = self._clone_ensemble_chunk_dir(chunk_dir, label)
             with ThreadPoolExecutor(max_workers=stt_workers, thread_name_prefix="stt-ensemble") as executor:
                 futures = [
                     executor.submit(_run, "STT1", primary_model),
@@ -715,6 +748,8 @@ class VideoProcessorTranscribeMixin:
             )
             yield merged, 1, 1
         finally:
+            for local_chunk_dir in ensemble_chunk_dirs.values():
+                shutil.rmtree(local_chunk_dir, ignore_errors=True)
             shutil.rmtree(chunk_dir, ignore_errors=True)
             self._release_after_transcribe_job("STT 앙상블")
     def transcribe(
@@ -833,7 +868,7 @@ class VideoProcessorTranscribeMixin:
                     chunk_paths=safe_paths,
                     model=target_model,
                     language=self.language,
-                    temperature_values=temperature_values
+                    temperature_values=temperature_values,
                 )
         else:
             from core.audio.whisper_faster import run_whisper

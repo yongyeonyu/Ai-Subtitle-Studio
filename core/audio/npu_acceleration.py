@@ -14,8 +14,11 @@ _NPU_UNAVAILABLE_NOTICE_KEYS: set[tuple[str, str]] = set()
 _NPU_MODEL_MAP = {
     "large-v3": DEFAULT_COREML_MODEL_ID,
     "whisper-large-v3": DEFAULT_COREML_MODEL_ID,
+    "whisper-large-v3-mlx": DEFAULT_COREML_MODEL_ID,
+    "whisper-large-v3-faster": DEFAULT_COREML_MODEL_ID,
     "openai/whisper-large-v3": DEFAULT_COREML_MODEL_ID,
     "mlx-community/whisper-large-v3-mlx": DEFAULT_COREML_MODEL_ID,
+    "systran/faster-whisper-large-v3": DEFAULT_COREML_MODEL_ID,
 }
 
 

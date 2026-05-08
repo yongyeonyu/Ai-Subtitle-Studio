@@ -224,6 +224,45 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             self.assertNotIn("mutated-after-preview", [segs[0]["text"] for _, segs in preview_calls])
             self.assertEqual(result[0][1:], (1, 1))
 
+    def test_ensemble_uses_isolated_chunk_dirs_for_each_track(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chunk_dir = os.path.join(tmp, "chunks")
+            os.makedirs(chunk_dir, exist_ok=True)
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000)
+
+            captured_dirs = {}
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "primary",
+                "selected_whisper_model_secondary": "secondary",
+                "stt_workers_auto_enabled": False,
+                "vad_post_stt_align_enabled": False,
+            }
+
+            def fake_collect(local_chunk_dir, _model, *, label, **_kwargs):
+                captured_dirs[label] = local_chunk_dir
+                local_wav = os.path.join(local_chunk_dir, "vad_000_0.000.wav")
+                self.assertTrue(os.path.exists(local_wav))
+                if label == "STT1":
+                    os.remove(local_wav)
+                return [{"start": 0.0, "end": 0.8, "text": label}]
+
+            self.processor._collect_transcribe_result = fake_collect
+
+            result = list(self.processor.transcribe_ensemble(chunk_dir))
+
+            self.assertEqual(result[0][1:], (1, 1))
+            self.assertEqual(set(captured_dirs), {"STT1", "STT2"})
+            self.assertNotEqual(captured_dirs["STT1"], chunk_dir)
+            self.assertNotEqual(captured_dirs["STT2"], chunk_dir)
+            self.assertNotEqual(captured_dirs["STT1"], captured_dirs["STT2"])
+            self.assertFalse(os.path.exists(captured_dirs["STT1"]))
+            self.assertFalse(os.path.exists(captured_dirs["STT2"]))
+
     def test_normalize_scored_tracks_filters_stt1_and_stt2_with_same_rule(self):
         tracks = {
             "STT1": [
@@ -1140,6 +1179,14 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False))
 
         self.assertEqual(rows[0][0][0]["text"], "fallback")
+
+    def test_dash_mlx_whisper_model_is_scheduled_as_gpu(self):
+        accel = self.processor._whisper_runtime_accelerator(
+            "youngouk/ghost613-turbo-korean-4bit-mlx",
+            {},
+        )
+
+        self.assertEqual(accel, "gpu")
 
 
 if __name__ == "__main__":

@@ -656,6 +656,11 @@ class PipelineCutBoundaryMixin:
 
             old_thread = getattr(self, "_cut_boundary_prescan_thread", None)
             if old_thread is not None and old_thread.is_alive():
+                self._ui_emit("_sig_set_cut_boundary_scan_active", True)
+                try:
+                    self._emit_cut_boundary_count_to_sidebar(0, percent=0, done=False)
+                except Exception:
+                    pass
                 return []
 
             def _worker():
@@ -673,10 +678,16 @@ class PipelineCutBoundaryMixin:
                 daemon=True,
             )
             self._cut_boundary_prescan_thread = thread
+            self._ui_emit("_sig_set_cut_boundary_scan_active", True)
+            try:
+                self._emit_cut_boundary_count_to_sidebar(0, percent=0, done=False)
+            except Exception:
+                pass
             thread.start()
             get_logger().log("  🎬 [컷 경계] 백그라운드 자동 분석 시작")
             return []
         except Exception as exc:
+            self._ui_emit("_sig_set_cut_boundary_scan_active", False)
             get_logger().log(f"  ⚠️ [컷 경계] 백그라운드 자동 분석 시작 실패: {exc}")
             return []
 
@@ -716,7 +727,7 @@ class PipelineCutBoundaryMixin:
             total_files = len(list(files or []))
             progress_preview_interval_sec = 0.18
             last_preview_emit_mono = 0.0
-            last_progress_log_mono = 0.0
+            last_detected_save_mono = 0.0
             pioneer_done_by_clip: dict[int, bool] = {}
             pioneer_progress_by_clip: dict[int, dict[int, int]] = {}
             last_logged_progress_pct_by_clip: dict[int, int] = {}
@@ -731,6 +742,12 @@ class PipelineCutBoundaryMixin:
                     or 1.0
                 ),
             )
+            self._ui_emit("_sig_set_cut_boundary_scan_active", True)
+            try:
+                self._emit_cut_boundary_count_to_sidebar(0, percent=0, done=False)
+            except Exception:
+                pass
+
             # CUT_BOUNDARY_FULL_TOPICLESS_INIT_V1
             # 컷 경계 체크가 켜져 있으면 스캔 시작 즉시 전체 A 주제없음 세그먼트를 만든다.
             # 이후 verified cut이 들어올 때마다 frame 기준으로 A/B/C split 된다.
@@ -745,8 +762,6 @@ class PipelineCutBoundaryMixin:
                 get_logger().log("  ▒ [컷 경계] 전체 주제없음 회색 중분류 초기화 (A)")
             except Exception as exc:
                 get_logger().log(f"  ⚠️ [컷 경계] 전체 주제없음 초기화 실패: {exc}")
-
-            self._ui_emit("_sig_set_cut_boundary_scan_active", True)
 
             def _style_provisional_row(row: dict) -> dict:
                 styled = dict(row or {})
@@ -766,7 +781,19 @@ class PipelineCutBoundaryMixin:
                     styled.setdefault("source", "visual_provisional")
                 return styled
 
-            def _save_detected_now():
+            def _save_detected_now(*, force: bool = False):
+                nonlocal last_detected_save_mono
+                if not force:
+                    try:
+                        interval_sec = max(
+                            0.0,
+                            float(settings.get("scan_cut_incremental_save_interval_sec", 0.75) or 0.0),
+                        )
+                    except Exception:
+                        interval_sec = 0.75
+                    now_mono = time.monotonic()
+                    if interval_sec > 0.0 and (now_mono - last_detected_save_mono) < interval_sec:
+                        return False
                 try:
                     project = read_project_file(project_path)
                     project.setdefault("analysis", {})
@@ -778,11 +805,14 @@ class PipelineCutBoundaryMixin:
                         provisional_boundaries=list(provisional_rows),
                     )
                     write_project_file(project_path, project)
+                    last_detected_save_mono = time.monotonic()
+                    return True
                 except Exception as exc:
                     get_logger().log(f"  ⚠️ [컷 경계] 중간 저장 실패: {exc}")
+                    return False
 
             def _progress(info: dict):
-                nonlocal last_preview_emit_mono, last_progress_log_mono
+                nonlocal last_preview_emit_mono
                 try:
                     clip_no = int(info.get("clip_idx", 0) or 0) + 1
                 except Exception:
@@ -905,10 +935,6 @@ class PipelineCutBoundaryMixin:
                 # 첫 번째 컷 경계가 발견되면 즉시 00:00~첫 경계 구간의
                 # "주제없음/컷경계" 중분류 placeholder를 갱신한다.
                 self._ui_emit("_sig_refresh_cut_boundary_placeholder")
-                try:
-                    self._ui_emit("_sig_refresh_cut_boundary_placeholder")
-                except Exception:
-                    pass
 
             def _relocated_provisional_found(row: dict, _current_rows: list[dict]):
                 sec = self._cut_boundary_sec_from_row(row)
@@ -971,6 +997,8 @@ class PipelineCutBoundaryMixin:
                     progress_callback=_progress,
                     found_callback=_provisional_found,
                     completion_callback=_pioneer_completion,
+                    settings=settings,
+                    settings_preloaded=True,
                 )
                 rows = scan_media_cut_boundary_provisionals(
                     path,
@@ -1010,10 +1038,11 @@ class PipelineCutBoundaryMixin:
                             scan_profile=scan_profile,
                             sample_positions=scan_profile.get("positions", ()),
                             settings=settings,
+                            settings_preloaded=True,
                             found_callback=_found_verified,
                             provisional_callback=_relocated_provisional_found,
                         )
-                    _save_detected_now()
+                    _save_detected_now(force=True)
                     self._save_cut_boundary_cache_for_start(files, settings, detected)
                     try:
                         self._force_cut_boundary_topicless_segments_to_project(

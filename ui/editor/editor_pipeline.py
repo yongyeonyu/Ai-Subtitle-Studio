@@ -8,7 +8,10 @@ ui/editor_pipeline.py
 - update_progress: 완료 조건 단일화 (EditorPipeline만 완료 판단)
 - 기존 기능 100% 유지
 """
-import os, time, threading, queue
+import os
+import queue
+import threading
+import time
 from PyQt6.QtCore import QTimer, QObject, pyqtSignal
 
 from core.runtime import config
@@ -102,7 +105,8 @@ class EditorPipelineMixin:
     # Pipeline & State Machine Logic
     # ---------------------------------------------------------
     def _trigger_auto_start(self):
-        if not hasattr(self, 'btn_start'): return
+        if not hasattr(self, 'btn_start'):
+            return
         from core.state_manager import SubtitleStateManager
         if self.sm.state == SubtitleStateManager.ST_IDLE:
             self._on_start_clicked()
@@ -110,7 +114,8 @@ class EditorPipelineMixin:
     def _tick_spinner(self):
         try:
             self._spinner_idx = (self._spinner_idx + 1) % len(self._spinner_frames)
-        except RuntimeError: pass
+        except RuntimeError:
+            pass
 
     def _clear_processing_indicators(self):
         self._last_live_processing_stage = ""
@@ -128,7 +133,8 @@ class EditorPipelineMixin:
         try:
             if hasattr(self, 'btn_start') and self.btn_start:
                 self.btn_start.setEnabled(True)
-        except RuntimeError: pass
+        except RuntimeError:
+            pass
 
     def _stop_pipeline(self):
         main_w = self.window()
@@ -154,6 +160,7 @@ class EditorPipelineMixin:
     def _start_pipeline(self, is_restart=False):
         main_w = self.window()
         layout_snapshot = self._snapshot_start_layout()
+        self._show_pipeline_start_feedback(is_restart=is_restart)
         lock_sidebar = getattr(main_w, "_lock_workspace_sidebar_width", None)
         if callable(lock_sidebar):
             try:
@@ -207,14 +214,38 @@ class EditorPipelineMixin:
             except Exception:
                 pass
 
-        if getattr(self, 'is_auto_start', False):
-            self.sm.start_auto_mode()
-        else:
-            self.sm.start_ai_all()
         self._process_start_time = time.time()
         self._backend_finished = False
         self._execute_pipeline_logic(is_restart)
         self._restore_start_layout(layout_snapshot)
+
+    def _show_pipeline_start_feedback(self, *, is_restart: bool = False) -> None:
+        """Make the Start click visibly acknowledge before setup work runs."""
+        try:
+            if getattr(self, "is_auto_start", False):
+                self.sm.start_auto_mode()
+            elif is_restart:
+                self.sm.start_processing()
+            else:
+                self.sm.start_ai_all()
+            self.sm.set_custom_status("⏳ 재시작 준비 중..." if is_restart else "⏳ 시작 준비 중...")
+        except Exception:
+            return
+        try:
+            main_w = self.window()
+            if hasattr(main_w, "sync_menu_from_editor"):
+                main_w.sync_menu_from_editor(self)
+        except Exception:
+            pass
+        try:
+            from PyQt6.QtCore import QEventLoop
+            from PyQt6.QtWidgets import QApplication
+
+            app = QApplication.instance()
+            if app is not None:
+                app.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        except Exception:
+            pass
 
     def _snapshot_start_layout(self) -> dict:
         """Capture layout sizes that should not shift just because processing starts."""
@@ -1033,9 +1064,12 @@ class EditorPipelineMixin:
 
     def _run_partial_backend(self, start_sec, end_sec, is_single=False):
         main_w = self.window()
-        if not (main_w and main_w.backend): return
-        if is_single: self.sm.start_partial_segment()
-        else: self.sm.start_partial_from_here()
+        if not (main_w and main_w.backend):
+            return
+        if is_single:
+            self.sm.start_partial_segment()
+        else:
+            self.sm.start_partial_from_here()
         rerun_cut_boundaries = not bool(is_single)
         prefix_vad = self._prepare_partial_rerun_state(
             start_sec,
@@ -1417,8 +1451,10 @@ class EditorPipelineMixin:
             QTimer.singleShot(0, lambda t=text, f=is_final, r=is_raw: self.update_status(t, f, r))
             return
         if is_final or "에러" in text or "실패" in text:
-            if "완료" in text: self.sm.complete_ai()
-            else: self.sm.stop_processing(text)
+            if "완료" in text:
+                self.sm.complete_ai()
+            else:
+                self.sm.stop_processing(text)
             self._clear_processing_indicators()
         else:
             self.sm.set_custom_status(text)

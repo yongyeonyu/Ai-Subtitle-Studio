@@ -41,7 +41,7 @@ def save_training_queue(
     }
     write_json(paths["training_queue"], payload)
     if refresh_manifest:
-        refresh_lora_personalization_manifest(store_dir)
+        refresh_lora_personalization_manifest(store_dir, refresh_bundle=False)
     return payload
 
 
@@ -151,7 +151,12 @@ def load_dedupe_index(store_dir: str | Path | None = None) -> dict[str, Any]:
     return payload
 
 
-def save_dedupe_index(payload: dict[str, Any], store_dir: str | Path | None = None) -> dict[str, Any]:
+def save_dedupe_index(
+    payload: dict[str, Any],
+    store_dir: str | Path | None = None,
+    *,
+    refresh_manifest: bool = True,
+) -> dict[str, Any]:
     paths = store_paths(store_dir)
     merged = default_dedupe_index()
     merged.update(dict(payload or {}))
@@ -161,7 +166,8 @@ def save_dedupe_index(payload: dict[str, Any], store_dir: str | Path | None = No
         entries.setdefault(kind, {})
     merged["entries"] = entries
     write_json(paths["dedupe_index"], merged)
-    refresh_lora_personalization_manifest(store_dir)
+    if refresh_manifest:
+        refresh_lora_personalization_manifest(store_dir, refresh_bundle=False)
     return merged
 
 
@@ -223,7 +229,7 @@ def _append_unique_rows(
             }
             appended += 1
             existing_rows.append(row)
-    save_dedupe_index(dedupe, store_dir)
+    save_dedupe_index(dedupe, store_dir, refresh_manifest=False)
     manifest = refresh_lora_personalization_manifest(store_dir)
     return {
         "kind": kind,

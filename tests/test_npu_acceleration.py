@@ -11,6 +11,14 @@ class NpuAccelerationTests(unittest.TestCase):
             "coreml:large-v3-v20240930_626MB",
         )
         self.assertEqual(
+            whisper_model_npu_target("whisper-large-v3-mlx"),
+            "coreml:large-v3-v20240930_626MB",
+        )
+        self.assertEqual(
+            whisper_model_npu_target("Systran/faster-whisper-large-v3"),
+            "coreml:large-v3-v20240930_626MB",
+        )
+        self.assertEqual(
             whisper_model_npu_target("large-v3"),
             "coreml:large-v3-v20240930_626MB",
         )

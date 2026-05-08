@@ -1,5 +1,5 @@
-# Version: 03.24.02
-# Phase: PHASE8_STTModeRuntimeRelease
+# Version: 03.24.03
+# Phase: PHASE9_EditorPerformanceRelease
 
 
 # === OS / Platform Detection ===
@@ -12,7 +12,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.24.02"
+APP_VERSION = "03.24.03"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -95,7 +95,7 @@ DEFAULT_ADV_SETTINGS = {
     "runtime_scheduler_reserve_cores": 0,
     "runtime_memory_monitor_interval_ms": 15000,
     "runtime_memory_disk_cache_budget_gb": 12.0,
-    "runtime_memory_tracemalloc_enabled": True,
+    "runtime_memory_tracemalloc_enabled": False,
     "runtime_memory_tracemalloc_frames": 8,
     "autopilot_enabled": True,
     "autopilot_single_user_mode": True,
@@ -151,8 +151,9 @@ DEFAULT_ADV_SETTINGS = {
     "editor_truth_capture_enabled": True,
     "editor_truth_capture_min_chars": 2,
     "editor_truth_capture_max_chars": 240,
-    "audio_chunk_routing_enabled": True,
-    "audio_chunk_route_vad_enabled": True,
+    "audio_chunk_routing_enabled": False,
+    "audio_chunk_route_vad_enabled": False,
+    "audio_chunk_route_max_workers": 2,
     "audio_chunk_profile_sec": 30.0,
     "whisper_chunk_overlap_sec": 1.5,
     "chunk_time_limit": 240,

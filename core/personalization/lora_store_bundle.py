@@ -263,7 +263,11 @@ def _move_legacy_cache_dir(legacy_dir: Path, target_dir: Path, conflicts_dir: Pa
     return moved, conflicted
 
 
-def _migrate_legacy_lora_cache_layout(paths: dict[str, Path]) -> dict[str, int]:
+def _migrate_legacy_lora_cache_layout(
+    paths: dict[str, Path],
+    *,
+    cleanup_temp_files: bool = False,
+) -> dict[str, int]:
     root = paths["root"]
     cache_root = paths["cache_root"]
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -293,7 +297,7 @@ def _migrate_legacy_lora_cache_layout(paths: dict[str, Path]) -> dict[str, int]:
         except OSError:
             pass
 
-    removed_tmp_files = _cleanup_all_lora_temp_files(paths)
+    removed_tmp_files = _cleanup_all_lora_temp_files(paths) if cleanup_temp_files else 0
     return {
         "migrated_files": migrated_files,
         "conflicted_files": conflicted_files,
@@ -917,7 +921,7 @@ def refresh_unified_lora_data_bundle(
 ) -> dict[str, Any]:
     with _UNIFIED_LORA_ARCHIVE_WRITE_LOCK:
         paths = store_paths(store_dir)
-        migration = _migrate_legacy_lora_cache_layout(paths)
+        migration = _migrate_legacy_lora_cache_layout(paths, cleanup_temp_files=True)
         targets = _bucket_archive_paths(paths)
         existing_targets = [path for path in targets.values() if path.exists()]
         needs_refresh = bool(force or len(existing_targets) != len(targets))
@@ -1199,7 +1203,7 @@ def initialize_lora_personalization_store(store_dir: str | Path | None = None) -
     paths = store_paths(store_dir)
     paths["root"].mkdir(parents=True, exist_ok=True)
     paths["cache_root"].mkdir(parents=True, exist_ok=True)
-    _migrate_legacy_lora_cache_layout(paths)
+    _migrate_legacy_lora_cache_layout(paths, cleanup_temp_files=True)
     paths["trained_adapters"].mkdir(parents=True, exist_ok=True)
     if _should_restore_from_existing_bundle(paths):
         return restore_lora_personalization_store_from_bundle(_existing_unified_lora_data_path(paths), store_dir)["manifest"]
@@ -1231,7 +1235,7 @@ def refresh_lora_personalization_manifest(
     refresh_bundle: bool = True,
 ) -> dict[str, Any]:
     paths = store_paths(store_dir)
-    _migrate_legacy_lora_cache_layout(paths)
+    _migrate_legacy_lora_cache_layout(paths, cleanup_temp_files=False)
     voice_training_plan = read_json(paths["voice_lora_training_plan"], {})
     stt1_whisper_adapter_plan = read_json(paths["stt1_whisper_adapter_training_plan"], {})
     stt1_whisper_runtime_manifest = read_json(paths["stt1_whisper_adapter_runtime_manifest"], {})

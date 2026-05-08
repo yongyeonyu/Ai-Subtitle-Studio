@@ -195,7 +195,7 @@ def _is_heavy_app_child_command(command: str) -> bool:
         "ffmpeg", "ffprobe", "rnnoise",
         "whisper_worker.py", "whisper_transformers.py", "whisper_faster.py",
         "whisper_coreml.py", "whisper_mlx.py", "resemble_enhance_runner.py",
-        "ollama runner",
+        "ollama runner", "ollama_llama_server",
     )
     return any(name in lowered for name in heavy_names)
 
@@ -231,6 +231,10 @@ def _is_ollama_runtime_command(command: str) -> bool:
     if "ollama runner" in lowered:
         return True
     if "ollama serve" in lowered:
+        return True
+    if "ollama_llama_server" in lowered:
+        return True
+    if "/ollama.app/contents/resources/ollama" in lowered:
         return True
     return "/ollama.app/contents/macos/ollama" in lowered
 

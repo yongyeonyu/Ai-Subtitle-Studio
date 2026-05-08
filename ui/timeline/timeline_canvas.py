@@ -8,7 +8,7 @@ from bisect import bisect_left, bisect_right
 
 import numpy as np
 from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
-from PyQt6.QtWidgets import QSizePolicy
+from PyQt6.QtWidgets import QSizePolicy, QScrollArea
 
 from core.frame_time import normalize_fps, snap_sec_to_frame
 
@@ -130,11 +130,16 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._speech_mask_wf_len: int = 0
         self._analysis_markers_cache_key = None
         self._analysis_markers_cache: list[dict] = []
+        self._visible_analysis_markers_cache_key = None
+        self._visible_analysis_markers_cache: list[dict] = []
+        self._visible_voice_activity_cache_key = None
+        self._visible_voice_activity_cache: list[dict] = []
         self._roughcut_major_cache_key = None
         self._roughcut_major_cache: list[dict] = []
         self._render_epoch = 0
         self._paint_index_cache: dict[str, dict] = {}
         self._paint_last_visible_counts: dict[str, int] = {}
+        self._segment_visual_style_cache: dict[tuple, tuple[str, str]] = {}
         self._line_segment_index_cache_key = None
         self._line_segment_index_cache: dict[int, dict] = {}
         self._editable_segments_cache_key = None
@@ -142,6 +147,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._diamond_pairs_cache_key = None
         self._diamond_pairs_cache: dict[str, object] = {}
         self._scan_boundary_hit_cache = None
+        self._voice_activity_segments_external = False
 
     # ---------------------------------------------------------
     # State / Utility
@@ -160,6 +166,10 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     def _invalidate_marker_caches(self):
         self._analysis_markers_cache_key = None
         self._analysis_markers_cache = []
+        self._visible_analysis_markers_cache_key = None
+        self._visible_analysis_markers_cache = []
+        self._visible_voice_activity_cache_key = None
+        self._visible_voice_activity_cache = []
         self._roughcut_major_cache_key = None
         self._roughcut_major_cache = []
 
@@ -167,6 +177,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._render_epoch = int(getattr(self, "_render_epoch", 0) or 0) + 1
         self._paint_index_cache = {}
         self._paint_last_visible_counts = {}
+        self._segment_visual_style_cache = {}
         self._line_segment_index_cache_key = None
         self._line_segment_index_cache = {}
         self._editable_segments_cache_key = None
@@ -174,6 +185,10 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._diamond_pairs_cache_key = None
         self._diamond_pairs_cache = {}
         self._scan_boundary_hit_cache = None
+        self._visible_analysis_markers_cache_key = None
+        self._visible_analysis_markers_cache = []
+        self._visible_voice_activity_cache_key = None
+        self._visible_voice_activity_cache = []
 
     def begin_mic_visualization(self, line_num: int | None = None):
         self._is_listening = True
@@ -198,6 +213,36 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         right = max(left + 1, int(rect.right()) + int(pad_px) + 1)
         return max(0.0, left / pps), max(0.0, right / pps)
 
+    def _viewport_paint_clip(self, rect: QRect | None = None, *, pad_px: int = 128) -> QRect:
+        """Clamp resize/full-widget repaints to the scroll viewport.
+
+        Zoom and fit-to-view resize the virtual timeline canvas. Qt can then
+        send a very wide paint rect even though only the scroll viewport is
+        visible, so capping the clip here prevents off-screen segment work.
+        """
+        paint_rect = QRect(rect) if rect is not None else QRect(self.rect())
+        scroll_area = self.parent()
+        while scroll_area is not None and not isinstance(scroll_area, QScrollArea):
+            scroll_area = scroll_area.parent()
+        if scroll_area is None:
+            return paint_rect
+        try:
+            viewport = scroll_area.viewport()
+            scroll_x = int(scroll_area.horizontalScrollBar().value())
+            viewport_w = max(1, int(viewport.width()))
+            viewport_h = max(1, int(viewport.height()))
+        except RuntimeError:
+            return paint_rect
+        except Exception:
+            return paint_rect
+        visible = QRect(
+            max(0, scroll_x - int(pad_px)),
+            0,
+            viewport_w + int(pad_px) * 2,
+            max(int(self.height()), viewport_h),
+        )
+        return paint_rect.intersected(visible)
+
     @staticmethod
     def _paint_item_bounds(item: dict) -> tuple[float, float]:
         try:
@@ -214,7 +259,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
     def _linear_visible_items_for_paint(self, items, start_sec: float, end_sec: float) -> list:
         visible = []
-        for item in list(items or []):
+        for item in items or []:
             if not isinstance(item, dict):
                 continue
             start, end = self._paint_item_bounds(item)
@@ -277,7 +322,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         *,
         pad_sec: float = 0.0,
     ) -> list:
-        rows = list(items or [])
+        rows = items if isinstance(items, list) else list(items or [])
         start_sec = max(0.0, float(start_sec or 0.0) - float(pad_sec or 0.0))
         end_sec = max(start_sec, float(end_sec or start_sec) + float(pad_sec or 0.0))
         if not rows:
@@ -311,8 +356,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             }
             self._paint_index_cache[cache_name] = cache
 
-        starts = list(cache.get("starts") or [])
-        by_start = list(cache.get("by_start") or [])
+        starts = cache.get("starts") or []
+        by_start = cache.get("by_start") or []
         if not by_start:
             self._paint_last_visible_counts[cache_name] = 0
             return []
@@ -323,14 +368,66 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         candidates = by_start[start_index:end_index]
         visible = [
             row
-            for _start, _end, _idx, row in candidates
-            if self._paint_item_bounds(row)[1] >= start_sec
-            and self._paint_item_bounds(row)[0] <= end_sec
+            for item_start, item_end, _idx, row in candidates
+            if item_end >= start_sec and item_start <= end_sec
         ]
         if cache_name == "segments":
             visible = self._merge_forced_visible_segments(visible, start_sec, end_sec)
         self._paint_last_visible_counts[cache_name] = len(visible)
         return visible
+
+    def _paint_window_signature(self, rows) -> tuple:
+        rows = rows or []
+        if not rows:
+            return (0, None, None, None, None)
+        first = rows[0] if isinstance(rows[0], dict) else {}
+        last = rows[-1] if isinstance(rows[-1], dict) else {}
+        first_start, _first_end = self._paint_item_bounds(first)
+        _last_start, last_end = self._paint_item_bounds(last)
+        return (
+            len(rows),
+            round(float(first_start or 0.0), 3),
+            round(float(last_end or 0.0), 3),
+            id(first),
+            id(last),
+        )
+
+    def visible_voice_activity_segments_cached(
+        self,
+        start_sec: float,
+        end_sec: float,
+        visible_segments=None,
+        visible_vad_segments=None,
+        visible_gap_segments=None,
+    ) -> list[dict]:
+        """Build subtitle-detection lane data only for the visible paint window."""
+        from ui.timeline.timeline_analysis import subtitle_detection_segments_for_editor
+
+        start_sec = max(0.0, float(start_sec or 0.0))
+        end_sec = max(start_sec, float(end_sec or start_sec))
+        key = (
+            int(getattr(self, "_render_epoch", 0) or 0),
+            round(start_sec, 2),
+            round(end_sec, 2),
+            self._paint_window_signature(visible_segments),
+            self._paint_window_signature(visible_vad_segments),
+            self._paint_window_signature(visible_gap_segments),
+            round(float(getattr(self, "total_duration", 0.0) or 0.0), 3),
+        )
+        if self._visible_voice_activity_cache_key != key:
+            markers = subtitle_detection_segments_for_editor(
+                list(visible_segments or []),
+                list(visible_vad_segments or []),
+                list(visible_gap_segments or []),
+                float(getattr(self, "total_duration", 0.0) or 0.0),
+            )
+            self._visible_voice_activity_cache = self._linear_visible_items_for_paint(
+                markers,
+                start_sec,
+                end_sec,
+            )
+            self._visible_voice_activity_cache_key = key
+        return list(self._visible_voice_activity_cache)
 
     def _items_near_x_for_hit(self, items, cache_name: str, x: int | float, *, pad_px: int = 24) -> list:
         pps = max(0.001, float(getattr(self, "pps", 1.0) or 1.0))
@@ -398,8 +495,10 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
                 list(getattr(self, "gap_segments", []) or []),
                 float(getattr(self, "total_duration", 0.0) or 0.0),
             )
+            self._voice_activity_segments_external = False
         except Exception:
             self.voice_activity_segments = []
+            self._voice_activity_segments_external = False
 
     def analysis_markers_cached(self) -> list[dict]:
         from ui.timeline.timeline_analysis import analysis_markers_for_widget
@@ -424,6 +523,44 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             )
             self._analysis_markers_cache_key = key
         return list(self._analysis_markers_cache)
+
+    def analysis_markers_visible_cached(
+        self,
+        start_sec: float,
+        end_sec: float,
+        visible_segments=None,
+        visible_vad_segments=None,
+        visible_gap_segments=None,
+    ) -> list[dict]:
+        """Return analysis markers for the visible viewport instead of the full project."""
+        from ui.timeline.timeline_analysis import analysis_markers_for_widget
+
+        start_sec = max(0.0, float(start_sec or 0.0))
+        end_sec = max(start_sec, float(end_sec or start_sec))
+        key = (
+            int(getattr(self, "_render_epoch", 0) or 0),
+            round(start_sec, 2),
+            round(end_sec, 2),
+            self._paint_window_signature(visible_segments),
+            self._paint_window_signature(visible_vad_segments),
+            self._paint_window_signature(visible_gap_segments),
+            round(float(getattr(self, "total_duration", 0.0) or 0.0), 3),
+        )
+        if self._visible_analysis_markers_cache_key != key:
+            markers = analysis_markers_for_widget(
+                self,
+                list(visible_segments or []),
+                list(visible_vad_segments or []),
+                list(visible_gap_segments or []),
+                float(getattr(self, "total_duration", 0.0) or 0.0),
+            )
+            self._visible_analysis_markers_cache = self._linear_visible_items_for_paint(
+                markers,
+                start_sec,
+                end_sec,
+            )
+            self._visible_analysis_markers_cache_key = key
+        return list(self._visible_analysis_markers_cache)
 
     def generation_silence_markers_cached(self) -> list[dict]:
         from ui.timeline.timeline_analysis import subtitle_generation_silence_segments_for_editor
@@ -469,13 +606,14 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         return list(self._roughcut_major_cache)
 
     def update_segments(self, segs, active_sec, total_dur):
+        rows = list(segs or [])
         source_gaps = [
             dict(s)
-            for s in list(segs or [])
+            for s in rows
             if s.get("is_gap") and float(s.get("end", s.get("start", 0.0)) or 0.0) > float(s.get("start", 0.0) or 0.0)
         ]
-        self.segments = [s for s in segs if not s.get("is_gap")]
-        self.total_duration = total_dur or (segs[-1]["end"] if segs else 0.0)
+        self.segments = [s for s in rows if not s.get("is_gap")]
+        self.total_duration = total_dur or (rows[-1]["end"] if rows else 0.0)
 
         generated_gaps = _build_gaps(self.segments, self.total_duration)
         if source_gaps:
@@ -505,7 +643,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
                 break
 
         self.gap_segments = new_gaps
-        self._refresh_voice_activity_segments()
+        if not bool(getattr(self, "_voice_activity_segments_external", False)):
+            self.voice_activity_segments = []
         self._invalidate_marker_caches()
         self._invalidate_render_cache()
 
@@ -626,13 +765,15 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     def set_vad_segments(self, vad_segs):
         self.vad_segments = vad_segs
         self._speech_mask = None      # 마스크 재계산 트리거
-        self._refresh_voice_activity_segments()
+        if not bool(getattr(self, "_voice_activity_segments_external", False)):
+            self.voice_activity_segments = []
         self._invalidate_marker_caches()
         self._invalidate_render_cache()
         self.update()
 
     def set_voice_activity_segments(self, segments: list[dict]):
         self.voice_activity_segments = list(segments or [])
+        self._voice_activity_segments_external = True
         self._invalidate_render_cache()
         self.update()
 

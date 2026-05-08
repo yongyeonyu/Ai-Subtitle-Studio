@@ -45,6 +45,7 @@ configure_qt_gpu_rendering_before_app()
 from PyQt6.QtCore import qInstallMessageHandler
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from core.runtime.logger import get_logger
+from ui.button_feedback import install_button_click_feedback
 from ui.dialogs.message_box import install_qmessagebox_hooks, show_message
 
 _QT_APP_SHUTTING_DOWN = False
@@ -150,12 +151,17 @@ def main():
         }}
         QScrollBar::add-line, QScrollBar::sub-line {{ background: none; }}
         QSplitter::handle {{ background: {config.BG3}; }}
+        QPushButton:pressed, QToolButton:pressed {{
+            border: 1px solid #74A9FF;
+            padding-top: 1px;
+        }}
         QToolTip {{
             background: #333333; color: #ffffff;
             border: 1px solid #555555; padding: 4px;
             font-size: 13px;
         }}
     """)
+    install_button_click_feedback(app)
 
     _start_ollama_runtime_for_app_launch()
 

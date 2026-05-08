@@ -251,6 +251,43 @@ class PerformanceMediaCacheTest(unittest.TestCase):
         self.assertNotIn("user_active", meta["reductions"])
         self.assertEqual(meta["ramp"]["reason"], "hardware_max_profile")
 
+    def test_hardware_max_profile_backs_off_under_extreme_cpu_load(self):
+        snapshot = {
+            "system": "Darwin",
+            "machine": "arm64",
+            "logical_cores": 10,
+            "physical_cores": 10,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 10 * 1024 ** 3,
+            "available_memory_ratio": 0.62,
+            "cpu_load_1m": 32.0,
+            "cpu_load_ratio": 3.2,
+            "on_battery": False,
+            "battery_percent": 80,
+            "user_idle_seconds": 120.0,
+            "user_active": False,
+        }
+        settings = {
+            "runtime_scheduler_auto_enabled": True,
+            "runtime_hardware_acceleration_enabled": True,
+            "runtime_performance_profile": "max",
+        }
+        with patch("core.performance.hardware_profile", return_value=snapshot), \
+             patch("core.performance.current_resource_snapshot", return_value=snapshot):
+            workers, meta = adaptive_worker_count(
+                task="cut_follower",
+                settings=settings,
+                requested=4,
+                workload=20,
+                minimum=1,
+                maximum=8,
+            )
+
+        self.assertEqual(workers, 4)
+        self.assertIn("extreme_cpu_load", meta["reductions"])
+
     def test_native_runtime_env_budget_uses_logical_cores_for_max_profile(self):
         snapshot = {
             "system": "Darwin",

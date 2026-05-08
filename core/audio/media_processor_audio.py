@@ -627,6 +627,20 @@ class VideoProcessorAudioHelpersMixin:
         return str(audio_ai or "none").lower() in {"none", "deepfilter"}
 
     @staticmethod
+    def _settings_bool(settings: dict | None, key: str, default: bool = False) -> bool:
+        value = dict(settings or {}).get(key, default)
+        if isinstance(value, bool):
+            return value
+        text = str(value or "").strip().lower()
+        if not text:
+            return bool(default)
+        if text in {"1", "true", "yes", "on", "enabled", "enable"}:
+            return True
+        if text in {"0", "false", "no", "off", "disabled", "disable", "끄기", "끔"}:
+            return False
+        return bool(default)
+
+    @staticmethod
     def _combine_audio_filters(*filters: str) -> str:
         chain = []
         for value in filters:
@@ -639,9 +653,9 @@ class VideoProcessorAudioHelpersMixin:
     @staticmethod
     def _adaptive_audio_routing_enabled(settings: dict | None) -> bool:
         data = dict(settings or {})
-        if bool(data.get("audio_chunk_routing_disabled", False)):
+        if VideoProcessorAudioHelpersMixin._settings_bool(data, "audio_chunk_routing_disabled", False):
             return False
-        return bool(data.get("audio_chunk_routing_enabled", True))
+        return VideoProcessorAudioHelpersMixin._settings_bool(data, "audio_chunk_routing_enabled", True)
 
     def _audio_route_sample_span(self, start: float, end: float, settings: dict | None = None) -> tuple[float, float]:
         start = max(0.0, float(start or 0.0))
@@ -868,7 +882,11 @@ class VideoProcessorAudioHelpersMixin:
         routes_by_index: dict[int, dict] = {}
         route_runtime: dict[int, tuple[dict, str, float]] = {}
         route_vad_segments = []
-        route_vad_enabled = bool(settings.get("audio_chunk_route_vad_enabled", settings.get("vad_post_stt_align_enabled", True)))
+        route_vad_enabled = self._settings_bool(
+            settings,
+            "audio_chunk_route_vad_enabled",
+            self._settings_bool(settings, "vad_post_stt_align_enabled", True),
+        )
         failures = 0
         workload = len(grouped)
         max_workers, scheduler = runtime_parallel_worker_plan(
@@ -880,6 +898,16 @@ class VideoProcessorAudioHelpersMixin:
             maximum=workload,
             reserve_task="io",
         )
+        try:
+            route_worker_cap = int(float(settings.get("audio_chunk_route_max_workers", 2) or 0))
+        except (TypeError, ValueError):
+            route_worker_cap = 2
+        if route_worker_cap > 0 and max_workers > route_worker_cap:
+            max_workers = max(1, min(max_workers, route_worker_cap))
+            reductions_list = list(scheduler.get("reductions") or [])
+            reductions_list.append("audio_route_cap")
+            scheduler["reductions"] = reductions_list
+            scheduler["audio_chunk_route_max_workers"] = int(route_worker_cap)
         reductions = ",".join(scheduler.get("reductions") or [])
         if max_workers > 1:
             suffix = f" ({reductions})" if reductions else ""
