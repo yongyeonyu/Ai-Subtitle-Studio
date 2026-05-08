@@ -3,6 +3,8 @@
 """Silero/TEN VAD ensemble logic for STT work segment generation."""
 from __future__ import annotations
 
+import os
+import tempfile
 from typing import Any
 
 from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
@@ -205,19 +207,27 @@ def detect_stt_work_segments(
     cut_boundaries: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Run available providers and return STT work segments."""
-    from core.stt_mode.vad_provider import detect_vad_candidates
+    from core.stt_mode.vad_provider import detect_vad_candidates_from_wav, extract_vad_analysis_wav
 
     timeline_fps = normalize_fps(fps or 30.0)
     silero: list[dict[str, Any]] = []
     ten: list[dict[str, Any]] = []
-    try:
-        silero = detect_vad_candidates(media_path, provider="silero", settings=settings, fps=timeline_fps)
-    except Exception:
-        silero = []
-    try:
-        ten = detect_vad_candidates(media_path, provider="ten_vad", settings=settings, fps=timeline_fps)
-    except Exception:
-        ten = []
+    if not media_path or not os.path.exists(media_path):
+        return []
+    with tempfile.TemporaryDirectory(prefix="ai_subtitle_stt_vad_") as td:
+        wav_path = os.path.join(td, "stt_vad.wav")
+        try:
+            extract_vad_analysis_wav(media_path, wav_path)
+        except Exception:
+            return []
+        try:
+            silero = detect_vad_candidates_from_wav(wav_path, provider="silero", settings=settings, fps=timeline_fps)
+        except Exception:
+            silero = []
+        try:
+            ten = detect_vad_candidates_from_wav(wav_path, provider="ten_vad", settings=settings, fps=timeline_fps)
+        except Exception:
+            ten = []
     return ensemble_vad_candidates(
         silero,
         ten,

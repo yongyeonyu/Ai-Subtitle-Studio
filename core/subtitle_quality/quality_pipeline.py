@@ -19,7 +19,7 @@ from .models import (
     normalize_segment_quality,
 )
 from .recheck_engine import recheck_low_confidence_segments
-from .vad_alignment_checker import annotate_segment_vad_alignment
+from .vad_alignment_checker import annotate_segments_vad_alignment
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -118,10 +118,10 @@ def _recalculate_segments(
 ) -> list[dict[str, Any]]:
     recalculated: list[dict[str, Any]] = []
     previous_texts: list[str] = []
-    for segment in segments:
-        item = attach_asr_metadata(dict(segment))
-        if vad_segments:
-            item = annotate_segment_vad_alignment(item, vad_segments)
+    prepared = [attach_asr_metadata(dict(segment)) for segment in segments]
+    if vad_segments:
+        prepared = annotate_segments_vad_alignment(prepared, vad_segments)
+    for item in prepared:
         item = annotate_segment_hallucination_risk(item, vad_segments=vad_segments, previous_texts=previous_texts)
         metrics = evaluate_subtitle_confidence(
             item,
@@ -130,7 +130,7 @@ def _recalculate_segments(
             previous_texts=previous_texts,
         )
         item["quality"] = metrics_to_dict(metrics)
-        history = list(segment.get("quality_history") or [])
+        history = list(item.get("quality_history") or [])
         if history:
             item["quality_history"] = history
         recalculated.append(normalize_segment_quality(item))

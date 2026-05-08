@@ -27,6 +27,8 @@ from core.project.project_context import (
     project_stt_preview_segments,
     segment_signature,
 )
+from core.project.project_assets import externalize_project_text_assets
+from core.project.project_srt import parse_srt_to_segments
 from core.cut_boundary import split_segments_by_cut_boundaries
 
 
@@ -1115,6 +1117,81 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(segment["text"], "최종 자막")
         self.assertEqual([candidate["source"] for candidate in segment["stt_candidates"]], ["STT1", "STT2"])
         self.assertEqual([row["text"] for row in previews], ["후보 하나", "후보 둘"])
+
+    def test_external_stt_assets_are_deduped_to_non_overlapping_tracks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            project = {
+                "project_name": "stt-overlap",
+                "project_path": str(path),
+                "timeline": {"timebase": {"primary_fps": 30.0}, "tracks": [{"clips": []}]},
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[],
+                    segments=[],
+                    stt_preview_segments=[
+                        {"start": 0.0, "end": 1.0, "text": "첫 후보", "stt_preview_source": "STT1", "stt_score": 92.0},
+                        {"start": 0.1, "end": 0.9, "text": "첫 후보", "stt_preview_source": "STT1", "stt_score": 60.0},
+                        {"start": 0.98, "end": 2.0, "text": "둘 후보", "stt_preview_source": "STT1", "stt_score": 91.0},
+                        {"start": 1.2, "end": 1.8, "text": "둘 후보", "stt_preview_source": "STT1", "stt_score": 55.0},
+                        {"start": 0.0, "end": 1.0, "text": "다른 후보", "stt_preview_source": "STT2", "stt_score": 90.0},
+                    ],
+                    primary_fps=30.0,
+                ),
+            }
+
+            externalize_project_text_assets(
+                str(path),
+                project,
+                final_segments=[],
+                stt_tracks=(project["editor_state"]["stt"]["candidate_tracks"]),
+            )
+            raw_payload = json.loads(json.dumps(project, ensure_ascii=False))
+            stt1_srt = path.parent / raw_payload["asset_storage"]["tracks"]["stt_stt1"]["path"]
+            stt1_rows = parse_srt_to_segments(str(stt1_srt))
+            loaded_previews = project_stt_preview_segments(raw_payload)
+            stt1_previews = [row for row in loaded_previews if row.get("stt_preview_source") == "STT1"]
+
+        self.assertEqual([row["text"] for row in stt1_rows], ["첫 후보", "둘 후보"])
+        self.assertLessEqual(stt1_rows[0]["end"], stt1_rows[1]["start"])
+        self.assertEqual([row["text"] for row in stt1_previews], ["첫 후보", "둘 후보"])
+        self.assertLessEqual(stt1_previews[0]["end"], stt1_previews[1]["start"])
+
+    def test_project_open_can_skip_heavy_external_candidate_hydration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            project = {
+                "project_name": "lazy-open",
+                "project_path": str(path),
+                "timeline": {"timebase": {"primary_fps": 30.0}, "tracks": [{"clips": []}]},
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[],
+                    segments=[],
+                    primary_fps=30.0,
+                ),
+            }
+            externalize_project_text_assets(
+                str(path),
+                project,
+                final_segments=[{"id": "seg-1", "start": 0.0, "end": 1.0, "text": "최종", "speaker": "00"}],
+                stt_tracks={"STT1": [{"start": 0.0, "end": 1.0, "text": "후보", "stt_score": 91.0}]},
+            )
+            path.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
+
+            lazy_loaded = load_project(str(path), hydrate_text_assets=False)
+            lazy_segments = project_segments_to_editor(lazy_loaded, include_analysis_candidates=False)
+            lazy_had_stt_cache = "_external_stt_tracks_cache" in lazy_loaded
+            lazy_candidate_tracks = dict(((lazy_loaded.get("editor_state", {}) or {}).get("stt", {}) or {}).get("candidate_tracks") or {})
+            eager_loaded = load_project(str(path), hydrate_text_assets=True)
+            eager_segments = project_segments_to_editor(eager_loaded)
+
+        self.assertFalse(lazy_had_stt_cache)
+        self.assertEqual(lazy_candidate_tracks, {})
+        self.assertEqual(lazy_segments[0]["text"], "최종")
+        self.assertNotIn("stt_candidates", lazy_segments[0])
+        self.assertIn("_external_stt_tracks_cache", eager_loaded)
+        self.assertEqual(eager_segments[0]["stt_candidates"][0]["text"], "후보")
 
     def test_project_segments_to_editor_reuses_persisted_subtitle_status(self):
         project = {

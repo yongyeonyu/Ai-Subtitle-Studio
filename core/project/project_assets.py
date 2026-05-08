@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from bisect import bisect_right
 from datetime import datetime
 from typing import Any
 
@@ -187,6 +188,143 @@ def _track_signature(rows: list[dict[str, Any]]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _track_text_key(text: str) -> str:
+    return "".join(str(text or "").lower().split())
+
+
+def _stt_track_row_score(row: dict[str, Any]) -> float:
+    score = None
+    for key in ("stt_score", "score"):
+        try:
+            value = float(row.get(key))
+        except (TypeError, ValueError):
+            continue
+        score = value * 100.0 if 0.0 < value <= 1.0 else value
+        break
+    if score is None:
+        score = 55.0
+    text_len = len(str(row.get("text", "") or "").strip())
+    duration = max(0.0, _segment_end(row) - _segment_start(row))
+    # Favor good ASR confidence and enough text, but avoid huge rolling-window
+    # candidates winning over multiple focused subtitle candidates.
+    return float(score) + min(text_len, 80) * 0.08 + min(duration, 4.0) * 0.20 - max(0.0, duration - 8.0) * 3.0
+
+
+def sanitize_stt_track_rows(
+    rows: list[dict[str, Any]] | None,
+    *,
+    source: str = "",
+    primary_fps: float = 30.0,
+) -> list[dict[str, Any]]:
+    """Return a compact, non-overlapping STT preview track for project assets."""
+    cleaned: list[tuple[int, dict[str, Any]]] = []
+    for idx, row in enumerate(rows or []):
+        if not isinstance(row, dict) or row.get("is_gap"):
+            continue
+        text = str(row.get("text", "") or "").strip()
+        if not text:
+            continue
+        start = _segment_start(row)
+        end = _segment_end(row)
+        if end <= start:
+            end = start + 0.1
+        item = dict(row)
+        item["start"] = start
+        item["end"] = end
+        item["text"] = text.replace("\u2028", "\n")
+        if source:
+            item["source"] = source
+            item["stt_preview_source"] = source
+        cleaned.append((idx, item))
+    if len(cleaned) <= 1:
+        out: list[dict[str, Any]] = []
+        for i, (_idx, item) in enumerate(cleaned):
+            row = dict(item)
+            row["index"] = i + 1
+            out.append(row)
+        return out
+
+    best_by_exact_key: dict[tuple[int, int, str], tuple[int, dict[str, Any]]] = {}
+    fps = max(1.0, _safe_float(primary_fps, 30.0))
+    for original_idx, item in cleaned:
+        start_frame = int(round(_segment_start(item) * fps))
+        end_frame = int(round(_segment_end(item) * fps))
+        key = (start_frame, end_frame, _track_text_key(str(item.get("text", "") or "")))
+        previous = best_by_exact_key.get(key)
+        if previous is None or _stt_track_row_score(item) > _stt_track_row_score(previous[1]):
+            best_by_exact_key[key] = (original_idx, item)
+
+    candidates = sorted(
+        best_by_exact_key.values(),
+        key=lambda pair: (_segment_end(pair[1]), _segment_start(pair[1]), pair[0]),
+    )
+    ends = [_segment_end(item) for _idx, item in candidates]
+    tolerance = max(0.035, min(0.090, 2.0 / fps))
+    weights = [_stt_track_row_score(item) for _idx, item in candidates]
+    prev_indices = [
+        bisect_right(ends, _segment_start(item) + tolerance, 0, i) - 1
+        for i, (_idx, item) in enumerate(candidates)
+    ]
+    dp = [0.0] * (len(candidates) + 1)
+    take = [False] * len(candidates)
+    for i, weight in enumerate(weights, start=1):
+        include = weight + dp[prev_indices[i - 1] + 1]
+        exclude = dp[i - 1]
+        if include > exclude:
+            dp[i] = include
+            take[i - 1] = True
+        else:
+            dp[i] = exclude
+
+    selected_pairs: list[tuple[int, dict[str, Any]]] = []
+    i = len(candidates) - 1
+    while i >= 0:
+        include = weights[i] + dp[prev_indices[i] + 1]
+        if take[i] and include >= dp[i]:
+            selected_pairs.append(candidates[i])
+            i = prev_indices[i]
+        else:
+            i -= 1
+    selected_pairs.reverse()
+    selected = [dict(item) for _idx, item in sorted(selected_pairs, key=lambda pair: (_segment_start(pair[1]), _segment_end(pair[1]), pair[0]))]
+
+    out: list[dict[str, Any]] = []
+    for item in selected:
+        if out:
+            prev = out[-1]
+            overlap = _segment_end(prev) - _segment_start(item)
+            if overlap > 0.0:
+                if overlap <= tolerance:
+                    prev["end"] = max(_segment_start(prev) + 0.05, _segment_start(item))
+                else:
+                    if _stt_track_row_score(item) > _stt_track_row_score(prev):
+                        out.pop()
+                    else:
+                        continue
+        if _segment_end(item) <= _segment_start(item):
+            item["end"] = _segment_start(item) + 0.05
+        item["index"] = len(out) + 1
+        out.append(item)
+    for item in out:
+        start = _segment_start(item)
+        end = _segment_end(item)
+        start_frame = int(round(start * fps))
+        end_frame = max(start_frame + 1, int(round(end * fps)))
+        item["start_frame"] = start_frame
+        item["end_frame"] = end_frame
+        item["timeline_start_frame"] = start_frame
+        item["timeline_end_frame"] = end_frame
+        item["frame_rate"] = fps
+        item["timeline_frame_rate"] = fps
+        item["frame_range"] = {
+            "unit": "frame",
+            "start": start_frame,
+            "end": end_frame,
+            "timeline_frame_rate": fps,
+        }
+    return out
+
+
 def _compact_value(value: Any, depth: int = 0) -> Any:
     if depth > 4:
         return None
@@ -351,6 +489,7 @@ def load_external_stt_tracks(project: dict[str, Any] | None) -> dict[str, list[d
         if not path or not os.path.exists(path):
             continue
         rows = _merge_srt_metadata(parse_srt_to_segments(path), list(track.get("metadata") or []), source=source)
+        rows = sanitize_stt_track_rows(rows, source=source)
         if rows:
             out[source] = rows
     if out:
@@ -418,7 +557,7 @@ def externalize_project_text_assets(
 
     stt_external_tracks: dict[str, Any] = {}
     for source in ("STT1", "STT2"):
-        rows = list(stt_tracks.get(source) or [])
+        rows = sanitize_stt_track_rows(list(stt_tracks.get(source) or []), source=source)
         if not rows:
             continue
         key = f"{_STT_TRACK_PREFIX}{source.lower()}"
@@ -474,6 +613,13 @@ def externalize_project_text_assets(
             source: int(track.get("segment_count", 0) or 0)
             for source, track in stt_external_tracks.items()
         }
+        editor_analysis = editor_state.setdefault("analysis", {})
+        if isinstance(editor_analysis, dict):
+            editor_analysis.pop("stt_candidate_tracks", None)
+            editor_analysis["external_stt_tracks"] = {
+                source: _track_ref(track)
+                for source, track in stt_external_tracks.items()
+            }
     analysis = project.setdefault("analysis", {})
     analysis.pop("stt_candidate_tracks", None)
     analysis["stt_candidate_schema"] = "stt_candidate_tracks.external_srt.v1"
@@ -510,5 +656,6 @@ __all__ = [
     "project_uses_external_text_assets",
     "relative_asset_path",
     "resolve_project_asset_path",
+    "sanitize_stt_track_rows",
     "write_srt_track",
 ]

@@ -64,14 +64,44 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_global_menu_qml_badges_expand_common_actions_to_four_letters(self):
+    def test_global_menu_qml_badges_are_removed_for_korean_only_labels(self):
         window = MainWindow()
         try:
-            self.assertEqual(window.global_menu_bar.btn_undo.property("qmlBadge"), "UNDO")
-            self.assertEqual(window.global_menu_bar.btn_redo.property("qmlBadge"), "REDO")
-            self.assertEqual(window.global_menu_bar.btn_save.property("qmlBadge"), "SAVE")
-            self.assertEqual(window.global_menu_bar.btn_help.property("qmlBadge"), "HELP")
-            self.assertEqual(window.global_menu_bar.btn_log.property("qmlBadge"), "SIDE")
+            self.assertEqual(window.global_menu_bar.btn_undo.property("qmlBadge"), "")
+            self.assertEqual(window.global_menu_bar.btn_redo.property("qmlBadge"), "")
+            self.assertEqual(window.global_menu_bar.btn_save.property("qmlBadge"), "")
+            self.assertEqual(window.global_menu_bar.btn_help.property("qmlBadge"), "")
+            self.assertEqual(window.global_menu_bar.btn_log.property("qmlBadge"), "")
+            self.assertEqual(window.global_menu_bar.btn_undo.text(), "실행취소")
+            self.assertEqual(window.global_menu_bar.btn_redo.text(), "다시실행")
+            self.assertEqual(window.global_menu_bar.btn_help.text(), "도움말")
+            self.assertEqual(window.global_menu_bar.btn_log.text(), "사이드바")
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_stt2_menu_includes_korean_komixv2_models(self):
+        window = MainWindow()
+        try:
+            window._whisper_model_items = lambda: [
+                "whisper-large-v3",
+                "whisper-medium-komixv2",
+                "seastar105/whisper-medium-komixv2",
+                "youngouk/whisper-medium-komixv2-mlx",
+                "ghost613-turbo-korean-4bit",
+            ]
+
+            items = window._stt2_model_items()
+
+            self.assertNotIn("whisper-large-v3", items)
+            self.assertIn("whisper-medium-komixv2", items)
+            self.assertIn("seastar105/whisper-medium-komixv2", items)
+            self.assertIn("youngouk/whisper-medium-komixv2-mlx", items)
+            self.assertIn("ghost613-turbo-korean-4bit", items)
+            self.assertEqual(window._short_model_name("whisper-medium-komixv2"), "KomixV2 · 별칭")
+            self.assertEqual(window._short_model_name("seastar105/whisper-medium-komixv2"), "KomixV2 · HF 원본")
+            self.assertEqual(window._short_model_name("youngouk/whisper-medium-komixv2-mlx"), "KomixV2 · MLX")
         finally:
             window.close()
             window.deleteLater()
@@ -1425,6 +1455,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 release_calls,
                 [{"force": True, "preserve_roughcut_status": True, "ollama_timeout_sec": 1.2}],
             )
+            self.assertTrue(editor._post_generation_models_release_requested)
+            self.assertFalse(editor._post_generation_models_released)
             schedule_gc.assert_called_once()
         finally:
             window._editor_widget = None

@@ -6,7 +6,7 @@ Timeline widget container
 """
 import time
 
-from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QBrush
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -272,7 +272,7 @@ class TimelineWidget(QWidget):
 
         self._vp = QTimer(self)
         self._vp.setSingleShot(True)
-        self._vp.setInterval(0)
+        self._vp.setInterval(16)
         self._vp.timeout.connect(self._sync_vp)
         self.scroll.horizontalScrollBar().valueChanged.connect(self._schedule_vp_sync)
         self.scroll.horizontalScrollBar().valueChanged.connect(lambda *_: self._sync_playhead_overlay())
@@ -286,6 +286,8 @@ class TimelineWidget(QWidget):
         self._fit_to_view_locked = False
         self._fit_after_resize_pending = False
         self._manual_zoom_since_fit = False
+        self._speaker_settings_cache = {}
+        self._speaker_settings_cache_at = 0.0
 
         self._smooth_scroll_timer = QTimer(self)
         self._smooth_scroll_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -307,6 +309,10 @@ class TimelineWidget(QWidget):
         self._shutdown_in_progress = False
         self._sync_scenegraph_layer()
         self._sync_focus_border()
+        try:
+            self.canvas._speaker_settings_provider = self._timeline_speaker_settings
+        except Exception:
+            pass
 
     def _reset_single_media_context(self, *, clear_duration: bool) -> None:
         self._waveform_mode = "single"
@@ -413,10 +419,24 @@ class TimelineWidget(QWidget):
         return None
 
     def _timeline_speaker_settings(self) -> dict:
+        now = time.monotonic()
+        cache = getattr(self, "_speaker_settings_cache", None)
+        cached_at = float(getattr(self, "_speaker_settings_cache_at", 0.0) or 0.0)
+        if isinstance(cache, dict) and cache and (now - cached_at) < 1.0:
+            return dict(cache)
         owner = self.parent()
         while owner is not None and not hasattr(owner, "settings"):
             owner = owner.parent()
-        return getattr(owner, "settings", {}) if owner is not None else {}
+        settings = getattr(owner, "settings", {}) if owner is not None else {}
+        try:
+            from ui.timeline.speaker_labels import current_speaker_settings
+
+            settings = current_speaker_settings(dict(settings or {}))
+        except Exception:
+            settings = dict(settings or {})
+        self._speaker_settings_cache = dict(settings or {})
+        self._speaker_settings_cache_at = now
+        return dict(self._speaker_settings_cache)
 
     def _sync_scenegraph_layer(self):
         layer = getattr(self, "_scenegraph_layer", None)
@@ -496,10 +516,23 @@ class TimelineWidget(QWidget):
             return max(0.0, float(boxes[-1].get("end", 0.0) or 0.0))
 
         total_duration = max(0.0, float(getattr(self.canvas, "total_duration", 0.0) or 0.0))
-        segments = [seg for seg in list(getattr(self.canvas, "segments", []) or []) if not seg.get("is_gap")]
-        if segments:
-            seg_end = max(float(seg.get("end", 0.0) or 0.0) for seg in segments)
-            return max(total_duration, max(0.0, seg_end))
+        cached_duration = getattr(self.canvas, "_segments_content_duration", None)
+        if cached_duration is not None:
+            try:
+                return max(total_duration, max(0.0, float(cached_duration or 0.0)))
+            except Exception:
+                pass
+
+        seg_end = 0.0
+        for seg in list(getattr(self.canvas, "segments", []) or []):
+            if not isinstance(seg, dict) or seg.get("is_gap"):
+                continue
+            try:
+                seg_end = max(seg_end, float(seg.get("end", 0.0) or 0.0))
+            except Exception:
+                continue
+        if seg_end > 0.0:
+            return max(total_duration, seg_end)
 
         return total_duration
 
@@ -535,20 +568,27 @@ class TimelineWidget(QWidget):
         if anchor_sec is None or anchor_view_x is None:
             anchor_sec, anchor_view_x = self._playhead_zoom_anchor(old_pps)
 
-        self.canvas.pps = new_pps
         target_w = self._canvas_width_for_duration(dur, new_pps)
-        if self.canvas.width() != target_w:
-            self.canvas.setFixedWidth(target_w)
-        self.canvas.update()
-        self._sync_scenegraph_layer()
-        self._sync_playhead_overlay()
-
+        viewport_w = max(1, int(self.scroll.viewport().width()))
+        max_scroll = max(0, int(target_w) - viewport_w)
         new_scroll = int(float(anchor_sec) * new_pps - float(anchor_view_x))
-        new_scroll = self._clamp_scroll_x(new_scroll)
+        new_scroll = max(0, min(new_scroll, max_scroll))
         sb = self.scroll.horizontalScrollBar()
-        sb.setValue(new_scroll)
-        self._target_scroll_x = float(new_scroll)
-        self._current_scroll_x = float(new_scroll)
+        self.canvas.setUpdatesEnabled(False)
+        try:
+            self.canvas.pps = new_pps
+            if self.canvas.width() != target_w:
+                self.canvas.setFixedWidth(target_w)
+            sb.setValue(new_scroll)
+            self._target_scroll_x = float(new_scroll)
+            self._current_scroll_x = float(new_scroll)
+        finally:
+            self.canvas.setUpdatesEnabled(True)
+        if hasattr(self.canvas, "_update_viewport_region"):
+            self.canvas._update_viewport_region()
+        else:
+            view_w = max(1, int(self.scroll.viewport().width()))
+            self.canvas.update(QRect(max(0, new_scroll - 160), 0, view_w + 320, self.canvas.height()))
         self._schedule_vp_sync()
         self._sync_playhead_overlay()
 
@@ -758,7 +798,12 @@ class TimelineWidget(QWidget):
         if self.canvas.width() != target_w:
             self.canvas.setFixedWidth(target_w)
         self.canvas.update_segments(segs, active_sec, dur)
-        self.global_canvas.update_segments(segs, dur)
+        self.global_canvas.update_segments(
+            getattr(self.canvas, "segments", segs),
+            dur,
+            signature=getattr(self.canvas, "_segments_geometry_signature", None),
+            rows=getattr(self.canvas, "segments", None),
+        )
         self._sync_scenegraph_layer()
         if _keep_view_x is not None and not fit_view:
             self._restore_subtitle_resize_view()
@@ -1273,23 +1318,29 @@ class TimelineWidget(QWidget):
         self._manual_zoom_since_fit = False
 
         new_pps = self._fit_pps_for_duration(dur)
-        self.canvas.pps = new_pps
-
         total_dur = max(float(getattr(self.canvas, "total_duration", 0.0) or 0.0), dur)
         target_w = self._canvas_width_for_duration(total_dur, new_pps)
-        if self.canvas.width() != target_w:
-            self.canvas.setFixedWidth(target_w)
-        self.canvas.update()
-        self._sync_scenegraph_layer()
-
         fit_start_sec = 0.0
         if not is_multiclip and self._selected_clip_idx >= 0 and self._selected_clip_duration > 0:
             fit_start_sec = max(0.0, float(self._selected_clip_offset or 0.0))
 
-        target_scroll = self._clamp_scroll_x(fit_start_sec * new_pps)
-        self.scroll.horizontalScrollBar().setValue(target_scroll)
-        self._target_scroll_x = float(target_scroll)
-        self._current_scroll_x = float(target_scroll)
+        viewport_w = max(1, int(self.scroll.viewport().width()))
+        max_scroll = max(0, int(target_w) - viewport_w)
+        target_scroll = max(0, min(int(fit_start_sec * new_pps), max_scroll))
+        self.canvas.setUpdatesEnabled(False)
+        try:
+            self.canvas.pps = new_pps
+            if self.canvas.width() != target_w:
+                self.canvas.setFixedWidth(target_w)
+            self.scroll.horizontalScrollBar().setValue(target_scroll)
+            self._target_scroll_x = float(target_scroll)
+            self._current_scroll_x = float(target_scroll)
+        finally:
+            self.canvas.setUpdatesEnabled(True)
+        if hasattr(self.canvas, "_update_viewport_region"):
+            self.canvas._update_viewport_region()
+        else:
+            self.canvas.update()
 
         if is_multiclip:
             start_frac = 0.0
@@ -1304,8 +1355,98 @@ class TimelineWidget(QWidget):
             end_frac = max(start_frac, min(1.0, (fit_start_sec + dur) / total_for_view))
         self.global_canvas.update_viewport(start_frac, end_frac)
         self.global_canvas.update()
-        self._sync_scenegraph_layer()
+        self._schedule_vp_sync()
         self._sync_playhead_overlay()
+
+    def show_time_window_seconds(
+        self,
+        seconds: float = 15.0,
+        *,
+        center_sec: float | None = None,
+        start_sec: float | None = None,
+    ) -> None:
+        """Show a compact time window for newly opened subtitle/project files."""
+        total_dur = max(0.0, float(getattr(self.canvas, "total_duration", 0.0) or 0.0), self._fit_content_duration())
+        try:
+            window_sec = max(1.0, float(seconds or 15.0))
+        except Exception:
+            window_sec = 15.0
+        if total_dur <= 0.0:
+            return
+        visible_sec = min(window_sec, max(0.001, total_dur))
+        visible_w = max(1, self._fit_reference_width())
+        new_pps = max(0.001, min(500.0, float(visible_w) / max(0.001, visible_sec)))
+        target_w = self._canvas_width_for_duration(total_dur, new_pps)
+        viewport_w = max(1, int(self.scroll.viewport().width()))
+        max_scroll = max(0, int(target_w) - viewport_w)
+
+        if center_sec is not None:
+            try:
+                anchor = max(0.0, min(total_dur, float(center_sec or 0.0)))
+            except Exception:
+                anchor = 0.0
+            view_start_sec = anchor - (visible_sec / 2.0)
+        elif start_sec is not None:
+            try:
+                view_start_sec = float(start_sec or 0.0)
+            except Exception:
+                view_start_sec = 0.0
+        elif self._selected_clip_idx >= 0 and self._selected_clip_duration > 0:
+            view_start_sec = max(0.0, float(self._selected_clip_offset or 0.0))
+        else:
+            view_start_sec = 0.0
+        view_start_sec = max(0.0, min(view_start_sec, max(0.0, total_dur - visible_sec)))
+        target_scroll = max(0, min(int(view_start_sec * new_pps), max_scroll))
+
+        self._fit_to_view_locked = False
+        self._fit_after_resize_pending = False
+        self._manual_zoom_since_fit = False
+        self.canvas.setUpdatesEnabled(False)
+        try:
+            self.canvas.pps = new_pps
+            if self.canvas.width() != target_w:
+                self.canvas.setFixedWidth(target_w)
+            self.scroll.horizontalScrollBar().setValue(target_scroll)
+            self._target_scroll_x = float(target_scroll)
+            self._current_scroll_x = float(target_scroll)
+        finally:
+            self.canvas.setUpdatesEnabled(True)
+
+        total_for_view = max(0.001, float(getattr(self.canvas, "total_duration", 0.0) or total_dur))
+        start_frac = max(0.0, min(1.0, view_start_sec / total_for_view))
+        end_frac = max(start_frac, min(1.0, (view_start_sec + visible_sec) / total_for_view))
+        self.global_canvas.update_viewport(start_frac, end_frac)
+        self.global_canvas.update()
+        if hasattr(self.canvas, "_update_viewport_region"):
+            self.canvas._update_viewport_region()
+        else:
+            self.canvas.update()
+        self._schedule_vp_sync()
+        self._sync_playhead_overlay()
+
+    def schedule_time_window_seconds(
+        self,
+        seconds: float = 15.0,
+        *,
+        center_sec: float | None = None,
+        start_sec: float | None = None,
+        delays: tuple[int, ...] = (0, 120, 280),
+    ) -> None:
+        def _apply_window(s: float, c: float | None, st: float | None) -> None:
+            if bool(getattr(self, "_shutdown_in_progress", False)):
+                return
+            if bool(getattr(self, "_manual_zoom_since_fit", False)):
+                return
+            try:
+                self.show_time_window_seconds(s, center_sec=c, start_sec=st)
+            except RuntimeError:
+                return
+
+        for delay in delays:
+            QTimer.singleShot(
+                int(delay),
+                lambda s=seconds, c=center_sec, st=start_sec: _apply_window(s, c, st),
+            )
 
     def zoom_in(self):
         self._zoom_canvas(1.15)

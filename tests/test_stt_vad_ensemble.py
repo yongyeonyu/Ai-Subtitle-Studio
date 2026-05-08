@@ -1,4 +1,4 @@
-from core.stt_mode.vad_ensemble import ensemble_vad_candidates
+from core.stt_mode.vad_ensemble import detect_stt_work_segments, ensemble_vad_candidates
 
 
 def test_overlapping_silero_ten_candidates_produce_high_confidence_segment():
@@ -40,3 +40,32 @@ def test_sorted_output_has_valid_ranges():
 
     assert [row["start_frame"] for row in rows] == sorted(row["start_frame"] for row in rows)
     assert all(row["end_frame"] > row["start_frame"] for row in rows)
+
+
+def test_detect_stt_work_segments_reuses_one_extracted_wav_for_both_providers(tmp_path, monkeypatch):
+    media = tmp_path / "media.mp4"
+    media.write_bytes(b"fake-media")
+    extracted = []
+    providers = []
+
+    def fake_extract(media_path, wav_path):
+        extracted.append((media_path, wav_path))
+        with open(wav_path, "wb") as handle:
+            handle.write(b"wav")
+
+    def fake_detect_from_wav(wav_path, *, provider, settings=None, fps=None):
+        providers.append((wav_path, provider))
+        if provider == "silero":
+            return [{"provider": "silero", "start": 1.0, "end": 2.0}]
+        return [{"provider": "ten_vad", "start": 1.1, "end": 1.9}]
+
+    monkeypatch.setattr("core.stt_mode.vad_provider.extract_vad_analysis_wav", fake_extract)
+    monkeypatch.setattr("core.stt_mode.vad_provider.detect_vad_candidates_from_wav", fake_detect_from_wav)
+
+    rows = detect_stt_work_segments(str(media), fps=30)
+
+    assert len(extracted) == 1
+    assert [provider for _wav, provider in providers] == ["silero", "ten_vad"]
+    assert providers[0][0] == providers[1][0]
+    assert rows
+    assert rows[0]["vad_sources"] == ["silero", "ten_vad"]

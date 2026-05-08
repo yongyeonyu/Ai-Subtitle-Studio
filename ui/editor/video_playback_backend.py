@@ -2,9 +2,9 @@
 # Phase: PHASE3
 """Selectable video playback backends for the editor preview.
 
-On macOS we now prefer QtMultimedia for the default editor preview because it
-keeps memory pressure lower than always standing up an external player path.
-mpv/libVLC remain available as explicit opt-ins and practical fallbacks.
+The editor prefers mpv when available because it gives us lightweight hardware
+decode and smoother 720p proxy playback after AI models have been unloaded.
+QtMultimedia remains the safest test/offscreen fallback.
 """
 from __future__ import annotations
 
@@ -98,8 +98,6 @@ def choose_video_backend(preferred: str | None = None) -> VideoBackendChoice:
         return VideoBackendChoice("qt", "forced")
     if (requested == "auto") and (_running_under_pytest() or _offscreen_qt()):
         return VideoBackendChoice("qt", "test_or_offscreen_safe")
-    if requested == "auto" and bool(getattr(config, "IS_MAC", False)):
-        return VideoBackendChoice("qt", "mac_low_memory_default")
     if requested in {"auto", "mpv"} and _mpv_available():
         return VideoBackendChoice("mpv", "preferred_lightweight_gpu_backend")
     if requested == "mpv":

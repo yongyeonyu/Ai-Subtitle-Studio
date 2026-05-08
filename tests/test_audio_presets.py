@@ -14,6 +14,7 @@ from core.audio.audio_presets import (
     resolve_audio_preset_combo_data,
     uses_default_audio_preset,
 )
+from core.audio.preset_auto_classifier import select_audio_candidate
 from core.audio.media_processor import VideoProcessor
 
 
@@ -157,6 +158,20 @@ class AudioPresetTests(unittest.TestCase):
         self.assertIn("afftdn=nf=-26", cleanup)
         self.assertIn("volume=4.8", cleanup)
 
+    def test_deepfilter_fused_ffmpeg_filter_removes_duplicate_heavy_filters(self):
+        processor = VideoProcessor()
+        settings = apply_audio_preset({}, "야외")
+
+        fused = processor._build_fused_ffmpeg_filter("deepfilter", settings, use_basic=True)
+
+        self.assertEqual(fused.count("afftdn="), 1)
+        self.assertEqual(fused.count("loudnorm="), 1)
+        self.assertEqual(fused.count("highpass="), 1)
+        self.assertEqual(fused.count("lowpass="), 1)
+        self.assertIn("dynaudnorm", fused)
+        self.assertIn("speechnorm", fused)
+        self.assertIn("volume=4.8", fused)
+
     def test_audio_filter_none_skips_cleanup_filter_after_ffmpeg_preprocess(self):
         processor = VideoProcessor()
         settings = apply_audio_preset({}, "마이크 없음/풀속도")
@@ -168,7 +183,7 @@ class AudioPresetTests(unittest.TestCase):
         self.assertIn("afftdn=nf=-28", preprocess)
         self.assertEqual(cleanup, "anull")
 
-    def test_rnnoise_uses_fast_cleanup_chain_without_demucs_settings(self):
+    def test_rnnoise_uses_speech_preserve_cleanup_chain_without_demucs_settings(self):
         processor = VideoProcessor()
         settings = apply_audio_preset({}, "야외")
 
@@ -179,6 +194,39 @@ class AudioPresetTests(unittest.TestCase):
         self.assertIn("speechnorm", cleanup)
         self.assertIn("volume=4.8", cleanup)
         self.assertNotIn("demucs", cleanup.lower())
+
+    def test_auto_audio_quality_risk_prefers_clearvoice_over_rnnoise_even_for_long_media(self):
+        profile = {
+            "environment": "indoor",
+            "noise_level": "medium",
+            "low_rumble": False,
+            "quiet": False,
+            "hot_signal": False,
+            "speech_confidence": 0.46,
+        }
+        features = {"speech_confidence": 0.46, "media_duration_sec": 7200.0}
+
+        result = select_audio_candidate(profile, features, use_lora_prior=False)
+
+        self.assertEqual(result["id"], "noisy_voice")
+        self.assertEqual(result["settings"]["selected_audio_ai"], "clearvoice")
+        self.assertIn("자막 품질", result["reason"])
+
+    def test_auto_audio_duration_does_not_change_filter_choice(self):
+        profile = {
+            "environment": "outdoor",
+            "noise_level": "high",
+            "low_rumble": False,
+            "quiet": False,
+            "hot_signal": False,
+            "speech_confidence": 0.6,
+        }
+        short = select_audio_candidate(profile, {"speech_confidence": 0.6, "media_duration_sec": 60.0}, use_lora_prior=False)
+        long = select_audio_candidate(profile, {"speech_confidence": 0.6, "media_duration_sec": 10800.0}, use_lora_prior=False)
+
+        self.assertEqual(short["settings"]["selected_audio_ai"], "clearvoice")
+        self.assertEqual(long["settings"]["selected_audio_ai"], "clearvoice")
+        self.assertEqual(short["id"], long["id"])
 
     def test_experimental_enhancers_use_light_cleanup_chain(self):
         processor = VideoProcessor()

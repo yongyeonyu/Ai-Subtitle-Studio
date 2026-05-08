@@ -20,9 +20,9 @@ from PyQt6.QtGui import QPixmap, QImage, QColor
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from core.runtime import config
 from core.frame_time import build_frame_time_map, normalize_fps, snap_sec_to_frame
-from core.media_fingerprint import media_file_fingerprint
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail
+from core.video_preview_proxy import preview_proxy_path_for
 from core.video_codec import ffmpeg_hwdecode_args, hevc_encode_args
 from ui.editor.video_playback_backend import create_video_backend
 from ui.editor.video_overlay_widgets import (
@@ -101,6 +101,7 @@ class _WorkerProxy:
 
     def set_playing(self, playing: bool):
         if playing: 
+            self.parent_widget._video_surface_primed = True
             self.media_player.play()
             if getattr(self.parent_widget, 'has_vocal_track', False):
                 vocal_player = self.parent_widget._ensure_vocal_player()
@@ -154,6 +155,9 @@ class VideoPlayerWidget(QWidget):
         self._pending_thumb_path: str | None = None
         self._pending_thumb_sec: float = 0.0
         self._subtitle_starts: list[float] = []
+        self._subtitle_ends: list[float] = []
+        self._subtitle_texts: list[str] = []
+        self._subtitle_count: int = 0
         self._subtitle_cache_idx: int = -1
         self._last_time_label_ms: int = -250
         self._last_provider_refresh_at: float = 0.0
@@ -172,6 +176,9 @@ class VideoPlayerWidget(QWidget):
         self._preview_max_width: int = 1280
         self._pending_media_source_path: str = ""
         self._media_source_loaded: bool = False
+        self._video_surface_primed: bool = False
+        self._last_unprimed_thumbnail_at: float = 0.0
+        self._last_unprimed_thumbnail_sec: float | None = None
         self._source_display_name: str = ""
         self._proxy_build_proc = None
         self._proxy_build_src: str = ""
@@ -191,6 +198,10 @@ class VideoPlayerWidget(QWidget):
 
         self.media_player.durationChanged.connect(self._on_duration_changed)
         self.media_player.mediaStatusChanged.connect(self._on_media_status_changed)
+        try:
+            self.media_player.playbackStateChanged.connect(self._on_playback_state_changed)
+        except Exception:
+            pass
 
         _pretendard = "/Library/Fonts/Pretendard-Regular.ttf"
         if os.path.exists(_pretendard):
@@ -282,6 +293,7 @@ class VideoPlayerWidget(QWidget):
         source_changed = self._set_media_source_if_needed(self.media_player, path)
         self._media_source_loaded = True
         if source_changed:
+            self._video_surface_primed = False
             self._source_ready = False
             return False
         self._source_ready = True
@@ -356,6 +368,12 @@ class VideoPlayerWidget(QWidget):
             cb = getattr(self, '_end_of_media_callback', None)
             if callable(cb):
                 cb()
+
+    def _on_playback_state_changed(self, state):
+        if state == QMediaPlayer.PlaybackState.PlayingState:
+            self._video_surface_primed = True
+            self._hide_thumbnail()
+        self._update_btn()
 
     def _create_transport_button(
         self,
@@ -876,15 +894,7 @@ class VideoPlayerWidget(QWidget):
         return self._legacy_preview_proxy_enabled(default=True)
 
     def _proxy_path_for(self, path: str) -> str:
-        root = os.path.join(config.DATASET_DIR, "video_preview_cache")
-        os.makedirs(root, exist_ok=True)
-        digest = hashlib.sha1(self._proxy_source_fingerprint(path).encode("utf-8")).hexdigest()[:20]
-        base = os.path.splitext(os.path.basename(path))[0]
-        safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in base)[:48]
-        return os.path.join(root, f"{safe}_{digest}_preview_720p_hevc.mp4")
-
-    def _proxy_source_fingerprint(self, path: str) -> str:
-        return media_file_fingerprint(path, sample_bytes=1024 * 1024, include_samples=True)
+        return preview_proxy_path_for(path)
 
     def _playback_path_for(self, path: str) -> str:
         self._proxy_original_path = path
@@ -1016,6 +1026,7 @@ class VideoPlayerWidget(QWidget):
             self._source_ready = True
             self.info_label.setText("HEVC 프리뷰")
             pending_autoplay = bool(getattr(self, "_pending_autoplay", False))
+            self._video_surface_primed = bool(was_playing or pending_autoplay)
             self._pending_autoplay = False
             if was_playing or pending_autoplay:
                 self.media_player.play()
@@ -1054,6 +1065,7 @@ class VideoPlayerWidget(QWidget):
         if os.path.exists(path):
             self._set_source_name_badge(path)
             self._current_source_path = path
+            self._video_surface_primed = False
             try:
                 from core.media_info import probe_media
                 info = probe_media(path)
@@ -1199,6 +1211,43 @@ class VideoPlayerWidget(QWidget):
         if self.video_stack.currentIndex() == 1:
             self.video_stack.setCurrentIndex(0)
 
+    def _paused_seek_should_keep_thumbnail(self) -> bool:
+        try:
+            if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                return False
+        except Exception:
+            return False
+        return not bool(getattr(self, "_video_surface_primed", False))
+
+    def _seek_hide_thumbnail_threshold(self, default_threshold: float | None) -> float | None:
+        if self._paused_seek_should_keep_thumbnail():
+            return None
+        return default_threshold
+
+    def _show_unprimed_seek_thumbnail(self, sec: float, *, force: bool = False) -> None:
+        if not self._paused_seek_should_keep_thumbnail():
+            return
+        source_path = str(getattr(self, "_current_source_path", "") or getattr(self, "_proxy_original_path", "") or "")
+        if not source_path or not self._is_video_file(source_path):
+            return
+        try:
+            sec = self._normalize_seek_sec(sec)
+        except Exception:
+            sec = max(0.0, float(sec or 0.0))
+        now = time.monotonic()
+        last_sec = getattr(self, "_last_unprimed_thumbnail_sec", None)
+        try:
+            near_same = last_sec is not None and abs(float(last_sec) - sec) < 0.08
+        except Exception:
+            near_same = False
+        if not force:
+            elapsed = now - float(getattr(self, "_last_unprimed_thumbnail_at", 0.0) or 0.0)
+            if elapsed < 0.18 or (near_same and elapsed < 0.45):
+                return
+        self._last_unprimed_thumbnail_at = now
+        self._last_unprimed_thumbnail_sec = sec
+        self.show_cached_thumbnail_at(source_path, sec, width=640)
+
     def _subtitle_lookup_time(self) -> float:
         override = getattr(self, "_subtitle_display_time_sec", None)
         if override is not None:
@@ -1309,23 +1358,117 @@ class VideoPlayerWidget(QWidget):
         self._last_sub = cur_sub
         self._set_subtitle_overlay_text(cur_sub)
 
-    def _set_segments(self, segments):
-        cleaned = []
-        for seg in list(segments or []):
+    @staticmethod
+    def _normalize_video_subtitle_segment(seg):
+        try:
+            return {
+                "start": float(seg.get("start", 0.0) or 0.0),
+                "end": float(seg.get("end", 0.0) or 0.0),
+                "text": str(seg.get("text", "") or ""),
+            }
+        except Exception:
+            return None
+
+    @staticmethod
+    def _update_subtitle_digest(digest, start: float, end: float, text: str, speaker: str) -> None:
+        digest.update(f"{start:.3f}\x1f{end:.3f}\x1f".encode("utf-8"))
+        digest.update(str(text or "").encode("utf-8", errors="replace"))
+        digest.update(b"\x1f")
+        digest.update(str(speaker or "").encode("utf-8", errors="replace"))
+        digest.update(b"\x1e")
+
+    def _segments_signature_fast(self, segments) -> str:
+        digest = hashlib.sha256()
+        count = 0
+        for seg in (() if segments is None else segments):
             try:
-                item = dict(seg)
-                item["start"] = float(item.get("start", 0.0))
-                item["end"] = float(item.get("end", 0.0))
-                item["text"] = str(item.get("text", "") or "")
-                cleaned.append(item)
+                start = float(seg.get("start", 0.0) or 0.0)
+                end = float(seg.get("end", 0.0) or 0.0)
+                text = str(seg.get("text", "") or "")
+                speaker = str(seg.get("speaker", seg.get("spk", "")) or "")
             except Exception:
                 continue
-        signature = self._segments_signature(cleaned)
+            self._update_subtitle_digest(digest, start, end, text, speaker)
+            count += 1
+        digest.update(f"count:{count}".encode("ascii"))
+        return digest.hexdigest()
+
+    def _normalized_segments_context(self, segments, *, signature_override: str | None = None):
+        cleaned = []
+        starts = []
+        ends = []
+        texts = []
+        digest = None if signature_override is not None else hashlib.sha256()
+        sorted_ok = True
+        prev_start = None
+        count = 0
+        source = () if segments is None else segments
+        for seg in source:
+            item = self._normalize_video_subtitle_segment(seg)
+            if item is None:
+                continue
+            start = float(item["start"])
+            end = float(item["end"])
+            if prev_start is not None and start < prev_start:
+                sorted_ok = False
+            prev_start = start
+            cleaned.append(item)
+            starts.append(start)
+            ends.append(end)
+            texts.append(item["text"])
+            count += 1
+            speaker = str(seg.get("speaker", seg.get("spk", "")) or "")
+            if digest is not None:
+                self._update_subtitle_digest(digest, start, end, item["text"], speaker)
+        signature = str(signature_override or "")
+        if digest is not None:
+            digest.update(f"count:{count}".encode("ascii"))
+            signature = digest.hexdigest()
+        return cleaned, signature, sorted_ok, starts, ends, texts
+
+    def _normalized_segments_and_signature(self, segments):
+        cleaned, signature, sorted_ok, _starts, _ends, _texts = self._normalized_segments_context(segments)
+        return cleaned, signature, sorted_ok
+
+    def _set_segments(
+        self,
+        segments,
+        *,
+        normalized=None,
+        signature: str | None = None,
+        sorted_ok: bool | None = None,
+        starts=None,
+        ends=None,
+        texts=None,
+    ):
+        if normalized is None or signature is None or sorted_ok is None:
+            existing_signature = str(getattr(self, "_context_segments_signature", "") or "")
+            if existing_signature:
+                signature = self._segments_signature_fast(segments or [])
+                if signature == existing_signature:
+                    self._context_segments_ref = segments
+                    return False
+                cleaned, signature, sorted_ok, starts, ends, texts = self._normalized_segments_context(
+                    segments or [],
+                    signature_override=signature,
+                )
+            else:
+                cleaned, signature, sorted_ok, starts, ends, texts = self._normalized_segments_context(segments or [])
+        else:
+            cleaned = list(normalized or [])
         if signature and signature == getattr(self, "_context_segments_signature", ""):
             self._context_segments_ref = segments
             return False
-        self.segments = sorted(cleaned, key=lambda s: s["start"])
-        self._subtitle_starts = [s["start"] for s in self.segments]
+        self.segments = cleaned if sorted_ok else sorted(cleaned, key=lambda s: s["start"])
+        if sorted_ok and starts is not None and ends is not None and texts is not None:
+            self._subtitle_starts = list(starts)
+            self._subtitle_ends = list(ends)
+            self._subtitle_texts = list(texts)
+        else:
+            self._subtitle_starts = [s["start"] for s in self.segments]
+            self._subtitle_ends = [s["end"] for s in self.segments]
+            self._subtitle_texts = [s["text"] for s in self.segments]
+        self._subtitle_count = len(self._subtitle_starts)
         self._subtitle_cache_idx = -1
         self._context_segments_ref = segments
         self._context_segments_signature = signature
@@ -1359,53 +1502,58 @@ class VideoPlayerWidget(QWidget):
             return
         if segments is None:
             return
-        cleaned = list(segments or [])
-        signature = self._segments_signature(cleaned)
+        if not force and getattr(self, "_subtitle_provider_signature", ""):
+            signature = self._segments_signature_fast(segments)
+            if signature == getattr(self, "_subtitle_provider_signature", ""):
+                self._subtitle_provider_segments_ref = segments
+                self._provider_refresh_requested = False
+                return
+        cleaned, signature, sorted_ok, starts, ends, texts = self._normalized_segments_context(
+            segments,
+            signature_override=signature if not force and signature else None,
+        )
         if signature and signature == getattr(self, "_subtitle_provider_signature", ""):
             self._subtitle_provider_segments_ref = segments
             self._provider_refresh_requested = False
             return
         self._subtitle_provider_segments_ref = segments
         self._subtitle_provider_signature = signature
-        self._set_segments(cleaned)
+        self._set_segments(
+            segments,
+            normalized=cleaned,
+            signature=signature,
+            sorted_ok=sorted_ok,
+            starts=starts,
+            ends=ends,
+            texts=texts,
+        )
         self._provider_refresh_requested = False
         self._refresh_subtitle_now()
 
     def _segments_signature(self, segments: list[dict]) -> str:
-        compact = []
-        for seg in segments or []:
-            try:
-                compact.append(
-                    {
-                        "start": round(float(seg.get("start", 0.0) or 0.0), 3),
-                        "end": round(float(seg.get("end", 0.0) or 0.0), 3),
-                        "text": str(seg.get("text", "") or ""),
-                        "speaker": str(seg.get("speaker", seg.get("spk", "")) or ""),
-                    }
-                )
-            except Exception:
-                continue
-        payload = json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        _cleaned, signature, _sorted_ok = self._normalized_segments_and_signature(segments or [])
+        return signature
 
     def _find_subtitle_at(self, now: float) -> str:
-        idx = int(getattr(self, "_subtitle_cache_idx", -1))
-        if 0 <= idx < len(self.segments):
-            seg = self.segments[idx]
-            if seg["start"] <= now < seg["end"]:
-                return seg["text"]
-            if idx + 1 < len(self.segments):
-                nxt = self.segments[idx + 1]
-                if nxt["start"] <= now < nxt["end"]:
+        idx = int(self._subtitle_cache_idx)
+        starts = self._subtitle_starts
+        ends = self._subtitle_ends
+        texts = self._subtitle_texts
+        count = int(self._subtitle_count)
+        if 0 <= idx < count:
+            if starts[idx] <= now < ends[idx]:
+                return texts[idx]
+            next_idx = idx + 1
+            if next_idx < count:
+                if starts[next_idx] <= now < ends[next_idx]:
                     self._subtitle_cache_idx = idx + 1
-                    return nxt["text"]
+                    return texts[next_idx]
 
-        idx = bisect_right(self._subtitle_starts, now) - 1
+        idx = bisect_right(starts, now) - 1
         self._subtitle_cache_idx = idx
-        if 0 <= idx < len(self.segments):
-            seg = self.segments[idx]
-            if seg["start"] <= now < seg["end"]:
-                return seg["text"]
+        if 0 <= idx < count:
+            if starts[idx] <= now < ends[idx]:
+                return texts[idx]
         return ""
 
     def set_context_segments(self, segments: list[dict] | None = None):
@@ -1431,6 +1579,7 @@ class VideoPlayerWidget(QWidget):
                 self.toggle_play()
             return
         self._current_source_path = path
+        self._video_surface_primed = False
         self._pending_segments = segments
         self._pending_seek_sec = seek_sec
         self._pending_autoplay = bool(autoplay)
@@ -1443,7 +1592,8 @@ class VideoPlayerWidget(QWidget):
 
 
     def seek_direct(self, sec):
-        self._apply_seek_state(sec, remember_pending=False, refresh_provider=True)
+        snapped = self._apply_seek_state(sec, remember_pending=False, refresh_provider=True)
+        self._show_unprimed_seek_thumbnail(snapped, force=True)
 
     def preview_seek(self, sec: float):
         """Lightweight seek for timeline scrubbing.
@@ -1451,31 +1601,34 @@ class VideoPlayerWidget(QWidget):
         This updates the media position and visible subtitle without forcing the
         subtitle provider or thumbnail pipeline on every mouse-move event.
         """
-        self._apply_seek_state(
+        snapped = self._apply_seek_state(
             sec,
             remember_pending=False,
-            hide_thumbnail_threshold=0.05,
+            hide_thumbnail_threshold=self._seek_hide_thumbnail_threshold(0.05),
             refresh_provider=False,
         )
+        self._show_unprimed_seek_thumbnail(snapped)
 
     def frame_step_seek(self, sec: float):
         """Frame-exact manual seek used by < / > and scan buttons."""
-        self._apply_seek_state(
+        snapped = self._apply_seek_state(
             sec,
             clamp_total=True,
             remember_pending=False,
-            hide_thumbnail_threshold=-1.0,
+            hide_thumbnail_threshold=self._seek_hide_thumbnail_threshold(-1.0),
             refresh_provider=False,
             tick_ui=True,
         )
+        self._show_unprimed_seek_thumbnail(snapped, force=True)
 
     def seek(self, sec: float):
-        self._apply_seek_state(
+        snapped = self._apply_seek_state(
             sec,
             remember_pending=True,
-            hide_thumbnail_threshold=0.05,
+            hide_thumbnail_threshold=self._seek_hide_thumbnail_threshold(0.05),
             refresh_provider=True,
         )
+        self._show_unprimed_seek_thumbnail(snapped, force=True)
 
 
     def request_scan_cut(self, direction: int):
@@ -1507,6 +1660,7 @@ class VideoPlayerWidget(QWidget):
         else:
             if bool(getattr(self, "_provider_refresh_requested", False)):
                 self._refresh_provider_segments(force=False)
+            self._video_surface_primed = True
             start_frame = self.frame_for_sec(max(0.0, float(getattr(self, "current_time", 0.0) or 0.0)))
             last_playable_frame = self._last_playable_frame()
             if self.total_time > 0.0 and start_frame >= last_playable_frame:
@@ -1580,6 +1734,9 @@ class VideoPlayerWidget(QWidget):
     def _release_cached_surfaces(self):
         self.segments = []
         self._subtitle_starts = []
+        self._subtitle_ends = []
+        self._subtitle_texts = []
+        self._subtitle_count = 0
         self._subtitle_cache_idx = -1
         self._subtitle_provider = None
         self._subtitle_provider_segments_ref = None

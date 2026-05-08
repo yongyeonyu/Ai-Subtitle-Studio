@@ -59,7 +59,17 @@ class SettingsMaterializationTests(unittest.TestCase):
         self.assertEqual(materialized["auto_start_mode"], "precise")
         self.assertEqual(materialized["stt_quality_preset"], "precise")
         self.assertEqual(materialized["runtime_native_threads"], 8)
+        self.assertTrue(materialized["runtime_native_text_similarity_enabled"])
+        self.assertTrue(materialized["runtime_native_cut_boundary_enabled"])
+        self.assertTrue(materialized["ollama_python_client_enabled"])
+        self.assertFalse(materialized["runtime_monitor_terminal_log_enabled"])
         self.assertEqual(materialized["ffmpeg_filter_threads"], 8)
+        self.assertTrue(materialized["wav_pcm_fast_chunk_extract"])
+        self.assertTrue(materialized["direct_ffmpeg_chunk_extract"])
+        self.assertEqual(materialized["direct_ffmpeg_chunk_min_sec"], 60.0)
+        self.assertTrue(materialized["direct_ffmpeg_chunk_batch_extract"])
+        self.assertEqual(materialized["direct_ffmpeg_chunk_batch_size"], 8)
+        self.assertEqual(materialized["direct_ffmpeg_chunk_batch_max_span_sec"], 240.0)
         self.assertTrue(materialized["autopilot_enabled"])
 
     def test_project_data_manager_save_writes_materialized_settings(self):

@@ -223,20 +223,37 @@ class EditorWidget(
                     backup_existing_srt(srt_guess)
                     segments = []
 
+        self._segment_cache_valid = False
+        self._last_segment_cache_block_count = 0
+        self._subtitle_context_window_index_cache = {}
+        self._subtitle_context_index_epoch = 0
+
         self._is_initial_load = True if segments else False
         if segments:
-            if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
-                self.timeline.canvas.segments = [dict(s) for s in segments]
-                if hasattr(self.timeline.canvas, "_invalidate_render_cache"):
-                    self.timeline.canvas._invalidate_render_cache()
-            self.append_segments(segments)
+            loaded_segments = None
+            try:
+                ordered_segments = self._normalize_multiclip_segment_order(segments)
+                loaded_segments = self._bulk_load_segments_to_document(ordered_segments)
+            except Exception:
+                loaded_segments = None
+            if isinstance(loaded_segments, list):
+                self._rebuild_subtitle_memory_cache(loaded_segments)
+                total_dur = loaded_segments[-1]["end"] if loaded_segments else 0.0
+                if hasattr(self, "timeline"):
+                    self.timeline.update_segments(loaded_segments, self._active_seg_start, total_dur)
+                    if hasattr(self.timeline, "schedule_time_window_seconds"):
+                        self.timeline.schedule_time_window_seconds(15.0, delays=(0, 160, 360))
+            else:
+                if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
+                    self.timeline.canvas.segments = [dict(s) for s in segments]
+                    if hasattr(self.timeline.canvas, "_invalidate_render_cache"):
+                        self.timeline.canvas._invalidate_render_cache()
+                self.append_segments(segments)
             QTimer.singleShot(350, self._mark_initial_segments_saved)
 
         if media_path and not defer_media_load:
             QTimer.singleShot(200, lambda: self._load_video(media_path))
 
-        self._segment_cache_valid = False
-        self._last_segment_cache_block_count = 0
         self._playhead_timer = QTimer()
         self._playhead_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._playhead_timer.setInterval(self._playhead_active_interval_ms())
@@ -636,6 +653,10 @@ class EditorWidget(
     def eventFilter(self, obj, event):
         if obj is getattr(self, "_editor_wrap", None) and event.type() == QEvent.Type.Resize:
             QTimer.singleShot(0, self._sync_editor_focus_border)
+        if obj is getattr(self, "_editor_wrap", None) and event.type() == QEvent.Type.Wheel:
+            handler = getattr(getattr(self, "text_edit", None), "apply_wheel_scroll_event", None)
+            if callable(handler) and handler(event):
+                return True
         return False
 
     def _on_inline_text_changed(self, line_num: int, new_text: str):
@@ -670,7 +691,14 @@ class EditorWidget(
         cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
         cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
         cur.insertText(new_text)
-        cur.block().setUserData(SubtitleBlockData(ud.spk_id, ud.start_sec, ud.is_gap))
+        cur.block().setUserData(
+            SubtitleBlockData(
+                ud.spk_id,
+                ud.start_sec,
+                ud.is_gap,
+                end_sec=getattr(ud, "end_sec", None),
+            )
+        )
         cur.endEditBlock()
         if old_text.count("\u2028") != str(new_text or "").count("\u2028"):
             self.text_edit.update_margins()
@@ -901,12 +929,20 @@ class EditorWidget(
             locked = bool(getattr(getattr(self, "sm", None), "is_locked", False))
         except Exception:
             locked = False
-        if locked or self._is_video_playback_active():
-            if self._is_video_playback_active() and not bool(getattr(self, "_auto_quality_review_defer_logged", False)):
+        try:
+            recent_activity_at = float(getattr(self, "_last_editor_foreground_activity_at", 0.0) or 0.0)
+            defer_after_edit_sec = float(self.settings.get("subtitle_quality_defer_after_edit_sec", 4.0) or 4.0)
+            recent_editor_activity = recent_activity_at > 0.0 and (time.monotonic() - recent_activity_at) < max(0.25, defer_after_edit_sec)
+        except Exception:
+            recent_editor_activity = False
+        playback_active = self._is_video_playback_active()
+        if locked or playback_active or recent_editor_activity:
+            if playback_active and not bool(getattr(self, "_auto_quality_review_defer_logged", False)):
                 self._auto_quality_review_defer_logged = True
                 get_logger().log("[자막 품질] 재생 중이라 자동 품질 검사를 잠시 미룹니다.")
             self._auto_quality_review_scheduled = True
-            QTimer.singleShot(1800 if self._is_video_playback_active() else 700, self._run_scheduled_auto_quality_review)
+            delay_ms = 1800 if playback_active else 1200 if recent_editor_activity else 700
+            QTimer.singleShot(delay_ms, self._run_scheduled_auto_quality_review)
             return
         self._auto_quality_review_pending = False
         self._auto_quality_review_defer_logged = False

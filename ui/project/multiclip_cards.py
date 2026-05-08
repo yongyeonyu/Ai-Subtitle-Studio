@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QWidget
 
 from core.media_info import probe_media
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
+from core.runtime import config
 from ui.gpu_rendering import configure_lightweight_paint
 
 
@@ -106,10 +107,10 @@ class ClipCard(QFrame):
         else:
             painter.fillRect(4, thumb_y, w - 8, thumb_h, QColor("#1A1A1A"))
             painter.setPen(QColor("#666666"))
-            painter.setFont(QFont("", 11))
+            painter.setFont(QFont(config.FONT, 11))
             painter.drawText(4, thumb_y, w - 8, thumb_h, Qt.AlignmentFlag.AlignCenter, "No Preview")
 
-        painter.setFont(QFont("", 11, QFont.Weight.Bold))
+        painter.setFont(QFont(config.FONT, 11, QFont.Weight.Bold))
         x_text = "[X]"
         x_w = painter.fontMetrics().horizontalAdvance(x_text) + 12
         num_w = 32
@@ -124,10 +125,10 @@ class ClipCard(QFrame):
         painter.setBrush(QColor(0, 0, 0, 200))
         painter.drawRoundedRect(num_x, 6, num_w, 24, 4, 4)
         painter.setPen(QColor("#4AFF80"))
-        painter.setFont(QFont("", 13, QFont.Weight.Bold))
+        painter.setFont(QFont(config.FONT, 13, QFont.Weight.Bold))
         painter.drawText(num_x, 6, num_w, 24, Qt.AlignmentFlag.AlignCenter, str(self.index))
 
-        painter.setFont(QFont("", 10, QFont.Weight.Bold))
+        painter.setFont(QFont(config.FONT, 10, QFont.Weight.Bold))
         date_w = painter.fontMetrics().horizontalAdvance(self.date_str) + 12
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(0, 0, 0, 210))
@@ -135,7 +136,7 @@ class ClipCard(QFrame):
         painter.setPen(QColor("#FFFFFF"))
         painter.drawText(w - date_w - 6, 6, date_w, 24, Qt.AlignmentFlag.AlignCenter, self.date_str)
 
-        painter.setFont(QFont("", 12, QFont.Weight.Bold))
+        painter.setFont(QFont(config.FONT, 12, QFont.Weight.Bold))
         dur_w = painter.fontMetrics().horizontalAdvance(self.duration_str) + 14
         panel_x = w - dur_w - 6
         panel_y = thumb_y + thumb_h - 26
@@ -150,7 +151,7 @@ class ClipCard(QFrame):
         painter.setBrush(QColor(0, 0, 0, 160))
         painter.drawRoundedRect(4, thumb_y + thumb_h + 2, w - 8, 44, 3, 3)
         painter.setPen(QColor("#FFFFFF"))
-        painter.setFont(QFont("", 9, QFont.Weight.Bold))
+        painter.setFont(QFont(config.FONT, 9, QFont.Weight.Bold))
         painter.drawText(
             8,
             thumb_y + thumb_h + 4,
@@ -204,9 +205,9 @@ class AddCard(QFrame):
         painter.setPen(pen)
         painter.drawRoundedRect(2, 2, w - 4, h - 4, 6, 6)
         painter.setPen(QColor("#4AFF80"))
-        painter.setFont(QFont("", 36, QFont.Weight.Bold))
+        painter.setFont(QFont(config.FONT, 36, QFont.Weight.Bold))
         painter.drawText(0, 0, w, h - 20, Qt.AlignmentFlag.AlignCenter, "+")
-        painter.setFont(QFont("", 10))
+        painter.setFont(QFont(config.FONT, 10))
         painter.setPen(QColor("#888888"))
         painter.drawText(0, h - 40, w, 30, Qt.AlignmentFlag.AlignCenter, "클립 추가")
         painter.end()

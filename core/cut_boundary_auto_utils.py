@@ -4,6 +4,15 @@
 
 from __future__ import annotations
 
+try:
+    import numpy as _np
+except Exception:  # pragma: no cover - optional runtime dependency fallback.
+    _np = None  # type: ignore
+
+from core.native_cut_boundary import color_avg_delta as _native_color_avg_delta
+from core.native_cut_boundary import delta_bytes as _native_delta_bytes
+from core.native_cut_boundary import gray_delta as _native_gray_delta
+
 
 COMPARE_MAX_WIDTH_1080P = 1920
 COMPARE_MAX_HEIGHT_1080P = 1080
@@ -118,6 +127,20 @@ def build_auto_grid_verify_utils(get_grid_cells):
         target_samples = max(16, min(256, int(target_samples or 64)))
         step = max(1, n // target_samples)
 
+        native = _native_delta_bytes(a, b, target_samples=target_samples)
+        if native is not None:
+            return native
+
+        if _np is not None:
+            try:
+                left = _np.frombuffer(a, dtype=_np.uint8, count=n)[::step].astype(_np.int16, copy=False)
+                right = _np.frombuffer(b, dtype=_np.uint8, count=n)[::step].astype(_np.int16, copy=False)
+                if left.size <= 0 or right.size <= 0:
+                    return 0.0
+                return float(_np.abs(left - right).mean())
+            except Exception:
+                pass
+
         total = 0
         count = 0
         for i in range(0, n, step):
@@ -130,6 +153,15 @@ def build_auto_grid_verify_utils(get_grid_cells):
     def _auto_gray_delta(prev_thumb, next_thumb, *, region_threshold: float, target_samples: int):
         if not prev_thumb or not next_thumb:
             return 0.0, 0, []
+
+        native = _native_gray_delta(
+            prev_thumb,
+            next_thumb,
+            region_threshold=region_threshold,
+            target_samples=target_samples,
+        )
+        if native is not None:
+            return native
 
         n = min(len(prev_thumb), len(next_thumb))
         deltas = [
@@ -154,6 +186,16 @@ def build_auto_grid_verify_utils(get_grid_cells):
     ):
         if not prev_avg or not next_avg:
             return 0.0, 0, []
+
+        native = _native_color_avg_delta(
+            prev_avg,
+            next_avg,
+            threshold=threshold,
+            weight_luma=weight_luma,
+            weight_chroma=weight_chroma,
+        )
+        if native is not None:
+            return native
 
         n = min(len(prev_avg), len(next_avg))
         deltas = []

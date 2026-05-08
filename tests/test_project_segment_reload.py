@@ -591,6 +591,23 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_project_reload_uses_sparse_blocks_but_preserves_segment_end_times(self):
+        editor = _ActualSelectionEditor()
+        try:
+            editor._reload_segments_from_list([
+                {"start": 0.0, "end": 1.0, "text": "앞", "speaker": "00"},
+                {"start": 4.0, "end": 5.0, "text": "뒤", "speaker": "00"},
+            ])
+
+            self.assertEqual(editor.text_edit.document().blockCount(), 2)
+            current = editor._get_current_segments()
+            self.assertEqual([(seg["start"], seg["end"], seg["text"]) for seg in current], [
+                (0.0, 1.0, "앞"),
+                (4.0, 5.0, "뒤"),
+            ])
+        finally:
+            editor.text_edit.close()
+
     def test_replace_text_in_all_subtitles_skips_gap_blocks(self):
         editor = _ReplacementEditor()
         try:

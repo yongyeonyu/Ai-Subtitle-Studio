@@ -963,7 +963,7 @@ def _normalize_voice_activity_segment(item: dict, idx: int) -> dict:
 # 로드 / 목록
 # ─────────────────────────────────────────────
 
-def load_project(filepath: str) -> dict | None:
+def load_project(filepath: str, *, hydrate_text_assets: bool = True) -> dict | None:
     """프로젝트 JSON 로드 → dict 반환"""
     if not os.path.exists(filepath):
         return None
@@ -975,8 +975,27 @@ def load_project(filepath: str) -> dict | None:
         refresh_project_recovery_state(project)
     except Exception:
         pass
-    hydrate_project_text_asset_cache(project)
+    if hydrate_text_assets:
+        hydrate_project_text_asset_cache(project)
+    else:
+        _strip_text_asset_runtime_cache(project)
     return project
+
+
+def _strip_text_asset_runtime_cache(project: dict | None) -> None:
+    """Drop large text-asset caches for fast UI project entry."""
+    if not isinstance(project, dict):
+        return
+    project.pop("_external_subtitle_segments_cache", None)
+    project.pop("_external_stt_tracks_cache", None)
+    if not project_uses_external_text_assets(project):
+        return
+    editor_state = project.get("editor_state")
+    if not isinstance(editor_state, dict):
+        return
+    stt_state = editor_state.get("stt")
+    if isinstance(stt_state, dict) and isinstance(stt_state.get("candidate_tracks"), dict):
+        stt_state["candidate_tracks"] = {}
 
 
 def list_projects() -> list:

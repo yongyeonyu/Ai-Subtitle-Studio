@@ -233,12 +233,41 @@ class TimelineInputMixin:
 
     def _speaker_lane_hit_rect_for_seg(self, seg):
         rect = self._speaker_lane_rect_for_seg(seg)
-        owner = self._find_owner_with_settings()
-        settings = current_speaker_settings(getattr(owner, "settings", {}) if owner is not None else {})
+        settings = self._speaker_settings_for_hit_test()
+        try:
+            start_ms = int(round(float(seg.get("start", 0.0) or 0.0) * 1000.0))
+            end_ms = int(round(float(seg.get("end", seg.get("start", 0.0)) or 0.0) * 1000.0))
+            line_key = int(seg.get("line", -1))
+        except Exception:
+            start_ms = end_ms = line_key = -1
+        settings_key = getattr(self, "_speaker_hit_settings_cache_key", None)
+        owner_key = (
+            self._segment_index_cache_key() if hasattr(self, "_segment_index_cache_key") else id(getattr(self, "segments", None)),
+            settings_key,
+            round(float(getattr(self, "pps", 0.0) or 0.0), 3),
+        )
+        cache = getattr(self, "_speaker_hit_rect_cache", None)
+        if not isinstance(cache, dict) or getattr(self, "_speaker_hit_rect_cache_key", None) != owner_key:
+            cache = {}
+            self._speaker_hit_rect_cache = cache
+            self._speaker_hit_rect_cache_key = owner_key
+        cache_key = (
+            id(seg),
+            line_key,
+            start_ms,
+            end_ms,
+            str(seg.get("speaker", seg.get("spk_id", "")) or ""),
+        )
+        cached = cache.get(cache_key)
+        if isinstance(cached, QRect):
+            return QRect(cached)
+
         names = [str(name).strip() for name in speaker_labels_for_segment(settings, seg) if str(name).strip()]
         if not names:
             target_w = min(rect.width(), 42)
-            return QRect(rect.center().x() - target_w // 2, rect.y(), max(1, target_w), rect.height())
+            result = QRect(rect.center().x() - target_w // 2, rect.y(), max(1, target_w), rect.height())
+            cache[cache_key] = QRect(result)
+            return result
 
         visible_names = names[:2]
         multi_line = len(visible_names) > 1
@@ -262,7 +291,11 @@ class TimelineInputMixin:
         left = max(rect.left(), right - target_w)
         top = max(rect.top(), draw_y - pad_y)
         bottom = min(rect.bottom() + 1, draw_y + total_h + pad_y)
-        return QRect(left, top, max(1, right - left), max(1, bottom - top))
+        result = QRect(left, top, max(1, right - left), max(1, bottom - top))
+        if len(cache) > 4096:
+            cache.clear()
+        cache[cache_key] = QRect(result)
+        return result
 
     def _speaker_lane_seg_at(self, x: int, y: int):
         candidates = self._segments_near_x_for_hit(x, pad_px=14) if hasattr(self, "_segments_near_x_for_hit") else self.segments
@@ -529,6 +562,25 @@ class TimelineInputMixin:
         while owner and not hasattr(owner, "settings"):
             owner = owner.parent()
         return owner
+
+    def _speaker_settings_for_hit_test(self) -> dict:
+        owner = self._find_owner_with_settings()
+        settings = getattr(owner, "settings", {}) if owner is not None else {}
+        keys = (
+            "max_speakers",
+            "spk1_enabled", "spk1_id", "spk1_name", "spk1_color",
+            "spk2_enabled", "spk2_id", "spk2_name", "spk2_color",
+            "spk3_enabled", "spk3_id", "spk3_name", "spk3_color",
+        )
+        key = tuple((name, str((settings or {}).get(name, ""))) for name in keys)
+        if key == getattr(self, "_speaker_hit_settings_cache_key", None):
+            cached = getattr(self, "_speaker_hit_settings_cache", None)
+            if isinstance(cached, dict):
+                return cached
+        merged = current_speaker_settings(settings)
+        self._speaker_hit_settings_cache_key = key
+        self._speaker_hit_settings_cache = dict(merged or {})
+        return self._speaker_hit_settings_cache
 
     def _speaker_options(self):
         owner = self._find_owner_with_settings()
@@ -1179,26 +1231,55 @@ class TimelineInputMixin:
             return
         candidates.append({"time": value, "kind": kind, "source": source})
 
-    def _drag_snap_candidates(self) -> list[dict]:
+    def _drag_snap_base_key(self) -> tuple:
+        segment_key = self._segment_index_cache_key() if hasattr(self, "_segment_index_cache_key") else (
+            id(getattr(self, "segments", None)),
+            len(getattr(self, "segments", []) or []),
+        )
+        roughcut_key = None
+        try:
+            markers = self.roughcut_major_markers_cached() if hasattr(self, "roughcut_major_markers_cached") else []
+            roughcut_key = (
+                len(markers or []),
+                id(markers[0]) if markers else None,
+                id(markers[-1]) if markers else None,
+            )
+        except Exception:
+            roughcut_key = None
+        return (
+            segment_key,
+            id(getattr(self, "gap_segments", None)),
+            len(getattr(self, "gap_segments", []) or []),
+            id(getattr(self, "vad_segments", None)),
+            len(getattr(self, "vad_segments", []) or []),
+            id(getattr(self, "voice_activity_segments", None)),
+            len(getattr(self, "voice_activity_segments", []) or []),
+            id(getattr(self, "boundary_times", None)),
+            len(getattr(self, "boundary_times", []) or []),
+            id(getattr(self, "scan_boundary_times", None)),
+            len(getattr(self, "scan_boundary_times", []) or []),
+            int(round(float(getattr(self, "total_duration", 0.0) or 0.0) * 1000.0)),
+            round(float(self._get_fps() if hasattr(self, "_get_fps") else 30.0), 3),
+            roughcut_key,
+        )
+
+    def _build_drag_snap_base_candidates(self) -> list[dict]:
+        key = self._drag_snap_base_key()
+        if key == getattr(self, "_drag_snap_base_cache_key", None):
+            cached = getattr(self, "_drag_snap_base_candidates", None)
+            if isinstance(cached, list):
+                return cached
+
         candidates: list[dict] = []
-        dragged = getattr(self, "_drag_seg", None)
         for seg in list(getattr(self, "segments", []) or []):
-            if seg is dragged or not isinstance(seg, dict) or bool(seg.get("is_gap")):
+            if not isinstance(seg, dict) or bool(seg.get("is_gap")):
                 continue
             kind = self._stt_preview_source(seg).lower() if self._is_stt_preview_segment(seg) else "subtitle"
             self._add_snap_candidate(candidates, seg.get("start"), kind, seg)
             self._add_snap_candidate(candidates, seg.get("end"), kind, seg)
-
-        drag_original_edges = {
-            self._snap_to_frame(getattr(self, "_drag_s0_start", -1.0)),
-            self._snap_to_frame(getattr(self, "_drag_s0_end", -1.0)),
-        }
         for gap in list(getattr(self, "gap_segments", []) or []):
-            for edge_time in (gap.get("start"), gap.get("end")):
-                snapped_edge = self._snap_to_frame(_as_float(edge_time, -1.0))
-                if any(abs(snapped_edge - original) < 0.05 for original in drag_original_edges):
-                    continue
-                self._add_snap_candidate(candidates, snapped_edge, "gap", gap)
+            self._add_snap_candidate(candidates, gap.get("start"), "gap", gap)
+            self._add_snap_candidate(candidates, gap.get("end"), "gap", gap)
         for vad in list(getattr(self, "vad_segments", []) or []):
             self._add_snap_candidate(candidates, vad.get("start"), "vad", vad)
             self._add_snap_candidate(candidates, vad.get("end"), "vad", vad)
@@ -1219,6 +1300,27 @@ class TimelineInputMixin:
             self._add_snap_candidate(candidates, marker.get("end"), "roughcut", marker)
         self._add_snap_candidate(candidates, 0.0, "timeline", None)
         self._add_snap_candidate(candidates, getattr(self, "total_duration", 0.0), "timeline", None)
+        self._drag_snap_base_cache_key = key
+        self._drag_snap_base_candidates = candidates
+        return candidates
+
+    def _drag_snap_candidates(self) -> list[dict]:
+        candidates: list[dict] = []
+        dragged = getattr(self, "_drag_seg", None)
+        drag_original_edges = {
+            self._snap_to_frame(getattr(self, "_drag_s0_start", -1.0)),
+            self._snap_to_frame(getattr(self, "_drag_s0_end", -1.0)),
+        }
+
+        for item in self._build_drag_snap_base_candidates():
+            source = item.get("source")
+            if source is dragged:
+                continue
+            if item.get("kind") == "gap":
+                snapped_edge = self._snap_to_frame(_as_float(item.get("time"), -1.0))
+                if any(abs(snapped_edge - original) < 0.05 for original in drag_original_edges):
+                    continue
+            candidates.append(item)
 
         priority = {
             "cut_official": 12,

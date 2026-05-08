@@ -14,6 +14,11 @@ from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_constants import DIAMOND_Y
 
 
+class _NoEqualitySegment(dict):
+    def __eq__(self, other):
+        raise AssertionError("adjacent segment lookup should use identity cache, not list.index equality scans")
+
+
 class TimelineRenderCacheTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -34,6 +39,25 @@ class TimelineRenderCacheTests(unittest.TestCase):
             self.assertLess(len(visible), 10)
             self.assertTrue(all(float(item["end"]) >= 200.0 and float(item["start"]) <= 208.0 for item in visible))
             self.assertEqual(canvas._paint_last_visible_counts["segments"], len(visible))
+        finally:
+            canvas.close()
+
+    def test_segment_store_reuses_identical_visible_window(self):
+        canvas = TimelineCanvas()
+        try:
+            segments = [
+                {"start": float(i * 2), "end": float(i * 2 + 1), "text": f"seg {i}", "line": i}
+                for i in range(2000)
+            ]
+            canvas.segments = segments
+            canvas._invalidate_render_cache()
+
+            first = canvas._visible_items_for_paint(segments, "segments", 200.0, 208.0)
+            second = canvas._visible_items_for_paint(segments, "segments", 200.0, 208.0)
+
+            self.assertIs(first, second)
+            self.assertTrue(first)
+            self.assertIs(canvas._segment_store.rows, canvas.segments)
         finally:
             canvas.close()
 
@@ -74,13 +98,40 @@ class TimelineRenderCacheTests(unittest.TestCase):
             canvas.update_segments(first, active_sec=0.0, total_dur=12.0)
             epoch_1 = canvas._render_epoch
             canvas._visible_items_for_paint(canvas.segments, "segments", 0.0, 2.0)
-            self.assertIn("segments", canvas._paint_index_cache)
+            self.assertIsNotNone(canvas._segment_store)
 
             canvas.update_segments(second, active_sec=10.0, total_dur=12.0)
 
             self.assertGreater(canvas._render_epoch, epoch_1)
-            for cache in canvas._paint_index_cache.values():
-                self.assertEqual(cache.get("sig", ())[-1], canvas._render_epoch)
+            self.assertIsNotNone(canvas._segment_store)
+            self.assertEqual(len(canvas._segment_store.rows), len(second))
+        finally:
+            canvas.close()
+
+    def test_update_segments_reuses_gap_cache_for_same_geometry(self):
+        canvas = TimelineCanvas()
+        try:
+            first = [
+                {"start": float(i * 2), "end": float(i * 2 + 1), "text": f"first {i}", "line": i}
+                for i in range(80)
+            ]
+            same_geometry = [
+                {"start": seg["start"], "end": seg["end"], "text": f"renamed {idx}", "line": seg["line"]}
+                for idx, seg in enumerate(first)
+            ]
+
+            canvas.update_segments(first, active_sec=0.0, total_dur=180.0)
+            epoch_1 = canvas._render_epoch
+            gap_signature = canvas._gap_segments_signature
+            segment_store = canvas._segment_store
+            canvas.update_segments(same_geometry, active_sec=4.0, total_dur=180.0)
+
+            self.assertEqual(canvas._render_epoch, epoch_1)
+            self.assertEqual(canvas._gap_segments_signature, gap_signature)
+            self.assertIs(canvas._segment_store, segment_store)
+            self.assertIs(canvas._segment_store.rows, canvas.segments)
+            self.assertEqual(canvas.segments[0]["text"], "renamed 0")
+            self.assertEqual(canvas.active_seg_start, 4.0)
         finally:
             canvas.close()
 
@@ -140,7 +191,7 @@ class TimelineRenderCacheTests(unittest.TestCase):
                 for i in range(80)
             ]
             canvas._visible_items_for_paint(canvas.segments, "segments", 0.0, 3.0)
-            self.assertIn("segments", canvas._paint_index_cache)
+            self.assertIsNotNone(canvas._segment_store)
             epoch = canvas._render_epoch
 
             canvas.set_frame_rate(24.0)
@@ -237,6 +288,56 @@ class TimelineRenderCacheTests(unittest.TestCase):
             self.assertLess(len(candidates), 8)
             self.assertTrue(all(item["end"] >= 500.42 and item["start"] <= 500.58 for item in candidates))
         finally:
+            canvas.close()
+
+    def test_adjacent_segment_lookup_uses_identity_position_cache(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.segments = [
+                _NoEqualitySegment({"start": float(i), "end": float(i + 0.8), "text": f"seg {i}", "line": i})
+                for i in range(5000)
+            ]
+            canvas._invalidate_render_cache()
+
+            target = canvas.segments[2500]
+            prev_seg = canvas._get_prev_seg(target)
+            next_seg = canvas._get_next_seg(target)
+
+            self.assertIs(prev_seg, canvas.segments[2499])
+            self.assertIs(next_seg, canvas.segments[2501])
+            self.assertEqual(canvas._editable_segment_pos_cache[id(target)], 2500)
+        finally:
+            canvas.close()
+
+    def test_drag_snap_candidates_reuse_base_cache_between_dragged_segments(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.segments = [
+                {"start": float(i), "end": float(i + 0.8), "text": f"seg {i}", "line": i}
+                for i in range(5000)
+            ]
+            canvas.gap_segments = [{"start": 10.0, "end": 12.0}]
+            canvas.vad_segments = [{"start": 15.0, "end": 16.0}]
+            canvas.total_duration = 5001.0
+            canvas._invalidate_render_cache()
+
+            canvas._drag_seg = canvas.segments[10]
+            canvas._drag_s0_start = canvas._drag_seg["start"]
+            canvas._drag_s0_end = canvas._drag_seg["end"]
+            first = canvas._drag_snap_candidates()
+            base_id = id(canvas._drag_snap_base_candidates)
+
+            canvas._drag_seg = canvas.segments[20]
+            canvas._drag_s0_start = canvas._drag_seg["start"]
+            canvas._drag_s0_end = canvas._drag_seg["end"]
+            second = canvas._drag_snap_candidates()
+
+            self.assertEqual(id(canvas._drag_snap_base_candidates), base_id)
+            self.assertTrue(first)
+            self.assertTrue(second)
+            self.assertFalse(any(item.get("source") is canvas.segments[20] for item in second))
+        finally:
+            canvas._drag_seg = None
             canvas.close()
 
     def test_diamond_hit_uses_cached_sorted_pairs_for_large_timeline(self):

@@ -480,19 +480,40 @@ class EditorPipelineMixin:
     def _post_completion_sync(self):
         """E fix: 자막 생성 완료 후 타임라인/글로벌 캔버스 재동기화"""
         try:
-            self._redraw_timeline()
+            timeline = getattr(self, "timeline", None)
+            canvas = getattr(timeline, "canvas", None)
+            cached = [seg for seg in list(getattr(self, "_cached_segs", []) or []) if not seg.get("is_gap")]
+            canvas_segments = list(getattr(canvas, "segments", []) or []) if canvas is not None else []
+            timeline_current = bool(cached and len(canvas_segments) == len(cached))
+            if timeline_current:
+                try:
+                    timeline_current = (
+                        abs(float(canvas_segments[0].get("start", 0.0) or 0.0) - float(cached[0].get("start", 0.0) or 0.0)) < 0.001
+                        and abs(float(canvas_segments[-1].get("end", 0.0) or 0.0) - float(cached[-1].get("end", 0.0) or 0.0)) < 0.001
+                    )
+                except Exception:
+                    timeline_current = False
+            if not timeline_current:
+                self._redraw_timeline()
         except Exception:
             pass
         try:
             if hasattr(self, "timeline"):
                 boxes = list(getattr(self.timeline.canvas, "_multiclip_boxes", []) or [])
+                can_auto_fit = not bool(getattr(self.timeline, "_fit_to_view_locked", False)) and not bool(
+                    getattr(self.timeline, "_manual_zoom_since_fit", False)
+                )
                 if boxes:
-                    self.timeline.fit_to_view()
+                    if can_auto_fit:
+                        self.timeline.fit_to_view()
                     gc = self.timeline.global_canvas
                     gc.total_duration = self.timeline.canvas.total_duration
                     gc.update()
-                    self.timeline.canvas.update()
-                else:
+                    if hasattr(self.timeline.canvas, "_update_viewport_region"):
+                        self.timeline.canvas._update_viewport_region()
+                    else:
+                        self.timeline.canvas.update()
+                elif can_auto_fit:
                     self.timeline.fit_to_view()
         except Exception:
             pass

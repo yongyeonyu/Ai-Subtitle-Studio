@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import os
 
-from PyQt6.QtCore import QObject, QPoint, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QEventLoop, QObject, QPoint, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QFontMetrics
 from PyQt6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QVBoxLayout, QWidget
 
+from ui.dialogs.popup_dismiss import install_outside_click_dismiss, uninstall_outside_click_dismiss
 from ui.style import COLORS
 
 QML_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "qml")
@@ -125,12 +126,12 @@ def _estimate_message_dialog_size(title: str, text: str, button_count: int) -> t
     fm = QFontMetrics(app.font()) if app is not None else None
     lines = [str(title or "").strip()] + [line for line in str(text or "").splitlines() if line.strip()]
     if fm is None:
-        width = 560
+        width = 440
     else:
         max_width = max((fm.horizontalAdvance(line) for line in lines), default=360)
-        width = min(860, max(460, max_width + 180))
+        width = min(680, max(390, max_width + 128))
     line_count = max(1, len(str(text or "").splitlines()))
-    height = max(230, 150 + line_count * 28 + (60 if button_count else 0))
+    height = max(188, 118 + line_count * 22 + (46 if button_count else 0))
     return width, height
 
 
@@ -205,7 +206,7 @@ class _QuickContextMenuDialog(QDialog):
         super().__init__(parent)
         self._selected_id: str | None = None
         self._bridge = _PopupBridge()
-        self.setModal(True)
+        self.setModal(False)
         self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         layout = QVBoxLayout(self)
@@ -235,12 +236,12 @@ class _QuickContextMenuDialog(QDialog):
         fm = QFontMetrics(app.font()) if app is not None else None
         visible_labels = [str(item.get("label") or "") for item in items if not bool(item.get("separator"))]
         if fm is None:
-            width = 260
+            width = 240
         else:
-            width = min(420, max(220, max((fm.horizontalAdvance(label) for label in visible_labels), default=120) + 92))
+            width = min(380, max(220, max((fm.horizontalAdvance(label) for label in visible_labels), default=120) + 76))
         rows = sum(1 for item in items if not bool(item.get("separator")))
         separators = sum(1 for item in items if bool(item.get("separator")))
-        height = max(48, rows * 40 + separators * 10 + 20)
+        height = max(44, rows * 34 + separators * 8 + 16)
         return width, height
 
     def _on_triggered(self, item_id: str):
@@ -249,6 +250,24 @@ class _QuickContextMenuDialog(QDialog):
 
     def selected_id(self) -> str | None:
         return self._selected_id
+
+    def showEvent(self, event):  # noqa: N802 - Qt override
+        super().showEvent(event)
+        install_outside_click_dismiss(self, self.reject, consume=True)
+
+    def hideEvent(self, event):  # noqa: N802 - Qt override
+        uninstall_outside_click_dismiss(self)
+        super().hideEvent(event)
+
+    def closeEvent(self, event):  # noqa: N802 - Qt override
+        uninstall_outside_click_dismiss(self)
+        super().closeEvent(event)
+
+    def keyPressEvent(self, event):  # noqa: N802 - Qt override
+        if event.key() == Qt.Key.Key_Escape:
+            self.reject()
+            return
+        super().keyPressEvent(event)
 
 
 def exec_message_box(
@@ -299,9 +318,9 @@ def exec_message_box(
 def _fallback_qmenu(parent, global_pos: QPoint, items: list[dict]) -> str | None:
     menu = QMenu(_widget_parent(parent))
     menu.setStyleSheet(
-        f"QMenu {{ background:{COLORS['surface']}; color:{COLORS['text']}; border:1px solid {COLORS['separator']}; border-radius:8px; }}"
-        f"QMenu::item {{ padding:7px 22px 7px 12px; border-radius:4px; }}"
-        "QMenu::item:selected { background:#1F3A56; }"
+        f"QMenu {{ background:#F6F7F9; color:#111820; border:1px solid #D8DEE6; border-radius:12px; padding:6px; }}"
+        "QMenu::item { padding:6px 20px 6px 11px; border-radius:8px; font-size:13px; }"
+        "QMenu::item:selected { background:#E7F0FF; color:#0A3D75; }"
         "QMenu::item:disabled { color:#65717A; }"
     )
     action_map = {}
@@ -327,7 +346,10 @@ def show_context_menu(parent, global_pos: QPoint, items: list[dict]) -> str | No
         try:
             dialog = _QuickContextMenuDialog(_widget_parent(parent), normalized)
             dialog.move(QPoint(global_pos))
-            dialog.exec()
+            loop = QEventLoop()
+            dialog.finished.connect(loop.quit)
+            dialog.show()
+            loop.exec()
             return dialog.selected_id()
         except Exception:
             pass

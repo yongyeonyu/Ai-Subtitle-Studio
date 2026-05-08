@@ -13,7 +13,7 @@ from typing import Any
 from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
 from core.engine.word_resegmenter import resegment_by_word_timestamps
 from core.subtitle_quality.models import attach_asr_metadata
-from core.subtitle_quality.vad_alignment_checker import annotate_segment_vad_alignment, normalize_vad_segments
+from core.subtitle_quality.vad_alignment_checker import annotate_segments_vad_alignment, normalize_vad_segments
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -261,9 +261,7 @@ def snap_segments_to_word_vad_boundaries(
                 "source": "whisper_words+vad",
             }
             segment["asr_metadata"] = meta
-        if vad:
-            segment = annotate_segment_vad_alignment(segment, vad)
-        else:
+        if not vad:
             segment = attach_asr_metadata(segment, backend=(segment.get("asr_metadata") or {}).get("backend"))
         snapped.append(segment)
 
@@ -272,6 +270,8 @@ def snap_segments_to_word_vad_boundaries(
         cur = snapped[idx]
         if _as_float(prev.get("end")) > _as_float(cur.get("start")):
             prev["end"] = round(max(_as_float(prev.get("start")) + 0.05, _as_float(cur.get("start")) - 0.02), 3)
+    if vad:
+        snapped = annotate_segments_vad_alignment(snapped, vad)
     return snapped
 
 

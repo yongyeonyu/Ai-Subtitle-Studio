@@ -58,7 +58,7 @@ def create_settings_header(parent, *, title: str, subtitle: str, badge: str = "Q
         parent,
         qml_name="settings_panel_header.qml",
         scope="settings",
-        height=72,
+        height=60,
         mouse_transparent=True,
         root_props={
             "titleText": str(title or "Settings"),
@@ -73,7 +73,7 @@ def create_qml_tab_bar(parent, *, items: list[dict], current_index: int = 0, sco
         parent,
         qml_name="app_tab_bar.qml",
         scope=scope,
-        height=54,
+        height=44,
         root_props={
             "tabItems": list(items or []),
             "currentIndex": max(0, int(current_index or 0)),
@@ -130,7 +130,7 @@ def create_qml_action_bar(parent, *, actions: list[dict], compact: bool = False,
         parent,
         qml_name="app_action_bar.qml",
         scope=scope,
-        height=44 if compact else 62,
+        height=38 if compact else 52,
         root_props={
             "actions": list(actions or []),
             "compact": bool(compact),

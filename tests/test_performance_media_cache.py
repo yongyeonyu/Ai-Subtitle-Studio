@@ -311,6 +311,9 @@ class PerformanceMediaCacheTest(unittest.TestCase):
         self.assertEqual(env["AI_SUBTITLE_NATIVE_THREADS"], "10")
         self.assertEqual(env["OMP_NUM_THREADS"], "10")
         self.assertEqual(env["AI_SUBTITLE_NATIVE_JSON"], "1")
+        self.assertEqual(env["AI_SUBTITLE_NATIVE_TEXT_SIMILARITY"], "1")
+        self.assertEqual(env["AI_SUBTITLE_NATIVE_CUT_BOUNDARY"], "1")
+        self.assertEqual(env["AI_SUBTITLE_OLLAMA_PY_CLIENT"], "1")
 
     def test_distributed_worker_ceiling_keeps_one_core_for_ui_in_max_profile(self):
         snapshot = {

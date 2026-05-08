@@ -14,7 +14,37 @@ from core.runtime.logger import get_logger
 
 
 class EditorRoughcutDraftMixin:
+    def _post_generation_local_llm_release_requested(self, settings: dict, segments: list[dict]) -> bool:
+        if not bool(getattr(self, "_post_generation_models_release_requested", False)) and not bool(
+            getattr(self, "_post_generation_models_released", False)
+        ):
+            try:
+                main_w = self.window()
+                if not bool(getattr(main_w, "_editor_ai_runtime_release_requested_for_editor_mode", False)):
+                    return False
+            except Exception:
+                return False
+        try:
+            from core.llm.openai_provider import is_openai_model
+            from core.roughcut.roughcut_llm_config import resolve_roughcut_llm_config
+
+            llm_config = resolve_roughcut_llm_config(settings, subtitle_rows=list(segments or []))
+            provider = str(llm_config.provider or "").strip().lower()
+            model = str(llm_config.model or "").strip()
+            if not llm_config.enabled or not model or "사용 안함" in model or provider == "none":
+                return False
+            if provider in {"openai", "google", "gemini"} or is_openai_model(model) or "gemini" in model.lower():
+                return False
+            return True
+        except Exception:
+            provider = str(settings.get("selected_llm_provider") or settings.get("roughcut_llm_provider") or "ollama")
+            return provider.strip().lower() not in {"openai", "google", "gemini", "none"}
+
     def _schedule_post_roughcut_model_release(self):
+        if bool(getattr(self, "_post_generation_models_release_requested", False)) or bool(
+            getattr(self, "_post_generation_models_released", False)
+        ):
+            return
         release = getattr(self, "_release_ai_models_after_roughcut_draft", None)
         if callable(release):
             try:
@@ -163,6 +193,15 @@ class EditorRoughcutDraftMixin:
         if len(segments) < min_count or not model or "사용 안함" in model:
             try:
                 emit_candidate(None, "local_after_generation")
+            except Exception as exc:
+                self._set_roughcut_draft_status("failed")
+                get_logger().log(f"⚠️ 에디터 러프컷 로컬 초안 생성 실패: {exc}")
+            return
+        if self._post_generation_local_llm_release_requested(settings, segments):
+            try:
+                self._roughcut_llm_cooldown_until = time.time() + 10.0
+                get_logger().log("⏩ 러프컷 LLM: 에디터 모드 모델 정리 요청 상태라 로컬 규칙 초안으로 즉시 대체합니다.")
+                emit_candidate(None, "local_after_generation_runtime_released")
             except Exception as exc:
                 self._set_roughcut_draft_status("failed")
                 get_logger().log(f"⚠️ 에디터 러프컷 로컬 초안 생성 실패: {exc}")

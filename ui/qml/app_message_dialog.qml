@@ -11,10 +11,10 @@ Rectangle {
     property string iconKind: "info"
     property var buttonsModel: []
 
-    readonly property color surfaceColor: "#171E23"
-    readonly property color borderColor: "#32414B"
-    readonly property color textColor: "#F5F7FA"
-    readonly property color mutedColor: "#A9B0B7"
+    readonly property color surfaceColor: "#F6F7F9"
+    readonly property color borderColor: "#D7DEE7"
+    readonly property color textColor: "#111820"
+    readonly property color mutedColor: "#52606B"
     readonly property color accentColor: iconKind === "danger" ? "#FF453A"
         : iconKind === "warning" ? "#FF9F0A"
         : iconKind === "question" ? "#5AC8FA"
@@ -22,14 +22,14 @@ Rectangle {
 
     Rectangle {
         anchors.fill: parent
-        radius: 26
-        color: "#88000000"
+        radius: 22
+        color: "#44000000"
     }
 
     Rectangle {
         anchors.fill: parent
-        anchors.margins: 14
-        radius: 28
+        anchors.margins: 10
+        radius: 22
         color: surfaceColor
         border.width: 1
         border.color: borderColor
@@ -37,16 +37,16 @@ Rectangle {
         Rectangle {
             x: 18
             y: 18
-            width: 12
-            height: Math.max(28, titleLabel.paintedHeight + 12)
-            radius: 6
+            width: 8
+            height: Math.max(22, titleLabel.paintedHeight + 8)
+            radius: 4
             color: accentColor
         }
 
         Column {
             anchors.fill: parent
-            anchors.margins: 34
-            spacing: 22
+            anchors.margins: 28
+            spacing: 16
 
             Item {
                 width: parent.width
@@ -57,7 +57,7 @@ Rectangle {
                     anchors.right: parent.right
                     text: root.titleText
                     color: textColor
-                    font.pixelSize: 30
+                    font.pixelSize: 22
                     font.bold: true
                     elide: Text.ElideRight
                 }
@@ -68,43 +68,43 @@ Rectangle {
                 text: root.messageText
                 wrapMode: Text.WordWrap
                 color: mutedColor
-                font.pixelSize: 18
+                font.pixelSize: 14
                 lineHeight: 1.25
             }
 
             Item {
                 width: parent.width
-                height: 62
+                height: 46
 
                 Row {
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    spacing: 14
+                    spacing: 9
 
                     Repeater {
                         model: root.buttonsModel
                         delegate: Rectangle {
                             required property var modelData
 
-                            width: Math.max(116, buttonLabel.paintedWidth + 42)
-                            height: 54
-                            radius: 14
+                            width: Math.max(88, buttonLabel.paintedWidth + 32)
+                            height: 36
+                            radius: 10
                             color: modelData.kind === "primary" ? "#0A84FF"
                                 : modelData.kind === "warning" ? "#FF9F0A"
                                 : modelData.kind === "danger" ? "#FF453A"
-                                : "#232E36"
+                                : "#E8ECF2"
                             border.width: modelData.default ? 2 : 1
                             border.color: modelData.kind === "primary" ? "#52A6FF"
                                 : modelData.kind === "warning" ? "#FFC46A"
                                 : modelData.kind === "danger" ? "#FF8B84"
-                                : "#44535E"
+                                : "#D1D8E0"
 
                             Text {
                                 id: buttonLabel
                                 anchors.centerIn: parent
                                 text: String(modelData.label || "")
-                                color: "#F5F7FA"
-                                font.pixelSize: 17
+                                color: modelData.kind === "secondary" ? "#111820" : "#FFFFFF"
+                                font.pixelSize: 13
                                 font.bold: true
                             }
 

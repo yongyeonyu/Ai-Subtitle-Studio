@@ -5,7 +5,7 @@ ui/timeline_global.py
 Global timeline minimap
 """
 import numpy as np
-from PyQt6.QtCore import QRect, Qt, pyqtSignal
+from PyQt6.QtCore import QLine, QRect, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QSizePolicy
 
@@ -46,6 +46,7 @@ class GlobalCanvas(GlobalCanvasBase):
         self._last_playhead_px: int | None = None
         self._last_viewport_px: tuple[int, int] | None = None
         self._last_whisper_px: int | None = None
+        self._segments_signature = None
 
     def _invalidate_static_cache(self):
         self._static_cache = None
@@ -108,8 +109,26 @@ class GlobalCanvas(GlobalCanvasBase):
         self._last_playhead_px = px
         self.update()
 
-    def update_segments(self, segs, total_dur):
-        self.segments = [s for s in segs if not s.get("is_gap")]
+    def update_segments(self, segs, total_dur, *, signature=None, rows=None):
+        if rows is None:
+            rows = [s for s in segs if not s.get("is_gap")]
+        if signature is None:
+            checksum = 0
+            for seg in rows:
+                try:
+                    start_ms = int(round(float(seg.get("start", 0.0) or 0.0) * 1000.0))
+                    end_ms = int(round(float(seg.get("end", seg.get("start", 0.0)) or 0.0) * 1000.0))
+                except Exception:
+                    start_ms = 0
+                    end_ms = 0
+                checksum = ((checksum * 1000003) ^ (start_ms * 31) ^ end_ms) & 0xFFFFFFFF
+            signature = (len(rows), int(round(float(total_dur or 0.0) * 1000.0)), checksum)
+        if signature == getattr(self, "_segments_signature", None):
+            self.segments = rows
+            self.total_duration = total_dur
+            return
+        self._segments_signature = signature
+        self.segments = rows
         self.total_duration = total_dur
         self._invalidate_static_cache()
         self.update()
@@ -225,20 +244,43 @@ class GlobalCanvas(GlobalCanvasBase):
         if columns:
             pen_speech = QPen(QColor(130, 205, 235, 150), 1)
             pen_silence = QPen(QColor(85, 92, 98, 105), 1)
+            speech_lines: list[QLine] = []
+            silence_lines: list[QLine] = []
             for x, (amp_h, in_speech) in enumerate(columns):
-                p.setPen(pen_speech if in_speech else pen_silence)
-                p.drawLine(x, mid_y - amp_h, x, mid_y + amp_h)
+                line = QLine(x, mid_y - amp_h, x, mid_y + amp_h)
+                if in_speech:
+                    speech_lines.append(line)
+                else:
+                    silence_lines.append(line)
+            if speech_lines:
+                p.setPen(pen_speech)
+                p.drawLines(speech_lines)
+            if silence_lines:
+                p.setPen(pen_silence)
+                p.drawLines(silence_lines)
 
         if total > 0:
             sc = w / total
             p.setPen(Qt.PenStyle.NoPen)
+            pending_rects: list[QRect] = []
+            confirmed_rects: list[QRect] = []
             for s in self.segments:
                 try:
                     x = int(float(s["start"]) * sc)
                     sw = max(1, int((float(s["end"]) - float(s["start"])) * sc))
                 except Exception:
                     continue
-                p.fillRect(QRect(x, 14, sw, 18), QColor("#FF453A") if s.get("stt_pending") else QColor("#666666"))
+                rect = QRect(x, 14, sw, 18)
+                if s.get("stt_pending"):
+                    pending_rects.append(rect)
+                else:
+                    confirmed_rects.append(rect)
+            if confirmed_rects:
+                p.setBrush(QColor("#666666"))
+                p.drawRects(confirmed_rects)
+            if pending_rects:
+                p.setBrush(QColor("#FF453A"))
+                p.drawRects(pending_rects)
 
         p.end()
         self._static_cache = pixmap
@@ -278,7 +320,7 @@ class GlobalCanvas(GlobalCanvasBase):
         # 선택 클립 라벨 (우상단 숫자만)
         if self._clip_label:
             p.setPen(QColor("#4FC3F7"))
-            p.setFont(QFont("", 11))
+            p.setFont(QFont(config.FONT, 11))
             fm = p.fontMetrics()
             txt = str(self._clip_label)
             tw = fm.horizontalAdvance(txt)

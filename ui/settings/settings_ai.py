@@ -52,13 +52,13 @@ from core.path_manager import (
 def _ai_settings_panel_stylesheet() -> str:
     return (
         "#AiSettingsSectionCard {"
-        f"background: {COLORS['surface']}; border: 1px solid {COLORS['separator']}; border-radius: 16px;"
+        f"background: {COLORS['surface']}; border: 1px solid {COLORS['separator']}; border-radius: 14px;"
         "}"
         "#AiSettingsSectionTitle {"
-        f"color: {COLORS['text']}; font-size: 18px; font-weight: 900;"
+        f"color: {COLORS['text']}; font-size: 16px; font-weight: 900;"
         "}"
         "#AiSettingsSectionHint {"
-        f"color: {COLORS['muted']}; font-size: 12px; font-weight: 700;"
+        f"color: {COLORS['muted']}; font-size: 11px; font-weight: 700;"
         "}"
         "#AiModelDownloadPanel {"
         "background: transparent; border: none;"
@@ -66,14 +66,14 @@ def _ai_settings_panel_stylesheet() -> str:
         "#AiRegistryModelStatus, #AiModelInfoLabel {"
         "background: rgba(0, 122, 255, 0.08);"
         "border: 1px solid rgba(0, 122, 255, 0.24);"
-        "border-radius: 12px; padding: 10px 12px;"
+        "border-radius: 12px; padding: 8px 10px;"
         f"color: #D8E9FF;"
         "}"
         "#AiApiSectionLabel {"
-        f"color: {COLORS['text']}; font-size: 14px; font-weight: 900;"
+        f"color: {COLORS['text']}; font-size: 13px; font-weight: 900;"
         "}"
         "#GoogleApiKeyInput, #OpenAiApiKeyInput, #HuggingFaceTokenInput {"
-        "padding-left: 12px; font-size: 13px;"
+        "padding-left: 10px; font-size: 12px;"
         "}"
     )
 
@@ -94,12 +94,31 @@ def _resolve_audio_preset_combo_data(settings: dict | None) -> str:
     return ""
 
 
+def stt2_whisper_model_candidates(models):
+    candidates = []
+    for model in models:
+        model_name = str(model or "")
+        lowered = model_name.lower()
+        if (
+            "ghost613" in lowered
+            or "zeroth" in lowered
+            or "komixv2" in lowered
+            or model_name.startswith("coreml:")
+        ):
+            candidates.append(model)
+    return candidates
+
+
 class SettingsDialog(QDialog, SettingsRoughcutMixin):
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("⚙️ AI 엔진 설정")
-        self.setMinimumWidth(860)
-        apply_tablet_dialog_profile(self)
+        self.setMinimumWidth(780)
+        profile = apply_tablet_dialog_profile(self)
+        if getattr(profile, "name", "desktop") == "desktop":
+            self._settings_control_height = 36
+        else:
+            self._settings_control_height = min(int(getattr(self, "_settings_control_height", 44) or 44), 40)
         self.setStyleSheet(settings_dialog_stylesheet() + _ai_settings_panel_stylesheet())
         self.result_settings = dict(settings)
         self.stt_quality_presets = load_stt_quality_presets()
@@ -145,7 +164,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.combo_stt_quality_preset = QComboBox()
         for key, label, summary in simple_operation_mode_items():
             self.combo_stt_quality_preset.addItem(f"{label} - {summary}" if summary else label, key)
-        self.combo_stt_quality_preset.setMinimumWidth(280)
+        self.combo_stt_quality_preset.setMinimumWidth(240)
 
         self.combo_audio_preset = QComboBox()
         self.combo_audio_preset.addItem("직접 설정", "")
@@ -156,7 +175,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
                 continue
             desc = preset.get("description", "")
             self.combo_audio_preset.addItem(f"{name} - {desc}" if desc else name, name)
-        self.combo_audio_preset.setMinimumWidth(280)
+        self.combo_audio_preset.setMinimumWidth(240)
 
         self._build_subtitle_quality_section(editor_form, settings)
 
@@ -384,16 +403,20 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             model for model in w_models
             if "ghost613" not in model.lower() and "zeroth" not in model.lower()
         ]
-        stt2_models = [
-            model for model in w_models
-            if "ghost613" in model.lower() or "zeroth" in model.lower() or model.startswith("coreml:")
-        ]
+        stt2_models = stt2_whisper_model_candidates(w_models)
 
         self.combo_whisper.setUpdatesEnabled(False)
         self.combo_whisper.blockSignals(True)
         self.combo_whisper.addItems(stt1_models)
         for idx, model_name in enumerate(stt1_models):
-            if "ghost613" in model_name or "Zeroth-KO" in model_name or model_name.startswith("o0dimplz0o/") or model_name.startswith("coreml:"):
+            if (
+                "ghost613" in model_name
+                or "komixv2" in model_name.lower()
+                or "Zeroth-KO" in model_name
+                or model_name.startswith("o0dimplz0o/")
+                or model_name.startswith("seastar105/")
+                or model_name.startswith("coreml:")
+            ):
                 self.combo_whisper.setItemText(idx, f"{model_name} (실험)")
         self._fit_model_combo(self.combo_whisper)
         curr_w = settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", stt1_models[0] if stt1_models else ""))
@@ -425,7 +448,14 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.combo_whisper_secondary.blockSignals(True)
         self.combo_whisper_secondary.addItems(stt2_models)
         for idx, model_name in enumerate(stt2_models):
-            if "ghost613" in model_name or "Zeroth-KO" in model_name or model_name.startswith("o0dimplz0o/") or model_name.startswith("coreml:"):
+            if (
+                "ghost613" in model_name
+                or "komixv2" in model_name.lower()
+                or "Zeroth-KO" in model_name
+                or model_name.startswith("o0dimplz0o/")
+                or model_name.startswith("seastar105/")
+                or model_name.startswith("coreml:")
+            ):
                 self.combo_whisper_secondary.setItemText(idx, f"{model_name} (실험)")
         self._fit_model_combo(self.combo_whisper_secondary)
         curr_w2 = settings.get(
@@ -537,12 +567,12 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
     def _make_tab_form(self):
         content = QWidget()
         form = QFormLayout(content)
-        form.setContentsMargins(18, 18, 18, 18)
+        form.setContentsMargins(14, 14, 14, 14)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        form.setHorizontalSpacing(16)
-        form.setVerticalSpacing(12)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(9)
         tab = QScrollArea()
         tab.setFrameShape(QScrollArea.Shape.NoFrame)
         tab.setWidgetResizable(True)
@@ -553,8 +583,8 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         card = QFrame()
         card.setObjectName("AiSettingsSectionCard")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
         title_label = QLabel(title)
         title_label.setObjectName("AiSettingsSectionTitle")
@@ -573,20 +603,20 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        form.setHorizontalSpacing(16)
-        form.setVerticalSpacing(10)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
         return form
 
     def _model_grid_label(self, text: str):
         label = QLabel(text)
         label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        label.setMinimumWidth(118)
+        label.setMinimumWidth(106)
         label.setStyleSheet(label_style("text", 11, bold=True))
         return label
 
     def _fit_action_button(self, button: QPushButton, width: int):
         button.setFixedWidth(width)
-        height = int(getattr(self, "_settings_control_height", 40) or 40)
+        height = int(getattr(self, "_settings_control_height", 36) or 36)
         button.setMinimumHeight(height)
         button.setMaximumHeight(height)
         button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -594,14 +624,14 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
     def _fit_model_combo(self, combo: QComboBox, *, min_contents: int = 24):
         combo.setMinimumContentsLength(min_contents)
         combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        height = int(getattr(self, "_settings_control_height", 40) or 40)
+        height = int(getattr(self, "_settings_control_height", 36) or 36)
         combo.setMinimumHeight(height)
         combo.setMaximumHeight(height)
-        combo.setMaxVisibleItems(14)
+        combo.setMaxVisibleItems(10)
         combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def _settings_button_style(self, kind: str = "toolbar", *, min_width: int = 72):
-        height = int(getattr(self, "_settings_control_height", 40) or 40)
+        height = int(getattr(self, "_settings_control_height", 36) or 36)
         return settings_button_style(kind, min_width=min_width, min_height=height)
 
     def _set_combo_item_tooltip(self, combo: QComboBox, index: int, text: str):

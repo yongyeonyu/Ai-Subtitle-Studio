@@ -21,6 +21,7 @@ from ui.timeline.timeline_constants import (
 from ui.timeline.timeline_paint import TimelinePaintMixin
 from ui.timeline.timeline_input import TimelineInputMixin
 from ui.timeline.timeline_inline_edit import TimelineInlineEditMixin
+from ui.timeline.segment_store import TimelineSegmentStore
 from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
 
 
@@ -139,22 +140,33 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._render_epoch = 0
         self._paint_index_cache: dict[str, dict] = {}
         self._paint_last_visible_counts: dict[str, int] = {}
+        self._segment_store: TimelineSegmentStore | None = None
+        self._segment_store_geometry_signature = None
         self._segment_visual_style_cache: dict[tuple, tuple[str, str]] = {}
         self._line_segment_index_cache_key = None
         self._line_segment_index_cache: dict[int, dict] = {}
         self._editable_segments_cache_key = None
         self._editable_segments_cache: list[tuple[int, dict]] = []
+        self._editable_segment_pos_cache_key = None
+        self._editable_segment_pos_cache: dict[int, int] = {}
+        self._speaker_hit_rect_cache_key = None
+        self._speaker_hit_rect_cache: dict[tuple, QRect] = {}
+        self._speaker_hit_settings_cache_key = None
+        self._speaker_hit_settings_cache: dict = {}
+        self._drag_snap_base_cache_key = None
+        self._drag_snap_base_candidates: list[dict] = []
         self._diamond_pairs_cache_key = None
         self._diamond_pairs_cache: dict[str, object] = {}
         self._scan_boundary_hit_cache = None
         self._voice_activity_segments_external = False
+        self._gap_segments_signature = None
 
     # ---------------------------------------------------------
     # State / Utility
     # ---------------------------------------------------------
     def set_zoom(self, new_pps):
         self.pps = max(5.0, min(500.0, new_pps))
-        self.update()
+        self._update_viewport_region()
 
     def set_frame_rate(self, fps: float):
         normalized = normalize_fps(fps)
@@ -177,11 +189,19 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._render_epoch = int(getattr(self, "_render_epoch", 0) or 0) + 1
         self._paint_index_cache = {}
         self._paint_last_visible_counts = {}
+        self._segment_store = None
+        self._segment_store_geometry_signature = None
         self._segment_visual_style_cache = {}
         self._line_segment_index_cache_key = None
         self._line_segment_index_cache = {}
         self._editable_segments_cache_key = None
         self._editable_segments_cache = []
+        self._editable_segment_pos_cache_key = None
+        self._editable_segment_pos_cache = {}
+        self._speaker_hit_rect_cache_key = None
+        self._speaker_hit_rect_cache = {}
+        self._drag_snap_base_cache_key = None
+        self._drag_snap_base_candidates = []
         self._diamond_pairs_cache_key = None
         self._diamond_pairs_cache = {}
         self._scan_boundary_hit_cache = None
@@ -242,6 +262,16 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             max(int(self.height()), viewport_h),
         )
         return paint_rect.intersected(visible)
+
+    def _update_viewport_region(self, *, pad_px: int = 160) -> None:
+        try:
+            rect = self._viewport_paint_clip(QRect(self.rect()), pad_px=pad_px)
+            if rect.isValid() and not rect.isEmpty():
+                self.update(rect)
+                return
+        except Exception:
+            pass
+        self.update()
 
     @staticmethod
     def _paint_item_bounds(item: dict) -> tuple[float, float]:
@@ -336,8 +366,18 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             return visible
 
         cache_name = str(cache_name or "items")
+        if cache_name == "segments" and rows is self.segments:
+            store = getattr(self, "_segment_store", None)
+            if store is None or len(store.rows) != len(self.segments):
+                store = TimelineSegmentStore(self.segments)
+                self._segment_store = store
+            visible = store.visible(start_sec, end_sec)
+            visible = self._merge_forced_visible_segments(visible, start_sec, end_sec)
+            self._paint_last_visible_counts[cache_name] = len(visible)
+            return visible
         sig = (id(items), len(rows), int(getattr(self, "_render_epoch", 0) or 0))
-        cache = dict(getattr(self, "_paint_index_cache", {}).get(cache_name) or {})
+        paint_index_cache = getattr(self, "_paint_index_cache", {})
+        cache = paint_index_cache.get(cache_name) or {}
         if cache.get("sig") != sig:
             by_start = []
             max_span = 0.0
@@ -607,52 +647,119 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
     def update_segments(self, segs, active_sec, total_dur):
         rows = list(segs or [])
-        source_gaps = [
-            dict(s)
-            for s in rows
-            if s.get("is_gap") and float(s.get("end", s.get("start", 0.0)) or 0.0) > float(s.get("start", 0.0) or 0.0)
-        ]
-        self.segments = [s for s in rows if not s.get("is_gap")]
+        source_gaps = []
+        segments = []
+        geometry_checksum = 0
+        content_end_ms = 0
+        for s in rows:
+            if not isinstance(s, dict):
+                continue
+            try:
+                start_ms = int(round(float(s.get("start", 0.0) or 0.0) * 1000.0))
+                end_ms = int(round(float(s.get("end", s.get("start", 0.0)) or 0.0) * 1000.0))
+            except Exception:
+                start_ms = 0
+                end_ms = 0
+            if s.get("is_gap"):
+                if end_ms > start_ms:
+                    source_gaps.append(dict(s))
+                continue
+            segments.append(s)
+            content_end_ms = max(content_end_ms, end_ms)
+            geometry_checksum = ((geometry_checksum * 1000003) ^ (start_ms * 31) ^ end_ms) & 0xFFFFFFFF
+        previous_geometry_signature = getattr(self, "_segments_geometry_signature", None)
+        self.segments = segments
         self.total_duration = total_dur or (rows[-1]["end"] if rows else 0.0)
+        self._segments_content_duration = max(
+            float(self.total_duration or 0.0),
+            float(content_end_ms) / 1000.0,
+        )
 
-        generated_gaps = _build_gaps(self.segments, self.total_duration)
-        if source_gaps:
-            new_gaps = self._preserve_explicit_gaps(generated_gaps, source_gaps)
-        else:
-            new_gaps = generated_gaps
-        old_active = {
-            (g["start"], g["end"])
-            for g in self.gap_segments
-            if g.get("active")
-        }
+        segments_geometry_signature = (
+            len(self.segments),
+            int(round(float(self.total_duration or 0.0) * 1000.0)),
+            geometry_checksum,
+        )
+        gap_signature = (
+            len(self.segments),
+            int(round(float(self.total_duration or 0.0) * 1000.0)),
+            len(source_gaps),
+            geometry_checksum,
+        )
+        self._segments_geometry_signature = segments_geometry_signature
+        gaps_changed = bool(source_gaps) or gap_signature != getattr(self, "_gap_segments_signature", None)
+        if gaps_changed:
+            generated_gaps = _build_gaps(self.segments, self.total_duration)
+            if source_gaps:
+                new_gaps = self._preserve_explicit_gaps(generated_gaps, source_gaps)
+            else:
+                new_gaps = generated_gaps
+            old_active = {
+                (g["start"], g["end"])
+                for g in self.gap_segments
+                if g.get("active")
+            }
 
-        for gap in new_gaps:
-            if (gap["start"], gap["end"]) in old_active:
-                gap["active"] = True
-            for source in source_gaps:
-                try:
-                    same_start = abs(float(source.get("start", 0.0) or 0.0) - float(gap.get("start", 0.0) or 0.0)) < 0.05
-                    same_end = abs(float(source.get("end", 0.0) or 0.0) - float(gap.get("end", 0.0) or 0.0)) < 0.05
-                except Exception:
-                    same_start = same_end = False
-                if not (same_start and same_end):
-                    continue
-                for key in ("quality", "quality_history", "quality_candidates", "linked_silence_for_line"):
-                    if key in source:
-                        gap[key] = source[key]
-                break
+            for gap in new_gaps:
+                if (gap["start"], gap["end"]) in old_active:
+                    gap["active"] = True
+                for source in source_gaps:
+                    try:
+                        same_start = abs(float(source.get("start", 0.0) or 0.0) - float(gap.get("start", 0.0) or 0.0)) < 0.05
+                        same_end = abs(float(source.get("end", 0.0) or 0.0) - float(gap.get("end", 0.0) or 0.0)) < 0.05
+                    except Exception:
+                        same_start = same_end = False
+                    if not (same_start and same_end):
+                        continue
+                    for key in ("quality", "quality_history", "quality_candidates", "linked_silence_for_line"):
+                        if key in source:
+                            gap[key] = source[key]
+                    break
 
-        self.gap_segments = new_gaps
+            self.gap_segments = new_gaps
+            self._gap_segments_signature = gap_signature
         if not bool(getattr(self, "_voice_activity_segments_external", False)):
             self.voice_activity_segments = []
-        self._invalidate_marker_caches()
-        self._invalidate_render_cache()
+        if gaps_changed:
+            self._invalidate_marker_caches()
+            self._invalidate_render_cache()
+        else:
+            self._line_segment_index_cache_key = None
+            self._line_segment_index_cache = {}
+            self._editable_segments_cache_key = None
+            self._editable_segments_cache = []
+            self._editable_segment_pos_cache_key = None
+            self._editable_segment_pos_cache = {}
+            self._speaker_hit_rect_cache_key = None
+            self._speaker_hit_rect_cache = {}
+            self._drag_snap_base_cache_key = None
+            self._drag_snap_base_candidates = []
+            if len(getattr(self, "_segment_visual_style_cache", {}) or {}) > 4096:
+                self._segment_visual_style_cache = {}
+
+        if len(self.segments) >= 64:
+            store = getattr(self, "_segment_store", None)
+            store_sig = getattr(self, "_segment_store_geometry_signature", None)
+            if (
+                store is not None
+                and store_sig == segments_geometry_signature
+                and previous_geometry_signature == segments_geometry_signature
+                and len(getattr(store, "rows", []) or []) == len(self.segments)
+            ):
+                store.set_rows(self.segments)
+            else:
+                store = TimelineSegmentStore(self.segments)
+                self._segment_store = store
+            self._segment_store_geometry_signature = segments_geometry_signature
+        else:
+            self._segment_store = None
+            self._segment_store_geometry_signature = None
 
         if active_sec is not None:
             self.active_seg_start = active_sec
             self._sync_active_segment_key(active_sec)
 
-        self.update()
+        self._update_viewport_region()
 
     def set_llm_review_segment(self, payload: dict | None) -> None:
         data = dict(payload or {})
@@ -876,19 +983,30 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             owner = owner.parent()
 
     def _get_prev_seg(self, seg):
-        segs = self._editable_segments_sorted()
+        key = self._segment_index_cache_key()
+        if self._editable_segments_cache_key != key:
+            self._editable_segments_sorted()
+        pos = self._editable_segment_pos_cache.get(id(seg))
+        if pos is None or pos <= 0:
+            return None
         try:
-            idx = segs.index(seg)
-            return segs[idx - 1] if idx > 0 else None
-        except ValueError:
+            return self._editable_segments_cache[int(pos) - 1][1]
+        except Exception:
             return None
 
     def _get_next_seg(self, seg):
-        segs = self._editable_segments_sorted()
+        key = self._segment_index_cache_key()
+        if self._editable_segments_cache_key != key:
+            self._editable_segments_sorted()
+        pos = self._editable_segment_pos_cache.get(id(seg))
+        if pos is None:
+            return None
         try:
-            idx = segs.index(seg)
-            return segs[idx + 1] if idx + 1 < len(segs) else None
-        except ValueError:
+            next_pos = int(pos) + 1
+            if next_pos >= len(self._editable_segments_cache):
+                return None
+            return self._editable_segments_cache[next_pos][1]
+        except Exception:
             return None
 
     def _editable_segments_sorted(self):
@@ -904,6 +1022,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             editable.sort(key=lambda item: (float(item[1].get("start", 0.0) or 0.0), float(item[1].get("end", 0.0) or 0.0), int(item[0])))
             self._editable_segments_cache_key = key
             self._editable_segments_cache = editable
+            self._editable_segment_pos_cache_key = key
+            self._editable_segment_pos_cache = {id(seg): pos for pos, (_idx, seg) in enumerate(editable)}
         return [seg for _idx, seg in list(self._editable_segments_cache or [])]
 
     def _editable_segments_with_indices_sorted(self):

@@ -16,6 +16,11 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+try:
+    import ollama as _ollama_py  # type: ignore
+except Exception:  # pragma: no cover - optional dependency fallback.
+    _ollama_py = None  # type: ignore
+
 
 _WARMED: set[str] = set()
 _PROBE_OK_UNTIL: dict[str, float] = {}
@@ -31,6 +36,8 @@ _START_IN_PROGRESS_UNTIL = 0.0
 _SERVER_READY_LOGGED_UNTIL = 0.0
 _APP_STARTED_RUNTIME = False
 _OLLAMA_ROOT_URL = "http://localhost:11434/"
+_OLLAMA_CLIENT_HOST = "http://localhost:11434"
+OLLAMA_KEEP_ALIVE_FOREVER = "-1m"
 _GENERATE_RETRY_STATUS_CODES = {500, 502, 503, 504}
 _PROBE_RETRY_STATUS_CODES = {502, 503, 504}
 _TRANSIENT_CONNECTION_FRAGMENTS = (
@@ -55,6 +62,114 @@ _APP_BUNDLE_OLLAMA_BINS = (
     "/Applications/Ollama.app/Contents/MacOS/ollama",
     os.path.expanduser("~/Applications/Ollama.app/Contents/MacOS/ollama"),
 )
+
+
+def _ollama_python_client_enabled() -> bool:
+    if _ollama_py is None:
+        return False
+    value = str(os.environ.get("AI_SUBTITLE_OLLAMA_PY_CLIENT", "1") or "1").strip().lower()
+    return value not in {"0", "false", "off", "no"}
+
+
+def ollama_connection_backend() -> str:
+    return "python-client" if _ollama_python_client_enabled() else "http"
+
+
+def _ollama_client(timeout: float | None = None):
+    if not _ollama_python_client_enabled():
+        return None
+    kwargs: dict[str, Any] = {}
+    if timeout is not None:
+        kwargs["timeout"] = max(0.1, float(timeout or 0.1))
+    return _ollama_py.Client(host=_OLLAMA_CLIENT_HOST, **kwargs)
+
+
+def _response_value(payload: Any, key: str, default: Any = None) -> Any:
+    if isinstance(payload, dict):
+        return payload.get(key, default)
+    return getattr(payload, key, default)
+
+
+def _ollama_keep_alive(value: int | float | str | None) -> str | float | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            numeric = float(text)
+        except Exception:
+            return text
+        if numeric == 0:
+            return 0
+        if numeric < 0:
+            return OLLAMA_KEEP_ALIVE_FOREVER
+        return numeric
+    try:
+        numeric = float(value)
+    except Exception:
+        return str(value)
+    if numeric == 0:
+        return 0
+    if numeric < 0:
+        return OLLAMA_KEEP_ALIVE_FOREVER
+    return numeric
+
+
+def _ollama_client_generate(
+    model: str,
+    prompt: str,
+    *,
+    timeout: float,
+    keep_alive: int | float | str | None = -1,
+    num_predict: int = 256,
+    temperature: float = 0.0,
+    json_format: bool = True,
+) -> str | None:
+    client = _ollama_client(timeout)
+    if client is None:
+        return None
+    response = client.generate(
+        model=model,
+        prompt=prompt,
+        stream=False,
+        format="json" if json_format else None,
+        keep_alive=_ollama_keep_alive(keep_alive),
+        options={
+            "temperature": float(temperature or 0.0),
+            "num_predict": int(num_predict or 256),
+        },
+    )
+    return str(_response_value(response, "response", "") or "")
+
+
+def _ollama_client_list_models(timeout: float = 1.5) -> list[str] | None:
+    client = _ollama_client(timeout)
+    if client is None:
+        return None
+    payload = client.list()
+    rows = _response_value(payload, "models", [])
+    result: list[str] = []
+    for row in list(rows or []):
+        name = str(_response_value(row, "name") or _response_value(row, "model") or "").strip()
+        if name and name not in result:
+            result.append(name)
+    return result
+
+
+def _ollama_client_running_models(timeout: float = 1.5) -> set[str] | None:
+    client = _ollama_client(timeout)
+    if client is None:
+        return None
+    payload = client.ps()
+    rows = _response_value(payload, "models", [])
+    names: set[str] = set()
+    for row in list(rows or []):
+        name = str(_response_value(row, "name") or _response_value(row, "model") or "").strip()
+        if name and "사용 안함" not in name:
+            names.add(name)
+    return names
 
 
 def _reset_ollama_runtime_state(*, clear_warmed: bool = True) -> None:
@@ -252,6 +367,11 @@ def _is_retryable_generate_error(exc: BaseException) -> bool:
         return True
     if _is_timeout_error(exc):
         return True
+    if _ollama_py is not None and isinstance(exc, getattr(_ollama_py, "ResponseError", ())):
+        try:
+            return int(getattr(exc, "status_code", 0) or 0) in _GENERATE_RETRY_STATUS_CODES
+        except Exception:
+            return False
     if isinstance(exc, urllib.error.HTTPError):
         try:
             return int(getattr(exc, "code", 0) or 0) in _GENERATE_RETRY_STATUS_CODES
@@ -266,6 +386,11 @@ def _is_retryable_generate_error(exc: BaseException) -> bool:
 def _is_transient_ollama_connection_error(exc: BaseException) -> bool:
     if isinstance(exc, (ConnectionError, socket.timeout, TimeoutError, http.client.RemoteDisconnected)):
         return True
+    if _ollama_py is not None and isinstance(exc, getattr(_ollama_py, "ResponseError", ())):
+        try:
+            return int(getattr(exc, "status_code", 0) or 0) in _PROBE_RETRY_STATUS_CODES
+        except Exception:
+            return False
     if isinstance(exc, urllib.error.HTTPError):
         try:
             return int(getattr(exc, "code", 0) or 0) in _PROBE_RETRY_STATUS_CODES
@@ -279,16 +404,24 @@ def _is_transient_ollama_connection_error(exc: BaseException) -> bool:
     return any(fragment in text for fragment in _TRANSIENT_CONNECTION_FRAGMENTS)
 
 
-def _build_generate_request(model: str, prompt: str, *, keep_alive: int = -1) -> urllib.request.Request:
+def _build_generate_request(
+    model: str,
+    prompt: str,
+    *,
+    keep_alive: int | float | str = -1,
+    num_predict: int = 256,
+    temperature: float = 0.0,
+    json_format: bool = True,
+) -> urllib.request.Request:
     body = json.dumps({
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "format": "json",
-        "keep_alive": keep_alive,
+        "format": "json" if json_format else "",
+        "keep_alive": _ollama_keep_alive(keep_alive),
         "options": {
-            "temperature": 0.0,
-            "num_predict": 256,
+            "temperature": float(temperature or 0.0),
+            "num_predict": int(num_predict or 256),
         },
     }).encode("utf-8")
 
@@ -300,6 +433,62 @@ def _build_generate_request(model: str, prompt: str, *, keep_alive: int = -1) ->
             "Connection": "close",
         },
     )
+
+
+def generate_text(
+    model: str,
+    prompt: str,
+    *,
+    timeout: int | float = 120,
+    keep_alive: int | float | str | None = -1,
+    num_predict: int = 256,
+    temperature: float = 0.0,
+    json_format: bool = True,
+    attempts: int = 3,
+) -> str | None:
+    if not model or "사용 안함" in model:
+        return None
+    ensure_ollama_server(wait_sec=4.0)
+    last_exc: BaseException | None = None
+    total = max(1, int(attempts or 1))
+    for attempt in range(total):
+        request_keep_alive = keep_alive if attempt == 0 else 0
+        try:
+            out_text = _ollama_client_generate(
+                model,
+                prompt,
+                timeout=float(timeout or 120),
+                keep_alive=request_keep_alive,
+                num_predict=num_predict,
+                temperature=temperature,
+                json_format=json_format,
+            )
+            if out_text is None:
+                req = _build_generate_request(
+                    model,
+                    prompt,
+                    keep_alive=request_keep_alive if request_keep_alive is not None else -1,
+                    num_predict=num_predict,
+                    temperature=temperature,
+                    json_format=json_format,
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    out_text = json.loads(resp.read().decode("utf-8")).get("response", "")
+            _mark_model_probe_ok(model)
+            return str(out_text or "")
+        except Exception as exc:
+            last_exc = exc
+            if not _is_retryable_generate_error(exc) or attempt >= total - 1:
+                raise
+            try:
+                _WARMED.discard(model)
+                ensure_ollama_server(wait_sec=2.0)
+            except Exception:
+                pass
+            time.sleep(0.35 * (attempt + 1))
+    if last_exc:
+        raise last_exc
+    return None
 
 
 def _read_http_error_body(exc: BaseException) -> str:
@@ -319,6 +508,8 @@ def _read_http_error_body(exc: BaseException) -> str:
 
 
 def _extract_ollama_error_message(exc: BaseException) -> str:
+    if _ollama_py is not None and isinstance(exc, getattr(_ollama_py, "ResponseError", ())):
+        return str(getattr(exc, "error", "") or exc).strip()
     if isinstance(exc, urllib.error.HTTPError):
         body = _read_http_error_body(exc)
         if body:
@@ -339,6 +530,12 @@ def _extract_ollama_error_message(exc: BaseException) -> str:
 
 def _get_ollama_installed_models(timeout: float = 1.5) -> list[str]:
     try:
+        models = _ollama_client_list_models(timeout=timeout)
+        if models is not None:
+            return models
+    except Exception:
+        pass
+    try:
         req = urllib.request.Request("http://localhost:11434/api/tags")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             payload = json.loads(resp.read().decode("utf-8") or "{}")
@@ -357,9 +554,18 @@ def _get_ollama_installed_models(timeout: float = 1.5) -> list[str]:
 
 def _probe_ollama_model_once(model: str, *, timeout: float = 8.0) -> dict[str, Any]:
     try:
-        req = _build_generate_request(model, "ping", keep_alive=-1)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            resp.read()
+        out_text = _ollama_client_generate(
+            model,
+            "ping",
+            timeout=timeout,
+            keep_alive=-1,
+            num_predict=1,
+            json_format=False,
+        )
+        if out_text is None:
+            req = _build_generate_request(model, "ping", keep_alive=-1)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                resp.read()
         return {"ok": True, "model": model, "message": ""}
     except Exception as exc:
         return {
@@ -493,32 +699,18 @@ def resolve_ollama_model_for_request(
 def split_text(model: str, prompt: str, timeout: int = 120) -> list[str] | None:
     if not model or "사용 안함" in model:
         return None
-    ensure_ollama_server(wait_sec=4.0)
-    last_exc: BaseException | None = None
-
-    for attempt in range(3):
-        keep_alive = -1 if attempt == 0 else 0
-        try:
-            req = _build_generate_request(model, prompt, keep_alive=keep_alive)
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                out_text = json.loads(resp.read().decode("utf-8")).get("response", "")
-            _mark_model_probe_ok(model)
-            chunks = _parse_chunks(out_text)
-            return chunks or None
-        except Exception as exc:
-            last_exc = exc
-            if not _is_retryable_generate_error(exc) or attempt >= 2:
-                raise
-            try:
-                _WARMED.discard(model)
-                ensure_ollama_server(wait_sec=2.0)
-            except Exception:
-                pass
-            time.sleep(0.35 * (attempt + 1))
-
-    if last_exc:
-        raise last_exc
-    return None
+    out_text = generate_text(
+        model,
+        prompt,
+        timeout=timeout,
+        keep_alive=-1,
+        num_predict=256,
+        temperature=0.0,
+        json_format=True,
+        attempts=3,
+    )
+    chunks = _parse_chunks(out_text or "")
+    return chunks or None
 
 
 def _is_timeout_error(exc: BaseException) -> bool:
@@ -540,28 +732,38 @@ def warmup_model(model: str, logger=None, timeout: float = _WARMUP_TIMEOUT_SEC) 
             return
 
         try:
-            body = json.dumps({
-                "model": model,
-                "prompt": " ",
-                "stream": False,
-                "keep_alive": -1,
-                "options": {
-                    "temperature": 0.0,
-                    "num_predict": 1,
-                },
-            }).encode("utf-8")
-
-            req = urllib.request.Request(
-                "http://localhost:11434/api/generate",
-                data=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "Connection": "keep-alive",
-                },
+            out_text = _ollama_client_generate(
+                model,
+                " ",
+                timeout=float(timeout or _WARMUP_TIMEOUT_SEC),
+                keep_alive=-1,
+                num_predict=1,
+                temperature=0.0,
+                json_format=False,
             )
+            if out_text is None:
+                body = json.dumps({
+                    "model": model,
+                    "prompt": " ",
+                    "stream": False,
+                    "keep_alive": _ollama_keep_alive(-1),
+                    "options": {
+                        "temperature": 0.0,
+                        "num_predict": 1,
+                    },
+                }).encode("utf-8")
 
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                resp.read()
+                req = urllib.request.Request(
+                    "http://localhost:11434/api/generate",
+                    data=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Connection": "keep-alive",
+                    },
+                )
+
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    resp.read()
 
             _mark_model_probe_ok(model, ttl_sec=max(_PROBE_OK_TTL_SEC, timeout * 6.0))
             if logger:
@@ -585,7 +787,25 @@ def warmup_model(model: str, logger=None, timeout: float = _WARMUP_TIMEOUT_SEC) 
 
 
 def _post_ollama_json(path: str, payload: dict, timeout: float = 2.0) -> dict:
-    body = json.dumps(payload).encode("utf-8")
+    if str(path or "") == "/api/generate":
+        try:
+            out_text = _ollama_client_generate(
+                str(payload.get("model") or ""),
+                str(payload.get("prompt") or ""),
+                timeout=timeout,
+                keep_alive=payload.get("keep_alive", None),
+                num_predict=int(dict(payload.get("options") or {}).get("num_predict", 1) or 1),
+                temperature=float(dict(payload.get("options") or {}).get("temperature", 0.0) or 0.0),
+                json_format=bool(payload.get("format") == "json"),
+            )
+            if out_text is not None:
+                return {"response": out_text}
+        except Exception:
+            pass
+    normalized_payload = dict(payload or {})
+    if "keep_alive" in normalized_payload:
+        normalized_payload["keep_alive"] = _ollama_keep_alive(normalized_payload.get("keep_alive"))
+    body = json.dumps(normalized_payload).encode("utf-8")
     req = urllib.request.Request(
         f"http://localhost:11434{path}",
         data=body,
@@ -601,6 +821,12 @@ def _post_ollama_json(path: str, payload: dict, timeout: float = 2.0) -> dict:
 
 
 def _get_ollama_running_models(timeout: float = 1.5) -> set[str]:
+    try:
+        models = _ollama_client_running_models(timeout=timeout)
+        if models is not None:
+            return models
+    except Exception:
+        pass
     try:
         req = urllib.request.Request("http://localhost:11434/api/ps")
         with urllib.request.urlopen(req, timeout=timeout) as resp:

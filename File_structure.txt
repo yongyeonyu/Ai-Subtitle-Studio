@@ -1,7 +1,7 @@
 <!--
-Document-Version: 03.24.03
-Phase: EDITOR_PERFORMANCE_RELEASED
-Last-Updated: 2026-05-08
+Document-Version: 03.25.00
+Phase: NATIVE_PERFORMANCE_UI_RELEASED
+Last-Updated: 2026-05-09
 Updated-By: Codex
 Scope: Actual project filesystem map generated from tracked source files plus untracked non-ignored release files. `.git/`, `venv/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.codex_work/`, and large runtime cache/output folders are intentionally not expanded.
 Role-Description-Rule: Tree entries are generated from actual paths; review notes are removed.
@@ -9,9 +9,9 @@ Role-Description-Rule: Tree entries are generated from actual paths; review note
 ================================================================================
 AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
-Last Updated: 2026-05-08
-Phase: EDITOR_PERFORMANCE_RELEASED
-App Version: 03.24.03
+Last Updated: 2026-05-09
+Phase: NATIVE_PERFORMANCE_UI_RELEASED
+App Version: 03.25.00
 Structure Document: File_structure.txt
 Note: This file is an actual tree map and excludes cache-only Python bytecode folders, virtualenvs, local Codex scratch files, secrets, and large runtime output/cache folders.
 ================================================================================
@@ -66,6 +66,7 @@ ai_subtitle_studio/
 ├── core
 │   ├── audio
 │   │   ├── __init__.py
+│   │   ├── audio_extract_backend_router.py
 │   │   ├── audio_preset_data.py
 │   │   ├── audio_presets.py
 │   │   ├── diarize.py
@@ -78,6 +79,8 @@ ai_subtitle_studio/
 │   │   ├── preset_auto_classifier.py
 │   │   ├── resemble_enhance_runner.py
 │   │   ├── runtime_cleanup.py
+│   │   ├── silero_vad_runtime.py
+│   │   ├── stt_backend_router.py
 │   │   ├── stt_candidate_scorer.py
 │   │   ├── stt_ensemble.py
 │   │   ├── stt_lattice.py
@@ -85,6 +88,7 @@ ai_subtitle_studio/
 │   │   ├── stt_rescue.py
 │   │   ├── stt_vad.py
 │   │   ├── torch_acceleration.py
+│   │   ├── vad_backend_router.py
 │   │   ├── whisper_coreml.py
 │   │   ├── whisper_faster.py
 │   │   ├── whisper_mlx.py
@@ -110,10 +114,18 @@ ai_subtitle_studio/
 │   ├── llm
 │   │   ├── __init__.py
 │   │   ├── gemini_provider.py
+│   │   ├── llama_cpp_provider.py
 │   │   ├── ollama_provider.py
 │   │   ├── openai_provider.py
+│   │   ├── provider_router.py
 │   │   ├── provider_registry.py
 │   │   └── secure_keys.py
+│   ├── optimization
+│   │   ├── __init__.py
+│   │   ├── backend_policy.py
+│   │   ├── profile_store.py
+│   │   ├── quality_gate.py
+│   │   └── types.py
 │   ├── personalization
 │   │   ├── deep_policy_learning.py
 │   │   ├── deep_runtime_adaptation.py
@@ -262,6 +274,8 @@ ai_subtitle_studio/
 │   ├── cut_boundary_auto_scan.py
 │   ├── cut_boundary_auto_utils.py
 │   ├── cut_boundary_auto_verify.py
+│   ├── cut_boundary_backend_router.py
+│   ├── cut_boundary_ffmpeg_scene.py
 │   ├── cut_boundary_fps.py
 │   ├── cut_boundary_fusion.py
 │   ├── cut_boundary_middle.py
@@ -272,7 +286,9 @@ ai_subtitle_studio/
 │   ├── media_queue_order.py
 │   ├── mode_policy.py
 │   ├── model_manager.py
+│   ├── native_cut_boundary.py
 │   ├── native_json.py
+│   ├── native_text_similarity.py
 │   ├── notifier.py
 │   ├── path_manager.py
 │   ├── performance.py
@@ -288,6 +304,7 @@ ai_subtitle_studio/
 │   ├── time_history.py
 │   ├── utils.py
 │   ├── video_codec.py
+│   ├── video_preview_proxy.py
 │   └── work_mode.py
 ├── dataset
 │   ├── audio_presets.json
@@ -295,6 +312,9 @@ ai_subtitle_studio/
 │   ├── dataset_correction.json
 │   ├── golden_subtitle_suite.json
 │   └── model_registry.json
+├── native
+│   └── cut_boundary
+│       └── native_cut_boundary.cpp
 ├── tests
 │   ├── conftest.py
 │   ├── test_accuracy_policy.py
@@ -312,6 +332,7 @@ ai_subtitle_studio/
 │   ├── test_cut_boundary_audio.py
 │   ├── test_cut_boundary_auto_scan_backend.py
 │   ├── test_cut_boundary_compare_resolution.py
+│   ├── test_cut_boundary_ffmpeg_scene.py
 │   ├── test_cut_boundary_fusion.py
 │   ├── test_cut_boundary_middle.py
 │   ├── test_deep_policy_learning.py
@@ -353,6 +374,8 @@ ai_subtitle_studio/
 │   ├── test_mode_policy.py
 │   ├── test_model_manager.py
 │   ├── test_multiclip_panel.py
+│   ├── test_native_cut_boundary.py
+│   ├── test_native_text_similarity.py
 │   ├── test_npu_acceleration.py
 │   ├── test_ollama_provider.py
 │   ├── test_performance_media_cache.py
@@ -360,6 +383,7 @@ ai_subtitle_studio/
 │   ├── test_pipeline_audio_extract_guard.py
 │   ├── test_pipeline_cut_boundary_cache.py
 │   ├── test_pipeline_status.py
+│   ├── test_popup_dismiss.py
 │   ├── test_preset_auto_classifier.py
 │   ├── test_project_context.py
 │   ├── test_project_segment_reload.py
@@ -378,6 +402,7 @@ ai_subtitle_studio/
 │   ├── test_roughcut_v2_output_compat.py
 │   ├── test_runtime_memory_manager.py
 │   ├── test_runtime_multi_process.py
+│   ├── test_runtime_optimization_profile.py
 │   ├── test_settings_materialization.py
 │   ├── test_settings_simplifier.py
 │   ├── test_sidebar_terminal_layout.py
@@ -429,8 +454,10 @@ ai_subtitle_studio/
 │   ├── test_timeline_render_cache.py
 │   ├── test_timeline_segment_colors.py
 │   ├── test_timeline_speaker_labels.py
+│   ├── test_timeline_waveform_worker.py
 │   ├── test_torch_acceleration.py
 │   ├── test_video_player_widget.py
+│   ├── test_video_preview_proxy.py
 │   ├── test_whisper_coreml.py
 │   ├── test_whisper_model_catalog.py
 │   ├── test_windows_platform_compat.py
@@ -441,6 +468,7 @@ ai_subtitle_studio/
 │   │   ├── export_dialog.py
 │   │   ├── folder_dialog.py
 │   │   ├── message_box.py
+│   │   ├── popup_dismiss.py
 │   │   └── qml_popup.py
 │   ├── editor
 │   │   ├── __init__.py
@@ -552,6 +580,7 @@ ai_subtitle_studio/
 │   │   └── project_sidebar_widget.py
 │   ├── timeline
 │   │   ├── __init__.py
+│   │   ├── segment_store.py
 │   │   ├── speaker_labels.py
 │   │   ├── timeline_analysis.py
 │   │   ├── timeline_canvas.py
@@ -618,5 +647,10 @@ ai_subtitle_studio/
 ├── RELEASE_v03.24.01.md
 ├── RELEASE_v03.24.02.md
 ├── RELEASE_v03.24.03.md
+├── RELEASE_v03.25.00.md
 ├── requirements-mac.txt
+├── tools
+│   ├── apply_runtime_optimization_profile.py
+│   ├── benchmark_dense_flow_cut_boundary.py
+│   └── build_native_extensions.py
 └── requirements-windows.txt

@@ -9,10 +9,12 @@ opencv-python>=4.9.0
 Pillow>=10.0.0
 numpy>=1.26.0,<2.0
 requests>=2.31.0
+ollama>=0.6.0
 watchdog>=3.0.0
 python-dotenv>=1.0.0
 packaging>=23.0,<24.0
 orjson>=3.9.0
+rapidfuzz>=3.9.0
 soundfile>=0.12.1
 silero-vad>=6.2.1
 ten-vad>=1.0.6.8
@@ -25,12 +27,17 @@ accelerate>=0.30.0
 keyring>=25.0.0
 scikit-learn>=1.4.0
 speechbrain>=1.0.0
-torch
-torchaudio
+torch>=2.4
+torchaudio>=2.4
+torchvision>=0.19
 mlx-whisper>=0.4.3
 deepfilternet>=0.5.6
 clearvoice>=0.1.2
+librosa==0.10.2.post1
 torchcodec
+scenedetect[opencv]>=0.6.4
+## 선택: Ollama 없이 GGUF를 Python 프로세스에서 직접 호출하는 로컬 LLM 백엔드
+llama-cpp-python>=0.3.8
 ## 선택: 가장 가벼운 편집 미리보기 백엔드. libmpv는 Homebrew 등 시스템 설치가 필요할 수 있음
 python-mpv>=1.0.7
 ## 선택: mpv 사용 불가 시 대체 백엔드. libVLC 시스템 설치가 필요할 수 있음

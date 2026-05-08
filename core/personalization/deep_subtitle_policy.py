@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import difflib
 import hashlib
 import math
 import re
 from statistics import median
 from typing import Any
+
+from core.native_text_similarity import similarity_ratio
 
 
 DEEP_POLICY_SCHEMA = "ai_subtitle_studio.deep_subtitle_policy.v1"
@@ -100,7 +101,7 @@ def text_similarity(a: Any, b: Any) -> float:
     right = _compact(b)
     if not left or not right:
         return 0.0
-    char_ratio = difflib.SequenceMatcher(None, left, right).ratio()
+    char_ratio = similarity_ratio(left, right)
     token_ratio = _token_overlap(str(a or ""), str(b or ""))
     return max(0.0, min(1.0, (char_ratio * 0.72) + (token_ratio * 0.28)))
 

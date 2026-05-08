@@ -435,7 +435,6 @@ class RuntimeResourceCoordinator:
             return ""
         active = ", ".join(str(item) for item in list(data.get("active_labels", []) or [])[:4]) or "idle"
         return (
-            f"runtime={data.get('profile', 'balanced')} "
             f"cpu={float(data.get('system_cpu_percent', 0.0)):.0f}% "
             f"proc={float(data.get('process_cpu_percent', 0.0)):.0f}% "
             f"ram={float(data.get('rss_gb', 0.0)):.2f}GB "
@@ -513,7 +512,12 @@ class RuntimeResourceCoordinator:
     def _maybe_log(self, snapshot: dict[str, Any]) -> None:
         if self.logger is None:
             return
+        if not _setting_bool(self.settings.get("runtime_monitor_terminal_log_enabled"), False):
+            return
         stage = str(snapshot.get("pressure_stage", "normal") or "normal")
+        active_labels = list(snapshot.get("active_labels", []) or [])
+        if stage == "normal" and not active_labels:
+            return
         now = time.time()
         if stage == self._last_logged_stage and (now - self._last_logged_at) < 30.0:
             return
@@ -522,14 +526,12 @@ class RuntimeResourceCoordinator:
         try:
             self.logger.log(
                 "📊 [Runtime] "
-                f"{str(snapshot.get('profile', 'balanced')).upper()} · "
                 f"CPU {float(snapshot.get('system_cpu_percent', 0.0)):.0f}% · "
                 f"PROC {float(snapshot.get('process_cpu_percent', 0.0)):.0f}% · "
                 f"RAM {float(snapshot.get('rss_gb', 0.0)):.2f}GB · "
                 f"FREE {float(snapshot.get('free_memory_gb', 0.0)):.2f}GB · "
                 f"CACHE {float(snapshot.get('disk_cache_gb', 0.0)):.2f}GB · "
-                f"ACCEL {dict(snapshot.get('accelerators') or {}).get('summary', 'CPU')} · "
-                f"ACTIVE {', '.join(snapshot.get('active_labels', []) or ['idle'])}"
+                f"ACTIVE {', '.join(active_labels or ['idle'])}"
             )
         except Exception:
             pass

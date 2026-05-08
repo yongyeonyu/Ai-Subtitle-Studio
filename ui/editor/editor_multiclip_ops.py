@@ -150,24 +150,30 @@ class EditorMulticlipOpsMixin:
             timestamp_area.setUpdatesEnabled(False)
         if timeline is not None and hasattr(timeline, "setUpdatesEnabled"):
             timeline.setUpdatesEnabled(False)
+        loaded_segments = None
         try:
-            self.text_edit.clear()
-            self.append_segments(segs)
-            if preserve_view and hasattr(self, "_flush_queue"):
-                self._flush_queue()
-                try:
-                    if getattr(self, "_queue_timer", None) is not None:
-                        self._queue_timer.stop()
-                except Exception:
-                    pass
+            fast_loader = getattr(self, "_bulk_load_segments_to_document", None)
+            if callable(fast_loader):
+                loaded_segments = fast_loader(segs, preserve_view=preserve_view)
+            if loaded_segments is None:
+                self.text_edit.clear()
+                self.append_segments(segs)
+                if hasattr(self, "_flush_queue"):
+                    self._flush_queue()
+                    try:
+                        if getattr(self, "_queue_timer", None) is not None:
+                            self._queue_timer.stop()
+                    except Exception:
+                        pass
+            timeline_segments = loaded_segments if isinstance(loaded_segments, list) else segs
             if hasattr(self, "_rebuild_subtitle_memory_cache"):
-                self._rebuild_subtitle_memory_cache(segs)
+                self._rebuild_subtitle_memory_cache(timeline_segments)
             else:
-                self._cached_segs = segs
-            total_dur = segs[-1]['end'] if segs else 0.0
+                self._cached_segs = timeline_segments
+            total_dur = timeline_segments[-1]['end'] if timeline_segments else 0.0
             if hasattr(self, 'video_player') and self.video_player.total_time > 0:
                 total_dur = max(total_dur, self.video_player.total_time)
-            self.timeline.update_segments(segs, self._active_seg_start, total_dur)
+            self.timeline.update_segments(timeline_segments, self._active_seg_start, total_dur)
             self._mark_dirty()
             self._schedule_timeline()
         finally:

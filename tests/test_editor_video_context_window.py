@@ -50,6 +50,28 @@ class _Highlighter:
 
 
 class EditorVideoContextWindowTests(unittest.TestCase):
+    def test_segment_lookup_reuses_sorted_segment_objects(self):
+        segments = [
+            {"start": 0.0, "end": 1.0, "text": "첫째", "line": 0},
+            {"start": 1.0, "end": 2.0, "text": "둘째", "line": 1},
+        ]
+
+        lookup = build_segment_lookup(segments)
+
+        self.assertIs(lookup["segments"][0], segments[0])
+        self.assertIs(lookup["visible_segments"][1], segments[1])
+        self.assertIs(lookup["line_map"][0], segments[0])
+
+    def test_segment_lookup_sorts_only_when_needed(self):
+        first = {"start": 2.0, "end": 3.0, "text": "뒤", "line": 2}
+        second = {"start": 0.0, "end": 1.0, "text": "앞", "line": 0}
+
+        lookup = build_segment_lookup([first, second])
+
+        self.assertIs(lookup["segments"][0], second)
+        self.assertIs(lookup["segments"][1], first)
+        self.assertEqual(lookup["starts"], [0.0, 2.0])
+
     def test_video_context_uses_playhead_window_not_full_subtitle_list(self):
         segments = [
             {"start": float(i), "end": float(i) + 0.6, "text": f"seg {i}", "line": i}
@@ -64,6 +86,21 @@ class EditorVideoContextWindowTests(unittest.TestCase):
         self.assertTrue(any(seg["start"] <= 500.0 < seg["end"] or abs(seg["start"] - 500.0) < 1.0 for seg in window))
         self.assertGreaterEqual(window[0]["start"], 489.0)
         self.assertLessEqual(window[-1]["start"], 522.0)
+
+    def test_video_context_reuses_cached_visible_window_for_same_range(self):
+        segments = [
+            {"start": float(i), "end": float(i) + 0.6, "text": f"seg {i}", "line": i}
+            for i in range(2000)
+        ]
+        editor = _EditorHarness(segments, playhead_sec=500.0)
+
+        first = editor._subtitle_memory_visible_window(center_sec=500.0)
+        second = editor._subtitle_memory_visible_window(center_sec=500.0)
+        third = editor._subtitle_memory_visible_window(center_sec=900.0)
+
+        self.assertIs(first, second)
+        self.assertIsNot(first, third)
+        self.assertLess(len(first), 80)
 
     def test_context_window_caps_dense_local_segments_around_center(self):
         segments = [

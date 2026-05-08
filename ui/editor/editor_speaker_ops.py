@@ -68,7 +68,12 @@ class EditorSpeakerOpsMixin:
         for i in range(start_idx, end_idx + 1):
             b = doc.findBlockByNumber(i)
             ud = b.userData()
-            new_ud = SubtitleBlockData(ud.spk_id, ud.start_sec, ud.is_gap) if ud else None
+            new_ud = SubtitleBlockData(
+                ud.spk_id,
+                ud.start_sec,
+                ud.is_gap,
+                end_sec=getattr(ud, "end_sec", None),
+            ) if ud else None
             blocks_data.append({"text": b.text(), "ud": new_ud})
         if from_line < to_line:
             item = blocks_data.pop(0)

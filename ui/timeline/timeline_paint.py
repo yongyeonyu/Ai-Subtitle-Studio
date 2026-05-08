@@ -7,7 +7,7 @@ Timeline paint mixin
 from bisect import bisect_left, bisect_right
 
 import numpy as np
-from PyQt6.QtCore import QPoint, QRect, QRectF, Qt
+from PyQt6.QtCore import QLine, QPoint, QRect, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygon
 from PyQt6.QtWidgets import QScrollArea
 
@@ -133,9 +133,9 @@ def subtitle_render_detail_mode(
         return "full"
     count = max(0, int(visible_segment_count or 0))
     zoom = max(0.0, float(pps or 0.0))
-    if count >= 220 or (count >= 120 and zoom < 18.0):
+    if count >= 180 or (count >= 72 and zoom < 24.0) or (count >= 32 and zoom < 10.0):
         return "ultra"
-    if count >= 80 or (count >= 48 and zoom < 36.0):
+    if count >= 56 or (count >= 28 and zoom < 40.0):
         return "dense"
     return "full"
 
@@ -155,7 +155,7 @@ def scan_boundary_marker_visual(marker, *, hover: bool = False) -> dict:
     if hover:
         return {"color": "#00FFFF", "width": 3, "style": "solid"}
     if cut_boundary_scan_marker_verified(marker):
-        return {"color": "#8E8E93", "width": 1, "style": "dot"}
+        return {"color": "#6EA8FF", "width": 2, "style": "solid"}
     if isinstance(marker, dict):
         raw_color = str(marker.get("line_color", "") or "").strip()
         color_aliases = {
@@ -182,11 +182,17 @@ def scan_boundary_marker_visual(marker, *, hover: bool = False) -> dict:
 
 
 def segment_text_kind(text: str) -> str:
-    normalized = "".join(str(text or "").split())
-    if normalized == "음성":
+    raw = str(text or "")
+    if raw == "음성":
         return "speech"
-    if normalized == "무음":
+    if raw == "무음":
         return "silence"
+    if len(raw) <= 8:
+        normalized = "".join(raw.split())
+        if normalized == "음성":
+            return "speech"
+        if normalized == "무음":
+            return "silence"
     return ""
 
 
@@ -215,25 +221,36 @@ def _normalize_quality_filter(value: str) -> str:
     return aliases.get(raw, "all")
 
 
-def _quality_filter_matches(quality: dict, q_label: str, q_filter: str) -> bool:
+_REVIEW_QUALITY_FLAGS = frozenset(
+    {"non_speech_hallucination_risk", "high_no_speech_prob", "outside_vad_speech"}
+)
+
+
+def _quality_flags_tuple(flags) -> tuple[str, ...]:
+    if not flags:
+        return ()
+    if isinstance(flags, str):
+        return (flags,)
+    if isinstance(flags, tuple) and all(isinstance(flag, str) for flag in flags):
+        return flags
+    return tuple(str(flag) for flag in flags)
+
+
+def _quality_filter_matches(
+    quality: dict,
+    q_label: str,
+    q_filter: str,
+    q_flags: tuple[str, ...] | None = None,
+) -> bool:
     q_filter = _normalize_quality_filter(q_filter)
-    q_flags = set(quality.get("flags") or ())
-    return (
-        q_filter == "all"
-        or q_filter == q_label
-        or (
-            q_filter == "needs_review"
-            and (
-                q_label in {"red", "gray"}
-                or bool(
-                    q_flags.intersection(
-                        {"non_speech_hallucination_risk", "high_no_speech_prob", "outside_vad_speech"}
-                    )
-                )
-            )
-        )
-        or (q_filter == "auto_corrected" and "auto_corrected" in q_flags)
-    )
+    if q_filter == "all" or q_filter == q_label:
+        return True
+    flags = _quality_flags_tuple(quality.get("flags") or ()) if q_flags is None else q_flags
+    if q_filter == "needs_review":
+        return q_label in {"red", "gray"} or any(flag in _REVIEW_QUALITY_FLAGS for flag in flags)
+    if q_filter == "auto_corrected":
+        return "auto_corrected" in flags
+    return False
 
 
 def subtitle_segment_visual_style(
@@ -245,17 +262,18 @@ def subtitle_segment_visual_style(
 ) -> dict:
     """Return zoom-stable subtitle segment colors."""
     is_stt_pending = bool(seg.get("stt_pending"))
-    quality = dict(seg.get("quality") or {})
+    quality = seg.get("quality") or {}
     q_label = str(quality.get("confidence_label") or "")
-    q_flags = set(str(flag) for flag in (quality.get("flags") or ()))
-    manually_confirmed = bool(quality.get("manual_confirmed")) or "manual_confirmed" in q_flags
     kind_style = SEGMENT_TEXT_KIND_STYLES.get(segment_text_kind(seg.get("text", "")), {})
     review_state = subtitle_review_state(seg)
     q_filter = _normalize_quality_filter(quality_filter)
+    q_flags = _quality_flags_tuple(quality.get("flags") or ()) if quality and q_filter != "all" else ()
+    manually_confirmed = bool(quality.get("manual_confirmed")) or bool(q_flags and "manual_confirmed" in q_flags)
     muted_by_filter = (
         bool(quality)
         and not manually_confirmed
-        and not _quality_filter_matches(quality, q_label, q_filter)
+        and q_filter != "all"
+        and not _quality_filter_matches(quality, q_label, q_filter, q_flags)
     )
 
     if review_state in SUBTITLE_STATE_SEGMENT_COLORS and not kind_style and not is_stt_pending:
@@ -278,6 +296,28 @@ def subtitle_segment_visual_style(
         border = "#2D3942"
 
     return {"fill": fill, "border": border, "text": text, "muted": muted_by_filter}
+
+
+def subtitle_segment_style_cache_key(seg: dict, *, render_epoch: int, quality_filter: str) -> tuple:
+    quality = seg.get("quality") or {}
+    flags = quality.get("flags") or ()
+    return (
+        id(seg),
+        int(render_epoch),
+        str(quality_filter or "all"),
+        bool(seg.get("stt_pending")),
+        segment_text_kind(seg.get("text", "")),
+        str(quality.get("confidence_label", "") or ""),
+        quality.get("confidence_score"),
+        bool(quality.get("manual_confirmed")),
+        _quality_flags_tuple(flags),
+        str(seg.get("subtitle_auto_review_severity", "") or ""),
+        str(seg.get("subtitle_confidence_label", "") or ""),
+        str(seg.get("stt_selected_source", "") or ""),
+        str(seg.get("stt_ensemble_llm_selected_source", "") or ""),
+        bool(seg.get("stt_ensemble_needs_llm_review")),
+        len(seg.get("stt_candidates") or ()),
+    )
 
 
 def stt_preview_source(seg: dict) -> str:
@@ -335,18 +375,84 @@ def _segment_overlap_ratio(left: dict, right: dict) -> float:
     return overlap / base
 
 
-def stt_candidate_selection_state(candidate: dict, final_segments: list[dict]) -> str:
-    candidate_source = stt_preview_source(candidate)
-    if candidate_source not in {"STT1", "STT2"}:
-        return ""
-    candidate_text = "".join(str(candidate.get("text", "") or "").split())
+def build_stt_selection_index(final_segments: list[dict]) -> dict:
+    """Build a time index for STT preview-vs-final selection lookups."""
+    rows: list[tuple[float, float, dict, str, str, str]] = []
+    max_span = 0.0
     for final in final_segments or []:
+        if not isinstance(final, dict):
+            continue
         manual_source = str(final.get("stt_selected_source", "") or "").strip().upper()
         llm_source = str(final.get("stt_ensemble_llm_selected_source", "") or "").strip().upper()
         selected_source = manual_source or llm_source
         if selected_source not in {"STT1", "STT2"}:
             continue
-        if _segment_overlap_ratio(candidate, final) < 0.20:
+        try:
+            start = float(final.get("start", 0.0) or 0.0)
+            end = float(final.get("end", start) or start)
+        except Exception:
+            continue
+        if end < start:
+            start, end = end, start
+        max_span = max(max_span, max(0.0, end - start))
+        rows.append((start, end, final, manual_source, llm_source, selected_source))
+    rows.sort(key=lambda item: (item[0], item[1], id(item[2])))
+    return {
+        "rows": rows,
+        "starts": [row[0] for row in rows],
+        "max_span": float(max_span),
+    }
+
+
+def stt_candidate_selection_state(
+    candidate: dict,
+    final_segments: list[dict],
+    selection_index: dict | None = None,
+) -> str:
+    candidate_source = stt_preview_source(candidate)
+    if candidate_source not in {"STT1", "STT2"}:
+        return ""
+    candidate_text = "".join(str(candidate.get("text", "") or "").split())
+    try:
+        cand_start = float(candidate.get("start", 0.0) or 0.0)
+        cand_end = float(candidate.get("end", cand_start) or cand_start)
+    except Exception:
+        cand_start = cand_end = 0.0
+    if cand_end < cand_start:
+        cand_start, cand_end = cand_end, cand_start
+
+    if isinstance(selection_index, dict):
+        rows = selection_index.get("rows") or ()
+        starts = selection_index.get("starts") or ()
+        max_span = max(0.0, float(selection_index.get("max_span", 0.0) or 0.0))
+        if not rows or not starts:
+            return ""
+        left = bisect_left(starts, max(0.0, cand_start - max_span))
+        right = bisect_right(starts, cand_end)
+        iterable = rows[left:right]
+        if not iterable:
+            return ""
+    else:
+        iterable = []
+        for final in final_segments or []:
+            manual_source = str(final.get("stt_selected_source", "") or "").strip().upper()
+            llm_source = str(final.get("stt_ensemble_llm_selected_source", "") or "").strip().upper()
+            selected_source = manual_source or llm_source
+            if selected_source not in {"STT1", "STT2"}:
+                continue
+            try:
+                start = float(final.get("start", 0.0) or 0.0)
+                end = float(final.get("end", start) or start)
+            except Exception:
+                continue
+            if end < start:
+                start, end = end, start
+            iterable.append((start, end, final, manual_source, llm_source, selected_source))
+
+    for final_start, final_end, final, manual_source, llm_source, selected_source in iterable:
+        overlap = max(0.0, min(cand_end, final_end) - max(cand_start, final_start))
+        base = max(0.001, min(max(0.001, cand_end - cand_start), max(0.001, final_end - final_start)))
+        if overlap / base < 0.20:
             continue
         selected_by_this_source = selected_source == candidate_source
         final_candidates = list(final.get("stt_candidates") or [])
@@ -457,16 +563,23 @@ class TimelinePaintMixin:
         voice_mid = (VOICE_ACTIVITY_TOP + VOICE_ACTIVITY_BOT) // 2
         audio_mid = (ANALYSIS_TOP + ANALYSIS_BOT) // 2
         track_bottom = SEG_BOT
-        stt_preview_segments = [
-            seg for seg in visible_segments
-            if bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
-        ]
-        final_stt_segments = [
-            seg for seg in visible_segments
-            if not bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
-        ]
-        stt1_preview_segments = [seg for seg in stt_preview_segments if stt_preview_source(seg) != "STT2"]
-        stt2_preview_segments = [seg for seg in stt_preview_segments if stt_preview_source(seg) == "STT2"]
+        stt_preview_segments = []
+        final_stt_segments = []
+        selected_final_stt_segments = []
+        stt1_preview_segments = []
+        stt2_preview_segments = []
+        for seg in visible_segments:
+            if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
+                stt_preview_segments.append(seg)
+                if stt_preview_source(seg) == "STT2":
+                    stt2_preview_segments.append(seg)
+                else:
+                    stt1_preview_segments.append(seg)
+                continue
+            final_stt_segments.append(seg)
+            if final_stt_selection_source(seg):
+                selected_final_stt_segments.append(seg)
+        selected_final_stt_index = build_stt_selection_index(selected_final_stt_segments)
         scenegraph_subtitles = bool(getattr(self, "_scenegraph_subtitle_rendering", False)) and not bool(getattr(self, "_edit_active", False))
         subtitle_detail_mode = subtitle_render_detail_mode(
             visible_segment_count=len(final_stt_segments) + len(stt_preview_segments),
@@ -479,12 +592,21 @@ class TimelinePaintMixin:
         self._paint_density_mode = subtitle_detail_mode
 
         def _owner_speaker_settings():
+            provider = getattr(self, "_speaker_settings_provider", None)
+            if callable(provider):
+                try:
+                    return provider()
+                except Exception:
+                    pass
             owner = self.parent()
             while owner and not hasattr(owner, "settings"):
                 owner = owner.parent()
             return getattr(owner, "settings", {}) if owner is not None else {}
 
-        speaker_settings = current_speaker_settings(_owner_speaker_settings())
+        if callable(getattr(self, "_speaker_settings_provider", None)):
+            speaker_settings = _owner_speaker_settings()
+        else:
+            speaker_settings = current_speaker_settings(_owner_speaker_settings())
 
         def _speaker_color(seg):
             spk = normalize_speaker_id(seg.get("speaker", seg.get("spk_id", "")))
@@ -737,9 +859,43 @@ class TimelinePaintMixin:
                 p.setPen(QColor("#A9B0B7"))
                 p.drawText(QRect(gutter_x + 8, y - 16, max(12, gutter_w - 14), 22), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
 
-        def _draw_rect_batch(rects, *, fill: QColor | None = None, pen: QPen | None = None):
+        def _coalesce_rects(rects, *, max_gap_px: int = 0) -> list[QRect]:
+            """Merge adjacent same-lane rects in dense modes to reduce painter calls."""
+            rows: dict[tuple[int, int], list[QRect]] = {}
+            for rect in rects or []:
+                if rect is None or not rect.isValid() or rect.isEmpty():
+                    continue
+                rows.setdefault((int(rect.y()), int(rect.height())), []).append(rect)
+            merged: list[QRect] = []
+            for (y, h), row_rects in rows.items():
+                row_rects.sort(key=lambda r: (int(r.left()), int(r.right())))
+                cur_left: int | None = None
+                cur_right: int | None = None
+                for rect in row_rects:
+                    left = int(rect.left())
+                    right = int(rect.right())
+                    if cur_left is not None and left <= cur_right + max(0, int(max_gap_px)) + 1:
+                        cur_right = max(cur_right, right)
+                        continue
+                    if cur_left is not None:
+                        merged.append(QRect(cur_left, y, max(1, cur_right - cur_left + 1), h))
+                    cur_left, cur_right = left, right
+                if cur_left is not None:
+                    merged.append(QRect(cur_left, y, max(1, cur_right - cur_left + 1), h))
+            return merged
+
+        def _draw_rect_batch(
+            rects,
+            *,
+            fill: QColor | None = None,
+            pen: QPen | None = None,
+            coalesce: bool = False,
+            max_gap_px: int = 0,
+        ):
             if not rects:
                 return
+            if coalesce and len(rects) >= 24:
+                rects = _coalesce_rects(rects, max_gap_px=max_gap_px)
             p.setBrush(QBrush(fill) if fill is not None else Qt.BrushStyle.NoBrush)
             p.setPen(pen if pen is not None else Qt.PenStyle.NoPen)
             try:
@@ -751,7 +907,15 @@ class TimelinePaintMixin:
         def _append_batch(batches: dict, key, rect: QRect):
             batches.setdefault(key, []).append(rect)
 
-        def _draw_color_batches(batches: dict, *, as_pen: bool = False, width: int = 1, style=Qt.PenStyle.SolidLine):
+        def _draw_color_batches(
+            batches: dict,
+            *,
+            as_pen: bool = False,
+            width: int = 1,
+            style=Qt.PenStyle.SolidLine,
+            coalesce: bool = False,
+            max_gap_px: int = 0,
+        ):
             for key, rects in batches.items():
                 if isinstance(key, tuple):
                     color = QColor(str(key[0]))
@@ -760,9 +924,9 @@ class TimelinePaintMixin:
                 else:
                     color = QColor(str(key))
                 if as_pen:
-                    _draw_rect_batch(rects, pen=QPen(color, width, style))
+                    _draw_rect_batch(rects, pen=QPen(color, width, style), coalesce=coalesce, max_gap_px=max_gap_px)
                 else:
-                    _draw_rect_batch(rects, fill=color)
+                    _draw_rect_batch(rects, fill=color, coalesce=coalesce, max_gap_px=max_gap_px)
 
         p.fillRect(paint_clip, QColor("#0F1518"))
 
@@ -855,6 +1019,12 @@ class TimelinePaintMixin:
             pen_bot_loud = QPen(QColor(150, 156, 164), 1)
             pen_top_sil = QPen(QColor(82, 87, 94), 1)
             pen_bot_sil = QPen(QColor(56, 61, 68), 1)
+            top_norm_lines: list[QLine] = []
+            bot_norm_lines: list[QLine] = []
+            top_loud_lines: list[QLine] = []
+            bot_loud_lines: list[QLine] = []
+            top_sil_lines: list[QLine] = []
+            bot_sil_lines: list[QLine] = []
 
             for x in range(x_start, x_end):
                 idx = int((x / self.pps) * 100)
@@ -865,14 +1035,26 @@ class TimelinePaintMixin:
                 in_sp = speech_mask[idx]
                 if in_sp:
                     if val > 0.6:
-                        p.setPen(pen_top_loud); p.drawLine(x, WAVE_MID, x, WAVE_MID - h)
-                        p.setPen(pen_bot_loud); p.drawLine(x, WAVE_MID + 1, x, WAVE_MID + h)
+                        top_loud_lines.append(QLine(x, WAVE_MID, x, WAVE_MID - h))
+                        bot_loud_lines.append(QLine(x, WAVE_MID + 1, x, WAVE_MID + h))
                     else:
-                        p.setPen(pen_top_norm); p.drawLine(x, WAVE_MID, x, WAVE_MID - h)
-                        p.setPen(pen_bot_norm); p.drawLine(x, WAVE_MID + 1, x, WAVE_MID + h)
+                        top_norm_lines.append(QLine(x, WAVE_MID, x, WAVE_MID - h))
+                        bot_norm_lines.append(QLine(x, WAVE_MID + 1, x, WAVE_MID + h))
                 else:
-                    p.setPen(pen_top_sil); p.drawLine(x, WAVE_MID, x, WAVE_MID - h)
-                    p.setPen(pen_bot_sil); p.drawLine(x, WAVE_MID + 1, x, WAVE_MID + h)
+                    top_sil_lines.append(QLine(x, WAVE_MID, x, WAVE_MID - h))
+                    bot_sil_lines.append(QLine(x, WAVE_MID + 1, x, WAVE_MID + h))
+
+            for pen, lines in (
+                (pen_top_norm, top_norm_lines),
+                (pen_bot_norm, bot_norm_lines),
+                (pen_top_loud, top_loud_lines),
+                (pen_bot_loud, bot_loud_lines),
+                (pen_top_sil, top_sil_lines),
+                (pen_bot_sil, bot_sil_lines),
+            ):
+                if lines:
+                    p.setPen(pen)
+                    p.drawLines(lines)
 
             p.setPen(Qt.PenStyle.NoPen)
             vad_rects = []
@@ -905,6 +1087,25 @@ class TimelinePaintMixin:
             if not gaps:
                 return
             compact_gap_mode = bool(overview_mode or ultra_dense_segment_mode or len(gaps) >= 512)
+            if compact_gap_mode:
+                active_gaps = [g for g in gaps if g.get("active", False)]
+                if not active_gaps:
+                    return
+                p.setFont(QFont(config.FONT, 9, QFont.Weight.Bold))
+                for g in active_gaps:
+                    x1, x2 = self._x(g["start"]), self._x(g["end"])
+                    sw = max(4, x2 - x1)
+                    if x2 < clip_left or x1 > clip_right:
+                        continue
+                    rect = QRect(x1, SEG_TOP, sw, SEG_BOT - SEG_TOP)
+                    ir = self._icon_rect(x1, x2)
+                    p.fillRect(rect, QColor(20, 16, 0, 118))
+                    p.setPen(QPen(QColor("#FFFFFF"), 2))
+                    p.drawRect(rect)
+                    p.fillRect(ir, QColor("#3B1D20"))
+                    p.setPen(QColor("#FF8A80"))
+                    p.drawText(ir, Qt.AlignmentFlag.AlignCenter, "✕")
+                return
             base_rects: list[QRect] = []
             border_rects: list[QRect] = []
             plus_items: list[tuple[QRect, QRect]] = []
@@ -949,6 +1150,34 @@ class TimelinePaintMixin:
         def _draw_stt_preview_lane(preview_segments, lane_top, lane_bot, fill_hex, border_hex, text_hex):
             if not preview_segments:
                 return
+            if ultra_dense_segment_mode and len(preview_segments) >= 96 and not selected_final_stt_segments:
+                spans: list[tuple[int, int]] = []
+                cur_l: int | None = None
+                cur_r: int | None = None
+                pps = float(getattr(self, "pps", 1.0) or 1.0)
+                merge_gap_px = 4 if pps < 10.0 else 3
+                for seg in preview_segments:
+                    try:
+                        x1 = self._x(float(seg.get("start", 0.0) or 0.0))
+                        x2 = self._x(float(seg.get("end", seg.get("start", 0.0)) or seg.get("start", 0.0) or 0.0))
+                    except Exception:
+                        continue
+                    if x2 < clip_left or x1 > clip_right:
+                        continue
+                    x2 = max(x1 + 1, x2)
+                    if cur_l is not None and x1 <= cur_r + merge_gap_px:
+                        cur_r = max(cur_r, x2)
+                    else:
+                        if cur_l is not None:
+                            spans.append((cur_l, cur_r))
+                        cur_l, cur_r = x1, x2
+                if cur_l is not None:
+                    spans.append((cur_l, cur_r))
+                if spans:
+                    rects = [QRect(left, lane_top, max(1, right - left), lane_bot - lane_top) for left, right in spans]
+                    _draw_rect_batch(rects, fill=QColor(fill_hex))
+                    _draw_rect_batch(rects, pen=QPen(QColor(border_hex), 1))
+                return
             p.setFont(QFont(config.FONT, 8))
             fills: dict[tuple[str, int], list[QRect]] = {}
             borders: dict[tuple[str, int, int], list[QRect]] = {}
@@ -960,7 +1189,11 @@ class TimelinePaintMixin:
                 if x2 < clip_left or x1 > clip_right:
                     continue
                 rect = QRect(x1 + 1, lane_top, max(2, sw - 2), lane_bot - lane_top)
-                selection_state = stt_candidate_selection_state(seg, final_stt_segments)
+                selection_state = (
+                    stt_candidate_selection_state(seg, selected_final_stt_segments, selected_final_stt_index)
+                    if selected_final_stt_segments
+                    else ""
+                )
                 is_selected = selection_state in {"manual", "llm"}
                 visual = stt_preview_visual_style(
                     seg,
@@ -1002,10 +1235,64 @@ class TimelinePaintMixin:
                         p.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
                         p.setFont(QFont(config.FONT, 8))
 
-        def _draw_vector_subtitle_strips(segments) -> set[int]:
+        def _draw_vector_subtitle_strips(segments):
             """Batch dense subtitle geometry so large projects repaint like vector strips."""
             if not segments:
                 return set()
+            pps = float(getattr(self, "pps", 1.0) or 1.0)
+            aggregate_overview = bool(
+                ultra_dense_segment_mode
+                and (len(segments) >= 96 or (len(segments) >= 32 and pps < 10.0))
+            )
+            if aggregate_overview:
+                spans: list[tuple[int, int]] = []
+                detail_segments: list[dict] = []
+                active_start = getattr(self, "active_seg_start", None)
+                try:
+                    active_start_f = float(active_start) if active_start is not None else None
+                except Exception:
+                    active_start_f = None
+                hover_line = getattr(self, "_hover_line", None)
+                merge_gap_px = 4 if pps < 10.0 else 3
+                cur_l: int | None = None
+                cur_r: int | None = None
+                for seg in segments:
+                    try:
+                        start = float(seg.get("start", 0.0) or 0.0)
+                        end = float(seg.get("end", start) or start)
+                    except Exception:
+                        continue
+                    if end < start:
+                        start, end = end, start
+                    x1 = int(start * pps)
+                    x2 = int(end * pps)
+                    if x2 < clip_left or x1 > clip_right:
+                        continue
+                    is_active = active_start_f is not None and abs(start - active_start_f) < 0.001
+                    is_hover = hover_line == seg.get("line")
+                    if is_active or is_hover:
+                        detail_segments.append(seg)
+                        continue
+                    x2 = max(x1 + 1, x2)
+                    if cur_l is not None and x1 <= cur_r + merge_gap_px:
+                        if x2 > cur_r:
+                            cur_r = x2
+                    else:
+                        if cur_l is not None:
+                            spans.append((cur_l, cur_r))
+                        cur_l, cur_r = x1, x2
+                if cur_l is not None:
+                    spans.append((cur_l, cur_r))
+                if spans:
+                    sub_h = subtitle_bot - subtitle_top
+                    speaker_h = speaker_bot - speaker_top
+                    rects = [QRect(left, subtitle_top, max(1, right - left), sub_h) for left, right in spans]
+                    speaker_rects = [QRect(left, speaker_top, max(1, right - left), speaker_h) for left, right in spans]
+                    _draw_rect_batch(rects, fill=QColor(24, 64, 42, 168))
+                    _draw_rect_batch(speaker_rects, fill=QColor(38, 98, 72, 156))
+                    _draw_rect_batch(rects, pen=QPen(QColor(64, 148, 98, 170), 1))
+                return set(), detail_segments
+
             fill_batches: dict[str, list[QRect]] = {}
             border_batches: dict[str, list[QRect]] = {}
             speaker_batches: dict[str, list[QRect]] = {}
@@ -1033,23 +1320,10 @@ class TimelinePaintMixin:
                 is_hover = self._hover_line == seg.get("line")
                 if is_active or is_hover:
                     continue
-                quality = dict(seg.get("quality") or {})
-                style_key = (
-                    id(seg),
-                    render_epoch,
-                    quality_filter,
-                    bool(seg.get("stt_pending")),
-                    segment_text_kind(seg.get("text", "")),
-                    str(quality.get("confidence_label", "")),
-                    quality.get("confidence_score"),
-                    bool(quality.get("manual_confirmed")),
-                    tuple(str(flag) for flag in (quality.get("flags") or ())),
-                    str(seg.get("subtitle_auto_review_severity", "") or ""),
-                    str(seg.get("subtitle_confidence_label", "") or ""),
-                    str(seg.get("stt_selected_source", "") or ""),
-                    str(seg.get("stt_ensemble_llm_selected_source", "") or ""),
-                    bool(seg.get("stt_ensemble_needs_llm_review")),
-                    len(list(seg.get("stt_candidates") or [])),
+                style_key = subtitle_segment_style_cache_key(
+                    seg,
+                    render_epoch=render_epoch,
+                    quality_filter=quality_filter,
                 )
                 cached_style = style_cache.get(style_key)
                 if cached_style is None:
@@ -1076,12 +1350,13 @@ class TimelinePaintMixin:
 
             if not fill_batches:
                 return set()
+            merge_gap_px = 1 if dense_segment_mode else 0
             for color_name, rects in fill_batches.items():
-                _draw_rect_batch(rects, fill=QColor(color_name))
+                _draw_rect_batch(rects, fill=QColor(color_name), coalesce=True, max_gap_px=merge_gap_px)
             for color_name, rects in speaker_batches.items():
-                _draw_rect_batch(rects, fill=QColor(color_name))
+                _draw_rect_batch(rects, fill=QColor(color_name), coalesce=True, max_gap_px=merge_gap_px)
             for color_name, rects in border_batches.items():
-                _draw_rect_batch(rects, pen=QPen(QColor(color_name), 1))
+                _draw_rect_batch(rects, pen=QPen(QColor(color_name), 1), coalesce=True, max_gap_px=merge_gap_px)
             return drawn_ids
 
         if not scenegraph_subtitles:
@@ -1089,12 +1364,17 @@ class TimelinePaintMixin:
             _draw_stt_preview_lane(stt2_preview_segments, STT2_TOP, STT2_BOT, "#1A3148", "#64D2FF", "#BDEBFF")
 
             seg_font = QFont(config.FONT, 9); p.setFont(seg_font)
-            vector_drawn_ids = (
+            detail_segments = final_stt_segments
+            vector_result = (
                 _draw_vector_subtitle_strips(final_stt_segments)
                 if dense_segment_mode and not bool(getattr(self, "_edit_active", False))
                 else set()
             )
-            for seg in final_stt_segments:
+            if isinstance(vector_result, tuple):
+                vector_drawn_ids, detail_segments = vector_result
+            else:
+                vector_drawn_ids = vector_result
+            for seg in detail_segments:
                 if id(seg) in vector_drawn_ids:
                     continue
                 if bool(seg.get("stt_pending") or seg.get("_live_stt_preview")):
@@ -1296,7 +1576,7 @@ class TimelinePaintMixin:
                 # CLIP label: top-right outside box + delete
                 clip_label = f"CLIP {box.get('index', '?')}"
                 delete_label = '[X]'
-                p.setFont(QFont("", 9, QFont.Weight.Bold))
+                p.setFont(QFont(config.FONT, 9, QFont.Weight.Bold))
                 fm = p.fontMetrics()
                 label_w = fm.horizontalAdvance(clip_label) + 10
                 delete_w = fm.horizontalAdvance(delete_label) + 10
@@ -1379,7 +1659,7 @@ class TimelinePaintMixin:
             return [(item, sec) for sec, _idx, item in timed[start_idx:end_idx]]
 
         if getattr(self, "boundary_times", None):
-            pen_confirmed_boundary = QPen(QColor("#8E8E93"), 1, Qt.PenStyle.DashLine)
+            pen_confirmed_boundary = QPen(QColor("#6EA8FF"), 2, Qt.PenStyle.SolidLine)
             for bt, sec in _visible_time_items(getattr(self, "boundary_times", []) or [], lambda item: float(item or 0.0)):
                 bx = self._x(sec)
                 if bx < clip_left or bx > clip_right:

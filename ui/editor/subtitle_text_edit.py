@@ -22,6 +22,7 @@ class SubtitleBlockData(QTextBlockUserData):
         start_sec: float,
         is_gap: bool = False,
         *,
+        end_sec: float | None = None,
         stt_mode: bool = False,
         stt_pending: bool = False,
         original_text: str = "",
@@ -55,6 +56,7 @@ class SubtitleBlockData(QTextBlockUserData):
         super().__init__()
         self.spk_id = spk_id
         self.start_sec = start_sec
+        self.end_sec = end_sec
         self.is_gap = is_gap
         self.stt_mode = bool(stt_mode)
         self.stt_pending = bool(stt_pending)
@@ -95,6 +97,12 @@ class SubtitleHighlighter(QSyntaxHighlighter):
         self.speaker_colors = {} 
         self.quality_by_line: dict[int, dict] = {}
         self.quality_filter = "all"
+        self._quality_colors = {
+            "green": QColor(31, 88, 55, 84),
+            "yellow": QColor(112, 86, 16, 90),
+            "red": QColor(120, 34, 34, 106),
+            "gray": QColor(80, 86, 94, 80),
+        }
 
     def mark_edited(self, line: int): 
         self._edited_lines.add(line); self.rehighlight()
@@ -107,7 +115,7 @@ class SubtitleHighlighter(QSyntaxHighlighter):
         next_map = dict(quality_by_line or {})
         if next_map == self.quality_by_line:
             return
-        previous_lines = set(self.quality_by_line.keys())
+        previous_map = self.quality_by_line
         self.quality_by_line = next_map
         if visible_lines is None:
             self.rehighlight()
@@ -116,9 +124,19 @@ class SubtitleHighlighter(QSyntaxHighlighter):
             line_set = {int(line) for line in visible_lines}
         except Exception:
             line_set = set()
-        changed_lines = previous_lines.union(next_map.keys()).union(line_set)
+        added_or_changed = {
+            int(line)
+            for line, quality in next_map.items()
+            if previous_map.get(line) != quality
+        }
+        removed = {int(line) for line in previous_map.keys() if line not in next_map}
+        if line_set:
+            changed_lines = {line for line in added_or_changed.union(removed) if line in line_set or line in next_map}
+        else:
+            changed_lines = added_or_changed.union(removed)
         if not changed_lines or len(changed_lines) > 900:
-            self.rehighlight()
+            if len(changed_lines) > 900:
+                self.rehighlight()
             return
         doc = self.document()
         for line in sorted(changed_lines):
@@ -138,13 +156,7 @@ class SubtitleHighlighter(QSyntaxHighlighter):
         self.rehighlight()
 
     def _quality_color(self, label: str) -> QColor | None:
-        colors = {
-            "green": QColor(31, 88, 55, 84),
-            "yellow": QColor(112, 86, 16, 90),
-            "red": QColor(120, 34, 34, 106),
-            "gray": QColor(80, 86, 94, 80),
-        }
-        return colors.get(str(label or ""))
+        return self._quality_colors.get(str(label or ""))
 
     def _matches_filter(self, quality: dict) -> bool:
         key = str(self.quality_filter or "all")
@@ -162,7 +174,7 @@ class SubtitleHighlighter(QSyntaxHighlighter):
         if self._gpu_overlay_active:
             return
         block_num = self.currentBlock().blockNumber()
-        quality = dict(self.quality_by_line.get(block_num) or {})
+        quality = self.quality_by_line.get(block_num) or {}
         if quality and len(text) > 0:
             label = str(quality.get("confidence_label") or "gray")
             bg = self._quality_color(label)
@@ -282,6 +294,8 @@ class SubtitleTextEdit(QTextEdit):
         )
 
     def _schedule_timestamp_area_update(self):
+        if bool(getattr(self, "_bulk_segment_load_active", False)):
+            return
         timer = getattr(self, "_timestamp_update_timer", None)
         if timer is None:
             self._flush_timestamp_area_update()
@@ -308,6 +322,8 @@ class SubtitleTextEdit(QTextEdit):
         self.cursor_moved.emit()
 
     def _schedule_quick_layer_sync(self):
+        if bool(getattr(self, "_bulk_segment_load_active", False)):
+            return
         timer = getattr(self, "_quick_layer_timer", None)
         if timer is None:
             self._sync_quick_layer()
@@ -336,6 +352,44 @@ class SubtitleTextEdit(QTextEdit):
                     refresher()
                 except Exception:
                     pass
+
+    def apply_wheel_scroll_event(self, event) -> bool:
+        """Scroll the editor even when text interaction is locked or focusless."""
+        bar = self.verticalScrollBar()
+        if bar is None:
+            return False
+        try:
+            pixel_delta = event.pixelDelta()
+        except Exception:
+            pixel_delta = QPoint()
+        try:
+            angle_delta = event.angleDelta()
+        except Exception:
+            angle_delta = QPoint()
+
+        delta_y = int(pixel_delta.y() or 0)
+        if delta_y:
+            scroll_delta = -delta_y
+        else:
+            angle_y = int(angle_delta.y() or 0)
+            if not angle_y:
+                return False
+            step_px = max(12, int(bar.singleStep() or 20) * 3)
+            scroll_delta = int(round((-angle_y / 120.0) * step_px))
+
+        if not scroll_delta:
+            return False
+        current = int(bar.value())
+        target = max(int(bar.minimum()), min(int(bar.maximum()), current + scroll_delta))
+        if target == current and int(bar.maximum()) <= int(bar.minimum()):
+            return False
+        self._mark_user_scroll_activity()
+        bar.setValue(target)
+        try:
+            event.accept()
+        except Exception:
+            pass
+        return True
 
     def focusInEvent(self, event):
         if self._selection_locked:
@@ -429,51 +483,62 @@ class SubtitleTextEdit(QTextEdit):
 
     def update_margins(self):
         doc = self.document()
-        doc.blockSignals(True)  # 💡 [핵심 추가] 여백 조절을 글자 수정으로 오해하지 않게 신호를 차단합니다!
-        
-        cur = QTextCursor(doc)
-        cur.beginEditBlock() 
-        prev_start = -1.0
-        block_count = int(doc.blockCount())
-        virtual_threshold = int(os.environ.get("AI_SUBTITLE_EDITOR_MARGIN_VIRTUALIZE_THRESHOLD", "900") or "900")
-        if block_count > virtual_threshold:
-            start_line, end_line = self._visible_margin_line_range(block_count)
-            if start_line > 0:
-                prev_block = doc.findBlockByNumber(start_line - 1)
-                prev_ud = prev_block.userData() if prev_block.isValid() else None
-                if isinstance(prev_ud, SubtitleBlockData) and not prev_ud.is_gap:
-                    prev_start = prev_ud.start_sec
-            block = doc.findBlockByNumber(start_line)
-        else:
-            start_line, end_line = 0, max(0, block_count - 1)
-            block = doc.begin()
-
-        while block.isValid() and block.blockNumber() <= end_line:
-            ud = block.userData()
-            fmt = block.blockFormat()
-            target_margin = 0.0
-            
-            if isinstance(ud, SubtitleBlockData):
-                if ud.is_gap:
-                    target_margin = 0.0
-                    prev_start = -1.0
-                else:
-                    if abs(ud.start_sec - prev_start) > 0.05:
-                        if block.blockNumber() > 0:
-                            target_margin = 5.0 
-                    prev_start = ud.start_sec
+        prev_doc_signals = bool(doc.blockSignals(True))  # margin changes must not look like text edits
+        cur = None
+        edit_open = False
+        try:
+            prev_start = -1.0
+            block_count = int(doc.blockCount())
+            virtual_threshold = int(os.environ.get("AI_SUBTITLE_EDITOR_MARGIN_VIRTUALIZE_THRESHOLD", "900") or "900")
+            if block_count > virtual_threshold:
+                start_line, end_line = self._visible_margin_line_range(block_count)
+                if start_line > 0:
+                    prev_block = doc.findBlockByNumber(start_line - 1)
+                    prev_ud = prev_block.userData() if prev_block.isValid() else None
+                    if isinstance(prev_ud, SubtitleBlockData) and not prev_ud.is_gap:
+                        prev_start = prev_ud.start_sec
+                block = doc.findBlockByNumber(start_line)
             else:
-                prev_start = -1.0
+                start_line, end_line = 0, max(0, block_count - 1)
+                block = doc.begin()
+
+            while block.isValid() and block.blockNumber() <= end_line:
+                ud = block.userData()
+                fmt = block.blockFormat()
+                target_margin = 0.0
                 
-            if fmt.topMargin() != target_margin:
-                fmt.setTopMargin(target_margin)
-                cur.setPosition(block.position())
-                cur.setBlockFormat(fmt)
-                
-            block = block.next()
-        cur.endEditBlock()
-        
-        doc.blockSignals(False) # 💡 [신호 복구] 작업이 끝나면 다시 신호를 켭니다.
+                if isinstance(ud, SubtitleBlockData):
+                    if ud.is_gap:
+                        target_margin = 0.0
+                        prev_start = -1.0
+                    else:
+                        if abs(ud.start_sec - prev_start) > 0.05:
+                            if block.blockNumber() > 0:
+                                target_margin = 5.0
+                        prev_start = ud.start_sec
+                else:
+                    prev_start = -1.0
+
+                if abs(float(fmt.topMargin()) - float(target_margin)) > 0.01:
+                    if cur is None:
+                        cur = QTextCursor(doc)
+                        cur.beginEditBlock()
+                        edit_open = True
+                    fmt.setTopMargin(target_margin)
+                    cur.setPosition(block.position())
+                    cur.setBlockFormat(fmt)
+
+                block = block.next()
+        finally:
+            if cur is not None and edit_open:
+                try:
+                    cur.endEditBlock()
+                except Exception:
+                    pass
+            try:
+                doc.blockSignals(prev_doc_signals)
+            except Exception:
+                pass
 
     def _update_margin(self):
         self.setViewportMargins(self.timestampArea.sizeHint().width(), 0, 0, 0)
@@ -721,6 +786,8 @@ class SubtitleTextEdit(QTextEdit):
         # 이제 드래그만 해서는 아무 일도 일어나지 않습니다.
 
     def wheelEvent(self, event):
+        if self.apply_wheel_scroll_event(event):
+            return
         self._mark_user_scroll_activity()
         super().wheelEvent(event)
 

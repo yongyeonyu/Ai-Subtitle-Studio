@@ -279,8 +279,11 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
     # Timeline Segment Events
     # ---------------------------------------------------------
 
-    def _on_timeline_seg_clicked(self, line_num, start_sec):
-        cache = getattr(self, "_subtitle_memory_cache", None)
+    def _segment_for_timeline_click(self, line_num, start_sec, cache: dict | None = None):
+        try:
+            click_sec = self._snap_to_frame(float(start_sec or 0.0))
+        except Exception:
+            click_sec = 0.0
         if not isinstance(cache, dict):
             cached = getattr(self, "_cached_segs", None)
             if cached is not None:
@@ -290,34 +293,65 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             else:
                 cache = build_segment_lookup(self._get_current_segments())
             self._subtitle_memory_cache = cache
+
+        line_seg = None
         try:
-            seg = (cache.get("line_map") or {}).get(int(line_num))
+            line_seg = (cache.get("line_map") or {}).get(int(line_num))
         except Exception:
-            seg = None
-        if seg is None:
-            segs = self._get_current_segments()
-            seg = next((s for s in segs if s["line"] == line_num), None)
+            line_seg = None
+
+        time_seg = find_segment_at_lookup(cache, click_sec, skip_gap=False)
+        if time_seg is None:
+            best = None
+            for seg in list(cache.get("segments") or []):
+                try:
+                    start = self._snap_to_frame(float(seg.get("start", 0.0) or 0.0))
+                except Exception:
+                    continue
+                dist = abs(start - click_sec)
+                if dist <= 0.15 and (best is None or dist < best[0]):
+                    best = (dist, seg)
+            if best is not None:
+                time_seg = best[1]
+
+        if isinstance(line_seg, dict):
+            try:
+                line_start = self._snap_to_frame(float(line_seg.get("start", 0.0) or 0.0))
+            except Exception:
+                line_start = click_sec
+            if click_sec <= 0.001 or abs(line_start - click_sec) <= 0.15:
+                return line_seg
+        if isinstance(time_seg, dict):
+            return time_seg
+        return line_seg
+
+    def _on_timeline_seg_clicked(self, line_num, start_sec):
+        cache = getattr(self, "_subtitle_memory_cache", None)
+        seg = self._segment_for_timeline_click(line_num, start_sec, cache)
         lock_edit = self._timeline_lock_edit_enabled()
         if seg:
+            target_sec = float(seg.get("start", start_sec) or start_sec or 0.0)
+            line_num = int(seg.get("line", line_num) if seg.get("line") is not None else line_num)
             if lock_edit:
-                self._active_seg_start = seg["start"]
-                self.timeline.set_active(seg["start"])
+                self._active_seg_start = target_sec
+                self.timeline.set_active(target_sec)
                 if hasattr(self.timeline, "set_playhead"):
-                    self._reset_playhead_smoothing(seg["start"])
-                    self.timeline.set_playhead(seg["start"])
+                    self._reset_playhead_smoothing(target_sec)
+                    self.timeline.set_playhead(target_sec)
             else:
                 self._sync_cursor_to_seg(seg)
-            target_center = (seg["start"] + seg["end"]) / 2
+            target_end = float(seg.get("end", target_sec) or target_sec)
+            target_center = (target_sec + target_end) / 2
             if hasattr(self.timeline, "ensure_sec_visible"):
                 self.timeline.ensure_sec_visible(target_center, smooth=True, margin_px=96)
             else:
                 self.timeline.center_to_sec(target_center, smooth=True)
             if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
-                ctx = self._resolve_active_context(global_sec=float(start_sec))
+                ctx = self._resolve_active_context(global_sec=target_sec)
                 self._apply_active_context(ctx, autoplay=False, show_thumbnail=True)
             elif hasattr(self, 'video_player'):
                 self.video_player.pause_video()
-                self.video_player.seek_direct(float(start_sec))
+                self.video_player.seek_direct(target_sec)
         if lock_edit:
             if hasattr(self.timeline, "canvas"):
                 self.timeline.canvas.setFocus()
@@ -326,6 +360,10 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
 
 
     def _on_timeline_seg_double_clicked(self, line_num, start_sec):
+        seg = self._segment_for_timeline_click(line_num, start_sec, getattr(self, "_subtitle_memory_cache", None))
+        if isinstance(seg, dict):
+            start_sec = float(seg.get("start", start_sec) or start_sec or 0.0)
+            line_num = int(seg.get("line", line_num) if seg.get("line") is not None else line_num)
         self._active_seg_start = start_sec
         self.timeline.set_active(start_sec)
         if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):

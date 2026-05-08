@@ -20,7 +20,12 @@ from .models import (
 )
 from .hallucination_detector import annotate_segment_hallucination_risk, estimate_hallucination_risk
 from .llm_guarded_corrector import build_conservative_prompt
-from .vad_alignment_checker import annotate_segment_vad_alignment, vad_alignment_info, vad_overlap_ratio
+from .vad_alignment_checker import (
+    annotate_segment_vad_alignment,
+    annotate_segments_vad_alignment,
+    vad_alignment_info,
+    vad_overlap_ratio,
+)
 from .confidence_checker import evaluate_subtitle_confidence
 from .quality_pipeline import run_subtitle_quality_pipeline
 from .recheck_engine import recheck_low_confidence_segments
@@ -38,6 +43,7 @@ __all__ = [
     "normalize_segment_quality",
     "annotate_segment_hallucination_risk",
     "annotate_segment_vad_alignment",
+    "annotate_segments_vad_alignment",
     "build_conservative_prompt",
     "estimate_hallucination_risk",
     "evaluate_subtitle_confidence",

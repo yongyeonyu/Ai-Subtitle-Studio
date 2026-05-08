@@ -15,6 +15,341 @@ def build_strict_verify_helpers(deps: dict):
     _auto_color_avg_delta_mps = deps["_auto_color_avg_delta_mps"]
     _mps_available = deps["_mps_available"]
 
+    def _auto_dense_flow_cut_check(
+        cap,
+        cv2_mod,
+        *,
+        frame: int,
+        frame_count: int,
+        settings: dict | None = None,
+    ) -> dict:
+        settings = settings or {}
+
+        def _as_bool(value, default: bool = True) -> bool:
+            if value is None:
+                return bool(default)
+            if isinstance(value, str):
+                return value.strip().lower() not in {"0", "false", "off", "no", "disabled", "사용 안함", "끔"}
+            return bool(value)
+
+        if not _as_bool(settings.get("scan_cut_follower_dense_flow_enabled"), True):
+            return {"passed": True, "reason": "disabled"}
+        try:
+            import numpy as np
+        except Exception:
+            return {"passed": True, "reason": "numpy_unavailable"}
+        if not hasattr(cv2_mod, "remap"):
+            return {"passed": True, "reason": "opencv_remap_unavailable"}
+
+        frame_count = int(frame_count or 0)
+        if frame_count <= 2:
+            return {"passed": True, "reason": "not_enough_frames"}
+        center = max(1, min(frame_count - 2, int(frame or 0)))
+        radius = max(1, min(4, int(settings.get("scan_cut_dense_flow_window_radius", 2) or 2)))
+        start_idx = max(0, center - radius)
+        end_idx = min(frame_count - 1, center + radius)
+        if end_idx - start_idx < 1:
+            return {"passed": True, "reason": "not_enough_window"}
+        max_width = max(120, min(640, int(settings.get("scan_cut_dense_flow_width", 320) or 320)))
+
+        def _frame_to_gray(frame_bgr):
+            if frame_bgr is None:
+                return None
+            try:
+                h, w = frame_bgr.shape[:2]
+                if w > max_width:
+                    scale = max_width / float(w)
+                    frame_bgr = cv2_mod.resize(
+                        frame_bgr,
+                        (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
+                        interpolation=cv2_mod.INTER_AREA,
+                    )
+                gray = cv2_mod.cvtColor(frame_bgr, cv2_mod.COLOR_BGR2GRAY)
+                return gray.astype(np.uint8, copy=False)
+            except Exception:
+                return None
+
+        def _read_gray(index: int):
+            try:
+                cap.set(cv2_mod.CAP_PROP_POS_FRAMES, int(index))
+                ok, frame_bgr = cap.read()
+            except Exception:
+                return None
+            if not ok:
+                return None
+            return _frame_to_gray(frame_bgr)
+
+        def _read_window_grays() -> dict[int, object]:
+            out: dict[int, object] = {}
+            if _as_bool(settings.get("scan_cut_dense_flow_sequential_window_decode_enabled"), True):
+                try:
+                    cap.set(cv2_mod.CAP_PROP_POS_FRAMES, int(start_idx))
+                    for idx in range(start_idx, end_idx + 1):
+                        ok, frame_bgr = cap.read()
+                        if not ok:
+                            break
+                        gray = _frame_to_gray(frame_bgr)
+                        if gray is not None:
+                            out[idx] = gray
+                except Exception:
+                    out = {}
+            if len(out) >= 2:
+                return out
+            return {
+                idx: gray
+                for idx in range(start_idx, end_idx + 1)
+                if (gray := _read_gray(idx)) is not None
+            }
+
+        frames: dict[int, object] = {}
+        luma: dict[int, float] = {}
+        for idx, gray in _read_window_grays().items():
+            frames[idx] = gray
+            try:
+                luma[idx] = float(gray.mean())
+            except Exception:
+                luma[idx] = 0.0
+        ordered_indices = sorted(frames)
+        if len(ordered_indices) < 2:
+            return {"passed": True, "reason": "frame_unavailable"}
+
+        diff_threshold = max(4.0, float(settings.get("scan_cut_dense_flow_diff_threshold", 18.0) or 18.0))
+        min_diff = float(settings.get("scan_cut_dense_flow_min_diff", 14.0) or 14.0)
+        strong_diff = float(settings.get("scan_cut_dense_flow_strong_diff", 62.0) or 62.0)
+        min_motion = float(settings.get("scan_cut_dense_flow_min_motion_px", 0.8) or 0.8)
+        max_motion_residual_ratio = float(settings.get("scan_cut_dense_flow_motion_residual_ratio", 0.88) or 0.88)
+        motion_coherence = float(settings.get("scan_cut_dense_flow_motion_coherence", 0.64) or 0.64)
+        min_coverage = float(settings.get("scan_cut_dense_flow_min_coverage", 0.08) or 0.08)
+        motion_score_threshold = float(settings.get("scan_cut_dense_flow_motion_score_threshold", 0.56) or 0.56)
+        votes_required = max(1, int(settings.get("scan_cut_dense_flow_motion_votes_required", 2) or 2))
+        hard_cut_residual_ratio = float(settings.get("scan_cut_dense_flow_hard_cut_residual_ratio", 0.92) or 0.92)
+        fade_brightness_range = float(settings.get("scan_cut_dense_flow_fade_brightness_range", 18.0) or 18.0)
+        fade_motion_max = float(settings.get("scan_cut_dense_flow_fade_motion_max_px", 1.8) or 1.8)
+        backend_preference = str(settings.get("scan_cut_dense_flow_backend", "dis") or "dis").strip().lower()
+
+        def _clamp01(value: float) -> float:
+            return max(0.0, min(1.0, float(value)))
+
+        def _round(value: float) -> float:
+            return round(float(value), 4)
+
+        flow_engine = None
+        if backend_preference != "farneback" and hasattr(cv2_mod, "DISOpticalFlow_create"):
+            try:
+                preset = getattr(cv2_mod, "DISOPTICAL_FLOW_PRESET_ULTRAFAST", 0)
+                flow_engine = cv2_mod.DISOpticalFlow_create(preset)
+            except Exception:
+                flow_engine = None
+
+        def _calc_flow(prev_gray, next_gray):
+            if flow_engine is not None:
+                try:
+                    flow = flow_engine.calc(prev_gray, next_gray, None)
+                    if flow is not None:
+                        return flow, "opencv_dis_ultrafast"
+                except Exception:
+                    pass
+            if not hasattr(cv2_mod, "calcOpticalFlowFarneback"):
+                return None, "flow_unavailable"
+            try:
+                return cv2_mod.calcOpticalFlowFarneback(
+                    prev_gray,
+                    next_gray,
+                    None,
+                    0.5,
+                    2,
+                    15,
+                    2,
+                    5,
+                    1.1,
+                    0,
+                ), "opencv_farneback"
+            except Exception:
+                return None, "flow_unavailable"
+
+        def _pair_metrics(left_idx: int, right_idx: int, mode: str) -> dict | None:
+            prev_gray = frames.get(left_idx)
+            next_gray = frames.get(right_idx)
+            if prev_gray is None or next_gray is None:
+                return None
+            try:
+                if prev_gray.shape != next_gray.shape:
+                    return None
+            except Exception:
+                return None
+
+            diff = np.abs(prev_gray.astype(np.float32) - next_gray.astype(np.float32))
+            diff_before = float(diff.mean())
+            coverage = float((diff >= diff_threshold).mean())
+            flow, backend = _calc_flow(prev_gray, next_gray)
+            if flow is None:
+                return None
+
+            h, w = prev_gray.shape[:2]
+            grid_x, grid_y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+            map_x = grid_x - flow[:, :, 0].astype(np.float32)
+            map_y = grid_y - flow[:, :, 1].astype(np.float32)
+            try:
+                warped = cv2_mod.remap(
+                    prev_gray,
+                    map_x,
+                    map_y,
+                    interpolation=cv2_mod.INTER_LINEAR,
+                    borderMode=cv2_mod.BORDER_REPLICATE,
+                )
+                residual = float(np.abs(warped.astype(np.float32) - next_gray.astype(np.float32)).mean())
+            except Exception:
+                residual = diff_before
+
+            fx = flow[:, :, 0].astype(np.float32)
+            fy = flow[:, :, 1].astype(np.float32)
+            mag = np.sqrt(fx ** 2 + fy ** 2)
+            mean_mag = float(mag.mean())
+            mean_fx = float(fx.mean())
+            mean_fy = float(fy.mean())
+            coherence = float((mean_fx * mean_fx + mean_fy * mean_fy) ** 0.5 / max(mean_mag, 1e-6))
+            residual_ratio = residual / max(diff_before, 1e-6)
+            residual_conf = _clamp01((max_motion_residual_ratio - residual_ratio) / max(max_motion_residual_ratio, 1e-6))
+            diff_conf = _clamp01(diff_before / max(strong_diff, 1e-6))
+            coverage_conf = _clamp01(coverage / max(min_coverage, 1e-6)) if min_coverage > 0 else _clamp01(coverage)
+            motion_conf = _clamp01(mean_mag / max(min_motion * 4.0, 1e-6))
+            motion_score = (
+                diff_conf * 0.24
+                + residual_conf * 0.30
+                + _clamp01(coherence) * 0.24
+                + coverage_conf * 0.12
+                + motion_conf * 0.10
+            )
+            motion_like = (
+                diff_before >= min_diff
+                and diff_before < strong_diff
+                and coverage >= min_coverage
+                and mean_mag >= min_motion
+                and coherence >= motion_coherence
+                and residual_ratio <= max_motion_residual_ratio
+                and motion_score >= motion_score_threshold
+            )
+            return {
+                "left": int(left_idx),
+                "right": int(right_idx),
+                "mode": str(mode),
+                "diff": diff_before,
+                "residual": residual,
+                "residual_ratio": residual_ratio,
+                "coverage": coverage,
+                "mean_motion_px": mean_mag,
+                "coherence": coherence,
+                "motion_score": motion_score,
+                "motion_like": bool(motion_like),
+                "backend": backend,
+            }
+
+        pair_specs: list[tuple[int, int, str]] = []
+        for left_idx, right_idx in zip(ordered_indices, ordered_indices[1:]):
+            if right_idx == left_idx + 1:
+                pair_specs.append((left_idx, right_idx, "adjacent"))
+        if center - 1 in frames and center + 1 in frames:
+            pair_specs.append((center - 1, center + 1, "center_bridge"))
+
+        pair_metrics = [
+            item for item in (_pair_metrics(left, right, mode) for left, right, mode in pair_specs)
+            if item is not None
+        ]
+        if not pair_metrics:
+            return {"passed": True, "reason": "flow_empty"}
+
+        best_pair = max(pair_metrics, key=lambda item: (float(item["diff"]), float(item["coverage"])))
+        motion_pairs = [item for item in pair_metrics if item.get("motion_like")]
+        best_motion = max(pair_metrics, key=lambda item: float(item["motion_score"]))
+        max_diff = max(float(item["diff"]) for item in pair_metrics)
+        max_motion = max(float(item["mean_motion_px"]) for item in pair_metrics)
+        avg_diff = sum(float(item["diff"]) for item in pair_metrics) / len(pair_metrics)
+        avg_residual_ratio = sum(float(item["residual_ratio"]) for item in pair_metrics) / len(pair_metrics)
+        avg_coverage = sum(float(item["coverage"]) for item in pair_metrics) / len(pair_metrics)
+        avg_coherence = sum(float(item["coherence"]) for item in pair_metrics) / len(pair_metrics)
+        avg_motion = sum(float(item["mean_motion_px"]) for item in pair_metrics) / len(pair_metrics)
+
+        hard_cut_like = (
+            max_diff >= strong_diff
+            and float(best_pair["residual_ratio"]) >= hard_cut_residual_ratio
+            and float(best_pair["coherence"]) < motion_coherence
+        )
+        luma_values = [luma[idx] for idx in ordered_indices if idx in luma]
+        brightness_values = []
+        for left_idx, right_idx in zip(ordered_indices, ordered_indices[1:]):
+            if left_idx in luma and right_idx in luma:
+                brightness_values.append(luma[right_idx] - luma[left_idx])
+        brightness_range = (max(luma_values) - min(luma_values)) if luma_values else 0.0
+        trend_epsilon = float(settings.get("scan_cut_dense_flow_brightness_trend_epsilon", 1.5) or 1.5)
+        trend_signs = [1 if value > trend_epsilon else -1 if value < -trend_epsilon else 0 for value in brightness_values]
+        nonzero_signs = [value for value in trend_signs if value != 0]
+        brightness_monotonic = bool(nonzero_signs) and len(set(nonzero_signs)) <= 1
+        brightness_trend_protected = (
+            _as_bool(settings.get("scan_cut_dense_flow_fade_trend_protection_enabled"), True)
+            and brightness_monotonic
+            and brightness_range >= fade_brightness_range
+            and max_motion <= fade_motion_max
+        )
+
+        motion_like = (
+            len(motion_pairs) >= votes_required
+            and float(best_motion["motion_score"]) >= motion_score_threshold
+            and not hard_cut_like
+            and not brightness_trend_protected
+        )
+        pair_payload = [
+            {
+                "left": item["left"],
+                "right": item["right"],
+                "mode": item["mode"],
+                "diff": _round(item["diff"]),
+                "residual": _round(item["residual"]),
+                "residual_ratio": _round(item["residual_ratio"]),
+                "coverage": _round(item["coverage"]),
+                "mean_motion_px": _round(item["mean_motion_px"]),
+                "coherence": _round(item["coherence"]),
+                "motion_score": _round(item["motion_score"]),
+                "motion_like": bool(item["motion_like"]),
+                "backend": item["backend"],
+            }
+            for item in pair_metrics
+        ]
+        backend_counts: dict[str, int] = {}
+        for item in pair_metrics:
+            backend = str(item.get("backend") or "unknown")
+            backend_counts[backend] = backend_counts.get(backend, 0) + 1
+
+        return {
+            "passed": not motion_like,
+            "reason": "dense_flow_motion_reject" if motion_like else "dense_flow_pass",
+            "window": [int(start_idx), int(end_idx)],
+            "center_frame": int(center),
+            "pair_count": len(pair_metrics),
+            "motion_votes": len(motion_pairs),
+            "votes_required": int(votes_required),
+            "diff": _round(best_pair["diff"]),
+            "residual": _round(best_pair["residual"]),
+            "residual_ratio": _round(best_pair["residual_ratio"]),
+            "coverage": _round(best_pair["coverage"]),
+            "mean_motion_px": _round(best_pair["mean_motion_px"]),
+            "coherence": _round(best_pair["coherence"]),
+            "motion_score": _round(best_motion["motion_score"]),
+            "avg_diff": _round(avg_diff),
+            "avg_residual_ratio": _round(avg_residual_ratio),
+            "avg_coverage": _round(avg_coverage),
+            "avg_coherence": _round(avg_coherence),
+            "avg_motion_px": _round(avg_motion),
+            "max_diff": _round(max_diff),
+            "max_motion_px": _round(max_motion),
+            "hard_cut_like": bool(hard_cut_like),
+            "brightness_trend_protected": bool(brightness_trend_protected),
+            "brightness_range": _round(brightness_range),
+            "brightness_monotonic": bool(brightness_monotonic),
+            "pairs": pair_payload,
+            "backend_counts": backend_counts,
+            "backend": "opencv_dense_optical_flow_window",
+        }
+
     def _auto_grid_v3_manual_verify_strict(
         cap,
         cv2_mod,
@@ -308,6 +643,16 @@ def build_strict_verify_helpers(deps: dict):
         if not color_pass:
             return provisional_hint("color_avg_failed")
 
+        flow_check = _auto_dense_flow_cut_check(
+            cap,
+            cv2_mod,
+            frame=int(color_center if color_center is not None else coarse_frame),
+            frame_count=frame_count,
+            settings=settings,
+        )
+        if not flow_check.get("passed", True):
+            return {"passed": False, "reason": "dense_flow_motion_reject", "dense_flow": dict(flow_check)}
+
         # 통과 위치 선택
         if gray_window_pass:
             selected_frame = int(best_win["frame"])
@@ -334,6 +679,7 @@ def build_strict_verify_helpers(deps: dict):
             "color_score": float(best_color["score"]),
             "color_regions": int(best_color["regions"]),
             "color_deltas": list(best_color["deltas"]),
+            "dense_flow": dict(flow_check),
             "grid_cells": selected_count,
         }
 
@@ -493,6 +839,15 @@ def build_strict_verify_helpers(deps: dict):
                 choices.append(("color_window_mps", best_color["frame"], best_color["score"], best_color["regions"], best_color["deltas"], color_window_frames))
             mode, frame, score, regions, deltas, stage = choices[0]
             return {"passed": False, "reason": "color_avg_failed", "provisional_frame": int(frame), "provisional_sec": float(int(frame) / fps), "provisional_score": float(score or 0.0), "provisional_regions": int(regions or 0), "provisional_mode": str(mode), "provisional_stage": int(stage or 0), "provisional_deltas": list(deltas or []), "rollback_relocated": True}
+        flow_check = _auto_dense_flow_cut_check(
+            cap,
+            cv2_mod,
+            frame=int(color_center if color_center is not None else coarse_frame),
+            frame_count=frame_count,
+            settings=settings,
+        )
+        if not flow_check.get("passed", True):
+            return {"passed": False, "reason": "dense_flow_motion_reject", "dense_flow": dict(flow_check)}
         if gray_window_pass:
             selected_frame = int(best_win["frame"]); selected_score = float(best_win["score"]); selected_regions = int(best_win["regions"]); selected_mode = "gray_window_color_avg_mps"; selected_deltas = list(best_win["deltas"])
         else:
@@ -509,10 +864,12 @@ def build_strict_verify_helpers(deps: dict):
             "color_score": float(best_color["score"]),
             "color_regions": int(best_color["regions"]),
             "color_deltas": list(best_color["deltas"]),
+            "dense_flow": dict(flow_check),
             "grid_cells": selected_count,
         }
 
     return {
         "_auto_grid_v3_manual_verify_strict": _auto_grid_v3_manual_verify_strict,
         "_auto_grid_v3_manual_verify_strict_mps": _auto_grid_v3_manual_verify_strict_mps,
+        "_auto_dense_flow_cut_check": _auto_dense_flow_cut_check,
     }

@@ -25,26 +25,56 @@ def find_segment_at(segs, sec, skip_gap=True):
     return None
 
 
+def _segment_sort_key(seg: dict) -> tuple[float, int]:
+    try:
+        start = float(seg.get("start", 0.0) or 0.0)
+    except Exception:
+        start = 0.0
+    try:
+        line = int(seg.get("line", 0) or 0)
+    except Exception:
+        line = 0
+    return start, line
+
+
 def build_segment_lookup(segs) -> dict:
     """Build an in-memory lookup table for playback/editor subtitle sync."""
-    ordered = sorted(
-        [dict(seg) for seg in list(segs or []) if isinstance(seg, dict)],
-        key=lambda seg: (float(seg.get("start", 0.0) or 0.0), int(seg.get("line", 0) or 0)),
-    )
-    visible = [
-        seg for seg in ordered
-        if not seg.get("is_gap") and str(seg.get("text", "") or "").strip()
-    ]
-    line_map = {
-        int(seg.get("line", -1)): seg
-        for seg in ordered
-        if int(seg.get("line", -1)) >= 0
-    }
+    source = segs if isinstance(segs, list) else list(segs or [])
+    ordered = []
+    starts = []
+    lines = []
+    previous_key: tuple[float, int] | None = None
+    sorted_ok = True
+    for seg in source:
+        if not isinstance(seg, dict):
+            continue
+        key = _segment_sort_key(seg)
+        if previous_key is not None and key < previous_key:
+            sorted_ok = False
+        previous_key = key
+        starts.append(key[0])
+        lines.append(key[1])
+        ordered.append(seg)
+    if not sorted_ok:
+        entries = sorted(zip(starts, lines, ordered), key=lambda item: (item[0], item[1]))
+        starts = [item[0] for item in entries]
+        lines = [item[1] for item in entries]
+        ordered = [item[2] for item in entries]
+
+    visible = []
+    visible_starts = []
+    line_map = {}
+    for start, line, seg in zip(starts, lines, ordered):
+        if not seg.get("is_gap") and str(seg.get("text", "") or "").strip():
+            visible.append(seg)
+            visible_starts.append(start)
+        if line >= 0:
+            line_map[line] = seg
     return {
         "segments": ordered,
-        "starts": [float(seg.get("start", 0.0) or 0.0) for seg in ordered],
+        "starts": starts,
         "visible_segments": visible,
-        "visible_starts": [float(seg.get("start", 0.0) or 0.0) for seg in visible],
+        "visible_starts": visible_starts,
         "line_map": line_map,
         "line_numbers": sorted(line_map.keys()),
     }

@@ -58,6 +58,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             pass
 
     def _note_editor_foreground_activity(self):
+        self._last_editor_foreground_activity_at = time.monotonic()
         try:
             main_w = self.window()
             reset_idle = getattr(main_w, "_reset_post_completion_idle_timer", None)
@@ -75,6 +76,11 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
     def _invalidate_segment_cache(self) -> None:
         self._segment_cache_valid = False
         self._subtitle_memory_cache = None
+        self._subtitle_context_window_index_cache = {}
+        self._subtitle_memory_visible_window_cache = {}
+        self._subtitle_memory_visible_window_last_key = None
+        self._subtitle_memory_visible_window_last_result = None
+        self._subtitle_context_index_epoch = int(getattr(self, "_subtitle_context_index_epoch", 0) or 0) + 1
         try:
             self._last_segment_cache_block_count = int(self.text_edit.document().blockCount())
         except Exception:
@@ -86,6 +92,11 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         self._refresh_cached_line_map()
         cache = build_segment_lookup(segs)
         self._subtitle_memory_cache = cache
+        self._subtitle_context_window_index_cache = {}
+        self._subtitle_memory_visible_window_cache = {}
+        self._subtitle_memory_visible_window_last_key = None
+        self._subtitle_memory_visible_window_last_result = None
+        self._subtitle_context_index_epoch = int(getattr(self, "_subtitle_context_index_epoch", 0) or 0) + 1
         self._segment_cache_valid = True
         try:
             self._last_segment_cache_block_count = int(self.text_edit.document().blockCount())
@@ -124,10 +135,15 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         return list(cache.get("visible_segments") or [])
 
     def _subtitle_context_window_seconds(self) -> tuple[float, float, int]:
-        settings = dict(getattr(self, "settings", {}) or {})
+        settings = getattr(self, "settings", {}) or {}
         before = settings.get("editor_video_context_before_sec", settings.get("editor_context_before_sec", 75.0))
         after = settings.get("editor_video_context_after_sec", settings.get("editor_context_after_sec", 105.0))
         max_segments = settings.get("editor_video_context_max_segments", settings.get("editor_context_max_segments", 480))
+        cache_key = (id(settings), before, after, max_segments)
+        if cache_key == getattr(self, "_subtitle_context_window_seconds_cache_key", None):
+            cached = getattr(self, "_subtitle_context_window_seconds_cache", None)
+            if cached is not None:
+                return cached
         try:
             before = float(before)
         except Exception:
@@ -140,7 +156,14 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             max_segments = int(max_segments)
         except Exception:
             max_segments = 480
-        return max(10.0, min(before, 900.0)), max(20.0, min(after, 900.0)), max(48, min(max_segments, 3000))
+        result = (
+            max(10.0, min(before, 900.0)),
+            max(20.0, min(after, 900.0)),
+            max(48, min(max_segments, 3000)),
+        )
+        self._subtitle_context_window_seconds_cache_key = cache_key
+        self._subtitle_context_window_seconds_cache = result
+        return result
 
     def _subtitle_context_center_sec(self, *, local: bool = False) -> float:
         center = getattr(self, "_active_seg_start", None)
@@ -167,10 +190,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         *,
         center_sec: float | None = None,
     ) -> list[dict]:
-        rows = [
-            seg for seg in list(segments or [])
-            if isinstance(seg, dict) and not seg.get("is_gap") and str(seg.get("text", "") or "").strip()
-        ]
+        rows, starts = self._subtitle_context_index_for_segments(segments)
         if not rows:
             return []
         before, after, max_segments = self._subtitle_context_window_seconds()
@@ -180,7 +200,52 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             center = max(0.0, float(center_sec or 0.0))
         except Exception:
             center = 0.0
-        starts = []
+        left_sec = max(0.0, center - before)
+        right_sec = center + after
+        left = max(0, bisect_left(starts, left_sec) - 1)
+        right = min(len(rows), bisect_right(starts, right_sec) + 1)
+        window = rows[left:right]
+        if len(window) <= max_segments:
+            return [seg for seg in window if str(seg.get("text", "") or "").strip()]
+
+        center_idx = min(len(rows) - 1, max(0, bisect_right(starts, center) - 1))
+        half = max(1, max_segments // 2)
+        trim_left = max(0, center_idx - half)
+        trim_right = min(len(rows), trim_left + max_segments)
+        trim_left = max(0, trim_right - max_segments)
+        return [seg for seg in rows[trim_left:trim_right] if str(seg.get("text", "") or "").strip()]
+
+    def _subtitle_context_index_for_segments(self, segments) -> tuple[list[dict], list[float]]:
+        if segments is None:
+            source = []
+        elif isinstance(segments, (list, tuple)):
+            source = segments
+        else:
+            source = list(segments or [])
+        if not source:
+            return [], []
+        first = source[0] if source else None
+        last = source[-1] if source else None
+        key = (
+            id(segments),
+            len(source),
+            id(first),
+            id(last),
+            int(getattr(self, "_subtitle_context_index_epoch", 0) or 0),
+        )
+        cache = getattr(self, "_subtitle_context_window_index_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._subtitle_context_window_index_cache = cache
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
+        rows = [
+            seg for seg in source
+            if isinstance(seg, dict) and not seg.get("is_gap") and str(seg.get("text", "") or "").strip()
+        ]
+        starts: list[float] = []
         ordered = rows
         is_sorted = True
         prev = -1.0
@@ -197,21 +262,14 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             pairs = sorted(zip(starts, rows), key=lambda item: item[0])
             starts = [item[0] for item in pairs]
             ordered = [item[1] for item in pairs]
-
-        left_sec = max(0.0, center - before)
-        right_sec = center + after
-        left = max(0, bisect_left(starts, left_sec) - 1)
-        right = min(len(ordered), bisect_right(starts, right_sec) + 1)
-        window = ordered[left:right]
-        if len(window) <= max_segments:
-            return list(window)
-
-        center_idx = min(len(ordered) - 1, max(0, bisect_right(starts, center) - 1))
-        half = max(1, max_segments // 2)
-        trim_left = max(0, center_idx - half)
-        trim_right = min(len(ordered), trim_left + max_segments)
-        trim_left = max(0, trim_right - max_segments)
-        return list(ordered[trim_left:trim_right])
+        result = (ordered, starts)
+        if len(cache) >= 8:
+            try:
+                cache.pop(next(iter(cache)))
+            except Exception:
+                cache.clear()
+        cache[key] = result
+        return result
 
     def _subtitle_memory_visible_window(self, center_sec: float | None = None) -> list[dict]:
         cache = getattr(self, "_subtitle_memory_cache", None)
@@ -229,18 +287,65 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                 center = max(0.0, float(center_sec or 0.0))
             except Exception:
                 center = 0.0
+            first = rows[0] if rows else None
+            last = rows[-1] if rows else None
+            hot_key = (
+                id(rows),
+                len(rows),
+                id(first),
+                id(last),
+                int(getattr(self, "_subtitle_context_index_epoch", 0) or 0),
+                round(center, 3),
+                round(float(before), 3),
+                round(float(after), 3),
+                int(max_segments),
+            )
+            if hot_key == getattr(self, "_subtitle_memory_visible_window_last_key", None):
+                hot_result = getattr(self, "_subtitle_memory_visible_window_last_result", None)
+                if hot_result is not None:
+                    return hot_result
             left_sec = max(0.0, center - before)
             right_sec = center + after
             left = max(0, bisect_left(starts, left_sec) - 1)
             right = min(len(rows), bisect_right(starts, right_sec) + 1)
             if right - left <= max_segments:
-                return list(rows[left:right])
-            center_idx = min(len(rows) - 1, max(0, bisect_right(starts, center) - 1))
-            half = max(1, max_segments // 2)
-            trim_left = max(0, center_idx - half)
-            trim_right = min(len(rows), trim_left + max_segments)
-            trim_left = max(0, trim_right - max_segments)
-            return list(rows[trim_left:trim_right])
+                trim_left, trim_right = left, right
+            else:
+                center_idx = min(len(rows) - 1, max(0, bisect_right(starts, center) - 1))
+                half = max(1, max_segments // 2)
+                trim_left = max(0, center_idx - half)
+                trim_right = min(len(rows), trim_left + max_segments)
+                trim_left = max(0, trim_right - max_segments)
+
+            key = (
+                id(rows),
+                len(rows),
+                id(first),
+                id(last),
+                int(getattr(self, "_subtitle_context_index_epoch", 0) or 0),
+                int(trim_left),
+                int(trim_right),
+                int(max_segments),
+            )
+            window_cache = getattr(self, "_subtitle_memory_visible_window_cache", None)
+            if not isinstance(window_cache, dict):
+                window_cache = {}
+                self._subtitle_memory_visible_window_cache = window_cache
+            cached_window = window_cache.get(key)
+            if cached_window is not None:
+                self._subtitle_memory_visible_window_last_key = hot_key
+                self._subtitle_memory_visible_window_last_result = cached_window
+                return cached_window
+            result = list(rows[trim_left:trim_right])
+            if len(window_cache) >= 16:
+                try:
+                    window_cache.pop(next(iter(window_cache)))
+                except Exception:
+                    window_cache.clear()
+            window_cache[key] = result
+            self._subtitle_memory_visible_window_last_key = hot_key
+            self._subtitle_memory_visible_window_last_result = result
+            return result
         return self._subtitle_context_window_from_segments(rows, center_sec=center_sec)
 
     def _schedule_visible_quality_refresh(self) -> None:
@@ -287,13 +392,13 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         for line in line_numbers[left:right]:
             seg = line_map.get(int(line))
             if isinstance(seg, dict) and seg.get("quality"):
-                quality_map[int(line)] = dict(seg.get("quality") or {})
+                quality_map[int(line)] = seg.get("quality") or {}
 
         try:
             current_line = int(text_edit.textCursor().blockNumber())
             seg = line_map.get(current_line)
             if isinstance(seg, dict) and seg.get("quality"):
-                quality_map[current_line] = dict(seg.get("quality") or {})
+                quality_map[current_line] = seg.get("quality") or {}
         except Exception:
             pass
 
@@ -303,7 +408,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             highlighter.set_quality_map(quality_map)
 
     def _update_subtitle_memory_line_text(self, line_num: int, text: str) -> bool:
-        visible_text = str(text or "").replace("\u2028", "\n")
+        visible_text = str(text or "").replace("\u2028", "\n").strip()
         changed = False
         found = False
         visibility_changed = False
@@ -342,6 +447,11 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             if changed and visibility_changed:
                 self._subtitle_memory_cache = build_segment_lookup(getattr(self, "_cached_segs", []) or [])
                 self._refresh_cached_line_map()
+                self._subtitle_context_window_index_cache = {}
+                self._subtitle_memory_visible_window_cache = {}
+                self._subtitle_memory_visible_window_last_key = None
+                self._subtitle_memory_visible_window_last_result = None
+                self._subtitle_context_index_epoch = int(getattr(self, "_subtitle_context_index_epoch", 0) or 0) + 1
         self._segment_cache_valid = bool(found)
         self._subtitle_text_visibility_changed = bool(visibility_changed)
         try:
@@ -479,6 +589,235 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             if stage_bits:
                 lines.append("단계 신뢰도: " + " · ".join(stage_bits))
         return "\n".join(lines)
+
+    def _bulk_load_segments_to_document(self, segments: list[dict], *, preserve_view: bool = False) -> list[dict] | None:
+        """Load already-final subtitle/project rows with one QTextDocument rewrite.
+
+        Live generation still uses the queue path because it needs gap push/pull
+        behavior. Project/SRT restore is different: rows are already timed, so a
+        single document rewrite avoids thousands of per-row insert/layout/undo
+        updates on long files.
+        """
+        text_edit = getattr(self, "text_edit", None)
+        if text_edit is None or not hasattr(text_edit, "setPlainText"):
+            return None
+        doc = text_edit.document() if hasattr(text_edit, "document") else None
+        if doc is None:
+            return None
+
+        rows = list(segments or [])
+        block_texts: list[str] = []
+        block_meta: list[SubtitleBlockData] = []
+        display_rows: list[dict] = []
+        spk1_id = self.settings.get("spk1_id", "00") if hasattr(self, "settings") else "00"
+        spk2_id = self.settings.get("spk2_id", "01") if hasattr(self, "settings") else "01"
+        no_match = re.compile(r"(?!)")
+        junk_ts = getattr(self, "_JUNK_TS_RE", no_match)
+        junk_three = getattr(self, "_JUNK_NO_BRACKET_3PART", no_match)
+        junk_three_end = getattr(self, "_JUNK_NO_BRACKET_3PART_END", no_match)
+        junk_start = getattr(self, "_JUNK_START_RE", no_match)
+
+        for idx, raw_seg in enumerate(rows):
+            if not isinstance(raw_seg, dict):
+                continue
+            seg = dict(raw_seg)
+            try:
+                start_sec = self._frame_time(max(0.0, float(seg.get("start", 0.0) or 0.0)))
+            except Exception:
+                start_sec = 0.0
+            try:
+                end_sec = self._frame_time(max(start_sec, float(seg.get("end", start_sec) or start_sec)))
+            except Exception:
+                end_sec = start_sec
+            if end_sec <= start_sec:
+                end_sec = self._frame_time(start_sec + 0.5)
+
+            if bool(seg.get("is_gap")):
+                first_line = len(block_texts)
+                block_texts.append("")
+                block_meta.append(SubtitleBlockData("00", start_sec, is_gap=True, end_sec=end_sec))
+                display = dict(seg)
+                display["line"] = first_line
+                display["start"] = start_sec
+                display["end"] = end_sec
+                display["text"] = str(seg.get("text", "") or "")
+                display["is_gap"] = True
+                display_rows.append(display)
+                continue
+
+            text = str(seg.get("text", "") or "").replace("\u2028", "\n")
+            text = junk_ts.sub("", text)
+            text = junk_three.sub("", text)
+            text = junk_three_end.sub("", text)
+            text = junk_start.sub("", text).strip()
+            text = re.sub(r"<[^>]+>", "", text.replace("\r", ""))
+            parts = [re.sub(r"[ \t\f\v]+", " ", part).strip() for part in text.split("\n")]
+            parts = [part for part in parts if part]
+            if not parts:
+                continue
+
+            spk_list = list(seg.get("speaker_list", []) or [])
+            current_spk = str((spk_list[0] if spk_list else seg.get("speaker", seg.get("spk", spk1_id))) or spk1_id)
+            stt_kwargs = {
+                "stt_mode": bool(seg.get("stt_mode", False)),
+                "stt_pending": bool(seg.get("stt_pending", False)),
+                "original_text": str(seg.get("original_text", "") or ""),
+                "dictated_text": str(seg.get("dictated_text", "") or ""),
+                "stt_selected_source": str(seg.get("stt_selected_source", "") or ""),
+                "stt_ensemble_llm_selected_source": str(seg.get("stt_ensemble_llm_selected_source", "") or ""),
+                "stt_candidates": list(seg.get("stt_candidates") or []),
+                "stt_ensemble_source": str(seg.get("stt_ensemble_source", "") or ""),
+                "stt_ensemble_llm_selected_label": str(seg.get("stt_ensemble_llm_selected_label", "") or ""),
+                "stt_ensemble_similarity": seg.get("stt_ensemble_similarity"),
+                "stt_ensemble_needs_llm_review": bool(seg.get("stt_ensemble_needs_llm_review", False)),
+                "stt_ensemble_inserted_from_stt2": bool(seg.get("stt_ensemble_inserted_from_stt2", False)),
+                "stt_ensemble_word_rover": dict(seg.get("stt_ensemble_word_rover") or {}),
+                "score": seg.get("score"),
+                "stt_score": seg.get("stt_score"),
+                "score_color": str(seg.get("score_color", "") or ""),
+                "stt_score_color": str(seg.get("stt_score_color", "") or ""),
+                "stt_score_label": str(seg.get("stt_score_label", "") or ""),
+                "stt_score_flags": list(seg.get("stt_score_flags") or []),
+                "stt_score_components": dict(seg.get("stt_score_components") or {}),
+            }
+            clip_idx = seg.get("_clip_idx")
+            try:
+                clip_idx = int(clip_idx) if clip_idx is not None else None
+            except Exception:
+                clip_idx = None
+            clip_kwargs = {
+                "clip_idx": clip_idx,
+                "clip_file": str(seg.get("_clip_file", "") or ""),
+            }
+            quality_kwargs = self._quality_kwargs_from_segment(
+                seg,
+                signature=self._segment_quality_signature(
+                    {
+                        "start": start_sec,
+                        "end": end_sec,
+                        "text": parts[0],
+                        "speaker": current_spk,
+                    }
+                ),
+            )
+
+            first_line = len(block_texts)
+            block_texts.append(parts[0])
+            block_meta.append(SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs))
+            for part in parts[1:]:
+                if part.startswith("-"):
+                    current_spk = spk2_id if current_spk == spk1_id else spk1_id
+                    block_texts.append(part)
+                    block_meta.append(SubtitleBlockData(current_spk, start_sec, end_sec=end_sec, **stt_kwargs, **quality_kwargs, **clip_kwargs))
+                else:
+                    block_texts[-1] = block_texts[-1] + "\u2028" + part
+
+            display = dict(seg)
+            display["line"] = first_line
+            display["start"] = start_sec
+            display["end"] = end_sec
+            display["text"] = "\n".join(parts)
+            display["speaker"] = str(seg.get("speaker", seg.get("spk", current_spk)) or current_spk)
+            if clip_idx is not None:
+                display["_clip_idx"] = clip_idx
+            if clip_kwargs["clip_file"]:
+                display["_clip_file"] = clip_kwargs["clip_file"]
+            display_rows.append(display)
+
+        prev_text_signals = False
+        prev_doc_signals = False
+        prev_undo = True
+        prev_updates = True
+        prev_timestamp_updates = True
+        highlighter = getattr(self, "_highlighter", None)
+        detached_highlighter = False
+        timestamp_area = getattr(text_edit, "timestampArea", None)
+        try:
+            setattr(text_edit, "_bulk_segment_load_active", True)
+            if hasattr(text_edit, "updatesEnabled") and hasattr(text_edit, "setUpdatesEnabled"):
+                prev_updates = bool(text_edit.updatesEnabled())
+                text_edit.setUpdatesEnabled(False)
+            if timestamp_area is not None and hasattr(timestamp_area, "updatesEnabled") and hasattr(timestamp_area, "setUpdatesEnabled"):
+                prev_timestamp_updates = bool(timestamp_area.updatesEnabled())
+                timestamp_area.setUpdatesEnabled(False)
+            if highlighter is not None and hasattr(highlighter, "setDocument"):
+                try:
+                    if highlighter.document() is doc:
+                        highlighter.setDocument(None)
+                        detached_highlighter = True
+                except Exception:
+                    detached_highlighter = False
+            prev_text_signals = bool(text_edit.blockSignals(True))
+            prev_doc_signals = bool(doc.blockSignals(True))
+            if hasattr(text_edit, "isUndoRedoEnabled") and hasattr(text_edit, "setUndoRedoEnabled"):
+                prev_undo = bool(text_edit.isUndoRedoEnabled())
+                text_edit.setUndoRedoEnabled(False)
+            text_edit.setPlainText("\n".join(block_texts))
+            block = doc.begin()
+            for meta in block_meta:
+                if not block.isValid():
+                    break
+                block.setUserData(meta)
+                block = block.next()
+            cursor = QTextCursor(doc)
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            text_edit.setTextCursor(cursor)
+        finally:
+            try:
+                if hasattr(text_edit, "setUndoRedoEnabled"):
+                    text_edit.setUndoRedoEnabled(prev_undo)
+            except Exception:
+                pass
+            try:
+                doc.blockSignals(prev_doc_signals)
+            except Exception:
+                pass
+            try:
+                text_edit.blockSignals(prev_text_signals)
+            except Exception:
+                pass
+            try:
+                if detached_highlighter and highlighter is not None and hasattr(highlighter, "setDocument"):
+                    highlighter.setDocument(doc)
+            except Exception:
+                pass
+            try:
+                if timestamp_area is not None and hasattr(timestamp_area, "setUpdatesEnabled"):
+                    timestamp_area.setUpdatesEnabled(prev_timestamp_updates)
+            except Exception:
+                pass
+            try:
+                if hasattr(text_edit, "setUpdatesEnabled"):
+                    text_edit.setUpdatesEnabled(prev_updates)
+            except Exception:
+                pass
+            try:
+                setattr(text_edit, "_bulk_segment_load_active", False)
+            except Exception:
+                pass
+
+        try:
+            if hasattr(text_edit, "update_margins"):
+                text_edit.update_margins()
+            if timestamp_area is not None and hasattr(timestamp_area, "update"):
+                timestamp_area.update()
+            quick_sync = getattr(text_edit, "_schedule_quick_layer_sync", None)
+            if callable(quick_sync):
+                quick_sync()
+        except Exception:
+            pass
+        self._segment_queue.clear()
+        self._is_initial_load = False
+        if not preserve_view:
+            try:
+                if hasattr(self, "timeline"):
+                    self.timeline.set_playhead(0.0)
+                    self.timeline.center_to_sec(0.0, smooth=True)
+                if hasattr(self, "video_player"):
+                    self.video_player.seek(0.0)
+            except Exception:
+                pass
+        return display_rows
 
     # ---------------------------------------------------------
     # Segment Queue
@@ -2342,12 +2681,20 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         if not seg:
             return
         if self._active_seg_start != seg["start"]:
-            if hasattr(self, 'video_player'):
+            try:
+                playback_active = bool(self._is_video_playback_active()) if hasattr(self, "_is_video_playback_active") else False
+            except Exception:
+                playback_active = False
+            if hasattr(self, 'video_player') and not playback_active:
                 self.video_player.pause_video()
             self._active_seg_start = seg["start"]
             self.timeline.set_active(seg["start"])
             self.timeline.set_playhead(seg["start"])
-            self.timeline.center_to_sec((seg["start"] + seg["end"]) / 2, smooth=True)
+            target_sec = (seg["start"] + seg["end"]) / 2
+            if hasattr(self.timeline, "ensure_sec_visible"):
+                self.timeline.ensure_sec_visible(target_sec, smooth=False, margin_px=128)
+            else:
+                self.timeline.center_to_sec(target_sec, smooth=True)
             self._highlighter.set_current_line(line_num)
             self._schedule_visible_quality_refresh()
             tip = self._quality_tooltip(seg)
@@ -2355,7 +2702,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                 self.text_edit.setToolTip(tip)
             else:
                 self.text_edit.setToolTip("")
-            if hasattr(self, 'video_player'):
+            if hasattr(self, 'video_player') and not playback_active:
                 self._schedule_cursor_video_seek(seg["start"])
 
     def _on_esc_pressed(self):
@@ -2499,7 +2846,14 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             if end_block:
                 cur.insertText("\n")
                 if end_ud:
-                    cur.block().setUserData(SubtitleBlockData(end_ud.spk_id, end_ud.start_sec, end_ud.is_gap))
+                    cur.block().setUserData(
+                        SubtitleBlockData(
+                            end_ud.spk_id,
+                            end_ud.start_sec,
+                            end_ud.is_gap,
+                            end_sec=getattr(end_ud, "end_sec", None),
+                        )
+                    )
                 cur.movePosition(QTextCursor.MoveOperation.PreviousBlock)
             else:
                 while cur.block().text().strip() == "" and doc.blockCount() > 1:

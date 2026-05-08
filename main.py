@@ -19,6 +19,94 @@ os.environ.setdefault(
 )
 os.environ.setdefault("AV_LOG_LEVEL", "16")
 
+_STDERR_NOISE_FILTER_INSTALLED = False
+_STDERR_NOISE_FILTER_ORIGINAL_FD = None
+_STDERR_NOISE_PATTERNS = (
+    b"TSM AdjustCapsLockLEDForKeyTransitionHandling",
+)
+
+
+def _env_flag_enabled(name: str, default: bool = True) -> bool:
+    value = str(os.environ.get(name, "") or "").strip().lower()
+    if not value:
+        return bool(default)
+    if value in {"1", "true", "yes", "on", "enabled", "enable"}:
+        return True
+    if value in {"0", "false", "no", "off", "disabled", "disable"}:
+        return False
+    return bool(default)
+
+
+def _install_macos_stderr_noise_filter() -> None:
+    """Drop noisy AppKit stderr lines while preserving real errors."""
+    global _STDERR_NOISE_FILTER_INSTALLED, _STDERR_NOISE_FILTER_ORIGINAL_FD
+    if _STDERR_NOISE_FILTER_INSTALLED:
+        return
+    if sys.platform != "darwin":
+        return
+    if not _env_flag_enabled("AI_SUBTITLE_SUPPRESS_MACOS_TSM_LOG", True):
+        return
+    try:
+        read_fd, write_fd = os.pipe()
+        original_fd = os.dup(2)
+        os.set_inheritable(read_fd, False)
+        os.set_inheritable(write_fd, False)
+        os.set_inheritable(original_fd, False)
+        os.dup2(write_fd, 2)
+        os.close(write_fd)
+        _STDERR_NOISE_FILTER_ORIGINAL_FD = original_fd
+        _STDERR_NOISE_FILTER_INSTALLED = True
+    except Exception:
+        return
+
+    def _drain_stderr_pipe() -> None:
+        import select
+
+        pending = b""
+        try:
+            while True:
+                readable, _, _ = select.select([read_fd], [], [], 0.25)
+                if not readable:
+                    if pending and not any(pattern in pending for pattern in _STDERR_NOISE_PATTERNS):
+                        os.write(original_fd, pending)
+                        pending = b""
+                    continue
+                chunk = os.read(read_fd, 4096)
+                if not chunk:
+                    break
+                pending += chunk
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    if any(pattern in line for pattern in _STDERR_NOISE_PATTERNS):
+                        continue
+                    os.write(original_fd, line + b"\n")
+                if len(pending) > 8192:
+                    if not any(pattern in pending for pattern in _STDERR_NOISE_PATTERNS):
+                        os.write(original_fd, pending)
+                    pending = b""
+            if pending and not any(pattern in pending for pattern in _STDERR_NOISE_PATTERNS):
+                os.write(original_fd, pending)
+        except Exception:
+            pass
+        finally:
+            try:
+                os.dup2(original_fd, 2)
+            except Exception:
+                pass
+            try:
+                os.close(read_fd)
+            except Exception:
+                pass
+
+    threading.Thread(
+        target=_drain_stderr_pipe,
+        daemon=True,
+        name="macos-stderr-noise-filter",
+    ).start()
+
+
+_install_macos_stderr_noise_filter()
+
 warnings.filterwarnings(
     "ignore",
     message=r".*pynvml package is deprecated.*",

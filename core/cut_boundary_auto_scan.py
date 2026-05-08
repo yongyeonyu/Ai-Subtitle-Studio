@@ -9,10 +9,12 @@ import sys
 import time
 
 from core.cut_boundary_audio import detect_audio_gain_boundary_rows
+from core.cut_boundary_ffmpeg_scene import detect_ffmpeg_scene_boundaries
 from core.performance import (
     balanced_task_slices,
 )
 from core.runtime.multi_process import runtime_parallel_worker_plan
+from core.cut_boundary_backend_router import apply_cut_boundary_backend_settings, select_cut_boundary_backend
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on", "enabled", "enable"}
@@ -176,6 +178,7 @@ def build_auto_grid_scan_helpers(deps: dict):
             except Exception:
                 pass
         fallback_kwargs = dict(kwargs)
+        settings = apply_cut_boundary_backend_settings(settings)
         fallback_kwargs["settings"] = settings
 
         if not bool(settings.get("scan_cut_auto_strict_color_avg_enabled", True)):
@@ -210,8 +213,18 @@ def build_auto_grid_scan_helpers(deps: dict):
                 **fallback_kwargs,
             )
 
+        original_filepath = str(filepath)
+        backend_choice = select_cut_boundary_backend(original_filepath, settings)
+        scan_filepath = backend_choice.scan_path
         configure_cut_boundary_cv2_threads(cv2, settings)
-        cap = cv2.VideoCapture(str(filepath))
+        cap = cv2.VideoCapture(str(scan_filepath))
+        if not cap.isOpened() and scan_filepath != original_filepath:
+            try:
+                cap.release()
+            except Exception:
+                pass
+            scan_filepath = original_filepath
+            cap = cv2.VideoCapture(str(scan_filepath))
         if not cap.isOpened():
             try:
                 cap.release()
@@ -271,6 +284,9 @@ def build_auto_grid_scan_helpers(deps: dict):
                     fixed["detected"] = len(verified_rows)
                     fixed["verified_detected"] = len(verified_rows)
                     fixed["provisional_detected"] = len(provisional_rows)
+                    fixed["visual_scan_source_path"] = str(scan_filepath)
+                    fixed["visual_scan_proxy"] = bool(scan_filepath != original_filepath)
+                    fixed["cut_boundary_backend"] = backend_choice.backend
                     progress_callback(fixed)
                 except Exception:
                     pass
@@ -301,7 +317,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                     verify_row._caps = []
                 verify_cap = getattr(thread_state, "cap", None)
                 if verify_cap is None or not verify_cap.isOpened():
-                    verify_cap = cv2.VideoCapture(str(filepath))
+                    verify_cap = cv2.VideoCapture(str(scan_filepath))
                     thread_state.cap = verify_cap
                     try:
                         verify_row._caps.append(verify_cap)
@@ -348,11 +364,15 @@ def build_auto_grid_scan_helpers(deps: dict):
                         "timeline_frame_rate": fps,
                         "clip_idx": int(clip_idx or 0),
                         "clip_local_sec": refined_local_sec,
-                        "source_path": str(filepath),
+                        "source_path": original_filepath,
+                        "visual_scan_source_path": str(scan_filepath),
+                        "visual_scan_proxy": bool(scan_filepath != original_filepath),
+                        "cut_boundary_backend": backend_choice.backend,
                         "score": float(verified.get("score", fixed.get("score", 0.0)) or 0.0),
                         "regions": int(verified.get("regions", fixed.get("regions", 0)) or 0),
                         "color_score": float(verified.get("color_score", 0.0) or 0.0),
                         "color_regions": int(verified.get("color_regions", 0) or 0),
+                        "dense_flow": dict(verified.get("dense_flow") or {}),
                         "grid_cells": int(verified.get("grid_cells", 0) or 0),
                         "reason": str(verified.get("reason") or "strict_color_avg"),
                         "detector": "opencv-gray-grid-v3-strict-color-avg",
@@ -418,7 +438,7 @@ def build_auto_grid_scan_helpers(deps: dict):
 
                 try:
                     raw_rows = _auto_grid_v3_original_detect_media_cut_boundaries(
-                        filepath,
+                        scan_filepath,
                         clip_offset=clip_offset,
                         clip_idx=clip_idx,
                         sample_step_sec=pioneer_step_sec,
@@ -476,6 +496,7 @@ def build_auto_grid_scan_helpers(deps: dict):
             except Exception:
                 pass
         fallback_kwargs = dict(kwargs)
+        settings = apply_cut_boundary_backend_settings(settings)
         fallback_kwargs["settings"] = settings
 
         try:
@@ -497,8 +518,18 @@ def build_auto_grid_scan_helpers(deps: dict):
             )
             return normalize_cut_boundaries(rows or [])
 
+        original_filepath = str(filepath)
+        backend_choice = select_cut_boundary_backend(original_filepath, settings)
+        scan_filepath = backend_choice.scan_path
         configure_cut_boundary_cv2_threads(cv2, settings)
-        cap = cv2.VideoCapture(str(filepath))
+        cap = cv2.VideoCapture(str(scan_filepath))
+        if not cap.isOpened() and scan_filepath != original_filepath:
+            try:
+                cap.release()
+            except Exception:
+                pass
+            scan_filepath = original_filepath
+            cap = cv2.VideoCapture(str(scan_filepath))
         if not cap.isOpened():
             try:
                 cap.release()
@@ -544,7 +575,12 @@ def build_auto_grid_scan_helpers(deps: dict):
         )
         gpu_refine_enabled = bool(settings.get("scan_cut_pioneer_gpu_refine_enabled", True))
         cuda_available = _cb_cuda_available() if gpu_refine_enabled else False
-        audio_gain_enabled = bool(settings.get("scan_cut_audio_gain_enabled", True))
+        audio_gain_enabled = _setting_bool(settings.get("scan_cut_audio_gain_enabled"), True)
+        ffmpeg_scene_enabled = _setting_bool(settings.get("scan_cut_ffmpeg_scene_prepass_enabled"), False)
+        ffmpeg_scene_replace_opencv = _setting_bool(
+            settings.get("scan_cut_ffmpeg_scene_replace_opencv_enabled"),
+            False,
+        )
 
         def _settings_float(key: str, default: float) -> float:
             try:
@@ -568,6 +604,12 @@ def build_auto_grid_scan_helpers(deps: dict):
         audio_gain_context_windows = max(1, _settings_int("scan_cut_audio_gain_context_windows", 2))
         audio_gain_timeout_sec = max(1.0, _settings_float("scan_cut_audio_gain_timeout_sec", 45.0))
         audio_gain_max_candidates = max(1, _settings_int("scan_cut_audio_gain_max_candidates", 240))
+        ffmpeg_scene_threshold = max(
+            0.01,
+            min(0.95, _settings_float("scan_cut_ffmpeg_scene_threshold", 0.35)),
+        )
+        ffmpeg_scene_timeout_sec = max(1.0, _settings_float("scan_cut_ffmpeg_scene_timeout_sec", 90.0))
+        ffmpeg_scene_max_candidates = max(1, _settings_int("scan_cut_ffmpeg_scene_max_candidates", 300))
         progress_sample_stride = max(1, _settings_int("scan_cut_progress_sample_stride", 4))
 
         def _scan_audio_gain_rows():
@@ -591,7 +633,27 @@ def build_auto_grid_scan_helpers(deps: dict):
             except Exception:
                 return []
 
-        def _emit_audio_gain_rows(rows):
+        def _scan_ffmpeg_scene_rows():
+            if not ffmpeg_scene_enabled:
+                return []
+            try:
+                return detect_ffmpeg_scene_boundaries(
+                    str(scan_filepath),
+                    clip_offset=float(clip_offset or 0.0),
+                    clip_idx=int(clip_idx or 0),
+                    fps=fps,
+                    threshold=ffmpeg_scene_threshold,
+                    min_gap_sec=min_gap_sec,
+                    timeout_sec=ffmpeg_scene_timeout_sec,
+                    max_candidates=ffmpeg_scene_max_candidates,
+                    progress_callback=progress_callback,
+                    visual_scan_source_path=original_filepath,
+                    visual_scan_proxy=bool(scan_filepath != original_filepath),
+                )
+            except Exception:
+                return []
+
+        def _emit_provisional_rows(rows):
             if not callable(found_callback):
                 return
             current_rows = list(rows or [])
@@ -601,8 +663,43 @@ def build_auto_grid_scan_helpers(deps: dict):
                 except Exception:
                     pass
 
+        if ffmpeg_scene_enabled and ffmpeg_scene_replace_opencv:
+            scene_rows = list(_scan_ffmpeg_scene_rows() or [])
+            if scene_rows:
+                audio_rows = list(_scan_audio_gain_rows() or [])
+                _emit_provisional_rows(scene_rows)
+                _emit_provisional_rows(audio_rows)
+                combined_rows = [*scene_rows, *audio_rows]
+                normalized = normalize_cut_boundaries(combined_rows, primary_fps=fps)
+                payload = {
+                    "clip_idx": int(clip_idx or 0),
+                    "worker_total": 1,
+                    "worker_completed": 1,
+                    "percent": 100,
+                    "timestamp": float(duration or 0.0),
+                    "duration": float(duration or 0.0),
+                    "detected": len(normalized),
+                    "done": True,
+                    "scheduler": pioneer_scheduler,
+                    "visual_scan_source_path": str(scan_filepath),
+                    "visual_scan_proxy": bool(scan_filepath != original_filepath),
+                    "cut_boundary_backend": "ffmpeg_scene_prepass",
+                    "opencv_scan_replaced": True,
+                }
+                if callable(progress_callback):
+                    try:
+                        progress_callback(dict(payload))
+                    except Exception:
+                        pass
+                if callable(completion_callback):
+                    try:
+                        completion_callback(dict(payload))
+                    except Exception:
+                        pass
+                return normalized
+
         high_cost_skip = high_cost_visual_scan_skip_meta(
-            filepath,
+            scan_filepath,
             width=frame_width,
             height=frame_height,
             duration_sec=duration,
@@ -610,8 +707,11 @@ def build_auto_grid_scan_helpers(deps: dict):
         )
         if bool(high_cost_skip.get("skip")):
             audio_rows = list(_scan_audio_gain_rows() or [])
-            _emit_audio_gain_rows(audio_rows)
-            normalized = normalize_cut_boundaries(audio_rows, primary_fps=fps)
+            scene_rows = list(_scan_ffmpeg_scene_rows() or []) if ffmpeg_scene_enabled else []
+            _emit_provisional_rows(audio_rows)
+            _emit_provisional_rows(scene_rows)
+            combined_skip_rows = [*scene_rows, *audio_rows]
+            normalized = normalize_cut_boundaries(combined_skip_rows, primary_fps=fps)
             payload = {
                 "clip_idx": int(clip_idx or 0),
                 "percent": 100,
@@ -621,6 +721,9 @@ def build_auto_grid_scan_helpers(deps: dict):
                 "done": True,
                 "visual_scan_skipped": True,
                 "skip_meta": high_cost_skip,
+                "visual_scan_source_path": str(scan_filepath),
+                "visual_scan_proxy": bool(scan_filepath != original_filepath),
+                "cut_boundary_backend": backend_choice.backend,
                 "scheduler": pioneer_scheduler,
             }
             if callable(progress_callback):
@@ -636,7 +739,7 @@ def build_auto_grid_scan_helpers(deps: dict):
             return normalized
 
         def _scan_range(worker_idx: int, start_frame: int, end_frame: int):
-            worker_cap = cv2.VideoCapture(str(filepath))
+            worker_cap = cv2.VideoCapture(str(scan_filepath))
             if not worker_cap.isOpened():
                 try:
                     worker_cap.release()
@@ -646,13 +749,22 @@ def build_auto_grid_scan_helpers(deps: dict):
             rows_local = []
             prev_gray = None
             last_emit_t = -999999.0
+            sequential_decode = _setting_bool(settings.get("scan_cut_pioneer_sequential_decode_enabled"), False)
             try:
                 frame_no = int(start_frame)
                 sample_idx = 0
+                if sequential_decode:
+                    try:
+                        worker_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+                    except Exception:
+                        sequential_decode = False
                 while frame_no < end_frame:
-                    worker_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+                    if not sequential_decode:
+                        worker_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
                     ok, frame = worker_cap.read()
                     if not ok or frame is None:
+                        if sequential_decode:
+                            break
                         frame_no += step_frames
                         sample_idx += 1
                         continue
@@ -706,6 +818,9 @@ def build_auto_grid_scan_helpers(deps: dict):
                                 "coarse_time": coarse_sec,
                                 "refine_pending": True,
                                 "refine_backend": "gpu_preferred" if cuda_available else "async_cpu",
+                                "source_path": original_filepath,
+                                "visual_scan_source_path": str(scan_filepath),
+                                "visual_scan_proxy": bool(scan_filepath != original_filepath),
                             }
                             rows_local.append(row)
                             last_emit_t = coarse_sec
@@ -715,7 +830,26 @@ def build_auto_grid_scan_helpers(deps: dict):
                                 except Exception:
                                     pass
                     prev_gray = gray
-                    frame_no += step_frames
+                    next_frame_no = frame_no + step_frames
+                    if sequential_decode:
+                        skip_frames = max(0, min(end_frame, next_frame_no) - frame_no - 1)
+                        grab = getattr(worker_cap, "grab", None)
+                        skipped = 0
+                        while skipped < skip_frames:
+                            try:
+                                if callable(grab):
+                                    if not grab():
+                                        break
+                                else:
+                                    ok_skip, _frame_skip = worker_cap.read()
+                                    if not ok_skip:
+                                        break
+                            except Exception:
+                                break
+                            skipped += 1
+                        if skipped < skip_frames:
+                            break
+                    frame_no = next_frame_no
                     sample_idx += 1
             finally:
                 try:
@@ -733,6 +867,9 @@ def build_auto_grid_scan_helpers(deps: dict):
                         "detected": len(rows_local),
                         "worker_idx": worker_idx,
                         "worker_total": pioneer_workers,
+                        "visual_scan_source_path": str(scan_filepath),
+                        "visual_scan_proxy": bool(scan_filepath != original_filepath),
+                        "cut_boundary_backend": backend_choice.backend,
                     })
                 except Exception:
                     pass
@@ -740,9 +877,11 @@ def build_auto_grid_scan_helpers(deps: dict):
 
         if pioneer_workers <= 1 or duration <= scan_interval_sec * 2.0:
             audio_rows = list(_scan_audio_gain_rows() or [])
-            _emit_audio_gain_rows(audio_rows)
+            scene_rows = list(_scan_ffmpeg_scene_rows() or [])
+            _emit_provisional_rows(audio_rows)
+            _emit_provisional_rows(scene_rows)
             rows = _scan_range(0, 0, frame_count)
-            normalized = normalize_cut_boundaries([*(rows or []), *audio_rows], primary_fps=fps)
+            normalized = normalize_cut_boundaries([*(rows or []), *scene_rows, *audio_rows], primary_fps=fps)
             if callable(completion_callback):
                 try:
                     completion_callback(
@@ -754,6 +893,9 @@ def build_auto_grid_scan_helpers(deps: dict):
                             "detected": len(normalized),
                             "done": True,
                             "scheduler": pioneer_scheduler,
+                            "visual_scan_source_path": str(scan_filepath),
+                            "visual_scan_proxy": bool(scan_filepath != original_filepath),
+                            "cut_boundary_backend": backend_choice.backend,
                         }
                     )
                 except Exception:
@@ -762,7 +904,9 @@ def build_auto_grid_scan_helpers(deps: dict):
 
         futures = []
         audio_future = None
+        scene_future = None
         audio_rows = []
+        scene_rows = []
         merged = []
         completed_workers = 0
         step_count = max(1, int(math.ceil(frame_count / max(1, step_frames))))
@@ -776,22 +920,33 @@ def build_auto_grid_scan_helpers(deps: dict):
             for idx, (start_step, end_step) in enumerate(step_slices)
             if end_step > start_step
         ]
-        worker_count = len(worker_ranges) + (1 if audio_gain_enabled else 0)
+        worker_count = len(worker_ranges) + (1 if audio_gain_enabled else 0) + (1 if ffmpeg_scene_enabled else 0)
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="cut-boundary-pioneer") as executor:
             if audio_gain_enabled:
                 audio_future = executor.submit(_scan_audio_gain_rows)
+            if ffmpeg_scene_enabled:
+                scene_future = executor.submit(_scan_ffmpeg_scene_rows)
             for worker_idx, start_frame, end_frame in worker_ranges:
                 futures.append(executor.submit(_scan_range, worker_idx, start_frame, end_frame))
             wait_futures = list(futures)
             if audio_future is not None:
                 wait_futures.append(audio_future)
+            if scene_future is not None:
+                wait_futures.append(scene_future)
             for future in as_completed(wait_futures):
                 if audio_future is not None and future is audio_future:
                     try:
                         audio_rows.extend(list(future.result() or []))
                     except Exception:
                         audio_rows[:] = []
-                    _emit_audio_gain_rows(audio_rows)
+                    _emit_provisional_rows(audio_rows)
+                    continue
+                if scene_future is not None and future is scene_future:
+                    try:
+                        scene_rows.extend(list(future.result() or []))
+                    except Exception:
+                        scene_rows[:] = []
+                    _emit_provisional_rows(scene_rows)
                     continue
                 completed_workers += 1
                 try:
@@ -809,12 +964,15 @@ def build_auto_grid_scan_helpers(deps: dict):
                                 "detected": len(merged),
                                 "done": bool(completed_workers >= len(worker_ranges)),
                                 "scheduler": pioneer_scheduler,
+                                "visual_scan_source_path": str(scan_filepath),
+                                "visual_scan_proxy": bool(scan_filepath != original_filepath),
+                                "cut_boundary_backend": backend_choice.backend,
                             }
                         )
                     except Exception:
                         pass
 
-        combined_rows = [*list(merged or []), *list(audio_rows or [])]
+        combined_rows = [*list(merged or []), *list(scene_rows or []), *list(audio_rows or [])]
         if combined_rows:
             for row in combined_rows:
                 try:
@@ -832,6 +990,9 @@ def build_auto_grid_scan_helpers(deps: dict):
                     "duration": duration,
                     "detected": len(combined_rows),
                     "worker_idx": 0,
+                    "visual_scan_source_path": str(scan_filepath),
+                    "visual_scan_proxy": bool(scan_filepath != original_filepath),
+                    "cut_boundary_backend": backend_choice.backend,
                 })
             except Exception:
                 pass
@@ -867,8 +1028,19 @@ def build_auto_grid_scan_helpers(deps: dict):
         except Exception:
             return normalize_cut_boundaries(provisional_rows or [])
 
+        settings = apply_cut_boundary_backend_settings(settings)
+        original_filepath = str(filepath)
+        backend_choice = select_cut_boundary_backend(original_filepath, settings)
+        scan_filepath = backend_choice.scan_path
         configure_cut_boundary_cv2_threads(cv2, settings)
-        cap = cv2.VideoCapture(str(filepath))
+        cap = cv2.VideoCapture(str(scan_filepath))
+        if not cap.isOpened() and scan_filepath != original_filepath:
+            try:
+                cap.release()
+            except Exception:
+                pass
+            scan_filepath = original_filepath
+            cap = cv2.VideoCapture(str(scan_filepath))
         if not cap.isOpened():
             try:
                 cap.release()
@@ -887,7 +1059,7 @@ def build_auto_grid_scan_helpers(deps: dict):
             fps = normalize_fps(fps)
             duration = frame_count / fps if fps > 0.0 else 0.0
             high_cost_skip = high_cost_visual_scan_skip_meta(
-                filepath,
+                scan_filepath,
                 width=frame_width,
                 height=frame_height,
                 duration_sec=duration,
@@ -902,6 +1074,9 @@ def build_auto_grid_scan_helpers(deps: dict):
                     fixed["visual_verify_skipped"] = True
                     fixed["verify_backend"] = "audio_gain_only_high_cost_skip"
                     fixed["skip_meta"] = dict(high_cost_skip)
+                    fixed["visual_scan_source_path"] = str(scan_filepath)
+                    fixed["visual_scan_proxy"] = bool(scan_filepath != original_filepath)
+                    fixed["cut_boundary_backend"] = backend_choice.backend
                     rows.append(fixed)
                     if callable(found_callback):
                         try:
@@ -944,7 +1119,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                         local_sec = 0.0
                 coarse_frame = max(0, int(round(local_sec * fps)))
                 owns_cap = verify_cap is None
-                local_cap = verify_cap if verify_cap is not None else cv2.VideoCapture(str(filepath))
+                local_cap = verify_cap if verify_cap is not None else cv2.VideoCapture(str(scan_filepath))
                 if local_cap is None:
                     return None
                 if not local_cap.isOpened():
@@ -1003,7 +1178,10 @@ def build_auto_grid_scan_helpers(deps: dict):
                                 "timeline_frame_rate": fps,
                                 "clip_idx": int(clip_idx or 0),
                                 "clip_local_sec": provisional_local_sec,
-                                "source_path": str(filepath),
+                                "source_path": original_filepath,
+                                "visual_scan_source_path": str(scan_filepath),
+                                "visual_scan_proxy": bool(scan_filepath != original_filepath),
+                                "cut_boundary_backend": backend_choice.backend,
                                 "score": float(verified.get("provisional_score", hint.get("score", 0.0)) or 0.0),
                                 "regions": int(verified.get("provisional_regions", hint.get("regions", 0)) or 0),
                                 "reason": str(verified.get("reason") or "rollback_relocated_provisional"),
@@ -1039,7 +1217,10 @@ def build_auto_grid_scan_helpers(deps: dict):
                         "timeline_frame_rate": fps,
                         "clip_idx": int(clip_idx or 0),
                         "clip_local_sec": refined_local_sec,
-                        "source_path": str(filepath),
+                        "source_path": original_filepath,
+                        "visual_scan_source_path": str(scan_filepath),
+                        "visual_scan_proxy": bool(scan_filepath != original_filepath),
+                        "cut_boundary_backend": backend_choice.backend,
                         "score": float(verified.get("score", fixed.get("score", 0.0)) or 0.0),
                         "regions": int(verified.get("regions", fixed.get("regions", 0)) or 0),
                         "color_score": float(verified.get("color_score", 0.0) or 0.0),
@@ -1098,7 +1279,7 @@ def build_auto_grid_scan_helpers(deps: dict):
 
             def _verify_batch(start_idx: int, end_idx: int):
                 local_results = []
-                verify_cap = cv2.VideoCapture(str(filepath))
+                verify_cap = cv2.VideoCapture(str(scan_filepath))
                 try:
                     if not verify_cap.isOpened():
                         return [None for _ in verify_rows[start_idx:end_idx]]

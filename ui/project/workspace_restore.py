@@ -80,7 +80,7 @@ class WorkspaceMixin:
 
     def _restore_workspace(self, editor, proj_path):
         try:
-            project_data = load_project(proj_path)
+            project_data = load_project(proj_path, hydrate_text_assets=False)
             if not project_data:
                 return
 
@@ -91,9 +91,6 @@ class WorkspaceMixin:
 
             def _apply():
                 try:
-                    if hasattr(editor, "timeline") and hasattr(editor.timeline, "fit_to_view"):
-                        editor.timeline.fit_to_view()
-
                     splitter_sizes = workspace.get("splitter_sizes", [])
                     if splitter_sizes and hasattr(editor, "splitter"):
                         editor.splitter.setSizes(splitter_sizes)
@@ -111,7 +108,17 @@ class WorkspaceMixin:
                             editor.video_player.seek(playhead)
                         if hasattr(editor, "timeline"):
                             editor.timeline.set_playhead(playhead)
-                            editor.timeline.center_to_sec(playhead, smooth=False)
+
+                    if hasattr(editor, "timeline"):
+                        if hasattr(editor.timeline, "show_time_window_seconds"):
+                            editor.timeline.show_time_window_seconds(
+                                15.0,
+                                center_sec=playhead if playhead > 0 else None,
+                            )
+                        elif hasattr(editor.timeline, "fit_to_view"):
+                            editor.timeline.fit_to_view()
+                            if playhead > 0:
+                                editor.timeline.center_to_sec(playhead, smooth=False)
 
                     block_num = workspace.get("last_cursor_block", 0)
                     if block_num > 0 and hasattr(editor, "text_edit"):
@@ -130,7 +137,9 @@ class WorkspaceMixin:
 
     def _fit_timeline_on_start(self, editor):
         timeline = getattr(editor, "timeline", None)
-        if timeline is not None and hasattr(timeline, "fit_to_view"):
+        if timeline is not None and hasattr(timeline, "schedule_time_window_seconds"):
+            timeline.schedule_time_window_seconds(15.0, delays=(500,))
+        elif timeline is not None and hasattr(timeline, "fit_to_view"):
             QTimer.singleShot(500, timeline.fit_to_view)
 
     def _fit_timeline_if_missing_zoom(self, editor):

@@ -32,7 +32,13 @@ class SettingsRoughcutMixin:
 
         provider_row = QHBoxLayout()
         self.combo_roughcut_llm_provider = QComboBox()
-        for label, value in (("사용 안 함", "none"), ("Ollama", "ollama"), ("OpenAI", "openai"), ("Gemini", "google")):
+        for label, value in (
+            ("사용 안 함", "none"),
+            ("llama.cpp / GGUF", "llama_cpp"),
+            ("Ollama", "ollama"),
+            ("OpenAI", "openai"),
+            ("Gemini", "google"),
+        ):
             self.combo_roughcut_llm_provider.addItem(label, value)
         self._set_combo_data(self.combo_roughcut_llm_provider, roughcut_provider if roughcut_enabled else "none")
         provider_row.addWidget(self.combo_roughcut_llm_provider)

@@ -90,12 +90,8 @@ class VideoPlayerWidgetTests(unittest.TestCase):
              patch("ui.editor.video_playback_backend._vlc_available", return_value=True):
             choice = choose_video_backend()
 
-        if config.IS_MAC:
-            self.assertEqual(choice.name, "qt")
-            self.assertEqual(choice.reason, "mac_low_memory_default")
-        else:
-            self.assertEqual(choice.name, "mpv")
-            self.assertEqual(choice.reason, "preferred_lightweight_gpu_backend")
+        self.assertEqual(choice.name, "mpv")
+        self.assertEqual(choice.reason, "preferred_lightweight_gpu_backend")
 
     def test_video_backend_uses_vlc_when_mpv_is_unavailable(self):
         with patch.dict(os.environ, {"AI_SUBTITLE_VIDEO_BACKEND": "auto"}, clear=True), \
@@ -105,12 +101,8 @@ class VideoPlayerWidgetTests(unittest.TestCase):
              patch("ui.editor.video_playback_backend._vlc_available", return_value=True):
             choice = choose_video_backend()
 
-        if config.IS_MAC:
-            self.assertEqual(choice.name, "qt")
-            self.assertEqual(choice.reason, "mac_low_memory_default")
-        else:
-            self.assertEqual(choice.name, "vlc")
-            self.assertEqual(choice.reason, "libvlc_fallback")
+        self.assertEqual(choice.name, "vlc")
+        self.assertEqual(choice.reason, "libvlc_fallback")
 
     def test_video_backend_can_be_forced_by_render_settings(self):
         with patch.dict(os.environ, {}, clear=True), \
@@ -358,7 +350,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget._last_provider_refresh_at = 0.0
             shared[0]["text"] = "수정 자막"
 
-            with patch.object(widget, "_segments_signature", wraps=widget._segments_signature) as signature_mock:
+            with patch.object(widget, "_normalized_segments_context", wraps=widget._normalized_segments_context) as signature_mock:
                 widget._provider_refresh_requested = True
                 widget._refresh_provider_segments(force=False)
 
@@ -366,6 +358,28 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             signature_mock.assert_called()
             self.assertEqual(widget._last_sub, "수정 자막")
             self.assertEqual(widget.sub_label.text(), "수정 자막")
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_provider_refresh_skips_full_context_build_when_signature_is_unchanged(self):
+        widget = VideoPlayerWidget()
+        shared = [{"start": 0.0, "end": 2.0, "text": "현재 자막"}]
+        provider = Mock(return_value=shared)
+        try:
+            widget.set_subtitle_provider(provider)
+            provider.reset_mock()
+            widget._last_provider_refresh_at = 0.0
+
+            with patch.object(widget, "_segments_signature_fast", wraps=widget._segments_signature_fast) as fast_signature, \
+                 patch.object(widget, "_normalized_segments_context", side_effect=AssertionError("unchanged provider should not rebuild subtitle context")):
+                widget._provider_refresh_requested = True
+                widget._refresh_provider_segments(force=False)
+
+            provider.assert_called_once()
+            fast_signature.assert_called_once_with(shared)
+            self.assertFalse(widget._provider_refresh_requested)
         finally:
             widget.close()
             widget.deleteLater()
@@ -383,6 +397,88 @@ class VideoPlayerWidgetTests(unittest.TestCase):
 
             self.assertEqual(widget._last_sub, "수정 자막")
             self.assertEqual(widget.sub_label.text(), "수정 자막")
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_context_refresh_skips_full_context_build_when_signature_is_unchanged(self):
+        widget = VideoPlayerWidget()
+        shared = [{"start": 0.0, "end": 2.0, "text": "현재 자막"}]
+        try:
+            widget.set_context_segments(shared)
+            widget.set_subtitle_display_time(0.5)
+
+            with patch.object(widget, "_segments_signature_fast", wraps=widget._segments_signature_fast) as fast_signature, \
+                 patch.object(widget, "_normalized_segments_context", side_effect=AssertionError("unchanged context should not rebuild subtitle rows")):
+                widget.refresh_subtitle_context(shared)
+
+            fast_signature.assert_called_once_with(shared)
+            self.assertEqual(widget._last_sub, "현재 자막")
+            self.assertEqual(widget.sub_label.text(), "현재 자막")
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_set_segments_skips_sort_for_already_sorted_large_context(self):
+        widget = VideoPlayerWidget()
+        segments = [
+            {"start": float(i), "end": float(i) + 0.8, "text": f"자막 {i}"}
+            for i in range(1000)
+        ]
+        try:
+            with patch("builtins.sorted", side_effect=AssertionError("sorted context should not be resorted")):
+                changed = widget._set_segments(segments)
+
+            self.assertTrue(changed)
+            self.assertEqual(len(widget.segments), 1000)
+            self.assertEqual(widget._subtitle_starts[500], 500.0)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_video_subtitle_context_keeps_lightweight_overlay_rows(self):
+        widget = VideoPlayerWidget()
+        heavy_payload = {"confidence_label": "green", "history": ["x" * 1024]}
+        segments = [
+            {
+                "start": 0.0,
+                "end": 2.0,
+                "text": "현재 자막",
+                "speaker": "SPEAKER_00",
+                "quality": heavy_payload,
+                "stt_candidates": [{"text": "후보", "score": 0.9}],
+            }
+        ]
+        try:
+            changed = widget._set_segments(segments)
+
+            self.assertTrue(changed)
+            self.assertEqual(widget.segments, [{"start": 0.0, "end": 2.0, "text": "현재 자막"}])
+            self.assertNotIn("quality", widget.segments[0])
+            self.assertNotIn("stt_candidates", widget.segments[0])
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_subtitle_lookup_uses_parallel_arrays_during_playback(self):
+        class GuardedSegments(list):
+            def __getitem__(self, index):
+                raise AssertionError("subtitle playback lookup should not read segment dicts")
+
+        widget = VideoPlayerWidget()
+        try:
+            widget._set_segments([
+                {"start": 0.0, "end": 1.0, "text": "첫 자막"},
+                {"start": 1.0, "end": 2.0, "text": "둘째 자막"},
+            ])
+            widget.segments = GuardedSegments(widget.segments)
+
+            self.assertEqual(widget._find_subtitle_at(1.25), "둘째 자막")
+            self.assertEqual(widget._find_subtitle_at(1.50), "둘째 자막")
         finally:
             widget.close()
             widget.deleteLater()
@@ -427,6 +523,50 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertEqual(widget.current_frame, 24)
             self.assertAlmostEqual(widget.current_time, 1.0, places=6)
             set_position.assert_called_once_with(1000)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_initial_paused_preview_seek_keeps_thumbnail_until_video_surface_is_primed(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
+                widget._current_source_path = f.name
+                widget._rebuild_frame_time_map(duration=10.0, fps=30.0)
+                widget._media_source_loaded = True
+                widget._video_surface_primed = False
+
+                with patch.object(widget.media_player, "setPosition") as set_position, \
+                     patch.object(widget, "_hide_thumbnail") as hide_thumbnail, \
+                     patch.object(widget, "show_cached_thumbnail_at", return_value=True) as show_thumb:
+                    widget.preview_seek(3.0)
+
+                set_position.assert_called_once_with(3000)
+                hide_thumbnail.assert_not_called()
+                show_thumb.assert_called_once_with(f.name, 3.0, width=640)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_primed_preview_seek_uses_video_surface_instead_of_thumbnail(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
+                widget._current_source_path = f.name
+                widget._rebuild_frame_time_map(duration=10.0, fps=30.0)
+                widget._media_source_loaded = True
+                widget._video_surface_primed = True
+
+                with patch.object(widget.media_player, "setPosition") as set_position, \
+                     patch.object(widget, "_hide_thumbnail") as hide_thumbnail, \
+                     patch.object(widget, "show_cached_thumbnail_at", return_value=True) as show_thumb:
+                    widget.preview_seek(3.0)
+
+                set_position.assert_called_once_with(3000)
+                hide_thumbnail.assert_called_once()
+                show_thumb.assert_not_called()
         finally:
             widget.close()
             widget.deleteLater()

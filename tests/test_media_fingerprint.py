@@ -1,8 +1,9 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from core.media_fingerprint import media_file_fingerprint
+from core.media_fingerprint import _sample_digest_for_stat, media_file_fingerprint, media_fingerprint_digest
 
 
 class MediaFingerprintTests(unittest.TestCase):
@@ -20,6 +21,21 @@ class MediaFingerprintTests(unittest.TestCase):
             second = media_file_fingerprint(path, sample_bytes=1024, include_samples=True)
 
             self.assertNotEqual(first, second)
+
+    def test_sample_digest_is_reused_for_same_file_stat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "same_name.mp4")
+            with open(path, "wb") as handle:
+                handle.write(b"A" * 4096)
+            _sample_digest_for_stat.cache_clear()
+
+            with patch("builtins.open", wraps=open) as open_spy:
+                first = media_file_fingerprint(path, sample_bytes=1024, include_samples=True)
+                digest = media_fingerprint_digest(path, sample_bytes=1024, include_samples=True)
+
+            self.assertTrue(first)
+            self.assertTrue(digest)
+            self.assertEqual(open_spy.call_count, 1)
 
 
 if __name__ == "__main__":

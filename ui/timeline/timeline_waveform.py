@@ -17,6 +17,7 @@ from core.media_fingerprint import media_fingerprint_digest
 
 WAVEFORM_CACHE_SCHEMA = "ai_subtitle_studio.waveform_cache.v1"
 WAVEFORM_SAMPLE_RATE = 2000
+WAVEFORM_POINTS_PER_SECOND = 100
 
 
 def _safe_media_base_name(path: str) -> str:
@@ -96,6 +97,52 @@ def save_waveform_cache(path: str, waveform: np.ndarray, duration: float) -> Non
         pass
 
 
+def _decode_f32le_samples(raw: bytes | bytearray | memoryview | None) -> np.ndarray:
+    if not raw:
+        return np.array([], dtype=np.float32)
+    return np.frombuffer(raw, dtype=np.float32).copy()
+
+
+def _downsample_waveform_samples(samples: np.ndarray, *, duration: float | None = None) -> tuple[np.ndarray, float]:
+    samples = np.asarray(samples, dtype=np.float32)
+    if samples.size < 2:
+        return np.array([], dtype=np.float32), 0.0
+
+    dur = float(duration or 0.0)
+    if dur <= 0.0:
+        dur = samples.size / float(WAVEFORM_SAMPLE_RATE)
+    total_px = max(1, int(dur * WAVEFORM_POINTS_PER_SECOND))
+    chunk = max(1, samples.size // total_px)
+    trim = (samples.size // chunk) * chunk
+    downs = np.abs(samples[:trim].reshape(-1, chunk)).max(axis=1)
+
+    mx = float(downs.max()) if downs.size else 0.0
+    if mx > 1e-6:
+        downs = downs / mx
+
+    return downs[:total_px].astype(np.float32), float(dur)
+
+
+def _ffmpeg_waveform_cmd(path: str) -> list[str]:
+    return [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-i",
+        path,
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(WAVEFORM_SAMPLE_RATE),
+        "-f",
+        "f32le",
+        "-loglevel",
+        "error",
+        "pipe:1",
+    ]
+
+
 class WaveformWorker(QThread):
     ready = pyqtSignal(np.ndarray, float)
 
@@ -147,7 +194,6 @@ class WaveformWorker(QThread):
             return 0.0
 
     def run(self):
-        tmp = None
         try:
             cached = load_waveform_cache(self._path)
             if cached is not None and not self.isInterruptionRequested():
@@ -159,60 +205,19 @@ class WaveformWorker(QThread):
                 return
             timeout = max(60, min(600, int(duration * 0.5) + 30))
 
-            fd, tmp = tempfile.mkstemp(suffix=".raw")
-            os.close(fd)
-
-            self._run_cmd(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    self._path,
-                    "-vn",
-                    "-ac",
-                    "1",
-                    "-ar",
-                    "2000",
-                    "-f",
-                    "f32le",
-                    "-loglevel",
-                    "error",
-                    tmp,
-                ],
-                timeout=timeout,
-            )
+            raw = self._run_cmd(_ffmpeg_waveform_cmd(self._path), timeout=timeout)
             if self.isInterruptionRequested():
                 return
-
-            if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
+            samples = _decode_f32le_samples(raw)
+            ready, dur = _downsample_waveform_samples(samples)
+            if ready.size <= 0:
                 return
-
-            samples = np.fromfile(tmp, dtype=np.float32)
-            if len(samples) < 2:
-                return
-
-            dur = len(samples) / 2000.0
-            total_px = max(1, int(dur * 100))
-            chunk = max(1, len(samples) // total_px)
-            trim = (len(samples) // chunk) * chunk
-            downs = np.abs(samples[:trim].reshape(-1, chunk)).max(axis=1)
-
-            mx = float(downs.max())
-            if mx > 1e-6:
-                downs = downs / mx
 
             if not self.isInterruptionRequested():
-                ready = downs[:total_px].astype(np.float32)
                 save_waveform_cache(self._path, ready, float(dur))
                 self.ready.emit(ready, float(dur))
         except Exception:
             pass
-        finally:
-            if tmp:
-                try:
-                    os.remove(tmp)
-                except Exception:
-                    pass
 
 class MultiClipWaveformWorker(QThread):
     clip_ready = pyqtSignal(int, np.ndarray)
@@ -258,13 +263,12 @@ class MultiClipWaveformWorker(QThread):
             return
 
         total_dur = self._clips[-1]["end"]
-        total_px = max(1, int(total_dur * 100))
+        total_px = max(1, int(total_dur * WAVEFORM_POINTS_PER_SECOND))
         combined = np.zeros(total_px, dtype=np.float32)
 
         for idx, clip in enumerate(self._clips):
             if self.isInterruptionRequested():
                 return
-            tmp = None
             try:
                 clip_file = clip["file"]
                 clip_start = clip["start"]
@@ -273,8 +277,8 @@ class MultiClipWaveformWorker(QThread):
                 cached = load_waveform_cache(clip_file)
                 if cached is not None:
                     downs, _dur = cached
-                    clip_px = max(1, int(clip_dur * 100))
-                    start_px = int(clip_start * 100)
+                    clip_px = max(1, int(clip_dur * WAVEFORM_POINTS_PER_SECOND))
+                    start_px = int(clip_start * WAVEFORM_POINTS_PER_SECOND)
                     end_px = min(start_px + min(len(downs), clip_px), total_px)
                     combined[start_px:end_px] = downs[: end_px - start_px]
                     if not self.isInterruptionRequested():
@@ -284,51 +288,17 @@ class MultiClipWaveformWorker(QThread):
                 cleaned_wav = fingerprint_cleaned_wav_path(clip_file)
                 src = cleaned_wav if os.path.exists(cleaned_wav) else clip_file
 
-                fd, tmp = tempfile.mkstemp(suffix=".raw")
-                os.close(fd)
-
-                self._run_cmd(
-                    [
-                        "ffmpeg",
-                        "-y",
-                        "-i",
-                        src,
-                        "-vn",
-                        "-ac",
-                        "1",
-                        "-ar",
-                        "2000",
-                        "-f",
-                        "f32le",
-                        "-loglevel",
-                        "error",
-                        tmp,
-                    ],
-                    timeout=max(60, int(clip_dur * 0.5) + 30),
-                )
+                raw = self._run_cmd(_ffmpeg_waveform_cmd(src), timeout=max(60, int(clip_dur * 0.5) + 30))
                 if self.isInterruptionRequested():
                     return
-
-                if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
+                samples = _decode_f32le_samples(raw)
+                downs, _dur = _downsample_waveform_samples(samples, duration=clip_dur)
+                if downs.size <= 0:
                     continue
 
-                samples = np.fromfile(tmp, dtype=np.float32)
-                if len(samples) < 2:
-                    continue
+                save_waveform_cache(clip_file, downs[: max(1, int(clip_dur * WAVEFORM_POINTS_PER_SECOND))], float(clip_dur))
 
-                clip_px = max(1, int(clip_dur * 100))
-                chunk = max(1, len(samples) // clip_px)
-                trim = (len(samples) // chunk) * chunk
-                downs = np.abs(samples[:trim].reshape(-1, chunk)).max(axis=1)
-
-                mx = float(downs.max())
-                if mx > 1e-6:
-                    downs = downs / mx
-
-                downs = downs.astype(np.float32)
-                save_waveform_cache(clip_file, downs[: max(1, int(clip_dur * 100))], float(clip_dur))
-
-                start_px = int(clip_start * 100)
+                start_px = int(clip_start * WAVEFORM_POINTS_PER_SECOND)
                 end_px = min(start_px + len(downs), total_px)
                 combined[start_px:end_px] = downs[: end_px - start_px]
 
@@ -337,12 +307,6 @@ class MultiClipWaveformWorker(QThread):
 
             except Exception:
                 pass
-            finally:
-                if tmp:
-                    try:
-                        os.remove(tmp)
-                    except Exception:
-                        pass
 
         if not self.isInterruptionRequested():
             self.all_ready.emit(combined, total_dur)

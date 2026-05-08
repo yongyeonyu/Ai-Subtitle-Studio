@@ -11,7 +11,9 @@ from core.subtitle_quality.models import (
 from core.subtitle_quality.hallucination_detector import estimate_hallucination_risk
 from core.subtitle_quality.vad_alignment_checker import (
     annotate_segment_vad_alignment,
+    annotate_segments_vad_alignment,
     apply_review_vad_settings,
+    adjust_segments_to_vad_boundaries,
     vad_overlap_ratio,
 )
 
@@ -71,6 +73,32 @@ class SubtitleQualityModelsTest(unittest.TestCase):
         self.assertEqual(vad_overlap_ratio(segment, vad), 0.5)
         self.assertEqual(annotated["quality"]["vad_alignment_score"], 50.0)
         self.assertEqual(annotated["asr_metadata"]["vad_alignment"]["vad_aligned"], True)
+
+    def test_vad_alignment_adjustment_uses_prepared_overlap_path(self):
+        segments = [{"start": 1.9, "end": 3.2, "text": "음성"}]
+        vad = [{"start": 2.0, "end": 3.0}]
+
+        adjusted, changed = adjust_segments_to_vad_boundaries(segments, vad, max_shift_sec=0.3, edge_pad_sec=0.05)
+
+        self.assertEqual(changed, 1)
+        self.assertEqual(adjusted[0]["start"], 1.95)
+        self.assertEqual(adjusted[0]["end"], 3.05)
+        self.assertEqual(adjusted[0]["quality"]["vad_alignment_score"], 90.909)
+
+    def test_batch_vad_alignment_matches_single_segment_annotations(self):
+        segments = [
+            {"start": 0.0, "end": 2.0, "text": "앞"},
+            {"start": 3.0, "end": 5.0, "text": "뒤"},
+        ]
+        vad = [{"start": 1.0, "end": 1.5}, {"start": 3.5, "end": 4.5}]
+
+        batch = annotate_segments_vad_alignment(segments, vad)
+        single = [annotate_segment_vad_alignment(segment, vad) for segment in segments]
+
+        self.assertEqual(
+            [item["asr_metadata"]["vad_alignment"] for item in batch],
+            [item["asr_metadata"]["vad_alignment"] for item in single],
+        )
 
     def test_hallucination_risk_combines_asr_and_vad(self):
         segment = {

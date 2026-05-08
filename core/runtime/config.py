@@ -1,5 +1,5 @@
-# Version: 03.24.03
-# Phase: PHASE9_EditorPerformanceRelease
+# Version: 03.25.00
+# Phase: PHASE10_NativePerformanceUiRelease
 
 
 # === OS / Platform Detection ===
@@ -12,7 +12,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.24.03"
+APP_VERSION = "03.25.00"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -89,6 +89,13 @@ DEFAULT_ADV_SETTINGS = {
     "subtitle_common_split_hard_max_duration_sec": 5.5,
     "llm_threads_auto_enabled": True,
     "llm_workers_auto_enabled": True,
+    "runtime_backend_autotune_enabled": True,
+    "stt_backend_policy": "auto",
+    "vad_backend_policy": "auto",
+    "cut_boundary_backend_policy": "auto",
+    "audio_extract_backend_policy": "auto",
+    "llm_backend_policy": "auto",
+    "editor_render_backend_policy": "auto",
     "runtime_scheduler_ramp_up_enabled": True,
     "runtime_scheduler_ramp_initial_sec": 45.0,
     "runtime_scheduler_ramp_step_sec": 60.0,

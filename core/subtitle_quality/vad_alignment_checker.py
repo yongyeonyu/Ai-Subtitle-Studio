@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from typing import Any
+
+from core.native_cut_boundary import interval_overlaps as _native_interval_overlaps
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -35,28 +38,58 @@ def vad_overlap_seconds(
     end: float,
     vad_segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
 ) -> float:
+    return _vad_overlap_seconds_prepared(start, end, normalize_vad_segments(vad_segments))
+
+
+def _vad_overlap_seconds_prepared(
+    start: float,
+    end: float,
+    vad_segments: list[dict[str, Any]],
+) -> float:
+    start = max(0.0, _as_float(start, 0.0))
+    end = max(start, _as_float(end, start))
+    if end <= start or not vad_segments:
+        return 0.0
+    try:
+        native = _native_interval_overlaps(
+            [start],
+            [end],
+            [float(vad["start"]) for vad in vad_segments],
+            [float(vad["end"]) for vad in vad_segments],
+        )
+        if native is not None:
+            return float(native[0] if native else 0.0)
+    except Exception:
+        pass
+    return _vad_overlap_seconds_python_prepared(start, end, vad_segments)
+
+
+def _vad_overlap_seconds_python_prepared(
+    start: float,
+    end: float,
+    vad_segments: list[dict[str, Any]],
+) -> float:
     overlap = 0.0
-    for vad in normalize_vad_segments(vad_segments):
+    for vad in vad_segments:
         overlap += max(0.0, min(end, vad["end"]) - max(start, vad["start"]))
     return overlap
 
 
-def vad_alignment_info(
-    segment: dict[str, Any],
-    vad_segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+def _vad_alignment_info_from_overlap(
+    start: float,
+    end: float,
+    overlap: float,
+    *,
+    has_vad: bool,
 ) -> dict[str, Any]:
-    start = _as_float(segment.get("start"), 0.0)
-    end = _as_float(segment.get("end"), start)
     duration = max(0.0, end - start)
-    if duration <= 0.0 or not vad_segments:
+    if duration <= 0.0 or not has_vad:
         return {
             "vad_overlap_ratio": None,
             "vad_overlap_sec": 0.0,
             "vad_duration_sec": round(duration, 6),
             "vad_aligned": None,
         }
-
-    overlap = vad_overlap_seconds(start, end, vad_segments)
     ratio = round(max(0.0, min(1.0, overlap / duration)), 6)
     return {
         "vad_overlap_ratio": ratio,
@@ -64,6 +97,27 @@ def vad_alignment_info(
         "vad_duration_sec": round(duration, 6),
         "vad_aligned": ratio >= 0.35,
     }
+
+
+def vad_alignment_info(
+    segment: dict[str, Any],
+    vad_segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> dict[str, Any]:
+    return _vad_alignment_info_prepared(segment, normalize_vad_segments(vad_segments))
+
+
+def _vad_alignment_info_prepared(
+    segment: dict[str, Any],
+    vad_segments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    start = _as_float(segment.get("start"), 0.0)
+    end = _as_float(segment.get("end"), start)
+    duration = max(0.0, end - start)
+    if duration <= 0.0 or not vad_segments:
+        return _vad_alignment_info_from_overlap(start, end, 0.0, has_vad=False)
+
+    overlap = _vad_overlap_seconds_prepared(start, end, vad_segments)
+    return _vad_alignment_info_from_overlap(start, end, overlap, has_vad=True)
 
 
 def vad_overlap_ratio(segment: dict[str, Any], vad_segments: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> float | None:
@@ -74,8 +128,18 @@ def annotate_segment_vad_alignment(
     segment: dict[str, Any],
     vad_segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
 ) -> dict[str, Any]:
+    return _annotate_segment_vad_alignment_prepared(segment, normalize_vad_segments(vad_segments))
+
+
+def _annotate_segment_vad_alignment_prepared(
+    segment: dict[str, Any],
+    vad_segments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return _annotate_segment_vad_alignment_with_info(segment, _vad_alignment_info_prepared(segment, vad_segments))
+
+
+def _annotate_segment_vad_alignment_with_info(segment: dict[str, Any], info: dict[str, Any]) -> dict[str, Any]:
     out = dict(segment or {})
-    info = vad_alignment_info(out, vad_segments)
     asr_metadata = dict(out.get("asr_metadata") or {})
     asr_metadata["vad_alignment"] = info
     out["asr_metadata"] = asr_metadata
@@ -93,6 +157,48 @@ def annotate_segment_vad_alignment(
     return out
 
 
+def annotate_segments_vad_alignment(
+    segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    vad_segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> list[dict[str, Any]]:
+    items = [dict(segment or {}) for segment in (segments or ())]
+    vad = normalize_vad_segments(vad_segments)
+    if not items:
+        return []
+
+    starts: list[float] = []
+    ends: list[float] = []
+    for item in items:
+        start = max(0.0, _as_float(item.get("start"), 0.0))
+        end = max(start, _as_float(item.get("end"), start))
+        starts.append(start)
+        ends.append(end)
+
+    overlaps: list[float] | None = None
+    if vad:
+        try:
+            native = _native_interval_overlaps(
+                starts,
+                ends,
+                [float(v["start"]) for v in vad],
+                [float(v["end"]) for v in vad],
+            )
+            if native is not None and len(native) == len(items):
+                overlaps = [float(value) for value in native]
+        except Exception:
+            overlaps = None
+        if overlaps is None:
+            overlaps = [_vad_overlap_seconds_python_prepared(start, end, vad) for start, end in zip(starts, ends)]
+    else:
+        overlaps = [0.0 for _ in items]
+
+    annotated: list[dict[str, Any]] = []
+    for item, start, end, overlap in zip(items, starts, ends, overlaps):
+        info = _vad_alignment_info_from_overlap(start, end, overlap, has_vad=bool(vad))
+        annotated.append(_annotate_segment_vad_alignment_with_info(item, info))
+    return annotated
+
+
 def adjust_segments_to_vad_boundaries(
     segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     vad_segments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
@@ -101,12 +207,22 @@ def adjust_segments_to_vad_boundaries(
     edge_pad_sec: float = 0.04,
 ) -> tuple[list[dict[str, Any]], int]:
     """Snap subtitle edges to nearby VAD speech boundaries without stretching rows."""
-    vad = normalize_vad_segments(vad_segments)
+    vad = sorted(normalize_vad_segments(vad_segments), key=lambda item: (item["start"], item["end"]))
     if not segments or not vad:
         return [dict(seg) for seg in (segments or [])], 0
 
     max_shift = max(0.0, _as_float(max_shift_sec, 0.7))
     pad = max(0.0, _as_float(edge_pad_sec, 0.04))
+    vad_starts = [float(item["start"]) for item in vad]
+    max_vad_duration = max((float(item["end"]) - float(item["start"]) for item in vad), default=0.0)
+
+    def _nearby_refs(start: float, end: float, window: float) -> list[dict[str, Any]]:
+        lower = max(0.0, start - window)
+        upper = end + window
+        lo = bisect_left(vad_starts, max(0.0, lower - max_vad_duration))
+        hi = bisect_right(vad_starts, upper)
+        return [v for v in vad[lo:hi] if v["end"] >= lower and v["start"] <= upper]
+
     adjusted: list[dict[str, Any]] = []
     changed = 0
 
@@ -118,8 +234,8 @@ def adjust_segments_to_vad_boundaries(
             adjusted.append(out)
             continue
 
-        overlaps = [v for v in vad if v["end"] >= start and v["start"] <= end]
-        nearby = [v for v in vad if v["end"] >= start - max_shift and v["start"] <= end + max_shift]
+        overlaps = _nearby_refs(start, end, 0.0)
+        nearby = _nearby_refs(start, end, max_shift)
         refs = overlaps or nearby
         if not refs:
             adjusted.append(out)
@@ -151,7 +267,7 @@ def adjust_segments_to_vad_boundaries(
             out["asr_metadata"] = meta
         out["start"] = round(new_start, 3)
         out["end"] = round(new_end, 3)
-        adjusted.append(annotate_segment_vad_alignment(out, vad))
+        adjusted.append(out)
 
     adjusted.sort(key=lambda item: (_as_float(item.get("start")), _as_float(item.get("end"))))
     for idx in range(1, len(adjusted)):
@@ -159,6 +275,7 @@ def adjust_segments_to_vad_boundaries(
         cur = adjusted[idx]
         if _as_float(prev.get("end")) > _as_float(cur.get("start")):
             prev["end"] = round(max(_as_float(prev.get("start")) + 0.05, _as_float(cur.get("start")) - 0.02), 3)
+    adjusted = annotate_segments_vad_alignment(adjusted, vad)
     return adjusted, changed
 
 

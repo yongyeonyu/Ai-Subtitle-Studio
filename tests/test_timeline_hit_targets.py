@@ -25,6 +25,7 @@ from ui.timeline.timeline_constants import (
     WAVE_H,
 )
 from ui.timeline.timeline_paint import (
+    build_stt_selection_index,
     stt_candidate_selected,
     stt_candidate_selected_by_llm,
     stt_candidate_selection_state,
@@ -232,6 +233,24 @@ class TimelineHitTargetTests(unittest.TestCase):
 
         self.assertIs(canvas._speaker_lane_seg_at(canvas._x(1.5), y), canvas.segments[0])
         self.assertIsNone(canvas._speaker_lane_seg_at(canvas._x(1.05), y))
+
+    def test_speaker_hit_rect_reuses_settings_and_rect_cache(self):
+        canvas = self._canvas()
+        canvas.segments[0]["speaker"] = "00"
+        settings = {
+            "spk1_id": "00",
+            "spk1_name": "주인공",
+            "spk1_color": "#579DFF",
+            "max_speakers": 1,
+        }
+
+        with patch("ui.timeline.timeline_input.current_speaker_settings", return_value=settings) as current_settings:
+            first = canvas._speaker_lane_hit_rect_for_seg(canvas.segments[0])
+            second = canvas._speaker_lane_hit_rect_for_seg(canvas.segments[0])
+
+        self.assertEqual(first, second)
+        self.assertEqual(current_settings.call_count, 1)
+        self.assertEqual(len(getattr(canvas, "_speaker_hit_rect_cache", {}) or {}), 1)
 
     def test_gap_hit_target_detects_silent_segment(self):
         canvas = self._canvas()
@@ -785,6 +804,39 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertEqual(stt_candidate_selection_state(stt1, [final]), "manual")
         self.assertTrue(stt_candidate_selected(stt1, [final]))
         self.assertTrue(stt_candidate_unselected(stt2, [final]))
+
+    def test_indexed_stt_candidate_selection_matches_linear_scan(self):
+        finals = [
+            {"start": float(i * 2), "end": float(i * 2 + 1), "text": f"final {i}"}
+            for i in range(500)
+        ]
+        finals.append(
+            {
+                "start": 777.05,
+                "end": 778.05,
+                "text": "선택",
+                "stt_ensemble_llm_selected_source": "STT2",
+                "stt_candidates": [{"source": "STT2", "text": "STT2 후보"}],
+            }
+        )
+        candidate = {
+            "start": 777.0,
+            "end": 778.0,
+            "text": "STT2 후보",
+            "stt_preview_source": "STT2",
+            "stt_pending": True,
+        }
+        index = build_stt_selection_index(finals)
+
+        self.assertEqual(stt_candidate_selection_state(candidate, finals), "llm")
+        self.assertEqual(stt_candidate_selection_state(candidate, finals, index), "llm")
+        self.assertEqual(
+            stt_candidate_selection_state({**candidate, "stt_preview_source": "STT1"}, finals, index),
+            "unselected",
+        )
+        far_candidate = {**candidate, "start": 9999.0, "end": 10000.0}
+        self.assertEqual(stt_candidate_selection_state(far_candidate, finals), "")
+        self.assertEqual(stt_candidate_selection_state(far_candidate, finals, index), "")
 
     def test_manual_stt_candidate_selection_removes_selected_preview_highlight(self):
         class DummyScroll:

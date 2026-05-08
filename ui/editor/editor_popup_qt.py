@@ -9,6 +9,7 @@ from PyQt6.QtCore    import Qt
 from PyQt6.QtGui     import QTextCursor, QFont
 
 from core.runtime import config
+from ui.dialogs.popup_dismiss import install_outside_click_dismiss, uninstall_outside_click_dismiss
 
 class EditorPopup(QWidget):
     """우클릭 → 즉시 텍스트 입력창 표시 (메뉴 없음)."""
@@ -84,6 +85,7 @@ class EditorPopup(QWidget):
         self.show()
         self.raise_()
         self._entry.setFocus()
+        install_outside_click_dismiss(self, lambda: self.close_popup(refocus=False), consume=True)
 
     def navigate(self, direction):
         pass  
@@ -132,6 +134,7 @@ class EditorPopup(QWidget):
             self.owner._save_correction(root, new_word)
 
     def close_popup(self, refocus=False):
+        uninstall_outside_click_dismiss(self)
         self._info = {}
         self.hide()
         if self._worker:
@@ -151,3 +154,11 @@ class EditorPopup(QWidget):
                 return True
                 
         return False
+
+    def hideEvent(self, event):
+        uninstall_outside_click_dismiss(self)
+        super().hideEvent(event)
+
+    def closeEvent(self, event):
+        uninstall_outside_click_dismiss(self)
+        super().closeEvent(event)

@@ -138,7 +138,7 @@ _AUTO_AUDIO_CANDIDATES = (
     },
     {
         "id": "fast_noise_gate",
-        "label": "Fast Noise Gate",
+        "label": "Speech-Preserve Noise Gate",
         "settings": {
             "selected_audio_ai": "rnnoise",
             "selected_vad": "silero",
@@ -543,27 +543,34 @@ def _score_audio_candidate(candidate: dict, profile: dict, features: dict) -> tu
     quiet = bool(profile.get("quiet"))
     hot = bool(profile.get("hot_signal"))
     speech_conf = float(profile.get("speech_confidence", features.get("speech_confidence", 0.55)) or 0.55)
+    subtitle_quality_risk = bool(speech_conf < 0.58 or quiet or noise == "high" or low_rumble)
     score = 0.42 + speech_conf * 0.28
     reasons: list[str] = []
 
     if cid == "low_rumble":
         score += 0.32 if low_rumble or env == "car" else -0.08
-        reasons.append("저역 울림/차량성 대응")
+        reasons.append("저역 울림에서 자막 인식 안정성 우선")
     elif cid == "noisy_voice":
-        score += 0.3 if noise == "high" or env == "outdoor" else (-0.02 if noise == "medium" else -0.1)
-        reasons.append("잡음 많은 음성 보호")
+        if noise == "high" or env == "outdoor":
+            score += 0.34
+        elif noise == "medium" and subtitle_quality_risk:
+            score += 0.26
+        else:
+            score += 0.04 if noise == "medium" else -0.1
+        reasons.append("잡음 구간에서 자막 품질 우선 음성 복원")
     elif cid == "quiet_boost":
         score += 0.3 if quiet else -0.04
-        reasons.append("작은 음량 보강")
+        reasons.append("작은 음량 자막 누락 방지")
     elif cid == "fast_noise_gate":
-        score += 0.16 if noise == "medium" and not low_rumble else -0.03
-        reasons.append("중간 잡음 빠른 억제")
+        stable_speech = bool(noise == "medium" and not subtitle_quality_risk and not low_rumble)
+        score += 0.1 if stable_speech else -0.12
+        reasons.append("음성이 충분히 선명한 중간 잡음에서 음성 보존형 억제")
     elif cid == "minimal_hot_signal":
         score += 0.22 if hot and noise == "low" else -0.12
-        reasons.append("과입력 원본 보존")
+        reasons.append("과입력 음성 왜곡 최소화")
     else:
         score += 0.2 if noise == "low" and not quiet and not low_rumble else -0.02
-        reasons.append("일반 음성 균형")
+        reasons.append("일반 음성 자막 인식 균형")
 
     if quiet and cid not in {"quiet_boost", "noisy_voice"}:
         score -= 0.08
@@ -571,6 +578,8 @@ def _score_audio_candidate(candidate: dict, profile: dict, features: dict) -> tu
         score -= 0.12
     if noise == "high" and cid not in {"noisy_voice", "low_rumble"}:
         score -= 0.13
+    if subtitle_quality_risk and cid == "fast_noise_gate":
+        score -= 0.08
     if hot and cid in {"quiet_boost", "noisy_voice"}:
         score -= 0.08
     return max(0.0, min(0.98, score)), reasons

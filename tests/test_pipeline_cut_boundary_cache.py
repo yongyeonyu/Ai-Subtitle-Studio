@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -19,6 +20,11 @@ class _DummyBackend(PipelineHelpersMixin):
     def __init__(self, project_path: str):
         self.ui = _DummyUi(project_path)
         self._cut_boundary_provisional_rows = []
+        self._cut_boundary_pipeline_cache = None
+        self.emitted = []
+
+    def _ui_emit(self, name, *args):
+        self.emitted.append((name, args))
 
 
 class PipelineCutBoundaryCacheTests(unittest.TestCase):
@@ -87,6 +93,131 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
 
         self.assertEqual(len(seen_boundaries), 1)
         self.assertAlmostEqual(float(seen_boundaries[0]["timeline_sec"]), 2.0, places=3)
+
+    def test_completed_follower_clears_saved_provisional_rows(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = os.path.join(tmpdir, "sample.project.json")
+            confirmed = [{"timeline_sec": 10.0, "time": 10.0, "timeline_frame": 300, "fps": 30.0}]
+            provisional = [{"timeline_sec": 9.5, "time": 9.5, "timeline_frame": 285, "fps": 30.0, "status": "provisional"}]
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "analysis": {
+                            "cut_boundaries": list(confirmed),
+                            "cut_boundary_provisional_boundaries": list(provisional),
+                        },
+                        "editor_state": {
+                            "analysis": {
+                                "cut_boundaries": list(confirmed),
+                                "cut_boundary_provisional_boundaries": list(provisional),
+                            },
+                            "multiclip": {
+                                "cut_boundaries": list(confirmed),
+                                "cut_boundary_provisional_boundaries": list(provisional),
+                            },
+                        },
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+
+            backend = _DummyBackend(project_path)
+            backend._cut_boundary_provisional_rows = list(provisional)
+            backend._cut_boundary_pipeline_cache = {
+                "project_path": project_path,
+                "provisional_cut_boundaries": list(provisional),
+            }
+
+            backend._clear_completed_cut_boundary_provisionals(
+                project_path,
+                settings={"cut_boundary_detection_enabled": True},
+                detected=confirmed,
+            )
+
+            self.assertEqual(backend._cut_boundary_provisional_rows, [])
+            self.assertIsNone(backend._cut_boundary_pipeline_cache)
+            self.assertIn(("_sig_preview_cut_boundary_scan_lines", ([],)), backend.emitted)
+            with open(project_path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertEqual(saved["analysis"]["cut_boundary_provisional_boundaries"], [])
+            self.assertEqual(saved["editor_state"]["analysis"]["cut_boundary_provisional_boundaries"], [])
+            self.assertEqual(saved["editor_state"]["multiclip"]["cut_boundary_provisional_boundaries"], [])
+            self.assertEqual(len(saved["analysis"]["cut_boundaries"]), 1)
+            self.assertAlmostEqual(float(saved["analysis"]["cut_boundaries"][0]["timeline_sec"]), 10.0, places=3)
+
+    def test_cut_boundary_follower_starts_streaming_before_all_pioneers_finish(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = os.path.join(tmpdir, "sample.project.json")
+            file_one = os.path.join(tmpdir, "clip1.mp4")
+            file_two = os.path.join(tmpdir, "clip2.mp4")
+            for path in (file_one, file_two):
+                with open(path, "wb") as f:
+                    f.write(b"media")
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump({"analysis": {}}, f)
+
+            backend = _DummyBackend(project_path)
+            backend._load_cut_boundary_cache_for_start = lambda *_args, **_kwargs: None
+            backend._save_cut_boundary_cache_for_start = lambda *_args, **_kwargs: None
+            backend._clear_completed_cut_boundary_provisionals = lambda *_args, **_kwargs: None
+            backend._force_cut_boundary_topicless_segments_to_project = lambda *_args, **_kwargs: None
+            backend._emit_cut_boundary_count_to_sidebar = lambda *_args, **_kwargs: None
+
+            verify_started = threading.Event()
+            second_scan_saw_follower = []
+            verify_calls = []
+
+            def fake_scan(path, **kwargs):
+                clip_idx = int(kwargs.get("clip_idx", 0) or 0)
+                if clip_idx == 1:
+                    second_scan_saw_follower.append(verify_started.wait(timeout=1.0))
+                row = {
+                    "timeline_sec": 10.0 + clip_idx,
+                    "time": 10.0 + clip_idx,
+                    "clip_local_sec": 10.0,
+                    "clip_idx": clip_idx,
+                    "source": "unit_pioneer",
+                    "refine_pending": True,
+                }
+                found_callback = kwargs.get("found_callback")
+                if callable(found_callback):
+                    found_callback(dict(row), [dict(row)])
+                completion_callback = kwargs.get("completion_callback")
+                if callable(completion_callback):
+                    completion_callback({"clip_idx": clip_idx, "worker_total": 1, "worker_completed": 1, "done": True})
+                return [row]
+
+            def fake_verify(path, rows, **kwargs):
+                verify_started.set()
+                verify_calls.append((path, list(rows or [])))
+                found_callback = kwargs.get("found_callback")
+                if callable(found_callback):
+                    for row in rows or []:
+                        fixed = dict(row)
+                        fixed["status"] = "verified"
+                        fixed["verified"] = True
+                        found_callback(fixed, [fixed])
+                return list(rows or [])
+
+            with mock.patch("core.pipeline.cut_boundary_helpers.load_settings", return_value={"cut_boundary_detection_enabled": True}), \
+                 mock.patch("core.cut_boundary.cut_boundary_enabled", return_value=True), \
+                 mock.patch("core.cut_boundary.cut_boundary_scan_profile", return_value={"positions": (0, 2, 4, 6, 8), "mask": "x5", "sample_step_sec": 1.0}), \
+                 mock.patch("core.cut_boundary.scan_media_cut_boundary_provisionals", side_effect=fake_scan), \
+                 mock.patch("core.cut_boundary.verify_media_cut_boundary_rows", side_effect=fake_verify), \
+                 mock.patch("core.cut_boundary.sync_project_cut_boundaries", lambda *_args, **_kwargs: None):
+                backend._auto_scan_cut_boundaries_for_start_sync(project_path, [file_one, file_two])
+
+            follower = getattr(backend, "_cut_boundary_follower_thread", None)
+            self.assertIsNotNone(follower)
+            follower.join(timeout=2.0)
+
+            self.assertFalse(follower.is_alive())
+            self.assertTrue(second_scan_saw_follower)
+            self.assertTrue(second_scan_saw_follower[0])
+            self.assertGreaterEqual(len(verify_calls), 2)
+            self.assertEqual(verify_calls[0][0], file_one)
+            self.assertTrue(backend._cut_boundary_prescan_completed)
 
 
 if __name__ == "__main__":

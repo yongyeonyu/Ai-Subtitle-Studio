@@ -8,6 +8,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable
 
+from core.native_text_similarity import similarity_ratio
 from core.personalization.lora_models import iso_now, stable_hash
 from core.personalization.lora_storage import LORA_INTERNAL_CACHE_DIR
 
@@ -253,7 +254,7 @@ def apply_recent_editor_truth_patterns(
         if old and old in source_text and old != new:
             updated = source_text.replace(old, new, 1)
             if updated != source_text:
-                similarity = SequenceMatcher(None, _compact(pattern_source), source_compact).ratio()
+                similarity = similarity_ratio(_compact(pattern_source), source_compact)
                 return updated, {
                     "schema": EDITOR_TRUTH_PATTERN_SCHEMA,
                     "task": "editor_truth_runtime_apply",
@@ -264,7 +265,7 @@ def apply_recent_editor_truth_patterns(
                     "new": new,
                     "similarity": round(similarity, 4),
                 }
-        similarity = SequenceMatcher(None, pattern_compact, source_compact).ratio() if pattern_compact else 0.0
+        similarity = similarity_ratio(pattern_compact, source_compact) if pattern_compact else 0.0
         length_delta = abs(len(pattern_compact) - len(source_compact)) / max(1, len(pattern_compact))
         if similarity >= min_similarity and length_delta <= 0.12:
             return pattern_corrected, {

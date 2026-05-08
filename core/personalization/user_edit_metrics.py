@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
-from difflib import SequenceMatcher
 from typing import Any
 
+from core.native_text_similarity import edit_distance, similarity_ratio
 from core.personalization.lora_models import line_break_pattern_for_text, stable_hash
 
 
@@ -72,22 +72,7 @@ def _parenthetical_count(value: Any) -> int:
 
 
 def _levenshtein_distance(source: str, target: str) -> int:
-    if source == target:
-        return 0
-    if not source:
-        return len(target)
-    if not target:
-        return len(source)
-    previous = list(range(len(target) + 1))
-    for i, src_ch in enumerate(source, start=1):
-        current = [i]
-        for j, tgt_ch in enumerate(target, start=1):
-            insert_cost = current[j - 1] + 1
-            delete_cost = previous[j] + 1
-            replace_cost = previous[j - 1] + (0 if src_ch == tgt_ch else 1)
-            current.append(min(insert_cost, delete_cost, replace_cost))
-        previous = current
-    return int(previous[-1])
+    return edit_distance(source, target)
 
 
 def source_text_for_edit_metrics(segment: dict[str, Any] | None) -> str:
@@ -160,7 +145,7 @@ def measure_user_edit_metrics(
     distance = _levenshtein_distance(source_compact, final_compact) if source_compact or final_compact else 0
     base_chars = max(1, len(source_compact), len(final_compact))
     edit_ratio = distance / base_chars
-    similarity = SequenceMatcher(None, source_compact, final_compact).ratio() if source_compact or final_compact else 1.0
+    similarity = similarity_ratio(source_compact, final_compact) if source_compact or final_compact else 1.0
 
     final_start = _safe_float(start_sec if start_sec is not None else seg.get("start"), 0.0)
     final_end = _safe_float(end_sec if end_sec is not None else seg.get("end"), final_start)

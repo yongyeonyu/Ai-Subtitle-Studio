@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import re
-from difflib import SequenceMatcher
 from typing import Any
 
 from core.audio.stt_candidate_scorer import score_stt_candidate, stt_score_label, stt_score_to_color
+from core.native_text_similarity import similarity_ratio
 
 
 _KO_RE = re.compile(r"[가-힣]")
@@ -55,7 +55,7 @@ def text_similarity(left: str, right: str) -> float:
         return 1.0
     if not ltxt or not rtxt:
         return 0.0
-    return SequenceMatcher(None, ltxt, rtxt).ratio()
+    return similarity_ratio(ltxt, rtxt)
 
 
 def overlap_ratio(left: dict, right: dict) -> float:

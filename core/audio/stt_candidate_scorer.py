@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import re
-from difflib import SequenceMatcher
 from typing import Any
+
+from core.native_text_similarity import character_error_rate, similarity_ratio
 
 _KO_RE = re.compile(r"[가-힣]")
 _LANG_RE = re.compile(r"[가-힣A-Za-z]")
@@ -216,30 +217,13 @@ def _text_similarity(left: Any, right: Any) -> float:
         return 1.0
     if not ltxt or not rtxt:
         return 0.0
-    sequence_similarity = SequenceMatcher(None, ltxt, rtxt).ratio()
+    sequence_similarity = similarity_ratio(ltxt, rtxt)
     cer_similarity = 1.0 - _character_error_rate(ltxt, rtxt)
     return max(0.0, min(1.0, sequence_similarity * 0.55 + cer_similarity * 0.45))
 
 
 def _character_error_rate(reference: str, hypothesis: str) -> float:
-    if not reference and not hypothesis:
-        return 0.0
-    if not reference or not hypothesis:
-        return 1.0
-    previous = list(range(len(hypothesis) + 1))
-    for i, ref_ch in enumerate(reference, 1):
-        current = [i]
-        for j, hyp_ch in enumerate(hypothesis, 1):
-            cost = 0 if ref_ch == hyp_ch else 1
-            current.append(
-                min(
-                    previous[j] + 1,
-                    current[j - 1] + 1,
-                    previous[j - 1] + cost,
-                )
-            )
-        previous = current
-    return min(1.0, previous[-1] / max(1, len(reference)))
+    return character_error_rate(reference, hypothesis)
 
 
 def _agreement_score(

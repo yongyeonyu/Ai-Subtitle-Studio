@@ -53,7 +53,12 @@ class EditorLifecycleMixin:
             return
         timeline = editor.timeline
         try:
-            if hasattr(timeline, "schedule_fit_to_view"):
+            if hasattr(timeline, "schedule_time_window_seconds"):
+                timeline.schedule_time_window_seconds(
+                    15.0,
+                    delays=(0, delay_ms, max(delay_ms + 160, 300)),
+                )
+            elif hasattr(timeline, "schedule_fit_to_view"):
                 timeline.schedule_fit_to_view((0, delay_ms, max(delay_ms + 140, 260)))
             elif hasattr(timeline, "fit_to_view"):
                 QTimer.singleShot(max(0, int(delay_ms)), timeline.fit_to_view)
@@ -128,7 +133,7 @@ class EditorLifecycleMixin:
         if self._current_project_path and self.backend:
             n_files = len(getattr(self.backend, 'files_to_process', []))
             if n_files > 1:
-                pd = load_project(self._current_project_path)
+                pd = load_project(self._current_project_path, hydrate_text_assets=False)
                 if pd and "timeline" in pd:
                     clips = pd["timeline"].get("tracks", [{}])[0].get("clips", [])
                     if len(clips) > 1: editor._project_clips = clips

@@ -263,6 +263,110 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             self.assertFalse(os.path.exists(captured_dirs["STT1"]))
             self.assertFalse(os.path.exists(captured_dirs["STT2"]))
 
+    def test_ensemble_chunk_clone_prefers_linked_files_over_byte_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chunk_dir = os.path.join(tmp, "chunks")
+            os.makedirs(os.path.join(chunk_dir, ".ensemble_old"), exist_ok=True)
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000)
+            with open(os.path.join(chunk_dir, "vad_strict.json"), "w", encoding="utf-8") as handle:
+                json.dump([{"start": 0.0, "end": 1.0}], handle)
+            with open(os.path.join(chunk_dir, ".ensemble_old", "ignored.wav"), "wb") as handle:
+                handle.write(b"ignored")
+
+            link_calls = []
+
+            def fake_link(src, dst):
+                link_calls.append((src, dst))
+                with open(src, "rb") as in_handle, open(dst, "wb") as out_handle:
+                    out_handle.write(in_handle.read())
+
+            with patch("core.audio.media_processor_transcribe.os.link", side_effect=fake_link), patch(
+                "core.audio.media_processor_transcribe.shutil.copy2",
+                side_effect=AssertionError("hardlink fast path should avoid byte-copy fallback"),
+            ):
+                clone = self.processor._clone_ensemble_chunk_dir(chunk_dir, "STT1")
+
+            try:
+                self.assertGreaterEqual(len(link_calls), 2)
+                self.assertTrue(os.path.exists(os.path.join(clone, "vad_000_0.000.wav")))
+                self.assertTrue(os.path.exists(os.path.join(clone, "vad_strict.json")))
+                self.assertFalse(os.path.exists(os.path.join(clone, ".ensemble_old", "ignored.wav")))
+                os.remove(os.path.join(clone, "vad_000_0.000.wav"))
+                self.assertTrue(os.path.exists(wav_path))
+            finally:
+                if os.path.exists(clone):
+                    import shutil
+
+                    shutil.rmtree(clone, ignore_errors=True)
+
+    def test_ensemble_chunk_clone_falls_back_to_copy_when_link_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chunk_dir = os.path.join(tmp, "chunks")
+            os.makedirs(chunk_dir, exist_ok=True)
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x01\x00" * 16000)
+
+            copy_calls = []
+
+            def fake_copy(src, dst):
+                copy_calls.append((src, dst))
+                with open(src, "rb") as in_handle, open(dst, "wb") as out_handle:
+                    out_handle.write(in_handle.read())
+
+            with patch("core.audio.media_processor_transcribe.os.link", side_effect=OSError("cross-device")), patch(
+                "core.audio.media_processor_transcribe.shutil.copy2",
+                side_effect=fake_copy,
+            ):
+                clone = self.processor._clone_ensemble_chunk_dir(chunk_dir, "STT2")
+
+            try:
+                self.assertEqual(len(copy_calls), 1)
+                cloned_wav = os.path.join(clone, "vad_000_0.000.wav")
+                self.assertTrue(os.path.exists(cloned_wav))
+                self.assertEqual(os.path.getsize(cloned_wav), os.path.getsize(wav_path))
+            finally:
+                if os.path.exists(clone):
+                    import shutil
+
+                    shutil.rmtree(clone, ignore_errors=True)
+
+    def test_ensemble_respects_cleanup_chunk_dir_false_for_benchmarks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chunk_dir = os.path.join(tmp, "chunks")
+            os.makedirs(chunk_dir, exist_ok=True)
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000)
+
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "primary",
+                "selected_whisper_model_secondary": "secondary",
+                "stt_workers_auto_enabled": False,
+                "vad_post_stt_align_enabled": False,
+            }
+
+            def fake_collect(_local_chunk_dir, _model, *, label, **_kwargs):
+                return [{"start": 0.0, "end": 0.8, "text": label}]
+
+            self.processor._collect_transcribe_result = fake_collect
+
+            list(self.processor.transcribe_ensemble(chunk_dir, cleanup_chunk_dir=False))
+
+            self.assertTrue(os.path.exists(chunk_dir))
+            self.assertTrue(os.path.exists(wav_path))
+
     def test_normalize_scored_tracks_filters_stt1_and_stt2_with_same_rule(self):
         tracks = {
             "STT1": [
@@ -766,6 +870,156 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 self.assertIn("16000", first_cmd)
             finally:
                 config.OUTPUT_DIR = old_output_dir
+
+    def test_long_no_vad_direct_extract_batches_chunks_when_routing_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_output_dir = config.OUTPUT_DIR
+            config.OUTPUT_DIR = tmp
+            try:
+                video_path = os.path.join(tmp, "long.mp4")
+                with open(video_path, "wb") as f:
+                    f.write(b"video")
+
+                calls = []
+
+                def write_silent_wav(path: str, seconds: float = 1.0):
+                    frames = int(16000 * seconds)
+                    with wave.open(path, "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(16000)
+                        wf.writeframes(b"\x00\x00" * frames)
+
+                def fake_no_progress(cmd, *, label, timeout=None, env=None):
+                    calls.append((label, list(cmd)))
+                    for part in cmd:
+                        if str(part).lower().endswith(".wav"):
+                            write_silent_wav(str(part))
+                    return True
+
+                self.processor._load_all_settings = lambda: {
+                    "selected_audio_ai": "none",
+                    "selected_vad": "none",
+                    "vad_post_stt_align_enabled": False,
+                    "use_basic_filter": False,
+                    "max_speakers": 1,
+                    "ff_chunk": 30,
+                    "whisper_chunk_overlap_sec": 0.0,
+                    "direct_ffmpeg_chunk_extract": True,
+                    "direct_ffmpeg_chunk_min_sec": 10,
+                    "direct_ffmpeg_chunk_batch_extract": True,
+                    "direct_ffmpeg_chunk_batch_size": 8,
+                    "audio_chunk_routing_enabled": False,
+                }
+                self.processor._media_duration_for_progress = lambda _path: 65.0
+                self.processor._run_media_command_no_progress = fake_no_progress
+                self.processor._run_media_command = (
+                    lambda *_args, **_kwargs: self.fail("direct batch path must not build full cleaned wav")
+                )
+
+                chunk_dir, vad_segments = self.processor.extract_audio(video_path)
+
+                self.assertEqual(vad_segments, [])
+                chunks = sorted(f for f in os.listdir(chunk_dir) if f.endswith(".wav"))
+                self.assertEqual(len(chunks), 3)
+                self.assertFalse(os.path.exists(os.path.join(tmp, "long_cleaned.wav")))
+                self.assertEqual([label for label, _cmd in calls], ["ffmpeg 직접 청크 배치 추출"])
+                cmd = calls[0][1]
+                self.assertIn("-filter_complex", cmd)
+                filter_graph = cmd[cmd.index("-filter_complex") + 1]
+                self.assertIn("asplit=3", filter_graph)
+                self.assertIn("atrim=start=0.000:end=30.000", filter_graph)
+                self.assertEqual(cmd.count("-map"), 3)
+                self.assertIn("-vn", cmd)
+                self.assertIn("-sn", cmd)
+                self.assertIn("-dn", cmd)
+            finally:
+                config.OUTPUT_DIR = old_output_dir
+
+    def test_cleaned_wav_chunks_use_pcm_fast_path_without_ffmpeg_retrim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wav_path = os.path.join(tmp, "cleaned.wav")
+            chunk_dir = os.path.join(tmp, "chunks")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                frames = []
+                for idx in range(16000 * 4):
+                    frames.append(struct.pack("<h", idx % 32767))
+                wf.writeframes(b"".join(frames))
+
+            self.processor._load_all_settings = lambda: {"wav_pcm_fast_chunk_extract": True}
+            self.processor._ffmpeg_trim_to_wav = (
+                lambda *_args, **_kwargs: self.fail("PCM fast chunking should avoid ffmpeg retrim")
+            )
+
+            ok = self.processor._write_grouped_chunks_parallel(
+                wav_path,
+                chunk_dir,
+                [{"start": 0.0, "end": 1.5}, {"start": 1.0, "end": 3.25}],
+            )
+
+            self.assertTrue(ok)
+            chunks = sorted(name for name in os.listdir(chunk_dir) if name.endswith(".wav"))
+            self.assertEqual(chunks, ["vad_000_0.000.wav", "vad_001_1.000.wav"])
+            with wave.open(os.path.join(chunk_dir, chunks[0]), "rb") as wf:
+                self.assertEqual(wf.getframerate(), 16000)
+                self.assertEqual(wf.getnchannels(), 1)
+                self.assertAlmostEqual(wf.getnframes() / wf.getframerate(), 1.5, places=2)
+            with wave.open(os.path.join(chunk_dir, chunks[1]), "rb") as wf:
+                self.assertAlmostEqual(wf.getnframes() / wf.getframerate(), 2.25, places=2)
+
+    def test_direct_media_batch_extract_splits_sparse_chunks_by_span(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = os.path.join(tmp, "sparse.mp4")
+            chunk_dir = os.path.join(tmp, "chunks")
+            with open(media_path, "wb") as f:
+                f.write(b"video")
+
+            calls = []
+
+            def write_silent_wav(path: str):
+                with wave.open(path, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(16000)
+                    wf.writeframes(b"\x00\x00" * 16000)
+
+            def fake_no_progress(cmd, *, label, timeout=None, env=None):
+                calls.append((label, list(cmd)))
+                os.makedirs(chunk_dir, exist_ok=True)
+                for part in cmd:
+                    if str(part).lower().endswith(".wav"):
+                        write_silent_wav(str(part))
+                return True
+
+            self.processor._run_media_command_no_progress = fake_no_progress
+
+            ok = self.processor._write_grouped_chunks_from_media_batched(
+                media_path,
+                chunk_dir,
+                [
+                    {"start": 0.0, "end": 30.0},
+                    {"start": 40.0, "end": 70.0},
+                    {"start": 400.0, "end": 430.0},
+                ],
+                "anull",
+                {
+                    "direct_ffmpeg_chunk_batch_size": 8,
+                    "direct_ffmpeg_chunk_batch_max_span_sec": 120.0,
+                },
+            )
+
+            self.assertTrue(ok)
+            self.assertEqual([label for label, _cmd in calls], ["ffmpeg 직접 청크 배치 추출"] * 2)
+            first_cmd = calls[0][1]
+            second_cmd = calls[1][1]
+            self.assertEqual(first_cmd[first_cmd.index("-t") + 1], "70.000")
+            self.assertIn("asplit=2", first_cmd[first_cmd.index("-filter_complex") + 1])
+            self.assertEqual(second_cmd[second_cmd.index("-ss") + 1], "400.000")
+            self.assertEqual(second_cmd[second_cmd.index("-t") + 1], "30.000")
+            self.assertNotIn("asplit=1", second_cmd[second_cmd.index("-filter_complex") + 1])
 
     def test_no_vad_fallback_chunks_restart_at_confirmed_cut_boundaries(self):
         with tempfile.TemporaryDirectory() as tmp:

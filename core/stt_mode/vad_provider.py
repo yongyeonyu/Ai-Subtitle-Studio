@@ -10,6 +10,7 @@ import wave
 from typing import Any
 
 from core.frame_time import normalize_fps
+from core.audio.silero_vad_runtime import load_silero_vad_runtime
 from core.audio.torch_acceleration import move_torch_model_to_preferred_device, move_torch_tensor_to_device
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.runtime.logger import get_logger
@@ -51,19 +52,16 @@ def _extract_stt_vad_wav(media_path: str, wav_path: str) -> None:
         raise RuntimeError("STT VAD wav extraction failed")
 
 
-def _detect_silero_wav(wav_path: str, settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    import torch
+def extract_vad_analysis_wav(media_path: str, wav_path: str) -> None:
+    _extract_stt_vad_wav(media_path, wav_path)
 
+
+def _detect_silero_wav(wav_path: str, settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     model = None
     audio_data = None
     device_name = "cpu"
     try:
-        model, utils = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad",
-            model="silero_vad",
-            force_reload=False,
-            onnx=False,
-        )
+        model, utils, _loader = load_silero_vad_runtime()
         device_name = move_torch_model_to_preferred_device(model, settings=settings, log_label="STT VAD")
         get_speech_timestamps, _, read_audio, _, _ = utils
         audio_data = read_audio(wav_path, sampling_rate=16000)
@@ -227,4 +225,5 @@ def detect_vad_candidates(
 __all__ = [
     "detect_vad_candidates",
     "detect_vad_candidates_from_wav",
+    "extract_vad_analysis_wav",
 ]

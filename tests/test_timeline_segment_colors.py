@@ -204,6 +204,14 @@ class TimelineSegmentColorTests(unittest.TestCase):
             "dense",
         )
         self.assertEqual(
+            subtitle_render_detail_mode(visible_segment_count=40, pps=8.0, editing=False, scenegraph=False),
+            "ultra",
+        )
+        self.assertEqual(
+            subtitle_render_detail_mode(visible_segment_count=56, pps=80.0, editing=False, scenegraph=False),
+            "dense",
+        )
+        self.assertEqual(
             subtitle_render_detail_mode(visible_segment_count=240, pps=12.0, editing=False, scenegraph=False),
             "ultra",
         )
@@ -554,12 +562,12 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertEqual(style["fill"], stt_score_to_color(76))
         self.assertEqual(style["border"], stt_score_to_color(76))
 
-    def test_scan_boundary_visual_keeps_provisional_cyan_until_verified(self):
+    def test_scan_boundary_visual_distinguishes_provisional_from_verified(self):
         provisional = scan_boundary_marker_visual({"timeline_sec": 1.2, "status": "provisional"})
         verified = scan_boundary_marker_visual({"timeline_sec": 1.2, "status": "verified", "verified": True})
 
         self.assertEqual(provisional, {"color": "#00FFFF", "width": 2, "style": "solid"})
-        self.assertEqual(verified, {"color": "#8E8E93", "width": 1, "style": "dot"})
+        self.assertEqual(verified, {"color": "#6EA8FF", "width": 2, "style": "solid"})
 
     def test_scan_boundary_visual_uses_audio_gain_neon_green_hint(self):
         style = scan_boundary_marker_visual(

@@ -162,6 +162,8 @@ def ensure_worker(proc=None):
 
 def _fallback_model_name(model: str) -> str:
     requested = str(model or "")
+    if "komixv2" in requested.lower():
+        return "mlx-community/whisper-medium-mlx"
     if "ghost613" in requested.lower():
         return "mlx-community/whisper-large-v3-mlx"
     return ""

@@ -90,12 +90,25 @@ class UndoManager:
             else:
                 blocks.append((block.text(), {"spk_id": "00", "start_sec": 0.0, "is_gap": False}))
 
+        cached_source = getattr(editor, "_cached_segs", None)
+        if bool(getattr(editor, "_segment_cache_valid", False)) and isinstance(cached_source, list):
+            cached_segments = [dict(seg) for seg in cached_source]
+        else:
+            try:
+                cached_segments = [dict(seg) for seg in list(editor._get_current_segments() or [])]
+            except Exception:
+                cached_segments = [dict(seg) for seg in list(cached_source or [])]
+
         canvas_end_map = {}
-        if hasattr(editor, 'timeline') and hasattr(editor.timeline, 'canvas'):
-            for seg in editor.timeline.canvas.segments:
-                line = seg.get('line', -1)
-                if line >= 0 and 'end' in seg:
-                    canvas_end_map[line] = seg['end']
+        canvas_rows = cached_segments
+        if not canvas_rows and hasattr(editor, 'timeline') and hasattr(editor.timeline, 'canvas'):
+            canvas_rows = list(getattr(editor.timeline.canvas, "segments", []) or [])
+        for seg in canvas_rows:
+            if not isinstance(seg, dict):
+                continue
+            line = seg.get('line', -1)
+            if line >= 0 and 'end' in seg:
+                canvas_end_map[line] = seg['end']
 
         owner = editor.window() if hasattr(editor, 'window') else None
         multiclip_files = list(getattr(owner, '_multiclip_files', []) or []) if owner else []
@@ -105,10 +118,6 @@ class UndoManager:
         active_clip_idx = int(getattr(canvas, '_active_clip_idx', getattr(owner, '_active_clip_idx', 0)) or 0)
         cursor_line = editor.text_edit.textCursor().blockNumber()
         live_stt_preview_segments = [dict(seg) for seg in list(getattr(editor, "_live_stt_preview_segments", []) or [])]
-        try:
-            cached_segments = [dict(seg) for seg in list(editor._get_current_segments() or [])]
-        except Exception:
-            cached_segments = [dict(seg) for seg in list(getattr(editor, "_cached_segs", []) or [])]
         return SnapshotState(
             blocks,
             canvas_end_map,
@@ -211,6 +220,7 @@ class UndoManager:
         return {
             "spk_id": ud.spk_id,
             "start_sec": ud.start_sec,
+            "end_sec": getattr(ud, "end_sec", None),
             "is_gap": ud.is_gap,
             "stt_mode": getattr(ud, "stt_mode", False),
             "stt_pending": getattr(ud, "stt_pending", False),
@@ -246,6 +256,7 @@ class UndoManager:
             meta.get("spk_id", "00"),
             meta.get("start_sec", 0.0),
             meta.get("is_gap", False),
+            end_sec=meta.get("end_sec"),
             stt_mode=meta.get("stt_mode", False),
             stt_pending=meta.get("stt_pending", False),
             original_text=meta.get("original_text", ""),

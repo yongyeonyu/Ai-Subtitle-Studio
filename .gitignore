@@ -3,9 +3,12 @@
 venv/
 VENV/
 __pycache__/
+build/
 *.pyc
 *.pyo
 *.pyd
+*.so
+*.dylib
 
 # ── 환경변수 (보안) ──
 .env
@@ -24,6 +27,7 @@ dataset/auto_tracker.json
 dataset/folder_settings.json
 dataset/time_history.json
 dataset/user_settings.json
+dataset/runtime_optimization_profile.json
 dataset/subtitle_rule.json
 dataset/correction_memory.json
 dataset/wrong_answer_memory.json

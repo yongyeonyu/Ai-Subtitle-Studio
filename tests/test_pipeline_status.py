@@ -17,7 +17,7 @@ class PipelineStatusTests(unittest.TestCase):
         self.assertEqual(generation_stage_label(status), "전처리")
 
     def test_pipeline_stage_parser_matches_sidebar_keys(self):
-        self.assertEqual(generation_stage_keys("⏳ [음성] RNNoise 빠른 노이즈 제거 중"), {"audio"})
+        self.assertEqual(generation_stage_keys("⏳ [음성] RNNoise 음성 보존 노이즈 제거 중"), {"audio"})
         self.assertEqual(generation_stage_keys("⏳ [VAD] TEN VAD 음성 섹터 스캔 중"), {"vad"})
         self.assertEqual(generation_stage_keys("⏳ [STT] STT1/STT2 병렬 인식 중", stt_ensemble_enabled=True), {"stt1", "stt2"})
         self.assertEqual(generation_stage_keys("⏳ [자막 LLM] 교정/분리 중"), {"subtitle_llm"})

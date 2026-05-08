@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable
 
 from core.media_fingerprint import media_fingerprint_digest
 from core.audio.stt_candidate_scorer import score_stt_candidate
+from core.native_text_similarity import similarity_ratio
 from core.personalization.lora_models import iso_now, stable_hash
 from core.personalization.lora_storage import LORA_INTERNAL_CACHE_DIR
 
@@ -77,7 +77,7 @@ def _similarity(left: Any, right: Any) -> float:
         return 1.0
     if not ltxt or not rtxt:
         return 0.0
-    return SequenceMatcher(None, ltxt, rtxt).ratio()
+    return similarity_ratio(ltxt, rtxt)
 
 
 def _word_text(word: dict[str, Any]) -> str:

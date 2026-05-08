@@ -11,6 +11,7 @@ import sys
 import wave
 
 from core.runtime.logger import get_logger
+from core.audio.silero_vad_runtime import load_silero_vad_runtime
 from core.audio.torch_acceleration import move_torch_model_to_preferred_device, move_torch_tensor_to_device
 from core.subtitle_quality.vad_alignment_checker import apply_review_vad_settings, review_vad_config
 
@@ -286,6 +287,18 @@ class VideoProcessorVadMixin:
     ) -> list[dict]:
         requested_vad_model = str(vad_model or "none").lower()
         try:
+            from core.audio.vad_backend_router import select_vad_backend
+
+            vad_choice = select_vad_backend(requested_vad_model, s)
+            requested_vad_model = vad_choice.provider
+            vad_model = vad_choice.provider
+            if vad_choice.reason not in {"selected_provider", "legacy_policy"}:
+                _runtime_get_logger().log(
+                    f"  ⚙️ [VAD] backend={vad_choice.provider} reason={vad_choice.reason}"
+                )
+        except Exception:
+            pass
+        try:
             cached = self._load_vad_timestamps_cache(
                 wav_path,
                 requested_vad_model,
@@ -329,8 +342,6 @@ class VideoProcessorVadMixin:
                 _runtime_get_logger().log("  ⚠️ TEN VAD 결과가 없어 Silero VAD로 재시도합니다")
                 vad_model = "silero"
 
-            import torch
-
             effective_s = apply_review_vad_settings(s)
             label = vad_model.upper()
             if not self._vad_loaded:
@@ -338,12 +349,7 @@ class VideoProcessorVadMixin:
                 _runtime_get_logger().log(f"  └ [VAD 후처리] {label} 모델 준비 중...")
                 heartbeat = self._start_vad_heartbeat(label, "모델 준비")
                 try:
-                    self._vad_model, self._vad_utils = torch.hub.load(
-                        repo_or_dir="snakers4/silero-vad",
-                        model="silero_vad",
-                        force_reload=False,
-                        onnx=False,
-                    )
+                    self._vad_model, self._vad_utils, _loader = load_silero_vad_runtime()
                 finally:
                     self._stop_vad_heartbeat(heartbeat)
                 self._vad_loaded = True
@@ -488,6 +494,18 @@ class VideoProcessorVadMixin:
         try:
             effective_s = apply_review_vad_settings(s)
             vad_cfg = review_vad_config(s)
+            try:
+                from core.audio.vad_backend_router import select_vad_backend
+
+                vad_choice = select_vad_backend(requested_vad_model, s)
+                requested_vad_model = vad_choice.provider
+                vad_model = vad_choice.provider
+                if vad_choice.reason not in {"selected_provider", "legacy_policy"}:
+                    _runtime_get_logger().log(
+                        f"  ⚙️ [VAD 선분할] backend={vad_choice.provider} reason={vad_choice.reason}"
+                    )
+            except Exception:
+                pass
             if vad_cfg["review_vad_before_stt_enabled"] and vad_cfg["review_vad_strict_mode"]:
                 _runtime_get_logger().log(
                     "  └ 🧪 자막 품질 검수 VAD: "
@@ -531,14 +549,8 @@ class VideoProcessorVadMixin:
                 _runtime_get_logger().log("  ⚠️ TEN VAD 결과가 없어 Silero VAD로 재시도합니다")
                 vad_model = "silero"
 
-            import torch
             if not self._vad_loaded:
-                self._vad_model, self._vad_utils = torch.hub.load(
-                    repo_or_dir="snakers4/silero-vad",
-                    model="silero_vad",
-                    force_reload=False,
-                    onnx=False
-                )
+                self._vad_model, self._vad_utils, _loader = load_silero_vad_runtime()
                 self._vad_loaded = True
                 move_torch_model_to_preferred_device(self._vad_model, settings=effective_s, log_label=f"{vad_model.upper()} VAD")
 

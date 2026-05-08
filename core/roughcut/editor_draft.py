@@ -57,6 +57,20 @@ DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT = """너는 자막 생성이 완료된 뒤 
 MAX_EDITOR_MAJOR_SEGMENTS = 26
 
 
+def _roughcut_llm_connection_unavailable(exc: Exception) -> bool:
+    message = str(exc or "").lower()
+    return any(
+        token in message
+        for token in (
+            "connection refused",
+            "errno 61",
+            "urlopen error",
+            "failed to establish a new connection",
+            "actively refused",
+        )
+    )
+
+
 def is_fast_recognition_mode(settings: dict[str, Any] | None) -> bool:
     settings = settings or {}
     return str(settings.get("stt_quality_preset", "") or "").strip().lower() == "fast"
@@ -297,6 +311,16 @@ def run_editor_roughcut_llm_draft(
             try:
                 payload = _call_editor_roughcut_json(provider, model, prompt, timeout=timeout)
             except Exception as exc:
+                if _roughcut_llm_connection_unavailable(exc):
+                    try:
+                        from core.runtime.logger import get_logger
+
+                        get_logger().log(
+                            "⚠️ 에디터 러프컷 LLM 연결 불가: chunk 재시도를 중단하고 로컬 규칙 초안으로 대체합니다."
+                        )
+                    except Exception:
+                        pass
+                    return None
                 try:
                     from core.runtime.logger import get_logger
 
@@ -898,6 +922,11 @@ def _candidate_outputs(
 
 
 def _call_editor_roughcut_json(provider: str, model: str, prompt: str, *, timeout: int) -> dict[str, Any] | None:
+    from core.llm.provider_router import normalize_llm_provider
+
+    provider = normalize_llm_provider(provider, model)
+    if provider == "llama_cpp":
+        return _call_local_llm_json(provider, model, prompt, timeout=timeout)
     if provider in {"google", "gemini"} or "gemini" in model.lower():
         return _call_gemini_json(model, prompt)
     if provider == "openai" or is_openai_model(model):
@@ -1106,23 +1135,34 @@ def _boundary_time(value: Any) -> float | None:
 
 
 def _call_ollama_json(model: str, prompt: str, *, timeout: int) -> dict[str, Any] | None:
-    body = json.dumps(
-        {
-            "model": model,
-            "prompt": prompt,
-            "stream": False,
-            "format": "json",
-            "keep_alive": -1,
-            "options": {"temperature": 0.2, "num_predict": 1024},
-        }
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        "http://localhost:11434/api/generate",
-        data=body,
-        headers={"Content-Type": "application/json", "Connection": "keep-alive"},
+    from core.llm.ollama_provider import generate_text
+
+    text = generate_text(
+        model,
+        prompt,
+        timeout=timeout,
+        keep_alive=-1,
+        num_predict=1024,
+        temperature=0.2,
+        json_format=True,
+        attempts=2,
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        text = json.loads(resp.read().decode("utf-8")).get("response", "")
+    return _parse_json_object(text)
+
+
+def _call_local_llm_json(provider: str, model: str, prompt: str, *, timeout: int) -> dict[str, Any] | None:
+    from core.llm.provider_router import generate_text
+
+    text = generate_text(
+        provider,
+        model,
+        prompt,
+        timeout=timeout,
+        num_predict=1024,
+        temperature=0.2,
+        json_format=True,
+        attempts=1,
+    )
     return _parse_json_object(text)
 
 

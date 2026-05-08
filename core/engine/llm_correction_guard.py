@@ -2,9 +2,10 @@
 # Phase: PHASE2
 from __future__ import annotations
 
-import difflib
 import re
 from typing import Iterable
+
+from core.native_text_similarity import similarity_ratio
 
 
 _TIME_CODE_PATTERN = re.compile(
@@ -51,7 +52,7 @@ def validate_llm_chunks(
     if length_delta > max_length_delta_ratio:
         return False, f"length_delta:{length_delta:.2f}"
 
-    similarity = difflib.SequenceMatcher(None, source_norm, candidate_norm).ratio()
+    similarity = similarity_ratio(source_norm, candidate_norm)
     if similarity < min_similarity:
         return False, f"similarity:{similarity:.2f}"
 
@@ -84,7 +85,7 @@ def assess_llm_rewrite_policy(source_text: str, chunks: Iterable[str] | None) ->
             "score_penalty": 0.0,
         }
 
-    similarity = difflib.SequenceMatcher(None, source_norm, candidate_norm).ratio()
+    similarity = similarity_ratio(source_norm, candidate_norm)
     length_delta_ratio = abs(len(candidate_norm) - len(source_norm)) / max(1, len(source_norm))
     numbers_changed = _number_tokens(source_text) != _number_tokens(candidate_text)
     high_confidence = (not numbers_changed) and similarity >= 0.90 and length_delta_ratio <= 0.10

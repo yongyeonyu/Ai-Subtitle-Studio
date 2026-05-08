@@ -21,7 +21,7 @@ from ui.style import label_style, line_icon, tool_button_style
 
 MENU_BAR_HEIGHT = 54
 MENU_BUTTON_HEIGHT = 44
-MENU_SMALL_WIDTH = 48
+MENU_SMALL_WIDTH = 54
 MENU_ACTION_WIDTH = 78
 MENU_WIDE_WIDTH = 62
 MENU_CACHE_WIDTH = 82
@@ -360,7 +360,7 @@ class GlobalMenuBar(QWidget):
             ("간격", "timeline", self._open_gap, "#579DFF"),
             ("비디오", "video", self._toggle_video, "#579DFF"),
             ("자막", "export", self._open_export, "#34C759"),
-            ("STT", "mic", self._toggle_stt_mode, "#FF453A"),
+            ("음성", "mic", self._toggle_stt_mode, "#FF453A"),
         ]:
             btn = self._small_button(text, icon, slot, color)
             self._register_qml_button(
@@ -370,7 +370,7 @@ class GlobalMenuBar(QWidget):
                 accent=color,
                 section="left",
             )
-            if text == "STT":
+            if text == "음성":
                 self.btn_stt_mode = btn
             left.addWidget(btn)
         root.addWidget(self.left_group, stretch=1, alignment=Qt.AlignmentFlag.AlignLeft)
@@ -381,13 +381,13 @@ class GlobalMenuBar(QWidget):
         center.setContentsMargins(0, 0, 0, 0)
         center.setSpacing(6)
         self.btn_start = self._action_button("시작", "play", self._click_start)
-        self.btn_undo = self._action_button("Undo", "undo", self._click_undo)
-        self.btn_redo = self._action_button("Redo", "redo", self._click_redo)
+        self.btn_undo = self._action_button("실행취소", "undo", self._click_undo)
+        self.btn_redo = self._action_button("다시실행", "redo", self._click_redo)
         self.btn_save = self._action_button("저장", "save", self._click_save)
-        self._register_qml_button(self.btn_start, action_id="center_start", badge="GO", accent="#34C759", section="center", kind="primary")
-        self._register_qml_button(self.btn_undo, action_id="center_undo", badge="UNDO", accent="#579DFF", section="center")
-        self._register_qml_button(self.btn_redo, action_id="center_redo", badge="REDO", accent="#579DFF", section="center")
-        self._register_qml_button(self.btn_save, action_id="center_save", badge="SAVE", accent="#34C759", section="center")
+        self._register_qml_button(self.btn_start, action_id="center_start", badge="", accent="#34C759", section="center", kind="primary")
+        self._register_qml_button(self.btn_undo, action_id="center_undo", badge="", accent="#579DFF", section="center")
+        self._register_qml_button(self.btn_redo, action_id="center_redo", badge="", accent="#579DFF", section="center")
+        self._register_qml_button(self.btn_save, action_id="center_save", badge="", accent="#34C759", section="center")
         for btn in (self.btn_start, self.btn_undo, self.btn_redo, self.btn_save):
             center.addWidget(btn)
         root.addWidget(self.center_group, stretch=0, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -402,11 +402,11 @@ class GlobalMenuBar(QWidget):
         self.btn_log = self._wide_button("사이드바", "terminal", self._toggle_log)
         self.btn_cache_clear = self._wide_button("캐쉬삭제", "trash", self._clear_cache, min_width=MENU_CACHE_WIDTH)
         self.btn_quit = self._wide_button("종료", "power", self._quit, kind="danger")
-        self._register_qml_button(self.btn_cache_clear, action_id="right_cache", badge="CLR", accent="#FF9500", section="right")
-        self._register_qml_button(self.btn_auto_start, action_id="right_auto", badge="AUTO", accent="#34C759", section="right")
-        self._register_qml_button(self.btn_help, action_id="right_help", badge="HELP", accent="#579DFF", section="right")
-        self._register_qml_button(self.btn_log, action_id="right_log", badge="SIDE", accent="#579DFF", section="right")
-        self._register_qml_button(self.btn_quit, action_id="right_quit", badge="QUIT", accent="#FF453A", section="right", kind="danger")
+        self._register_qml_button(self.btn_cache_clear, action_id="right_cache", badge="", accent="#FF9500", section="right")
+        self._register_qml_button(self.btn_auto_start, action_id="right_auto", badge="", accent="#34C759", section="right")
+        self._register_qml_button(self.btn_help, action_id="right_help", badge="", accent="#579DFF", section="right")
+        self._register_qml_button(self.btn_log, action_id="right_log", badge="", accent="#579DFF", section="right")
+        self._register_qml_button(self.btn_quit, action_id="right_quit", badge="", accent="#FF453A", section="right", kind="danger")
         right.addWidget(self.btn_cache_clear)
         right.addWidget(self.btn_auto_start)
         right.addWidget(self.btn_help)
@@ -469,24 +469,7 @@ class GlobalMenuBar(QWidget):
     def _button_badge_text(self, icon_name: str, text: str) -> str:
         icon_name = str(icon_name or "").strip().lower()
         text = str(text or "").strip()
-        return {
-            "settings": "CFG",
-            "ai": "AI",
-            "speaker": "SPK",
-            "sliders": "CTL",
-            "timeline": "CUT",
-            "video": "VID",
-            "export": "SUB",
-            "mic": "STT",
-            "play": "GO",
-            "undo": "UNDO",
-            "redo": "REDO",
-            "save": "SAVE",
-            "help": "HELP",
-            "terminal": "SIDE",
-            "trash": "CLR",
-            "power": "QUIT",
-        }.get(icon_name, (text[:4] or "UI").upper())
+        return ""
 
     def _register_qml_button(self, btn, *, action_id: str, badge: str, accent: str, section: str, kind: str = "toolbar"):
         btn.setProperty("qmlActionId", action_id)
@@ -557,7 +540,7 @@ class GlobalMenuBar(QWidget):
         stt_on = bool(getattr(editor, "_stt_mode_enabled", False)) if editor is not None else False
         if hasattr(self, "btn_stt_mode"):
             stt_color = "#FF453A" if stt_on else "#8B949E"
-            self.btn_stt_mode.setText("STT")
+            self.btn_stt_mode.setText("음성")
             self.btn_stt_mode.setIcon(line_icon("mic", stt_color, 22))
             self.btn_stt_mode.setToolTip("STT 모드 ON" if stt_on else "STT 모드 OFF")
             self.btn_stt_mode.setStyleSheet(tool_button_style("toolbar", checked=stt_on, padding=MENU_TEXT_UNDER_ICON_PADDING))
@@ -803,7 +786,7 @@ class GlobalMenuBar(QWidget):
     def _handle_quick_action(self, action_id: str):
         button = self._quick_action_buttons.get(str(action_id or ""))
         if button is not None and button.isEnabled():
-            button.click()
+            QTimer.singleShot(0, button.click)
 
     def _qml_button_payload(self, btn) -> dict:
         return {

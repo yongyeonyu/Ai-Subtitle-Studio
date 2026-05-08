@@ -6,6 +6,7 @@ Project JSON adapter for editor / roughcut state separation.
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 import hashlib
 import json
 import os
@@ -24,6 +25,7 @@ from core.project.project_assets import (
     load_external_stt_tracks,
     load_external_subtitle_segments,
     project_uses_external_text_assets,
+    sanitize_stt_track_rows,
 )
 
 STT_SEGMENT_METADATA_KEYS = (
@@ -319,11 +321,7 @@ def project_stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]
         raw_segments = editor_state.get("stt_preview_segments")
     if not isinstance(raw_segments, list) or not raw_segments:
         tracks = stt_state.get("candidate_tracks")
-        if not isinstance(tracks, dict):
-            tracks = (editor_state.get("analysis", {}) or {}).get("stt_candidate_tracks")
-        if not isinstance(tracks, dict):
-            tracks = (project.get("analysis", {}) or {}).get("stt_candidate_tracks")
-        if isinstance(tracks, dict):
+        if isinstance(tracks, dict) and tracks:
             raw_segments = []
             for source, rows in tracks.items():
                 if not isinstance(rows, list):
@@ -333,13 +331,27 @@ def project_stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]
                         item = dict(row)
                         item["stt_preview_source"] = str(source)
                         raw_segments.append(item)
-    if (not isinstance(raw_segments, list) or not raw_segments) and project_uses_external_text_assets(project):
-        raw_segments = []
-        for source, rows in load_external_stt_tracks(project).items():
-            for row in rows:
-                item = dict(row)
-                item["stt_preview_source"] = str(source)
-                raw_segments.append(item)
+        elif project_uses_external_text_assets(project):
+            raw_segments = []
+            for source, rows in load_external_stt_tracks(project).items():
+                for row in rows:
+                    item = dict(row)
+                    item["stt_preview_source"] = str(source)
+                    raw_segments.append(item)
+        else:
+            tracks = (editor_state.get("analysis", {}) or {}).get("stt_candidate_tracks")
+            if not isinstance(tracks, dict):
+                tracks = (project.get("analysis", {}) or {}).get("stt_candidate_tracks")
+            if isinstance(tracks, dict):
+                raw_segments = []
+                for source, rows in tracks.items():
+                    if not isinstance(rows, list):
+                        continue
+                    for row in rows:
+                        if isinstance(row, dict):
+                            item = dict(row)
+                            item["stt_preview_source"] = str(source)
+                            raw_segments.append(item)
     if not isinstance(raw_segments, list):
         return []
     timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
@@ -352,22 +364,39 @@ def project_stt_preview_segments(project: dict[str, Any]) -> list[dict[str, Any]
 def _attach_clip_context_from_boundaries(segments: list[dict[str, Any]], boundaries: list[dict[str, Any]]) -> None:
     if not segments or not boundaries:
         return
+    indexed = [
+        (
+            _safe_float(boundary.get("start")),
+            _safe_float(boundary.get("end")),
+            idx,
+            boundary,
+        )
+        for idx, boundary in enumerate(boundaries)
+    ]
+    indexed.sort(key=lambda item: (item[0], item[1], item[2]))
+    starts = [item[0] for item in indexed]
     for seg in segments:
         if not isinstance(seg, dict) or seg.get("_clip_idx") is not None:
             continue
         start = _safe_float(seg.get("start", 0.0))
-        for idx, boundary in enumerate(boundaries):
-            boundary_start = _safe_float(boundary.get("start"))
-            boundary_end = _safe_float(boundary.get("end"))
+        candidate = bisect_right(starts, start) - 1
+        for probe in (candidate, candidate - 1, candidate + 1):
+            if probe < 0 or probe >= len(indexed):
+                continue
+            boundary_start, boundary_end, idx, boundary = indexed[probe]
             is_last = idx == len(boundaries) - 1
             if boundary_start <= start < boundary_end or (is_last and start <= boundary_end + 0.001):
-                seg["_clip_idx"] = idx
+                seg["_clip_idx"] = int(idx)
                 if boundary.get("file"):
                     seg["_clip_file"] = str(boundary.get("file") or "")
                 break
 
 
-def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
+def project_segments_to_editor(
+    project: dict[str, Any],
+    *,
+    include_analysis_candidates: bool = True,
+) -> list[dict[str, Any]]:
     editor_state = project.get("editor_state", {}) or {}
     editor_subtitles = editor_state.get("subtitles", {}) or {}
     vector_canvas = ((editor_state.get("rendering", {}) or {}).get("subtitle_canvas", {}) or {})
@@ -384,6 +413,22 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
     boundaries = project_clip_boundaries(project)
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", []) or []
     clip_by_id = {str(clip.get("id", "")): clip for clip in clips if clip.get("id")}
+    boundary_rows = [
+        (
+            _safe_float(boundary.get("start")),
+            _safe_float(boundary.get("end")),
+            b_idx,
+            boundary,
+        )
+        for b_idx, boundary in enumerate(boundaries)
+    ]
+    boundary_rows.sort(key=lambda item: (item[0], item[1], item[2]))
+    boundary_starts = [item[0] for item in boundary_rows]
+    boundary_by_file = {
+        str(boundary.get("file") or ""): (b_idx, boundary)
+        for b_idx, boundary in enumerate(boundaries)
+        if boundary.get("file")
+    }
     timebase = (project.get("timeline", {}) or {}).get("timebase", {}) or project.get("frame_timebase", {}) or {}
     primary_fps = normalize_fps(timebase.get("primary_fps", 30.0) or 30.0)
     status_threshold = recheck_threshold() if raw_segments else None
@@ -413,13 +458,17 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
             clip = clip_by_id[clip_id]
             clip_file = str(clip.get("source_path", "") or "")
         if clip_idx is None and clip_file and boundaries:
-            for b_idx, boundary in enumerate(boundaries):
-                if boundary.get("file") == clip_file:
-                    clip_idx = b_idx
-                    break
-        if clip_idx is None and boundaries:
-            for b_idx, boundary in enumerate(boundaries):
-                if _safe_float(boundary.get("start")) <= start < _safe_float(boundary.get("end")) + 0.001:
+            resolved = boundary_by_file.get(clip_file)
+            if resolved is not None:
+                clip_idx, _boundary = resolved
+        if clip_idx is None and boundary_rows:
+            candidate = bisect_right(boundary_starts, start) - 1
+            for probe in (candidate, candidate - 1, candidate + 1):
+                if probe < 0 or probe >= len(boundary_rows):
+                    continue
+                boundary_start, boundary_end, b_idx, boundary = boundary_rows[probe]
+                is_last = b_idx == len(boundaries) - 1
+                if boundary_start <= start < boundary_end or (is_last and start <= boundary_end + 0.001):
                     clip_idx = b_idx
                     clip_file = str(boundary.get("file", "") or clip_file)
                     break
@@ -474,7 +523,7 @@ def project_segments_to_editor(project: dict[str, Any]) -> list[dict[str, Any]]:
                 item[key] = seg.get(key)
         item.update(_project_segment_status_payload(item, threshold=status_threshold))
         out.append(item)
-    if out and project_uses_external_text_assets(project):
+    if out and include_analysis_candidates and project_uses_external_text_assets(project):
         _attach_external_stt_candidates(out, load_external_stt_tracks(project))
         _attach_lattice_candidates_from_artifact(out, project)
     return out
@@ -753,7 +802,11 @@ def build_stt_candidate_tracks(
             continue
         add_row(str(seg.get("stt_preview_source") or seg.get("stt_source") or "STT1"), seg, seg)
 
-    return {source: rows for source, rows in tracks.items() if rows}
+    return {
+        source: sanitize_stt_track_rows(rows, source=source, primary_fps=fps)
+        for source, rows in tracks.items()
+        if rows
+    }
 
 
 def _normalize_stt_source(source: Any) -> str:

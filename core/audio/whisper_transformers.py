@@ -22,11 +22,29 @@ TRANSFORMERS_KOREAN_WHISPER_MODELS = {
     "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2",
     "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO",
     "o0dimplz0o/Fine-Tuned-Whisper-Large-v2-Zeroth-STT-KO",
+    "seastar105/whisper-medium-komixv2",
+}
+
+TRANSFORMERS_WHISPER_MODEL_ALIASES = {
+    "whisper-medium-komixv2": "seastar105/whisper-medium-komixv2",
+}
+
+TRANSFORMERS_WHISPER_FALLBACK_MODELS = {
+    "seastar105/whisper-medium-komixv2": (
+        "youngouk/whisper-medium-komixv2-mlx"
+        if sys.platform == "darwin" else
+        "medium"
+    ),
 }
 
 
-def is_transformers_whisper_model(model: str) -> bool:
+def normalize_transformers_whisper_model(model: str) -> str:
     value = str(model or "").strip()
+    return TRANSFORMERS_WHISPER_MODEL_ALIASES.get(value.lower(), value)
+
+
+def is_transformers_whisper_model(model: str) -> bool:
+    value = normalize_transformers_whisper_model(model)
     if value in TRANSFORMERS_KOREAN_WHISPER_MODELS:
         return True
     try:
@@ -47,6 +65,7 @@ def is_transformers_whisper_model(model: str) -> bool:
 def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple: str = "(0.0,)", log_label: str = "STT"):
     """Run a Transformers ASR worker and stream one JSON line per chunk."""
     env = _huggingface_env(strip_qt=True)
+    model = normalize_transformers_whisper_model(model)
     proc = subprocess.Popen(
         [sys.executable, "-u", "-c", _build_worker_script()],
         stdin=subprocess.PIPE,
@@ -94,6 +113,9 @@ def _huggingface_env(*, strip_qt: bool = False) -> dict:
 
 
 def transformers_whisper_fallback_model(model: str) -> str:
+    requested_raw = normalize_transformers_whisper_model(model)
+    if requested_raw in TRANSFORMERS_WHISPER_FALLBACK_MODELS:
+        return TRANSFORMERS_WHISPER_FALLBACK_MODELS[requested_raw]
     requested = str(model or "").strip().lower()
     if not requested:
         return ""

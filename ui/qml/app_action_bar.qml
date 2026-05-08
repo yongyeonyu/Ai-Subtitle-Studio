@@ -6,11 +6,11 @@ Item {
     property bool compact: false
     signal actionTriggered(string actionId)
 
-    height: compact ? 44 : 62
+    height: compact ? 38 : 52
 
     Rectangle {
         anchors.fill: parent
-        radius: compact ? 14 : 18
+        radius: compact ? 12 : 15
         color: "#121C22"
         border.color: "#25343D"
         border.width: 1
@@ -20,8 +20,8 @@ Item {
     Row {
         id: row
         anchors.fill: parent
-        anchors.margins: compact ? 6 : 8
-        spacing: compact ? 6 : 8
+        anchors.margins: compact ? 5 : 7
+        spacing: compact ? 5 : 7
 
         Repeater {
             model: root.actions
@@ -34,9 +34,9 @@ Item {
                 property string kind: String((modelData && modelData.kind) || "secondary")
                 property bool enabledState: modelData ? modelData.enabled !== false : true
 
-                width: Math.max(root.compact ? 88 : 112, titleText.implicitWidth + (root.compact ? 28 : 36))
+                width: Math.max(root.compact ? 76 : 98, titleText.implicitWidth + (root.compact ? 24 : 30))
                 height: row.height
-                radius: root.compact ? 12 : 16
+                radius: root.compact ? 10 : 13
                 color: {
                     if (!enabledState) return "#182228"
                     if (kind === "primary") return "#1E7CF0"
@@ -58,7 +58,7 @@ Item {
                     anchors.centerIn: parent
                     text: parent.title
                     color: parent.kind === "primary" ? "#FFFFFF" : "#EAF1F5"
-                    font.pixelSize: root.compact ? 13 : 14
+                    font.pixelSize: root.compact ? 12 : 13
                     font.bold: true
                     elide: Text.ElideRight
                 }

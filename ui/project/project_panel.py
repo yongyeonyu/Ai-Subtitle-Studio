@@ -112,16 +112,18 @@ class ProjectUIMixin:
                 editor._apply_multiclip_state_from_owner()
             if hasattr(editor, "_set_process_completed"):
                 editor._set_process_completed()
-            stt_preview = project_stt_preview_segments(project)
-            if stt_preview:
-                editor._live_stt_preview_segments = stt_preview
             provisional_boundaries = project_cut_boundary_provisional_segments(project)
-            voice_activity = project_voice_activity_segments(project)
             if hasattr(editor, "_schedule_timeline"):
                 editor._schedule_timeline()
 
             def _restore_deferred_state():
                 try:
+                    stt_preview = project_stt_preview_segments(project)
+                    if stt_preview:
+                        editor._live_stt_preview_segments = stt_preview
+                        if hasattr(editor, "_schedule_timeline"):
+                            editor._schedule_timeline()
+                    voice_activity = project_voice_activity_segments(project)
                     if hasattr(editor, "_refresh_video_subtitle_context"):
                         editor._refresh_video_subtitle_context()
                     if provisional_boundaries and hasattr(editor, "timeline") and hasattr(editor.timeline, "set_scan_boundary_times"):
@@ -134,7 +136,7 @@ class ProjectUIMixin:
                 except Exception as inner_exc:
                     get_logger().log(f"⚠️ 프로젝트 지연 상태 복원 실패: {inner_exc}")
 
-            QTimer.singleShot(0, _restore_deferred_state)
+            QTimer.singleShot(120, _restore_deferred_state)
         except Exception as e:
             get_logger().log(f"⚠️ 프로젝트 자막 복원 실패: {e}")
         return True
@@ -174,7 +176,7 @@ class ProjectUIMixin:
         self._current_project_path = filepath
         self._is_auto_pipeline = False
 
-        project_data = load_project(filepath)
+        project_data = load_project(filepath, hydrate_text_assets=False)
         if project_data:
             self._project_boundary_times = get_boundary_times(project_data)
 
@@ -196,7 +198,7 @@ class ProjectUIMixin:
         if not filepath:
             return
 
-        project = load_project(filepath)
+        project = load_project(filepath, hydrate_text_assets=False)
         if not project:
             QMessageBox.warning(self, "오류", "프로젝트 파일을 열 수 없습니다.")
             return
@@ -217,7 +219,7 @@ class ProjectUIMixin:
             get_logger().log("🔁 프로젝트 AI 모델 설정 복원 완료")
 
         media = self._sorted_project_media(project)
-        project_segments = project_segments_to_editor(project)
+        project_segments = project_segments_to_editor(project, include_analysis_candidates=False)
 
         srt_path = (
             project.get("subtitle", {}).get("path", "")
@@ -231,10 +233,13 @@ class ProjectUIMixin:
         if media:
             if self._open_project_segments_in_editor(filepath, project, media, project_segments):
                 if project_active_work_mode(project) == "roughcut" and project_roughcut_state(project):
-                    try:
-                        self._open_roughcut_helper()
-                    except Exception as e:
-                        get_logger().log(f"⚠️ 러프컷 화면 복원 실패: {e}")
+                    def _open_roughcut_deferred():
+                        try:
+                            self._open_roughcut_helper()
+                        except Exception as e:
+                            get_logger().log(f"⚠️ 러프컷 화면 복원 실패: {e}")
+
+                    QTimer.singleShot(180, _open_roughcut_deferred)
                 return
 
         if srt_path and os.path.exists(srt_path):

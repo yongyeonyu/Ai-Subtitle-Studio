@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import difflib
 import json
 import math
 import re
 from typing import Any, Iterable
 
 from core.engine.llm_correction_guard import normalized_text, validate_llm_chunks
+from core.native_text_similarity import similarity_ratio
 
 
 LLM_CANDIDATE_POLICY_SCHEMA = "ai_subtitle_studio.llm_candidate_policy.v1"
@@ -326,7 +326,7 @@ def validate_candidate_locked_chunks(
     best_similarity = 0.0
     for candidate in candidate_rows:
         candidate_sig = _chunks_signature(candidate.get("chunks") or [])
-        similarity = difflib.SequenceMatcher(None, candidate_sig, output_sig).ratio() if candidate_sig and output_sig else 0.0
+        similarity = similarity_ratio(candidate_sig, output_sig) if candidate_sig and output_sig else 0.0
         if similarity > best_similarity:
             best_similarity = similarity
             best_id = str(candidate.get("id") or "")
@@ -347,7 +347,7 @@ def validate_candidate_locked_chunks(
 
     allow_minimal = _safe_bool(settings.get("llm_candidate_policy_allow_minimal_edit"), True)
     max_edit_ratio = max(0.0, min(0.5, _safe_float(settings.get("llm_candidate_policy_max_edit_ratio"), 0.08)))
-    edit_similarity = difflib.SequenceMatcher(None, source_sig, output_sig).ratio() if source_sig and output_sig else 0.0
+    edit_similarity = similarity_ratio(source_sig, output_sig) if source_sig and output_sig else 0.0
     edit_ratio = 1.0 - edit_similarity
     ok, guard_reason = validate_llm_chunks(
         source_text,

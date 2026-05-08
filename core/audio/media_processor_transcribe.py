@@ -159,14 +159,29 @@ class VideoProcessorTranscribeMixin:
         parent = os.path.dirname(source) or None
         prefix = f".ensemble_{str(label or 'stt').lower()}_"
         target = tempfile.mkdtemp(prefix=prefix, dir=parent)
-        ignore = shutil.ignore_patterns(
-            "_stt_recheck",
-            "_fast_stt2_recheck",
-            ".ensemble_*",
-        )
+
+        def _ignored(name: str) -> bool:
+            text = str(name or "")
+            return text in {"_stt_recheck", "_fast_stt2_recheck"} or text.startswith(".ensemble_")
+
+        def _link_or_copy(src: str, dst: str) -> None:
+            try:
+                os.link(src, dst)
+            except Exception:
+                shutil.copy2(src, dst)
+
         try:
             shutil.rmtree(target, ignore_errors=True)
-            shutil.copytree(source, target, ignore=ignore)
+            os.makedirs(target, exist_ok=True)
+            for root, dirs, files in os.walk(source):
+                dirs[:] = [name for name in dirs if not _ignored(name)]
+                rel_root = os.path.relpath(root, source)
+                out_root = target if rel_root == "." else os.path.join(target, rel_root)
+                os.makedirs(out_root, exist_ok=True)
+                for name in files:
+                    if _ignored(name):
+                        continue
+                    _link_or_copy(os.path.join(root, name), os.path.join(out_root, name))
         except Exception:
             shutil.rmtree(target, ignore_errors=True)
             raise
@@ -582,6 +597,7 @@ class VideoProcessorTranscribeMixin:
         target_end_sec: float = None,
         is_single: bool = False,
         preview_callback=None,
+        cleanup_chunk_dir: bool = True,
     ):
         s = self._load_all_settings()
         from core.audio.npu_acceleration import prefer_npu_whisper_model
@@ -608,7 +624,7 @@ class VideoProcessorTranscribeMixin:
                 target_end_sec=target_end_sec,
                 is_single=is_single,
                 model_override=primary_model,
-                cleanup_chunk_dir=True,
+                cleanup_chunk_dir=cleanup_chunk_dir,
                 log_label="STT1",
                 preview_callback=preview_callback,
             )
@@ -750,7 +766,8 @@ class VideoProcessorTranscribeMixin:
         finally:
             for local_chunk_dir in ensemble_chunk_dirs.values():
                 shutil.rmtree(local_chunk_dir, ignore_errors=True)
-            shutil.rmtree(chunk_dir, ignore_errors=True)
+            if cleanup_chunk_dir:
+                shutil.rmtree(chunk_dir, ignore_errors=True)
             self._release_after_transcribe_job("STT 앙상블")
     def transcribe(
         self,
@@ -786,11 +803,25 @@ class VideoProcessorTranscribeMixin:
                 target_end_sec=target_end_sec,
                 is_single=is_single,
                 preview_callback=preview_callback,
+                cleanup_chunk_dir=cleanup_chunk_dir,
             )
             return
         from core.audio.npu_acceleration import prefer_npu_whisper_model
 
         target_model = model_override or _s.get("selected_whisper_model", self.whisper_model)
+        try:
+            from core.audio.stt_backend_router import select_stt_backend
+
+            stt_choice = select_stt_backend(target_model, _s)
+            if stt_choice.model:
+                target_model = stt_choice.model
+            if stt_choice.reason not in {"auto_selected_model", "selected_model"}:
+                get_logger().log(
+                    f"  ⚙️ [{log_label}] STT backend={stt_choice.backend} "
+                    f"reason={stt_choice.reason}"
+                )
+        except Exception:
+            pass
         target_model = prefer_npu_whisper_model(target_model, _s, purpose="stt", log_label=log_label)
         target_model, _used_runtime_fallback = self._resolve_runtime_whisper_model(target_model, log_label=log_label)
         self._notify_stage(f"⏳ [{log_label}] Whisper 인식 중")

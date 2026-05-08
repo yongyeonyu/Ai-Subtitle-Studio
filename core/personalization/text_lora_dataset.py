@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import hashlib
 import uuid
-from difflib import SequenceMatcher
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from core.native_text_similarity import similarity_ratio
 from core.personalization.ground_truth_import import extract_parenthetical_segments
 from core.personalization.lora_context_classifier import classify_lora_context
 from core.personalization.lora_models import TrainingQueueItem, stable_hash
@@ -297,7 +297,7 @@ def _delta_ratio(src: str, dst: str) -> float:
     dst = _normalize_text(dst)
     if not src and not dst:
         return 0.0
-    return 1.0 - float(SequenceMatcher(None, src, dst).ratio())
+    return 1.0 - similarity_ratio(src, dst)
 
 
 def _project_pair_quality(src: str, dst: str) -> tuple[bool, str, float]:

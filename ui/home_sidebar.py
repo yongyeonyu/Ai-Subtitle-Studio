@@ -693,6 +693,13 @@ class HomeSidebarMixin:
             return "미사용"
         if "사용 안함" in text:
             return "미사용"
+        lowered = text.lower()
+        if lowered == "whisper-medium-komixv2":
+            return "KomixV2 · 별칭"
+        if lowered == "youngouk/whisper-medium-komixv2-mlx":
+            return "KomixV2 · MLX"
+        if lowered == "seastar105/whisper-medium-komixv2":
+            return "KomixV2 · HF 원본"
         for prefix in ("mlx-community/", "Systran/", "youngouk/", "ghost613/", "o0dimplz0o/"):
             text = text.replace(prefix, "")
         text = text.replace("-mlx", "")
@@ -1566,7 +1573,7 @@ class HomeSidebarMixin:
         picked = []
         for model in self._whisper_model_items():
             model_l = str(model).lower()
-            if "ghost613" not in model_l and "zeroth" not in model_l:
+            if "ghost613" not in model_l and "zeroth" not in model_l and "komixv2" not in model_l:
                 continue
             if model not in picked:
                 picked.append(model)

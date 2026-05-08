@@ -5,6 +5,7 @@ import json
 import unittest
 from pathlib import Path
 
+from ui.settings.settings_ai import stt2_whisper_model_candidates
 from ui.settings.settings_common import MAC_WHISPER_MODELS, WINDOWS_WHISPER_MODELS, filter_available_whisper_models
 
 
@@ -55,6 +56,23 @@ class WhisperModelCatalogTest(unittest.TestCase):
     def test_cache_filter_removes_unused_models(self):
         mixed = ["mlx-community/whisper-large-v3-mlx", "small", "mlx-community/whisper-base-mlx"]
         self.assertEqual(filter_available_whisper_models(mixed), ["mlx-community/whisper-large-v3-mlx"])
+
+    def test_korean_komixv2_candidates_are_selectable(self):
+        self.assertIn("whisper-medium-komixv2", MAC_WHISPER_MODELS)
+        self.assertIn("youngouk/whisper-medium-komixv2-mlx", MAC_WHISPER_MODELS)
+        self.assertIn("seastar105/whisper-medium-komixv2", MAC_WHISPER_MODELS)
+        self.assertIn("whisper-medium-komixv2", WINDOWS_WHISPER_MODELS)
+        self.assertIn("seastar105/whisper-medium-komixv2", WINDOWS_WHISPER_MODELS)
+
+    def test_korean_komixv2_candidates_are_selectable_for_stt2(self):
+        mac_stt2 = stt2_whisper_model_candidates(MAC_WHISPER_MODELS)
+        windows_stt2 = stt2_whisper_model_candidates(WINDOWS_WHISPER_MODELS)
+
+        self.assertIn("whisper-medium-komixv2", mac_stt2)
+        self.assertIn("youngouk/whisper-medium-komixv2-mlx", mac_stt2)
+        self.assertIn("seastar105/whisper-medium-komixv2", mac_stt2)
+        self.assertIn("whisper-medium-komixv2", windows_stt2)
+        self.assertIn("seastar105/whisper-medium-komixv2", windows_stt2)
 
     def test_unused_models_are_not_in_default_settings(self):
         defaults = json.loads((ROOT / "dataset" / "custom_defaults.json").read_text(encoding="utf-8"))

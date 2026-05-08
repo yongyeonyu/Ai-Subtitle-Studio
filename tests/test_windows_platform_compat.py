@@ -182,6 +182,9 @@ class WindowsPlatformCompatTest(unittest.TestCase):
         self.assertTrue(
             is_transformers_whisper_model("o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2")
         )
+        self.assertTrue(
+            is_transformers_whisper_model("seastar105/whisper-medium-komixv2")
+        )
         self.assertFalse(is_transformers_whisper_model("large-v3"))
 
 

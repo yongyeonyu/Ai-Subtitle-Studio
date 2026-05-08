@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import difflib
 import re
 from collections import Counter
 from statistics import median
@@ -8,6 +7,7 @@ from time import time
 from typing import Any, Iterable
 
 from core.engine.llm_correction_guard import contains_timecode, normalized_text, validate_llm_chunks
+from core.native_text_similarity import similarity_ratio
 
 
 SUBTITLE_ACCURACY_SCHEMA = "ai_subtitle_studio.subtitle_accuracy_pipeline.v1"
@@ -374,7 +374,7 @@ def _candidate_text_conflict(segment: dict[str, Any], *, min_similarity: float =
     best_similarity = 0.0
     for left_index, left in enumerate(compact):
         for right in compact[left_index + 1:]:
-            best_similarity = max(best_similarity, difflib.SequenceMatcher(None, left, right).ratio())
+            best_similarity = max(best_similarity, similarity_ratio(left, right))
     if best_similarity >= min_similarity:
         return None
     return {
@@ -596,7 +596,7 @@ def verify_llm_chunks_for_subtitle(
     cleaned = _clean_chunks(chunks)
     source_norm = normalized_text(source_text)
     candidate_norm = normalized_text("".join(cleaned))
-    similarity = difflib.SequenceMatcher(None, source_norm, candidate_norm).ratio() if source_norm and candidate_norm else 0.0
+    similarity = similarity_ratio(source_norm, candidate_norm) if source_norm and candidate_norm else 0.0
     length_delta = abs(len(candidate_norm) - len(source_norm)) / max(1, len(source_norm)) if source_norm else 1.0
     base_meta = {
         "chunk_count": len(cleaned),
@@ -742,7 +742,7 @@ def subtitle_context_consistency_metrics(
                 if compact == prev_text and len(compact) >= 2:
                     repeated_segments += 1
                 elif min(len(compact), len(prev_text)) >= 4:
-                    similarity = difflib.SequenceMatcher(None, compact, prev_text).ratio()
+                    similarity = similarity_ratio(compact, prev_text)
                     if similarity >= near_duplicate_ratio:
                         near_duplicate_segments += 1
             if (
@@ -845,7 +845,7 @@ def annotate_subtitle_context_consistency(
                     flags.append("repeat_previous")
                     details["repeat_similarity"] = 1.0
                 elif min(len(compact), len(prev_text)) >= 4:
-                    similarity = difflib.SequenceMatcher(None, compact, prev_text).ratio()
+                    similarity = similarity_ratio(compact, prev_text)
                     if similarity >= near_duplicate_ratio:
                         flags.append("near_duplicate_previous")
                         details["repeat_similarity"] = round(similarity, 4)

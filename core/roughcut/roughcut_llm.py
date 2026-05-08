@@ -204,14 +204,16 @@ def _default_roughcut_llm_client(llm_config):
         return None
 
     def _client(prompt: str):
-        from .editor_draft import _call_gemini_json, _call_ollama_json, _call_openai_json
+        from core.llm.provider_router import normalize_llm_provider
+        from .editor_draft import _call_editor_roughcut_json, _call_gemini_json, _call_openai_json
 
         timeout = 180
-        if provider in {"google", "gemini"} or "gemini" in model.lower():
+        provider_key = normalize_llm_provider(provider, model)
+        if provider_key in {"google", "gemini"} or "gemini" in model.lower():
             return _call_gemini_json(model, prompt)
-        if provider == "openai":
+        if provider_key == "openai":
             return _call_openai_json(model, prompt, timeout=timeout)
-        return _call_ollama_json(model, prompt, timeout=timeout)
+        return _call_editor_roughcut_json(provider_key, model, prompt, timeout=timeout)
 
     return _client
 

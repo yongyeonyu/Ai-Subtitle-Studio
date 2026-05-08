@@ -15,6 +15,7 @@ import subprocess
 import sys  # noqa: F401 - compatibility hook for runtime/test patching
 import threading
 import time  # noqa: F401 - compatibility hook for heartbeat tests/runtime patching
+import wave
 from concurrent.futures import ThreadPoolExecutor
 from core.audio.audio_presets import apply_audio_preset, auto_audio_settings_only
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
@@ -39,7 +40,7 @@ from core.subtitle_quality.vad_alignment_checker import (
 _CHUNK_DURATION = 30
 _OVERLAP_SEC = 3.0
 _VAD_CACHE_VERSION = 3
-_AUDIO_CACHE_VERSION = 3
+_AUDIO_CACHE_VERSION = 4
 
 
 class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMixin, VideoProcessorVadMixin):
@@ -157,6 +158,22 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         vad_post_align_enabled = bool(s.get("vad_post_stt_align_enabled", True))
         direct_start, direct_end = self._direct_chunk_span(video_path, target_start_sec, target_end_sec)
         direct_span = max(0.0, direct_end - direct_start)
+        try:
+            from core.audio.audio_extract_backend_router import select_audio_extract_backend
+
+            audio_backend = select_audio_extract_backend(s, audio_ai=audio_ai, span_sec=direct_span)
+            if audio_backend.direct_chunk_min_sec is not None:
+                s = dict(s)
+                s["direct_ffmpeg_chunk_min_sec"] = min(
+                    float(s.get("direct_ffmpeg_chunk_min_sec", audio_backend.direct_chunk_min_sec) or audio_backend.direct_chunk_min_sec),
+                    float(audio_backend.direct_chunk_min_sec),
+                )
+            if audio_backend.reason not in {"auto"}:
+                get_logger().log(
+                    f"  ⚙️ [전처리] audio backend={audio_backend.backend} reason={audio_backend.reason}"
+                )
+        except Exception:
+            pass
         if not prefetch_only and self._can_direct_extract_stt_chunks(
             s,
             audio_ai=audio_ai,
@@ -170,7 +187,7 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             overlap_sec = self._chunk_overlap_sec(s)
             grouped = self._split_range_with_overlap(direct_start, direct_end, chunk_sec, overlap_sec)
             grouped = self._split_grouped_chunks_at_hard_cuts(grouped, direct_start, direct_end)
-            fused_filter = self._combine_audio_filters(master_filter if use_basic else "anull", active_filter)
+            fused_filter = self._build_fused_ffmpeg_filter(audio_ai, s, use_basic=use_basic)
             self._notify_stage("⏳ [전처리] FFMPEG 직접 청크 추출 중")
             get_logger().log(
                 "  └ [전처리] 전체 WAV 생성을 건너뛰고 원본에서 STT 청크를 직접 추출합니다 "
@@ -206,7 +223,7 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             ffmpeg = ffmpeg_binary()
 
             if self._can_fuse_ffmpeg_preprocess(audio_ai):
-                fused_filter = self._combine_audio_filters(master_filter if use_basic else "anull", active_filter)
+                fused_filter = self._build_fused_ffmpeg_filter(audio_ai, s, use_basic=use_basic)
                 self._notify_stage("⏳ [전처리] FFMPEG 단일 패스 오디오 추출/정제 중")
                 get_logger().log("  └ [전처리] FFMPEG 단일 패스로 오디오 추출/정제를 처리합니다")
                 extract_cmd = [
@@ -246,8 +263,8 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                 ai_wav = raw_wav
                 audio_filter_applied = False
                 if audio_ai == "rnnoise":
-                    self._notify_stage("⏳ [음성] RNNoise 빠른 노이즈 제거 중")
-                    get_logger().log("  └ [음성] RNNoise 빠른 노이즈 제거 중...")
+                    self._notify_stage("⏳ [음성] RNNoise 음성 보존 노이즈 제거 중")
+                    get_logger().log("  └ [음성] RNNoise 음성 보존 노이즈 제거 중...")
                     rnnoise_wav = os.path.join(work_dir, f"{base_name}_rnnoise.wav")
                     if self._apply_rnnoise(raw_wav, rnnoise_wav) and os.path.exists(rnnoise_wav):
                         ai_wav = rnnoise_wav
@@ -584,6 +601,73 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             **hidden_subprocess_kwargs(),
         )
         return result.returncode == 0 and os.path.exists(out_wav) and os.path.getsize(out_wav) > 0
+
+    def _write_grouped_chunks_pcm_fast(self, wav_path: str, chunk_dir: str, grouped: list[dict], settings: dict) -> bool:
+        if not self._settings_bool(settings, "wav_pcm_fast_chunk_extract", True):
+            return False
+        if not grouped or not os.path.exists(wav_path):
+            return False
+
+        try:
+            with wave.open(wav_path, "rb") as source:
+                channels = int(source.getnchannels() or 0)
+                sample_width = int(source.getsampwidth() or 0)
+                frame_rate = int(source.getframerate() or 0)
+                total_frames = int(source.getnframes() or 0)
+                if channels <= 0 or sample_width <= 0 or frame_rate <= 0 or total_frames <= 0:
+                    return False
+
+                os.makedirs(chunk_dir, exist_ok=True)
+                all_ok = True
+                next_log_pct = 0
+                total = len(grouped)
+
+                for idx, seg in enumerate(grouped):
+                    try:
+                        start = max(0.0, float(seg.get("start", 0.0) or 0.0))
+                        end = max(start, float(seg.get("end", start) or start))
+                    except Exception:
+                        all_ok = False
+                        continue
+                    start_frame = max(0, min(total_frames, int(round(start * frame_rate))))
+                    end_frame = max(start_frame, min(total_frames, int(round(end * frame_rate))))
+                    if end_frame <= start_frame:
+                        all_ok = False
+                        continue
+
+                    out = os.path.join(chunk_dir, f"vad_{idx:03d}_{start:.3f}.wav")
+                    source.setpos(start_frame)
+                    remaining = end_frame - start_frame
+                    with wave.open(out, "wb") as target:
+                        target.setnchannels(channels)
+                        target.setsampwidth(sample_width)
+                        target.setframerate(frame_rate)
+                        while remaining > 0:
+                            frames_to_read = min(remaining, 262_144)
+                            data = source.readframes(frames_to_read)
+                            if not data:
+                                break
+                            written_frames = len(data) // max(1, channels * sample_width)
+                            if written_frames <= 0:
+                                break
+                            target.writeframes(data)
+                            remaining -= written_frames
+
+                    if remaining > 0 or not os.path.exists(out) or os.path.getsize(out) <= 44:
+                        all_ok = False
+
+                    pct = min(100, int(round(((idx + 1) / max(1, total)) * 100)))
+                    if pct >= next_log_pct or idx + 1 == total:
+                        next_log_pct = min(100, pct + 10)
+                        self._notify_stage(f"⏳ [STT 준비] PCM 직접 청크 분할 중 {pct}%")
+                        get_logger().log(f"  └ [STT 준비] PCM 직접 청크 분할 진행률 {pct}% ({idx + 1}/{total})")
+
+                if all_ok:
+                    get_logger().log(f"  ✅ [STT 준비] FFMPEG 재디코딩 없이 PCM 청크 {total}개를 직접 생성했습니다")
+                return all_ok
+        except Exception as e:
+            get_logger().log(f"  ⚠️ PCM 직접 청크 분할 실패: {e}")
+            return False
     
     def _chunk_overlap_sec(self, settings: dict | None = None) -> float:
         settings = settings or {}
@@ -655,6 +739,11 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             return
 
         settings = self._load_all_settings()
+        if self._write_grouped_chunks_pcm_fast(wav_path, chunk_dir, grouped, settings):
+            return True
+        if self._settings_bool(settings, "wav_pcm_fast_chunk_extract", True):
+            get_logger().log("  ⚠️ PCM 직접 청크 분할 실패: FFMPEG 청크 분할로 재시도합니다")
+
         workload = len(grouped)
         max_workers, scheduler = runtime_parallel_worker_plan(
             settings=settings,
@@ -702,6 +791,24 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
     ) -> bool:
         if not grouped:
             return False
+
+        if self._settings_bool(settings, "direct_ffmpeg_chunk_batch_extract", True) and len(grouped) > 1:
+            batch_ok = self._write_grouped_chunks_from_media_batched(
+                media_path,
+                chunk_dir,
+                grouped,
+                audio_filter,
+                settings,
+            )
+            if batch_ok:
+                return True
+            for idx, seg in enumerate(grouped):
+                try:
+                    start = max(0.0, float(seg.get("start", 0.0) or 0.0))
+                    os.remove(os.path.join(chunk_dir, f"vad_{idx:03d}_{start:.3f}.wav"))
+                except Exception:
+                    pass
+            get_logger().log("  ⚠️ [전처리] FFmpeg 배치 청크 추출 실패: 기존 청크별 추출로 재시도합니다")
 
         ffmpeg = ffmpeg_binary()
         workload = len(grouped)
@@ -770,3 +877,148 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                     finally:
                         _mark_progress()
         return failures == 0
+
+    def _write_grouped_chunks_from_media_batched(
+        self,
+        media_path: str,
+        chunk_dir: str,
+        grouped: list[dict],
+        audio_filter: str,
+        settings: dict,
+    ) -> bool:
+        """Extract several STT chunks with one FFmpeg decode/filter pass.
+
+        The old fast path spawned one FFmpeg process per STT chunk. For long
+        files that repeats process startup and input probing dozens of times.
+        This path batches nearby chunk requests into a single filter_complex
+        graph and falls back to the old per-chunk path on any failure.
+        """
+        try:
+            batch_size = int(float(settings.get("direct_ffmpeg_chunk_batch_size", 8) or 8))
+        except Exception:
+            batch_size = 8
+        batch_size = max(2, min(32, batch_size))
+        try:
+            batch_max_span_sec = float(settings.get("direct_ffmpeg_chunk_batch_max_span_sec", 240.0) or 0.0)
+        except Exception:
+            batch_max_span_sec = 240.0
+        batch_max_span_sec = max(0.0, batch_max_span_sec)
+        normalized: list[tuple[int, float, float, str]] = []
+        for idx, seg in enumerate(grouped):
+            try:
+                start = max(0.0, float(seg.get("start", 0.0) or 0.0))
+                end = max(start, float(seg.get("end", start) or start))
+            except Exception:
+                return False
+            if end <= start:
+                return False
+            out = os.path.join(chunk_dir, f"vad_{idx:03d}_{start:.3f}.wav")
+            normalized.append((idx, start, end, out))
+        if len(normalized) <= 1:
+            return False
+
+        ffmpeg = ffmpeg_binary()
+        audio_chain = str(audio_filter or "anull").strip() or "anull"
+        total = len(normalized)
+        done = 0
+        next_log_pct = 0
+
+        batches: list[list[tuple[int, float, float, str]]] = []
+        current_batch: list[tuple[int, float, float, str]] = []
+        for item in normalized:
+            if current_batch:
+                batch_seek_start = min(row[1] for row in current_batch)
+                next_seek_end = max([row[2] for row in current_batch] + [item[2]])
+                would_exceed_count = len(current_batch) >= batch_size
+                would_exceed_span = batch_max_span_sec > 0 and (next_seek_end - batch_seek_start) > batch_max_span_sec
+                if would_exceed_count or would_exceed_span:
+                    batches.append(current_batch)
+                    current_batch = []
+            current_batch.append(item)
+        if current_batch:
+            batches.append(current_batch)
+
+        if len(batches) > 1:
+            get_logger().log(
+                "  🧩 [전처리] FFmpeg 배치 청크를 "
+                f"{len(batches)}개 묶음으로 분할했습니다 "
+                f"(max_span={batch_max_span_sec:.0f}s, batch_size={batch_size})"
+            )
+
+        def _mark_progress(count: int):
+            nonlocal done, next_log_pct
+            done += int(count)
+            pct = min(100, int(round((done / max(1, total)) * 100)))
+            if pct >= next_log_pct or done >= total:
+                next_log_pct = min(100, pct + 10)
+                msg = f"⏳ [전처리] FFMPEG 배치 청크 추출 중 {pct}%"
+                self._notify_stage(msg)
+                get_logger().log(f"  └ [전처리] 배치 청크 추출 진행률 {pct}% ({done}/{total})")
+
+        for batch in batches:
+            seek_start = min(item[1] for item in batch)
+            seek_end = max(item[2] for item in batch)
+            seek_duration = max(0.001, seek_end - seek_start)
+
+            filter_parts: list[str] = []
+            if len(batch) == 1:
+                _idx, start, end, _out = batch[0]
+                local_start = max(0.0, start - seek_start)
+                local_end = max(local_start + 0.001, end - seek_start)
+                filter_parts.append(
+                    f"[0:a:0]{audio_chain},atrim=start={local_start:.3f}:end={local_end:.3f},"
+                    "asetpts=PTS-STARTPTS[a0]"
+                )
+            else:
+                split_labels = "".join(f"[s{i}]" for i in range(len(batch)))
+                filter_parts = [f"[0:a:0]{audio_chain},asplit={len(batch)}{split_labels}"]
+                for local_idx, (_idx, start, end, _out) in enumerate(batch):
+                    local_start = max(0.0, start - seek_start)
+                    local_end = max(local_start + 0.001, end - seek_start)
+                    filter_parts.append(
+                        f"[s{local_idx}]atrim=start={local_start:.3f}:end={local_end:.3f},"
+                        f"asetpts=PTS-STARTPTS[a{local_idx}]"
+                    )
+
+            cmd = [
+                ffmpeg,
+                "-y",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                *self._ffmpeg_parallel_args(settings),
+                "-ss",
+                f"{seek_start:.3f}",
+                "-t",
+                f"{seek_duration:.3f}",
+                "-i",
+                media_path,
+                "-filter_complex",
+                ";".join(filter_parts),
+                "-vn",
+                "-sn",
+                "-dn",
+            ]
+            for local_idx, (_idx, _start, _end, out) in enumerate(batch):
+                cmd.extend(
+                    [
+                        "-map",
+                        f"[a{local_idx}]",
+                        "-ac",
+                        "1",
+                        "-ar",
+                        "16000",
+                        "-acodec",
+                        "pcm_s16le",
+                        out,
+                    ]
+                )
+
+            ok = self._run_media_command_no_progress(cmd, label="ffmpeg 직접 청크 배치 추출")
+            if not ok:
+                return False
+            for _idx, _start, _end, out in batch:
+                if not os.path.exists(out) or os.path.getsize(out) <= 0:
+                    return False
+            _mark_progress(len(batch))
+        return True

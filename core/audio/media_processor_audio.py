@@ -33,7 +33,7 @@ from core.runtime.multi_process import runtime_parallel_worker_plan
 from core.subtitle_quality.vad_alignment_checker import apply_review_vad_settings, review_vad_config
 
 _VAD_CACHE_VERSION = 3
-_AUDIO_CACHE_VERSION = 3
+_AUDIO_CACHE_VERSION = 4
 
 
 def _runtime_get_logger():
@@ -598,6 +598,62 @@ class VideoProcessorAudioHelpersMixin:
 
         return "anull"
 
+    def _build_deepfilter_fused_ffmpeg_filter(self, settings: dict) -> str:
+        ff_hp = int(self._float_setting(settings, "ff_hp", settings.get("none_hp", 90), 0, 500))
+        df_hp = int(self._float_setting(settings, "df_hp", 100, 0, 500))
+        ff_lp = int(self._float_setting(settings, "ff_lp", settings.get("none_lp", 3200), 0, 8000))
+        df_lp = int(self._float_setting(settings, "df_lp", 8000, 1000, 8000))
+        ff_nf = self._float_setting(settings, "ff_nf", settings.get("none_nf", -32), -80, 0)
+        df_nf = self._float_setting(settings, "df_nf", settings.get("ff_nf", -32), -80, 0)
+        dyn_m = self._float_setting(settings, "ff_dynaudnorm_m", 10.0, 1.0, 50.0)
+        dyn_p = self._float_setting(settings, "ff_dynaudnorm_p", 0.95, 0.5, 1.0)
+        treble = self._float_setting(settings, "ff_treble_boost", 0.0, -10.0, 20.0)
+        eq_gain = self._float_setting(settings, "df_eq_g", 8, -10, 20)
+        comp_th = self._float_setting(settings, "df_comp_th", -28, -60, 0)
+        df_vol = self._float_setting(settings, "df_vol", 3.5, 0.5, 8.0)
+
+        filters = []
+        hp = max(ff_hp, df_hp)
+        if hp > 0:
+            filters.append(f"highpass=f={hp}")
+        lp_candidates = [value for value in (ff_lp, df_lp) if value > 0]
+        if lp_candidates:
+            filters.append(f"lowpass=f={min(lp_candidates)}")
+        filters.append(f"afftdn=nf={self._fmt_filter_num(min(ff_nf, df_nf))}")
+        filters.append(
+            "dynaudnorm=f=150:g=9:"
+            f"m={self._fmt_filter_num(dyn_m)}:"
+            f"p={self._fmt_filter_num(dyn_p)}"
+        )
+        if abs(treble) >= 0.01:
+            filters.append(
+                "equalizer=f=3200:width_type=h:width=2200:"
+                f"g={self._fmt_filter_num(treble)}"
+            )
+        filters.append(
+            "equalizer=f=3000:width_type=h:width=2000:"
+            f"g={self._fmt_filter_num(eq_gain)}"
+        )
+        filters.append(
+            f"acompressor=threshold={self._fmt_filter_num(comp_th)}dB:"
+            "ratio=4:attack=5:release=50"
+        )
+        filters.append("speechnorm=e=12:r=0.0001:l=1")
+        filters.append(f"volume={self._fmt_filter_num(df_vol)}")
+        filters.append("loudnorm=I=-14:LRA=11:tp=-1.0")
+        return ",".join(filters)
+
+    def _build_fused_ffmpeg_filter(self, audio_ai: str, settings: dict, *, use_basic: bool = True) -> str:
+        audio_kind = str(audio_ai or "none").strip().lower()
+        active_filter = self._build_audio_cleanup_filter(audio_kind, settings)
+        if not use_basic:
+            return active_filter
+        if audio_kind == "none":
+            return self._build_ffmpeg_preprocess_filter(settings)
+        if audio_kind == "deepfilter":
+            return self._build_deepfilter_fused_ffmpeg_filter(settings)
+        return self._combine_audio_filters(self._build_ffmpeg_preprocess_filter(settings), active_filter)
+
     @staticmethod
     def _audio_cleanup_label(audio_ai: str, filter_applied: bool = False) -> str:
         if audio_ai in {"rnnoise", "resemble_enhance", "clearvoice"} and not filter_applied:
@@ -798,7 +854,7 @@ class VideoProcessorAudioHelpersMixin:
         active_filter = self._build_audio_cleanup_filter(audio_ai, settings)
 
         if self._can_fuse_ffmpeg_preprocess(audio_ai):
-            fused_filter = self._combine_audio_filters(master_filter if use_basic else "anull", active_filter)
+            fused_filter = self._build_fused_ffmpeg_filter(audio_ai, settings, use_basic=use_basic)
             cmd = [
                 ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error",
                 *self._ffmpeg_parallel_args(settings),
@@ -1324,7 +1380,7 @@ class VideoProcessorAudioHelpersMixin:
             return False
         if span_sec <= 0:
             return False
-        min_sec = float(settings.get("direct_ffmpeg_chunk_min_sec", 600.0) or 0.0)
+        min_sec = float(settings.get("direct_ffmpeg_chunk_min_sec", 60.0) or 0.0)
         return bool(is_partial or span_sec >= max(0.0, min_sec))
 
     def _cleaned_audio_cache_valid(self, cleaned_wav: str, meta_path: str, cache_config: dict) -> bool:

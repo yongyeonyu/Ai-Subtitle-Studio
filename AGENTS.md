@@ -1,7 +1,7 @@
 <!--
-Document-Version: 03.24.03
-Phase: EDITOR_PERFORMANCE_RELEASED
-Last-Updated: 2026-05-08
+Document-Version: 03.25.00
+Phase: NATIVE_PERFORMANCE_UI_RELEASED
+Last-Updated: 2026-05-09
 Updated-By: Codex
 Purpose: Agent bootstrap and handoff rules only.
 -->
@@ -61,10 +61,10 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 ## Current Continuation Facts
 
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- Current app version in code: `03.24.03`
-- Current handoff document version: `03.24.03`
-- Latest release checkpoint: `v03.24.03`
-- Current phase: `EDITOR_PERFORMANCE_RELEASED`
+- Current app version in code: `03.25.00`
+- Current handoff document version: `03.25.00`
+- Latest release checkpoint: `v03.25.00`
+- Current phase: `NATIVE_PERFORMANCE_UI_RELEASED`
 - Next planned phase: none.
 - Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping generation startup, cut-boundary scanning, playback, and editor-mode subtitle edits responsive.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
@@ -81,9 +81,13 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Refactor state: `core.engine.subtitle_macro_chunks` owns 10-15 subtitle LLM macro chunk grouping and execution; `subtitle_engine.py` keeps orchestration and final timing/gap passes.
 - Dashboard state: the sidebar engine dashboard shows ten stages: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
 - Editor performance state: subtitle line edits update cached line maps and the affected timeline dirty rectangle instead of rebuilding the full segment lookup; playback/editor sync respects recent manual scrolling and avoids recentering already visible active segments.
-- Runtime scheduling state: cut-boundary pioneer/follower workers use topology-aware CPU planning, OpenCV thread caps, progress throttling, and high-cost visual scan fallback; chunk-level audio routing is disabled by default after benchmarking because it was slower than its quality benefit on the reviewed samples.
+- Runtime scheduling state: cut-boundary pioneer/follower workers use topology-aware CPU planning, OpenCV thread caps, progress throttling, optional FFmpeg scene prepass, optional C++ native helper kernels, and optical-flow follower verification for candidate-only rollback checks.
+- Backend routing state: STT, VAD, cut-boundary, audio extraction, LLM, and editor rendering paths now route through auto/native/fast/legacy policy helpers, with optional benchmark profile materialization stored outside Git.
+- Audio/video IO state: long-media audio extraction can use direct FFmpeg chunk routing and fused filter graphs when quality-safe; editor playback reuses 720p preview proxies and cut-boundary scanning can reuse existing proxies to avoid repeated 4K decode.
+- STT model state: Korean KomixV2 STT candidates include alias, Hugging Face original, and MLX variants with distinct sidebar labels; Transformers aliases normalize to `seastar105/whisper-medium-komixv2`.
+- Popup/UI state: QML context menus and message dialogs have compact Apple-style sizing, hover/press feedback, outside-click dismissal, and Korean-only global menu labels.
 - STT ensemble state: parallel STT1/STT2 runs clone chunk directories per worker and clean them afterward so one worker cannot delete audio chunks still needed by the other.
-- Verification state: full test suite and static checks passed for this release: `1130 passed, 1 warning, 5 subtests passed`.
+- Verification state: full test suite and static checks passed for this release: `1222 passed, 1 warning, 5 subtests passed`.
 
 ## Collaboration Rules
 

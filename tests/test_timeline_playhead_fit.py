@@ -28,6 +28,17 @@ class _DummyEditor(EditorSegmentsMixin):
     pass
 
 
+class _GuardedSegmentList(list):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.fail_on_iter = False
+
+    def __iter__(self):
+        if self.fail_on_iter:
+            raise AssertionError("cached subtitle context index should avoid rescanning the source list")
+        return super().__iter__()
+
+
 class _DummyTimelineVideoEditor(EditorTimelineVideoMixin):
     def _multiclip_active_offset(self) -> float:
         return 0.0
@@ -140,6 +151,28 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         self.assertEqual(editor.review_calls, [True])
         self.assertFalse(editor._auto_quality_review_pending)
 
+    def test_auto_quality_review_defers_after_recent_editor_activity(self):
+        editor = _AutoQualityEditor()
+        callbacks = []
+
+        with patch("ui.editor.editor_widget.QTimer.singleShot", side_effect=lambda delay, cb: callbacks.append((delay, cb))):
+            editor._schedule_auto_quality_review(delay_ms=10)
+            self.assertEqual(callbacks[0][0], 10)
+
+            editor._last_editor_foreground_activity_at = time.monotonic()
+            callbacks.pop(0)[1]()
+
+            self.assertEqual(editor.review_calls, [])
+            self.assertTrue(editor._auto_quality_review_pending)
+            self.assertTrue(editor._auto_quality_review_scheduled)
+            self.assertEqual(callbacks[-1][0], 1200)
+
+            editor._last_editor_foreground_activity_at = time.monotonic() - 10.0
+            callbacks.pop()[1]()
+
+        self.assertEqual(editor.review_calls, [True])
+        self.assertFalse(editor._auto_quality_review_pending)
+
     def test_text_selection_moves_timeline_playhead_to_segment_start(self):
         editor = _DummyEditor()
         editor._sync_lock = False
@@ -176,6 +209,44 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_cursor_move_does_not_seek_video_while_playing(self):
+        editor = _DummyEditor()
+        editor._sync_lock = False
+        editor._active_seg_start = -1.0
+        editor._timeline_lock_edit_enabled = lambda: False
+        editor._is_video_playback_active = lambda: True
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("첫 줄\n둘째 줄")
+        editor.timeline = SimpleNamespace(
+            set_active=Mock(),
+            set_playhead=Mock(),
+            ensure_sec_visible=Mock(),
+            center_to_sec=Mock(),
+        )
+        editor.video_player = SimpleNamespace(pause_video=Mock(), seek=Mock())
+        editor._schedule_cursor_video_seek = Mock()
+        editor._highlighter = SimpleNamespace(set_current_line=Mock())
+        editor._quality_tooltip = lambda seg: ""
+        editor._schedule_visible_quality_refresh = Mock()
+        editor._cached_segs = [
+            {"line": 0, "start": 1.0, "end": 2.0},
+            {"line": 1, "start": 5.0, "end": 6.0},
+        ]
+
+        try:
+            editor._rebuild_subtitle_memory_cache(editor._cached_segs)
+            block = editor.text_edit.document().findBlockByNumber(1)
+            editor.text_edit.setTextCursor(QTextCursor(block))
+
+            editor._on_cursor_moved()
+
+            editor.video_player.pause_video.assert_not_called()
+            editor._schedule_cursor_video_seek.assert_not_called()
+            editor.timeline.ensure_sec_visible.assert_called_once()
+            editor.timeline.center_to_sec.assert_not_called()
+        finally:
+            editor.text_edit.close()
+
     def test_timeline_click_does_not_force_full_redraw(self):
         editor = _ClickEditor()
         editor._segments = [{"line": 0, "start": 3.0, "end": 4.0, "text": "클릭"}]
@@ -208,6 +279,43 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             editor.timeline.center_to_sec.assert_called_once()
             editor.text_edit.setFocus.assert_called_once()
             editor._redraw_timeline.assert_not_called()
+        finally:
+            editor.text_edit.close()
+
+    def test_timeline_click_prefers_clicked_time_when_line_is_ambiguous(self):
+        editor = _ClickEditor()
+        editor._segments = [
+            {"line": 0, "start": 0.0, "end": 1.0, "text": "첫 자막"},
+            {"line": 10, "start": 8.0, "end": 9.0, "text": "클릭한 자막"},
+        ]
+        editor._active_seg_start = None
+        editor.applied_contexts = []
+        editor._highlighter = SimpleNamespace(set_current_line=Mock())
+        editor.text_edit = QTextEdit()
+        editor.text_edit.setPlainText("\n".join(f"줄 {idx}" for idx in range(11)))
+        editor.text_edit.setFocus = Mock()
+        editor.timeline = SimpleNamespace(
+            set_active=Mock(),
+            set_playhead=Mock(),
+            center_to_sec=Mock(),
+            canvas=SimpleNamespace(playhead_sec=0.0),
+        )
+        editor.video_player = SimpleNamespace(
+            pause_video=Mock(),
+            seek_direct=Mock(),
+            media_player=SimpleNamespace(
+                PlaybackState=SimpleNamespace(PlayingState=object()),
+                playbackState=Mock(return_value=None),
+            ),
+        )
+
+        try:
+            editor._on_timeline_seg_clicked(0, 8.0)
+
+            editor.timeline.set_active.assert_called_once_with(8.0)
+            editor.timeline.set_playhead.assert_any_call(8.0)
+            self.assertEqual(editor.text_edit.textCursor().blockNumber(), 10)
+            self.assertEqual(editor.applied_contexts[0][0]["global_sec"], 8.0)
         finally:
             editor.text_edit.close()
 
@@ -441,6 +549,28 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_subtitle_context_window_reuses_index_for_same_local_segments(self):
+        editor = _DummyEditor()
+        editor.settings = {
+            "editor_video_context_before_sec": 20.0,
+            "editor_video_context_after_sec": 20.0,
+            "editor_video_context_max_segments": 80,
+        }
+        segments = _GuardedSegmentList(
+            [
+                {"line": i, "start": float(i), "end": float(i) + 0.5, "text": f"자막 {i}"}
+                for i in range(2000)
+            ]
+        )
+
+        first = editor._subtitle_context_window_from_segments(segments, center_sec=1000.0)
+        segments.fail_on_iter = True
+        second = editor._subtitle_context_window_from_segments(segments, center_sec=1001.0)
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertLess(len(second), 90)
+
     def test_line_text_edit_repaints_only_timeline_segment_rect(self):
         editor = _DummyEditor()
         segment = {
@@ -495,6 +625,52 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             self.assertEqual(timeline._current_scroll_x, 0.0)
             self.assertEqual(timeline.global_canvas.view_start, 0.0)
             self.assertEqual(timeline.global_canvas.view_end, 1.0)
+        finally:
+            timeline.close()
+
+    def test_initial_time_window_shows_about_fifteen_seconds(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 180.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, timeline.canvas.pps))
+
+            timeline.show_time_window_seconds(15.0)
+
+            viewport_w = max(1, timeline.scroll.viewport().width())
+            visible_seconds = viewport_w / max(0.001, timeline.canvas.pps)
+            self.assertAlmostEqual(visible_seconds, 15.0, delta=0.35)
+            self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
+            self.assertFalse(timeline._fit_to_view_locked)
+            self.assertAlmostEqual(timeline.global_canvas.view_start, 0.0, places=3)
+            self.assertAlmostEqual(timeline.global_canvas.view_end, 15.0 / dur, delta=0.01)
+        finally:
+            timeline.close()
+
+    def test_initial_time_window_can_center_on_restored_playhead(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            dur = 180.0
+            timeline.canvas.total_duration = dur
+            timeline.global_canvas.total_duration = dur
+            timeline.canvas.setFixedWidth(timeline._canvas_width_for_duration(dur, timeline.canvas.pps))
+
+            timeline.show_time_window_seconds(15.0, center_sec=60.0)
+
+            viewport_w = max(1, timeline.scroll.viewport().width())
+            visible_start = timeline.scroll.horizontalScrollBar().value() / max(0.001, timeline.canvas.pps)
+            visible_center = visible_start + (viewport_w / max(0.001, timeline.canvas.pps) / 2.0)
+            self.assertAlmostEqual(visible_center, 60.0, delta=0.35)
+            self.assertFalse(timeline._fit_to_view_locked)
         finally:
             timeline.close()
 
@@ -743,6 +919,21 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             self.assertAlmostEqual(timeline.canvas.pps, timeline._fit_pps_for_duration(240.0))
             self.assertEqual(timeline.scroll.horizontalScrollBar().value(), 0)
+        finally:
+            timeline.close()
+
+    def test_fit_content_duration_uses_canvas_cached_duration(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.canvas.total_duration = 10.0
+            timeline.canvas._segments_content_duration = 123.0
+            guarded = _GuardedSegmentList([
+                {"line": 0, "start": 0.0, "end": 123.0, "text": "긴 자막"},
+            ])
+            guarded.fail_on_iter = True
+            timeline.canvas.segments = guarded
+
+            self.assertEqual(timeline._fit_content_duration(), 123.0)
         finally:
             timeline.close()
 

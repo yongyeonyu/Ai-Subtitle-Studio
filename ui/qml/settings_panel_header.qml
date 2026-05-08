@@ -5,12 +5,12 @@ Item {
     property string titleText: "Settings"
     property string subtitleText: "QML SceneGraph panel"
     property string badgeText: "GPU"
-    height: 72
+    height: 60
     clip: true
 
     Rectangle {
         anchors.fill: parent
-        radius: 12
+        radius: 14
         gradient: Gradient {
             GradientStop { position: 0.0; color: "#17252B" }
             GradientStop { position: 1.0; color: "#10181D" }
@@ -34,15 +34,15 @@ Item {
         anchors.left: parent.left
         anchors.right: badge.left
         anchors.verticalCenter: parent.verticalCenter
-        anchors.leftMargin: 18
+        anchors.leftMargin: 16
         anchors.rightMargin: 12
-        spacing: 6
+        spacing: 4
 
         Text {
             width: parent.width
             text: root.titleText
             color: "#F5F7FA"
-            font.pixelSize: 16
+            font.pixelSize: 15
             font.bold: true
             elide: Text.ElideRight
         }
@@ -59,12 +59,12 @@ Item {
 
     Rectangle {
         id: badge
-        width: Math.max(62, badgeTextItem.implicitWidth + 24)
-        height: 28
-        radius: 14
+        width: Math.max(56, badgeTextItem.implicitWidth + 20)
+        height: 24
+        radius: 12
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
-        anchors.rightMargin: 16
+        anchors.rightMargin: 14
         color: "#14261D"
         border.color: "#2F9E58"
         border.width: 1

@@ -139,8 +139,25 @@ def native_thread_budget(settings: dict[str, Any] | None = None) -> int:
         default = max(perf, physical, logical)
     else:
         default = min(max(1, perf), physical)
-    requested = _positive_int(settings.get("runtime_native_threads"), 0)
+    profile_requested = 0
+    if _safe_bool(settings.get("runtime_native_threads_auto_enabled"), True):
+        profile_requested = _runtime_profile_native_threads(settings)
+    requested = profile_requested or _positive_int(settings.get("runtime_native_threads"), 0)
     return max(1, min(requested or default, logical))
+
+
+def _runtime_profile_native_threads(settings: dict[str, Any]) -> int:
+    if "pytest" in sys.modules:
+        return 0
+    if not _safe_bool(settings.get("runtime_backend_autotune_enabled"), True):
+        return 0
+    try:
+        from core.optimization.profile_store import load_optimization_profile
+
+        profile = load_optimization_profile()
+        return _positive_int(profile.selected_backends.get("native_threads"), 0)
+    except Exception:
+        return 0
 
 
 def native_runtime_env_overrides(settings: dict[str, Any] | None = None) -> dict[str, str]:
@@ -151,6 +168,15 @@ def native_runtime_env_overrides(settings: dict[str, Any] | None = None) -> dict
     out = {
         "AI_SUBTITLE_NATIVE_THREADS": str(budget),
         "AI_SUBTITLE_NATIVE_JSON": "1" if _safe_bool(settings.get("runtime_native_json_enabled"), True) else "0",
+        "AI_SUBTITLE_NATIVE_TEXT_SIMILARITY": (
+            "1" if _safe_bool(settings.get("runtime_native_text_similarity_enabled"), True) else "0"
+        ),
+        "AI_SUBTITLE_NATIVE_CUT_BOUNDARY": (
+            "1" if _safe_bool(settings.get("runtime_native_cut_boundary_enabled"), True) else "0"
+        ),
+        "AI_SUBTITLE_OLLAMA_PY_CLIENT": (
+            "1" if _safe_bool(settings.get("ollama_python_client_enabled"), True) else "0"
+        ),
         "OMP_NUM_THREADS": str(budget),
         "OPENBLAS_NUM_THREADS": str(budget),
         "MKL_NUM_THREADS": str(budget),

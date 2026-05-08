@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from core.native_text_similarity import edit_distance
 from core.personalization.lora_models import TrialRecord, line_break_pattern_for_text
 from core.personalization.lora_storage import (
     append_prompt_trials,
@@ -22,20 +23,7 @@ def _punctuation_pattern(text: Any) -> str:
 
 
 def _levenshtein(seq_a: list[Any], seq_b: list[Any]) -> int:
-    if not seq_a:
-        return len(seq_b)
-    if not seq_b:
-        return len(seq_a)
-    previous = list(range(len(seq_b) + 1))
-    for index_a, item_a in enumerate(seq_a, start=1):
-        current = [index_a]
-        for index_b, item_b in enumerate(seq_b, start=1):
-            insert_cost = current[index_b - 1] + 1
-            delete_cost = previous[index_b] + 1
-            replace_cost = previous[index_b - 1] + (0 if item_a == item_b else 1)
-            current.append(min(insert_cost, delete_cost, replace_cost))
-        previous = current
-    return previous[-1]
+    return edit_distance(seq_a, seq_b)
 
 
 def _interval_overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:

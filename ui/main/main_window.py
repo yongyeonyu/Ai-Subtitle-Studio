@@ -669,6 +669,9 @@ class MainWindow(
                 video_player.segments = []
                 video_player._pending_segments = []
                 video_player._subtitle_starts = []
+                video_player._subtitle_ends = []
+                video_player._subtitle_texts = []
+                video_player._subtitle_count = 0
                 video_player._last_segments_signature = ""
                 video_player.seek(0.0)
         except Exception:
@@ -1247,6 +1250,11 @@ class MainWindow(
             except Exception:
                 pass
             try:
+                target_editor._post_generation_models_release_requested = True
+                target_editor._post_generation_models_released = False
+            except Exception:
+                pass
+            try:
                 state_manager = getattr(target_editor, "sm", None)
                 if state_manager is not None and (
                     bool(getattr(state_manager, "is_locked", False))
@@ -1264,6 +1272,7 @@ class MainWindow(
         except Exception:
             self._restore_normal_cursor(self, target_editor)
         try:
+            self._editor_ai_runtime_release_requested_for_editor_mode = True
             self._release_ai_models_for_editor_mode(
                 force=True,
                 preserve_roughcut_status=True,

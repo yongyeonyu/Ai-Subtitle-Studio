@@ -26,6 +26,7 @@ from ui.timeline.timeline_constants import (
     SUBTITLE_TOP,
 )
 from ui.timeline.timeline_paint import (
+    build_stt_selection_index,
     stt_candidate_selection_state,
     stt_preview_source,
     stt_preview_visual_style,
@@ -89,6 +90,7 @@ def build_scenegraph_subtitle_segments(
         seg for seg in rows
         if not bool(seg.get("stt_pending") or seg.get("_live_stt_preview") or seg.get("_live_subtitle_preview"))
     ]
+    final_selection_index = build_stt_selection_index(final_rows)
     fps = normalize_fps(fps or 30.0)
     px_per_frame = max(0.001, float(pps or 1.0) / fps)
     speaker_settings = current_speaker_settings(speaker_settings or {})
@@ -113,7 +115,7 @@ def build_scenegraph_subtitle_segments(
                 h = STT2_BOT - STT2_TOP
                 visual = stt_preview_visual_style(
                     seg,
-                    selection_state=stt_candidate_selection_state(seg, final_rows),
+                    selection_state=stt_candidate_selection_state(seg, final_rows, final_selection_index),
                     fill_hex="#1A3148",
                     border_hex="#64D2FF",
                     text_hex="#BDEBFF",
@@ -123,7 +125,7 @@ def build_scenegraph_subtitle_segments(
                 h = STT1_BOT - STT1_TOP
                 visual = stt_preview_visual_style(
                     seg,
-                    selection_state=stt_candidate_selection_state(seg, final_rows),
+                    selection_state=stt_candidate_selection_state(seg, final_rows, final_selection_index),
                     fill_hex="#173524",
                     border_hex="#34C759",
                     text_hex="#D7FFE4",

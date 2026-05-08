@@ -9,6 +9,7 @@ PyQt6 : QThread + pyqtSignal 패턴
 UI는 절대 block되지 않음.
 """
 from PyQt6.QtCore import QThread, pyqtSignal
+from core.llm.ollama_provider import OLLAMA_KEEP_ALIVE_FOREVER
 from core.runtime.logger import get_logger
 
 
@@ -75,7 +76,7 @@ class OllamaTranslateWorker(QThread):
                           "Reply STRICTLY: 한국어텍스트 : 한국어 뜻")
             payload = {
                 "model": self._model, "prompt": prompt, "stream": False,
-                "keep_alive": -1, "options": {"temperature": 0.0, "num_predict": 50}
+                "keep_alive": OLLAMA_KEEP_ALIVE_FOREVER, "options": {"temperature": 0.0, "num_predict": 50}
             }
             r = requests.post("http://localhost:11434/api/generate", json=payload, timeout=4)
             if r.status_code == 200:

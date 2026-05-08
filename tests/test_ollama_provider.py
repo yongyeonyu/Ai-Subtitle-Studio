@@ -1,12 +1,15 @@
 # Version: 03.09.01
 # Phase: PHASE2
 import http.client
+import json
+import os
 import socket
 import unittest
 from unittest import mock
 import urllib.error
 
 from core.llm import ollama_provider
+from core.llm.provider_router import normalize_llm_provider
 
 
 class _Logger:
@@ -26,6 +29,14 @@ class OllamaWarmupTest(unittest.TestCase):
         ollama_provider._SERVER_READY_UNTIL = 0.0
         ollama_provider._START_IN_PROGRESS_UNTIL = 0.0
         ollama_provider._SERVER_READY_LOGGED_UNTIL = 0.0
+        self._previous_py_client = os.environ.get("AI_SUBTITLE_OLLAMA_PY_CLIENT")
+        os.environ["AI_SUBTITLE_OLLAMA_PY_CLIENT"] = "0"
+
+    def tearDown(self):
+        if self._previous_py_client is None:
+            os.environ.pop("AI_SUBTITLE_OLLAMA_PY_CLIENT", None)
+        else:
+            os.environ["AI_SUBTITLE_OLLAMA_PY_CLIENT"] = self._previous_py_client
 
     def test_warmup_timeout_is_skipped_without_failure_log(self):
         logger = _Logger()
@@ -37,6 +48,10 @@ class OllamaWarmupTest(unittest.TestCase):
         joined = "\n".join(logger.lines)
         self.assertIn("워밍업 건너뜀", joined)
         self.assertNotIn("워밍업 실패", joined)
+
+    def test_provider_router_recognizes_llama_cpp_gguf_models(self):
+        self.assertEqual(normalize_llm_provider("llama.cpp", "/models/korean.gguf"), "llama_cpp")
+        self.assertEqual(normalize_llm_provider("", "/models/korean.gguf"), "llama_cpp")
 
     def test_stop_local_llm_models_unloads_candidates_and_running_models(self):
         logger = _Logger()
@@ -222,6 +237,36 @@ class OllamaWarmupTest(unittest.TestCase):
         self.assertEqual(urlopen_mock.call_count, 2)
         self.assertGreaterEqual(ensure_mock.call_count, 2)
         sleep_mock.assert_called_once()
+
+    def test_split_text_uses_python_client_when_enabled(self):
+        os.environ["AI_SUBTITLE_OLLAMA_PY_CLIENT"] = "1"
+
+        with mock.patch("core.llm.ollama_provider.ensure_ollama_server", return_value=True), \
+             mock.patch("core.llm.ollama_provider._ollama_client_generate", return_value='["A"]') as client_mock, \
+             mock.patch("core.llm.ollama_provider.urllib.request.urlopen") as urlopen_mock:
+            chunks = ollama_provider.split_text("gemma4:e4b", "prompt", timeout=1)
+
+        self.assertEqual(chunks, ["A"])
+        client_mock.assert_called_once()
+        urlopen_mock.assert_not_called()
+
+    def test_ollama_connection_backend_reports_python_client_when_enabled(self):
+        os.environ["AI_SUBTITLE_OLLAMA_PY_CLIENT"] = "1"
+        expected = "python-client" if ollama_provider._ollama_py is not None else "http"
+
+        self.assertEqual(ollama_provider.ollama_connection_backend(), expected)
+
+    def test_negative_keep_alive_uses_ollama_duration_unit(self):
+        self.assertEqual(ollama_provider._ollama_keep_alive(-1), "-1m")
+        self.assertEqual(ollama_provider._ollama_keep_alive("-1"), "-1m")
+        self.assertEqual(ollama_provider._ollama_keep_alive(-0.5), "-1m")
+        self.assertEqual(ollama_provider._ollama_keep_alive("15m"), "15m")
+
+    def test_http_generate_request_normalizes_negative_keep_alive(self):
+        request = ollama_provider._build_generate_request("gemma4:e4b", "ping", keep_alive=-1)
+        payload = json.loads(request.data.decode("utf-8"))
+
+        self.assertEqual(payload["keep_alive"], "-1m")
 
     def test_split_text_raises_after_repeated_http_500(self):
         repeated_error = urllib.error.HTTPError(

@@ -7,6 +7,7 @@ MainWindow runtime cleanup / fast-exit responsibilities extracted from main_wind
 import gc
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from PyQt6.QtCore import QTimer
@@ -943,8 +944,18 @@ class MainRuntimeCleanupMixin:
                     except Exception as exc:
                         get_logger().log(f"⚠️ 에디터 모드 LLM 모델 종료 실패: {exc}")
                     self._clear_runtime_memory_caches(include_gpu=True)
+                    try:
+                        if bool(getattr(editor, "_post_generation_models_release_requested", False)):
+                            editor._post_generation_models_released = True
+                            self._editor_ai_runtime_released_for_editor_mode = True
+                    except Exception:
+                        pass
                     if stopped_runtime:
-                        get_logger().log("🧹 에디터 모드: AI/STT/LLM 모델을 종료하고 GPU/런타임 메모리를 정리했습니다.")
+                        now = time.monotonic()
+                        last_log_at = float(getattr(self, "_editor_ai_release_last_log_at", 0.0) or 0.0)
+                        if now - last_log_at >= 3.0:
+                            self._editor_ai_release_last_log_at = now
+                            get_logger().log("🧹 에디터 모드: AI/STT/LLM 모델을 종료하고 GPU/런타임 메모리를 정리했습니다.")
                 finally:
                     self._editor_ai_release_in_progress = False
 

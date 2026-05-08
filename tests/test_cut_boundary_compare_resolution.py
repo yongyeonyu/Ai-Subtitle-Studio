@@ -39,6 +39,18 @@ class CutBoundaryCompareResolutionTests(unittest.TestCase):
         self.assertIs(out, frame)
         self.assertEqual(fake_cv2.resize_calls, [])
 
+    def test_delta_bytes_matches_existing_sampled_mean(self):
+        helpers = build_auto_grid_verify_utils(lambda width, height: [(0, 0, width, height)] * 25)
+        left = bytes((i * 7) % 256 for i in range(1024))
+        right = bytes((255 - i * 3) % 256 for i in range(1024))
+        target_samples = 64
+        step = max(1, len(left) // target_samples)
+        expected = sum(abs(left[i] - right[i]) for i in range(0, len(left), step)) / len(range(0, len(left), step))
+
+        out = helpers["_auto_delta_bytes"](left, right, target_samples=target_samples)
+
+        self.assertAlmostEqual(out, expected, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

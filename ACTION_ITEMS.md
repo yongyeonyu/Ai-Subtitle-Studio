@@ -1,7 +1,7 @@
 <!--
-Document-Version: 03.24.03
-Phase: EDITOR_PERFORMANCE_RELEASED
-Last-Updated: 2026-05-08
+Document-Version: 03.25.00
+Phase: NATIVE_PERFORMANCE_UI_RELEASED
+Last-Updated: 2026-05-09
 Updated-By: Codex
 Purpose: Remaining work queue only.
 -->
@@ -19,9 +19,9 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "03.24.03"
-document_version: "03.24.03"
-phase: "EDITOR_PERFORMANCE_RELEASED"
+app_version: "03.25.00"
+document_version: "03.25.00"
+phase: "NATIVE_PERFORMANCE_UI_RELEASED"
 next_phase: null
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
@@ -54,16 +54,15 @@ release_handoff_files:
 
 ## Completion Snapshot
 
-The v03.24.03 Editor Performance release completed the prior queue:
+The v03.25.00 Native Performance and UI release completed the prior queue:
 
-- Timeline canvas visibility was restored by keeping the playhead overlay on QWidget instead of a full QQuickWidget layer.
-- Subtitle editor and timeline segment movement now use line-map caches, dirty-rectangle updates, and visible-window context refreshes.
-- Timeline segment activation no longer recenters when the target is already visible, reducing scroll jitter during editing and playback.
-- STT ensemble chunk workers now use cloned per-worker chunk directories and clean them after transcription.
-- Cut-boundary pioneer/follower work now has topology-aware worker planning, lower UI progress overhead, reusable follower captures, and high-cost visual scan fallback.
-- Roughcut middle-topic labeling now prefers category-level labels and repairs weak/raw subtitle-copy topics.
-- Post-generation Ollama cleanup, runtime resource polling, and editor playback cleanup were tightened.
+- Cut-boundary pioneer/follower work now has backend routing, optional C++ helper kernels, FFmpeg scene prepass support, proxy reuse, and candidate-only optical-flow follower verification.
+- Long-media audio extraction now has quality-safe direct FFmpeg chunk routing, fused filter graphs, and backend profile hooks.
+- STT/VAD/LLM/backend selection now flows through shared auto/native/fast/legacy routing helpers and optional local benchmark profile materialization.
+- Korean KomixV2 Whisper candidates are available and clearly labeled across STT2 surfaces.
+- Editor mode gained lighter segment/waveform rendering paths, preview proxy reuse, tighter playback/editor sync, and safer post-generation runtime cleanup.
+- Settings, context menus, message dialogs, and bottom/global menu buttons were compacted with Apple-style hover/press feedback and outside-click popup dismissal.
 - Test video folders are ignored by Git and remain local-only.
-- Release verification passed with the full current suite: `1130 passed, 1 warning, 5 subtests passed`.
+- Release verification passed with the full current suite: `1222 passed, 1 warning, 5 subtests passed`.
 
 Future work should start from a new user request rather than this completed backlog.

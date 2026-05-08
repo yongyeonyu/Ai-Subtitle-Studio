@@ -306,7 +306,13 @@ class RuntimeMultiProcessTests(unittest.TestCase):
                  patch("core.runtime.multi_process.native_thread_budget", return_value=10), \
                  patch("core.runtime.multi_process.hardware_profile", return_value=snapshot), \
                  patch("core.runtime.multi_process.runtime_acceleration_snapshot", return_value={"summary": "CPU + GPU + NPU", "available": {"cpu": True, "gpu": True, "npu": True}}):
-                coordinator = RuntimeResourceCoordinator(settings={"runtime_performance_profile": "max"}, logger=logger)
+                coordinator = RuntimeResourceCoordinator(
+                    settings={
+                        "runtime_performance_profile": "max",
+                        "runtime_monitor_terminal_log_enabled": True,
+                    },
+                    logger=logger,
+                )
                 coordinator._sample_system_cpu_percent = lambda: 72.5
                 coordinator._sample_process_cpu_percent = lambda: 54.0
                 data = coordinator.poll(window=window)
@@ -328,8 +334,67 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertIn("ACTIVE", coordinator.status_html(data))
         self.assertEqual(coordinator.status_color(data), "#34C759")
         self.assertIn("cpu=72", coordinator.status_plain(data))
+        self.assertNotIn("runtime=max", coordinator.status_plain(data))
         self.assertNotIn("accel=CPU + GPU + NPU", coordinator.status_plain(data))
-        self.assertTrue(any("📊 [Runtime]" in item for item in logger.messages))
+        self.assertTrue(any("📊 [Runtime] CPU 72%" in item for item in logger.messages))
+        self.assertFalse(any("MAX" in item or "ACCEL" in item for item in logger.messages))
+
+    def test_runtime_resource_coordinator_does_not_log_normal_idle_snapshot(self):
+        logger = _Logger()
+        snapshot = {
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 12 * 1024 ** 3,
+            "available_memory_ratio": 0.75,
+            "logical_cores": 8,
+            "physical_cores": 4,
+            "performance_cores": 4,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            with patch("core.runtime.multi_process.runtime_monitor_dir", return_value=tmpdir), \
+                 patch("core.runtime.multi_process.current_resource_snapshot", return_value=snapshot), \
+                 patch("core.runtime.multi_process.process_rss_bytes", return_value=1 * 1024 ** 3), \
+                 patch("core.runtime.multi_process.runtime_disk_cache_usage", return_value={"total_bytes": 0, "file_count": 0}), \
+                 patch("core.runtime.multi_process.native_thread_budget", return_value=8), \
+                 patch("core.runtime.multi_process.hardware_profile", return_value=snapshot):
+                coordinator = RuntimeResourceCoordinator(settings={}, logger=logger)
+                coordinator._sample_system_cpu_percent = lambda: 8.0
+                coordinator._sample_process_cpu_percent = lambda: 2.0
+                data = coordinator.poll(window=None)
+
+            self.assertTrue((tmpdir / "latest.json").exists())
+
+        self.assertEqual(data["pressure_stage"], "normal")
+        self.assertEqual(data["active_labels"], [])
+        self.assertIn("ACTIVE idle", coordinator.status_html(data))
+        self.assertEqual(logger.messages, [])
+
+    def test_runtime_resource_coordinator_terminal_log_is_off_by_default_even_when_active(self):
+        logger = _Logger()
+        snapshot = {
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 12 * 1024 ** 3,
+            "available_memory_ratio": 0.75,
+            "logical_cores": 8,
+            "physical_cores": 4,
+            "performance_cores": 4,
+        }
+        window = SimpleNamespace(backend=SimpleNamespace(_active=True))
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            with patch("core.runtime.multi_process.runtime_monitor_dir", return_value=tmpdir), \
+                 patch("core.runtime.multi_process.current_resource_snapshot", return_value=snapshot), \
+                 patch("core.runtime.multi_process.process_rss_bytes", return_value=1 * 1024 ** 3), \
+                 patch("core.runtime.multi_process.runtime_disk_cache_usage", return_value={"total_bytes": 0, "file_count": 0}), \
+                 patch("core.runtime.multi_process.native_thread_budget", return_value=8), \
+                 patch("core.runtime.multi_process.hardware_profile", return_value=snapshot):
+                coordinator = RuntimeResourceCoordinator(settings={}, logger=logger)
+                coordinator._sample_system_cpu_percent = lambda: 16.0
+                coordinator._sample_process_cpu_percent = lambda: 99.0
+                data = coordinator.poll(window=window)
+
+        self.assertIn("pipeline", data["active_labels"])
+        self.assertEqual(logger.messages, [])
 
     def test_runtime_resource_coordinator_exit_mode_overrides_pressure_stage(self):
         snapshot = {

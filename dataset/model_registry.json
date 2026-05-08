@@ -122,6 +122,48 @@
       "experimental": true
     },
     {
+      "id": "whisper-korean-komixv2-mlx",
+      "name": "Whisper Medium KomixV2 Korean (MLX, 실험)",
+      "category": "STT",
+      "os": [
+        "mac"
+      ],
+      "pip_packages": [
+        "mlx-whisper"
+      ],
+      "import_names": [
+        "mlx_whisper"
+      ],
+      "hf_repo": "youngouk/whisper-medium-komixv2-mlx",
+      "model_path": "",
+      "required": false,
+      "hidden": false,
+      "experimental": true
+    },
+    {
+      "id": "whisper-korean-komixv2-transformers",
+      "name": "Whisper Medium KomixV2 Korean (Transformers, 실험)",
+      "category": "STT",
+      "os": [
+        "mac",
+        "windows"
+      ],
+      "pip_packages": [
+        "transformers",
+        "accelerate"
+      ],
+      "import_names": [
+        "transformers",
+        "accelerate",
+        "torch"
+      ],
+      "hf_repo": "seastar105/whisper-medium-komixv2",
+      "model_path": "",
+      "required": false,
+      "hidden": false,
+      "experimental": true
+    },
+    {
       "id": "whisper-korean-zeroth-ko-v2-transformers",
       "name": "Whisper Korean Zeroth KO v2 (Transformers, 실험)",
       "category": "STT",
@@ -453,7 +495,7 @@
     },
     {
       "id": "rnnoise",
-      "name": "RNNoise (빠른 노이즈 제거)",
+      "name": "RNNoise (음성 보존형 노이즈 제거)",
       "category": "Audio",
       "os": [
         "mac",

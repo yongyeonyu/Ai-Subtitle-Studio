@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtCore import QPoint, QPointF, Qt
+from PyQt6.QtGui import QKeyEvent, QWheelEvent
 from PyQt6.QtWidgets import QApplication
 
 from ui.editor.subtitle_text_edit import SubtitleHighlighter, SubtitleTextEdit
@@ -23,6 +23,18 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
             QKeyEvent.Type.KeyPress,
             key,
             Qt.KeyboardModifier.NoModifier,
+        )
+
+    def _wheel_down_event(self):
+        return QWheelEvent(
+            QPointF(20, 20),
+            QPointF(20, 20),
+            QPoint(0, 0),
+            QPoint(0, -120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.ScrollUpdate,
+            False,
         )
 
     def test_fast_left_arrow_does_not_jump_to_block_start(self):
@@ -78,6 +90,45 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
             edit.deleteLater()
             self.app.processEvents()
 
+    def test_mouse_wheel_scrolls_even_when_selection_locked(self):
+        edit = SubtitleTextEdit()
+        try:
+            edit.resize(360, 120)
+            edit.setPlainText("\n".join(f"line {idx}" for idx in range(120)))
+            edit.show()
+            self.app.processEvents()
+            edit.verticalScrollBar().setValue(0)
+            edit.set_selection_locked(True)
+
+            event = self._wheel_down_event()
+            handled = edit.apply_wheel_scroll_event(event)
+
+            self.assertTrue(handled)
+            self.assertTrue(event.isAccepted())
+            self.assertGreater(edit.verticalScrollBar().value(), 0)
+            self.assertGreater(float(getattr(edit, "_last_user_scroll_at", 0.0)), 0.0)
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
+    def test_timestamp_margin_wheel_scrolls_editor(self):
+        edit = SubtitleTextEdit()
+        try:
+            edit.resize(360, 120)
+            edit.setPlainText("\n".join(f"line {idx}" for idx in range(120)))
+            edit.show()
+            self.app.processEvents()
+            edit.verticalScrollBar().setValue(0)
+
+            edit.timestampArea.wheelEvent(self._wheel_down_event())
+
+            self.assertGreater(edit.verticalScrollBar().value(), 0)
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
     def test_current_line_change_does_not_rehighlight_whole_document(self):
         edit = SubtitleTextEdit()
         try:
@@ -107,6 +158,33 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
             rehighlight.assert_not_called()
             self.assertGreaterEqual(rehighlight_block.call_count, 2)
             self.assertEqual(set(highlighter.quality_by_line), {5, 6})
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
+    def test_quality_map_rehighlights_only_changed_visible_blocks(self):
+        edit = SubtitleTextEdit()
+        try:
+            edit.setPlainText("\n".join(f"line {idx}" for idx in range(200)))
+            highlighter = SubtitleHighlighter(edit.document())
+            highlighter.set_quality_map(
+                {5: {"confidence_label": "red"}, 6: {"confidence_label": "green"}},
+                visible_lines=range(0, 120),
+            )
+
+            with patch.object(highlighter, "rehighlight") as rehighlight, \
+                 patch.object(highlighter, "rehighlightBlock", wraps=highlighter.rehighlightBlock) as rehighlight_block:
+                highlighter.set_quality_map(
+                    {5: {"confidence_label": "red"}, 6: {"confidence_label": "yellow"}},
+                    visible_lines=range(0, 120),
+                )
+
+            rehighlight.assert_not_called()
+            self.assertEqual(
+                [call.args[0].blockNumber() for call in rehighlight_block.call_args_list],
+                [6],
+            )
         finally:
             edit.close()
             edit.deleteLater()

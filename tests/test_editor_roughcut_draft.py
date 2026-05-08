@@ -283,6 +283,59 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertTrue(result.segments)
         self.assertEqual(len(segments), 12)
 
+    def test_post_generation_released_local_llm_uses_local_draft_without_thread(self):
+        class _Signal:
+            def __init__(self):
+                self.calls = []
+
+            def emit(self, result, segments, payload):
+                self.calls.append((result, segments, payload))
+
+        class _Main:
+            _multiclip_files = []
+            _multiclip_boundaries = []
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self):
+                self.settings = {
+                    "editor_roughcut_draft_enabled": True,
+                    "selected_llm_provider": "ollama",
+                    "selected_model": "gemma4:e4b",
+                    "roughcut_llm_enabled": True,
+                    "roughcut_major_min_subtitle_count": 1,
+                }
+                self._post_generation_models_release_requested = True
+                self._post_generation_models_released = False
+                self._roughcut_draft_status = "idle"
+                self._roughcut_draft_thread = None
+                self._roughcut_draft_generation = 0
+                self._roughcut_llm_cooldown_until = 0.0
+                self.sig_roughcut_draft_ready = _Signal()
+                self.video_player = None
+                self.media_path = "/tmp/source.mp4"
+                self._main = _Main()
+
+            def window(self):
+                return self._main
+
+            def _draft_settings_snapshot(self):
+                return dict(self.settings)
+
+            def _get_current_segments(self):
+                return _segments(12)
+
+        editor = _Editor()
+        with mock.patch("ui.editor.editor_roughcut_draft.threading.Thread") as thread_cls, \
+             mock.patch("core.roughcut.run_editor_roughcut_llm_draft") as run_llm:
+            editor._run_post_generation_roughcut_draft()
+
+        thread_cls.assert_not_called()
+        run_llm.assert_not_called()
+        self.assertEqual(len(editor.sig_roughcut_draft_ready.calls), 1)
+        _result, segments, payload = editor.sig_roughcut_draft_ready.calls[0]
+        self.assertEqual(payload["refinement_source"], "local_after_generation_runtime_released")
+        self.assertEqual(len(segments), 12)
+
     def test_editor_draft_prompt_targets_post_generation_workflow(self):
         from core.roughcut import build_editor_roughcut_draft_prompt
 
@@ -347,6 +400,38 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertIs(prepare.call_args.args[0], settings)
         self.assertEqual(prepare.call_args.args[1].model, "roughcut-local")
         self.assertEqual(call_ollama.call_args.args[0], "roughcut-local")
+
+    def test_editor_draft_ollama_call_uses_shared_python_client_provider(self):
+        from core.roughcut.editor_draft import _call_ollama_json
+
+        with mock.patch("core.llm.ollama_provider.generate_text", return_value='{"major_segments": []}') as generate:
+            result = _call_ollama_json("roughcut-local", "prompt", timeout=7)
+
+        self.assertEqual(result, {"major_segments": []})
+        generate.assert_called_once()
+        self.assertEqual(generate.call_args.args[:2], ("roughcut-local", "prompt"))
+        self.assertEqual(generate.call_args.kwargs["num_predict"], 1024)
+        self.assertEqual(generate.call_args.kwargs["temperature"], 0.2)
+
+    def test_chunked_connection_refused_aborts_after_first_roughcut_llm_call(self):
+        from core.roughcut.editor_draft import run_editor_roughcut_llm_draft
+
+        settings = {
+            "selected_llm_provider": "ollama",
+            "selected_model": "roughcut-local",
+            "roughcut_llm_enabled": True,
+            "roughcut_llm_rows_auto_enabled": False,
+            "roughcut_llm_max_context_rows": 5,
+        }
+        with mock.patch("core.roughcut.editor_draft.prepare_roughcut_llm_model_for_run"), \
+             mock.patch(
+                 "core.roughcut.editor_draft._call_ollama_json",
+                 side_effect=RuntimeError("[Errno 61] Connection refused"),
+             ) as call_ollama:
+            result = run_editor_roughcut_llm_draft(_segments(12), settings=settings)
+
+        self.assertIsNone(result)
+        self.assertEqual(call_ollama.call_count, 1)
 
     def test_failed_post_generation_draft_schedules_model_release(self):
         class _Editor(EditorRoughcutDraftMixin):
