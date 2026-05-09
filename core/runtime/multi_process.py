@@ -17,12 +17,25 @@ from core.performance import (
     performance_profile,
     runtime_scheduler_reserve_cores,
 )
+from core.native_macos_acceleration import (
+    EXPERIMENTAL_SWIFT_POLICY_KEYS,
+    mac_native_backend_plan,
+    mac_native_runtime_overrides,
+)
 from core.runtime import config
 from core.runtime.memory_manager import process_rss_bytes, runtime_disk_cache_usage
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on", "enabled", "enable"}
 _FALSE_VALUES = {"0", "false", "no", "off", "disabled", "disable", "끄기", "끔"}
+
+# BENCH LOCK 2026-05-09 (Apple M5, X5_시승기_후반.MP4 4K HEVC):
+# cut-boundary pioneer 4 workers and follower 4-way CPU verification beat
+# 6/8/10-way fanout and MPS for this workload. Do not tune these constants
+# without rerunning the recorded cut-boundary benchmark matrix.
+BENCH_LOCKED_CUT_PIONEER_WORKERS = 4
+BENCH_LOCKED_CUT_FOLLOWER_WORKERS = 4
+BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS = 4
 
 
 def _int_value(value: Any, default: int = 0) -> int:
@@ -64,6 +77,8 @@ def manual_lora_runtime_settings(settings: dict[str, Any] | None = None) -> dict
     profile = hardware_profile()
     logical = max(1, int(profile.get("logical_cores", 1) or 1))
     reserve = 1 if logical > 1 else 0
+    # BENCH LOCK 2026-05-09: CPU fanout kept improving up to all 10 logical
+    # cores, but manual LoRA must leave one core for immediate stop/exit.
     native_threads = max(1, logical - reserve)
     merged["runtime_performance_profile"] = "max"
     merged["runtime_hardware_acceleration_enabled"] = True
@@ -117,7 +132,6 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     )
     chip_pipeline = dict(chip_plan.get("pipeline") or {})
     chip_cpu = dict(chip_plan.get("cpu") or {})
-    chip_gpu = dict(chip_plan.get("gpu") or {})
     chip_npu = dict(chip_plan.get("npu") or {})
 
     balanced_workers = max(1, min(logical, performance + min(efficiency, 2)))
@@ -162,17 +176,41 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     set_opt("stt_backend_policy", "native")
     set_opt("whisperkit_native_auto_enabled", True)
     set_opt("stt_persistent_runtime_reuse_enabled", True)
-    set_opt("stt_primary_fast_native_enabled", True)
-    set_opt("stt_primary_fast_native_model", getattr(config, "WHISPERKIT_FAST_MODEL", "whisperkit-persistent:large-v3-v20240930_turbo_632MB"))
+    # BENCH LOCK 2026-05-09: 1-minute SRT-referenced X5 sample picked
+    # WhisperKit quality for STT1 by compact CER. Turbo/MLX stays STT2/recheck.
+    set_opt("stt_primary_fast_native_enabled", False)
+    set_opt("stt_primary_fast_native_model", getattr(config, "WHISPERKIT_QUALITY_MODEL", "whisperkit-persistent:large-v3-v20240930_626MB"))
     set_opt("stt_primary_gpu_slots", stt_primary_slots)
     set_opt("stt_npu_coreml_slots", npu_slots)
     set_opt("stt_accelerator_distribution", "gpu+npu+cpu" if npu_slots else "gpu+cpu")
-    set_opt("stt_ensemble_selective_enabled", True)
+    mode = str(merged.get("subtitle_mode") or merged.get("simple_operation_mode") or "").strip().lower()
+    if mode in {"high", "precise", "정밀", "높음"}:
+        word_ts_mode = "selective"
+        word_ts_enabled = True
+        word_ts_max_segments = 32
+        word_ts_max_audio_sec = 100.0
+    elif mode in {"fast", "speed", "quick", "빠름"}:
+        word_ts_mode = "off"
+        word_ts_enabled = False
+        word_ts_max_segments = 0
+        word_ts_max_audio_sec = 0.0
+    else:
+        word_ts_mode = "selective"
+        word_ts_enabled = True
+        word_ts_max_segments = 16
+        word_ts_max_audio_sec = 70.0
+    set_opt("stt_ensemble_selective_enabled", False)
     set_opt("stt_ensemble_parallel_enabled", False)
-    set_opt("stt_word_timestamps_mode", "selective")
+    set_opt("stt_word_timestamps_mode", word_ts_mode)
     set_opt("stt_word_timestamps_default_enabled", False)
-    set_opt("stt_word_timestamps_precision_max_segments", 24)
-    set_opt("stt_word_timestamps_precision_max_audio_sec", 90.0)
+    set_opt("stt_word_timestamps_precision_enabled", word_ts_enabled)
+    set_opt("stt_word_timestamps_precision_threshold", 72.0)
+    set_opt("stt_word_timestamps_precision_max_segments", word_ts_max_segments)
+    set_opt("stt_word_timestamps_precision_max_audio_sec", word_ts_max_audio_sec)
+    set_opt("stt_word_timestamps_precision_keep_text", True)
+    set_opt("stt_word_timestamps_precision_max_timing_shift_sec", 0.55)
+    set_opt("stt_word_timestamps_precision_min_duration_ratio", 0.45)
+    set_opt("stt_word_timestamps_precision_max_duration_ratio", 1.8)
 
     set_opt("audio_extract_backend_policy", "native")
     set_opt("macos_native_fast_audio_flatten_enabled", True)
@@ -183,19 +221,36 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     set_opt("direct_ffmpeg_chunk_min_sec", direct_ffmpeg_chunk_min_sec)
 
     set_opt("cut_boundary_backend_policy", "native")
-    set_opt("scan_cut_pioneer_cpu_max_workers", wide_workers)
-    set_opt("scan_cut_follower_cpu_max_workers", balanced_workers)
+    set_opt("scan_cut_pioneer_workers", BENCH_LOCKED_CUT_PIONEER_WORKERS)
+    set_opt("scan_cut_verify_workers", BENCH_LOCKED_CUT_FOLLOWER_WORKERS)
+    set_opt("scan_cut_pioneer_cpu_max_workers", BENCH_LOCKED_CUT_PIONEER_WORKERS)
+    set_opt("scan_cut_follower_cpu_max_workers", BENCH_LOCKED_CUT_FOLLOWER_WORKERS)
+    set_opt("scan_cut_follower_outer_splits", BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS)
+    set_opt("scan_cut_pioneer_worker_overlap_steps", 1)
     set_opt("scan_cut_cv2_threads_per_worker", 1)
     set_opt("scan_cut_follower_stream_start_percent", stream_start_percent)
-    set_opt("scan_cut_follower_stream_batch_size", stream_batch_size)
+    set_opt("scan_cut_follower_stream_batch_size", max(BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS, stream_batch_size))
     set_opt("scan_cut_follower_stream_min_interval_sec", 0.1)
-    set_opt("scan_cut_follower_mps_enabled", True)
+    # The follower verifier compares many tiny thumbnail grids. On Apple
+    # Silicon this micro-kernel is usually faster on CPU unless the user
+    # explicitly opts into MPS for benchmarking, so keep the default off but
+    # do not override an explicit user opt-in.
+    if merged.get("scan_cut_follower_mps_enabled") in (None, ""):
+        merged["scan_cut_follower_mps_enabled"] = False
     set_opt("scan_cut_follower_dense_flow_enabled", True)
 
     set_opt("llm_threads_auto_enabled", True)
     set_opt("llm_workers_auto_enabled", True)
     set_opt("subtitle_native_prepass_workers", wide_workers)
     set_opt("subtitle_native_prepass_workers_resource_max", wide_workers)
+    native_overrides = mac_native_runtime_overrides(merged)
+    for key, value in native_overrides.items():
+        # Native policy helpers are benchmark-gated centrally. Apply them
+        # directly so stale manual settings cannot re-enable a slower path.
+        if key in EXPERIMENTAL_SWIFT_POLICY_KEYS or key == "native_swift_policy_experimental_enabled":
+            merged[key] = value
+        else:
+            set_opt(key, value)
     set_opt("llm_workers", min(llm_workers, 4))
     set_opt("llm_threads_resource_max", llm_workers)
     set_opt("local_ollama_llm_max_workers", local_llm_workers)
@@ -217,13 +272,18 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
         "neural_engine_cores": int(profile.get("neural_engine_cores", 0) or 0),
         "native_threads": native_threads,
         "audio_workers": wide_workers,
-        "cut_pioneer_workers": wide_workers,
-        "cut_follower_workers": balanced_workers,
+        "cut_pioneer_workers": BENCH_LOCKED_CUT_PIONEER_WORKERS,
+        "cut_follower_workers": BENCH_LOCKED_CUT_FOLLOWER_WORKERS,
+        "cut_follower_outer_splits": BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS,
         "llm_workers": min(llm_workers, 4),
         "llm_resource_max": llm_workers,
         "local_llm_workers": local_llm_workers,
         "stt_primary_gpu_slots": stt_primary_slots,
         "stt_npu_coreml_slots": npu_slots,
+        "native_cpp_llm_macro_groups": bool(native_overrides["native_cpp_llm_macro_groups_enabled"]),
+        "native_swift_quality_min_segments": int(native_overrides["native_swift_quality_scoring_min_segments"]),
+        "native_swift_common_split_min_items": int(native_overrides["native_swift_common_split_min_items"]),
+        "native_backend_plan": mac_native_backend_plan(merged),
     }
     return merged
 
@@ -284,11 +344,6 @@ def _cut_boundary_topology_worker_limit(
     physical = max(1, int(profile.get("physical_cores", logical) or logical))
     perf = max(1, int(profile.get("performance_cores", physical) or physical))
     efficiency = max(0, int(profile.get("efficiency_cores", 0) or 0))
-    max_profile = performance_profile(settings) == "max" and _setting_bool(
-        settings.get("runtime_hardware_acceleration_enabled"),
-        True,
-    )
-
     if task_key == "cut_follower" and any(name != "cpu" for name in accelerators):
         return 1, {
             "reason": "single_gpu_queue",
@@ -307,22 +362,15 @@ def _cut_boundary_topology_worker_limit(
         limit = configured
         reason = "configured"
     elif task_key == "cut_pioneer":
-        if workload <= 40:
-            limit = perf
-            reason = "bench_short_clip_perf_cores"
-        elif workload <= 80:
-            limit = perf + min(efficiency, 2)
-            reason = "bench_medium_clip_perf_plus_efficiency"
-        elif workload <= 160:
-            limit = perf + min(efficiency, 4)
-            reason = "bench_long_clip_balanced_fanout"
-        else:
-            limit = logical
-            reason = "bench_full_fanout"
+        # BENCH LOCK 2026-05-09: cut-boundary pioneer was fastest and most
+        # stable at 4 workers on the real 4K HEVC benchmark. Larger topology
+        # fanout created more decode contention and can miss seam candidates
+        # without overlap, so topology does not auto-expand this task anymore.
+        limit = BENCH_LOCKED_CUT_PIONEER_WORKERS
+        reason = "bench_locked_four_way_pioneer"
     else:
-        extra_efficiency = 2 if max_profile else 0
-        limit = perf + min(efficiency, extra_efficiency)
-        reason = "verify_core_topology"
+        limit = BENCH_LOCKED_CUT_FOLLOWER_WORKERS
+        reason = "bench_locked_four_way_follower"
 
     limit = max(1, min(workload, logical, int(limit or 1)))
     return limit, {

@@ -21,6 +21,7 @@ from core.path_manager import load_settings as _path_load_settings, save_setting
 from core.pipeline_status import generation_stage_keys, generation_stage_keys_all
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
+    apply_recommended_stt_quality_defaults,
     load_stt_quality_presets,
     normalize_stt_quality_key,
     save_stt_quality_user_preset,
@@ -30,6 +31,7 @@ from core.mode_policy import stt_quality_to_mode
 from core.settings_simplifier import apply_simple_operation_mode
 from ui.home_sidebar_presets import sync_sidebar_preset_panel
 from ui.dialogs.qml_popup import show_context_menu
+from ui.settings.settings_common import filter_available_whisper_models, whisper_model_display_name
 from ui.style import line_icon
 
 
@@ -419,6 +421,32 @@ class HomeSidebarMixin:
         except Exception:
             pass
 
+    def _on_sidebar_subtitle_quality_default(self):
+        combo = getattr(self, "sidebar_subtitle_quality_combo", None)
+        key = normalize_stt_quality_key(
+            combo.currentData() if combo is not None else _runtime_load_settings().get("stt_quality_preset")
+        )
+        mode = stt_quality_to_mode(key)
+        settings = dict(_runtime_load_settings() or {})
+        settings = apply_recommended_stt_quality_defaults(settings, key)
+        settings["_ignore_saved_quality_preset_once"] = True
+        settings = apply_simple_operation_mode(settings, mode)
+        settings = save_stt_quality_user_preset(settings, key)
+        self._apply_ai_settings(settings)
+        try:
+            from core.project.data_manager import save_default_settings
+
+            save_default_settings(settings)
+        except Exception:
+            pass
+        self._sync_subtitle_quality_combos_for_scope("workspace", key)
+        try:
+            from core.runtime.logger import get_logger
+
+            get_logger().log(f"⭐ Mode 기본값 지정: {stt_quality_label(key)} 추천값 적용")
+        except Exception:
+            pass
+
     def _create_sidebar_subtitle_quality_row(self, parent=None) -> QWidget:
         row = QWidget(parent)
         row.setObjectName("SidebarSubtitleQualityRow")
@@ -434,26 +462,36 @@ class HomeSidebarMixin:
         label.setStyleSheet("color:#00D46A; font-size:10px; font-weight:800; background:transparent; border:none;")
         layout.addWidget(label)
 
-        combo = self._make_subtitle_quality_combo(row, width=0, height=22, scope="workspace")
+        combo = self._make_subtitle_quality_combo(row, width=78, height=22, scope="workspace")
         self.sidebar_subtitle_quality_combo = combo
         layout.addWidget(combo)
         layout.addStretch(1)
 
-        save_btn = QPushButton("저장", row)
-        save_btn.setIcon(line_icon("save", "#F5F7FA", 16))
-        save_btn.setIconSize(QSize(9, 9))
-        save_btn.setFixedSize(44, 22)
-        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        save_btn.setToolTip("현재 Mode 설정 저장")
-        save_btn.setStyleSheet(
+        button_style = (
             "QPushButton { background:#24313A; color:#F5F7FA; border:1px solid #344652; "
             "border-radius:4px; padding:0 4px; font-size:9px; font-weight:800; } "
             "QPushButton:hover { background:#2D3D47; border-color:#3F8CFF; } "
             "QPushButton:pressed { background:#1A84FF; color:#FFFFFF; }"
         )
+        save_btn = QPushButton("저장", row)
+        save_btn.setIcon(line_icon("save", "#F5F7FA", 16))
+        save_btn.setIconSize(QSize(9, 9))
+        save_btn.setFixedSize(40, 22)
+        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save_btn.setToolTip("현재 Mode 설정 저장")
+        save_btn.setStyleSheet(button_style)
         save_btn.clicked.connect(self._on_sidebar_subtitle_quality_save)
         self.sidebar_subtitle_quality_save_btn = save_btn
         layout.addWidget(save_btn, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        default_btn = QPushButton("기본값", row)
+        default_btn.setFixedSize(48, 22)
+        default_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        default_btn.setToolTip("선택한 모델은 유지하고 현재 Mode를 벤치 추천 기본값으로 지정")
+        default_btn.setStyleSheet(button_style)
+        default_btn.clicked.connect(self._on_sidebar_subtitle_quality_default)
+        self.sidebar_subtitle_quality_default_btn = default_btn
+        layout.addWidget(default_btn, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         return row
 
     def _settings_for_subtitle_quality_scope(self, scope: str | None) -> dict:
@@ -703,6 +741,9 @@ class HomeSidebarMixin:
             return "미사용"
         if "사용 안함" in text:
             return "미사용"
+        display_name = whisper_model_display_name(text)
+        if display_name and display_name != text:
+            return display_name
         lowered = text.lower()
         if lowered == "whisper-medium-komixv2":
             return "KomixV2 · 별칭"
@@ -808,9 +849,7 @@ class HomeSidebarMixin:
 
         return {
             "off": "미사용",
-            "low": "낮음",
-            "medium": "중간",
-        }.get(str(level or "medium"), "중간")
+        }.get(str(level or "medium"), "사용")
 
     def _pipeline_model_labels(self, settings: dict) -> dict[str, str]:
         short_name = getattr(self, "_short_model_name", lambda value: value)
@@ -1570,24 +1609,13 @@ class HomeSidebarMixin:
                             models.append(repo_name)
             except Exception:
                 pass
-        return models
+        return filter_available_whisper_models(models)
 
     def _stt1_model_items(self) -> list[str]:
-        blocked = ("ghost613", "zeroth")
-        return [
-            model for model in self._whisper_model_items()
-            if not any(token in str(model).lower() for token in blocked)
-        ]
+        return filter_available_whisper_models(self._whisper_model_items())
 
     def _stt2_model_items(self) -> list[str]:
-        picked = []
-        for model in self._whisper_model_items():
-            model_l = str(model).lower()
-            if "ghost613" not in model_l and "zeroth" not in model_l and "komixv2" not in model_l:
-                continue
-            if model not in picked:
-                picked.append(model)
-        return picked
+        return filter_available_whisper_models(self._whisper_model_items())
 
     def _llm_model_items(self) -> list[dict]:
         items = [
@@ -1666,6 +1694,8 @@ class HomeSidebarMixin:
         settings = dict(_runtime_load_settings())
         if updates:
             settings.update(updates)
+        if "selected_whisper_model_secondary" in updates or "stt_ensemble_enabled" in updates:
+            settings["stt_ensemble_user_selected"] = True
         if "selected_model" in updates or "selected_llm_provider" in updates:
             model = str(settings.get("selected_model") or "").strip()
             provider = str(settings.get("selected_llm_provider") or "").strip().lower()
@@ -1711,33 +1741,32 @@ class HomeSidebarMixin:
                 current = cut_boundary_level(settings)
             except Exception:
                 current = "medium" if bool(settings.get("cut_boundary_detection_enabled", settings.get("scan_cut_enabled", True))) else "off"
+            current = "off" if str(current or "").strip().lower() == "off" else "auto"
 
             choices = [
                 ("미사용", "off"),
-                ("낮음", "low"),
-                ("중간", "medium"),
+                ("사용", "auto"),
             ]
 
             labels = {
                 "off": "미사용",
-                "low": "낮음 - 3초 간격",
-                "medium": "중간 - 2초 간격",
+                "auto": "사용",
             }
             masks = {
                 "off": "off",
-                "low": "cross4",
-                "medium": "cross5",
+                "auto": "auto",
             }
 
             def _cut_boundary_updates(level: str) -> dict:
-                level = str(level or "medium")
-                if level == "high":
-                    level = "medium"
+                level = str(level or "auto")
+                if level != "off":
+                    level = "auto"
                 enabled = level != "off"
                 return {
                     "scan_cut_boundary_level": level,
                     "cut_boundary_level": level,
                     "scan_cut_level": level,
+                    "cut_boundary_adaptive_level_enabled": enabled,
 
                     # 기존 boolean 설정과 호환
                     "cut_boundary_detection_enabled": enabled,
@@ -1746,8 +1775,8 @@ class HomeSidebarMixin:
                     "cut_boundary_enabled": enabled,
 
                     # detector profile 보조 저장
-                    "scan_cut_boundary_label": labels.get(level, labels["medium"]),
-                    "scan_cut_grid_mask": masks.get(level, "cross5"),
+                    "scan_cut_boundary_label": labels.get(level, labels["auto"]),
+                    "scan_cut_grid_mask": masks.get(level, "auto"),
                     **(
                         {
                             "roughcut_llm_enabled": False,
@@ -1807,7 +1836,7 @@ class HomeSidebarMixin:
                 _push_item(
                     "stt2:ensemble",
                     "STT2 앙상블 사용",
-                    {"stt_ensemble_enabled": not ensemble},
+                    {"stt_ensemble_enabled": not ensemble, "stt_ensemble_user_selected": True},
                     checked=ensemble,
                     accent="#34C759",
                 )
@@ -1827,7 +1856,11 @@ class HomeSidebarMixin:
                 _push_item(
                     f"stt2:model:{idx}",
                     label,
-                    {"selected_whisper_model_secondary": model, "stt_ensemble_enabled": True},
+                    {
+                        "selected_whisper_model_secondary": model,
+                        "stt_ensemble_enabled": True,
+                        "stt_ensemble_user_selected": True,
+                    },
                     checked=model == current2,
                     accent="#5AC8FA",
                 )

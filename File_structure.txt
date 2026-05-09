@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.00-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_RELEASED
-Last-Updated: 2026-05-09
+Document-Version: 04.00.01-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_1_RELEASED
+Last-Updated: 2026-05-10
 Updated-By: Codex
 Scope: Actual project filesystem map generated from tracked source files plus untracked non-ignored release files. `.git/`, `venv/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.codex_work/`, and large runtime cache/output folders are intentionally not expanded.
 Role-Description-Rule: Tree entries are generated from actual paths; review notes are removed.
@@ -9,9 +9,9 @@ Role-Description-Rule: Tree entries are generated from actual paths; review note
 ================================================================================
 AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
-Last Updated: 2026-05-09
-Phase: MAC_NATIVE_APPSTORE_V4_RELEASED
-App Version: 04.00.00
+Last Updated: 2026-05-10
+Phase: MAC_NATIVE_APPSTORE_V4_0_1_RELEASED
+App Version: 04.00.01
 Structure Document: File_structure.txt
 Note: This file is an actual tree map and excludes cache-only Python bytecode folders, virtualenvs, local Codex scratch files, secrets, and large runtime output/cache folders.
 ================================================================================
@@ -278,10 +278,12 @@ ai_subtitle_studio/
 │   ├── cut_boundary_auto_scan.py
 │   ├── cut_boundary_auto_utils.py
 │   ├── cut_boundary_auto_verify.py
+│   ├── cut_boundary_api.py
 │   ├── cut_boundary_backend_router.py
 │   ├── cut_boundary_ffmpeg_scene.py
 │   ├── cut_boundary_fps.py
 │   ├── cut_boundary_fusion.py
+│   ├── cut_boundary_jump.py
 │   ├── cut_boundary_middle.py
 │   ├── frame_time.py
 │   ├── json_file.py
@@ -294,6 +296,7 @@ ai_subtitle_studio/
 │   │   └── _native_cut_boundary.cpp
 │   ├── native_cut_boundary.py
 │   ├── native_json.py
+│   ├── native_macos_acceleration.py
 │   ├── native_macos_memory.py
 │   ├── native_swift_common_split.py
 │   ├── native_swift_policy.py
@@ -398,10 +401,13 @@ ai_subtitle_studio/
 │   ├── test_cp08_cp10_home_timeline.py
 │   ├── test_cp11_multiclip_offset.py
 │   ├── test_cut_boundary_audio.py
+│   ├── test_cut_boundary_adaptive_level.py
+│   ├── test_cut_boundary_api.py
 │   ├── test_cut_boundary_auto_scan_backend.py
 │   ├── test_cut_boundary_compare_resolution.py
 │   ├── test_cut_boundary_ffmpeg_scene.py
 │   ├── test_cut_boundary_fusion.py
+│   ├── test_cut_boundary_jump.py
 │   ├── test_cut_boundary_middle.py
 │   ├── test_deep_policy_learning.py
 │   ├── test_deep_runtime_adaptation.py
@@ -445,8 +451,11 @@ ai_subtitle_studio/
 │   ├── test_multiclip_panel.py
 │   ├── test_native_cut_boundary.py
 │   ├── test_native_ffmpeg_manager.py
+│   ├── test_native_macos_acceleration.py
 │   ├── test_native_macos_memory.py
 │   ├── test_native_policy_engine.py
+│   ├── test_native_swift_adaptive.py
+│   ├── test_native_swift_core_worker.py
 │   ├── test_native_text_similarity.py
 │   ├── test_npu_acceleration.py
 │   ├── test_ollama_provider.py
@@ -691,12 +700,15 @@ ai_subtitle_studio/
 ├── RELEASE_v03.25.00.md
 ├── RELEASE_v03.25.01.md
 ├── RELEASE_v04.00.00.md
+├── RELEASE_v04.00.01.md
 ├── requirements-mac.txt
 ├── tools
 │   ├── apply_runtime_optimization_profile.py
 │   ├── benchmark_apple_silicon_scheduler.py
 │   ├── benchmark_dense_flow_cut_boundary.py
+│   ├── benchmark_llm_model_variants.py
 │   ├── benchmark_macos_native_pipeline.py
 │   ├── benchmark_native_policy_engine.py
+│   ├── benchmark_subtitle_pipeline_variants.py
 │   ├── benchmark_stt_native_backends.py
 │   └── build_native_extensions.py

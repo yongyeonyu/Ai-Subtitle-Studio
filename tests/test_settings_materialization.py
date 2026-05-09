@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -58,7 +59,8 @@ class SettingsMaterializationTests(unittest.TestCase):
         self.assertEqual(materialized["subtitle_mode"], "high")
         self.assertEqual(materialized["auto_start_mode"], "precise")
         self.assertEqual(materialized["stt_quality_preset"], "precise")
-        self.assertEqual(materialized["runtime_native_threads"], 8)
+        self.assertGreaterEqual(materialized["runtime_native_threads"], 8)
+        self.assertLessEqual(materialized["runtime_native_threads"], max(8, os.cpu_count() or 8))
         self.assertTrue(materialized["runtime_native_text_similarity_enabled"])
         self.assertTrue(materialized["runtime_native_cut_boundary_enabled"])
         self.assertTrue(materialized["ollama_python_client_enabled"])

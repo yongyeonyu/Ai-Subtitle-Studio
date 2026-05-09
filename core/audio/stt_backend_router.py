@@ -65,11 +65,13 @@ def _whisperkit_model(model: str) -> str:
     if alias:
         raw = raw.split("/")[-1].replace("whisper-", "")
     elif lowered.startswith("mlx-community/"):
-        raw = raw.split("/", 1)[1]
-        if raw.startswith("whisper-"):
-            raw = raw[len("whisper-"):]
-        if raw.endswith("-mlx"):
-            raw = raw[:-4]
+        candidate = raw.split("/", 1)[1]
+        if "large-v3" in candidate.lower():
+            raw = candidate
+            if raw.startswith("whisper-"):
+                raw = raw[len("whisper-"):]
+            if raw.endswith("-mlx"):
+                raw = raw[:-4]
     if not raw:
         raw = "large-v3-v20240930_turbo_632MB"
     lowered = raw.lower()
@@ -92,11 +94,27 @@ def _whisperkit_model(model: str) -> str:
     return f"whisperkit-persistent:{raw}"
 
 
+def _whisperkit_supported_model(model: str) -> bool:
+    try:
+        from core.audio.whisperkit_persistent import whisperkit_model_selector, whisperkit_selector_is_supported
+
+        return whisperkit_selector_is_supported(whisperkit_model_selector(_whisperkit_model(model)))
+    except Exception:
+        return False
+
+
+def _unwrap_whisperkit_model(model: str) -> str:
+    raw = str(model or "").strip()
+    if raw.lower().startswith("whisperkit-persistent:"):
+        return raw.split(":", 1)[1].strip()
+    return raw
+
+
 def _model_for_backend(backend: str, model: str) -> str:
     backend_key = str(backend or "").strip().lower()
     raw = str(model or "").strip()
     if backend_key == "whisperkit_persistent":
-        return _whisperkit_model(raw)
+        return _whisperkit_model(raw) if _whisperkit_supported_model(raw) else raw
     if backend_key == "whisper_cpp" and raw and not raw.lower().startswith(("whisper.cpp:", "whisper_cpp:", "whisper-cpp:")):
         return f"whisper.cpp:{raw}"
     if backend_key == "mlx":
@@ -145,15 +163,36 @@ def select_stt_backend(model: str, settings: dict[str, Any] | None = None) -> St
     if policy == "disabled":
         return SttBackendChoice(_infer_backend(requested_model), requested_model, "policy_disabled_fallback")
     if requested_model.lower().startswith("whisperkit-persistent:"):
+        if not _whisperkit_supported_model(requested_model):
+            fallback_model = _unwrap_whisperkit_model(requested_model)
+            return SttBackendChoice(
+                _infer_backend(fallback_model),
+                fallback_model,
+                "explicit_whisperkit_unsupported_model_fallback",
+            )
         return SttBackendChoice(
             "whisperkit_persistent",
             _whisperkit_model(requested_model),
             "explicit_whisperkit_model",
         )
-    if prof_model:
+    if prof_model and (not requested_model or prof_model == requested_model):
         backend = prof_backend or _infer_backend(prof_model)
+        if str(backend or "").strip().lower() == "whisperkit_persistent" and not _whisperkit_supported_model(prof_model):
+            return SttBackendChoice(
+                _infer_backend(prof_model),
+                prof_model,
+                "autotuned_profile_unsupported_whisperkit_fallback",
+            )
         return SttBackendChoice(backend, _model_for_backend(backend, prof_model), "autotuned_profile")
     if prof_backend and policy == "auto":
+        if str(prof_backend or "").strip().lower() == "whisperkit_persistent" and not _whisperkit_supported_model(
+            requested_model
+        ):
+            return SttBackendChoice(
+                _infer_backend(requested_model),
+                requested_model,
+                "autotuned_backend_unsupported_whisperkit_fallback",
+            )
         return SttBackendChoice(prof_backend, _model_for_backend(prof_backend, requested_model), "autotuned_backend")
 
     if policy == "quality":
@@ -171,7 +210,12 @@ def select_stt_backend(model: str, settings: dict[str, Any] | None = None) -> St
         return SttBackendChoice(_infer_backend(requested_model), requested_model, "fast_policy_selected_model")
     if policy == "native":
         model_for_native = requested_model or "large-v3-turbo"
-        if bool(getattr(config, "IS_MAC", False)) and _whisperkit_auto_enabled(data) and _whisperkit_ready():
+        if (
+            bool(getattr(config, "IS_MAC", False))
+            and _whisperkit_auto_enabled(data)
+            and _whisperkit_ready()
+            and _whisperkit_supported_model(model_for_native)
+        ):
             return SttBackendChoice(
                 "whisperkit_persistent",
                 _whisperkit_model(model_for_native),

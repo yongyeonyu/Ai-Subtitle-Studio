@@ -8,16 +8,60 @@ import threading
 from typing import Any
 
 from core.native_swift_subtitle import find_native_cli_path
+from core.runtime.config import IS_MAC
 
 _WORKER: subprocess.Popen | None = None
 _WORKER_LOCK = threading.Lock()
 
 
-def _enabled() -> bool:
-    value = os.environ.get("AI_SUBTITLE_STUDIO_SWIFT_QUALITY", "").lower()
-    if value in {"0", "false", "off", "no"}:
+def _setting_bool(value: Any, default: bool = True) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().casefold()
+    if normalized in {"0", "false", "off", "no", "사용 안함", "끔"}:
         return False
-    return value in {"1", "true", "on", "yes"}
+    if normalized in {"1", "true", "on", "yes", "사용", "켬"}:
+        return True
+    return bool(default)
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(float(value))
+    except Exception:
+        parsed = int(default)
+    return parsed if parsed > 0 else int(default)
+
+
+def _env_bool(name: str) -> bool | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    normalized = value.strip().casefold()
+    if normalized in {"0", "false", "off", "no"}:
+        return False
+    if normalized in {"1", "true", "on", "yes"}:
+        return True
+    return None
+
+
+def _enabled(settings: dict[str, Any] | None, item_count: int) -> bool:
+    if not IS_MAC:
+        return False
+    env = _env_bool("AI_SUBTITLE_STUDIO_SWIFT_QUALITY")
+    if env is not None:
+        return env
+    data = dict(settings or {})
+    if not _setting_bool(data.get("mac_native_acceleration_enabled"), True):
+        return False
+    if not _setting_bool(data.get("native_swift_quality_scoring_enabled"), True):
+        return False
+    if _setting_bool(data.get("native_swift_quality_scoring_force_enabled"), False):
+        return True
+    min_segments = _positive_int(data.get("native_swift_quality_scoring_min_segments"), 64)
+    return int(item_count or 0) >= min_segments
 
 
 def _json_default(value: Any) -> Any:
@@ -36,7 +80,7 @@ def evaluate_quality_batch_via_swift(
     *,
     settings: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]] | None:
-    if not _enabled() or not segments:
+    if not segments or not _enabled(settings, len(segments)):
         return None
     cli = find_native_cli_path()
     if cli is None:

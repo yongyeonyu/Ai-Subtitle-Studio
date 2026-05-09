@@ -51,6 +51,42 @@ def _segment_float(segment: dict[str, Any], key: str, default: float, *, low: fl
     return max(low, value)
 
 
+def _lora_score(segment: dict[str, Any]) -> float:
+    scores: list[float] = []
+    for key in ("_lora_segment_score", "lora_score"):
+        value = segment.get(key)
+        if value not in (None, ""):
+            scores.append(_as_float(value))
+    profile = segment.get("_lora_generation_profile")
+    if isinstance(profile, dict):
+        scores.append(_as_float(profile.get("top_score")))
+        pattern = profile.get("pattern_match")
+        if isinstance(pattern, dict):
+            scores.append(_as_float(pattern.get("score")))
+    return max(scores or [0.0])
+
+
+def _lora_continuity_enabled(segment: dict[str, Any]) -> bool:
+    for payload_key in ("_lora_gap_settings", "_lora_segment_settings"):
+        payload = segment.get(payload_key)
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("subtitle_lora_split_policy_enabled") is False:
+            return False
+        if any(
+            payload.get(key) not in (None, "")
+            for key in (
+                "split_length_threshold",
+                "sub_gap_break_sec",
+                "word_timing_gap_break_sec",
+                "continuous_threshold",
+                "sub_min_duration",
+            )
+        ):
+            return True
+    return _lora_score(segment) >= 70.0
+
+
 def _snap_edge_to_frame(sec: float, fps: float, *, edge: str) -> float:
     frame = sec_to_frame(sec, fps)
     snapped = frame_to_sec(frame, fps)
@@ -131,13 +167,29 @@ def merge_short_segments_by_gap(
             _segment_float(prev, "sub_gap_break_sec", gap_break_sec, low=0.05),
             _segment_float(seg, "sub_gap_break_sec", gap_break_sec, low=0.05),
         )
+        pair_continuous_threshold = max(
+            pair_gap_break_sec,
+            _segment_float(prev, "continuous_threshold", pair_gap_break_sec, low=0.05),
+            _segment_float(seg, "continuous_threshold", pair_gap_break_sec, low=0.05),
+        )
+        lora_continuity = _lora_continuity_enabled(prev) or _lora_continuity_enabled(seg)
+        prev_chars = _char_count(prev.get("text", ""))
+        cur_chars = _char_count(seg.get("text", ""))
+        has_micro_side = (
+            prev_dur < min_duration
+            or cur_dur < min_duration
+            or prev_chars <= max(2, int(pair_max_chars * 0.45))
+            or cur_chars <= max(2, int(pair_max_chars * 0.45))
+        )
+        if lora_continuity and has_micro_side and gap <= pair_continuous_threshold:
+            hard_boundary = False
         should_merge = (
             not hard_boundary
             and
-            gap <= pair_gap_break_sec
+            gap <= (pair_continuous_threshold if lora_continuity else pair_gap_break_sec)
             and _same_merge_boundary(prev, seg)
             and (prev_dur < min_duration or cur_dur < min_duration or merged_chars <= pair_max_chars)
-            and merged_chars <= int(pair_max_chars * 1.5)
+            and merged_chars <= int(pair_max_chars * (1.9 if lora_continuity else 1.5))
         )
         if should_merge:
             result[-1] = _merge_pair(prev, seg)

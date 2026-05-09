@@ -157,6 +157,36 @@ class FingerprintCacheTests(unittest.TestCase):
 
         self.assertNotEqual(default_path, low_res_path)
 
+    def test_cut_boundary_cache_path_uses_auto_resolved_level(self):
+        owner = _CutCacheOwner()
+        old_output_dir = config.OUTPUT_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            config.OUTPUT_DIR = tmp
+            try:
+                media = os.path.join(tmp, "same.mp4")
+                with open(media, "wb") as handle:
+                    handle.write(b"media")
+                low_path = owner._cut_boundary_cache_path_for_start(
+                    [media],
+                    {
+                        "scan_cut_boundary_level": "auto",
+                        "scan_cut_boundary_resolved_level": "low",
+                        "cut_boundary_media_duration_sec": 1800.0,
+                    },
+                )
+                medium_path = owner._cut_boundary_cache_path_for_start(
+                    [media],
+                    {
+                        "scan_cut_boundary_level": "auto",
+                        "scan_cut_boundary_resolved_level": "medium",
+                        "cut_boundary_media_duration_sec": 300.0,
+                    },
+                )
+            finally:
+                config.OUTPUT_DIR = old_output_dir
+
+        self.assertNotEqual(low_path, medium_path)
+
     def test_cut_boundary_cache_reuses_empty_result_as_completed_hit(self):
         owner = _CutCacheOwner()
         old_output_dir = config.OUTPUT_DIR

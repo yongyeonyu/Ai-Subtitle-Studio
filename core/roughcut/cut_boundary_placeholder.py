@@ -429,62 +429,7 @@ _TOPICLESS_SPLIT_LOGGED_KEYS: list[tuple[str, int, int]] = []
 
 
 def _topicless_log_split_rows(rows, *, context: str = "build") -> None:
-    rows = list(rows or [])
-    if not rows:
-        _topicless_split_log_emit(f"  ▒ [컷 경계] split 없음 context={context}")
-        return
-
-    current_keys: list[tuple[str, int, int]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        label, start_frame, end_frame, _start_sec, _end_sec, _fps = _topicless_split_row_meta(row)
-        current_keys.append((label, int(start_frame), int(end_frame)))
-
-    global _TOPICLESS_SPLIT_LOGGED_KEYS
-    previous_keys = list(_TOPICLESS_SPLIT_LOGGED_KEYS or [])
-
-    should_reset = False
-    if not previous_keys:
-        should_reset = True
-    elif len(current_keys) < len(previous_keys):
-        should_reset = True
-    elif current_keys:
-        prev_first = previous_keys[0] if previous_keys else None
-        prev_last = previous_keys[-1] if previous_keys else None
-        if prev_first != current_keys[0] or prev_last != current_keys[-1]:
-            should_reset = True
-
-    previous_seen = set() if should_reset else set(previous_keys)
-    new_rows = []
-    for row, key in zip(rows, current_keys):
-        if key not in previous_seen:
-            new_rows.append(row)
-
-    _TOPICLESS_SPLIT_LOGGED_KEYS = current_keys
-    if not new_rows:
-        return
-
-    _topicless_split_log_emit(
-        f"  ▒ [컷 경계] split frame/time 로그 시작 context={context} new={len(new_rows)} total={len(rows)}"
-    )
-
-    for row in new_rows:
-        if not isinstance(row, dict):
-            continue
-
-        label, start_frame, end_frame, start_sec, end_sec, fps = _topicless_split_row_meta(row)
-        title = str(row.get("title", row.get("name", "주제없음")) or "주제없음")
-        dur_frame = max(0, int(end_frame) - int(start_frame))
-        dur_sec = max(0.0, float(end_sec) - float(start_sec))
-
-        _topicless_split_log_emit(
-            f"  ▒ [컷 경계] split {label} {title} "
-            f"frame={start_frame}->{end_frame} "
-            f"time={start_sec:.3f}s->{end_sec:.3f}s "
-            f"dur={dur_frame}f/{dur_sec:.3f}s "
-            f"fps={fps:.3f}"
-        )
+    return None
 
 
 _topicless_original_build_topicless_middle_segments = build_topicless_middle_segments

@@ -1,4 +1,4 @@
-# Version: 04.00.00
+# Version: 04.00.01
 # Phase: PHASE12_MacNativeV4Release
 
 
@@ -13,7 +13,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "04.00.00"
+APP_VERSION = "04.00.01"
 MACBOOK_ONLY_APP = True
 SUPPORTED_OS_NAMES = ("Darwin",)
 APP_STORE_TARGET = True
@@ -177,7 +177,19 @@ DEFAULT_ADV_SETTINGS = {
     "cut_boundary_cache_enabled": True,
     "scan_cut_compare_max_width": 1920,
     "scan_cut_compare_max_height": 1080,
+    # BENCH LOCK 2026-05-09 (Apple M5, X5_시승기_후반.MP4 4K HEVC):
+    # Cut-boundary search is fastest and stable with pioneer=4 and follower
+    # CPU 4-way outer split. Do not change without rerunning the full matrix.
+    "scan_cut_pioneer_workers": 4,
+    "scan_cut_verify_workers": 4,
+    "scan_cut_pioneer_cpu_max_workers": 4,
+    "scan_cut_follower_cpu_max_workers": 4,
+    "scan_cut_follower_outer_splits": 4,
+    "scan_cut_pioneer_worker_overlap_steps": 1,
+    "scan_cut_cv2_threads_per_worker": 1,
     "vad_detection_cache_enabled": True,
+    # BENCH LOCK 2026-05-09: API LLM stays single-worker in runtime planning;
+    # local 7B-class LLMs are resource-adaptive with a cap of 2 on this 16GB M5.
     "llm_workers":      4,
     "llm_threads_resource_max": 4,
     "local_ollama_llm_max_workers": 2,
@@ -186,6 +198,16 @@ DEFAULT_ADV_SETTINGS = {
     "codex_subtitle_native_fast_path_enabled": True,
     "codex_subtitle_native_fast_path_min_segments": 80,
     "codex_subtitle_native_fast_path_long_text_llm_ratio": 2.8,
+    "mac_native_acceleration_enabled": True,
+    "native_cpp_llm_macro_groups_enabled": True,
+    "native_swift_quality_scoring_enabled": True,
+    "native_swift_quality_scoring_min_segments": 64,
+    "native_swift_common_split_enabled": True,
+    "native_swift_common_split_min_items": 1000,
+    # BENCH LOCK 2026-05-09 (native policy benchmark, 80 rounds/2500 LoRA docs):
+    # Python beat Swift worker for LLM candidates, Deep rerank, and LoRA scoring,
+    # and Swift LoRA changed top-5 ranking. Keep these native policy paths off
+    # until a rerun proves both speed and ranking parity.
     "native_swift_llm_candidate_policy_enabled": False,
     "native_swift_deep_policy_enabled": False,
     "native_swift_lora_scoring_enabled": False,
@@ -198,18 +220,21 @@ DEFAULT_ADV_SETTINGS = {
     "auto_start_mode": "balanced",
     "stt_quality_preset": "balanced",
     "stt_ensemble_enabled": False,
-    "stt_ensemble_selective_enabled": True,
+    "stt_ensemble_selective_enabled": False,
     "stt_ensemble_parallel_enabled": False,
     "stt_candidate_scoring_enabled": True,
-    "stt_low_score_recheck_enabled": True,
+    "stt_low_score_recheck_enabled": False,
     "stt_low_score_recheck_threshold": 60,
     "stt_low_score_recheck_padding_sec": 0.8,
     "stt_low_score_recheck_max_segments": 80,
     "stt_low_score_recheck_max_audio_sec": 180.0,
     "stt_recheck_native_fast_audio_filter_enabled": True,
     "stt_persistent_runtime_reuse_enabled": True,
-    "stt_primary_fast_native_enabled": True,
-    "stt_primary_fast_native_model": WHISPERKIT_FAST_MODEL,
+    # BENCH LOCK 2026-05-09 (X5_시승기_후반.MP4 120.3s-180.3s, SRT reference):
+    # STT1 keeps WhisperKit persistent quality: compact CER 1.083% beat
+    # WhisperKit/MLX turbo at 1.805%. MLX turbo remains STT2/recheck for speed.
+    "stt_primary_fast_native_enabled": False,
+    "stt_primary_fast_native_model": WHISPERKIT_QUALITY_MODEL,
     "editor_live_stt_preview_follow_video_enabled": False,
     "editor_live_stt_preview_follow_interval_sec": 2.0,
     "stt_word_timestamps_mode": "selective",
@@ -220,8 +245,11 @@ DEFAULT_ADV_SETTINGS = {
     "stt_word_timestamps_precision_max_audio_sec": 90.0,
     "stt_word_timestamps_precision_keep_text": True,
     "stt_word_timestamps_precision_min_similarity": 0.18,
+    "stt_word_timestamps_precision_max_timing_shift_sec": 0.55,
+    "stt_word_timestamps_precision_min_duration_ratio": 0.45,
+    "stt_word_timestamps_precision_max_duration_ratio": 1.8,
     "stt_missing_voice_min_duration_sec": 0.55,
-    "selected_whisper_model_secondary": "youngouk/ghost613-turbo-korean-4bit-mlx",
+    "selected_whisper_model_secondary": MLX_FALLBACK_MODEL,
     "stt_ensemble_llm_judge_enabled": False,
     "vad_post_stt_align_enabled": True,
     "vad_post_stt_max_shift_sec": 0.7,

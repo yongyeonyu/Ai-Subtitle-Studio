@@ -7,6 +7,7 @@ import re
 from statistics import median
 from typing import Any
 
+from core.native_macos_acceleration import mac_native_swift_policy_experimental_enabled
 from core.native_text_similarity import similarity_ratio
 
 
@@ -257,9 +258,12 @@ def rerank_subtitle_candidates(
     profile: dict[str, Any] | None,
 ) -> tuple[list[str], dict[str, Any]]:
     settings = dict(settings or {})
-    native_requested = _setting_bool(settings, "native_swift_deep_policy_enabled", False) or any(
-        os.environ.get(key, "").strip().lower() in {"1", "true", "on", "yes"}
-        for key in ("AI_SUBTITLE_STUDIO_SWIFT_DEEP_POLICY", "AI_SUBTITLE_STUDIO_SWIFT_POLICY")
+    native_requested = mac_native_swift_policy_experimental_enabled(settings) and (
+        _setting_bool(settings, "native_swift_deep_policy_enabled", False)
+        or any(
+            os.environ.get(key, "").strip().lower() in {"1", "true", "on", "yes"}
+            for key in ("AI_SUBTITLE_STUDIO_SWIFT_DEEP_POLICY", "AI_SUBTITLE_STUDIO_SWIFT_POLICY")
+        )
     )
     if native_requested:
         try:

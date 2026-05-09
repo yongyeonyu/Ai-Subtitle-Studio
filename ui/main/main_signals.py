@@ -58,6 +58,9 @@ class SignalHandlersMixin:
     def refresh_cut_boundary_placeholder(self):
         self._sig_refresh_cut_boundary_placeholder.emit()
 
+    def preview_cut_boundary_topicless_segments(self, rows):
+        self._sig_preview_cut_boundary_topicless_segments.emit(list(rows or []))
+
     def set_cut_boundary_scan_active(self, active: bool):
         self._sig_set_cut_boundary_scan_active.emit(bool(active))
 
@@ -436,6 +439,17 @@ class SignalHandlersMixin:
                 handler(list(times or []))
             except Exception as exc:
                 get_logger().log(f"⚠️ 자동 컷 경계 임시선 반영 실패: {exc}")
+
+    def _on_cut_boundary_topicless_segments(self, rows):
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None:
+            return
+        handler = getattr(editor, "_apply_cut_boundary_topicless_rows_to_ui", None)
+        if callable(handler):
+            try:
+                handler(list(rows or []), source="stream")
+            except Exception as exc:
+                get_logger().log(f"⚠️ 컷 경계 split 실시간 반영 실패: {exc}")
 
     def _on_project_boundary_times_updated(self, times):
         try:

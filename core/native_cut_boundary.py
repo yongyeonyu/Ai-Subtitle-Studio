@@ -172,6 +172,65 @@ def color_avg_delta(
         return None
 
 
+def dense_flow_pair_metrics(
+    prev_gray: Any,
+    next_gray: Any,
+    flow: Any,
+    *,
+    diff_threshold: float,
+) -> dict[str, float] | None:
+    if not native_cut_boundary_enabled():
+        return None
+    try:
+        import numpy as np
+
+        prev_arr = np.ascontiguousarray(prev_gray, dtype=np.uint8)
+        next_arr = np.ascontiguousarray(next_gray, dtype=np.uint8)
+        flow_arr = np.ascontiguousarray(flow, dtype=np.float32)
+        if prev_arr.ndim != 2 or next_arr.shape != prev_arr.shape:
+            return None
+        if flow_arr.ndim != 3 or flow_arr.shape[:2] != prev_arr.shape or flow_arr.shape[2] < 2:
+            return None
+        values = _native.dense_flow_pair_metrics(
+            prev_arr,
+            next_arr,
+            flow_arr,
+            float(diff_threshold),
+        )
+        if not isinstance(values, dict):
+            return None
+        return {str(key): float(value) for key, value in values.items()}
+    except Exception:
+        return None
+
+
+def waveform_peaks_f32le(
+    raw: bytes | bytearray | memoryview | None,
+    *,
+    sample_rate: int,
+    points_per_second: int,
+    duration: float | None = None,
+):
+    if not raw or not native_cut_boundary_enabled():
+        return None
+    try:
+        import numpy as np
+
+        peaks_bytes, dur = _native.waveform_peaks_f32le(
+            raw,
+            int(sample_rate or 2000),
+            int(points_per_second or 100),
+            float(duration or 0.0),
+        )
+        peaks = np.frombuffer(peaks_bytes or b"", dtype=np.float32).copy()
+        dur = float(dur or 0.0)
+    except Exception:
+        return None
+    if peaks.size <= 0 or dur <= 0.0:
+        return None
+    return peaks, dur
+
+
 def interval_overlaps(
     segment_starts: Any,
     segment_ends: Any,

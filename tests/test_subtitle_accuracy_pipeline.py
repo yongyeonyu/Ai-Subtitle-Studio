@@ -117,6 +117,58 @@ class SubtitleAccuracyPipelineTests(unittest.TestCase):
         self.assertNotIn("low_lora_score", decision["reasons"])
         self.assertGreaterEqual(decision["combined_signal_score"], 94.0)
 
+    def test_llm_gate_uses_segment_lora_score_for_fast_lane(self):
+        decision = llm_gate_decision(
+            {
+                "start": 0.0,
+                "end": 3.2,
+                "text": "안경 쓰신 분들은 시뮬레이터가 더 편합니다",
+                "_lora_segment_score": 92.0,
+                "_lora_generation_profile": {"top_score": 92.0},
+            },
+            {
+                "llm_confidence_gate_enabled": True,
+                "llm_confidence_gate_min_lora_score": 87.0,
+                "llm_confidence_gate_max_compact_ratio": 1.45,
+                "llm_confidence_gate_strong_signal_score": 88.0,
+                "llm_confidence_gate_strong_max_compact_ratio": 1.9,
+                "sub_max_duration": 6.0,
+            },
+            {},
+            text="안경 쓰신 분들은 시뮬레이터가 더 편합니다",
+            threshold=16,
+            duration=3.2,
+        )
+
+        self.assertFalse(decision["call_llm"])
+        self.assertTrue(decision["strong_fast_lane"])
+        self.assertEqual(decision["reason"], "skip_llm:strong_lora_deep_stt_fast_lane")
+        self.assertEqual(decision["segment_lora_score"], 92.0)
+
+    def test_llm_gate_keeps_llm_for_hallucination_even_with_strong_lora(self):
+        decision = llm_gate_decision(
+            {
+                "start": 0.0,
+                "end": 2.0,
+                "text": "Thank you for watching",
+                "_lora_segment_score": 96.0,
+                "_lora_generation_profile": {"top_score": 96.0},
+            },
+            {
+                "llm_confidence_gate_enabled": True,
+                "llm_confidence_gate_min_lora_score": 87.0,
+                "llm_confidence_gate_strong_signal_score": 88.0,
+                "sub_max_duration": 6.0,
+            },
+            {},
+            text="Thank you for watching",
+            threshold=16,
+            duration=2.0,
+        )
+
+        self.assertTrue(decision["call_llm"])
+        self.assertIn("hallucination_phrase_in_source", decision["reasons"])
+
     def test_llm_verifier_rejects_hallucinated_or_timecoded_output(self):
         chunks, meta = verify_llm_chunks_for_subtitle(
             "안녕하세요 반갑습니다",

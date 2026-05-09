@@ -24,6 +24,7 @@ func printUsage() {
       srt-to-json <input.srt>
       json-to-srt <input.json> [output.srt]
       validate-srt <input.srt>
+      core-jsonl-worker
       read-project-json <project.json>
       write-project-json <project.json>
       project-summary <project.json>
@@ -90,6 +91,63 @@ func run() throws {
         }
         let segments = try SRTCodec.parseFile(URL(fileURLWithPath: path))
         print("segments=\(segments.count)")
+
+    case "core-jsonl-worker":
+        while let line = readLine(strippingNewline: true) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                continue
+            }
+            do {
+                let data = Data(trimmed.utf8)
+                let payload = (try JSONSerialization.jsonObject(with: data, options: [])) as? [String: Any] ?? [:]
+                let task = String(describing: payload["task"] ?? "")
+                let response: [String: Any]
+                switch task {
+                case "srt_to_json":
+                    let path = String(describing: payload["path"] ?? "")
+                    if path.isEmpty {
+                        response = ["error": "Missing SRT path"]
+                    } else {
+                        let segments = try SRTCodec.parseFile(URL(fileURLWithPath: path))
+                        response = ["segments": try jsonValue(from: segments)]
+                    }
+                case "read_project_json":
+                    let path = String(describing: payload["path"] ?? "")
+                    if path.isEmpty {
+                        response = ["error": "Missing project path"]
+                    } else {
+                        let object = try ProjectJSON.readObject(from: URL(fileURLWithPath: path))
+                        response = ["project": object]
+                    }
+                case "write_project_json":
+                    let path = String(describing: payload["path"] ?? "")
+                    guard !path.isEmpty else {
+                        response = ["error": "Missing project path"]
+                        try writeJSONObject(response)
+                        continue
+                    }
+                    let project = payload["project"] as? [String: Any] ?? [:]
+                    let normalized = try ProjectJSON.normalizedData(from: project)
+                    try ProjectJSON.atomicWrite(normalized, to: URL(fileURLWithPath: path))
+                    response = ["ok": true]
+                case "project_summary":
+                    let path = String(describing: payload["path"] ?? "")
+                    if path.isEmpty {
+                        response = ["error": "Missing project path"]
+                    } else {
+                        let object = try ProjectJSON.readObject(from: URL(fileURLWithPath: path))
+                        response = ["summary": ProjectJSON.summary(for: object)]
+                    }
+                default:
+                    response = ["error": "Unsupported core task: \(task)"]
+                }
+                try writeJSONObject(response)
+            } catch {
+                let message = String(describing: error).replacingOccurrences(of: "\n", with: " ")
+                try writeJSONObject(["error": message])
+            }
+        }
 
     case "read-project-json":
         guard let path = args.first else {
@@ -364,6 +422,12 @@ func writeJSONObject(_ object: [String: Any]) throws {
     let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data("\n".utf8))
+}
+
+func jsonValue<T: Encodable>(from value: T) throws -> Any {
+    let encoder = JSONEncoder()
+    let data = try encoder.encode(value)
+    return try JSONSerialization.jsonObject(with: data, options: [])
 }
 
 func parseWaveformOptions(_ args: [String]) -> (sampleRate: Int, pointsPerSecond: Int, duration: Double?) {

@@ -3,7 +3,10 @@ import unittest
 from unittest.mock import patch
 
 from core.cut_boundary_auto_scan import (
+    _cut_boundary_pioneer_worker_ranges,
     build_auto_grid_scan_helpers,
+    cut_boundary_memory_pressure_stage,
+    cut_boundary_pressure_worker_cap,
     configure_cut_boundary_cv2_threads,
     cut_follower_verify_backend,
     high_cost_visual_scan_skip_meta,
@@ -173,6 +176,31 @@ class CutBoundaryAutoScanBackendTests(unittest.TestCase):
             "cpu",
         )
 
+    def test_cut_follower_memory_pressure_forces_cpu_even_when_mps_is_enabled(self):
+        self.assertEqual(
+            cut_follower_verify_backend(
+                {"scan_cut_follower_mps_enabled": True},
+                platform_name="darwin",
+                mps_available=lambda: True,
+                pressure_stage="critical",
+            ),
+            "cpu",
+        )
+
+    def test_cut_boundary_memory_pressure_stage_uses_runtime_snapshot(self):
+        with patch(
+            "core.cut_boundary_auto_scan.current_resource_snapshot",
+            return_value={"memory_pressure_stage": "warning"},
+        ):
+            self.assertEqual(cut_boundary_memory_pressure_stage({}), "warning")
+
+    def test_cut_boundary_pressure_worker_cap_reduces_cut_workers_under_pressure(self):
+        self.assertEqual(cut_boundary_pressure_worker_cap("cut_pioneer", 8, "warning"), 4)
+        self.assertEqual(cut_boundary_pressure_worker_cap("cut_pioneer", 8, "critical"), 2)
+        self.assertEqual(cut_boundary_pressure_worker_cap("cut_follower", 6, "warning"), 2)
+        self.assertEqual(cut_boundary_pressure_worker_cap("cut_follower", 6, "critical"), 1)
+        self.assertEqual(cut_boundary_pressure_worker_cap("cut_follower", 2, "normal"), 2)
+
     def test_cut_cv2_threads_are_limited_inside_worker_pools(self):
         fake_cv2 = _FakeCv2()
 
@@ -190,6 +218,17 @@ class CutBoundaryAutoScanBackendTests(unittest.TestCase):
         self.assertFalse(meta["applied"])
         self.assertEqual(meta["reason"], "opencv_auto")
         self.assertEqual(fake_cv2.threads, 8)
+
+    def test_pioneer_worker_ranges_overlap_one_step_to_protect_seams(self):
+        ranges = _cut_boundary_pioneer_worker_ranges(
+            step_count=12,
+            worker_count=4,
+            step_frames=10,
+            frame_count=120,
+            settings={"scan_cut_pioneer_worker_overlap_steps": 1},
+        )
+
+        self.assertEqual(ranges, [(0, 0, 40), (1, 20, 70), (2, 50, 100), (3, 80, 120)])
 
     def test_high_cost_4k_video_skips_visual_scan(self):
         class FakePath:
@@ -502,6 +541,137 @@ class CutBoundaryAutoScanBackendTests(unittest.TestCase):
 
         self.assertTrue(result["passed"])
         self.assertEqual(result["reason"], "disabled")
+
+    def test_strict_verify_skips_color_capture_when_gray_fails(self):
+        capture_calls = []
+
+        def capture_maps(_cap, _cv2, **kwargs):
+            capture_calls.append(
+                {
+                    "start_frame": int(kwargs["start_frame"]),
+                    "end_frame": int(kwargs["end_frame"]),
+                    "capture_gray": bool(kwargs.get("capture_gray", True)),
+                    "capture_color": bool(kwargs.get("capture_color", True)),
+                }
+            )
+            start_frame = int(kwargs["start_frame"])
+            end_frame = int(kwargs["end_frame"])
+            gray_map = {frame: frame for frame in range(start_frame, end_frame + 1)} if kwargs.get("capture_gray", True) else {}
+            color_map = {frame: frame for frame in range(start_frame, end_frame + 1)} if kwargs.get("capture_color", True) else {}
+            return gray_map, color_map
+
+        strict_verify = build_strict_verify_helpers(
+            {
+                "normalize_cut_boundary_level": lambda level: str(level or "medium"),
+                "get_level_positions": lambda scan_profile, sample_positions: tuple(sample_positions or (0, 1, 2, 3, 4)),
+                "_auto_capture_verify_maps": capture_maps,
+                "_auto_gray_delta": lambda *args, **kwargs: (0.0, 0, []),
+                "_auto_color_avg_delta": lambda *args, **kwargs: (999.0, 5, [999.0]),
+                "_auto_gray_delta_mps": lambda *args, **kwargs: (0.0, 0, []),
+                "_auto_color_avg_delta_mps": lambda *args, **kwargs: (999.0, 5, [999.0]),
+                "_mps_available": lambda: False,
+            }
+        )["_auto_grid_v3_manual_verify_strict"]
+
+        result = strict_verify(
+            object(),
+            object(),
+            fps=10.0,
+            frame_count=45,
+            coarse_frame=10,
+            settings={
+                "scan_cut_auto_verify_rollback_frames": 5,
+                "scan_cut_auto_verify_forward_frames": 5,
+                "scan_cut_color_avg_window_frames": 3,
+                "scan_cut_auto_verify_window_stages": [4, 2, 1],
+            },
+            sample_positions=(0, 1, 2, 3, 4),
+        )
+
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["reason"], "gray_failed")
+        self.assertEqual(len(capture_calls), 1)
+        self.assertEqual(
+            capture_calls[0],
+            {
+                "start_frame": 5,
+                "end_frame": 20,
+                "capture_gray": True,
+                "capture_color": False,
+            },
+        )
+
+    def test_strict_verify_limits_color_capture_to_local_window_after_gray_pass(self):
+        capture_calls = []
+
+        def capture_maps(_cap, _cv2, **kwargs):
+            capture_calls.append(
+                {
+                    "start_frame": int(kwargs["start_frame"]),
+                    "end_frame": int(kwargs["end_frame"]),
+                    "capture_gray": bool(kwargs.get("capture_gray", True)),
+                    "capture_color": bool(kwargs.get("capture_color", True)),
+                }
+            )
+            start_frame = int(kwargs["start_frame"])
+            end_frame = int(kwargs["end_frame"])
+            gray_map = {frame: frame for frame in range(start_frame, end_frame + 1)} if kwargs.get("capture_gray", True) else {}
+            color_map = {frame: frame for frame in range(start_frame, end_frame + 1)} if kwargs.get("capture_color", True) else {}
+            return gray_map, color_map
+
+        def gray_delta(a, b, **_kwargs):
+            gap = abs(int(b) - int(a))
+            return float(gap * 40.0), 5, [float(gap)]
+
+        strict_verify = build_strict_verify_helpers(
+            {
+                "normalize_cut_boundary_level": lambda level: str(level or "medium"),
+                "get_level_positions": lambda scan_profile, sample_positions: tuple(sample_positions or (0, 1, 2, 3, 4)),
+                "_auto_capture_verify_maps": capture_maps,
+                "_auto_gray_delta": gray_delta,
+                "_auto_color_avg_delta": lambda *args, **kwargs: (25.0, 5, [25.0]),
+                "_auto_gray_delta_mps": gray_delta,
+                "_auto_color_avg_delta_mps": lambda *args, **kwargs: (25.0, 5, [25.0]),
+                "_mps_available": lambda: False,
+            }
+        )["_auto_grid_v3_manual_verify_strict"]
+
+        result = strict_verify(
+            object(),
+            object(),
+            fps=10.0,
+            frame_count=45,
+            coarse_frame=10,
+            settings={
+                "scan_cut_auto_verify_rollback_frames": 5,
+                "scan_cut_auto_verify_forward_frames": 5,
+                "scan_cut_color_avg_window_frames": 3,
+                "scan_cut_auto_verify_window_stages": [4, 2, 1],
+                "scan_cut_follower_dense_flow_enabled": False,
+            },
+            sample_positions=(0, 1, 2, 3, 4),
+        )
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(len(capture_calls), 2)
+        self.assertEqual(
+            capture_calls[0],
+            {
+                "start_frame": 5,
+                "end_frame": 20,
+                "capture_gray": True,
+                "capture_color": False,
+            },
+        )
+        self.assertEqual(
+            capture_calls[1],
+            {
+                "start_frame": 5,
+                "end_frame": 11,
+                "capture_gray": False,
+                "capture_color": True,
+            },
+        )
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from typing import Any
 
 from core.native_swift_subtitle import find_native_cli_path
 from core.runtime.config import IS_MAC
+from core.native_macos_acceleration import mac_native_swift_policy_experimental_enabled
 
 _WORKER: subprocess.Popen | None = None
 _WORKER_LOCK = threading.Lock()
@@ -37,6 +38,13 @@ def _env_bool(name: str) -> bool | None:
     return None
 
 
+def _experimental_policy_enabled(settings: dict[str, Any] | None) -> bool:
+    explicit = _env_bool("AI_SUBTITLE_STUDIO_SWIFT_POLICY_EXPERIMENTAL")
+    if explicit is not None:
+        return explicit
+    return mac_native_swift_policy_experimental_enabled(settings)
+
+
 def _enabled(settings: dict[str, Any] | None, setting_key: str, env_key: str, default: bool = True) -> bool:
     if not IS_MAC:
         return False
@@ -44,8 +52,12 @@ def _enabled(settings: dict[str, Any] | None, setting_key: str, env_key: str, de
     if global_env is False:
         return False
     local_env = _env_bool(env_key)
+    if not _experimental_policy_enabled(settings):
+        return False
     if local_env is not None:
         return local_env
+    if global_env is not None:
+        return global_env
     return _setting_bool((settings or {}).get(setting_key), default)
 
 

@@ -303,11 +303,15 @@ def build_auto_grid_verify_utils(get_grid_cells):
         scale_w: int,
         scale_h: int,
         color_space: str,
+        capture_gray: bool = True,
+        capture_color: bool = True,
         settings: dict | None = None,
     ):
         start_frame = max(0, int(start_frame))
         end_frame = min(int(frame_count) - 1, int(end_frame))
         if end_frame < start_frame:
+            return {}, {}
+        if not bool(capture_gray) and not bool(capture_color):
             return {}, {}
 
         gray_map = {}
@@ -325,19 +329,21 @@ def build_auto_grid_verify_utils(get_grid_cells):
                 break
             frame = _auto_downscale_frame_for_compare(frame, cv2_mod, settings=settings)
 
-            gray_map[f] = _auto_gray_thumb_from_frame(
-                frame,
-                cv2_mod,
-                positions=positions,
-                scale_w=scale_w,
-                scale_h=scale_h,
-            )
-            color_map[f] = _auto_color_avg_from_frame(
-                frame,
-                cv2_mod,
-                positions=positions,
-                color_space=color_space,
-            )
+            if capture_gray:
+                gray_map[f] = _auto_gray_thumb_from_frame(
+                    frame,
+                    cv2_mod,
+                    positions=positions,
+                    scale_w=scale_w,
+                    scale_h=scale_h,
+                )
+            if capture_color:
+                color_map[f] = _auto_color_avg_from_frame(
+                    frame,
+                    cv2_mod,
+                    positions=positions,
+                    color_space=color_space,
+                )
             f += 1
 
         return gray_map, color_map

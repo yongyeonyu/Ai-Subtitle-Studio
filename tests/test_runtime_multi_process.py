@@ -44,15 +44,22 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertEqual(settings["io_workers"], 8)
         self.assertEqual(settings["audio_chunk_route_max_workers"], 8)
         self.assertEqual(settings["ffmpeg_filter_threads"], 6)
-        self.assertEqual(settings["scan_cut_pioneer_cpu_max_workers"], 8)
-        self.assertEqual(settings["scan_cut_follower_cpu_max_workers"], 6)
+        self.assertEqual(settings["scan_cut_pioneer_cpu_max_workers"], 4)
+        self.assertEqual(settings["scan_cut_follower_cpu_max_workers"], 4)
+        self.assertEqual(settings["scan_cut_follower_outer_splits"], 4)
         self.assertEqual(settings["scan_cut_follower_stream_start_percent"], 25)
         self.assertEqual(settings["scan_cut_follower_stream_batch_size"], 12)
-        self.assertTrue(settings["scan_cut_follower_mps_enabled"])
+        self.assertFalse(settings["scan_cut_follower_mps_enabled"])
         self.assertFalse(settings["stt_ensemble_parallel_enabled"])
         self.assertEqual(settings["stt_word_timestamps_mode"], "selective")
         self.assertEqual(settings["llm_threads_resource_max"], 5)
         self.assertEqual(settings["local_ollama_llm_max_workers"], 2)
+        self.assertTrue(settings["native_cpp_llm_macro_groups_enabled"])
+        self.assertTrue(settings["native_swift_quality_scoring_enabled"])
+        self.assertTrue(settings["native_swift_common_split_enabled"])
+        self.assertFalse(settings["native_swift_llm_candidate_policy_enabled"])
+        self.assertFalse(settings["native_swift_deep_policy_enabled"])
+        self.assertFalse(settings["native_swift_lora_scoring_enabled"])
         self.assertEqual(settings["_apple_m_pipeline_parallel_plan"]["audio_workers"], 8)
 
     def test_apply_apple_m_subtitle_pipeline_plan_uses_m5_chip_aware_budget(self):
@@ -81,13 +88,17 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertEqual(settings["runtime_native_threads"], 10)
         self.assertEqual(settings["io_workers"], 10)
         self.assertEqual(settings["ffmpeg_filter_threads"], 8)
-        self.assertEqual(settings["scan_cut_pioneer_cpu_max_workers"], 10)
-        self.assertEqual(settings["scan_cut_follower_cpu_max_workers"], 7)
+        self.assertEqual(settings["scan_cut_pioneer_cpu_max_workers"], 4)
+        self.assertEqual(settings["scan_cut_follower_cpu_max_workers"], 4)
+        self.assertEqual(settings["scan_cut_follower_outer_splits"], 4)
         self.assertEqual(settings["scan_cut_follower_stream_start_percent"], 20)
-        self.assertEqual(settings["scan_cut_follower_stream_batch_size"], 14)
+        self.assertEqual(settings["scan_cut_follower_stream_batch_size"], 8)
         self.assertEqual(settings["stt_primary_gpu_slots"], 1)
         self.assertEqual(settings["stt_npu_coreml_slots"], 1)
         self.assertEqual(settings["stt_accelerator_distribution"], "gpu+npu+cpu")
+        self.assertTrue(plan["native_cpp_llm_macro_groups"])
+        self.assertEqual(plan["native_swift_quality_min_segments"], 64)
+        self.assertEqual(plan["native_swift_common_split_min_items"], 1000)
 
     def test_apply_apple_m_subtitle_pipeline_plan_can_be_disabled(self):
         original = {"apple_m_pipeline_parallel_enabled": False, "io_workers": 2}
@@ -95,6 +106,43 @@ class RuntimeMultiProcessTests(unittest.TestCase):
             settings = apply_apple_m_subtitle_pipeline_plan(original)
 
         self.assertEqual(settings, original)
+
+    def test_apply_apple_m_subtitle_pipeline_plan_preserves_explicit_cut_follower_mps_opt_in(self):
+        snapshot = {
+            "logical_cores": 10,
+            "physical_cores": 10,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "memory_bytes": 16 * 1024 ** 3,
+        }
+        with patch("core.runtime.multi_process.config.IS_APPLE_SILICON", True), \
+             patch("core.runtime.multi_process.hardware_profile", return_value=snapshot):
+            settings = apply_apple_m_subtitle_pipeline_plan({
+                "scan_cut_follower_mps_enabled": True,
+            })
+
+        self.assertTrue(settings["scan_cut_follower_mps_enabled"])
+
+    def test_apply_apple_m_plan_preserves_manual_native_batch_thresholds(self):
+        snapshot = {
+            "logical_cores": 10,
+            "physical_cores": 10,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "memory_bytes": 16 * 1024 ** 3,
+        }
+        with patch("core.runtime.multi_process.config.IS_APPLE_SILICON", True), \
+             patch("core.runtime.multi_process.hardware_profile", return_value=snapshot):
+            settings = apply_apple_m_subtitle_pipeline_plan({
+                "apple_m_pipeline_respect_manual_worker_settings": True,
+                "native_swift_quality_scoring_min_segments": 128,
+                "native_swift_common_split_min_items": 1500,
+                "native_swift_lora_scoring_enabled": True,
+            })
+
+        self.assertEqual(settings["native_swift_quality_scoring_min_segments"], 128)
+        self.assertEqual(settings["native_swift_common_split_min_items"], 1500)
+        self.assertFalse(settings["native_swift_lora_scoring_enabled"])
 
     def test_manual_lora_runtime_settings_keeps_one_core_for_stop(self):
         snapshot = {
@@ -184,7 +232,7 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertEqual(meta["worker_upper_bound"], 6)
         self.assertEqual(meta["reserve_cores"], 0)
 
-    def test_runtime_parallel_worker_plan_limits_cut_follower_cpu_by_core_topology(self):
+    def test_runtime_parallel_worker_plan_uses_bench_locked_cut_follower_four_way_cap(self):
         hardware = {
             "logical_cores": 10,
             "physical_cores": 10,
@@ -206,11 +254,11 @@ class RuntimeMultiProcessTests(unittest.TestCase):
                 accelerators=["cpu"],
             )
 
-        self.assertEqual(workers, 6)
-        self.assertEqual(meta["worker_upper_bound"], 6)
-        self.assertEqual(meta["worker_topology_limit"], 6)
+        self.assertEqual(workers, 4)
+        self.assertEqual(meta["worker_upper_bound"], 4)
+        self.assertEqual(meta["worker_topology_limit"], 4)
         self.assertTrue(meta["worker_topology_applied"])
-        self.assertEqual(meta["worker_topology"]["reason"], "verify_core_topology")
+        self.assertEqual(meta["worker_topology"]["reason"], "bench_locked_four_way_follower")
 
     def test_runtime_parallel_worker_plan_serializes_cut_follower_gpu_queue(self):
         hardware = {
@@ -238,7 +286,7 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertEqual(meta["worker_upper_bound"], 1)
         self.assertEqual(meta["worker_topology"]["reason"], "single_gpu_queue")
 
-    def test_runtime_parallel_worker_plan_uses_bench_cut_pioneer_long_clip_cap(self):
+    def test_runtime_parallel_worker_plan_uses_bench_locked_cut_pioneer_four_way_cap(self):
         hardware = {
             "logical_cores": 10,
             "physical_cores": 10,
@@ -260,12 +308,12 @@ class RuntimeMultiProcessTests(unittest.TestCase):
                 accelerators=["cpu"],
             )
 
-        self.assertEqual(workers, 8)
-        self.assertEqual(meta["worker_upper_bound"], 8)
+        self.assertEqual(workers, 4)
+        self.assertEqual(meta["worker_upper_bound"], 4)
         self.assertTrue(meta["worker_topology_applied"])
-        self.assertEqual(meta["worker_topology"]["reason"], "bench_long_clip_balanced_fanout")
+        self.assertEqual(meta["worker_topology"]["reason"], "bench_locked_four_way_pioneer")
 
-    def test_runtime_parallel_worker_plan_uses_bench_cut_pioneer_medium_clip_cap(self):
+    def test_runtime_parallel_worker_plan_uses_bench_locked_cut_pioneer_four_way_for_medium_clip(self):
         hardware = {
             "logical_cores": 10,
             "physical_cores": 10,
@@ -287,10 +335,10 @@ class RuntimeMultiProcessTests(unittest.TestCase):
                 accelerators=["cpu"],
             )
 
-        self.assertEqual(workers, 6)
-        self.assertEqual(meta["worker_upper_bound"], 6)
+        self.assertEqual(workers, 4)
+        self.assertEqual(meta["worker_upper_bound"], 4)
         self.assertTrue(meta["worker_topology_applied"])
-        self.assertEqual(meta["worker_topology"]["reason"], "bench_medium_clip_perf_plus_efficiency")
+        self.assertEqual(meta["worker_topology"]["reason"], "bench_locked_four_way_pioneer")
 
     def test_runtime_parallel_worker_plan_honors_cut_pioneer_configured_cap(self):
         hardware = {

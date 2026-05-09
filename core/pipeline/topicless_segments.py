@@ -547,50 +547,6 @@ def install_topicless_segment_helpers(PipelineHelpersMixin):
                     continue
                 rows.append(_pipeline_topicless_row(i + 1, start_frame, end_frame, fps))
 
-        try:
-            current_keys = [
-                (
-                    str(row.get("major_id") or ""),
-                    int(row.get("timeline_start_frame") or 0),
-                    int(row.get("timeline_end_frame") or 0),
-                )
-                for row in rows
-            ]
-            previous_keys = list(getattr(self, "_cut_boundary_topicless_logged_keys", []) or [])
-
-            should_reset = False
-            if not previous_keys:
-                should_reset = True
-            elif len(current_keys) < len(previous_keys):
-                should_reset = True
-            elif current_keys:
-                prev_first = previous_keys[0] if previous_keys else None
-                prev_last = previous_keys[-1] if previous_keys else None
-                if prev_first != current_keys[0] or prev_last != current_keys[-1]:
-                    should_reset = True
-
-            if should_reset:
-                previous_seen = set()
-            else:
-                previous_seen = set(previous_keys)
-
-            new_rows = []
-            for row, key in zip(rows, current_keys):
-                if key not in previous_seen:
-                    new_rows.append(row)
-
-            setattr(self, "_cut_boundary_topicless_logged_keys", current_keys)
-
-            for row in new_rows:
-                get_logger().log(
-                    f"  ▒ [컷 경계] split {row.get('major_id')} {row.get('title')} "
-                    f"frame={row.get('timeline_start_frame')}->{row.get('timeline_end_frame')} "
-                    f"time={float(row.get('timeline_start', 0.0) or 0.0):.3f}s->{float(row.get('timeline_end', 0.0) or 0.0):.3f}s "
-                    f"fps={fps:.3f}"
-                )
-        except Exception:
-            pass
-
         return rows
 
 

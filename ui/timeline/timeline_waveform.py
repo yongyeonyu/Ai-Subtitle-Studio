@@ -125,6 +125,19 @@ def _downsample_waveform_samples(samples: np.ndarray, *, duration: float | None 
 
 def _downsample_waveform_raw(raw: bytes | bytearray | memoryview | None, *, duration: float | None = None) -> tuple[np.ndarray, float]:
     try:
+        from core.native_cut_boundary import waveform_peaks_f32le
+
+        native = waveform_peaks_f32le(
+            raw,
+            sample_rate=WAVEFORM_SAMPLE_RATE,
+            points_per_second=WAVEFORM_POINTS_PER_SECOND,
+            duration=duration,
+        )
+        if native is not None:
+            return native
+    except Exception:
+        pass
+    try:
         from core.native_swift_waveform import downsample_f32le_via_swift
 
         native = downsample_f32le_via_swift(
@@ -139,6 +152,32 @@ def _downsample_waveform_raw(raw: bytes | bytearray | memoryview | None, *, dura
         pass
     samples = _decode_f32le_samples(raw)
     return _downsample_waveform_samples(samples, duration=duration)
+
+
+def patch_waveform_buffer(
+    target: np.ndarray | None,
+    *,
+    start_px: int,
+    total_px: int,
+    values: np.ndarray | bytes | bytearray | memoryview | list[float] | tuple[float, ...] | None,
+) -> np.ndarray:
+    total = max(1, int(total_px or 0))
+    start = max(0, int(start_px or 0))
+    if isinstance(values, np.ndarray):
+        chunk = np.asarray(values, dtype=np.float32)
+    else:
+        chunk = np.asarray(values or [], dtype=np.float32)
+    if target is None or not isinstance(target, np.ndarray) or target.dtype != np.float32 or len(target) != total:
+        base = np.zeros(total, dtype=np.float32)
+        if isinstance(target, np.ndarray) and target.size > 0:
+            keep = min(len(target), total)
+            base[:keep] = np.asarray(target[:keep], dtype=np.float32)
+        target = base
+    if chunk.size <= 0 or start >= total:
+        return target
+    end = min(total, start + int(chunk.size))
+    target[start:end] = chunk[: max(0, end - start)]
+    return target
 
 
 def _ffmpeg_waveform_cmd(path: str) -> list[str]:
@@ -185,10 +224,10 @@ class WaveformWorker(QThread):
     def _run_cmd(self, cmd: list[str], *, timeout: float):
         if self.isInterruptionRequested():
             return None
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=False)
         self._proc = proc
         try:
-            out, err = proc.communicate(timeout=timeout)
+            out, _err = proc.communicate(timeout=timeout)
             if self.isInterruptionRequested() or proc.returncode not in (0, None):
                 return None
             return out
@@ -223,10 +262,13 @@ class WaveformWorker(QThread):
                 return
             timeout = max(60, min(600, int(duration * 0.5) + 30))
 
-            raw = self._run_cmd(_ffmpeg_waveform_cmd(self._path), timeout=timeout)
+            cleaned_wav = fingerprint_cleaned_wav_path(self._path)
+            source_path = cleaned_wav if cleaned_wav and os.path.exists(cleaned_wav) else self._path
+            raw = self._run_cmd(_ffmpeg_waveform_cmd(source_path), timeout=timeout)
             if self.isInterruptionRequested():
                 return
             ready, dur = _downsample_waveform_raw(raw)
+            raw = None
             if ready.size <= 0:
                 return
 
@@ -237,7 +279,7 @@ class WaveformWorker(QThread):
             pass
 
 class MultiClipWaveformWorker(QThread):
-    clip_ready = pyqtSignal(int, np.ndarray)
+    clip_ready = pyqtSignal(int, int, int, object)
     all_ready = pyqtSignal(np.ndarray, float)
 
     def __init__(self, clip_boundaries, parent=None):
@@ -261,10 +303,10 @@ class MultiClipWaveformWorker(QThread):
     def _run_cmd(self, cmd: list[str], *, timeout: float):
         if self.isInterruptionRequested():
             return None
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=False)
         self._proc = proc
         try:
-            out, err = proc.communicate(timeout=timeout)
+            out, _err = proc.communicate(timeout=timeout)
             if self.isInterruptionRequested() or proc.returncode not in (0, None):
                 return None
             return out
@@ -299,7 +341,7 @@ class MultiClipWaveformWorker(QThread):
                     end_px = min(start_px + min(len(downs), clip_px), total_px)
                     combined[start_px:end_px] = downs[: end_px - start_px]
                     if not self.isInterruptionRequested():
-                        self.clip_ready.emit(idx, combined.copy())
+                        self.clip_ready.emit(idx, start_px, total_px, np.asarray(combined[start_px:end_px], dtype=np.float32).copy())
                     continue
 
                 cleaned_wav = fingerprint_cleaned_wav_path(clip_file)
@@ -309,6 +351,7 @@ class MultiClipWaveformWorker(QThread):
                 if self.isInterruptionRequested():
                     return
                 downs, _dur = _downsample_waveform_raw(raw, duration=clip_dur)
+                raw = None
                 if downs.size <= 0:
                     continue
 
@@ -319,7 +362,7 @@ class MultiClipWaveformWorker(QThread):
                 combined[start_px:end_px] = downs[: end_px - start_px]
 
                 if not self.isInterruptionRequested():
-                    self.clip_ready.emit(idx, combined.copy())
+                    self.clip_ready.emit(idx, start_px, total_px, np.asarray(combined[start_px:end_px], dtype=np.float32).copy())
 
             except Exception:
                 pass

@@ -7,6 +7,7 @@ import re
 from typing import Any, Iterable
 
 from core.engine.llm_correction_guard import normalized_text, validate_llm_chunks
+from core.native_macos_acceleration import mac_native_swift_policy_experimental_enabled
 from core.native_text_similarity import similarity_ratio
 
 
@@ -214,9 +215,12 @@ def build_llm_candidate_options(
     settings: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     settings = dict(settings or {})
-    native_requested = _safe_bool(settings.get("native_swift_llm_candidate_policy_enabled"), False) or any(
-        os.environ.get(key, "").strip().lower() in {"1", "true", "on", "yes"}
-        for key in ("AI_SUBTITLE_STUDIO_SWIFT_LLM_POLICY", "AI_SUBTITLE_STUDIO_SWIFT_POLICY")
+    native_requested = mac_native_swift_policy_experimental_enabled(settings) and (
+        _safe_bool(settings.get("native_swift_llm_candidate_policy_enabled"), False)
+        or any(
+            os.environ.get(key, "").strip().lower() in {"1", "true", "on", "yes"}
+            for key in ("AI_SUBTITLE_STUDIO_SWIFT_LLM_POLICY", "AI_SUBTITLE_STUDIO_SWIFT_POLICY")
+        )
     )
     if native_requested:
         try:

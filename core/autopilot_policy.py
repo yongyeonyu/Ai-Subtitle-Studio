@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """AutoPilot policy helpers.
 
 This module keeps the normal UI simple while preserving internal lanes for
 speed/accuracy decisions. The functions are intentionally lightweight and
 deterministic so they can run before expensive STT/LoRA/LLM work starts.
 """
+
+from __future__ import annotations
 
 from math import isfinite
 from typing import Any
@@ -144,9 +144,11 @@ def apply_autopilot_runtime_policy(settings: dict[str, Any] | None) -> dict[str,
         out["cut_boundary_policy_mode"] = "hybrid"
         out["cut_boundary_user_level_visible"] = False
         if _safe_bool(out.get("cut_boundary_enabled", out.get("cut_boundary_detection_enabled", True)), True):
-            out["scan_cut_level"] = str(out.get("cut_boundary_hybrid_fast_level") or "low")
-            out["cut_boundary_level"] = str(out.get("cut_boundary_hybrid_fast_level") or "low")
-            out["scan_cut_boundary_level"] = str(out.get("cut_boundary_hybrid_fast_level") or "low")
+            raw_level = str(out.get("scan_cut_boundary_level") or out.get("cut_boundary_level") or "").strip().lower()
+            level = raw_level if raw_level in {"auto", "adaptive", "자동"} else str(out.get("cut_boundary_hybrid_fast_level") or "low")
+            out["scan_cut_level"] = level
+            out["cut_boundary_level"] = level
+            out["scan_cut_boundary_level"] = level
     out["autopilot_policy"] = {
         "schema": AUTOPILOT_POLICY_SCHEMA,
         "single_user_mode": True,

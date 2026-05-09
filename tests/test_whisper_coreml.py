@@ -26,6 +26,23 @@ class WhisperCoreMLTests(unittest.TestCase):
             whisper_coreml.DEFAULT_COREML_MODEL,
         )
 
+    def test_coreml_rejects_unsupported_custom_mlx_selector(self):
+        self.assertFalse(
+            whisper_coreml.coreml_selector_is_supported("youngouk/whisper-medium-komixv2-mlx")
+        )
+        with patch("core.audio.whisper_coreml.config.IS_MAC", True), \
+                patch("core.audio.whisper_coreml.find_whisperkit_cli", return_value="/opt/homebrew/bin/whisperkit-cli"), \
+                patch("core.audio.whisper_coreml.subprocess.Popen") as popen:
+            proc = whisper_coreml.run_whisper(
+                ["/tmp/chunk.wav"],
+                "coreml:youngouk/whisper-medium-komixv2-mlx",
+                "ko",
+                log_label="STT2",
+            )
+
+        self.assertIsNone(proc)
+        popen.assert_not_called()
+
     def test_run_whisper_returns_none_without_cli(self):
         with patch("core.audio.whisper_coreml.config.IS_MAC", True), \
                 patch("core.audio.whisper_coreml.find_whisperkit_cli", return_value=""), \

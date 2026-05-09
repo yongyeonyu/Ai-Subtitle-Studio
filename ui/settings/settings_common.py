@@ -21,24 +21,25 @@ DATASET_DIR = config.DATASET_DIR
 MAC_WHISPER_MODELS = [
     "whisperkit-persistent:large-v3-v20240930_626MB",
     "whisperkit-persistent:large-v3-v20240930_turbo_632MB",
-    "whisperkit-persistent:large-v3",
     "mlx-community/whisper-large-v3-mlx",
     "mlx-community/whisper-large-v3-turbo",
-    "youngouk/ghost613-turbo-korean-4bit-mlx",
-    "whisper-medium-komixv2",
     "youngouk/whisper-medium-komixv2-mlx",
-    "whisper.cpp:large-v3-turbo",
-    "seastar105/whisper-medium-komixv2",
-    "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2",
-    "mlx-community/whisper-large-v2-mlx",
-    "mlx-community/whisper-medium-mlx",
-    "mlx-community/distil-whisper-large-v3",
 ]
 
 WINDOWS_WHISPER_MODELS: list[str] = []
 
 REMOVED_WHISPER_MODELS = {
+    "whisperkit-persistent:large-v3",
     "coreml:large-v3-v20240930_626MB",
+    "whisper-medium-komixv2",
+    "seastar105/whisper-medium-komixv2",
+    "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2",
+    "ghost613/faster-whisper-large-v3-turbo-korean",
+    "Systran/faster-whisper-large-v3",
+    "faster-whisper-large-v3",
+    "whisper.cpp:large-v3-turbo",
+    "whisper_cpp:large-v3-turbo",
+    "whisper-cpp:large-v3-turbo",
     "mlx-community/whisper-medium.en-mlx",
     "mlx-community/whisper-small-mlx",
     "mlx-community/whisper-small.en-mlx",
@@ -53,11 +54,71 @@ REMOVED_WHISPER_MODELS = {
     "base.en",
     "tiny",
     "tiny.en",
+    "large-v3",
+    "large-v3-turbo",
+    "turbo",
+    "large-v2",
+    "large-v1",
+    "large",
+    "medium",
+    "distil-large-v3",
+    "distil-large-v2",
+    "distil-medium.en",
+    "distil-small.en",
 }
 
 
 def filter_available_whisper_models(models):
-    return [model for model in models if model not in REMOVED_WHISPER_MODELS]
+    removed = {str(model).lower() for model in REMOVED_WHISPER_MODELS}
+    filtered = []
+    for model in models:
+        value = str(model or "").strip()
+        if not value:
+            continue
+        if value in REMOVED_WHISPER_MODELS or value.lower() in removed:
+            continue
+        if value not in filtered:
+            filtered.append(value)
+    return filtered
+
+
+WHISPER_MODEL_DISPLAY_NAMES = {
+    "whisperkit-persistent:large-v3-v20240930_626MB": "WhisperKit Large V3 · 정밀",
+    "whisperkit-persistent:large-v3-v20240930_turbo_632MB": "WhisperKit Large V3 Turbo · 빠름",
+    "mlx-community/whisper-large-v3-mlx": "MLX Whisper Large V3 · 정밀",
+    "mlx-community/whisper-large-v3-turbo": "MLX Whisper Large V3 Turbo · 빠름",
+    "youngouk/whisper-medium-komixv2-mlx": "KomixV2 MLX · 한국어 특화",
+    "youngouk/ghost613-turbo-korean-4bit-mlx": "Ghost613 MLX · 한국어 Turbo",
+    "mlx-community/whisper-large-v2-mlx": "MLX Whisper Large V2 · 레거시",
+    "mlx-community/whisper-medium-mlx": "MLX Whisper Medium · 경량",
+    "mlx-community/distil-whisper-large-v3": "MLX Distil Whisper Large V3 · 경량",
+}
+
+EXPERIMENTAL_WHISPER_MODELS = {
+    "youngouk/whisper-medium-komixv2-mlx",
+    "youngouk/ghost613-turbo-korean-4bit-mlx",
+}
+
+
+def is_experimental_whisper_model(model: str) -> bool:
+    return str(model or "").strip() in EXPERIMENTAL_WHISPER_MODELS
+
+
+def whisper_model_display_name(model: str) -> str:
+    value = str(model or "").strip()
+    if not value:
+        return "미사용"
+    if value in WHISPER_MODEL_DISPLAY_NAMES:
+        return WHISPER_MODEL_DISPLAY_NAMES[value]
+    lowered = value.lower()
+    if lowered.startswith(("whisper.cpp:", "whisper_cpp:", "whisper-cpp:")):
+        selector = value.split(":", 1)[1].strip() if ":" in value else "default"
+        return f"whisper.cpp {selector or 'default'}"
+    for prefix in ("mlx-community/", "Systran/", "youngouk/", "ghost613/", "o0dimplz0o/"):
+        if value.startswith(prefix):
+            value = value[len(prefix):]
+            break
+    return value.replace("-mlx", "")
 
 
 DEFAULT_WHISPER_MODELS = filter_available_whisper_models(
@@ -97,6 +158,8 @@ DEFAULT_ADV_SETTINGS = {
 
     # System
     "io_workers": 6,
+    # BENCH LOCK 2026-05-09: API LLM planning remains single-worker; local LLM
+    # concurrency is resource-adaptive and capped elsewhere for 16GB MacBooks.
     "llm_threads": 4,
 
     # FFmpeg
@@ -140,7 +203,7 @@ DEFAULT_ADV_SETTINGS = {
     "stt_low_score_recheck_padding_sec": 0.8,
     "stt_low_score_recheck_max_segments": 80,
     "selected_whisper_model": getattr(config, "WHISPER_MODEL", "whisperkit-persistent:large-v3"),
-    "selected_whisper_model_secondary": "youngouk/ghost613-turbo-korean-4bit-mlx",
+    "selected_whisper_model_secondary": getattr(config, "MLX_FALLBACK_MODEL", "mlx-community/whisper-large-v3-turbo"),
     "stt_ensemble_llm_judge_enabled": False,
     "vad_post_stt_align_enabled": True,
     "vad_post_stt_max_shift_sec": 0.7,
@@ -163,13 +226,21 @@ DEFAULT_ADV_SETTINGS = {
     "runtime_backend_autotune_enabled": True,
     "subtitle_native_prepass_workers": 0,
     "subtitle_native_prepass_workers_resource_max": 0,
+    # BENCH LOCK 2026-05-09: Swift policy worker did not beat Python for LLM
+    # candidates, Deep rerank, or LoRA scoring and changed LoRA top ranking.
+    "native_swift_llm_candidate_policy_enabled": False,
+    "native_swift_deep_policy_enabled": False,
+    "native_swift_lora_scoring_enabled": False,
+    "native_swift_lora_scoring_min_docs": 32,
     "stt_backend_policy": "native",
     "audio_extract_backend_policy": "native",
     "cut_boundary_backend_policy": "native",
     "editor_render_backend_policy": "native",
     "whisperkit_native_auto_enabled": True,
-    "stt_primary_fast_native_enabled": True,
-    "stt_primary_fast_native_model": getattr(config, "WHISPERKIT_FAST_MODEL", "whisperkit-persistent:large-v3-v20240930_turbo_632MB"),
+    # BENCH LOCK 2026-05-09: SRT-referenced 1-minute benchmark keeps STT1 on
+    # WhisperKit quality; MLX turbo is STT2/recheck. Do not flip without WER/CER.
+    "stt_primary_fast_native_enabled": False,
+    "stt_primary_fast_native_model": getattr(config, "WHISPERKIT_QUALITY_MODEL", "whisperkit-persistent:large-v3-v20240930_626MB"),
     "editor_live_stt_preview_follow_video_enabled": False,
     "editor_live_stt_preview_follow_interval_sec": 2.0,
     "direct_ffmpeg_chunk_min_sec": 1.0,
@@ -215,9 +286,16 @@ DEFAULT_ADV_SETTINGS = {
     "cut_boundary_cache_enabled": True,
     "scan_cut_compare_max_width": 1920,
     "scan_cut_compare_max_height": 1080,
-    "scan_cut_pioneer_cpu_max_workers": 0,
-    "scan_cut_follower_cpu_max_workers": 0,
-    "scan_cut_cv2_threads_per_worker": 0,
+    # BENCH LOCK 2026-05-09 (Apple M5, X5_시승기_후반.MP4 4K HEVC):
+    # Cut-boundary defaults are measured values, not UI taste. Keep pioneer=4
+    # and follower=4 CPU split unless the benchmark matrix is rerun.
+    "scan_cut_pioneer_workers": 4,
+    "scan_cut_verify_workers": 4,
+    "scan_cut_pioneer_cpu_max_workers": 4,
+    "scan_cut_follower_cpu_max_workers": 4,
+    "scan_cut_follower_outer_splits": 4,
+    "scan_cut_pioneer_worker_overlap_steps": 1,
+    "scan_cut_cv2_threads_per_worker": 1,
     "scan_cut_follower_stream_start_percent": 25,
     "scan_cut_follower_stream_batch_size": 16,
     "scan_cut_follower_stream_min_interval_sec": 0.75,

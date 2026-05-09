@@ -160,7 +160,7 @@
       "hf_repo": "seastar105/whisper-medium-komixv2",
       "model_path": "",
       "required": false,
-      "hidden": false,
+      "hidden": true,
       "experimental": true
     },
     {
@@ -183,7 +183,7 @@
       "hf_repo": "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2",
       "model_path": "",
       "required": false,
-      "hidden": false,
+      "hidden": true,
       "experimental": true
     },
     {

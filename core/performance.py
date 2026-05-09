@@ -254,6 +254,12 @@ def apple_silicon_runtime_profile(
     llm_resource_max = max(1, min(logical_cap, performance + min(efficiency, 2), 6))
     interactive_reserve = 0 if max_profile else (1 if logical > 1 else 0)
     emergency_reserve = 1 if logical > 1 else 0
+    # BENCH LOCK 2026-05-09 (Apple M5, X5_시승기_후반.MP4 4K HEVC):
+    # The generic CPU profile still exposes wide/balanced workers for audio and
+    # native prepasses, but cut-boundary scan/verify stays fixed at 4. Measured
+    # 6/8/10 pioneer workers and 6/8/10 follower splits were slower or missed
+    # boundary candidates at worker seams.
+    cut_boundary_workers = 4
     profile_payload = {
         "schema": "ai_subtitle_studio.apple_silicon_chip_profile.v1",
         "chip_name": profile.get("chip_name") or profile.get("brand_string") or "Apple Silicon",
@@ -293,10 +299,11 @@ def apple_silicon_runtime_profile(
             "audio_workers": wide,
             "ffmpeg_filter_threads": sustained,
             "direct_ffmpeg_chunk_min_sec": 0.75 if generation >= 5 else 1.0,
-            "cut_pioneer_workers": wide,
-            "cut_follower_workers": balanced,
+            "cut_pioneer_workers": cut_boundary_workers,
+            "cut_follower_workers": cut_boundary_workers,
+            "cut_follower_outer_splits": cut_boundary_workers,
             "cut_follower_stream_start_percent": follower_start_percent,
-            "cut_follower_stream_batch_size": max(8, balanced * 2),
+            "cut_follower_stream_batch_size": max(8, cut_boundary_workers * 2),
             "subtitle_prepass_workers": wide,
             "llm_workers": min(4, llm_resource_max),
             "llm_resource_max": llm_resource_max,

@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-04.00.00-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.00.00-30D158?style=for-the-badge)](RELEASE_v04.00.00.md)
+[![App Version](https://img.shields.io/badge/app-04.00.01-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.00.01-30D158?style=for-the-badge)](RELEASE_v04.00.01.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -38,8 +38,9 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - Project JSON I/O now has a Swift-native validation and atomic-write bridge, so packaged macOS builds can move project persistence out of Python while keeping Python as a fallback during migration.
 - Timeline waveform peak/downsample generation now has a Swift-native bridge for packaged macOS builds, with NumPy retained as the development fallback.
 - Timeline minimap waveform column generation now has a Swift-native bridge so packaged macOS builds avoid Python loops when rebuilding zoom/resize paint caches.
-- Subtitle quality scoring now has a Swift-native batch scorer behind an explicit benchmark flag; packaged builds keep the current Python path until the native worker beats in-process Python on real batches.
+- Subtitle quality scoring now has an adaptive Swift-native batch scorer for large macOS batches, while small edits keep the lower-overhead Python path.
 - Common subtitle split/clamp planning now has a Swift-native adaptive planner for large packaged macOS batches, while Python preserves existing row metadata and assembly.
+- Production macOS native acceleration is intentionally conservative: STT uses WhisperKit/Core ML/MLX, VAD alignment uses C++ overlap math, LLM macro grouping uses C++, and Swift LoRA/Deep/LLM policy helpers stay behind an explicit experimental gate until benchmarks prove both speed and LoRA ranking parity.
 - Word timestamps default to off for fast STT passes, then re-run selectively on low-score, editor-selected, precision-review, or VAD-risk spans.
 - ClearVoice can use a native FFmpeg single-pass path instead of waiting on the slower deep-learning enhancer when the quality-safe preset allows it.
 - OpenAI Codex ChatGPT CLI can be selected as a subscription-backed LLM provider without requiring an API key or Ollama model preflight.
@@ -135,10 +136,10 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `04.00.00` |
-| Latest release checkpoint | `v04.00.00` |
-| Handoff document version | `04.00.00-mac-native` |
-| Active phase | `MAC_NATIVE_APPSTORE_BRANCH` |
+| App version in code | `04.00.01` |
+| Latest release checkpoint | `v04.00.01` |
+| Handoff document version | `04.00.01-mac-native` |
+| Active phase | `MAC_NATIVE_APPSTORE_V4_0_1_RELEASED` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
 | Supported target platforms | macOS, Apple Silicon first |
@@ -169,7 +170,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.00.00.md`](RELEASE_v04.00.00.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.00.01.md`](RELEASE_v04.00.01.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

@@ -318,9 +318,22 @@ def _confidence_to_100(value: Any) -> float:
 
 
 def _segment_signal_scores(segment: dict[str, Any]) -> dict[str, float]:
+    lora_profile = dict(segment.get("_lora_generation_profile") or {})
+    lora_scores = [
+        _safe_float(segment.get("_lora_segment_score"), 0.0),
+        _safe_float(lora_profile.get("top_score"), 0.0),
+        _safe_float(lora_profile.get("truth_score"), 0.0),
+    ]
+    for source in list(lora_profile.get("setting_sources") or []):
+        if isinstance(source, dict):
+            lora_scores.append(_safe_float(source.get("score"), 0.0))
+    for example in list(lora_profile.get("examples") or []):
+        if isinstance(example, dict):
+            lora_scores.append(_safe_float(example.get("score"), 0.0))
     deep_policy = dict(segment.get("_deep_candidate_selector_policy") or {})
     lattice_policy = dict(segment.get("_stt_lattice_policy") or {})
     scores = {
+        "lora_score": max(lora_scores, default=0.0),
         "deep_score": max(
             _confidence_to_100(deep_policy.get("confidence")),
             _confidence_to_100(deep_policy.get("score")),
@@ -472,12 +485,21 @@ def llm_gate_decision(
     duration_sec = _safe_float(duration, _segment_duration(segment))
     chars = compact_len(text)
     ratio = chars / max(1, threshold)
-    lora_score = _profile_score(profile)
     signal_scores = _segment_signal_scores(segment)
+    lora_score = max(_profile_score(profile), signal_scores.get("lora_score", 0.0))
     combined_signal_score = max(lora_score, signal_scores.get("combined_signal_score", 0.0))
     min_lora_score = _safe_float(settings.get("llm_confidence_gate_min_lora_score"), 82.0)
     max_compact_ratio = max(1.0, _safe_float(settings.get("llm_confidence_gate_max_compact_ratio"), 1.45))
     max_duration = max(0.3, _safe_float(settings.get("sub_max_duration"), 6.0))
+    strong_signal_score = max(min_lora_score, _safe_float(settings.get("llm_confidence_gate_strong_signal_score"), 88.0))
+    strong_max_ratio = max(
+        max_compact_ratio,
+        _safe_float(settings.get("llm_confidence_gate_strong_max_compact_ratio"), 1.85),
+    )
+    strong_max_duration_ratio = max(
+        1.0,
+        _safe_float(settings.get("llm_confidence_gate_strong_max_duration_ratio"), 1.65),
+    )
 
     reasons: list[str] = []
     if not str(text or "").strip():
@@ -495,6 +517,25 @@ def llm_gate_decision(
     if combined_signal_score < min_lora_score:
         reasons.append("low_lora_score")
 
+    hard_reasons = {
+        "empty_text",
+        "stt_candidate_uncertain",
+        "timecode_noise",
+        "hallucination_phrase_in_source",
+    }
+    strong_fast_lane = (
+        combined_signal_score >= strong_signal_score
+        and ratio <= strong_max_ratio
+        and duration_sec <= max_duration * strong_max_duration_ratio
+        and not any(reason in hard_reasons for reason in reasons)
+    )
+    if strong_fast_lane:
+        reasons = [
+            reason
+            for reason in reasons
+            if reason not in {"long_text_needs_llm", "long_duration_needs_llm", "low_lora_score"}
+        ]
+
     call_llm = bool(reasons)
     if "empty_text" in reasons:
         call_llm = False
@@ -506,24 +547,33 @@ def llm_gate_decision(
         duration_part = max(0.0, min(0.18, (max_duration - min(duration_sec, max_duration)) / max_duration))
         confidence = min(0.98, 0.42 + score_part + length_part + duration_part)
 
-    reason = "call_llm:" + ",".join(reasons) if call_llm else "skip_llm:high_lora_deep_stt_confidence"
+    if call_llm:
+        reason = "call_llm:" + ",".join(reasons)
+    elif strong_fast_lane:
+        reason = "skip_llm:strong_lora_deep_stt_fast_lane"
+    else:
+        reason = "skip_llm:high_lora_deep_stt_confidence"
     return _decision(
         "llm_gate",
         call_llm=call_llm,
         reason=reason,
         reasons=reasons,
+        strong_fast_lane=bool(strong_fast_lane),
         confidence=round(confidence, 4),
         compact_len=chars,
         threshold=threshold,
         compact_ratio=round(ratio, 4),
         duration_sec=round(duration_sec, 4),
         lora_score=round(lora_score, 4),
+        segment_lora_score=round(signal_scores.get("lora_score", 0.0), 4),
         deep_score=round(signal_scores.get("deep_score", 0.0), 4),
         stt_lattice_score=round(signal_scores.get("stt_lattice_score", 0.0), 4),
         stt_score=round(signal_scores.get("stt_score", 0.0), 4),
         combined_signal_score=round(combined_signal_score, 4),
         min_lora_score=round(min_lora_score, 4),
         max_compact_ratio=round(max_compact_ratio, 4),
+        strong_signal_score=round(strong_signal_score, 4),
+        strong_max_compact_ratio=round(strong_max_ratio, 4),
     )
 
 

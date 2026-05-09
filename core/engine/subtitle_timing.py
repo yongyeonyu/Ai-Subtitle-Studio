@@ -921,7 +921,7 @@ def _apply_common_subtitle_split_guard_native(rows: list[dict], settings: dict) 
     if plan_common_split_via_swift is None or not rows:
         return None
     items, words_by_row, policies = _native_common_split_items(rows, settings)
-    plans = plan_common_split_via_swift(items)
+    plans = plan_common_split_via_swift(items, settings=settings)
     if plans is None or len(plans) != len(rows):
         return None
 

@@ -59,8 +59,9 @@ class ModelManager:
         with self.registry_path.open("w", encoding="utf-8") as f:
             json.dump({"models": models}, f, ensure_ascii=False, indent=2)
 
-    def available_models(self, include_hidden=False) -> list[dict]:
+    def available_models(self, include_hidden=False, include_runtime_discovered=False) -> list[dict]:
         result = []
+        seen_ids: set[str] = set()
         for model in self.load_registry():
             supported_os = [str(v).lower() for v in model.get("os", [])]
             if supported_os and self.current_os not in supported_os:
@@ -70,6 +71,15 @@ class ModelManager:
             row = deepcopy(model)
             row["installed"] = self.check_installed(row)
             result.append(row)
+            seen_ids.add(str(row.get("id") or ""))
+        if include_runtime_discovered:
+            for row in self._discovered_runtime_models():
+                row_id = str(row.get("id") or "")
+                if row_id and row_id in seen_ids:
+                    continue
+                result.append(row)
+                if row_id:
+                    seen_ids.add(row_id)
         return result
 
     def required_models(self) -> list[dict]:
@@ -79,6 +89,11 @@ class ModelManager:
         ]
 
     def check_installed(self, model: dict) -> bool:
+        if model.get("binary_check") == "ollama_model":
+            target_name = str(model.get("ollama_model_name") or model.get("name") or "").strip()
+            if not target_name:
+                return False
+            return any(str(item.get("name") or "").strip() == target_name for item in get_local_llm_models())
         if model.get("binary_check") == "ollama" or model.get("id") == "ollama":
             return is_ollama_available()
         if model.get("binary_check") == "rnnoise":
@@ -115,6 +130,9 @@ class ModelManager:
         model_id = model.get("id", "unknown")
         get_logger().log(f"📦 모델 설치 시작: {model.get('name', model_id)}")
 
+        if model.get("binary_check") == "ollama_model":
+            model_name = str(model.get("ollama_model_name") or model.get("name") or "").strip()
+            return install_ollama_model(model_name)
         if model.get("binary_check") == "ollama" or model.get("id") == "ollama":
             get_logger().log("💡 Ollama는 외부 앱 설치가 필요합니다: https://ollama.com/download")
             return is_ollama_available()
@@ -171,6 +189,9 @@ class ModelManager:
     def uninstall_model(self, model: dict) -> bool:
         model_id = model.get("id", "unknown")
 
+        if model.get("binary_check") == "ollama_model":
+            model_name = str(model.get("ollama_model_name") or model.get("name") or "").strip()
+            return uninstall_ollama_model(model_name)
         if model.get("binary_check") == "ollama" or model.get("id") == "ollama":
             get_logger().log("💡 Ollama 앱 삭제는 운영체제 앱 관리에서 진행하세요.")
             return True
@@ -234,6 +255,33 @@ class ModelManager:
             row["import_names"] = [_derive_import_name(pkg) for pkg in row.get("pip_packages", [])]
         return row
 
+    def _discovered_runtime_models(self) -> list[dict]:
+        discovered: list[dict] = []
+        for item in get_local_llm_models():
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            details = dict(item.get("details", {}) or {})
+            discovered.append(
+                {
+                    "id": f"ollama-model::{name}",
+                    "name": name,
+                    "category": "LLM",
+                    "os": [self.current_os],
+                    "pip_packages": [],
+                    "model_path": "",
+                    "required": False,
+                    "hidden": False,
+                    "installed": True,
+                    "binary_check": "ollama_model",
+                    "ollama_model_name": name,
+                    "details": details,
+                    "discovered": True,
+                    "size_bytes": int(item.get("size", 0) or 0),
+                }
+            )
+        return discovered
+
 
 def _load_registry() -> list:
     return ModelManager().load_registry()
@@ -253,9 +301,12 @@ def get_current_os() -> str:
     return "windows"
 
 
-def get_available_models(include_hidden=False) -> list:
+def get_available_models(include_hidden=False, include_runtime_discovered=False) -> list:
     """현재 OS에서 사용 가능한 모델 목록 반환"""
-    return ModelManager().available_models(include_hidden=include_hidden)
+    return ModelManager().available_models(
+        include_hidden=include_hidden,
+        include_runtime_discovered=include_runtime_discovered,
+    )
 
 
 def get_required_models() -> list:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.autopilot_policy import apply_autopilot_runtime_policy, autopilot_runtime_defaults
+from core.audio.stt_quality_presets import USER_SELECTED_ROUTE_KEYS
 from core.mode_policy import (
     MODE_LABELS,
     MODE_ORDER,
@@ -178,11 +179,18 @@ def simple_operation_mode_summary(mode: Any) -> str:
 
 def apply_simple_operation_mode(settings: dict[str, Any] | None, mode: Any = None) -> dict[str, Any]:
     out = dict(settings or {})
+    user_routes = {
+        key: out[key]
+        for key in USER_SELECTED_ROUTE_KEYS
+        if key in out and out.get(key) not in (None, "")
+    }
     selected_mode = normalize_simple_operation_mode(mode if mode is not None else out.get("simple_operation_mode", "auto"))
     out["simple_operation_mode"] = selected_mode
     out["subtitle_mode"] = selected_mode
     out.update(_ALWAYS_AUTOMATED_SETTINGS)
     out.update(dict(SIMPLE_OPERATION_MODES[selected_mode]["settings"]))
+    if selected_mode != "stt":
+        out.update(user_routes)
     quality_preset = mode_to_stt_quality(selected_mode)
     out["stt_quality_preset"] = quality_preset
     out["auto_start_mode"] = quality_preset

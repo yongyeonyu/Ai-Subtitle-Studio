@@ -351,10 +351,6 @@ class RuntimeMemoryManager:
         ):
             self.prune_disk_caches(stage=stage)
         self._last_trim_at = now
-        self._log(
-            f"🧠 메모리 압박 감지: {stage} | rss={snapshot['rss_gb']}GB | "
-            f"free={round(float(snapshot['resource'].get('available_memory_bytes', 0) or 0) / (1024 ** 3), 2)}GB"
-        )
 
     def _maybe_report_leak(self, snapshot: dict[str, Any]) -> None:
         if not (self._trace_enabled and tracemalloc.is_tracing()):

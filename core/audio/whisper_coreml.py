@@ -23,6 +23,20 @@ from core.runtime.logger import get_logger
 COREML_MODEL_PREFIX = "coreml:"
 DEFAULT_COREML_MODEL = "large-v3-v20240930_626MB"
 DEFAULT_COREML_MODEL_ID = f"{COREML_MODEL_PREFIX}{DEFAULT_COREML_MODEL}"
+_SUPPORTED_COREML_SELECTORS = {
+    "large-v3",
+    "whisper-large-v3",
+    "openai/whisper-large-v3",
+    "openai_whisper-large-v3",
+    "large-v3-v20240930_626mb",
+    "large-v3-v20240930_626MB",
+    "large-v3-turbo",
+    "whisper-large-v3-turbo",
+    "openai/whisper-large-v3-turbo",
+    "openai_whisper-large-v3_turbo",
+    "large-v3-v20240930_turbo_632mb",
+    "large-v3-v20240930_turbo_632MB",
+}
 
 
 def is_coreml_whisper_model(model: str) -> bool:
@@ -34,6 +48,19 @@ def coreml_model_selector(model: str) -> str:
     if value.lower().startswith(COREML_MODEL_PREFIX):
         value = value[len(COREML_MODEL_PREFIX):].strip()
     return value or DEFAULT_COREML_MODEL
+
+
+def coreml_selector_is_supported(selector: str) -> bool:
+    value = str(selector or "").strip()
+    if not value:
+        return True
+    if os.path.exists(os.path.expanduser(value)):
+        return True
+    return value in _SUPPORTED_COREML_SELECTORS or value.lower() in _SUPPORTED_COREML_SELECTORS
+
+
+def is_supported_coreml_whisper_model(model: str) -> bool:
+    return is_coreml_whisper_model(model) and coreml_selector_is_supported(coreml_model_selector(model))
 
 
 def find_whisperkit_cli() -> str:
@@ -89,6 +116,11 @@ def run_whisper(
         return None
 
     selector = coreml_model_selector(model)
+    if not coreml_selector_is_supported(selector):
+        get_logger().log(
+            f"  ⚠️ [{log_label}] Core ML WhisperKit 미지원 모델이라 원래 STT 경로로 되돌립니다: {selector}"
+        )
+        return None
     get_logger().log(f"  🧪 [{log_label}] Core ML WhisperKit 실행 준비: {selector}")
     script = _build_worker_script()
     task = {

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """User-facing Fast/Auto/High/STT mode policy.
 
 The rest of the app still stores the historical STT quality keys in a few
@@ -8,8 +6,12 @@ UI and pipeline code can talk in Mode terms while existing project/settings
 files continue to load without a schema break.
 """
 
+from __future__ import annotations
+
 from copy import deepcopy
 from typing import Any
+
+from core.native_macos_acceleration import mac_native_runtime_overrides
 
 
 MODE_POLICY_SCHEMA = "ai_subtitle_studio.mode_policy.v1"
@@ -109,6 +111,19 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return float(default)
+
+
+def _restore_user_selected_stt2_route(out: dict[str, Any], base: dict[str, Any]) -> None:
+    secondary_model = str(base.get("selected_whisper_model_secondary") or "").strip()
+    if not secondary_model:
+        return
+    user_selected = _safe_bool(base.get("stt_ensemble_user_selected"), False)
+    explicit_enabled_setting = "stt_ensemble_enabled" in base
+    if not user_selected and not explicit_enabled_setting:
+        return
+    out["selected_whisper_model_secondary"] = secondary_model
+    out["stt_ensemble_enabled"] = _safe_bool(base.get("stt_ensemble_enabled"), False)
+    out["stt_ensemble_user_selected"] = True
 
 
 def _short_model_name(value: Any) -> str:
@@ -402,7 +417,7 @@ def resolve_mode_policy(
                 "stt2_enabled": False,
                 "speaker_diarization": False,
                 "decoder": "safe-fast",
-                "reason": "Fast mode forces STT2 off and uses safe fast decoder settings.",
+                "reason": "Fast mode uses the benchmarked STT1-only route and skips STT2/word-timestamp rescue.",
             },
             "llm": {
                 "subtitle_enabled": False,
@@ -457,10 +472,10 @@ def resolve_mode_policy(
             "vad": {"selected": vad_value, "state": vad_state, "dual": True, "reason": vad_reason},
             "stt": {
                 "stt1_profile": "high",
-                "stt2_enabled": True,
-                "speaker_diarization": True,
+                "stt2_enabled": False,
+                "speaker_diarization": False,
                 "decoder": "precise",
-                "reason": "High mode enables STT2, diarization, and precise decoder settings.",
+                "reason": "High mode uses STT1 plus low-score word timestamps; STT2 rescue stays off unless explicitly benchmarked.",
             },
             "llm": {
                 "subtitle_enabled": bool(subtitle_llm_enabled),
@@ -518,7 +533,7 @@ def resolve_mode_policy(
                 "stt2_enabled": False,
                 "speaker_diarization": False,
                 "decoder": "adaptive",
-                "reason": "Auto mode starts with STT1 and escalates uncertain spans only.",
+                "reason": "Auto mode stays on STT1 and applies selective word timestamps to uncertain spans.",
             },
             "llm": {
                 "subtitle_enabled": False,
@@ -688,7 +703,18 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
     explicit_subtitle_llm = _safe_bool(base.get("subtitle_llm_user_selected"), False) or (
         base_has_subtitle_llm and "selected_llm_provider" not in base
     )
-    out = dict(base) if mode == "stt" else apply_stt_quality_preset(base, quality_key)
+    use_saved_quality_preset = not _safe_bool(base.get("_ignore_saved_quality_preset_once"), False)
+    out = (
+        dict(base)
+        if mode == "stt"
+        else apply_stt_quality_preset(
+            base,
+            quality_key,
+            use_saved_user_preset=use_saved_quality_preset,
+            preserve_user_routes=True,
+        )
+    )
+    out.pop("_ignore_saved_quality_preset_once", None)
     out["subtitle_mode"] = mode
     out["simple_operation_mode"] = mode
     out["stt_quality_preset"] = quality_key
@@ -759,23 +785,31 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "scan_cut_audio_gain_enabled": False,
                 "stt_ensemble_enabled": False,
                 "stt_ensemble_llm_judge_enabled": False,
-                "stt_ensemble_selective_enabled": True,
+                "stt_ensemble_selective_enabled": False,
                 "stt_ensemble_parallel_enabled": False,
-                "stt_low_score_recheck_enabled": True,
+                "stt_low_score_recheck_enabled": False,
                 "stt_low_score_recheck_threshold": 54,
                 "stt_low_score_recheck_padding_sec": 0.35,
-                "stt_low_score_recheck_max_segments": 16,
-                "stt_low_score_recheck_max_audio_sec": 60.0,
+                "stt_low_score_recheck_max_segments": 0,
+                "stt_low_score_recheck_max_audio_sec": 0.0,
                 "stt_recheck_native_fast_audio_filter_enabled": True,
                 "stt_persistent_runtime_reuse_enabled": True,
-                "stt_word_timestamps_mode": "selective",
+                "stt_word_timestamps_mode": "off",
                 "stt_word_timestamps_default_enabled": False,
-                "stt_word_timestamps_precision_enabled": True,
-                "stt_word_timestamps_precision_max_segments": 8,
-                "stt_word_timestamps_precision_max_audio_sec": 45.0,
+                "stt_word_timestamps_precision_enabled": False,
+                "stt_word_timestamps_precision_threshold": 72.0,
+                "stt_word_timestamps_precision_max_segments": 0,
+                "stt_word_timestamps_precision_max_audio_sec": 0.0,
+                "stt_word_timestamps_precision_keep_text": True,
+                "stt_word_timestamps_precision_min_similarity": 0.18,
+                "stt_word_timestamps_precision_max_timing_shift_sec": 0.55,
+                "stt_word_timestamps_precision_min_duration_ratio": 0.45,
+                "stt_word_timestamps_precision_max_duration_ratio": 1.8,
                 "stt_missing_voice_min_duration_sec": 0.55,
-                "stt_selective_secondary_recheck_enabled": True,
-                "stt_selective_secondary_recheck_reason": "Fast mode runs STT2 only on low-score STT1 spans.",
+                "stt_selective_secondary_recheck_enabled": False,
+                "stt_selective_secondary_recheck_reason": "Fast mode keeps STT2 off; benchmarked speed path is STT1 + LoRA.",
+                "vad_post_stt_align_enabled": True,
+                "vad_post_stt_edge_pad_sec": 0.04,
                 "runtime_quality_self_review_enabled": False,
                 "fast_hallucination_guard_enabled": True,
                 "deep_subtitle_policy_enabled": False,
@@ -810,25 +844,32 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "scan_cut_level": "medium",
                 "scan_cut_boundary_level": "medium",
                 "scan_cut_audio_gain_enabled": True,
-                "stt_ensemble_enabled": True,
-                "stt_ensemble_llm_judge_enabled": True,
-                "stt_ensemble_selective_enabled": True,
+                "stt_ensemble_enabled": False,
+                "stt_ensemble_llm_judge_enabled": False,
+                "stt_ensemble_selective_enabled": False,
                 "stt_ensemble_parallel_enabled": False,
-                "stt_low_score_recheck_enabled": True,
+                "stt_low_score_recheck_enabled": False,
                 "stt_low_score_recheck_threshold": 72,
                 "stt_low_score_recheck_padding_sec": 0.45,
-                "stt_low_score_recheck_max_segments": 48,
-                "stt_low_score_recheck_max_audio_sec": 240.0,
+                "stt_low_score_recheck_max_segments": 0,
+                "stt_low_score_recheck_max_audio_sec": 0.0,
                 "stt_recheck_native_fast_audio_filter_enabled": True,
                 "stt_persistent_runtime_reuse_enabled": True,
-                "stt_selective_secondary_recheck_enabled": True,
+                "stt_selective_secondary_recheck_enabled": False,
                 "stt_word_timestamps_mode": "selective",
                 "stt_word_timestamps_default_enabled": False,
                 "stt_word_timestamps_precision_enabled": True,
-                "stt_word_timestamps_precision_threshold": 78.0,
-                "stt_word_timestamps_precision_max_segments": 16,
-                "stt_word_timestamps_precision_max_audio_sec": 120.0,
+                "stt_word_timestamps_precision_threshold": 72.0,
+                "stt_word_timestamps_precision_max_segments": 32,
+                "stt_word_timestamps_precision_max_audio_sec": 100.0,
+                "stt_word_timestamps_precision_keep_text": True,
+                "stt_word_timestamps_precision_min_similarity": 0.18,
+                "stt_word_timestamps_precision_max_timing_shift_sec": 0.55,
+                "stt_word_timestamps_precision_min_duration_ratio": 0.45,
+                "stt_word_timestamps_precision_max_duration_ratio": 1.8,
                 "stt_missing_voice_min_duration_sec": 0.55,
+                "vad_post_stt_align_enabled": True,
+                "vad_post_stt_edge_pad_sec": 0.04,
                 "runtime_quality_self_review_enabled": True,
                 "fast_hallucination_guard_enabled": True,
                 "deep_subtitle_policy_enabled": True,
@@ -838,9 +879,14 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "subtitle_llm_macro_chunk_enabled": True,
                 "subtitle_llm_mode_disabled": False,
                 "llm_confidence_gate_enabled": True,
+                "llm_confidence_gate_min_lora_score": 88.0,
+                "llm_confidence_gate_max_compact_ratio": 1.37,
+                "llm_confidence_gate_strong_signal_score": 92.0,
+                "llm_confidence_gate_strong_max_compact_ratio": 1.28,
+                "llm_confidence_gate_strong_max_duration_ratio": 1.35,
                 "llm_candidate_policy_enabled": True,
                 "llm_minimize_enabled": True,
-                "speaker_diarization_auto_enabled": True,
+                "speaker_diarization_auto_enabled": False,
                 "vad_dual_model_enabled": True,
                 "subtitle_lora_quality_buckets": ["high", "medium", "low"],
                 "runtime_scheduler_ramp_up_enabled": False,
@@ -865,12 +911,28 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "scan_cut_boundary_level": "low",
                 "scan_cut_audio_gain_enabled": False,
                 "stt_ensemble_enabled": False,
-                "stt_ensemble_llm_judge_enabled": True,
-                "stt_low_score_recheck_max_audio_sec": 120.0,
+                "stt_ensemble_llm_judge_enabled": False,
+                "stt_ensemble_selective_enabled": False,
+                "stt_ensemble_parallel_enabled": False,
+                "stt_selective_secondary_recheck_enabled": False,
+                "stt_low_score_recheck_enabled": False,
+                "stt_low_score_recheck_max_segments": 0,
+                "stt_low_score_recheck_max_audio_sec": 0.0,
                 "stt_recheck_native_fast_audio_filter_enabled": True,
                 "stt_persistent_runtime_reuse_enabled": True,
+                "stt_word_timestamps_mode": "selective",
+                "stt_word_timestamps_default_enabled": False,
+                "stt_word_timestamps_precision_enabled": True,
+                "stt_word_timestamps_precision_threshold": 72.0,
                 "stt_word_timestamps_precision_max_segments": 16,
-                "stt_word_timestamps_precision_max_audio_sec": 60.0,
+                "stt_word_timestamps_precision_max_audio_sec": 70.0,
+                "stt_word_timestamps_precision_keep_text": True,
+                "stt_word_timestamps_precision_min_similarity": 0.18,
+                "stt_word_timestamps_precision_max_timing_shift_sec": 0.55,
+                "stt_word_timestamps_precision_min_duration_ratio": 0.45,
+                "stt_word_timestamps_precision_max_duration_ratio": 1.8,
+                "vad_post_stt_align_enabled": True,
+                "vad_post_stt_edge_pad_sec": 0.04,
                 "speaker_diarization_auto_enabled": False,
                 "vad_dual_model_enabled": False,
                 "runtime_quality_self_review_enabled": True,
@@ -914,6 +976,8 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
             "clearvoice_native_ffmpeg_enabled": True,
         }
     )
+    out.update(mac_native_runtime_overrides(out))
+    _restore_user_selected_stt2_route(out, base)
 
     policy = resolve_mode_policy(out)
     out["mode_policy_snapshot"] = {

@@ -194,7 +194,8 @@ def _sanitize(segments: list[dict], corrections: dict) -> list[dict]:
     result = []
     for seg in segments:
         text = _clean(seg.get("text", ""), corrections)
-        if not text: continue
+        if not text:
+            continue
             
         # 💡 [환각 문구 검사]
         is_halluc = False
@@ -203,9 +204,11 @@ def _sanitize(segments: list[dict], corrections: dict) -> list[dict]:
                 get_logger().log(f"[삭제-환각문구] '{text[:15]}...'")
                 is_halluc = True
                 break
-        if is_halluc: continue
+        if is_halluc:
+            continue
             
-        if not re.search(r"[가-힣a-zA-Z]", text): continue
+        if not re.search(r"[가-힣a-zA-Z]", text):
+            continue
             
         clean_len = len(text.replace(" ", "").replace("\n", ""))
         duration = seg.get("end", 0) - seg.get("start", 0)
@@ -271,7 +274,8 @@ def _global_dedup(segments: list[dict]) -> list[dict]:
         
         is_halluc = False
         for past_t in reversed(history[-40:]):
-            if len(past_t) < 5: continue
+            if len(past_t) < 5:
+                continue
             if t in past_t or past_t in t:
                 is_halluc = True
                 break
@@ -765,6 +769,101 @@ def _attach_context_repair_policy(segments: list[dict], decision: dict | None, s
     return rows
 
 
+def _bool_setting(settings: dict, key: str, default: bool = True) -> bool:
+    value = settings.get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "off", "no", "끔", "미사용"}
+    return bool(value)
+
+
+def _lora_style_merge_settings(settings: dict | None) -> dict:
+    settings = dict(settings or {})
+    max_chars = max(8, _setting_int(settings, "split_length_threshold", 16))
+    min_duration = max(
+        _setting_float(settings, "sub_min_duration", 0.3),
+        _setting_float(settings, "subtitle_lora_micro_merge_min_duration", 0.8),
+    )
+    gap_break = max(
+        _setting_float(settings, "sub_gap_break_sec", 1.5),
+        _setting_float(settings, "subtitle_lora_micro_merge_gap_sec", 1.8),
+    )
+    word_gap = max(
+        _setting_float(settings, "word_timing_gap_break_sec", 0.65),
+        _setting_float(settings, "subtitle_lora_micro_merge_word_gap_sec", 1.2),
+    )
+    continuous = max(
+        _setting_float(settings, "continuous_threshold", 2.0),
+        _setting_float(settings, "subtitle_lora_micro_merge_continuous_sec", 3.0),
+        gap_break,
+    )
+    return {
+        "split_length_threshold": max_chars,
+        "sub_min_duration": round(min_duration, 3),
+        "sub_gap_break_sec": round(gap_break, 3),
+        "word_timing_gap_break_sec": round(word_gap, 3),
+        "continuous_threshold": round(continuous, 3),
+    }
+
+
+def _seed_lora_style_merge_context(segments: list[dict], settings: dict | None, *, stage: str) -> list[dict]:
+    merge_settings = _lora_style_merge_settings(settings)
+    rows: list[dict] = []
+    for seg in list(segments or []):
+        if not isinstance(seg, dict):
+            continue
+        row = dict(seg)
+        segment_settings = dict(row.get("_lora_segment_settings") or {})
+        gap_settings = dict(row.get("_lora_gap_settings") or {})
+        for key in ("split_length_threshold", "sub_min_duration", "sub_gap_break_sec", "word_timing_gap_break_sec"):
+            segment_settings.setdefault(key, merge_settings[key])
+        gap_settings.setdefault("continuous_threshold", merge_settings["continuous_threshold"])
+        gap_settings.setdefault("sub_gap_break_sec", merge_settings["sub_gap_break_sec"])
+        row["_lora_segment_settings"] = segment_settings
+        row["_lora_gap_settings"] = gap_settings
+        row["_lora_style_merge_policy"] = {
+            "task": "lora_style_micro_merge",
+            "stage": stage,
+            "source": "runtime_lora_style_settings",
+            "settings": merge_settings,
+        }
+        rows.append(row)
+    return rows
+
+
+def _apply_lora_style_micro_merge(
+    segments: list[dict],
+    vad_segments: list[dict] | None,
+    settings: dict | None,
+    *,
+    stage: str,
+) -> list[dict]:
+    settings = dict(settings or {})
+    if not segments or not _bool_setting(settings, "subtitle_lora_micro_merge_enabled", True):
+        return segments
+    rows = _seed_lora_style_merge_context(segments, settings, stage=stage)
+    merge_settings = _lora_style_merge_settings(settings)
+    before_count = len(rows)
+    try:
+        merged = regroup_by_word_timestamps(
+            rows,
+            max_chars=int(merge_settings["split_length_threshold"]),
+            max_duration=_setting_float(settings, "sub_max_duration", _MAX_DURATION),
+            max_cps=_setting_int(settings, "sub_max_cps", _MAX_CPS),
+            min_duration=float(merge_settings["sub_min_duration"]),
+            gap_break_sec=float(merge_settings["sub_gap_break_sec"]),
+            word_gap_break_sec=float(merge_settings["word_timing_gap_break_sec"]),
+            vad_segments=vad_segments or [],
+            frame_rate=float(settings.get("video_fps", 0.0) or 0.0),
+            rules=load_subtitle_rules(),
+        )
+    except Exception as exc:
+        get_logger().log(f"[LoRA자막묶음] 실패({stage}): {exc}")
+        return segments
+    if len(merged) < before_count:
+        get_logger().log(f"[LoRA자막묶음] {stage}: 짧은 자막 {before_count}개 → {len(merged)}개로 병합")
+    return merged
+
+
 def _context_repair_output_variant(segments: list[dict], vad_segments: list[dict] | None, settings: dict | None) -> list[dict]:
     repaired, decision = repair_subtitle_context_consistency(segments, settings or {})
     if not decision.get("applied"):
@@ -791,6 +890,7 @@ def _source_output_variant(segments: list[dict], vad_segments: list[dict] | None
     source = adjust_timing(source)
     source = apply_final_gap_settings(source, settings or {}, force=True)
     source = align_stt_candidates_to_subtitle_segments(source)
+    source = _apply_lora_style_micro_merge(source, vad_segments or [], settings or {}, stage="source")
     source = _self_review_subtitle_quality(source, vad_segments or [], settings or {})
     return _annotate_context_consistency(source, settings or {})
 
@@ -820,6 +920,8 @@ def _apply_output_variant_selector(
         variants.append({"name": f"{stage}_source_gap_only", "segments": source})
     selected, decision = select_best_subtitle_output(variants, settings)
     decision = _compact_output_selector_decision(decision, stage=stage)
+    selected = _apply_lora_style_micro_merge(selected, vad_segments or [], settings, stage=f"{stage}_selected")
+    selected = apply_final_gap_settings(selected, settings, force=True)
     selected_index = int(decision.get("selected_index", 0) if decision.get("selected_index") is not None else 0)
     selected_score = decision.get("selected_score")
     if selected_index > 0:
@@ -2086,6 +2188,18 @@ def optimize_segments(
                 threshold=threshold,
                 settings=loaded_settings,
                 codex_native_fast_path=codex_native_fast_path,
+            )
+            llm_rows = sum(1 for item in needs_llm if item)
+            fast_lane_rows = max(0, len(gated_rows) - llm_rows)
+            strong_fast_rows = sum(
+                1
+                for row in gated_rows
+                if dict(row.get("_llm_gate_policy") or {}).get("strong_fast_lane")
+            )
+            get_logger().log(
+                f"[LLM-게이트] 전체 {len(gated_rows)}개 중 LLM 후보 {llm_rows}개, "
+                f"LoRA/Deep/STT 확정 {fast_lane_rows}개"
+                + (f" (강신뢰 fast-lane {strong_fast_rows}개)" if strong_fast_rows else "")
             )
             if codex_native_fast_path:
                 codex_rows = sum(1 for item in needs_llm if item)

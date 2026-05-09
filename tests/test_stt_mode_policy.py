@@ -67,6 +67,17 @@ class STTModePolicyTests(unittest.TestCase):
         self.assertEqual(auto["subtitle_tool_stack_tools"], ["lora", "deep_learning"])
         self.assertEqual(high["subtitle_tool_stack_tools"], ["lora", "deep_learning", "llm"])
 
+    def test_fast_auto_high_modes_preserve_user_selected_stt_models(self):
+        base = {
+            "selected_whisper_model": "user-selected-stt1",
+            "selected_whisper_model_secondary": "user-selected-stt2",
+        }
+
+        for mode in ("fast", "auto", "high"):
+            settings = apply_mode_runtime_settings({**base, "subtitle_mode": mode})
+            self.assertEqual(settings["selected_whisper_model"], "user-selected-stt1")
+            self.assertEqual(settings["selected_whisper_model_secondary"], "user-selected-stt2")
+
 
 if __name__ == "__main__":
     unittest.main()

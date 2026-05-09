@@ -38,7 +38,16 @@ def build_strict_verify_helpers(deps: dict):
             import numpy as np
         except Exception:
             return {"passed": True, "reason": "numpy_unavailable"}
-        if not hasattr(cv2_mod, "remap"):
+        try:
+            from core.native_cut_boundary import (
+                dense_flow_pair_metrics as _native_dense_flow_pair_metrics,
+                native_cut_boundary_enabled as _native_cut_boundary_enabled,
+            )
+            native_dense_metrics_enabled = bool(_native_cut_boundary_enabled())
+        except Exception:
+            _native_dense_flow_pair_metrics = None
+            native_dense_metrics_enabled = False
+        if not native_dense_metrics_enabled and not hasattr(cv2_mod, "remap"):
             return {"passed": True, "reason": "opencv_remap_unavailable"}
 
         frame_count = int(frame_count or 0)
@@ -178,37 +187,57 @@ def build_strict_verify_helpers(deps: dict):
             except Exception:
                 return None
 
-            diff = np.abs(prev_gray.astype(np.float32) - next_gray.astype(np.float32))
-            diff_before = float(diff.mean())
-            coverage = float((diff >= diff_threshold).mean())
             flow, backend = _calc_flow(prev_gray, next_gray)
             if flow is None:
                 return None
 
-            h, w = prev_gray.shape[:2]
-            grid_x, grid_y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
-            map_x = grid_x - flow[:, :, 0].astype(np.float32)
-            map_y = grid_y - flow[:, :, 1].astype(np.float32)
-            try:
-                warped = cv2_mod.remap(
+            metrics_backend = "python_numpy"
+            native_metrics = None
+            if _native_dense_flow_pair_metrics is not None:
+                native_metrics = _native_dense_flow_pair_metrics(
                     prev_gray,
-                    map_x,
-                    map_y,
-                    interpolation=cv2_mod.INTER_LINEAR,
-                    borderMode=cv2_mod.BORDER_REPLICATE,
+                    next_gray,
+                    flow,
+                    diff_threshold=diff_threshold,
                 )
-                residual = float(np.abs(warped.astype(np.float32) - next_gray.astype(np.float32)).mean())
-            except Exception:
-                residual = diff_before
+            if isinstance(native_metrics, dict):
+                diff_before = float(native_metrics.get("diff", 0.0) or 0.0)
+                coverage = float(native_metrics.get("coverage", 0.0) or 0.0)
+                residual = float(native_metrics.get("residual", diff_before) or 0.0)
+                residual_ratio = float(native_metrics.get("residual_ratio", residual / max(diff_before, 1e-6)) or 0.0)
+                mean_mag = float(native_metrics.get("mean_motion_px", 0.0) or 0.0)
+                mean_fx = float(native_metrics.get("mean_fx", 0.0) or 0.0)
+                mean_fy = float(native_metrics.get("mean_fy", 0.0) or 0.0)
+                coherence = float(native_metrics.get("coherence", 0.0) or 0.0)
+                metrics_backend = "cpp_native"
+            else:
+                diff = np.abs(prev_gray.astype(np.float32) - next_gray.astype(np.float32))
+                diff_before = float(diff.mean())
+                coverage = float((diff >= diff_threshold).mean())
+                h, w = prev_gray.shape[:2]
+                grid_x, grid_y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+                map_x = grid_x - flow[:, :, 0].astype(np.float32)
+                map_y = grid_y - flow[:, :, 1].astype(np.float32)
+                try:
+                    warped = cv2_mod.remap(
+                        prev_gray,
+                        map_x,
+                        map_y,
+                        interpolation=cv2_mod.INTER_LINEAR,
+                        borderMode=cv2_mod.BORDER_REPLICATE,
+                    )
+                    residual = float(np.abs(warped.astype(np.float32) - next_gray.astype(np.float32)).mean())
+                except Exception:
+                    residual = diff_before
 
-            fx = flow[:, :, 0].astype(np.float32)
-            fy = flow[:, :, 1].astype(np.float32)
-            mag = np.sqrt(fx ** 2 + fy ** 2)
-            mean_mag = float(mag.mean())
-            mean_fx = float(fx.mean())
-            mean_fy = float(fy.mean())
-            coherence = float((mean_fx * mean_fx + mean_fy * mean_fy) ** 0.5 / max(mean_mag, 1e-6))
-            residual_ratio = residual / max(diff_before, 1e-6)
+                fx = flow[:, :, 0].astype(np.float32)
+                fy = flow[:, :, 1].astype(np.float32)
+                mag = np.sqrt(fx ** 2 + fy ** 2)
+                mean_mag = float(mag.mean())
+                mean_fx = float(fx.mean())
+                mean_fy = float(fy.mean())
+                coherence = float((mean_fx * mean_fx + mean_fy * mean_fy) ** 0.5 / max(mean_mag, 1e-6))
+                residual_ratio = residual / max(diff_before, 1e-6)
             residual_conf = _clamp01((max_motion_residual_ratio - residual_ratio) / max(max_motion_residual_ratio, 1e-6))
             diff_conf = _clamp01(diff_before / max(strong_diff, 1e-6))
             coverage_conf = _clamp01(coverage / max(min_coverage, 1e-6)) if min_coverage > 0 else _clamp01(coverage)
@@ -242,6 +271,7 @@ def build_strict_verify_helpers(deps: dict):
                 "motion_score": motion_score,
                 "motion_like": bool(motion_like),
                 "backend": backend,
+                "metrics_backend": metrics_backend,
             }
 
         pair_specs: list[tuple[int, int, str]] = []
@@ -311,6 +341,7 @@ def build_strict_verify_helpers(deps: dict):
                 "motion_score": _round(item["motion_score"]),
                 "motion_like": bool(item["motion_like"]),
                 "backend": item["backend"],
+                "metrics_backend": item.get("metrics_backend", "python_numpy"),
             }
             for item in pair_metrics
         ]
@@ -439,6 +470,8 @@ def build_strict_verify_helpers(deps: dict):
             scale_w=scale_w,
             scale_h=scale_h,
             color_space=color_space,
+            capture_gray=True,
+            capture_color=False,
             settings=settings,
         )
 
@@ -557,20 +590,68 @@ def build_strict_verify_helpers(deps: dict):
             and best_win["regions"] >= gray_window_required
         )
 
-        # color average final gate
+        gray_pass = gray_adj_pass or gray_window_pass
         color_center = best_win["frame"] if best_win["frame"] is not None else best_adj["frame"]
         if color_center is None:
             color_center = coarse_frame
 
         color_lo = max(lo, int(color_center) - color_window_frames)
         color_hi = min(hi, int(color_center) + color_window_frames)
-
         best_color = {
             "frame": None,
             "score": -1.0,
             "regions": 0,
             "deltas": [],
         }
+
+        if not gray_pass:
+            def provisional_hint(reason: str):
+                choices = []
+                if best_win["frame"] is not None:
+                    choices.append(("gray_window_rollback", best_win["frame"], best_win["score"], best_win["regions"], best_win["deltas"], best_win.get("stage", 0)))
+                if best_adj["frame"] is not None:
+                    choices.append((best_adj.get("mode", "gray_adj"), best_adj["frame"], best_adj["score"], best_adj["regions"], best_adj["deltas"], 1))
+                if best_color["frame"] is not None:
+                    choices.append(("color_window", best_color["frame"], best_color["score"], best_color["regions"], best_color["deltas"], color_window_frames))
+                if not choices:
+                    return {"passed": False, "reason": reason}
+                mode, frame, score, regions, deltas, stage = choices[0]
+                return {
+                    "passed": False,
+                    "reason": reason,
+                    "provisional_frame": int(frame),
+                    "provisional_sec": float(int(frame) / fps),
+                    "provisional_score": float(score or 0.0),
+                    "provisional_regions": int(regions or 0),
+                    "provisional_mode": str(mode),
+                    "provisional_stage": int(stage or 0),
+                    "provisional_deltas": list(deltas or []),
+                    "rollback_relocated": True,
+                }
+
+            return provisional_hint("gray_failed")
+
+        try:
+            gray_map.clear()
+        except Exception:
+            pass
+        gray_map = {}
+
+        color_read_hi = min(frame_count - 1, color_hi + color_window_frames)
+        _, color_map = _auto_capture_verify_maps(
+            cap,
+            cv2_mod,
+            start_frame=color_lo,
+            end_frame=color_read_hi,
+            frame_count=frame_count,
+            positions=positions,
+            scale_w=scale_w,
+            scale_h=scale_h,
+            color_space=color_space,
+            capture_gray=False,
+            capture_color=True,
+            settings=settings,
+        )
 
         step = max(1, color_window_frames // 2)
         f = color_lo
@@ -610,9 +691,6 @@ def build_strict_verify_helpers(deps: dict):
             and best_color["regions"] >= relaxed_color_required_regions
         )
 
-        # gray 통과 조건
-        gray_pass = gray_adj_pass or gray_window_pass
-
         def provisional_hint(reason: str):
             choices = []
             if best_win["frame"] is not None:
@@ -637,11 +715,13 @@ def build_strict_verify_helpers(deps: dict):
                 "rollback_relocated": True,
             }
 
-        if not gray_pass:
-            return provisional_hint("gray_failed")
-
         if not color_pass:
             return provisional_hint("color_avg_failed")
+
+        try:
+            color_map.clear()
+        except Exception:
+            pass
 
         flow_check = _auto_dense_flow_cut_check(
             cap,
@@ -759,6 +839,8 @@ def build_strict_verify_helpers(deps: dict):
             scale_w=scale_w,
             scale_h=scale_h,
             color_space=color_space,
+            capture_gray=True,
+            capture_color=False,
             settings=settings,
         )
         if not gray_map:
@@ -798,25 +880,13 @@ def build_strict_verify_helpers(deps: dict):
             cur_lo = max(lo, local_frame - stage); cur_hi = min(hi, local_frame + stage)
         gray_adj_pass = best_adj["frame"] is not None and best_adj["score"] >= best_adj["threshold"] and best_adj["regions"] >= gray_required_regions
         gray_window_pass = best_win["frame"] is not None and best_win["score"] >= gray_window_threshold and best_win["regions"] >= gray_window_required
+        gray_pass = gray_adj_pass or gray_window_pass
         color_center = best_win["frame"] if best_win["frame"] is not None else best_adj["frame"]
         if color_center is None:
             color_center = coarse_frame
         color_lo = max(lo, int(color_center) - color_window_frames)
         color_hi = min(hi, int(color_center) + color_window_frames)
         best_color = {"frame": None, "score": -1.0, "regions": 0, "deltas": []}
-        step = max(1, color_window_frames // 2)
-        f = color_lo
-        while f <= color_hi:
-            a = color_map.get(f); b = color_map.get(f + color_window_frames)
-            if a is not None and b is not None:
-                score, regions, deltas = _auto_color_avg_delta_mps(a, b, threshold=color_threshold, weight_luma=color_weight_luma, weight_chroma=color_weight_chroma)
-                if score > best_color["score"]:
-                    best_color.update({"frame": int(f), "score": float(score), "regions": int(regions), "deltas": list(deltas or [])})
-            f += step
-        gray_super_strong_for_color = best_win["frame"] is not None and best_win["score"] >= float(settings.get("scan_cut_auto_gray_super_strong_threshold", 110.0)) and best_win["regions"] >= max(1, min(selected_count, int(round(selected_count * 0.85))))
-        relaxed_color_required_regions = max(1, color_required_regions - int(settings.get("scan_cut_color_avg_super_strong_relax_regions", 2))) if gray_super_strong_for_color else color_required_regions
-        gray_pass = gray_adj_pass or gray_window_pass
-        color_pass = best_color["frame"] is not None and best_color["score"] >= color_threshold and best_color["regions"] >= relaxed_color_required_regions
         if not gray_pass:
             choices = []
             if best_win["frame"] is not None:
@@ -829,6 +899,38 @@ def build_strict_verify_helpers(deps: dict):
                 return {"passed": False, "reason": "gray_failed"}
             mode, frame, score, regions, deltas, stage = choices[0]
             return {"passed": False, "reason": "gray_failed", "provisional_frame": int(frame), "provisional_sec": float(int(frame) / fps), "provisional_score": float(score or 0.0), "provisional_regions": int(regions or 0), "provisional_mode": str(mode), "provisional_stage": int(stage or 0), "provisional_deltas": list(deltas or []), "rollback_relocated": True}
+        try:
+            gray_map.clear()
+        except Exception:
+            pass
+        gray_map = {}
+        color_read_hi = min(frame_count - 1, color_hi + color_window_frames)
+        _, color_map = _auto_capture_verify_maps(
+            cap,
+            cv2_mod,
+            start_frame=color_lo,
+            end_frame=color_read_hi,
+            frame_count=frame_count,
+            positions=positions,
+            scale_w=scale_w,
+            scale_h=scale_h,
+            color_space=color_space,
+            capture_gray=False,
+            capture_color=True,
+            settings=settings,
+        )
+        step = max(1, color_window_frames // 2)
+        f = color_lo
+        while f <= color_hi:
+            a = color_map.get(f); b = color_map.get(f + color_window_frames)
+            if a is not None and b is not None:
+                score, regions, deltas = _auto_color_avg_delta_mps(a, b, threshold=color_threshold, weight_luma=color_weight_luma, weight_chroma=color_weight_chroma)
+                if score > best_color["score"]:
+                    best_color.update({"frame": int(f), "score": float(score), "regions": int(regions), "deltas": list(deltas or [])})
+            f += step
+        gray_super_strong_for_color = best_win["frame"] is not None and best_win["score"] >= float(settings.get("scan_cut_auto_gray_super_strong_threshold", 110.0)) and best_win["regions"] >= max(1, min(selected_count, int(round(selected_count * 0.85))))
+        relaxed_color_required_regions = max(1, color_required_regions - int(settings.get("scan_cut_color_avg_super_strong_relax_regions", 2))) if gray_super_strong_for_color else color_required_regions
+        color_pass = best_color["frame"] is not None and best_color["score"] >= color_threshold and best_color["regions"] >= relaxed_color_required_regions
         if not color_pass:
             choices = []
             if best_win["frame"] is not None:
@@ -839,6 +941,10 @@ def build_strict_verify_helpers(deps: dict):
                 choices.append(("color_window_mps", best_color["frame"], best_color["score"], best_color["regions"], best_color["deltas"], color_window_frames))
             mode, frame, score, regions, deltas, stage = choices[0]
             return {"passed": False, "reason": "color_avg_failed", "provisional_frame": int(frame), "provisional_sec": float(int(frame) / fps), "provisional_score": float(score or 0.0), "provisional_regions": int(regions or 0), "provisional_mode": str(mode), "provisional_stage": int(stage or 0), "provisional_deltas": list(deltas or []), "rollback_relocated": True}
+        try:
+            color_map.clear()
+        except Exception:
+            pass
         flow_check = _auto_dense_flow_cut_check(
             cap,
             cv2_mod,

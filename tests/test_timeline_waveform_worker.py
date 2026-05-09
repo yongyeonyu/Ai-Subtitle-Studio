@@ -15,6 +15,7 @@ from ui.timeline.timeline_waveform import (
     _downsample_waveform_raw,
     _downsample_waveform_samples,
     _ffmpeg_waveform_cmd,
+    patch_waveform_buffer,
 )
 
 
@@ -55,6 +56,30 @@ class TimelineWaveformWorkerTests(unittest.TestCase):
         self.assertIn("pipe:1", cmd)
         self.assertIn("-nostdin", cmd)
         self.assertNotIn(".raw", " ".join(cmd))
+
+    def test_patch_waveform_buffer_reuses_existing_allocation(self):
+        original = np.zeros(10, dtype=np.float32)
+
+        patched = patch_waveform_buffer(
+            original,
+            start_px=3,
+            total_px=10,
+            values=np.array([0.25, 0.5, 0.75], dtype=np.float32),
+        )
+
+        self.assertIs(patched, original)
+        np.testing.assert_allclose(patched, np.array([0, 0, 0, 0.25, 0.5, 0.75, 0, 0, 0, 0], dtype=np.float32))
+
+    def test_patch_waveform_buffer_allocates_when_target_is_missing(self):
+        patched = patch_waveform_buffer(
+            None,
+            start_px=1,
+            total_px=5,
+            values=[1.0, 0.5, 0.25],
+        )
+
+        self.assertEqual(patched.dtype, np.float32)
+        np.testing.assert_allclose(patched, np.array([0, 1.0, 0.5, 0.25, 0], dtype=np.float32))
 
     def test_swift_timeline_columns_bridge_when_available(self):
         if find_native_cli_path() is None:

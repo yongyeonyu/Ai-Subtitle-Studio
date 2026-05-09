@@ -67,8 +67,10 @@ class AccuracyPolicyTests(unittest.TestCase):
         self.assertEqual(settings["subtitle_mode"], "high")
         self.assertEqual(settings["auto_start_mode"], "precise")
         self.assertEqual(settings["stt_quality_preset"], "precise")
-        self.assertTrue(settings["stt_ensemble_enabled"])
-        self.assertTrue(settings["stt_ensemble_llm_judge_enabled"])
+        self.assertFalse(settings["stt_ensemble_enabled"])
+        self.assertFalse(settings["stt_ensemble_llm_judge_enabled"])
+        self.assertTrue(settings["stt_word_timestamps_precision_enabled"])
+        self.assertEqual(settings["stt_word_timestamps_precision_max_segments"], 32)
 
     def test_auto_runtime_preserves_fast_quality_preset_while_capping_heavy_work(self):
         settings = apply_accuracy_first_runtime_settings(

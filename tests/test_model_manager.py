@@ -185,6 +185,26 @@ class ModelManagerTest(unittest.TestCase):
         self.assertTrue(all(model.get("experimental") for model in models))
         self.assertEqual(required, [])
 
+    def test_available_models_can_append_installed_ollama_variants(self):
+        registry_path, root = self._registry([
+            {"id": "ollama", "name": "Ollama (로컬 LLM)", "category": "LLM", "os": ["mac"], "binary_check": "ollama"}
+        ])
+        manager = ModelManager(registry_path=registry_path, project_root=root, current_os="mac")
+
+        with patch("core.model_manager.get_local_llm_models", return_value=[
+            {"name": "deepseek-r1:8b", "size": 123, "details": {"format": "ollama"}},
+            {"name": "exaone3.5:7.8b", "size": 456, "details": {"format": "ollama"}},
+        ]), patch("core.model_manager.is_ollama_available", return_value=True):
+            models = manager.available_models(include_hidden=True, include_runtime_discovered=True)
+
+        self.assertEqual(models[0]["id"], "ollama")
+        discovered_ids = [model["id"] for model in models[1:]]
+        self.assertIn("ollama-model::deepseek-r1:8b", discovered_ids)
+        self.assertIn("ollama-model::exaone3.5:7.8b", discovered_ids)
+        discovered = {model["id"]: model for model in models}
+        self.assertTrue(discovered["ollama-model::deepseek-r1:8b"]["installed"])
+        self.assertTrue(discovered["ollama-model::deepseek-r1:8b"]["discovered"])
+
 
 if __name__ == "__main__":
     unittest.main()

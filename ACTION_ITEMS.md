@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.00-mac-native
-Phase: MAC_NATIVE_APPSTORE_BRANCH
-Last-Updated: 2026-05-09
+Document-Version: 04.00.01-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_1_RELEASED
+Last-Updated: 2026-05-10
 Updated-By: Codex
 Purpose: Remaining work queue only.
 -->
@@ -19,9 +19,9 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "04.00.00"
-document_version: "04.00.00-mac-native"
-phase: "MAC_NATIVE_APPSTORE_BRANCH"
+app_version: "04.00.01"
+document_version: "04.00.01-mac-native"
+phase: "MAC_NATIVE_APPSTORE_V4_0_1_RELEASED"
 next_phase: null
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
@@ -54,12 +54,13 @@ release_handoff_files:
 
 ## Completion Snapshot
 
-The v04.00.00 Mac-native release completed the prior queue:
+The v04.00.01 Mac-native release completed the prior queue:
 
 - The repository now targets macOS Apple Silicon only on this branch; Windows launcher and Windows-only dependency files were removed from the active release path.
 - Apple Silicon scheduling now includes chip-aware worker budgeting, FFmpeg thread caps, pioneer/follower cut-boundary planning, and accelerator slot distribution for the detected Mac.
 - STT candidate scoring and STT1/STT2 merge work now reuse indexed or native overlap calculations instead of rescanning every peer segment.
 - Native Swift bridges now cover subtitle/project/timeline/waveform/policy quality helpers intended for later reuse in a future iPad app, with Python kept as a fallback only where quality or compatibility still requires it.
+- Production macOS runtime now enables only benchmark-safe native routes by default and keeps Swift LoRA/Deep/LLM policy helpers behind an explicit experimental gate until speed and LoRA ranking parity are proven.
 - Native macOS memory helpers, packaging scripts, and benchmark tools are part of the active release set so the app can be profiled, packaged, and iterated as a Mac-first product.
 - Release verification should be re-read from the latest `RELEASE_v*.md` only.
 

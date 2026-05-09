@@ -12,6 +12,7 @@ from core.cut_boundary_audio import detect_audio_gain_boundary_rows
 from core.cut_boundary_ffmpeg_scene import detect_ffmpeg_scene_boundaries
 from core.performance import (
     balanced_task_slices,
+    current_resource_snapshot,
 )
 from core.runtime.multi_process import runtime_parallel_worker_plan
 from core.cut_boundary_backend_router import apply_cut_boundary_backend_settings, select_cut_boundary_backend
@@ -49,6 +50,43 @@ def _setting_float(value, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _benchmark_locked_slice_count(settings: dict | None, key: str, default: int = 4) -> int:
+    """Return benchmark-locked cut-boundary split counts.
+
+    BENCH LOCK 2026-05-09 (Apple M5, X5_시승기_후반.MP4 4K HEVC):
+    4-way CPU split was the fastest verified follower layout. 1/6, 1/8 and
+    1/10 increased wall time/RSS; MPS was also slower for these tiny grids.
+    """
+    return max(1, min(16, _setting_int((settings or {}).get(key), default)))
+
+
+def _cut_boundary_pioneer_worker_ranges(
+    *,
+    step_count: int,
+    worker_count: int,
+    step_frames: int,
+    frame_count: int,
+    settings: dict | None = None,
+) -> list[tuple[int, int, int]]:
+    """Build overlapped pioneer frame ranges so worker seams cannot hide cuts."""
+    step_slices = balanced_task_slices(step_count, worker_count, min_batch_size=1)
+    overlap_steps = max(0, min(4, _setting_int((settings or {}).get("scan_cut_pioneer_worker_overlap_steps"), 1)))
+    ranges: list[tuple[int, int, int]] = []
+    last_idx = len(step_slices) - 1
+    for idx, (start_step, end_step) in enumerate(step_slices):
+        if end_step <= start_step:
+            continue
+        # BENCH LOCK 2026-05-09: keep 1-step overlap. It removes the candidate
+        # variance seen when 6+ workers split a hard cut exactly at a range seam.
+        overlapped_start = max(0, start_step - (overlap_steps if idx > 0 else 0))
+        overlapped_end = min(step_count, end_step + (overlap_steps if idx < last_idx else 0))
+        start_frame = min(frame_count, overlapped_start * step_frames)
+        end_frame = min(frame_count, overlapped_end * step_frames)
+        if end_frame > start_frame:
+            ranges.append((idx, start_frame, end_frame))
+    return ranges
 
 
 def high_cost_visual_scan_skip_meta(
@@ -118,6 +156,7 @@ def cut_follower_verify_backend(
     *,
     platform_name: str | None = None,
     mps_available=None,
+    pressure_stage: str | None = None,
 ) -> str:
     """Choose the strict cut-boundary verifier backend.
 
@@ -126,6 +165,8 @@ def cut_follower_verify_backend(
     CPU, so MPS stays opt-in for this micro-kernel.
     """
     data = dict(settings or {})
+    if str(pressure_stage or "").strip().lower() in {"warning", "critical"}:
+        return "cpu"
     if not _setting_bool(data.get("scan_cut_follower_mps_enabled"), False):
         return "cpu"
     if str(platform_name or sys.platform).strip().lower() != "darwin":
@@ -135,6 +176,41 @@ def cut_follower_verify_backend(
     except Exception:
         available = False
     return "mps" if available else "cpu"
+
+
+def cut_boundary_memory_pressure_stage(settings: dict | None = None) -> str:
+    try:
+        snapshot = dict(current_resource_snapshot(settings) or {})
+    except Exception:
+        snapshot = {}
+    stage = str(snapshot.get("memory_pressure_stage", "") or "").strip().lower()
+    if stage in {"warning", "critical"}:
+        return stage
+    available_ratio = _setting_float(snapshot.get("available_memory_ratio"), 1.0)
+    available_gb = _setting_float(snapshot.get("available_memory_bytes"), 0.0) / float(1024 ** 3)
+    if available_ratio <= 0.12 or (available_gb > 0.0 and available_gb <= 1.5):
+        return "critical"
+    if available_ratio <= 0.20 or (available_gb > 0.0 and available_gb <= 3.0):
+        return "warning"
+    return "normal"
+
+
+def cut_boundary_pressure_worker_cap(task: str, workers: int, pressure_stage: str | None) -> int:
+    task_key = str(task or "").strip().lower()
+    stage = str(pressure_stage or "").strip().lower()
+    count = max(1, _setting_int(workers, 1))
+    if task_key == "cut_follower":
+        if stage == "critical":
+            return 1
+        if stage == "warning":
+            return min(count, 2)
+        return count
+    if task_key == "cut_pioneer":
+        if stage == "critical":
+            return min(count, 2)
+        if stage == "warning":
+            return min(count, 4)
+    return count
 
 
 def build_auto_grid_scan_helpers(deps: dict):
@@ -265,6 +341,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                 1,
                 int((frame_count / max(1.0, fps)) / max(0.25, pioneer_step_sec)),
             )
+            pressure_stage = cut_boundary_memory_pressure_stage(settings)
             follower_workers, follower_scheduler = runtime_parallel_worker_plan(
                 settings=settings,
                 task="cut_follower",
@@ -275,6 +352,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                 reserve_task="cut_follower",
                 accelerators=["cpu"],
             )
+            follower_workers = cut_boundary_pressure_worker_cap("cut_follower", follower_workers, pressure_stage)
 
             def verified_progress_callback(payload):
                 if not callable(progress_callback):
@@ -563,6 +641,7 @@ def build_auto_grid_scan_helpers(deps: dict):
         min_gap_sec = _cb_level_min_gap_sec(level)
         pioneer_requested = int(settings.get("scan_cut_pioneer_workers", 4) or 4)
         pioneer_workload = max(1, int(duration / max(0.25, scan_interval_sec)))
+        pressure_stage = cut_boundary_memory_pressure_stage(settings)
         pioneer_workers, pioneer_scheduler = runtime_parallel_worker_plan(
             settings=settings,
             task="cut_pioneer",
@@ -573,6 +652,7 @@ def build_auto_grid_scan_helpers(deps: dict):
             reserve_task="cut_pioneer",
             accelerators=["cpu"],
         )
+        pioneer_workers = cut_boundary_pressure_worker_cap("cut_pioneer", pioneer_workers, pressure_stage)
         gpu_refine_enabled = bool(settings.get("scan_cut_pioneer_gpu_refine_enabled", True))
         cuda_available = _cb_cuda_available() if gpu_refine_enabled else False
         audio_gain_enabled = _setting_bool(settings.get("scan_cut_audio_gain_enabled"), True)
@@ -910,16 +990,13 @@ def build_auto_grid_scan_helpers(deps: dict):
         merged = []
         completed_workers = 0
         step_count = max(1, int(math.ceil(frame_count / max(1, step_frames))))
-        step_slices = balanced_task_slices(step_count, pioneer_workers, min_batch_size=1)
-        worker_ranges = [
-            (
-                idx,
-                min(frame_count, start_step * step_frames),
-                min(frame_count, end_step * step_frames),
-            )
-            for idx, (start_step, end_step) in enumerate(step_slices)
-            if end_step > start_step
-        ]
+        worker_ranges = _cut_boundary_pioneer_worker_ranges(
+            step_count=step_count,
+            worker_count=pioneer_workers,
+            step_frames=step_frames,
+            frame_count=frame_count,
+            settings=settings,
+        )
         worker_count = len(worker_ranges) + (1 if audio_gain_enabled else 0) + (1 if ffmpeg_scene_enabled else 0)
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="cut-boundary-pioneer") as executor:
             if audio_gain_enabled:
@@ -1088,10 +1165,12 @@ def build_auto_grid_scan_helpers(deps: dict):
             min_gap_frames = max(1, int(round(min_gap_sec * fps)))
             follower_requested = int(settings.get("scan_cut_verify_workers", 4) or 4)
             follower_workload = max(1, len(provisional_rows or []))
+            pressure_stage = cut_boundary_memory_pressure_stage(settings)
             follower_backend = cut_follower_verify_backend(
                 settings,
                 platform_name=sys.platform,
                 mps_available=_mps_available,
+                pressure_stage=pressure_stage,
             )
             follower_workers, follower_scheduler = runtime_parallel_worker_plan(
                 settings=settings,
@@ -1103,6 +1182,7 @@ def build_auto_grid_scan_helpers(deps: dict):
                 reserve_task="cut_follower",
                 accelerators=[follower_backend],
             )
+            follower_workers = cut_boundary_pressure_worker_cap("cut_follower", follower_workers, pressure_stage)
             verified_rows = []
 
             def _verify_row(row, verify_cap=None):
@@ -1275,7 +1355,16 @@ def build_auto_grid_scan_helpers(deps: dict):
                         pass
 
             verify_rows = [dict(row) for row in list(provisional_rows or []) if isinstance(row, dict)]
-            batches = balanced_task_slices(len(verify_rows), follower_workers, min_batch_size=2)
+            # BENCH LOCK 2026-05-09 (Apple M5, X5_시승기_후반.MP4 4K HEVC):
+            # Verifying fixed candidates in 4 outer chunks won the measured
+            # matrix: 1/4 = 36.579s vs 1/3 = 41.464s, 1/2 = 43.892s,
+            # sequential = 58.466s, and 1/6+ regressed wall time/RSS.
+            outer_splits = min(
+                follower_workers,
+                follower_workload,
+                _benchmark_locked_slice_count(settings, "scan_cut_follower_outer_splits", 4),
+            )
+            batches = balanced_task_slices(len(verify_rows), outer_splits, min_batch_size=1)
 
             def _verify_batch(start_idx: int, end_idx: int):
                 local_results = []

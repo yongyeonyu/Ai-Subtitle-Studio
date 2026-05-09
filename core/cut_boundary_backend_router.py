@@ -64,10 +64,16 @@ def apply_cut_boundary_backend_settings(settings: dict[str, Any] | None) -> dict
         data.setdefault("scan_cut_ffmpeg_scene_timeout_sec", 90.0)
         data.setdefault("scan_cut_ffmpeg_scene_max_candidates", 300)
         data.setdefault("scan_cut_progress_sample_stride", 8)
-        if "scan_cut_pioneer_workers" not in data:
-            data["scan_cut_pioneer_workers"] = 4
-        if "scan_cut_verify_workers" not in data:
-            data["scan_cut_verify_workers"] = 4
+        # BENCH LOCK 2026-05-09 (Apple M5, X5_시승기_후반.MP4 4K HEVC):
+        # Native cut-boundary routing is intentionally capped at 4 pioneer
+        # workers and 4 follower CPU outer splits. 6/8/10-way fanout was slower
+        # and MPS verification increased wall time/RSS on the benchmark video.
+        data.setdefault("scan_cut_pioneer_workers", 4)
+        data.setdefault("scan_cut_verify_workers", 4)
+        data.setdefault("scan_cut_pioneer_cpu_max_workers", 4)
+        data.setdefault("scan_cut_follower_cpu_max_workers", 4)
+        data.setdefault("scan_cut_follower_outer_splits", 4)
+        data.setdefault("scan_cut_pioneer_worker_overlap_steps", 1)
     return data
 
 

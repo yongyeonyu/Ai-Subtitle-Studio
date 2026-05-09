@@ -1,6 +1,7 @@
 #include <Python.h>
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -18,8 +19,8 @@ struct BufferView {
     }
 };
 
-bool get_buffer(PyObject* obj, BufferView& out) {
-    if (PyObject_GetBuffer(obj, &out.view, PyBUF_SIMPLE) != 0) {
+bool get_buffer(PyObject* obj, BufferView& out, int flags = PyBUF_SIMPLE) {
+    if (PyObject_GetBuffer(obj, &out.view, flags) != 0) {
         return false;
     }
     out.acquired = true;
@@ -90,6 +91,69 @@ PyObject* tuple_score_hits_deltas(double score, int hits, const std::vector<doub
     PyTuple_SET_ITEM(out, 1, py_hits);
     PyTuple_SET_ITEM(out, 2, py_deltas);
     return out;
+}
+
+bool dict_set_double(PyObject* dict, const char* key, double value) {
+    PyObject* item = PyFloat_FromDouble(value);
+    if (item == nullptr) {
+        return false;
+    }
+    const int status = PyDict_SetItemString(dict, key, item);
+    Py_DECREF(item);
+    return status == 0;
+}
+
+bool dict_set_long(PyObject* dict, const char* key, long value) {
+    PyObject* item = PyLong_FromLong(value);
+    if (item == nullptr) {
+        return false;
+    }
+    const int status = PyDict_SetItemString(dict, key, item);
+    Py_DECREF(item);
+    return status == 0;
+}
+
+float read_float32_unaligned(const char* ptr) {
+    float value = 0.0f;
+    std::memcpy(&value, ptr, sizeof(float));
+    return value;
+}
+
+unsigned char read_u8_at(const BufferView& view, Py_ssize_t y, Py_ssize_t x) {
+    const auto* base = static_cast<const char*>(view.view.buf);
+    return *reinterpret_cast<const unsigned char*>(base + y * view.view.strides[0] + x * view.view.strides[1]);
+}
+
+float read_flow_at(const BufferView& view, Py_ssize_t y, Py_ssize_t x, Py_ssize_t channel) {
+    const auto* base = static_cast<const char*>(view.view.buf);
+    const char* ptr = base + y * view.view.strides[0] + x * view.view.strides[1] + channel * view.view.strides[2];
+    return read_float32_unaligned(ptr);
+}
+
+double clamp_double(double value, double lo, double hi) {
+    return std::max(lo, std::min(hi, value));
+}
+
+double sample_bilinear_replicate_u8(const BufferView& view, Py_ssize_t h, Py_ssize_t w, double x, double y) {
+    if (h <= 0 || w <= 0) {
+        return 0.0;
+    }
+    x = clamp_double(x, 0.0, static_cast<double>(w - 1));
+    y = clamp_double(y, 0.0, static_cast<double>(h - 1));
+    const auto x0 = static_cast<Py_ssize_t>(std::floor(x));
+    const auto y0 = static_cast<Py_ssize_t>(std::floor(y));
+    const Py_ssize_t x1 = std::min<Py_ssize_t>(w - 1, x0 + 1);
+    const Py_ssize_t y1 = std::min<Py_ssize_t>(h - 1, y0 + 1);
+    const double wx = x - static_cast<double>(x0);
+    const double wy = y - static_cast<double>(y0);
+
+    const double v00 = static_cast<double>(read_u8_at(view, y0, x0));
+    const double v10 = static_cast<double>(read_u8_at(view, y0, x1));
+    const double v01 = static_cast<double>(read_u8_at(view, y1, x0));
+    const double v11 = static_cast<double>(read_u8_at(view, y1, x1));
+    const double top = v00 * (1.0 - wx) + v10 * wx;
+    const double bottom = v01 * (1.0 - wx) + v11 * wx;
+    return top * (1.0 - wy) + bottom * wy;
 }
 
 bool read_triplet(PyObject* obj, double& a0, double& a1, double& a2) {
@@ -285,6 +349,193 @@ PyObject* py_color_avg_delta(PyObject*, PyObject* args) {
     }
     score /= static_cast<double>(deltas.empty() ? 1 : deltas.size());
     return tuple_score_hits_deltas(score, hits, deltas);
+}
+
+PyObject* py_dense_flow_pair_metrics(PyObject*, PyObject* args) {
+    PyObject* prev_obj = nullptr;
+    PyObject* next_obj = nullptr;
+    PyObject* flow_obj = nullptr;
+    double diff_threshold = 18.0;
+    if (!PyArg_ParseTuple(
+            args,
+            "OOOd:dense_flow_pair_metrics",
+            &prev_obj,
+            &next_obj,
+            &flow_obj,
+            &diff_threshold)) {
+        return nullptr;
+    }
+
+    BufferView prev;
+    BufferView next;
+    BufferView flow;
+    const int buffer_flags = PyBUF_ND | PyBUF_STRIDES;
+    if (!get_buffer(prev_obj, prev, buffer_flags) ||
+        !get_buffer(next_obj, next, buffer_flags) ||
+        !get_buffer(flow_obj, flow, buffer_flags)) {
+        return nullptr;
+    }
+
+    if (prev.view.ndim != 2 || next.view.ndim != 2 || flow.view.ndim < 3) {
+        PyErr_SetString(PyExc_ValueError, "expected prev/next gray arrays and HxWx2 flow array");
+        return nullptr;
+    }
+    const Py_ssize_t h = prev.view.shape[0];
+    const Py_ssize_t w = prev.view.shape[1];
+    if (h <= 0 || w <= 0 ||
+        next.view.shape[0] != h || next.view.shape[1] != w ||
+        flow.view.shape[0] != h || flow.view.shape[1] != w || flow.view.shape[2] < 2) {
+        PyErr_SetString(PyExc_ValueError, "dense flow inputs must have matching shapes");
+        return nullptr;
+    }
+    if (prev.view.itemsize != 1 || next.view.itemsize != 1 || flow.view.itemsize != static_cast<Py_ssize_t>(sizeof(float))) {
+        PyErr_SetString(PyExc_ValueError, "expected uint8 gray arrays and float32 flow array");
+        return nullptr;
+    }
+
+    double diff_sum = 0.0;
+    double residual_sum = 0.0;
+    double mag_sum = 0.0;
+    double fx_sum = 0.0;
+    double fy_sum = 0.0;
+    long coverage_count = 0;
+    long count = 0;
+
+    Py_BEGIN_ALLOW_THREADS
+    for (Py_ssize_t y = 0; y < h; ++y) {
+        for (Py_ssize_t x = 0; x < w; ++x) {
+            const double prev_value = static_cast<double>(read_u8_at(prev, y, x));
+            const double next_value = static_cast<double>(read_u8_at(next, y, x));
+            const double diff = std::abs(prev_value - next_value);
+            diff_sum += diff;
+            if (diff >= diff_threshold) {
+                ++coverage_count;
+            }
+
+            double fx = static_cast<double>(read_flow_at(flow, y, x, 0));
+            double fy = static_cast<double>(read_flow_at(flow, y, x, 1));
+            if (!std::isfinite(fx)) {
+                fx = 0.0;
+            }
+            if (!std::isfinite(fy)) {
+                fy = 0.0;
+            }
+            fx_sum += fx;
+            fy_sum += fy;
+            mag_sum += std::sqrt(fx * fx + fy * fy);
+
+            const double warped = sample_bilinear_replicate_u8(prev, h, w, static_cast<double>(x) - fx, static_cast<double>(y) - fy);
+            residual_sum += std::abs(warped - next_value);
+            ++count;
+        }
+    }
+    Py_END_ALLOW_THREADS
+
+    const double denom = static_cast<double>(count > 0 ? count : 1);
+    const double diff_before = diff_sum / denom;
+    const double residual = residual_sum / denom;
+    const double coverage = static_cast<double>(coverage_count) / denom;
+    const double mean_mag = mag_sum / denom;
+    const double mean_fx = fx_sum / denom;
+    const double mean_fy = fy_sum / denom;
+    const double coherence = std::sqrt(mean_fx * mean_fx + mean_fy * mean_fy) / std::max(mean_mag, 1e-6);
+    const double residual_ratio = residual / std::max(diff_before, 1e-6);
+
+    PyObject* out = PyDict_New();
+    if (out == nullptr) {
+        return nullptr;
+    }
+    if (!dict_set_double(out, "diff", diff_before) ||
+        !dict_set_double(out, "residual", residual) ||
+        !dict_set_double(out, "residual_ratio", residual_ratio) ||
+        !dict_set_double(out, "coverage", coverage) ||
+        !dict_set_double(out, "mean_motion_px", mean_mag) ||
+        !dict_set_double(out, "mean_fx", mean_fx) ||
+        !dict_set_double(out, "mean_fy", mean_fy) ||
+        !dict_set_double(out, "coherence", coherence) ||
+        !dict_set_long(out, "pixel_count", count)) {
+        Py_DECREF(out);
+        return nullptr;
+    }
+    return out;
+}
+
+PyObject* py_waveform_peaks_f32le(PyObject*, PyObject* args) {
+    PyObject* raw_obj = nullptr;
+    int sample_rate = 2000;
+    int points_per_second = 100;
+    double duration = 0.0;
+    if (!PyArg_ParseTuple(
+            args,
+            "Oiid:waveform_peaks_f32le",
+            &raw_obj,
+            &sample_rate,
+            &points_per_second,
+            &duration)) {
+        return nullptr;
+    }
+
+    BufferView raw;
+    if (!get_buffer(raw_obj, raw, PyBUF_SIMPLE)) {
+        return nullptr;
+    }
+    const Py_ssize_t sample_count = raw.view.len / static_cast<Py_ssize_t>(sizeof(float));
+    if (sample_count < 2 || sample_rate <= 0 || points_per_second <= 0) {
+        PyObject* empty = PyBytes_FromStringAndSize("", 0);
+        if (empty == nullptr) {
+            return nullptr;
+        }
+        PyObject* out = Py_BuildValue("(Od)", empty, 0.0);
+        Py_DECREF(empty);
+        return out;
+    }
+
+    double dur = duration > 0.0 ? duration : static_cast<double>(sample_count) / static_cast<double>(sample_rate);
+    if (!(dur > 0.0) || !std::isfinite(dur)) {
+        dur = static_cast<double>(sample_count) / static_cast<double>(sample_rate);
+    }
+    const Py_ssize_t total_px = std::max<Py_ssize_t>(1, static_cast<Py_ssize_t>(dur * static_cast<double>(points_per_second)));
+    const Py_ssize_t chunk = std::max<Py_ssize_t>(1, sample_count / total_px);
+    const Py_ssize_t trim = (sample_count / chunk) * chunk;
+    const Py_ssize_t out_count = std::min(total_px, trim / chunk);
+    std::vector<float> peaks(static_cast<size_t>(out_count), 0.0f);
+
+    const auto* samples = static_cast<const char*>(raw.view.buf);
+    float max_peak = 0.0f;
+
+    Py_BEGIN_ALLOW_THREADS
+    for (Py_ssize_t i = 0; i < out_count; ++i) {
+        float peak = 0.0f;
+        const Py_ssize_t base = i * chunk;
+        for (Py_ssize_t j = 0; j < chunk; ++j) {
+            const char* ptr = samples + (base + j) * static_cast<Py_ssize_t>(sizeof(float));
+            const float value = std::abs(read_float32_unaligned(ptr));
+            if (value > peak) {
+                peak = value;
+            }
+        }
+        peaks[static_cast<size_t>(i)] = peak;
+        if (peak > max_peak) {
+            max_peak = peak;
+        }
+    }
+    if (max_peak > 1e-6f) {
+        for (float& value : peaks) {
+            value /= max_peak;
+        }
+    }
+    Py_END_ALLOW_THREADS
+
+    PyObject* bytes = PyBytes_FromStringAndSize(
+        reinterpret_cast<const char*>(peaks.data()),
+        static_cast<Py_ssize_t>(peaks.size() * sizeof(float))
+    );
+    if (bytes == nullptr) {
+        return nullptr;
+    }
+    PyObject* out = Py_BuildValue("(Od)", bytes, dur);
+    Py_DECREF(bytes);
+    return out;
 }
 
 PyObject* py_interval_overlaps(PyObject*, PyObject* args) {
@@ -524,6 +775,8 @@ PyMethodDef methods[] = {
     {"delta_bytes", py_delta_bytes, METH_VARARGS, "Sampled byte mean absolute delta."},
     {"gray_delta", py_gray_delta, METH_VARARGS, "Compute sampled gray-region deltas."},
     {"color_avg_delta", py_color_avg_delta, METH_VARARGS, "Compute color average deltas."},
+    {"dense_flow_pair_metrics", py_dense_flow_pair_metrics, METH_VARARGS, "Compute dense optical-flow pair metrics without NumPy temporaries."},
+    {"waveform_peaks_f32le", py_waveform_peaks_f32le, METH_VARARGS, "Downsample f32le PCM bytes into normalized waveform peaks."},
     {"interval_overlaps", py_interval_overlaps, METH_VARARGS, "Compute segment/VAD interval overlaps."},
     {"word_split_groups", py_word_split_groups, METH_VARARGS, "Split word indexes into subtitle groups with native C++ thresholds."},
     {"llm_macro_group_ranges", py_llm_macro_group_ranges, METH_VARARGS, "Build LLM macro group ranges from cut and review flags."},

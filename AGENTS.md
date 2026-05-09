@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.00-mac-native
-Phase: MAC_NATIVE_APPSTORE_BRANCH
-Last-Updated: 2026-05-09
+Document-Version: 04.00.01-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_1_RELEASED
+Last-Updated: 2026-05-10
 Updated-By: Codex
 Purpose: Agent bootstrap and handoff rules only.
 -->
@@ -61,10 +61,11 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 ## Current Continuation Facts
 
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- Current app version in code: `04.00.00`
-- Current handoff document version: `04.00.00-mac-native`
-- Latest release checkpoint: `v04.00.00`
-- Current phase: `MAC_NATIVE_APPSTORE_V4_RELEASED`
+- Real benchmark fixtures: `/Users/u_mo_c/Downloads/ai_subtitle_studio/test video` contains the canonical local video/SRT pair for 3-minute subtitle pipeline benchmarks. Use this folder before larger ad-hoc media when comparing STT order, LoRA/Deep/LLM gating, timing, and cut-boundary variants.
+- Current app version in code: `04.00.01`
+- Current handoff document version: `04.00.01-mac-native`
+- Latest release checkpoint: `v04.00.01`
+- Current phase: `MAC_NATIVE_APPSTORE_V4_0_1_RELEASED`
 - Next planned phase: none.
 - Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping generation startup, cut-boundary scanning, playback, and editor-mode subtitle edits responsive.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
@@ -83,6 +84,7 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Editor performance state: subtitle line edits update cached line maps and the affected timeline dirty rectangle instead of rebuilding the full segment lookup; playback/editor sync respects recent manual scrolling and avoids recentering already visible active segments.
 - Runtime scheduling state: cut-boundary pioneer/follower workers use topology-aware CPU planning, OpenCV thread caps, progress throttling, optional FFmpeg scene prepass, optional C++ native helper kernels, and optical-flow follower verification for candidate-only rollback checks.
 - Backend routing state: STT, VAD, cut-boundary, audio extraction, LLM, and editor rendering paths now default to native policies on this branch, with optional benchmark profile materialization stored outside Git.
+- Mac-native acceleration state: production runtime uses only benchmark-safe native routes by default: WhisperKit/Core ML/MLX STT, C++ VAD overlap/alignment math, C++ LLM macro grouping, adaptive Swift batch quality scoring, and adaptive Swift common split planning. Swift LoRA scoring, Swift Deep rerank, and Swift LLM candidate policy remain benchmark-only behind `native_swift_policy_experimental_enabled` or the explicit experimental environment gate because they were slower or changed LoRA ranking parity.
 - Apple Silicon scheduling state: runtime worker counts, FFmpeg thread budgets, pioneer/follower cut-boundary concurrency, and GPU/NPU slot use can now be materialized from detected Apple Silicon topology, including M5-specific defaults on the current Mac.
 - Audio/video IO state: long-media audio extraction defaults to direct FFmpeg chunk routing with a 1-second native threshold, overlapped native audio preprocessing, fused filter graphs, and native ClearVoice FFmpeg mode when quality-safe; editor playback reuses 720p preview proxies and cut-boundary scanning can reuse existing proxies to avoid repeated 4K decode.
 - STT model state: Swift WhisperKit persistent is the default STT1 route on macOS; Korean KomixV2 STT candidates include alias, Hugging Face original, and MLX variants with distinct sidebar labels; whisper.cpp remains an optional native fallback route.
@@ -94,7 +96,7 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Swift migration state: `native/macos/AIStudioNative` is the first Swift-native core package. It owns the subtitle segment model, SRT parser/formatter, project JSON validation/atomic write helpers, timeline waveform peak/downsample and minimap column engines, an opt-in subtitle quality batch scorer, adaptive common split planner, CLI bridge, packaged-app integration, and Python fallback hooks. New macOS-native work should prefer this package when behavior can match or exceed Python, and should keep core algorithms separated from macOS-only UI/process APIs so they can be reused by a future iPad app.
 - Popup/UI state: QML context menus and message dialogs have compact Apple-style sizing, hover/press feedback, outside-click dismissal, and Korean-only global menu labels.
 - STT ensemble state: parallel STT1/STT2 runs clone chunk directories per worker and clean them afterward so one worker cannot delete audio chunks still needed by the other.
-- Verification state: `v04.00.00` release verification passed with `1317 passed, 5 subtests passed` under `QT_QPA_PLATFORM=offscreen`; `compileall`, `git diff --check`, `MainWindow` smoke, and the Apple Silicon scheduler benchmark also completed. The only remaining warning is a headless-session Metal-device warning emitted at Python exit after the test suite.
+- Verification state: `v04.00.01` release verification passed with focused mac-native regression tests, `compileall`, `git diff --check`, and release handoff refresh. Full release verification details are in `RELEASE_v04.00.01.md`.
 
 ## Collaboration Rules
 

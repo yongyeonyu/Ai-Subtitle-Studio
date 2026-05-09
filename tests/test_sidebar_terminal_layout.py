@@ -80,11 +80,12 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_sidebar_stt2_menu_includes_korean_komixv2_models(self):
+    def test_sidebar_stt2_menu_uses_curated_native_models(self):
         window = MainWindow()
         try:
             window._whisper_model_items = lambda: [
-                "whisper-large-v3",
+                "whisperkit-persistent:large-v3-v20240930_626MB",
+                "mlx-community/whisper-large-v3-mlx",
                 "whisper-medium-komixv2",
                 "seastar105/whisper-medium-komixv2",
                 "youngouk/whisper-medium-komixv2-mlx",
@@ -93,14 +94,17 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
 
             items = window._stt2_model_items()
 
-            self.assertNotIn("whisper-large-v3", items)
-            self.assertIn("whisper-medium-komixv2", items)
-            self.assertIn("seastar105/whisper-medium-komixv2", items)
+            self.assertIn("whisperkit-persistent:large-v3-v20240930_626MB", items)
+            self.assertIn("mlx-community/whisper-large-v3-mlx", items)
+            self.assertNotIn("whisper-medium-komixv2", items)
+            self.assertNotIn("seastar105/whisper-medium-komixv2", items)
             self.assertIn("youngouk/whisper-medium-komixv2-mlx", items)
             self.assertIn("ghost613-turbo-korean-4bit", items)
-            self.assertEqual(window._short_model_name("whisper-medium-komixv2"), "KomixV2 · 별칭")
-            self.assertEqual(window._short_model_name("seastar105/whisper-medium-komixv2"), "KomixV2 · HF 원본")
-            self.assertEqual(window._short_model_name("youngouk/whisper-medium-komixv2-mlx"), "KomixV2 · MLX")
+            self.assertEqual(
+                window._short_model_name("whisperkit-persistent:large-v3-v20240930_626MB"),
+                "WhisperKit Large V3 · 정밀",
+            )
+            self.assertEqual(window._short_model_name("youngouk/whisper-medium-komixv2-mlx"), "KomixV2 MLX · 한국어 특화")
         finally:
             window.close()
             window.deleteLater()
@@ -442,6 +446,35 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 completed,
                 {"cut_boundary", "stt2", "vad", "subtitle_llm", "roughcut_llm"},
             )
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_cut_boundary_sidebar_menu_is_usage_toggle(self):
+        window = MainWindow()
+        captured = []
+        try:
+            with mock.patch("ui.home_sidebar._runtime_load_settings", return_value={"cut_boundary_level": "medium"}), \
+                 mock.patch("ui.home_sidebar.show_context_menu", side_effect=lambda _parent, _pos, items: captured.extend(items) or None):
+                window._on_sidebar_model_link("model:cut_boundary")
+
+            labels = [item.get("label") for item in captured if not item.get("separator")]
+            self.assertEqual(labels, ["미사용", "사용"])
+            checked = [item.get("label") for item in captured if item.get("checked")]
+            self.assertEqual(checked, ["사용"])
+            self.assertEqual(window._cut_boundary_sidebar_label({"cut_boundary_level": "low"}), "사용")
+            self.assertEqual(window._cut_boundary_sidebar_label({"cut_boundary_level": "medium"}), "사용")
+
+            applied = []
+            window._apply_sidebar_model_selection = lambda updates: applied.append(dict(updates))
+            with mock.patch("ui.home_sidebar._runtime_load_settings", return_value={"cut_boundary_level": "medium"}), \
+                 mock.patch("ui.home_sidebar.show_context_menu", return_value="cut_boundary:auto"):
+                window._on_sidebar_model_link("model:cut_boundary")
+
+            self.assertEqual(applied[-1]["cut_boundary_level"], "auto")
+            self.assertEqual(applied[-1]["scan_cut_boundary_level"], "auto")
+            self.assertTrue(applied[-1]["cut_boundary_adaptive_level_enabled"])
         finally:
             window.close()
             window.deleteLater()

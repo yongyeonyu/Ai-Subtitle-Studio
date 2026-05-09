@@ -8,21 +8,63 @@ import threading
 from typing import Any
 
 from core.native_swift_subtitle import find_native_cli_path
+from core.runtime.config import IS_MAC
 
 _WORKER: subprocess.Popen | None = None
 _WORKER_LOCK = threading.Lock()
 
 
-def _enabled(item_count: int) -> bool:
-    value = os.environ.get("AI_SUBTITLE_STUDIO_SWIFT_COMMON_SPLIT", "").lower()
-    if value in {"0", "false", "off", "no"}:
+def _setting_bool(value: Any, default: bool = True) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().casefold()
+    if normalized in {"0", "false", "off", "no", "사용 안함", "끔"}:
         return False
-    if value in {"1", "true", "on", "yes"}:
+    if normalized in {"1", "true", "on", "yes", "사용", "켬"}:
+        return True
+    return bool(default)
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(float(value))
+    except Exception:
+        parsed = int(default)
+    return parsed if parsed > 0 else int(default)
+
+
+def _env_bool(name: str) -> bool | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    normalized = value.strip().casefold()
+    if normalized in {"0", "false", "off", "no"}:
+        return False
+    if normalized in {"1", "true", "on", "yes"}:
+        return True
+    return None
+
+
+def _enabled(item_count: int, settings: dict[str, Any] | None = None) -> bool:
+    if not IS_MAC:
+        return False
+    env = _env_bool("AI_SUBTITLE_STUDIO_SWIFT_COMMON_SPLIT")
+    if env is not None:
+        return env
+    data = dict(settings or {})
+    if not _setting_bool(data.get("mac_native_acceleration_enabled"), True):
+        return False
+    if not _setting_bool(data.get("native_swift_common_split_enabled"), True):
+        return False
+    if _setting_bool(data.get("native_swift_common_split_force_enabled"), False):
         return True
     # Benchmarks show the persistent Swift planner becomes useful on larger
     # batches, while small batches are already faster in Python. Keep packaged
     # macOS builds adaptive instead of forcing a slower native hop.
-    return bool(os.environ.get("AI_SUBTITLE_STUDIO_BUNDLE_RESOURCES")) and item_count >= 1_000
+    min_items = _positive_int(data.get("native_swift_common_split_min_items"), 1_000)
+    return int(item_count or 0) >= min_items
 
 
 def _json_default(value: Any) -> Any:
@@ -36,8 +78,12 @@ def _json_default(value: Any) -> Any:
     return str(value)
 
 
-def plan_common_split_via_swift(items: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
-    if not items or not _enabled(len(items)):
+def plan_common_split_via_swift(
+    items: list[dict[str, Any]],
+    *,
+    settings: dict[str, Any] | None = None,
+) -> list[dict[str, Any]] | None:
+    if not items or not _enabled(len(items), settings):
         return None
     cli = find_native_cli_path()
     if cli is None:

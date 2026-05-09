@@ -6,6 +6,8 @@ Timeline widget container
 """
 import time
 
+import numpy as np
+
 from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QBrush
 from PyQt6.QtWidgets import (
@@ -21,7 +23,7 @@ from PyQt6.QtWidgets import (
 from ui.timeline.timeline_constants import CANVAS_H, FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH, RULER_H, SEG_TOP, WAVE_H
 from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_global import GlobalCanvas
-from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker
+from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker, patch_waveform_buffer
 from ui.responsive_profile import responsive_profile_for_size
 from ui.style import button_style
 from core.frame_time import normalize_fps, snap_sec_to_frame
@@ -335,6 +337,7 @@ class TimelineWidget(QWidget):
         self._selected_clip_duration = 0.0
         self._selected_clip_label = ""
         self._multiclip_fit_done = False
+        self._multiclip_waveform_buffer: np.ndarray | None = None
 
         self._vp = QTimer(self)
         self._vp.setSingleShot(True)
@@ -1254,6 +1257,7 @@ class TimelineWidget(QWidget):
             self._reset_single_media_context(clear_duration=True)
             self.canvas.set_waveform(None)
             self.global_canvas.set_waveform(None)
+            self._multiclip_waveform_buffer = None
 
         self._waveform_path = str(path or "")
 
@@ -1282,6 +1286,7 @@ class TimelineWidget(QWidget):
         if self._waveform_mode == "multi" and self._mc_worker and self._mc_worker.isRunning():
             return
         self._waveform_mode = "multi"
+        self._multiclip_waveform_buffer = None
 
         # 초기 멀티클립 로드 시 선택 컨텍스트를 항상 clip1로 고정
         _boxes = getattr(self.canvas, '_multiclip_boxes', []) or []
@@ -1310,7 +1315,7 @@ class TimelineWidget(QWidget):
         self._mc_worker.all_ready.connect(self._on_waveform_ready)
         self._mc_worker.start()
 
-    def _on_clip_waveform_ready(self, clip_idx, partial_wf):
+    def _on_clip_waveform_ready(self, clip_idx, start_px, total_px, partial_wf):
         if self._waveform_mode != "multi":
             return
         if self.sender() is not self._mc_worker:
@@ -1321,8 +1326,14 @@ class TimelineWidget(QWidget):
             if _boxes:
                 self._apply_selected_clip_context(0)
 
-        self.canvas.set_waveform(partial_wf)
-        self.global_canvas.set_waveform(partial_wf)
+        self._multiclip_waveform_buffer = patch_waveform_buffer(
+            self._multiclip_waveform_buffer,
+            start_px=int(start_px or 0),
+            total_px=int(total_px or 0),
+            values=partial_wf,
+        )
+        self.canvas.set_waveform(self._multiclip_waveform_buffer)
+        self.global_canvas.set_waveform(self._multiclip_waveform_buffer)
         _boxes = getattr(self.canvas, '_multiclip_boxes', []) or []
         if _boxes:
             self.global_canvas.total_duration = float(_boxes[-1].get("end", self.canvas.total_duration))
@@ -1340,8 +1351,9 @@ class TimelineWidget(QWidget):
             if self._selected_clip_idx < 0 and _boxes:
                 self._apply_selected_clip_context(0)
 
-            self.canvas.set_waveform(wf)
-            self.global_canvas.set_waveform(wf)
+            self._multiclip_waveform_buffer = np.asarray(wf, dtype=np.float32)
+            self.canvas.set_waveform(self._multiclip_waveform_buffer)
+            self.global_canvas.set_waveform(self._multiclip_waveform_buffer)
             self.global_canvas.total_duration = d
             self.global_canvas.update()
             if not self._multiclip_fit_done:

@@ -186,6 +186,43 @@ class RuntimeOptimizationProfileTests(unittest.TestCase):
         self.assertEqual(choice.backend, "whisperkit_persistent")
         self.assertEqual(choice.model, "whisperkit-persistent:large-v3-v20240930_turbo_632MB")
 
+    def test_profiled_whisperkit_backend_does_not_capture_custom_mlx_models(self):
+        with patch("core.audio.stt_backend_router.config.IS_MAC", True), \
+             patch("core.audio.stt_backend_router.profile_backend", return_value="whisperkit_persistent"), \
+             patch("core.audio.stt_backend_router.profile_model", return_value=""):
+            choice = select_stt_backend(
+                "youngouk/whisper-medium-komixv2-mlx",
+                {"stt_backend_policy": "auto"},
+            )
+
+        self.assertEqual(choice.backend, "mlx")
+        self.assertEqual(choice.model, "youngouk/whisper-medium-komixv2-mlx")
+        self.assertEqual(choice.reason, "autotuned_backend_unsupported_whisperkit_fallback")
+
+    def test_profiled_stt_model_does_not_replace_user_selected_model(self):
+        with patch("core.audio.stt_backend_router.config.IS_MAC", True), \
+             patch("core.audio.stt_backend_router.profile_backend", return_value="mlx"), \
+             patch("core.audio.stt_backend_router.profile_model", return_value="profile-stt-model"):
+            choice = select_stt_backend(
+                "user-selected-stt-model",
+                {"stt_backend_policy": "auto"},
+            )
+
+        self.assertEqual(choice.backend, "mlx")
+        self.assertEqual(choice.model, "user-selected-stt-model")
+        self.assertEqual(choice.reason, "autotuned_backend")
+
+    def test_explicit_whisperkit_prefix_falls_back_for_unsupported_custom_model(self):
+        with patch("core.audio.stt_backend_router.config.IS_MAC", True):
+            choice = select_stt_backend(
+                "whisperkit-persistent:youngouk/whisper-medium-komixv2-mlx",
+                {"stt_backend_policy": "auto", "runtime_backend_autotune_enabled": False},
+            )
+
+        self.assertEqual(choice.backend, "mlx")
+        self.assertEqual(choice.model, "youngouk/whisper-medium-komixv2-mlx")
+        self.assertEqual(choice.reason, "explicit_whisperkit_unsupported_model_fallback")
+
     def test_cut_boundary_router_uses_existing_preview_proxy(self):
         with tempfile.TemporaryDirectory() as tmp, patch("core.video_preview_proxy.config.DATASET_DIR", tmp):
             media_path = os.path.join(tmp, "source.mp4")

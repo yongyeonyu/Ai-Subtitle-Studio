@@ -16,6 +16,7 @@ from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import (
     DEFAULT_ADV_SETTINGS, DEFAULT_WHISPER_MODELS,
     _fetch_models, _create_bottom_buttons, filter_available_whisper_models,
+    is_experimental_whisper_model, whisper_model_display_name,
 )
 from ui.settings.tablet_dialog import apply_tablet_dialog_profile
 from ui.style import COLORS, label_style, settings_button_style, settings_dialog_stylesheet, line_icon
@@ -28,6 +29,7 @@ from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
     load_stt_quality_presets,
     normalize_stt_quality_key,
+    save_stt_quality_user_preset,
     stt_quality_label,
 )
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
@@ -95,19 +97,7 @@ def _resolve_audio_preset_combo_data(settings: dict | None) -> str:
 
 
 def stt2_whisper_model_candidates(models):
-    candidates = []
-    for model in models:
-        model_name = str(model or "")
-        lowered = model_name.lower()
-        if (
-            "ghost613" in lowered
-            or "zeroth" in lowered
-            or "komixv2" in lowered
-            or model_name.startswith("coreml:")
-            or lowered.startswith(("whisper.cpp:", "whisper_cpp:", "whisper-cpp:"))
-        ):
-            candidates.append(model)
-    return candidates
+    return filter_available_whisper_models(models)
 
 
 _LORA_GAP_SETTING_LABELS = {
@@ -368,6 +358,11 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         # 4. Whisper 모델
         self.combo_whisper = QComboBox()
         w_models = list(DEFAULT_WHISPER_MODELS)
+        curr_w = settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", w_models[0] if w_models else ""))
+        curr_w2 = settings.get(
+            "selected_whisper_model_secondary",
+            getattr(config, "MLX_FALLBACK_MODEL", "mlx-community/whisper-large-v3-turbo"),
+        )
 
         hf_cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
         if os.path.exists(hf_cache_dir):
@@ -377,40 +372,27 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
                     if repo_name not in w_models:
                         w_models.append(repo_name)
         w_models = filter_available_whisper_models(w_models)
-        stt1_models = [
-            model for model in w_models
-            if "ghost613" not in model.lower() and "zeroth" not in model.lower()
-        ]
-        stt2_models = stt2_whisper_model_candidates(w_models)
+        for selected_model in (curr_w, curr_w2):
+            if (
+                selected_model
+                and filter_available_whisper_models([selected_model])
+                and selected_model not in w_models
+            ):
+                w_models.append(selected_model)
+        stt1_models = list(dict.fromkeys(w_models))
+        stt2_models = list(dict.fromkeys(w_models))
 
         self.combo_whisper.setUpdatesEnabled(False)
         self.combo_whisper.blockSignals(True)
-        self.combo_whisper.addItems(stt1_models)
-        for idx, model_name in enumerate(stt1_models):
-            if (
-                "ghost613" in model_name
-                or "komixv2" in model_name.lower()
-                or "Zeroth-KO" in model_name
-                or model_name.startswith("o0dimplz0o/")
-                or model_name.startswith("seastar105/")
-                or model_name.startswith("coreml:")
-                or model_name.lower().startswith(("whisper.cpp:", "whisper_cpp:", "whisper-cpp:"))
-            ):
-                self.combo_whisper.setItemText(idx, f"{model_name} (실험)")
+        for model_name in stt1_models:
+            label = whisper_model_display_name(model_name)
+            if is_experimental_whisper_model(model_name):
+                label = f"{label} (실험)"
+            self.combo_whisper.addItem(label, model_name)
         self._fit_model_combo(self.combo_whisper)
-        curr_w = settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", stt1_models[0] if stt1_models else ""))
-        if curr_w not in stt1_models and stt1_models:
-            curr_w = stt1_models[0]
-        display_values = [self.combo_whisper.itemText(i).replace(" (실험)", "") for i in range(self.combo_whisper.count())]
         for i in range(self.combo_whisper.count()):
-            self._set_combo_item_tooltip(self.combo_whisper, i, self.combo_whisper.itemText(i).replace(" (실험)", ""))
-        if curr_w in display_values:
-            self.combo_whisper.setCurrentText(curr_w)
-            for i, value in enumerate(display_values):
-                if value == curr_w:
-                    self.combo_whisper.setCurrentIndex(i)
-                    break
-        else:
+            self._set_combo_item_tooltip(self.combo_whisper, i, str(self.combo_whisper.itemData(i) or ""))
+        if not self._set_combo_by_data_value(self.combo_whisper, curr_w) and self.combo_whisper.count() > 0:
             self.combo_whisper.setCurrentIndex(0)
         self.combo_whisper.blockSignals(False)
         self.combo_whisper.setUpdatesEnabled(True)
@@ -420,34 +402,15 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.combo_whisper_secondary = QComboBox()
         self.combo_whisper_secondary.setUpdatesEnabled(False)
         self.combo_whisper_secondary.blockSignals(True)
-        self.combo_whisper_secondary.addItems(stt2_models)
-        for idx, model_name in enumerate(stt2_models):
-            if (
-                "ghost613" in model_name
-                or "komixv2" in model_name.lower()
-                or "Zeroth-KO" in model_name
-                or model_name.startswith("o0dimplz0o/")
-                or model_name.startswith("seastar105/")
-                or model_name.startswith("coreml:")
-                or model_name.lower().startswith(("whisper.cpp:", "whisper_cpp:", "whisper-cpp:"))
-            ):
-                self.combo_whisper_secondary.setItemText(idx, f"{model_name} (실험)")
+        for model_name in stt2_models:
+            label = whisper_model_display_name(model_name)
+            if is_experimental_whisper_model(model_name):
+                label = f"{label} (실험)"
+            self.combo_whisper_secondary.addItem(label, model_name)
         self._fit_model_combo(self.combo_whisper_secondary)
-        curr_w2 = settings.get(
-            "selected_whisper_model_secondary",
-            "youngouk/ghost613-turbo-korean-4bit-mlx",
-        )
-        if curr_w2 not in stt2_models and stt2_models:
-            curr_w2 = stt2_models[0]
-        display_values2 = [self.combo_whisper_secondary.itemText(i).replace(" (실험)", "") for i in range(self.combo_whisper_secondary.count())]
         for i in range(self.combo_whisper_secondary.count()):
-            self._set_combo_item_tooltip(self.combo_whisper_secondary, i, self.combo_whisper_secondary.itemText(i).replace(" (실험)", ""))
-        if curr_w2 in display_values2:
-            for i, value in enumerate(display_values2):
-                if value == curr_w2:
-                    self.combo_whisper_secondary.setCurrentIndex(i)
-                    break
-        else:
+            self._set_combo_item_tooltip(self.combo_whisper_secondary, i, str(self.combo_whisper_secondary.itemData(i) or ""))
+        if not self._set_combo_by_data_value(self.combo_whisper_secondary, curr_w2) and self.combo_whisper_secondary.count() > 0:
             self.combo_whisper_secondary.setCurrentIndex(0)
         self.combo_whisper_secondary.blockSignals(False)
         self.combo_whisper_secondary.setUpdatesEnabled(True)
@@ -636,7 +599,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.combo_registry_model.clear()
         try:
             from core.model_manager import get_available_models
-            self._registry_models = get_available_models(include_hidden=True)
+            self._registry_models = get_available_models(include_hidden=True, include_runtime_discovered=True)
         except Exception as e:
             self._registry_models = []
             self.combo_registry_model.addItem(f"모델 목록 로드 실패: {e}", {})
@@ -644,7 +607,8 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         for model in self._registry_models:
             status = "설치됨" if model.get("installed") else "미설치"
             required = "필수" if model.get("required") else "선택"
-            label = f"[{model.get('category', '-')}] {model.get('name', model.get('id', ''))} · {status} · {required}"
+            extra = " · 실설치" if model.get("discovered") else ""
+            label = f"[{model.get('category', '-')}] {model.get('name', model.get('id', ''))} · {status} · {required}{extra}"
             self.combo_registry_model.addItem(label, model)
             self._set_combo_item_tooltip(self.combo_registry_model, self.combo_registry_model.count() - 1, label)
         if self.combo_registry_model.count() == 0:
@@ -674,11 +638,17 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         os_label = ", ".join(model.get("os", []))
         pip_label = ", ".join(model.get("pip_packages", [])) or "외부 앱/파일"
         path_label = model.get("model_path") or "내장/캐시"
+        details = dict(model.get("details", {}) or {})
+        discovered = " · 실설치 스캔" if model.get("discovered") else ""
+        size_bytes = int(model.get("size_bytes", 0) or 0)
+        size_label = f" · 용량: {size_bytes / (1024 ** 3):.2f} GB" if size_bytes > 0 else ""
+        provider_label = str(details.get("format") or details.get("provider") or "").strip()
+        provider_text = f" · 형식: {provider_label}" if provider_label else ""
         self.lbl_registry_model_status.setText(
-            f"{'✅ 설치됨' if installed else '⚠️ 미설치'} · {required} · OS: {os_label} · 패키지: {pip_label} · 경로: {path_label}"
+            f"{'✅ 설치됨' if installed else '⚠️ 미설치'} · {required}{discovered} · OS: {os_label} · 패키지: {pip_label} · 경로: {path_label}{provider_text}{size_label}"
         )
         self.btn_registry_install.setEnabled(not installed)
-        self.btn_registry_delete.setEnabled(installed and model.get("id") != "ollama")
+        self.btn_registry_delete.setEnabled(installed and (model.get("id") != "ollama" or model.get("binary_check") == "ollama_model"))
 
     def _install_registry_model(self):
         model = self._current_registry_model()
@@ -817,7 +787,11 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
                     return True
             return False
         for i in range(combo.count()):
-            if combo.itemText(i) == value:
+            if (
+                combo.itemData(i) == value
+                or combo.itemText(i) == value
+                or combo.itemText(i).replace(" (실험)", "") == value
+            ):
                 combo.setCurrentIndex(i)
                 return True
         return False
@@ -1195,9 +1169,15 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "selected_model": selected_llm_name,
             "selected_llm_provider": provider,
             "subtitle_llm_user_selected": subtitle_llm_user_selected,
-            "selected_whisper_model": self.combo_whisper.currentText().replace(" (실험)", ""),
+            "selected_whisper_model": str(
+                self.combo_whisper.currentData()
+                or self.combo_whisper.currentText().replace(" (실험)", "")
+            ),
             "stt_ensemble_enabled": bool(self.chk_stt_ensemble.isChecked()),
-            "selected_whisper_model_secondary": self.combo_whisper_secondary.currentText().replace(" (실험)", ""),
+            "selected_whisper_model_secondary": str(
+                self.combo_whisper_secondary.currentData()
+                or self.combo_whisper_secondary.currentText().replace(" (실험)", "")
+            ),
             "stt_ensemble_llm_judge_enabled": bool(self.chk_stt_ensemble_llm.isChecked()),
             "selected_audio_ai": self.audio_map[self.combo_audio.currentText()],
             "selected_vad": self.vad_map[self.combo_vad.currentText()],
@@ -1238,8 +1218,15 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "icloud_stt_quality_preset": auto_start_mode,
             "nas_stt_quality_preset": auto_start_mode,
         })
+        selected_stt_model = str(res.get("selected_whisper_model") or "").strip()
+        selected_stt2_model = str(res.get("selected_whisper_model_secondary") or "").strip()
         res = apply_simple_operation_mode(res, simple_mode)
         res = apply_accuracy_first_runtime_settings(res)
+        if selected_stt_model:
+            res["selected_whisper_model"] = selected_stt_model
+        if selected_stt2_model:
+            res["selected_whisper_model_secondary"] = selected_stt2_model
+        res = save_stt_quality_user_preset(res, mode_to_stt_quality(simple_mode))
         auto_start_mode = normalize_stt_quality_key(res.get("auto_start_mode", auto_start_mode) or auto_start_mode)
         path_settings = load_path_settings()
         path_settings.update({

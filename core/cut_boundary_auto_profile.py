@@ -110,10 +110,24 @@ def _auto_grid_cells(width: int, height: int):
 
 
 def build_auto_grid_profile_helpers(cut_boundary_level):
+    def _adaptive_requested(settings: dict) -> bool:
+        has_explicit_level = False
+        for key in ("scan_cut_boundary_level", "cut_boundary_level", "scan_cut_level"):
+            if key in settings:
+                has_explicit_level = True
+                if str(settings.get(key) or "").strip().lower() in {"auto", "adaptive", "자동"}:
+                    return True
+        if has_explicit_level:
+            return False
+        return bool(settings.get("cut_boundary_adaptive_level_enabled", False))
+
     def cut_boundary_scan_profile(settings: dict | None = None) -> dict:
-        level = cut_boundary_level(settings or {})
+        settings = settings or {}
+        level = cut_boundary_level(settings)
         profile = dict(CUT_BOUNDARY_GRID_PROFILES.get(level, CUT_BOUNDARY_GRID_PROFILES["medium"]))
         profile["choices"] = CUT_BOUNDARY_LEVEL_CHOICES
+        profile["adaptive"] = _adaptive_requested(settings)
+        profile["resolved_level"] = level
         return profile
 
     return {

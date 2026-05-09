@@ -74,6 +74,7 @@ class NativePolicyEngineTests(unittest.TestCase):
             {
                 "llm_candidate_policy_enabled": True,
                 "llm_candidate_policy_max_candidates": 4,
+                "native_swift_policy_experimental_enabled": True,
                 "native_swift_llm_candidate_policy_enabled": True,
             },
         )
@@ -89,6 +90,7 @@ class NativePolicyEngineTests(unittest.TestCase):
             {
                 "deep_subtitle_policy_enabled": True,
                 "deep_subtitle_reranker_min_margin": 0.0,
+                "native_swift_policy_experimental_enabled": True,
                 "native_swift_deep_policy_enabled": True,
             },
             {
@@ -109,6 +111,7 @@ class NativePolicyEngineTests(unittest.TestCase):
             "llm_candidate_policy_enabled": True,
             "llm_candidate_policy_max_candidates": 4,
             "deep_subtitle_policy_enabled": True,
+            "native_swift_policy_experimental_enabled": True,
             "native_swift_llm_candidate_policy_enabled": True,
             "native_swift_deep_policy_enabled": True,
         }
@@ -167,7 +170,11 @@ class NativePolicyEngineTests(unittest.TestCase):
             query_vector=dict(vectorize_lora_text(query)),
             query_terms=dict(term_counts(query)),
             media_lookup_keys=["vehicle_review", "clip_0"],
-            settings={"native_swift_lora_scoring_enabled": True, "native_swift_lora_scoring_min_docs": 1},
+            settings={
+                "native_swift_policy_experimental_enabled": True,
+                "native_swift_lora_scoring_enabled": True,
+                "native_swift_lora_scoring_min_docs": 1,
+            },
         )
 
         self.assertIsNotNone(ranked)

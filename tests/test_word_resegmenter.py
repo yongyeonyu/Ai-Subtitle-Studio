@@ -141,6 +141,145 @@ class WordResegmenterTests(unittest.TestCase):
         self.assertEqual(result[0]["_lora_gap_settings"]["split_length_threshold"], 24)
         self.assertEqual(result[0]["_lora_segment_score"], 91.0)
 
+    def test_lora_continuity_prevents_vad_from_creating_micro_splits(self):
+        result = resegment_by_word_timestamps(
+            [
+                {
+                    "start": 0.0,
+                    "end": 3.0,
+                    "text": "오 아 이건 스티커구나",
+                    "words": [
+                        {"word": "오", "start": 0.0, "end": 0.25},
+                        {"word": "아", "start": 0.95, "end": 1.18},
+                        {"word": "이건", "start": 1.55, "end": 1.9},
+                        {"word": "스티커구나", "start": 2.0, "end": 2.6},
+                    ],
+                    "_lora_segment_settings": {
+                        "split_length_threshold": 18,
+                        "sub_min_duration": 0.8,
+                        "sub_gap_break_sec": 1.8,
+                        "word_timing_gap_break_sec": 1.2,
+                    },
+                    "_lora_gap_settings": {
+                        "continuous_threshold": 2.4,
+                        "sub_gap_break_sec": 1.8,
+                    },
+                    "_lora_segment_score": 94.0,
+                }
+            ],
+            max_chars=8,
+            max_duration=8.0,
+            max_cps=20,
+            min_duration=0.1,
+            gap_break_sec=1.5,
+            word_gap_break_sec=0.65,
+            vad_segments=[
+                {"start": 0.0, "end": 0.3},
+                {"start": 0.92, "end": 1.22},
+                {"start": 1.5, "end": 2.7},
+            ],
+        )
+
+        self.assertEqual([item["text"] for item in result], ["오 아 이건 스티커구나"])
+        self.assertEqual(result[0]["_lora_segment_score"], 94.0)
+
+    def test_timestamp_regrouper_merges_lora_micro_segments_across_short_vad_gaps(self):
+        base_lora = {
+            "_lora_segment_settings": {
+                "split_length_threshold": 18,
+                "sub_min_duration": 0.8,
+                "sub_gap_break_sec": 1.8,
+                "word_timing_gap_break_sec": 1.2,
+            },
+            "_lora_gap_settings": {
+                "continuous_threshold": 2.4,
+                "sub_gap_break_sec": 1.8,
+            },
+            "_lora_segment_score": 93.0,
+        }
+        result = regroup_by_word_timestamps(
+            [
+                {
+                    **base_lora,
+                    "start": 0.0,
+                    "end": 0.25,
+                    "text": "오",
+                    "words": [{"word": "오", "start": 0.0, "end": 0.25}],
+                    "asr_metadata": {"_clip_idx": 0},
+                },
+                {
+                    **base_lora,
+                    "start": 0.95,
+                    "end": 1.18,
+                    "text": "아",
+                    "words": [{"word": "아", "start": 0.95, "end": 1.18}],
+                    "asr_metadata": {"_clip_idx": 0},
+                },
+                {
+                    **base_lora,
+                    "start": 1.55,
+                    "end": 2.6,
+                    "text": "이건 스티커구나",
+                    "words": [
+                        {"word": "이건", "start": 1.55, "end": 1.9},
+                        {"word": "스티커구나", "start": 2.0, "end": 2.6},
+                    ],
+                    "asr_metadata": {"_clip_idx": 0},
+                },
+            ],
+            max_chars=8,
+            max_duration=8.0,
+            max_cps=20,
+            min_duration=0.8,
+            gap_break_sec=1.5,
+            word_gap_break_sec=0.65,
+            vad_segments=[
+                {"start": 0.0, "end": 0.3},
+                {"start": 0.92, "end": 1.22},
+                {"start": 1.5, "end": 2.7},
+            ],
+        )
+
+        self.assertEqual([item["text"] for item in result], ["오 아 이건 스티커구나"])
+        self.assertEqual(result[0]["asr_metadata"]["_clip_idx"], 0)
+
+    def test_lora_style_micro_merge_repairs_source_gap_only_micro_subtitles(self):
+        result = subtitle_engine._apply_lora_style_micro_merge(
+            [
+                {
+                    "start": 54.55,
+                    "end": 54.85,
+                    "text": "일단",
+                    "words": [{"word": "일단", "start": 54.55, "end": 54.85}],
+                    "asr_metadata": {"_clip_idx": 0},
+                },
+                {
+                    "start": 56.61,
+                    "end": 57.25,
+                    "text": "넥스 수소차",
+                    "words": [{"word": "넥스", "start": 56.61, "end": 56.85}, {"word": "수소차", "start": 56.9, "end": 57.25}],
+                    "asr_metadata": {"_clip_idx": 0},
+                },
+            ],
+            [],
+            {
+                "subtitle_lora_micro_merge_enabled": True,
+                "split_length_threshold": 16,
+                "sub_min_duration": 0.3,
+                "sub_gap_break_sec": 1.5,
+                "continuous_threshold": 2.0,
+                "subtitle_lora_micro_merge_continuous_sec": 3.0,
+                "word_timing_gap_break_sec": 0.65,
+                "sub_max_duration": 6.0,
+                "sub_max_cps": 20,
+            },
+            stage="unit",
+        )
+
+        self.assertEqual([item["text"] for item in result], ["일단 넥스 수소차"])
+        self.assertEqual(result[0]["_lora_style_merge_policy"]["task"], "lora_style_micro_merge")
+        self.assertEqual(result[0]["_lora_segment_settings"]["split_length_threshold"], 16)
+
     def test_splits_when_duration_is_too_long(self):
         result = resegment_by_word_timestamps(
             [

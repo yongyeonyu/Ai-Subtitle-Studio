@@ -55,7 +55,7 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
         self.assertEqual(editor.selected_model, "gemma3:4b")
         self.assertIn("자막 LLM", window.sidebar_settings_label.text())
         self.assertIn("gemma3:4b", window.sidebar_settings_label.text())
-        self.assertIn("whisper-large-v3", window.sidebar_settings_label.text())
+        self.assertIn("MLX Whisper Large V3", window.sidebar_settings_label.text())
         window.close()
         editor.close()
 
@@ -191,6 +191,95 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
 
             reloaded = apply_stt_quality_preset(saved, "precise")
             self.assertEqual(reloaded["selected_model"], "gemma3:4b")
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_mode_default_keeps_user_models_and_saves_recommended_policy(self):
+        window = MainWindow()
+        base = {
+            "subtitle_mode": "high",
+            "stt_quality_preset": "precise",
+            "selected_audio_ai": "clearvoice",
+            "selected_vad": "ten_vad",
+            "selected_whisper_model": "user-stt1",
+            "selected_whisper_model_secondary": "user-stt2",
+            "selected_model": "custom-llm",
+            "selected_llm_provider": "ollama",
+            "subtitle_llm_user_selected": True,
+            "stt_quality_user_presets": {
+                "precise": {
+                    "label": "High",
+                    "settings": {
+                        "stt_ensemble_enabled": True,
+                        "stt_word_timestamps_precision_max_segments": 4,
+                    },
+                },
+            },
+        }
+        try:
+            row = window._create_sidebar_subtitle_quality_row(window)
+            combo = window.sidebar_subtitle_quality_combo
+            combo.blockSignals(True)
+            for index in range(combo.count()):
+                if combo.itemData(index) == "precise":
+                    combo.setCurrentIndex(index)
+                    break
+            combo.blockSignals(False)
+            with (
+                patch("ui.home_ui.load_settings", return_value=dict(base)),
+                patch("ui.home_ui.save_settings") as save_mock,
+                patch("core.project.data_manager.save_default_settings") as default_mock,
+            ):
+                window._on_sidebar_subtitle_quality_default()
+
+            save_mock.assert_called_once()
+            default_mock.assert_called_once()
+            saved = save_mock.call_args.args[0]
+            self.assertEqual(saved["selected_audio_ai"], "clearvoice")
+            self.assertEqual(saved["selected_vad"], "ten_vad")
+            self.assertEqual(saved["selected_whisper_model"], "user-stt1")
+            self.assertEqual(saved["selected_whisper_model_secondary"], "user-stt2")
+            self.assertEqual(saved["selected_model"], "custom-llm")
+            self.assertFalse(saved["stt_ensemble_enabled"])
+            self.assertFalse(saved["stt_selective_secondary_recheck_enabled"])
+            self.assertEqual(saved["stt_word_timestamps_precision_max_segments"], 32)
+            user_preset = saved["stt_quality_user_presets"]["precise"]["settings"]
+            self.assertFalse(user_preset["stt_ensemble_enabled"])
+            self.assertEqual(user_preset["stt_word_timestamps_precision_max_segments"], 32)
+            row.deleteLater()
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_sidebar_stt2_model_selection_marks_user_route(self):
+        window = MainWindow()
+        base = {
+            "subtitle_mode": "high",
+            "stt_quality_preset": "precise",
+            "selected_whisper_model": "user-stt1",
+            "selected_whisper_model_secondary": "old-stt2",
+            "stt_ensemble_enabled": False,
+        }
+        try:
+            with patch("ui.home_ui.load_settings", return_value=dict(base)), patch("ui.home_ui.save_settings") as save_mock:
+                window._apply_sidebar_model_selection(
+                    {
+                        "selected_whisper_model_secondary": "new-stt2",
+                        "stt_ensemble_enabled": True,
+                    }
+                )
+
+            save_mock.assert_called_once()
+            saved = save_mock.call_args.args[0]
+            self.assertEqual(saved["selected_whisper_model_secondary"], "new-stt2")
+            self.assertTrue(saved["stt_ensemble_enabled"])
+            self.assertTrue(saved["stt_ensemble_user_selected"])
+            user_preset = saved["stt_quality_user_presets"]["precise"]["settings"]
+            self.assertTrue(user_preset["stt_ensemble_enabled"])
+            self.assertTrue(user_preset["stt_ensemble_user_selected"])
         finally:
             window.close()
             window.deleteLater()

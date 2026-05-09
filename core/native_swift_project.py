@@ -5,7 +5,7 @@ import os
 import subprocess
 from typing import Any
 
-from core.native_swift_subtitle import find_native_cli_path
+from core.native_swift_subtitle import find_native_cli_path, request_native_core_task
 
 
 def _enabled() -> bool:
@@ -18,27 +18,33 @@ def _enabled() -> bool:
 def read_project_via_swift(filepath: str) -> dict[str, Any] | None:
     if not _enabled():
         return None
-    cli = find_native_cli_path()
-    if cli is None:
-        return None
-    try:
-        proc = subprocess.run(
-            [str(cli), "read-project-json", filepath],
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=20,
-        )
-        payload = json.loads(proc.stdout or "{}")
-    except Exception:
-        return None
+    payload = request_native_core_task("read_project_json", {"path": filepath})
+    payload = payload.get("project") if isinstance(payload, dict) else None
+    if payload is None:
+        cli = find_native_cli_path()
+        if cli is None:
+            return None
+        try:
+            proc = subprocess.run(
+                [str(cli), "read-project-json", filepath],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=20,
+            )
+            payload = json.loads(proc.stdout or "{}")
+        except Exception:
+            return None
     return payload if isinstance(payload, dict) else None
 
 
 def write_project_via_swift(filepath: str, project: dict[str, Any]) -> bool:
     if not _enabled():
         return False
+    payload = request_native_core_task("write_project_json", {"path": filepath, "project": project})
+    if isinstance(payload, dict) and payload.get("ok") is True:
+        return True
     cli = find_native_cli_path()
     if cli is None:
         return False

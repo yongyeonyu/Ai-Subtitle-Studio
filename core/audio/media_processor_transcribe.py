@@ -182,20 +182,24 @@ class VideoProcessorTranscribeMixin:
                     setattr(worker, attr, getattr(self, attr))
                 except Exception:
                     pass
-        worker._fast_mode_overrides = dict(settings_overrides or {}) if settings_overrides else None
+        worker._fast_mode_overrides = dict(effective_settings or {}) if effective_settings else None
         result: list[dict] = []
         try:
-            for chunk_segs, _idx, _total in worker.transcribe(
-                chunk_dir,
-                is_fast_mode=False,
-                target_end_sec=target_end_sec,
-                is_single=is_single,
-                model_override=model,
-                cleanup_chunk_dir=False,
-                log_label=label,
-                preview_callback=preview_callback,
-            ):
-                result.extend(chunk_segs or [])
+            try:
+                for chunk_segs, _idx, _total in worker.transcribe(
+                    chunk_dir,
+                    is_fast_mode=False,
+                    target_end_sec=target_end_sec,
+                    is_single=is_single,
+                    model_override=model,
+                    cleanup_chunk_dir=False,
+                    log_label=label,
+                    preview_callback=preview_callback,
+                ):
+                    result.extend(chunk_segs or [])
+            except RuntimeError as exc:
+                get_logger().log(f"  ⚠️ [{label}] 보조 STT 재검사 실패, 기존 STT 결과를 유지합니다: {exc}")
+                result = []
         finally:
             if reuse_worker:
                 with self._ensemble_child_lock:
@@ -752,6 +756,18 @@ class VideoProcessorTranscribeMixin:
             0.0,
             min(1.0, self._setting_float(settings, "stt_word_timestamps_precision_min_similarity", 0.18)),
         )
+        max_timing_shift = max(
+            0.05,
+            self._setting_float(settings, "stt_word_timestamps_precision_max_timing_shift_sec", 0.55),
+        )
+        min_duration_ratio = max(
+            0.05,
+            self._setting_float(settings, "stt_word_timestamps_precision_min_duration_ratio", 0.45),
+        )
+        max_duration_ratio = max(
+            min_duration_ratio,
+            self._setting_float(settings, "stt_word_timestamps_precision_max_duration_ratio", 1.8),
+        )
         try:
             from core.audio.stt_ensemble import text_similarity
         except Exception:
@@ -786,11 +802,28 @@ class VideoProcessorTranscribeMixin:
             if similarity < min_similarity:
                 updated.append(seg)
                 continue
+            original_start = float(seg.get("start", 0.0) or 0.0)
+            original_end = float(seg.get("end", original_start) or original_start)
             out = dict(seg)
             words = [dict(word) for word in (chosen.get("words") or [])]
+            new_start = float(words[0].get("start", chosen.get("start", original_start)) or original_start)
+            new_end = float(words[-1].get("end", chosen.get("end", original_end)) or original_end)
+            if new_end <= new_start + 0.05:
+                updated.append(seg)
+                continue
+            edge_shift = max(abs(new_start - original_start), abs(new_end - original_end))
+            original_duration = max(0.05, original_end - original_start)
+            new_duration = max(0.05, new_end - new_start)
+            duration_ratio = new_duration / original_duration
+            if edge_shift > max_timing_shift:
+                updated.append(seg)
+                continue
+            if original_duration >= 0.2 and not (min_duration_ratio <= duration_ratio <= max_duration_ratio):
+                updated.append(seg)
+                continue
             out["words"] = words
-            out["start"] = float(words[0].get("start", chosen.get("start", out.get("start", 0.0))) or out.get("start", 0.0))
-            out["end"] = float(words[-1].get("end", chosen.get("end", out.get("end", out["start"]))) or out.get("end", out["start"]))
+            out["start"] = new_start
+            out["end"] = new_end
             if not keep_text and str(chosen.get("text") or "").strip():
                 out["text"] = str(chosen.get("text") or "").strip()
             meta = dict(out.get("asr_metadata") or {})
@@ -799,8 +832,10 @@ class VideoProcessorTranscribeMixin:
                 "source": str(chosen.get("stt_selected_source") or chosen.get("stt_ensemble_source") or "STT1"),
                 "similarity": round(similarity, 6),
                 "kept_original_text": bool(keep_text),
-                "range_start": round(float(seg.get("start", 0.0) or 0.0), 3),
-                "range_end": round(float(seg.get("end", 0.0) or 0.0), 3),
+                "edge_shift": round(edge_shift, 4),
+                "duration_ratio": round(duration_ratio, 4),
+                "range_start": round(original_start, 3),
+                "range_end": round(original_end, 3),
             }
             out["asr_metadata"] = meta
             out["stt_word_precision_applied"] = True
@@ -1150,6 +1185,13 @@ class VideoProcessorTranscribeMixin:
 
         updated = [seg for seg in scored_primary if _keep_existing(seg)] + applied_segments
         updated.sort(key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
+        retention_ratio = float(settings.get("stt_selective_recheck_min_segment_retention_ratio", 0.9) or 0.9)
+        if scored_primary and len(updated) < max(1, int(len(scored_primary) * retention_ratio)):
+            get_logger().log(
+                f"  ↩️ [{context_label}] STT2 보강 결과가 원본 세그먼트를 과도하게 줄여 "
+                f"STT1 유지 ({len(scored_primary)}개 → {len(updated)}개)"
+            )
+            return scored_primary
         get_logger().log(f"  ✅ [{context_label}] 저점 구간 {len(applied_ranges)}개를 STT2 결과로 보강했습니다.")
         return updated
 
@@ -1353,6 +1395,7 @@ class VideoProcessorTranscribeMixin:
                     is_single=is_single,
                     label=label,
                     preview_callback=self._ensemble_preview_callback(label, preview_callback),
+                    settings_overrides=s,
                 )
                 with result_lock:
                     results[label] = local_result
@@ -1589,33 +1632,49 @@ class VideoProcessorTranscribeMixin:
         use_transformers_whisper = is_transformers_whisper_model(target_model)
         use_whisperkit_persistent = is_whisperkit_persistent_model(target_model)
         if use_whisperkit_persistent:
-            from core.audio.whisperkit_persistent import ensure_worker, submit_task
+            from core.audio.whisperkit_persistent import (
+                ensure_worker,
+                is_supported_whisperkit_model,
+                submit_task,
+                whisperkit_model_selector,
+            )
 
             try:
-                with self._whisper_lock:
-                    current_proc = getattr(self, "_whisperkit_runner_proc", None)
-                    self._whisperkit_runner_proc = ensure_worker(current_proc, log_label=log_label)
-                    proc = self._whisperkit_runner_proc
-                    if proc is not None:
-                        mac_task_id = submit_task(
-                            proc=proc,
-                            chunk_paths=safe_paths,
-                            model=target_model,
-                            language=self.language,
-                            temperature_values=temperature_values,
-                            word_timestamps=word_timestamps,
-                        )
+                if not is_supported_whisperkit_model(target_model):
+                    selector = whisperkit_model_selector(target_model)
+                    get_logger().log(
+                        f"  ⚠️ [{log_label}] WhisperKit Native 미지원 모델이라 원래 STT 경로로 되돌립니다: {selector}"
+                    )
+                    target_model = selector or "mlx-community/whisper-large-v3-turbo"
+                    use_whisperkit_persistent = False
+                    use_coreml_whisper = is_coreml_whisper_model(target_model)
+                    use_whisper_cpp = stt_backend_name == "whisper_cpp" or is_whisper_cpp_model(target_model)
+                    use_transformers_whisper = is_transformers_whisper_model(target_model)
+                else:
+                    with self._whisper_lock:
+                        current_proc = getattr(self, "_whisperkit_runner_proc", None)
+                        self._whisperkit_runner_proc = ensure_worker(current_proc, log_label=log_label)
+                        proc = self._whisperkit_runner_proc
+                        if proc is not None:
+                            mac_task_id = submit_task(
+                                proc=proc,
+                                chunk_paths=safe_paths,
+                                model=target_model,
+                                language=self.language,
+                                temperature_values=temperature_values,
+                                word_timestamps=word_timestamps,
+                            )
             except Exception as exc:
                 get_logger().log(f"  ⚠️ [{log_label}] WhisperKit worker 요청 실패 → MLX fallback: {exc}")
                 proc = None
                 mac_task_id = None
-            if proc is None:
+            if use_whisperkit_persistent and proc is None:
                 fallback_model = "mlx-community/whisper-large-v3-turbo"
                 get_logger().log(f"  ↩️ [{log_label}] WhisperKit Native 준비 안 됨 → MLX fallback: {fallback_model}")
                 target_model = fallback_model
                 use_whisperkit_persistent = False
         if use_coreml_whisper:
-            from core.audio.whisper_coreml import run_whisper
+            from core.audio.whisper_coreml import coreml_model_selector, coreml_selector_is_supported, run_whisper
             proc = run_whisper(
                 chunk_paths=safe_paths,
                 model=target_model,
@@ -1625,10 +1684,18 @@ class VideoProcessorTranscribeMixin:
                 options={**self._whisper_worker_options(s), "word_timestamps": word_timestamps},
             )
             if proc is None:
-                fallback_model = "mlx-community/whisper-large-v3-turbo"
+                selector_fallback = str(coreml_model_selector(target_model) or "").strip()
+                fallback_model = (
+                    selector_fallback
+                    if selector_fallback and not coreml_selector_is_supported(selector_fallback)
+                    else "mlx-community/whisper-large-v3-turbo"
+                )
                 get_logger().log(f"  ↩️ [{log_label}] Core ML STT 준비 안 됨 → MLX fallback: {fallback_model}")
                 target_model = fallback_model
                 use_coreml_whisper = False
+                use_whisper_cpp = stt_backend_name == "whisper_cpp" or is_whisper_cpp_model(target_model)
+                use_transformers_whisper = is_transformers_whisper_model(target_model)
+                use_whisperkit_persistent = is_whisperkit_persistent_model(target_model)
         if use_whisper_cpp:
             from core.audio.whisper_cpp import run_whisper
 

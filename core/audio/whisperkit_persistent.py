@@ -13,6 +13,20 @@ from core.runtime.logger import get_logger
 
 
 WHISPERKIT_PERSISTENT_PREFIX = "whisperkit-persistent:"
+_SUPPORTED_WHISPERKIT_SELECTORS = {
+    "large-v3",
+    "whisper-large-v3",
+    "openai/whisper-large-v3",
+    "openai_whisper-large-v3",
+    "large-v3-v20240930_626mb",
+    "large-v3-v20240930_626MB",
+    "large-v3-turbo",
+    "whisper-large-v3-turbo",
+    "openai/whisper-large-v3-turbo",
+    "openai_whisper-large-v3_turbo",
+    "large-v3-v20240930_turbo_632mb",
+    "large-v3-v20240930_turbo_632MB",
+}
 DEFAULT_WORKER_RELATIVE_PATH = os.path.join(
     "experiments",
     "whisperkit_persistent_worker",
@@ -32,6 +46,19 @@ def whisperkit_model_selector(model: str) -> str:
     if value.lower().startswith(WHISPERKIT_PERSISTENT_PREFIX):
         value = value[len(WHISPERKIT_PERSISTENT_PREFIX):].strip()
     return value or "large-v3"
+
+
+def whisperkit_selector_is_supported(selector: str) -> bool:
+    value = str(selector or "").strip()
+    if not value:
+        return True
+    if os.path.exists(os.path.expanduser(value)):
+        return True
+    return value in _SUPPORTED_WHISPERKIT_SELECTORS or value.lower() in _SUPPORTED_WHISPERKIT_SELECTORS
+
+
+def is_supported_whisperkit_model(model: str) -> bool:
+    return whisperkit_selector_is_supported(whisperkit_model_selector(model))
 
 
 def _build_bundled_worker(repo_root: str, bundled: str) -> str:
@@ -138,6 +165,8 @@ def submit_task(
 ) -> str:
     if proc is None or proc.poll() is not None:
         raise RuntimeError("Swift WhisperKit worker가 실행 중이 아닙니다.")
+    if not is_supported_whisperkit_model(model):
+        raise ValueError(f"unsupported_whisperkit_model:{whisperkit_model_selector(model)}")
 
     task_id = uuid.uuid4().hex
     payload = {
@@ -202,6 +231,12 @@ def run_whisper(
     This backend is the macOS-native STT path. MLX remains the quality-safe
     fallback when the Swift worker is not built or cannot start.
     """
+    if not is_supported_whisperkit_model(model):
+        get_logger().log(
+            f"  ⚠️ [{log_label}] WhisperKit Native 미지원 모델이라 원래 STT 경로로 되돌립니다: "
+            f"{whisperkit_model_selector(model)}"
+        )
+        return None
     try:
         temp_values = [
             float(part.strip())
@@ -239,8 +274,10 @@ __all__ = [
     "ensure_worker",
     "find_whisperkit_persistent_worker",
     "is_whisperkit_persistent_model",
+    "is_supported_whisperkit_model",
     "run_whisper",
     "stop_worker",
     "submit_task",
+    "whisperkit_selector_is_supported",
     "whisperkit_model_selector",
 ]

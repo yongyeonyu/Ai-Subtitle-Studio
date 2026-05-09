@@ -89,6 +89,61 @@ class NativeCutBoundaryTests(unittest.TestCase):
         self.assertIsNotNone(native_out)
         self.assertEqual([round(value, 3) for value in native_out or []], [1.5, 0.5, 1.0])
 
+    def test_dense_flow_pair_metrics_runs_in_native_extension(self):
+        import numpy as np
+
+        previous = os.environ.get("AI_SUBTITLE_NATIVE_CUT_BOUNDARY")
+        try:
+            os.environ["AI_SUBTITLE_NATIVE_CUT_BOUNDARY"] = "1"
+            prev = np.zeros((4, 5), dtype=np.uint8)
+            next_ = np.zeros((4, 5), dtype=np.uint8)
+            flow = np.zeros((4, 5, 2), dtype=np.float32)
+            flow[:, :, 0] = 2.0
+
+            metrics = native.dense_flow_pair_metrics(prev, next_, flow, diff_threshold=18.0)
+        finally:
+            if previous is None:
+                os.environ.pop("AI_SUBTITLE_NATIVE_CUT_BOUNDARY", None)
+            else:
+                os.environ["AI_SUBTITLE_NATIVE_CUT_BOUNDARY"] = previous
+
+        self.assertIsNotNone(metrics)
+        self.assertAlmostEqual(metrics["diff"], 0.0, places=6)
+        self.assertAlmostEqual(metrics["residual"], 0.0, places=6)
+        self.assertAlmostEqual(metrics["coverage"], 0.0, places=6)
+        self.assertAlmostEqual(metrics["mean_motion_px"], 2.0, places=6)
+        self.assertAlmostEqual(metrics["mean_fx"], 2.0, places=6)
+        self.assertAlmostEqual(metrics["mean_fy"], 0.0, places=6)
+        self.assertAlmostEqual(metrics["coherence"], 1.0, places=6)
+
+    def test_waveform_peaks_f32le_matches_reference_downsample(self):
+        import numpy as np
+
+        from ui.timeline.timeline_waveform import _downsample_waveform_samples
+
+        previous = os.environ.get("AI_SUBTITLE_NATIVE_CUT_BOUNDARY")
+        samples = np.zeros(2000, dtype=np.float32)
+        samples[100:110] = 0.5
+        samples[1000:1010] = -1.0
+        try:
+            os.environ["AI_SUBTITLE_NATIVE_CUT_BOUNDARY"] = "1"
+            native_out = native.waveform_peaks_f32le(
+                samples.tobytes(),
+                sample_rate=2000,
+                points_per_second=100,
+                duration=None,
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("AI_SUBTITLE_NATIVE_CUT_BOUNDARY", None)
+            else:
+                os.environ["AI_SUBTITLE_NATIVE_CUT_BOUNDARY"] = previous
+
+        reference = _downsample_waveform_samples(samples)
+        self.assertIsNotNone(native_out)
+        np.testing.assert_allclose(native_out[0], reference[0], rtol=0, atol=1e-6)
+        self.assertAlmostEqual(native_out[1], reference[1], places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

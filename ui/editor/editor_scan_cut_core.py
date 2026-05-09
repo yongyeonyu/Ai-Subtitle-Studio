@@ -10,6 +10,7 @@ from datetime import datetime
 from PyQt6.QtCore import QTimer
 
 from core.cut_boundary import sync_project_cut_boundaries
+from core.cut_boundary_jump import nearest_boundary_second, normalize_boundary_seconds
 
 
 class EditorScanCutCoreMixin:
@@ -1126,6 +1127,131 @@ class EditorScanCutCoreMixin:
         print(f"🟢 [scan-cut] CANCEL reason={reason}", flush=True)
 
 
+    def _scan_cached_cut_jump_enabled(self) -> bool:
+        settings = getattr(self, "settings", {}) or {}
+        raw = settings.get("scan_cut_cached_jump_enabled", True)
+        if isinstance(raw, str):
+            return raw.strip().lower() not in {"0", "false", "no", "off", "미사용"}
+        return bool(raw)
+
+    def _scan_fast_boundary_sources(self) -> list:
+        rows: list = []
+
+        def _extend(values) -> None:
+            if not values:
+                return
+            try:
+                rows.extend(list(values))
+            except Exception:
+                pass
+
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None)
+        if canvas is not None:
+            _extend(getattr(canvas, "boundary_times", []) or [])
+            _extend(getattr(canvas, "scan_boundary_times", []) or [])
+
+        _extend(getattr(self, "_project_boundary_times", []) or [])
+        _extend(getattr(self, "_auto_cut_boundary_scan_lines", []) or [])
+
+        for obj in (self.window() if hasattr(self, "window") else None, getattr(self, "parent", lambda: None)()):
+            if obj is None:
+                continue
+            _extend(getattr(obj, "_project_boundary_times", []) or [])
+            _extend(getattr(obj, "_auto_cut_boundary_scan_lines", []) or [])
+
+        return rows
+
+    def _scan_jump_to_cached_cut_boundary(self, direction: int) -> bool:
+        """
+        Fast path for the << / >> cut buttons.
+
+        If the project already has confirmed/provisional cut markers, jump with a
+        sorted boundary lookup instead of starting the expensive visual scanner.
+        """
+
+        if not self._scan_cached_cut_jump_enabled():
+            return False
+
+        try:
+            fps = float(self._current_frame_fps())
+        except Exception:
+            fps = 30.0
+
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None)
+        try:
+            total_sec = float(getattr(canvas, "total_duration", 0.0) or 0.0) if canvas is not None else 0.0
+        except Exception:
+            total_sec = 0.0
+
+        rows = self._scan_fast_boundary_sources()
+        boundaries = normalize_boundary_seconds(rows, primary_fps=fps, max_sec=total_sec or None)
+        if not boundaries:
+            return False
+
+        try:
+            current_sec = float(self._manual_global_sec_from_player())
+        except Exception:
+            try:
+                current_sec = float(getattr(canvas, "playhead_sec", 0.0) or 0.0)
+            except Exception:
+                current_sec = 0.0
+
+        try:
+            direction_i = 1 if int(direction) > 0 else -1
+        except Exception:
+            direction_i = 1
+
+        min_gap = max(0.06, min(0.35, 3.0 / max(fps, 1.0)))
+        target_sec = nearest_boundary_second(
+            boundaries,
+            current_sec=current_sec,
+            direction=direction_i,
+            primary_fps=fps,
+            max_sec=total_sec or None,
+            min_gap_sec=min_gap,
+        )
+        if target_sec is None:
+            return False
+
+        target_sec = self._snap_to_frame(float(target_sec))
+        try:
+            if hasattr(self.video_player, "pause_video"):
+                self.video_player.pause_video()
+        except Exception:
+            pass
+
+        self._set_scan_cut_button_active(direction_i)
+
+        try:
+            self._scan_preview_global_sec(target_sec)
+        except Exception:
+            try:
+                if timeline is not None:
+                    timeline.set_playhead(target_sec)
+            except Exception:
+                pass
+
+        try:
+            if hasattr(self.video_player, "info_label"):
+                self.video_player.info_label.setText(f"컷 경계 즉시 이동 · {target_sec:.3f}s")
+        except Exception:
+            pass
+
+        try:
+            QTimer.singleShot(120, lambda: self._set_scan_cut_button_active(0))
+        except Exception:
+            self._set_scan_cut_button_active(0)
+
+        print(
+            f"⚡ [scan-cut-fast-jump] cached boundary dir={direction_i} "
+            f"{current_sec:.3f}s -> {target_sec:.3f}s count={len(boundaries)}",
+            flush=True,
+        )
+        return True
+
+
 
     def _on_scan_cut_requested(self, direction: int):
         try:
@@ -1160,6 +1286,9 @@ class EditorScanCutCoreMixin:
                 self._cancel_scan_cut("same-button-toggle")
                 return
             self._cancel_scan_cut("switch-direction", update_label=False)
+
+        if self._scan_jump_to_cached_cut_boundary(direction):
+            return
 
         if hasattr(self.video_player, "pause_video"):
             self.video_player.pause_video()

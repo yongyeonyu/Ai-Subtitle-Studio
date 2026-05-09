@@ -22,6 +22,7 @@ _PRESERVED_SEGMENT_KEYS = (
     "_lora_segment_score",
     "_lora_segment_doc_count",
     "_lora_segment_query",
+    "_lora_style_merge_policy",
     "_deep_rerank_policy",
     "_deep_timing_policy",
     "_editor_truth_runtime_policy",
@@ -84,6 +85,42 @@ def _segment_float(segment: dict[str, Any], key: str, default: float, *, low: fl
     except Exception:
         value = float(default)
     return max(low, value)
+
+
+def _lora_score(segment: dict[str, Any]) -> float:
+    scores: list[float] = []
+    for key in ("_lora_segment_score", "lora_score"):
+        value = segment.get(key)
+        if value not in (None, ""):
+            scores.append(_as_float(value))
+    profile = segment.get("_lora_generation_profile")
+    if isinstance(profile, dict):
+        scores.append(_as_float(profile.get("top_score")))
+        pattern = profile.get("pattern_match")
+        if isinstance(pattern, dict):
+            scores.append(_as_float(pattern.get("score")))
+    return max(scores or [0.0])
+
+
+def _lora_continuity_enabled(segment: dict[str, Any]) -> bool:
+    for payload_key in ("_lora_gap_settings", "_lora_segment_settings"):
+        payload = segment.get(payload_key)
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("subtitle_lora_split_policy_enabled") is False:
+            return False
+        if any(
+            payload.get(key) not in (None, "")
+            for key in (
+                "split_length_threshold",
+                "sub_gap_break_sec",
+                "word_timing_gap_break_sec",
+                "continuous_threshold",
+                "sub_min_duration",
+            )
+        ):
+            return True
+    return _lora_score(segment) >= 70.0
 
 
 def _clean_word(value: str) -> str:
@@ -179,6 +216,7 @@ def _should_flush(
     word_gap_break_sec: float,
     vad_segments: list[dict[str, Any]] | None,
     rules: dict[str, Any] | None,
+    lora_continuity: bool = False,
 ) -> bool:
     if not buf:
         return False
@@ -199,11 +237,15 @@ def _should_flush(
 
     vad_break = _is_vad_boundary_between_words(buf[-1], next_word, vad_segments)
     word_gap_break = gap >= word_gap_break_sec
-    if (vad_break or word_gap_break) and duration >= 0.08:
-        return True
 
     if duration < min_duration:
         return False
+
+    if lora_continuity:
+        if gap >= gap_break_sec:
+            return True
+    elif (vad_break or word_gap_break) and duration >= 0.08:
+        return True
 
     if gap >= gap_break_sec:
         return True
@@ -358,9 +400,10 @@ def resegment_by_word_timestamps(
         segment_min_duration = _segment_float(segment, "sub_min_duration", min_duration, low=0.0)
         segment_gap_break_sec = _segment_float(segment, "sub_gap_break_sec", gap_break_sec, low=0.05)
         segment_word_gap_break_sec = _segment_float(segment, "word_timing_gap_break_sec", word_gap_break_sec, low=0.08)
+        lora_continuity = _lora_continuity_enabled(segment)
         fallback_speaker = segment.get("speaker")
         source_metadata = dict(segment.get("asr_metadata") or {})
-        native_groups = _native_word_groups(
+        native_groups = None if lora_continuity else _native_word_groups(
             words,
             max_chars=segment_max_chars,
             max_duration=segment_max_duration,
@@ -392,6 +435,7 @@ def resegment_by_word_timestamps(
                 word_gap_break_sec=segment_word_gap_break_sec,
                 vad_segments=vad_segments,
                 rules=rules,
+                lora_continuity=lora_continuity,
             ):
                 continue
             built = _build_segment(buf, fallback_speaker, source_metadata, segment)

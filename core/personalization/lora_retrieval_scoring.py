@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
 
+from core.native_macos_acceleration import mac_native_swift_policy_experimental_enabled
 from core.media_fingerprint import media_fingerprint_digest
 from core.personalization.lora_models import stable_hash
 from core.personalization.lora_retrieval_config import (
@@ -190,9 +191,12 @@ def score_lora_docs(
     query_terms = term_counts(query)
     if not docs or (not query_vector and not query_terms):
         return []
-    native_requested = _setting_bool(settings, "native_swift_lora_scoring_enabled", False) or any(
-        os.environ.get(key, "").strip().lower() in {"1", "true", "on", "yes"}
-        for key in ("AI_SUBTITLE_STUDIO_SWIFT_LORA_SCORING", "AI_SUBTITLE_STUDIO_SWIFT_POLICY")
+    native_requested = mac_native_swift_policy_experimental_enabled(settings) and (
+        _setting_bool(settings, "native_swift_lora_scoring_enabled", False)
+        or any(
+            os.environ.get(key, "").strip().lower() in {"1", "true", "on", "yes"}
+            for key in ("AI_SUBTITLE_STUDIO_SWIFT_LORA_SCORING", "AI_SUBTITLE_STUDIO_SWIFT_POLICY")
+        )
     )
     if native_requested:
         try:

@@ -589,6 +589,108 @@ class EditorPipelineMixin:
             except Exception:
                 pass
 
+    def _apply_cut_boundary_topicless_rows_to_ui(self, rows, *, source: str = "stream"):
+        """Push live cut-boundary middle split rows into timeline/canvas immediately."""
+        try:
+            import threading as _th
+
+            if _th.current_thread() is not _th.main_thread():
+                snapshot = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+                QTimer.singleShot(0, lambda rows=snapshot: self._apply_cut_boundary_topicless_rows_to_ui(rows, source=source))
+                return
+        except Exception:
+            pass
+
+        rows = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+        try:
+            main_w = self.window()
+        except Exception:
+            main_w = None
+
+        result_dict = None
+        if rows:
+            result_dict = {
+                "segments": list(rows),
+                "chapters": [],
+                "edit_decisions": [],
+                "edl_segments": [],
+                "guide_markdown": "",
+                "schema_version": "roughcut_result.v2",
+                "draft_state": {"status": "review"},
+                "video_summary": f"컷 경계 기반 주제없음 중분류 {len(rows)}개",
+                "source": f"cut_boundary_{source}",
+            }
+
+        row_attrs = (
+            "_cut_boundary_topicless_middle_segments",
+            "_roughcut_segments",
+            "roughcut_segments",
+            "_middle_segments",
+            "middle_segments",
+            "_chapter_segments",
+            "chapter_segments",
+            "_roughcut_draft_segments",
+        )
+        result_attrs = ("_roughcut_result", "roughcut_result", "_roughcut_draft_result")
+
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        global_canvas = getattr(timeline, "global_canvas", None) if timeline is not None else None
+
+        for obj in (self, main_w, timeline, canvas, global_canvas):
+            if obj is None:
+                continue
+            for attr in row_attrs:
+                try:
+                    setattr(obj, attr, list(rows))
+                except Exception:
+                    pass
+            for attr in result_attrs:
+                try:
+                    setattr(obj, attr, dict(result_dict) if isinstance(result_dict, dict) else None)
+                except Exception:
+                    pass
+            try:
+                if hasattr(obj, "_roughcut_major_cache_key"):
+                    obj._roughcut_major_cache_key = None
+                    obj._roughcut_major_cache = []
+                if hasattr(obj, "_analysis_markers_cache_key"):
+                    obj._analysis_markers_cache_key = None
+                if hasattr(obj, "_visible_analysis_markers_cache_key"):
+                    obj._visible_analysis_markers_cache_key = None
+                if hasattr(obj, "_paint_index_cache"):
+                    obj._paint_index_cache.pop("roughcut_major_markers", None)
+                if hasattr(obj, "_render_epoch"):
+                    obj._render_epoch = int(getattr(obj, "_render_epoch", 0) or 0) + 1
+            except Exception:
+                pass
+            try:
+                obj.update()
+            except Exception:
+                pass
+
+        for name in ("_sync_roughcut_segments_to_timeline", "_sync_roughcut_to_timeline", "_redraw_timeline"):
+            fn = getattr(self, name, None)
+            if not callable(fn):
+                continue
+            try:
+                fn()
+                break
+            except TypeError:
+                try:
+                    fn(rows)
+                    break
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        try:
+            if timeline is not None:
+                timeline.update()
+        except Exception:
+            pass
+
     def _refresh_cut_boundary_placeholder_from_project(self):
         """Load gray topicless middle segments from project and push them to UI objects.
 
