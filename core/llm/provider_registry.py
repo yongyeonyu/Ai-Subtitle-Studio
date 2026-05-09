@@ -3,7 +3,7 @@
 """Available LLM model metadata for settings UI."""
 from __future__ import annotations
 
-from core.llm.openai_provider import OPENAI_MODEL_MAP
+from core.llm.openai_provider import OPENAI_MODEL_MAP, is_codex_model
 
 
 GEMINI_MODELS = [
@@ -12,7 +12,13 @@ GEMINI_MODELS = [
 ]
 
 OPENAI_MODELS = [
-    {"name": display, "provider": "openai", "paid": True, "raw_model": display}
+    {
+        "name": display,
+        "provider": "openai",
+        "paid": not is_codex_model(display),
+        "raw_model": display,
+        "codex_cli": is_codex_model(display),
+    }
     for display in OPENAI_MODEL_MAP
 ]
 
@@ -20,11 +26,12 @@ OPENAI_MODELS = [
 def cloud_model_items() -> list[dict]:
     items = []
     for m in GEMINI_MODELS + OPENAI_MODELS:
+        codex_cli = bool(m.get("codex_cli"))
         details = {
-            "family": "Google API" if m["provider"] == "google" else "OpenAI API",
+            "family": "OpenAI Codex CLI" if codex_cli else ("Google API" if m["provider"] == "google" else "OpenAI API"),
             "parameter_size": "Cloud",
-            "format": "api",
-            "billing": "유료" if m.get("paid") else "무료/제한",
+            "format": "cli" if codex_cli else "api",
+            "billing": "구독/CLI" if codex_cli else ("유료" if m.get("paid") else "무료/제한"),
             "provider": m["provider"],
         }
         items.append({

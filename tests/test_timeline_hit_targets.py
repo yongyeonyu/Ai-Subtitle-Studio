@@ -37,6 +37,7 @@ from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_scan_cut_core import EditorScanCutCoreMixin
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
 from ui.editor.editor_video_controls import EditorVideoControlsMixin
+from ui.editor import timeline_scan_cut_relative_refine as scan_cut_relative_refine
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 
 
@@ -628,6 +629,165 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertEqual([row["timeline_sec"] for row in editor._auto_cut_boundary_scan_lines], [10.0])
         self.assertEqual([row["timeline_sec"] for row in editor.timeline.scan_boundary_times], [10.0])
         self.assertTrue(editor.dirty)
+
+    def test_scan_verify_cut_boundary_candidate_forces_medium_profile(self):
+        class FakeCv2:
+            CAP_PROP_FPS = 5
+            CAP_PROP_FRAME_COUNT = 7
+
+        class FakeCap:
+            def get(self, prop):
+                if prop == FakeCv2.CAP_PROP_FPS:
+                    return 30.0
+                if prop == FakeCv2.CAP_PROP_FRAME_COUNT:
+                    return 900.0
+                return 0.0
+
+        captured = {}
+
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.settings = {
+                    "scan_cut_boundary_level": "off",
+                    "scan_cut_follower_strict_multiplier": 1.0,
+                }
+
+            def _current_frame_fps(self):
+                return 30.0
+
+            def _snap_to_frame(self, sec):
+                return round(float(sec), 3)
+
+            def _scan_get_cv2_module(self):
+                return FakeCv2()
+
+            def _scan_get_cv2_capture(self, _source_path):
+                return FakeCap()
+
+            def _scan_source_and_local_sec(self, global_sec):
+                return "/tmp/test.mp4", float(global_sec), {}
+
+            def _scan_cut_strict_verify_bundle(self):
+                def _profile(settings):
+                    return {"level": settings.get("scan_cut_boundary_level"), "positions": (0, 2, 4, 6, 8)}
+
+                def _verify(_cap, _cv2_mod, **kwargs):
+                    captured.update(kwargs)
+                    return {
+                        "passed": True,
+                        "frame": 205,
+                        "sec": 205.0 / 30.0,
+                        "score": 98.4,
+                        "regions": 5,
+                        "mode": "gray_window_color_avg",
+                    }
+
+                return {"profile_fn": _profile, "verify_fn": _verify}
+
+        editor = DummyEditor()
+
+        result = editor._scan_verify_cut_boundary_candidate(150, 30.0, reason="strong_window")
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result["passed"])
+        self.assertEqual(captured["settings"]["scan_cut_boundary_level"], "medium")
+        self.assertGreaterEqual(captured["settings"]["scan_cut_follower_strict_multiplier"], 1.12)
+        self.assertEqual(captured["frame_count"], 900)
+        self.assertEqual(captured["scan_profile"]["level"], "medium")
+        self.assertEqual(result["frame"], 205)
+        self.assertAlmostEqual(result["sec"], 205.0 / 30.0, places=3)
+
+    def test_relative_refine_uses_strict_verified_frame(self):
+        class DummyEditor:
+            def __init__(self):
+                self.settings = {
+                    "scan_cut_relative_stages": [3, 1],
+                    "scan_cut_relative_rollback_frames": 0,
+                    "scan_cut_strong_window_threshold": 75.0,
+                    "scan_cut_strong_window_regions_required": 2,
+                }
+                self._scan_last_region_hits = 0
+                self._scan_last_region_deltas = []
+
+            def _current_frame_fps(self):
+                return 30.0
+
+            def _scan_verify_cut_boundary_candidate(self, coarse_frame, fps, *, reason=""):
+                self.coarse_frame = int(coarse_frame)
+                self.coarse_reason = str(reason)
+                return {
+                    "available": True,
+                    "passed": True,
+                    "frame": 44,
+                    "sec": 44.0 / 30.0,
+                    "score": 123.0,
+                    "regions": 5,
+                    "mode": "gray_window_color_avg",
+                }
+
+        editor = DummyEditor()
+
+        def fake_capture(_self, sec, region_mode="fast4", **_kwargs):
+            return int(round(float(sec) * 30.0))
+
+        def fake_delta(self, left, right):
+            boundary = 42
+            hit = int(left) <= boundary < int(right)
+            self._scan_last_region_hits = 4 if hit else 1
+            self._scan_last_region_deltas = [80.0, 79.0, 78.0, 77.0] if hit else [10.0, 9.0, 8.0, 7.0]
+            return 95.0 if hit else 12.0
+
+        with patch.object(scan_cut_relative_refine, "_rel_capture_image_at_global", new=fake_capture), patch.object(
+            scan_cut_relative_refine, "_rel_image_delta", new=fake_delta
+        ):
+            result = scan_cut_relative_refine._rel_refine_boundary(editor, 40, 45, 30.0, "strong_window")
+
+        self.assertEqual(editor.coarse_frame, 42)
+        self.assertEqual(editor.coarse_reason, "strong_window")
+        self.assertEqual(result, (44, 44.0 / 30.0, 123.0, 5, "strict_gray_window_color_avg"))
+
+    def test_relative_refine_rejects_when_strict_verify_fails(self):
+        class DummyEditor:
+            def __init__(self):
+                self.settings = {
+                    "scan_cut_relative_stages": [3, 1],
+                    "scan_cut_relative_rollback_frames": 0,
+                    "scan_cut_strong_window_threshold": 75.0,
+                    "scan_cut_strong_window_regions_required": 2,
+                }
+                self._scan_last_region_hits = 0
+                self._scan_last_region_deltas = []
+
+            def _current_frame_fps(self):
+                return 30.0
+
+            def _scan_verify_cut_boundary_candidate(self, _coarse_frame, _fps, *, reason=""):
+                return {
+                    "available": True,
+                    "passed": False,
+                    "reason": "gray_failed",
+                    "provisional_sec": 1.433,
+                    "provisional_mode": "gray_window_rollback",
+                }
+
+        editor = DummyEditor()
+
+        def fake_capture(_self, sec, region_mode="fast4", **_kwargs):
+            return int(round(float(sec) * 30.0))
+
+        def fake_delta(self, left, right):
+            boundary = 42
+            hit = int(left) <= boundary < int(right)
+            self._scan_last_region_hits = 4 if hit else 1
+            self._scan_last_region_deltas = [80.0, 79.0, 78.0, 77.0] if hit else [10.0, 9.0, 8.0, 7.0]
+            return 95.0 if hit else 12.0
+
+        with patch.object(scan_cut_relative_refine, "_rel_capture_image_at_global", new=fake_capture), patch.object(
+            scan_cut_relative_refine, "_rel_image_delta", new=fake_delta
+        ):
+            result = scan_cut_relative_refine._rel_refine_boundary(editor, 40, 45, 30.0, "strong_window")
+
+        self.assertIsNone(result)
 
     def test_set_active_repaints_only_segment_region(self):
         canvas = self._canvas()

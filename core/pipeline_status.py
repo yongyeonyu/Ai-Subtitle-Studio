@@ -82,6 +82,11 @@ def _stage_keys_from_blob(blob: str, *, stt_ensemble_enabled: bool = False) -> s
     if any(token in blob for token in ("[vad]", "silero", "ten_vad", "ten vad", "검수", "위치 재계산", "음성 섹터")):
         return {"vad"}
 
+    if "stt1 우선" in blob:
+        return {"stt1"}
+    if any(token in blob for token in ("저점 구간", "stt2 확인", "stt2 결과로 보강")):
+        return {"stt2"}
+
     if any(token in blob for token in ("[lora]", "lora", "개인화", "텍스트 lora", "lo-ra")):
         return {"lora"}
 

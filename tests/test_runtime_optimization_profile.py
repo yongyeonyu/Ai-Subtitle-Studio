@@ -98,6 +98,28 @@ class RuntimeOptimizationProfileTests(unittest.TestCase):
                 "mlx",
             )
 
+    def test_whisper_cpp_model_routes_to_native_backend(self):
+        self.assertEqual(
+            select_stt_backend(
+                "whisper.cpp:large-v3-turbo",
+                {"stt_backend_policy": "quality", "runtime_backend_autotune_enabled": False},
+            ).backend,
+            "whisper_cpp",
+        )
+        self.assertEqual(
+            select_stt_backend(
+                "whisper_cpp:/models/ggml-large-v3.bin",
+                {"stt_backend_policy": "quality", "runtime_backend_autotune_enabled": False},
+            ).backend,
+            "whisper_cpp",
+        )
+        native_choice = select_stt_backend(
+            "large-v3-turbo",
+            {"stt_backend_policy": "native", "runtime_backend_autotune_enabled": False},
+        )
+        self.assertEqual(native_choice.backend, "whisper_cpp")
+        self.assertEqual(native_choice.model, "large-v3-turbo")
+
     def test_cut_boundary_router_uses_existing_preview_proxy(self):
         with tempfile.TemporaryDirectory() as tmp, patch("core.video_preview_proxy.config.DATASET_DIR", tmp):
             media_path = os.path.join(tmp, "source.mp4")

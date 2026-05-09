@@ -222,13 +222,13 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
-    def test_preview_display_rect_is_capped_to_720p(self):
+    def test_preview_display_rect_uses_full_default_16_9_bounds(self):
         widget = VideoPlayerWidget()
         try:
-            widget._source_aspect = 16 / 9
+            widget._display_aspect = 16 / 9
             rect = widget._displayed_video_rect(SimpleNamespace(width=lambda: 1920, height=lambda: 1080))
-            self.assertLessEqual(rect.height(), 720)
-            self.assertLessEqual(rect.width(), 1280)
+            self.assertEqual(rect.width(), 1920)
+            self.assertEqual(rect.height(), 1080)
         finally:
             widget.close()
             widget.deleteLater()

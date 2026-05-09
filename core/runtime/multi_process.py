@@ -409,13 +409,11 @@ class RuntimeResourceCoordinator:
         data = dict(snapshot or self._latest or {})
         if not data:
             return ""
-        active = ", ".join(str(item) for item in list(data.get("active_labels", []) or [])[:3]) or "idle"
         return (
             "<div style='margin-top:6px; padding-top:5px; border-top:1px solid #22313A;'>"
             f"<div style='color:#DCE7F3; font-size:8px;'>CPU {float(data.get('system_cpu_percent', 0.0)):.0f}% · "
             f"PROC {float(data.get('process_cpu_percent', 0.0)):.0f}% · "
             f"RAM {float(data.get('rss_gb', 0.0)):.2f}GB</div>"
-            f"<div style='color:#9DB7C8; font-size:8px;'>ACTIVE {active}</div>"
             "</div>"
         )
 

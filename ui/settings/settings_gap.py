@@ -9,18 +9,11 @@ ui/settings_gap.py  ─  ⏱️ 자막 간격/분할 설정
 """
 from PyQt6.QtWidgets import (
     QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QPushButton, QSlider, QFrame, QMessageBox, QToolTip, QCheckBox, QComboBox
+    QLabel, QPushButton, QSlider, QFrame, QMessageBox, QToolTip
 )
 from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt
 from core.project.data_manager import save_settings, save_default_settings
-from core.personalization.runtime_personalization import personalization_settings_override_for_media
-from core.settings_simplifier import (
-    apply_simple_operation_mode,
-    normalize_simple_operation_mode,
-    simple_operation_mode_items,
-    simple_operation_mode_summary,
-)
 from ui.settings.settings_common import DEFAULT_ADV_SETTINGS, _create_bottom_buttons
 from ui.settings.qml_panel import create_settings_header
 from ui.settings.tablet_dialog import apply_tablet_dialog_profile
@@ -28,19 +21,6 @@ from ui.style import button_style, settings_dialog_stylesheet
 
 
 from ui.settings.gap_simulator import GapSimulatorWidget
-
-
-_LORA_GAP_SLIDERS = {
-    "continuous_threshold": ("slider_cont", 10.0, "연속자막 기준"),
-    "gap_push_rate": ("slider_push", 100.0, "자막간격 조정"),
-    "single_subtitle_end": ("slider_single", 10.0, "단일자막 유지"),
-    "split_length_threshold": ("slider_split", 1.0, "분할 기준 글자 수"),
-    "sub_min_duration": ("slider_min_dur", 10.0, "초단문 무시"),
-    "sub_max_duration": ("slider_max_dur", 10.0, "최대 자막 길이"),
-    "sub_max_cps": ("slider_cps", 1.0, "최대 CPS"),
-    "sub_dedup_window": ("slider_dedup", 10.0, "말더듬 환각 제거"),
-    "sub_gap_break_sec": ("slider_gap_break", 10.0, "강제 줄바꿈 무음"),
-}
 
 
 class GapSettingsDialog(QDialog):
@@ -57,7 +37,6 @@ class GapSettingsDialog(QDialog):
         self.setStyleSheet(settings_dialog_stylesheet())
         self.result = dict(settings)
         self.sliders_info = []
-        self._simplified_ui_enabled = bool(self.result.get("settings_simplified_ui_enabled", True))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -82,52 +61,6 @@ class GapSettingsDialog(QDialog):
         sep0.setFixedHeight(1)
         sep0.setStyleSheet("background-color: #24313A; margin: 6px 0;")
         layout.addWidget(sep0)
-
-        auto_row = QFrame()
-        auto_row.setStyleSheet("QFrame { background: #12202A; border: 1px solid #2B3C48; border-radius: 10px; }")
-        auto_layout = QHBoxLayout(auto_row)
-        auto_layout.setContentsMargins(10, 6, 8, 6)
-        auto_layout.setSpacing(8)
-        auto_title = QLabel("<b>LoRA 간격</b>")
-        auto_title.setStyleSheet("color: #DCE3EA; background: transparent;")
-        auto_hint = QLabel("학습 데이터가 있으면 현재 영상에 맞는 간격 값을 반영합니다.")
-        auto_hint.setStyleSheet("color: #8FA1AF; font-size: 12px; background: transparent;")
-        self.btn_lora_gap_auto = QPushButton("자동설정")
-        self.btn_lora_gap_auto.setFixedHeight(30)
-        self.btn_lora_gap_auto.setStyleSheet(button_style("primary", font_size="13px", padding="5px 14px"))
-        self.btn_lora_gap_auto.clicked.connect(self._on_lora_gap_auto_apply)
-        auto_layout.addWidget(auto_title)
-        auto_layout.addWidget(auto_hint, 1)
-        auto_layout.addWidget(self.btn_lora_gap_auto)
-        layout.addWidget(auto_row)
-
-        simple_row = QFrame()
-        simple_row.setStyleSheet("QFrame { background: #101B23; border: 1px solid #263945; border-radius: 10px; }")
-        simple_layout = QHBoxLayout(simple_row)
-        simple_layout.setContentsMargins(10, 7, 8, 7)
-        simple_layout.setSpacing(8)
-        simple_title = QLabel("<b>자동 모드</b>")
-        simple_title.setStyleSheet("color: #DCE3EA; background: transparent;")
-        self.combo_simple_operation_mode = QComboBox()
-        for mode, label, summary in simple_operation_mode_items():
-            self.combo_simple_operation_mode.addItem(f"{label} - {summary}", mode)
-        current_mode = normalize_simple_operation_mode(self.result.get("simple_operation_mode", "auto"))
-        for idx in range(self.combo_simple_operation_mode.count()):
-            if self.combo_simple_operation_mode.itemData(idx) == current_mode:
-                self.combo_simple_operation_mode.setCurrentIndex(idx)
-                break
-        self.lbl_simple_operation_summary = QLabel(simple_operation_mode_summary(current_mode))
-        self.lbl_simple_operation_summary.setWordWrap(True)
-        self.lbl_simple_operation_summary.setStyleSheet("color: #8FA1AF; font-size: 12px; background: transparent;")
-        self.chk_show_manual_gap_settings = QCheckBox("상세값 보기")
-        self.chk_show_manual_gap_settings.setChecked(not self._simplified_ui_enabled)
-        self.chk_show_manual_gap_settings.setStyleSheet("color: #DCE3EA; background: transparent;")
-        self.combo_simple_operation_mode.currentIndexChanged.connect(self._on_simple_operation_mode_changed)
-        simple_layout.addWidget(simple_title)
-        simple_layout.addWidget(self.combo_simple_operation_mode, 0)
-        simple_layout.addWidget(self.lbl_simple_operation_summary, 1)
-        simple_layout.addWidget(self.chk_show_manual_gap_settings)
-        layout.addWidget(simple_row)
 
         # [v01.00.10] 파라미터 폼 전체를 QScrollArea로 감싸 화면 넘침 방지
         scroll_container = QWidget()
@@ -296,84 +229,6 @@ class GapSettingsDialog(QDialog):
             s.valueChanged.connect(self._update_simulator)
         
         self._update_simulator()
-        self.chk_show_manual_gap_settings.toggled.connect(self._on_gap_detail_toggled)
-        self._on_gap_detail_toggled(self.chk_show_manual_gap_settings.isChecked())
-
-    def _on_simple_operation_mode_changed(self, *args):
-        mode = self.combo_simple_operation_mode.currentData() or "auto"
-        if hasattr(self, "lbl_simple_operation_summary"):
-            self.lbl_simple_operation_summary.setText(simple_operation_mode_summary(mode))
-
-    def _on_gap_detail_toggled(self, checked: bool):
-        if hasattr(self, "_manual_gap_scroll_area"):
-            self._manual_gap_scroll_area.setVisible(bool(checked))
-        if hasattr(self, "simulator"):
-            self.simulator.setVisible(bool(checked))
-
-    def _current_media_path(self) -> str:
-        owner = self.parent()
-        for candidate in (owner, getattr(owner, "window", lambda: None)()):
-            if candidate is None:
-                continue
-            editor_getter = getattr(candidate, "_active_editor", None)
-            if callable(editor_getter):
-                try:
-                    editor = editor_getter()
-                except Exception:
-                    editor = None
-            else:
-                editor = candidate
-            media_path = str(
-                getattr(editor, "media_path", "")
-                or getattr(getattr(editor, "sm", None), "current_file", "")
-                or getattr(candidate, "media_path", "")
-                or ""
-            )
-            if media_path:
-                return media_path
-        return ""
-
-    def _coerce_slider_value(self, slider: QSlider, key: str, value, multiplier: float) -> int | None:
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError):
-            return None
-        if key == "gap_push_rate" and numeric > 1.0:
-            numeric /= 100.0
-        slider_value = int(round(numeric * multiplier))
-        return max(slider.minimum(), min(slider.maximum(), slider_value))
-
-    def _on_lora_gap_auto_apply(self):
-        media_path = self._current_media_path()
-        try:
-            recommended = personalization_settings_override_for_media(media_path)
-        except Exception as e:
-            QMessageBox.warning(self, "LoRA 자동설정 실패", str(e))
-            return
-
-        applied: list[str] = []
-        for key, (slider_attr, multiplier, label) in _LORA_GAP_SLIDERS.items():
-            if key not in recommended:
-                continue
-            slider = getattr(self, slider_attr, None)
-            if slider is None:
-                continue
-            slider_value = self._coerce_slider_value(slider, key, recommended.get(key), multiplier)
-            if slider_value is None:
-                continue
-            slider.setValue(slider_value)
-            applied.append(label)
-
-        if not applied:
-            QMessageBox.information(self, "LoRA 자동설정", "아직 적용할 수 있는 LoRA 간격 학습값이 없습니다.")
-            return
-
-        self._collect_data()
-        QMessageBox.information(
-            self,
-            "LoRA 자동설정 완료",
-            "학습된 LoRA 값을 간격 설정에 반영했습니다.\n\n" + " · ".join(applied),
-        )
 
     def _update_simulator(self, *args):
         self.simulator.cont_thresh = self.slider_cont.value() / 10.0
@@ -440,12 +295,6 @@ class GapSettingsDialog(QDialog):
                 s.setValue(int(d * m))
 
     def _collect_data(self):
-        if bool(self.result.get("settings_simplified_ui_enabled", True)) and hasattr(self, "chk_show_manual_gap_settings") and not self.chk_show_manual_gap_settings.isChecked():
-            self.result = apply_simple_operation_mode(
-                self.result,
-                self.combo_simple_operation_mode.currentData() if hasattr(self, "combo_simple_operation_mode") else self.result.get("simple_operation_mode", "auto"),
-            )
-            return
         self.result["continuous_threshold"] = self.slider_cont.value() / 10.0
         self.result["gap_push_rate"] = self.slider_push.value() / 100.0
         self.result["single_subtitle_end"] = self.slider_single.value() / 10.0

@@ -19,6 +19,150 @@ from core.audio.media_processor import VideoProcessor
 
 
 class AudioPresetTests(unittest.TestCase):
+    def test_clearvoice_defaults_to_fast_16k_model(self):
+        processor = VideoProcessor()
+
+        self.assertEqual(processor._clearvoice_model_name({}), "MossFormerGAN_SE_16K")
+        self.assertEqual(processor._clearvoice_input_sample_rate({}), 16000)
+        self.assertEqual(processor._audio_processing_sample_rate("clearvoice", {}), 16000)
+
+    def test_external_audio_overlap_preprocess_creates_cleaned_wav(self):
+        processor = VideoProcessor()
+        calls = []
+        enhanced = []
+
+        def _write_wav(path):
+            with open(path, "wb") as f:
+                f.write(b"RIFF" + b"\0" * 4096)
+
+        def fake_no_progress(cmd, *, label, timeout=None, env=None):
+            _ = (timeout, env)
+            calls.append((label, list(cmd)))
+            _write_wav(str(cmd[-1]))
+            return True
+
+        def fake_progress(cmd, *, label, timeout=None, env=None):
+            _ = (timeout, env)
+            calls.append((label, list(cmd)))
+            _write_wav(str(cmd[-1]))
+            return True
+
+        def fake_rnnoise(source_wav, target_wav):
+            enhanced.append((source_wav, target_wav))
+            _write_wav(target_wav)
+            return True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            video_path = os.path.join(tmpdir, "sample.mp4")
+            cleaned_wav = os.path.join(tmpdir, "cleaned.wav")
+            _write_wav(video_path)
+
+            settings = {
+                "audio_preprocess_audio_overlap_enabled": True,
+                "audio_preprocess_audio_overlap_min_sec": 0,
+                "audio_preprocess_audio_overlap_chunk_sec": 30,
+                "audio_preprocess_audio_overlap_workers": 2,
+                "ffmpeg_filter_threads": 1,
+            }
+            with mock.patch.object(processor, "_run_media_command_no_progress", side_effect=fake_no_progress), \
+                 mock.patch.object(processor, "_run_media_command", side_effect=fake_progress), \
+                 mock.patch.object(processor, "_apply_rnnoise", side_effect=fake_rnnoise):
+                ok, applied = processor._run_overlapped_audio_preprocess(
+                    video_path=video_path,
+                    work_dir=tmpdir,
+                    base_name="sample",
+                    cleaned_wav=cleaned_wav,
+                    audio_ai="rnnoise",
+                    settings=settings,
+                    use_basic=True,
+                    master_filter="anull",
+                    active_filter="anull",
+                    direct_start=0.0,
+                    direct_end=90.0,
+                )
+            cleaned_exists = os.path.exists(cleaned_wav)
+
+        self.assertTrue(ok)
+        self.assertTrue(applied)
+        self.assertTrue(cleaned_exists)
+        self.assertEqual(len(enhanced), 3)
+        self.assertGreaterEqual(sum(1 for label, _cmd in calls if label == "병렬 오디오 청크 추출"), 3)
+        self.assertTrue(any(label == "청크 음성 향상 병합" for label, _cmd in calls))
+        self.assertTrue(any(label == "ffmpeg 음량 평탄화" for label, _cmd in calls))
+
+    def test_external_audio_overlap_preprocess_skips_partial_span(self):
+        processor = VideoProcessor()
+        settings = {
+            "audio_preprocess_audio_overlap_enabled": True,
+            "audio_preprocess_audio_overlap_min_sec": 0,
+            "clearvoice_native_ffmpeg_enabled": False,
+        }
+
+        self.assertTrue(
+            processor._can_overlap_preprocess_audio(
+                settings,
+                audio_ai="clearvoice",
+                span_sec=300.0,
+                is_partial=False,
+            )
+        )
+        self.assertFalse(
+            processor._can_overlap_preprocess_audio(
+                settings,
+                audio_ai="clearvoice",
+                span_sec=300.0,
+                is_partial=True,
+            )
+        )
+
+    def test_clearvoice_uses_native_ffmpeg_fused_path_by_default(self):
+        processor = VideoProcessor()
+
+        self.assertTrue(processor._clearvoice_native_ffmpeg_enabled({}))
+        self.assertTrue(processor._can_fuse_ffmpeg_preprocess("clearvoice", {}))
+        self.assertFalse(
+            processor._can_overlap_preprocess_audio(
+                {"audio_preprocess_audio_overlap_enabled": True, "audio_preprocess_audio_overlap_min_sec": 0},
+                audio_ai="clearvoice",
+                span_sec=300.0,
+                is_partial=False,
+            )
+        )
+
+    def test_clearvoice_native_ffmpeg_can_be_disabled_for_legacy_model_path(self):
+        processor = VideoProcessor()
+        settings = {"clearvoice_native_ffmpeg_enabled": False}
+
+        self.assertFalse(processor._clearvoice_native_ffmpeg_enabled(settings))
+        self.assertFalse(processor._can_fuse_ffmpeg_preprocess("clearvoice", settings))
+
+    def test_clearvoice_apply_native_ffmpeg_without_python_clearvoice_package(self):
+        processor = VideoProcessor()
+        calls = []
+
+        def _write_wav(path):
+            with open(path, "wb") as f:
+                f.write(b"RIFF" + b"\0" * 4096)
+
+        def fake_run(cmd, *, label, timeout=None, env=None):
+            _ = (timeout, env)
+            calls.append((label, list(cmd)))
+            _write_wav(str(cmd[-1]))
+            return True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = os.path.join(tmpdir, "source.wav")
+            target = os.path.join(tmpdir, "target.wav")
+            _write_wav(source)
+            processor._clearvoice_runtime_settings = {"clearvoice_native_ffmpeg_enabled": True}
+            with mock.patch.object(processor, "_run_media_command", side_effect=fake_run), \
+                 mock.patch("core.audio.media_processor_audio.importlib.util.find_spec", return_value=None):
+                ok = processor._apply_clearvoice(source, target)
+
+        self.assertTrue(ok)
+        self.assertEqual(calls[0][0], "ClearVoice Native FFmpeg")
+        self.assertIn("-af", calls[0][1])
+
     def test_outdoor_preset_boosts_stt1_frontend_audio(self):
         applied = apply_audio_preset({}, "야외")
 
@@ -232,13 +376,19 @@ class AudioPresetTests(unittest.TestCase):
         processor = VideoProcessor()
         settings = apply_audio_preset({}, "야외")
 
-        for audio_ai in ("resemble_enhance", "clearvoice"):
-            cleanup = processor._build_audio_cleanup_filter(audio_ai, settings)
-            self.assertIn("highpass=f=170", cleanup)
-            self.assertIn("lowpass=f=5200", cleanup)
-            self.assertIn("speechnorm", cleanup)
-            self.assertIn("loudnorm", cleanup)
-            self.assertNotIn("afftdn", cleanup)
+        resemble_cleanup = processor._build_audio_cleanup_filter("resemble_enhance", settings)
+        self.assertIn("highpass=f=170", resemble_cleanup)
+        self.assertIn("lowpass=f=5200", resemble_cleanup)
+        self.assertIn("speechnorm", resemble_cleanup)
+        self.assertIn("loudnorm", resemble_cleanup)
+        self.assertNotIn("afftdn", resemble_cleanup)
+
+        clearvoice_cleanup = processor._build_audio_cleanup_filter("clearvoice", settings)
+        self.assertIn("highpass=f=170", clearvoice_cleanup)
+        self.assertIn("lowpass=f=5200", clearvoice_cleanup)
+        self.assertIn("speechnorm", clearvoice_cleanup)
+        self.assertIn("loudnorm", clearvoice_cleanup)
+        self.assertIn("afftdn", clearvoice_cleanup)
 
     def test_rnnoise_fallback_cleanup_label_uses_ffmpeg(self):
         self.assertEqual(VideoProcessor._audio_cleanup_label("rnnoise", False), "FFMPEG")

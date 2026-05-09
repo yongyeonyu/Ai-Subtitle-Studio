@@ -194,7 +194,8 @@ def _is_heavy_app_child_command(command: str) -> bool:
     heavy_names = (
         "ffmpeg", "ffprobe", "rnnoise",
         "whisper_worker.py", "whisper_transformers.py", "whisper_faster.py",
-        "whisper_coreml.py", "whisper_mlx.py", "resemble_enhance_runner.py",
+        "whisper_coreml.py", "whisper_mlx.py", "whisper_cpp.py", "whisper-cli",
+        "resemble_enhance_runner.py",
         "ollama runner", "ollama_llama_server",
     )
     return any(name in lowered for name in heavy_names)

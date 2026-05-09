@@ -19,8 +19,8 @@ from ui.gpu_rendering import scenegraph_enabled
 from ui.responsive_profile import responsive_profile_for_size
 from ui.style import label_style, line_icon, tool_button_style
 
-MENU_BAR_HEIGHT = 54
-MENU_BUTTON_HEIGHT = 44
+MENU_BAR_HEIGHT = 48
+MENU_BUTTON_HEIGHT = 38
 MENU_SMALL_WIDTH = 54
 MENU_ACTION_WIDTH = 78
 MENU_WIDE_WIDTH = 62
@@ -28,7 +28,7 @@ MENU_CACHE_WIDTH = 82
 MENU_SMALL_ICON = 17
 MENU_WIDE_ICON = 16
 MENU_ACTION_ICON = 18
-MENU_TEXT_UNDER_ICON_PADDING = "8px 5px 4px 5px"
+MENU_TEXT_UNDER_ICON_PADDING = "5px 5px 2px 5px"
 
 
 class StatusRail(QWidget):
@@ -36,6 +36,7 @@ class StatusRail(QWidget):
         super().__init__(parent)
         self.setStyleSheet("background: transparent; border: none;")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(26)
         self._last_state_text = ""
         self._flash_left = 0
         self._flash_on = False
@@ -47,9 +48,9 @@ class StatusRail(QWidget):
         self._quick_icon_text = "ED"
         self._quick_color = "#34C759"
         layout = QGridLayout(self)
-        layout.setContentsMargins(0, 2, 0, 4)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setHorizontalSpacing(0)
-        layout.setVerticalSpacing(4)
+        layout.setVerticalSpacing(0)
         self.state_button = self._rail_button("에디터 | 검토", "edit")
         layout.addWidget(self.state_button, 0, 0)
         layout.setColumnStretch(0, 1)
@@ -62,7 +63,7 @@ class StatusRail(QWidget):
         btn.setIcon(line_icon(icon, "#A9B0B7", 20))
         btn.setIconSize(QSize(15, 15))
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        btn.setMinimumHeight(34)
+        btn.setFixedHeight(26)
         btn.setMinimumWidth(0)
         btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         btn.setCursor(Qt.CursorShape.ArrowCursor)
@@ -242,7 +243,7 @@ class StatusRail(QWidget):
         return (
             "QToolButton { "
             f"background: {bg}; color: #D9FFE3; border: 1px solid #34C759; "
-            "border-radius: 7px; padding: 6px 8px; font-size: 12px; font-weight: 700; "
+            "border-radius: 7px; padding: 3px 8px; font-size: 11px; font-weight: 700; "
             "text-align: left; "
             "} "
             "QToolButton:hover { "
@@ -356,8 +357,6 @@ class GlobalMenuBar(QWidget):
             ("설정", "settings", self._open_ai, "#34C759"),
             *([("개인화", "ai", self._open_personalization, "#34C759")] if config.IS_MAC else []),
             ("화자", "speaker", self._open_speaker, "#A678F4"),
-            ("화각", "sliders", self._open_angle_placeholder, "#FF9500"),
-            ("간격", "timeline", self._open_gap, "#579DFF"),
             ("비디오", "video", self._toggle_video, "#579DFF"),
             ("자막", "export", self._open_export, "#34C759"),
             ("음성", "mic", self._toggle_stt_mode, "#FF453A"),
@@ -399,18 +398,15 @@ class GlobalMenuBar(QWidget):
         right.setSpacing(5)
         self.btn_auto_start = self._wide_button("자동", "sliders", self._toggle_auto_start)
         self.btn_help = self._wide_button("도움말", "help", self._open_help)
-        self.btn_log = self._wide_button("사이드바", "terminal", self._toggle_log)
         self.btn_cache_clear = self._wide_button("캐쉬삭제", "trash", self._clear_cache, min_width=MENU_CACHE_WIDTH)
         self.btn_quit = self._wide_button("종료", "power", self._quit, kind="danger")
         self._register_qml_button(self.btn_cache_clear, action_id="right_cache", badge="", accent="#FF9500", section="right")
         self._register_qml_button(self.btn_auto_start, action_id="right_auto", badge="", accent="#34C759", section="right")
         self._register_qml_button(self.btn_help, action_id="right_help", badge="", accent="#579DFF", section="right")
-        self._register_qml_button(self.btn_log, action_id="right_log", badge="", accent="#579DFF", section="right")
         self._register_qml_button(self.btn_quit, action_id="right_quit", badge="", accent="#FF453A", section="right", kind="danger")
         right.addWidget(self.btn_cache_clear)
         right.addWidget(self.btn_auto_start)
         right.addWidget(self.btn_help)
-        right.addWidget(self.btn_log)
         right.addWidget(self.btn_quit)
         root.addWidget(self.right_group, stretch=1, alignment=Qt.AlignmentFlag.AlignRight)
 
@@ -551,11 +547,6 @@ class GlobalMenuBar(QWidget):
         self.btn_auto_start.setIcon(line_icon("auto", auto_color, 22))
         self.btn_auto_start.setStyleSheet(tool_button_style("toolbar", checked=auto_on, padding=MENU_TEXT_UNDER_ICON_PADDING))
         self.btn_auto_start.setToolTip("자동시작 ON" if auto_on else "자동시작 OFF")
-        log_visible = bool(getattr(main, "_log_visible", True))
-        self.btn_log.setText("사이드바")
-        log_color = "#34C759" if log_visible else "#A9B0B7"
-        self.btn_log.setIcon(line_icon("terminal", log_color, 22))
-        self.btn_log.setToolTip("사이드바 숨기기" if log_visible else "사이드바 보기")
 
         compact = self._should_icon_only()
         for btn in self._tool_buttons:
@@ -570,7 +561,7 @@ class GlobalMenuBar(QWidget):
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setFixedHeight(profile.menu_button_height)
                     btn.setFixedWidth(max(profile.touch_target, MENU_ACTION_WIDTH))
-                elif btn in (self.btn_auto_start, self.btn_help, self.btn_log, self.btn_cache_clear):
+                elif btn in (self.btn_auto_start, self.btn_help, self.btn_cache_clear):
                     btn.setIconSize(QSize(MENU_WIDE_ICON, MENU_WIDE_ICON))
                     btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
                     btn.setFixedHeight(profile.menu_button_height)
@@ -694,10 +685,6 @@ class GlobalMenuBar(QWidget):
         if editor is not None and hasattr(editor, "_toggle_stt_mode"):
             editor._toggle_stt_mode()
         self.refresh()
-
-    def _open_angle_placeholder(self):
-        if hasattr(self.main_window, "_dummy_action"):
-            self.main_window._dummy_action()
 
     def _click_start(self):
         if normalize_work_mode(getattr(self.main_window, "_current_work_mode", EDITOR_MODE)) == ROUGHCUT_MODE:

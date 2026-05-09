@@ -58,6 +58,44 @@ class FingerprintCacheTests(unittest.TestCase):
         self.assertIn("source_fingerprint_digest", first)
         self.assertNotEqual(first["source_fingerprint_digest"], second["source_fingerprint_digest"])
 
+    def test_clearvoice_audio_cache_config_tracks_model_variant(self):
+        processor = VideoProcessor()
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "voice.mp4")
+            with open(media, "wb") as handle:
+                handle.write(b"voice media payload")
+            fast = processor._audio_cache_config(
+                media,
+                {"clearvoice_model_name": "MossFormerGAN_SE_16K", "clearvoice_native_ffmpeg_enabled": False},
+                audio_ai="clearvoice",
+                use_basic=False,
+                master_filter="anull",
+                active_filter="anull",
+            )
+            legacy = processor._audio_cache_config(
+                media,
+                {"clearvoice_model_name": "MossFormer2_SE_48K", "clearvoice_native_ffmpeg_enabled": False},
+                audio_ai="clearvoice",
+                use_basic=False,
+                master_filter="anull",
+                active_filter="anull",
+            )
+            native = processor._audio_cache_config(
+                media,
+                {"clearvoice_model_name": "MossFormer2_SE_48K"},
+                audio_ai="clearvoice",
+                use_basic=False,
+                master_filter="anull",
+                active_filter="anull",
+            )
+
+        self.assertEqual(fast["audio_ai_variant"], "MossFormerGAN_SE_16K")
+        self.assertEqual(fast["processing_sample_rate"], 16000)
+        self.assertEqual(legacy["audio_ai_variant"], "MossFormer2_SE_48K")
+        self.assertEqual(legacy["processing_sample_rate"], 48000)
+        self.assertEqual(native["audio_ai_variant"], "native_ffmpeg_v1")
+        self.assertTrue(native["clearvoice_native_ffmpeg_enabled"])
+
     def test_cut_boundary_cache_path_uses_media_fingerprint(self):
         owner = _CutCacheOwner()
         old_output_dir = config.OUTPUT_DIR

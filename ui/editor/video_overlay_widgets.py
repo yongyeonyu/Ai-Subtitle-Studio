@@ -59,7 +59,7 @@ class ThumbnailLabel(QLabel):
             if self._scaled_cache is None or self._scaled_cache_size != cache_size:
                 self._scaled_cache = self._pixmap.scaled(
                     self.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     Qt.TransformationMode.SmoothTransformation
                 )
                 self._scaled_cache_size = cache_size
@@ -295,7 +295,7 @@ class VideoSurfaceView(QGraphicsView):
         super().__init__(parent)
         self._scene = QGraphicsScene(self)
         self.video_item = QGraphicsVideoItem()
-        self.video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+        self.video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatioByExpanding)
         self._scene.addItem(self.video_item)
         self.subtitle_item = SubtitleSceneOverlayItem()
         self.subtitle_item.setVisible(False)

@@ -25,8 +25,8 @@ class ResponsiveProfile:
 DESKTOP_PROFILE = ResponsiveProfile(
     name="desktop",
     touch_target=44,
-    menu_bar_height=54,
-    menu_button_height=44,
+    menu_bar_height=48,
+    menu_button_height=38,
     menu_icon_only_width=760,
     editor_compact_width=1100,
     settings_min_button_height=40,

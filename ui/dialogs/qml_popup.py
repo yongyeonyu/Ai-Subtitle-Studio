@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from PyQt6.QtCore import QEventLoop, QObject, QPoint, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QEventLoop, QObject, QPoint, QRect, QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QFontMetrics
 from PyQt6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QVBoxLayout, QWidget
 
@@ -46,6 +46,53 @@ def _platform_name() -> str:
 
 def _widget_parent(parent):
     return parent if isinstance(parent, QWidget) else None
+
+
+def _screen_available_geometry(global_pos: QPoint | None = None) -> QRect:
+    app = QApplication.instance()
+    screen = None
+    if app is not None and global_pos is not None:
+        try:
+            screen = app.screenAt(global_pos)
+        except Exception:
+            screen = None
+    if screen is None and app is not None:
+        screen = app.primaryScreen()
+    if screen is not None:
+        return screen.availableGeometry()
+    return QRect(0, 0, 800, 600)
+
+
+def _bounded_popup_size(
+    size: QSize,
+    available: QRect,
+    *,
+    margin: int = 8,
+    min_width: int = 120,
+    min_height: int = 80,
+) -> QSize:
+    width = max(1, int(size.width()))
+    height = max(1, int(size.height()))
+    max_width = max(min_width, int(available.width()) - margin * 2)
+    max_height = max(min_height, int(available.height()) - margin * 2)
+    return QSize(min(width, max_width), min(height, max_height))
+
+
+def _clamp_popup_pos(pos: QPoint, popup_size: QSize, available: QRect, *, margin: int = 8) -> QPoint:
+    x = int(pos.x())
+    y = int(pos.y())
+    width = max(1, int(popup_size.width()))
+    height = max(1, int(popup_size.height()))
+
+    min_x = int(available.left()) + margin
+    max_x = int(available.right()) - width + 1 - margin
+    min_y = int(available.top()) + margin
+    max_y = int(available.bottom()) - height + 1 - margin
+    if max_x < min_x:
+        max_x = min_x
+    if max_y < min_y:
+        max_y = min_y
+    return QPoint(max(min_x, min(x, max_x)), max(min_y, min(y, max_y)))
 
 
 def _button_bits(buttons) -> list[QMessageBox.StandardButton]:
@@ -244,6 +291,13 @@ class _QuickContextMenuDialog(QDialog):
         height = max(44, rows * 34 + separators * 8 + 16)
         return width, height
 
+    def fit_to_screen(self, global_pos: QPoint) -> None:
+        available = _screen_available_geometry(global_pos)
+        bounded = _bounded_popup_size(self.size(), available)
+        if bounded != self.size():
+            self.resize(bounded)
+        self.move(_clamp_popup_pos(global_pos, bounded, available))
+
     def _on_triggered(self, item_id: str):
         self._selected_id = str(item_id or "")
         self.accept()
@@ -334,7 +388,12 @@ def _fallback_qmenu(parent, global_pos: QPoint, items: list[dict]) -> str | None
             action.setCheckable(True)
             action.setChecked(bool(item.get("checked")))
         action_map[action] = str(item.get("id") or "")
-    chosen = menu.exec(global_pos)
+    available = _screen_available_geometry(global_pos)
+    bounded = _bounded_popup_size(menu.sizeHint(), available)
+    menu.setMaximumSize(bounded)
+    if menu.sizeHint().width() > bounded.width():
+        menu.setFixedWidth(bounded.width())
+    chosen = menu.exec(_clamp_popup_pos(global_pos, bounded, available))
     return action_map.get(chosen)
 
 
@@ -345,7 +404,7 @@ def show_context_menu(parent, global_pos: QPoint, items: list[dict]) -> str | No
     if _quick_available(MENU_QML):
         try:
             dialog = _QuickContextMenuDialog(_widget_parent(parent), normalized)
-            dialog.move(QPoint(global_pos))
+            dialog.fit_to_screen(QPoint(global_pos))
             loop = QEventLoop()
             dialog.finished.connect(loop.quit)
             dialog.show()

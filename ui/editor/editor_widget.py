@@ -303,6 +303,7 @@ class EditorWidget(
     # 상태 머신 핸들러
     # ---------------------------------------------------------
     def _on_state_machine_update(self, mode, state, is_locked, is_dirty, lbl_txt, btn_txt, btn_en):
+        was_processing = bool(getattr(self, "_is_ai_processing", False))
         self.current_mode      = mode
         self.current_state     = state
         self._is_ai_processing = is_locked
@@ -322,6 +323,16 @@ class EditorWidget(
             self.btn_start.setText(self._clean_action_label(btn_txt))
             self.btn_start.setEnabled(btn_en)
         main_w = self.window()
+        if is_locked and not was_processing and hasattr(main_w, "_lock_workspace_sidebar_width"):
+            try:
+                main_w._lock_workspace_sidebar_width()
+            except Exception:
+                pass
+        elif not is_locked and was_processing and hasattr(main_w, "_unlock_workspace_sidebar_width"):
+            try:
+                main_w._unlock_workspace_sidebar_width()
+            except Exception:
+                pass
         if hasattr(main_w, "sync_menu_from_editor"):
             main_w.sync_menu_from_editor(self)
         if hasattr(main_w, "_refresh_saved_status_label"):
@@ -1304,13 +1315,11 @@ class EditorWidget(
         self.btn_spk = QPushButton("🗣️ 화자")
         self.btn_gap = QPushButton("⏱️ 간격")
         self.btn_vid = QPushButton("🎬 비디오")
-        self.btn_log = QPushButton(self._terminal_log_button_text())
         self._top_btns = [
             (self.btn_ai,  "⚙️ AI",      "AI",      self._show_settings),
             (self.btn_spk, "🗣️ 화자",    "화자",     self._show_speaker_settings),
             (self.btn_gap, "⏱️ 간격",    "간격",     self._show_gap_settings),
             (self.btn_vid, "🎬 비디오",  "비디오",   self._toggle_video),
-            (self.btn_log, "터미널 로그", "로그",     self._toggle_terminal_log),
         ]
         for btn, _, _, slot in self._top_btns:
             btn.setStyleSheet(button_style("toolbar")); btn.clicked.connect(slot); btn_row.addWidget(btn)
@@ -1376,8 +1385,6 @@ class EditorWidget(
         for btn, full_t, comp_t, _ in getattr(self, '_bot_btns', []):
             if btn != getattr(self, 'btn_start', None):
                 btn.setText(comp_t if is_compact else full_t)
-        if hasattr(self, "btn_log"):
-            self.btn_log.setText("로그" if is_compact else self._terminal_log_button_text())
 
     def _position_video_expand_button(self):
         return
@@ -1415,21 +1422,8 @@ class EditorWidget(
         timeline = getattr(self, "timeline", None)
         if timeline is not None and hasattr(timeline, "schedule_fit_to_view"):
             timeline.schedule_fit_to_view((0, 120, 260))
-        if hasattr(self, "btn_log"):
-            self.btn_log.setText(self._terminal_log_button_text())
 
     def _force_ui_log(self, msg: str): get_logger().log(msg)
-
-    def _terminal_log_button_text(self):
-        main_w = self.window()
-        visible = bool(getattr(main_w, "_log_visible", True))
-        return "사이드바 숨기기" if visible else "사이드바"
-
-    def _toggle_terminal_log(self):
-        main_w = self.window()
-        if hasattr(main_w, "_toggle_log"):
-            main_w._toggle_log()
-            self.set_terminal_visible_layout(bool(getattr(main_w, "_log_visible", False)))
 
     def _update_engine_label_text(self):
         short_w = self.settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", "")).replace("mlx-community/", "").replace("-mlx", "") or "기본"

@@ -825,6 +825,50 @@ def _rel_refine_boundary(self, start_frame: int, end_frame: int, fps: float, rea
         )
         return None
 
+    strict_verified = None
+    if hasattr(self, "_scan_verify_cut_boundary_candidate"):
+        try:
+            strict_verified = self._scan_verify_cut_boundary_candidate(best_frame, fps, reason=reason)
+        except Exception as exc:
+            print(f"⚠️ [scan-cut-relative] strict verify error: {exc}", flush=True)
+            strict_verified = None
+
+    if isinstance(strict_verified, dict) and strict_verified.get("available"):
+        if not strict_verified.get("passed"):
+            provisional_bits = []
+            if strict_verified.get("provisional_sec") is not None:
+                provisional_bits.append(
+                    f"provisional={float(strict_verified.get('provisional_sec') or 0.0):.3f}s"
+                )
+            if strict_verified.get("provisional_mode"):
+                provisional_bits.append(f"mode={strict_verified.get('provisional_mode')}")
+            provisional_text = f" {' '.join(provisional_bits)}" if provisional_bits else ""
+            print(
+                f"⚠️ [scan-cut-relative] FINAL REJECT BY STRICT VERIFY "
+                f"reason={strict_verified.get('reason', 'strict_verify_failed')}{provisional_text}",
+                flush=True,
+            )
+            return None
+
+        stop_frame = int(strict_verified.get("frame", best_frame) or best_frame)
+        stop_sec = float(strict_verified.get("sec", stop_frame / max(fps, 1e-6)) or 0.0)
+        strict_score = float(strict_verified.get("score", strongest_window_score) or strongest_window_score)
+        strict_regions = int(strict_verified.get("regions", strongest_window_regions) or strongest_window_regions)
+        strict_mode = str(strict_verified.get("mode", "strict_verify") or "strict_verify")
+
+        delta_text = ",".join(f"{d:.1f}" for d in best_deltas[:9])
+        print(
+            f"🎯 [scan-cut-relative] FINAL reason=strict_{strict_mode} "
+            f"stop_frame={stop_frame} stop={stop_sec:.3f}s "
+            f"window_score={strongest_window_score:.2f} "
+            f"regions={strongest_window_regions}/{required_regions} "
+            f"verified_score={strict_score:.2f} verified_regions={strict_regions} "
+            f"last_score={best_score:.2f} deltas=[{delta_text}]",
+            flush=True,
+        )
+
+        return stop_frame, stop_sec, strict_score, strict_regions, f"strict_{strict_mode}"
+
     stop_frame = int(best_frame)
     stop_sec = stop_frame / fps
 

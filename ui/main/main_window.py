@@ -351,6 +351,11 @@ class MainWindow(
         locked_w = int(getattr(self, "_workspace_sidebar_locked_width", 0) or 0)
         if locked_w > 0:
             sidebar_w = max(profile.sidebar_min_width, min(profile.sidebar_max_width, locked_w))
+            try:
+                sidebar.setMinimumWidth(sidebar_w)
+                sidebar.setMaximumWidth(sidebar_w)
+            except Exception:
+                pass
             splitter.setSizes([sidebar_w, max(1, total - sidebar_w)])
             return
         if profile.name == "desktop":
@@ -369,7 +374,8 @@ class MainWindow(
 
     def _lock_workspace_sidebar_width(self, width: int | None = None) -> int:
         splitter = getattr(self, "workspace_splitter", None)
-        if splitter is None or not bool(getattr(self, "_log_visible", True)):
+        sidebar = getattr(self, "home_page", None)
+        if splitter is None or sidebar is None or not bool(getattr(self, "_log_visible", True)):
             self._workspace_sidebar_locked_width = 0
             return 0
         profile = self._current_responsive_profile()
@@ -382,11 +388,28 @@ class MainWindow(
         target = int(width or current_w or responsive_sidebar_width(total, profile))
         target = max(profile.sidebar_min_width, min(profile.sidebar_max_width, target))
         self._workspace_sidebar_locked_width = target
-        self._apply_responsive_workspace_layout()
+        try:
+            sidebar.setMinimumWidth(target)
+            sidebar.setMaximumWidth(target)
+        except Exception:
+            pass
+        try:
+            splitter.setSizes([target, max(1, total - target)])
+        except Exception:
+            pass
         return target
 
     def _unlock_workspace_sidebar_width(self) -> None:
         self._workspace_sidebar_locked_width = 0
+        sidebar = getattr(self, "home_page", None)
+        if sidebar is not None:
+            profile = self._current_responsive_profile()
+            try:
+                sidebar.setMinimumWidth(profile.sidebar_min_width)
+                sidebar.setMaximumWidth(profile.sidebar_max_width)
+            except Exception:
+                pass
+        self._apply_responsive_workspace_layout()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -433,8 +456,7 @@ class MainWindow(
         self.roughcut_bottom_host = panel.roughcut_bottom_host
         self.roughcut_bottom_host_layout = panel.roughcut_bottom_host_layout
 
-        settings = load_settings()
-        self._log_visible = bool(settings.get("sidebar_visible", True))
+        self._log_visible = True
         self._project_panel_visible = self._log_visible
 
         # 큐 애니메이션
@@ -1370,6 +1392,7 @@ class MainWindow(
 
     # ── 로그 토글 ────────────────────────────────────────
     def _apply_log_visible(self, visible: bool, *, persist: bool = True):
+        visible = True
         previous_visible = bool(getattr(self, "_log_visible", True))
         self._log_visible = bool(visible)
         self._project_panel_visible = self._log_visible

@@ -224,6 +224,127 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             self.assertNotIn("mutated-after-preview", [segs[0]["text"] for _, segs in preview_calls])
             self.assertEqual(result[0][1:], (1, 1))
 
+    def test_selective_ensemble_runs_stt2_only_for_low_score_ranges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wav_path = os.path.join(tmp, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000)
+
+            calls = []
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "primary",
+                "selected_whisper_model_secondary": "secondary",
+                "stt_ensemble_selective_enabled": True,
+                "stt_ensemble_parallel_enabled": False,
+                "stt_low_score_recheck_enabled": True,
+                "stt_low_score_recheck_threshold": 80,
+                "stt_low_score_recheck_max_segments": 4,
+                "stt_word_timestamps_precision_enabled": False,
+                "vad_post_stt_align_enabled": False,
+            }
+
+            def fake_collect(_chunk_dir, _model, *, label, **_kwargs):
+                calls.append(label)
+                if label == "STT1":
+                    return [{
+                        "start": 0.0,
+                        "end": 1.0,
+                        "text": "낮은 후보",
+                        "stt_score": 35,
+                        "score": 35,
+                        "chunk_path": wav_path,
+                        "asr_metadata": {"chunk_path": wav_path},
+                    }]
+                return [{
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "보강 후보",
+                    "stt_score": 96,
+                    "score": 96,
+                    "words": [{"word": "보강", "start": 0.1, "end": 0.4}],
+                    "chunk_path": wav_path,
+                    "asr_metadata": {"chunk_path": wav_path},
+                }]
+
+            self.processor._collect_transcribe_result = fake_collect
+            self.processor._prepare_recheck_clip = lambda item, _out_dir, _idx, _settings: {
+                "range": item,
+                "path": wav_path,
+                "start": item.start,
+                "end": item.end,
+            }
+
+            with patch("core.audio.stt_candidate_scorer.annotate_stt_candidates", side_effect=lambda segments, **_kwargs: segments):
+                result = list(self.processor.transcribe_ensemble(tmp, cleanup_chunk_dir=False))
+
+            self.assertEqual(calls, ["STT1", "Fast-STT2"])
+            self.assertEqual(result[0][0][0]["text"], "보강 후보")
+            self.assertEqual(result[0][0][0]["stt_ensemble_source"], "STT2_SELECTIVE_RECHECK")
+
+    def test_selective_ensemble_rechecks_missing_vad_voice_ranges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wav_path = os.path.join(tmp, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000 * 4)
+            with open(os.path.join(tmp, "vad_strict.json"), "w", encoding="utf-8") as handle:
+                json.dump([{"start": 0.0, "end": 0.5}, {"start": 2.0, "end": 3.0}], handle)
+
+            calls = []
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "primary",
+                "selected_whisper_model_secondary": "secondary",
+                "stt_ensemble_selective_enabled": True,
+                "stt_ensemble_parallel_enabled": False,
+                "stt_low_score_recheck_enabled": True,
+                "stt_low_score_recheck_threshold": 60,
+                "stt_low_score_recheck_max_segments": 4,
+                "stt_word_timestamps_precision_enabled": False,
+                "stt_missing_voice_min_duration_sec": 0.55,
+                "vad_post_stt_align_enabled": False,
+            }
+
+            def fake_collect(_chunk_dir, _model, *, label, **_kwargs):
+                calls.append(label)
+                if label == "STT1":
+                    return [{
+                        "start": 0.0,
+                        "end": 0.5,
+                        "text": "기존 후보",
+                        "stt_score": 92,
+                        "score": 92,
+                        "chunk_path": wav_path,
+                        "asr_metadata": {"chunk_path": wav_path},
+                    }]
+                return [{
+                    "start": 2.0,
+                    "end": 2.6,
+                    "text": "누락 보강",
+                    "stt_score": 94,
+                    "score": 94,
+                    "chunk_path": wav_path,
+                    "asr_metadata": {"chunk_path": wav_path},
+                }]
+
+            self.processor._collect_transcribe_result = fake_collect
+            self.processor._prepare_recheck_clip = lambda item, _out_dir, _idx, _settings: {
+                "range": item,
+                "path": wav_path,
+                "start": item.start,
+                "end": item.end,
+            }
+
+            with patch("core.audio.stt_candidate_scorer.annotate_stt_candidates", side_effect=lambda segments, **_kwargs: segments):
+                result = list(self.processor.transcribe_ensemble(tmp, cleanup_chunk_dir=False))
+
+            self.assertEqual(calls, ["STT1", "Fast-STT2"])
+            self.assertEqual([seg["text"] for seg in result[0][0]], ["기존 후보", "누락 보강"])
+
     def test_ensemble_uses_isolated_chunk_dirs_for_each_track(self):
         with tempfile.TemporaryDirectory() as tmp:
             chunk_dir = os.path.join(tmp, "chunks")
@@ -1313,6 +1434,68 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertIsNone(self.processor._whisper_proc)
         self.assertIsNone(self.processor._whisper_runner_proc)
 
+    def test_transcribe_disables_word_timestamps_for_selective_fast_pass(self):
+        class _Stdout:
+            def __init__(self, lines):
+                self.lines = list(lines)
+
+            def readline(self):
+                return self.lines.pop(0) if self.lines else ""
+
+        class _Proc:
+            def __init__(self, lines):
+                self.stdout = _Stdout(lines)
+
+            def poll(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chunk_dir = os.path.join(tmp, "chunks")
+            os.makedirs(chunk_dir, exist_ok=True)
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000)
+
+            proc = _Proc([
+                json.dumps(
+                    {
+                        "task_id": "task-1",
+                        "index": 0,
+                        "word_timestamps": False,
+                        "result": {
+                            "segments": [{"start": 0.0, "end": 0.5, "text": "빠른 패스", "words": []}]
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                json.dumps({"task_id": "task-1", "done": True}, ensure_ascii=False) + "\n",
+            ])
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "mlx-test-model",
+                "w_none_temp_max": 0.0,
+                "stt_ensemble_enabled": False,
+                "stt_selective_secondary_recheck_enabled": False,
+                "stt_word_timestamps_mode": "selective",
+                "stt_word_timestamps_default_enabled": False,
+                "stt_word_timestamps_precision_enabled": False,
+            }
+
+            with patch.object(config, "IS_MAC", True), \
+                 patch("core.audio.whisper_coreml.is_coreml_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_transformers.is_transformers_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_mlx.ensure_worker", return_value=proc), \
+                 patch("core.audio.whisper_mlx.submit_task", return_value="task-1") as submit_task, \
+                 patch("core.audio.whisper_mlx.stop_worker"):
+                rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False))
+
+        self.assertEqual(rows[0][0][0]["text"], "빠른 패스")
+        self.assertFalse(submit_task.call_args.kwargs["word_timestamps"])
+        self.assertFalse(rows[0][0][0]["asr_metadata"]["word_timestamps_requested"])
+
     def test_transcribe_prefers_coreml_route_for_npu_compatible_model(self):
         class _Stdout:
             def __init__(self, lines):
@@ -1327,7 +1510,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 self.returncode = 0
 
             def poll(self):
-                return 0
+                return None
 
             def wait(self, timeout=None):
                 return 0
@@ -1372,6 +1555,139 @@ class MediaProcessorOverlapTests(unittest.TestCase):
 
         self.assertEqual(rows[0][0][0]["text"], "NPU")
         self.assertEqual(run_coreml.call_args.kwargs["model"], "coreml:large-v3-v20240930_626MB")
+
+    def test_transcribe_can_route_to_experimental_whisperkit_persistent_backend(self):
+        class _Stdout:
+            def __init__(self, lines):
+                self.lines = list(lines)
+
+            def readline(self):
+                return self.lines.pop(0) if self.lines else ""
+
+        class _Proc:
+            def __init__(self, lines):
+                self.stdout = _Stdout(lines)
+                self.returncode = 0
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chunk_dir = os.path.join(tmp, "chunks")
+            os.makedirs(chunk_dir, exist_ok=True)
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000)
+
+            proc = _Proc([
+                json.dumps(
+                    {
+                        "task_id": "task-1",
+                        "index": 0,
+                        "backend": "whisperkit-persistent",
+                        "word_timestamps": False,
+                        "result": {
+                            "segments": [{"start": 0.0, "end": 0.5, "text": "Swift", "words": []}],
+                            "chunk_path": wav_path,
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                json.dumps({"task_id": "task-1", "done": True}, ensure_ascii=False) + "\n",
+            ])
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "whisperkit-persistent:large-v3",
+                "w_none_temp_max": 0.0,
+                "stt_ensemble_enabled": False,
+                "stt_selective_secondary_recheck_enabled": False,
+                "stt_word_timestamps_mode": "selective",
+                "stt_word_timestamps_default_enabled": False,
+                "stt_word_timestamps_precision_enabled": False,
+            }
+
+            with patch.object(config, "IS_MAC", True), \
+                 patch("core.audio.whisper_coreml.is_coreml_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_transformers.is_transformers_whisper_model", return_value=False), \
+                 patch("core.audio.whisperkit_persistent.ensure_worker", return_value=proc) as ensure_worker, \
+                 patch("core.audio.whisperkit_persistent.submit_task", return_value="task-1") as submit_task, \
+                 patch("core.audio.whisperkit_persistent.stop_worker"):
+                rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False))
+
+        self.assertEqual(rows[0][0][0]["text"], "Swift")
+        self.assertIs(ensure_worker.return_value, proc)
+        self.assertEqual(submit_task.call_args.kwargs["model"], "whisperkit-persistent:large-v3")
+        self.assertFalse(submit_task.call_args.kwargs["word_timestamps"])
+
+    def test_transcribe_can_route_to_whisper_cpp_backend(self):
+        class _Stdout:
+            def __init__(self, lines):
+                self.lines = list(lines)
+
+            def readline(self):
+                return self.lines.pop(0) if self.lines else ""
+
+        class _Proc:
+            def __init__(self, lines):
+                self.stdout = _Stdout(lines)
+                self.returncode = 0
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chunk_dir = os.path.join(tmp, "chunks")
+            os.makedirs(chunk_dir, exist_ok=True)
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000)
+
+            proc = _Proc([
+                json.dumps(
+                    {
+                        "backend": "whisper.cpp",
+                        "word_timestamps": False,
+                        "segments": [{"start": 0.0, "end": 0.5, "text": "CPP", "words": []}],
+                        "chunk_path": wav_path,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+            ])
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "large-v3-turbo",
+                "stt_backend_policy": "native",
+                "w_none_temp_max": 0.0,
+                "stt_ensemble_enabled": False,
+                "stt_selective_secondary_recheck_enabled": False,
+                "stt_word_timestamps_mode": "selective",
+                "stt_word_timestamps_default_enabled": False,
+                "stt_word_timestamps_precision_enabled": False,
+            }
+
+            with patch.object(config, "IS_MAC", True), \
+                 patch("core.audio.whisper_coreml.is_coreml_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_transformers.is_transformers_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_cpp.run_whisper", return_value=proc) as run_cpp:
+                rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False))
+
+        self.assertEqual(rows[0][0][0]["text"], "CPP")
+        self.assertEqual(run_cpp.call_args.kwargs["model"], "large-v3-turbo")
+        self.assertFalse(run_cpp.call_args.kwargs["word_timestamps"])
+        self.assertEqual(rows[0][0][0]["asr_metadata"]["backend"], "whisper.cpp")
+        self.assertFalse(rows[0][0][0]["asr_metadata"]["word_timestamps_requested"])
 
     def test_transcribe_falls_back_from_transformers_model_when_runtime_is_unavailable(self):
         class _Stdout:

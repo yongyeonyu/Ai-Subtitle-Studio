@@ -8,17 +8,21 @@ import re
 import urllib.error
 import urllib.request
 
+from core.llm.codex_provider import DEFAULT_CODEX_LABEL, is_codex_model
+
 
 OPENAI_MODEL_MAP = {
     "OpenAI GPT-5 Nano [유료/API 저비용]": "gpt-5-nano",
     "OpenAI GPT-5 Mini [유료/API 균형]": "gpt-5-mini",
     "OpenAI GPT-5.2 [유료/API 고품질]": "gpt-5.2",
     "OpenAI GPT-5.2 Chat [유료/API ChatGPT]": "gpt-5.2-chat-latest",
+    DEFAULT_CODEX_LABEL: "codex-chatgpt-cli",
 }
 
 
 def is_openai_model(model_name: str) -> bool:
-    return "OpenAI" in (model_name or "") or (model_name or "").startswith("gpt-")
+    text = model_name or ""
+    return is_codex_model(text) or "OpenAI" in text or text.startswith("gpt-")
 
 
 def resolve_openai_model(model_name: str) -> str:
@@ -54,6 +58,10 @@ def _parse_chunks(out_text: str) -> list[str]:
 
 
 def split_text(api_key: str, model_name: str, prompt: str, timeout: int = 120) -> list[str] | None:
+    if is_codex_model(model_name):
+        from core.llm.codex_provider import split_text as codex_split_text
+
+        return codex_split_text(model_name, prompt, timeout=timeout)
     if not api_key:
         return None
     body = json.dumps({

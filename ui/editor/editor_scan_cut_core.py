@@ -13,6 +13,281 @@ from core.cut_boundary import sync_project_cut_boundaries
 
 
 class EditorScanCutCoreMixin:
+    def _scan_normalize_cut_boundary_level(self, value) -> str:
+        raw = str(value or "").strip().lower()
+        aliases = {
+            "사용안함": "off",
+            "사용 안함": "off",
+            "미사용": "off",
+            "off": "off",
+            "false": "off",
+            "0": "off",
+            "disabled": "off",
+            "disable": "off",
+            "none": "off",
+            "낮음": "low",
+            "low": "low",
+            "중간": "medium",
+            "medium": "medium",
+            "mid": "medium",
+            "middle": "medium",
+            "사용": "low",
+            "on": "low",
+            "true": "low",
+            "1": "low",
+            "enabled": "low",
+            "높음": "medium",
+            "high": "medium",
+        }
+        return aliases.get(raw, "medium")
+
+    def _scan_cut_boundary_level(self, settings: dict | None = None, *, force_medium: bool = False) -> str:
+        data = dict(settings or getattr(self, "settings", {}) or {})
+
+        level = ""
+        for key in (
+            "scan_cut_boundary_level",
+            "cut_boundary_level",
+            "scan_cut_level",
+        ):
+            if key in data:
+                level = self._scan_normalize_cut_boundary_level(data.get(key))
+                break
+
+        if not level:
+            for key in (
+                "cut_boundary_detection_enabled",
+                "scan_cut_enabled",
+                "scan_cut_auto_enabled",
+                "cut_boundary_enabled",
+            ):
+                if key in data:
+                    level = "medium" if bool(data.get(key)) else "off"
+                    break
+
+        if not level:
+            level = "medium"
+
+        if force_medium and level in {"off", "low"}:
+            return "medium"
+        return level
+
+    def _scan_cut_manual_verify_settings(self, fps: float) -> dict:
+        data = dict(getattr(self, "settings", {}) or {})
+
+        try:
+            fps = float(fps or 30.0)
+        except Exception:
+            fps = 30.0
+
+        data["scan_cut_boundary_level"] = self._scan_cut_boundary_level(data, force_medium=True)
+        data["scan_cut_follower_dense_flow_enabled"] = True
+        data["scan_cut_follower_strict_multiplier"] = max(
+            float(data.get("scan_cut_follower_strict_multiplier", 1.08) or 1.08),
+            1.12,
+        )
+        data["scan_cut_auto_verify_threshold"] = max(
+            float(data.get("scan_cut_auto_verify_threshold", 30.0) or 30.0),
+            30.0,
+        )
+        data["scan_cut_auto_verify_window_threshold"] = max(
+            float(data.get("scan_cut_auto_verify_window_threshold", 90.0) or 90.0),
+            90.0,
+        )
+        data["scan_cut_auto_verify_regions_required"] = max(
+            int(data.get("scan_cut_auto_verify_regions_required", 3) or 3),
+            3,
+        )
+        data["scan_cut_auto_verify_window_regions_required"] = max(
+            int(data.get("scan_cut_auto_verify_window_regions_required", 4) or 4),
+            4,
+        )
+        data["scan_cut_color_avg_regions_required"] = max(
+            int(data.get("scan_cut_color_avg_regions_required", 2) or 2),
+            2,
+        )
+        data["scan_cut_auto_verify_rollback_frames"] = max(
+            int(data.get("scan_cut_auto_verify_rollback_frames", round(fps * 1.0)) or round(fps * 1.0)),
+            max(2, int(round(fps * 1.0))),
+        )
+        data["scan_cut_auto_verify_forward_frames"] = max(
+            int(data.get("scan_cut_auto_verify_forward_frames", round(fps * 1.0)) or round(fps * 1.0)),
+            max(2, int(round(fps * 1.0))),
+        )
+        return data
+
+    def _scan_cut_strict_verify_bundle(self):
+        bundle = getattr(self, "_scan_cut_strict_verify_bundle_cache", None)
+        if bundle is not None:
+            return None if bundle is False else bundle
+
+        try:
+            from core.cut_boundary_auto_profile import build_auto_grid_profile_helpers
+            from core.cut_boundary_auto_utils import build_auto_grid_verify_utils
+            from core.cut_boundary_auto_verify import build_strict_verify_helpers
+
+            profile_helpers = build_auto_grid_profile_helpers(
+                lambda settings=None: self._scan_cut_boundary_level(settings, force_medium=True)
+            )
+            verify_utils = build_auto_grid_verify_utils(profile_helpers["_auto_grid_cells"])
+            strict_helpers = build_strict_verify_helpers(
+                {
+                    "normalize_cut_boundary_level": self._scan_normalize_cut_boundary_level,
+                    "get_level_positions": profile_helpers["_auto_level_positions"],
+                    "_auto_capture_verify_maps": verify_utils["_auto_capture_verify_maps"],
+                    "_auto_gray_delta": verify_utils["_auto_gray_delta"],
+                    "_auto_color_avg_delta": verify_utils["_auto_color_avg_delta"],
+                    "_auto_gray_delta_mps": verify_utils["_auto_gray_delta_mps"],
+                    "_auto_color_avg_delta_mps": verify_utils["_auto_color_avg_delta_mps"],
+                    "_mps_available": verify_utils["_mps_available"],
+                }
+            )
+            bundle = {
+                "profile_fn": profile_helpers["cut_boundary_scan_profile"],
+                "verify_fn": strict_helpers["_auto_grid_v3_manual_verify_strict_mps"],
+            }
+        except Exception as exc:
+            bundle = False
+            print(f"⚠️ [scan-cut] strict verify helper 준비 실패: {exc}", flush=True)
+
+        self._scan_cut_strict_verify_bundle_cache = bundle
+        return None if bundle is False else bundle
+
+    def _scan_verify_cut_boundary_candidate(self, coarse_frame: int, fps: float, *, reason: str = ""):
+        bundle = self._scan_cut_strict_verify_bundle()
+        if not bundle:
+            return None
+
+        cv2_mod = self._scan_get_cv2_module()
+        if not cv2_mod:
+            return None
+
+        try:
+            fps = float(fps or self._current_frame_fps())
+            coarse_frame = max(0, int(coarse_frame))
+        except Exception:
+            return None
+
+        coarse_sec = float(coarse_frame) / max(fps, 1e-6)
+
+        try:
+            source_path, local_sec, _ctx = self._scan_source_and_local_sec(coarse_sec)
+        except Exception:
+            return None
+        if not source_path:
+            return None
+
+        cap = self._scan_get_cv2_capture(source_path)
+        if cap is None:
+            return None
+
+        try:
+            source_fps = float(cap.get(cv2_mod.CAP_PROP_FPS) or 0.0)
+        except Exception:
+            source_fps = 0.0
+        if source_fps <= 1.0:
+            source_fps = fps
+
+        local_frame = max(0, int(round(float(local_sec) * source_fps)))
+
+        try:
+            frame_count = int(cap.get(cv2_mod.CAP_PROP_FRAME_COUNT) or 0)
+        except Exception:
+            frame_count = 0
+        if frame_count <= 1:
+            try:
+                frame_count = max(local_frame + 2, int(round(float(local_sec) * source_fps)) + 2)
+            except Exception:
+                frame_count = max(local_frame + 2, 2)
+
+        settings = self._scan_cut_manual_verify_settings(source_fps)
+        profile = bundle["profile_fn"](settings)
+
+        try:
+            verified = bundle["verify_fn"](
+                cap,
+                cv2_mod,
+                fps=source_fps,
+                frame_count=frame_count,
+                coarse_frame=local_frame,
+                settings=settings,
+                scan_profile=profile,
+                sample_positions=profile.get("positions"),
+            )
+        except Exception as exc:
+            print(f"⚠️ [scan-cut] strict verify 실행 실패: {exc}", flush=True)
+            return None
+
+        if not isinstance(verified, dict):
+            return None
+
+        clip_global_offset = float(coarse_sec) - float(local_sec)
+
+        if verified.get("passed"):
+            try:
+                verified_local_frame = int(verified.get("frame", local_frame) or local_frame)
+                verified_local_sec = float(verified.get("sec", verified_local_frame / max(source_fps, 1e-6)) or 0.0)
+            except Exception:
+                return None
+
+            global_sec = self._snap_to_frame(max(0.0, clip_global_offset + verified_local_sec))
+            global_frame = max(0, int(round(global_sec * fps)))
+            result = {
+                "available": True,
+                "passed": True,
+                "frame": global_frame,
+                "sec": global_sec,
+                "local_frame": verified_local_frame,
+                "local_sec": verified_local_sec,
+                "score": float(verified.get("score", 0.0) or 0.0),
+                "regions": int(verified.get("regions", 0) or 0),
+                "mode": str(verified.get("mode", verified.get("reason", "strict_verify")) or "strict_verify"),
+                "reason": str(verified.get("reason", verified.get("mode", "strict_verify")) or "strict_verify"),
+                "color_score": float(verified.get("color_score", 0.0) or 0.0),
+            }
+            print(
+                f"🎯 [scan-cut] STRICT VERIFY PASS reason={reason or '-'} "
+                f"global={global_sec:.3f}s frame={global_frame} "
+                f"local={verified_local_sec:.3f}s local_frame={verified_local_frame} "
+                f"mode={result['mode']} score={result['score']:.2f} regions={result['regions']}",
+                flush=True,
+            )
+            return result
+
+        result = {
+            "available": True,
+            "passed": False,
+            "reason": str(verified.get("reason", "strict_verify_failed") or "strict_verify_failed"),
+        }
+
+        if verified.get("provisional_frame") is not None:
+            try:
+                provisional_local_frame = int(verified.get("provisional_frame") or 0)
+                provisional_local_sec = float(
+                    verified.get("provisional_sec", provisional_local_frame / max(source_fps, 1e-6)) or 0.0
+                )
+                provisional_global_sec = self._snap_to_frame(max(0.0, clip_global_offset + provisional_local_sec))
+                provisional_global_frame = max(0, int(round(provisional_global_sec * fps)))
+                result.update(
+                    {
+                        "provisional_frame": provisional_global_frame,
+                        "provisional_sec": provisional_global_sec,
+                        "provisional_mode": str(verified.get("provisional_mode", "") or ""),
+                        "provisional_score": float(verified.get("provisional_score", 0.0) or 0.0),
+                        "provisional_regions": int(verified.get("provisional_regions", 0) or 0),
+                    }
+                )
+            except Exception:
+                pass
+
+        print(
+            f"⚠️ [scan-cut] STRICT VERIFY REJECT reason={reason or '-'} "
+            f"coarse_frame={coarse_frame} coarse={coarse_sec:.3f}s "
+            f"detail={result['reason']}",
+            flush=True,
+        )
+        return result
+
     def _scan_capture_image(self) -> bytes | None:
         """기존 호출부 호환용. 현재 위치 프레임을 OpenCV로 직접 읽는다."""
         try:

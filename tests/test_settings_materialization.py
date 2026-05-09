@@ -70,6 +70,7 @@ class SettingsMaterializationTests(unittest.TestCase):
         self.assertTrue(materialized["direct_ffmpeg_chunk_batch_extract"])
         self.assertEqual(materialized["direct_ffmpeg_chunk_batch_size"], 8)
         self.assertEqual(materialized["direct_ffmpeg_chunk_batch_max_span_sec"], 240.0)
+        self.assertTrue(materialized["clearvoice_native_ffmpeg_enabled"])
         self.assertTrue(materialized["autopilot_enabled"])
 
     def test_project_data_manager_save_writes_materialized_settings(self):

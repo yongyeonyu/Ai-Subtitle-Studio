@@ -2,13 +2,108 @@ from __future__ import annotations
 
 """Optional native C++ helpers for cut-boundary verification."""
 
+import importlib
 import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import sysconfig
+import threading
 from typing import Any
 
-try:
-    from core import _native_cut_boundary as _native  # type: ignore
-except Exception:  # pragma: no cover - exercised when extension is not built.
-    _native = None  # type: ignore
+_FALSE_VALUES = {"0", "false", "off", "no"}
+_BUILD_LOCK = threading.Lock()
+
+
+def _env_enabled(name: str, default: str = "1") -> bool:
+    value = str(os.environ.get(name, default) or default).strip().lower()
+    return value not in _FALSE_VALUES
+
+
+def _extension_suffix() -> str:
+    return str(sysconfig.get_config_var("EXT_SUFFIX") or ".so")
+
+
+def _source_path() -> Path:
+    return Path(__file__).resolve().with_name("native") / "_native_cut_boundary.cpp"
+
+
+def _extension_path() -> Path:
+    return Path(__file__).resolve().with_name(f"_native_cut_boundary{_extension_suffix()}")
+
+
+def _compiler_path() -> str | None:
+    configured = str(os.environ.get("CXX", "") or "").strip()
+    if configured:
+        return configured
+    for name in ("clang++", "c++", "g++"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def _compile_native_extension() -> bool:
+    if not _env_enabled("AI_SUBTITLE_NATIVE_CUT_BOUNDARY", "1"):
+        return False
+    if not _env_enabled("AI_SUBTITLE_NATIVE_CUT_BOUNDARY_BUILD", "1"):
+        return False
+
+    source = _source_path()
+    output = _extension_path()
+    if not source.exists():
+        return output.exists()
+    if output.exists() and output.stat().st_mtime >= source.stat().st_mtime:
+        return True
+
+    compiler = _compiler_path()
+    include_dir = sysconfig.get_paths().get("include")
+    if not compiler or not include_dir:
+        return output.exists()
+
+    with _BUILD_LOCK:
+        if output.exists() and output.stat().st_mtime >= source.stat().st_mtime:
+            return True
+
+        tmp_output = output.with_name(f"{output.name}.tmp")
+        cmd = [
+            compiler,
+            "-O3",
+            "-std=c++17",
+            "-shared",
+            "-fPIC",
+            "-I",
+            str(include_dir),
+            str(source),
+            "-o",
+            str(tmp_output),
+        ]
+        if sys.platform == "darwin":
+            cmd.extend(["-undefined", "dynamic_lookup"])
+        try:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            os.replace(tmp_output, output)
+            return True
+        except Exception:
+            try:
+                tmp_output.unlink()
+            except Exception:
+                pass
+            return output.exists()
+
+
+def _load_native_module():
+    if not _env_enabled("AI_SUBTITLE_NATIVE_CUT_BOUNDARY", "1"):
+        return None
+    _compile_native_extension()
+    try:
+        return importlib.import_module("core._native_cut_boundary")
+    except Exception:  # pragma: no cover - exercised when extension is unavailable.
+        return None
+
+
+_native = _load_native_module()
 
 
 HAS_NATIVE_CUT_BOUNDARY = _native is not None
@@ -17,8 +112,7 @@ HAS_NATIVE_CUT_BOUNDARY = _native is not None
 def native_cut_boundary_enabled() -> bool:
     if _native is None:
         return False
-    value = str(os.environ.get("AI_SUBTITLE_NATIVE_CUT_BOUNDARY", "1") or "1").strip().lower()
-    return value not in {"0", "false", "off", "no"}
+    return _env_enabled("AI_SUBTITLE_NATIVE_CUT_BOUNDARY", "1")
 
 
 def cut_boundary_backend() -> str:

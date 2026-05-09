@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                              QGridLayout,
                              QLabel, QComboBox, QMessageBox, QLineEdit, 
                              QSlider, QPushButton, QCheckBox, QTextEdit,
-                             QDoubleSpinBox, QSpinBox, QTabWidget, QWidget, QFrame,
+                             QDoubleSpinBox, QSpinBox, QWidget, QFrame,
                              QScrollArea, QSizePolicy)
 from PyQt6.QtCore import Qt
 from core.runtime import config
@@ -17,13 +17,13 @@ from ui.settings.settings_common import (
     DEFAULT_ADV_SETTINGS, DEFAULT_WHISPER_MODELS, WINDOWS_WHISPER_MODELS,
     _fetch_models, _create_bottom_buttons, filter_available_whisper_models,
 )
-from ui.settings.qml_panel import create_qml_tab_bar, create_settings_header, sync_qml_tab_bar
 from ui.settings.tablet_dialog import apply_tablet_dialog_profile
 from ui.style import COLORS, label_style, settings_button_style, settings_dialog_stylesheet, line_icon
 from core.llm.provider_registry import cloud_model_items
 from core.llm.secure_keys import get_api_key, set_api_key
 from core.audio import audio_presets as _audio_presets
 from core.audio.preset_auto_classifier import auto_classify_media_presets, apply_auto_classified_presets
+from core.personalization.runtime_personalization import personalization_settings_override_for_media
 from core.audio.stt_quality_presets import (
     STT_QUALITY_PRESET_ORDER,
     load_stt_quality_presets,
@@ -104,9 +104,23 @@ def stt2_whisper_model_candidates(models):
             or "zeroth" in lowered
             or "komixv2" in lowered
             or model_name.startswith("coreml:")
+            or lowered.startswith(("whisper.cpp:", "whisper_cpp:", "whisper-cpp:"))
         ):
             candidates.append(model)
     return candidates
+
+
+_LORA_GAP_SETTING_LABELS = {
+    "continuous_threshold": "연속자막 기준",
+    "gap_push_rate": "자막간격 조정",
+    "single_subtitle_end": "단일자막 유지",
+    "split_length_threshold": "분할 기준 글자 수",
+    "sub_min_duration": "초단문 무시",
+    "sub_max_duration": "최대 자막 길이",
+    "sub_max_cps": "최대 CPS",
+    "sub_dedup_window": "말더듬 환각 제거",
+    "sub_gap_break_sec": "강제 줄바꿈 무음",
+}
 
 
 class SettingsDialog(QDialog, SettingsRoughcutMixin):
@@ -125,41 +139,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.audio_presets = _audio_presets.load_audio_presets()
 
         layout = QVBoxLayout(self)
-        self._qml_header = create_settings_header(
-            self,
-            title="AI 엔진 설정",
-            subtitle="자막 검수, 러프컷, 모델/API, 자동 설정을 SceneGraph 헤더로 구성합니다.",
-            badge="QML",
-        )
-        if self._qml_header is not None:
-            layout.addWidget(self._qml_header)
-        self.tabs = QTabWidget()
-        editor_tab, editor_form = self._make_tab_form()
-        roughcut_tab, roughcut_form = self._make_tab_form()
-        ai_tab, ai_form = self._make_tab_form()
-        auto_tab, auto_form = self._make_tab_form()
-        self.tabs.addTab(editor_tab, "자막 검수")
-        self.tabs.addTab(roughcut_tab, "중분류")
-        self.tabs.addTab(ai_tab, "모델/API")
-        self.tabs.addTab(auto_tab, "자동 설정")
-        self.tabs.setDocumentMode(True)
-        self._qml_tab_bar = create_qml_tab_bar(
-            self,
-            items=[{"title": self.tabs.tabText(i)} for i in range(self.tabs.count())],
-            current_index=self.tabs.currentIndex(),
-            scope="settings",
-        )
-        if self._qml_tab_bar is not None:
-            self.tabs.tabBar().hide()
-            try:
-                root = self._qml_tab_bar.rootObject()
-                if root is not None:
-                    root.tabTriggered.connect(self.tabs.setCurrentIndex)
-                self.tabs.currentChanged.connect(
-                    lambda idx: sync_qml_tab_bar(self._qml_tab_bar, current_index=idx)
-                )
-            except Exception:
-                self._qml_tab_bar = None
+        settings_body, settings_form = self._make_tab_form()
 
         self.combo_stt_quality_preset = QComboBox()
         for key, label, summary in simple_operation_mode_items():
@@ -177,25 +157,23 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             self.combo_audio_preset.addItem(f"{name} - {desc}" if desc else name, name)
         self.combo_audio_preset.setMinimumWidth(240)
 
-        self._build_subtitle_quality_section(editor_form, settings)
+        self._build_subtitle_quality_section(settings_form, settings)
 
-        self._build_model_management_section(ai_form, settings)
-        self._build_api_keys_section(ai_form)
-        self._build_roughcut_llm_section(roughcut_form, settings)
-        self._build_chunk_bundle_section(editor_form, settings)
-        self._build_stt_support_section(ai_form, settings)
-        self._build_audio_vad_section(ai_form, settings)
+        self._build_chunk_bundle_section(settings_form, settings)
+        self._build_roughcut_llm_section(settings_form, settings)
+        self._build_model_management_section(settings_form, settings)
+        self._build_api_keys_section(settings_form)
+        self._build_stt_support_section(settings_form, settings)
+        self._build_audio_vad_section(settings_form, settings)
         self._sync_stt_quality_preset_combo(selected_mode_from_settings(settings))
         self._sync_audio_preset_combo(settings.get("audio_preset", ""))
         self._sync_auto_preset_button_state()
         self._update_editor_roughcut_draft_state()
         self.combo_audio_preset.currentIndexChanged.connect(self._on_audio_preset_changed)
 
-        self._build_auto_settings_section(auto_form, settings)
+        self._build_auto_settings_section(settings_form, settings)
 
-        if self._qml_tab_bar is not None:
-            layout.addWidget(self._qml_tab_bar)
-        layout.addWidget(self.tabs)
+        layout.addWidget(settings_body)
         layout.addSpacing(10)
         layout.addLayout(_create_bottom_buttons(self, self._on_ok, save_callback=self._on_save, save_def_callback=self._on_save_default))
 
@@ -416,6 +394,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
                 or model_name.startswith("o0dimplz0o/")
                 or model_name.startswith("seastar105/")
                 or model_name.startswith("coreml:")
+                or model_name.lower().startswith(("whisper.cpp:", "whisper_cpp:", "whisper-cpp:"))
             ):
                 self.combo_whisper.setItemText(idx, f"{model_name} (실험)")
         self._fit_model_combo(self.combo_whisper)
@@ -455,6 +434,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
                 or model_name.startswith("o0dimplz0o/")
                 or model_name.startswith("seastar105/")
                 or model_name.startswith("coreml:")
+                or model_name.lower().startswith(("whisper.cpp:", "whisper_cpp:", "whisper-cpp:"))
             ):
                 self.combo_whisper_secondary.setItemText(idx, f"{model_name} (실험)")
         self._fit_model_combo(self.combo_whisper_secondary)
@@ -937,6 +917,20 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self.chk_auto_start_enabled.setChecked(bool(path_settings.get("auto_start_enabled", settings.get("auto_start_enabled", True))))
         form.addRow("자동시작:", self.chk_auto_start_enabled)
 
+        lora_gap_row = QWidget()
+        lora_gap_layout = QHBoxLayout(lora_gap_row)
+        lora_gap_layout.setContentsMargins(0, 0, 0, 0)
+        lora_gap_layout.setSpacing(8)
+        lora_gap_hint = QLabel("학습 데이터가 있으면 현재 영상에 맞는 간격 값을 반영합니다.")
+        lora_gap_hint.setWordWrap(True)
+        lora_gap_hint.setStyleSheet(label_style("muted", 11))
+        lora_gap_layout.addWidget(lora_gap_hint, 1)
+        self.btn_lora_gap_auto = QPushButton("자동설정")
+        self.btn_lora_gap_auto.setStyleSheet(self._settings_button_style("primary", min_width=88))
+        self.btn_lora_gap_auto.clicked.connect(self._on_lora_gap_auto_apply)
+        lora_gap_layout.addWidget(self.btn_lora_gap_auto)
+        form.addRow("LoRA 간격:", lora_gap_row)
+
     def _build_subtitle_quality_section(self, form: QFormLayout, settings: dict):
         self.chk_subtitle_quality_auto_check = QCheckBox("자막 생성 후 자동 검사")
         self.chk_subtitle_quality_auto_check.setChecked(bool(settings.get(
@@ -1039,6 +1033,34 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             )
         except Exception as e:
             QMessageBox.warning(self, "자동 판정 실패", str(e))
+
+    def _on_lora_gap_auto_apply(self):
+        media_path = self._current_media_path()
+        if not media_path:
+            QMessageBox.information(self, "LoRA 자동설정", "현재 열려 있는 영상이 없어서 간격 자동설정을 진행할 수 없습니다.")
+            return
+        try:
+            recommended = personalization_settings_override_for_media(media_path)
+        except Exception as e:
+            QMessageBox.warning(self, "LoRA 자동설정 실패", str(e))
+            return
+
+        applied = []
+        for key, label in _LORA_GAP_SETTING_LABELS.items():
+            if key not in recommended:
+                continue
+            self.result_settings[key] = recommended.get(key)
+            applied.append(label)
+
+        if not applied:
+            QMessageBox.information(self, "LoRA 자동설정", "아직 적용할 수 있는 LoRA 간격 학습값이 없습니다.")
+            return
+
+        QMessageBox.information(
+            self,
+            "LoRA 자동설정 완료",
+            "학습된 LoRA 값을 설정에 반영했습니다.\n\n" + " · ".join(applied),
+        )
 
     def _refresh_ollama_models(self):
         self.models_data = _fetch_models()

@@ -15,7 +15,9 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
 
 from core.personalization.ground_truth_import import (
@@ -226,11 +228,23 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         layout.setContentsMargins(18, 18, 18, 16)
         layout.setSpacing(12)
 
+        body_scroll = QScrollArea()
+        body_scroll.setWidgetResizable(True)
+        body_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(12)
+        body_scroll.setWidget(body)
+        layout.addWidget(body_scroll, 1)
+
         hero_card = QFrame()
         hero_card.setObjectName("personalizationHeroCard")
         hero_layout = QVBoxLayout(hero_card)
         hero_layout.setContentsMargins(18, 16, 18, 16)
-        hero_layout.setSpacing(8)
+        hero_layout.setSpacing(10)
 
         hero_eyebrow = QLabel("PERSONALIZATION LAB")
         hero_eyebrow.setObjectName("personalizationHeroEyebrow")
@@ -256,13 +270,13 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         info_pill.setObjectName("personalizationInfoPill")
         info_pill.setWordWrap(True)
         hero_layout.addWidget(info_pill)
-        layout.addWidget(hero_card)
+        body_layout.addWidget(hero_card)
 
         ingest_card = QFrame()
         ingest_card.setObjectName("personalizationSectionCard")
         ingest_layout = QVBoxLayout(ingest_card)
         ingest_layout.setContentsMargins(16, 16, 16, 16)
-        ingest_layout.setSpacing(10)
+        ingest_layout.setSpacing(12)
 
         ingest_title = QLabel("입력")
         ingest_title.setObjectName("personalizationSectionTitle")
@@ -275,10 +289,10 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
 
         self.drop_zone = QFrame()
         self.drop_zone.setObjectName("personalizationDropZone")
-        self.drop_zone.setMinimumHeight(96)
+        self.drop_zone.setMinimumHeight(132)
         drop_layout = QVBoxLayout(self.drop_zone)
-        drop_layout.setContentsMargins(18, 14, 18, 14)
-        drop_layout.setSpacing(4)
+        drop_layout.setContentsMargins(18, 18, 18, 18)
+        drop_layout.setSpacing(8)
         drop_title = QLabel("영상 + SRT 끌어다 놓기")
         drop_title.setObjectName("personalizationDropTitle")
         drop_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -313,21 +327,21 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         self.btn_stop_full_learning.setEnabled(False)
         quick_row.addWidget(self.btn_stop_full_learning, 1)
         ingest_layout.addLayout(quick_row)
-        layout.addWidget(ingest_card)
+        body_layout.addWidget(ingest_card)
 
         status_card = QFrame()
         status_card.setObjectName("personalizationStatusCard")
         status_layout = QVBoxLayout(status_card)
         status_layout.setContentsMargins(16, 16, 16, 16)
-        status_layout.setSpacing(10)
+        status_layout.setSpacing(12)
 
         list_title = QLabel("자동 pair 확인")
         list_title.setObjectName("personalizationSectionTitle")
         status_layout.addWidget(list_title)
         self.pair_list = QListWidget()
         self.pair_list.setObjectName("personalizationPairList")
-        self.pair_list.setMinimumHeight(118)
-        self.pair_list.setMaximumHeight(190)
+        self.pair_list.setMinimumHeight(160)
+        self.pair_list.setMaximumHeight(240)
         self.pair_list.setAlternatingRowColors(False)
         status_layout.addWidget(self.pair_list, stretch=1)
 
@@ -354,13 +368,13 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         self.btn_learning_info.clicked.connect(self._open_learning_info)
         info_row.addWidget(self.btn_learning_info)
         status_layout.addLayout(info_row)
-        layout.addWidget(status_card)
+        body_layout.addWidget(status_card)
 
         manage_card = QFrame()
         manage_card.setObjectName("personalizationManageCard")
         manage_layout = QVBoxLayout(manage_card)
         manage_layout.setContentsMargins(16, 16, 16, 16)
-        manage_layout.setSpacing(10)
+        manage_layout.setSpacing(12)
 
         manage_title = QLabel("관리")
         manage_title.setObjectName("personalizationSectionTitle")
@@ -396,12 +410,14 @@ class PersonalizationLearningDialog(PersonalizationLearningActionsMixin, QDialog
         self.auto_note.setObjectName("personalizationAutoNote")
         self.auto_note.setWordWrap(True)
         manage_layout.addWidget(self.auto_note)
-        layout.addWidget(manage_card)
+        body_layout.addWidget(manage_card)
 
         self.advanced_scroll = None
         self.inspect_box = None
         self.btn_run_queue = None
         self.btn_build_voice_lora = None
+
+        body_layout.addStretch(1)
 
         bottom_row = QHBoxLayout()
         bottom_row.addStretch(1)

@@ -331,7 +331,7 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertNotIn("RUNTIME", coordinator.status_html(data))
         self.assertNotIn("ACCEL CPU + GPU + NPU", coordinator.status_html(data))
         self.assertIn("CPU 72%", coordinator.status_html(data))
-        self.assertIn("ACTIVE", coordinator.status_html(data))
+        self.assertNotIn("ACTIVE", coordinator.status_html(data))
         self.assertEqual(coordinator.status_color(data), "#34C759")
         self.assertIn("cpu=72", coordinator.status_plain(data))
         self.assertNotIn("runtime=max", coordinator.status_plain(data))
@@ -366,7 +366,7 @@ class RuntimeMultiProcessTests(unittest.TestCase):
 
         self.assertEqual(data["pressure_stage"], "normal")
         self.assertEqual(data["active_labels"], [])
-        self.assertIn("ACTIVE idle", coordinator.status_html(data))
+        self.assertNotIn("ACTIVE", coordinator.status_html(data))
         self.assertEqual(logger.messages, [])
 
     def test_runtime_resource_coordinator_terminal_log_is_off_by_default_even_when_active(self):

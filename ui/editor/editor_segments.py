@@ -118,6 +118,112 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         self._cached_line_map = line_map
         return line_map
 
+    def _subtitle_block_data_from_segment(self, seg: dict | None) -> SubtitleBlockData | None:
+        if not isinstance(seg, dict):
+            return None
+        spk1_id = self.settings.get("spk1_id", "00") if hasattr(self, "settings") else "00"
+        try:
+            start_sec = self._frame_time(max(0.0, float(seg.get("start", 0.0) or 0.0)))
+        except Exception:
+            start_sec = 0.0
+        try:
+            end_sec = self._frame_time(max(start_sec, float(seg.get("end", start_sec) or start_sec)))
+        except Exception:
+            end_sec = start_sec
+        if end_sec <= start_sec:
+            end_sec = self._frame_time(start_sec + 0.5)
+        speaker = str(seg.get("speaker", seg.get("spk", spk1_id)) or spk1_id)
+        clip_idx = seg.get("_clip_idx")
+        try:
+            clip_idx = int(clip_idx) if clip_idx is not None else None
+        except Exception:
+            clip_idx = None
+        return SubtitleBlockData(
+            speaker,
+            start_sec,
+            bool(seg.get("is_gap", False)),
+            end_sec=end_sec,
+            stt_mode=bool(seg.get("stt_mode", False)),
+            stt_pending=bool(seg.get("stt_pending", False)),
+            original_text=str(seg.get("original_text", "") or ""),
+            dictated_text=str(seg.get("dictated_text", "") or ""),
+            quality=dict(seg.get("quality") or {}),
+            quality_history=list(seg.get("quality_history") or []),
+            quality_candidates=list(seg.get("quality_candidates") or []),
+            quality_signature=str(seg.get("quality_signature", "") or ""),
+            clip_idx=clip_idx,
+            clip_file=str(seg.get("_clip_file", "") or ""),
+            stt_selected_source=str(seg.get("stt_selected_source", "") or ""),
+            stt_ensemble_llm_selected_source=str(seg.get("stt_ensemble_llm_selected_source", "") or ""),
+            stt_candidates=list(seg.get("stt_candidates") or []),
+            stt_ensemble_source=str(seg.get("stt_ensemble_source", "") or ""),
+            stt_ensemble_llm_selected_label=str(seg.get("stt_ensemble_llm_selected_label", "") or ""),
+            stt_ensemble_similarity=seg.get("stt_ensemble_similarity"),
+            stt_ensemble_needs_llm_review=bool(seg.get("stt_ensemble_needs_llm_review", False)),
+            stt_ensemble_inserted_from_stt2=bool(seg.get("stt_ensemble_inserted_from_stt2", False)),
+            stt_ensemble_word_rover=dict(seg.get("stt_ensemble_word_rover") or {}),
+            score=seg.get("score"),
+            stt_score=seg.get("stt_score"),
+            score_color=str(seg.get("score_color", "") or ""),
+            stt_score_color=str(seg.get("stt_score_color", "") or ""),
+            stt_score_label=str(seg.get("stt_score_label", "") or ""),
+            stt_score_flags=list(seg.get("stt_score_flags") or []),
+            stt_score_components=dict(seg.get("stt_score_components") or {}),
+            live_preview=bool(seg.get("live_preview", False)),
+            live_preview_source=str(seg.get("live_preview_source", "") or ""),
+            live_preview_stage=str(seg.get("live_preview_stage", "") or ""),
+        )
+
+    @staticmethod
+    def _segment_matches_block_text(seg: dict | None, block_text: str) -> bool:
+        if not isinstance(seg, dict):
+            return False
+        seg_text = str(seg.get("text", "") or "").replace("\u2028", "\n").strip()
+        block_text = str(block_text or "").replace("\u2028", "\n").strip()
+        if not seg_text and not block_text:
+            return True
+        if not seg_text or not block_text:
+            return False
+        seg_norm = re.sub(r"\s+", " ", seg_text)
+        block_norm = re.sub(r"\s+", " ", block_text)
+        return bool(
+            seg_norm == block_norm
+            or block_norm in seg_norm
+            or seg_norm in block_norm
+        )
+
+    def _restore_visible_block_user_data(self) -> int:
+        text_edit = getattr(self, "text_edit", None)
+        if text_edit is None or not hasattr(text_edit, "document"):
+            return 0
+        cached_line_map = getattr(self, "_cached_line_map", None)
+        if not isinstance(cached_line_map, dict):
+            cached_line_map = self._refresh_cached_line_map()
+        if not cached_line_map:
+            return 0
+
+        doc = text_edit.document()
+        try:
+            start_line, end_line = text_edit.visible_block_number_range(pad_before=32, pad_after=64)
+        except Exception:
+            start_line = 0
+            end_line = max(0, int(doc.blockCount()) - 1)
+
+        repaired = 0
+        block = doc.findBlockByNumber(int(start_line))
+        while block.isValid() and block.blockNumber() <= int(end_line):
+            if not isinstance(block.userData(), SubtitleBlockData):
+                seg = cached_line_map.get(int(block.blockNumber()))
+                if not self._segment_matches_block_text(seg, block.text()):
+                    block = block.next()
+                    continue
+                meta = self._subtitle_block_data_from_segment(seg)
+                if meta is not None:
+                    block.setUserData(meta)
+                    repaired += 1
+            block = block.next()
+        return repaired
+
     def _subtitle_memory_segments(self) -> list[dict]:
         cache = getattr(self, "_subtitle_memory_cache", None)
         if not isinstance(cache, dict):

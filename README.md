@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-03.25.00-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v03.25.00-30D158?style=for-the-badge)](RELEASE_v03.25.00.md)
+[![App Version](https://img.shields.io/badge/app-03.25.01-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v03.25.01-30D158?style=for-the-badge)](RELEASE_v03.25.01.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-555?style=for-the-badge)](#)
@@ -16,7 +16,7 @@ Accuracy-first desktop subtitle production for long-form video, rough cuts, spea
 
 AI Subtitle Studio is built for one primary outcome: produce highly accurate subtitles on the first pass, even when that takes longer than a fast draft. The goal is to reduce manual correction time by combining STT, audio preprocessing, VAD, cut-boundary alignment, LLM cleanup, subtitle timing rules, LoRA personalization, and project-aware editing in one desktop workflow.
 
-Current development has completed the v03.25.00 Native Performance and UI release. The app keeps one user-facing Mode control: `Fast`, `Auto`, `High`, and `STT 모드`, while adding backend routing, optional native C++ helper kernels, FFmpeg scene/audio extraction acceleration, Korean KomixV2 STT candidates, preview-proxy reuse, compact Apple-style popups, and benchmark-driven CPU/GPU/NPU scheduling defaults.
+Current development has completed the v03.25.01 Native STT Pipeline release. The app keeps one user-facing Mode control: `Fast`, `Auto`, `High`, and `STT 모드`, while adding backend routing, optional native C++ helper kernels, Swift WhisperKit and whisper.cpp STT routes, selective word timestamp rechecks, FFmpeg scene/audio extraction acceleration, native ClearVoice FFmpeg handling, Korean KomixV2 STT candidates, preview-proxy reuse, compact Apple-style popups, and benchmark-driven CPU/GPU/NPU scheduling defaults.
 
 ## Core Workflows
 
@@ -32,6 +32,10 @@ Current development has completed the v03.25.00 Native Performance and UI releas
 - Fast editor-mode subtitle movement using line-map caches, dirty-rectangle timeline updates, visible-window video context refreshes, and non-jittery active-segment scrolling.
 - Optional native/OpenCV cut-boundary verification, FFmpeg scene prepass, direct FFmpeg audio extraction, and benchmark-profile backend routing for long media.
 - Korean Whisper KomixV2 STT candidates, including alias, Hugging Face original, and MLX variants, are available as clearly labeled STT2 choices.
+- Optional Swift WhisperKit persistent and whisper.cpp STT backends route through the same Python transcription pipeline as MLX, Transformers, Core ML, and faster-whisper.
+- Word timestamps default to off for fast STT passes, then re-run selectively on low-score, editor-selected, precision-review, or VAD-risk spans.
+- ClearVoice can use a native FFmpeg single-pass path instead of waiting on the slower deep-learning enhancer when the quality-safe preset allows it.
+- OpenAI Codex ChatGPT CLI can be selected as a subscription-backed LLM provider without requiring an API key or Ollama model preflight.
 - Compact QML popup/menu surfaces use outside-click dismissal, hover/press feedback, and Korean-only bottom/global menu labels.
 - Ten-step engine dashboard: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
 - Runtime sidebar display of the current file's automatic audio-filter and VAD choices.
@@ -114,10 +118,10 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `03.25.00` |
-| Latest release checkpoint | `v03.25.00` |
-| Handoff document version | `03.25.00` |
-| Active phase | `NATIVE_PERFORMANCE_UI_RELEASED` |
+| App version in code | `03.25.01` |
+| Latest release checkpoint | `v03.25.01` |
+| Handoff document version | `03.25.01` |
+| Active phase | `NATIVE_STT_PIPELINE_RELEASED` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
 | Supported target platforms | macOS and Windows |
@@ -148,7 +152,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v03.25.00.md`](RELEASE_v03.25.00.md). Older release notes remain in the repository as history, but handoff documents should only summarize the latest state and the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v03.25.01.md`](RELEASE_v03.25.01.md). Older release notes remain in the repository as history, but handoff documents should only summarize the latest state and the immediately previous release relationship.
 
 ## Security
 

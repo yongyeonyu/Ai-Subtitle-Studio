@@ -17,6 +17,8 @@ class SttBackendChoice:
 def _infer_backend(model: str) -> str:
     raw = str(model or "").strip()
     lowered = raw.lower()
+    if lowered.startswith("whisperkit-persistent:"):
+        return "whisperkit_persistent"
     if lowered.startswith("coreml:"):
         return "coreml"
     if lowered.startswith("transformers:"):
@@ -29,7 +31,7 @@ def _infer_backend(model: str) -> str:
         "o0dimplz0o/fine-tuned-whisper-large-v2-zeroth-stt-ko",
     }:
         return "transformers"
-    if "whisper.cpp" in lowered or lowered.startswith("whisper_cpp:"):
+    if "whisper.cpp" in lowered or lowered.startswith(("whisper_cpp:", "whisper-cpp:")):
         return "whisper_cpp"
     if bool(getattr(config, "IS_MAC", False)) and (
         "mlx-community/" in lowered
@@ -64,6 +66,9 @@ def select_stt_backend(model: str, settings: dict[str, Any] | None = None) -> St
         if bool(getattr(config, "IS_MAC", False)) and requested_model == "mlx-community/whisper-large-v3-mlx":
             return SttBackendChoice("mlx", "mlx-community/whisper-large-v3-turbo", "fast_policy_mlx_turbo")
         return SttBackendChoice(_infer_backend(requested_model), requested_model, "fast_policy_selected_model")
+    if policy == "native":
+        model_for_native = requested_model or "whisper.cpp:large-v3-turbo"
+        return SttBackendChoice("whisper_cpp", model_for_native, "native_policy_whisper_cpp")
     if policy == "legacy":
         return SttBackendChoice(_infer_backend(requested_model), requested_model, "legacy_policy")
 

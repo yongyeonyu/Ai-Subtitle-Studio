@@ -73,7 +73,9 @@ class HomeSidebarNavWidget(QWidget):
 
     def set_items(self, items: list[dict]):
         self._items = [dict(item or {}) for item in (items or [])]
-        min_height = max(30, len(self._items) * 30 + max(0, len(self._items) - 1) * 4)
+        item_height = 26
+        item_spacing = 4
+        min_height = max(item_height, len(self._items) * item_height + max(0, len(self._items) - 1) * item_spacing)
         self.setMinimumHeight(min_height)
         self.setMaximumHeight(min_height)
         if self._quick is not None:
@@ -96,8 +98,8 @@ class HomeSidebarNavWidget(QWidget):
             button = QWidget(self)
             button.setObjectName("MenuButton")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setMinimumHeight(30)
-            button.setMaximumHeight(30)
+            button.setMinimumHeight(26)
+            button.setMaximumHeight(26)
             accent = str(item.get("accent", "#3F8CFF") or "#3F8CFF")
             active = bool(item.get("active"))
             button.setStyleSheet(
@@ -107,10 +109,10 @@ class HomeSidebarNavWidget(QWidget):
                 "border-radius: 8px; }"
             )
             row = QHBoxLayout(button)
-            row.setContentsMargins(10, 0, 10, 0)
-            row.setSpacing(8)
+            row.setContentsMargins(8, 0, 8, 0)
+            row.setSpacing(7)
             badge = QLabel(str(item.get("badge", "") or ""), button)
-            badge.setFixedWidth(18)
+            badge.setFixedSize(16, 16)
             badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
             badge.setStyleSheet(
                 "color: "

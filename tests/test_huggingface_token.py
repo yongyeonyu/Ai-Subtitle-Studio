@@ -4,7 +4,10 @@ import os
 import unittest
 from unittest.mock import patch
 
-from core.audio.whisper_transformers import _format_stderr_log, _huggingface_env
+from core.audio.whisper_transformers import (
+    _format_stderr_log,
+    _huggingface_env,
+)
 from core.audio.media_processor import VideoProcessor
 from core.llm.secure_keys import get_api_key
 

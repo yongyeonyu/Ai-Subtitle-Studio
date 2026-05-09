@@ -99,11 +99,10 @@ class RoughcutUiV2Tests(unittest.TestCase):
             "roughcut_llm_threads": 3,
         })
         try:
-            self.assertEqual([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())], ["자막 검수", "중분류", "모델/API", "자동 설정"])
-            editor_tab = dialog.tabs.widget(0)
-            editor_labels = [label.text().replace("&", "") for label in editor_tab.findChildren(QLabel)]
-            self.assertNotIn("Mode", editor_labels)
-            self.assertNotIn("Mode:", editor_labels)
+            self.assertFalse(hasattr(dialog, "tabs"))
+            labels = [label.text().replace("&", "") for label in dialog.findChildren(QLabel)]
+            self.assertNotIn("Mode", labels)
+            self.assertNotIn("Mode:", labels)
             self.assertIsNone(dialog.combo_stt_quality_preset.parent())
             self.assertEqual(dialog.combo_stt_quality_preset.currentData(), "auto")
             collected = dialog._collect_settings()
@@ -138,13 +137,12 @@ class RoughcutUiV2Tests(unittest.TestCase):
     def test_ai_tab_exposes_api_tokens_and_model_download_controls(self):
         dialog = SettingsDialog({})
         try:
-            ai_tab = dialog.tabs.widget(2)
-            self.assertIsNotNone(ai_tab.findChild(QLineEdit, "GoogleApiKeyInput"))
-            self.assertIsNotNone(ai_tab.findChild(QLineEdit, "OpenAiApiKeyInput"))
-            self.assertIsNotNone(ai_tab.findChild(QLineEdit, "HuggingFaceTokenInput"))
-            self.assertIsNotNone(ai_tab.findChild(QWidget, "AiModelDownloadPanel"))
+            self.assertIsNotNone(dialog.findChild(QLineEdit, "GoogleApiKeyInput"))
+            self.assertIsNotNone(dialog.findChild(QLineEdit, "OpenAiApiKeyInput"))
+            self.assertIsNotNone(dialog.findChild(QLineEdit, "HuggingFaceTokenInput"))
+            self.assertIsNotNone(dialog.findChild(QWidget, "AiModelDownloadPanel"))
 
-            labels = {label.text() for label in ai_tab.findChildren(QLabel)}
+            labels = {label.text() for label in dialog.findChildren(QLabel)}
             self.assertIn("Google API Key:", labels)
             self.assertIn("OpenAI API Key:", labels)
             self.assertIn("Hugging Face Token:", labels)
@@ -199,12 +197,11 @@ class RoughcutUiV2Tests(unittest.TestCase):
     def test_gap_dialog_hides_manual_sliders_behind_simple_mode(self):
         dialog = GapSettingsDialog({"settings_simplified_ui_enabled": True, "simple_operation_mode": "precise"})
         try:
-            self.assertFalse(dialog.chk_show_manual_gap_settings.isChecked())
-            self.assertTrue(dialog._manual_gap_scroll_area.isHidden())
+            self.assertFalse(hasattr(dialog, "chk_show_manual_gap_settings"))
+            self.assertFalse(dialog._manual_gap_scroll_area.isHidden())
             dialog._collect_data()
-            self.assertTrue(dialog.result["subtitle_bundle_autopilot_enabled"])
-            self.assertEqual(dialog.result["simple_operation_mode"], "high")
-            self.assertFalse(dialog.result["operation_mode_choices_visible"])
+            self.assertIn("continuous_threshold", dialog.result)
+            self.assertIn("split_length_threshold", dialog.result)
         finally:
             dialog.close()
 

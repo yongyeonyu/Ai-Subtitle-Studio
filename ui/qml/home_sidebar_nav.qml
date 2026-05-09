@@ -25,8 +25,8 @@ Rectangle {
                 required property var modelData
 
                 width: root.width
-                height: 30
-                radius: 8
+                height: 26
+                radius: 7
                 color: modelData.active ? "#26313A" : (hitArea.containsMouse ? "#1B2429" : "#141C20")
                 border.width: 1
                 border.color: modelData.active
@@ -40,7 +40,7 @@ Rectangle {
                     anchors.leftMargin: 7
                     anchors.verticalCenter: parent.verticalCenter
                     width: 4
-                    height: parent.height - 12
+                    height: parent.height - 10
                     radius: 2
                     color: modelData.accent || "#3F8CFF"
                     visible: !!modelData.active
@@ -50,13 +50,13 @@ Rectangle {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    anchors.leftMargin: 12
-                    anchors.rightMargin: 12
-                    spacing: 8
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 10
+                    spacing: 7
 
                     Rectangle {
-                        width: 18
-                        height: 18
+                        width: 16
+                        height: 16
                         radius: 4
                         color: modelData.active ? "#10181D" : "#182126"
                         border.width: 1
@@ -73,7 +73,7 @@ Rectangle {
 
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width - 26
+                        width: parent.width - 23
                         text: modelData.title || ""
                         color: modelData.active ? "#F5F7FA" : "#D7DEE5"
                         font.pixelSize: 10

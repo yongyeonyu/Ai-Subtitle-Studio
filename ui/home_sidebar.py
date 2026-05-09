@@ -368,11 +368,13 @@ class HomeSidebarMixin:
         for label, key in self._subtitle_quality_preset_items():
             combo.addItem(label, key)
         combo.setFixedHeight(height)
+        combo.setMinimumContentsLength(5)
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         if width > 0:
             combo.setFixedWidth(width)
         else:
-            combo.setMinimumWidth(60)
-            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            combo.setFixedWidth(96)
+            combo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         combo.setCursor(Qt.CursorShape.PointingHandCursor)
         combo.setStyleSheet(self._sidebar_subtitle_quality_combo_style())
         combo.setToolTip("Mode")
@@ -427,14 +429,15 @@ class HomeSidebarMixin:
         layout.setSpacing(3)
 
         label = QLabel("Mode", row)
-        label.setFixedWidth(54)
-        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         label.setStyleSheet("color:#00D46A; font-size:10px; font-weight:800; background:transparent; border:none;")
         layout.addWidget(label)
 
         combo = self._make_subtitle_quality_combo(row, width=0, height=22, scope="workspace")
         self.sidebar_subtitle_quality_combo = combo
-        layout.addWidget(combo, stretch=1)
+        layout.addWidget(combo)
+        layout.addStretch(1)
 
         save_btn = QPushButton("저장", row)
         save_btn.setIcon(line_icon("save", "#F5F7FA", 16))
@@ -450,8 +453,7 @@ class HomeSidebarMixin:
         )
         save_btn.clicked.connect(self._on_sidebar_subtitle_quality_save)
         self.sidebar_subtitle_quality_save_btn = save_btn
-        layout.addWidget(save_btn)
-        layout.addStretch(1)
+        layout.addWidget(save_btn, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         return row
 
     def _settings_for_subtitle_quality_scope(self, scope: str | None) -> dict:
@@ -659,9 +661,17 @@ class HomeSidebarMixin:
         from core.runtime.config import APP_VERSION
         title_color = self._runtime_title_status_color()
         label.setText(
+            "<table width='100%' cellspacing='0' cellpadding='0' style='margin:0; padding:0;'>"
+            "<tr>"
+            "<td style='padding:0; margin:0; text-align:left; white-space:nowrap;'>"
             f"<span style='color:{dot_color}; font-size:12px;'>●</span> "
-            f"<span style='color:{title_color}; font-size:13px; font-weight:700;'>AI Subtitle Studio</span> "
+            f"<span style='color:{title_color}; font-size:13px; font-weight:700;'>AI Subtitle Studio</span>"
+            "</td>"
+            "<td style='padding:0; margin:0; text-align:right; white-space:nowrap;'>"
             f"<span style='color:#D1D1D6; font-size:10px; font-weight:600;'>v{APP_VERSION}</span>"
+            "</td>"
+            "</tr>"
+            "</table>"
         )
         label.setToolTip(tooltip)
 
@@ -700,6 +710,9 @@ class HomeSidebarMixin:
             return "KomixV2 · MLX"
         if lowered == "seastar105/whisper-medium-komixv2":
             return "KomixV2 · HF 원본"
+        for prefix in ("whisper.cpp:", "whisper_cpp:", "whisper-cpp:"):
+            if lowered.startswith(prefix):
+                return f"whisper.cpp · {text[len(prefix):] or 'default'}"
         for prefix in ("mlx-community/", "Systran/", "youngouk/", "ghost613/", "o0dimplz0o/"):
             text = text.replace(prefix, "")
         text = text.replace("-mlx", "")
@@ -1236,7 +1249,7 @@ class HomeSidebarMixin:
     def _pipeline_prompt_link(self, key: str) -> str:
         return (
             f"<a href='prompt:{escape(key)}' "
-            "style='color:#8EA4B8; text-decoration:none; margin-left:6px; font-size:11px;'>"
+            "style='color:#8EA4B8; text-decoration:none; margin-left:4px; font-size:10px;'>"
             "&#9881;</a>"
         )
 
@@ -1267,13 +1280,13 @@ class HomeSidebarMixin:
                 model_html = f"{model_html}&nbsp;{self._pipeline_prompt_link(key)}"
             rows.append(
                 "<tr>"
-                f"<td style='color:{num_color}; padding:1px 6px 1px 0; font-weight:400;{bg_style}'>{idx}</td>"
-                f"<td style='color:{stage_color}; padding:1px 10px 1px 0; font-weight:400;{bg_style}'>{escape(stage)}</td>"
-                f"<td style='color:{model_color}; padding:1px 0; font-family:Menlo, Monaco, Consolas, monospace; font-weight:400;{bg_style}'>{model_html}</td>"
+                f"<td style='color:{num_color}; padding:0 5px 0 0; font-weight:400;{bg_style}'>{idx}</td>"
+                f"<td style='color:{stage_color}; padding:0 8px 0 0; font-weight:400;{bg_style}'>{escape(stage)}</td>"
+                f"<td style='color:{model_color}; padding:0; font-family:Menlo, Monaco, Consolas, monospace; font-weight:400;{bg_style}'>{model_html}</td>"
                 "</tr>"
             )
         return (
-            "<table cellspacing='0' cellpadding='0' style='font-size:8px; margin-top:3px;'>"
+            "<table cellspacing='0' cellpadding='0' style='font-size:8px; line-height:100%; margin-top:1px;'>"
             + "".join(rows)
             + "</table>"
         )
@@ -1332,9 +1345,8 @@ class HomeSidebarMixin:
         if not snapshot:
             label.setTextFormat(Qt.TextFormat.RichText)
             label.setText(
-                "<div style='margin-top:6px; padding-top:5px; border-top:1px solid #22313A;'>"
+                "<div style='margin-top:3px; padding-top:3px; border-top:1px solid #22313A;'>"
                 "<div style='color:#6E8594; font-size:8px;'>CPU -- · PROC -- · RAM --</div>"
-                "<div style='color:#9DB7C8; font-size:8px;'>ACTIVE idle</div>"
                 "</div>"
             )
             label.setToolTip("런타임 모니터 대기 중")
@@ -1348,13 +1360,11 @@ class HomeSidebarMixin:
         else:
             html = ""
         if not html:
-            active = ", ".join(str(item) for item in list(snapshot.get("active_labels", []) or [])[:3]) or "idle"
             html = (
-                "<div style='margin-top:6px; padding-top:5px; border-top:1px solid #22313A;'>"
+                "<div style='margin-top:3px; padding-top:3px; border-top:1px solid #22313A;'>"
                 f"<div style='color:#DCE7F3; font-size:8px;'>CPU {float(snapshot.get('system_cpu_percent', 0.0)):.0f}% · "
                 f"PROC {float(snapshot.get('process_cpu_percent', 0.0)):.0f}% · "
                 f"RAM {float(snapshot.get('rss_gb', 0.0)):.2f}GB</div>"
-                f"<div style='color:#9DB7C8; font-size:8px;'>ACTIVE {escape(active)}</div>"
                 "</div>"
             )
         label.setTextFormat(Qt.TextFormat.RichText)
@@ -1633,6 +1643,8 @@ class HomeSidebarMixin:
         if provider in {"google", "openai"}:
             if any(re.search(rf"\b{re.escape(token)}\b", label_l) for token in ROUGHCUT_BLOCKED_CLOUD_TOKENS):
                 return False
+            if "codex" in label_l and ("chatgpt" in label_l or "구독" in label_l or "cli" in label_l):
+                return True
             return any(token in label_l for token in ROUGHCUT_CAPABLE_CLOUD_TOKENS) or "gpt-5" in label_l
 
         params_b = self._roughcut_llm_parameter_b(item)

@@ -303,6 +303,19 @@ class SubtitleTextEdit(QTextEdit):
         timer.start(16)
 
     def _flush_timestamp_area_update(self):
+        parent = getattr(self, "_parent_widget", None)
+        repairer = getattr(parent, "_restore_visible_block_user_data", None)
+        repaired = 0
+        if callable(repairer):
+            try:
+                repaired = int(repairer() or 0)
+            except Exception:
+                repaired = 0
+        if repaired:
+            try:
+                self.update_margins()
+            except Exception:
+                pass
         area = getattr(self, "timestampArea", None)
         if area is None:
             return
@@ -613,6 +626,13 @@ class SubtitleTextEdit(QTextEdit):
         doc = self.document()
         if doc is None:
             return []
+        parent = getattr(self, "_parent_widget", None)
+        repairer = getattr(parent, "_restore_visible_block_user_data", None)
+        if callable(repairer):
+            try:
+                repairer()
+            except Exception:
+                pass
         lines: list[dict] = []
         try:
             top_cursor = self.cursorForPosition(QPoint(8, 4))

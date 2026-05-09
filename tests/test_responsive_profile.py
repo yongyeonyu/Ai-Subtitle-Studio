@@ -22,11 +22,11 @@ class ResponsiveProfileTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_desktop_size_keeps_existing_menu_defaults(self):
+    def test_desktop_size_uses_compact_menu_defaults(self):
         profile = responsive_profile_for_size(1920, 1080)
         self.assertEqual(profile.name, "desktop")
-        self.assertEqual(profile.menu_button_height, 44)
-        self.assertEqual(profile.menu_bar_height, 54)
+        self.assertEqual(profile.menu_button_height, 38)
+        self.assertEqual(profile.menu_bar_height, 48)
 
     def test_desktop_tablet_sized_window_does_not_auto_enable_ipad_profile(self):
         profile = responsive_profile_for_size(1180, 820)

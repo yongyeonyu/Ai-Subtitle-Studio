@@ -1,5 +1,5 @@
-# Version: 03.25.00
-# Phase: PHASE10_NativePerformanceUiRelease
+# Version: 03.25.01
+# Phase: PHASE11_NativeSttPipelineRelease
 
 
 # === OS / Platform Detection ===
@@ -12,7 +12,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.25.00"
+APP_VERSION = "03.25.01"
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -137,11 +137,21 @@ DEFAULT_ADV_SETTINGS = {
     "auto_start_mode": "balanced",
     "stt_quality_preset": "balanced",
     "stt_ensemble_enabled": False,
+    "stt_ensemble_selective_enabled": True,
+    "stt_ensemble_parallel_enabled": False,
     "stt_candidate_scoring_enabled": True,
     "stt_low_score_recheck_enabled": True,
     "stt_low_score_recheck_threshold": 60,
     "stt_low_score_recheck_padding_sec": 0.8,
     "stt_low_score_recheck_max_segments": 80,
+    "stt_word_timestamps_mode": "selective",
+    "stt_word_timestamps_default_enabled": False,
+    "stt_word_timestamps_precision_enabled": True,
+    "stt_word_timestamps_precision_threshold": 72.0,
+    "stt_word_timestamps_precision_max_segments": 80,
+    "stt_word_timestamps_precision_keep_text": True,
+    "stt_word_timestamps_precision_min_similarity": 0.18,
+    "stt_missing_voice_min_duration_sec": 0.55,
     "selected_whisper_model_secondary": (
         "youngouk/ghost613-turbo-korean-4bit-mlx"
         if IS_MAC else

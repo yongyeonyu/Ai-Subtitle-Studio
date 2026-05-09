@@ -175,17 +175,21 @@ Rectangle {
         }
     }
 
-    Row {
+    Item {
         id: statusRow
+        anchors.left: controlRow.right
+        anchors.leftMargin: 12
         anchors.right: parent.right
         anchors.rightMargin: 8
         anchors.verticalCenter: parent.verticalCenter
         height: parent.height - 16
-        spacing: 6
 
         Rectangle {
+            id: infoBadge
             visible: root.infoText.length > 0
-            width: visible ? Math.min(360, Math.ceil(infoTextMetrics.boundingRect.width) + 26) : 0
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            width: visible ? Math.min(280, Math.ceil(infoTextMetrics.boundingRect.width) + 26) : 0
             height: 32
             radius: 9
             color: "#1A2127"
@@ -207,8 +211,13 @@ Rectangle {
         }
 
         Rectangle {
+            id: sourceBadge
             visible: root.sourceNameText.length > 0
-            width: visible ? Math.min(320, Math.ceil(sourceTextMetrics.boundingRect.width) + 24) : 0
+            anchors.left: infoBadge.visible ? infoBadge.right : parent.left
+            anchors.leftMargin: infoBadge.visible ? 6 : 0
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            width: visible ? Math.max(0, parent.width - (infoBadge.visible ? infoBadge.width + 6 : 0)) : 0
             height: 32
             radius: 9
             color: "#182126"

@@ -69,11 +69,14 @@ class VideoProcessorTranscribeMixin:
             return "cpu"
         from core.audio.torch_acceleration import torch_acceleration_snapshot
         from core.audio.whisper_coreml import is_coreml_whisper_model
+        from core.audio.whisper_cpp import is_whisper_cpp_model
         from core.audio.whisper_transformers import is_transformers_whisper_model
 
         lowered = raw.lower()
         if is_coreml_whisper_model(raw):
             return "npu"
+        if is_whisper_cpp_model(raw):
+            return "cpu"
         if (
             "mlx-community/" in lowered
             or lowered.startswith("mlx:")
@@ -123,6 +126,17 @@ class VideoProcessorTranscribeMixin:
     ) -> list[dict]:
         worker = type(self)()
         worker.language = self.language
+        for attr in (
+            "hard_cut_boundaries",
+            "_cut_boundary_provisional_rows",
+            "_audio_cut_boundary_rows",
+            "_saved_cut_boundaries",
+        ):
+            if hasattr(self, attr):
+                try:
+                    setattr(worker, attr, getattr(self, attr))
+                except Exception:
+                    pass
         if settings_overrides:
             worker._fast_mode_overrides = dict(settings_overrides)
         with self._ensemble_child_lock:
@@ -244,6 +258,108 @@ class VideoProcessorTranscribeMixin:
         except Exception:
             score = 24.0
         return max(0.0, min(100.0, score))
+
+    @staticmethod
+    def _setting_bool(settings: dict | None, key: str, default: bool = False) -> bool:
+        value = (settings or {}).get(key, default)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "사용", "켜짐"}
+        return bool(value)
+
+    @staticmethod
+    def _setting_float(settings: dict | None, key: str, default: float) -> float:
+        try:
+            return float((settings or {}).get(key, default))
+        except Exception:
+            return default
+
+    @staticmethod
+    def _stt_word_timestamps_for_pass(settings: dict | None) -> bool:
+        settings = settings or {}
+        if bool(settings.get("stt_word_timestamp_precision_pass", False)):
+            return VideoProcessorTranscribeMixin._setting_bool(
+                settings,
+                "stt_word_timestamps_precision_enabled",
+                True,
+            )
+        mode = str(settings.get("stt_word_timestamps_mode") or "always").strip().lower()
+        if mode in {"off", "false", "none", "disabled"}:
+            return False
+        if mode in {"always", "on", "true", "word", "words"}:
+            return True
+        return VideoProcessorTranscribeMixin._setting_bool(
+            settings,
+            "stt_word_timestamps_default_enabled",
+            False,
+        )
+
+    @staticmethod
+    def _stt_selective_ensemble_enabled(settings: dict | None) -> bool:
+        settings = settings or {}
+        if VideoProcessorTranscribeMixin._setting_bool(settings, "stt_ensemble_parallel_enabled", False):
+            return False
+        return VideoProcessorTranscribeMixin._setting_bool(settings, "stt_ensemble_selective_enabled", False)
+
+    @staticmethod
+    def _segment_score_100(segment: dict | None) -> float:
+        segment = segment or {}
+        for key in ("stt_score", "score", "confidence", "avg_confidence"):
+            value = segment.get(key)
+            if value is None:
+                continue
+            try:
+                score = float(value)
+            except Exception:
+                continue
+            if score <= 1.0:
+                score *= 100.0
+            return max(0.0, min(100.0, score))
+        return 0.0
+
+    @staticmethod
+    def _segment_has_score(segment: dict | None) -> bool:
+        segment = segment or {}
+        return any(segment.get(key) is not None for key in ("stt_score", "score", "confidence", "avg_confidence"))
+
+    @staticmethod
+    def _segment_needs_word_precision(segment: dict, settings: dict | None) -> bool:
+        if not isinstance(segment, dict) or not str(segment.get("text") or "").strip():
+            return False
+        if segment.get("words"):
+            return False
+        if any(bool(segment.get(key)) for key in ("editor_selected", "selected", "precision_review", "needs_review")):
+            return True
+        score_threshold = VideoProcessorTranscribeMixin._setting_float(
+            settings,
+            "stt_word_timestamps_precision_threshold",
+            72.0,
+        )
+        if (
+            VideoProcessorTranscribeMixin._segment_has_score(segment)
+            and VideoProcessorTranscribeMixin._segment_score_100(segment) <= score_threshold
+        ):
+            return True
+        quality = dict(segment.get("quality") or {})
+        if str(quality.get("confidence_label") or "").strip().lower() in {"red", "yellow"}:
+            return True
+        flags = {str(flag) for flag in (quality.get("flags") or ())}
+        if flags.intersection({"outside_vad_speech", "high_cps", "short_duration_long_text", "word_timestamps_missing"}):
+            return True
+        meta = dict(segment.get("asr_metadata") or {})
+        hallucination = dict(meta.get("hallucination_risk") or {})
+        try:
+            if float(hallucination.get("risk", 0.0) or 0.0) >= 0.25:
+                return True
+        except Exception:
+            pass
+        vad = dict(meta.get("vad_alignment") or {})
+        try:
+            ratio = vad.get("vad_overlap_ratio")
+            if ratio is not None and float(ratio) < 0.35:
+                return True
+        except Exception:
+            pass
+        return bool(segment.get("stt_ensemble_needs_llm_review"))
     def _normalize_scored_stt_tracks(
         self,
         tracks: dict[str, list[dict]],
@@ -351,6 +467,267 @@ class VideoProcessorTranscribeMixin:
             "start": round(actual_abs_start, 3),
             "end": round(actual_abs_start + duration, 3),
         }
+
+    def _chunk_path_covering_time(self, chunk_dir: str, target_sec: float) -> str:
+        try:
+            names = sorted(name for name in os.listdir(chunk_dir) if name.endswith(".wav"))
+        except Exception:
+            return ""
+        for name in names:
+            path = os.path.join(chunk_dir, name)
+            start = self._chunk_start_from_path(path)
+            duration = self._wav_duration(path)
+            if duration <= 0.0:
+                continue
+            if (start - 0.25) <= float(target_sec or 0.0) <= (start + duration + 0.25):
+                return path
+        return ""
+
+    def _missing_voice_recheck_ranges(
+        self,
+        chunk_dir: str,
+        primary_segments: list[dict],
+        vad_segments: list[dict],
+        settings: dict,
+        existing_count: int = 0,
+    ) -> list[stt_rescue.SttRecheckRange]:
+        if not vad_segments:
+            return []
+        limit = max(0, stt_rescue.max_recheck_segments(settings) - max(0, int(existing_count or 0)))
+        if limit <= 0:
+            return []
+        min_duration = max(0.2, self._setting_float(settings, "stt_missing_voice_min_duration_sec", 0.55))
+        candidates: list[stt_rescue.SttRecheckRange] = []
+        for vad in vad_segments:
+            if not isinstance(vad, dict):
+                continue
+            start = max(0.0, self._setting_float(vad, "start", 0.0))
+            end = max(start, self._setting_float(vad, "end", start))
+            if (end - start) < min_duration:
+                continue
+            covered = False
+            for seg in primary_segments or []:
+                if not str(seg.get("text") or "").strip():
+                    continue
+                overlap = max(0.0, min(end, float(seg.get("end", 0.0) or 0.0)) - max(start, float(seg.get("start", 0.0) or 0.0)))
+                if overlap / max(0.001, end - start) >= 0.18:
+                    covered = True
+                    break
+            if covered:
+                continue
+            source_path = self._chunk_path_covering_time(chunk_dir, (start + end) / 2.0)
+            if not source_path:
+                continue
+            synthetic = {
+                "start": start,
+                "end": end,
+                "text": "",
+                "score": 0.0,
+                "chunk_path": source_path,
+                "asr_metadata": {"chunk_path": source_path, "missing_voice_candidate": True},
+            }
+            candidates.append(
+                stt_rescue.SttRecheckRange(
+                    start=round(start, 3),
+                    end=round(end, 3),
+                    primary_score=0.0,
+                    secondary_score=0.0,
+                    primary_text="",
+                    secondary_text="",
+                    primary=synthetic,
+                    secondary={},
+                )
+            )
+            if len(candidates) >= limit:
+                break
+        return candidates
+
+    def _word_precision_ranges(
+        self,
+        segments: list[dict],
+        settings: dict,
+    ) -> list[stt_rescue.SttRecheckRange]:
+        if not self._setting_bool(settings, "stt_word_timestamps_precision_enabled", True):
+            return []
+        limit = max(
+            1,
+            min(
+                200,
+                int(self._setting_float(settings, "stt_word_timestamps_precision_max_segments", 80)),
+            ),
+        )
+        ranges: list[stt_rescue.SttRecheckRange] = []
+        for seg in segments or []:
+            if not self._segment_needs_word_precision(seg, settings):
+                continue
+            start = max(0.0, self._setting_float(seg, "start", 0.0))
+            end = max(start + 0.1, self._setting_float(seg, "end", start))
+            ranges.append(
+                stt_rescue.SttRecheckRange(
+                    start=round(start, 3),
+                    end=round(end, 3),
+                    primary_score=round(self._segment_score_100(seg), 2),
+                    secondary_score=0.0,
+                    primary_text=str(seg.get("text") or "").strip(),
+                    secondary_text="",
+                    primary=dict(seg),
+                    secondary={},
+                )
+            )
+            if len(ranges) >= limit:
+                break
+        return ranges
+
+    def _apply_word_precision_segments(
+        self,
+        base_segments: list[dict],
+        precision_segments: list[dict],
+        ranges: list[stt_rescue.SttRecheckRange],
+        settings: dict,
+    ) -> tuple[list[dict], int]:
+        if not base_segments or not precision_segments or not ranges:
+            return base_segments, 0
+        keep_text = self._setting_bool(settings, "stt_word_timestamps_precision_keep_text", True)
+        min_similarity = max(
+            0.0,
+            min(1.0, self._setting_float(settings, "stt_word_timestamps_precision_min_similarity", 0.18)),
+        )
+        try:
+            from core.audio.stt_ensemble import text_similarity
+        except Exception:
+            text_similarity = None
+
+        applied = 0
+        updated: list[dict] = []
+        for seg in base_segments:
+            if not any(self._segment_overlaps_range(seg, item.start, item.end) for item in ranges):
+                updated.append(seg)
+                continue
+            candidates = [
+                dict(candidate)
+                for candidate in precision_segments
+                if candidate.get("words") and self._segment_overlaps_range(candidate, float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0))
+            ]
+            if not candidates:
+                updated.append(seg)
+                continue
+            candidates.sort(
+                key=lambda candidate: (
+                    self._segment_score_100(candidate),
+                    len(candidate.get("words") or []),
+                ),
+                reverse=True,
+            )
+            chosen = candidates[0]
+            if callable(text_similarity):
+                similarity = float(text_similarity(str(seg.get("text") or ""), str(chosen.get("text") or "")) or 0.0)
+            else:
+                similarity = 1.0 if str(seg.get("text") or "").strip() == str(chosen.get("text") or "").strip() else 0.5
+            if similarity < min_similarity:
+                updated.append(seg)
+                continue
+            out = dict(seg)
+            words = [dict(word) for word in (chosen.get("words") or [])]
+            out["words"] = words
+            out["start"] = float(words[0].get("start", chosen.get("start", out.get("start", 0.0))) or out.get("start", 0.0))
+            out["end"] = float(words[-1].get("end", chosen.get("end", out.get("end", out["start"]))) or out.get("end", out["start"]))
+            if not keep_text and str(chosen.get("text") or "").strip():
+                out["text"] = str(chosen.get("text") or "").strip()
+            meta = dict(out.get("asr_metadata") or {})
+            meta["selective_word_timestamps"] = {
+                "enabled": True,
+                "source": str(chosen.get("stt_selected_source") or chosen.get("stt_ensemble_source") or "STT1"),
+                "similarity": round(similarity, 6),
+                "kept_original_text": bool(keep_text),
+                "range_start": round(float(seg.get("start", 0.0) or 0.0), 3),
+                "range_end": round(float(seg.get("end", 0.0) or 0.0), 3),
+            }
+            out["asr_metadata"] = meta
+            out["stt_word_precision_applied"] = True
+            updated.append(out)
+            applied += 1
+        return updated, applied
+
+    def _recheck_word_timestamps_for_precision(
+        self,
+        chunk_dir: str,
+        segments: list[dict],
+        settings: dict,
+        vad_strict: list[dict],
+        primary_model: str,
+    ) -> list[dict]:
+        if not segments:
+            return segments
+        if not self._setting_bool(settings, "stt_word_timestamps_precision_enabled", True):
+            return segments
+        if bool(settings.get("stt_word_timestamp_precision_pass", False)):
+            return segments
+        if self._stt_word_timestamps_for_pass(settings):
+            return segments
+
+        ranges = self._word_precision_ranges(segments, settings)
+        if not ranges:
+            return segments
+
+        get_logger().log(
+            f"  🔬 [단어 타임태그] 저신뢰/정밀 구간 {len(ranges)}개만 word timestamp 재인식"
+        )
+        self._notify_stage(f"⏳ [STT] 단어 타임태그 {len(ranges)}개 정밀 보정 중")
+        precision_dir = os.path.join(chunk_dir, "_stt_word_precision")
+        os.makedirs(precision_dir, exist_ok=True)
+        prepared: list[dict] = []
+        for idx, item in enumerate(ranges):
+            clip = self._prepare_recheck_clip(item, precision_dir, idx, settings)
+            if clip:
+                prepared.append(clip)
+        if not prepared:
+            return segments
+
+        model = str(settings.get("stt_word_timestamps_precision_model") or primary_model or "").strip() or primary_model
+        overrides = {
+            "stt_ensemble_enabled": False,
+            "stt_selective_secondary_recheck_enabled": False,
+            "stt_candidate_scoring_enabled": True,
+            "stt_quality_preset": "precise",
+            "stt_rescue_whisper_mode": True,
+            "stt_word_timestamp_precision_pass": True,
+            "stt_word_timestamps_mode": "always",
+            "stt_word_timestamps_default_enabled": True,
+            "stt_word_timestamps_precision_enabled": True,
+            "w_none_temp_max": 0.0,
+            "whisper_chunk_overlap_sec": 0.0,
+        }
+        precision_segments = self._collect_transcribe_result(
+            precision_dir,
+            model,
+            is_single=False,
+            label="STT-단어정밀",
+            settings_overrides=overrides,
+        )
+        if not precision_segments:
+            return segments
+        try:
+            from core.audio.stt_candidate_scorer import annotate_stt_candidates
+
+            precision_segments = annotate_stt_candidates(
+                precision_segments,
+                source="WORD_PRECISION",
+                peer_segments=segments,
+                vad_segments=vad_strict,
+                settings=settings,
+            )
+        except Exception as exc:
+            get_logger().log(f"  ⚠️ [단어 타임태그] 정밀 구간 점수 계산 실패: {exc}")
+
+        updated, applied = self._apply_word_precision_segments(
+            segments,
+            precision_segments,
+            ranges,
+            settings,
+        )
+        if applied > 0:
+            get_logger().log(f"  ✅ [단어 타임태그] {applied}개 자막 타이밍을 단어 기준으로 보정했습니다.")
+        return updated
     def _recheck_low_score_stt_ranges(
         self,
         chunk_dir: str,
@@ -466,16 +843,19 @@ class VideoProcessorTranscribeMixin:
     def _selective_secondary_recheck_enabled(self, settings: dict, primary_model: str) -> bool:
         if not stt_rescue.enabled(settings):
             return False
-        if bool(settings.get("stt_ensemble_enabled", False)):
+        if bool(settings.get("stt_ensemble_enabled", False)) and not self._stt_selective_ensemble_enabled(settings):
             return False
         enabled_value = settings.get("stt_selective_secondary_recheck_enabled")
         if enabled_value is None:
-            try:
-                from core.mode_policy import selected_mode_from_settings
+            if self._stt_selective_ensemble_enabled(settings):
+                enabled_value = True
+            else:
+                try:
+                    from core.mode_policy import selected_mode_from_settings
 
-                enabled_value = selected_mode_from_settings(settings) == "fast"
-            except Exception:
-                enabled_value = False
+                    enabled_value = selected_mode_from_settings(settings) == "fast"
+                except Exception:
+                    enabled_value = False
         if not bool(enabled_value):
             return False
         secondary_model = str(settings.get("selected_whisper_model_secondary") or "").strip()
@@ -494,6 +874,7 @@ class VideoProcessorTranscribeMixin:
         if not chunk_segs or not self._selective_secondary_recheck_enabled(settings, primary_model):
             return chunk_segs
         secondary_model = str(settings.get("selected_whisper_model_secondary") or "").strip()
+        context_label = "선택 STT2 재검사" if self._stt_selective_ensemble_enabled(settings) else "Fast STT2 재검사"
         try:
             from core.audio.stt_candidate_scorer import annotate_stt_candidates
 
@@ -504,18 +885,27 @@ class VideoProcessorTranscribeMixin:
                 settings=settings,
             )
         except Exception as exc:
-            get_logger().log(f"  ⚠️ [Fast STT2 재검사] STT1 점수 계산 실패: {exc}")
+            get_logger().log(f"  ⚠️ [{context_label}] STT1 점수 계산 실패: {exc}")
             return chunk_segs
 
         ranges = stt_rescue.find_primary_low_score_recheck_ranges(scored_primary, settings)
+        missing_ranges = self._missing_voice_recheck_ranges(
+            chunk_dir,
+            scored_primary,
+            vad_strict,
+            settings,
+            existing_count=len(ranges),
+        )
+        if missing_ranges:
+            ranges = list(ranges) + missing_ranges
         if not ranges:
             return scored_primary
 
         threshold = stt_rescue.threshold(settings)
         get_logger().log(
-            f"  🔁 [Fast STT2 재검사] STT1 {threshold:.0f}점 이하 구간 {len(ranges)}개만 STT2로 확인"
+            f"  🔁 [{context_label}] STT1 {threshold:.0f}점 이하/누락 후보 {len(ranges)}개만 STT2로 확인"
         )
-        self._notify_stage(f"⏳ [Fast] 저점 구간 {len(ranges)}개 STT2 확인 중")
+        self._notify_stage(f"⏳ [STT] 저점 구간 {len(ranges)}개 STT2 확인 중")
 
         rescue_dir = os.path.join(chunk_dir, "_fast_stt2_recheck")
         os.makedirs(rescue_dir, exist_ok=True)
@@ -533,6 +923,10 @@ class VideoProcessorTranscribeMixin:
             "stt_quality_preset": "precise",
             "stt_rescue_whisper_mode": True,
             "stt_selective_secondary_recheck_enabled": False,
+            "stt_word_timestamp_precision_pass": True,
+            "stt_word_timestamps_mode": "always",
+            "stt_word_timestamps_default_enabled": True,
+            "stt_word_timestamps_precision_enabled": True,
             "w_none_temp_max": 0.0,
             "whisper_chunk_overlap_sec": 0.0,
         }
@@ -555,7 +949,7 @@ class VideoProcessorTranscribeMixin:
                 settings=settings,
             )
         except Exception as exc:
-            get_logger().log(f"  ⚠️ [Fast STT2 재검사] STT2 점수 계산 실패: {exc}")
+            get_logger().log(f"  ⚠️ [{context_label}] STT2 점수 계산 실패: {exc}")
 
         applied_ranges: list[stt_rescue.SttRecheckRange] = []
         applied_segments: list[dict] = []
@@ -580,7 +974,7 @@ class VideoProcessorTranscribeMixin:
             applied_segments.extend(marked)
 
         if not applied_segments:
-            get_logger().log("  ↩️ [Fast STT2 재검사] 개선된 저점 구간이 없어 STT1 결과를 유지합니다.")
+            get_logger().log(f"  ↩️ [{context_label}] 개선된 저점 구간이 없어 STT1 결과를 유지합니다.")
             return scored_primary
 
         def _keep_existing(seg: dict) -> bool:
@@ -588,8 +982,126 @@ class VideoProcessorTranscribeMixin:
 
         updated = [seg for seg in scored_primary if _keep_existing(seg)] + applied_segments
         updated.sort(key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)))
-        get_logger().log(f"  ✅ [Fast STT2 재검사] 저점 구간 {len(applied_ranges)}개를 STT2 결과로 보강했습니다.")
+        get_logger().log(f"  ✅ [{context_label}] 저점 구간 {len(applied_ranges)}개를 STT2 결과로 보강했습니다.")
         return updated
+
+    def _transcribe_selective_ensemble(
+        self,
+        chunk_dir: str,
+        primary_model: str,
+        secondary_model: str,
+        settings: dict,
+        target_end_sec: float = None,
+        is_single: bool = False,
+        preview_callback=None,
+        cleanup_chunk_dir: bool = True,
+    ):
+        get_logger().log(
+            "\n🎧 [STT 선택 앙상블] STT1 빠른 1차 인식 → 저신뢰 구간만 STT2/단어 타임태그 정밀 보강 "
+            f"(STT1: {primary_model.split(chr(47))[-1]}, STT2: {secondary_model.split(chr(47))[-1]})"
+        )
+        self._notify_stage("⏳ [STT] STT1 우선 인식 중")
+        vad_strict = []
+        vad_json = os.path.join(chunk_dir, "vad_strict.json")
+        if os.path.exists(vad_json):
+            try:
+                with open(vad_json, "r", encoding="utf-8") as f:
+                    vad_strict = json.load(f)
+            except Exception:
+                vad_strict = []
+
+        try:
+            primary_overrides = {
+                "stt_ensemble_enabled": False,
+                "stt_selective_secondary_recheck_enabled": False,
+                "stt_candidate_scoring_enabled": True,
+            }
+            primary_segments = self._collect_transcribe_result(
+                chunk_dir,
+                primary_model,
+                target_end_sec=target_end_sec,
+                is_single=is_single,
+                label="STT1",
+                preview_callback=self._ensemble_preview_callback("STT1", preview_callback),
+                settings_overrides=primary_overrides,
+            )
+            if not primary_segments:
+                get_logger().log("  ⚠️ [STT 선택 앙상블] STT1 결과가 비어 있어 STT2 전체 인식으로 대체합니다.")
+                fallback_overrides = {
+                    "stt_ensemble_enabled": False,
+                    "stt_selective_secondary_recheck_enabled": False,
+                    "stt_candidate_scoring_enabled": True,
+                }
+                primary_segments = self._collect_transcribe_result(
+                    chunk_dir,
+                    secondary_model,
+                    target_end_sec=target_end_sec,
+                    is_single=is_single,
+                    label="STT2",
+                    preview_callback=self._ensemble_preview_callback("STT2", preview_callback),
+                    settings_overrides=fallback_overrides,
+                )
+                for seg in primary_segments:
+                    seg["stt_selected_source"] = "STT2"
+                    seg["stt_ensemble_source"] = "STT2_FALLBACK"
+            else:
+                primary_segments = self._recheck_primary_low_score_with_secondary(
+                    chunk_dir,
+                    primary_segments,
+                    settings,
+                    vad_strict,
+                    primary_model,
+                )
+
+            primary_segments = self._recheck_word_timestamps_for_precision(
+                chunk_dir,
+                primary_segments,
+                settings,
+                vad_strict,
+                primary_model,
+            )
+            try:
+                from core.audio.stt_candidate_scorer import annotate_stt_candidates
+
+                primary_segments = annotate_stt_candidates(
+                    primary_segments,
+                    source="STT1_SELECTIVE",
+                    vad_segments=vad_strict,
+                    settings=settings,
+                )
+            except Exception as exc:
+                get_logger().log(f"  ⚠️ [STT 선택 앙상블] 최종 점수 계산 실패: {exc}")
+
+            for seg in primary_segments:
+                seg.setdefault("stt_selected_source", "STT1")
+                seg.setdefault("stt_ensemble_source", "STT1_SELECTIVE")
+
+            if vad_strict and bool(settings.get("vad_post_stt_align_enabled", True)):
+                from core.subtitle_quality.vad_alignment_checker import adjust_segments_to_vad_boundaries
+
+                self._notify_stage("⏳ [VAD] 선택 앙상블 자막 위치 재계산 중")
+                primary_segments, adjusted_count = adjust_segments_to_vad_boundaries(
+                    primary_segments,
+                    vad_strict,
+                    max_shift_sec=float(settings.get("vad_post_stt_max_shift_sec", 0.7) or 0.7),
+                    edge_pad_sec=float(settings.get("vad_post_stt_edge_pad_sec", 0.04) or 0.04),
+                )
+                get_logger().log(f"  🎯 [VAD 후처리] 선택 앙상블 자막 위치 {adjusted_count}개 보정")
+
+            if callable(preview_callback):
+                try:
+                    preview_callback([dict(seg) for seg in primary_segments], "STT-SELECTIVE")
+                except Exception:
+                    pass
+            get_logger().log(
+                "  ✅ [STT 선택 앙상블] 최종 후보 완료 "
+                f"({len(primary_segments)}개, STT2는 저신뢰/누락 후보에만 사용)"
+            )
+            yield primary_segments, 1, 1
+        finally:
+            if cleanup_chunk_dir:
+                shutil.rmtree(chunk_dir, ignore_errors=True)
+            self._release_after_transcribe_job("STT 선택 앙상블")
 
     def transcribe_ensemble(
         self,
@@ -634,6 +1146,19 @@ class VideoProcessorTranscribeMixin:
             secondary_model,
             s,
         )
+
+        if self._stt_selective_ensemble_enabled(s):
+            yield from self._transcribe_selective_ensemble(
+                chunk_dir,
+                primary_model,
+                secondary_model,
+                s,
+                target_end_sec=target_end_sec,
+                is_single=is_single,
+                preview_callback=preview_callback,
+                cleanup_chunk_dir=cleanup_chunk_dir,
+            )
+            return
 
         get_logger().log(
             "\n🎧 [STT 앙상블] STT1/STT2 병렬 인식 시작 "
@@ -809,10 +1334,12 @@ class VideoProcessorTranscribeMixin:
         from core.audio.npu_acceleration import prefer_npu_whisper_model
 
         target_model = model_override or _s.get("selected_whisper_model", self.whisper_model)
+        stt_backend_name = ""
         try:
             from core.audio.stt_backend_router import select_stt_backend
 
             stt_choice = select_stt_backend(target_model, _s)
+            stt_backend_name = str(stt_choice.backend or "").strip().lower()
             if stt_choice.model:
                 target_model = stt_choice.model
             if stt_choice.reason not in {"auto_selected_model", "selected_model"}:
@@ -850,15 +1377,51 @@ class VideoProcessorTranscribeMixin:
         temp_max = float(s.get("w_none_temp_max", 0.4))
         temperature_values = [round(x * 0.2, 1) for x in range(int(temp_max / 0.2) + 1)]
         temperature_tuple = "(" + ", ".join(str(x) for x in temperature_values) + ",)"
+        word_timestamps = self._stt_word_timestamps_for_pass(s)
+        get_logger().log(
+            f"  ⚙️ [{log_label}] word_timestamps={'on' if word_timestamps else 'off'} "
+            f"(mode={str(s.get('stt_word_timestamps_mode') or 'always')})"
+        )
 
         from core.runtime import config as _cfg
 
+        proc = None
         mac_task_id = None
         from core.audio.whisper_coreml import is_coreml_whisper_model
+        from core.audio.whisper_cpp import is_whisper_cpp_model
         from core.audio.whisper_transformers import is_transformers_whisper_model
+        from core.audio.whisperkit_persistent import is_whisperkit_persistent_model
 
         use_coreml_whisper = is_coreml_whisper_model(target_model)
+        use_whisper_cpp = stt_backend_name == "whisper_cpp" or is_whisper_cpp_model(target_model)
         use_transformers_whisper = is_transformers_whisper_model(target_model)
+        use_whisperkit_persistent = is_whisperkit_persistent_model(target_model)
+        if use_whisperkit_persistent:
+            from core.audio.whisperkit_persistent import ensure_worker, submit_task
+
+            try:
+                with self._whisper_lock:
+                    current_proc = getattr(self, "_whisperkit_runner_proc", None)
+                    self._whisperkit_runner_proc = ensure_worker(current_proc, log_label=log_label)
+                    proc = self._whisperkit_runner_proc
+                    if proc is not None:
+                        mac_task_id = submit_task(
+                            proc=proc,
+                            chunk_paths=safe_paths,
+                            model=target_model,
+                            language=self.language,
+                            temperature_values=temperature_values,
+                            word_timestamps=word_timestamps,
+                        )
+            except Exception as exc:
+                get_logger().log(f"  ⚠️ [{log_label}] WhisperKit worker 요청 실패 → MLX fallback: {exc}")
+                proc = None
+                mac_task_id = None
+            if proc is None:
+                fallback_model = "mlx-community/whisper-large-v3-turbo"
+                get_logger().log(f"  ↩️ [{log_label}] WhisperKit 실험 백엔드 준비 안 됨 → MLX fallback: {fallback_model}")
+                target_model = fallback_model
+                use_whisperkit_persistent = False
         if use_coreml_whisper:
             from core.audio.whisper_coreml import run_whisper
             proc = run_whisper(
@@ -867,15 +1430,33 @@ class VideoProcessorTranscribeMixin:
                 language=self.language,
                 temperature_tuple=temperature_tuple,
                 log_label=log_label,
-                options=self._whisper_worker_options(s),
+                options={**self._whisper_worker_options(s), "word_timestamps": word_timestamps},
             )
             if proc is None:
                 fallback_model = "mlx-community/whisper-large-v3-turbo"
                 get_logger().log(f"  ↩️ [{log_label}] Core ML STT 준비 안 됨 → MLX fallback: {fallback_model}")
                 target_model = fallback_model
                 use_coreml_whisper = False
+        if use_whisper_cpp:
+            from core.audio.whisper_cpp import run_whisper
+
+            proc = run_whisper(
+                chunk_paths=safe_paths,
+                model=target_model,
+                language=self.language,
+                temperature_tuple=temperature_tuple,
+                log_label=log_label,
+                word_timestamps=word_timestamps,
+                options=self._whisper_worker_options(s),
+            )
+            if proc is None:
+                fallback_model = "mlx-community/whisper-large-v3-turbo" if _cfg.IS_MAC else "large-v3-turbo"
+                get_logger().log(f"  ↩️ [{log_label}] whisper.cpp STT 준비 안 됨 → fallback: {fallback_model}")
+                target_model = fallback_model
+                use_whisper_cpp = False
         if use_transformers_whisper:
             from core.audio.whisper_transformers import run_whisper
+
             proc = run_whisper(
                 chunk_paths=safe_paths,
                 model=target_model,
@@ -886,6 +1467,10 @@ class VideoProcessorTranscribeMixin:
             if proc is None:
                 get_logger().log("❌ Transformers Whisper 백엔드를 실행할 수 없습니다.")
                 return
+        elif use_whisper_cpp:
+            pass
+        elif use_whisperkit_persistent:
+            pass
         elif use_coreml_whisper:
             pass
         elif _cfg.IS_MAC:
@@ -900,6 +1485,7 @@ class VideoProcessorTranscribeMixin:
                     model=target_model,
                     language=self.language,
                     temperature_values=temperature_values,
+                    word_timestamps=word_timestamps,
                 )
         else:
             from core.audio.whisper_faster import run_whisper
@@ -920,7 +1506,7 @@ class VideoProcessorTranscribeMixin:
         processed_count = 0
 
         try:
-            if _cfg.IS_MAC and not use_coreml_whisper and not use_transformers_whisper:
+            if _cfg.IS_MAC and not use_coreml_whisper and not use_whisper_cpp and not use_transformers_whisper:
                 received = 0
                 while received < total:
                     line = proc.stdout.readline()
@@ -950,6 +1536,7 @@ class VideoProcessorTranscribeMixin:
                         payload.setdefault("backend", data.get("backend", "mlx-whisper"))
                         payload.setdefault("language_probability", data.get("language_probability"))
                         payload.setdefault("chunk_path", item.get("input_path"))
+                        payload.setdefault("word_timestamps", data.get("word_timestamps", word_timestamps))
                     chunk_segs = self._parse_whisper_payload(
                         payload,
                         item,
@@ -964,6 +1551,13 @@ class VideoProcessorTranscribeMixin:
                         vad_segments=vad_strict,
                     )
                     chunk_segs = self._recheck_primary_low_score_with_secondary(
+                        chunk_dir,
+                        chunk_segs,
+                        s,
+                        vad_strict,
+                        target_model,
+                    )
+                    chunk_segs = self._recheck_word_timestamps_for_precision(
                         chunk_dir,
                         chunk_segs,
                         s,
@@ -1023,6 +1617,13 @@ class VideoProcessorTranscribeMixin:
                         vad_strict,
                         target_model,
                     )
+                    chunk_segs = self._recheck_word_timestamps_for_precision(
+                        chunk_dir,
+                        chunk_segs,
+                        s,
+                        vad_strict,
+                        target_model,
+                    )
 
                     if chunk_segs:
                         prev_end = chunk_segs[-1]["end"]
@@ -1061,7 +1662,11 @@ class VideoProcessorTranscribeMixin:
             f"{int(total_sec // 60):02d}분 {int(total_sec % 60):02d}초 ({int(pct)}%)"
         )
     def stop_transcribe(self):
-        had_runtime = bool(getattr(self, "_whisper_proc", None) or getattr(self, "_whisper_runner_proc", None))
+        had_runtime = bool(
+            getattr(self, "_whisper_proc", None)
+            or getattr(self, "_whisper_runner_proc", None)
+            or getattr(self, "_whisperkit_runner_proc", None)
+        )
         try:
             with getattr(self, "_ensemble_child_lock", threading.Lock()):
                 children = list(getattr(self, "_ensemble_child_processors", []) or [])
@@ -1074,11 +1679,27 @@ class VideoProcessorTranscribeMixin:
             from core.runtime import config as _cfg
 
             if _cfg.IS_MAC:
-                from core.audio.whisper_mlx import stop_worker
+                from core.audio.whisper_mlx import stop_worker as stop_mlx_worker
+                from core.audio.whisperkit_persistent import stop_worker as stop_whisperkit_worker
                 with self._whisper_lock:
+                    active_proc = getattr(self, "_whisper_proc", None)
                     if self._whisper_runner_proc:
-                        stop_worker(self._whisper_runner_proc)
+                        stop_mlx_worker(self._whisper_runner_proc)
                         self._whisper_runner_proc = None
+                    whisperkit_proc = getattr(self, "_whisperkit_runner_proc", None)
+                    if whisperkit_proc:
+                        stop_whisperkit_worker(whisperkit_proc)
+                        self._whisperkit_runner_proc = None
+                    if active_proc and active_proc not in {getattr(self, "_whisper_runner_proc", None), whisperkit_proc}:
+                        try:
+                            if active_proc.poll() is None:
+                                active_proc.terminate()
+                                active_proc.wait(timeout=2)
+                        except Exception:
+                            try:
+                                active_proc.kill()
+                            except Exception:
+                                pass
                     self._whisper_proc = None
                 return
 
@@ -1194,6 +1815,11 @@ class VideoProcessorTranscribeMixin:
                 language_probability=data.get("language_probability"),
                 chunk_path=data.get("chunk_path") or item.get("input_path"),
             )
+            asr_metadata = dict(segment.get("asr_metadata") or {})
+            if data.get("word_timestamps") is not None:
+                asr_metadata["word_timestamps_requested"] = bool(data.get("word_timestamps"))
+            asr_metadata["word_timestamps_available"] = bool(offset_words)
+            segment["asr_metadata"] = asr_metadata
             if vad_strict:
                 segment = annotate_segment_vad_alignment(segment, vad_strict)
             segment = annotate_segment_hallucination_risk(segment, vad_segments=vad_strict)

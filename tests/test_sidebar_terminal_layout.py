@@ -18,7 +18,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_terminal_log_lives_in_sidebar_and_menu_toggles_sidebar(self):
+    def test_terminal_log_lives_in_sidebar_and_sidebar_stays_visible(self):
         window = MainWindow()
         try:
             window.show_home()
@@ -29,8 +29,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertTrue(window.bottom_work_panel.isHidden())
 
             window._apply_log_visible(False, persist=False)
-            self.assertTrue(window.home_page.isHidden())
-            self.assertTrue(window.sidebar_terminal_panel.isHidden())
+            self.assertFalse(window.home_page.isHidden())
+            self.assertFalse(window.sidebar_terminal_panel.isHidden())
             self.assertTrue(window.bottom_work_panel.isHidden())
 
             window._apply_log_visible(True, persist=False)
@@ -54,11 +54,11 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_global_menu_uses_sidebar_button_label(self):
+    def test_global_menu_omits_sidebar_button(self):
         window = MainWindow()
         try:
-            self.assertEqual(window.global_menu_bar.btn_log.text(), "사이드바")
             self.assertIs(window.global_menu_bar.parent(), window.right_workspace)
+            self.assertFalse(hasattr(window.global_menu_bar, "btn_log"))
         finally:
             window.close()
             window.deleteLater()
@@ -71,11 +71,9 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertEqual(window.global_menu_bar.btn_redo.property("qmlBadge"), "")
             self.assertEqual(window.global_menu_bar.btn_save.property("qmlBadge"), "")
             self.assertEqual(window.global_menu_bar.btn_help.property("qmlBadge"), "")
-            self.assertEqual(window.global_menu_bar.btn_log.property("qmlBadge"), "")
             self.assertEqual(window.global_menu_bar.btn_undo.text(), "실행취소")
             self.assertEqual(window.global_menu_bar.btn_redo.text(), "다시실행")
             self.assertEqual(window.global_menu_bar.btn_help.text(), "도움말")
-            self.assertEqual(window.global_menu_bar.btn_log.text(), "사이드바")
         finally:
             window.close()
             window.deleteLater()
@@ -182,7 +180,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                     if parent is not None and parent.objectName() == "MenuButton":
                         nav_buttons.append(parent)
             self.assertEqual(len(nav_buttons), 4)
-            self.assertTrue(all(btn.maximumHeight() == 30 for btn in nav_buttons))
+            self.assertTrue(all(btn.maximumHeight() == 26 for btn in nav_buttons))
             preset_panel = getattr(window, "sidebar_preset_panel", None)
             self.assertIsNone(preset_panel)
             quality_combo = getattr(window, "sidebar_subtitle_quality_combo", None)
@@ -194,8 +192,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIsNotNone(quality_row)
             self.assertEqual(quality_row.height(), 24)
             self.assertEqual(getattr(window, "sidebar_subtitle_quality_save_btn", None).text(), "저장")
-            self.assertGreaterEqual(window.sidebar_settings_label.minimumHeight(), 120)
-            self.assertGreaterEqual(window.sidebar_settings_label.parentWidget().minimumHeight(), 166)
+            self.assertGreaterEqual(window.sidebar_settings_label.minimumHeight(), 100)
+            self.assertGreaterEqual(window.sidebar_settings_label.parentWidget().minimumHeight(), 144)
             quality_combos = [
                 combo for combo in window.home_page.findChildren(QComboBox)
                 if [combo.itemText(i) for i in range(combo.count())] == ["Fast", "Auto", "High", "STT"]
@@ -258,9 +256,9 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                     "selected_roughcut_llm_model": "사용 안함",
                 }
             )
-            self.assertIn("color:#00D46A; padding:1px 10px 1px 0; font-weight:400;", progress_html)
-            self.assertIn("color:#FFD60A; padding:1px 10px 1px 0; font-weight:400;", progress_html)
-            self.assertIn("color:#00D46A; padding:1px 0; font-family:Menlo", progress_html)
+            self.assertIn("color:#00D46A; padding:0 8px 0 0; font-weight:400;", progress_html)
+            self.assertIn("color:#FFD60A; padding:0 8px 0 0; font-weight:400;", progress_html)
+            self.assertIn("color:#00D46A; padding:0; font-family:Menlo", progress_html)
             self.assertIn("style='color:#FFD60A; text-decoration:none;", progress_html)
         finally:
             window.close()
@@ -1239,6 +1237,8 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.app.processEvents()
 
     def test_project_info_button_stays_at_sidebar_bottom_and_opens_overlay(self):
+        from ui.menu_bar import MENU_BUTTON_HEIGHT
+
         window = MainWindow()
         try:
             window._unified_dashboard = True
@@ -1252,7 +1252,7 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertIsNotNone(button)
             self.assertIsNotNone(terminal)
             self.assertGreater(button.y(), terminal.y())
-            self.assertEqual(button.height(), 44)
+            self.assertEqual(button.height(), MENU_BUTTON_HEIGHT)
 
             window._toggle_project_info_card()
             self.app.processEvents()

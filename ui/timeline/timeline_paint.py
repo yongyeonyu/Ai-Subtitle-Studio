@@ -1666,7 +1666,7 @@ class TimelinePaintMixin:
                     continue
                 p.setPen(pen_confirmed_boundary)
                 p.drawLine(bx, boundary_top, bx, boundary_bot)
-        if getattr(self, "scan_boundary_times", None):
+        if getattr(self, "show_scan_boundary_markers", False) and getattr(self, "scan_boundary_times", None):
             hover_scan_boundary_idx = getattr(self, "_hover_scan_boundary_idx", None)
             for idx, bt, sec in _visible_time_items(
                 getattr(self, "scan_boundary_times", []) or [],

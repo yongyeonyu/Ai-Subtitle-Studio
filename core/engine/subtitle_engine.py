@@ -22,7 +22,7 @@ from core.llm.ollama_provider import (
     split_text as ollama_split_text,
     warmup_model as warmup_ollama_model,
 )
-from core.llm.openai_provider import is_openai_model, split_text as openai_split_text
+from core.llm.openai_provider import is_codex_model, is_openai_model, split_text as openai_split_text
 from core.audio.stt_lattice import select_stt_lattice_text
 from core.engine.llm_correction_guard import assess_llm_rewrite_policy, safe_llm_chunks, validate_llm_chunks
 from core.engine.llm_candidate_policy import (
@@ -442,9 +442,11 @@ def ask_openai_to_split(
     settings: dict | None = None,
     candidate_options: list[dict] | None = None,
 ) -> list[str] | None:
-    if not api_key:
+    if not api_key and not is_codex_model(model_name):
         get_logger().log("❌ API 키가 없습니다. 환경설정에서 OpenAI API Key를 입력해주세요.")
         return None
+    if is_codex_model(model_name):
+        get_logger().log("🤖 Codex CLI 구독 인증으로 자막 LLM을 실행합니다. 자막 텍스트가 Codex/OpenAI로 전송될 수 있습니다.")
     try:
         chunks = openai_split_text(
             api_key,

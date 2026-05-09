@@ -14,6 +14,22 @@ from core.runtime import config
 from core.runtime.logger import get_logger
 
 
+def _is_preflight_local_ollama_model(model: str) -> bool:
+    text = str(model or "").strip()
+    if not text or "사용 안함" in text:
+        return False
+    if "Gemini" in text:
+        return False
+    try:
+        from core.llm.openai_provider import is_openai_model
+
+        if is_openai_model(text):
+            return False
+    except Exception:
+        pass
+    return True
+
+
 class SignalHandlersMixin:
     """MainWindow 시그널 핸들러 모음."""
 
@@ -470,7 +486,7 @@ class SignalHandlersMixin:
                 seen = set()
                 for context, model in candidates:
                     name = str(model or "").strip()
-                    if not name or name in seen or "사용 안함" in name:
+                    if not _is_preflight_local_ollama_model(name) or name in seen:
                         continue
                     seen.add(name)
                     resolve_ollama_model_for_request(

@@ -21,6 +21,7 @@ from core.audio.audio_presets import apply_audio_preset, auto_audio_settings_onl
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
 from core.settings_profiles import materialize_user_settings
 from core.audio.media_processor_audio import VideoProcessorAudioHelpersMixin
+from core.audio.native_ffmpeg_manager import NativeAudioPreprocessJob, NativeAudioPreprocessManager
 from core.audio.media_processor_transcribe import VideoProcessorTranscribeMixin
 from core.audio.media_processor_vad import VideoProcessorVadMixin
 from core.llm.secure_keys import get_api_key  # noqa: F401 - patched by audio helper tests/runtime hooks
@@ -40,7 +41,7 @@ from core.subtitle_quality.vad_alignment_checker import (
 _CHUNK_DURATION = 30
 _OVERLAP_SEC = 3.0
 _VAD_CACHE_VERSION = 3
-_AUDIO_CACHE_VERSION = 4
+_AUDIO_CACHE_VERSION = 6
 
 
 class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMixin, VideoProcessorVadMixin):
@@ -70,6 +71,7 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         # 런타임 핸들
         self._whisper_proc = None
         self._whisper_runner_proc = None
+        self._whisperkit_runner_proc = None
         self._whisper_lock = threading.Lock()
         self._ensemble_child_lock = threading.Lock()
 
@@ -222,10 +224,16 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             get_logger().log("  └ [전처리] FFMPEG 오디오 추출 및 기본 필터 적용 중...")
             ffmpeg = ffmpeg_binary()
 
-            if self._can_fuse_ffmpeg_preprocess(audio_ai):
+            if self._can_fuse_ffmpeg_preprocess(audio_ai, s):
                 fused_filter = self._build_fused_ffmpeg_filter(audio_ai, s, use_basic=use_basic)
-                self._notify_stage("⏳ [전처리] FFMPEG 단일 패스 오디오 추출/정제 중")
-                get_logger().log("  └ [전처리] FFMPEG 단일 패스로 오디오 추출/정제를 처리합니다")
+                if audio_ai == "clearvoice":
+                    self._notify_stage("⏳ [음성] ClearVoice Native FFmpeg 단일 패스 정제 중")
+                    get_logger().log(
+                        "  └ [음성] ClearVoice 딥러닝 모델 대신 FFmpeg 네이티브 필터로 단일 패스 정제합니다"
+                    )
+                else:
+                    self._notify_stage("⏳ [전처리] FFMPEG 단일 패스 오디오 추출/정제 중")
+                    get_logger().log("  └ [전처리] FFMPEG 단일 패스로 오디오 추출/정제를 처리합니다")
                 extract_cmd = [
                     ffmpeg, "-y", "-nostdin", "-loglevel", "error",
                     *self._ffmpeg_parallel_args(s),
@@ -247,65 +255,104 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                 ai_wav = cleaned_wav
                 audio_filter_applied = False
             else:
-                extract_cmd = [
-                    ffmpeg, "-y", "-nostdin", "-loglevel", "error",
-                    *self._ffmpeg_parallel_args(s),
-                    "-i", video_path,
-                    *self._ffmpeg_audio_stream_args(),
-                    "-ac", "1", "-ar", "48000",
-                ]
-                if use_basic:
-                    extract_cmd.extend(["-af", master_filter])
-                extract_cmd.extend(["-acodec", "pcm_s16le", raw_wav])
-                if not self._run_media_command(extract_cmd, label="ffmpeg 오디오 추출"):
-                    return chunk_dir, []
-
                 ai_wav = raw_wav
                 audio_filter_applied = False
-                if audio_ai == "rnnoise":
-                    self._notify_stage("⏳ [음성] RNNoise 음성 보존 노이즈 제거 중")
-                    get_logger().log("  └ [음성] RNNoise 음성 보존 노이즈 제거 중...")
-                    rnnoise_wav = os.path.join(work_dir, f"{base_name}_rnnoise.wav")
-                    if self._apply_rnnoise(raw_wav, rnnoise_wav) and os.path.exists(rnnoise_wav):
-                        ai_wav = rnnoise_wav
-                        audio_filter_applied = True
-                elif audio_ai == "resemble_enhance":
-                    self._notify_stage("⏳ [음성] Resemble Enhance 음성 향상 중")
-                    get_logger().log("  └ [음성] Resemble Enhance 음성 향상 중...")
-                    resemble_wav = os.path.join(work_dir, f"{base_name}_resemble.wav")
-                    if self._apply_resemble_enhance(raw_wav, resemble_wav) and os.path.exists(resemble_wav):
-                        ai_wav = resemble_wav
-                        audio_filter_applied = True
-                elif audio_ai == "clearvoice":
-                    self._notify_stage("⏳ [음성] ClearVoice 음성 향상 중")
-                    get_logger().log("  └ [음성] ClearVoice 음성 향상 중...")
-                    clearvoice_wav = os.path.join(work_dir, f"{base_name}_clearvoice.wav")
-                    if self._apply_clearvoice(raw_wav, clearvoice_wav) and os.path.exists(clearvoice_wav):
-                        ai_wav = clearvoice_wav
-                        audio_filter_applied = True
+                overlapped_ok = False
+                if self._can_overlap_preprocess_audio(
+                    s,
+                    audio_ai=audio_ai,
+                    span_sec=direct_span,
+                    is_partial=is_partial,
+                ):
+                    overlapped_ok, audio_filter_applied = self._run_overlapped_audio_preprocess(
+                        video_path=video_path,
+                        work_dir=work_dir,
+                        base_name=base_name,
+                        cleaned_wav=cleaned_wav,
+                        audio_ai=audio_ai,
+                        settings=s,
+                        use_basic=use_basic,
+                        master_filter=master_filter,
+                        active_filter=active_filter,
+                        direct_start=direct_start,
+                        direct_end=direct_end,
+                    )
+                    if overlapped_ok:
+                        ai_wav = cleaned_wav
+                        self._write_cleaned_audio_cache_meta(cleaned_meta, cache_config)
+                        if os.path.exists(raw_wav):
+                            try:
+                                os.remove(raw_wav)
+                            except Exception:
+                                pass
 
-                audio_label = self._audio_cleanup_label(audio_ai, audio_filter_applied)
-                if audio_ai == "none":
-                    self._notify_stage("⏳ [음성] 미사용: FFMPEG 16k 포맷 변환 중")
-                    get_logger().log("  └ [음성] 미사용: FFMPEG 16k 포맷 변환 중...")
-                else:
-                    self._notify_stage(f"⏳ [음성] {audio_label} 정제 및 FFMPEG 16k 변환 중")
-                    get_logger().log(f"  └ [음성] {audio_label} 정제 및 FFMPEG 16k 변환 중...")
-                if not self._run_media_command(
-                    [
+                if not overlapped_ok:
+                    raw_sample_rate = self._audio_processing_sample_rate(audio_ai, s)
+                    extract_cmd = [
                         ffmpeg, "-y", "-nostdin", "-loglevel", "error",
                         *self._ffmpeg_parallel_args(s),
-                        "-i", ai_wav,
-                        "-ac", "1", "-ar", "16000",
-                        "-af", active_filter,
-                        "-acodec", "pcm_s16le",
-                        cleaned_wav,
-                    ],
-                    label="ffmpeg 음량 평탄화",
-                ):
-                    return chunk_dir, []
-                self._write_cleaned_audio_cache_meta(cleaned_meta, cache_config)
-                if os.path.exists(raw_wav): os.remove(raw_wav)
+                        "-i", video_path,
+                        *self._ffmpeg_audio_stream_args(),
+                        "-ac", "1", "-ar", str(raw_sample_rate),
+                    ]
+                    if use_basic:
+                        extract_cmd.extend(["-af", master_filter])
+                    extract_cmd.extend(["-acodec", "pcm_s16le", raw_wav])
+                    if not self._run_media_command(extract_cmd, label="ffmpeg 오디오 추출"):
+                        return chunk_dir, []
+
+                    ai_wav = raw_wav
+                    audio_filter_applied = False
+                    if audio_ai == "rnnoise":
+                        self._notify_stage("⏳ [음성] RNNoise 음성 보존 노이즈 제거 중")
+                        get_logger().log("  └ [음성] RNNoise 음성 보존 노이즈 제거 중...")
+                        rnnoise_wav = os.path.join(work_dir, f"{base_name}_rnnoise.wav")
+                        if self._apply_rnnoise(raw_wav, rnnoise_wav) and os.path.exists(rnnoise_wav):
+                            ai_wav = rnnoise_wav
+                            audio_filter_applied = True
+                    elif audio_ai == "resemble_enhance":
+                        self._notify_stage("⏳ [음성] Resemble Enhance 음성 향상 중")
+                        get_logger().log("  └ [음성] Resemble Enhance 음성 향상 중...")
+                        resemble_wav = os.path.join(work_dir, f"{base_name}_resemble.wav")
+                        if self._apply_resemble_enhance(raw_wav, resemble_wav) and os.path.exists(resemble_wav):
+                            ai_wav = resemble_wav
+                            audio_filter_applied = True
+                    elif audio_ai == "clearvoice":
+                        self._notify_stage("⏳ [음성] ClearVoice 음성 향상 중")
+                        get_logger().log("  └ [음성] ClearVoice 음성 향상 중...")
+                        clearvoice_wav = os.path.join(work_dir, f"{base_name}_clearvoice.wav")
+                        prev_clearvoice_settings = getattr(self, "_clearvoice_runtime_settings", None)
+                        self._clearvoice_runtime_settings = dict(s)
+                        try:
+                            if self._apply_clearvoice(raw_wav, clearvoice_wav) and os.path.exists(clearvoice_wav):
+                                ai_wav = clearvoice_wav
+                                audio_filter_applied = True
+                        finally:
+                            self._clearvoice_runtime_settings = prev_clearvoice_settings
+
+                    audio_label = self._audio_cleanup_label(audio_ai, audio_filter_applied)
+                    if audio_ai == "none":
+                        self._notify_stage("⏳ [음성] 미사용: FFMPEG 16k 포맷 변환 중")
+                        get_logger().log("  └ [음성] 미사용: FFMPEG 16k 포맷 변환 중...")
+                    else:
+                        self._notify_stage(f"⏳ [음성] {audio_label} 정제 및 FFMPEG 16k 변환 중")
+                        get_logger().log(f"  └ [음성] {audio_label} 정제 및 FFMPEG 16k 변환 중...")
+                    if not self._run_media_command(
+                        [
+                            ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+                            *self._ffmpeg_parallel_args(s),
+                            "-i", ai_wav,
+                            "-ac", "1", "-ar", "16000",
+                            "-af", active_filter,
+                            "-acodec", "pcm_s16le",
+                            cleaned_wav,
+                        ],
+                        label="ffmpeg 음량 평탄화",
+                    ):
+                        return chunk_dir, []
+                    self._write_cleaned_audio_cache_meta(cleaned_meta, cache_config)
+                    if os.path.exists(raw_wav):
+                        os.remove(raw_wav)
 
         if prefetch_only:
             get_logger().log("  └ ♻️ [전처리] 오디오 선추출은 cleaned cache까지만 준비하고 STT 청크는 실제 처리에서 분할합니다")
@@ -586,6 +633,287 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
             "raw_wav": os.path.join(work_dir, f"{base_name}_raw.wav"),
             "cleaned_wav": os.path.join(work_dir, f"{base_name}_cleaned.wav"),
         }
+
+    def _can_overlap_preprocess_audio(
+        self,
+        settings: dict,
+        *,
+        audio_ai: str,
+        span_sec: float,
+        is_partial: bool,
+    ) -> bool:
+        audio_kind = str(audio_ai or "none").strip().lower()
+        if audio_kind not in {"rnnoise", "resemble_enhance", "clearvoice"}:
+            return False
+        if self._can_fuse_ffmpeg_preprocess(audio_kind, settings):
+            return False
+        if is_partial:
+            return False
+        if not self._settings_bool(settings, "audio_preprocess_audio_overlap_enabled", True):
+            return False
+        try:
+            min_sec = float(settings.get("audio_preprocess_audio_overlap_min_sec", 180.0) or 0.0)
+        except (TypeError, ValueError):
+            min_sec = 180.0
+        return float(span_sec or 0.0) >= max(0.0, min_sec)
+
+    @staticmethod
+    def _audio_overlap_concat_line(path: str) -> str:
+        escaped = os.path.abspath(path).replace("\\", "\\\\").replace("'", "\\'")
+        return f"file '{escaped}'\n"
+
+    def _audio_overlap_chunk_sec(self, settings: dict, audio_ai: str) -> float:
+        default = 120.0 if str(audio_ai or "").lower() in {"clearvoice", "resemble_enhance"} else 90.0
+        try:
+            value = float(settings.get("audio_preprocess_audio_overlap_chunk_sec", default) or default)
+        except (TypeError, ValueError):
+            value = default
+        return max(30.0, min(600.0, value))
+
+    def _audio_overlap_worker_count(self, settings: dict, audio_ai: str, workload: int) -> int:
+        audio_kind = str(audio_ai or "none").strip().lower()
+        default_workers = 2 if audio_kind in {"clearvoice", "resemble_enhance"} else min(4, self.io_workers)
+        try:
+            requested = int(float(settings.get("audio_preprocess_audio_overlap_workers", default_workers) or default_workers))
+        except (TypeError, ValueError):
+            requested = default_workers
+        if audio_kind == "clearvoice" and not self._settings_bool(settings, "clearvoice_parallel_chunks_enabled", False):
+            # The native ClearVoice engine is cached and guarded by a model lock.
+            # Keep the default conservative; users can opt in to subprocess-heavy fan-out separately.
+            requested = min(requested, 1)
+        hard_cap = 2 if audio_kind in {"clearvoice", "resemble_enhance"} else 4
+        try:
+            configured_cap = int(float(settings.get("audio_preprocess_audio_overlap_max_workers", hard_cap) or hard_cap))
+        except (TypeError, ValueError):
+            configured_cap = hard_cap
+        max_workers, _scheduler = runtime_parallel_worker_plan(
+            settings=settings,
+            task="io",
+            workload=max(1, int(workload or 1)),
+            requested=requested,
+            minimum=1,
+            maximum=max(1, min(int(workload or 1), configured_cap)),
+            reserve_task="io",
+        )
+        return max(1, int(max_workers or 1))
+
+    def _extract_audio_overlap_raw_chunk(
+        self,
+        *,
+        ffmpeg: str,
+        video_path: str,
+        out_wav: str,
+        start_sec: float,
+        duration_sec: float,
+        settings: dict,
+        raw_sample_rate: int,
+        use_basic: bool,
+        master_filter: str,
+    ) -> bool:
+        cmd = [
+            ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+            *self._ffmpeg_parallel_args(settings),
+            "-ss", f"{max(0.0, float(start_sec or 0.0)):.3f}",
+            "-t", f"{max(0.001, float(duration_sec or 0.0)):.3f}",
+            "-i", video_path,
+            *self._ffmpeg_audio_stream_args(),
+            "-ac", "1", "-ar", str(int(raw_sample_rate or 16000)),
+        ]
+        if use_basic:
+            cmd.extend(["-af", master_filter or "anull"])
+        cmd.extend(["-acodec", "pcm_s16le", out_wav])
+        return (
+            self._run_media_command_no_progress(cmd, label="병렬 오디오 청크 추출")
+            and os.path.exists(out_wav)
+            and os.path.getsize(out_wav) > 0
+        )
+
+    def _apply_audio_overlap_filter_chunk(
+        self,
+        *,
+        audio_ai: str,
+        raw_wav: str,
+        out_wav: str,
+        settings: dict,
+    ) -> bool:
+        audio_kind = str(audio_ai or "none").strip().lower()
+        if audio_kind == "rnnoise":
+            return self._apply_rnnoise(raw_wav, out_wav) and os.path.exists(out_wav) and os.path.getsize(out_wav) > 0
+        if audio_kind == "resemble_enhance":
+            return self._apply_resemble_enhance(raw_wav, out_wav) and os.path.exists(out_wav) and os.path.getsize(out_wav) > 0
+        if audio_kind == "clearvoice":
+            prev_clearvoice_settings = getattr(self, "_clearvoice_runtime_settings", None)
+            self._clearvoice_runtime_settings = dict(settings)
+            try:
+                return self._apply_clearvoice(raw_wav, out_wav) and os.path.exists(out_wav) and os.path.getsize(out_wav) > 0
+            finally:
+                self._clearvoice_runtime_settings = prev_clearvoice_settings
+        return False
+
+    def _run_overlapped_audio_preprocess(
+        self,
+        *,
+        video_path: str,
+        work_dir: str,
+        base_name: str,
+        cleaned_wav: str,
+        audio_ai: str,
+        settings: dict,
+        use_basic: bool,
+        master_filter: str,
+        active_filter: str,
+        direct_start: float,
+        direct_end: float,
+    ) -> tuple[bool, bool]:
+        audio_kind = str(audio_ai or "none").strip().lower()
+        span_sec = max(0.0, float(direct_end or 0.0) - float(direct_start or 0.0))
+        if span_sec <= 0.0:
+            return False, False
+
+        ffmpeg = ffmpeg_binary()
+        tmpdir = os.path.join(work_dir, f"{base_name}_audio_overlap")
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        os.makedirs(tmpdir, exist_ok=True)
+
+        chunk_sec = self._audio_overlap_chunk_sec(settings, audio_kind)
+        spans: list[tuple[int, float, float]] = []
+        cursor = float(direct_start or 0.0)
+        idx = 0
+        while cursor < float(direct_end or 0.0) - 0.001:
+            end = min(float(direct_end or 0.0), cursor + chunk_sec)
+            spans.append((idx, cursor, end))
+            idx += 1
+            cursor = end
+        if not spans:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return False, False
+
+        workers = self._audio_overlap_worker_count(settings, audio_kind, len(spans))
+        raw_sample_rate = self._audio_processing_sample_rate(audio_kind, settings)
+        self._notify_stage(f"⏳ [전처리+음성] {self._audio_cleanup_label(audio_kind, True)} 청크 병렬 처리 준비 중")
+        get_logger().log(
+            "  🧵 [전처리+음성] FFmpeg 추출과 음성 향상을 청크 파이프라인으로 겹쳐 처리합니다 "
+            f"(청크 {len(spans)}개, {chunk_sec:.0f}초, 음성 워커 {workers}개)"
+        )
+
+        jobs = [
+            NativeAudioPreprocessJob(
+                index=item_idx,
+                start_sec=start,
+                end_sec=end,
+                raw_wav=os.path.join(tmpdir, f"raw_{item_idx:04d}.wav"),
+                enhanced_wav=os.path.join(tmpdir, f"{audio_kind}_{item_idx:04d}.wav"),
+            )
+            for item_idx, start, end in spans
+        ]
+        progress_lock = threading.Lock()
+        next_extract_pct = 0
+        next_enhance_pct = 0
+
+        def _mark_native_progress(phase: str, done: int, total: int):
+            nonlocal next_extract_pct, next_enhance_pct
+            if total <= 0:
+                return
+            pct = min(100, int(round((done / total) * 100)))
+            with progress_lock:
+                if phase == "extract":
+                    if pct < next_extract_pct and done != total:
+                        return
+                    next_extract_pct = min(100, pct + 10)
+                    self._notify_stage(f"⏳ [전처리] 병렬 오디오 청크 추출 중 {pct}%")
+                    get_logger().log(
+                        f"  └ [전처리] 병렬 오디오 청크 추출 진행률 {pct}% ({done}/{total})"
+                    )
+                elif phase == "enhance":
+                    if pct < next_enhance_pct and done != total:
+                        return
+                    next_enhance_pct = min(100, pct + 10)
+                    self._notify_stage(f"⏳ [음성] 청크 음성 향상 중 {pct}%")
+                    get_logger().log(
+                        f"  └ [음성] 청크 음성 향상 진행률 {pct}% ({done}/{total})"
+                    )
+
+        def _extract_job(job: NativeAudioPreprocessJob) -> bool:
+            return self._extract_audio_overlap_raw_chunk(
+                ffmpeg=ffmpeg,
+                video_path=video_path,
+                out_wav=job.raw_wav,
+                start_sec=job.start_sec,
+                duration_sec=job.duration_sec,
+                settings=settings,
+                raw_sample_rate=raw_sample_rate,
+                use_basic=use_basic,
+                master_filter=master_filter,
+            )
+
+        def _enhance_job(job: NativeAudioPreprocessJob) -> bool:
+            return self._apply_audio_overlap_filter_chunk(
+                audio_ai=audio_kind,
+                raw_wav=job.raw_wav,
+                out_wav=job.enhanced_wav,
+                settings=settings,
+            )
+
+        try:
+            manager_result = NativeAudioPreprocessManager(
+                jobs=jobs,
+                workers=workers,
+                extract_func=_extract_job,
+                enhance_func=_enhance_job,
+                progress_callback=_mark_native_progress,
+            ).run()
+
+            ordered_chunks = [path for path in manager_result.results if path]
+            if not manager_result.ok or len(ordered_chunks) != len(spans):
+                get_logger().log(
+                    "  ⚠️ [전처리+음성] 청크 병렬 처리 실패: 기존 전체 WAV 처리 경로로 재시도합니다 "
+                    f"({', '.join(manager_result.errors[:4])})"
+                )
+                return False, False
+
+            concat_list = os.path.join(tmpdir, "enhanced_concat.txt")
+            merged_wav = os.path.join(tmpdir, "enhanced_merged.wav")
+            with open(concat_list, "w", encoding="utf-8") as f:
+                for path in ordered_chunks:
+                    f.write(self._audio_overlap_concat_line(path))
+            concat_cmd = [
+                ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_list,
+                "-c", "copy",
+                merged_wav,
+            ]
+            if not self._run_media_command_no_progress(concat_cmd, label="청크 음성 향상 병합"):
+                concat_cmd = [
+                    ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+                    "-f", "concat", "-safe", "0",
+                    "-i", concat_list,
+                    "-acodec", "pcm_s16le",
+                    merged_wav,
+                ]
+                if not self._run_media_command_no_progress(concat_cmd, label="청크 음성 향상 병합"):
+                    return False, False
+
+            audio_label = self._audio_cleanup_label(audio_kind, True)
+            self._notify_stage(f"⏳ [음성] {audio_label} 청크 병합 후 FFMPEG 16k 변환 중")
+            get_logger().log(f"  └ [음성] {audio_label} 청크 병합 후 FFMPEG 16k 변환 중...")
+            final_cmd = [
+                ffmpeg, "-y", "-nostdin", "-loglevel", "error",
+                *self._ffmpeg_parallel_args(settings),
+                "-i", merged_wav,
+                "-ac", "1", "-ar", "16000",
+                "-af", active_filter or "anull",
+                "-acodec", "pcm_s16le",
+                cleaned_wav,
+            ]
+            ok = self._run_media_command(final_cmd, label="ffmpeg 음량 평탄화")
+            if not ok or not os.path.exists(cleaned_wav) or os.path.getsize(cleaned_wav) <= 0:
+                return False, False
+            get_logger().log("  ✅ [전처리+음성] 청크 병렬 오디오 전처리 완료")
+            return True, True
+        finally:
+            if not self._settings_bool(settings, "audio_preprocess_audio_overlap_keep_temp", False):
+                shutil.rmtree(tmpdir, ignore_errors=True)
 
     def _ffmpeg_trim_to_wav(self, src_wav: str, out_wav: str, start_sec: float, duration_sec: float) -> bool:
         result = subprocess.run(

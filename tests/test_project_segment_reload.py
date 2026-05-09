@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QApplication, QTextEdit
 from ui.editor.editor_actions import EditorActionsMixin
 from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_multiclip_ops import EditorMulticlipOpsMixin
+from ui.editor.editor_widget import EditorWidget
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.undo_manager import UndoManager
 
@@ -317,6 +318,39 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor.timeline.active_calls[-1], 1.0)
         self.assertEqual(editor.timeline.playhead_calls[-1], (1.0, True))
         self.assertEqual(editor.video_player.seek_calls[-1], 1.0)
+
+    def test_timestamp_area_recovers_missing_block_user_data_after_srt_like_load(self):
+        segments = [
+            {"start": 1.0, "end": 2.2, "text": "첫 줄", "speaker": "00"},
+            {"start": 3.4, "end": 5.0, "text": "둘째 줄", "speaker": "00"},
+        ]
+        editor = EditorWidget(
+            video_name="sample.mp4",
+            segments=segments,
+            media_path="",
+            defer_media_load=True,
+        )
+        editor.resize(1280, 720)
+        editor.show()
+        self.app.processEvents()
+
+        doc = editor.text_edit.document()
+        for idx in range(doc.blockCount()):
+            doc.findBlockByNumber(idx).setUserData(None)
+
+        self.assertIsNone(doc.findBlockByNumber(0).userData())
+        self.assertIsNone(doc.findBlockByNumber(1).userData())
+
+        editor.text_edit._flush_timestamp_area_update()
+        self.app.processEvents()
+
+        first = doc.findBlockByNumber(0).userData()
+        second = doc.findBlockByNumber(1).userData()
+        self.assertIsInstance(first, SubtitleBlockData)
+        self.assertIsInstance(second, SubtitleBlockData)
+        self.assertAlmostEqual(first.start_sec, 1.0, places=2)
+        self.assertAlmostEqual(second.start_sec, 3.4, places=2)
+        editor.close()
 
     def test_live_stt_preview_keeps_stt1_and_stt2_overlap_as_separate_lanes(self):
         editor = _LivePreviewEditor()

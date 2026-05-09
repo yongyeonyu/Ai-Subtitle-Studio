@@ -170,6 +170,7 @@ class VideoPlayerWidget(QWidget):
         self._proxy_original_path: str = ""
         self._proxy_playback_path: str = ""
         self._source_aspect: float = 16 / 9
+        self._display_aspect: float = 16 / 9
         self._source_width: int = 0
         self._source_height: int = 0
         self._preview_max_height: int = 720
@@ -739,28 +740,21 @@ class VideoPlayerWidget(QWidget):
             quick_overlay.set_export_style(style or {})
 
     def _displayed_video_rect(self, bounds):
-        aspect = max(0.01, float(getattr(self, "_source_aspect", 16 / 9) or (16 / 9)))
+        aspect = max(0.01, float(getattr(self, "_display_aspect", 16 / 9) or (16 / 9)))
         bw = max(1, int(bounds.width()))
         bh = max(1, int(bounds.height()))
-        max_h = max(1, int(getattr(self, "_preview_max_height", 720) or 720))
-        max_w = max(1, int(getattr(self, "_preview_max_width", 1280) or 1280))
-        if aspect >= 1.0:
-            target_w = min(bw, max_w)
-            target_h = int(target_w / aspect)
-            if target_h > min(bh, max_h):
-                target_h = min(bh, max_h)
-                target_w = int(target_h * aspect)
+        box_aspect = bw / max(1, bh)
+        if box_aspect > aspect:
+            target_h = bh
+            target_w = int(round(target_h * aspect))
+            x = int((bw - target_w) / 2)
+            y = 0
         else:
-            target_h = min(bh, max_h)
-            target_w = int(target_h * aspect)
-            if target_w > min(bw, max_w):
-                target_w = min(bw, max_w)
-                target_h = int(target_w / aspect)
-        target_w = max(1, min(bw, target_w))
-        target_h = max(1, min(bh, target_h))
-        x = int((bw - target_w) / 2)
-        y = int((bh - target_h) / 2)
-        return QRectF(x, y, target_w, target_h).toRect()
+            target_w = bw
+            target_h = int(round(target_w / aspect))
+            x = 0
+            y = int((bh - target_h) / 2)
+        return QRectF(x, y, max(1, target_w), max(1, target_h)).toRect()
 
     def _source_video_rect(self, bounds):
         aspect = max(0.01, float(getattr(self, "_source_aspect", 16 / 9) or (16 / 9)))

@@ -188,9 +188,8 @@ class HomeUIMixin(HomeSidebarMixin):
         if not is_unified:
             btn_auto_start = QPushButton(self._auto_start_label()); btn_auto_start.setStyleSheet(self._auto_start_style()); btn_auto_start.clicked.connect(self._toggle_auto_start_enabled)
             btn_clear_cache = QPushButton("🗑️ 캐쉬삭제"); btn_clear_cache.setStyleSheet(button_style("toolbar")); btn_clear_cache.clicked.connect(self._clear_cache)
-            btn_log = QPushButton(self._terminal_log_label()); btn_log.setStyleSheet(button_style("toolbar")); btn_log.clicked.connect(self._toggle_log)
             btn_exit = QPushButton("❌ 종료"); btn_exit.setStyleSheet(button_style("danger")); btn_exit.clicked.connect(self._quick_exit)
-            bottom_bar.addWidget(btn_auto_start); bottom_bar.addWidget(btn_clear_cache); bottom_bar.addWidget(btn_log); bottom_bar.addWidget(btn_exit)
+            bottom_bar.addWidget(btn_auto_start); bottom_bar.addWidget(btn_clear_cache); bottom_bar.addWidget(btn_exit)
         if not is_unified:
             layout.addLayout(bottom_bar)
         self._ensure_watchdog_timer()
@@ -198,11 +197,11 @@ class HomeUIMixin(HomeSidebarMixin):
 
     def _sidebar_status_card(self):
         card = QWidget()
-        card.setMinimumHeight(166)
+        card.setMinimumHeight(144)
         card.setStyleSheet("background: #1B2429; border: 1px solid #2D3942; border-radius: 7px;")
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(10, 7, 10, 7)
-        lay.setSpacing(5)
+        lay.setContentsMargins(10, 6, 10, 5)
+        lay.setSpacing(3)
 
         if not hasattr(self, "saved_status_label"):
             self.saved_status_label = QLabel("", self.home_page)
@@ -213,12 +212,12 @@ class HomeUIMixin(HomeSidebarMixin):
             self.sidebar_runtime_label = QLabel("", self.home_page)
         self.sidebar_settings_label.setWordWrap(True)
         self.sidebar_settings_label.setMinimumWidth(0)
-        self.sidebar_settings_label.setMinimumHeight(120)
+        self.sidebar_settings_label.setMinimumHeight(100)
         self.sidebar_settings_label.setTextFormat(Qt.TextFormat.RichText)
         self.sidebar_settings_label.setStyleSheet("color: #A9B0B7; font-size: 8px; font-weight: bold; background: transparent; border: none;")
         self.sidebar_runtime_label.setWordWrap(True)
         self.sidebar_runtime_label.setMinimumWidth(0)
-        self.sidebar_runtime_label.setMinimumHeight(42)
+        self.sidebar_runtime_label.setMinimumHeight(30)
         self.sidebar_runtime_label.setTextFormat(Qt.TextFormat.RichText)
         self.sidebar_runtime_label.setStyleSheet("color: #A9B0B7; font-size: 8px; font-weight: bold; background: transparent; border: none;")
         self._refresh_sidebar_engine_info()
@@ -238,9 +237,6 @@ class HomeUIMixin(HomeSidebarMixin):
 
     def _auto_start_label(self):
         return "자동시작 ON" if self._is_auto_start_enabled() else "자동시작 OFF"
-
-    def _terminal_log_label(self):
-        return "사이드바 숨기기" if getattr(self, "_log_visible", True) else "사이드바 보기"
 
     def _auto_start_style(self):
         if self._is_auto_start_enabled():
@@ -586,8 +582,6 @@ class HomeUIMixin(HomeSidebarMixin):
             ("AI", "ai", self._open_main_ai_settings),
             *([("개인화", "ai", self._open_main_personalization_learning)] if config.IS_MAC else []),
             ("화자", "speaker", self._open_main_speaker_settings),
-            ("화각", "sliders", self._dummy_action),
-            ("간격", "timeline", self._open_main_gap_settings),
             ("비디오", "video", self._toggle_main_video),
             ("자막출력", "export", self._open_main_export_dialog),
         ]
@@ -612,7 +606,6 @@ class HomeUIMixin(HomeSidebarMixin):
         actions = [
             ("자동시작", "sliders", self._toggle_auto_start_enabled),
             ("캐쉬삭제", "trash", self._clear_cache),
-            ("로그", "terminal", self._toggle_log),
             ("종료", "power", self._quick_exit),
         ]
         for text, icon, cmd in actions:
@@ -634,9 +627,16 @@ class HomeUIMixin(HomeSidebarMixin):
             expanded = bool(expanded)
         if not expanded and not overlay:
             try:
-                from ui.menu_bar import MENU_BUTTON_HEIGHT
+                profile = self._current_responsive_profile() if hasattr(self, "_current_responsive_profile") else None
+                MENU_BUTTON_HEIGHT = int(getattr(profile, "menu_button_height", 0) or 0)
             except Exception:
-                MENU_BUTTON_HEIGHT = 44
+                MENU_BUTTON_HEIGHT = 0
+            if MENU_BUTTON_HEIGHT <= 0:
+                try:
+                    from ui.menu_bar import MENU_BUTTON_HEIGHT as DEFAULT_MENU_BUTTON_HEIGHT
+                    MENU_BUTTON_HEIGHT = DEFAULT_MENU_BUTTON_HEIGHT
+                except Exception:
+                    MENU_BUTTON_HEIGHT = 38
             btn = QToolButton()
             btn.setText("프로젝트 정보")
             btn.setIcon(line_icon("project", "#E8EEF5", 15))
@@ -906,9 +906,6 @@ class HomeUIMixin(HomeSidebarMixin):
         if hasattr(self, "global_menu_bar"):
             self.global_menu_bar.refresh()
         self._show_development_notice("숏폼 제작기", "PHASE3")
-
-    def _dummy_action(self):
-        self._show_development_notice("개발 중 기능", "후속 단계")
 
     def _active_editor(self):
         editor = getattr(self, "_editor_widget", None)

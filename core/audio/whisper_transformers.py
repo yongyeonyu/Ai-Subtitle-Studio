@@ -62,7 +62,13 @@ def is_transformers_whisper_model(model: str) -> bool:
     return bool(has_config and has_processor and not has_adapter_only)
 
 
-def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple: str = "(0.0,)", log_label: str = "STT"):
+def run_whisper(
+    chunk_paths: list,
+    model: str,
+    language: str,
+    temperature_tuple: str = "(0.0,)",
+    log_label: str = "STT",
+):
     """Run a Transformers ASR worker and stream one JSON line per chunk."""
     env = _huggingface_env(strip_qt=True)
     model = normalize_transformers_whisper_model(model)

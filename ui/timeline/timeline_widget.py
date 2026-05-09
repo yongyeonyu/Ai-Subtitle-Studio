@@ -1077,6 +1077,10 @@ class TimelineWidget(QWidget):
             self.canvas._scan_boundary_hit_cache = None
         self.canvas.update()
 
+    def set_scan_boundary_markers_visible(self, visible: bool):
+        self.canvas.show_scan_boundary_markers = bool(visible)
+        self.canvas.update()
+
     def _update_smooth_scroll(self):
         delta = float(self._target_scroll_x - self._current_scroll_x)
         if abs(delta) <= 1.0:

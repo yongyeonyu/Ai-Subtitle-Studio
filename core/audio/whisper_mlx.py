@@ -49,6 +49,7 @@ for raw in sys.stdin:
     temperature_values = msg.get("temperature_values") or [0.0]
     temperature = tuple(float(x) for x in temperature_values)
     chunk_paths = msg.get("chunk_paths") or []
+    word_timestamps = bool(msg.get("word_timestamps", True))
 
     for idx, p in enumerate(chunk_paths):
         try:
@@ -57,7 +58,7 @@ for raw in sys.stdin:
                     p,
                     path_or_hf_repo=model,
                     language=language,
-                    word_timestamps=True,
+                    word_timestamps=word_timestamps,
                     temperature=temperature,
                     condition_on_previous_text=False,
                     verbose=False,
@@ -69,6 +70,7 @@ for raw in sys.stdin:
                 "index": idx,
                 "result": result,
                 "loaded_model": loaded_model,
+                "word_timestamps": word_timestamps,
                 "language_probability": result.get("language_probability"),
             }, ensure_ascii=False), flush=True)
         except Exception as e:
@@ -79,7 +81,7 @@ for raw in sys.stdin:
                             p,
                             path_or_hf_repo=fallback_model,
                             language=language,
-                            word_timestamps=True,
+                            word_timestamps=word_timestamps,
                             temperature=temperature,
                             condition_on_previous_text=False,
                             verbose=False,
@@ -91,6 +93,7 @@ for raw in sys.stdin:
                         "result": result,
                         "loaded_model": fallback_model,
                         "fallback_from": model,
+                        "word_timestamps": word_timestamps,
                         "language_probability": result.get("language_probability"),
                     }, ensure_ascii=False), flush=True)
                 except Exception as fallback_e:
@@ -169,7 +172,14 @@ def _fallback_model_name(model: str) -> str:
     return ""
 
 
-def submit_task(proc, chunk_paths: list, model: str, language: str, temperature_values: list[float]):
+def submit_task(
+    proc,
+    chunk_paths: list,
+    model: str,
+    language: str,
+    temperature_values: list[float],
+    word_timestamps: bool = True,
+):
     if proc is None or proc.poll() is not None:
         raise RuntimeError("MLX Whisper worker가 실행 중이 아닙니다.")
 
@@ -182,6 +192,7 @@ def submit_task(proc, chunk_paths: list, model: str, language: str, temperature_
         "fallback_model": _fallback_model_name(model),
         "language": language,
         "temperature_values": list(temperature_values),
+        "word_timestamps": bool(word_timestamps),
     }
     proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
     proc.stdin.flush()
@@ -226,7 +237,13 @@ def stop_worker(proc):
         except Exception:
             pass
 
-def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple: str):
+def run_whisper(
+    chunk_paths: list,
+    model: str,
+    language: str,
+    temperature_tuple: str,
+    word_timestamps: bool = True,
+):
     """
     MLX Whisper를 subprocess로 실행하고,
     각 청크별 결과를 yield합니다.
@@ -236,6 +253,7 @@ def run_whisper(chunk_paths: list, model: str, language: str, temperature_tuple:
     """
     safe_model = json.dumps(model)
     safe_paths = json.dumps(chunk_paths)
+    safe_word_timestamps = "True" if bool(word_timestamps) else "False"
 
     script = f"""
 import mlx_whisper, json, sys, os, contextlib
@@ -249,11 +267,12 @@ for p in {safe_paths}:
                 p,
                 path_or_hf_repo={safe_model},
                 language='{language}',
-                word_timestamps=True,
+                word_timestamps={safe_word_timestamps},
                 temperature={temperature_tuple},
                 condition_on_previous_text=False
             )
         r["backend"] = "mlx-whisper"
+        r["word_timestamps"] = {safe_word_timestamps}
         print(json.dumps(r, ensure_ascii=False), flush=True)
     except Exception as e:
         fallback_model = "mlx-community/whisper-large-v3-mlx" if "ghost613" in {safe_model}.lower() else ""
@@ -264,13 +283,14 @@ for p in {safe_paths}:
                         p,
                         path_or_hf_repo=fallback_model,
                         language='{language}',
-                        word_timestamps=True,
+                        word_timestamps={safe_word_timestamps},
                         temperature={temperature_tuple},
                         condition_on_previous_text=False
                     )
                 r["backend"] = "mlx-whisper"
                 r["loaded_model"] = fallback_model
                 r["fallback_from"] = {safe_model}
+                r["word_timestamps"] = {safe_word_timestamps}
                 print(json.dumps(r, ensure_ascii=False), flush=True)
             except Exception as fallback_e:
                 print(json.dumps({{"error": str(fallback_e), "fallback_from": {safe_model}}}, ensure_ascii=False), flush=True)

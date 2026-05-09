@@ -5,7 +5,10 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import gc
 import hashlib
+import io
 import json
 import os
 import re
@@ -33,7 +36,7 @@ from core.runtime.multi_process import runtime_parallel_worker_plan
 from core.subtitle_quality.vad_alignment_checker import apply_review_vad_settings, review_vad_config
 
 _VAD_CACHE_VERSION = 3
-_AUDIO_CACHE_VERSION = 4
+_AUDIO_CACHE_VERSION = 6
 
 
 def _runtime_get_logger():
@@ -460,19 +463,97 @@ class VideoProcessorAudioHelpersMixin:
             shutil.rmtree(work_dir, ignore_errors=True)
             clear_audio_model_memory_caches(include_gpu=True)
 
-    def _apply_clearvoice(self, source_wav: str, target_wav: str) -> bool:
-        if importlib.util.find_spec("clearvoice") is None:
-            _runtime_get_logger().log("  ⚠️ ClearVoice 패키지가 설치되어 있지 않습니다: python3.11 -m pip install clearvoice")
-            return False
+    @staticmethod
+    def _clearvoice_supported_models() -> tuple[str, ...]:
+        return (
+            "MossFormerGAN_SE_16K",
+            "FRCRN_SE_16K",
+            "MossFormer2_SE_48K",
+        )
+
+    def _clearvoice_effective_settings(self) -> dict:
+        data = getattr(self, "_clearvoice_runtime_settings", None)
+        return dict(data or {})
+
+    def _clearvoice_model_name(self, settings: dict | None = None) -> str:
+        data = dict(settings or self._clearvoice_effective_settings() or {})
+        requested = str(
+            os.environ.get(
+                "AI_SUBTITLE_CLEARVOICE_MODEL",
+                data.get("clearvoice_model_name", ""),
+            )
+            or ""
+        ).strip()
+        if requested in self._clearvoice_supported_models():
+            return requested
+        # STT 최종 입력이 16k mono 이므로 기본 ClearVoice도 16k 경로로 고정합니다.
+        return "MossFormerGAN_SE_16K"
+
+    def _clearvoice_input_sample_rate(self, settings: dict | None = None) -> int:
+        model_name = self._clearvoice_model_name(settings)
+        return 16000 if model_name.endswith("16K") else 48000
+
+    def _audio_processing_sample_rate(self, audio_ai: str, settings: dict | None = None) -> int:
+        if str(audio_ai or "none").strip().lower() == "clearvoice":
+            return self._clearvoice_input_sample_rate(settings)
+        return 48000
+
+    def _audio_ai_variant(self, audio_ai: str, settings: dict | None = None) -> str:
+        if str(audio_ai or "none").strip().lower() == "clearvoice":
+            if self._clearvoice_native_ffmpeg_enabled(settings):
+                return "native_ffmpeg_v1"
+            return self._clearvoice_model_name(settings)
+        return ""
+
+    @staticmethod
+    def _clearvoice_native_ffmpeg_enabled(settings: dict | None = None) -> bool:
+        env_value = os.environ.get("AI_SUBTITLE_CLEARVOICE_NATIVE_FFMPEG")
+        if env_value is not None:
+            text = str(env_value or "").strip().lower()
+            if text in {"1", "true", "yes", "on", "enabled", "enable"}:
+                return True
+            if text in {"0", "false", "no", "off", "disabled", "disable", "끄기", "끔"}:
+                return False
+        return VideoProcessorAudioHelpersMixin._settings_bool(settings, "clearvoice_native_ffmpeg_enabled", True)
+
+    def _clearvoice_engine_handle(self, model_name: str):
+        cache = getattr(self, "_clearvoice_engine_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._clearvoice_engine_cache = cache
+        locks = getattr(self, "_clearvoice_engine_locks", None)
+        if not isinstance(locks, dict):
+            locks = {}
+            self._clearvoice_engine_locks = locks
+        cache_lock = getattr(self, "_clearvoice_engine_cache_lock", None)
+        if cache_lock is None:
+            cache_lock = threading.Lock()
+            self._clearvoice_engine_cache_lock = cache_lock
+
+        with cache_lock:
+            if model_name not in cache:
+                from clearvoice import ClearVoice
+
+                quiet = io.StringIO()
+                with contextlib.redirect_stdout(quiet), contextlib.redirect_stderr(quiet):
+                    cache[model_name] = ClearVoice(
+                        task="speech_enhancement",
+                        model_names=[model_name],
+                    )
+            if model_name not in locks:
+                locks[model_name] = threading.Lock()
+            return cache[model_name], locks[model_name]
+
+    def _apply_clearvoice_subprocess(self, source_wav: str, target_wav: str, *, model_name: str) -> bool:
         script = (
             "import gc\n"
             "import sys\n"
             "from clearvoice import ClearVoice\n"
-            "source, target = sys.argv[1], sys.argv[2]\n"
+            "source, target, model_name = sys.argv[1], sys.argv[2], sys.argv[3]\n"
             "engine = None\n"
             "audio = None\n"
             "try:\n"
-            "    engine = ClearVoice(task='speech_enhancement', model_names=['MossFormer2_SE_48K'])\n"
+            "    engine = ClearVoice(task='speech_enhancement', model_names=[model_name])\n"
             "    audio = engine(input_path=source, online_write=False)\n"
             "    engine.write(audio, output_path=target)\n"
             "finally:\n"
@@ -488,18 +569,70 @@ class VideoProcessorAudioHelpersMixin:
             "    except Exception:\n"
             "        pass\n"
         )
+        return self._run_media_command(
+            [sys.executable, "-c", script, source_wav, target_wav, model_name],
+            label="ClearVoice 음성 향상",
+            timeout=900,
+            env=self._huggingface_env(),
+        )
+
+    def _apply_clearvoice_native_ffmpeg(self, source_wav: str, target_wav: str, settings: dict | None = None) -> bool:
+        filter_chain = self._build_audio_cleanup_filter("clearvoice", dict(settings or {}))
+        _runtime_get_logger().log(
+            "  ⚙️ ClearVoice Native FFmpeg 경로: 딥러닝 ClearVoice 대신 네이티브 필터로 빠르게 정제합니다"
+        )
+        return (
+            self._run_media_command(
+                [
+                    ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error",
+                    *self._ffmpeg_parallel_args(dict(settings or {})),
+                    "-i", source_wav,
+                    "-ac", "1", "-ar", "16000",
+                    "-af", filter_chain,
+                    "-acodec", "pcm_s16le",
+                    target_wav,
+                ],
+                label="ClearVoice Native FFmpeg",
+            )
+            and os.path.exists(target_wav)
+            and os.path.getsize(target_wav) > 0
+        )
+
+    def _apply_clearvoice(self, source_wav: str, target_wav: str) -> bool:
+        settings = self._clearvoice_effective_settings()
+        if self._clearvoice_native_ffmpeg_enabled(settings):
+            return self._apply_clearvoice_native_ffmpeg(source_wav, target_wav, settings)
+
+        if importlib.util.find_spec("clearvoice") is None:
+            _runtime_get_logger().log("  ⚠️ ClearVoice 패키지가 설치되어 있지 않습니다: python3.11 -m pip install clearvoice")
+            return False
+        model_name = self._clearvoice_model_name(settings)
+        sample_rate = self._clearvoice_input_sample_rate(settings)
         heartbeat = self._start_audio_heartbeat("ClearVoice", "음성 향상", interval_sec=5.0)
+        audio = None
         try:
-            if not self._run_media_command(
-                [sys.executable, "-c", script, source_wav, target_wav],
-                label="ClearVoice 음성 향상",
-                timeout=900,
-                env=self._huggingface_env(),
-            ):
-                _runtime_get_logger().log("  ⚠️ ClearVoice 실행 실패 또는 미설치: FFMPEG 정제로 계속 진행합니다")
+            _runtime_get_logger().log(
+                f"  ⚙️ ClearVoice 최적화 경로: native model={model_name} input={sample_rate}Hz"
+            )
+            try:
+                engine, engine_lock = self._clearvoice_engine_handle(model_name)
+                quiet = io.StringIO()
+                with engine_lock, contextlib.redirect_stdout(quiet), contextlib.redirect_stderr(quiet):
+                    audio = engine(input_path=source_wav, online_write=False)
+                    engine.write(audio, output_path=target_wav)
+            except Exception as exc:
+                _runtime_get_logger().log(
+                    f"  ⚠️ ClearVoice native 경로 실패({exc}): subprocess fallback 으로 재시도합니다"
+                )
+                if not self._apply_clearvoice_subprocess(source_wav, target_wav, model_name=model_name):
+                    _runtime_get_logger().log("  ⚠️ ClearVoice 실행 실패 또는 미설치: FFMPEG 정제로 계속 진행합니다")
+                    return False
+            if not os.path.exists(target_wav):
                 return False
         finally:
             self._stop_audio_heartbeat(heartbeat)
+            audio = None
+            gc.collect()
             clear_audio_model_memory_caches(include_gpu=True)
         return os.path.exists(target_wav)
 
@@ -582,7 +715,27 @@ class VideoProcessorAudioHelpersMixin:
                 "loudnorm=I=-14:LRA=11:tp=-1.0"
             )
 
-        if audio_ai in {"resemble_enhance", "clearvoice"}:
+        if audio_ai == "clearvoice":
+            hp = int(self._float_setting(settings, "df_hp", settings.get("ff_hp", 150), 0, 500))
+            lp = int(self._float_setting(settings, "df_lp", 4600, 1000, 8000))
+            nf = self._float_setting(settings, "ff_nf", settings.get("df_nf", -30), -80, 0)
+            treble = self._float_setting(settings, "ff_treble_boost", 2.5, -10, 20)
+            eq_gain = self._float_setting(settings, "df_eq_g", 6, -10, 20)
+            comp_th = self._float_setting(settings, "df_comp_th", -30, -60, 0)
+            return (
+                f"highpass=f={hp},lowpass=f={lp},"
+                f"afftdn=nf={self._fmt_filter_num(nf)},"
+                "dynaudnorm=f=150:g=9:m=12:p=0.95,"
+                "equalizer=f=3200:width_type=h:width=2200:"
+                f"g={self._fmt_filter_num(treble)},"
+                "equalizer=f=3000:width_type=h:width=2000:"
+                f"g={self._fmt_filter_num(eq_gain)},"
+                f"acompressor=threshold={self._fmt_filter_num(comp_th)}dB:ratio=3.5:attack=5:release=55,"
+                "speechnorm=e=10:r=0.0001:l=1,"
+                "loudnorm=I=-14:LRA=11:tp=-1.0"
+            )
+
+        if audio_ai == "resemble_enhance":
             hp = int(self._float_setting(settings, "df_hp", 100, 0, 500))
             lp = int(self._float_setting(settings, "df_lp", 8000, 1000, 8000))
             comp_th = self._float_setting(settings, "df_comp_th", -28, -60, 0)
@@ -678,9 +831,14 @@ class VideoProcessorAudioHelpersMixin:
         # not speed up audio extraction, so avoid touching video/subtitle/data streams.
         return ["-map", "0:a:0", "-vn", "-sn", "-dn"]
 
-    @staticmethod
-    def _can_fuse_ffmpeg_preprocess(audio_ai: str) -> bool:
-        return str(audio_ai or "none").lower() in {"none", "deepfilter"}
+    @classmethod
+    def _can_fuse_ffmpeg_preprocess(cls, audio_ai: str, settings: dict | None = None) -> bool:
+        audio_kind = str(audio_ai or "none").lower()
+        if audio_kind in {"none", "deepfilter"}:
+            return True
+        if audio_kind == "clearvoice":
+            return cls._clearvoice_native_ffmpeg_enabled(settings)
+        return False
 
     @staticmethod
     def _settings_bool(settings: dict | None, key: str, default: bool = False) -> bool:
@@ -853,7 +1011,7 @@ class VideoProcessorAudioHelpersMixin:
         master_filter = self._build_ffmpeg_preprocess_filter(settings)
         active_filter = self._build_audio_cleanup_filter(audio_ai, settings)
 
-        if self._can_fuse_ffmpeg_preprocess(audio_ai):
+        if self._can_fuse_ffmpeg_preprocess(audio_ai, settings):
             fused_filter = self._build_fused_ffmpeg_filter(audio_ai, settings, use_basic=use_basic)
             cmd = [
                 ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error",
@@ -874,6 +1032,7 @@ class VideoProcessorAudioHelpersMixin:
             )
 
         raw_wav = os.path.join(tmpdir, f"{os.path.basename(out_path)}.raw.wav")
+        raw_sample_rate = self._audio_processing_sample_rate(audio_ai, settings)
         extract_cmd = [
             ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error",
             *self._ffmpeg_parallel_args(settings),
@@ -881,7 +1040,7 @@ class VideoProcessorAudioHelpersMixin:
             "-t", f"{duration:.3f}",
             "-i", media_path,
             *self._ffmpeg_audio_stream_args(),
-            "-ac", "1", "-ar", "48000",
+            "-ac", "1", "-ar", str(raw_sample_rate),
         ]
         if use_basic:
             extract_cmd.extend(["-af", master_filter])
@@ -900,8 +1059,13 @@ class VideoProcessorAudioHelpersMixin:
                 ai_wav = routed_wav
         elif audio_ai == "clearvoice":
             routed_wav = os.path.join(tmpdir, f"{os.path.basename(out_path)}.clearvoice.wav")
-            if self._apply_clearvoice(raw_wav, routed_wav) and os.path.exists(routed_wav):
-                ai_wav = routed_wav
+            prev_clearvoice_settings = getattr(self, "_clearvoice_runtime_settings", None)
+            self._clearvoice_runtime_settings = dict(settings)
+            try:
+                if self._apply_clearvoice(raw_wav, routed_wav) and os.path.exists(routed_wav):
+                    ai_wav = routed_wav
+            finally:
+                self._clearvoice_runtime_settings = prev_clearvoice_settings
 
         final_cmd = [
             ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error",
@@ -1169,13 +1333,26 @@ class VideoProcessorAudioHelpersMixin:
             "source_fingerprint": source_fingerprint,
             "source_fingerprint_digest": source_fingerprint_digest,
             "audio_ai": str(audio_ai or "none"),
+            "audio_ai_variant": self._audio_ai_variant(audio_ai, settings),
             "use_basic_filter": bool(use_basic),
             "master_filter": str(master_filter or "anull"),
             "active_filter": str(active_filter or "anull"),
             "sample_rate": 16000,
+            "processing_sample_rate": self._audio_processing_sample_rate(audio_ai, settings),
             "channels": 1,
             "pcm": "s16le",
             "ffmpeg_filter_threads": int(max(1, bounded_worker_count(settings.get("ffmpeg_filter_threads", self.io_workers), kind="cpu"))),
+            "audio_preprocess_audio_overlap_enabled": self._settings_bool(settings, "audio_preprocess_audio_overlap_enabled", True),
+            "audio_preprocess_audio_overlap_chunk_sec": self._float_setting(
+                settings,
+                "audio_preprocess_audio_overlap_chunk_sec",
+                120.0,
+                30.0,
+                600.0,
+            ),
+            "audio_preprocess_audio_overlap_workers": str(settings.get("audio_preprocess_audio_overlap_workers", "auto") or "auto"),
+            "clearvoice_parallel_chunks_enabled": self._settings_bool(settings, "clearvoice_parallel_chunks_enabled", False),
+            "clearvoice_native_ffmpeg_enabled": self._clearvoice_native_ffmpeg_enabled(settings),
         }
 
     def _direct_chunk_span(self, video_path: str, target_start_sec=0.0, target_end_sec=None) -> tuple[float, float]:
@@ -1367,7 +1544,7 @@ class VideoProcessorAudioHelpersMixin:
     ) -> bool:
         if not bool(settings.get("direct_ffmpeg_chunk_extract", True)):
             return False
-        if not self._can_fuse_ffmpeg_preprocess(audio_ai):
+        if not self._can_fuse_ffmpeg_preprocess(audio_ai, settings):
             return False
         if vad_pre_split_enabled:
             return False

@@ -11,7 +11,7 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Iterable
 
-from core.llm.openai_provider import is_openai_model, resolve_openai_model
+from core.llm.openai_provider import is_codex_model, is_openai_model, resolve_openai_model
 from core.llm.secure_keys import get_api_key
 from core.project.project_context import segment_signature
 
@@ -1167,6 +1167,10 @@ def _call_local_llm_json(provider: str, model: str, prompt: str, *, timeout: int
 
 
 def _call_openai_json(model: str, prompt: str, *, timeout: int) -> dict[str, Any] | None:
+    if is_codex_model(model):
+        from core.llm.codex_provider import run_json as codex_run_json
+
+        return codex_run_json(model, prompt, timeout=timeout)
     api_key = get_api_key("openai")
     if not api_key:
         return None

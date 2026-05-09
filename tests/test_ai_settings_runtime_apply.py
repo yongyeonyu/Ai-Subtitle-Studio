@@ -9,6 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
+from core.llm.codex_provider import DEFAULT_CODEX_LABEL
 from ui.main.main_window import MainWindow
 from ui.settings.settings_ai import SettingsDialog
 
@@ -82,7 +83,7 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             window._unified_dashboard = True
             window._build_home_content()
             dialog = SettingsDialog({}, window)
-            self.assertEqual([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())], ["자막 검수", "중분류", "모델/API", "자동 설정"])
+            self.assertFalse(hasattr(dialog, "tabs"))
             label_texts = [label.text() for label in dialog.findChildren(QLabel)]
             self.assertFalse(any("자막 정확도 프리셋" in text for text in label_texts))
             self.assertFalse(any("오디오 프리셋" in text for text in label_texts))
@@ -123,6 +124,9 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
     def test_roughcut_llm_sidebar_has_no_inherit_mode(self):
         window = MainWindow()
         try:
+            roughcut_models = {str(item.get("name") or "") for item in window._roughcut_llm_items()}
+            self.assertIn(DEFAULT_CODEX_LABEL, roughcut_models)
+
             inherited_name, _ = window._roughcut_llm_name(
                 {
                     "selected_model": "exaone3.5:7.8b",

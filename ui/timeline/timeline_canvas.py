@@ -90,6 +90,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._waveform = None
         self.boundary_times: list[float] = []
         self.scan_boundary_times: list[float] = []
+        self.show_scan_boundary_markers: bool = False
         self._multiclip_boxes: list[dict] = []   # 
         self._clip_delete_rects: list[tuple[int, QRect]] = []
         self._clip_add_rect = QRect()

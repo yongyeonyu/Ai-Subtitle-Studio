@@ -395,6 +395,17 @@ def apply_timing_fusion_policy(segment: dict, settings: dict | None = None) -> d
         evidence.append({"source": "word_timestamp", "start": round(word[0], 3), "end": round(word[1], 3), "weight": round(weight, 3)})
         start, end = new_start, new_end
 
+    deep_timing = dict(seg.get("_deep_timing_policy") or {})
+    if deep_timing:
+        evidence.append(
+            {
+                "source": "deep_timing",
+                "start_shift": deep_timing.get("start_shift"),
+                "end_shift": deep_timing.get("end_shift"),
+                "profile_score": deep_timing.get("profile_score"),
+            }
+        )
+
     vad = _overlapping_vad_span(seg)
     if vad:
         weight = max(0.0, min(1.0, _setting_float(s, "subtitle_timing_fusion_vad_weight", 0.46)))
