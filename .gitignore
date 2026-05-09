@@ -4,6 +4,7 @@ venv/
 VENV/
 __pycache__/
 build/
+dist/
 *.pyc
 *.pyo
 *.pyd
@@ -44,6 +45,7 @@ projects/
 # ── 모델/백업/일회성 생성 스크립트 ──
 models/
 _backup_*/
+_backup_mac_migration/
 create_all*.py
 .codex_work/
 

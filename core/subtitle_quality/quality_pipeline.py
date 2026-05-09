@@ -21,6 +21,11 @@ from .models import (
 from .recheck_engine import recheck_low_confidence_segments
 from .vad_alignment_checker import annotate_segments_vad_alignment
 
+try:
+    from core.native_swift_quality import evaluate_quality_batch_via_swift
+except Exception:  # pragma: no cover - optional macOS native bridge
+    evaluate_quality_batch_via_swift = None  # type: ignore[assignment]
+
 
 def _as_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -116,13 +121,33 @@ def _recalculate_segments(
     vad_segments: list[dict[str, Any]],
     settings: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    recalculated: list[dict[str, Any]] = []
     previous_texts: list[str] = []
     prepared = [attach_asr_metadata(dict(segment)) for segment in segments]
     if vad_segments:
         prepared = annotate_segments_vad_alignment(prepared, vad_segments)
+    annotated: list[dict[str, Any]] = []
     for item in prepared:
         item = annotate_segment_hallucination_risk(item, vad_segments=vad_segments, previous_texts=previous_texts)
+        annotated.append(item)
+        previous_texts.append(str(item.get("text", "") or ""))
+
+    native_metrics = None
+    if evaluate_quality_batch_via_swift is not None:
+        native_metrics = evaluate_quality_batch_via_swift(annotated, settings=settings)
+    if native_metrics is not None and len(native_metrics) == len(annotated):
+        recalculated: list[dict[str, Any]] = []
+        for item, quality in zip(annotated, native_metrics):
+            item = dict(item)
+            item["quality"] = quality
+            history = list(item.get("quality_history") or [])
+            if history:
+                item["quality_history"] = history
+            recalculated.append(normalize_segment_quality(item))
+        return recalculated
+
+    recalculated = []
+    previous_texts = []
+    for item in annotated:
         metrics = evaluate_subtitle_confidence(
             item,
             vad_segments=vad_segments,

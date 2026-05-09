@@ -17,14 +17,16 @@ from ui.style import line_icon, settings_button_style
 
 DATASET_DIR = config.DATASET_DIR
 
-# ── OS별 Whisper 모델 목록 ──
+# macOS native branch: user-facing STT choices are Apple Silicon first.
 MAC_WHISPER_MODELS = [
+    "whisperkit-persistent:large-v3-v20240930_626MB",
+    "whisperkit-persistent:large-v3-v20240930_turbo_632MB",
+    "whisperkit-persistent:large-v3",
     "mlx-community/whisper-large-v3-mlx",
     "mlx-community/whisper-large-v3-turbo",
     "youngouk/ghost613-turbo-korean-4bit-mlx",
     "whisper-medium-komixv2",
     "youngouk/whisper-medium-komixv2-mlx",
-    "whisperkit-persistent:large-v3",
     "whisper.cpp:large-v3-turbo",
     "seastar105/whisper-medium-komixv2",
     "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2",
@@ -33,24 +35,7 @@ MAC_WHISPER_MODELS = [
     "mlx-community/distil-whisper-large-v3",
 ]
 
-WINDOWS_WHISPER_MODELS = [
-    "large-v3",
-    "large-v3-turbo",
-    "turbo",
-    "ghost613/faster-whisper-large-v3-turbo-korean",
-    "whisper-medium-komixv2",
-    "whisper.cpp:large-v3-turbo",
-    "seastar105/whisper-medium-komixv2",
-    "o0dimplz0o/Whisper-Large-v3-turbo-STT-Zeroth-KO-v2",
-    "large-v2",
-    "large-v1",
-    "large",
-    "medium",
-    "distil-large-v3",
-    "distil-large-v2",
-    "distil-medium.en",
-    "distil-small.en",
-]
+WINDOWS_WHISPER_MODELS: list[str] = []
 
 REMOVED_WHISPER_MODELS = {
     "coreml:large-v3-v20240930_626MB",
@@ -76,7 +61,7 @@ def filter_available_whisper_models(models):
 
 
 DEFAULT_WHISPER_MODELS = filter_available_whisper_models(
-    MAC_WHISPER_MODELS if config.IS_MAC else WINDOWS_WHISPER_MODELS
+    MAC_WHISPER_MODELS
 )
 
 DEFAULT_ADV_SETTINGS = {
@@ -154,11 +139,8 @@ DEFAULT_ADV_SETTINGS = {
     "stt_low_score_recheck_threshold": 60,
     "stt_low_score_recheck_padding_sec": 0.8,
     "stt_low_score_recheck_max_segments": 80,
-    "selected_whisper_model_secondary": (
-        "youngouk/ghost613-turbo-korean-4bit-mlx"
-        if config.IS_MAC else
-        "ghost613/faster-whisper-large-v3-turbo-korean"
-    ),
+    "selected_whisper_model": getattr(config, "WHISPER_MODEL", "whisperkit-persistent:large-v3"),
+    "selected_whisper_model_secondary": "youngouk/ghost613-turbo-korean-4bit-mlx",
     "stt_ensemble_llm_judge_enabled": False,
     "vad_post_stt_align_enabled": True,
     "vad_post_stt_max_shift_sec": 0.7,
@@ -169,7 +151,28 @@ DEFAULT_ADV_SETTINGS = {
     "editor_lora_runtime_enabled": True,
     "audio_chunk_routing_enabled": True,
     "audio_chunk_route_vad_enabled": True,
+    "audio_chunk_route_max_workers": 4,
     "audio_chunk_profile_sec": 30.0,
+    "runtime_hardware_acceleration_enabled": True,
+    "apple_m_pipeline_parallel_enabled": True,
+    "apple_m_chip_aware_scheduler_enabled": True,
+    "apple_m_pipeline_respect_manual_worker_settings": False,
+    "runtime_performance_profile": "max",
+    "runtime_native_threads_auto_enabled": True,
+    "runtime_native_threads": 8,
+    "runtime_backend_autotune_enabled": True,
+    "subtitle_native_prepass_workers": 0,
+    "subtitle_native_prepass_workers_resource_max": 0,
+    "stt_backend_policy": "native",
+    "audio_extract_backend_policy": "native",
+    "cut_boundary_backend_policy": "native",
+    "editor_render_backend_policy": "native",
+    "whisperkit_native_auto_enabled": True,
+    "stt_primary_fast_native_enabled": True,
+    "stt_primary_fast_native_model": getattr(config, "WHISPERKIT_FAST_MODEL", "whisperkit-persistent:large-v3-v20240930_turbo_632MB"),
+    "editor_live_stt_preview_follow_video_enabled": False,
+    "editor_live_stt_preview_follow_interval_sec": 2.0,
+    "direct_ffmpeg_chunk_min_sec": 1.0,
     "whisper_chunk_overlap_sec": 3.0,
     "chunk_time_limit": 180,
     "vad_pre_split_enabled": False,
@@ -212,6 +215,12 @@ DEFAULT_ADV_SETTINGS = {
     "cut_boundary_cache_enabled": True,
     "scan_cut_compare_max_width": 1920,
     "scan_cut_compare_max_height": 1080,
+    "scan_cut_pioneer_cpu_max_workers": 0,
+    "scan_cut_follower_cpu_max_workers": 0,
+    "scan_cut_cv2_threads_per_worker": 0,
+    "scan_cut_follower_stream_start_percent": 25,
+    "scan_cut_follower_stream_batch_size": 16,
+    "scan_cut_follower_stream_min_interval_sec": 0.75,
     "vad_detection_cache_enabled": True,
 }
 

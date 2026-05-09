@@ -37,6 +37,7 @@ from ui.main.main_runtime_cleanup import MainRuntimeCleanupMixin
 from ui.main.main_signals import SignalHandlersMixin
 
 from core.runtime.logger import get_logger
+from core.runtime import config
 from core.runtime.memory_manager import RuntimeMemoryManager
 from core.runtime.multi_process import RuntimeResourceCoordinator
 from core.personalization.idle_trainer import FOREGROUND_ACTIVITY_HOLD_MS, PersonalizationIdleTrainer
@@ -165,9 +166,9 @@ class MainWindow(
         self._initialize_runtime_resource_coordinator(settings)
         _offscreen_test = str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen"
         if not _offscreen_test:
-            QTimer.singleShot(0, self._warmup_local_llm_models)
-            QTimer.singleShot(900, self._check_required_models_on_startup)
-            QTimer.singleShot(1200, self._preflight_selected_local_llm_models)
+            QTimer.singleShot(450 if getattr(config, "IS_MAC", False) else 0, self._warmup_local_llm_models)
+            QTimer.singleShot(1400 if getattr(config, "IS_MAC", False) else 900, self._check_required_models_on_startup)
+            QTimer.singleShot(1800 if getattr(config, "IS_MAC", False) else 1200, self._preflight_selected_local_llm_models)
 
         self._cloud_sync_manager = CloudSyncManager(
             get_icloud_path(), self._on_files_detected, self._is_app_busy
@@ -176,6 +177,13 @@ class MainWindow(
             get_local_path(get_nas_path()), self._on_files_detected, self._is_app_busy,
             mode="nas", scan_interval=60, stable_seconds=300, exclude_callback=get_nas_excluded_folders
         )
+        if self._auto_start_on and (getattr(self, "_is_icloud_auto_mode", False) or getattr(self, "_is_nas_auto_mode", False)):
+            if _offscreen_test:
+                self._start_auto_watchers_after_launch()
+            else:
+                QTimer.singleShot(1600 if getattr(config, "IS_MAC", False) else 0, self._start_auto_watchers_after_launch)
+
+    def _start_auto_watchers_after_launch(self):
         if self._auto_start_on and getattr(self, "_is_icloud_auto_mode", False):
             self._cloud_sync_manager.start()
         elif self._auto_start_on and getattr(self, "_is_nas_auto_mode", False):
@@ -1473,6 +1481,24 @@ class MainWindow(
         return result
 
     def closeEvent(self, event):
+        if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
+            try:
+                self._detach_app_event_filter()
+            except Exception:
+                pass
+            event.accept()
+            return
+        if bool(getattr(self, "_quick_exit_requested", False)):
+            try:
+                get_logger().clear_ui_callback()
+            except Exception:
+                pass
+            try:
+                self.blockSignals(True)
+            except Exception:
+                pass
+            event.accept()
+            return
         busy_before_exit = False
         try:
             busy_before_exit = bool(self._has_active_runtime_work_for_exit())
@@ -1483,9 +1509,9 @@ class MainWindow(
             try:
                 async_cleanup = getattr(self, "_start_runtime_cleanup_for_app_exit_async", None)
                 if callable(async_cleanup):
-                    async_cleanup(timeout_sec=0.15)
+                    async_cleanup(timeout_sec=0.08 if getattr(config, "IS_MAC", False) else 0.15)
                 else:
-                    self._cleanup_runtime_for_app_exit(timeout_sec=0.15)
+                    self._cleanup_runtime_for_app_exit(timeout_sec=0.08 if getattr(config, "IS_MAC", False) else 0.15)
             except Exception:
                 pass
         if not busy_before_exit:
@@ -1502,4 +1528,4 @@ class MainWindow(
         except Exception:
             pass
         event.accept()
-        self._schedule_forced_process_exit(delay_ms=60)
+        self._schedule_forced_process_exit(delay_ms=30 if getattr(config, "IS_MAC", False) else 60)

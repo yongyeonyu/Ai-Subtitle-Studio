@@ -4,6 +4,8 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
+import numpy as np
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QRect
@@ -12,6 +14,7 @@ from PyQt6.QtWidgets import QApplication, QScrollArea
 from ui.timeline.timeline_scenegraph import build_scenegraph_subtitle_segments
 from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_constants import DIAMOND_Y
+from ui.timeline.timeline_widget import TimelineWidget
 
 
 class _NoEqualitySegment(dict):
@@ -105,6 +108,105 @@ class TimelineRenderCacheTests(unittest.TestCase):
             self.assertGreater(canvas._render_epoch, epoch_1)
             self.assertIsNotNone(canvas._segment_store)
             self.assertEqual(len(canvas._segment_store.rows), len(second))
+        finally:
+            canvas.close()
+
+    def test_scan_boundary_updates_skip_identical_repaints(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.canvas.setFixedWidth(120_000)
+            timeline.show()
+            self.app.processEvents()
+            timeline.canvas.update = Mock()
+
+            first = [{"timeline_sec": 12.0, "status": "pending", "detector_stage": "pioneer"}]
+            same = [{"timeline_sec": 12.0, "status": "pending", "detector_stage": "pioneer"}]
+            verifying = [{"timeline_sec": 12.0, "status": "verifying", "detector_stage": "follower"}]
+
+            self.assertTrue(timeline.set_scan_boundary_times(first))
+            self.assertEqual(timeline.canvas.update.call_count, 1)
+            dirty = timeline.canvas.update.call_args.args[0]
+            self.assertIsInstance(dirty, QRect)
+            self.assertLess(dirty.height(), timeline.canvas.height())
+
+            timeline.canvas.update.reset_mock()
+            self.assertFalse(timeline.set_scan_boundary_times(same))
+            timeline.canvas.update.assert_not_called()
+
+            self.assertTrue(timeline.set_scan_boundary_times(verifying))
+            self.assertEqual(timeline.canvas.update.call_count, 1)
+        finally:
+            timeline.close()
+
+    def test_boundary_updates_invalidate_snap_cache_without_repaint(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.canvas.update = Mock()
+            timeline.canvas._drag_snap_base_cache_key = object()
+            timeline.canvas._drag_snap_base_candidates = [{"sec": 1.0}]
+
+            self.assertTrue(timeline.set_boundary_times([1.0, 2.0]))
+            self.assertIsNone(timeline.canvas._drag_snap_base_cache_key)
+            self.assertEqual(timeline.canvas._drag_snap_base_candidates, [])
+            timeline.canvas.update.assert_not_called()
+
+            self.assertFalse(timeline.set_boundary_times([1.0, 2.0]))
+            timeline.canvas.update.assert_not_called()
+
+            timeline.canvas.boundary_times = [9.0]
+            self.assertTrue(timeline.set_boundary_times([]))
+            self.assertEqual(timeline.canvas.boundary_times, [])
+            timeline.canvas.update.assert_not_called()
+        finally:
+            timeline.close()
+
+    def test_scan_boundary_visible_index_culls_offscreen_work_markers(self):
+        canvas = TimelineCanvas()
+        try:
+            rows = [
+                {"timeline_sec": float(i * 2), "start": float(i * 2), "status": "pending"}
+                for i in range(2000)
+            ]
+            canvas.scan_boundary_times = rows
+            canvas._invalidate_render_cache()
+
+            visible = canvas._visible_items_for_paint(
+                canvas.scan_boundary_times,
+                "scan_boundaries",
+                200.0,
+                206.0,
+                pad_sec=0.05,
+            )
+
+            self.assertLess(len(visible), 8)
+            self.assertTrue(all(199.9 <= float(item["timeline_sec"]) <= 206.1 for item in visible))
+            self.assertIn("scan_boundaries", canvas._paint_index_cache)
+            self.assertEqual(canvas._paint_last_visible_counts["scan_boundaries"], len(visible))
+        finally:
+            canvas.close()
+
+    def test_waveform_line_groups_reuse_visible_window_cache(self):
+        canvas = TimelineCanvas()
+        try:
+            waveform = np.zeros(1000, dtype=np.float32)
+            waveform[100:260] = 0.5
+            waveform[300:360] = 0.8
+            canvas.set_waveform(waveform)
+            canvas.pps = 100.0
+            canvas.vad_segments = [{"start": 1.0, "end": 2.6}]
+
+            first = canvas._waveform_line_groups_cached(90, 380)
+            first_key = canvas._waveform_line_cache_key
+            second = canvas._waveform_line_groups_cached(90, 380)
+
+            self.assertIs(first, second)
+            self.assertEqual(canvas._waveform_line_cache_key, first_key)
+            self.assertGreater(sum(len(group) for group in first), 0)
+
+            canvas.set_vad_segments([{"start": 3.0, "end": 3.6}])
+            self.assertIsNone(canvas._waveform_line_cache_key)
+            self.assertIsNone(canvas._waveform_line_cache)
         finally:
             canvas.close()
 

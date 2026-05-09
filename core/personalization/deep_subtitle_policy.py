@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 from statistics import median
 from typing import Any
@@ -256,6 +257,19 @@ def rerank_subtitle_candidates(
     profile: dict[str, Any] | None,
 ) -> tuple[list[str], dict[str, Any]]:
     settings = dict(settings or {})
+    native_requested = _setting_bool(settings, "native_swift_deep_policy_enabled", False) or any(
+        os.environ.get(key, "").strip().lower() in {"1", "true", "on", "yes"}
+        for key in ("AI_SUBTITLE_STUDIO_SWIFT_DEEP_POLICY", "AI_SUBTITLE_STUDIO_SWIFT_POLICY")
+    )
+    if native_requested:
+        try:
+            from core.native_swift_policy import rerank_subtitle_candidates_via_swift
+
+            native = rerank_subtitle_candidates_via_swift(original_text, candidate_lists, settings, profile)
+            if native is not None:
+                return native
+        except Exception:
+            pass
     if not deep_policy_enabled(settings) or not _setting_bool(settings, "deep_subtitle_reranker_enabled", True):
         return list(candidate_lists[0] if candidate_lists else []), {}
 

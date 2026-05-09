@@ -78,6 +78,48 @@ def max_recheck_segments(settings: dict[str, Any] | None) -> int:
     return max(1, min(200, int(_as_float(settings.get("stt_low_score_recheck_max_segments"), 80))))
 
 
+def max_recheck_audio_sec(settings: dict[str, Any] | None) -> float:
+    settings = settings or {}
+    value = _as_float(settings.get("stt_low_score_recheck_max_audio_sec"), 180.0)
+    return max(10.0, min(1800.0, value))
+
+
+def _range_duration(item: SttRecheckRange) -> float:
+    return max(0.05, float(item.end or 0.0) - float(item.start or 0.0))
+
+
+def budget_recheck_ranges(
+    ranges: list[SttRecheckRange],
+    settings: dict[str, Any] | None = None,
+    *,
+    max_segments: int | None = None,
+    max_audio_sec: float | None = None,
+) -> list[SttRecheckRange]:
+    if not ranges:
+        return []
+    seg_limit = max_recheck_segments(settings) if max_segments is None else max(1, min(200, int(max_segments)))
+    sec_limit = max_recheck_audio_sec(settings) if max_audio_sec is None else max(10.0, min(1800.0, float(max_audio_sec)))
+
+    def _priority(item: SttRecheckRange) -> tuple[float, float, float]:
+        missing_voice = not item.primary_text and not item.secondary_text
+        best_score = item.best_original_score
+        duration = _range_duration(item)
+        return (0.0 if missing_voice else 1.0, best_score, -duration)
+
+    selected: list[SttRecheckRange] = []
+    selected_sec = 0.0
+    for item in sorted(ranges, key=_priority):
+        duration = _range_duration(item)
+        if len(selected) >= seg_limit:
+            break
+        if selected and selected_sec + duration > sec_limit:
+            continue
+        selected.append(item)
+        selected_sec += duration
+    selected.sort(key=lambda item: (item.start, item.end))
+    return selected
+
+
 def find_low_score_recheck_ranges(
     primary_segments: list[dict[str, Any]],
     secondary_segments: list[dict[str, Any]],
@@ -127,9 +169,7 @@ def find_low_score_recheck_ranges(
                 secondary=dict(secondary),
             )
         )
-        if len(candidates) >= max_recheck_segments(settings):
-            break
-    return candidates
+    return budget_recheck_ranges(candidates, settings)
 
 
 def find_primary_low_score_recheck_ranges(
@@ -164,13 +204,20 @@ def find_primary_low_score_recheck_ranges(
                 secondary={},
             )
         )
-        if len(candidates) >= max_recheck_segments(settings):
-            break
-    return candidates
+    return budget_recheck_ranges(candidates, settings)
 
 
-def rescue_audio_filter() -> str:
+def rescue_audio_filter(settings: dict[str, Any] | None = None) -> str:
     """Speech-focused ffmpeg chain for short recheck clips."""
+    settings = settings or {}
+    if bool(settings.get("stt_recheck_native_fast_audio_filter_enabled", True)):
+        return (
+            "highpass=f=80,"
+            "lowpass=f=7600,"
+            "acompressor=threshold=-24dB:ratio=3:attack=5:release=55,"
+            "volume=2.5,"
+            "alimiter=limit=0.93"
+        )
     return (
         "highpass=f=80,"
         "lowpass=f=7600,"
@@ -227,11 +274,13 @@ def mark_rescue_segments(
 __all__ = [
     "DEFAULT_RECHECK_THRESHOLD",
     "SttRecheckRange",
+    "budget_recheck_ranges",
     "enabled",
     "find_primary_low_score_recheck_ranges",
     "find_low_score_recheck_ranges",
     "mark_rescue_segments",
     "max_recheck_segments",
+    "max_recheck_audio_sec",
     "recheck_padding",
     "replacement_is_better",
     "rescue_audio_filter",

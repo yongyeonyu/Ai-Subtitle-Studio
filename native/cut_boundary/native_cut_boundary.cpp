@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -259,6 +260,28 @@ bool read_double_sequence(PyObject* obj, std::vector<double>& out) {
     return true;
 }
 
+bool read_int_sequence(PyObject* obj, std::vector<int>& out) {
+    PyObject* seq = PySequence_Fast(obj, "expected an integer sequence");
+    if (seq == nullptr) {
+        return false;
+    }
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    out.clear();
+    out.reserve(static_cast<size_t>(std::max<Py_ssize_t>(0, n)));
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        PyObject* item = PySequence_Fast_GET_ITEM(seq, i);
+        const long value = PyLong_AsLong(item);
+        if (PyErr_Occurred()) {
+            PyErr_Clear();
+            out.push_back(0);
+        } else {
+            out.push_back(static_cast<int>(value));
+        }
+    }
+    Py_DECREF(seq);
+    return true;
+}
+
 struct Interval {
     double start = 0.0;
     double end = 0.0;
@@ -372,11 +395,229 @@ PyObject* py_interval_overlaps(PyObject*, PyObject* args, PyObject* kwargs) {
     return list;
 }
 
+PyObject* py_word_split_groups(PyObject*, PyObject* args, PyObject* kwargs) {
+    static const char* kwlist[] = {
+        "starts",
+        "ends",
+        "char_counts",
+        "natural_breaks",
+        "vad_indexes",
+        "max_chars",
+        "max_duration",
+        "max_cps",
+        "min_duration",
+        "gap_break_sec",
+        "word_gap_break_sec",
+        nullptr,
+    };
+    PyObject* starts_obj = nullptr;
+    PyObject* ends_obj = nullptr;
+    PyObject* chars_obj = nullptr;
+    PyObject* natural_obj = nullptr;
+    PyObject* vad_obj = nullptr;
+    int max_chars = 10;
+    double max_duration = 6.0;
+    double max_cps = 12.0;
+    double min_duration = 0.0;
+    double gap_break_sec = 1.5;
+    double word_gap_break_sec = 0.65;
+    if (!PyArg_ParseTupleAndKeywords(
+            args,
+            kwargs,
+            "OOOOOiddddd",
+            const_cast<char**>(kwlist),
+            &starts_obj,
+            &ends_obj,
+            &chars_obj,
+            &natural_obj,
+            &vad_obj,
+            &max_chars,
+            &max_duration,
+            &max_cps,
+            &min_duration,
+            &gap_break_sec,
+            &word_gap_break_sec
+        )) {
+        return nullptr;
+    }
+
+    std::vector<double> starts;
+    std::vector<double> ends;
+    std::vector<int> char_counts;
+    std::vector<int> natural_breaks;
+    std::vector<int> vad_indexes;
+    if (
+        !read_double_sequence(starts_obj, starts)
+        || !read_double_sequence(ends_obj, ends)
+        || !read_int_sequence(chars_obj, char_counts)
+        || !read_int_sequence(natural_obj, natural_breaks)
+        || !read_int_sequence(vad_obj, vad_indexes)
+    ) {
+        return nullptr;
+    }
+
+    const size_t n = std::min({starts.size(), ends.size(), char_counts.size(), natural_breaks.size(), vad_indexes.size()});
+    std::vector<std::pair<size_t, size_t>> groups;
+    groups.reserve(n);
+
+    Py_BEGIN_ALLOW_THREADS
+    size_t begin = 0;
+    int chars = 0;
+    for (size_t i = 0; i < n; ++i) {
+        chars += std::max(0, char_counts[i]);
+        bool flush = false;
+        if (i + 1 >= n) {
+            flush = true;
+        } else {
+            const double start = std::max(0.0, starts[begin]);
+            const double end = std::max(start, ends[i]);
+            const double duration = std::max(0.05, end - start);
+            const double gap = starts[i + 1] - end;
+            const double cps = duration > 0.0 ? static_cast<double>(chars) / duration : static_cast<double>(chars);
+            const bool natural = natural_breaks[i] != 0;
+            const bool vad_break = vad_indexes[i] >= 0 && vad_indexes[i + 1] >= 0 && vad_indexes[i] != vad_indexes[i + 1];
+            const bool word_gap_break = gap >= word_gap_break_sec;
+
+            if ((vad_break || word_gap_break) && duration >= 0.08) {
+                flush = true;
+            } else if (duration < min_duration) {
+                flush = false;
+            } else if (gap >= gap_break_sec) {
+                flush = true;
+            } else if (chars >= max_chars && natural) {
+                flush = true;
+            } else if (
+                duration >= max_duration
+                && (natural || gap >= std::min(gap_break_sec * 0.5, 1.0) || chars >= static_cast<int>(max_chars * 0.5))
+            ) {
+                flush = true;
+            } else if (cps > max_cps && chars >= max_chars && natural) {
+                flush = true;
+            } else if (chars >= static_cast<int>(max_chars * 1.5)) {
+                flush = true;
+            }
+        }
+
+        if (flush) {
+            groups.push_back({begin, i + 1});
+            begin = i + 1;
+            chars = 0;
+        }
+    }
+    Py_END_ALLOW_THREADS
+
+    PyObject* list = PyList_New(static_cast<Py_ssize_t>(groups.size()));
+    if (list == nullptr) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < groups.size(); ++i) {
+        PyObject* item = Py_BuildValue("(nn)", static_cast<Py_ssize_t>(groups[i].first), static_cast<Py_ssize_t>(groups[i].second));
+        if (item == nullptr) {
+            Py_DECREF(list);
+            return nullptr;
+        }
+        PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), item);
+    }
+    return list;
+}
+
+PyObject* py_llm_macro_group_ranges(PyObject*, PyObject* args, PyObject* kwargs) {
+    static const char* kwlist[] = {
+        "cut_before",
+        "needs_llm",
+        "min_rows",
+        "max_rows",
+        nullptr,
+    };
+    PyObject* cut_obj = nullptr;
+    PyObject* needs_obj = nullptr;
+    int min_rows = 10;
+    int max_rows = 15;
+    if (!PyArg_ParseTupleAndKeywords(
+            args,
+            kwargs,
+            "OOii",
+            const_cast<char**>(kwlist),
+            &cut_obj,
+            &needs_obj,
+            &min_rows,
+            &max_rows
+        )) {
+        return nullptr;
+    }
+
+    std::vector<int> cut_before;
+    std::vector<int> needs_llm;
+    if (!read_int_sequence(cut_obj, cut_before) || !read_int_sequence(needs_obj, needs_llm)) {
+        return nullptr;
+    }
+
+    const size_t n = std::min(cut_before.size(), needs_llm.size());
+    min_rows = std::max(2, min_rows);
+    max_rows = std::max(min_rows, max_rows);
+
+    struct Group {
+        size_t start;
+        size_t end;
+        int needs_any;
+        int need_count;
+    };
+    std::vector<Group> groups;
+    groups.reserve(n > 0 ? (n / static_cast<size_t>(max_rows) + 1) : 0);
+
+    Py_BEGIN_ALLOW_THREADS
+    size_t current_start = 0;
+    int current_need_count = 0;
+    size_t current_len = 0;
+    for (size_t index = 0; index < n; ++index) {
+        if (current_len > 0) {
+            const bool cut_here = cut_before[index] != 0;
+            if ((current_len >= static_cast<size_t>(min_rows) && cut_here) || current_len >= static_cast<size_t>(max_rows)) {
+                groups.push_back({current_start, index, current_need_count > 0 ? 1 : 0, current_need_count});
+                current_start = index;
+                current_len = 0;
+                current_need_count = 0;
+            }
+        }
+        current_len += 1;
+        if (needs_llm[index] != 0) {
+            current_need_count += 1;
+        }
+    }
+    if (current_len > 0) {
+        groups.push_back({current_start, n, current_need_count > 0 ? 1 : 0, current_need_count});
+    }
+    Py_END_ALLOW_THREADS
+
+    PyObject* list = PyList_New(static_cast<Py_ssize_t>(groups.size()));
+    if (list == nullptr) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < groups.size(); ++i) {
+        const Group& group = groups[i];
+        PyObject* item = Py_BuildValue(
+            "(nnii)",
+            static_cast<Py_ssize_t>(group.start),
+            static_cast<Py_ssize_t>(group.end),
+            group.needs_any,
+            group.need_count
+        );
+        if (item == nullptr) {
+            Py_DECREF(list);
+            return nullptr;
+        }
+        PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), item);
+    }
+    return list;
+}
+
 PyMethodDef methods[] = {
     {"delta_bytes", reinterpret_cast<PyCFunction>(py_delta_bytes), METH_VARARGS | METH_KEYWORDS, "Compute sampled absolute byte delta."},
     {"gray_delta", reinterpret_cast<PyCFunction>(py_gray_delta), METH_VARARGS | METH_KEYWORDS, "Compute cut-boundary gray thumbnail deltas."},
     {"color_avg_delta", reinterpret_cast<PyCFunction>(py_color_avg_delta), METH_VARARGS | METH_KEYWORDS, "Compute cut-boundary color average deltas."},
     {"interval_overlaps", reinterpret_cast<PyCFunction>(py_interval_overlaps), METH_VARARGS | METH_KEYWORDS, "Compute batch interval overlaps for subtitle/VAD ranges."},
+    {"word_split_groups", reinterpret_cast<PyCFunction>(py_word_split_groups), METH_VARARGS | METH_KEYWORDS, "Split word indexes into subtitle groups with native C++ thresholds."},
+    {"llm_macro_group_ranges", reinterpret_cast<PyCFunction>(py_llm_macro_group_ranges), METH_VARARGS | METH_KEYWORDS, "Build LLM macro group ranges from cut and review flags."},
     {nullptr, nullptr, 0, nullptr},
 };
 

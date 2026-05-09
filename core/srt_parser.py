@@ -20,6 +20,14 @@ def parse_srt(srt_path: str) -> list:
     if not os.path.exists(srt_path):
         return segments
 
+    try:
+        from core.native_swift_subtitle import parse_srt_via_swift
+        native_segments = parse_srt_via_swift(srt_path)
+        if native_segments:
+            return native_segments
+    except Exception:
+        pass
+
     content = ""
     for enc in ['utf-8-sig', 'utf-8', 'cp949', 'euc-kr']:
         try:

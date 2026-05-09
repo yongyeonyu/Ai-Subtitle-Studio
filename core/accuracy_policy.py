@@ -157,10 +157,19 @@ def apply_accuracy_first_defaults(settings: dict | None) -> dict:
     return out
 
 
+def _apply_apple_m_runtime_plan(settings: dict) -> dict:
+    try:
+        from core.runtime.multi_process import apply_apple_m_subtitle_pipeline_plan
+
+        return apply_apple_m_subtitle_pipeline_plan(settings)
+    except Exception:
+        return settings
+
+
 def apply_accuracy_first_runtime_settings(settings: dict | None) -> dict:
     out = apply_accuracy_first_defaults(settings)
     if not bool(out.get("accuracy_first_mode", True)):
-        return out
+        return _apply_apple_m_runtime_plan(out)
 
     explicit_values = {
         key: deepcopy(out[key])
@@ -187,4 +196,5 @@ def apply_accuracy_first_runtime_settings(settings: dict | None) -> dict:
         out["auto_start_mode"] = auto_start_key
         out["_speed_safe_auto_profile"] = "03.21.auto_speed_safe.v1"
     out = apply_autopilot_runtime_policy(out)
-    return apply_mode_runtime_settings(out)
+    out = apply_mode_runtime_settings(out)
+    return _apply_apple_m_runtime_plan(out)

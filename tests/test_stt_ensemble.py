@@ -3,6 +3,7 @@
 import unittest
 from unittest.mock import patch
 
+from core.audio import stt_ensemble
 from core.audio.stt_ensemble import merge_stt_outputs, text_similarity
 from core.engine import subtitle_engine
 from core.engine.subtitle_engine import _process_one, optimize_segments
@@ -192,6 +193,33 @@ class STTEnsembleTests(unittest.TestCase):
         self.assertEqual(merged[1]["stt_ensemble_source"], "STT2")
         self.assertEqual(merged[1]["stt_ensemble_inserted_from_stt2"], True)
         self.assertEqual(merged[1]["stt_ensemble_needs_llm_review"], True)
+
+    def test_merge_start_index_matches_full_secondary_scan(self):
+        primary = [
+            {"start": float(index * 2), "end": float(index * 2 + 1.0), "text": f"문장 {index}"}
+            for index in range(12)
+        ]
+        secondary = [
+            {"start": float(index * 2 + 0.05), "end": float(index * 2 + 1.05), "text": f"문장 {index}"}
+            for index in range(12)
+        ]
+        secondary.extend(
+            {"start": 100.0 + float(index), "end": 100.5 + float(index), "text": f"먼 후보 {index}"}
+            for index in range(8)
+        )
+
+        indexed = merge_stt_outputs(primary, secondary)
+        with patch.object(
+            stt_ensemble,
+            "_matching_secondary_candidates",
+            side_effect=lambda _primary, items, *_args, **_kwargs: list(enumerate(items)),
+        ):
+            full_scan = merge_stt_outputs(primary, secondary)
+
+        self.assertEqual(
+            [(row["start"], row["end"], row["text"], row["stt_ensemble_source"]) for row in indexed],
+            [(row["start"], row["end"], row["text"], row["stt_ensemble_source"]) for row in full_scan],
+        )
 
     def test_model_key_includes_secondary_stt_when_ensemble_enabled(self):
         key = get_model_key(

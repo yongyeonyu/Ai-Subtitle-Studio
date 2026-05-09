@@ -62,6 +62,29 @@ class STTRescueTests(unittest.TestCase):
         self.assertEqual(ranges[0].best_original_score, 42)
         self.assertEqual(ranges[0].secondary_text, "")
 
+    def test_recheck_budget_prioritizes_worst_ranges_with_audio_cap(self):
+        ranges = stt_rescue.find_primary_low_score_recheck_ranges(
+            [
+                {"start": 0.0, "end": 30.0, "text": "낮음", "stt_score": 49},
+                {"start": 40.0, "end": 70.0, "text": "가장 낮음", "stt_score": 12},
+                {"start": 80.0, "end": 110.0, "text": "중간", "stt_score": 35},
+            ],
+            {
+                "stt_low_score_recheck_threshold": 60,
+                "stt_low_score_recheck_max_segments": 3,
+                "stt_low_score_recheck_max_audio_sec": 60,
+            },
+        )
+
+        self.assertEqual([item.primary_text for item in ranges], ["가장 낮음", "중간"])
+
+    def test_native_fast_rescue_filter_avoids_slow_normalizers(self):
+        fast_filter = stt_rescue.rescue_audio_filter({"stt_recheck_native_fast_audio_filter_enabled": True})
+
+        self.assertIn("acompressor", fast_filter)
+        self.assertNotIn("dynaudnorm", fast_filter)
+        self.assertNotIn("loudnorm", fast_filter)
+
     def test_mark_rescue_segments_preserves_original_scores(self):
         item = stt_rescue.find_low_score_recheck_ranges(
             [{"start": 0, "end": 1, "text": "원본1", "stt_score": 30}],

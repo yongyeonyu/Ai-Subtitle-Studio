@@ -2,7 +2,11 @@
 # Phase: PHASE2
 import unittest
 
-from core.subtitle_quality.candidate_ranker import is_candidate_safe_to_apply, rank_quality_candidates
+from core.subtitle_quality.candidate_ranker import (
+    is_candidate_safe_to_apply,
+    rank_overlap_candidates,
+    rank_quality_candidates,
+)
 from core.subtitle_quality.recheck_engine import recheck_low_confidence_segments
 
 
@@ -33,6 +37,21 @@ class QualityCandidateRankerTests(unittest.TestCase):
         )
 
         self.assertTrue(ranked[0]["safe_to_apply"])
+
+    def test_rank_overlap_candidates_reuses_batched_vad_alignment(self):
+        ranked = rank_overlap_candidates(
+            [
+                {"candidate_id": "speech", "segment": {"start": 0.0, "end": 1.0, "text": "음성 구간"}},
+                {"candidate_id": "silent", "segment": {"start": 2.0, "end": 3.0, "text": "무음 구간"}},
+            ],
+            vad_segments=[{"start": 0.0, "end": 1.0}],
+        )
+
+        speech = next(item for item in ranked if item["candidate_id"] == "speech")
+        silent = next(item for item in ranked if item["candidate_id"] == "silent")
+        self.assertEqual(speech["segment"]["quality"]["vad_alignment_score"], 100.0)
+        self.assertEqual(silent["segment"]["quality"]["vad_alignment_score"], 0.0)
+        self.assertGreater(speech["score"], silent["score"])
 
     def test_recheck_low_confidence_clamps_to_clip_boundary(self):
         targets = recheck_low_confidence_segments(

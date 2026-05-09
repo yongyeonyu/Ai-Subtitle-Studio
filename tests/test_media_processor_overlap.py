@@ -29,6 +29,80 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             {"start": 54.0, "end": 80.0},
         ])
 
+    def test_release_after_transcribe_keeps_macos_persistent_worker_warm(self):
+        class _LiveProc:
+            def poll(self):
+                return None
+
+        proc = _LiveProc()
+        self.processor._whisperkit_runner_proc = proc
+        self.processor._whisper_proc = proc
+        self.processor._load_all_settings = lambda: {"stt_persistent_runtime_reuse_enabled": True}
+
+        with patch.object(config, "IS_MAC", True), \
+             patch.object(self.processor, "stop_transcribe") as stop_transcribe, \
+             patch("core.audio.media_processor_transcribe.clear_audio_model_memory_caches") as clear_caches:
+            self.processor._release_after_transcribe_job("STT1")
+
+        stop_transcribe.assert_not_called()
+        clear_caches.assert_not_called()
+        self.assertIs(self.processor._whisperkit_runner_proc, proc)
+        self.assertIsNone(self.processor._whisper_proc)
+
+    def test_mac_stt1_first_pass_routes_quality_model_to_fast_native_model(self):
+        settings = {
+            "stt_primary_fast_native_enabled": True,
+            "stt_primary_fast_native_model": config.WHISPERKIT_FAST_MODEL,
+            "stt_word_timestamp_precision_pass": False,
+        }
+
+        with patch.object(config, "IS_MAC", True):
+            first_pass = self.processor._mac_primary_fast_native_model(
+                config.WHISPERKIT_QUALITY_MODEL,
+                settings,
+                log_label="STT1",
+            )
+            precision_pass = self.processor._mac_primary_fast_native_model(
+                config.WHISPERKIT_QUALITY_MODEL,
+                {**settings, "stt_word_timestamp_precision_pass": True},
+                log_label="STT1",
+            )
+            stt2_pass = self.processor._mac_primary_fast_native_model(
+                config.WHISPERKIT_QUALITY_MODEL,
+                settings,
+                log_label="Fast-STT2",
+            )
+            komix_pass = self.processor._mac_primary_fast_native_model(
+                "youngouk/whisper-medium-komixv2-mlx",
+                settings,
+                log_label="STT1",
+            )
+
+        self.assertEqual(first_pass, config.WHISPERKIT_FAST_MODEL)
+        self.assertEqual(precision_pass, config.WHISPERKIT_QUALITY_MODEL)
+        self.assertEqual(stt2_pass, config.WHISPERKIT_QUALITY_MODEL)
+        self.assertEqual(komix_pass, "youngouk/whisper-medium-komixv2-mlx")
+
+    def test_word_precision_ranges_respect_audio_budget(self):
+        segments = [
+            {"start": 0.0, "end": 5.0, "text": "후보1", "stt_score": 40},
+            {"start": 10.0, "end": 15.0, "text": "후보2", "stt_score": 20},
+            {"start": 20.0, "end": 25.0, "text": "후보3", "stt_score": 30},
+            {"start": 30.0, "end": 35.0, "text": "후보4", "stt_score": 10},
+        ]
+
+        ranges = self.processor._word_precision_ranges(
+            segments,
+            {
+                "stt_word_timestamps_precision_enabled": True,
+                "stt_word_timestamps_precision_threshold": 80.0,
+                "stt_word_timestamps_precision_max_segments": 4,
+                "stt_word_timestamps_precision_max_audio_sec": 10.0,
+            },
+        )
+
+        self.assertEqual([(item.start, item.end) for item in ranges], [(10.0, 15.0), (30.0, 35.0)])
+
     def test_build_grouped_chunks_applies_overlap_to_long_vad_sector(self):
         chunks = self.processor._build_grouped_chunks(
             [{"start": 10.0, "end": 80.0}],
@@ -247,7 +321,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             }
 
             def fake_collect(_chunk_dir, _model, *, label, **_kwargs):
-                calls.append(label)
+                calls.append((label, dict(_kwargs.get("settings_overrides") or {})))
                 if label == "STT1":
                     return [{
                         "start": 0.0,
@@ -280,9 +354,28 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             with patch("core.audio.stt_candidate_scorer.annotate_stt_candidates", side_effect=lambda segments, **_kwargs: segments):
                 result = list(self.processor.transcribe_ensemble(tmp, cleanup_chunk_dir=False))
 
-            self.assertEqual(calls, ["STT1", "Fast-STT2"])
+            self.assertEqual([label for label, _overrides in calls], ["STT1", "Fast-STT2"])
+            self.assertFalse(calls[0][1]["stt_word_timestamps_precision_enabled"])
+            self.assertEqual(calls[1][1]["stt_word_timestamps_mode"], "off")
+            self.assertFalse(calls[1][1]["stt_word_timestamps_default_enabled"])
+            self.assertFalse(calls[1][1]["stt_word_timestamps_precision_enabled"])
             self.assertEqual(result[0][0][0]["text"], "보강 후보")
             self.assertEqual(result[0][0][0]["stt_ensemble_source"], "STT2_SELECTIVE_RECHECK")
+
+    def test_chunk_sort_key_uses_timeline_offset_not_filename_order(self):
+        names = [
+            "vad_1000_1440.000.wav",
+            "vad_900_10.000.wav",
+            "vad_901_20.000.wav",
+        ]
+
+        ordered = sorted(names, key=self.processor._chunk_sort_key)
+
+        self.assertEqual(ordered, [
+            "vad_900_10.000.wav",
+            "vad_901_20.000.wav",
+            "vad_1000_1440.000.wav",
+        ])
 
     def test_selective_ensemble_rechecks_missing_vad_voice_ranges(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -568,7 +661,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 def fake_run(cmd, *, label, timeout=None):
                     if label == "ffmpeg 오디오 추출":
                         write_silent_wav(cmd[-1])
-                    elif label == "ffmpeg 음량 평탄화":
+                    elif "음량 평탄화" in label:
                         write_silent_wav(cmd[-1])
                     return True
 
@@ -615,7 +708,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 def fake_run(cmd, *, label, timeout=None):
                     if label == "ffmpeg 오디오 추출":
                         write_active_wav(cmd[-1])
-                    elif label == "ffmpeg 음량 평탄화":
+                    elif "음량 평탄화" in label:
                         write_active_wav(cmd[-1])
                     return True
 
@@ -680,7 +773,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 def fake_run(cmd, *, label, timeout=None):
                     if label == "ffmpeg 오디오 추출":
                         write_active_wav(cmd[-1])
-                    elif label == "ffmpeg 음량 평탄화":
+                    elif "음량 평탄화" in label:
                         write_active_wav(cmd[-1])
                     return True
 
@@ -744,7 +837,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 self.processor.extract_audio(video_path)
                 self.processor.extract_audio(video_path)
 
-                self.assertEqual([label for label, _cmd in calls], ["ffmpeg 음량 평탄화"])
+                self.assertEqual([label for label, _cmd in calls], ["Mac Native Fast 음량 평탄화"])
                 cmd = calls[0][1]
                 self.assertIn("-filter_threads", cmd)
                 self.assertIn("-threads", cmd)
@@ -1419,6 +1512,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                 "w_none_temp_max": 0.0,
                 "stt_ensemble_enabled": False,
                 "stt_selective_secondary_recheck_enabled": False,
+                "stt_persistent_runtime_reuse_enabled": False,
             }
 
             with patch.object(config, "IS_MAC", True), \
@@ -1622,7 +1716,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
 
         self.assertEqual(rows[0][0][0]["text"], "Swift")
         self.assertIs(ensure_worker.return_value, proc)
-        self.assertEqual(submit_task.call_args.kwargs["model"], "whisperkit-persistent:large-v3")
+        self.assertEqual(submit_task.call_args.kwargs["model"], "whisperkit-persistent:large-v3-v20240930_626MB")
         self.assertFalse(submit_task.call_args.kwargs["word_timestamps"])
 
     def test_transcribe_can_route_to_whisper_cpp_backend(self):
@@ -1678,13 +1772,15 @@ class MediaProcessorOverlapTests(unittest.TestCase):
             }
 
             with patch.object(config, "IS_MAC", True), \
+                 patch("core.audio.stt_backend_router._whisper_cpp_ready", return_value=True), \
+                 patch("core.audio.stt_backend_router._whisperkit_ready", return_value=False), \
                  patch("core.audio.whisper_coreml.is_coreml_whisper_model", return_value=False), \
                  patch("core.audio.whisper_transformers.is_transformers_whisper_model", return_value=False), \
                  patch("core.audio.whisper_cpp.run_whisper", return_value=proc) as run_cpp:
                 rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False))
 
         self.assertEqual(rows[0][0][0]["text"], "CPP")
-        self.assertEqual(run_cpp.call_args.kwargs["model"], "large-v3-turbo")
+        self.assertEqual(run_cpp.call_args.kwargs["model"], "whisper.cpp:large-v3-turbo")
         self.assertFalse(run_cpp.call_args.kwargs["word_timestamps"])
         self.assertEqual(rows[0][0][0]["asr_metadata"]["backend"], "whisper.cpp")
         self.assertFalse(rows[0][0][0]["asr_metadata"]["word_timestamps_requested"])

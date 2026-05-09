@@ -4,6 +4,7 @@ import unittest
 import unittest.mock
 import importlib
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -192,6 +193,53 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
                     )
                 )
                 self.assertTrue(all(seg.get("_final_gap_settings_applied") for seg in adjusted))
+
+    def test_swift_common_split_bridge_matches_python_when_available(self):
+        from core.native_swift_subtitle import find_native_cli_path
+
+        if find_native_cli_path() is None:
+            self.skipTest("native Swift CLI is not built")
+
+        text = "여기 안에 들어가 있는 것도 똑같고 저기 방향제도 똑같고 이번에는 동일한 차를 그냥 2대를 만드셨네"
+        tokens = text.split()
+        words = [
+            {
+                "word": token,
+                "start": round(index * (9.9 / len(tokens)), 3),
+                "end": round((index + 1) * (9.9 / len(tokens)), 3),
+            }
+            for index, token in enumerate(tokens)
+        ]
+        segments = [
+            {
+                "start": 0.0,
+                "end": 9.9,
+                "text": text,
+                "words": words,
+                "_final_gap_settings_applied": True,
+            }
+        ]
+        settings = {
+            "subtitle_mode": "high",
+            "single_subtitle_end": 0.0,
+            "split_length_threshold": 10,
+            "sub_min_duration": 0.2,
+            "sub_max_duration": 6.0,
+            "subtitle_common_split_guard_enabled": True,
+            "subtitle_common_split_target_chars": 16,
+            "subtitle_common_split_hard_max_chars": 24,
+            "subtitle_common_split_hard_max_duration_sec": 5.5,
+        }
+        with unittest.mock.patch.dict(os.environ, {"AI_SUBTITLE_STUDIO_SWIFT_COMMON_SPLIT": "0"}, clear=False):
+            python_result = subtitle_engine.apply_final_gap_settings(segments, settings)
+        with unittest.mock.patch.dict(os.environ, {"AI_SUBTITLE_STUDIO_SWIFT_COMMON_SPLIT": "1"}, clear=False):
+            swift_result = subtitle_engine.apply_final_gap_settings(segments, settings)
+
+        self.assertEqual(
+            [(seg["text"], round(seg["start"], 3), round(seg["end"], 3)) for seg in swift_result],
+            [(seg["text"], round(seg["start"], 3), round(seg["end"], 3)) for seg in python_result],
+        )
+        self.assertTrue(all(seg.get("_common_split_guard_policy", {}).get("action") == "split" for seg in swift_result))
 
     def test_final_gap_settings_use_segment_lora_overrides(self):
         segments = [
@@ -522,6 +570,86 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertEqual(len(result), 12)
         self.assertTrue(any(row.get("_llm_macro_chunk_policy", {}).get("llm_called") for row in result))
 
+    def test_lora_deep_prepass_uses_runtime_worker_plan_and_preserves_order(self):
+        segments = [
+            {"start": float(index), "end": float(index) + 0.8, "text": f"문장 {index}"}
+            for index in range(6)
+        ]
+
+        def fake_process(arg):
+            seg = arg[0]
+            return [{**seg, "text": f"{seg['text']}!"}]
+
+        with (
+            unittest.mock.patch(
+                "core.engine.subtitle_engine.runtime_parallel_worker_plan",
+                return_value=(3, {"reason": "apple_m"}),
+            ) as worker_plan,
+            unittest.mock.patch("core.engine.subtitle_engine._process_one", side_effect=fake_process),
+        ):
+            result = subtitle_engine._preprocess_lora_deep_without_llm(
+                segments,
+                rules={},
+                threshold=10,
+                corrections={},
+                user_prompt="",
+                settings={"io_workers": 3},
+            )
+
+        worker_plan.assert_called_once()
+        self.assertEqual(worker_plan.call_args.kwargs["task"], "subtitle_prepass")
+        self.assertEqual([row["text"] for row in result], [f"문장 {index}!" for index in range(6)])
+
+    def test_codex_native_fast_path_skips_bulk_cli_for_normal_segments(self):
+        from core.llm.codex_provider import DEFAULT_CODEX_LABEL
+
+        segments = [
+            {
+                "start": float(index * 2),
+                "end": float(index * 2 + 1.2),
+                "text": "테스트 문장",
+                "words": [
+                    {"word": "테스트", "start": float(index * 2), "end": float(index * 2 + 0.5)},
+                    {"word": "문장", "start": float(index * 2 + 0.55), "end": float(index * 2 + 1.0)},
+                ],
+            }
+            for index in range(6)
+        ]
+        settings = {
+            "subtitle_llm_macro_chunk_enabled": False,
+            "codex_subtitle_native_fast_path_enabled": True,
+            "codex_subtitle_native_fast_path_min_segments": 3,
+            "split_length_threshold": 10,
+            "sub_max_duration": 6.0,
+            "llm_candidate_policy_enabled": False,
+            "editor_lora_runtime_enabled": False,
+            "subtitle_quality_auto_correct_enabled": False,
+            "deep_subtitle_policy_enabled": False,
+            "deep_policy_event_logging_enabled": False,
+            "runtime_quality_self_review_enabled": False,
+            "subtitle_output_selector_enabled": False,
+            "subtitle_context_consistency_enabled": False,
+            "subtitle_auto_review_enabled": False,
+            "accuracy_decision_graph_enabled": False,
+        }
+
+        with (
+            unittest.mock.patch("core.engine.subtitle_engine.get_selected_llm", return_value=DEFAULT_CODEX_LABEL),
+            unittest.mock.patch("core.engine.subtitle_engine._get_user_settings", return_value=settings),
+            unittest.mock.patch("core.engine.subtitle_engine._resolve_runtime_llm_model", side_effect=lambda model, **_: model),
+            unittest.mock.patch("core.engine.subtitle_engine.ask_openai_to_split") as ask_openai,
+        ):
+            result = subtitle_engine.optimize_segments(segments)
+
+        ask_openai.assert_not_called()
+        self.assertEqual(len(result), 6)
+        self.assertTrue(
+            all(
+                row.get("_codex_native_fast_path_policy", {}).get("reason") == "bulk_native_rules"
+                for row in result
+            )
+        )
+
     def test_macro_chunk_respects_confirmed_cut_boundaries_after_min_rows(self):
         rows = [
             {"start": float(index), "end": float(index) + 0.8, "text": f"문장 {index}"}
@@ -540,6 +668,40 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         )
 
         self.assertEqual([len(group["rows"]) for group in groups], [10, 2])
+
+    def test_native_cpp_macro_group_ranges_match_python_chunking(self):
+        from core.native_cut_boundary import llm_macro_group_ranges
+
+        native_ranges = llm_macro_group_ranges(
+            [0, 0, 0, 0, 1, 0, 0],
+            [0, 1, 0, 0, 0, 1, 0],
+            min_rows=3,
+            max_rows=5,
+        )
+        if native_ranges is None:
+            self.skipTest("native C++ extension unavailable")
+
+        rows = [
+            {"start": float(index), "end": float(index) + 0.7, "text": f"문장 {index}"}
+            for index in range(7)
+        ]
+        rows[4]["nearest_confirmed_cut_sec"] = rows[4]["start"]
+        groups = subtitle_engine._build_llm_macro_groups(
+            rows,
+            [False, True, False, False, False, True, False],
+            {
+                "subtitle_llm_macro_chunk_min_rows": 3,
+                "subtitle_llm_macro_chunk_max_rows": 5,
+                "subtitle_llm_macro_chunk_use_cut_boundaries": True,
+                "subtitle_bundle_boundary_snap_window_sec": 0.3,
+                "native_cpp_llm_macro_groups_enabled": True,
+            },
+        )
+
+        self.assertEqual(native_ranges, [(0, 4, True, 1), (4, 7, True, 1)])
+        self.assertEqual([group["start_index"] for group in groups], [0, 4])
+        self.assertEqual([len(group["rows"]) for group in groups], [4, 3])
+        self.assertTrue(all(group.get("_native_group_policy", {}).get("backend") == "cpp" for group in groups))
 
     def test_self_review_quality_attaches_runtime_quality_metadata(self):
         segments = [

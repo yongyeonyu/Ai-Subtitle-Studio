@@ -1,6 +1,6 @@
 <!--
-Document-Version: 03.25.01
-Phase: NATIVE_STT_PIPELINE_RELEASED
+Document-Version: 04.00.00-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_RELEASED
 Last-Updated: 2026-05-09
 Updated-By: Codex
 Scope: Actual project filesystem map generated from tracked source files plus untracked non-ignored release files. `.git/`, `venv/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.codex_work/`, and large runtime cache/output folders are intentionally not expanded.
@@ -10,8 +10,8 @@ Role-Description-Rule: Tree entries are generated from actual paths; review note
 AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
 Last Updated: 2026-05-09
-Phase: NATIVE_STT_PIPELINE_RELEASED
-App Version: 03.25.01
+Phase: MAC_NATIVE_APPSTORE_V4_RELEASED
+App Version: 04.00.00
 Structure Document: File_structure.txt
 Note: This file is an actual tree map and excludes cache-only Python bytecode folders, virtualenvs, local Codex scratch files, secrets, and large runtime output/cache folders.
 ================================================================================
@@ -294,6 +294,14 @@ ai_subtitle_studio/
 │   │   └── _native_cut_boundary.cpp
 │   ├── native_cut_boundary.py
 │   ├── native_json.py
+│   ├── native_macos_memory.py
+│   ├── native_swift_common_split.py
+│   ├── native_swift_policy.py
+│   ├── native_swift_project.py
+│   ├── native_swift_quality.py
+│   ├── native_swift_subtitle.py
+│   ├── native_swift_timeline.py
+│   ├── native_swift_waveform.py
 │   ├── native_text_similarity.py
 │   ├── notifier.py
 │   ├── path_manager.py
@@ -319,8 +327,35 @@ ai_subtitle_studio/
 │   ├── golden_subtitle_suite.json
 │   └── model_registry.json
 ├── native
-│   └── cut_boundary
-│       └── native_cut_boundary.cpp
+│   ├── cut_boundary
+│   │   └── native_cut_boundary.cpp
+│   └── macos
+│       └── AIStudioNative
+│           ├── Package.swift
+│           ├── README.md
+│           ├── Sources
+│           │   ├── AIStudioCore
+│           │   │   ├── CommonSplitPlanner.swift
+│           │   │   ├── MemoryPressure.swift
+│           │   │   ├── NativePolicyEngine.swift
+│           │   │   ├── ProjectJSON.swift
+│           │   │   ├── SRTCodec.swift
+│           │   │   ├── SubtitleQualityScorer.swift
+│           │   │   ├── SubtitleSegment.swift
+│           │   │   ├── TimelineColumns.swift
+│           │   │   └── WaveformPeaks.swift
+│           │   ├── AIStudioMacUI
+│           │   │   └── NativeTimelineView.swift
+│           │   └── AIStudioNativeCLI
+│           │       └── main.swift
+│           └── Tests
+│               └── AIStudioCoreTests
+│                   ├── CommonSplitPlannerTests.swift
+│                   ├── ProjectJSONTests.swift
+│                   ├── SRTCodecTests.swift
+│                   ├── SubtitleQualityScorerTests.swift
+│                   ├── TimelineColumnsTests.swift
+│                   └── WaveformPeaksTests.swift
 ├── experiments
 │   └── whisperkit_persistent_worker
 │       ├── Package.resolved
@@ -328,6 +363,24 @@ ai_subtitle_studio/
 │       └── Sources
 │           └── WhisperKitPersistentWorker
 │               └── main.swift
+├── packaging
+│   └── macos
+│       ├── AI Subtitle Studio.entitlements
+│       ├── Build Beta DMG.command
+│       ├── Info.plist.template
+│       ├── Install or Update AI Subtitle Studio.command
+│       ├── README.md
+│       ├── build_app_bundle.sh
+│       ├── build_app_store_pkg.sh
+│       ├── build_beta_dmg.sh
+│       ├── create_dmg.sh
+│       ├── install_or_update_app.sh
+│       ├── notarize_app_bundle.sh
+│       ├── notarize_dmg.sh
+│       ├── sign_app_bundle.sh
+│       ├── upload_app_store_build.sh
+│       ├── validate_app_bundle.sh
+│       └── validate_dmg.sh
 ├── tests
 │   ├── conftest.py
 │   ├── test_accuracy_policy.py
@@ -374,6 +427,7 @@ ai_subtitle_studio/
 │   ├── test_ipad_exchange.py
 │   ├── test_live_microphone_session.py
 │   ├── test_live_stt_cleanup.py
+│   ├── test_macos_bundle_runtime_paths.py
 │   ├── test_llm_candidate_policy.py
 │   ├── test_llm_correction_guard.py
 │   ├── test_lora_gap_autosettings.py
@@ -391,6 +445,8 @@ ai_subtitle_studio/
 │   ├── test_multiclip_panel.py
 │   ├── test_native_cut_boundary.py
 │   ├── test_native_ffmpeg_manager.py
+│   ├── test_native_macos_memory.py
+│   ├── test_native_policy_engine.py
 │   ├── test_native_text_similarity.py
 │   ├── test_npu_acceleration.py
 │   ├── test_ollama_provider.py
@@ -403,6 +459,7 @@ ai_subtitle_studio/
 │   ├── test_preset_auto_classifier.py
 │   ├── test_project_context.py
 │   ├── test_project_segment_reload.py
+│   ├── test_qt_runtime_font.py
 │   ├── test_quality_candidate_ranker.py
 │   ├── test_queue_clip_completion_order.py
 │   ├── test_recovery_state.py
@@ -476,7 +533,6 @@ ai_subtitle_studio/
 │   ├── test_video_preview_proxy.py
 │   ├── test_whisper_coreml.py
 │   ├── test_whisper_model_catalog.py
-│   ├── test_windows_platform_compat.py
 │   └── test_word_resegmenter.py
 ├── ui
 │   ├── dialogs
@@ -628,46 +684,19 @@ ai_subtitle_studio/
 ├── AGENTS.md
 ├── check_list.md
 ├── File_structure.txt
-├── main.bat
 ├── main.py
 ├── README.md
-├── RELEASE_v02.02.00.md
-├── RELEASE_v02.03.00.md
-├── RELEASE_v02.04.00.md
-├── RELEASE_v02.06.00.md
-├── RELEASE_v02.07.00.md
-├── RELEASE_v03.00.00.md
-├── RELEASE_v03.03.00.md
-├── RELEASE_v03.04.00.md
-├── RELEASE_v03.05.00.md
-├── RELEASE_v03.06.00.md
-├── RELEASE_v03.07.00.md
-├── RELEASE_v03.08.00.md
-├── RELEASE_v03.09.00.md
-├── RELEASE_v03.10.00.md
-├── RELEASE_v03.11.00.md
-├── RELEASE_v03.12.00.md
-├── RELEASE_v03.13.00.md
-├── RELEASE_v03.14.00.md
-├── RELEASE_v03.15.00.md
-├── RELEASE_v03.16.00.md
-├── RELEASE_v03.17.00.md
-├── RELEASE_v03.18.00.md
-├── RELEASE_v03.19.00.md
-├── RELEASE_v03.20.00.md
-├── RELEASE_v03.21.00.md
-├── RELEASE_v03.22.00.md
-├── RELEASE_v03.23.00.md
-├── RELEASE_v03.23.01.md
-├── RELEASE_v03.24.00.md
-├── RELEASE_v03.24.01.md
 ├── RELEASE_v03.24.02.md
 ├── RELEASE_v03.24.03.md
 ├── RELEASE_v03.25.00.md
 ├── RELEASE_v03.25.01.md
+├── RELEASE_v04.00.00.md
 ├── requirements-mac.txt
 ├── tools
 │   ├── apply_runtime_optimization_profile.py
+│   ├── benchmark_apple_silicon_scheduler.py
 │   ├── benchmark_dense_flow_cut_boundary.py
+│   ├── benchmark_macos_native_pipeline.py
+│   ├── benchmark_native_policy_engine.py
+│   ├── benchmark_stt_native_backends.py
 │   └── build_native_extensions.py
-└── requirements-windows.txt

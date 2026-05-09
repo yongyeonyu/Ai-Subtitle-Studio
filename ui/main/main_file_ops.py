@@ -15,6 +15,7 @@ from core.path_manager import (
     get_last_folder, set_last_folder,
     ensure_nas_mounted, get_recent_folders, add_recent_folder,
 )
+from core.runtime import config
 from core.settings import load_settings, save_settings
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
 from ui.dialogs.message_box import ask_yes_no, show_message
@@ -332,6 +333,7 @@ class FileOpsMixin:
                 )
 
     def _quick_exit(self):
+        self._quick_exit_requested = True
         busy_before_exit = False
         try:
             busy_before_exit = bool(self._has_active_runtime_work_for_exit())
@@ -348,12 +350,13 @@ class FileOpsMixin:
                 self.backend.stop()
 
         cleanup_runtime_async = getattr(self, "_start_runtime_cleanup_for_app_exit_async", None)
+        exit_cleanup_timeout = 0.08 if getattr(config, "IS_MAC", False) else 0.15
         if callable(cleanup_runtime_async):
-            cleanup_runtime_async(timeout_sec=0.15)
+            cleanup_runtime_async(timeout_sec=exit_cleanup_timeout)
         else:
             cleanup_runtime_sync = getattr(self, "_cleanup_runtime_for_app_exit", None)
             if callable(cleanup_runtime_sync):
-                cleanup_runtime_sync(timeout_sec=0.15)
+                cleanup_runtime_sync(timeout_sec=exit_cleanup_timeout)
 
         if not busy_before_exit:
             self._backup_before_quick_exit(include_project_backup=False)
@@ -366,7 +369,7 @@ class FileOpsMixin:
                 pass
         schedule_exit = getattr(self, "_schedule_forced_process_exit", None)
         if callable(schedule_exit):
-            schedule_exit(delay_ms=60)
+            schedule_exit(delay_ms=30 if getattr(config, "IS_MAC", False) else 60)
         QApplication.quit()
 
     def _restore_current_work_mode(self):

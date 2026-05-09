@@ -32,6 +32,13 @@ def select_cut_boundary_backend(path: str, settings: dict[str, Any] | None = Non
         scan_path = cut_boundary_scan_source(original, data)
         return CutBoundaryBackendChoice("opencv_proxy_fast", scan_path, "fast_policy", bool(scan_path != original))
     scan_path = cut_boundary_scan_source(original, data)
+    try:
+        from core.native_cut_boundary import native_cut_boundary_enabled
+
+        if native_cut_boundary_enabled():
+            return CutBoundaryBackendChoice("native_opencv", scan_path, "auto_native_cpp_available", bool(scan_path != original))
+    except Exception:
+        pass
     return CutBoundaryBackendChoice("opencv_strict", scan_path, "auto_strict", bool(scan_path != original))
 
 
@@ -40,6 +47,14 @@ def apply_cut_boundary_backend_settings(settings: dict[str, Any] | None) -> dict
     policy = normalize_backend_policy(data.get("cut_boundary_backend_policy", "auto"))
     prof = profile_backend("cut_boundary", data) or profile_backend("cut", data)
     backend = prof if policy == "auto" and prof else policy
+    if backend == "auto":
+        try:
+            from core.native_cut_boundary import native_cut_boundary_enabled
+
+            if native_cut_boundary_enabled():
+                backend = "native_opencv"
+        except Exception:
+            pass
     if backend in {"fast", "native", "opencv_proxy_fast", "native_opencv"}:
         data.setdefault("scan_cut_cv2_threads_per_worker", 1)
         data.setdefault("scan_cut_pioneer_sequential_decode_enabled", True)

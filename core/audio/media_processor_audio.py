@@ -36,7 +36,7 @@ from core.runtime.multi_process import runtime_parallel_worker_plan
 from core.subtitle_quality.vad_alignment_checker import apply_review_vad_settings, review_vad_config
 
 _VAD_CACHE_VERSION = 3
-_AUDIO_CACHE_VERSION = 6
+_AUDIO_CACHE_VERSION = 7
 
 
 def _runtime_get_logger():
@@ -499,7 +499,10 @@ class VideoProcessorAudioHelpersMixin:
         return 48000
 
     def _audio_ai_variant(self, audio_ai: str, settings: dict | None = None) -> str:
-        if str(audio_ai or "none").strip().lower() == "clearvoice":
+        audio_kind = str(audio_ai or "none").strip().lower()
+        if audio_kind != "none" and self._macos_native_fast_audio_flatten_enabled(settings):
+            return "macos_native_fast_audio_flatten_v1"
+        if audio_kind == "clearvoice":
             if self._clearvoice_native_ffmpeg_enabled(settings):
                 return "native_ffmpeg_v1"
             return self._clearvoice_model_name(settings)
@@ -515,6 +518,23 @@ class VideoProcessorAudioHelpersMixin:
             if text in {"0", "false", "no", "off", "disabled", "disable", "끄기", "끔"}:
                 return False
         return VideoProcessorAudioHelpersMixin._settings_bool(settings, "clearvoice_native_ffmpeg_enabled", True)
+
+    @staticmethod
+    def _macos_native_fast_audio_flatten_enabled(settings: dict | None = None) -> bool:
+        env_value = os.environ.get("AI_SUBTITLE_STUDIO_FAST_AUDIO_FLATTEN")
+        if env_value is not None:
+            text = str(env_value or "").strip().lower()
+            if text in {"1", "true", "yes", "on", "enabled", "enable"}:
+                return True
+            if text in {"0", "false", "no", "off", "disabled", "disable", "끄기", "끔"}:
+                return False
+        if not getattr(config, "IS_MAC", False):
+            return False
+        return VideoProcessorAudioHelpersMixin._settings_bool(
+            settings,
+            "macos_native_fast_audio_flatten_enabled",
+            True,
+        )
 
     def _clearvoice_engine_handle(self, model_name: str):
         cache = getattr(self, "_clearvoice_engine_cache", None)
@@ -561,11 +581,8 @@ class VideoProcessorAudioHelpersMixin:
             "    del engine\n"
             "    gc.collect()\n"
             "    try:\n"
-            "        import torch\n"
-            "        if hasattr(torch, 'mps') and hasattr(torch.mps, 'empty_cache'):\n"
-            "            torch.mps.empty_cache()\n"
-            "        if hasattr(torch, 'cuda') and torch.cuda.is_available():\n"
-            "            torch.cuda.empty_cache()\n"
+            "        from core.audio.torch_acceleration import trim_torch_memory_caches\n"
+            "        trim_torch_memory_caches(include_sync=True)\n"
             "    except Exception:\n"
             "        pass\n"
         )
@@ -680,7 +697,30 @@ class VideoProcessorAudioHelpersMixin:
         filters.append(f"loudnorm=I={self._fmt_filter_num(target)}")
         return ",".join(filters) if filters else "anull"
 
+    def _build_macos_native_fast_audio_flatten_filter(self, settings: dict) -> str:
+        hp = int(self._float_setting(settings, "macos_native_fast_audio_flatten_hp", 150, 0, 500))
+        lp = int(self._float_setting(settings, "macos_native_fast_audio_flatten_lp", 4600, 1000, 8000))
+        comp_th = self._float_setting(settings, "macos_native_fast_audio_flatten_comp_th", -24, -60, 0)
+        volume = self._float_setting(settings, "macos_native_fast_audio_flatten_volume", 3.2, 0.5, 8.0)
+        limiter = self._float_setting(settings, "macos_native_fast_audio_flatten_limiter", 0.93, 0.1, 1.0)
+
+        filters = []
+        if hp > 0:
+            filters.append(f"highpass=f={hp}")
+        if lp > 0:
+            filters.append(f"lowpass=f={lp}")
+        filters.append(
+            f"acompressor=threshold={self._fmt_filter_num(comp_th)}dB:"
+            "ratio=3:attack=5:release=55"
+        )
+        filters.append(f"volume={self._fmt_filter_num(volume)}")
+        filters.append(f"alimiter=limit={self._fmt_filter_num(limiter)}")
+        return ",".join(filters)
+
     def _build_audio_cleanup_filter(self, audio_ai: str, settings: dict) -> str:
+        if self._macos_native_fast_audio_flatten_enabled(settings) and str(audio_ai or "none").lower() != "none":
+            return self._build_macos_native_fast_audio_flatten_filter(settings)
+
         df_vol = self._float_setting(settings, "df_vol", 3.5, 0.5, 8.0)
 
         if audio_ai == "deepfilter":
@@ -798,6 +838,8 @@ class VideoProcessorAudioHelpersMixin:
 
     def _build_fused_ffmpeg_filter(self, audio_ai: str, settings: dict, *, use_basic: bool = True) -> str:
         audio_kind = str(audio_ai or "none").strip().lower()
+        if self._macos_native_fast_audio_flatten_enabled(settings):
+            return self._build_macos_native_fast_audio_flatten_filter(settings)
         active_filter = self._build_audio_cleanup_filter(audio_kind, settings)
         if not use_basic:
             return active_filter
@@ -833,6 +875,8 @@ class VideoProcessorAudioHelpersMixin:
 
     @classmethod
     def _can_fuse_ffmpeg_preprocess(cls, audio_ai: str, settings: dict | None = None) -> bool:
+        if cls._macos_native_fast_audio_flatten_enabled(settings):
+            return True
         audio_kind = str(audio_ai or "none").lower()
         if audio_kind in {"none", "deepfilter"}:
             return True
@@ -1353,6 +1397,7 @@ class VideoProcessorAudioHelpersMixin:
             "audio_preprocess_audio_overlap_workers": str(settings.get("audio_preprocess_audio_overlap_workers", "auto") or "auto"),
             "clearvoice_parallel_chunks_enabled": self._settings_bool(settings, "clearvoice_parallel_chunks_enabled", False),
             "clearvoice_native_ffmpeg_enabled": self._clearvoice_native_ffmpeg_enabled(settings),
+            "macos_native_fast_audio_flatten_enabled": self._macos_native_fast_audio_flatten_enabled(settings),
         }
 
     def _direct_chunk_span(self, video_path: str, target_start_sec=0.0, target_end_sec=None) -> tuple[float, float]:

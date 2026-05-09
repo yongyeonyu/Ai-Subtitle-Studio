@@ -92,12 +92,9 @@ def _clear_runtime_memory_caches() -> None:
     except Exception:
         pass
     try:
-        import torch
+        from core.audio.torch_acceleration import trim_torch_memory_caches
 
-        if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
-            torch.mps.empty_cache()
-        if hasattr(torch, "cuda") and torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        trim_torch_memory_caches(include_sync=True)
     except Exception:
         pass
     try:

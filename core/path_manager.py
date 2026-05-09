@@ -9,14 +9,15 @@ import subprocess
 import time
 from core.json_file import read_json_file, write_json_file_atomic
 from core.runtime.logger import get_logger
+from core.runtime import config
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SETTINGS_FILE = os.path.join(ROOT_DIR, "dataset", "folder_settings.json")
+ROOT_DIR = getattr(config, "BASE_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SETTINGS_FILE = os.path.join(getattr(config, "DATASET_DIR", os.path.join(ROOT_DIR, "dataset")), "folder_settings.json")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 DEFAULT_SETTINGS = {
     "watch_folders": [],
-    "fcpxml_output": os.path.join(ROOT_DIR, "output", "FCPXML"), 
+    "fcpxml_output": os.path.join(getattr(config, "OUTPUT_DIR", os.path.join(ROOT_DIR, "output")), "FCPXML"),
     "last_folder": "",
     "nas_urls": {},
     "nas_path": "",

@@ -22,6 +22,10 @@ def select_audio_extract_backend(
     data = dict(settings or {})
     policy = normalize_backend_policy(data.get("audio_extract_backend_policy", "auto"))
     prof = profile_backend("audio_extract", data)
+    audio_kind = str(audio_ai or "").strip().lower()
+    native_ffmpeg_safe = audio_kind in {"none", "deepfilter"} or (
+        audio_kind == "clearvoice" and bool(data.get("clearvoice_native_ffmpeg_enabled", True))
+    )
     try:
         direct_min_sec = float(data.get("direct_ffmpeg_chunk_min_sec", 60.0) or 60.0)
     except (TypeError, ValueError):
@@ -32,14 +36,16 @@ def select_audio_extract_backend(
     if policy == "legacy":
         return AudioExtractBackendChoice("ffmpeg_cli", "legacy_policy")
     if policy == "native":
+        if native_ffmpeg_safe:
+            return AudioExtractBackendChoice("ffmpeg_direct_chunks", "native_policy_ffmpeg_direct", direct_chunk_min_sec=direct_min_sec)
         return AudioExtractBackendChoice("native_libav_optional", "native_policy")
     if policy == "fast":
         # Direct chunk extraction is quality-safe only for filters that already
         # support one-pass FFmpeg preprocessing.
-        if str(audio_ai or "").strip().lower() in {"none", "deepfilter"}:
+        if native_ffmpeg_safe:
             return AudioExtractBackendChoice("ffmpeg_direct_chunks", "fast_policy", direct_chunk_min_sec=direct_min_sec)
         return AudioExtractBackendChoice("ffmpeg_cli", "fast_policy_filter_preserved")
-    if span_sec >= direct_min_sec and str(audio_ai or "").strip().lower() in {"none", "deepfilter"}:
+    if span_sec >= direct_min_sec and native_ffmpeg_safe:
         return AudioExtractBackendChoice("ffmpeg_direct_chunks", "auto_long_media", direct_chunk_min_sec=direct_min_sec)
     return AudioExtractBackendChoice("ffmpeg_cli", "auto")
 

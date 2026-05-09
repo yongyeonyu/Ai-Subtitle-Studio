@@ -123,6 +123,24 @@ def _downsample_waveform_samples(samples: np.ndarray, *, duration: float | None 
     return downs[:total_px].astype(np.float32), float(dur)
 
 
+def _downsample_waveform_raw(raw: bytes | bytearray | memoryview | None, *, duration: float | None = None) -> tuple[np.ndarray, float]:
+    try:
+        from core.native_swift_waveform import downsample_f32le_via_swift
+
+        native = downsample_f32le_via_swift(
+            raw,
+            sample_rate=WAVEFORM_SAMPLE_RATE,
+            points_per_second=WAVEFORM_POINTS_PER_SECOND,
+            duration=duration,
+        )
+        if native is not None:
+            return native
+    except Exception:
+        pass
+    samples = _decode_f32le_samples(raw)
+    return _downsample_waveform_samples(samples, duration=duration)
+
+
 def _ffmpeg_waveform_cmd(path: str) -> list[str]:
     return [
         "ffmpeg",
@@ -208,8 +226,7 @@ class WaveformWorker(QThread):
             raw = self._run_cmd(_ffmpeg_waveform_cmd(self._path), timeout=timeout)
             if self.isInterruptionRequested():
                 return
-            samples = _decode_f32le_samples(raw)
-            ready, dur = _downsample_waveform_samples(samples)
+            ready, dur = _downsample_waveform_raw(raw)
             if ready.size <= 0:
                 return
 
@@ -291,8 +308,7 @@ class MultiClipWaveformWorker(QThread):
                 raw = self._run_cmd(_ffmpeg_waveform_cmd(src), timeout=max(60, int(clip_dur * 0.5) + 30))
                 if self.isInterruptionRequested():
                     return
-                samples = _decode_f32le_samples(raw)
-                downs, _dur = _downsample_waveform_samples(samples, duration=clip_dur)
+                downs, _dur = _downsample_waveform_raw(raw, duration=clip_dur)
                 if downs.size <= 0:
                     continue
 

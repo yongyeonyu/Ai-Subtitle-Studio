@@ -16,6 +16,11 @@ from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_pain
 
 GlobalCanvasBase = accelerated_widget_base("timeline")
 
+MINIMAP_WAVEFORM_BG = "#2B2500"
+MINIMAP_WAVEFORM_MIDLINE = QColor(130, 124, 67, 145)
+MINIMAP_WAVEFORM_SPEECH = QColor(80, 245, 238, 205)
+MINIMAP_WAVEFORM_SILENCE = QColor(45, 130, 130, 120)
+
 
 class GlobalCanvas(GlobalCanvasBase):
     seek_frac = pyqtSignal(float)
@@ -105,9 +110,17 @@ class GlobalCanvas(GlobalCanvasBase):
         px = self._sec_to_px(sec)
         if self.playhead_sec == sec or self._last_playhead_px == px:
             return
+        old_px = self._last_playhead_px
         self.playhead_sec = sec
         self._last_playhead_px = px
-        self.update()
+        margin = 4
+        if old_px is None:
+            dirty = QRect(max(0, px - margin), 0, margin * 2 + 1, self.height())
+        else:
+            left = max(0, min(old_px, px) - margin)
+            right = min(max(1, self.width()), max(old_px, px) + margin + 1)
+            dirty = QRect(left, 0, max(1, right - left), self.height())
+        self.update(dirty)
 
     def update_segments(self, segs, total_dur, *, signature=None, rows=None):
         if rows is None:
@@ -181,6 +194,20 @@ class GlobalCanvas(GlobalCanvasBase):
         if self._waveform_columns and len(self._waveform_columns) == width:
             return self._waveform_columns
         wf = self._waveform
+        try:
+            from core.native_swift_timeline import build_waveform_columns_via_swift
+
+            native_columns = build_waveform_columns_via_swift(
+                wf,
+                width=width,
+                total_duration=total,
+                vad_segments=list(self.vad_segments or []),
+            )
+            if native_columns is not None and len(native_columns) == width:
+                self._waveform_columns = native_columns
+                return native_columns
+        except Exception:
+            pass
         wf_len = len(wf)
         speech_ranges: list[tuple[int, int]] = []
         if self.vad_segments:
@@ -211,7 +238,7 @@ class GlobalCanvas(GlobalCanvasBase):
         if bool(getattr(self, "_shutdown_in_progress", False)):
             return QPixmap()
         pixmap = QPixmap(max(1, self.width()), max(1, self.height()))
-        pixmap.fill(QColor("#0B1115"))
+        pixmap.fill(QColor(MINIMAP_WAVEFORM_BG))
         p = QPainter(pixmap)
         if not p.isActive():
             return pixmap
@@ -242,8 +269,10 @@ class GlobalCanvas(GlobalCanvasBase):
 
         columns = self._build_waveform_columns(w, total)
         if columns:
-            pen_speech = QPen(QColor(130, 205, 235, 150), 1)
-            pen_silence = QPen(QColor(85, 92, 98, 105), 1)
+            p.setPen(QPen(MINIMAP_WAVEFORM_MIDLINE, 1))
+            p.drawLine(0, mid_y, w, mid_y)
+            pen_speech = QPen(MINIMAP_WAVEFORM_SPEECH, 1)
+            pen_silence = QPen(MINIMAP_WAVEFORM_SILENCE, 1)
             speech_lines: list[QLine] = []
             silence_lines: list[QLine] = []
             for x, (amp_h, in_speech) in enumerate(columns):

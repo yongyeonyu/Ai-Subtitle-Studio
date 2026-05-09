@@ -185,3 +185,69 @@ def interval_overlaps(
         return [float(item) for item in list(values or [])]
     except Exception:
         return None
+
+
+def word_split_groups(
+    starts: Any,
+    ends: Any,
+    char_counts: Any,
+    natural_breaks: Any,
+    vad_indexes: Any,
+    *,
+    max_chars: int,
+    max_duration: float,
+    max_cps: float,
+    min_duration: float,
+    gap_break_sec: float,
+    word_gap_break_sec: float,
+) -> list[tuple[int, int]] | None:
+    if not native_cut_boundary_enabled():
+        return None
+    try:
+        values = _native.word_split_groups(
+            starts,
+            ends,
+            char_counts,
+            natural_breaks,
+            vad_indexes,
+            int(max_chars),
+            float(max_duration),
+            float(max_cps),
+            float(min_duration),
+            float(gap_break_sec),
+            float(word_gap_break_sec),
+        )
+        groups: list[tuple[int, int]] = []
+        for item in list(values or []):
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                return None
+            groups.append((int(item[0]), int(item[1])))
+        return groups
+    except Exception:
+        return None
+
+
+def llm_macro_group_ranges(
+    cut_before: Any,
+    needs_llm: Any,
+    *,
+    min_rows: int,
+    max_rows: int,
+) -> list[tuple[int, int, bool, int]] | None:
+    if not native_cut_boundary_enabled():
+        return None
+    try:
+        values = _native.llm_macro_group_ranges(
+            cut_before,
+            needs_llm,
+            int(min_rows),
+            int(max_rows),
+        )
+        groups: list[tuple[int, int, bool, int]] = []
+        for item in list(values or []):
+            if not isinstance(item, (list, tuple)) or len(item) < 4:
+                return None
+            groups.append((int(item[0]), int(item[1]), bool(item[2]), int(item[3])))
+        return groups
+    except Exception:
+        return None

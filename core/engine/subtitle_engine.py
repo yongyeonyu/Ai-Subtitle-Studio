@@ -85,6 +85,7 @@ from core.subtitle_quality.quality_pipeline import run_subtitle_quality_pipeline
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.runtime.logger import get_logger
+from core.runtime.multi_process import runtime_parallel_worker_plan
 from core.utils import load_subtitle_rules
 
 _S = _get_user_settings() # 설정 데이터 스냅샷 로드
@@ -1110,6 +1111,10 @@ def _stt_selection_metadata(seg: dict) -> dict:
         "_stt_lattice_policy",
         "_deep_candidate_selector_policy",
         "_llm_gate_policy",
+        "_uncertainty_policy",
+        "_uncertainty_bucket",
+        "_uncertainty_risk_score",
+        "_codex_native_fast_path_policy",
     )
     return {key: seg[key] for key in keys if key in seg}
 
@@ -1274,48 +1279,50 @@ def _process_one(args: tuple) -> list[dict]:
         return [_attach_lora_and_deep_timing({**seg, "text": _clean(text, corrections)}, segment_lora, segment_settings)]
     # [수정] LLM 호출 분기 부분
     should_call_llm = False
-    candidate_options = build_llm_candidate_options(text, threshold, rules, segment_settings)
+    candidate_options: list[dict] | None = None
     if "사용 안함" in str(model or ""):
         chunks = None
     else:
         should_call_llm, segment_lora = _apply_llm_confidence_gate(seg, text, threshold, duration, segment_settings, segment_lora)
         if not should_call_llm:
             chunks = None
-        elif "Gemini" in model:
-            chunks = ask_gemini_to_split(
-                text,
-                threshold,
-                rules,
-                model,
-                user_prompt,
-                api_key,
-                conservative=conservative,
-                settings=segment_settings,
-                candidate_options=candidate_options,
-            )
-        elif is_openai_model(model):
-            chunks = ask_openai_to_split(
-                text,
-                threshold,
-                rules,
-                model,
-                user_prompt,
-                api_key,
-                conservative=conservative,
-                settings=segment_settings,
-                candidate_options=candidate_options,
-            )
         else:
-            chunks = ask_exaone_to_split(
-                text,
-                threshold,
-                rules,
-                model,
-                user_prompt,
-                conservative=conservative,
-                settings=segment_settings,
-                candidate_options=candidate_options,
-            )
+            candidate_options = build_llm_candidate_options(text, threshold, rules, segment_settings)
+            if "Gemini" in model:
+                chunks = ask_gemini_to_split(
+                    text,
+                    threshold,
+                    rules,
+                    model,
+                    user_prompt,
+                    api_key,
+                    conservative=conservative,
+                    settings=segment_settings,
+                    candidate_options=candidate_options,
+                )
+            elif is_openai_model(model):
+                chunks = ask_openai_to_split(
+                    text,
+                    threshold,
+                    rules,
+                    model,
+                    user_prompt,
+                    api_key,
+                    conservative=conservative,
+                    settings=segment_settings,
+                    candidate_options=candidate_options,
+                )
+            else:
+                chunks = ask_exaone_to_split(
+                    text,
+                    threshold,
+                    rules,
+                    model,
+                    user_prompt,
+                    conservative=conservative,
+                    settings=segment_settings,
+                    candidate_options=candidate_options,
+                )
         if should_call_llm:
             chunks, segment_lora = _verify_llm_chunks(
                 text,
@@ -1490,44 +1497,45 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
             word.setdefault("speaker", spk)
 
     should_call_llm, segment_lora = _apply_llm_confidence_gate(seg, cleaned_text, threshold, duration, segment_settings, segment_lora)
-    candidate_options = build_llm_candidate_options(cleaned_text, threshold, rules, segment_settings)
     if not should_call_llm:
         chunks = None
-    elif "Gemini" in model:
-        chunks = ask_gemini_to_split(
-            cleaned_text,
-            threshold,
-            rules,
-            model,
-            user_prompt,
-            api_key,
-            conservative=conservative,
-            settings=segment_settings,
-            candidate_options=candidate_options,
-        )
-    elif is_openai_model(model):
-        chunks = ask_openai_to_split(
-            cleaned_text,
-            threshold,
-            rules,
-            model,
-            user_prompt,
-            api_key,
-            conservative=conservative,
-            settings=segment_settings,
-            candidate_options=candidate_options,
-        )
     else:
-        chunks = ask_exaone_to_split(
-            cleaned_text,
-            threshold,
-            rules,
-            model,
-            user_prompt,
-            conservative=conservative,
-            settings=segment_settings,
-            candidate_options=candidate_options,
-        )
+        candidate_options = build_llm_candidate_options(cleaned_text, threshold, rules, segment_settings)
+        if "Gemini" in model:
+            chunks = ask_gemini_to_split(
+                cleaned_text,
+                threshold,
+                rules,
+                model,
+                user_prompt,
+                api_key,
+                conservative=conservative,
+                settings=segment_settings,
+                candidate_options=candidate_options,
+            )
+        elif is_openai_model(model):
+            chunks = ask_openai_to_split(
+                cleaned_text,
+                threshold,
+                rules,
+                model,
+                user_prompt,
+                api_key,
+                conservative=conservative,
+                settings=segment_settings,
+                candidate_options=candidate_options,
+            )
+        else:
+            chunks = ask_exaone_to_split(
+                cleaned_text,
+                threshold,
+                rules,
+                model,
+                user_prompt,
+                conservative=conservative,
+                settings=segment_settings,
+                candidate_options=candidate_options,
+            )
     if should_call_llm:
         chunks, segment_lora = _verify_llm_chunks(
             cleaned_text,
@@ -1792,6 +1800,71 @@ def _segment_needs_llm_review(seg: dict, rules: dict, threshold: int, settings: 
     return bool(should_call), out
 
 
+def _codex_native_fast_path_enabled(model: str, settings: dict | None, segment_count: int) -> bool:
+    if not is_codex_model(model):
+        return False
+    if not _setting_bool(settings, "codex_subtitle_native_fast_path_enabled", True):
+        return False
+    min_segments = max(1, _setting_int(settings or {}, "codex_subtitle_native_fast_path_min_segments", 80))
+    return int(segment_count or 0) >= min_segments
+
+
+def _codex_native_fast_path_needs_llm(seg: dict, normal_gate_needs: bool, settings: dict | None) -> bool:
+    """Keep Codex CLI for true review targets while bulk rows use local rules."""
+    if bool(seg.get("stt_ensemble_needs_llm_review")):
+        return True
+    bucket = str(seg.get("_uncertainty_bucket") or "").strip().lower()
+    if bucket == "precision":
+        return True
+    quality = dict(seg.get("quality") or {})
+    quality_label = str(quality.get("confidence_label") or seg.get("subtitle_confidence_label") or "").strip().lower()
+    if quality_label == "red":
+        return True
+    if not normal_gate_needs:
+        return False
+    text = str(seg.get("text", "") or "")
+    compact_len = len(text.replace(" ", "").replace("\n", ""))
+    row_settings = dict(seg.get("_lora_segment_settings") or {})
+    threshold = max(1, _setting_int({**dict(settings or {}), **row_settings}, "split_length_threshold", 10))
+    long_ratio = max(1.0, _setting_float(settings or {}, "codex_subtitle_native_fast_path_long_text_llm_ratio", 2.8))
+    return compact_len >= int(threshold * long_ratio)
+
+
+def _attach_codex_native_fast_path_policy(seg: dict, *, llm_called: bool, reason: str) -> dict:
+    out = dict(seg)
+    out["_codex_native_fast_path_policy"] = {
+        "schema": "ai_subtitle_studio.codex_native_fast_path.v1",
+        "task": "subtitle_codex_native_fast_path",
+        "llm_called": bool(llm_called),
+        "reason": str(reason or ""),
+    }
+    return out
+
+
+def _subtitle_native_prepass_worker_plan(settings: dict, workload: int) -> tuple[int, dict]:
+    requested = (
+        _setting_int(settings, "subtitle_native_prepass_workers", 0)
+        or _setting_int(settings, "io_workers", 0)
+        or _setting_int(settings, "llm_threads_resource_max", 0)
+        or 1
+    )
+    maximum = (
+        _setting_int(settings, "subtitle_native_prepass_workers_resource_max", 0)
+        or _setting_int(settings, "io_workers", 0)
+        or None
+    )
+    return runtime_parallel_worker_plan(
+        settings=settings,
+        task="subtitle_prepass",
+        workload=max(1, int(workload or 1)),
+        requested=requested,
+        minimum=1,
+        maximum=maximum,
+        reserve_task="subtitle_prepass",
+        accelerators=["cpu"],
+    )
+
+
 def _preprocess_lora_deep_without_llm(
     segments: list[dict],
     *,
@@ -1801,20 +1874,105 @@ def _preprocess_lora_deep_without_llm(
     user_prompt: str,
     settings: dict,
 ) -> list[dict]:
-    preprocessed: list[dict] = []
-    for seg in list(segments or []):
-        if not isinstance(seg, dict):
-            continue
+    input_rows = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+    if not input_rows:
+        return []
+
+    def run_one(index: int, seg: dict) -> list[dict]:
         try:
-            preprocessed.extend(
-                _process_one((dict(seg), rules, threshold, corrections, "사용 안함 (LoRA/Deep fast prepass)", user_prompt, "", False, settings))
+            return list(
+                _process_one(
+                    (
+                        dict(seg),
+                        rules,
+                        threshold,
+                        corrections,
+                        "사용 안함 (LoRA/Deep fast prepass)",
+                        user_prompt,
+                        "",
+                        False,
+                        settings,
+                    )
+                )
             )
         except Exception as exc:
             get_logger().log(f"[LoRA/Deep-전처리] 실패: {exc}")
             text = _clean(str(seg.get("text", "") or ""), corrections)
             if text:
-                preprocessed.append({**dict(seg), "text": text})
+                return [{**dict(seg), "text": text}]
+            return []
+
+    workers, scheduler = _subtitle_native_prepass_worker_plan(settings, len(input_rows))
+    if workers <= 1 or len(input_rows) <= 1:
+        preprocessed: list[dict] = []
+        for index, seg in enumerate(input_rows):
+            preprocessed.extend(run_one(index, seg))
+        return preprocessed
+
+    get_logger().log(
+        f"[LoRA/Deep-전처리] Apple M 병렬 전처리: {workers}개 워커 "
+        f"({len(input_rows)}개, {scheduler.get('reason', 'runtime')})"
+    )
+    result_map: dict[int, list[dict]] = {}
+    with ThreadPoolExecutor(max_workers=max(1, min(workers, len(input_rows))), thread_name_prefix="subtitle-prepass") as ex:
+        futures = {ex.submit(run_one, index, seg): index for index, seg in enumerate(input_rows)}
+        for fut in as_completed(futures):
+            index = futures[fut]
+            try:
+                result_map[index] = fut.result()
+            except Exception as exc:
+                get_logger().log(f"[LoRA/Deep-전처리] 병렬 작업 실패: {exc}")
+                result_map[index] = []
+    preprocessed: list[dict] = []
+    for index in range(len(input_rows)):
+        preprocessed.extend(result_map.get(index, []))
     return preprocessed
+
+
+def _build_llm_review_gates(
+    rows: list[dict],
+    *,
+    rules: dict,
+    threshold: int,
+    settings: dict,
+    codex_native_fast_path: bool,
+) -> tuple[list[bool], list[dict]]:
+    input_rows = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+    if not input_rows:
+        return [], []
+
+    def run_one(index: int, row: dict) -> tuple[bool, dict]:
+        needs, gated = _segment_needs_llm_review(row, rules, threshold, settings)
+        if codex_native_fast_path:
+            fast_needs = _codex_native_fast_path_needs_llm(gated, needs, settings)
+            reason = "precision_or_conflict" if fast_needs else "bulk_native_rules"
+            gated = _attach_codex_native_fast_path_policy(gated, llm_called=fast_needs, reason=reason)
+            needs = fast_needs
+        return bool(needs), gated
+
+    workers, scheduler = _subtitle_native_prepass_worker_plan(settings, len(input_rows))
+    if workers <= 1 or len(input_rows) <= 1:
+        pairs = [run_one(index, row) for index, row in enumerate(input_rows)]
+    else:
+        get_logger().log(
+            f"[LLM-게이트] Apple M 병렬 선별: {workers}개 워커 "
+            f"({len(input_rows)}개, {scheduler.get('reason', 'runtime')})"
+        )
+        result_map: dict[int, tuple[bool, dict]] = {}
+        with ThreadPoolExecutor(max_workers=max(1, min(workers, len(input_rows))), thread_name_prefix="subtitle-gate") as ex:
+            futures = {ex.submit(run_one, index, row): index for index, row in enumerate(input_rows)}
+            for fut in as_completed(futures):
+                index = futures[fut]
+                try:
+                    result_map[index] = fut.result()
+                except Exception as exc:
+                    get_logger().log(f"[LLM-게이트] 병렬 선별 실패: {exc}")
+                    result_map[index] = (True, input_rows[index])
+        pairs = [result_map.get(index, (True, input_rows[index])) for index in range(len(input_rows))]
+
+    needs_llm = [item[0] for item in pairs]
+    gated_rows = [item[1] for item in pairs]
+    return needs_llm, gated_rows
 
 
 def _llm_macro_callbacks() -> dict:
@@ -1886,6 +2044,7 @@ def optimize_segments(
 
     else:
         max_workers, worker_mode = _effective_llm_workers(model, _EXAONE_WORKERS, loaded_settings, len(args))
+        codex_native_fast_path = _codex_native_fast_path_enabled(model, loaded_settings, len(args))
         if worker_mode == "api":
             get_logger().log(f"🤖 {short_m} API 안전 모드: {max_workers}개 워커 순차 처리 중...")
         elif worker_mode == "local_auto":
@@ -1905,7 +2064,14 @@ def optimize_segments(
             else:
                 get_logger().log(f"{short_m} {max_workers}개 워커 병렬 처리 ({len(segments)}개)...")
 
-        if _llm_macro_chunk_enabled(loaded_settings, model, len(segments)):
+        use_macro_chunks = _llm_macro_chunk_enabled(loaded_settings, model, len(segments)) or codex_native_fast_path
+        if codex_native_fast_path:
+            get_logger().log(
+                "[Codex-네이티브가드] 대량 자막은 로컬 규칙/LoRA/Deep으로 먼저 확정하고 "
+                "정밀 검수 대상만 Codex CLI로 보냅니다."
+            )
+
+        if use_macro_chunks:
             preprocessed = _preprocess_lora_deep_without_llm(
                 segments,
                 rules=rules,
@@ -1914,12 +2080,20 @@ def optimize_segments(
                 user_prompt=user_prompt,
                 settings=loaded_settings,
             )
-            needs_llm: list[bool] = []
-            gated_rows: list[dict] = []
-            for row in preprocessed:
-                needs, gated = _segment_needs_llm_review(row, rules, threshold, loaded_settings)
-                needs_llm.append(bool(needs))
-                gated_rows.append(gated)
+            needs_llm, gated_rows = _build_llm_review_gates(
+                preprocessed,
+                rules=rules,
+                threshold=threshold,
+                settings=loaded_settings,
+                codex_native_fast_path=codex_native_fast_path,
+            )
+            if codex_native_fast_path:
+                codex_rows = sum(1 for item in needs_llm if item)
+                native_rows = max(0, len(gated_rows) - codex_rows)
+                get_logger().log(
+                    f"[Codex-네이티브가드] Codex 호출 후보 {codex_rows}개, "
+                    f"네이티브 확정 {native_rows}개"
+                )
             groups = _build_llm_macro_groups(gated_rows, needs_llm, loaded_settings)
             optimized = _process_llm_macro_groups(
                 groups,

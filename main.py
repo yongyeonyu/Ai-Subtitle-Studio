@@ -114,6 +114,11 @@ warnings.filterwarnings(
 )
 
 from core.runtime import config
+
+if getattr(config, "MACBOOK_ONLY_APP", False) and not getattr(config, "IS_MAC", False):
+    sys.stderr.write("AI Subtitle Studio macOS native branch requires macOS.\n")
+    sys.exit(78)
+
 from core.performance import configure_native_runtime, configure_qt_gpu_rendering_before_app, configure_qt_runtime
 from core.platform_compat import (
     cleanup_app_child_processes,
@@ -130,7 +135,7 @@ except Exception:
 
 configure_qt_gpu_rendering_before_app()
 
-from PyQt6.QtCore import qInstallMessageHandler
+from PyQt6.QtCore import QTimer, qInstallMessageHandler
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from core.runtime.logger import get_logger
 from ui.button_feedback import install_button_click_feedback
@@ -205,13 +210,32 @@ def _start_ollama_runtime_for_app_launch() -> None:
         _run()
 
 
+def _cleanup_stale_preview_proxy_processes_for_app_launch_async() -> None:
+    def _run():
+        try:
+            cleaned = cleanup_stale_preview_proxy_processes(timeout_sec=0.05 if getattr(config, "IS_MAC", False) else 0.2)
+            if cleaned:
+                get_logger().log(f"🧹 이전 미리보기 프록시 ffmpeg {cleaned}개 정리 완료")
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(
+            target=_run,
+            daemon=True,
+            name="app-start-preview-proxy-cleanup",
+        ).start()
+    except Exception:
+        _run()
+
+
 def main():
     global _PREV_QT_MESSAGE_HANDLER
     app = QApplication(sys.argv)
     install_qmessagebox_hooks()
     _PREV_QT_MESSAGE_HANDLER = qInstallMessageHandler(_qt_message_handler)
     configure_qt_runtime()
-    cleaned_preview_jobs = cleanup_stale_preview_proxy_processes(timeout_sec=0.2)
+    _cleanup_stale_preview_proxy_processes_for_app_launch_async()
     try:
         profile = _NATIVE_RUNTIME_META.get("profile", "balanced")
         threads = _NATIVE_RUNTIME_META.get("native_threads", "-")
@@ -251,15 +275,13 @@ def main():
     """)
     install_button_click_feedback(app)
 
-    _start_ollama_runtime_for_app_launch()
-
     win = MainWindow()
     def _shutdown_runtime_in_order():
         global _QT_APP_SHUTTING_DOWN
         _QT_APP_SHUTTING_DOWN = True
         cleanup_runtime = getattr(win, "_start_runtime_cleanup_for_app_exit_async", None)
         if callable(cleanup_runtime):
-            cleanup_runtime(timeout_sec=0.15)
+            cleanup_runtime(timeout_sec=0.08 if getattr(config, "IS_MAC", False) else 0.15)
             return
         pause_runtime = getattr(win, "_pause_all_runtime_work_for_exit", None)
         if callable(pause_runtime):
@@ -287,9 +309,6 @@ def main():
             _fallback_cleanup()
 
     app.aboutToQuit.connect(_shutdown_runtime_in_order)
-    if cleaned_preview_jobs:
-        get_logger().log(f"🧹 이전 미리보기 프록시 ffmpeg {cleaned_preview_jobs}개 정리 완료")
-
     # ✅ 1순위 수정: 백엔드 먼저 연결
     from core.pipeline.backend_core import CoreBackend
     backend = CoreBackend(win)
@@ -303,6 +322,7 @@ def main():
     win.show_home()
 
     win.showMaximized()
+    QTimer.singleShot(700 if getattr(config, "IS_MAC", False) else 0, _start_ollama_runtime_for_app_launch)
 
     sys.exit(app.exec())
 

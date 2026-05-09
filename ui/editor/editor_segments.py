@@ -976,6 +976,24 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         """Keep the video pane visibly following the newest live STT draft."""
         if not preview:
             return
+        settings = getattr(self, "settings", {}) or {}
+        follow_enabled = settings.get("editor_live_stt_preview_follow_video_enabled")
+        if follow_enabled is None:
+            follow_enabled = True
+        if not bool(follow_enabled):
+            return
+        now = time.monotonic()
+        try:
+            interval = max(
+                0.5,
+                float(settings.get("editor_live_stt_preview_follow_interval_sec", 2.0) or 2.0),
+            )
+        except Exception:
+            interval = 2.0
+        last_at = float(getattr(self, "_last_live_stt_video_follow_at", 0.0) or 0.0)
+        if now - last_at < interval:
+            return
+        self._last_live_stt_video_follow_at = now
         try:
             latest = max(
                 preview,
@@ -988,7 +1006,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         except Exception:
             return
 
-        self._sync_processing_segment_view(global_sec, show_thumbnail=True)
+        self._sync_processing_segment_view(global_sec, show_thumbnail=False)
 
     def _sync_processing_segment_view(self, global_sec: float, *, show_thumbnail: bool = True) -> None:
         try:

@@ -8,7 +8,6 @@ import gc
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
@@ -282,12 +281,14 @@ class MainRuntimeCleanupMixin:
             from core.media_info import clear_media_probe_cache_memory
             from core.personalization.lora_vector_retriever import clear_lora_retrieval_caches
             from core.project.project_io import clear_project_file_cache
+            from core.runtime.memory_manager import trim_runtime_memory_caches
             from ui.style import clear_line_icon_cache
 
             clear_media_probe_cache_memory()
             clear_project_file_cache()
             clear_lora_retrieval_caches()
             clear_line_icon_cache()
+            trim_runtime_memory_caches(stage="critical" if include_gpu else "warning", include_gpu=include_gpu)
         except Exception:
             pass
         for owner in (self, getattr(self, "backend", None), getattr(self, "backend_fast", None)):
@@ -320,23 +321,8 @@ class MainRuntimeCleanupMixin:
             pass
         if not include_gpu:
             return
-        try:
-            import torch
-
-            if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
-                torch.mps.empty_cache()
-            if hasattr(torch, "cuda") and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
-        try:
-            import mlx.core as mx
-
-            clear_cache = getattr(mx, "clear_cache", None)
-            if callable(clear_cache):
-                clear_cache()
-        except Exception:
-            pass
+        # GPU and MLX cache trimming is already routed through
+        # core.runtime.memory_manager.trim_runtime_memory_caches above.
 
     def _shutdown_runtime_memory_manager(self) -> None:
         try:
@@ -687,27 +673,14 @@ class MainRuntimeCleanupMixin:
             for backend_name in ("backend", "backend_fast")
             if getattr(self, backend_name, None) is not None
         ]
-        if backends:
+        for backend in backends:
             try:
-                with ThreadPoolExecutor(max_workers=min(len(backends), 2), thread_name_prefix="exit-backend-pause") as pool:
-                    futures = [
-                        pool.submit(self._pause_backend_runtime_for_exit, backend, context=context)
-                        for backend in backends
-                    ]
-                    for future in futures:
-                        try:
-                            stopped_any = bool(future.result()) or stopped_any
-                        except Exception:
-                            pass
+                stopped_any = self._pause_backend_runtime_for_exit(
+                    backend,
+                    context=context,
+                ) or stopped_any
             except Exception:
-                for backend in backends:
-                    try:
-                        stopped_any = self._pause_backend_runtime_for_exit(
-                            backend,
-                            context=context,
-                        ) or stopped_any
-                    except Exception:
-                        pass
+                pass
         try:
             from core.audio.live_stt import stop_live_stt_worker
 

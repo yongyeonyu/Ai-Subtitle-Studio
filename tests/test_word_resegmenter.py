@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 from core.engine import subtitle_engine
+from core.native_cut_boundary import word_split_groups
 from core.engine.word_resegmenter import resegment_by_word_timestamps
 from core.subtitle_quality.timestamp_regrouper import (
     regroup_by_word_timestamps,
@@ -13,6 +14,25 @@ from core.subtitle_quality.timestamp_regrouper import (
 
 
 class WordResegmenterTests(unittest.TestCase):
+    def test_native_cpp_word_split_groups_match_gap_rules(self):
+        groups = word_split_groups(
+            [0.0, 2.7],
+            [0.8, 3.5],
+            [5, 5],
+            [0, 0],
+            [-1, -1],
+            max_chars=30,
+            max_duration=8.0,
+            max_cps=20.0,
+            min_duration=0.1,
+            gap_break_sec=1.5,
+            word_gap_break_sec=0.65,
+        )
+        if groups is None:
+            self.skipTest("native C++ extension unavailable")
+
+        self.assertEqual(groups, [(0, 1), (1, 2)])
+
     def test_splits_on_silence_gap(self):
         result = resegment_by_word_timestamps(
             [
@@ -57,6 +77,69 @@ class WordResegmenterTests(unittest.TestCase):
         )
 
         self.assertEqual([item["text"] for item in result], ["처음입니다,", "다음 문장입니다"])
+
+    def test_lora_threshold_prevents_stt1_over_resegmentation(self):
+        words = [
+            {"word": token, "start": round(index * 0.35, 3), "end": round(index * 0.35 + 0.25, 3)}
+            for index, token in enumerate(["하나", "둘셋", "넷다", "다섯", "여섯", "일곱", "여덟", "아홉"])
+        ]
+
+        result = resegment_by_word_timestamps(
+            [
+                {
+                    "start": 0.0,
+                    "end": 3.0,
+                    "text": "하나 둘셋 넷다 다섯 여섯 일곱 여덟 아홉",
+                    "words": words,
+                    "_lora_segment_settings": {"split_length_threshold": 24},
+                    "_lora_gap_settings": {"split_length_threshold": 24, "sub_gap_break_sec": 1.5},
+                    "_lora_generation_profile": {"top_score": 92.0},
+                    "_lora_segment_score": 92.0,
+                }
+            ],
+            max_chars=6,
+            max_duration=8.0,
+            max_cps=20,
+            min_duration=0.1,
+            gap_break_sec=1.5,
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["text"], "하나 둘셋 넷다 다섯 여섯 일곱 여덟 아홉")
+        self.assertEqual(result[0]["_lora_segment_settings"], {"split_length_threshold": 24})
+        self.assertEqual(result[0]["_lora_gap_settings"]["split_length_threshold"], 24)
+        self.assertEqual(result[0]["_lora_generation_profile"], {"top_score": 92.0})
+
+    def test_timestamp_regrouper_preserves_lora_metadata(self):
+        words = [
+            {"word": token, "start": round(index * 0.32, 3), "end": round(index * 0.32 + 0.22, 3)}
+            for index, token in enumerate(["하나", "둘셋", "넷다", "다섯", "여섯", "일곱", "여덟"])
+        ]
+
+        result = regroup_by_word_timestamps(
+            [
+                {
+                    "start": 0.0,
+                    "end": 2.5,
+                    "text": "하나 둘셋 넷다 다섯 여섯 일곱 여덟",
+                    "words": words,
+                    "_lora_segment_settings": {"split_length_threshold": 24},
+                    "_lora_gap_settings": {"split_length_threshold": 24, "sub_max_duration": 8.0},
+                    "_lora_generation_profile": {"top_score": 91.0},
+                    "_lora_segment_score": 91.0,
+                }
+            ],
+            max_chars=6,
+            max_duration=4.0,
+            max_cps=20,
+            min_duration=0.1,
+            gap_break_sec=1.5,
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["_lora_segment_settings"], {"split_length_threshold": 24})
+        self.assertEqual(result[0]["_lora_gap_settings"]["split_length_threshold"], 24)
+        self.assertEqual(result[0]["_lora_segment_score"], 91.0)
 
     def test_splits_when_duration_is_too_long(self):
         result = resegment_by_word_timestamps(

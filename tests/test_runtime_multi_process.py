@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from core.runtime.multi_process import (
     RuntimeResourceCoordinator,
+    apply_apple_m_subtitle_pipeline_plan,
     manual_lora_runtime_settings,
     runtime_acceleration_snapshot,
     runtime_llm_worker_plan,
@@ -22,6 +23,79 @@ class _Logger:
 
 
 class RuntimeMultiProcessTests(unittest.TestCase):
+    def test_apply_apple_m_subtitle_pipeline_plan_sets_shared_worker_budget(self):
+        snapshot = {
+            "logical_cores": 10,
+            "physical_cores": 10,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "memory_bytes": 16 * 1024 ** 3,
+        }
+        with patch("core.runtime.multi_process.config.IS_APPLE_SILICON", True), \
+             patch("core.runtime.multi_process.hardware_profile", return_value=snapshot):
+            settings = apply_apple_m_subtitle_pipeline_plan({
+                "runtime_scheduler_ramp_up_enabled": True,
+                "stt_ensemble_parallel_enabled": True,
+            })
+
+        self.assertEqual(settings["runtime_performance_profile"], "max")
+        self.assertEqual(settings["runtime_native_threads"], 10)
+        self.assertFalse(settings["runtime_scheduler_ramp_up_enabled"])
+        self.assertEqual(settings["io_workers"], 8)
+        self.assertEqual(settings["audio_chunk_route_max_workers"], 8)
+        self.assertEqual(settings["ffmpeg_filter_threads"], 6)
+        self.assertEqual(settings["scan_cut_pioneer_cpu_max_workers"], 8)
+        self.assertEqual(settings["scan_cut_follower_cpu_max_workers"], 6)
+        self.assertEqual(settings["scan_cut_follower_stream_start_percent"], 25)
+        self.assertEqual(settings["scan_cut_follower_stream_batch_size"], 12)
+        self.assertTrue(settings["scan_cut_follower_mps_enabled"])
+        self.assertFalse(settings["stt_ensemble_parallel_enabled"])
+        self.assertEqual(settings["stt_word_timestamps_mode"], "selective")
+        self.assertEqual(settings["llm_threads_resource_max"], 5)
+        self.assertEqual(settings["local_ollama_llm_max_workers"], 2)
+        self.assertEqual(settings["_apple_m_pipeline_parallel_plan"]["audio_workers"], 8)
+
+    def test_apply_apple_m_subtitle_pipeline_plan_uses_m5_chip_aware_budget(self):
+        snapshot = {
+            "system": "Darwin",
+            "machine": "arm64",
+            "brand_string": "Apple M5",
+            "chip_name": "Apple M5",
+            "chip_generation": 5,
+            "chip_tier": "base",
+            "logical_cores": 10,
+            "physical_cores": 10,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "gpu_cores": 10,
+            "neural_engine_cores": 16,
+            "memory_bytes": 16 * 1024 ** 3,
+        }
+        with patch("core.runtime.multi_process.config.IS_APPLE_SILICON", True), \
+             patch("core.runtime.multi_process.hardware_profile", return_value=snapshot):
+            settings = apply_apple_m_subtitle_pipeline_plan({})
+
+        plan = settings["_apple_m_pipeline_parallel_plan"]
+        self.assertTrue(plan["chip_aware"])
+        self.assertEqual(plan["chip_profile"]["chip_name"], "Apple M5")
+        self.assertEqual(settings["runtime_native_threads"], 10)
+        self.assertEqual(settings["io_workers"], 10)
+        self.assertEqual(settings["ffmpeg_filter_threads"], 8)
+        self.assertEqual(settings["scan_cut_pioneer_cpu_max_workers"], 10)
+        self.assertEqual(settings["scan_cut_follower_cpu_max_workers"], 7)
+        self.assertEqual(settings["scan_cut_follower_stream_start_percent"], 20)
+        self.assertEqual(settings["scan_cut_follower_stream_batch_size"], 14)
+        self.assertEqual(settings["stt_primary_gpu_slots"], 1)
+        self.assertEqual(settings["stt_npu_coreml_slots"], 1)
+        self.assertEqual(settings["stt_accelerator_distribution"], "gpu+npu+cpu")
+
+    def test_apply_apple_m_subtitle_pipeline_plan_can_be_disabled(self):
+        original = {"apple_m_pipeline_parallel_enabled": False, "io_workers": 2}
+        with patch("core.runtime.multi_process.config.IS_APPLE_SILICON", True):
+            settings = apply_apple_m_subtitle_pipeline_plan(original)
+
+        self.assertEqual(settings, original)
+
     def test_manual_lora_runtime_settings_keeps_one_core_for_stop(self):
         snapshot = {
             "logical_cores": 10,

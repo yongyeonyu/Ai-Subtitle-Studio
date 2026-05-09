@@ -87,6 +87,12 @@ class EditorRoughcutDraftMixin:
         except Exception:
             return False
 
+    def _roughcut_draft_post_generation_autorun_enabled(self) -> bool:
+        value = self._draft_settings_snapshot().get("roughcut_run_after_subtitle_generation", False)
+        if isinstance(value, str):
+            return value.strip().lower() not in {"0", "false", "off", "no", "사용 안함", "끔"}
+        return bool(value)
+
     def _roughcut_playback_active(self) -> bool:
         try:
             player = getattr(getattr(self, "video_player", None), "media_player", None)
@@ -108,6 +114,9 @@ class EditorRoughcutDraftMixin:
             pass
 
     def _schedule_post_generation_roughcut_draft(self, force: bool = False):
+        if force and not self._roughcut_draft_post_generation_autorun_enabled():
+            self._set_roughcut_draft_status("disabled")
+            return
         if not self._roughcut_draft_runtime_enabled():
             self._set_roughcut_draft_status("disabled")
             return

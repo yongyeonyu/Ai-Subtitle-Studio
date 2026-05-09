@@ -85,6 +85,14 @@ def find_roughcut_result(widget: Any):
         result = getattr(roughcut, "_result", None)
         if result is not None:
             return result
+        for attr in ("_roughcut_result", "roughcut_result", "_roughcut_draft_result"):
+            result = getattr(owner, attr, None)
+            if result is not None:
+                return result
+        for attr in ("_cut_boundary_topicless_middle_segments", "_middle_segments", "middle_segments"):
+            rows = getattr(owner, attr, None)
+            if rows:
+                return {"segments": list(rows)}
         owner = owner.parent() if hasattr(owner, "parent") else None
 
     try:
@@ -99,6 +107,14 @@ def find_roughcut_result(widget: Any):
         result = getattr(window, "_editor_roughcut_result", None)
         if result is not None:
             return result
+        for attr in ("_roughcut_result", "roughcut_result", "_roughcut_draft_result"):
+            result = getattr(window, attr, None)
+            if result is not None:
+                return result
+        for attr in ("_cut_boundary_topicless_middle_segments", "_middle_segments", "middle_segments"):
+            rows = getattr(window, attr, None)
+            if rows:
+                return {"segments": list(rows)}
     return None
 
 
@@ -132,22 +148,28 @@ def roughcut_markers(result: Any) -> list[dict]:
 
 def roughcut_major_markers(result: Any) -> list[dict]:
     markers: list[dict] = []
-    segments = getattr(result, "segments", None) or []
+    if isinstance(result, dict):
+        segments = result.get("segments", []) or []
+    else:
+        segments = getattr(result, "segments", None) or []
+
+    def _field(segment: Any, name: str, default: Any = "") -> Any:
+        if isinstance(segment, dict):
+            return segment.get(name, default)
+        return getattr(segment, name, default)
+
     for index, segment in enumerate(segments):
-        start = _as_float(getattr(segment, "start", None))
-        end = _as_float(getattr(segment, "end", None))
+        start = _as_float(_field(segment, "start", None))
+        end = _as_float(_field(segment, "end", None))
         if start is None or end is None or end <= start:
             continue
-        major_id = str(getattr(segment, "major_id", "") or getattr(segment, "segment_id", "") or chr(65 + (index % 26)))
-        title = str(getattr(segment, "title", "") or "")
-        status = str(getattr(segment, "status", "") or "provisional")
-        tags = tuple(getattr(segment, "tags", ()) or ())
-        is_topicless_placeholder = (
-            title == "주제없음"
-            or "주제없음" in tags
-            or (status == "provisional" and "컷경계" in tags)
-        )
-        color = "#8E8E93" if is_topicless_placeholder else roughcut_major_color(major_id, index)
+        major_id = str(_field(segment, "major_id", "") or _field(segment, "segment_id", "") or chr(65 + (index % 26)))
+        title = str(_field(segment, "title", "") or "")
+        status = str(_field(segment, "status", "") or "provisional")
+        # Middle-category blocks are a visual grouping aid only. Keep the
+        # underlying roughcut/cut-boundary data intact, but render the lane in a
+        # neutral white style so it does not compete with subtitle quality colors.
+        color = "#FFFFFF"
         markers.append(
             {
                 "start": start,

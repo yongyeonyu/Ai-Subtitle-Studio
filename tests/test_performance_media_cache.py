@@ -11,6 +11,7 @@ from core import media_info
 from core.performance import (
     adaptive_llm_worker_count,
     adaptive_worker_count,
+    apple_silicon_runtime_profile,
     balanced_task_slices,
     bounded_worker_count,
     distributed_worker_ceiling,
@@ -314,6 +315,35 @@ class PerformanceMediaCacheTest(unittest.TestCase):
         self.assertEqual(env["AI_SUBTITLE_NATIVE_TEXT_SIMILARITY"], "1")
         self.assertEqual(env["AI_SUBTITLE_NATIVE_CUT_BOUNDARY"], "1")
         self.assertEqual(env["AI_SUBTITLE_OLLAMA_PY_CLIENT"], "1")
+
+    def test_apple_silicon_runtime_profile_detects_m5_allocation(self):
+        snapshot = {
+            "system": "Darwin",
+            "machine": "arm64",
+            "chip_name": "Apple M5",
+            "chip_generation": 5,
+            "chip_tier": "base",
+            "logical_cores": 10,
+            "physical_cores": 10,
+            "performance_cores": 4,
+            "efficiency_cores": 6,
+            "gpu_cores": 10,
+            "neural_engine_cores": 16,
+            "memory_bytes": 16 * 1024 ** 3,
+            "accelerators": {"metal_gpu": True, "neural_engine_path": True},
+        }
+
+        profile = apple_silicon_runtime_profile(
+            {"runtime_performance_profile": "max", "runtime_hardware_acceleration_enabled": True},
+            profile=snapshot,
+        )
+
+        self.assertEqual(profile["chip_name"], "Apple M5")
+        self.assertEqual(profile["cpu"]["wide_workers"], 10)
+        self.assertEqual(profile["cpu"]["balanced_workers"], 7)
+        self.assertEqual(profile["gpu"]["stt_slots"], 1)
+        self.assertEqual(profile["npu"]["coreml_slots"], 1)
+        self.assertEqual(profile["pipeline"]["cut_follower_stream_start_percent"], 20)
 
     def test_distributed_worker_ceiling_keeps_one_core_for_ui_in_max_profile(self):
         snapshot = {

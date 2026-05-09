@@ -140,7 +140,7 @@ class ProjectContextTests(unittest.TestCase):
             path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
             clear_project_file_cache(str(path))
 
-            with patch("core.project.project_io.json.load", wraps=json.load) as load_mock:
+            with patch("core.project.project_io._read_project_payload_from_disk", wraps=project_io._read_project_payload_from_disk) as load_mock:
                 first = read_project_file(str(path))
                 second = read_project_file(str(path))
 
@@ -155,7 +155,7 @@ class ProjectContextTests(unittest.TestCase):
             payload = {"project_name": "cached-save", "workspace": {"last_playhead": 12.0}}
 
             write_project_file(str(path), payload)
-            with patch("core.project.project_io.json.load", wraps=json.load) as load_mock:
+            with patch("core.project.project_io._read_project_payload_from_disk", wraps=project_io._read_project_payload_from_disk) as load_mock:
                 loaded = read_project_file(str(path))
 
             self.assertIs(loaded, payload)
@@ -168,7 +168,7 @@ class ProjectContextTests(unittest.TestCase):
             path.write_text(json.dumps({"project_name": "first"}), encoding="utf-8")
 
             with patch("core.project.project_io._project_file_signature", side_effect=[(1, 10), (2, 11)]), \
-                 patch("core.project.project_io.json.load", wraps=json.load) as load_mock:
+                 patch("core.project.project_io._read_project_payload_from_disk", wraps=project_io._read_project_payload_from_disk) as load_mock:
                 first = read_project_file(str(path))
                 path.write_text(json.dumps({"project_name": "second", "changed": True}), encoding="utf-8")
                 second = read_project_file(str(path))

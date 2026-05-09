@@ -88,7 +88,7 @@ class AudioPresetTests(unittest.TestCase):
         self.assertEqual(len(enhanced), 3)
         self.assertGreaterEqual(sum(1 for label, _cmd in calls if label == "병렬 오디오 청크 추출"), 3)
         self.assertTrue(any(label == "청크 음성 향상 병합" for label, _cmd in calls))
-        self.assertTrue(any(label == "ffmpeg 음량 평탄화" for label, _cmd in calls))
+        self.assertTrue(any("음량 평탄화" in label for label, _cmd in calls))
 
     def test_external_audio_overlap_preprocess_skips_partial_span(self):
         processor = VideoProcessor()
@@ -96,6 +96,7 @@ class AudioPresetTests(unittest.TestCase):
             "audio_preprocess_audio_overlap_enabled": True,
             "audio_preprocess_audio_overlap_min_sec": 0,
             "clearvoice_native_ffmpeg_enabled": False,
+            "macos_native_fast_audio_flatten_enabled": False,
         }
 
         self.assertTrue(
@@ -131,7 +132,10 @@ class AudioPresetTests(unittest.TestCase):
 
     def test_clearvoice_native_ffmpeg_can_be_disabled_for_legacy_model_path(self):
         processor = VideoProcessor()
-        settings = {"clearvoice_native_ffmpeg_enabled": False}
+        settings = {
+            "clearvoice_native_ffmpeg_enabled": False,
+            "macos_native_fast_audio_flatten_enabled": False,
+        }
 
         self.assertFalse(processor._clearvoice_native_ffmpeg_enabled(settings))
         self.assertFalse(processor._can_fuse_ffmpeg_preprocess("clearvoice", settings))
@@ -297,10 +301,13 @@ class AudioPresetTests(unittest.TestCase):
         self.assertIn("afftdn=nf=-26", preprocess)
         self.assertIn("dynaudnorm=f=150:g=9:m=16:p=0.97", preprocess)
         self.assertIn("equalizer=f=3200", preprocess)
-        self.assertIn("highpass=f=170", cleanup)
-        self.assertIn("lowpass=f=5200", cleanup)
-        self.assertIn("afftdn=nf=-26", cleanup)
-        self.assertIn("volume=4.8", cleanup)
+        self.assertIn("highpass=f=150", cleanup)
+        self.assertIn("lowpass=f=4600", cleanup)
+        self.assertIn("acompressor=threshold=-24dB:ratio=3:attack=5:release=55", cleanup)
+        self.assertIn("volume=3.2", cleanup)
+        self.assertIn("alimiter=limit=0.93", cleanup)
+        self.assertNotIn("dynaudnorm", cleanup)
+        self.assertNotIn("loudnorm", cleanup)
 
     def test_deepfilter_fused_ffmpeg_filter_removes_duplicate_heavy_filters(self):
         processor = VideoProcessor()
@@ -308,10 +315,23 @@ class AudioPresetTests(unittest.TestCase):
 
         fused = processor._build_fused_ffmpeg_filter("deepfilter", settings, use_basic=True)
 
-        self.assertEqual(fused.count("afftdn="), 1)
-        self.assertEqual(fused.count("loudnorm="), 1)
+        self.assertEqual(fused.count("afftdn="), 0)
+        self.assertEqual(fused.count("loudnorm="), 0)
         self.assertEqual(fused.count("highpass="), 1)
         self.assertEqual(fused.count("lowpass="), 1)
+        self.assertNotIn("dynaudnorm", fused)
+        self.assertNotIn("speechnorm", fused)
+        self.assertIn("volume=3.2", fused)
+        self.assertIn("alimiter=limit=0.93", fused)
+
+    def test_legacy_fused_ffmpeg_filter_can_be_restored_for_comparison(self):
+        processor = VideoProcessor()
+        settings = apply_audio_preset({"macos_native_fast_audio_flatten_enabled": False}, "야외")
+
+        fused = processor._build_fused_ffmpeg_filter("deepfilter", settings, use_basic=True)
+
+        self.assertEqual(fused.count("afftdn="), 1)
+        self.assertEqual(fused.count("loudnorm="), 1)
         self.assertIn("dynaudnorm", fused)
         self.assertIn("speechnorm", fused)
         self.assertIn("volume=4.8", fused)
@@ -333,10 +353,12 @@ class AudioPresetTests(unittest.TestCase):
 
         cleanup = processor._build_audio_cleanup_filter("rnnoise", settings)
 
-        self.assertIn("highpass=f=170", cleanup)
-        self.assertIn("lowpass=f=5200", cleanup)
-        self.assertIn("speechnorm", cleanup)
-        self.assertIn("volume=4.8", cleanup)
+        self.assertIn("highpass=f=150", cleanup)
+        self.assertIn("lowpass=f=4600", cleanup)
+        self.assertIn("acompressor=threshold=-24dB", cleanup)
+        self.assertIn("volume=3.2", cleanup)
+        self.assertIn("alimiter=limit=0.93", cleanup)
+        self.assertNotIn("speechnorm", cleanup)
         self.assertNotIn("demucs", cleanup.lower())
 
     def test_auto_audio_quality_risk_prefers_clearvoice_over_rnnoise_even_for_long_media(self):
@@ -377,18 +399,20 @@ class AudioPresetTests(unittest.TestCase):
         settings = apply_audio_preset({}, "야외")
 
         resemble_cleanup = processor._build_audio_cleanup_filter("resemble_enhance", settings)
-        self.assertIn("highpass=f=170", resemble_cleanup)
-        self.assertIn("lowpass=f=5200", resemble_cleanup)
-        self.assertIn("speechnorm", resemble_cleanup)
-        self.assertIn("loudnorm", resemble_cleanup)
+        self.assertIn("highpass=f=150", resemble_cleanup)
+        self.assertIn("lowpass=f=4600", resemble_cleanup)
+        self.assertIn("acompressor=threshold=-24dB", resemble_cleanup)
+        self.assertNotIn("speechnorm", resemble_cleanup)
+        self.assertNotIn("loudnorm", resemble_cleanup)
         self.assertNotIn("afftdn", resemble_cleanup)
 
         clearvoice_cleanup = processor._build_audio_cleanup_filter("clearvoice", settings)
-        self.assertIn("highpass=f=170", clearvoice_cleanup)
-        self.assertIn("lowpass=f=5200", clearvoice_cleanup)
-        self.assertIn("speechnorm", clearvoice_cleanup)
-        self.assertIn("loudnorm", clearvoice_cleanup)
-        self.assertIn("afftdn", clearvoice_cleanup)
+        self.assertIn("highpass=f=150", clearvoice_cleanup)
+        self.assertIn("lowpass=f=4600", clearvoice_cleanup)
+        self.assertIn("volume=3.2", clearvoice_cleanup)
+        self.assertNotIn("speechnorm", clearvoice_cleanup)
+        self.assertNotIn("loudnorm", clearvoice_cleanup)
+        self.assertNotIn("afftdn", clearvoice_cleanup)
 
     def test_rnnoise_fallback_cleanup_label_uses_ffmpeg(self):
         self.assertEqual(VideoProcessor._audio_cleanup_label("rnnoise", False), "FFMPEG")
@@ -472,8 +496,9 @@ class AudioPresetTests(unittest.TestCase):
         self.assertEqual([r["audio_tune_settings"]["selected_audio_ai"] for r in routes], ["deepfilter", "clearvoice"])
         self.assertEqual([r["audio_tune_settings"]["selected_vad"] for r in routes], ["silero", "ten_vad"])
         filters = [cmd[cmd.index("-af") + 1] for cmd in processor.commands if "-af" in cmd]
-        self.assertTrue(any("highpass=f=120" in value for value in filters))
-        self.assertTrue(any("highpass=f=180" in value for value in filters))
+        self.assertTrue(filters)
+        self.assertTrue(all("highpass=f=150" in value for value in filters))
+        self.assertTrue(all("loudnorm" not in value for value in filters))
 
     def test_adaptive_chunk_audio_routing_caps_parallel_workers(self):
         class RoutingProcessor(VideoProcessor):

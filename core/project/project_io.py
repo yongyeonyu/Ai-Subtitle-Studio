@@ -113,6 +113,20 @@ def _project_payload_for_disk(project: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _read_project_payload_from_disk(key: str) -> dict[str, Any]:
+    data = None
+    try:
+        from core.native_swift_project import read_project_via_swift
+
+        data = read_project_via_swift(key)
+    except Exception:
+        data = None
+    if data is None:
+        with open(key, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    return data if isinstance(data, dict) else {}
+
+
 def read_project_file(filepath: str) -> dict[str, Any]:
     """Read a project JSON file with the app-wide encoding/settings."""
     key = _project_cache_key(filepath)
@@ -124,8 +138,7 @@ def read_project_file(filepath: str) -> dict[str, Any]:
             project = cached.get("project")
             return _attach_project_path(project, key) if isinstance(project, dict) else {}
 
-    with open(key, "r", encoding="utf-8") as handle:
-        data = json.load(handle)
+    data = _read_project_payload_from_disk(key)
     project = _attach_project_path(data if isinstance(data, dict) else {}, key)
     _cache_project_payload(key, signature, project)
     return project
@@ -137,5 +150,14 @@ def write_project_file(filepath: str, project: dict[str, Any]) -> None:
     folder = os.path.dirname(key)
     if folder:
         os.makedirs(folder, exist_ok=True)
-    write_json_file_atomic(key, _project_payload_for_disk(project), indent=2, backup=False)
+    payload = _project_payload_for_disk(project)
+    wrote_native = False
+    try:
+        from core.native_swift_project import write_project_via_swift
+
+        wrote_native = write_project_via_swift(key, payload)
+    except Exception:
+        wrote_native = False
+    if not wrote_native:
+        write_json_file_atomic(key, payload, indent=2, backup=False)
     prime_project_file_cache(key, project)

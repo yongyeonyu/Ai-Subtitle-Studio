@@ -1,6 +1,7 @@
 # Version: 03.24.03
 # Phase: PHASE2
 import unittest
+import sys
 from pathlib import Path
 
 from PyQt6.QtWidgets import QApplication, QGraphicsDropShadowEffect, QPushButton
@@ -29,7 +30,11 @@ class ButtonClickFeedbackTests(unittest.TestCase):
         feedback.flash_button(button, duration_ms=1000)
 
         self.assertTrue(button.property("_click_feedback_active"))
-        self.assertIsNotNone(button.graphicsEffect())
+        if sys.platform == "darwin":
+            self.assertIsNone(button.graphicsEffect())
+            self.assertTrue(getattr(button, "_mac_fast_button_prepared", False))
+        else:
+            self.assertIsNotNone(button.graphicsEffect())
 
         feedback._restore_button(button, button.graphicsEffect())
 
@@ -55,6 +60,25 @@ class ButtonClickFeedbackTests(unittest.TestCase):
 
         self.assertFalse(button.property("_click_feedback_active"))
         self.assertIs(button.graphicsEffect(), existing)
+        button.close()
+        button.deleteLater()
+
+    def test_flash_button_reuses_restore_timer_on_repeated_clicks(self):
+        button = QPushButton("반응")
+        button.show()
+        self.app.processEvents()
+        feedback = ButtonClickFeedbackFilter(native_fast=True)
+
+        feedback.flash_button(button, duration_ms=1000)
+        first_timer = getattr(button, "_click_feedback_restore_timer", None)
+        feedback.flash_button(button, duration_ms=1000)
+        second_timer = getattr(button, "_click_feedback_restore_timer", None)
+
+        self.assertIs(first_timer, second_timer)
+        self.assertTrue(second_timer.isActive())
+
+        feedback._restore_button(button)
+        self.assertFalse(second_timer.isActive())
         button.close()
         button.deleteLater()
 

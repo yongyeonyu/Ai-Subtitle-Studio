@@ -1,6 +1,8 @@
 # Version: 03.01.24
 # Phase: PHASE2
+import os
 import unittest
+from unittest import mock
 
 from core.subtitle_quality.confidence_checker import evaluate_subtitle_confidence
 from core.subtitle_quality.quality_pipeline import run_subtitle_quality_pipeline
@@ -128,6 +130,37 @@ class SubtitleQualityPipelineTests(unittest.TestCase):
         self.assertEqual(quality.get("confidence_label"), "yellow")
         self.assertIn("llm_uncertain_rewrite", tuple(quality.get("flags") or ()))
         self.assertGreaterEqual(result.summary.needs_review_count, 1)
+
+    def test_swift_quality_bridge_matches_pipeline_when_available(self):
+        from core.native_swift_subtitle import find_native_cli_path
+
+        if find_native_cli_path() is None:
+            self.skipTest("native Swift CLI is not built")
+
+        segments = [
+            self._good_segment(),
+            {
+                "start": 2.0,
+                "end": 2.8,
+                "text": "Thank you for watching",
+                "asr_metadata": {"no_speech_prob": 0.95, "avg_logprob": -1.5},
+            },
+        ]
+        settings = {"subtitle_quality_enabled": True, "sub_max_cps": 12}
+        env_off = {"AI_SUBTITLE_STUDIO_SWIFT_QUALITY": "0"}
+        env_on = {"AI_SUBTITLE_STUDIO_SWIFT_QUALITY": "1"}
+        with mock.patch.dict(os.environ, env_off, clear=False):
+            python_result = run_subtitle_quality_pipeline(segments, vad_segments=[{"start": 0.0, "end": 1.3}], settings=settings)
+        with mock.patch.dict(os.environ, env_on, clear=False):
+            swift_result = run_subtitle_quality_pipeline(segments, vad_segments=[{"start": 0.0, "end": 1.3}], settings=settings)
+
+        self.assertEqual(len(swift_result.segments), len(python_result.segments))
+        self.assertEqual(
+            [dict(item.get("quality") or {}).get("confidence_label") for item in swift_result.segments],
+            [dict(item.get("quality") or {}).get("confidence_label") for item in python_result.segments],
+        )
+        self.assertEqual(swift_result.summary.green_count, python_result.summary.green_count)
+        self.assertEqual(swift_result.summary.needs_review_count, python_result.summary.needs_review_count)
 
 
 if __name__ == "__main__":

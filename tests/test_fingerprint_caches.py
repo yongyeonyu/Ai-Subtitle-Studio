@@ -66,7 +66,11 @@ class FingerprintCacheTests(unittest.TestCase):
                 handle.write(b"voice media payload")
             fast = processor._audio_cache_config(
                 media,
-                {"clearvoice_model_name": "MossFormerGAN_SE_16K", "clearvoice_native_ffmpeg_enabled": False},
+                {
+                    "clearvoice_model_name": "MossFormerGAN_SE_16K",
+                    "clearvoice_native_ffmpeg_enabled": False,
+                    "macos_native_fast_audio_flatten_enabled": False,
+                },
                 audio_ai="clearvoice",
                 use_basic=False,
                 master_filter="anull",
@@ -74,13 +78,28 @@ class FingerprintCacheTests(unittest.TestCase):
             )
             legacy = processor._audio_cache_config(
                 media,
-                {"clearvoice_model_name": "MossFormer2_SE_48K", "clearvoice_native_ffmpeg_enabled": False},
+                {
+                    "clearvoice_model_name": "MossFormer2_SE_48K",
+                    "clearvoice_native_ffmpeg_enabled": False,
+                    "macos_native_fast_audio_flatten_enabled": False,
+                },
                 audio_ai="clearvoice",
                 use_basic=False,
                 master_filter="anull",
                 active_filter="anull",
             )
             native = processor._audio_cache_config(
+                media,
+                {
+                    "clearvoice_model_name": "MossFormer2_SE_48K",
+                    "macos_native_fast_audio_flatten_enabled": False,
+                },
+                audio_ai="clearvoice",
+                use_basic=False,
+                master_filter="anull",
+                active_filter="anull",
+            )
+            fast_native = processor._audio_cache_config(
                 media,
                 {"clearvoice_model_name": "MossFormer2_SE_48K"},
                 audio_ai="clearvoice",
@@ -95,6 +114,10 @@ class FingerprintCacheTests(unittest.TestCase):
         self.assertEqual(legacy["processing_sample_rate"], 48000)
         self.assertEqual(native["audio_ai_variant"], "native_ffmpeg_v1")
         self.assertTrue(native["clearvoice_native_ffmpeg_enabled"])
+        self.assertFalse(native["macos_native_fast_audio_flatten_enabled"])
+        self.assertEqual(fast_native["audio_ai_variant"], "macos_native_fast_audio_flatten_v1")
+        self.assertTrue(fast_native["clearvoice_native_ffmpeg_enabled"])
+        self.assertTrue(fast_native["macos_native_fast_audio_flatten_enabled"])
 
     def test_cut_boundary_cache_path_uses_media_fingerprint(self):
         owner = _CutCacheOwner()

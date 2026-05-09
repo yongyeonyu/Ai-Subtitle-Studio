@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import os
+import sys
 import tempfile
 import time
 import tracemalloc
@@ -146,6 +147,63 @@ def prune_runtime_disk_caches(
     }
 
 
+def trim_runtime_memory_caches(*, stage: str = "warning", include_gpu: bool = False) -> dict[str, Any]:
+    stage_text = str(stage or "warning").strip().lower()
+    actions: list[str] = []
+    for module_name, func_name in (
+        ("core.media_info", "clear_media_probe_cache_memory"),
+        ("core.project.project_io", "clear_project_file_cache"),
+        ("core.personalization.lora_vector_retriever", "clear_lora_retrieval_caches"),
+        ("core.native_macos_memory", "clear_native_memory_snapshot_cache"),
+        ("core.native_swift_policy", "trim_native_policy_worker_cache"),
+    ):
+        try:
+            module = __import__(module_name, fromlist=[func_name])
+            func = getattr(module, func_name, None)
+            if callable(func):
+                func()
+                actions.append(f"{module_name}.{func_name}")
+        except Exception:
+            continue
+    try:
+        gc.collect()
+        actions.append("gc.collect")
+    except Exception:
+        pass
+    if include_gpu:
+        torch_module = sys.modules.get("torch")
+        if torch_module is not None:
+            try:
+                from core.audio.torch_acceleration import allow_mps_empty_cache
+
+                mps = getattr(torch_module, "mps", None)
+                empty_cache = getattr(mps, "empty_cache", None)
+                if allow_mps_empty_cache() and callable(empty_cache):
+                    empty_cache()
+                    actions.append("torch.mps.empty_cache")
+            except Exception:
+                pass
+            try:
+                cuda = getattr(torch_module, "cuda", None)
+                if cuda is not None and callable(getattr(cuda, "is_available", None)) and cuda.is_available():
+                    empty_cache = getattr(cuda, "empty_cache", None)
+                    if callable(empty_cache):
+                        empty_cache()
+                        actions.append("torch.cuda.empty_cache")
+            except Exception:
+                pass
+        mlx_core = sys.modules.get("mlx.core")
+        if mlx_core is not None:
+            try:
+                clear_cache = getattr(mlx_core, "clear_cache", None)
+                if callable(clear_cache):
+                    clear_cache()
+                    actions.append("mlx.core.clear_cache")
+            except Exception:
+                pass
+    return {"stage": stage_text, "actions": actions}
+
+
 class RuntimeMemoryManager:
     def __init__(
         self,
@@ -192,8 +250,8 @@ class RuntimeMemoryManager:
             pass
 
     def collect_snapshot(self) -> dict[str, Any]:
-        resource = current_resource_snapshot()
-        rss_bytes = process_rss_bytes()
+        resource = current_resource_snapshot(self.settings)
+        rss_bytes = int(resource.get("process_rss_bytes", 0) or 0) or process_rss_bytes()
         memory_bytes = max(0, int(resource.get("memory_bytes", 0) or 0))
         rss_ratio = (float(rss_bytes) / float(memory_bytes)) if memory_bytes > 0 and rss_bytes > 0 else 0.0
         now = time.time()
@@ -238,7 +296,9 @@ class RuntimeMemoryManager:
         return snapshot
 
     def prune_disk_caches(self, *, stage: str = "warning") -> dict[str, Any]:
-        target_ratio = 0.85 if stage == "warning" else 0.65
+        target_ratio = 0.72 if stage == "warning" else 0.45
+        if not self.settings.get("macos_memory_cache_prune_enabled", True):
+            target_ratio = 0.85 if stage == "warning" else 0.65
         result = prune_runtime_disk_caches(
             paths=self.cache_paths,
             target_total_bytes=int(self.disk_cache_budget_bytes * target_ratio),
@@ -254,6 +314,11 @@ class RuntimeMemoryManager:
 
     def _pressure_stage(self, snapshot: dict[str, Any]) -> str:
         resource = dict(snapshot.get("resource") or {})
+        native_stage = str(resource.get("memory_pressure_stage", "") or "").strip().lower()
+        if native_stage == "critical":
+            return "critical"
+        if native_stage == "warning":
+            return "warning"
         available_ratio = float(resource.get("available_memory_ratio", 1.0) or 1.0)
         available_gb = float(resource.get("available_memory_bytes", 0) or 0) / float(1024 ** 3)
         rss_ratio = float(snapshot.get("rss_ratio", 0.0) or 0.0)
@@ -268,6 +333,8 @@ class RuntimeMemoryManager:
         cooldown = 12.0 if stage == "warning" else 6.0
         if (now - self._last_trim_at) < cooldown and stage == self._last_stage:
             return
+        if self.settings.get("macos_memory_trim_runtime_caches_enabled", True):
+            trim_runtime_memory_caches(stage=stage, include_gpu=stage == "critical")
         for _name, callback in list(self._trim_callbacks):
             try:
                 callback(stage, snapshot)
@@ -277,7 +344,11 @@ class RuntimeMemoryManager:
             gc.collect()
         except Exception:
             pass
-        if stage == "critical":
+        if stage == "critical" or (
+            stage == "warning"
+            and self.settings.get("macos_memory_cache_prune_enabled", True)
+            and int(snapshot.get("disk_cache_bytes", 0) or 0) > int(self.disk_cache_budget_bytes * 0.72)
+        ):
             self.prune_disk_caches(stage=stage)
         self._last_trim_at = now
         self._log(
@@ -354,4 +425,5 @@ __all__ = [
     "prune_runtime_disk_caches",
     "runtime_disk_cache_usage",
     "runtime_memory_monitor_dir",
+    "trim_runtime_memory_caches",
 ]

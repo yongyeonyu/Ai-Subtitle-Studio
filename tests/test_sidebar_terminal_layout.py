@@ -1,6 +1,7 @@
 # Version: 03.09.10
 # Phase: PHASE2
 import os
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -1857,7 +1858,9 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             with mock.patch("ui.main.main_file_ops.QApplication.quit") as quit_app:
                 window._quick_exit()
 
-            self.assertEqual(events, [("pause", "앱 종료"), ("cleanup_async", 0.15), ("schedule", 60)])
+            expected_timeout = 0.08 if sys.platform == "darwin" else 0.15
+            expected_delay = 30 if sys.platform == "darwin" else 60
+            self.assertEqual(events, [("pause", "앱 종료"), ("cleanup_async", expected_timeout), ("schedule", expected_delay)])
             quit_app.assert_called_once()
         finally:
             window.close()

@@ -13,6 +13,7 @@ from ui.main.main_window import MainWindow
 
 class _AutoSaveEditor:
     _auto_save_interval_ms = EditorWidget._auto_save_interval_ms
+    _editor_auto_save_allowed = EditorWidget._editor_auto_save_allowed
     _on_auto_save = EditorWidget._on_auto_save
 
 
@@ -34,7 +35,12 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
 
     def test_auto_save_skips_document_scan_when_nothing_changed(self):
         editor = _AutoSaveEditor()
-        editor.sm = SimpleNamespace(is_locked=False, is_dirty=True, start_autosave=Mock())
+        editor.sm = SimpleNamespace(
+            is_locked=False,
+            is_dirty=True,
+            state="ST_EDITING",
+            start_autosave=Mock(),
+        )
         editor._has_unsaved_changes = Mock(return_value=False)
         editor._mark_save_completed = Mock()
         editor._get_current_segments = Mock(side_effect=AssertionError("unchanged autosave should not scan"))
@@ -48,6 +54,17 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         editor.sm.start_autosave.assert_not_called()
         editor.sig_auto_save.emit.assert_not_called()
         editor._on_save.assert_not_called()
+
+    def test_auto_save_runs_only_while_editor_is_actively_editing(self):
+        editor = _AutoSaveEditor()
+        editor.sm = SimpleNamespace(is_locked=False, is_dirty=True, state="ST_COMP", start_autosave=Mock())
+        editor._has_unsaved_changes = Mock(side_effect=AssertionError("completed generation must not autosave"))
+        editor._get_current_segments = Mock(side_effect=AssertionError("completed generation must not scan subtitles"))
+
+        editor._on_auto_save()
+
+        editor.sm.start_autosave.assert_not_called()
+        editor._has_unsaved_changes.assert_not_called()
 
     def test_generation_idle_cleanup_clears_busy_surfaces_and_prefetch_cache(self):
         state_manager = SimpleNamespace(is_locked=True, state="ST_PROC", complete_ai=Mock())

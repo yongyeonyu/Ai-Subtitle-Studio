@@ -390,6 +390,75 @@ class PipelineCutBoundaryMixin:
         except Exception:
             return None
 
+    def _cut_boundary_candidate_key(self, row) -> str:
+        sec = self._cut_boundary_sec_from_row(row)
+        if sec is None:
+            sec = 0.0
+        try:
+            clip_idx = int(row.get("clip_idx", 0) or 0) if isinstance(row, dict) else 0
+        except Exception:
+            clip_idx = 0
+        return f"{clip_idx}:{float(sec):.3f}"
+
+    def _mark_cut_boundary_rows_following(self, provisional_rows: list[dict], rows: list[dict]) -> bool:
+        """Mark pioneer candidates as actively checked by the follower worker."""
+        candidate_keys = {
+            self._cut_boundary_candidate_key(row)
+            for row in list(rows or [])
+            if isinstance(row, dict)
+        }
+        if not candidate_keys:
+            return False
+        changed = False
+        for idx, item in enumerate(list(provisional_rows or [])):
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("candidate_key") or self._cut_boundary_candidate_key(item))
+            if key not in candidate_keys:
+                continue
+            marked = dict(item)
+            marked["candidate_key"] = key
+            marked["status"] = "verifying"
+            marked["detector_stage"] = "follower"
+            marked["follower_active"] = True
+            marked["line_color"] = "#FFCC00"
+            marked["line_style"] = "dash"
+            marked["ui_label"] = "후발대 확인"
+            provisional_rows[idx] = marked
+            changed = True
+        return changed
+
+    def _remove_cut_boundary_checked_rows(self, provisional_rows: list[dict], rows: list[dict]) -> bool:
+        """Remove follower-checked temporary candidates from the UI list.
+
+        Relocated rollback hints are intentionally kept because they are new
+        provisional evidence for a later verification pass.
+        """
+        candidate_keys = {
+            self._cut_boundary_candidate_key(row)
+            for row in list(rows or [])
+            if isinstance(row, dict)
+        }
+        if not candidate_keys:
+            return False
+        kept: list[dict] = []
+        changed = False
+        for item in list(provisional_rows or []):
+            if not isinstance(item, dict):
+                kept.append(item)
+                continue
+            if bool(item.get("follower_relocated") or item.get("rollback_relocated")):
+                kept.append(item)
+                continue
+            key = str(item.get("candidate_key") or self._cut_boundary_candidate_key(item))
+            if key in candidate_keys:
+                changed = True
+                continue
+            kept.append(item)
+        if changed:
+            provisional_rows[:] = kept
+        return changed
+
     def _cut_boundary_placeholder_duration(self, files=None) -> float:
         try:
             if hasattr(self, "_cut_boundary_total_duration_for_start"):
@@ -790,6 +859,33 @@ class PipelineCutBoundaryMixin:
             pioneer_done_by_clip: dict[int, bool] = {}
             pioneer_progress_by_clip: dict[int, dict[int, int]] = {}
             last_logged_progress_pct_by_clip: dict[int, int] = {}
+            clip_path_by_idx = {idx: path for idx, path in enumerate(list(files or []))}
+            clip_offset_by_idx: dict[int, float] = {}
+            follower_enqueued_keys: set[str] = set()
+            follower_pending_by_clip: dict[int, list[dict]] = {}
+            follower_last_enqueue_mono_by_clip: dict[int, float] = {}
+            follower_stream_logged_by_clip: set[int] = set()
+            try:
+                follower_stream_start_pct = max(
+                    0,
+                    min(100, int(settings.get("scan_cut_follower_stream_start_percent", 25) or 25)),
+                )
+            except Exception:
+                follower_stream_start_pct = 25
+            try:
+                follower_stream_batch_size = max(
+                    4,
+                    int(settings.get("scan_cut_follower_stream_batch_size", 16) or 16),
+                )
+            except Exception:
+                follower_stream_batch_size = 16
+            try:
+                follower_stream_min_interval_sec = max(
+                    0.0,
+                    float(settings.get("scan_cut_follower_stream_min_interval_sec", 0.75) or 0.75),
+                )
+            except Exception:
+                follower_stream_min_interval_sec = 0.75
             step_sec = max(
                 0.25,
                 float(
@@ -826,6 +922,8 @@ class PipelineCutBoundaryMixin:
                 styled = dict(row or {})
                 styled["status"] = "provisional"
                 styled["verified"] = False
+                styled.setdefault("candidate_key", self._cut_boundary_candidate_key(styled))
+                styled.setdefault("detector_stage", "pioneer")
                 if is_audio_gain_boundary(styled):
                     decision = hybrid_cut_boundary_decision(styled, settings)
                     styled["autopilot_cut_boundary_decision"] = decision
@@ -892,16 +990,22 @@ class PipelineCutBoundaryMixin:
                 except Exception:
                     worker_idx = 0
                 try:
-                    worker_total = max(1, int(info.get("worker_total", 4) or 4))
+                    raw_worker_total = info.get("worker_total")
+                    worker_total = int(raw_worker_total) if raw_worker_total is not None else 0
                 except Exception:
-                    worker_total = 4
+                    worker_total = 0
                 try:
                     worker_pct = int(info.get("worker_percent", pct) or pct)
                 except Exception:
                     worker_pct = pct
                 clip_progress = pioneer_progress_by_clip.setdefault(clip_no, {})
                 clip_progress[worker_idx] = max(0, min(100, worker_pct))
-                aggregate_pct = int(round(sum(clip_progress.values()) / float(max(1, worker_total))))
+                if worker_total <= 0:
+                    worker_total = max(1, len(clip_progress))
+                aggregate_pct = max(
+                    0,
+                    min(100, int(round(sum(clip_progress.values()) / float(max(1, worker_total))))),
+                )
                 try:
                     self._emit_cut_boundary_count_to_sidebar(found, percent=aggregate_pct, done=False)
                 except Exception:
@@ -927,6 +1031,77 @@ class PipelineCutBoundaryMixin:
                         )
                     except Exception:
                         pass
+                _maybe_flush_streaming_follower(clip_no - 1, aggregate_pct=aggregate_pct)
+
+            def _follower_progress_pct(clip_idx: int) -> int:
+                clip_progress = pioneer_progress_by_clip.get(int(clip_idx) + 1, {})
+                if not clip_progress:
+                    return 0
+                return int(round(sum(clip_progress.values()) / float(max(1, len(clip_progress)))))
+
+            def _queue_follower_rows(clip_idx: int, rows: list[dict], *, reason: str) -> int:
+                queued: list[dict] = []
+                with list_lock:
+                    for row in list(rows or []):
+                        if not isinstance(row, dict):
+                            continue
+                        key = str(row.get("candidate_key") or self._cut_boundary_candidate_key(row))
+                        if key in follower_enqueued_keys:
+                            continue
+                        follower_enqueued_keys.add(key)
+                        item = dict(row)
+                        item["candidate_key"] = key
+                        queued.append(item)
+                if not queued:
+                    return 0
+                follower_queue.put(
+                    {
+                        "path": clip_path_by_idx.get(int(clip_idx)),
+                        "clip_idx": int(clip_idx),
+                        "offset": float(clip_offset_by_idx.get(int(clip_idx), 0.0) or 0.0),
+                        "rows": queued,
+                        "reason": str(reason or "stream"),
+                    }
+                )
+                if reason == "stream" and int(clip_idx) not in follower_stream_logged_by_clip:
+                    follower_stream_logged_by_clip.add(int(clip_idx))
+                    try:
+                        get_logger().log(
+                            f"  🚀 [컷 경계] 파일 {int(clip_idx) + 1}/{total_files} "
+                            f"선발대 {follower_stream_start_pct}% 이후 후발대 병렬 검증 시작"
+                        )
+                    except Exception:
+                        pass
+                return len(queued)
+
+            def _maybe_flush_streaming_follower(clip_idx: int, *, aggregate_pct: int | None = None, force: bool = False) -> int:
+                if int(clip_idx) not in clip_path_by_idx:
+                    return 0
+                pct = _follower_progress_pct(int(clip_idx)) if aggregate_pct is None else int(aggregate_pct or 0)
+                if not force and pct < follower_stream_start_pct:
+                    return 0
+                pending = follower_pending_by_clip.get(int(clip_idx), [])
+                if not pending:
+                    return 0
+                now_mono = time.monotonic()
+                last_enqueue = float(follower_last_enqueue_mono_by_clip.get(int(clip_idx), 0.0) or 0.0)
+                if (
+                    not force
+                    and len(pending) < follower_stream_batch_size
+                    and (now_mono - last_enqueue) < follower_stream_min_interval_sec
+                ):
+                    return 0
+                if force:
+                    batch = list(pending)
+                    pending.clear()
+                else:
+                    batch = list(pending[:follower_stream_batch_size])
+                    del pending[:follower_stream_batch_size]
+                follower_last_enqueue_mono_by_clip[int(clip_idx)] = now_mono
+                queued = _queue_follower_rows(int(clip_idx), batch, reason="stream")
+                if queued <= 0 and pending:
+                    follower_pending_by_clip[int(clip_idx)] = pending
+                return queued
 
             def _provisional_found(row: dict, _current_rows: list[dict]):
                 sec = self._cut_boundary_sec_from_row(row)
@@ -937,7 +1112,13 @@ class PipelineCutBoundaryMixin:
                         provisional_rows[:] = normalize_cut_boundaries(list(provisional_rows))
                         self._cut_boundary_provisional_rows = [dict(item) for item in provisional_rows]
                         preview_rows = [dict(item) for item in provisional_rows]
+                        try:
+                            clip_idx = int(provisional.get("clip_idx", 0) or 0)
+                        except Exception:
+                            clip_idx = 0
+                        follower_pending_by_clip.setdefault(clip_idx, []).append(dict(provisional))
                     self._ui_emit("_sig_preview_cut_boundary_scan_lines", preview_rows)
+                    _maybe_flush_streaming_follower(clip_idx)
                     if is_audio_gain_boundary(provisional):
                         try:
                             get_logger().log(
@@ -1015,6 +1196,11 @@ class PipelineCutBoundaryMixin:
                 if sec is None or sec <= 0.0:
                     return
                 relocated = _style_provisional_row(row)
+                relocated["status"] = "provisional"
+                relocated["detector_stage"] = "follower"
+                relocated["follower_relocated"] = True
+                relocated["follower_active"] = False
+                relocated["ui_label"] = "재배치"
                 try:
                     clip_idx = int(relocated.get("clip_idx", 0) or 0)
                 except Exception:
@@ -1068,14 +1254,29 @@ class PipelineCutBoundaryMixin:
                             break
                         processed_jobs += 1
                         rows = [dict(row) for row in list(job.get("rows") or []) if isinstance(row, dict)]
+                        if not job.get("path"):
+                            continue
+                        reason = str(job.get("reason") or "stream")
                         try:
+                            reason_label = "병렬" if reason == "stream" else "잔여"
                             get_logger().log(
                                 f"  🚀 [컷 경계] 파일 {int(job.get('clip_idx', 0) or 0) + 1}/{total_files} "
-                                f"후발대 즉시 검증 시작 (후보 {len(rows)}개)"
+                                f"후발대 {reason_label} 검증 시작 (후보 {len(rows)}개)"
                             )
                         except Exception:
                             pass
                         if rows:
+                            with list_lock:
+                                changed = self._mark_cut_boundary_rows_following(provisional_rows, rows)
+                                self._cut_boundary_provisional_rows = [dict(item) for item in provisional_rows]
+                                preview_rows = [dict(item) for item in provisional_rows]
+                            if changed:
+                                self._ui_emit("_sig_preview_cut_boundary_scan_lines", preview_rows)
+                                _save_detected_now(force=(reason != "stream"))
+                                self._ui_emit(
+                                    "_sig_editor_processing_stage",
+                                    f"후발대 컷 경계 확인 중 ({len(rows)}개)",
+                                )
                             verify_media_cut_boundary_rows(
                                 job["path"],
                                 rows,
@@ -1088,6 +1289,15 @@ class PipelineCutBoundaryMixin:
                                 found_callback=_found_verified,
                                 provisional_callback=_relocated_provisional_found,
                             )
+                            with list_lock:
+                                changed = self._remove_cut_boundary_checked_rows(provisional_rows, rows)
+                                if changed:
+                                    provisional_rows[:] = normalize_cut_boundaries(list(provisional_rows))
+                                self._cut_boundary_provisional_rows = [dict(item) for item in provisional_rows]
+                                preview_rows = [dict(item) for item in provisional_rows]
+                            if changed:
+                                self._ui_emit("_sig_preview_cut_boundary_scan_lines", preview_rows)
+                                _save_detected_now(force=(reason != "stream"))
                     with list_lock:
                         final_detected = [dict(item) for item in detected]
                     self._clear_completed_cut_boundary_provisionals(
@@ -1098,6 +1308,7 @@ class PipelineCutBoundaryMixin:
                     self._save_cut_boundary_cache_for_start(files, settings, final_detected)
                     self._cut_boundary_prescan_completed = True
                     try:
+                        self._ui_emit("_sig_editor_processing_stage", "컷 경계 중분류 세그먼트 확정 중")
                         self._force_cut_boundary_topicless_segments_to_project(
                             project_path,
                             final_detected,
@@ -1139,6 +1350,7 @@ class PipelineCutBoundaryMixin:
                         offset = float(clip_boundaries[idx].get("start", 0.0) or 0.0)
                     except Exception:
                         offset = 0.0
+                clip_offset_by_idx[idx] = float(offset or 0.0)
                 detect_kwargs = dict(
                     clip_offset=offset,
                     clip_idx=idx,
@@ -1157,23 +1369,20 @@ class PipelineCutBoundaryMixin:
                     sample_positions=scan_profile.get("positions", ()),
                     sample_mask=scan_profile.get("mask", ""),
                 )
-                follower_queue.put(
-                    {
-                        "path": path,
-                        "clip_idx": idx,
-                        "offset": offset,
-                        "rows": [dict(row) for row in list(rows or []) if isinstance(row, dict)],
-                    }
+                _maybe_flush_streaming_follower(idx, force=True)
+                final_queued = _queue_follower_rows(
+                    idx,
+                    [dict(row) for row in list(rows or []) if isinstance(row, dict)],
+                    reason="final",
                 )
                 try:
                     get_logger().log(
                         f"  🚀 [컷 경계] 파일 {idx + 1}/{total_files} 선발대 완료 → 후발대 큐 즉시 전달 "
-                        f"(후보 {len(rows or [])}개)"
+                        f"(잔여 후보 {final_queued}개 / 전체 {len(rows or [])}개)"
                     )
                 except Exception:
                     pass
 
-            self._ui_emit("_sig_set_cut_boundary_scan_active", False)
             with list_lock:
                 if provisional_rows:
                     self._ui_emit("_sig_preview_cut_boundary_scan_lines", [dict(item) for item in provisional_rows])
@@ -1188,7 +1397,9 @@ class PipelineCutBoundaryMixin:
             get_logger().log(f"  ⚠️ [컷 경계] 시작 전 자동 분석 실패: {exc}")
             return []
         finally:
-            self._ui_emit("_sig_set_cut_boundary_scan_active", False)
+            follower = getattr(self, "_cut_boundary_follower_thread", None)
+            if follower is None or not follower.is_alive():
+                self._ui_emit("_sig_set_cut_boundary_scan_active", False)
 
     def _split_by_saved_cut_boundaries(self, segments, *, offset: float = 0.0, context: str = "자막") -> list[dict]:
         """Split subtitle/STT rows so no row crosses a saved visual cut."""

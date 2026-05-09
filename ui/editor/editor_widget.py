@@ -426,8 +426,18 @@ class EditorWidget(
         except Exception:
             pass
 
+    def _editor_auto_save_allowed(self) -> bool:
+        sm = getattr(self, "sm", None)
+        if sm is None or getattr(sm, "is_locked", False):
+            return False
+        return str(getattr(sm, "state", "") or "") in {
+            SubtitleStateManager.ST_EDITING,
+            SubtitleStateManager.ST_AUTOSAVE,
+        }
+
     def _on_auto_save(self):
-        if self.sm.is_locked: return
+        if not self._editor_auto_save_allowed():
+            return
         if hasattr(self, "_has_unsaved_changes"):
             try:
                 if not self._has_unsaved_changes():

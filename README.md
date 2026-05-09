@@ -4,11 +4,11 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-03.25.01-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v03.25.01-30D158?style=for-the-badge)](RELEASE_v03.25.01.md)
+[![App Version](https://img.shields.io/badge/app-04.00.00-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.00.00-30D158?style=for-the-badge)](RELEASE_v04.00.00.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-555?style=for-the-badge)](#)
+[![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
 
 </div>
 
@@ -16,7 +16,8 @@ Accuracy-first desktop subtitle production for long-form video, rough cuts, spea
 
 AI Subtitle Studio is built for one primary outcome: produce highly accurate subtitles on the first pass, even when that takes longer than a fast draft. The goal is to reduce manual correction time by combining STT, audio preprocessing, VAD, cut-boundary alignment, LLM cleanup, subtitle timing rules, LoRA personalization, and project-aware editing in one desktop workflow.
 
-Current development has completed the v03.25.01 Native STT Pipeline release. The app keeps one user-facing Mode control: `Fast`, `Auto`, `High`, and `STT 모드`, while adding backend routing, optional native C++ helper kernels, Swift WhisperKit and whisper.cpp STT routes, selective word timestamp rechecks, FFmpeg scene/audio extraction acceleration, native ClearVoice FFmpeg handling, Korean KomixV2 STT candidates, preview-proxy reuse, compact Apple-style popups, and benchmark-driven CPU/GPU/NPU scheduling defaults.
+Current development has moved to the macOS native/App Store branch. The app is now Apple Silicon first and macOS-only on this branch: Swift WhisperKit persistent STT is the default primary route, native backend policies are the default for STT, audio extraction, cut-boundary scanning, and editor rendering, and packaging work targets a signed sandboxed macOS `.app`.
+The macOS packaging scripts under `packaging/macos/` can now build and validate the `.app`, compile the Swift native core and WhisperKit worker, create a local beta `.dmg`, run a batch-style `.command` updater for this Mac, prepare Developer ID notarization, build a signed App Store package, and validate or upload that package once Apple Developer credentials are available.
 
 ## Core Workflows
 
@@ -30,9 +31,15 @@ Current development has completed the v03.25.01 Native STT Pipeline release. The
 - STT Mode iPad compatibility scope is intentionally limited to project state and STT LoRA/runtime policy bundles; this repository does not implement an iPad app.
 - Stable editor text, video, and timeline render frames with frame-based or whole-editor GPU rendering policy.
 - Fast editor-mode subtitle movement using line-map caches, dirty-rectangle timeline updates, visible-window video context refreshes, and non-jittery active-segment scrolling.
-- Optional native/OpenCV cut-boundary verification, FFmpeg scene prepass, direct FFmpeg audio extraction, and benchmark-profile backend routing for long media.
+- Native/OpenCV cut-boundary verification, FFmpeg scene prepass, direct FFmpeg audio extraction, and benchmark-profile backend routing for long media.
 - Korean Whisper KomixV2 STT candidates, including alias, Hugging Face original, and MLX variants, are available as clearly labeled STT2 choices.
-- Optional Swift WhisperKit persistent and whisper.cpp STT backends route through the same Python transcription pipeline as MLX, Transformers, Core ML, and faster-whisper.
+- Swift WhisperKit persistent STT routes through the Python transcription pipeline as the default macOS STT1 backend; MLX and whisper.cpp remain fallback/native comparison paths.
+- The first Swift-native core package now owns the lossless subtitle segment model plus SRT parsing/formatting, with Python kept as a fallback during migration.
+- Project JSON I/O now has a Swift-native validation and atomic-write bridge, so packaged macOS builds can move project persistence out of Python while keeping Python as a fallback during migration.
+- Timeline waveform peak/downsample generation now has a Swift-native bridge for packaged macOS builds, with NumPy retained as the development fallback.
+- Timeline minimap waveform column generation now has a Swift-native bridge so packaged macOS builds avoid Python loops when rebuilding zoom/resize paint caches.
+- Subtitle quality scoring now has a Swift-native batch scorer behind an explicit benchmark flag; packaged builds keep the current Python path until the native worker beats in-process Python on real batches.
+- Common subtitle split/clamp planning now has a Swift-native adaptive planner for large packaged macOS batches, while Python preserves existing row metadata and assembly.
 - Word timestamps default to off for fast STT passes, then re-run selectively on low-score, editor-selected, precision-review, or VAD-risk spans.
 - ClearVoice can use a native FFmpeg single-pass path instead of waiting on the slower deep-learning enhancer when the quality-safe preset allows it.
 - OpenAI Codex ChatGPT CLI can be selected as a subscription-backed LLM provider without requiring an API key or Ollama model preflight.
@@ -62,16 +69,6 @@ pip install -r requirements-mac.txt
 python main.py
 ```
 
-Windows:
-
-```powershell
-python -m venv venv
-.\venv\Scripts\activate
-python -m pip install --upgrade pip
-pip install -r requirements-windows.txt
-python main.py
-```
-
 Required runtime tools:
 
 - Python 3.11
@@ -84,6 +81,26 @@ Optional tools:
 - Ollama for local LLM workflows.
 - Hugging Face token for some model downloads.
 - External LLM API keys when enabled in settings.
+- Xcode command line tools or Xcode for Swift native workers and App Store packaging.
+
+Local macOS beta package:
+
+```bash
+packaging/macos/build_beta_dmg.sh
+```
+
+Build the DMG only for release or beta distribution validation. Normal native
+refactor and optimization work should stop at Swift/Python tests plus app bundle
+checks when needed.
+
+Local update test:
+
+```bash
+TARGET_APP="$HOME/Applications/AI Subtitle Studio.app" \
+  packaging/macos/install_or_update_app.sh
+```
+
+The same flows are available as double-click scripts in `packaging/macos/`.
 
 ## Project Data
 
@@ -118,13 +135,13 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `03.25.01` |
-| Latest release checkpoint | `v03.25.01` |
-| Handoff document version | `03.25.01` |
-| Active phase | `NATIVE_STT_PIPELINE_RELEASED` |
+| App version in code | `04.00.00` |
+| Latest release checkpoint | `v04.00.00` |
+| Handoff document version | `04.00.00-mac-native` |
+| Active phase | `MAC_NATIVE_APPSTORE_BRANCH` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
-| Supported target platforms | macOS and Windows |
+| Supported target platforms | macOS, Apple Silicon first |
 
 ## Verification
 
@@ -152,7 +169,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v03.25.01.md`](RELEASE_v03.25.01.md). Older release notes remain in the repository as history, but handoff documents should only summarize the latest state and the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.00.00.md`](RELEASE_v04.00.00.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

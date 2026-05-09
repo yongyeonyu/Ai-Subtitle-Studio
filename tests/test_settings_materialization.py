@@ -66,11 +66,17 @@ class SettingsMaterializationTests(unittest.TestCase):
         self.assertEqual(materialized["ffmpeg_filter_threads"], 8)
         self.assertTrue(materialized["wav_pcm_fast_chunk_extract"])
         self.assertTrue(materialized["direct_ffmpeg_chunk_extract"])
-        self.assertEqual(materialized["direct_ffmpeg_chunk_min_sec"], 60.0)
+        self.assertEqual(materialized["direct_ffmpeg_chunk_min_sec"], 1.0)
         self.assertTrue(materialized["direct_ffmpeg_chunk_batch_extract"])
         self.assertEqual(materialized["direct_ffmpeg_chunk_batch_size"], 8)
         self.assertEqual(materialized["direct_ffmpeg_chunk_batch_max_span_sec"], 240.0)
         self.assertTrue(materialized["clearvoice_native_ffmpeg_enabled"])
+        self.assertTrue(materialized["macos_native_fast_audio_flatten_enabled"])
+        self.assertEqual(materialized["macos_native_fast_audio_flatten_volume"], 3.2)
+        self.assertEqual(materialized["stt_backend_policy"], "native")
+        self.assertEqual(materialized["audio_extract_backend_policy"], "native")
+        self.assertEqual(materialized["cut_boundary_backend_policy"], "native")
+        self.assertTrue(materialized["whisperkit_native_auto_enabled"])
         self.assertTrue(materialized["autopilot_enabled"])
 
     def test_project_data_manager_save_writes_materialized_settings(self):

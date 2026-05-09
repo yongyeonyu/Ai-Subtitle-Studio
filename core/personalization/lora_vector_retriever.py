@@ -160,6 +160,7 @@ def retrieve_lora_context(
             query_facets=facets,
             kinds=kind_filter,
             quality_buckets=bucket_filter,
+            settings=settings,
         )
     selected: list[dict[str, Any]] = []
     kind_counts: dict[str, int] = defaultdict(int)

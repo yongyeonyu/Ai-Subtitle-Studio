@@ -130,6 +130,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
         self._speech_mask: np.ndarray | None = None
         self._speech_mask_wf_len: int = 0
+        self._waveform_line_cache_key = None
+        self._waveform_line_cache = None
         self._analysis_markers_cache_key = None
         self._analysis_markers_cache: list[dict] = []
         self._visible_analysis_markers_cache_key = None
@@ -873,6 +875,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     def set_vad_segments(self, vad_segs):
         self.vad_segments = vad_segs
         self._speech_mask = None      # 마스크 재계산 트리거
+        self._waveform_line_cache_key = None
+        self._waveform_line_cache = None
         if not bool(getattr(self, "_voice_activity_segments_external", False)):
             self.voice_activity_segments = []
         self._invalidate_marker_caches()
@@ -912,6 +916,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     def set_waveform(self, wf):
         self._waveform = wf
         self._speech_mask = None
+        self._waveform_line_cache_key = None
+        self._waveform_line_cache = None
         self._invalidate_render_cache()
         self.update()
 

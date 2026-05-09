@@ -8,6 +8,7 @@ from typing import Any
 from core.performance import (
     adaptive_llm_worker_count,
     adaptive_worker_count,
+    apple_silicon_runtime_profile,
     atomic_write_json,
     current_resource_snapshot,
     distributed_worker_ceiling,
@@ -71,6 +72,159 @@ def manual_lora_runtime_settings(settings: dict[str, Any] | None = None) -> dict
     merged["runtime_native_threads_auto_enabled"] = True
     merged["runtime_native_threads"] = native_threads
     merged["runtime_manual_lora_full_speed"] = True
+    return merged
+
+
+def _core_topology_counts(profile: dict[str, Any] | None = None) -> tuple[int, int, int, int]:
+    data = dict(profile or {})
+    logical = max(1, _int_value(data.get("logical_cores"), os.cpu_count() or 1))
+    physical = max(1, _int_value(data.get("physical_cores"), logical))
+    performance = max(1, _int_value(data.get("performance_cores"), physical))
+    efficiency = max(0, _int_value(data.get("efficiency_cores"), max(0, logical - performance)))
+    performance = max(1, min(performance, logical))
+    efficiency = max(0, min(efficiency, max(0, logical - performance)))
+    return logical, physical, performance, efficiency
+
+
+def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Apply one Apple Silicon worker budget across the whole subtitle pipeline.
+
+    The slow cases reported by the user came from each stage choosing its own
+    conservative defaults: cut-boundary workers, FFmpeg chunking, STT, word
+    timestamp rechecks, and LLM post-processing were not looking at the same
+    Apple M core budget.  This plan keeps quality-critical STT behavior
+    selective while letting CPU/native stages fan out over performance cores
+    plus a bounded number of efficiency cores.
+    """
+    merged = dict(settings or {})
+    if not _setting_bool(merged.get("apple_m_pipeline_parallel_enabled"), True):
+        return merged
+    if not bool(getattr(config, "IS_APPLE_SILICON", False)):
+        return merged
+
+    try:
+        profile = dict(hardware_profile() or {})
+    except Exception:
+        profile = {}
+    logical, physical, performance, efficiency = _core_topology_counts(profile)
+    chip_settings = dict(merged)
+    chip_settings.setdefault("runtime_performance_profile", "max")
+    chip_settings.setdefault("runtime_hardware_acceleration_enabled", True)
+    chip_plan = (
+        apple_silicon_runtime_profile(chip_settings, profile=profile)
+        if _setting_bool(merged.get("apple_m_chip_aware_scheduler_enabled"), True)
+        else {}
+    )
+    chip_pipeline = dict(chip_plan.get("pipeline") or {})
+    chip_cpu = dict(chip_plan.get("cpu") or {})
+    chip_gpu = dict(chip_plan.get("gpu") or {})
+    chip_npu = dict(chip_plan.get("npu") or {})
+
+    balanced_workers = max(1, min(logical, performance + min(efficiency, 2)))
+    wide_workers = max(1, min(logical, performance + min(efficiency, 4)))
+    llm_workers = max(1, min(logical, max(2, min(6, performance + (1 if efficiency >= 4 else 0)))))
+    local_llm_workers = 2
+    memory_gb = float(profile.get("memory_bytes", 0) or 0) / (1024 ** 3)
+    if memory_gb >= 32 and logical >= 12:
+        local_llm_workers = 3
+
+    if chip_pipeline:
+        balanced_workers = _positive_int(chip_pipeline.get("cut_follower_workers"), balanced_workers)
+        wide_workers = _positive_int(chip_pipeline.get("audio_workers"), wide_workers)
+        llm_workers = _positive_int(chip_pipeline.get("llm_resource_max"), llm_workers)
+        local_llm_workers = _positive_int(chip_pipeline.get("local_llm_workers"), local_llm_workers)
+    native_threads = _positive_int(chip_cpu.get("native_threads"), logical)
+    ffmpeg_threads = _positive_int(chip_pipeline.get("ffmpeg_filter_threads"), balanced_workers)
+    direct_ffmpeg_chunk_min_sec = float(chip_pipeline.get("direct_ffmpeg_chunk_min_sec", 1.0) or 1.0)
+    stream_start_percent = _positive_int(chip_pipeline.get("cut_follower_stream_start_percent"), 25)
+    stream_batch_size = _positive_int(chip_pipeline.get("cut_follower_stream_batch_size"), max(8, balanced_workers * 2))
+    stt_primary_slots = _positive_int(chip_pipeline.get("stt_primary_slots"), 1)
+    npu_slots = _positive_int(chip_npu.get("coreml_slots"), 0)
+
+    respect_manual = _setting_bool(merged.get("apple_m_pipeline_respect_manual_worker_settings"), False)
+
+    def set_opt(key: str, value: Any, *, manual_zero_is_auto: bool = True) -> None:
+        if respect_manual and key in merged:
+            current = merged.get(key)
+            if current not in (None, "") and (manual_zero_is_auto or _positive_int(current, 0) > 0):
+                return
+        merged[key] = value
+
+    set_opt("runtime_performance_profile", "max")
+    set_opt("runtime_hardware_acceleration_enabled", True)
+    set_opt("runtime_backend_autotune_enabled", True)
+    set_opt("runtime_native_threads_auto_enabled", True)
+    set_opt("runtime_native_threads", native_threads)
+    set_opt("runtime_scheduler_auto_enabled", True)
+    set_opt("runtime_scheduler_reserve_cores", int(chip_plan.get("interactive_reserve_cores", 0) or 0))
+    set_opt("runtime_scheduler_ramp_up_enabled", False)
+
+    set_opt("stt_backend_policy", "native")
+    set_opt("whisperkit_native_auto_enabled", True)
+    set_opt("stt_persistent_runtime_reuse_enabled", True)
+    set_opt("stt_primary_fast_native_enabled", True)
+    set_opt("stt_primary_fast_native_model", getattr(config, "WHISPERKIT_FAST_MODEL", "whisperkit-persistent:large-v3-v20240930_turbo_632MB"))
+    set_opt("stt_primary_gpu_slots", stt_primary_slots)
+    set_opt("stt_npu_coreml_slots", npu_slots)
+    set_opt("stt_accelerator_distribution", "gpu+npu+cpu" if npu_slots else "gpu+cpu")
+    set_opt("stt_ensemble_selective_enabled", True)
+    set_opt("stt_ensemble_parallel_enabled", False)
+    set_opt("stt_word_timestamps_mode", "selective")
+    set_opt("stt_word_timestamps_default_enabled", False)
+    set_opt("stt_word_timestamps_precision_max_segments", 24)
+    set_opt("stt_word_timestamps_precision_max_audio_sec", 90.0)
+
+    set_opt("audio_extract_backend_policy", "native")
+    set_opt("macos_native_fast_audio_flatten_enabled", True)
+    set_opt("io_workers", wide_workers)
+    set_opt("audio_chunk_route_max_workers", wide_workers)
+    set_opt("ffmpeg_filter_threads", ffmpeg_threads)
+    set_opt("ff_threads", ffmpeg_threads)
+    set_opt("direct_ffmpeg_chunk_min_sec", direct_ffmpeg_chunk_min_sec)
+
+    set_opt("cut_boundary_backend_policy", "native")
+    set_opt("scan_cut_pioneer_cpu_max_workers", wide_workers)
+    set_opt("scan_cut_follower_cpu_max_workers", balanced_workers)
+    set_opt("scan_cut_cv2_threads_per_worker", 1)
+    set_opt("scan_cut_follower_stream_start_percent", stream_start_percent)
+    set_opt("scan_cut_follower_stream_batch_size", stream_batch_size)
+    set_opt("scan_cut_follower_stream_min_interval_sec", 0.1)
+    set_opt("scan_cut_follower_mps_enabled", True)
+    set_opt("scan_cut_follower_dense_flow_enabled", True)
+
+    set_opt("llm_threads_auto_enabled", True)
+    set_opt("llm_workers_auto_enabled", True)
+    set_opt("subtitle_native_prepass_workers", wide_workers)
+    set_opt("subtitle_native_prepass_workers_resource_max", wide_workers)
+    set_opt("llm_workers", min(llm_workers, 4))
+    set_opt("llm_threads_resource_max", llm_workers)
+    set_opt("local_ollama_llm_max_workers", local_llm_workers)
+    set_opt("roughcut_llm_threads_auto_enabled", True)
+    set_opt("roughcut_llm_threads_resource_max", max(1, min(4, performance)))
+
+    set_opt("editor_live_stt_preview_follow_video_enabled", False)
+    set_opt("editor_live_stt_preview_follow_interval_sec", 2.0)
+
+    merged["_apple_m_pipeline_parallel_plan"] = {
+        "schema": "ai_subtitle_studio.apple_m_pipeline.v2",
+        "chip_aware": bool(chip_pipeline),
+        "chip_profile": chip_plan,
+        "logical_cores": logical,
+        "physical_cores": physical,
+        "performance_cores": performance,
+        "efficiency_cores": efficiency,
+        "gpu_cores": int(profile.get("gpu_cores", 0) or 0),
+        "neural_engine_cores": int(profile.get("neural_engine_cores", 0) or 0),
+        "native_threads": native_threads,
+        "audio_workers": wide_workers,
+        "cut_pioneer_workers": wide_workers,
+        "cut_follower_workers": balanced_workers,
+        "llm_workers": min(llm_workers, 4),
+        "llm_resource_max": llm_workers,
+        "local_llm_workers": local_llm_workers,
+        "stt_primary_gpu_slots": stt_primary_slots,
+        "stt_npu_coreml_slots": npu_slots,
+    }
     return merged
 
 
@@ -367,8 +521,8 @@ class RuntimeResourceCoordinator:
 
     def poll(self, *, window=None) -> dict[str, Any]:
         now = time.time()
-        resource = current_resource_snapshot()
-        rss_bytes = process_rss_bytes()
+        resource = current_resource_snapshot(self.settings)
+        rss_bytes = int(resource.get("process_rss_bytes", 0) or 0) or process_rss_bytes()
         if not self._last_disk_usage or (now - self._last_disk_usage_at) >= 60.0:
             self._last_disk_usage = runtime_disk_cache_usage()
             self._last_disk_usage_at = now
@@ -442,6 +596,9 @@ class RuntimeResourceCoordinator:
         )
 
     def _pressure_stage(self, resource: dict[str, Any], rss_bytes: int) -> str:
+        native_stage = str(resource.get("memory_pressure_stage", "") or "").strip().lower()
+        if native_stage in {"warning", "critical"}:
+            return native_stage
         available_ratio = float(resource.get("available_memory_ratio", 1.0) or 1.0)
         available_gb = float(resource.get("available_memory_bytes", 0) or 0) / float(1024 ** 3)
         memory_bytes = max(0, int(resource.get("memory_bytes", 0) or 0))

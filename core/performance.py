@@ -3,13 +3,15 @@
 """
 Runtime performance helpers.
 
-This module keeps tuning conservative and cross-platform. It avoids optional
-third-party dependencies so performance features remain safe on Windows builds.
+This branch targets macOS native execution. Optional native dependencies remain
+soft-detected so first-run setup can fall back cleanly while App Store packaging
+work moves the hot paths into Swift/C++ helpers.
 """
 from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -58,6 +60,69 @@ def _sysctl_int(name: str) -> int:
         return 0
 
 
+def _sysctl_str(name: str) -> str:
+    if platform.system() != "Darwin":
+        return ""
+    try:
+        proc = subprocess.run(
+            ["sysctl", "-n", name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=1.0,
+        )
+        return str(proc.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def _apple_chip_parts(brand: str) -> tuple[str, int, str]:
+    text = str(brand or "").strip()
+    match = re.search(r"\bApple\s+(M(?P<generation>\d+)(?:\s+(?P<tier>Ultra|Max|Pro))?)\b", text, re.IGNORECASE)
+    if not match:
+        return text, 0, "base"
+    chip_name = "Apple " + re.sub(r"\s+", " ", match.group(1).strip())
+    generation = _positive_int(match.group("generation"), 0)
+    tier = str(match.group("tier") or "base").strip().lower()
+    return chip_name, generation, tier or "base"
+
+
+@lru_cache(maxsize=1)
+def _apple_gpu_core_count() -> int:
+    if platform.system() != "Darwin":
+        return 0
+    try:
+        proc = subprocess.run(
+            ["system_profiler", "SPDisplaysDataType"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=2.5,
+        )
+    except Exception:
+        return 0
+    text = str(proc.stdout or "")
+    for pattern in (
+        r"Total Number of Cores:\s*(\d+)",
+        r"GPU Cores:\s*(\d+)",
+    ):
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return _positive_int(match.group(1), 0)
+    return 0
+
+
+def _apple_neural_engine_core_estimate(chip_generation: int) -> int:
+    # Apple does not expose ANE cores through a stable public sysctl. For M-series
+    # scheduling we only need a slot estimate, and all current M-series chips
+    # expose a Core ML / Neural Engine path with a 16-core class ANE.
+    return 16 if chip_generation > 0 else 0
+
+
 @lru_cache(maxsize=1)
 def hardware_profile() -> dict:
     logical = max(1, os.cpu_count() or 1)
@@ -65,14 +130,18 @@ def hardware_profile() -> dict:
     performance_cores = _sysctl_int("hw.perflevel0.physicalcpu")
     efficiency_cores = _sysctl_int("hw.perflevel1.physicalcpu")
     memory_bytes = _sysctl_int("hw.memsize")
+    brand_string = _sysctl_str("machdep.cpu.brand_string") or platform.processor()
+    chip_name, chip_generation, chip_tier = _apple_chip_parts(brand_string)
 
     if performance_cores <= 0:
-        # On Windows/Linux we do not assume hybrid core topology. Use physical
+        # Some macOS hosts may not expose perflevel sysctl values. Use physical
         # cores as a stability-first cap for CPU-bound worker defaults.
         performance_cores = physical
 
     is_darwin_arm = platform.system() == "Darwin" and platform.machine().lower() in {"arm64", "aarch64"}
     accelerators = {
+        "xcodebuild": bool(shutil.which("xcodebuild")),
+        "swift": bool(shutil.which("swift")),
         "mlx": importlib.util.find_spec("mlx") is not None,
         "mlx_whisper": importlib.util.find_spec("mlx_whisper") is not None,
         "torch": importlib.util.find_spec("torch") is not None,
@@ -81,27 +150,163 @@ def hardware_profile() -> dict:
         "directml": importlib.util.find_spec("torch_directml") is not None,
         "openvino": importlib.util.find_spec("openvino") is not None,
     }
+    worker = PROJECT_ROOT / "experiments" / "whisperkit_persistent_worker" / ".build" / "release" / "WhisperKitPersistentWorker"
+    accelerators["whisperkit_persistent_worker"] = worker.exists() or bool(shutil.which("WhisperKitPersistentWorker"))
     if accelerators["cuda_cli"]:
         accelerators["cuda"] = True
+    gpu_cores = _apple_gpu_core_count() if is_darwin_arm else 0
+    neural_engine_cores = _apple_neural_engine_core_estimate(chip_generation) if is_darwin_arm else 0
     if is_darwin_arm:
         # Metal is hardware-provided on Apple Silicon. MLX availability is
         # tracked separately because STT model routing still needs mlx-whisper.
         accelerators["metal"] = True
         accelerators["metal_gpu"] = True
+        accelerators["metal_gpu_cores"] = gpu_cores
         # Apple Neural Engine access is generally routed through Core ML /
         # WhisperKit rather than direct Python APIs.
-        accelerators["neural_engine_path"] = accelerators["coreml_cli"]
+        accelerators["neural_engine_path"] = bool(
+            accelerators["coreml_cli"] or accelerators["whisperkit_persistent_worker"] or neural_engine_cores
+        )
 
     return {
         "system": platform.system(),
         "machine": platform.machine(),
+        "brand_string": brand_string,
+        "chip_name": chip_name,
+        "chip_generation": chip_generation,
+        "chip_tier": chip_tier,
         "logical_cores": logical,
         "physical_cores": max(1, physical),
         "performance_cores": max(1, performance_cores),
         "efficiency_cores": max(0, efficiency_cores),
+        "gpu_cores": max(0, gpu_cores),
+        "neural_engine_cores": max(0, neural_engine_cores),
         "memory_bytes": max(0, memory_bytes),
         "accelerators": accelerators,
     }
+
+
+def apple_silicon_runtime_profile(
+    settings: dict[str, Any] | None = None,
+    *,
+    profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return chip-aware CPU/GPU/NPU allocation targets for Apple Silicon."""
+    settings = dict(settings or {})
+    profile = dict(profile or hardware_profile())
+    is_apple_silicon = (
+        str(profile.get("system") or "") == "Darwin"
+        and str(profile.get("machine") or "").lower() in {"arm64", "aarch64"}
+    )
+    if not is_apple_silicon:
+        return {}
+
+    logical = max(1, int(profile.get("logical_cores", 1) or 1))
+    performance = max(1, int(profile.get("performance_cores", 1) or 1))
+    efficiency = max(0, int(profile.get("efficiency_cores", max(0, logical - performance)) or 0))
+    gpu_cores = max(0, int(profile.get("gpu_cores", 0) or 0))
+    ane_cores = max(0, int(profile.get("neural_engine_cores", 0) or 0))
+    memory_gb = float(profile.get("memory_bytes", 0) or 0) / float(1024 ** 3)
+    generation = max(0, int(profile.get("chip_generation", 0) or 0))
+    tier = str(profile.get("chip_tier") or "base").lower()
+    max_profile = _safe_bool(settings.get("runtime_hardware_acceleration_enabled"), True) and performance_profile(settings) == "max"
+
+    if generation >= 5:
+        balanced = performance + min(efficiency, 3)
+        wide = logical
+        sustained = performance + min(efficiency, 4)
+        follower_start_percent = 20
+        chip_reason = "m5_or_newer_perf_plus_efficiency"
+    elif generation >= 3:
+        balanced = performance + min(efficiency, 2)
+        wide = performance + min(efficiency, 4)
+        sustained = performance + min(efficiency, 3)
+        follower_start_percent = 25
+        chip_reason = "m3_m4_balanced_efficiency"
+    else:
+        balanced = performance + min(efficiency, 2)
+        wide = performance + min(efficiency, 4)
+        sustained = balanced
+        follower_start_percent = 25
+        chip_reason = "generic_apple_silicon"
+
+    logical_cap = logical if max_profile else max(1, logical - 1)
+    balanced = max(1, min(logical_cap, balanced))
+    wide = max(1, min(logical_cap, wide))
+    sustained = max(1, min(logical_cap, sustained))
+
+    gpu_stt_slots = 1
+    if memory_gb >= 24 and (gpu_cores >= 16 or tier in {"pro", "max", "ultra"}):
+        gpu_stt_slots = 2
+    if memory_gb >= 64 and tier in {"max", "ultra"}:
+        gpu_stt_slots = 3
+
+    npu_slots = 1 if ane_cores > 0 else 0
+    if memory_gb >= 32 and tier in {"pro", "max", "ultra"}:
+        npu_slots = min(2, max(1, npu_slots))
+
+    local_llm_workers = 2
+    if memory_gb >= 32 and logical >= 12:
+        local_llm_workers = 3
+    if memory_gb < 14:
+        local_llm_workers = 1
+
+    llm_resource_max = max(1, min(logical_cap, performance + min(efficiency, 2), 6))
+    interactive_reserve = 0 if max_profile else (1 if logical > 1 else 0)
+    emergency_reserve = 1 if logical > 1 else 0
+    profile_payload = {
+        "schema": "ai_subtitle_studio.apple_silicon_chip_profile.v1",
+        "chip_name": profile.get("chip_name") or profile.get("brand_string") or "Apple Silicon",
+        "chip_generation": generation,
+        "chip_tier": tier,
+        "reason": chip_reason,
+        "logical_cores": logical,
+        "performance_cores": performance,
+        "efficiency_cores": efficiency,
+        "gpu_cores": gpu_cores,
+        "neural_engine_cores": ane_cores,
+        "memory_gb": round(memory_gb, 2),
+        "interactive_reserve_cores": interactive_reserve,
+        "emergency_reserve_cores": emergency_reserve,
+        "cpu": {
+            "native_threads": logical_cap,
+            "wide_workers": wide,
+            "balanced_workers": balanced,
+            "sustained_workers": sustained,
+            "p_core_workers": performance,
+            "e_core_assist_workers": min(efficiency, max(0, wide - performance)),
+        },
+        "gpu": {
+            "available": bool(gpu_cores),
+            "cores": gpu_cores,
+            "stt_slots": gpu_stt_slots,
+            "mlx_slots": gpu_stt_slots,
+            "timeline_render_slots": 1 if gpu_cores else 0,
+        },
+        "npu": {
+            "available": bool(npu_slots),
+            "estimated_cores": ane_cores,
+            "coreml_slots": npu_slots,
+            "prefer_for": ["whisperkit_prefill", "vad_coreml", "live_stt"] if npu_slots else [],
+        },
+        "pipeline": {
+            "audio_workers": wide,
+            "ffmpeg_filter_threads": sustained,
+            "direct_ffmpeg_chunk_min_sec": 0.75 if generation >= 5 else 1.0,
+            "cut_pioneer_workers": wide,
+            "cut_follower_workers": balanced,
+            "cut_follower_stream_start_percent": follower_start_percent,
+            "cut_follower_stream_batch_size": max(8, balanced * 2),
+            "subtitle_prepass_workers": wide,
+            "llm_workers": min(4, llm_resource_max),
+            "llm_resource_max": llm_resource_max,
+            "local_llm_workers": local_llm_workers,
+            "stt_primary_slots": gpu_stt_slots,
+            "stt_secondary_slots": 1,
+            "word_timestamp_slots": 1,
+        },
+    }
+    return profile_payload
 
 
 def performance_profile(settings: dict[str, Any] | None = None) -> str:
@@ -566,18 +771,30 @@ def _darwin_user_idle_seconds() -> float | None:
     return None
 
 
-def current_resource_snapshot() -> dict[str, Any]:
+def current_resource_snapshot(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    settings = dict(settings or {})
     profile = hardware_profile()
     logical = max(1, int(profile.get("logical_cores", 1) or 1))
     memory_bytes = max(0, int(profile.get("memory_bytes", 0) or 0))
-    available = _available_memory_bytes()
-    if memory_bytes <= 0:
-        try:
-            import psutil  # type: ignore
+    native_memory: dict[str, Any] | None = None
+    try:
+        from core.native_macos_memory import native_memory_snapshot
 
-            memory_bytes = max(0, int(psutil.virtual_memory().total))
-        except Exception:
-            memory_bytes = 0
+        native_memory = native_memory_snapshot(settings)
+    except Exception:
+        native_memory = None
+    available = int((native_memory or {}).get("available_memory_bytes", 0) or 0)
+    if available <= 0:
+        available = _available_memory_bytes()
+    if memory_bytes <= 0:
+        memory_bytes = max(0, int((native_memory or {}).get("memory_bytes", 0) or 0))
+        if memory_bytes <= 0:
+            try:
+                import psutil  # type: ignore
+
+                memory_bytes = max(0, int(psutil.virtual_memory().total))
+            except Exception:
+                memory_bytes = 0
     try:
         load_1m = float(os.getloadavg()[0])
     except Exception:
@@ -587,7 +804,7 @@ def current_resource_snapshot() -> dict[str, Any]:
     battery = _darwin_battery_state()
     idle_seconds = _darwin_user_idle_seconds()
     user_active = bool(idle_seconds is not None and idle_seconds < 15.0)
-    return {
+    snapshot = {
         **profile,
         "cpu_load_1m": round(load_1m, 4),
         "cpu_load_ratio": round(load_ratio, 4),
@@ -598,6 +815,14 @@ def current_resource_snapshot() -> dict[str, Any]:
         "user_idle_seconds": None if idle_seconds is None else round(float(idle_seconds), 3),
         "user_active": user_active,
     }
+    if native_memory:
+        snapshot["native_memory"] = native_memory
+        snapshot["memory_pressure_stage"] = str(native_memory.get("pressure_stage", "") or "")
+        snapshot["compressed_memory_ratio"] = float(native_memory.get("compressed_memory_ratio", 0.0) or 0.0)
+        snapshot["compressed_memory_bytes"] = int(native_memory.get("compressed_bytes", 0) or 0)
+        if int(native_memory.get("process_rss_bytes", 0) or 0) > 0:
+            snapshot["process_rss_bytes"] = int(native_memory.get("process_rss_bytes", 0) or 0)
+    return snapshot
 
 
 def _resource_pressure_reduction(snapshot: dict[str, Any], settings: dict[str, Any] | None = None) -> tuple[int, list[str]]:
@@ -676,7 +901,7 @@ def adaptive_worker_count(
     if max_profile and auto_enabled:
         base = max(base, min(workload, max_cap, logical))
     base = max(minimum, min(base, workload, max_cap))
-    snapshot = current_resource_snapshot()
+    snapshot = current_resource_snapshot(settings)
     if not auto_enabled:
         return base, {
             "schema": "ai_subtitle_studio.runtime_scheduler.v1",
@@ -772,7 +997,7 @@ def adaptive_llm_worker_count(
             "reason": "manual_compat",
         }
 
-    snapshot = current_resource_snapshot()
+    snapshot = current_resource_snapshot(settings)
     perf = max(1, int(snapshot.get("performance_cores", 1) or 1))
     logical = max(1, int(snapshot.get("logical_cores", 1) or 1))
     memory_gb = float(snapshot.get("memory_bytes", 0) or 0) / (1024 ** 3)
@@ -847,8 +1072,46 @@ def atomic_write_json(path: str | Path, payload: dict) -> None:
         raise
 
 
+def qt_application_font_family() -> str:
+    """Return the concrete Qt application font for the current platform."""
+    try:
+        from core.runtime import config
+
+        configured = str(getattr(config, "FONT", "") or "").strip()
+    except Exception:
+        configured = ""
+    if platform.system() == "Darwin":
+        return configured or "Apple SD Gothic Neo"
+    return configured
+
+
+def configure_qt_application_font() -> str:
+    """Pin QApplication to a real platform font before widgets trigger aliases."""
+    family = qt_application_font_family()
+    if not family:
+        return ""
+    try:
+        from PyQt6.QtGui import QFont
+        from PyQt6.QtWidgets import QApplication
+    except Exception:
+        return ""
+    app = QApplication.instance()
+    if app is None:
+        return ""
+    try:
+        font = QFont(app.font())
+        if str(font.family() or "") == family:
+            return family
+        font.setFamily(family)
+        app.setFont(font)
+        return family
+    except Exception:
+        return ""
+
+
 def configure_qt_runtime() -> None:
     """Tune Qt global caches after QApplication is created."""
+    configure_qt_application_font()
     try:
         from PyQt6.QtGui import QPixmapCache
     except Exception:

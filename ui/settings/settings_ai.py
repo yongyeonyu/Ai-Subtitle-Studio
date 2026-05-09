@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt
 from core.runtime import config
 from core.project.data_manager import save_settings, save_default_settings
 from ui.settings.settings_common import (
-    DEFAULT_ADV_SETTINGS, DEFAULT_WHISPER_MODELS, WINDOWS_WHISPER_MODELS,
+    DEFAULT_ADV_SETTINGS, DEFAULT_WHISPER_MODELS,
     _fetch_models, _create_bottom_buttons, filter_available_whisper_models,
 )
 from ui.settings.tablet_dialog import apply_tablet_dialog_profile
@@ -399,11 +399,6 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
                 self.combo_whisper.setItemText(idx, f"{model_name} (실험)")
         self._fit_model_combo(self.combo_whisper)
         curr_w = settings.get("selected_whisper_model", getattr(config, "WHISPER_MODEL", stt1_models[0] if stt1_models else ""))
-        # ── OS에 맞지 않는 저장값이면 기본값으로 교체 ──
-        if not config.IS_MAC and ("mlx-community" in curr_w or curr_w.startswith("youngouk/")):
-            curr_w = "large-v3"
-        elif config.IS_MAC and curr_w in WINDOWS_WHISPER_MODELS:
-            curr_w = "mlx-community/whisper-large-v3-mlx"
         if curr_w not in stt1_models and stt1_models:
             curr_w = stt1_models[0]
         display_values = [self.combo_whisper.itemText(i).replace(" (실험)", "") for i in range(self.combo_whisper.count())]
@@ -440,12 +435,8 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         self._fit_model_combo(self.combo_whisper_secondary)
         curr_w2 = settings.get(
             "selected_whisper_model_secondary",
-            "youngouk/ghost613-turbo-korean-4bit-mlx" if config.IS_MAC else "ghost613/faster-whisper-large-v3-turbo-korean",
+            "youngouk/ghost613-turbo-korean-4bit-mlx",
         )
-        if not config.IS_MAC and ("mlx-community" in curr_w2 or curr_w2.startswith("youngouk/")):
-            curr_w2 = "ghost613/faster-whisper-large-v3-turbo-korean"
-        elif config.IS_MAC and curr_w2 in WINDOWS_WHISPER_MODELS:
-            curr_w2 = "youngouk/ghost613-turbo-korean-4bit-mlx"
         if curr_w2 not in stt2_models and stt2_models:
             curr_w2 = stt2_models[0]
         display_values2 = [self.combo_whisper_secondary.itemText(i).replace(" (실험)", "") for i in range(self.combo_whisper_secondary.count())]

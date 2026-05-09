@@ -70,6 +70,24 @@ class LiveSTTCleanupTests(unittest.TestCase):
         transformers_route.assert_not_called()
         mlx.assert_called_once_with("/tmp/fake.wav", "mlx-community/whisper-large-v3-turbo")
 
+    def test_live_stt_uses_whisperkit_native_model_first(self):
+        with mock.patch("core.audio.live_stt.config.IS_MAC", True), \
+             mock.patch(
+                 "core.audio.npu_acceleration.prefer_npu_whisper_model",
+                 return_value="whisperkit-persistent:large-v3",
+             ), \
+             mock.patch("core.audio.live_stt._transcribe_whisperkit", return_value="위스퍼킷") as whisperkit, \
+             mock.patch("core.audio.live_stt._transcribe_mlx") as mlx:
+            text = live_stt._transcribe_local_whisper(
+                "/tmp/fake.wav",
+                "whisperkit-persistent:large-v3",
+                settings={},
+            )
+
+        self.assertEqual(text, "위스퍼킷")
+        whisperkit.assert_called_once_with("/tmp/fake.wav", "whisperkit-persistent:large-v3")
+        mlx.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

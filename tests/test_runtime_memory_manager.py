@@ -62,7 +62,10 @@ class RuntimeMemoryManagerTests(unittest.TestCase):
             with patch("core.runtime.memory_manager.current_resource_snapshot", return_value=snapshot), \
                  patch("core.runtime.memory_manager.process_rss_bytes", return_value=14 * 1024 ** 3):
                 manager = RuntimeMemoryManager(
-                    settings={"runtime_memory_tracemalloc_enabled": False},
+                    settings={
+                        "runtime_memory_tracemalloc_enabled": False,
+                        "macos_memory_trim_runtime_caches_enabled": False,
+                    },
                     diagnostics_dir=tmp,
                     cache_paths=[],
                 )
@@ -97,6 +100,34 @@ class RuntimeMemoryManagerTests(unittest.TestCase):
 
             self.assertEqual(result["pressure_stage"], "normal")
             self.assertEqual(events, [])
+
+    def test_manager_prefers_native_pressure_stage_and_rss(self):
+        snapshot = {
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 10 * 1024 ** 3,
+            "available_memory_ratio": 0.62,
+            "memory_pressure_stage": "warning",
+            "process_rss_bytes": 3 * 1024 ** 3,
+            "logical_cores": 8,
+            "physical_cores": 4,
+            "performance_cores": 4,
+            "cpu_load_ratio": 0.12,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("core.runtime.memory_manager.current_resource_snapshot", return_value=snapshot), \
+                 patch("core.runtime.memory_manager.process_rss_bytes", return_value=9 * 1024 ** 3):
+                manager = RuntimeMemoryManager(
+                    settings={
+                        "runtime_memory_tracemalloc_enabled": False,
+                        "macos_memory_trim_runtime_caches_enabled": False,
+                    },
+                    diagnostics_dir=tmp,
+                    cache_paths=[],
+                )
+                result = manager.poll()
+
+            self.assertEqual(result["pressure_stage"], "warning")
+            self.assertEqual(result["rss_bytes"], 3 * 1024 ** 3)
 
 
 if __name__ == "__main__":

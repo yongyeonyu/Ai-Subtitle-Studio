@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from core.audio import stt_rescue
 from core.audio.runtime_cleanup import clear_audio_model_memory_caches
 from core.platform_compat import ffmpeg_binary
+from core.runtime import config
 from core.runtime.logger import get_logger
 from core.runtime.multi_process import runtime_parallel_worker_plan
 from core.subtitle_quality.candidate_ranker import rank_overlap_candidates
@@ -124,7 +125,51 @@ class VideoProcessorTranscribeMixin:
         preview_callback=None,
         settings_overrides: dict | None = None,
     ) -> list[dict]:
-        worker = type(self)()
+        try:
+            effective_settings = self._load_all_settings()
+        except Exception:
+            effective_settings = {}
+        if settings_overrides:
+            effective_settings.update(dict(settings_overrides))
+        reuse_worker = self._stt_persistent_runtime_reuse_enabled(effective_settings)
+        cache_key = f"{self.language}|{str(model or '').strip()}"
+        worker = None
+        transient_worker = True
+        worker_id = 0
+
+        with self._ensemble_child_lock:
+            children = getattr(self, "_ensemble_child_processors", None)
+            if not isinstance(children, list):
+                children = []
+                self._ensemble_child_processors = children
+            if reuse_worker:
+                cache = getattr(self, "_stt_collect_worker_cache", None)
+                if not isinstance(cache, dict):
+                    cache = {}
+                    self._stt_collect_worker_cache = cache
+                busy = getattr(self, "_stt_collect_worker_busy", None)
+                if not isinstance(busy, set):
+                    busy = set()
+                    self._stt_collect_worker_busy = busy
+                cached = cache.get(cache_key)
+                if cached is not None and id(cached) not in busy:
+                    worker = cached
+                    transient_worker = False
+                    if worker not in children:
+                        children.append(worker)
+                else:
+                    worker = type(self)()
+                    if cached is None:
+                        cache[cache_key] = worker
+                        transient_worker = False
+                    if worker not in children:
+                        children.append(worker)
+                worker_id = id(worker)
+                busy.add(worker_id)
+            else:
+                worker = type(self)()
+                children.append(worker)
+
         worker.language = self.language
         for attr in (
             "hard_cut_boundaries",
@@ -137,14 +182,7 @@ class VideoProcessorTranscribeMixin:
                     setattr(worker, attr, getattr(self, attr))
                 except Exception:
                     pass
-        if settings_overrides:
-            worker._fast_mode_overrides = dict(settings_overrides)
-        with self._ensemble_child_lock:
-            children = getattr(self, "_ensemble_child_processors", None)
-            if not isinstance(children, list):
-                children = []
-                self._ensemble_child_processors = children
-            children.append(worker)
+        worker._fast_mode_overrides = dict(settings_overrides or {}) if settings_overrides else None
         result: list[dict] = []
         try:
             for chunk_segs, _idx, _total in worker.transcribe(
@@ -159,12 +197,21 @@ class VideoProcessorTranscribeMixin:
             ):
                 result.extend(chunk_segs or [])
         finally:
-            worker.stop_transcribe()
+            if reuse_worker:
+                with self._ensemble_child_lock:
+                    busy = getattr(self, "_stt_collect_worker_busy", set())
+                    try:
+                        busy.discard(worker_id)
+                    except Exception:
+                        pass
+            if transient_worker:
+                worker.stop_transcribe()
             with self._ensemble_child_lock:
-                try:
-                    self._ensemble_child_processors.remove(worker)
-                except (AttributeError, ValueError):
-                    pass
+                if transient_worker:
+                    try:
+                        self._ensemble_child_processors.remove(worker)
+                    except (AttributeError, ValueError):
+                        pass
         return result
 
     @staticmethod
@@ -201,7 +248,44 @@ class VideoProcessorTranscribeMixin:
             raise
         return target
 
-    def _release_after_transcribe_job(self, log_label: str = "STT") -> None:
+    def _release_after_transcribe_job(self, log_label: str = "STT", *, force_stop: bool = False) -> None:
+        try:
+            settings = self._load_all_settings()
+        except Exception:
+            settings = {}
+        keep_warm = (not force_stop) and self._stt_persistent_runtime_reuse_enabled(settings)
+
+        def _alive(proc) -> bool:
+            try:
+                return proc is not None and proc.poll() is None
+            except Exception:
+                return False
+
+        own_alive = _alive(getattr(self, "_whisper_runner_proc", None)) or _alive(
+            getattr(self, "_whisperkit_runner_proc", None)
+        )
+        child_alive = False
+        if keep_warm:
+            try:
+                with getattr(self, "_ensemble_child_lock", threading.Lock()):
+                    children = list(getattr(self, "_ensemble_child_processors", []) or [])
+                for child in children:
+                    if _alive(getattr(child, "_whisper_runner_proc", None)) or _alive(
+                        getattr(child, "_whisperkit_runner_proc", None)
+                    ):
+                        child_alive = True
+                        break
+            except Exception:
+                child_alive = False
+
+        if keep_warm and (own_alive or child_alive):
+            self._whisper_proc = None
+            try:
+                get_logger().log(f"🔥 [{log_label}] macOS STT persistent worker 유지: 다음 STT 재사용")
+            except Exception:
+                pass
+            return
+
         self.stop_transcribe()
         clear_audio_model_memory_caches(include_gpu=True)
         try:
@@ -299,6 +383,46 @@ class VideoProcessorTranscribeMixin:
         if VideoProcessorTranscribeMixin._setting_bool(settings, "stt_ensemble_parallel_enabled", False):
             return False
         return VideoProcessorTranscribeMixin._setting_bool(settings, "stt_ensemble_selective_enabled", False)
+
+    @staticmethod
+    def _stt_persistent_runtime_reuse_enabled(settings: dict | None) -> bool:
+        if not bool(getattr(config, "IS_MAC", False)):
+            return False
+        return VideoProcessorTranscribeMixin._setting_bool(
+            settings,
+            "stt_persistent_runtime_reuse_enabled",
+            True,
+        )
+
+    @staticmethod
+    def _mac_primary_fast_native_model(model: str, settings: dict | None, log_label: str = "STT") -> str:
+        """Use the Mac-native turbo model for the first STT1 pass only.
+
+        Quality is kept by leaving STT2 rescue and word-timestamp precision
+        passes on their requested models.
+        """
+        if not bool(getattr(config, "IS_MAC", False)):
+            return str(model or "").strip()
+        if not VideoProcessorTranscribeMixin._setting_bool(settings, "stt_primary_fast_native_enabled", True):
+            return str(model or "").strip()
+        label = str(log_label or "STT").strip().upper()
+        if label not in {"STT1"}:
+            return str(model or "").strip()
+        if VideoProcessorTranscribeMixin._setting_bool(settings, "stt_word_timestamp_precision_pass", False):
+            return str(model or "").strip()
+
+        raw = str(model or "").strip()
+        lowered = raw.lower()
+        if not raw:
+            return str((settings or {}).get("stt_primary_fast_native_model") or config.WHISPERKIT_FAST_MODEL)
+        whisper_large_family = "large-v3" in lowered or "whisper-large-v3" in lowered
+        if not whisper_large_family:
+            return raw
+        return str(
+            (settings or {}).get("stt_primary_fast_native_model")
+            or getattr(config, "WHISPERKIT_FAST_MODEL", "")
+            or raw
+        ).strip()
 
     @staticmethod
     def _segment_score_100(segment: dict | None) -> float:
@@ -410,6 +534,9 @@ class VideoProcessorTranscribeMixin:
         except Exception:
             return 0.0
     @staticmethod
+    def _chunk_sort_key(path: str) -> tuple[float, str]:
+        return (VideoProcessorTranscribeMixin._chunk_start_from_path(path), os.path.basename(str(path or "")))
+    @staticmethod
     def _wav_duration(path: str) -> float:
         try:
             with wave.open(path, "r") as w:
@@ -423,8 +550,8 @@ class VideoProcessorTranscribeMixin:
         overlap = max(0.0, min(seg_end, end) - max(seg_start, start))
         span = max(0.001, min(max(seg_end - seg_start, 0.0), max(end - start, 0.0)))
         return overlap / span >= 0.35
-    def _ffmpeg_trim_recheck_clip(self, src_wav: str, out_wav: str, start_sec: float, duration_sec: float) -> bool:
-        filter_chain = stt_rescue.rescue_audio_filter()
+    def _ffmpeg_trim_recheck_clip(self, src_wav: str, out_wav: str, start_sec: float, duration_sec: float, settings: dict | None = None) -> bool:
+        filter_chain = stt_rescue.rescue_audio_filter(settings)
         cmd = [
             ffmpeg_binary(), "-y", "-nostdin", "-loglevel", "error",
             "-ss", f"{max(0.0, float(start_sec or 0.0)):.3f}",
@@ -459,7 +586,7 @@ class VideoProcessorTranscribeMixin:
 
         actual_abs_start = chunk_start + local_start
         out_path = os.path.join(out_dir, f"vad_{900 + idx:03d}_{actual_abs_start:.3f}.wav")
-        if not self._ffmpeg_trim_recheck_clip(source_path, out_path, local_start, duration):
+        if not self._ffmpeg_trim_recheck_clip(source_path, out_path, local_start, duration, settings):
             return None
         return {
             "range": item,
@@ -553,30 +680,63 @@ class VideoProcessorTranscribeMixin:
             1,
             min(
                 200,
-                int(self._setting_float(settings, "stt_word_timestamps_precision_max_segments", 80)),
+                int(self._setting_float(settings, "stt_word_timestamps_precision_max_segments", 24)),
             ),
         )
-        ranges: list[stt_rescue.SttRecheckRange] = []
+        prioritized: list[tuple[tuple[float, float, float], stt_rescue.SttRecheckRange]] = []
         for seg in segments or []:
             if not self._segment_needs_word_precision(seg, settings):
                 continue
             start = max(0.0, self._setting_float(seg, "start", 0.0))
             end = max(start + 0.1, self._setting_float(seg, "end", start))
-            ranges.append(
-                stt_rescue.SttRecheckRange(
-                    start=round(start, 3),
-                    end=round(end, 3),
-                    primary_score=round(self._segment_score_100(seg), 2),
-                    secondary_score=0.0,
-                    primary_text=str(seg.get("text") or "").strip(),
-                    secondary_text="",
-                    primary=dict(seg),
-                    secondary={},
-                )
+            score = round(self._segment_score_100(seg), 2)
+            quality = dict(seg.get("quality") or {})
+            flags = {str(flag) for flag in (quality.get("flags") or ())}
+            priority = 0.0
+            if any(bool(seg.get(key)) for key in ("editor_selected", "selected", "precision_review", "needs_review")):
+                priority += 100.0
+            label = str(quality.get("confidence_label") or "").strip().lower()
+            if label == "red":
+                priority += 40.0
+            elif label == "yellow":
+                priority += 20.0
+            if flags.intersection({"outside_vad_speech", "high_cps", "short_duration_long_text"}):
+                priority += 15.0
+            if flags.intersection({"word_timestamps_missing"}):
+                priority += 5.0
+            if self._segment_has_score(seg):
+                priority += max(0.0, 100.0 - score) / 4.0
+            item = stt_rescue.SttRecheckRange(
+                start=round(start, 3),
+                end=round(end, 3),
+                primary_score=score,
+                secondary_score=0.0,
+                primary_text=str(seg.get("text") or "").strip(),
+                secondary_text="",
+                primary=dict(seg),
+                secondary={},
             )
-            if len(ranges) >= limit:
+            prioritized.append(((-priority, score, start), item))
+        prioritized.sort(key=lambda pair: pair[0])
+        max_audio_sec = max(
+            10.0,
+            min(
+                1800.0,
+                self._setting_float(settings, "stt_word_timestamps_precision_max_audio_sec", 90.0),
+            ),
+        )
+        selected: list[stt_rescue.SttRecheckRange] = []
+        selected_sec = 0.0
+        for _priority, item in prioritized:
+            duration = max(0.05, float(item.end or 0.0) - float(item.start or 0.0))
+            if len(selected) >= limit:
                 break
-        return ranges
+            if selected and selected_sec + duration > max_audio_sec:
+                continue
+            selected.append(item)
+            selected_sec += duration
+        selected.sort(key=lambda item: (item.start, item.end))
+        return selected
 
     def _apply_word_precision_segments(
         self,
@@ -674,6 +834,7 @@ class VideoProcessorTranscribeMixin:
         )
         self._notify_stage(f"⏳ [STT] 단어 타임태그 {len(ranges)}개 정밀 보정 중")
         precision_dir = os.path.join(chunk_dir, "_stt_word_precision")
+        shutil.rmtree(precision_dir, ignore_errors=True)
         os.makedirs(precision_dir, exist_ok=True)
         prepared: list[dict] = []
         for idx, item in enumerate(ranges):
@@ -898,6 +1059,12 @@ class VideoProcessorTranscribeMixin:
         )
         if missing_ranges:
             ranges = list(ranges) + missing_ranges
+        raw_range_count = len(ranges)
+        ranges = stt_rescue.budget_recheck_ranges(ranges, settings)
+        if raw_range_count > len(ranges):
+            get_logger().log(
+                f"  ⚡ [{context_label}] STT2 재검사 예산 적용: {raw_range_count}개 → {len(ranges)}개"
+            )
         if not ranges:
             return scored_primary
 
@@ -908,6 +1075,7 @@ class VideoProcessorTranscribeMixin:
         self._notify_stage(f"⏳ [STT] 저점 구간 {len(ranges)}개 STT2 확인 중")
 
         rescue_dir = os.path.join(chunk_dir, "_fast_stt2_recheck")
+        shutil.rmtree(rescue_dir, ignore_errors=True)
         os.makedirs(rescue_dir, exist_ok=True)
         prepared: list[dict] = []
         for idx, item in enumerate(ranges):
@@ -923,10 +1091,10 @@ class VideoProcessorTranscribeMixin:
             "stt_quality_preset": "precise",
             "stt_rescue_whisper_mode": True,
             "stt_selective_secondary_recheck_enabled": False,
-            "stt_word_timestamp_precision_pass": True,
-            "stt_word_timestamps_mode": "always",
-            "stt_word_timestamps_default_enabled": True,
-            "stt_word_timestamps_precision_enabled": True,
+            "stt_word_timestamp_precision_pass": False,
+            "stt_word_timestamps_mode": "off",
+            "stt_word_timestamps_default_enabled": False,
+            "stt_word_timestamps_precision_enabled": False,
             "w_none_temp_max": 0.0,
             "whisper_chunk_overlap_sec": 0.0,
         }
@@ -1015,6 +1183,8 @@ class VideoProcessorTranscribeMixin:
                 "stt_ensemble_enabled": False,
                 "stt_selective_secondary_recheck_enabled": False,
                 "stt_candidate_scoring_enabled": True,
+                "stt_word_timestamp_precision_pass": False,
+                "stt_word_timestamps_precision_enabled": False,
             }
             primary_segments = self._collect_transcribe_result(
                 chunk_dir,
@@ -1031,6 +1201,8 @@ class VideoProcessorTranscribeMixin:
                     "stt_ensemble_enabled": False,
                     "stt_selective_secondary_recheck_enabled": False,
                     "stt_candidate_scoring_enabled": True,
+                    "stt_word_timestamp_precision_pass": False,
+                    "stt_word_timestamps_precision_enabled": False,
                 }
                 primary_segments = self._collect_transcribe_result(
                     chunk_dir,
@@ -1306,7 +1478,10 @@ class VideoProcessorTranscribeMixin:
         preview_callback=None,
     ):
         _ = is_fast_mode
-        chunks = sorted([f for f in os.listdir(chunk_dir) if f.endswith(".wav")])
+        chunks = sorted(
+            [f for f in os.listdir(chunk_dir) if f.endswith(".wav")],
+            key=self._chunk_sort_key,
+        )
         if not chunks:
             yield [], 0, 0
             return
@@ -1334,6 +1509,14 @@ class VideoProcessorTranscribeMixin:
         from core.audio.npu_acceleration import prefer_npu_whisper_model
 
         target_model = model_override or _s.get("selected_whisper_model", self.whisper_model)
+        primary_requested_model = str(target_model or "").strip()
+        target_model = self._mac_primary_fast_native_model(target_model, _s, log_label=log_label)
+        if str(target_model or "").strip() != primary_requested_model:
+            get_logger().log(
+                f"  ⚡ [{log_label}] macOS M 최적화: 1차 STT는 native turbo로 실행 "
+                f"({primary_requested_model.split(chr(47))[-1]} → {str(target_model).split(chr(47))[-1]}), "
+                "저신뢰/단어정밀 구간은 품질 모델로 보강"
+            )
         stt_backend_name = ""
         try:
             from core.audio.stt_backend_router import select_stt_backend
@@ -1360,20 +1543,29 @@ class VideoProcessorTranscribeMixin:
             cp = os.path.join(chunk_dir, cf)
             m = re.search(r'vad_\d+_([\d\.]+)\.wav', cf)
             ov_start = float(m.group(1)) if m else i * 30.0
+            try:
+                with wave.open(cp, "r") as w:
+                    chunk_duration = w.getnframes() / float(w.getframerate())
+                    chunk_end = ov_start + chunk_duration
+            except Exception:
+                chunk_duration = 30.0
+                chunk_end = ov_start + 30.0
             q.append({
                 "idx": i,
                 "input_path": cp,
-                "ov_start_offset": ov_start
+                "ov_start_offset": ov_start,
+                "duration": max(0.001, float(chunk_duration or 0.001)),
             })
-            if i == len(chunks) - 1:
-                try:
-                    with wave.open(cp, "r") as w:
-                        t_sec = ov_start + (w.getnframes() / float(w.getframerate()))
-                except Exception:
-                    t_sec = ov_start + 30.0
+            t_sec = max(t_sec, chunk_end)
 
         safe_paths = [x["input_path"] for x in q]
         s = self._load_all_settings()
+        progress_by_audio_duration = bool(s.get("stt_rescue_whisper_mode", False)) or bool(
+            s.get("stt_word_timestamp_precision_pass", False)
+        )
+        if progress_by_audio_duration:
+            t_sec = max(0.001, sum(float(item.get("duration", 0.001) or 0.001) for item in q))
+        processed_audio_sec = 0.0
         temp_max = float(s.get("w_none_temp_max", 0.4))
         temperature_values = [round(x * 0.2, 1) for x in range(int(temp_max / 0.2) + 1)]
         temperature_tuple = "(" + ", ".join(str(x) for x in temperature_values) + ",)"
@@ -1419,7 +1611,7 @@ class VideoProcessorTranscribeMixin:
                 mac_task_id = None
             if proc is None:
                 fallback_model = "mlx-community/whisper-large-v3-turbo"
-                get_logger().log(f"  ↩️ [{log_label}] WhisperKit 실험 백엔드 준비 안 됨 → MLX fallback: {fallback_model}")
+                get_logger().log(f"  ↩️ [{log_label}] WhisperKit Native 준비 안 됨 → MLX fallback: {fallback_model}")
                 target_model = fallback_model
                 use_whisperkit_persistent = False
         if use_coreml_whisper:
@@ -1573,8 +1765,13 @@ class VideoProcessorTranscribeMixin:
                             except Exception:
                                 pass
 
-                    pct = min(100, int((prev_end / t_sec) * 100))
-                    get_logger().log(self._format_transcribe_progress(log_label, prev_end, t_sec, pct))
+                    if progress_by_audio_duration:
+                        processed_audio_sec += float(item.get("duration", 0.0) or 0.0)
+                        progress_sec = min(t_sec, processed_audio_sec)
+                    else:
+                        progress_sec = prev_end
+                    pct = min(100, int((progress_sec / t_sec) * 100))
+                    get_logger().log(self._format_transcribe_progress(log_label, progress_sec, t_sec, pct))
 
                     yield chunk_segs, item["idx"] + 1, total
                     processed_count += 1
@@ -1633,8 +1830,13 @@ class VideoProcessorTranscribeMixin:
                             except Exception:
                                 pass
 
-                    pct = min(100, int((prev_end / t_sec) * 100))
-                    get_logger().log(self._format_transcribe_progress(log_label, prev_end, t_sec, pct))
+                    if progress_by_audio_duration:
+                        processed_audio_sec += float(item.get("duration", 0.0) or 0.0)
+                        progress_sec = min(t_sec, processed_audio_sec)
+                    else:
+                        progress_sec = prev_end
+                    pct = min(100, int((progress_sec / t_sec) * 100))
+                    get_logger().log(self._format_transcribe_progress(log_label, progress_sec, t_sec, pct))
                     yield chunk_segs, item["idx"] + 1, total
                     processed_count += 1
 
@@ -1647,7 +1849,7 @@ class VideoProcessorTranscribeMixin:
                     raise RuntimeError("whisper produced 0 chunks")
 
         finally:
-            self._release_after_transcribe_job(log_label)
+            self._release_after_transcribe_job(log_label, force_stop=had_error)
             if cleanup_chunk_dir:
                 shutil.rmtree(chunk_dir, ignore_errors=True)
             if had_error:

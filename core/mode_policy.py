@@ -765,9 +765,14 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "stt_low_score_recheck_threshold": 54,
                 "stt_low_score_recheck_padding_sec": 0.35,
                 "stt_low_score_recheck_max_segments": 16,
+                "stt_low_score_recheck_max_audio_sec": 60.0,
+                "stt_recheck_native_fast_audio_filter_enabled": True,
+                "stt_persistent_runtime_reuse_enabled": True,
                 "stt_word_timestamps_mode": "selective",
                 "stt_word_timestamps_default_enabled": False,
                 "stt_word_timestamps_precision_enabled": True,
+                "stt_word_timestamps_precision_max_segments": 8,
+                "stt_word_timestamps_precision_max_audio_sec": 45.0,
                 "stt_missing_voice_min_duration_sec": 0.55,
                 "stt_selective_secondary_recheck_enabled": True,
                 "stt_selective_secondary_recheck_reason": "Fast mode runs STT2 only on low-score STT1 spans.",
@@ -812,12 +817,17 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "stt_low_score_recheck_enabled": True,
                 "stt_low_score_recheck_threshold": 72,
                 "stt_low_score_recheck_padding_sec": 0.45,
-                "stt_low_score_recheck_max_segments": 80,
+                "stt_low_score_recheck_max_segments": 48,
+                "stt_low_score_recheck_max_audio_sec": 240.0,
+                "stt_recheck_native_fast_audio_filter_enabled": True,
+                "stt_persistent_runtime_reuse_enabled": True,
                 "stt_selective_secondary_recheck_enabled": True,
                 "stt_word_timestamps_mode": "selective",
                 "stt_word_timestamps_default_enabled": False,
                 "stt_word_timestamps_precision_enabled": True,
                 "stt_word_timestamps_precision_threshold": 78.0,
+                "stt_word_timestamps_precision_max_segments": 16,
+                "stt_word_timestamps_precision_max_audio_sec": 120.0,
                 "stt_missing_voice_min_duration_sec": 0.55,
                 "runtime_quality_self_review_enabled": True,
                 "fast_hallucination_guard_enabled": True,
@@ -856,6 +866,11 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
                 "scan_cut_audio_gain_enabled": False,
                 "stt_ensemble_enabled": False,
                 "stt_ensemble_llm_judge_enabled": True,
+                "stt_low_score_recheck_max_audio_sec": 120.0,
+                "stt_recheck_native_fast_audio_filter_enabled": True,
+                "stt_persistent_runtime_reuse_enabled": True,
+                "stt_word_timestamps_precision_max_segments": 16,
+                "stt_word_timestamps_precision_max_audio_sec": 60.0,
                 "speaker_diarization_auto_enabled": False,
                 "vad_dual_model_enabled": False,
                 "runtime_quality_self_review_enabled": True,
@@ -880,6 +895,25 @@ def apply_mode_runtime_settings(settings: dict[str, Any] | None) -> dict[str, An
     out["subtitle_tool_stack"] = _tool_stack_for_mode(mode)
     out["subtitle_tool_stack_label"] = out["subtitle_tool_stack"]["label"]
     out["subtitle_tool_stack_tools"] = list(out["subtitle_tool_stack"]["tools"])
+    out.update(
+        {
+            "stt_backend_policy": "native",
+            "audio_extract_backend_policy": "native",
+            "cut_boundary_backend_policy": "native",
+            "editor_render_backend_policy": "native",
+            "whisperkit_native_auto_enabled": True,
+            "macos_native_fast_audio_flatten_enabled": True,
+            "macos_native_fast_audio_flatten_hp": 150,
+            "macos_native_fast_audio_flatten_lp": 4600,
+            "macos_native_fast_audio_flatten_comp_th": -24,
+            "macos_native_fast_audio_flatten_volume": 3.2,
+            "macos_native_fast_audio_flatten_limiter": 0.93,
+            "macos_native_app_store_target_enabled": True,
+            "macos_native_require_xcode_tools": True,
+            "direct_ffmpeg_chunk_min_sec": 1.0,
+            "clearvoice_native_ffmpeg_enabled": True,
+        }
+    )
 
     policy = resolve_mode_policy(out)
     out["mode_policy_snapshot"] = {

@@ -20,7 +20,7 @@ def normalize_backend_policy(value: Any, default: str = "auto") -> str:
         return "fast"
     if text in {"quality", "accurate", "정확도", "정확"}:
         return "quality"
-    if text in {"native", "cpp", "c++"}:
+    if text in {"native", "cpp", "c++", "swift", "swiftpm", "metal", "coreml", "whisperkit"}:
         return "native"
     return text or str(default or "auto")
 

@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
+from core.runtime import config
 from core.cut_boundary import (
     cut_boundary_enabled,
     normalize_cut_boundaries,
@@ -81,9 +82,10 @@ __all__ = [
 # 기본 경로
 # ─────────────────────────────────────────────
 
-PROJECTS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "projects"
+PROJECTS_DIR = getattr(
+    config,
+    "PROJECTS_DIR",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "projects"),
 )
 
 

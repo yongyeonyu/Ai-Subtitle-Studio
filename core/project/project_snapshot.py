@@ -17,7 +17,7 @@ from core.project.project_assets import externalize_project_text_assets, hydrate
 from core.project.subtitle_status import subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
 
-PROJECTS_DIR = os.path.join(config.BASE_DIR, 'projects')
+PROJECTS_DIR = getattr(config, "PROJECTS_DIR", os.path.join(config.BASE_DIR, 'projects'))
 os.makedirs(PROJECTS_DIR, exist_ok=True)
 PROJECT_SCHEMA_VERSION = '03.00.26'
 PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.vector.v1"

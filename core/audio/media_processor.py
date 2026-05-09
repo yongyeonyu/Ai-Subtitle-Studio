@@ -32,7 +32,7 @@ from core.media_fingerprint import media_fingerprint_digest
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.runtime import config
 from core.runtime.logger import get_logger
-from core.runtime.multi_process import runtime_parallel_worker_plan
+from core.runtime.multi_process import apply_apple_m_subtitle_pipeline_plan, runtime_parallel_worker_plan
 from core.subtitle_quality.vad_alignment_checker import (
     review_vad_config,
     review_vad_enabled,
@@ -54,16 +54,20 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         self.io_workers = bounded_worker_count(kind="io")
 
         settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
-        if os.path.exists(settings_path):
-            try:
+        try:
+            s = materialize_user_settings({})
+            if os.path.exists(settings_path):
                 with open(settings_path, "r", encoding="utf-8") as f:
-                    s = json.load(f)
-                    self.whisper_model = s.get("selected_whisper_model", self.whisper_model)
-                    self.audio_ai = s.get("selected_audio_ai", "deepfilter")
-                    self.vad_model = s.get("selected_vad", "silero")
-                    self.io_workers = bounded_worker_count(s.get("io_workers", self.io_workers), kind="io")
-            except Exception:
-                pass
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    s.update(loaded)
+            s = apply_accuracy_first_runtime_settings(s)
+            self.whisper_model = s.get("selected_whisper_model", self.whisper_model)
+            self.audio_ai = s.get("selected_audio_ai", "deepfilter")
+            self.vad_model = s.get("selected_vad", "silero")
+            self.io_workers = bounded_worker_count(s.get("io_workers", self.io_workers), kind="io")
+        except Exception:
+            pass
 
         self.language = getattr(config, "LANGUAGE", "ko")
         self._executor = ThreadPoolExecutor(max_workers=self.io_workers)
@@ -226,7 +230,13 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
 
             if self._can_fuse_ffmpeg_preprocess(audio_ai, s):
                 fused_filter = self._build_fused_ffmpeg_filter(audio_ai, s, use_basic=use_basic)
-                if audio_ai == "clearvoice":
+                fast_flatten_enabled = self._macos_native_fast_audio_flatten_enabled(s)
+                if fast_flatten_enabled:
+                    self._notify_stage("⏳ [음성] Mac Native Fast 음량 평탄화 중")
+                    get_logger().log(
+                        "  └ [음성] Mac Native Fast 음량 평탄화: 벤치마크 최속 필터로 단일 패스 처리합니다"
+                    )
+                elif audio_ai == "clearvoice":
                     self._notify_stage("⏳ [음성] ClearVoice Native FFmpeg 단일 패스 정제 중")
                     get_logger().log(
                         "  └ [음성] ClearVoice 딥러닝 모델 대신 FFmpeg 네이티브 필터로 단일 패스 정제합니다"
@@ -244,7 +254,8 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                     "-acodec", "pcm_s16le",
                     cleaned_wav,
                 ]
-                if not self._run_media_command(extract_cmd, label="ffmpeg 음량 평탄화"):
+                flatten_label = "Mac Native Fast 음량 평탄화" if fast_flatten_enabled else "ffmpeg 음량 평탄화"
+                if not self._run_media_command(extract_cmd, label=flatten_label):
                     return chunk_dir, []
                 self._write_cleaned_audio_cache_meta(cleaned_meta, cache_config)
                 if os.path.exists(raw_wav):
@@ -337,6 +348,11 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                     else:
                         self._notify_stage(f"⏳ [음성] {audio_label} 정제 및 FFMPEG 16k 변환 중")
                         get_logger().log(f"  └ [음성] {audio_label} 정제 및 FFMPEG 16k 변환 중...")
+                    flatten_label = (
+                        "Mac Native Fast 음량 평탄화"
+                        if self._macos_native_fast_audio_flatten_enabled(s)
+                        else "ffmpeg 음량 평탄화"
+                    )
                     if not self._run_media_command(
                         [
                             ffmpeg, "-y", "-nostdin", "-loglevel", "error",
@@ -347,7 +363,7 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                             "-acodec", "pcm_s16le",
                             cleaned_wav,
                         ],
-                        label="ffmpeg 음량 평탄화",
+                        label=flatten_label,
                     ):
                         return chunk_dir, []
                     self._write_cleaned_audio_cache_meta(cleaned_meta, cache_config)
@@ -570,6 +586,7 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
         overrides = getattr(self, '_fast_mode_overrides', None)
         if overrides and isinstance(overrides, dict):
             data.update(overrides)
+        data = apply_apple_m_subtitle_pipeline_plan(data)
         return data
 
     def clear_fast_mode_overrides(self):
@@ -906,7 +923,12 @@ class VideoProcessor(VideoProcessorTranscribeMixin, VideoProcessorAudioHelpersMi
                 "-acodec", "pcm_s16le",
                 cleaned_wav,
             ]
-            ok = self._run_media_command(final_cmd, label="ffmpeg 음량 평탄화")
+            flatten_label = (
+                "Mac Native Fast 음량 평탄화"
+                if self._macos_native_fast_audio_flatten_enabled(settings)
+                else "ffmpeg 음량 평탄화"
+            )
+            ok = self._run_media_command(final_cmd, label=flatten_label)
             if not ok or not os.path.exists(cleaned_wav) or os.path.getsize(cleaned_wav) <= 0:
                 return False, False
             get_logger().log("  ✅ [전처리+음성] 청크 병렬 오디오 전처리 완료")

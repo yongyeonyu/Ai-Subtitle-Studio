@@ -85,18 +85,16 @@ STT_QUALITY_SAVED_SETTING_KEYS = {
 
 
 def _quality_model() -> str:
-    return "mlx-community/whisper-large-v3-mlx" if config.IS_MAC else "large-v3"
+    return getattr(config, "WHISPERKIT_QUALITY_MODEL", "whisperkit-persistent:large-v3")
 
 
 def _fast_model() -> str:
-    return "mlx-community/whisper-large-v3-turbo" if config.IS_MAC else "large-v3-turbo"
+    return getattr(config, "WHISPERKIT_FAST_MODEL", "whisperkit-persistent:large-v3-turbo")
 
 
 def _secondary_model() -> str:
     return (
         "youngouk/ghost613-turbo-korean-4bit-mlx"
-        if config.IS_MAC else
-        "ghost613/faster-whisper-large-v3-turbo-korean"
     )
 
 

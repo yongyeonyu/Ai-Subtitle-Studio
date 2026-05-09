@@ -61,18 +61,14 @@ class WhisperModelCatalogTest(unittest.TestCase):
         self.assertIn("whisper-medium-komixv2", MAC_WHISPER_MODELS)
         self.assertIn("youngouk/whisper-medium-komixv2-mlx", MAC_WHISPER_MODELS)
         self.assertIn("seastar105/whisper-medium-komixv2", MAC_WHISPER_MODELS)
-        self.assertIn("whisper-medium-komixv2", WINDOWS_WHISPER_MODELS)
-        self.assertIn("seastar105/whisper-medium-komixv2", WINDOWS_WHISPER_MODELS)
+        self.assertEqual(WINDOWS_WHISPER_MODELS, [])
 
     def test_korean_komixv2_candidates_are_selectable_for_stt2(self):
         mac_stt2 = stt2_whisper_model_candidates(MAC_WHISPER_MODELS)
-        windows_stt2 = stt2_whisper_model_candidates(WINDOWS_WHISPER_MODELS)
 
         self.assertIn("whisper-medium-komixv2", mac_stt2)
         self.assertIn("youngouk/whisper-medium-komixv2-mlx", mac_stt2)
         self.assertIn("seastar105/whisper-medium-komixv2", mac_stt2)
-        self.assertIn("whisper-medium-komixv2", windows_stt2)
-        self.assertIn("seastar105/whisper-medium-komixv2", windows_stt2)
 
     def test_unused_models_are_not_in_default_settings(self):
         defaults = json.loads((ROOT / "dataset" / "custom_defaults.json").read_text(encoding="utf-8"))

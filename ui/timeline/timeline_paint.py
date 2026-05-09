@@ -72,6 +72,19 @@ QUALITY_SEGMENT_COLORS = {
     "gray": ("#2F343A", "#8E8E93"),
 }
 
+WAVEFORM_RULER_BG = "#24231F"
+WAVEFORM_RULER_LINE = "#6A6651"
+WAVEFORM_BG = "#2B2500"
+WAVEFORM_BG_GRID = "#463D08"
+WAVEFORM_MIDLINE = "#827C43"
+WAVEFORM_TOP = QColor(80, 245, 238, 232)
+WAVEFORM_BOTTOM = QColor(23, 159, 166, 238)
+WAVEFORM_TOP_LOUD = QColor(144, 255, 247, 248)
+WAVEFORM_BOTTOM_LOUD = QColor(35, 214, 220, 248)
+WAVEFORM_TOP_QUIET = QColor(58, 168, 164, 160)
+WAVEFORM_BOTTOM_QUIET = QColor(35, 104, 111, 155)
+WAVEFORM_VAD_OVERLAY = QColor(0, 255, 210, 22)
+
 
 SUBTITLE_STATE_SEGMENT_COLORS = {
     "confirmed": ("#203A2A", SUBTITLE_STATUS_COLORS["confirmed"]),
@@ -154,6 +167,15 @@ def cut_boundary_scan_marker_verified(marker) -> bool:
 def scan_boundary_marker_visual(marker, *, hover: bool = False) -> dict:
     if hover:
         return {"color": "#00FFFF", "width": 3, "style": "solid"}
+    if isinstance(marker, dict):
+        status = str(marker.get("status", "") or "").strip().lower()
+        stage = str(marker.get("detector_stage", "") or "").strip().lower()
+        if (
+            status in {"verifying", "checking", "follower", "follower_verifying"}
+            or stage == "follower"
+            or bool(marker.get("follower_active"))
+        ):
+            return {"color": "#FFCC00", "width": 3, "style": "dash"}
     if cut_boundary_scan_marker_verified(marker):
         return {"color": "#6EA8FF", "width": 2, "style": "solid"}
     if isinstance(marker, dict):
@@ -179,6 +201,22 @@ def scan_boundary_marker_visual(marker, *, hover: bool = False) -> dict:
             width = 3 if color.upper() == "#39FF14" else 2
             return {"color": color, "width": width, "style": style}
     return {"color": "#00FFFF", "width": 2, "style": "solid"}
+
+
+def scan_boundary_marker_label(marker) -> str:
+    if not isinstance(marker, dict):
+        return "임시"
+    label = str(marker.get("ui_label", "") or "").strip()
+    if label:
+        return label
+    status = str(marker.get("status", "") or "").strip().lower()
+    stage = str(marker.get("detector_stage", "") or "").strip().lower()
+    if status in {"verifying", "checking", "follower", "follower_verifying"} or stage == "follower" or bool(marker.get("follower_active")):
+        return "후발대"
+    source = str(marker.get("source", "") or marker.get("provisional_type", "") or "").strip().lower()
+    if "audio" in source or source == "audio_gain":
+        return "음성"
+    return "임시"
 
 
 def segment_text_kind(text: str) -> str:
@@ -490,6 +528,94 @@ def final_stt_selection_source(seg: dict) -> str:
 
 
 class TimelinePaintMixin:
+    def _speech_mask_for_waveform(self, wf_len: int):
+        wf_len = max(0, int(wf_len or 0))
+        if wf_len <= 0:
+            return None
+        if self._speech_mask is None or self._speech_mask_wf_len != wf_len:
+            mask = np.zeros(wf_len, dtype=bool)
+            for vs in list(getattr(self, "vad_segments", []) or []):
+                try:
+                    s_idx = max(0, int(float(vs.get("start", 0.0) or 0.0) * 100))
+                    e_idx = min(wf_len, int(float(vs.get("end", 0.0) or 0.0) * 100) + 1)
+                except Exception:
+                    continue
+                if e_idx > s_idx:
+                    mask[s_idx:e_idx] = True
+            self._speech_mask = mask
+            self._speech_mask_wf_len = wf_len
+            self._waveform_line_cache_key = None
+            self._waveform_line_cache = None
+        return self._speech_mask
+
+    def _waveform_line_groups_cached(self, x_start: int, x_end: int):
+        wf = getattr(self, "_waveform", None)
+        if wf is None:
+            return None
+        try:
+            wf_len = len(wf)
+        except Exception:
+            return None
+        if wf_len <= 0:
+            return None
+        speech_mask = self._speech_mask_for_waveform(wf_len)
+        if speech_mask is None:
+            return None
+        pps = max(0.001, float(getattr(self, "pps", 1.0) or 1.0))
+        x_start = max(0, int(x_start or 0))
+        x_end = max(x_start, int(x_end or x_start))
+        key = (
+            id(wf),
+            wf_len,
+            id(speech_mask),
+            round(pps, 4),
+            int(x_start),
+            int(x_end),
+            int(WAVE_HALF),
+        )
+        if key == getattr(self, "_waveform_line_cache_key", None):
+            cached = getattr(self, "_waveform_line_cache", None)
+            if cached is not None:
+                return cached
+
+        top_norm_lines: list[QLine] = []
+        bot_norm_lines: list[QLine] = []
+        top_loud_lines: list[QLine] = []
+        bot_loud_lines: list[QLine] = []
+        top_sil_lines: list[QLine] = []
+        bot_sil_lines: list[QLine] = []
+        for x in range(x_start, x_end):
+            idx = int((x / pps) * 100)
+            if idx >= wf_len:
+                break
+            try:
+                val = float(wf[idx])
+            except Exception:
+                continue
+            if val < 0.008:
+                continue
+            h = max(1, min(int(val * (WAVE_HALF * 2.0)), WAVE_HALF))
+            if bool(speech_mask[idx]):
+                if val > 0.6:
+                    top_loud_lines.append(QLine(x, WAVE_MID, x, WAVE_MID - h))
+                    bot_loud_lines.append(QLine(x, WAVE_MID + 1, x, WAVE_MID + h))
+                else:
+                    top_norm_lines.append(QLine(x, WAVE_MID, x, WAVE_MID - h))
+                    bot_norm_lines.append(QLine(x, WAVE_MID + 1, x, WAVE_MID + h))
+            else:
+                top_sil_lines.append(QLine(x, WAVE_MID, x, WAVE_MID - h))
+                bot_sil_lines.append(QLine(x, WAVE_MID + 1, x, WAVE_MID + h))
+        result = (
+            top_norm_lines,
+            bot_norm_lines,
+            top_loud_lines,
+            bot_loud_lines,
+            top_sil_lines,
+            bot_sil_lines,
+        )
+        self._waveform_line_cache_key = key
+        self._waveform_line_cache = result
+        return result
 
     def paintEvent(self, event):
         if bool(getattr(self, "_shutdown_in_progress", False)):
@@ -823,6 +949,70 @@ class TimelinePaintMixin:
                 p.setPen(color.lighter(145))
                 p.drawText(QRect(int(x1) + 6, lane_top, int(w) - 12, lane_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignCenter, text)
 
+        def _draw_cut_boundary_work_lane():
+            scan_rows = getattr(self, "scan_boundary_times", []) or []
+            if hasattr(self, "_visible_items_for_paint"):
+                candidates = self._visible_items_for_paint(
+                    scan_rows,
+                    "scan_boundaries",
+                    visible_start_sec,
+                    visible_end_sec,
+                    pad_sec=0.05,
+                )
+            else:
+                candidates = list(scan_rows or [])
+            items = [
+                item for item in list(candidates or [])
+                if isinstance(item, dict) and not cut_boundary_scan_marker_verified(item)
+            ]
+            if not items:
+                return
+            clip = paint_clip
+            lane_top = RULER_H + WAVE_H + 5
+            lane_h = max(18, SEG_TOP - lane_top - 7)
+            x_start = max(0, clip.left())
+            x_end = min(total_w, clip.right() + 1)
+            p.setPen(QPen(QColor("#2D3942"), 1))
+            p.setBrush(QColor(11, 20, 24, 172))
+            p.drawRect(QRect(x_start, lane_top, max(1, x_end - x_start), lane_h))
+            p.setFont(QFont(config.FONT, 8, QFont.Weight.Bold))
+            detail_items = []
+            for item in items:
+                try:
+                    sec = float(item.get("timeline_sec", item.get("time", item.get("start", 0.0))) or 0.0)
+                except Exception:
+                    continue
+                x = self._x(sec)
+                if x < clip.left() - 8 or x > clip.right() + 8:
+                    continue
+                visual = scan_boundary_marker_visual(item)
+                color = QColor(str(visual.get("color") or "#8E8E93"))
+                width = max(2, int(visual.get("width", 2) or 2))
+                style_name = str(visual.get("style") or "solid")
+                pen_style = Qt.PenStyle.DashLine if style_name == "dash" else (Qt.PenStyle.DotLine if style_name == "dot" else Qt.PenStyle.SolidLine)
+                p.setPen(QPen(color, width, pen_style))
+                p.drawLine(int(x), lane_top + 3, int(x), lane_top + lane_h - 4)
+                p.setBrush(QColor(color.red(), color.green(), color.blue(), 64))
+                marker_rect = QRect(int(x) - 5, lane_top + max(3, lane_h // 2 - 5), 10, 10)
+                p.drawEllipse(marker_rect)
+                label = scan_boundary_marker_label(item)
+                if label and not dense_segment_mode:
+                    detail_items.append((label, color, x, width))
+            for label, color, x, _width in detail_items:
+                label_w = max(34, min(76, p.fontMetrics().horizontalAdvance(label) + 12))
+                rect = QRect(int(x) + 7, lane_top + 2, label_w, min(18, lane_h - 4))
+                if rect.right() > clip.right():
+                    rect.moveRight(int(x) - 7)
+                p.setPen(Qt.PenStyle.NoPen)
+                fill = QColor("#11181C")
+                fill.setAlpha(218)
+                p.setBrush(fill)
+                p.drawRoundedRect(QRectF(rect), 4, 4)
+                p.setPen(QPen(color, 1))
+                p.drawRoundedRect(QRectF(rect), 4, 4)
+                p.setPen(QColor("#F5F7FA"))
+                p.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
+
         def _draw_lane_labels():
             scroll_area = self.parent()
             while scroll_area and not isinstance(scroll_area, QScrollArea):
@@ -942,6 +1132,9 @@ class TimelinePaintMixin:
         ruler_font.setBold(True)
         p.setFont(ruler_font)
         fm_ruler = p.fontMetrics()
+        p.fillRect(QRect(clip_left, 0, max(1, clip_right - clip_left), RULER_H), QColor(WAVEFORM_RULER_BG))
+        p.setPen(QPen(QColor(WAVEFORM_RULER_LINE), 1))
+        p.drawLine(clip_left, RULER_H - 1, clip_right, RULER_H - 1)
 
         MIN_LABEL_PX = 80
         nice_steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600]
@@ -968,11 +1161,11 @@ class TimelinePaintMixin:
             if tx > clip_right:
                 break
             if sec_i > 0:
-                p.setPen(QColor("#6F7A83"))
+                p.setPen(QColor("#7B7A69"))
                 p.drawLine(tx, 10, tx, RULER_H - 9)
                 label = _fmt_ruler(sec_i)
                 lw = fm_ruler.horizontalAdvance(label)
-                p.setPen(QColor("#A9B0B7"))
+                p.setPen(QColor("#B9B5A2"))
                 p.drawText(tx - lw // 2, RULER_H - 7, label)
             sec_i = round(sec_i + major_step, 3)
 
@@ -986,63 +1179,39 @@ class TimelinePaintMixin:
             if major_step > 0 and abs(round(sec_f / major_step) * major_step - sec_f) < 0.001:
                 sec_f = round(sec_f + sub_step, 3)
                 continue
-            p.setPen(QColor("#46525B"))
+            p.setPen(QColor("#555244"))
             p.drawLine(tx, 13, tx, RULER_H - 14)
             sec_f = round(sec_f + sub_step, 3)
 
-        p.fillRect(QRect(clip_left, RULER_H, max(1, clip_right - clip_left), WAVE_H), QColor("#070A0C"))
+        p.fillRect(QRect(clip_left, RULER_H, max(1, clip_right - clip_left), WAVE_H), QColor(WAVEFORM_BG))
+        p.setPen(QPen(QColor(WAVEFORM_BG_GRID), 1))
+        p.drawLine(clip_left, RULER_H, clip_right, RULER_H)
+        p.drawLine(clip_left, RULER_H + WAVE_H - 1, clip_right, RULER_H + WAVE_H - 1)
+        p.setPen(QPen(QColor(WAVEFORM_MIDLINE), 1))
+        p.drawLine(clip_left, WAVE_MID, clip_right, WAVE_MID)
 
         if self._waveform is not None:
-            wf = self._waveform
-            wf_len = len(wf)
-
-            p.setPen(QPen(QColor("#2D3942"), 1))
-            p.drawLine(clip_left, WAVE_MID, clip_right, WAVE_MID)
-
-            if self._speech_mask is None or self._speech_mask_wf_len != wf_len:
-                mask = np.zeros(wf_len, dtype=bool)
-                for vs in self.vad_segments:
-                    s_idx = max(0, int(vs["start"] * 100))
-                    e_idx = min(wf_len, int(vs["end"] * 100) + 1)
-                    mask[s_idx:e_idx] = True
-                self._speech_mask = mask
-                self._speech_mask_wf_len = wf_len
-            speech_mask = self._speech_mask
-
             clip = paint_clip
             x_start = max(0, clip.left())
             x_end = min(total_w, clip.right() + 1)
 
-            pen_top_norm = QPen(QColor(170, 176, 184), 1)
-            pen_bot_norm = QPen(QColor(104, 110, 118), 1)
-            pen_top_loud = QPen(QColor(220, 224, 228), 1)
-            pen_bot_loud = QPen(QColor(150, 156, 164), 1)
-            pen_top_sil = QPen(QColor(82, 87, 94), 1)
-            pen_bot_sil = QPen(QColor(56, 61, 68), 1)
-            top_norm_lines: list[QLine] = []
-            bot_norm_lines: list[QLine] = []
-            top_loud_lines: list[QLine] = []
-            bot_loud_lines: list[QLine] = []
-            top_sil_lines: list[QLine] = []
-            bot_sil_lines: list[QLine] = []
-
-            for x in range(x_start, x_end):
-                idx = int((x / self.pps) * 100)
-                if idx >= wf_len: break
-                val = wf[idx]
-                if val < 0.008: continue
-                h = min(int(val * WAVE_HALF * 2.0), WAVE_HALF - 1)
-                in_sp = speech_mask[idx]
-                if in_sp:
-                    if val > 0.6:
-                        top_loud_lines.append(QLine(x, WAVE_MID, x, WAVE_MID - h))
-                        bot_loud_lines.append(QLine(x, WAVE_MID + 1, x, WAVE_MID + h))
-                    else:
-                        top_norm_lines.append(QLine(x, WAVE_MID, x, WAVE_MID - h))
-                        bot_norm_lines.append(QLine(x, WAVE_MID + 1, x, WAVE_MID + h))
-                else:
-                    top_sil_lines.append(QLine(x, WAVE_MID, x, WAVE_MID - h))
-                    bot_sil_lines.append(QLine(x, WAVE_MID + 1, x, WAVE_MID + h))
+            pen_top_norm = QPen(WAVEFORM_TOP, 1)
+            pen_bot_norm = QPen(WAVEFORM_BOTTOM, 1)
+            pen_top_loud = QPen(WAVEFORM_TOP_LOUD, 1)
+            pen_bot_loud = QPen(WAVEFORM_BOTTOM_LOUD, 1)
+            pen_top_sil = QPen(WAVEFORM_TOP_QUIET, 1)
+            pen_bot_sil = QPen(WAVEFORM_BOTTOM_QUIET, 1)
+            line_groups = self._waveform_line_groups_cached(x_start, x_end)
+            if line_groups is None:
+                line_groups = ([], [], [], [], [], [])
+            (
+                top_norm_lines,
+                bot_norm_lines,
+                top_loud_lines,
+                bot_loud_lines,
+                top_sil_lines,
+                bot_sil_lines,
+            ) = line_groups
 
             for pen, lines in (
                 (pen_top_norm, top_norm_lines),
@@ -1064,7 +1233,7 @@ class TimelinePaintMixin:
                 if vx2 < clip_left or vx1 > clip_right:
                     continue
                 vad_rects.append(QRect(vx1, RULER_H, max(1, vx2 - vx1), WAVE_H))
-            _draw_rect_batch(vad_rects, fill=QColor(87, 157, 255, 34))
+            _draw_rect_batch(vad_rects, fill=WAVEFORM_VAD_OVERLAY)
 
         if self.re_recog_zone:
             rs, re_sec = self.re_recog_zone
@@ -1077,6 +1246,7 @@ class TimelinePaintMixin:
                 p.fillRect(QRect(gx1, RULER_H, gx2 - gx1, WAVE_H), QColor(0, 255, 0, 70))
 
         _draw_roughcut_major_lane()
+        _draw_cut_boundary_work_lane()
 
         p.fillRect(QRect(clip_left, SEG_TOP, max(1, clip_right - clip_left), SEG_BOT - SEG_TOP), QColor("#11181C"))
         p.setPen(QPen(QColor("#2D3942"), 1))
@@ -1621,72 +1791,9 @@ class TimelinePaintMixin:
             p.setFont(QFont(config.FONT, 20, QFont.Weight.Bold))
             p.drawText(self._clip_add_rect, Qt.AlignmentFlag.AlignCenter, "+")
 
-        boundary_lane_top = RULER_H + WAVE_H + 5
-        boundary_lane_h = max(18, SEG_TOP - boundary_lane_top - 7)
-        boundary_top = int(boundary_lane_top + 3)
-        boundary_bot = int(boundary_lane_top + boundary_lane_h - 3)
-
-        def _visible_time_items(items, sec_getter, *, keep_index: bool = False):
-            rows = list(items or [])
-            if len(rows) < 64:
-                visible_rows = []
-                for idx, item in enumerate(rows):
-                    try:
-                        sec = float(sec_getter(item))
-                    except Exception:
-                        continue
-                    visible_rows.append((idx, item, sec))
-                if keep_index:
-                    return visible_rows
-                return [(item, sec) for _idx, item, sec in visible_rows]
-
-            timed = []
-            for idx, item in enumerate(rows):
-                try:
-                    sec = float(sec_getter(item))
-                except Exception:
-                    continue
-                if sec < 0.0:
-                    continue
-                timed.append((sec, idx, item))
-            timed.sort(key=lambda row: (row[0], row[1]))
-            secs = [row[0] for row in timed]
-            pad = max(0.02, 12.0 / max(0.001, float(getattr(self, "pps", 1.0) or 1.0)))
-            start_idx = bisect_left(secs, visible_start_sec - pad)
-            end_idx = bisect_right(secs, visible_end_sec + pad)
-            if keep_index:
-                return [(idx, item, sec) for sec, idx, item in timed[start_idx:end_idx]]
-            return [(item, sec) for sec, _idx, item in timed[start_idx:end_idx]]
-
-        if getattr(self, "boundary_times", None):
-            pen_confirmed_boundary = QPen(QColor("#6EA8FF"), 2, Qt.PenStyle.SolidLine)
-            for bt, sec in _visible_time_items(getattr(self, "boundary_times", []) or [], lambda item: float(item or 0.0)):
-                bx = self._x(sec)
-                if bx < clip_left or bx > clip_right:
-                    continue
-                p.setPen(pen_confirmed_boundary)
-                p.drawLine(bx, boundary_top, bx, boundary_bot)
-        if getattr(self, "show_scan_boundary_markers", False) and getattr(self, "scan_boundary_times", None):
-            hover_scan_boundary_idx = getattr(self, "_hover_scan_boundary_idx", None)
-            for idx, bt, sec in _visible_time_items(
-                getattr(self, "scan_boundary_times", []) or [],
-                lambda item: self._scan_boundary_sec(item) if hasattr(self, "_scan_boundary_sec") else (
-                    item.get("timeline_sec", item.get("time", item.get("start", 0.0))) if isinstance(item, dict) else item
-                ),
-                keep_index=True,
-            ):
-                visual = scan_boundary_marker_visual(bt, hover=(hover_scan_boundary_idx == idx))
-                pen_style = (
-                    Qt.PenStyle.DotLine
-                    if visual["style"] == "dot"
-                    else (Qt.PenStyle.DashLine if visual["style"] == "dash" else Qt.PenStyle.SolidLine)
-                )
-                pen_boundary = QPen(QColor(visual["color"]), int(visual["width"]), pen_style)
-                bx = self._x(sec)
-                if bx < clip_left or bx > clip_right:
-                    continue
-                p.setPen(pen_boundary)
-                p.drawLine(bx, boundary_top, bx, boundary_bot)
+        # Cut boundary data remains active for snapping and subtitle timing, but
+        # the dedicated blue UI lines are hidden so the middle-category lane stays
+        # visually clean. Do not clear boundary_times or scan_boundary_times here.
 
         guide_x = getattr(self, "_drag_guide_x", None)
         if guide_x is not None:

@@ -17,6 +17,7 @@ from ui.timeline.timeline_analysis import (
     MAJOR_SEGMENT_COLORS,
     analysis_markers_for_widget,
     editor_analysis_markers,
+    roughcut_major_markers,
     roughcut_major_color,
     roughcut_markers,
     subtitle_generation_silence_segments_for_editor,
@@ -593,6 +594,38 @@ class TimelineSegmentColorTests(unittest.TestCase):
         style = scan_boundary_marker_visual({"timeline_sec": 1.2, "status": "verified"}, hover=True)
 
         self.assertEqual(style, {"color": "#00FFFF", "width": 3, "style": "solid"})
+
+    def test_scan_boundary_visual_marks_follower_work_without_blue_confirmed_line(self):
+        style = scan_boundary_marker_visual(
+            {
+                "timeline_sec": 1.2,
+                "status": "verifying",
+                "detector_stage": "follower",
+                "follower_active": True,
+            }
+        )
+
+        self.assertEqual(style, {"color": "#FFCC00", "width": 3, "style": "dash"})
+
+    def test_roughcut_major_markers_accept_project_dict_segments(self):
+        markers = roughcut_major_markers(
+            {
+                "segments": [
+                    {
+                        "major_id": "A",
+                        "title": "주제없음",
+                        "start": 0.0,
+                        "end": 10.0,
+                        "status": "provisional",
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(len(markers), 1)
+        self.assertEqual(markers[0]["label"], "A")
+        self.assertEqual(markers[0]["title"], "주제없음")
+        self.assertEqual(markers[0]["color"], "#FFFFFF")
 
     def test_roughcut_major_palette_has_distinct_a_to_z_colors(self):
         colors = [roughcut_major_color(chr(65 + i), i) for i in range(26)]

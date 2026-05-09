@@ -1,10 +1,11 @@
-# Version: 03.25.01
-# Phase: PHASE11_NativeSttPipelineRelease
+# Version: 04.00.00
+# Phase: PHASE12_MacNativeV4Release
 
 
 # === OS / Platform Detection ===
 import os
 import platform
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -12,7 +13,10 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "03.25.01"
+APP_VERSION = "04.00.00"
+MACBOOK_ONLY_APP = True
+SUPPORTED_OS_NAMES = ("Darwin",)
+APP_STORE_TARGET = True
 
 # CPU / Apple Silicon
 MACHINE = platform.machine()         # "arm64", "x86_64"
@@ -27,9 +31,26 @@ INSTANCE_PORT = 47291
 
 # ── 📂 주요 폴더 경로 설정 ──
 BASE_DIR    = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-DATASET_DIR = os.path.join(BASE_DIR, "dataset")
-OUTPUT_DIR  = os.path.join(BASE_DIR, "output")
-VOICE_DATA_DIR = os.path.join(BASE_DIR, "voice_data")
+BUNDLE_RESOURCES_DIR = os.environ.get("AI_SUBTITLE_STUDIO_BUNDLE_RESOURCES", "")
+RUNNING_IN_APP_BUNDLE = bool(BUNDLE_RESOURCES_DIR)
+
+
+def _default_user_data_dir() -> str:
+    override = os.environ.get("AI_SUBTITLE_STUDIO_USER_DATA_DIR", "").strip()
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    if IS_MAC:
+        return str(Path.home() / "Library" / "Application Support" / "AI Subtitle Studio")
+    return os.path.join(BASE_DIR, ".local_app_data")
+
+
+USER_DATA_DIR = _default_user_data_dir()
+RUNTIME_BASE_DIR = USER_DATA_DIR if RUNNING_IN_APP_BUNDLE else BASE_DIR
+DATASET_DIR = os.path.join(RUNTIME_BASE_DIR, "dataset")
+OUTPUT_DIR  = os.path.join(RUNTIME_BASE_DIR, "output")
+VOICE_DATA_DIR = os.path.join(RUNTIME_BASE_DIR, "voice_data")
+PROJECTS_DIR = os.path.join(RUNTIME_BASE_DIR, "projects")
+BUNDLED_DATASET_DIR = os.path.join(BASE_DIR, "dataset")
 
 CORRECTIONS_DIR  = DATASET_DIR              # 호환용 alias
 CORRECTIONS_FILE = os.path.join(DATASET_DIR, "dataset_correction.json")
@@ -43,7 +64,10 @@ ICLOUD_DROPZONE    = os.path.expanduser(
 )
 
 # ── 🎙️ Whisper 및 오디오 설정 ──
-WHISPER_MODEL = "mlx-community/whisper-large-v3-mlx" if IS_MAC else "large-v3"
+WHISPERKIT_QUALITY_MODEL = "whisperkit-persistent:large-v3-v20240930_626MB"
+WHISPERKIT_FAST_MODEL = "whisperkit-persistent:large-v3-v20240930_turbo_632MB"
+MLX_FALLBACK_MODEL = "mlx-community/whisper-large-v3-turbo"
+WHISPER_MODEL = WHISPERKIT_QUALITY_MODEL
 LANGUAGE       = "ko"
 TIME_OFFSET    = 0.2
 
@@ -89,13 +113,34 @@ DEFAULT_ADV_SETTINGS = {
     "subtitle_common_split_hard_max_duration_sec": 5.5,
     "llm_threads_auto_enabled": True,
     "llm_workers_auto_enabled": True,
+    "runtime_hardware_acceleration_enabled": True,
+    "apple_m_pipeline_parallel_enabled": True,
+    "apple_m_chip_aware_scheduler_enabled": True,
+    "apple_m_pipeline_respect_manual_worker_settings": False,
+    "runtime_performance_profile": "max",
+    "runtime_native_threads_auto_enabled": True,
+    "runtime_native_threads": 8,
     "runtime_backend_autotune_enabled": True,
-    "stt_backend_policy": "auto",
+    "runtime_scheduler_auto_enabled": True,
+    "stt_workers_auto_enabled": True,
+    "cut_pioneer_workers_auto_enabled": True,
+    "cut_follower_workers_auto_enabled": True,
+    "lora_workers_auto_enabled": True,
+    "stt_backend_policy": "native",
     "vad_backend_policy": "auto",
-    "cut_boundary_backend_policy": "auto",
-    "audio_extract_backend_policy": "auto",
+    "cut_boundary_backend_policy": "native",
+    "audio_extract_backend_policy": "native",
     "llm_backend_policy": "auto",
-    "editor_render_backend_policy": "auto",
+    "editor_render_backend_policy": "native",
+    "whisperkit_native_auto_enabled": True,
+    "macos_native_fast_audio_flatten_enabled": True,
+    "macos_native_fast_audio_flatten_hp": 150,
+    "macos_native_fast_audio_flatten_lp": 4600,
+    "macos_native_fast_audio_flatten_comp_th": -24,
+    "macos_native_fast_audio_flatten_volume": 3.2,
+    "macos_native_fast_audio_flatten_limiter": 0.93,
+    "macos_native_app_store_target_enabled": True,
+    "macos_native_require_xcode_tools": True,
     "runtime_scheduler_ramp_up_enabled": True,
     "runtime_scheduler_ramp_initial_sec": 45.0,
     "runtime_scheduler_ramp_step_sec": 60.0,
@@ -104,6 +149,13 @@ DEFAULT_ADV_SETTINGS = {
     "runtime_memory_disk_cache_budget_gb": 12.0,
     "runtime_memory_tracemalloc_enabled": False,
     "runtime_memory_tracemalloc_frames": 8,
+    "macos_native_memory_snapshot_enabled": True,
+    "macos_memory_warning_reserve_gb": 3.0,
+    "macos_memory_critical_reserve_gb": 1.5,
+    "macos_memory_compressed_warning_ratio": 0.22,
+    "macos_memory_compressed_critical_ratio": 0.30,
+    "macos_memory_trim_runtime_caches_enabled": True,
+    "macos_memory_cache_prune_enabled": True,
     "autopilot_enabled": True,
     "autopilot_single_user_mode": True,
     "operation_mode_choices_visible": False,
@@ -129,6 +181,15 @@ DEFAULT_ADV_SETTINGS = {
     "llm_workers":      4,
     "llm_threads_resource_max": 4,
     "local_ollama_llm_max_workers": 2,
+    "subtitle_native_prepass_workers": 0,
+    "subtitle_native_prepass_workers_resource_max": 0,
+    "codex_subtitle_native_fast_path_enabled": True,
+    "codex_subtitle_native_fast_path_min_segments": 80,
+    "codex_subtitle_native_fast_path_long_text_llm_ratio": 2.8,
+    "native_swift_llm_candidate_policy_enabled": False,
+    "native_swift_deep_policy_enabled": False,
+    "native_swift_lora_scoring_enabled": False,
+    "native_swift_lora_scoring_min_docs": 32,
     "sub_gap_break_sec":  1.5,
     "sub_min_duration":   0.2,
     "sub_max_cps":        12,
@@ -144,19 +205,23 @@ DEFAULT_ADV_SETTINGS = {
     "stt_low_score_recheck_threshold": 60,
     "stt_low_score_recheck_padding_sec": 0.8,
     "stt_low_score_recheck_max_segments": 80,
+    "stt_low_score_recheck_max_audio_sec": 180.0,
+    "stt_recheck_native_fast_audio_filter_enabled": True,
+    "stt_persistent_runtime_reuse_enabled": True,
+    "stt_primary_fast_native_enabled": True,
+    "stt_primary_fast_native_model": WHISPERKIT_FAST_MODEL,
+    "editor_live_stt_preview_follow_video_enabled": False,
+    "editor_live_stt_preview_follow_interval_sec": 2.0,
     "stt_word_timestamps_mode": "selective",
     "stt_word_timestamps_default_enabled": False,
     "stt_word_timestamps_precision_enabled": True,
     "stt_word_timestamps_precision_threshold": 72.0,
-    "stt_word_timestamps_precision_max_segments": 80,
+    "stt_word_timestamps_precision_max_segments": 24,
+    "stt_word_timestamps_precision_max_audio_sec": 90.0,
     "stt_word_timestamps_precision_keep_text": True,
     "stt_word_timestamps_precision_min_similarity": 0.18,
     "stt_missing_voice_min_duration_sec": 0.55,
-    "selected_whisper_model_secondary": (
-        "youngouk/ghost613-turbo-korean-4bit-mlx"
-        if IS_MAC else
-        "ghost613/faster-whisper-large-v3-turbo-korean"
-    ),
+    "selected_whisper_model_secondary": "youngouk/ghost613-turbo-korean-4bit-mlx",
     "stt_ensemble_llm_judge_enabled": False,
     "vad_post_stt_align_enabled": True,
     "vad_post_stt_max_shift_sec": 0.7,
@@ -168,10 +233,11 @@ DEFAULT_ADV_SETTINGS = {
     "editor_truth_capture_enabled": True,
     "editor_truth_capture_min_chars": 2,
     "editor_truth_capture_max_chars": 240,
-    "audio_chunk_routing_enabled": False,
-    "audio_chunk_route_vad_enabled": False,
-    "audio_chunk_route_max_workers": 2,
+    "audio_chunk_routing_enabled": True,
+    "audio_chunk_route_vad_enabled": True,
+    "audio_chunk_route_max_workers": 4,
     "audio_chunk_profile_sec": 30.0,
+    "direct_ffmpeg_chunk_min_sec": 1.0,
     "whisper_chunk_overlap_sec": 1.5,
     "chunk_time_limit": 240,
     "subtitle_bundle_autopilot_enabled": True,

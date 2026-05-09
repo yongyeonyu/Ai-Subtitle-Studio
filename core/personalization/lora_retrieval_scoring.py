@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
@@ -63,6 +64,13 @@ def _kind_boost(kind: str) -> float:
         "learned_line_break_rules": 4.0,
         "best_settings": 3.0,
     }.get(kind, 1.0)
+
+
+def _setting_bool(settings: dict[str, Any] | None, key: str, default: bool = False) -> bool:
+    value = (settings or {}).get(key, default)
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "on", "yes"}
+    return bool(value)
 
 
 def _bm25_scores(index: dict[str, Any], query_terms: Counter[str]) -> dict[int, float]:
@@ -175,12 +183,38 @@ def score_lora_docs(
     query_facets: dict[str, Any] | None = None,
     kinds: set[str] | None = None,
     quality_buckets: set[str] | frozenset[str] | None = None,
+    settings: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     docs = list(index.get("docs") or [])
     query_vector = vectorize_lora_text(query)
     query_terms = term_counts(query)
     if not docs or (not query_vector and not query_terms):
         return []
+    native_requested = _setting_bool(settings, "native_swift_lora_scoring_enabled", False) or any(
+        os.environ.get(key, "").strip().lower() in {"1", "true", "on", "yes"}
+        for key in ("AI_SUBTITLE_STUDIO_SWIFT_LORA_SCORING", "AI_SUBTITLE_STUDIO_SWIFT_POLICY")
+    )
+    if native_requested:
+        try:
+            from core.native_swift_policy import score_lora_docs_via_swift
+
+            native_ranked = score_lora_docs_via_swift(
+                index,
+                query,
+                media_path=media_path,
+                media_id=media_id,
+                query_facets=query_facets,
+                kinds=kinds,
+                quality_buckets=quality_buckets,
+                query_vector=dict(query_vector),
+                query_terms=dict(query_terms),
+                media_lookup_keys=personalization_path_lookup_keys(media_path),
+                settings=settings or {"native_swift_lora_scoring_enabled": True},
+            )
+            if native_ranked is not None:
+                return native_ranked
+        except Exception:
+            pass
     inverted = dict(index.get("inverted_index") or {})
     vector_scores: dict[int, float] = defaultdict(float)
     for bucket, query_weight in query_vector.items():

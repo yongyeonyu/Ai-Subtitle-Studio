@@ -4,6 +4,11 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+try:
+    from core.native_cut_boundary import llm_macro_group_ranges as _native_llm_macro_group_ranges
+except Exception:  # pragma: no cover - optional native extension.
+    _native_llm_macro_group_ranges = None
+
 
 MACRO_CHUNK_POLICY_SCHEMA = "ai_subtitle_studio.subtitle_llm_macro_chunk.v1"
 
@@ -71,6 +76,9 @@ def confirmed_cut_before_segment(prev: dict[str, Any], current: dict[str, Any], 
 def build_llm_macro_groups(rows: list[dict], needs_llm: list[bool], settings: dict) -> list[dict]:
     min_rows = max(2, _setting_int(settings, "subtitle_llm_macro_chunk_min_rows", 10))
     max_rows = max(min_rows, _setting_int(settings, "subtitle_llm_macro_chunk_max_rows", 15))
+    native = _native_macro_groups(rows, needs_llm, settings, min_rows=min_rows, max_rows=max_rows)
+    if native is not None:
+        return native
     groups: list[dict] = []
     current_rows: list[dict] = []
     current_needs: list[bool] = []
@@ -105,6 +113,57 @@ def build_llm_macro_groups(rows: list[dict], needs_llm: list[bool], settings: di
         current_needs.append(bool(needs_llm[index] if index < len(needs_llm) else False))
     flush()
     return groups
+
+
+def _native_macro_groups(
+    rows: list[dict],
+    needs_llm: list[bool],
+    settings: dict,
+    *,
+    min_rows: int,
+    max_rows: int,
+) -> list[dict] | None:
+    if not _setting_bool(settings, "native_cpp_llm_macro_groups_enabled", False):
+        return None
+    if not callable(_native_llm_macro_group_ranges):
+        return None
+    clean_rows = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+    if len(clean_rows) < 2:
+        return None
+    needs_flags = [1 if bool(needs_llm[index] if index < len(needs_llm) else False) else 0 for index in range(len(clean_rows))]
+    cut_before = [0] * len(clean_rows)
+    for index in range(1, len(clean_rows)):
+        if confirmed_cut_before_segment(clean_rows[index - 1], clean_rows[index], settings):
+            cut_before[index] = 1
+    ranges = _native_llm_macro_group_ranges(
+        cut_before,
+        needs_flags,
+        min_rows=min_rows,
+        max_rows=max_rows,
+    )
+    if not ranges:
+        return None
+    groups: list[dict] = []
+    for start, end, needs_any, need_count in ranges:
+        start_i = max(0, min(int(start), len(clean_rows)))
+        end_i = max(start_i, min(int(end), len(clean_rows)))
+        if end_i <= start_i:
+            continue
+        group_needs = bool(needs_any)
+        group_need_count = int(need_count)
+        groups.append(
+            {
+                "start_index": start_i,
+                "rows": clean_rows[start_i:end_i],
+                "needs_llm": group_needs,
+                "need_count": group_need_count,
+                "_native_group_policy": {
+                    "schema": "ai_subtitle_studio.native_llm_macro_groups.v1",
+                    "backend": "cpp",
+                },
+            }
+        )
+    return groups or None
 
 
 def words_for_macro_group(rows: list[dict]) -> list[dict]:

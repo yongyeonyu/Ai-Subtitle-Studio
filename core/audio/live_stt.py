@@ -5,8 +5,8 @@ core/audio/live_stt.py
 마이크 직접 입력용 고성능 STT 유틸.
 
 우선순위:
-1. macOS Apple Silicon: MLX Whisper persistent worker
-2. Windows/Linux: faster-whisper subprocess
+1. macOS Apple Silicon: Swift WhisperKit persistent worker
+2. MLX Whisper persistent worker fallback
 3. 실패 시 기존 SpeechRecognition Google fallback
 """
 from __future__ import annotations
@@ -28,6 +28,7 @@ from core.runtime.logger import get_logger
 
 
 _LIVE_MLX_PROC = None
+_LIVE_WHISPERKIT_PROC = None
 _LIVE_MLX_LOCK = threading.Lock()
 
 
@@ -151,18 +152,21 @@ def _prepare_live_wav(raw_wav: str, clean_wav: str) -> str:
 
 def _select_live_model(settings: dict, profile: str) -> str:
     selected = settings.get("selected_whisper_model") or getattr(
-        config, "WHISPER_MODEL", "mlx-community/whisper-large-v3-mlx"
+        config, "WHISPER_MODEL", "whisperkit-persistent:large-v3"
     )
     profile = (profile or "quality").lower()
     from core.audio.npu_acceleration import npu_whisper_routing_enabled, whisper_model_npu_target
 
     if config.IS_MAC:
         if profile == "fast":
+            whisperkit_fast = str(getattr(config, "WHISPERKIT_FAST_MODEL", "") or "").strip()
+            if whisperkit_fast:
+                return whisperkit_fast
             if npu_whisper_routing_enabled(settings, purpose="live_stt") and whisper_model_npu_target(str(selected)):
                 return str(selected)
             return "mlx-community/whisper-large-v3-turbo"
-        if "large" in selected:
-            return selected
+        if "large" in str(selected).lower():
+            return str(selected)
         return "mlx-community/whisper-large-v3-mlx"
 
     if profile == "fast":
@@ -175,6 +179,7 @@ def _select_live_model(settings: dict, profile: str) -> str:
 def _transcribe_local_whisper(wav_path: str, model: str, settings: dict | None = None) -> str:
     from core.audio.npu_acceleration import prefer_npu_whisper_model
     from core.audio.whisper_coreml import is_coreml_whisper_model
+    from core.audio.whisperkit_persistent import is_whisperkit_persistent_model
     from core.audio.whisper_transformers import (
         is_transformers_whisper_model,
         transformers_whisper_fallback_model,
@@ -182,6 +187,12 @@ def _transcribe_local_whisper(wav_path: str, model: str, settings: dict | None =
     )
 
     effective_model = prefer_npu_whisper_model(model, settings, purpose="live_stt", log_label="LIVE STT")
+    if is_whisperkit_persistent_model(effective_model):
+        try:
+            return _transcribe_whisperkit(wav_path, effective_model)
+        except Exception as exc:
+            get_logger().log(f"  ↩️ [LIVE STT] WhisperKit Native 실패 → MLX fallback: {exc}")
+            return _transcribe_mlx(wav_path, str(getattr(config, "MLX_FALLBACK_MODEL", "") or "mlx-community/whisper-large-v3-turbo"))
     if is_coreml_whisper_model(effective_model):
         return _transcribe_coreml(wav_path, effective_model)
     if is_transformers_whisper_model(effective_model):
@@ -193,12 +204,15 @@ def _transcribe_local_whisper(wav_path: str, model: str, settings: dict | None =
                 f"({reason}) → {fallback_model or '기본 로컬 Whisper'} fallback"
             )
             if config.IS_MAC:
-                return _transcribe_mlx(wav_path, fallback_model or "mlx-community/whisper-large-v3-turbo")
-            return _transcribe_faster(wav_path, fallback_model or "large-v3-turbo")
+                return _transcribe_mlx(
+                    wav_path,
+                    fallback_model or str(getattr(config, "MLX_FALLBACK_MODEL", "") or "mlx-community/whisper-large-v3-turbo"),
+                )
+            raise RuntimeError("macOS native branch does not run faster-whisper live STT")
         return _transcribe_transformers(wav_path, effective_model)
     if config.IS_MAC:
         return _transcribe_mlx(wav_path, effective_model)
-    return _transcribe_faster(wav_path, effective_model)
+    raise RuntimeError("macOS native branch requires macOS for live STT")
 
 
 def _transcribe_coreml(wav_path: str, model: str) -> str:
@@ -282,19 +296,66 @@ def _transcribe_mlx(wav_path: str, model: str) -> str:
 
 
 def stop_live_stt_worker() -> bool:
-    global _LIVE_MLX_PROC
+    global _LIVE_MLX_PROC, _LIVE_WHISPERKIT_PROC
+    stopped = False
     with _LIVE_MLX_LOCK:
+        whisperkit_proc = _LIVE_WHISPERKIT_PROC
+        _LIVE_WHISPERKIT_PROC = None
+        if whisperkit_proc:
+            try:
+                from core.audio.whisperkit_persistent import stop_worker as stop_whisperkit_worker
+
+                stop_whisperkit_worker(whisperkit_proc)
+                stopped = True
+            except Exception:
+                pass
         proc = _LIVE_MLX_PROC
         _LIVE_MLX_PROC = None
         if not proc:
-            return False
+            return stopped
         try:
             from core.audio.whisper_mlx import stop_worker
 
             stop_worker(proc)
             return True
         except Exception:
-            return False
+            return stopped
+
+
+def _transcribe_whisperkit(wav_path: str, model: str) -> str:
+    global _LIVE_WHISPERKIT_PROC
+    from core.audio.whisperkit_persistent import ensure_worker, submit_task
+
+    with _LIVE_MLX_LOCK:
+        _LIVE_WHISPERKIT_PROC = ensure_worker(_LIVE_WHISPERKIT_PROC, log_label="LIVE STT")
+        if _LIVE_WHISPERKIT_PROC is None:
+            raise RuntimeError("WhisperKit persistent worker not available")
+        task_id = submit_task(
+            proc=_LIVE_WHISPERKIT_PROC,
+            chunk_paths=[wav_path],
+            model=model,
+            language=getattr(config, "LANGUAGE", "ko"),
+            temperature_values=[0.0],
+            word_timestamps=False,
+        )
+
+        while True:
+            line = _LIVE_WHISPERKIT_PROC.stdout.readline()
+            if not line:
+                raise RuntimeError("WhisperKit worker output closed")
+            data = _parse_json_line(line)
+            if not data or data.get("task_id") != task_id:
+                continue
+            if data.get("fatal_error") or data.get("error"):
+                raise RuntimeError(data.get("fatal_error") or data.get("error"))
+            result = data.get("result") or {}
+            text = _extract_text(result)
+            if text:
+                return text
+            if data.get("done"):
+                break
+
+    return ""
 
 
 def _transcribe_faster(wav_path: str, model: str) -> str:

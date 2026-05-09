@@ -3,10 +3,16 @@
 """Score STT1/STT2 subtitle candidates on a stable 0-100 scale."""
 from __future__ import annotations
 
+from bisect import bisect_left
 import re
 from typing import Any
 
 from core.native_text_similarity import character_error_rate, similarity_ratio
+
+try:
+    from core.native_cut_boundary import interval_overlaps as _native_interval_overlaps
+except Exception:  # pragma: no cover - optional native extension.
+    _native_interval_overlaps = None
 
 _KO_RE = re.compile(r"[가-힣]")
 _LANG_RE = re.compile(r"[가-힣A-Za-z]")
@@ -210,6 +216,51 @@ def _overlap_ratio(left: dict[str, Any], right: dict[str, Any]) -> float:
     return overlap / span
 
 
+def _segment_bounds(segment: dict[str, Any]) -> tuple[float, float]:
+    start = _as_float(segment.get("start"), 0.0) or 0.0
+    end = _as_float(segment.get("end"), start) or start
+    return float(start), float(end)
+
+
+def _peer_overlap_windows(
+    rows: list[dict[str, Any]],
+    peer_segments: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
+) -> list[list[dict[str, Any]]] | None:
+    if peer_segments is None:
+        return None
+    peers: list[tuple[float, float, dict[str, Any]]] = []
+    for peer in peer_segments or ():
+        if not isinstance(peer, dict):
+            continue
+        start, end = _segment_bounds(peer)
+        if end > start:
+            peers.append((start, end, dict(peer)))
+    if not peers:
+        return [[] for _ in rows]
+
+    peers.sort(key=lambda item: (item[0], item[1]))
+    peer_starts = [item[0] for item in peers]
+    row_items: list[tuple[float, float, int]] = []
+    for index, row in enumerate(rows):
+        start, end = _segment_bounds(row)
+        if end > start:
+            row_items.append((start, end, index))
+    row_items.sort(key=lambda item: (item[0], item[1]))
+
+    windows: list[list[dict[str, Any]]] = [[] for _ in rows]
+    active: list[tuple[float, float, dict[str, Any]]] = []
+    cursor = 0
+    for start, end, index in row_items:
+        stop = bisect_left(peer_starts, end, lo=cursor)
+        if stop > cursor:
+            active.extend(peers[cursor:stop])
+            cursor = stop
+        if active:
+            active = [item for item in active if item[1] > start]
+        windows[index] = [peer for peer_start, peer_end, peer in active if peer_start < end and peer_end > start]
+    return windows
+
+
 def _text_similarity(left: Any, right: Any) -> float:
     ltxt = _compact_text(left)
     rtxt = _compact_text(right)
@@ -291,6 +342,90 @@ def _vad_score(
     return score
 
 
+def _native_vad_alignment_infos(
+    segments: list[dict[str, Any]],
+    vad_segments: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
+) -> list[dict[str, Any]] | None:
+    if not callable(_native_interval_overlaps) or not segments or not vad_segments:
+        return None
+
+    starts: list[float] = []
+    ends: list[float] = []
+    durations: list[float] = []
+    for segment in segments:
+        start = max(0.0, _as_float(segment.get("start"), 0.0) or 0.0)
+        end = max(start, _as_float(segment.get("end"), start) or start)
+        starts.append(start)
+        ends.append(end)
+        durations.append(max(0.0, end - start))
+
+    vad_starts: list[float] = []
+    vad_ends: list[float] = []
+    for vad in vad_segments or ():
+        if not isinstance(vad, dict):
+            continue
+        start = max(0.0, _as_float(vad.get("start"), 0.0) or 0.0)
+        end = max(start, _as_float(vad.get("end"), start) or start)
+        if end > start:
+            vad_starts.append(start)
+            vad_ends.append(end)
+    if not vad_starts:
+        return None
+
+    overlaps = _native_interval_overlaps(starts, ends, vad_starts, vad_ends)
+    if overlaps is None or len(overlaps) != len(segments):
+        return None
+
+    infos: list[dict[str, Any]] = []
+    for duration, overlap in zip(durations, overlaps):
+        overlap_value = max(0.0, float(overlap or 0.0))
+        if duration <= 0.0:
+            infos.append(
+                {
+                    "vad_overlap_ratio": None,
+                    "vad_overlap_sec": 0.0,
+                    "vad_duration_sec": 0.0,
+                    "vad_aligned": None,
+                    "native_backend": "cpp",
+                }
+            )
+            continue
+        ratio = round(_clip(overlap_value / duration, 0.0, 1.0), 6)
+        infos.append(
+            {
+                "vad_overlap_ratio": ratio,
+                "vad_overlap_sec": round(overlap_value, 6),
+                "vad_duration_sec": round(duration, 6),
+                "vad_aligned": ratio >= 0.35,
+                "native_backend": "cpp",
+            }
+        )
+    return infos
+
+
+def _attach_native_vad_alignment(row: dict[str, Any], info: dict[str, Any]) -> None:
+    ratio = _as_float(info.get("vad_overlap_ratio"))
+    asr_metadata = dict(row.get("asr_metadata") or {})
+    vad_alignment = dict(asr_metadata.get("vad_alignment") or {})
+    if vad_alignment.get("vad_overlap_ratio") is None:
+        vad_alignment.update(info)
+        asr_metadata["vad_alignment"] = vad_alignment
+        row["asr_metadata"] = asr_metadata
+
+    quality = dict(row.get("quality") or {})
+    if ratio is None or quality.get("vad_alignment_score") is not None:
+        if quality:
+            row["quality"] = quality
+        return
+    quality["vad_alignment_score"] = round(float(ratio) * 100.0, 3)
+    flags = list(quality.get("flags") or ())
+    if ratio < 0.2 and "outside_vad_speech" not in flags:
+        flags.append("outside_vad_speech")
+    if flags:
+        quality["flags"] = tuple(flags)
+    row["quality"] = quality
+
+
 def stt_score_to_color(score: float | None) -> str:
     value = 50.0 if score is None else _clip(score)
     if value >= 50.0:
@@ -349,7 +484,7 @@ def score_stt_candidate(
     timing = _timing_score(segment, settings, flags)
     text_component = _text_score(segment, flags)
     vad = _vad_score(segment, vad_segments, flags)
-    agreement = _agreement_score(segment, peer_segments, flags) if peer_segments else None
+    agreement = _agreement_score(segment, peer_segments, flags) if peer_segments is not None else None
 
     repetition = 100.0
     for prev in reversed(list(previous_texts or ())[-36:]):
@@ -469,14 +604,19 @@ def annotate_stt_candidates(
     out: list[dict[str, Any]] = []
     previous: list[str] = []
     source_key = str(source or "").strip().upper() or "STT"
-    for segment in segments or ():
-        if not isinstance(segment, dict):
-            continue
-        row = dict(segment)
+    rows = [dict(segment) for segment in segments or () if isinstance(segment, dict)]
+    vad_infos = _native_vad_alignment_infos(rows, vad_segments)
+    if vad_infos is not None:
+        for row, info in zip(rows, vad_infos):
+            _attach_native_vad_alignment(row, info)
+    peer_windows = _peer_overlap_windows(rows, peer_segments)
+
+    for index, row in enumerate(rows):
+        row_peers = peer_windows[index] if peer_windows is not None else peer_segments
         score = score_stt_candidate(
             row,
             source=source_key,
-            peer_segments=peer_segments,
+            peer_segments=row_peers,
             vad_segments=vad_segments,
             previous_texts=previous,
             settings=settings,

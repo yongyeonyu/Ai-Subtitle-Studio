@@ -14,6 +14,96 @@ class SttBackendChoice:
     reason: str
 
 
+def _mac_mlx_alias(model: str) -> str:
+    if not bool(getattr(config, "IS_MAC", False)):
+        return ""
+    raw = str(model or "").strip()
+    lowered = raw.lower()
+    if lowered in {"large-v3", "whisper-large-v3", "openai/whisper-large-v3"}:
+        return "mlx-community/whisper-large-v3-mlx"
+    if lowered in {
+        "large-v3-turbo",
+        "whisper-large-v3-turbo",
+        "openai/whisper-large-v3-turbo",
+    }:
+        return "mlx-community/whisper-large-v3-turbo"
+    return ""
+
+
+def _whisper_cpp_ready(model: str) -> bool:
+    try:
+        from core.audio.whisper_cpp import find_whisper_cpp_binary, resolve_whisper_cpp_model_path
+
+        return bool(find_whisper_cpp_binary() and resolve_whisper_cpp_model_path(model))
+    except Exception:
+        return False
+
+
+def _whisperkit_ready() -> bool:
+    try:
+        from core.audio.whisperkit_persistent import find_whisperkit_persistent_worker
+
+        return bool(find_whisperkit_persistent_worker())
+    except Exception:
+        return False
+
+
+def _whisperkit_auto_enabled(settings: dict[str, Any] | None) -> bool:
+    value = dict(settings or {}).get("whisperkit_native_auto_enabled", True)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "off", "no", "사용 안함", "끔"}
+    return bool(value)
+
+
+def _whisperkit_model(model: str) -> str:
+    raw = str(model or "").strip()
+    lowered = raw.lower()
+    if lowered.startswith("whisperkit-persistent:"):
+        raw = raw.split(":", 1)[1].strip()
+        lowered = raw.lower()
+    alias = _mac_mlx_alias(raw)
+    if alias:
+        raw = raw.split("/")[-1].replace("whisper-", "")
+    elif lowered.startswith("mlx-community/"):
+        raw = raw.split("/", 1)[1]
+        if raw.startswith("whisper-"):
+            raw = raw[len("whisper-"):]
+        if raw.endswith("-mlx"):
+            raw = raw[:-4]
+    if not raw:
+        raw = "large-v3-v20240930_turbo_632MB"
+    lowered = raw.lower()
+    if lowered in {
+        "large-v3-turbo",
+        "whisper-large-v3-turbo",
+        "openai/whisper-large-v3-turbo",
+        "openai_whisper-large-v3_turbo",
+        "large-v3-v20240930_turbo_632mb",
+    }:
+        raw = "large-v3-v20240930_turbo_632MB"
+    elif lowered in {
+        "large-v3",
+        "whisper-large-v3",
+        "openai/whisper-large-v3",
+        "openai_whisper-large-v3",
+        "large-v3-v20240930_626mb",
+    }:
+        raw = "large-v3-v20240930_626MB"
+    return f"whisperkit-persistent:{raw}"
+
+
+def _model_for_backend(backend: str, model: str) -> str:
+    backend_key = str(backend or "").strip().lower()
+    raw = str(model or "").strip()
+    if backend_key == "whisperkit_persistent":
+        return _whisperkit_model(raw)
+    if backend_key == "whisper_cpp" and raw and not raw.lower().startswith(("whisper.cpp:", "whisper_cpp:", "whisper-cpp:")):
+        return f"whisper.cpp:{raw}"
+    if backend_key == "mlx":
+        return _mac_mlx_alias(raw) or raw
+    return raw
+
+
 def _infer_backend(model: str) -> str:
     raw = str(model or "").strip()
     lowered = raw.lower()
@@ -54,23 +144,59 @@ def select_stt_backend(model: str, settings: dict[str, Any] | None = None) -> St
 
     if policy == "disabled":
         return SttBackendChoice(_infer_backend(requested_model), requested_model, "policy_disabled_fallback")
+    if requested_model.lower().startswith("whisperkit-persistent:"):
+        return SttBackendChoice(
+            "whisperkit_persistent",
+            _whisperkit_model(requested_model),
+            "explicit_whisperkit_model",
+        )
     if prof_model:
         backend = prof_backend or _infer_backend(prof_model)
-        return SttBackendChoice(backend, prof_model, "autotuned_profile")
+        return SttBackendChoice(backend, _model_for_backend(backend, prof_model), "autotuned_profile")
     if prof_backend and policy == "auto":
-        return SttBackendChoice(prof_backend, requested_model, "autotuned_backend")
+        return SttBackendChoice(prof_backend, _model_for_backend(prof_backend, requested_model), "autotuned_backend")
 
     if policy == "quality":
+        mlx_alias = _mac_mlx_alias(requested_model)
+        if mlx_alias:
+            return SttBackendChoice("mlx", mlx_alias, "mac_native_mlx_quality_alias")
         return SttBackendChoice(_infer_backend(requested_model), requested_model, "quality_preserves_selected_model")
     if policy == "fast":
         if bool(getattr(config, "IS_MAC", False)) and requested_model == "mlx-community/whisper-large-v3-mlx":
             return SttBackendChoice("mlx", "mlx-community/whisper-large-v3-turbo", "fast_policy_mlx_turbo")
+        mlx_alias = _mac_mlx_alias(requested_model)
+        if mlx_alias:
+            turbo_alias = "mlx-community/whisper-large-v3-turbo" if "turbo" not in mlx_alias else mlx_alias
+            return SttBackendChoice("mlx", turbo_alias, "mac_native_mlx_fast_alias")
         return SttBackendChoice(_infer_backend(requested_model), requested_model, "fast_policy_selected_model")
     if policy == "native":
-        model_for_native = requested_model or "whisper.cpp:large-v3-turbo"
-        return SttBackendChoice("whisper_cpp", model_for_native, "native_policy_whisper_cpp")
+        model_for_native = requested_model or "large-v3-turbo"
+        if bool(getattr(config, "IS_MAC", False)) and _whisperkit_auto_enabled(data) and _whisperkit_ready():
+            return SttBackendChoice(
+                "whisperkit_persistent",
+                _whisperkit_model(model_for_native),
+                "native_policy_whisperkit_ready",
+            )
+        if str(model_for_native).lower().startswith(("whisper.cpp:", "whisper_cpp:", "whisper-cpp:")):
+            if _whisper_cpp_ready(model_for_native):
+                return SttBackendChoice("whisper_cpp", model_for_native, "native_policy_whisper_cpp_ready")
+        cpp_model = model_for_native if str(model_for_native).lower().startswith("whisper.cpp:") else f"whisper.cpp:{model_for_native}"
+        if _whisper_cpp_ready(cpp_model):
+            return SttBackendChoice("whisper_cpp", cpp_model, "native_policy_whisper_cpp_ready")
+        mlx_alias = _mac_mlx_alias(model_for_native) or "mlx-community/whisper-large-v3-turbo"
+        return SttBackendChoice("mlx", mlx_alias, "native_policy_mlx_safe_fallback")
     if policy == "legacy":
         return SttBackendChoice(_infer_backend(requested_model), requested_model, "legacy_policy")
+
+    mlx_alias = _mac_mlx_alias(requested_model)
+    if mlx_alias:
+        if bool(getattr(config, "IS_MAC", False)) and _whisperkit_auto_enabled(data) and _whisperkit_ready():
+            return SttBackendChoice(
+                "whisperkit_persistent",
+                _whisperkit_model(requested_model),
+                "mac_native_whisperkit_auto_ready",
+            )
+        return SttBackendChoice("mlx", mlx_alias, "mac_native_mlx_auto_alias")
 
     return SttBackendChoice(_infer_backend(requested_model), requested_model, "auto_selected_model")
 

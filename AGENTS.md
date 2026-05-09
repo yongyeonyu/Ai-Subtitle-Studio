@@ -1,6 +1,6 @@
 <!--
-Document-Version: 03.25.01
-Phase: NATIVE_STT_PIPELINE_RELEASED
+Document-Version: 04.00.00-mac-native
+Phase: MAC_NATIVE_APPSTORE_BRANCH
 Last-Updated: 2026-05-09
 Updated-By: Codex
 Purpose: Agent bootstrap and handoff rules only.
@@ -61,14 +61,14 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 ## Current Continuation Facts
 
 - Project path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- Current app version in code: `03.25.01`
-- Current handoff document version: `03.25.01`
-- Latest release checkpoint: `v03.25.01`
-- Current phase: `NATIVE_STT_PIPELINE_RELEASED`
+- Current app version in code: `04.00.00`
+- Current handoff document version: `04.00.00-mac-native`
+- Latest release checkpoint: `v04.00.00`
+- Current phase: `MAC_NATIVE_APPSTORE_V4_RELEASED`
 - Next planned phase: none.
 - Product priority: generate highly accurate subtitles with the fewest necessary user settings, while keeping generation startup, cut-boundary scanning, playback, and editor-mode subtitle edits responsive.
 - Shared pipeline rule: core subtitle algorithms must work across single-file, multiclip, folder queue, iCloud, and NAS workflows.
-- Cross-platform rule: macOS and Windows must remain supported, including Korean paths, spaces, backslashes, subprocess handling, ffmpeg/ffprobe, faster-whisper workers, and PyQt6 runtime behavior.
+- Platform rule: this branch is macOS-only and Apple Silicon first. Do not add Windows/Linux fallback work unless the user explicitly asks to restart cross-platform development. However, most reusable business logic should be shaped as Apple-platform Swift core code that can later move to iPadOS with minimal changes.
 - Release state: Fast, Auto, and High are now the single user-facing Mode controls. Fast runs LoRA-only subtitle post-processing, Auto runs LoRA + Deep, and High runs LoRA + Deep + chunked LLM. Legacy `balanced`, `normal`, `보통`, and `균형` settings map to Auto; legacy `fast` and `precise` settings are preserved as Fast and High when no explicit `subtitle_mode` exists.
 - Completion state: subtitle generation, editor save, quality review, and cleanup paths clear foreground busy UI before deferred learning starts; editor-save truth/text LoRA work is queued for Home-idle processing.
 - Editor layout state: the editor text pane, video preview, and timeline are mounted inside stable render frames so Start/status changes do not resize the major editor surfaces.
@@ -82,14 +82,19 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Dashboard state: the sidebar engine dashboard shows ten stages: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
 - Editor performance state: subtitle line edits update cached line maps and the affected timeline dirty rectangle instead of rebuilding the full segment lookup; playback/editor sync respects recent manual scrolling and avoids recentering already visible active segments.
 - Runtime scheduling state: cut-boundary pioneer/follower workers use topology-aware CPU planning, OpenCV thread caps, progress throttling, optional FFmpeg scene prepass, optional C++ native helper kernels, and optical-flow follower verification for candidate-only rollback checks.
-- Backend routing state: STT, VAD, cut-boundary, audio extraction, LLM, and editor rendering paths now route through auto/native/fast/legacy policy helpers, with optional benchmark profile materialization stored outside Git.
-- Audio/video IO state: long-media audio extraction can use direct FFmpeg chunk routing, overlapped native audio preprocessing, fused filter graphs, and native ClearVoice FFmpeg mode when quality-safe; editor playback reuses 720p preview proxies and cut-boundary scanning can reuse existing proxies to avoid repeated 4K decode.
-- STT model state: Korean KomixV2 STT candidates include alias, Hugging Face original, and MLX variants with distinct sidebar labels; Transformers aliases normalize to `seastar105/whisper-medium-komixv2`; opt-in Swift WhisperKit persistent and whisper.cpp backends are routed through the same Python STT pipeline.
+- Backend routing state: STT, VAD, cut-boundary, audio extraction, LLM, and editor rendering paths now default to native policies on this branch, with optional benchmark profile materialization stored outside Git.
+- Apple Silicon scheduling state: runtime worker counts, FFmpeg thread budgets, pioneer/follower cut-boundary concurrency, and GPU/NPU slot use can now be materialized from detected Apple Silicon topology, including M5-specific defaults on the current Mac.
+- Audio/video IO state: long-media audio extraction defaults to direct FFmpeg chunk routing with a 1-second native threshold, overlapped native audio preprocessing, fused filter graphs, and native ClearVoice FFmpeg mode when quality-safe; editor playback reuses 720p preview proxies and cut-boundary scanning can reuse existing proxies to avoid repeated 4K decode.
+- STT model state: Swift WhisperKit persistent is the default STT1 route on macOS; Korean KomixV2 STT candidates include alias, Hugging Face original, and MLX variants with distinct sidebar labels; whisper.cpp remains an optional native fallback route.
 - Word timestamp state: default STT passes keep word timestamps off for speed; low-score, editor-selected, precision-review, and VAD-risk spans are re-run selectively with word timestamps to preserve timing quality.
 - LLM state: roughcut/subtitle LLM lists include an OpenAI Codex ChatGPT CLI option that uses the local Codex subscription flow without requiring an API key or Ollama preflight.
+- App Store packaging state: macOS packaging scripts can build the `.app` payload, copy Swift WhisperKit and native helpers, sign locally, validate bundle layout, create/validate a local beta DMG, run double-click `.command` build/update flows for this Mac, prepare Developer ID notarization, build a signed App Store `.pkg`, and validate/upload that package when the user supplies Apple credentials.
+- Packaging rule: do not rebuild DMG files during ordinary refactor or optimization work. Run DMG packaging only when the user explicitly asks for a release, beta package, installer, distribution build, or DMG validation.
+- Benchmark state: macOS native benchmark tools report STT backend readiness, optional real-audio STT WER comparisons, and adopt/fallback decisions for WhisperKit, direct ClearVoice audio, and native cut-boundary routing.
+- Swift migration state: `native/macos/AIStudioNative` is the first Swift-native core package. It owns the subtitle segment model, SRT parser/formatter, project JSON validation/atomic write helpers, timeline waveform peak/downsample and minimap column engines, an opt-in subtitle quality batch scorer, adaptive common split planner, CLI bridge, packaged-app integration, and Python fallback hooks. New macOS-native work should prefer this package when behavior can match or exceed Python, and should keep core algorithms separated from macOS-only UI/process APIs so they can be reused by a future iPad app.
 - Popup/UI state: QML context menus and message dialogs have compact Apple-style sizing, hover/press feedback, outside-click dismissal, and Korean-only global menu labels.
 - STT ensemble state: parallel STT1/STT2 runs clone chunk directories per worker and clean them afterward so one worker cannot delete audio chunks still needed by the other.
-- Verification state: full test suite and static checks passed for this release: `1260 passed, 1 warning, 5 subtests passed`.
+- Verification state: `v04.00.00` release verification passed with `1317 passed, 5 subtests passed` under `QT_QPA_PLATFORM=offscreen`; `compileall`, `git diff --check`, `MainWindow` smoke, and the Apple Silicon scheduler benchmark also completed. The only remaining warning is a headless-session Metal-device warning emitted at Python exit after the test suite.
 
 ## Collaboration Rules
 
@@ -107,7 +112,7 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 
 - Refactoring is request-driven. Do it when the user explicitly asks.
 - Preserve behavior unless the user asks for a behavioral change.
-- Before deleting code, verify static references, dynamic imports, subprocess entry points, tests, macOS paths, and Windows paths.
+- Before deleting code, verify static references, dynamic imports, subprocess entry points, tests, and macOS paths.
 - Remove unused variables or dead paths only after confirming they are not public compatibility hooks or subprocess entry points.
 - Large files should be split by responsibility, not by arbitrary line count.
 

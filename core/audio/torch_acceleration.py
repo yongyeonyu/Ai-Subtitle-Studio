@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import platform
 import sys
 from typing import Any
 
@@ -35,6 +37,13 @@ def _safe_int(value: Any) -> int:
 
 def _torch_module():
     return sys.modules.get("torch")
+
+
+def allow_mps_empty_cache() -> bool:
+    value = os.environ.get("AI_SUBTITLE_STUDIO_ENABLE_MPS_EMPTY_CACHE")
+    if value is None:
+        return platform.system() != "Darwin"
+    return _setting_bool(value, False)
 
 
 def torch_gpu_acceleration_enabled(settings: dict[str, Any] | None = None) -> bool:
@@ -217,7 +226,7 @@ def trim_torch_memory_caches(*, include_sync: bool = True) -> None:
         if hasattr(torch_mod, "mps"):
             if include_sync and hasattr(torch_mod.mps, "synchronize"):
                 torch_mod.mps.synchronize()
-            if hasattr(torch_mod.mps, "empty_cache"):
+            if allow_mps_empty_cache() and hasattr(torch_mod.mps, "empty_cache"):
                 torch_mod.mps.empty_cache()
     except Exception:
         pass
@@ -231,6 +240,7 @@ def trim_torch_memory_caches(*, include_sync: bool = True) -> None:
 
 
 __all__ = [
+    "allow_mps_empty_cache",
     "move_torch_model_to_preferred_device",
     "move_torch_tensor_to_device",
     "preferred_torch_device_name",

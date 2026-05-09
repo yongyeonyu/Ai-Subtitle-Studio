@@ -560,7 +560,11 @@ class EditorScanCutCoreMixin:
         timeline = getattr(self, "timeline", None)
         if timeline is None or not hasattr(timeline, "set_scan_boundary_times"):
             return
-        timeline.set_scan_boundary_times(list(cleaned))
+        changed = timeline.set_scan_boundary_times(list(cleaned))
+        if changed is False:
+            return
+        if changed is True:
+            return
         try:
             if hasattr(timeline, "canvas"):
                 timeline.canvas.update()

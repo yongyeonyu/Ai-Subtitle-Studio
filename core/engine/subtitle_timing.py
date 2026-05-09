@@ -6,6 +6,11 @@ from core.engine.subtitle_settings import _get_user_settings, _setting_float
 from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
 from core.runtime.logger import get_logger
 
+try:
+    from core.native_swift_common_split import plan_common_split_via_swift
+except Exception:  # pragma: no cover - optional macOS native bridge
+    plan_common_split_via_swift = None  # type: ignore[assignment]
+
 
 TIMING_FUSION_SCHEMA = "ai_subtitle_studio.subtitle_timing_fusion.v1"
 COMMON_SPLIT_GUARD_SCHEMA = "ai_subtitle_studio.common_subtitle_split_guard.v1"
@@ -881,13 +886,139 @@ def _common_split_row(seg: dict, group: list[dict], policy_meta: dict) -> dict:
     return row
 
 
-def _apply_common_subtitle_split_guard(segments: list[dict], settings: dict) -> list[dict]:
-    if not segments:
-        return []
+def _native_common_split_items(rows: list[dict], settings: dict) -> tuple[list[dict], list[list[dict]], list[dict]]:
+    items: list[dict] = []
+    words_by_row: list[list[dict]] = []
+    policies: list[dict] = []
+    for row in rows:
+        policy = _common_split_policy_settings(settings, row)
+        if row.get("is_gap"):
+            policy = {**policy, "enabled": False}
+        words = _words_for_common_split(row)
+        start, end = _time_bounds(row)
+        items.append(
+            {
+                "start": start,
+                "end": end,
+                "text": str(row.get("text", "") or ""),
+                "words": [
+                    {
+                        "word": _word_text(word),
+                        "start": _as_float(word.get("start"), start),
+                        "end": _as_float(word.get("end"), start),
+                    }
+                    for word in words
+                ],
+                "policy": policy,
+            }
+        )
+        words_by_row.append(words)
+        policies.append(policy)
+    return items, words_by_row, policies
+
+
+def _apply_common_subtitle_split_guard_native(rows: list[dict], settings: dict) -> list[dict] | None:
+    if plan_common_split_via_swift is None or not rows:
+        return None
+    items, words_by_row, policies = _native_common_split_items(rows, settings)
+    plans = plan_common_split_via_swift(items)
+    if plans is None or len(plans) != len(rows):
+        return None
+
     output: list[dict] = []
     split_count = 0
     clamp_count = 0
-    for seg in segments:
+    for row, words, policy, plan in zip(rows, words_by_row, policies, plans):
+        row = dict(row)
+        action = str(plan.get("action") or "keep")
+        if action == "split":
+            groups = list(plan.get("groups") or [])
+            if len(groups) > 1 and words:
+                start, end = _time_bounds(row)
+                chars = _compact_len(row.get("text", ""))
+                duration = max(0.0, end - start)
+                policy_meta_base = {
+                    "schema": COMMON_SPLIT_GUARD_SCHEMA,
+                    "task": "common_subtitle_split_guard",
+                    "action": "split",
+                    "applies_to_modes": ["fast", "auto", "high"],
+                    "source_start": round(start, 3),
+                    "source_end": round(end, 3),
+                    "source_duration_sec": round(duration, 3),
+                    "source_chars": chars,
+                    "target_chars": policy["target_chars"],
+                    "hard_max_chars": policy["hard_chars"],
+                    "hard_max_duration_sec": round(policy["hard_duration"], 3),
+                    "split_count": len(groups),
+                }
+                emitted = 0
+                for idx, group_plan in enumerate(groups):
+                    try:
+                        start_idx = max(0, int(group_plan.get("start_index", 0)))
+                        end_idx = min(len(words), int(group_plan.get("end_index", start_idx)))
+                    except Exception:
+                        continue
+                    group = words[start_idx:end_idx]
+                    if not group:
+                        continue
+                    output.append(
+                        _common_split_row(
+                            row,
+                            group,
+                            {
+                                **policy_meta_base,
+                                "split_index": idx,
+                            },
+                        )
+                    )
+                    emitted += 1
+                if emitted > 1:
+                    split_count += emitted - 1
+                    continue
+            output.append(row)
+            continue
+
+        if action == "clamp":
+            start, end = _time_bounds(row)
+            old_end = end
+            try:
+                row["end"] = round(float(plan.get("new_end")), 3)
+            except Exception:
+                row["end"] = round(max(start + policy["min_duration"], start + policy["hard_duration"]), 3)
+            row["_common_split_guard_policy"] = {
+                "schema": COMMON_SPLIT_GUARD_SCHEMA,
+                "task": "common_subtitle_split_guard",
+                "action": "clamp_duration",
+                "applies_to_modes": ["fast", "auto", "high"],
+                "source_start": round(start, 3),
+                "source_end": round(old_end, 3),
+                "new_end": row["end"],
+                "hard_max_duration_sec": round(policy["hard_duration"], 3),
+                "reason": "not_enough_words_to_split",
+            }
+            row.pop("_final_gap_settings_applied", None)
+            clamp_count += 1
+        output.append(row)
+
+    if split_count or clamp_count:
+        get_logger().log(
+            "[공통자막분할] "
+            f"Fast/Auto/High 공통 룰 적용: 분할 {split_count}회, 길이 클램프 {clamp_count}개"
+        )
+    return output
+
+
+def _apply_common_subtitle_split_guard(segments: list[dict], settings: dict) -> list[dict]:
+    if not segments:
+        return []
+    rows = [dict(seg) for seg in segments]
+    native = _apply_common_subtitle_split_guard_native(rows, settings)
+    if native is not None:
+        return native
+    output: list[dict] = []
+    split_count = 0
+    clamp_count = 0
+    for seg in rows:
         row = dict(seg)
         if not _common_split_violation(row, settings):
             output.append(row)

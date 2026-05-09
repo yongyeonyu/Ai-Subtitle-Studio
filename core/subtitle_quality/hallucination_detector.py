@@ -30,6 +30,20 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _precomputed_vad_ratio(segment: dict[str, Any]) -> float | None:
+    metadata = dict(segment.get("asr_metadata") or {})
+    vad = dict(metadata.get("vad_alignment") or {})
+    ratio = _as_float(vad.get("vad_overlap_ratio"), None)
+    if ratio is None:
+        quality = dict(segment.get("quality") or {})
+        score = _as_float(quality.get("vad_alignment_score"), None)
+        if score is not None:
+            ratio = score / 100.0
+    if ratio is None:
+        return None
+    return max(0.0, min(1.0, float(ratio)))
+
+
 def _compact_text(value: Any) -> str:
     return re.sub(r"\s+", "", str(value or "")).strip()
 
@@ -88,7 +102,9 @@ def estimate_hallucination_risk(
             risk += 0.45
             _append_flag(flags, "known_hallucination_phrase")
             break
-    ratio = vad_overlap_ratio(segment, vad_segments or ())
+    ratio = _precomputed_vad_ratio(segment)
+    if ratio is None:
+        ratio = vad_overlap_ratio(segment, vad_segments or ())
     if ratio is not None and ratio < 0.2:
         risk += 0.35
         _append_flag(flags, "non_speech_hallucination_risk")

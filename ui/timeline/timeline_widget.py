@@ -18,13 +18,55 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ui.timeline.timeline_constants import CANVAS_H, FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
+from ui.timeline.timeline_constants import CANVAS_H, FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH, RULER_H, SEG_TOP, WAVE_H
 from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_global import GlobalCanvas
 from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker
 from ui.responsive_profile import responsive_profile_for_size
 from ui.style import button_style
 from core.frame_time import normalize_fps, snap_sec_to_frame
+
+
+def _scan_boundary_sec_value(item) -> float:
+    try:
+        if isinstance(item, dict):
+            return float(item.get("timeline_sec", item.get("time", item.get("start", 0.0))) or 0.0)
+        return float(item or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _scan_boundary_signature(times) -> tuple:
+    rows = []
+    for item in list(times or []):
+        sec = round(_scan_boundary_sec_value(item), 3)
+        if isinstance(item, dict):
+            rows.append(
+                (
+                    sec,
+                    str(item.get("status", "") or ""),
+                    str(item.get("detector_stage", "") or ""),
+                    str(item.get("source", "") or ""),
+                    str(item.get("kind", "") or ""),
+                    str(item.get("line_color", "") or ""),
+                    str(item.get("line_style", "") or ""),
+                    str(item.get("ui_label", "") or ""),
+                    bool(item.get("verified", False)),
+                    bool(item.get("follower_active", False)),
+                    bool(item.get("follower_relocated", False)),
+                    str(item.get("candidate_key", "") or ""),
+                )
+            )
+        else:
+            rows.append((sec,))
+    return tuple(rows)
+
+
+def _boundary_signature(times) -> tuple:
+    values = []
+    for item in list(times or []):
+        values.append(round(_scan_boundary_sec_value(item), 3))
+    return tuple(values)
 
 
 class TimelinePlayheadOverlay(QWidget):
@@ -37,6 +79,8 @@ class TimelinePlayheadOverlay(QWidget):
         self._scroll_x = 0
         self._center_locked = False
         self._busy = False
+        self._last_visual_px: int | None = None
+        self._last_state_signature = None
         self._quick = self._create_quick_layer()
         self._shutdown_in_progress = False
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -45,14 +89,33 @@ class TimelinePlayheadOverlay(QWidget):
         self.setAutoFillBackground(False)
 
     def set_state(self, sec: float, scroll_x: int, *, center_locked: bool = False, busy: bool = False):
+        old_px = self._last_visual_px
         self._sec = max(0.0, float(sec or 0.0))
         self._scroll_x = max(0, int(scroll_x or 0))
         self._center_locked = bool(center_locked)
         self._busy = bool(busy)
+        visual_px = int(round(self._playhead_visual_x()))
+        signature = (
+            visual_px,
+            bool(self._center_locked),
+            bool(self._busy),
+            int(self.width()),
+            int(self.height()),
+        )
+        if signature == getattr(self, "_last_state_signature", None):
+            return False
+        self._last_visual_px = visual_px
+        self._last_state_signature = signature
         if getattr(self, "_quick", None) is not None:
             self._sync_quick_layer()
-            return
-        self.update()
+            return True
+        if old_px is None:
+            self.update(QRect(max(0, visual_px - 12), 0, 25, max(1, self.height())))
+        else:
+            left = max(0, min(old_px, visual_px) - 12)
+            right = min(max(1, self.width()), max(old_px, visual_px) + 13)
+            self.update(QRect(left, 0, max(1, right - left), max(1, self.height())))
+        return True
 
     def _create_quick_layer(self):
         # A full-viewport QQuickWidget overlay can composite as an opaque black
@@ -91,10 +154,13 @@ class TimelinePlayheadOverlay(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._last_state_signature = None
         quick = getattr(self, "_quick", None)
         if quick is not None:
             quick.setGeometry(self.rect())
             self._sync_quick_layer(quick)
+        else:
+            self.update()
 
     def paintEvent(self, event):
         if bool(getattr(self, "_shutdown_in_progress", False)):
@@ -288,6 +354,8 @@ class TimelineWidget(QWidget):
         self._manual_zoom_since_fit = False
         self._speaker_settings_cache = {}
         self._speaker_settings_cache_at = 0.0
+        self._boundary_times_signature = _boundary_signature(getattr(self.canvas, "boundary_times", []))
+        self._scan_boundary_times_signature = _scan_boundary_signature(getattr(self.canvas, "scan_boundary_times", []))
 
         self._smooth_scroll_timer = QTimer(self)
         self._smooth_scroll_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -1039,8 +1107,13 @@ class TimelineWidget(QWidget):
             return
         viewport = self.scroll.viewport()
         try:
-            overlay.setGeometry(viewport.rect())
-            overlay.raise_()
+            rect = viewport.rect()
+            if overlay.geometry() != rect:
+                overlay.setGeometry(rect)
+                overlay.setProperty("_timeline_overlay_raised", False)
+            if not bool(overlay.property("_timeline_overlay_raised")):
+                overlay.raise_()
+                overlay.setProperty("_timeline_overlay_raised", True)
             overlay.set_state(
                 float(getattr(self.canvas, "playhead_sec", 0.0) or 0.0),
                 int(self.scroll.horizontalScrollBar().value()),
@@ -1066,20 +1139,66 @@ class TimelineWidget(QWidget):
         self._sync_playhead_overlay()
 
     def set_boundary_times(self, times: list[float]):
-        self.canvas.boundary_times = times or []
+        rows = list(times or [])
+        sig = _boundary_signature(rows)
+        current_sig = _boundary_signature(getattr(self.canvas, "boundary_times", []))
+        if sig == getattr(self, "_boundary_times_signature", None) and sig == current_sig:
+            return False
+        self._boundary_times_signature = sig
+        self.canvas.boundary_times = rows
         if hasattr(self.canvas, "_scan_boundary_hit_cache"):
             self.canvas._scan_boundary_hit_cache = None
-        self.canvas.update()
+        if hasattr(self.canvas, "_drag_snap_base_cache_key"):
+            self.canvas._drag_snap_base_cache_key = None
+            self.canvas._drag_snap_base_candidates = []
+        if hasattr(self.canvas, "_render_epoch"):
+            self.canvas._render_epoch = int(getattr(self.canvas, "_render_epoch", 0) or 0) + 1
+        return True
 
     def set_scan_boundary_times(self, times: list[float]):
-        self.canvas.scan_boundary_times = times or []
+        rows = list(times or [])
+        sig = _scan_boundary_signature(rows)
+        current_sig = _scan_boundary_signature(getattr(self.canvas, "scan_boundary_times", []))
+        if sig == getattr(self, "_scan_boundary_times_signature", None) and sig == current_sig:
+            return False
+        self._scan_boundary_times_signature = sig
+        self.canvas.scan_boundary_times = rows
         if hasattr(self.canvas, "_scan_boundary_hit_cache"):
             self.canvas._scan_boundary_hit_cache = None
-        self.canvas.update()
+        if hasattr(self.canvas, "_drag_snap_base_cache_key"):
+            self.canvas._drag_snap_base_cache_key = None
+            self.canvas._drag_snap_base_candidates = []
+        if hasattr(self.canvas, "_paint_index_cache"):
+            self.canvas._paint_index_cache.pop("scan_boundaries", None)
+        if hasattr(self.canvas, "_render_epoch"):
+            self.canvas._render_epoch = int(getattr(self.canvas, "_render_epoch", 0) or 0) + 1
+        self._update_scan_boundary_lane()
+        return True
 
     def set_scan_boundary_markers_visible(self, visible: bool):
-        self.canvas.show_scan_boundary_markers = bool(visible)
-        self.canvas.update()
+        visible = bool(visible)
+        if bool(getattr(self.canvas, "show_scan_boundary_markers", False)) == visible:
+            return False
+        self.canvas.show_scan_boundary_markers = visible
+        self._update_scan_boundary_lane()
+        return True
+
+    def _update_scan_boundary_lane(self):
+        canvas = getattr(self, "canvas", None)
+        if canvas is None:
+            return
+        try:
+            lane_top = max(0, RULER_H + WAVE_H - 2)
+            lane_bottom = min(CANVAS_H, max(lane_top + 1, SEG_TOP + 10))
+            rect = QRect(0, lane_top, max(1, int(canvas.width())), max(1, lane_bottom - lane_top))
+            if hasattr(canvas, "_viewport_paint_clip"):
+                rect = canvas._viewport_paint_clip(rect, pad_px=96)
+            if rect.isValid() and not rect.isEmpty():
+                canvas.update(rect)
+            else:
+                canvas.update()
+        except Exception:
+            canvas.update()
 
     def _update_smooth_scroll(self):
         delta = float(self._target_scroll_x - self._current_scroll_x)

@@ -3,6 +3,7 @@
 """STT ensemble helpers for merging two Whisper transcripts."""
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 import re
 from typing import Any
 
@@ -68,6 +69,32 @@ def overlap_ratio(left: dict, right: dict) -> float:
         0.001,
     )
     return overlap / span
+
+
+def _build_start_index(items: list[tuple[str, dict]]) -> tuple[list[float], list[tuple[float, int, tuple[str, dict]]]]:
+    indexed = sorted(
+        ((_as_float(item[1].get("start")), index, item) for index, item in enumerate(items)),
+        key=lambda entry: (entry[0], entry[1]),
+    )
+    return [entry[0] for entry in indexed], indexed
+
+
+def _matching_secondary_candidates(
+    primary: dict,
+    secondary_items: list[tuple[str, dict]],
+    secondary_starts: list[float],
+    secondary_index: list[tuple[float, int, tuple[str, dict]]],
+    *,
+    start_gap_sec: float = 1.2,
+) -> list[tuple[int, tuple[str, dict]]]:
+    if not secondary_items:
+        return []
+    p_start = _as_float(primary.get("start"))
+    lo = bisect_left(secondary_starts, p_start - start_gap_sec)
+    hi = bisect_right(secondary_starts, p_start + start_gap_sec)
+    if lo >= hi:
+        return []
+    return sorted(((index, item) for _start, index, item in secondary_index[lo:hi]), key=lambda entry: entry[0])
 
 
 def candidate_score(segment: dict) -> float:
@@ -601,10 +628,16 @@ def merge_stt_outputs(primary: list[dict], secondary: list[dict]) -> list[dict]:
 
     used_secondary: set[int] = set()
     groups: list[dict] = []
+    secondary_starts, secondary_index = _build_start_index(secondary_items)
     for p_src, p_seg in primary_items:
         best_idx = None
         best_score = 0.0
-        for idx, (s_src, s_seg) in enumerate(secondary_items):
+        for idx, (s_src, s_seg) in _matching_secondary_candidates(
+            p_seg,
+            secondary_items,
+            secondary_starts,
+            secondary_index,
+        ):
             if idx in used_secondary:
                 continue
             temporal = overlap_ratio(p_seg, s_seg)

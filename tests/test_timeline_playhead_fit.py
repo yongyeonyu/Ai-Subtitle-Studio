@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtGui import QWheelEvent, QTextCursor
-from PyQt6.QtCore import QObject, QPoint, QPointF, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QPoint, QPointF, QRect, Qt, pyqtSignal
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QTextEdit, QWidget
 
@@ -968,6 +968,47 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             timeline.canvas.update.assert_not_called()
             self.assertEqual(timeline._playhead_overlay._sec, 2.5)
             self.assertIs(timeline._playhead_overlay.parent(), timeline.scroll.viewport())
+        finally:
+            timeline.close()
+
+    def test_playhead_overlay_skips_duplicate_pixel_updates(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.update_segments([{"start": 0.0, "end": 10.0, "text": "테스트"}], active_sec=0.0, total_dur=10.0)
+            timeline.set_playhead(2.5)
+            self.app.processEvents()
+
+            timeline._playhead_overlay.update = Mock()
+            timeline.set_playhead(2.5)
+            timeline._sync_playhead_overlay()
+            self.app.processEvents()
+
+            timeline._playhead_overlay.update.assert_not_called()
+        finally:
+            timeline.close()
+
+    def test_playhead_overlay_repaints_only_dirty_strip(self):
+        timeline = TimelineWidget()
+        try:
+            timeline.resize(900, timeline.height())
+            timeline.show()
+            self.app.processEvents()
+
+            timeline.update_segments([{"start": 0.0, "end": 10.0, "text": "테스트"}], active_sec=0.0, total_dur=10.0)
+            timeline.set_playhead(2.0)
+            self.app.processEvents()
+
+            timeline._playhead_overlay.update = Mock()
+            timeline.set_playhead(3.0)
+
+            timeline._playhead_overlay.update.assert_called()
+            dirty = timeline._playhead_overlay.update.call_args.args[0]
+            self.assertIsInstance(dirty, QRect)
+            self.assertLess(dirty.width(), timeline._playhead_overlay.width())
         finally:
             timeline.close()
 

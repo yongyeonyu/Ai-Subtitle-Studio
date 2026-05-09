@@ -8,8 +8,47 @@ from typing import Any
 from core.subtitle_quality.models import attach_asr_metadata
 from core.subtitle_quality.vad_alignment_checker import normalize_vad_segments
 
+try:
+    from core.native_cut_boundary import word_split_groups as _native_word_split_groups
+except Exception:  # pragma: no cover - native extension is optional.
+    _native_word_split_groups = None
+
 
 _PUNCT_ENDINGS = tuple(",?!;:~…")
+_PRESERVED_SEGMENT_KEYS = (
+    "_lora_segment_settings",
+    "_lora_gap_settings",
+    "_lora_generation_profile",
+    "_lora_segment_score",
+    "_lora_segment_doc_count",
+    "_lora_segment_query",
+    "_deep_rerank_policy",
+    "_deep_timing_policy",
+    "_editor_truth_runtime_policy",
+    "_stt_lattice_policy",
+    "_llm_gate_policy",
+    "_llm_minimize_policy",
+    "_llm_candidate_policy",
+    "_llm_verifier_policy",
+    "_llm_rollback_policy",
+    "_llm_macro_chunk_policy",
+    "_accuracy_decision_graph",
+    "_cut_boundary_guard_policy",
+    "_uncertainty_policy",
+    "_uncertainty_bucket",
+    "_uncertainty_risk_score",
+    "_codex_native_fast_path_policy",
+    "stt_candidates",
+    "stt_ensemble_source",
+    "stt_selected_source",
+    "score",
+    "stt_score",
+    "score_color",
+    "stt_score_color",
+    "stt_score_label",
+    "stt_score_flags",
+    "stt_score_components",
+)
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -21,6 +60,30 @@ def _as_float(value: Any, default: float = 0.0) -> float:
 
 def _char_count(text: str) -> int:
     return len(str(text or "").replace(" ", "").replace("\n", ""))
+
+
+def _segment_setting(segment: dict[str, Any], key: str, default: Any) -> Any:
+    for payload_key in ("_lora_gap_settings", "_lora_segment_settings"):
+        payload = segment.get(payload_key)
+        if isinstance(payload, dict) and payload.get(key) not in (None, ""):
+            return payload.get(key)
+    return default
+
+
+def _segment_int(segment: dict[str, Any], key: str, default: int, *, low: int = 1) -> int:
+    try:
+        value = int(round(float(_segment_setting(segment, key, default))))
+    except Exception:
+        value = int(default)
+    return max(low, value)
+
+
+def _segment_float(segment: dict[str, Any], key: str, default: float, *, low: float = 0.0) -> float:
+    try:
+        value = float(_segment_setting(segment, key, default))
+    except Exception:
+        value = float(default)
+    return max(low, value)
 
 
 def _clean_word(value: str) -> str:
@@ -77,6 +140,7 @@ def _build_segment(
     words: list[dict[str, Any]],
     fallback_speaker: str | None,
     source_metadata: dict[str, Any] | None = None,
+    source_segment: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not words:
         return None
@@ -85,7 +149,13 @@ def _build_segment(
         return None
     start = _as_float(words[0].get("start"))
     end = max(start + 0.05, _as_float(words[-1].get("end"), start + 0.05))
+    preserved = {
+        key: source_segment[key]
+        for key in _PRESERVED_SEGMENT_KEYS
+        if isinstance(source_segment, dict) and key in source_segment
+    }
     built = {
+        **preserved,
         "start": round(start, 3),
         "end": round(end, 3),
         "text": text,
@@ -188,6 +258,71 @@ def _is_vad_boundary_between_words(
     return left_idx != right_idx
 
 
+def _native_word_groups(
+    words: list[dict[str, Any]],
+    *,
+    max_chars: int,
+    max_duration: float,
+    max_cps: float,
+    min_duration: float,
+    gap_break_sec: float,
+    word_gap_break_sec: float,
+    vad_segments: list[dict[str, Any]] | None,
+    rules: dict[str, Any] | None,
+) -> list[tuple[int, int]] | None:
+    if not callable(_native_word_split_groups) or len(words) < 2:
+        return None
+    starts: list[float] = []
+    ends: list[float] = []
+    char_counts: list[int] = []
+    natural_breaks: list[int] = []
+    vad_indexes: list[int] = []
+    for index, word in enumerate(words):
+        start = _as_float(word.get("start"))
+        end = max(start + 0.001, _as_float(word.get("end"), start + 0.001))
+        starts.append(start)
+        ends.append(end)
+        char_counts.append(_char_count(_word_text(word)))
+        if index + 1 < len(words):
+            current_word = _word_text(word)
+            next_word = _word_text(words[index + 1])
+            natural_breaks.append(
+                1
+                if (_is_punctuation_break(current_word) or _is_rule_break(current_word, next_word, rules))
+                else 0
+            )
+        else:
+            natural_breaks.append(0)
+        vad_idx = _vad_index_for_word(word, vad_segments)
+        vad_indexes.append(int(vad_idx) if vad_idx is not None else -1)
+    groups = _native_word_split_groups(
+        starts,
+        ends,
+        char_counts,
+        natural_breaks,
+        vad_indexes,
+        max_chars=max_chars,
+        max_duration=max_duration,
+        max_cps=max_cps,
+        min_duration=min_duration,
+        gap_break_sec=gap_break_sec,
+        word_gap_break_sec=word_gap_break_sec,
+    )
+    if not groups:
+        return None
+    cleaned: list[tuple[int, int]] = []
+    cursor = 0
+    word_count = len(words)
+    for begin, end in groups:
+        begin = int(begin)
+        end = int(end)
+        if begin != cursor or end <= begin or end > word_count:
+            return None
+        cleaned.append((begin, end))
+        cursor = end
+    return cleaned if cursor == word_count else None
+
+
 def resegment_by_word_timestamps(
     segments: list[dict[str, Any]],
     *,
@@ -217,8 +352,31 @@ def resegment_by_word_timestamps(
         words = _segment_words(segment)
         if not words:
             continue
+        segment_max_chars = _segment_int(segment, "split_length_threshold", max_chars, low=2)
+        segment_max_duration = _segment_float(segment, "sub_max_duration", max_duration, low=0.5)
+        segment_max_cps = _segment_float(segment, "sub_max_cps", max_cps, low=3.0)
+        segment_min_duration = _segment_float(segment, "sub_min_duration", min_duration, low=0.0)
+        segment_gap_break_sec = _segment_float(segment, "sub_gap_break_sec", gap_break_sec, low=0.05)
+        segment_word_gap_break_sec = _segment_float(segment, "word_timing_gap_break_sec", word_gap_break_sec, low=0.08)
         fallback_speaker = segment.get("speaker")
         source_metadata = dict(segment.get("asr_metadata") or {})
+        native_groups = _native_word_groups(
+            words,
+            max_chars=segment_max_chars,
+            max_duration=segment_max_duration,
+            max_cps=segment_max_cps,
+            min_duration=segment_min_duration,
+            gap_break_sec=segment_gap_break_sec,
+            word_gap_break_sec=segment_word_gap_break_sec,
+            vad_segments=vad_segments,
+            rules=rules,
+        )
+        if native_groups is not None:
+            for begin, end in native_groups:
+                built = _build_segment(words[begin:end], fallback_speaker, source_metadata, segment)
+                if built is not None:
+                    result.append(built)
+            continue
         buf: list[dict[str, Any]] = []
         for index, word in enumerate(words):
             buf.append(word)
@@ -226,23 +384,23 @@ def resegment_by_word_timestamps(
             if not _should_flush(
                 buf,
                 next_word,
-                max_chars=max_chars,
-                max_duration=max_duration,
-                max_cps=max_cps,
-                min_duration=min_duration,
-                gap_break_sec=gap_break_sec,
-                word_gap_break_sec=word_gap_break_sec,
+                max_chars=segment_max_chars,
+                max_duration=segment_max_duration,
+                max_cps=segment_max_cps,
+                min_duration=segment_min_duration,
+                gap_break_sec=segment_gap_break_sec,
+                word_gap_break_sec=segment_word_gap_break_sec,
                 vad_segments=vad_segments,
                 rules=rules,
             ):
                 continue
-            built = _build_segment(buf, fallback_speaker, source_metadata)
+            built = _build_segment(buf, fallback_speaker, source_metadata, segment)
             if built is not None:
                 result.append(built)
             buf = []
 
         if buf:
-            built = _build_segment(buf, fallback_speaker, source_metadata)
+            built = _build_segment(buf, fallback_speaker, source_metadata, segment)
             if built is not None:
                 result.append(built)
 

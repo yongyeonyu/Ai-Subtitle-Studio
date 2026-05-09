@@ -40,7 +40,7 @@ def _build_bundled_worker(repo_root: str, bundled: str) -> str:
     if not os.path.exists(package_file) or not shutil.which("swift"):
         return ""
     try:
-        get_logger().log("  🛠️ [WhisperKit 실험] SwiftPM worker 빌드 중...")
+        get_logger().log("  🛠️ [WhisperKit Native] SwiftPM worker 빌드 중...")
         result = subprocess.run(
             ["swift", "build", "-c", "release"],
             cwd=package_dir,
@@ -53,13 +53,13 @@ def _build_bundled_worker(repo_root: str, bundled: str) -> str:
             **hidden_subprocess_kwargs(strip_qt=True),
         )
         if result.returncode == 0 and os.path.exists(bundled):
-            get_logger().log("  ✅ [WhisperKit 실험] SwiftPM worker 빌드 완료")
+            get_logger().log("  ✅ [WhisperKit Native] SwiftPM worker 빌드 완료")
             return bundled
         tail = "\n".join((result.stderr or result.stdout or "").splitlines()[-4:])
         if tail:
-            get_logger().log(f"  ⚠️ [WhisperKit 실험] SwiftPM 빌드 실패: {tail}")
+            get_logger().log(f"  ⚠️ [WhisperKit Native] SwiftPM 빌드 실패: {tail}")
     except Exception as exc:
-        get_logger().log(f"  ⚠️ [WhisperKit 실험] SwiftPM 빌드 실패: {exc}")
+        get_logger().log(f"  ⚠️ [WhisperKit Native] SwiftPM 빌드 실패: {exc}")
     return ""
 
 
@@ -104,8 +104,8 @@ def ensure_worker(proc=None, log_label: str = "STT"):
     worker = find_whisperkit_persistent_worker()
     if not worker:
         get_logger().log(
-            "  ⚠️ [WhisperKit 실험] persistent worker 바이너리를 찾지 못해 MLX Whisper로 대체합니다. "
-            "WHISPERKIT_PERSISTENT_WORKER 경로를 지정하면 실험 백엔드를 사용할 수 있습니다."
+            "  ⚠️ [WhisperKit Native] persistent worker 바이너리를 찾지 못해 MLX Whisper로 대체합니다. "
+            "WHISPERKIT_PERSISTENT_WORKER 경로를 지정하면 Swift 백엔드를 사용할 수 있습니다."
         )
         return None
 
@@ -121,10 +121,10 @@ def ensure_worker(proc=None, log_label: str = "STT"):
             **hidden_subprocess_kwargs(strip_qt=True),
         )
         _attach_stderr_logger(new_proc, log_label=log_label)
-        get_logger().log(f"  🧪 [{log_label}] Swift WhisperKit persistent worker 시작")
+        get_logger().log(f"  🍎 [{log_label}] Swift WhisperKit persistent worker 시작")
         return new_proc
     except Exception as exc:
-        get_logger().log(f"  ⚠️ [WhisperKit 실험] worker 시작 실패, MLX Whisper로 대체합니다: {exc}")
+        get_logger().log(f"  ⚠️ [WhisperKit Native] worker 시작 실패, MLX Whisper로 대체합니다: {exc}")
         return None
 
 
@@ -199,9 +199,8 @@ def run_whisper(
 ):
     """Compatibility wrapper for the Swift WhisperKit JSONL worker.
 
-    This backend is intentionally opt-in. The production path keeps MLX as the
-    stable macOS default while Xcode/Swift experiments can compare quality and
-    speed through the same Python pipeline.
+    This backend is the macOS-native STT path. MLX remains the quality-safe
+    fallback when the Swift worker is not built or cannot start.
     """
     try:
         temp_values = [
@@ -229,7 +228,7 @@ def run_whisper(
         )
         return proc
     except Exception as exc:
-        get_logger().log(f"  ⚠️ [WhisperKit 실험] worker 요청 실패, MLX Whisper로 대체합니다: {exc}")
+        get_logger().log(f"  ⚠️ [WhisperKit Native] worker 요청 실패, MLX Whisper로 대체합니다: {exc}")
         stop_worker(proc)
         return None
 

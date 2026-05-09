@@ -64,6 +64,19 @@ class RuntimeOptimizationProfileTests(unittest.TestCase):
             "ffmpeg_cli",
         )
 
+    def test_audio_extract_auto_policy_uses_native_direct_chunks_for_clearvoice_ffmpeg(self):
+        settings = {
+            "audio_extract_backend_policy": "auto",
+            "direct_ffmpeg_chunk_min_sec": 60.0,
+            "clearvoice_native_ffmpeg_enabled": True,
+            "runtime_backend_autotune_enabled": False,
+        }
+
+        choice = select_audio_extract_backend(settings, audio_ai="clearvoice", span_sec=120.0)
+
+        self.assertEqual(choice.backend, "ffmpeg_direct_chunks")
+        self.assertEqual(choice.reason, "auto_long_media")
+
     def test_stt_fast_policy_prefers_mlx_turbo_on_mac_large_v3(self):
         with patch("core.audio.stt_backend_router.config.IS_MAC", True):
             choice = select_stt_backend(
@@ -73,6 +86,18 @@ class RuntimeOptimizationProfileTests(unittest.TestCase):
 
         self.assertEqual(choice.backend, "mlx")
         self.assertIn("turbo", choice.model)
+
+    def test_stt_auto_policy_maps_generic_large_models_to_mac_native_mlx(self):
+        with patch("core.audio.stt_backend_router.config.IS_MAC", True), \
+             patch("core.audio.stt_backend_router._whisperkit_ready", return_value=False):
+            choice = select_stt_backend(
+                "large-v3-turbo",
+                {"stt_backend_policy": "auto", "runtime_backend_autotune_enabled": False},
+            )
+
+        self.assertEqual(choice.backend, "mlx")
+        self.assertEqual(choice.model, "mlx-community/whisper-large-v3-turbo")
+        self.assertEqual(choice.reason, "mac_native_mlx_auto_alias")
 
     def test_komixv2_models_route_to_matching_backends(self):
         self.assertEqual(
@@ -113,12 +138,53 @@ class RuntimeOptimizationProfileTests(unittest.TestCase):
             ).backend,
             "whisper_cpp",
         )
-        native_choice = select_stt_backend(
-            "large-v3-turbo",
-            {"stt_backend_policy": "native", "runtime_backend_autotune_enabled": False},
-        )
+        with patch("core.audio.stt_backend_router._whisperkit_ready", return_value=False), \
+             patch("core.audio.stt_backend_router._whisper_cpp_ready", return_value=True):
+            native_choice = select_stt_backend(
+                "large-v3-turbo",
+                {"stt_backend_policy": "native", "runtime_backend_autotune_enabled": False},
+            )
         self.assertEqual(native_choice.backend, "whisper_cpp")
-        self.assertEqual(native_choice.model, "large-v3-turbo")
+        self.assertEqual(native_choice.model, "whisper.cpp:large-v3-turbo")
+
+    def test_native_stt_policy_prefers_whisperkit_when_ready(self):
+        with patch("core.audio.stt_backend_router.config.IS_MAC", True), \
+             patch("core.audio.stt_backend_router._whisper_cpp_ready", return_value=False), \
+             patch("core.audio.stt_backend_router._whisperkit_ready", return_value=True):
+            native_choice = select_stt_backend(
+                "large-v3-turbo",
+                {
+                    "stt_backend_policy": "native",
+                    "runtime_backend_autotune_enabled": False,
+                },
+            )
+
+        self.assertEqual(native_choice.backend, "whisperkit_persistent")
+        self.assertEqual(native_choice.model, "whisperkit-persistent:large-v3-v20240930_turbo_632MB")
+
+    def test_native_stt_policy_falls_back_to_mlx_when_native_experimental_paths_are_not_ready_or_opted_in(self):
+        with patch("core.audio.stt_backend_router.config.IS_MAC", True), \
+             patch("core.audio.stt_backend_router._whisper_cpp_ready", return_value=False), \
+             patch("core.audio.stt_backend_router._whisperkit_ready", return_value=True):
+            native_choice = select_stt_backend(
+                "large-v3-turbo",
+                {
+                    "stt_backend_policy": "native",
+                    "runtime_backend_autotune_enabled": False,
+                    "whisperkit_native_auto_enabled": False,
+                },
+            )
+
+        self.assertEqual(native_choice.backend, "mlx")
+        self.assertEqual(native_choice.model, "mlx-community/whisper-large-v3-turbo")
+
+    def test_profiled_whisperkit_backend_gets_persistent_model_prefix(self):
+        with patch("core.audio.stt_backend_router.profile_backend", return_value="whisperkit_persistent"), \
+             patch("core.audio.stt_backend_router.profile_model", return_value="large-v3-turbo"):
+            choice = select_stt_backend("large-v3-turbo", {"stt_backend_policy": "auto"})
+
+        self.assertEqual(choice.backend, "whisperkit_persistent")
+        self.assertEqual(choice.model, "whisperkit-persistent:large-v3-v20240930_turbo_632MB")
 
     def test_cut_boundary_router_uses_existing_preview_proxy(self):
         with tempfile.TemporaryDirectory() as tmp, patch("core.video_preview_proxy.config.DATASET_DIR", tmp):
@@ -137,6 +203,16 @@ class RuntimeOptimizationProfileTests(unittest.TestCase):
         self.assertEqual(choice.backend, "opencv_proxy_fast")
         self.assertEqual(choice.scan_path, proxy)
         self.assertTrue(choice.use_proxy)
+
+    def test_cut_boundary_auto_policy_uses_native_cpp_when_available(self):
+        with patch("core.native_cut_boundary.native_cut_boundary_enabled", return_value=True):
+            choice = select_cut_boundary_backend(
+                "clip.mp4",
+                {"cut_boundary_backend_policy": "auto", "runtime_backend_autotune_enabled": False},
+            )
+
+        self.assertEqual(choice.backend, "native_opencv")
+        self.assertEqual(choice.reason, "auto_native_cpp_available")
 
     def test_fast_cut_policy_caps_opencv_thread_multiplication(self):
         settings = apply_cut_boundary_backend_settings({"cut_boundary_backend_policy": "fast"})

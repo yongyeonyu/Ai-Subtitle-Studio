@@ -13,6 +13,7 @@ from PyQt6.QtCore import QEvent
 from PyQt6.QtWidgets import QApplication
 
 from core.project.project_phase1b import apply_project_ui_state
+import ui.main.main_window as main_window_module
 from ui.main.main_window import MainWindow
 
 
@@ -25,6 +26,10 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
         window.close()
         window.deleteLater()
         self.app.processEvents()
+
+    def test_main_window_imports_runtime_config_for_gui_launch_timers(self):
+        self.assertTrue(hasattr(main_window_module, "config"))
+        self.assertTrue(hasattr(main_window_module.config, "IS_MAC"))
 
     def test_post_completion_idle_default_is_five_minutes(self):
         window = MainWindow()

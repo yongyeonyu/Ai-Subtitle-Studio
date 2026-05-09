@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from typing import Any, Iterable
 
@@ -213,6 +214,19 @@ def build_llm_candidate_options(
     settings: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     settings = dict(settings or {})
+    native_requested = _safe_bool(settings.get("native_swift_llm_candidate_policy_enabled"), False) or any(
+        os.environ.get(key, "").strip().lower() in {"1", "true", "on", "yes"}
+        for key in ("AI_SUBTITLE_STUDIO_SWIFT_LLM_POLICY", "AI_SUBTITLE_STUDIO_SWIFT_POLICY")
+    )
+    if native_requested:
+        try:
+            from core.native_swift_policy import build_llm_candidate_options_via_swift
+
+            native = build_llm_candidate_options_via_swift(text, threshold, rules, settings)
+            if native is not None:
+                return native
+        except Exception:
+            pass
     if not _safe_bool(settings.get("llm_candidate_policy_enabled"), True):
         return []
     max_candidates = max(1, min(6, _safe_int(settings.get("llm_candidate_policy_max_candidates"), 4)))

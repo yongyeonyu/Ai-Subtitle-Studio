@@ -27,6 +27,30 @@ def _char_count(text: str) -> int:
     return len(str(text or "").replace(" ", "").replace("\n", ""))
 
 
+def _segment_setting(segment: dict[str, Any], key: str, default: Any) -> Any:
+    for payload_key in ("_lora_gap_settings", "_lora_segment_settings"):
+        payload = segment.get(payload_key)
+        if isinstance(payload, dict) and payload.get(key) not in (None, ""):
+            return payload.get(key)
+    return default
+
+
+def _segment_int(segment: dict[str, Any], key: str, default: int, *, low: int = 1) -> int:
+    try:
+        value = int(round(float(_segment_setting(segment, key, default))))
+    except Exception:
+        value = int(default)
+    return max(low, value)
+
+
+def _segment_float(segment: dict[str, Any], key: str, default: float, *, low: float = 0.0) -> float:
+    try:
+        value = float(_segment_setting(segment, key, default))
+    except Exception:
+        value = float(default)
+    return max(low, value)
+
+
 def _snap_edge_to_frame(sec: float, fps: float, *, edge: str) -> float:
     frame = sec_to_frame(sec, fps)
     snapped = frame_to_sec(frame, fps)
@@ -97,13 +121,23 @@ def merge_short_segments_by_gap(
         prev_dur = _as_float(prev.get("end")) - _as_float(prev.get("start"))
         cur_dur = _as_float(seg.get("end")) - _as_float(seg.get("start"))
         merged_chars = _char_count(prev.get("text", "")) + _char_count(seg.get("text", ""))
+        pair_max_chars = max(
+            max_chars,
+            _segment_int(prev, "split_length_threshold", max_chars, low=2),
+            _segment_int(seg, "split_length_threshold", max_chars, low=2),
+        )
+        pair_gap_break_sec = max(
+            gap_break_sec,
+            _segment_float(prev, "sub_gap_break_sec", gap_break_sec, low=0.05),
+            _segment_float(seg, "sub_gap_break_sec", gap_break_sec, low=0.05),
+        )
         should_merge = (
             not hard_boundary
             and
-            gap <= gap_break_sec
+            gap <= pair_gap_break_sec
             and _same_merge_boundary(prev, seg)
-            and (prev_dur < min_duration or cur_dur < min_duration or merged_chars <= max_chars)
-            and merged_chars <= int(max_chars * 1.5)
+            and (prev_dur < min_duration or cur_dur < min_duration or merged_chars <= pair_max_chars)
+            and merged_chars <= int(pair_max_chars * 1.5)
         )
         if should_merge:
             result[-1] = _merge_pair(prev, seg)
@@ -171,11 +205,13 @@ def clamp_segment_durations(
     for index, seg in enumerate(ordered):
         start = _as_float(seg.get("start"))
         end = max(start + 0.05, _as_float(seg.get("end"), start + 0.05))
-        if end - start > max_duration:
-            end = start + max_duration
+        segment_max_duration = _segment_float(seg, "sub_max_duration", max_duration, low=0.5)
+        if end - start > segment_max_duration:
+            end = start + segment_max_duration
         if index + 1 < len(ordered):
             next_start = _as_float(ordered[index + 1].get("start"), end)
-            if next_start - end >= gap_break_sec:
+            segment_gap_break_sec = _segment_float(seg, "sub_gap_break_sec", gap_break_sec, low=0.05)
+            if next_start - end >= segment_gap_break_sec:
                 end = min(end, next_start - 0.02)
         seg["start"] = round(start, 3)
         seg["end"] = round(max(start + 0.05, end), 3)

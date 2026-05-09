@@ -9,7 +9,7 @@ from typing import Any
 
 from core.engine.llm_correction_guard import validate_llm_chunks
 from core.subtitle_quality.hallucination_detector import estimate_hallucination_risk
-from core.subtitle_quality.vad_alignment_checker import vad_overlap_ratio
+from core.subtitle_quality.vad_alignment_checker import annotate_segments_vad_alignment, vad_overlap_ratio
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -37,6 +37,20 @@ def _metadata_score(segment: dict[str, Any]) -> float:
     return score
 
 
+def _precomputed_vad_ratio(segment: dict[str, Any]) -> float | None:
+    metadata = dict(segment.get("asr_metadata") or {})
+    vad = dict(metadata.get("vad_alignment") or {})
+    value = vad.get("vad_overlap_ratio")
+    if value is None:
+        quality = dict(segment.get("quality") or {})
+        score = quality.get("vad_alignment_score")
+        if score is not None:
+            value = _as_float(score) / 100.0
+    if value is None:
+        return None
+    return max(0.0, min(1.0, _as_float(value)))
+
+
 def score_quality_candidate(
     candidate: dict[str, Any],
     *,
@@ -45,7 +59,9 @@ def score_quality_candidate(
 ) -> float:
     segment = dict(candidate.get("segment") or candidate)
     score = _metadata_score(segment)
-    ratio = vad_overlap_ratio(segment, vad_segments or ())
+    ratio = _precomputed_vad_ratio(segment)
+    if ratio is None:
+        ratio = vad_overlap_ratio(segment, vad_segments or ())
     if ratio is not None:
         score += (float(ratio) - 0.5) * 30.0
     risk = estimate_hallucination_risk(segment, vad_segments=vad_segments or ()).get("risk", 0.0)
@@ -104,8 +120,19 @@ def rank_overlap_candidates(
     previous_end: float | None = None,
 ) -> list[dict[str, Any]]:
     ranked: list[dict[str, Any]] = []
-    for candidate in candidates:
+    clean_candidates = [dict(candidate) for candidate in candidates or () if isinstance(candidate, dict)]
+    segments = [dict(candidate.get("segment") or candidate) for candidate in clean_candidates]
+    annotated_segments = (
+        annotate_segments_vad_alignment(segments, vad_segments or ())
+        if vad_segments and segments
+        else segments
+    )
+    for candidate, segment in zip(clean_candidates, annotated_segments):
         item = dict(candidate)
+        if "segment" in item:
+            item["segment"] = segment
+        else:
+            item.update(segment)
         item["score"] = score_quality_candidate(item, vad_segments=vad_segments, previous_end=previous_end)
         ranked.append(item)
     return sorted(ranked, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)

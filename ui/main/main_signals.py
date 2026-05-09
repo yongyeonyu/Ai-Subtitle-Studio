@@ -145,7 +145,10 @@ class SignalHandlersMixin:
         editor = getattr(self, "_editor_widget", None)
         setter = getattr(editor, "set_live_processing_stage", None) if editor is not None else None
         if callable(setter):
-            setter(str(text or ""))
+            stage_text = str(text or "")
+            if getattr(config, "IS_MAC", False):
+                stage_text = stage_text.replace("⏳ ", "", 1)
+            setter(stage_text)
 
     def _do_clear_editor(self):
         if hasattr(self, "_clear_editor_for_full_restart"):
