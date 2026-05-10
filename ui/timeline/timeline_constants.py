@@ -5,14 +5,13 @@ ui/timeline_constants.py
 Timeline constants and shared utilities
 """
 
+from core.frame_time import frame_count, frame_to_sec, normalize_segment_to_frame_grid
+
 RULER_H = 30
 WAVE_H = 34
 
-CANVAS_H = 314
 SEG_TOP_GAP = 34
 SEG_TOP = RULER_H + WAVE_H + SEG_TOP_GAP
-SEG_BOT = CANVAS_H
-SEG_H = SEG_BOT - SEG_TOP
 
 SUBTITLE_TOP = SEG_TOP + 8
 SUBTITLE_BOT = SEG_TOP + 48
@@ -24,8 +23,14 @@ SPEAKER_TOP = STT2_BOT + 5
 SPEAKER_BOT = SPEAKER_TOP + 22
 VOICE_ACTIVITY_TOP = SPEAKER_BOT + 5
 VOICE_ACTIVITY_BOT = VOICE_ACTIVITY_TOP + 24
-ANALYSIS_TOP = VOICE_ACTIVITY_BOT + 4
-ANALYSIS_BOT = ANALYSIS_TOP + 24
+# Legacy analysis-lane constants are collapsed because the separate
+# "voice/silence" rail is no longer rendered. Silence markers now render as an
+# overlay inside the speaker rail.
+ANALYSIS_TOP = VOICE_ACTIVITY_BOT + 1
+ANALYSIS_BOT = ANALYSIS_TOP
+CANVAS_H = VOICE_ACTIVITY_BOT + 6
+SEG_BOT = CANVAS_H
+SEG_H = SEG_BOT - SEG_TOP
 DIAMOND_Y = SUBTITLE_BOT + 2
 LANE_LABEL_GUTTER_W = 92
 
@@ -41,22 +46,26 @@ FOCUS_BORDER_COLOR = "#FFFF00"
 FOCUS_BORDER_WIDTH = 2
 
 
-def _build_gaps(segs: list[dict], total_dur: float) -> list[dict]:
-    real = sorted(
-        [
-            s for s in segs
-            if not s.get("is_gap") and not bool(s.get("stt_pending") or s.get("_live_stt_preview"))
-        ],
-        key=lambda s: s["start"],
-    )
+def _build_gaps(segs: list[dict], total_dur: float, fps: float = 30.0) -> list[dict]:
+    real = [
+        normalize_segment_to_frame_grid(s, fps, min_frames=1)
+        for s in list(segs or [])
+        if isinstance(s, dict) and not s.get("is_gap") and not bool(s.get("stt_pending") or s.get("_live_stt_preview"))
+    ]
+    real.sort(key=lambda s: (int(s.get("timeline_start_frame", 0) or 0), int(s.get("timeline_end_frame", 0) or 0)))
 
     gaps: list[dict] = []
+    total_frames = max(0, frame_count(total_dur, fps))
 
-    if real and round(real[0]["start"], 1) > 0.0:
+    if real:
+        first_start_frame = int(real[0].get("timeline_start_frame", 0) or 0)
+    else:
+        first_start_frame = 0
+    if real and first_start_frame > 0:
         gaps.append(
             {
                 "start": 0.0,
-                "end": real[0]["start"],
+                "end": frame_to_sec(first_start_frame, fps),
                 "text": "",
                 "line": -1,
                 "is_gap": True,
@@ -65,13 +74,13 @@ def _build_gaps(segs: list[dict], total_dur: float) -> list[dict]:
         )
 
     for i in range(len(real) - 1):
-        gs = real[i]["end"]
-        ge = real[i + 1]["start"]
-        if round(ge - gs, 1) >= 0.1:
+        gs_frame = int(real[i].get("timeline_end_frame", 0) or 0)
+        ge_frame = int(real[i + 1].get("timeline_start_frame", gs_frame) or gs_frame)
+        if ge_frame > gs_frame:
             gaps.append(
                 {
-                    "start": gs,
-                    "end": ge,
+                    "start": frame_to_sec(gs_frame, fps),
+                    "end": frame_to_sec(ge_frame, fps),
                     "text": "",
                     "line": -(i + 2),
                     "is_gap": True,
@@ -79,11 +88,12 @@ def _build_gaps(segs: list[dict], total_dur: float) -> list[dict]:
                 }
             )
 
-    if real and round(real[-1]["end"], 1) < round(total_dur, 1):
+    last_end_frame = int(real[-1].get("timeline_end_frame", 0) or 0) if real else 0
+    if real and last_end_frame < total_frames:
         gaps.append(
             {
-                "start": real[-1]["end"],
-                "end": total_dur,
+                "start": frame_to_sec(last_end_frame, fps),
+                "end": frame_to_sec(total_frames, fps),
                 "text": "",
                 "line": -(len(real) + 10),
                 "is_gap": True,

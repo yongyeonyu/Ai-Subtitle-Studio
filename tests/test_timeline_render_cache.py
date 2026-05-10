@@ -237,6 +237,29 @@ class TimelineRenderCacheTests(unittest.TestCase):
         finally:
             canvas.close()
 
+    def test_frame_aligned_segments_do_not_leave_micro_gap_rows(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.set_frame_rate(30.0)
+            canvas.update_segments(
+                [
+                    {"start": 0.0, "end": 0.999, "text": "앞", "line": 0},
+                    {"start": 1.001, "end": 2.002, "text": "뒤", "line": 1},
+                ],
+                active_sec=0.0,
+                total_dur=4.0,
+            )
+
+            self.assertAlmostEqual(canvas.segments[0]["end"], 1.0, places=6)
+            self.assertAlmostEqual(canvas.segments[1]["start"], 1.0, places=6)
+            internal_gaps = [
+                gap for gap in list(canvas.gap_segments or [])
+                if float(gap.get("start", 0.0) or 0.0) > 0.0 and float(gap.get("end", 0.0) or 0.0) < 2.1
+            ]
+            self.assertEqual(internal_gaps, [])
+        finally:
+            canvas.close()
+
     def test_update_segments_does_not_precompute_full_voice_activity_lane(self):
         canvas = TimelineCanvas()
         try:
@@ -301,6 +324,24 @@ class TimelineRenderCacheTests(unittest.TestCase):
             self.assertGreater(canvas._render_epoch, epoch)
             self.assertEqual(canvas._paint_index_cache, {})
             self.assertEqual(canvas._get_fps(), 24.0)
+        finally:
+            canvas.close()
+
+    def test_frame_rate_change_resnaps_existing_canvas_segments(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.segments = [
+                {"start": 1.01, "end": 2.07, "text": "fps", "line": 0},
+            ]
+            canvas.active_seg_start = 1.01
+            canvas.playhead_sec = 2.07
+
+            canvas.set_frame_rate(24.0)
+
+            self.assertAlmostEqual(canvas.segments[0]["start"], canvas._snap_to_frame(1.01))
+            self.assertAlmostEqual(canvas.segments[0]["end"], canvas._snap_to_frame(2.07))
+            self.assertAlmostEqual(canvas.active_seg_start, canvas._snap_to_frame(1.01))
+            self.assertAlmostEqual(canvas.playhead_sec, canvas._snap_to_frame(2.07))
         finally:
             canvas.close()
 
@@ -440,6 +481,33 @@ class TimelineRenderCacheTests(unittest.TestCase):
             self.assertFalse(any(item.get("source") is canvas.segments[20] for item in second))
         finally:
             canvas._drag_seg = None
+            canvas.close()
+
+    def test_drag_snap_base_candidates_can_use_swift_builder(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.segments = [
+                {"start": 1.0, "end": 2.0, "text": "main", "line": 7},
+            ]
+            canvas.total_duration = 10.0
+            canvas._invalidate_render_cache()
+
+            with patch(
+                "ui.timeline.timeline_subtitle_segment_editing.build_subtitle_drag_snap_base_via_swift",
+                return_value=[
+                    {"time": 1.0, "kind": "subtitle", "sourceLine": 7},
+                    {"time": 10.0, "kind": "timeline"},
+                ],
+            ) as native_builder:
+                first = canvas._build_drag_snap_base_candidates()
+                second = canvas._build_drag_snap_base_candidates()
+
+            native_builder.assert_called_once()
+            self.assertEqual(first, second)
+            self.assertIs(first[0].get("source"), canvas.segments[0])
+            self.assertEqual(first[0].get("kind"), "subtitle")
+            self.assertEqual(first[1].get("kind"), "timeline")
+        finally:
             canvas.close()
 
     def test_diamond_hit_uses_cached_sorted_pairs_for_large_timeline(self):

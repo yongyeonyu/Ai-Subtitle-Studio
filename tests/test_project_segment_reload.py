@@ -4,16 +4,20 @@ import unittest
 import re
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QApplication, QTextEdit
 
 from ui.editor.editor_actions import EditorActionsMixin
+from ui.editor.editor_lifecycle import EditorLifecycleMixin
 from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_multiclip_ops import EditorMulticlipOpsMixin
 from ui.editor.editor_widget import EditorWidget
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.undo_manager import UndoManager
+from ui.project import project_panel as project_panel_module
+from ui.project.project_panel import ProjectUIMixin
 from core.project.project_assets import externalize_project_text_assets
 from core.project.project_phase1b import restore_project_stt_preview_segments
 
@@ -38,9 +42,21 @@ class _VideoPlayer:
     def __init__(self, total_time=0.0):
         self.total_time = float(total_time)
         self.seek_calls = []
+        self.provider = None
+        self.context_segments = []
+        self.display_time = None
 
     def seek(self, sec):
         self.seek_calls.append(float(sec))
+
+    def set_subtitle_provider(self, provider):
+        self.provider = provider
+
+    def refresh_subtitle_context(self, segments):
+        self.context_segments = list(segments or [])
+
+    def set_subtitle_display_time(self, sec):
+        self.display_time = float(sec)
 
 
 class _ScrollBar:
@@ -67,6 +83,7 @@ class _Timeline:
         self.updated = None
         self.active_calls = []
         self.playhead_calls = []
+        self.auto_gap_segments_enabled = True
         self.canvas = type("Canvas", (), {"playhead_sec": 0.0, "segments": []})()
         self.scroll = _TimelineScroll()
 
@@ -83,6 +100,9 @@ class _Timeline:
 
     def center_to_sec(self, _sec, smooth=False):
         return None
+
+    def set_auto_gap_segments_enabled(self, enabled: bool):
+        self.auto_gap_segments_enabled = bool(enabled)
 
 
 class _Status:
@@ -261,6 +281,66 @@ class _ActualSelectionEditor(EditorMulticlipOpsMixin, EditorSegmentsMixin):
         self.refreshed = True
 
 
+class _ProjectOpenEditor:
+    def __init__(self):
+        self.timeline = _Timeline()
+        self.video_player = _VideoPlayer(total_time=30.0)
+        self.text_edit = _TextEdit()
+        self._cached_segs = []
+        self.reload_called_with = None
+        self.completed = False
+        self.scheduled = False
+        self.timestamp_refreshes = []
+        self.video_context_refreshes = 0
+        self.memory_rebuilds = []
+
+    def _reload_segments_from_list(self, segments):
+        self.reload_called_with = [dict(seg) for seg in segments]
+        self._cached_segs = [dict(seg) for seg in segments]
+
+    def _rebuild_subtitle_memory_cache(self, segments=None):
+        rows = [dict(seg) for seg in (segments if segments is not None else self._cached_segs)]
+        self._cached_segs = rows
+        self.memory_rebuilds.append(rows)
+        return {}
+
+    def _refresh_editor_timestamp_metadata(self, *, full=False):
+        self.timestamp_refreshes.append(bool(full))
+        return len(self._cached_segs)
+
+    def _refresh_video_subtitle_context(self):
+        self.video_context_refreshes += 1
+        self.video_player.refresh_subtitle_context(self._video_subtitle_context_for_player())
+
+    def _video_subtitle_context_for_player(self):
+        return [dict(seg) for seg in self._cached_segs]
+
+    def _global_to_local_sec(self, sec):
+        return float(sec)
+
+    def _set_process_completed(self):
+        self.completed = True
+
+    def _schedule_timeline(self):
+        self.scheduled = True
+
+
+class _ProjectOpenWindow(ProjectUIMixin, EditorLifecycleMixin):
+    def __init__(self, editor):
+        self.editor = editor
+        self._editor_widget = None
+        self.runtime_schedule_count = 0
+        self.init_args = None
+
+    def _init_editor(self, target_file, is_batch=False):
+        self.init_args = (target_file, bool(is_batch))
+        self._editor_widget = self.editor
+
+    def _schedule_opened_editor_runtime_refresh(self, editor):
+        self.runtime_schedule_count += 1
+        self._refresh_opened_editor_runtime(editor)
+
+
 class _Editor(EditorMulticlipOpsMixin):
     def __init__(self):
         self._queue_timer = _Timer()
@@ -287,6 +367,39 @@ class ProjectSegmentReloadTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_project_open_uses_same_video_subtitle_runtime_refresh_as_srt_open(self):
+        editor = _ProjectOpenEditor()
+        window = _ProjectOpenWindow(editor)
+        segments = [
+            {"start": 0.0, "end": 2.0, "text": "프로젝트 자막", "speaker": "00"},
+            {"start": 2.5, "end": 4.0, "text": "다음 자막", "speaker": "00"},
+        ]
+        project = {
+            "project_name": "same-runtime",
+            "timeline": {"tracks": [{"clips": [{"source_path": "/tmp/sample.mp4"}]}]},
+            "editor_state": {},
+        }
+
+        with patch.object(project_panel_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+            opened = window._open_project_segments_in_editor(
+                "/tmp/sample_project.json",
+                project,
+                ["/tmp/sample.mp4"],
+                segments,
+            )
+
+        self.assertTrue(opened)
+        self.assertEqual(window.init_args, ("/tmp/sample.mp4", False))
+        self.assertEqual(editor.reload_called_with, segments)
+        self.assertFalse(editor.timeline.auto_gap_segments_enabled)
+        self.assertTrue(editor.completed)
+        self.assertTrue(editor.scheduled)
+        self.assertGreaterEqual(window.runtime_schedule_count, 1)
+        self.assertIsNotNone(editor.video_player.provider)
+        self.assertEqual(editor.video_player.provider(), segments)
+        self.assertEqual(editor.video_player.context_segments, segments)
+        self.assertEqual(editor.video_player.display_time, 0.0)
 
     def test_reload_replaces_pending_segments_before_project_restore(self):
         editor = _Editor()
@@ -387,6 +500,35 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             self.assertEqual(starts, [1.0, 3.4, 8.1])
             self.assertGreaterEqual(editor.text_edit.viewportMargins().left(), 120)
             self.assertTrue(editor.text_edit.timestampArea.isVisible())
+        finally:
+            editor.close()
+
+    def test_srt_like_load_restores_timestamp_metadata_from_editor_snapshot(self):
+        segments = [
+            {"start": 1.0, "end": 2.2, "text": "첫 줄", "speaker": "00"},
+            {"start": 3.4, "end": 5.0, "text": "둘째 줄", "speaker": "00"},
+        ]
+        editor = EditorWidget(
+            video_name="sample.srt",
+            segments=segments,
+            media_path="",
+            defer_media_load=True,
+        )
+        try:
+            doc = editor.text_edit.document()
+            snapshot = getattr(editor.text_edit, "_timestamp_block_meta_snapshot", {})
+            self.assertEqual(sorted(snapshot), [0, 1])
+
+            editor._cached_segs = []
+            editor._cached_line_map = {}
+            for idx in range(doc.blockCount()):
+                doc.findBlockByNumber(idx).setUserData(None)
+
+            repaired = editor._restore_all_block_user_data()
+
+            self.assertEqual(repaired, 2)
+            self.assertAlmostEqual(doc.findBlockByNumber(0).userData().start_sec, 1.0)
+            self.assertAlmostEqual(doc.findBlockByNumber(1).userData().start_sec, 3.4)
         finally:
             editor.close()
 
@@ -620,6 +762,23 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(len(editor._live_stt_preview_segments), 1)
         self.assertEqual(editor._live_stt_preview_segments[0]["text"], "STT1 후보")
 
+    def test_select_stt_candidate_strips_whisper_control_tokens(self):
+        editor = _LivePreviewEditor()
+        editor._cached_segs = [{"start": 1.0, "end": 2.0, "text": "기존", "speaker": "00"}]
+        editor.preview_stt_segments([
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "text": "<|startoftranscript|><|ko|><|transcribe|><|400|> STT1 후보<|900|>",
+                "stt_preview_source": "STT1",
+            }
+        ])
+
+        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
+
+        self.assertEqual(editor.reload_called_with[0]["text"], "STT1 후보")
+        self.assertEqual(editor.reload_called_with[0]["stt_candidates"][0]["text"], "STT1 후보")
+
     def test_select_stt_candidate_anchors_playhead_to_candidate_start(self):
         editor = _LivePreviewEditor()
         editor.timeline.canvas.playhead_sec = 99.0
@@ -638,7 +797,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor.video_player.seek_calls[-1], 12.5)
         self.assertEqual(editor.timeline.scroll.horizontalScrollBar().value(), 37)
 
-    def test_select_stt_candidate_preserves_exact_candidate_timing_near_boundary(self):
+    def test_select_stt_candidate_uses_existing_slot_near_boundary(self):
         editor = _LivePreviewEditor()
         editor.video_fps = 30.0
         editor._cached_segs = [{"start": 1.0, "end": 2.0, "text": "기존", "speaker": "00"}]
@@ -649,13 +808,13 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
 
         self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["STT2 후보"])
-        self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(0.92, 2.08)])
+        self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(1.0, 2.0)])
         self.assertEqual(editor.reload_called_with[0]["stt_selected_source"], "STT2")
-        self.assertEqual(editor.reload_called_with[0]["stt_candidates"][0]["_stt_placement_mode"], "manual_exact_candidate_timing")
+        self.assertEqual(editor.reload_called_with[0]["stt_candidates"][0]["_stt_placement_mode"], "manual_final_slot_replace")
         self.assertTrue(editor.reload_called_with[0]["manual_stt_candidate_locked"])
-        self.assertEqual(editor.timeline.playhead_calls[-1], (0.92, True))
+        self.assertEqual(editor.timeline.playhead_calls[-1], (1.0, True))
 
-    def test_select_stt_candidate_keeps_candidate_when_it_bleeds_across_boundary(self):
+    def test_select_stt_candidate_ignores_tiny_bleed_across_boundary(self):
         editor = _LivePreviewEditor()
         editor.video_fps = 30.0
         editor._cached_segs = [
@@ -669,8 +828,8 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
 
         self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["앞 자막", "STT1 후보"])
-        self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(0.0, 0.94), (0.94, 2.04)])
-        self.assertEqual(editor.reload_called_with[1]["stt_candidates"][0]["_stt_placement_mode"], "manual_exact_candidate_timing")
+        self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(0.0, 1.0), (1.0, 2.0)])
+        self.assertEqual(editor.reload_called_with[1]["stt_candidates"][0]["_stt_placement_mode"], "manual_final_slot_replace")
 
     def test_select_one_stt_candidate_replaces_two_split_subtitles_with_one_segment(self):
         editor = _LivePreviewEditor()
@@ -776,7 +935,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
-    def test_select_stt_candidate_trims_overlapping_final_segment_edges(self):
+    def test_select_stt_candidate_replaces_existing_slot_without_splitting_edges(self):
         editor = _LivePreviewEditor()
         editor._cached_segs = [
             {"start": 0.0, "end": 4.0, "text": "긴 기존 자막", "speaker": "00"},
@@ -787,11 +946,11 @@ class ProjectSegmentReloadTests(unittest.TestCase):
 
         editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
 
-        self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["긴 기존 자막", "STT2 선택", "긴 기존 자막"])
-        self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(0.0, 1.0), (1.0, 3.0), (3.0, 4.0)])
-        self.assertEqual(editor.reload_called_with[1]["stt_selected_source"], "STT2")
+        self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["STT2 선택"])
+        self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(0.0, 4.0)])
+        self.assertEqual(editor.reload_called_with[0]["stt_selected_source"], "STT2")
 
-    def test_select_stt_candidate_keeps_next_final_candidate_selectable(self):
+    def test_select_stt_candidate_splits_same_source_fragments_for_slot(self):
         editor = _LivePreviewEditor()
         editor._cached_segs = [
             {"start": 10.0, "end": 14.0, "text": "STT1 긴 자막", "speaker": "00"},
@@ -802,10 +961,45 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         ])
 
         editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
-        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[1])
 
         self.assertEqual([seg["text"] for seg in editor.reload_called_with], ["STT2 앞", "STT2 뒤"])
         self.assertEqual([(seg["start"], seg["end"]) for seg in editor.reload_called_with], [(10.0, 12.0), (12.0, 14.0)])
+        self.assertEqual(
+            [part["text"] for part in editor.reload_called_with[0]["stt_candidates"][0]["_stt_slot_candidate_parts"]],
+            ["STT2 앞", "STT2 뒤"],
+        )
+        self.assertEqual(editor.reload_called_with[0]["stt_candidates"][0]["_stt_slot_split_total"], 2)
+        self.assertEqual(editor.reload_called_with[1]["stt_candidates"][0]["_stt_slot_split_total"], 2)
+
+    def test_select_red_stt1_candidate_replaces_long_subtitle_with_three_stt1_segments(self):
+        editor = _LivePreviewEditor()
+        editor._cached_segs = [
+            {
+                "start": 2.0,
+                "end": 8.0,
+                "text": "긴 메인 자막",
+                "speaker": "00",
+                "quality": {"confidence_label": "red", "flags": ["high_cps"]},
+            },
+        ]
+        editor.preview_stt_segments([
+            {"start": 2.0, "end": 3.3, "text": "어 유스 어드벤처", "stt_preview_source": "STT1"},
+            {"start": 3.3, "end": 5.9, "text": "2026 2026", "stt_preview_source": "STT1"},
+            {"start": 5.9, "end": 8.0, "text": "네 안녕하세요 소셜기유모씨입니다", "stt_preview_source": "STT1"},
+        ])
+
+        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[2])
+
+        self.assertEqual(
+            [seg["text"] for seg in editor.reload_called_with],
+            ["어 유스 어드벤처", "2026 2026", "네 안녕하세요 소셜기유모씨입니다"],
+        )
+        self.assertEqual(
+            [(seg["start"], seg["end"]) for seg in editor.reload_called_with],
+            [(2.0, 3.3), (3.3, 5.9), (5.9, 8.0)],
+        )
+        self.assertEqual([seg["stt_selected_source"] for seg in editor.reload_called_with], ["STT1", "STT1", "STT1"])
+        self.assertTrue(all(seg["manual_stt_candidate_locked"] for seg in editor.reload_called_with))
 
     def test_select_stt_candidate_is_undo_redo_snapshot(self):
         editor = _UndoableLivePreviewEditor()

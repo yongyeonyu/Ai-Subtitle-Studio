@@ -1150,7 +1150,7 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual([candidate["source"] for candidate in segment["stt_candidates"]], ["STT1", "STT2"])
         self.assertEqual([row["text"] for row in previews], ["후보 하나", "후보 둘"])
 
-    def test_external_stt_assets_are_deduped_to_non_overlapping_tracks(self):
+    def test_external_stt_assets_preserve_distinct_overlapping_tracks(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "project.json"
             project = {
@@ -1166,6 +1166,7 @@ class ProjectContextTests(unittest.TestCase):
                         {"start": 0.1, "end": 0.9, "text": "첫 후보", "stt_preview_source": "STT1", "stt_score": 60.0},
                         {"start": 0.98, "end": 2.0, "text": "둘 후보", "stt_preview_source": "STT1", "stt_score": 91.0},
                         {"start": 1.2, "end": 1.8, "text": "둘 후보", "stt_preview_source": "STT1", "stt_score": 55.0},
+                        {"start": 0.5, "end": 1.4, "text": "겹친 다른 후보", "stt_preview_source": "STT1", "stt_score": 89.0},
                         {"start": 0.0, "end": 1.0, "text": "다른 후보", "stt_preview_source": "STT2", "stt_score": 90.0},
                     ],
                     primary_fps=30.0,
@@ -1184,10 +1185,109 @@ class ProjectContextTests(unittest.TestCase):
             loaded_previews = project_stt_preview_segments(raw_payload)
             stt1_previews = [row for row in loaded_previews if row.get("stt_preview_source") == "STT1"]
 
-        self.assertEqual([row["text"] for row in stt1_rows], ["첫 후보", "둘 후보"])
-        self.assertLessEqual(stt1_rows[0]["end"], stt1_rows[1]["start"])
-        self.assertEqual([row["text"] for row in stt1_previews], ["첫 후보", "둘 후보"])
-        self.assertLessEqual(stt1_previews[0]["end"], stt1_previews[1]["start"])
+        self.assertEqual([row["text"] for row in stt1_rows], ["첫 후보", "겹친 다른 후보", "둘 후보"])
+        self.assertGreater(stt1_rows[0]["end"], stt1_rows[1]["start"])
+        self.assertEqual([row["text"] for row in stt1_previews], ["첫 후보", "겹친 다른 후보", "둘 후보"])
+        self.assertGreater(stt1_previews[0]["end"], stt1_previews[1]["start"])
+
+    def test_external_stt_assets_strip_whisper_control_tokens(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            project = {
+                "project_name": "stt-clean",
+                "project_path": str(path),
+                "timeline": {"timebase": {"primary_fps": 30.0}, "tracks": [{"clips": []}]},
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[],
+                    segments=[],
+                    stt_preview_segments=[
+                        {
+                            "start": 0.0,
+                            "end": 1.0,
+                            "text": "<|startoftranscript|><|ko|><|transcribe|><|400|> 오늘은 여기<|900|>",
+                            "stt_preview_source": "STT1",
+                        },
+                        {
+                            "start": 1.0,
+                            "end": 2.0,
+                            "text": "<|1200|><|1300|>",
+                            "stt_preview_source": "STT1",
+                        },
+                    ],
+                    primary_fps=30.0,
+                ),
+            }
+
+            externalize_project_text_assets(
+                str(path),
+                project,
+                final_segments=[
+                    {
+                        "start": 0.0,
+                        "end": 1.0,
+                        "text": "<|400|> 최종 자막<|900|>",
+                    }
+                ],
+                stt_tracks=project["editor_state"]["stt"]["candidate_tracks"],
+            )
+            raw_payload = json.loads(json.dumps(project, ensure_ascii=False))
+            final_srt = path.parent / raw_payload["subtitles"]["srt_path"]
+            stt1_srt = path.parent / raw_payload["asset_storage"]["tracks"]["stt_stt1"]["path"]
+            stt1_rows = parse_srt_to_segments(str(stt1_srt))
+            previews = project_stt_preview_segments(raw_payload)
+            final_text = final_srt.read_text(encoding="utf-8")
+            stt1_text = stt1_srt.read_text(encoding="utf-8")
+
+        self.assertEqual(final_text.count("<|"), 0)
+        self.assertEqual(stt1_text.count("<|"), 0)
+        self.assertEqual([row["text"] for row in stt1_rows], ["오늘은 여기"])
+        self.assertEqual([row["text"] for row in previews], ["오늘은 여기"])
+
+    def test_project_repeated_save_preserves_overlapping_stt_preview_tracks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"video")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            previews = [
+                {"start": 0.0, "end": 1.0, "text": "STT1 앞", "stt_preview_source": "STT1"},
+                {"start": 0.5, "end": 1.5, "text": "STT1 중간", "stt_preview_source": "STT1"},
+                {"start": 1.4, "end": 2.0, "text": "STT1 뒤", "stt_preview_source": "STT1"},
+                {"start": 0.0, "end": 2.0, "text": "STT2 전체", "stt_preview_source": "STT2"},
+            ]
+            with patch("core.project.project_manager.probe_media", return_value={"duration": 4.0, "fps": 24.0}):
+                save_project(
+                    str(path),
+                    media_paths=[str(media)],
+                    segments=[{"start": 0.0, "end": 2.0, "text": "최종", "speaker": "00"}],
+                    stt_preview_segments=previews,
+                )
+            first = load_project(str(path))
+            first_previews = project_stt_preview_segments(first)
+            save_project(
+                str(path),
+                segments=project_segments_to_editor(first),
+                stt_preview_segments=first_previews,
+            )
+            second = load_project(str(path))
+            second_previews = project_stt_preview_segments(second)
+
+        self.assertEqual([row["text"] for row in first_previews], [row["text"] for row in previews])
+        self.assertEqual([row["text"] for row in second_previews], [row["text"] for row in previews])
 
     def test_project_open_can_skip_heavy_external_candidate_hydration(self):
         with tempfile.TemporaryDirectory() as tmp:

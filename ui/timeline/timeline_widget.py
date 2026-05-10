@@ -25,8 +25,8 @@ from ui.timeline.timeline_canvas import TimelineCanvas
 from ui.timeline.timeline_global import GlobalCanvas
 from ui.timeline.timeline_waveform import WaveformWorker, MultiClipWaveformWorker, patch_waveform_buffer
 from ui.responsive_profile import responsive_profile_for_size
-from ui.style import button_style
-from core.frame_time import normalize_fps, snap_sec_to_frame
+from ui.style import COLORS, button_style
+from core.frame_time import frame_count, frame_to_sec, normalize_fps, sec_to_nearest_frame, snap_sec_to_frame
 
 
 def _scan_boundary_sec_value(item) -> float:
@@ -69,6 +69,17 @@ def _boundary_signature(times) -> tuple:
     for item in list(times or []):
         values.append(round(_scan_boundary_sec_value(item), 3))
     return tuple(values)
+
+
+def _compact_toolbar_button_style(*, font_size: str = "11px", padding: str = "2px 8px") -> str:
+    return (
+        "QPushButton { "
+        f"background: {COLORS['control']}; color: {COLORS['text']}; border: 1px solid {COLORS['separator']}; "
+        f"padding: {padding}; font-size: {font_size}; border-radius: 7px; min-width: 64px; "
+        "} "
+        f"QPushButton:hover {{ background: {COLORS['control_hover']}; }} "
+        f"QPushButton:pressed {{ background: #182026; border-color: {COLORS['primary']}; }}"
+    )
 
 
 class TimelinePlayheadOverlay(QWidget):
@@ -132,7 +143,7 @@ class TimelinePlayheadOverlay(QWidget):
             return 0.0
         if self._center_locked:
             return max(0.0, self.width() / 2.0)
-        return (self._sec * float(getattr(canvas, "pps", 1.0) or 1.0)) - float(self._scroll_x)
+        return float(canvas._x(self._sec) if hasattr(canvas, "_x") else (self._sec * float(getattr(canvas, "pps", 1.0) or 1.0))) - float(self._scroll_x)
 
     def _sync_quick_layer(self, quick=None):
         quick = quick or getattr(self, "_quick", None)
@@ -176,7 +187,7 @@ class TimelinePlayheadOverlay(QWidget):
         if self._center_locked:
             px = max(0, self.width() // 2)
         else:
-            px = int(self._sec * float(getattr(canvas, "pps", 1.0) or 1.0)) - self._scroll_x
+            px = int(canvas._x(self._sec) if hasattr(canvas, "_x") else (self._sec * float(getattr(canvas, "pps", 1.0) or 1.0))) - self._scroll_x
         if px < -16 or px > self.width() + 16:
             return
         painter = QPainter(self)
@@ -208,6 +219,7 @@ class TimelineWidget(QWidget):
     gap_to_segs = pyqtSignal(float, float)
     gap_generate_requested = pyqtSignal(float, float, float, str)
     scrub_sec = pyqtSignal(float)
+    drag_preview_sec = pyqtSignal(float)
     drag_started = pyqtSignal()
     drag_finished = pyqtSignal()
     step_frame = pyqtSignal(int)
@@ -218,6 +230,7 @@ class TimelineWidget(QWidget):
     provisional_cut_boundary_delete_requested = pyqtSignal(int, float)
     sig_clip_selected = pyqtSignal(int)
     waveform_ready = pyqtSignal(str, float)
+    subtitle_magnet_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -231,9 +244,7 @@ class TimelineWidget(QWidget):
         lay.setContentsMargins(10, 4, 10, 1)
         lay.setSpacing(1)
 
-        self.lock_chk = QCheckBox("Lock Edit")
-        self.lock_chk.setStyleSheet(
-            """
+        toolbar_checkbox_style = """
             QCheckBox {
                 color: #FFFF00;
                 font-size: 12px;
@@ -251,17 +262,29 @@ class TimelineWidget(QWidget):
                 background: #FFFF00;
                 border: 1.5px solid #FFFF00;
             }
-            """
-        )
+        """
+        self.lock_chk = QCheckBox("Lock Edit")
+        self.lock_chk.setStyleSheet(toolbar_checkbox_style)
 
         lock_row = QHBoxLayout()
         lock_row.setContentsMargins(0, 0, 0, 0)
         lock_row.addWidget(self.lock_chk)
+        self.repeat_chk = QCheckBox("반복재생")
+        self.repeat_chk.setStyleSheet(toolbar_checkbox_style)
+        self.repeat_chk.setMinimumHeight(24)
+        self.repeat_chk.setMaximumHeight(24)
+        lock_row.addWidget(self.repeat_chk)
         lock_row.addStretch()
+        self.magnet_btn = QPushButton("자막자석")
+        self.magnet_btn.setStyleSheet(_compact_toolbar_button_style())
+        self.magnet_btn.setFixedHeight(24)
+        self.magnet_btn.clicked.connect(self.subtitle_magnet_requested.emit)
+        lock_row.addWidget(self.magnet_btn)
         self._zoom_buttons = []
         for text, tip, slot in (
             ("+", "캔버스 확대", self.zoom_in),
             ("-", "캔버스 축소", self.zoom_out),
+            ("O", "캔버스 10초 편집 창", self.show_ten_second_edit_window),
             ("ㅁ", "캔버스 화면 너비에 맞춤", self.fit_to_view),
         ):
             btn = QPushButton(text)
@@ -298,6 +321,8 @@ class TimelineWidget(QWidget):
         self.global_canvas.installEventFilter(self)
         self.scroll.installEventFilter(self)
         self.lock_chk.installEventFilter(self)
+        self.magnet_btn.installEventFilter(self)
+        self.repeat_chk.installEventFilter(self)
 
         self.canvas.seg_clicked.connect(self.seg_clicked)
         self.canvas.seg_right_clicked.connect(self._on_canvas_right_clicked)
@@ -310,6 +335,7 @@ class TimelineWidget(QWidget):
         self.canvas.gap_to_segs.connect(self.gap_to_segs)
         self.canvas.gap_generate_requested.connect(self.gap_generate_requested.emit)
         self.canvas.scrub_sec.connect(self.scrub_sec)
+        self.canvas.drag_preview_sec.connect(self.drag_preview_sec.emit)
         self.canvas.drag_started.connect(self.drag_started)
         self.canvas.drag_finished.connect(self.drag_finished)
         # 자막 세그먼트 좌우 화살표 리사이즈 중에는 타임라인 뷰포트가 따라 이동하지 않게 고정한다.
@@ -357,6 +383,11 @@ class TimelineWidget(QWidget):
         self._fit_to_view_locked = False
         self._fit_after_resize_pending = False
         self._manual_zoom_since_fit = False
+        self.set_toolbar_tooltips(
+            lock_tip="실수 편집 방지 잠금",
+            magnet_tip="짧은 무음구간을 자막자석으로 붙입니다.",
+            repeat_tip="선택된 세그먼트를 반복 재생합니다.",
+        )
         self._speaker_settings_cache = {}
         self._speaker_settings_cache_at = 0.0
         self._boundary_times_signature = _boundary_signature(getattr(self.canvas, "boundary_times", []))
@@ -412,6 +443,25 @@ class TimelineWidget(QWidget):
         self._schedule_vp_sync()
         self._sync_scenegraph_layer()
         self._sync_playhead_overlay()
+
+    def set_auto_gap_segments_enabled(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        canvas = getattr(self, "canvas", None)
+        if canvas is not None:
+            canvas.auto_generate_gap_segments = enabled
+            canvas.show_gap_insert_controls = enabled
+            canvas._gap_segments_signature = None
+            if not enabled:
+                canvas.gap_segments = [
+                    dict(gap)
+                    for gap in list(getattr(canvas, "gap_segments", []) or [])
+                    if bool(gap.get("_explicit_gap"))
+                ]
+            if hasattr(canvas, "_invalidate_marker_caches"):
+                canvas._invalidate_marker_caches()
+            if hasattr(canvas, "_invalidate_render_cache"):
+                canvas._invalidate_render_cache()
+            canvas.update()
 
     def _apply_single_media_duration(self, dur: float) -> None:
         self._reset_single_media_context(clear_duration=False)
@@ -557,6 +607,27 @@ class TimelineWidget(QWidget):
     def snap_sec_to_frame(self, sec: float) -> float:
         return snap_sec_to_frame(sec, getattr(self, "video_fps", getattr(self.canvas, "frame_rate", 30.0)))
 
+    def _timeline_fps(self) -> float:
+        return normalize_fps(getattr(self, "video_fps", getattr(self.canvas, "frame_rate", 30.0)))
+
+    def _pixels_per_frame(self, pps: float | None = None) -> float:
+        pps_value = float(self.canvas.pps if pps is None else pps)
+        return max(0.001, pps_value) / max(1.0, self._timeline_fps())
+
+    def _frame_for_sec(self, sec: float) -> int:
+        return sec_to_nearest_frame(sec, self._timeline_fps())
+
+    def _sec_for_frame(self, frame: int) -> float:
+        return frame_to_sec(frame, self._timeline_fps())
+
+    def _scroll_x_for_sec(self, sec: float, pps: float | None = None) -> int:
+        frame = self._frame_for_sec(sec)
+        return int(round(frame * self._pixels_per_frame(pps)))
+
+    def _sec_for_scroll_x(self, scroll_x: int | float) -> float:
+        frame = int(round(float(scroll_x or 0.0) / max(0.001, self._pixels_per_frame())))
+        return self._sec_for_frame(frame)
+
     def _create_playhead_overlay(self):
         # Keep the playhead isolated from the heavy timeline body without using
         # a full-size QQuickWidget that can cover the classic canvas.
@@ -564,8 +635,9 @@ class TimelineWidget(QWidget):
 
     def _canvas_width_for_duration(self, dur: float, pps: float | None = None) -> int:
         pps = float(self.canvas.pps if pps is None else pps)
+        total_frames = frame_count(dur, self._timeline_fps())
         end_padding = 96
-        return max(int(float(dur) * pps) + end_padding, self.scroll.width())
+        return max(int(round(total_frames * self._pixels_per_frame(pps))) + end_padding, self.scroll.width())
 
     def _fit_reference_width(self) -> int:
         global_canvas = getattr(self, "global_canvas", None)
@@ -624,7 +696,7 @@ class TimelineWidget(QWidget):
         playhead_sec = self.snap_sec_to_frame(max(0.0, min(dur, float(getattr(self.canvas, "playhead_sec", 0.0) or 0.0))))
         viewport_w = max(1, self.scroll.viewport().width())
         current_scroll = float(self.scroll.horizontalScrollBar().value())
-        playhead_view_x = (playhead_sec * max(0.001, old_pps)) - current_scroll
+        playhead_view_x = float(self._scroll_x_for_sec(playhead_sec, old_pps)) - current_scroll
         if 0 <= playhead_view_x <= viewport_w:
             return playhead_sec, playhead_view_x
         return playhead_sec, viewport_w / 2.0
@@ -644,7 +716,7 @@ class TimelineWidget(QWidget):
         target_w = self._canvas_width_for_duration(dur, new_pps)
         viewport_w = max(1, int(self.scroll.viewport().width()))
         max_scroll = max(0, int(target_w) - viewport_w)
-        new_scroll = int(float(anchor_sec) * new_pps - float(anchor_view_x))
+        new_scroll = int(self._scroll_x_for_sec(float(anchor_sec), new_pps) - float(anchor_view_x))
         new_scroll = max(0, min(new_scroll, max_scroll))
         sb = self.scroll.horizontalScrollBar()
         self.canvas.setUpdatesEnabled(False)
@@ -684,7 +756,17 @@ class TimelineWidget(QWidget):
             or self.global_canvas.hasFocus()
             or self.scroll.hasFocus()
             or self.lock_chk.hasFocus()
+            or self.magnet_btn.hasFocus()
+            or self.repeat_chk.hasFocus()
         )
+
+    def set_toolbar_tooltips(self, *, lock_tip: str = "", magnet_tip: str = "", repeat_tip: str = "") -> None:
+        if hasattr(self, "lock_chk"):
+            self.lock_chk.setToolTip(str(lock_tip or ""))
+        if hasattr(self, "magnet_btn"):
+            self.magnet_btn.setToolTip(str(magnet_tip or ""))
+        if hasattr(self, "repeat_chk"):
+            self.repeat_chk.setToolTip(str(repeat_tip or ""))
 
     def _sync_focus_border(self):
         border = getattr(self, "_focus_border", None)
@@ -777,8 +859,8 @@ class TimelineWidget(QWidget):
     def _viewport_fracs_for_selected_clip(self):
         sb = self.scroll.horizontalScrollBar()
         view_w = self.scroll.viewport().width() if self.scroll.viewport() else self.scroll.width()
-        global_start = float(sb.value()) / max(0.001, float(self.canvas.pps))
-        global_end = float(sb.value() + view_w) / max(0.001, float(self.canvas.pps))
+        global_start = self._sec_for_scroll_x(sb.value())
+        global_end = self._sec_for_scroll_x(sb.value() + view_w)
 
         if self._selected_clip_idx >= 0 and self._selected_clip_duration > 0:
             clip_start = float(self._selected_clip_offset or 0.0)
@@ -1180,6 +1262,16 @@ class TimelineWidget(QWidget):
         self._update_scan_boundary_lane()
         return True
 
+    def set_user_alignment_guides(self, times: list[float]):
+        if hasattr(self.canvas, "set_user_alignment_guides"):
+            return bool(self.canvas.set_user_alignment_guides(list(times or [])))
+        return False
+
+    def add_user_alignment_guides(self, times: list[float]):
+        if hasattr(self.canvas, "add_user_alignment_guides"):
+            return bool(self.canvas.add_user_alignment_guides(list(times or [])))
+        return False
+
     def set_scan_boundary_markers_visible(self, visible: bool):
         visible = bool(visible)
         if bool(getattr(self.canvas, "show_scan_boundary_markers", False)) == visible:
@@ -1235,7 +1327,7 @@ class TimelineWidget(QWidget):
             self._restore_segment_drag_view()
             return
         self.set_playback_center_lock(False)
-        target_x = int(sec * self.canvas.pps)
+        target_x = self._scroll_x_for_sec(sec)
         half_w = self.scroll.width() // 2
         target_val = int(self._clamp_scroll_x(max(0, target_x - half_w)))
 
@@ -1463,7 +1555,7 @@ class TimelineWidget(QWidget):
 
         viewport_w = max(1, int(self.scroll.viewport().width()))
         max_scroll = max(0, int(target_w) - viewport_w)
-        target_scroll = max(0, min(int(fit_start_sec * new_pps), max_scroll))
+        target_scroll = max(0, min(self._scroll_x_for_sec(fit_start_sec, new_pps), max_scroll))
         self.canvas.setUpdatesEnabled(False)
         try:
             self.canvas.pps = new_pps
@@ -1494,6 +1586,50 @@ class TimelineWidget(QWidget):
         self.global_canvas.update()
         self._schedule_vp_sync()
         self._sync_playhead_overlay()
+
+    def _editing_window_anchor_sec(self) -> float | None:
+        canvas = getattr(self, "canvas", None)
+        if canvas is None:
+            return None
+
+        active_line = getattr(canvas, "active_seg_line", None)
+        if active_line is not None and hasattr(canvas, "_segment_for_line"):
+            seg = canvas._segment_for_line(int(active_line))
+            if isinstance(seg, dict):
+                try:
+                    start = float(seg.get("start", 0.0) or 0.0)
+                    end = float(seg.get("end", start) or start)
+                    if end > start:
+                        return (start + end) / 2.0
+                except Exception:
+                    pass
+
+        active_start = getattr(canvas, "active_seg_start", None)
+        if active_start is not None and hasattr(canvas, "_active_segment_candidates"):
+            try:
+                candidates = canvas._active_segment_candidates()
+            except Exception:
+                candidates = []
+            for seg in list(candidates or []):
+                if not isinstance(seg, dict) or bool(seg.get("is_gap")):
+                    continue
+                try:
+                    start = float(seg.get("start", 0.0) or 0.0)
+                    end = float(seg.get("end", start) or start)
+                    if end > start:
+                        return (start + end) / 2.0
+                except Exception:
+                    continue
+            try:
+                return float(active_start)
+            except Exception:
+                pass
+
+        try:
+            playhead = float(getattr(canvas, "playhead_sec", 0.0) or 0.0)
+        except Exception:
+            playhead = 0.0
+        return max(0.0, playhead)
 
     def show_time_window_seconds(
         self,
@@ -1533,7 +1669,7 @@ class TimelineWidget(QWidget):
         else:
             view_start_sec = 0.0
         view_start_sec = max(0.0, min(view_start_sec, max(0.0, total_dur - visible_sec)))
-        target_scroll = max(0, min(int(view_start_sec * new_pps), max_scroll))
+        target_scroll = max(0, min(self._scroll_x_for_sec(view_start_sec, new_pps), max_scroll))
 
         self._fit_to_view_locked = False
         self._fit_after_resize_pending = False
@@ -1560,6 +1696,14 @@ class TimelineWidget(QWidget):
             self.canvas.update()
         self._schedule_vp_sync()
         self._sync_playhead_overlay()
+
+    def show_ten_second_edit_window(self) -> None:
+        anchor_sec = self._editing_window_anchor_sec()
+        self.show_time_window_seconds(10.0, center_sec=anchor_sec)
+        self._fit_to_view_locked = False
+        self._fit_after_resize_pending = False
+        self._manual_zoom_since_fit = True
+        self._begin_manual_scroll(hold_sec=1.2)
 
     def schedule_time_window_seconds(
         self,

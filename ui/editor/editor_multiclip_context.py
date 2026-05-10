@@ -9,6 +9,23 @@ from core.frame_time import normalize_fps
 
 
 class EditorMulticlipContextMixin:
+    def _editor_doc_revision(self) -> int:
+        try:
+            return int(self.text_edit.document().revision())
+        except Exception:
+            return -1
+
+    def _arm_snapshot_undo_routing(self):
+        self._snapshot_undo_revision = self._editor_doc_revision()
+        self._snapshot_redo_revision = None
+
+    def _arm_snapshot_redo_routing(self):
+        self._snapshot_redo_revision = self._editor_doc_revision()
+
+    def _clear_snapshot_history_routing(self):
+        self._snapshot_undo_revision = None
+        self._snapshot_redo_revision = None
+
     def _fps_for_media_path(self, path: str) -> float:
         try:
             from core.media_info import probe_media
@@ -44,6 +61,16 @@ class EditorMulticlipContextMixin:
 
     def _route_undo(self):
         from PyQt6.QtWidgets import QApplication
+        current_revision = self._editor_doc_revision()
+        if getattr(self, "_snapshot_undo_revision", None) != current_revision:
+            self._snapshot_undo_revision = None
+        if getattr(self, "_snapshot_redo_revision", None) != current_revision:
+            self._snapshot_redo_revision = None
+        if getattr(self, "_snapshot_undo_revision", None) == current_revision:
+            self._snapshot_undo_revision = None
+            self._undo_mgr.undo()
+            self._arm_snapshot_redo_routing()
+            return
         fw = QApplication.focusWidget()
         if hasattr(fw, 'undo') and fw.hasFocus():
             fw.undo()
@@ -52,6 +79,16 @@ class EditorMulticlipContextMixin:
 
     def _route_redo(self):
         from PyQt6.QtWidgets import QApplication
+        current_revision = self._editor_doc_revision()
+        if getattr(self, "_snapshot_undo_revision", None) != current_revision:
+            self._snapshot_undo_revision = None
+        if getattr(self, "_snapshot_redo_revision", None) != current_revision:
+            self._snapshot_redo_revision = None
+        if getattr(self, "_snapshot_redo_revision", None) == current_revision:
+            self._snapshot_redo_revision = None
+            self._undo_mgr.redo()
+            self._arm_snapshot_undo_routing()
+            return
         fw = QApplication.focusWidget()
         if hasattr(fw, 'redo') and fw.hasFocus():
             fw.redo()

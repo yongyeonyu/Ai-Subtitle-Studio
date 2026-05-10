@@ -35,9 +35,12 @@ from ui.editor.stable_render_frame import StableRenderFrame
 from ui.editor.subtitle_text_edit import SubtitleTextEdit, SubtitleHighlighter, SubtitleBlockData
 from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.editor.editor_actions import EditorActionsMixin
+from ui.editor.editor_save_manager import EditorSaveManagerMixin
+from ui.editor.editor_canvas_state import EditorCanvasStateMixin
 from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
 from ui.editor.editor_video_controls import EditorVideoControlsMixin
+from ui.editor.editor_subtitle_assist import EditorSubtitleAssistMixin
 from ui.editor.editor_multiclip_context import EditorMulticlipContextMixin
 from ui.editor.editor_speaker_ops import EditorSpeakerOpsMixin
 from ui.editor.editor_multiclip_ops import EditorMulticlipOpsMixin
@@ -46,16 +49,17 @@ from ui.editor.editor_stt_mode import EditorSTTModeMixin
 DATASET_DIR   = "dataset"
 SETTINGS_FILE = os.path.join(DATASET_DIR, "user_settings.json")
 DEFAULT_EDITOR_AUTO_SAVE_INTERVAL_SEC = 300
-MIN_EDITOR_AUTO_SAVE_INTERVAL_SEC = 120
-MAX_EDITOR_AUTO_SAVE_INTERVAL_SEC = 1800
 
 
 class EditorWidget(
+    EditorSaveManagerMixin,
     EditorActionsMixin,
     EditorPipelineMixin,
+    EditorCanvasStateMixin,
     EditorSegmentsMixin,
     EditorTimelineVideoMixin,
     EditorVideoControlsMixin,
+    EditorSubtitleAssistMixin,
     EditorMulticlipContextMixin,
     EditorSpeakerOpsMixin,
     EditorMulticlipOpsMixin,
@@ -79,17 +83,7 @@ class EditorWidget(
     _auto_start_next = False
 
     def _auto_save_interval_ms(self) -> int:
-        settings = getattr(self, "settings", {}) or {}
-        raw_value = settings.get(
-            "editor_auto_save_interval_sec",
-            settings.get("auto_save_interval_sec", DEFAULT_EDITOR_AUTO_SAVE_INTERVAL_SEC),
-        )
-        try:
-            interval_sec = float(raw_value)
-        except Exception:
-            interval_sec = float(DEFAULT_EDITOR_AUTO_SAVE_INTERVAL_SEC)
-        interval_sec = max(MIN_EDITOR_AUTO_SAVE_INTERVAL_SEC, min(MAX_EDITOR_AUTO_SAVE_INTERVAL_SEC, interval_sec))
-        return int(interval_sec * 1000)
+        return EditorSaveManagerMixin._auto_save_interval_ms(self)
 
     def __init__(
         self,
@@ -98,6 +92,7 @@ class EditorWidget(
         media_path: str | None = None,
         parent=None,
         defer_media_load: bool = False,
+        hydrate_existing_srt_on_empty: bool = True,
     ):
         super().__init__(parent)
         self._has_auto_started = False
@@ -116,7 +111,10 @@ class EditorWidget(
         self._auto_quality_review_pending = False
         self._auto_quality_review_scheduled = False
         self._auto_quality_review_defer_logged = False
+        self._snapshot_undo_revision = None
+        self._snapshot_redo_revision = None
         self.selected_model = self.settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
+        self._autosave_requires_manual_save = False
 
         self.sm = SubtitleStateManager()
         self.sm.current_file = media_path or ""    # ✅ 여기로 이동
@@ -186,6 +184,10 @@ class EditorWidget(
         self.editor_popup = EditorPopup(self)
         
         self._build_ui()
+        self._init_subtitle_assist_state()
+        self._refresh_subtitle_assist_ui()
+        if hasattr(self, "video_player"):
+            self.video_player._repeat_play_prepare_callback = self._prepare_repeat_playback_start
         app = QApplication.instance()
         if app is not None:
             app.focusChanged.connect(self._on_app_focus_changed)
@@ -208,7 +210,7 @@ class EditorWidget(
         self.redo_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         self.redo_shortcut.activated.connect(self._route_redo)
 
-        if not segments and media_path:
+        if not segments and media_path and hydrate_existing_srt_on_empty:
             base_path = os.path.splitext(media_path)[0]; srt_guess = base_path + ".srt"
             if not os.path.exists(srt_guess) and video_name.endswith('.srt'):
                 srt_guess = os.path.join(os.path.dirname(media_path), video_name)
@@ -230,31 +232,12 @@ class EditorWidget(
 
         self._is_initial_load = True if segments else False
         if segments:
-            loaded_segments = None
-            try:
-                ordered_segments = self._normalize_multiclip_segment_order(segments)
-                loaded_segments = self._bulk_load_segments_to_document(ordered_segments)
-            except Exception:
-                loaded_segments = None
-            if isinstance(loaded_segments, list):
-                self._rebuild_subtitle_memory_cache(loaded_segments)
-                self._refresh_editor_timestamp_metadata(full=True)
-                for delay_ms in (0, 120, 360):
-                    QTimer.singleShot(
-                        delay_ms,
-                        lambda e=self: e._refresh_editor_timestamp_metadata(full=False),
-                    )
-                total_dur = loaded_segments[-1]["end"] if loaded_segments else 0.0
-                if hasattr(self, "timeline"):
-                    self.timeline.update_segments(loaded_segments, self._active_seg_start, total_dur)
-                    if hasattr(self.timeline, "schedule_time_window_seconds"):
-                        self.timeline.schedule_time_window_seconds(15.0, delays=(0, 160, 360))
-            else:
-                if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
-                    self.timeline.canvas.segments = [dict(s) for s in segments]
-                    if hasattr(self.timeline.canvas, "_invalidate_render_cache"):
-                        self.timeline.canvas._invalidate_render_cache()
-                self.append_segments(segments)
+            self.apply_loaded_canvas_state(
+                segments,
+                preserve_view=False,
+                mark_dirty=False,
+            )
+            self._schedule_initial_open_layout((0, 160, 360))
             QTimer.singleShot(350, self._mark_initial_segments_saved)
 
         if media_path and not defer_media_load:
@@ -432,45 +415,55 @@ class EditorWidget(
         except Exception:
             pass
 
+    def _apply_initial_open_editor_layout(self):
+        text_edit = getattr(self, "text_edit", None)
+        if text_edit is None:
+            return
+        prev_sync_lock = bool(getattr(self, "_sync_lock", False))
+        try:
+            self._sync_lock = True
+            doc = text_edit.document()
+            first_block = doc.findBlockByNumber(0)
+            if first_block.isValid():
+                cur = QTextCursor(first_block)
+                cur.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                text_edit.setTextCursor(cur)
+        except Exception:
+            pass
+        finally:
+            self._sync_lock = prev_sync_lock
+        try:
+            bar = text_edit.verticalScrollBar()
+            bar.setValue(int(bar.minimum()))
+        except Exception:
+            pass
+
+    def _schedule_initial_open_layout(self, delays: tuple[int, ...] = (0, 160, 360)):
+        timeline = getattr(self, "timeline", None)
+        try:
+            if timeline is not None and hasattr(timeline, "schedule_time_window_seconds"):
+                timeline.schedule_time_window_seconds(
+                    10.0,
+                    start_sec=0.0,
+                    delays=tuple(int(delay) for delay in delays),
+                )
+        except Exception:
+            pass
+
+        def _apply_top_layout():
+            try:
+                self._apply_initial_open_editor_layout()
+            except RuntimeError:
+                return
+
+        for delay in tuple(int(delay) for delay in delays):
+            QTimer.singleShot(delay, _apply_top_layout)
+
     def _editor_auto_save_allowed(self) -> bool:
-        sm = getattr(self, "sm", None)
-        if sm is None or getattr(sm, "is_locked", False):
-            return False
-        return str(getattr(sm, "state", "") or "") in {
-            SubtitleStateManager.ST_EDITING,
-            SubtitleStateManager.ST_AUTOSAVE,
-        }
+        return EditorSaveManagerMixin._editor_auto_save_allowed(self)
 
     def _on_auto_save(self):
-        if not self._editor_auto_save_allowed():
-            return
-        if hasattr(self, "_has_unsaved_changes"):
-            try:
-                if not self._has_unsaved_changes():
-                    if getattr(self.sm, "is_dirty", False) and hasattr(self, "_mark_save_completed"):
-                        self._mark_save_completed(touch_saved_time=False)
-                    return
-            except Exception:
-                pass
-        if self.sm.is_dirty:
-            segs = self._get_current_segments()
-            if not segs:
-                return
-            self.sm.start_autosave()
-            try:
-                if not self._persist_editor_srts(segs, autosave=True):
-                    return
-            except Exception as e:
-                get_logger().log(f"⚠️ 자동 저장 실패: {e}")
-                return
-            self._remember_saved_segments(segs)
-            try:
-                project_path = self._auto_save_project(segs, persist_analysis_artifacts=False)
-            except Exception as e:
-                get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {e}")
-                project_path = ""
-            self._remember_saved_project_file(project_path)
-            self._mark_save_completed(touch_saved_time=True)
+        return EditorSaveManagerMixin._on_auto_save(self)
 
     # ---------------------------------------------------------
     # UI 빌드
@@ -568,12 +561,15 @@ class EditorWidget(
         # ✅ 여기 딱 한 번만 connect
         if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'sig_split_request'):
             self.timeline.canvas.sig_split_request.connect(self.split_segment_with_text)
+        if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'sig_speaker_split_request'):
+            self.timeline.canvas.sig_speaker_split_request.connect(self.split_speaker_segment_with_text)
 
         self.timeline.seg_clicked.connect(self._on_timeline_seg_clicked)
         if hasattr(self.timeline, 'stt_candidate_selected'):
             self.timeline.stt_candidate_selected.connect(self.select_stt_candidate_as_subtitle)
         self.timeline.seg_double_clicked.connect(self._on_timeline_seg_double_clicked)
         self.timeline.scrub_sec.connect(self._on_scrub)
+        if hasattr(self.timeline, 'drag_preview_sec'): self.timeline.drag_preview_sec.connect(self._on_timing_drag_preview)
 
         if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'seg_right_clicked'):
             self.timeline.canvas.seg_right_clicked.connect(self._on_timeline_seg_right_clicked)
@@ -592,6 +588,8 @@ class EditorWidget(
         if hasattr(self.timeline, 'drag_finished'):    self.timeline.drag_finished.connect(self._on_drag_finished)
         if hasattr(self.timeline, 'step_frame'):       self.timeline.step_frame.connect(self._on_step_frame)
         if hasattr(self.timeline, 'lock_chk'):         self.timeline.lock_chk.toggled.connect(self._on_lock_changed)
+        if hasattr(self.timeline, 'repeat_chk'):       self.timeline.repeat_chk.toggled.connect(self._on_repeat_segment_toggled)
+        if hasattr(self.timeline, 'subtitle_magnet_requested'): self.timeline.subtitle_magnet_requested.connect(self._on_subtitle_magnet_requested)
         if hasattr(self.timeline, 'diamond_merge'):    self.timeline.diamond_merge.connect(self._on_diamond_merge)
         if hasattr(self.timeline, 'sig_inline_text_changed'): self.timeline.sig_inline_text_changed.connect(self._on_inline_text_changed)
         if hasattr(self.timeline, 'sig_editing_mode'):        self.timeline.sig_editing_mode.connect(self._on_seg_editing_mode)

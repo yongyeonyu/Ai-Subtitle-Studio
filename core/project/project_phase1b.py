@@ -25,6 +25,7 @@ from core.project.project_manager import (
 )
 from core.project.project_assets import externalize_project_text_assets
 from core.cut_boundary import cut_boundary_enabled, project_cut_boundaries, split_segments_by_cut_boundaries, sync_project_cut_boundaries
+from core.frame_time import normalize_fps
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 
 PROJECT_SCHEMA_VERSION = '03.00.26'
@@ -92,6 +93,28 @@ def _media_paths(owner, editor, project_data: dict[str, Any]) -> list[str]:
             if p:
                 media_files.append(_safe_abs(p))
     return [p for p in media_files if p]
+
+
+def _project_primary_fps(project_data: dict[str, Any]) -> float:
+    timeline = project_data.get('timeline', {}) if isinstance(project_data.get('timeline'), dict) else {}
+    timebase = timeline.get('timebase', {}) if isinstance(timeline.get('timebase'), dict) else {}
+    try:
+        fps = float(timebase.get('primary_fps', 0.0) or 0.0)
+    except Exception:
+        fps = 0.0
+    if fps > 0.0:
+        return normalize_fps(fps)
+    tracks = timeline.get('tracks', []) if isinstance(timeline.get('tracks'), list) else []
+    for track in tracks:
+        clips = track.get('clips', []) if isinstance(track, dict) and isinstance(track.get('clips'), list) else []
+        for clip in clips:
+            try:
+                fps = float(clip.get('fps', 0.0) or 0.0)
+            except Exception:
+                fps = 0.0
+            if fps > 0.0:
+                return normalize_fps(fps)
+    return normalize_fps(30.0)
 
 
 def _normalize_segments_for_legacy(segments: list[dict[str, Any]] | None, existing: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -168,6 +191,7 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
     data['project_meta'] = _project_meta(owner)
     existing_segments = project_segments_to_editor(data)
     normalized_segments = _normalize_segments_for_legacy(segments, existing_segments)
+    primary_fps = _project_primary_fps(data)
     subtitles = dict(data.get('subtitles', {}) or {})
     subtitles['srt_path'] = _safe_abs(srt_path) or subtitles.get('srt_path')
     subtitles.pop('segments', None)
@@ -182,6 +206,7 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
         clip_boundaries=list(getattr(owner, '_multiclip_boundaries', []) or []),
         stt_preview_segments=project_stt_preview_segments(data),
         cut_boundaries=cut_boundaries,
+        primary_fps=primary_fps,
     )
     data.setdefault('roughcut_state', {})
     if media_files:

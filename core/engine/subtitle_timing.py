@@ -601,7 +601,7 @@ def align_stt_preview_to_subtitle_segments(
     *,
     edge_pad_sec: float = 0.08,
 ) -> list[dict]:
-    """Align visible STT1/STT2 preview lanes to final subtitle spans without editing text."""
+    """Keep STT1/STT2 preview lanes raw while aligning auxiliary preview rows to subtitles."""
     if not preview_segments:
         return []
     subtitles = [
@@ -622,14 +622,15 @@ def align_stt_preview_to_subtitle_segments(
             or row.get("stt_source")
             or row.get("stt_ensemble_source")
             or ""
-        ).upper()
-        if source not in {"STT1", "STT2"}:
+        ).strip().upper()
+        if source in {"STT1", "STT2"}:
+            row["stt_preview_preserved_candidate_timing"] = True
             out.append(row)
             continue
         span = _overlapped_subtitle_span(row, subtitles, edge_pad_sec=edge_pad_sec)
         if span is not None:
             _update_candidate_time_fields(row, span[0], span[1], row)
-            row["stt_preview_aligned_to_subtitle_segments"] = True
+            row["preview_aligned_to_subtitle_segments"] = True
             row["stt_alignment_preserved_text"] = True
         out.append(row)
     return out

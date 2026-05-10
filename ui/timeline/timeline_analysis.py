@@ -261,7 +261,7 @@ def editor_analysis_markers(
 
     speech_ranges: list[tuple[float, float]] = []
     for seg in segments or []:
-        if seg.get("is_gap"):
+        if seg.get("is_gap") or _is_stt_candidate_timing_segment(seg):
             continue
         start = _as_float(seg.get("start"))
         end = _as_float(seg.get("end"))
@@ -440,6 +440,8 @@ def subtitle_detection_segments_for_editor(
         end = seg.get("end")
         if seg.get("stt_pending") or seg.get("_live_stt_preview"):
             source = _stt_source_for_segment(seg)
+            if source in {"STT1", "STT2"}:
+                continue
             score = _subtitle_detection_score(seg, source)
             color = subtitle_detection_color(score) if score is not None else SUBTITLE_DETECTION_IDLE_COLOR
             add(
@@ -619,6 +621,10 @@ def _stt_source_for_segment(seg: dict) -> str:
         if source in {"STT1", "STT2"}:
             return source
     return ""
+
+
+def _is_stt_candidate_timing_segment(seg: dict) -> bool:
+    return bool(seg.get("stt_pending") or seg.get("_live_stt_preview")) and _stt_source_for_segment(seg) in {"STT1", "STT2"}
 
 
 def _subtitle_needs_selection(seg: dict) -> bool:

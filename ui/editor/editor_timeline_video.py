@@ -15,13 +15,14 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
 
 from core.frame_time import normalize_fps, snap_sec_to_frame
+from core.native_swift_timeline import plan_subtitle_timing_edit_via_swift
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_scan_cut_core import EditorScanCutCoreMixin
 from ui.editor.editor_helpers import (
     find_segment_at, get_sub_block_indices,
     find_segment_at_lookup,
     build_segment_lookup,
-    make_gap_ud, delete_block_safely, insert_gap_after,
+    make_gap_ud, delete_block_safely,
 )
 
 
@@ -138,6 +139,10 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             self.timeline.set_playhead(seg["start"])
         line_num = seg.get("line", 0)
         self._highlighter.set_current_line(line_num)
+        remember_repeat_segment = getattr(self, "_remember_repeat_segment", None)
+        repeat_enabled = getattr(self, "_segment_repeat_enabled", None)
+        if callable(remember_repeat_segment) and callable(repeat_enabled) and repeat_enabled():
+            remember_repeat_segment(seg)
         if not move_cursor:
             return
         block = self.text_edit.document().findBlockByNumber(line_num)
@@ -326,32 +331,37 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         return line_seg
 
     def _on_timeline_seg_clicked(self, line_num, start_sec):
+        click_sec = self._snap_to_frame(float(start_sec or 0.0))
         cache = getattr(self, "_subtitle_memory_cache", None)
-        seg = self._segment_for_timeline_click(line_num, start_sec, cache)
+        seg = self._segment_for_timeline_click(line_num, click_sec, cache)
         lock_edit = self._timeline_lock_edit_enabled()
+        if hasattr(self, "timeline") and hasattr(self.timeline, "set_playhead"):
+            self._reset_playhead_smoothing(click_sec)
+            self.timeline.set_playhead(click_sec)
         if seg:
-            target_sec = float(seg.get("start", start_sec) or start_sec or 0.0)
+            target_sec = float(seg.get("start", click_sec) or click_sec or 0.0)
             line_num = int(seg.get("line", line_num) if seg.get("line") is not None else line_num)
             if lock_edit:
                 self._active_seg_start = target_sec
                 self.timeline.set_active(target_sec)
-                if hasattr(self.timeline, "set_playhead"):
-                    self._reset_playhead_smoothing(target_sec)
-                    self.timeline.set_playhead(target_sec)
             else:
-                self._sync_cursor_to_seg(seg)
+                self._sync_cursor_to_seg(seg, sync_playhead=False)
             target_end = float(seg.get("end", target_sec) or target_sec)
-            target_center = (target_sec + target_end) / 2
+            target_view_sec = min(max(click_sec, target_sec), target_end)
             if hasattr(self.timeline, "ensure_sec_visible"):
-                self.timeline.ensure_sec_visible(target_center, smooth=True, margin_px=96)
+                self.timeline.ensure_sec_visible(target_view_sec, smooth=True, margin_px=96)
             else:
-                self.timeline.center_to_sec(target_center, smooth=True)
+                self.timeline.center_to_sec(target_view_sec, smooth=True)
             if hasattr(self, '_resolve_active_context') and hasattr(self, '_apply_active_context'):
-                ctx = self._resolve_active_context(global_sec=target_sec)
+                ctx = self._resolve_active_context(global_sec=click_sec)
                 self._apply_active_context(ctx, autoplay=False, show_thumbnail=True)
             elif hasattr(self, 'video_player'):
                 self.video_player.pause_video()
-                self.video_player.seek_direct(target_sec)
+                self.video_player.seek_direct(click_sec)
+            remember_repeat_segment = getattr(self, "_remember_repeat_segment", None)
+            repeat_enabled = getattr(self, "_segment_repeat_enabled", None)
+            if callable(remember_repeat_segment) and callable(repeat_enabled) and repeat_enabled():
+                remember_repeat_segment(seg)
         if lock_edit:
             if hasattr(self.timeline, "canvas"):
                 self.timeline.canvas.setFocus()
@@ -372,6 +382,10 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         elif hasattr(self, 'video_player'):
             self.video_player.pause_video()
             self.video_player.seek_direct(float(start_sec))
+        remember_repeat_segment = getattr(self, "_remember_repeat_segment", None)
+        repeat_enabled = getattr(self, "_segment_repeat_enabled", None)
+        if callable(remember_repeat_segment) and callable(repeat_enabled) and repeat_enabled() and isinstance(seg, dict):
+            remember_repeat_segment(seg)
         if hasattr(self.timeline, 'canvas') and hasattr(self.timeline.canvas, 'start_inline_edit'):
             self._undo_mgr.push_immediate()
             self.timeline.canvas.start_inline_edit(line_num, start_sec)
@@ -397,6 +411,11 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         now_mono = time.monotonic()
         local_sec = self._current_video_local_frame_sec(player)
         current_sec = self._snap_to_frame(self._local_to_global_sec(local_sec))
+        maybe_repeat = getattr(self, "_maybe_loop_selected_segment", None)
+        if callable(maybe_repeat):
+            looped_sec = maybe_repeat(current_sec)
+            if looped_sec is not None:
+                current_sec = self._snap_to_frame(looped_sec)
         self._playhead_display_sec = current_sec
         self._playhead_anchor_global_sec = current_sec
         self._playhead_anchor_mono = now_mono
@@ -484,6 +503,21 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         self._pending_scrub_sec = sec
         self._schedule_scrub_preview(sec)
         self._schedule_scrub_settle()
+
+    def _on_timing_drag_preview(self, sec: float) -> None:
+        if hasattr(self, "_scan_should_block_user_timeline_input") and self._scan_should_block_user_timeline_input():
+            return
+        sec = self._snap_to_frame(sec)
+        self._reset_playhead_smoothing(sec)
+        self._playhead_idle_synced = False
+        timeline = getattr(self, "timeline", None)
+        if timeline is not None:
+            try:
+                timeline.set_playhead(sec, preserve_center_lock=True)
+            except TypeError:
+                timeline.set_playhead(sec)
+        self._pending_scrub_sec = sec
+        self._schedule_scrub_preview(sec)
 
     def _make_scrub_timer(self):
         try:
@@ -588,6 +622,10 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                 and not self._editor_manual_scroll_recent()
             )
             self._sync_cursor_to_seg(seg, ensure_visible=move_editor, move_cursor=move_editor, sync_playhead=False)
+        remember_repeat_segment = getattr(self, "_remember_repeat_segment", None)
+        repeat_enabled = getattr(self, "_segment_repeat_enabled", None)
+        if callable(remember_repeat_segment) and callable(repeat_enabled) and repeat_enabled() and isinstance(seg, dict):
+            remember_repeat_segment(seg)
         self._pending_scrub_sec = None
 
     def _manual_global_sec_from_player(self) -> float:
@@ -632,6 +670,10 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         seg = find_segment_at(segs, global_sec, skip_gap=False)
         if seg and getattr(self, "_active_seg_start", None) != seg.get("start"):
             self._sync_cursor_to_seg(seg, sync_playhead=False)
+        remember_repeat_segment = getattr(self, "_remember_repeat_segment", None)
+        repeat_enabled = getattr(self, "_segment_repeat_enabled", None)
+        if callable(remember_repeat_segment) and callable(repeat_enabled) and repeat_enabled() and isinstance(seg, dict):
+            remember_repeat_segment(seg)
         self._reset_playhead_smoothing(global_sec)
         self.timeline.set_playhead(global_sec)
         self.timeline.center_to_sec(global_sec, smooth=False)
@@ -643,9 +685,13 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             return
 
         try:
-            direction = 1 if int(direction) > 0 else -1
+            raw_direction = int(direction)
         except Exception:
-            direction = 1
+            raw_direction = 1
+        if raw_direction == 0:
+            return
+        direction = 1 if raw_direction > 0 else -1
+        frame_delta = max(1, abs(raw_direction))
 
         try:
             self.video_player.pause_video()
@@ -655,7 +701,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         fps = self._current_frame_fps()
         current_global = float(getattr(self.timeline.canvas, 'playhead_sec', 0.0) or 0.0)
         local_frame = max(0, int(round(current_global * fps)))
-        target_frame = max(0, local_frame + direction)
+        target_frame = max(0, local_frame + (direction * frame_delta))
         global_sec = self._snap_to_frame(target_frame / fps)
         self._manual_frame_idx = max(0, int(round(global_sec * fps)))
 
@@ -707,11 +753,6 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         self.timeline.set_playhead(global_sec)
         self.timeline.center_to_sec(global_sec, smooth=False)
 
-        print(
-            f"🎯 [frame-step] local frame {local_frame}->{target_frame} "
-            f"{current_global:.3f}s->{target_local:.3f}s",
-            flush=True,
-        )
     def _snapshot_timeline_view_for_resize(self) -> dict:
         """자막 세그먼트 리사이즈 전 타임라인 뷰포트 상태 저장."""
         timeline = getattr(self, "timeline", None)
@@ -762,6 +803,9 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
     def _on_seg_time_changed(self, line_num: int, new_start: float, new_end: float, edge_type: str = ""):
         new_start = self._snap_to_frame(new_start)
         new_end = self._snap_to_frame(new_end)
+        if new_end <= new_start:
+            min_span = max(0.02, min(0.1, 1.0 / max(1.0, self._current_frame_fps())))
+            new_end = self._snap_to_frame(new_start + min_span)
         _timeline_resize_view_state = self._snapshot_timeline_view_for_resize()
         timeline = getattr(self, "timeline", None)
         if timeline is not None and hasattr(timeline, "_begin_subtitle_resize_keep_view"):
@@ -785,62 +829,251 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             return
 
         old_start = float(ud.start_sec)
-        ud.start_sec = new_start
+        old_end = float(ud.end_sec if ud.end_sec is not None else old_start)
+        eps = 0.001
+        min_span = max(0.02, min(0.1, 1.0 / max(1.0, self._current_frame_fps())))
+        trim_previous_subtitles = edge_type in {"square_left", "center"} and new_start < old_start - eps
+        trim_next_subtitles = edge_type in {"square_right", "center"} and new_end > old_end + eps
+        get_current_segments = getattr(self, "_get_current_segments", None)
+        if callable(get_current_segments):
+            try:
+                current_segments = list(get_current_segments())
+            except Exception:
+                current_segments = []
+        else:
+            current_segments = []
+        native_timing_plan = None
+        if current_segments:
+            native_timing_plan = plan_subtitle_timing_edit_via_swift(
+                segments=current_segments,
+                line=int(line_num),
+                new_start=float(new_start),
+                new_end=float(new_end),
+                edge=str(edge_type or ""),
+                fps=float(self._current_frame_fps()),
+            )
 
-        for idx in get_sub_block_indices(doc, line_num, old_start)[1:]:
-            u = doc.findBlockByNumber(idx).userData()
-            if isinstance(u, SubtitleBlockData):
-                u.start_sec = ud.start_sec
+        def _sub_indices_for_block(block_ref):
+            block_ud = block_ref.userData()
+            if not isinstance(block_ud, SubtitleBlockData):
+                return []
+            return get_sub_block_indices(
+                doc,
+                block_ref.blockNumber(),
+                float(block_ud.start_sec),
+            )
 
-        sub_now = get_sub_block_indices(doc, line_num, ud.start_sec)
-        last_idx = sub_now[-1] if sub_now else line_num
-        last_block = doc.findBlockByNumber(last_idx)
+        def _delete_block_group(block_ref):
+            block_ud = block_ref.userData()
+            if not isinstance(block_ud, SubtitleBlockData):
+                return
+            for idx in reversed(get_sub_block_indices(doc, block_ref.blockNumber(), float(block_ud.start_sec))):
+                victim = doc.findBlockByNumber(idx)
+                if not victim.isValid():
+                    continue
+                delete_cursor = QTextCursor(doc)
+                start_pos = victim.position()
+                next_block = victim.next()
+                if next_block.isValid():
+                    end_pos = next_block.position()
+                else:
+                    end_pos = victim.position() + max(0, victim.length() - 1)
+                    start_pos = max(0, start_pos - 1)
+                delete_cursor.setPosition(start_pos)
+                delete_cursor.setPosition(end_pos, QTextCursor.MoveMode.KeepAnchor)
+                delete_cursor.removeSelectedText()
 
-        # ── 앞쪽 Gap 처리 ──
-        prev_block = block.previous()
-        if prev_block.isValid():
-            prev_ud = prev_block.userData()
-            if isinstance(prev_ud, SubtitleBlockData):
+        def _set_group_end(block_ref, end_sec: float):
+            block_ud = block_ref.userData()
+            if not isinstance(block_ud, SubtitleBlockData):
+                return
+            end_sec = self._snap_to_frame(float(end_sec))
+            for idx in get_sub_block_indices(doc, block_ref.blockNumber(), float(block_ud.start_sec)):
+                u = doc.findBlockByNumber(idx).userData()
+                if isinstance(u, SubtitleBlockData):
+                    u.end_sec = end_sec
+
+        def _set_group_start(block_ref, start_sec: float):
+            block_ud = block_ref.userData()
+            if not isinstance(block_ud, SubtitleBlockData):
+                return
+            old_group_start = float(block_ud.start_sec)
+            start_sec = self._snap_to_frame(float(start_sec))
+            for idx in get_sub_block_indices(doc, block_ref.blockNumber(), old_group_start):
+                u = doc.findBlockByNumber(idx).userData()
+                if isinstance(u, SubtitleBlockData):
+                    u.start_sec = start_sec
+
+        def _trim_previous_overwritten_blocks(anchor_block):
+            prev = anchor_block.previous()
+            while prev.isValid():
+                prev_ud = prev.userData()
+                if not isinstance(prev_ud, SubtitleBlockData):
+                    break
+                prev_start = float(prev_ud.start_sec)
+                prev_end = float(prev_ud.end_sec if prev_ud.end_sec is not None else prev_start)
                 if prev_ud.is_gap:
-                    if (
-                        abs(float(prev_ud.start_sec) - float(ud.start_sec)) < 0.05
-                        or float(new_start) <= float(prev_ud.start_sec) + 0.05
-                    ):
-                        delete_block_safely(prev_block)
-                else:
-                    if edge_type not in ("diamond", "gap") and float(new_start) > old_start + 0.05:
-                        insert_gap_after(prev_block, old_start)
+                    if edge_type == "gap":
+                        break
+                    if prev_end <= new_start + eps:
+                        break
+                    before = prev.previous()
+                    if new_start <= prev_start + 0.05:
+                        _delete_block_group(prev)
+                        prev = before
+                        continue
+                    prev_ud.end_sec = new_start
+                    break
+                if not trim_previous_subtitles:
+                    break
+                if prev_end <= new_start + eps:
+                    break
+                before = prev.previous()
+                if new_start <= prev_start + min_span:
+                    _delete_block_group(prev)
+                    prev = before
+                    continue
+                _set_group_end(prev, new_start)
+                break
 
-        # ── 뒤쪽 Gap 처리 ──
-        next_block = last_block.next()
-        if next_block.isValid():
-            next_ud = next_block.userData()
-            if isinstance(next_ud, SubtitleBlockData):
-                if not next_ud.is_gap:
-                    is_same = abs(float(next_ud.start_sec) - float(ud.start_sec)) < 0.05
-                    if (not is_same
-                            and edge_type not in ("diamond", "gap")
-                            and float(new_end) < float(next_ud.start_sec) - 0.05):
-                        insert_gap_after(last_block, float(new_end))
-                else:
-                    next_next = next_block.next()
-                    if next_next.isValid():
-                        nnu = next_next.userData()
-                        if (
-                            isinstance(nnu, SubtitleBlockData)
-                            and float(new_end) >= float(nnu.start_sec) - 0.05
-                        ):
-                            delete_block_safely(next_block)
-                        else:
-                            next_ud.start_sec = new_end
-                    else:
-                        next_ud.start_sec = new_end
+        def _trim_next_overwritten_blocks(anchor_block):
+            indices = _sub_indices_for_block(anchor_block)
+            last_block = doc.findBlockByNumber(indices[-1] if indices else anchor_block.blockNumber())
+            nxt = last_block.next()
+            while nxt.isValid():
+                next_ud = nxt.userData()
+                if not isinstance(next_ud, SubtitleBlockData):
+                    break
+                next_start = float(next_ud.start_sec)
+                next_end = float(next_ud.end_sec if next_ud.end_sec is not None else next_start)
+                if next_ud.is_gap:
+                    if edge_type == "gap":
+                        break
+                    if next_start >= new_end - eps:
+                        break
+                    after = nxt.next()
+                    if new_end >= next_end - 0.05:
+                        _delete_block_group(nxt)
+                        nxt = after
+                        continue
+                    next_ud.start_sec = new_end
+                    break
+                if not trim_next_subtitles:
+                    break
+                if next_start >= new_end - eps:
+                    break
+                after = nxt.next()
+                if new_end >= next_end - min_span:
+                    _delete_block_group(nxt)
+                    nxt = after
+                    continue
+                _set_group_start(nxt, new_end)
+                break
 
-        self.text_edit.update_margins()
+        if isinstance(native_timing_plan, dict) and isinstance(native_timing_plan.get("segments"), list):
+            plan_rows = {}
+            for item in list(native_timing_plan.get("segments") or []):
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    row_line = int(item.get("line"))
+                    row_start = self._snap_to_frame(float(item.get("start", 0.0) or 0.0))
+                    row_end = self._snap_to_frame(float(item.get("end", row_start) or row_start))
+                except Exception:
+                    continue
+                plan_rows[row_line] = (row_start, row_end)
+
+            deleted_lines: list[int] = []
+            for value in list(native_timing_plan.get("deletedLines") or []):
+                try:
+                    deleted_lines.append(int(value))
+                except Exception:
+                    continue
+
+            if int(line_num) not in plan_rows:
+                plan_rows = {}
+
+            group_indices_by_line: dict[int, list[int]] = {}
+            for seg in current_segments:
+                try:
+                    seg_line = int(seg.get("line"))
+                except Exception:
+                    continue
+                block_ref = doc.findBlockByNumber(seg_line)
+                block_ud = block_ref.userData() if block_ref.isValid() else None
+                if block_ref.isValid() and isinstance(block_ud, SubtitleBlockData):
+                    group_indices_by_line[seg_line] = get_sub_block_indices(
+                        doc,
+                        block_ref.blockNumber(),
+                        float(block_ud.start_sec),
+                    )
+
+            for row_line, (row_start, row_end) in plan_rows.items():
+                indices = list(group_indices_by_line.get(int(row_line)) or [])
+                for idx in indices:
+                    u = doc.findBlockByNumber(idx).userData()
+                    if isinstance(u, SubtitleBlockData):
+                        u.start_sec = row_start
+                        u.end_sec = row_end
+
+            if plan_rows:
+                for victim_line in sorted(set(deleted_lines), reverse=True):
+                    victim_block = doc.findBlockByNumber(int(victim_line))
+                    if victim_block.isValid():
+                        _delete_block_group(victim_block)
+            else:
+                sub_indices = get_sub_block_indices(doc, line_num, old_start)
+                for idx in sub_indices:
+                    u = doc.findBlockByNumber(idx).userData()
+                    if isinstance(u, SubtitleBlockData):
+                        u.start_sec = new_start
+                        u.end_sec = new_end
+
+                _trim_previous_overwritten_blocks(block)
+                _trim_next_overwritten_blocks(block)
+        else:
+            sub_indices = get_sub_block_indices(doc, line_num, old_start)
+            for idx in sub_indices:
+                u = doc.findBlockByNumber(idx).userData()
+                if isinstance(u, SubtitleBlockData):
+                    u.start_sec = new_start
+                    u.end_sec = new_end
+
+            # ── 앞쪽 Gap 처리 ──
+            _trim_previous_overwritten_blocks(block)
+
+            # ── 뒤쪽 Gap 처리 ──
+            _trim_next_overwritten_blocks(block)
+
+        if hasattr(self, "_invalidate_segment_cache"):
+            self._invalidate_segment_cache()
+        prev_suspend_restore = bool(getattr(self, "_suspend_block_user_data_restore", False))
+        self._suspend_block_user_data_restore = True
+        try:
+            self.text_edit.update_margins()
+        finally:
+            self._suspend_block_user_data_restore = prev_suspend_restore
         cur.endEditBlock()
         self._sync_lock = prev_sync_lock
+        cache_rebuilt = False
+        if hasattr(self, "_rebuild_subtitle_memory_cache"):
+            try:
+                self._rebuild_subtitle_memory_cache()
+                cache_rebuilt = True
+            except Exception:
+                cache_rebuilt = False
+        if not cache_rebuilt and hasattr(self, "_invalidate_segment_cache"):
+            self._invalidate_segment_cache()
+        snapshot_refresher = getattr(self.text_edit, "_refresh_timestamp_meta_snapshot", None)
+        if callable(snapshot_refresher):
+            try:
+                snapshot_refresher()
+            except Exception:
+                pass
         if hasattr(self.text_edit, 'timestampArea'):
             self.text_edit.timestampArea.update()
+        if hasattr(self, "_mark_dirty"):
+            self._mark_dirty()
         QTimer.singleShot(0, lambda s=dict(_timeline_resize_view_state): self._redraw_timeline_preserve_resize_view(s))
         timeline = getattr(self, "timeline", None)
         if timeline is not None and hasattr(timeline, "_finish_subtitle_resize_keep_view"):
@@ -1244,6 +1477,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         right_ud = right_block.userData()
         if not isinstance(left_ud, SubtitleBlockData) or not isinstance(right_ud, SubtitleBlockData): return
         if left_ud.is_gap or right_ud.is_gap: return
+        right_end_sec = float(getattr(right_ud, "end_sec", left_ud.end_sec if getattr(left_ud, "end_sec", None) is not None else left_ud.start_sec) or left_ud.start_sec)
 
         left_last = get_sub_block_indices(doc, left_line, left_ud.start_sec)[-1]
         right_last = get_sub_block_indices(doc, right_line, right_ud.start_sec)[-1]
@@ -1267,6 +1501,11 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         cur.setPosition(right_end.position(), QTextCursor.MoveMode.KeepAnchor)
 
         cur.insertText(" " + " ".join(right_texts))
+        for idx in get_sub_block_indices(doc, left_line, left_ud.start_sec):
+            block_ref = doc.findBlockByNumber(idx)
+            block_ud = block_ref.userData()
+            if isinstance(block_ud, SubtitleBlockData):
+                block_ud.end_sec = right_end_sec
         cur.endEditBlock()
 
         self._mark_dirty()
@@ -1336,6 +1575,9 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
 
         self._mark_dirty()
         self._finalize_edit()
+        arm_snapshot_undo = getattr(self, "_arm_snapshot_undo_routing", None)
+        if callable(arm_snapshot_undo):
+            arm_snapshot_undo()
 
 from ui.editor.timeline_scan_cut_patches import install_scan_cut_patches
 

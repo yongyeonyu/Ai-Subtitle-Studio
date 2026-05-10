@@ -428,6 +428,26 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
         self.assertIn("안녕하세요", content)
         self.assertNotIn("안녕하세요.", content)
 
+    def test_save_srt_aligns_frame_grid_before_timestamp_output(self):
+        from core.engine.srt_writer import save_srt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "frame_grid.srt")
+            save_srt(
+                [
+                    {"start": 0.999, "end": 2.001, "text": "프레임 정렬"},
+                    {"start": 2.001, "end": 3.467, "text": "다음 줄"},
+                ],
+                path,
+                apply_offset=False,
+                fps=30.0,
+            )
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+        self.assertIn("00:00:01,000 --> 00:00:02,000", content)
+        self.assertIn("00:00:02,000 --> 00:00:03,467", content)
+
     def test_project_text_asset_srt_strips_periods(self):
         from core.project.project_assets import write_srt_track
 
@@ -439,6 +459,29 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
 
         self.assertEqual(info["rows"][0]["text"], "프로젝트 저장")
         self.assertNotIn("프로젝트 저장.", content)
+
+    def test_project_text_asset_srt_uses_frame_aligned_bounds(self):
+        from core.project.project_assets import write_srt_track
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "assets", "aligned.srt")
+            info = write_srt_track(
+                [
+                    {
+                        "start": 0.999,
+                        "end": 2.001,
+                        "text": "프로젝트 프레임",
+                        "timeline_frame_rate": 30.0,
+                    }
+                ],
+                path,
+            )
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+        self.assertIn("00:00:01,000 --> 00:00:02,000", content)
+        self.assertAlmostEqual(info["rows"][0]["start"], 1.0, places=6)
+        self.assertAlmostEqual(info["rows"][0]["end"], 2.0, places=6)
 
     def test_process_one_strips_whisper_tokens_before_builtin_split(self):
         segment = {

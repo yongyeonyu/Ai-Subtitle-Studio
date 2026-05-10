@@ -1,56 +1,212 @@
-# Version: 03.14.07
+# Version: 03.14.31
 # Phase: PHASE2
 """
-ui/editor_actions.py
-에디터 UI 버튼 액션 (저장/이전/종료/내보내기/설정)
-- editor_pipeline.py에서 분리
+ui/editor/editor_save_manager.py
+자막/프로젝트 저장, 자동저장, dirty 상태, 종료 전 저장 확인,
+백업 저장, 캐쉬 삭제 관련 기능을 한 곳에 모은 저장 전용 매니저.
 """
 
+from __future__ import annotations
+
+import glob
 import hashlib
 import json
 import os
+import tempfile
 import threading
+from typing import Any
+
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox
 
+from core.engine.subtitle_engine import save_srt
+from core.native_swift_timeline import capture_undo_snapshot_via_swift
+from core.path_manager import get_srt_path
 from core.runtime import config
 from core.runtime.logger import get_logger
-from core.project.data_manager import save_settings as _dm_save_settings
-from core.engine.subtitle_engine import save_srt
-from core.path_manager import get_srt_path
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 from ui.dialogs.message_box import confirm_save_changes
 
 
-class EditorActionsMixin:
-    """저장 / 이전 / 종료 / 내보내기 / 설정 다이얼로그"""
+DEFAULT_EDITOR_AUTO_SAVE_INTERVAL_SEC = 300
 
-    # ---------------------------------------------------------
-    # 공통 유틸
-    # ---------------------------------------------------------
-    def _go_home(self):
-        try:
-            self._cleanup()
-        except Exception:
-            pass
-        try:
-            self.sig_prev.emit()
-        except Exception:
-            pass
-        try:
-            main_w = self.window()
-            for name in ("handle_prev", "show_home", "go_home", "_show_home", "show_main"):
-                if hasattr(main_w, name) and callable(getattr(main_w, name)):
-                    getattr(main_w, name)()
-                    break
-        except Exception:
-            pass
+
+def reusable_cache_paths() -> list[str]:
+    output_dir = os.path.abspath(str(config.OUTPUT_DIR or ""))
+    cache_paths = [
+        os.path.join(output_dir, ".media_probe_cache"),
+        os.path.join(output_dir, "cut_boundary_cache"),
+        os.path.join(output_dir, "waveform_cache"),
+        os.path.join(output_dir, "_analysis_cache"),
+        os.path.join(output_dir, "_audio_fingerprint"),
+        os.path.join(tempfile.gettempdir(), "ai_subtitle_studio_waveform_cache"),
+        os.path.join(tempfile.gettempdir(), "ai_subtitle_studio_roughcut"),
+        os.path.join(tempfile.gettempdir(), "ai_subtitle_studio_roughcut_thumbnails"),
+    ]
+    for pattern in (
+        "*_cleaned.wav",
+        "*_cleaned.wav.meta.json",
+        "*_raw.wav",
+        "*.vad.cache.json",
+        "*.vad.cache.json.gz",
+    ):
+        cache_paths.extend(glob.glob(os.path.join(output_dir, pattern)))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for path in cache_paths:
+        normalized = os.path.abspath(os.path.expanduser(str(path or "")))
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def clear_reusable_caches(*, main_window=None) -> int:
+    import shutil
+
+    from core.auto_tracker import TRACKER_FILE
+    from core.media_info import clear_media_probe_cache_memory
+    from core.personalization.lora_vector_retriever import clear_lora_retrieval_caches
+    from core.project.project_io import clear_project_file_cache
+    from ui.style import clear_line_icon_cache
+
+    removed_count = 0
+    for cache_path in reusable_cache_paths():
+        if not os.path.lexists(cache_path):
+            continue
+        if os.path.isdir(cache_path) and not os.path.islink(cache_path):
+            shutil.rmtree(cache_path)
+        else:
+            os.remove(cache_path)
+        removed_count += 1
+    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+
+    if os.path.exists(TRACKER_FILE):
+        os.remove(TRACKER_FILE)
+        removed_count += 1
+    clear_media_probe_cache_memory()
+    clear_project_file_cache()
+    clear_lora_retrieval_caches()
+    clear_line_icon_cache()
+    if main_window is not None and hasattr(main_window, "_cloud_sync_manager"):
+        mgr = main_window._cloud_sync_manager
+        mgr._size_cache.clear()
+        mgr._in_flight.clear()
+    runtime_cache_clear = getattr(main_window, "_clear_runtime_memory_caches", None) if main_window is not None else None
+    if callable(runtime_cache_clear):
+        runtime_cache_clear(include_gpu=False)
+    return removed_count
+
+
+def backup_project_file_copy(project_path: str) -> str:
+    import datetime
+    import shutil
+
+    project_path = str(project_path or "")
+    if not project_path or not os.path.exists(project_path):
+        return ""
+    backup_dir = os.path.join(os.path.dirname(project_path), "프로젝트백업")
+    os.makedirs(backup_dir, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    base, ext = os.path.splitext(os.path.basename(project_path))
+    backup_path = os.path.join(backup_dir, f"{base}_{stamp}{ext or '.json'}")
+    shutil.copy2(project_path, backup_path)
+    return backup_path
+
+
+def backup_subtitle_file_copy(subtitle_path: str) -> str:
+    import datetime
+    import shutil
+
+    subtitle_path = str(subtitle_path or "")
+    if not subtitle_path or not os.path.exists(subtitle_path):
+        return ""
+    backup_dir = os.path.join(os.path.dirname(subtitle_path), "자막백업")
+    os.makedirs(backup_dir, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    base, ext = os.path.splitext(os.path.basename(subtitle_path))
+    backup_path = os.path.join(backup_dir, f"{base}_{stamp}{ext or '.srt'}")
+    shutil.copy2(subtitle_path, backup_path)
+    return backup_path
+
+
+class EditorSaveManagerMixin:
+    """저장/자동저장/dirty/백업/캐쉬 관리 전용 믹스인."""
+
+    def _auto_save_interval_ms(self) -> int:
+        return int(DEFAULT_EDITOR_AUTO_SAVE_INTERVAL_SEC * 1000)
 
     def _show_confirm_dialog(self, title, text):
         return confirm_save_changes(self, title=title)
 
-    # ---------------------------------------------------------
-    # 저장
-    # ---------------------------------------------------------
+    def _dirty_snapshot_blocks(self) -> list[tuple[str, dict[str, Any]]]:
+        blocks: list[tuple[str, dict[str, Any]]] = []
+        try:
+            doc = self.text_edit.document()
+        except Exception:
+            return blocks
+        for index in range(int(doc.blockCount() or 0)):
+            block = doc.findBlockByNumber(index)
+            data = block.userData()
+            meta = {
+                "spk_id": str(getattr(data, "spk_id", "00") or "00"),
+                "start_sec": float(getattr(data, "start_sec", 0.0) or 0.0),
+                "end_sec": getattr(data, "end_sec", None),
+                "is_gap": bool(getattr(data, "is_gap", False)),
+            }
+            blocks.append((block.text(), meta))
+        return blocks
+
+    def _schedule_native_dirty_snapshot(self) -> None:
+        generation = int(getattr(self, "_dirty_snapshot_generation", 0) or 0) + 1
+        self._dirty_snapshot_generation = generation
+
+        def worker() -> None:
+            try:
+                segments = [dict(seg) for seg in list(getattr(self, "_cached_segs", []) or [])]
+                if not segments and hasattr(self, "_get_current_segments"):
+                    segments = [dict(seg) for seg in list(self._get_current_segments() or [])]
+                native_snapshot = capture_undo_snapshot_via_swift(
+                    blocks=self._dirty_snapshot_blocks(),
+                    segments=segments,
+                    cursor_line=int(self.text_edit.textCursor().blockNumber()) if hasattr(self, "text_edit") else 0,
+                    active_clip_idx=int(getattr(getattr(self, "timeline", None), "canvas", object()).__dict__.get("_active_clip_idx", 0) or 0),
+                    project_boundary_times=list(getattr(self.window(), "_project_boundary_times", []) or []),
+                )
+                if int(getattr(self, "_dirty_snapshot_generation", 0) or 0) != generation:
+                    return
+                self._latest_dirty_native_snapshot = native_snapshot
+            except Exception:
+                pass
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="editor-dirty-native-snapshot",
+        ).start()
+
+    def _mark_dirty(self):
+        started_editing = False
+        if hasattr(self, "sm"):
+            if hasattr(self.sm, "start_editing") and not getattr(self.sm, "is_locked", False):
+                self.sm.start_editing()
+                started_editing = True
+            else:
+                self.sm.is_dirty = True
+        else:
+            self._is_dirty = True
+        self._is_dirty = True
+        if started_editing and hasattr(self, "_note_editor_foreground_activity"):
+            self._note_editor_foreground_activity()
+        try:
+            main_w = self.window()
+            if hasattr(main_w, "_refresh_saved_status_label"):
+                main_w._refresh_saved_status_label(is_dirty=True)
+        except Exception:
+            pass
+        self._schedule_native_dirty_snapshot()
+
     def _segments_dirty_signature(self, segs: list | None = None) -> str:
         if segs is None:
             segs = self._get_current_segments()
@@ -90,8 +246,8 @@ class EditorActionsMixin:
         project_path = str(project_path or self._current_project_path_for_dirty_check() or "")
         if not project_path or not os.path.exists(project_path):
             return ""
-        with open(project_path, "rb") as f:
-            return hashlib.sha256(f.read()).hexdigest()
+        with open(project_path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
 
     def _remember_saved_project_file(self, project_path: str | None = None):
         project_path = str(project_path or self._current_project_path_for_dirty_check() or "")
@@ -116,23 +272,7 @@ class EditorActionsMixin:
         return bool(current_sig and current_sig != saved_sig)
 
     def _mark_unsaved_project_change_detected(self):
-        try:
-            self._is_dirty = True
-        except Exception:
-            pass
-        try:
-            if hasattr(self, "sm") and not getattr(self.sm, "is_dirty", False):
-                self.sm.is_dirty = True
-                if hasattr(self.sm, "_broadcast"):
-                    self.sm._broadcast()
-        except Exception:
-            pass
-        try:
-            main_w = self.window()
-            if hasattr(main_w, "_refresh_saved_status_label"):
-                main_w._refresh_saved_status_label(is_dirty=True, touch_saved_time=False)
-        except Exception:
-            pass
+        self._mark_dirty()
 
     def _has_unsaved_changes(self) -> bool:
         try:
@@ -154,6 +294,7 @@ class EditorActionsMixin:
             return bool(getattr(self, "_is_dirty", False))
 
     def _mark_save_completed(self, touch_saved_time: bool = True) -> bool:
+        self._is_dirty = False
         try:
             if hasattr(self, "sm"):
                 if getattr(self.sm, "is_locked", False):
@@ -164,7 +305,6 @@ class EditorActionsMixin:
                     self.sm.complete_save()
         except Exception:
             pass
-
         try:
             main_w = self.window()
             if hasattr(main_w, "_refresh_saved_status_label"):
@@ -187,7 +327,6 @@ class EditorActionsMixin:
             return None
         if row_count <= 0:
             return None
-
         candidates: list[int] = []
         try:
             current_row = int(getattr(main_w, "_current_file_idx", 1) or 1) - 1
@@ -195,7 +334,6 @@ class EditorActionsMixin:
                 candidates.append(current_row)
         except Exception:
             pass
-
         media_path = str(getattr(self, "media_path", "") or "")
         media_name = os.path.basename(media_path).strip().lower()
         if media_name:
@@ -204,10 +342,8 @@ class EditorActionsMixin:
                 item_name = os.path.basename(str(item.text() if item else "")).strip().lower()
                 if item_name == media_name and row not in candidates:
                     candidates.append(row)
-
         if not candidates and row_count == 1:
             return 0
-
         for row in candidates:
             try:
                 status_item = table.item(row, 0)
@@ -255,7 +391,6 @@ class EditorActionsMixin:
             pass
 
     def _segments_for_srt_output(self, segs: list[dict]) -> list[dict]:
-        """Return SRT output order; currently changes only when roughcut explicitly enables it."""
         try:
             main_w = self.window()
             project_path = str(getattr(main_w, "_current_project_path", "") or "")
@@ -373,22 +508,17 @@ class EditorActionsMixin:
                     editor_analysis["stt_lattice_artifact_path"] = lattice_result.get("path", "")
                     editor_analysis["stt_lattice_summary"] = lattice_result.get("summary", {})
                 write_project_file(project_path, latest)
-                if (
-                    saved_segments_signature
-                    and saved_segments_signature == str(getattr(self, "_saved_segments_signature", "") or "")
-                ):
+                if saved_segments_signature and saved_segments_signature == str(getattr(self, "_saved_segments_signature", "") or ""):
                     self._saved_project_path = project_path
                     self._saved_project_signature = self._project_file_dirty_signature(project_path)
             except Exception as exc:
                 get_logger().log(f"⚠️ 프로젝트 분석 아티팩트 비동기 저장 실패: {exc}")
 
-        thread = threading.Thread(
+        threading.Thread(
             target=worker,
             name="editor-project-analysis-artifacts",
             daemon=True,
-        )
-        self._project_analysis_refresh_thread = thread
-        thread.start()
+        ).start()
 
     def _on_save(
         self,
@@ -414,8 +544,8 @@ class EditorActionsMixin:
             main_w = self.window()
             if not self._persist_editor_srts(segs, autosave=False, write_backup=write_backup):
                 return False
-        except Exception as e:
-            get_logger().log(f"⚠️ 저장 실패: {e}")
+        except Exception as exc:
+            get_logger().log(f"⚠️ 저장 실패: {exc}")
             return False
 
         if not skip_auto_next:
@@ -428,19 +558,15 @@ class EditorActionsMixin:
                 persist_analysis_artifacts=False,
                 allow_create=allow_project_create,
             )
-        except Exception as e:
-            get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {e}")
+        except Exception as exc:
+            get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {exc}")
             project_path = ""
         try:
-            should_auto_export = (
-                self._should_auto_export_after_editor_save()
-                if auto_export is None
-                else bool(auto_export)
-            )
+            should_auto_export = self._should_auto_export_after_editor_save() if auto_export is None else bool(auto_export)
             if should_auto_export:
                 self._schedule_auto_export_saved_subtitle_videos()
-        except Exception as e:
-            get_logger().log(f"⚠️ 자막영상 자동 출력 실패: {e}")
+        except Exception as exc:
+            get_logger().log(f"⚠️ 자막영상 자동 출력 실패: {exc}")
         self._remember_saved_project_file(project_path)
         if schedule_analysis_refresh:
             try:
@@ -450,13 +576,10 @@ class EditorActionsMixin:
                     dict(getattr(self, "settings", {}) or {}),
                     saved_segments_signature=str(getattr(self, "_saved_segments_signature", "") or ""),
                 )
-            except Exception as e:
-                get_logger().log(f"⚠️ 프로젝트 분석 아티팩트 예약 실패: {e}")
+            except Exception as exc:
+                get_logger().log(f"⚠️ 프로젝트 분석 아티팩트 예약 실패: {exc}")
         self._mark_save_completed(touch_saved_time=True)
-        try:
-            self._autosave_requires_manual_save = False
-        except Exception:
-            pass
+        self._autosave_requires_manual_save = False
         self._sync_queue_saved_state()
         if queue_learning:
             try:
@@ -475,8 +598,8 @@ class EditorActionsMixin:
                 )
                 if queued.get("queued"):
                     get_logger().log("🧠 [LoRA] 저장 자막 학습은 Home-idle 큐로 넘겼습니다.")
-            except Exception as e:
-                get_logger().log(f"⚠️ 개인화 학습 큐 등록 실패(저장): {e}")
+            except Exception as exc:
+                get_logger().log(f"⚠️ 개인화 학습 큐 등록 실패(저장): {exc}")
         return True
 
     def _on_save_for_exit(self) -> bool:
@@ -491,50 +614,33 @@ class EditorActionsMixin:
             )
         )
 
-    # ---------------------------------------------------------
-    # 멀티클립 SRT 저장 (개별 + 통합)
-    # ---------------------------------------------------------
     def _save_multiclip_srts(self, segs, multiclip_files, *, write_backup: bool = True):
-        """멀티클립 자막을 개별 SRT + 통합 SRT로 저장합니다."""
         main_w = self.window()
-
-        # boundaries 탐색: self → main_w → timeline canvas boxes
         boundaries = (
-            getattr(self, '_multiclip_boundaries', None)
-            or getattr(main_w, '_multiclip_boundaries', None)
-            or (getattr(self.timeline.canvas, '_multiclip_boxes', None)
-                if hasattr(self, 'timeline') else None)
+            getattr(self, "_multiclip_boundaries", None)
+            or getattr(main_w, "_multiclip_boundaries", None)
+            or (getattr(self.timeline.canvas, "_multiclip_boxes", None) if hasattr(self, "timeline") else None)
             or []
         )
-
-        # reuse indices 탐색: self → main_w
         reuse_indices = (
-            getattr(self, '_reuse_clip_indices', None)
-            or getattr(main_w, '_reuse_clip_indices', None)
+            getattr(self, "_reuse_clip_indices", None)
+            or getattr(main_w, "_reuse_clip_indices", None)
             or set()
         )
-
         if not boundaries:
             get_logger().log("⚠️ 멀티클립 boundaries 없음 — 단일 파일 저장으로 대체")
             if getattr(self, "media_path", None):
                 srt_path = get_srt_path(self.media_path)
                 non_gap = [s for s in segs if not s.get("is_gap") and s.get("text", "").strip()]
-                save_srt(
-                    non_gap,
-                    srt_path,
-                    fps=getattr(self, "video_fps", 30.0),
-                    write_backup=write_backup,
-                )
+                save_srt(non_gap, srt_path, fps=getattr(self, "video_fps", 30.0), write_backup=write_backup)
                 get_logger().log(f"💾 저장 완료: {os.path.basename(srt_path)}")
                 return True
             return False
 
         def _clip_idx_for(start_sec):
-            """세그먼트 시작 시간으로 클립 인덱스 판별"""
             for i, bd in enumerate(boundaries):
                 if bd["start"] <= start_sec < bd["end"]:
                     return i
-            # 마지막 클립 끝 이후 → 마지막 클립 소속
             if boundaries and start_sec >= boundaries[-1]["start"]:
                 return len(boundaries) - 1
             return 0
@@ -550,7 +656,6 @@ class EditorActionsMixin:
                 pass
             return _clip_idx_for(float(seg.get("start", 0.0)))
 
-        # 세그먼트를 clip_idx별로 분류 (boundaries 기반)
         clip_segs = {}
         for seg in segs:
             if seg.get("is_gap") or not seg.get("text", "").strip():
@@ -560,49 +665,29 @@ class EditorActionsMixin:
 
         saved_count = 0
         saved_outputs = []
-
-        # 개별 SRT 저장 (클립 로컬 타임스탬프)
         for i, clip_file in enumerate(multiclip_files):
             if i in reuse_indices:
-                continue  # G fix: skip reuse clips — prevent subtitle duplication
+                continue
             srt_path = get_srt_path(clip_file)
             c_segs = clip_segs.get(i, [])
             if not c_segs:
                 continue
-
-            offset = 0.0
-            if i < len(boundaries):
-                offset = boundaries[i].get("start", 0.0)
-
+            offset = boundaries[i].get("start", 0.0) if i < len(boundaries) else 0.0
             local_segs = []
             for seg in c_segs:
                 ls = dict(seg)
                 ls["start"] = max(0.0, float(ls["start"]) - offset)
                 ls["end"] = max(0.0, float(ls["end"]) - offset)
                 local_segs.append(ls)
-
-            save_srt(
-                local_segs,
-                srt_path,
-                fps=getattr(self, "video_fps", 30.0),
-                write_backup=write_backup,
-            )
+            save_srt(local_segs, srt_path, fps=getattr(self, "video_fps", 30.0), write_backup=write_backup)
             saved_outputs.append((srt_path, clip_file))
             saved_count += 1
-            get_logger().log(
-                f"💾 개별 저장: {os.path.basename(srt_path)} ({len(local_segs)}개)"
-            )
+            get_logger().log(f"💾 개별 저장: {os.path.basename(srt_path)} ({len(local_segs)}개)")
 
-        # 통합 SRT 저장 (글로벌 타임스탬프, 기존자막 클립 제외)
-        project_path = getattr(main_w, '_current_project_path', None)
-        if project_path:
-            proj_name = os.path.splitext(os.path.basename(project_path))[0]
-        else:
-            proj_name = os.path.splitext(os.path.basename(multiclip_files[0]))[0]
-
+        project_path = getattr(main_w, "_current_project_path", None)
+        proj_name = os.path.splitext(os.path.basename(project_path))[0] if project_path else os.path.splitext(os.path.basename(multiclip_files[0]))[0]
         proj_dir = os.path.dirname(multiclip_files[0])
         combined_srt_path = os.path.join(proj_dir, f"{proj_name}_통합.srt")
-
         combined_segs = []
         for seg in segs:
             if seg.get("is_gap") or not seg.get("text", "").strip():
@@ -611,52 +696,31 @@ class EditorActionsMixin:
             if cidx in reuse_indices:
                 continue
             combined_segs.append(seg)
-
         combined_segs.sort(key=lambda s: float(s.get("start", 0.0)))
 
         combined_saved = False
         if combined_segs:
-            save_srt(
-                combined_segs,
-                combined_srt_path,
-                fps=getattr(self, "video_fps", 30.0),
-                write_backup=write_backup,
-            )
+            save_srt(combined_segs, combined_srt_path, fps=getattr(self, "video_fps", 30.0), write_backup=write_backup)
             saved_outputs.append((combined_srt_path, combined_srt_path))
             combined_saved = True
-            get_logger().log(
-                f"💾 통합 저장: {os.path.basename(combined_srt_path)} "
-                f"({len(combined_segs)}개, 기존자막 {len(reuse_indices)}클립 제외)"
-            )
+            get_logger().log(f"💾 통합 저장: {os.path.basename(combined_srt_path)} ({len(combined_segs)}개, 기존자막 {len(reuse_indices)}클립 제외)")
         elif segs:
             non_gap = [s for s in segs if not s.get("is_gap") and s.get("text", "").strip()]
-            save_srt(
-                non_gap,
-                combined_srt_path,
-                fps=getattr(self, "video_fps", 30.0),
-                write_backup=write_backup,
-            )
+            save_srt(non_gap, combined_srt_path, fps=getattr(self, "video_fps", 30.0), write_backup=write_backup)
             saved_outputs.append((combined_srt_path, combined_srt_path))
             combined_saved = True
-            get_logger().log(
-                f"💾 통합 저장: {os.path.basename(combined_srt_path)} "
-                f"({len(non_gap)}개, 전체 포함)"
-            )
+            get_logger().log(f"💾 통합 저장: {os.path.basename(combined_srt_path)} ({len(non_gap)}개, 전체 포함)")
 
         get_logger().log(f"✅ 멀티클립 저장 완료: 개별 {saved_count}개 + 통합 1개")
         self._last_saved_srt_outputs = saved_outputs
         return bool(saved_count or combined_saved)
 
     def _should_auto_export_after_editor_save(self) -> bool:
-        """Manual editor saves should stay lightweight; queue/cloud completion renders elsewhere."""
         try:
             main_w = self.window()
         except Exception:
             return False
-        return bool(
-            getattr(main_w, "_is_auto_pipeline", False)
-            or getattr(main_w, "_auto_processing_active", False)
-        )
+        return bool(getattr(main_w, "_is_auto_pipeline", False) or getattr(main_w, "_auto_processing_active", False))
 
     def _schedule_auto_export_saved_subtitle_videos(self, *, delay_ms: int = 1500):
         outputs = list(getattr(self, "_last_saved_srt_outputs", []) or [])
@@ -665,12 +729,7 @@ class EditorActionsMixin:
         generation = int(getattr(self, "_auto_export_video_generation", 0) or 0) + 1
         self._auto_export_video_generation = generation
         self._auto_export_video_outputs = outputs
-        try:
-            from PyQt6.QtCore import QTimer
-
-            QTimer.singleShot(max(0, int(delay_ms)), lambda gen=generation: self._run_scheduled_auto_export(gen))
-        except Exception:
-            self._run_scheduled_auto_export(generation)
+        QTimer.singleShot(max(0, int(delay_ms)), lambda gen=generation: self._run_scheduled_auto_export(gen))
 
     def _run_scheduled_auto_export(self, generation: int):
         if int(generation or 0) != int(getattr(self, "_auto_export_video_generation", 0) or 0):
@@ -684,7 +743,6 @@ class EditorActionsMixin:
                 return
         except Exception:
             pass
-
         outputs = list(getattr(self, "_auto_export_video_outputs", []) or [])
         if not outputs:
             return
@@ -696,12 +754,7 @@ class EditorActionsMixin:
             finally:
                 self._auto_export_video_running = False
 
-        try:
-            import threading
-
-            threading.Thread(target=_worker, daemon=True, name="editor-subtitle-video-export").start()
-        except Exception:
-            _worker()
+        threading.Thread(target=_worker, daemon=True, name="editor-subtitle-video-export").start()
 
     def _auto_export_saved_subtitle_videos(self, *, outputs: list | None = None):
         outputs = list(outputs if outputs is not None else getattr(self, "_last_saved_srt_outputs", []) or [])
@@ -715,7 +768,6 @@ class EditorActionsMixin:
         except Exception as exc:
             get_logger().log(f"⚠️ 자막영상 출력 설정 로드 실패: {exc}")
             return
-
         total = len(outputs)
         for idx, item in enumerate(outputs, start=1):
             try:
@@ -728,9 +780,6 @@ class EditorActionsMixin:
             except Exception as exc:
                 get_logger().log(f"⚠️ 자막영상 자동 출력 실패 [{idx}/{total}]: {exc}")
 
-    # ---------------------------------------------------------
-    # 프로젝트 자동 저장
-    # ---------------------------------------------------------
     def _auto_save_project(
         self,
         segs: list = None,
@@ -738,11 +787,9 @@ class EditorActionsMixin:
         persist_analysis_artifacts: bool = False,
         allow_create: bool = True,
     ) -> str:
-        from core.project.project_manager import (
-            save_project, create_project
-        )
+        from core.project.project_manager import save_project, create_project
 
-        media_path = getattr(self, 'media_path', None)
+        media_path = getattr(self, "media_path", None)
         if not media_path:
             return ""
         if segs is None:
@@ -750,10 +797,8 @@ class EditorActionsMixin:
                 segs = self._get_current_segments()
             except Exception:
                 segs = []
-
         main_w = self.window()
-        project_path = getattr(main_w, '_current_project_path', None)
-
+        project_path = getattr(main_w, "_current_project_path", None)
         if not project_path:
             if not allow_create:
                 return ""
@@ -768,11 +813,11 @@ class EditorActionsMixin:
             get_logger().log(f"📝 프로젝트 자동 생성: {os.path.basename(project_path)}")
 
         workspace = {}
-        if hasattr(self, 'video_player'):
-            workspace["last_playhead"] = getattr(self.video_player, 'current_time', 0.0)
-        if hasattr(self, 'text_edit'):
+        if hasattr(self, "video_player"):
+            workspace["last_playhead"] = getattr(self.video_player, "current_time", 0.0)
+        if hasattr(self, "text_edit"):
             workspace["last_cursor_block"] = self.text_edit.textCursor().blockNumber()
-        if hasattr(self, 'splitter'):
+        if hasattr(self, "splitter"):
             workspace["splitter_sizes"] = self.splitter.sizes()
         try:
             workspace["terminal_visible"] = main_w._log_visible
@@ -780,22 +825,19 @@ class EditorActionsMixin:
             pass
         workspace["dashboard_mode"] = getattr(main_w, "_dashboard_mode", "dashboard") or "dashboard"
         workspace["project_panel_visible"] = bool(getattr(main_w, "_project_panel_visible", True))
-
-        _media_paths = list(getattr(main_w, '_multiclip_files', []) or [])
-        if not _media_paths:
-            _media_paths = [media_path]
-        workspace['selected_segment_line'] = workspace.get('last_cursor_block', 0)
+        media_paths = list(getattr(main_w, "_multiclip_files", []) or []) or [media_path]
+        workspace["selected_segment_line"] = workspace.get("last_cursor_block", 0)
         try:
-            workspace['edit_lock'] = bool(self.timeline.lock_chk.isChecked())
+            workspace["edit_lock"] = bool(self.timeline.lock_chk.isChecked())
         except Exception:
-            workspace['edit_lock'] = False
-        workspace['active_clip_idx'] = int(getattr(self.timeline.canvas, '_active_clip_idx', getattr(main_w, '_active_clip_idx', 0)) or 0)
-        workspace['active_work_mode'] = normalize_work_mode(getattr(main_w, '_current_work_mode', EDITOR_MODE))
+            workspace["edit_lock"] = False
+        workspace["active_clip_idx"] = int(getattr(self.timeline.canvas, "_active_clip_idx", getattr(main_w, "_active_clip_idx", 0)) or 0)
+        workspace["active_work_mode"] = normalize_work_mode(getattr(main_w, "_current_work_mode", EDITOR_MODE))
         stt_preview_segments = list(getattr(self, "_live_stt_preview_segments", []) or [])
         voice_activity_segments = []
         provisional_cut_boundaries = []
         try:
-            if hasattr(self, 'timeline') and hasattr(self.timeline, 'canvas'):
+            if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
                 canvas = self.timeline.canvas
                 voice_activity_segments = list(getattr(canvas, "voice_activity_segments", []) or [])
                 provisional_cut_boundaries = list(getattr(canvas, "scan_boundary_times", []) or [])
@@ -834,21 +876,18 @@ class EditorActionsMixin:
                     adapter_refs=dict(getattr(self, "_stt_adapter_refs", {}) or {}),
                 )
                 stt_mode_learning = default_stt_mode_learning(
-                    {
-                        "events": list(getattr(self, "_stt_learning_events", []) or []),
-                        "learning_opt_in": True,
-                    }
+                    {"events": list(getattr(self, "_stt_learning_events", []) or []), "learning_opt_in": True}
                 )
             except Exception as exc:
                 get_logger().log(f"⚠️ STT 프로젝트 상태 구성 실패: {exc}")
         save_project(
             filepath=project_path,
-            media_paths=_media_paths,
+            media_paths=media_paths,
             srt_path=get_srt_path(media_path),
             segments=segs,
             user_settings=dict(getattr(self, "settings", {}) or {}),
             workspace=workspace,
-            active_work_mode=workspace['active_work_mode'],
+            active_work_mode=workspace["active_work_mode"],
             voice_activity_segments=voice_activity_segments,
             stt_preview_segments=stt_preview_segments,
             stt_mode_state=stt_mode_state,
@@ -859,158 +898,75 @@ class EditorActionsMixin:
         get_logger().log(f"📦 프로젝트 저장 완료: {os.path.basename(project_path)}")
         return project_path
 
-    # ---------------------------------------------------------
-    # 이전
-    # ---------------------------------------------------------
-    def _on_prev(self):
-        from core.state_manager import SubtitleStateManager
+    def _editor_auto_save_allowed(self) -> bool:
+        sm = getattr(self, "sm", None)
+        if sm is None or getattr(sm, "is_locked", False):
+            return False
+        if bool(getattr(self, "_autosave_requires_manual_save", False)):
+            return False
+        return str(getattr(sm, "state", "") or "") in {
+            "editing",
+            "autosave",
+            "saved",
+            "ST_EDITING",
+            "ST_AUTOSAVE",
+            "ST_SAVED",
+            getattr(sm, "ST_EDITING", "editing"),
+            getattr(sm, "ST_AUTOSAVE", "autosave"),
+            getattr(sm, "ST_SAVED", "saved"),
+        }
 
-        if self.sm.state == SubtitleStateManager.ST_PROC:
-            self._stop_pipeline()
-
-        if getattr(self, "_skip_prev_confirm_once", False):
-            self._skip_prev_confirm_once = False
-            self._go_home()
+    def _on_auto_save(self):
+        if not self._editor_auto_save_allowed():
             return
-
-        is_dirty = False
-        try:
-            is_dirty = self._has_unsaved_changes()
-        except Exception:
-            pass
-
-        if not is_dirty:
-            self._go_home()
-            return
-
-        reply = self._show_confirm_dialog(
-            "이전으로 이동",
-            "저장되지 않은 변경사항이 있습니다.\n저장하시겠습니까?"
-        )
-        if reply == QMessageBox.StandardButton.Cancel:
-            return
-        if reply == QMessageBox.StandardButton.Yes:
-            if not self._on_save():
-                return
-
-        self._go_home()
-
-    # ---------------------------------------------------------
-    # 종료
-    # ---------------------------------------------------------
-    def _on_exit(self):
-        from core.state_manager import SubtitleStateManager
-
-        def _emit_exit():
+        if hasattr(self, "_has_unsaved_changes"):
             try:
-                self.sig_exit.emit(self._get_current_segments())
+                if not self._has_unsaved_changes():
+                    if getattr(self.sm, "is_dirty", False) and hasattr(self, "_mark_save_completed"):
+                        self._mark_save_completed(touch_saved_time=False)
+                    return
             except Exception:
-                self.sig_exit.emit([])
+                pass
+        if getattr(self.sm, "is_dirty", False):
+            segs = self._get_current_segments()
+            if not segs:
+                return
+            self.sm.start_autosave()
+            try:
+                if not self._persist_editor_srts(segs, autosave=True):
+                    return
+            except Exception as exc:
+                get_logger().log(f"⚠️ 자동 저장 실패: {exc}")
+                return
+            self._remember_saved_segments(segs)
+            try:
+                project_path = self._auto_save_project(segs, persist_analysis_artifacts=False)
+            except Exception as exc:
+                get_logger().log(f"⚠️ 프로젝트 자동 저장 실패: {exc}")
+                project_path = ""
+            self._remember_saved_project_file(project_path)
+            self._mark_save_completed(touch_saved_time=True)
 
-        if self.sm.state == SubtitleStateManager.ST_PROC:
-            self._stop_pipeline()
-
-        if getattr(self, "_skip_prev_confirm_once", False):
-            self._skip_prev_confirm_once = False
-            _emit_exit()
-            return
-
+    def _confirm_close_before_exit(self, title: str = "종료 확인") -> bool:
         is_dirty = False
         try:
             is_dirty = self._has_unsaved_changes()
         except Exception:
-            pass
-
+            is_dirty = bool(getattr(self, "_is_dirty", False))
         if not is_dirty:
-            _emit_exit()
-            return
-
-        reply = self._show_confirm_dialog(
-            "종료",
-            "저장되지 않은 변경사항이 있습니다.\n저장하시겠습니까?"
-        )
+            return True
+        reply = self._show_confirm_dialog(title, "저장되지 않은 변경사항이 있습니다.\n저장하시겠습니까?")
         if reply == QMessageBox.StandardButton.Cancel:
-            return
+            return False
         if reply == QMessageBox.StandardButton.Yes:
-            if not self._on_save():
-                return
+            return bool(self._on_save_for_exit())
+        return True
 
-        _emit_exit()
 
-    # ---------------------------------------------------------
-    # 다음
-    # ---------------------------------------------------------
-    def _on_next(self):
-        QMessageBox.information(self, "알림", "개발중입니다.")
-
-    # ---------------------------------------------------------
-    # 내보내기
-    # ---------------------------------------------------------
-    def _show_export_dialog(self):
-        is_dirty = False
-        try:
-            if hasattr(self, "sm"):
-                is_dirty = self._has_unsaved_changes()
-        except Exception:
-            pass
-
-        if is_dirty:
-            reply = self._show_confirm_dialog(
-                "자막 출력",
-                "변경된 자막이 저장되지 않았습니다.\n저장 후 출력하시겠습니까?"
-            )
-            if reply == QMessageBox.StandardButton.Cancel:
-                return
-            if reply == QMessageBox.StandardButton.Yes:
-                if not self._on_save(skip_auto_next=True):
-                    return
-                try:
-                    is_dirty = self._has_unsaved_changes()
-                except Exception:
-                    is_dirty = False
-
-        from ui.dialogs.export_dialog import ExportDialog
-        segs = self._get_current_segments()
-        if segs:
-            dlg = ExportDialog(segs, getattr(self, 'video_name', ''), self)
-            if hasattr(self, 'video_player'):
-                dlg._video_player_ref = self.video_player
-            dlg.exec()
-
-    # ---------------------------------------------------------
-    # 설정 다이얼로그
-    # ---------------------------------------------------------
-    def _show_settings(self):
-        from ui.settings.settings_dialog import SettingsDialog
-        # macOS Qt crash 회피: editor widget setCursor/unsetCursor 금지
-        dlg = SettingsDialog(self.settings, self)
-        if dlg.exec():
-            self.settings = dlg.result_settings
-            _dm_save_settings(self.settings)
-            self.selected_model = self.settings.get("selected_model", getattr(config, "OLLAMA_MODEL", "exaone3.5:7.8b"))
-            if hasattr(self, '_update_engine_label_text'):
-                self._update_engine_label_text()
-            main_w = self.window()
-            if hasattr(main_w, "_refresh_sidebar_engine_info"):
-                engine_label = getattr(self, "engine_lbl", None)
-                main_w._refresh_sidebar_engine_info(engine_label.text() if engine_label is not None else None)
-    def _show_adv_settings(self):
-        self._show_settings()
-
-    def _show_speaker_settings(self):
-        from ui.settings.settings_dialog import SpeakerDialog
-        dlg = SpeakerDialog(self.settings, self)
-        if dlg.exec():
-            self.settings.update(dlg.result)
-            _dm_save_settings(self.settings)
-            if hasattr(self, '_update_highlighter_colors'):
-                self._update_highlighter_colors()
-            if hasattr(self, '_refresh_speaker_strip'):
-                self._refresh_speaker_strip()
-
-    def _show_gap_settings(self):
-        from ui.settings.settings_dialog import GapSettingsDialog
-        dlg = GapSettingsDialog(self.settings, self)
-        if dlg.exec():
-            self.settings.update(dlg.result)
-            _dm_save_settings(self.settings)
+__all__ = [
+    "EditorSaveManagerMixin",
+    "backup_subtitle_file_copy",
+    "backup_project_file_copy",
+    "clear_reusable_caches",
+    "reusable_cache_paths",
+]

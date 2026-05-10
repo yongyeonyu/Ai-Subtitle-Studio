@@ -878,10 +878,16 @@ class HomeUIMixin(HomeSidebarMixin):
             self._show_bottom_queue_table()
         if hasattr(self, "_release_ai_models_for_editor_mode"):
             QTimer.singleShot(0, self._release_ai_models_for_editor_mode)
+        activate_editor_idle = getattr(self, "_activate_editor_idle_mode", None)
+        if callable(activate_editor_idle):
+            activate_editor_idle(reason="editor_screen")
         self._refresh_work_mode_ui()
 
     def _open_roughcut_helper(self):
         self._current_work_mode = ROUGHCUT_MODE
+        stop_idle = getattr(self, "_stop_post_completion_idle_timer", None)
+        if callable(stop_idle):
+            stop_idle()
         if hasattr(self, "_dock_global_menu_to_workspace"):
             self._dock_global_menu_to_workspace()
         if hasattr(self, "global_menu_bar"):

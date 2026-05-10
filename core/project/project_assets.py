@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import os
-from bisect import bisect_right
 from datetime import datetime
 from typing import Any
 
-from core.project.project_srt import parse_srt_to_segments
+from core.frame_time import normalize_fps, normalize_segments_to_frame_grid
+from core.project.project_srt import parse_srt_to_segments, strip_whisper_control_tokens
 from core.utils import seconds_to_srt_time
 
 
@@ -132,6 +132,28 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _project_primary_fps(project: dict[str, Any] | None) -> float:
+    if not isinstance(project, dict):
+        return 30.0
+    timeline = project.get("timeline", {}) if isinstance(project.get("timeline"), dict) else {}
+    timebase = timeline.get("timebase", {}) if isinstance(timeline.get("timebase"), dict) else {}
+    fps = _safe_float(timebase.get("primary_fps"), 0.0)
+    if fps > 0.0:
+        return fps
+    frame_timebase = project.get("frame_timebase", {}) if isinstance(project.get("frame_timebase"), dict) else {}
+    fps = _safe_float(frame_timebase.get("primary_fps"), 0.0)
+    if fps > 0.0:
+        return fps
+    tracks = timeline.get("tracks", []) if isinstance(timeline.get("tracks"), list) else []
+    for track in tracks:
+        clips = track.get("clips", []) if isinstance(track, dict) and isinstance(track.get("clips"), list) else []
+        for clip in clips:
+            fps = _safe_float(clip.get("fps"), 0.0) if isinstance(clip, dict) else 0.0
+            if fps > 0.0:
+                return fps
+    return 30.0
+
+
 def _safe_path_name(name: str) -> str:
     out = "".join("_" if c in '<>:"/\\|?*' else c for c in str(name or "").strip())
     return out.strip().strip(".") or "project"
@@ -216,12 +238,18 @@ def sanitize_stt_track_rows(
     source: str = "",
     primary_fps: float = 30.0,
 ) -> list[dict[str, Any]]:
-    """Return a compact, non-overlapping STT preview track for project assets."""
+    """Return a stable STT preview track for project assets.
+
+    STT1/STT2 tracks can legitimately overlap because different recognizers and
+    rolling-window chunks do not share the final subtitle boundaries.  Keep
+    distinct overlapping text, but collapse repeated overlapping rows with the
+    same normalized text so reopening a project never erodes the candidate set.
+    """
     cleaned: list[tuple[int, dict[str, Any]]] = []
     for idx, row in enumerate(rows or []):
         if not isinstance(row, dict) or row.get("is_gap"):
             continue
-        text = str(row.get("text", "") or "").strip()
+        text = strip_whisper_control_tokens(str(row.get("text", "") or ""))
         if not text:
             continue
         start = _segment_start(row)
@@ -231,76 +259,37 @@ def sanitize_stt_track_rows(
         item = dict(row)
         item["start"] = start
         item["end"] = end
-        item["text"] = text.replace("\u2028", "\n")
+        item["text"] = text
         if source:
             item["source"] = source
             item["stt_preview_source"] = source
         cleaned.append((idx, item))
-    if len(cleaned) <= 1:
-        out: list[dict[str, Any]] = []
-        for i, (_idx, item) in enumerate(cleaned):
-            row = dict(item)
-            row["index"] = i + 1
-            out.append(row)
-        return out
 
-    best_by_exact_key: dict[tuple[int, int, str], tuple[int, dict[str, Any]]] = {}
     fps = max(1.0, _safe_float(primary_fps, 30.0))
-    for original_idx, item in cleaned:
-        start_frame = int(round(_segment_start(item) * fps))
-        end_frame = int(round(_segment_end(item) * fps))
-        key = (start_frame, end_frame, _track_text_key(str(item.get("text", "") or "")))
-        previous = best_by_exact_key.get(key)
-        if previous is None or _stt_track_row_score(item) > _stt_track_row_score(previous[1]):
-            best_by_exact_key[key] = (original_idx, item)
-
-    candidates = sorted(
-        best_by_exact_key.values(),
-        key=lambda pair: (_segment_end(pair[1]), _segment_start(pair[1]), pair[0]),
-    )
-    ends = [_segment_end(item) for _idx, item in candidates]
-    tolerance = max(0.035, min(0.090, 2.0 / fps))
-    weights = [_stt_track_row_score(item) for _idx, item in candidates]
-    prev_indices = [
-        bisect_right(ends, _segment_start(item) + tolerance, 0, i) - 1
-        for i, (_idx, item) in enumerate(candidates)
-    ]
-    dp = [0.0] * (len(candidates) + 1)
-    take = [False] * len(candidates)
-    for i, weight in enumerate(weights, start=1):
-        include = weight + dp[prev_indices[i - 1] + 1]
-        exclude = dp[i - 1]
-        if include > exclude:
-            dp[i] = include
-            take[i - 1] = True
-        else:
-            dp[i] = exclude
-
     selected_pairs: list[tuple[int, dict[str, Any]]] = []
-    i = len(candidates) - 1
-    while i >= 0:
-        include = weights[i] + dp[prev_indices[i] + 1]
-        if take[i] and include >= dp[i]:
-            selected_pairs.append(candidates[i])
-            i = prev_indices[i]
-        else:
-            i -= 1
-    selected_pairs.reverse()
+    for original_idx, item in cleaned:
+        text_key = _track_text_key(str(item.get("text", "") or ""))
+        start = _segment_start(item)
+        end = _segment_end(item)
+        duplicate_idx = None
+        for idx, (_prev_original_idx, previous) in enumerate(selected_pairs):
+            if _track_text_key(str(previous.get("text", "") or "")) != text_key:
+                continue
+            overlap = min(end, _segment_end(previous)) - max(start, _segment_start(previous))
+            if overlap > max(0.035, min(0.090, 2.0 / fps)):
+                duplicate_idx = idx
+                break
+        if duplicate_idx is None:
+            selected_pairs.append((original_idx, item))
+            continue
+        previous = selected_pairs[duplicate_idx][1]
+        if _stt_track_row_score(item) > _stt_track_row_score(previous):
+            selected_pairs[duplicate_idx] = (original_idx, item)
+
     selected = [dict(item) for _idx, item in sorted(selected_pairs, key=lambda pair: (_segment_start(pair[1]), _segment_end(pair[1]), pair[0]))]
 
     out: list[dict[str, Any]] = []
     for item in selected:
-        if out:
-            prev = out[-1]
-            overlap = _segment_end(prev) - _segment_start(item)
-            if overlap > 0.0:
-                if overlap <= tolerance:
-                    prev["end"] = max(_segment_start(prev) + 0.05, _segment_start(item))
-                else:
-                    if _stt_track_row_score(item) > _stt_track_row_score(prev):
-                        out.pop()
-                    else:
-                        continue
         if _segment_end(item) <= _segment_start(item):
             item["end"] = _segment_start(item) + 0.05
         item["index"] = len(out) + 1
@@ -368,13 +357,39 @@ def compact_segment_metadata(seg: dict[str, Any], index: int, *, source: str = "
 
 def write_srt_track(rows: list[dict[str, Any]], srt_path: str) -> dict[str, Any]:
     os.makedirs(os.path.dirname(os.path.abspath(srt_path)), exist_ok=True)
+    inferred_fps = None
+    for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
+        frame_range = row.get("frame_range")
+        if isinstance(frame_range, dict) and frame_range.get("timeline_frame_rate") is not None:
+            try:
+                inferred_fps = normalize_fps(frame_range.get("timeline_frame_rate"))
+                break
+            except (TypeError, ValueError):
+                pass
+        for key in ("timeline_frame_rate", "frame_rate"):
+            value = row.get(key)
+            try:
+                if value is not None and float(value) > 0.0:
+                    inferred_fps = normalize_fps(value)
+                    break
+            except (TypeError, ValueError):
+                continue
+        if inferred_fps is not None:
+            break
+    prepared_rows = (
+        normalize_segments_to_frame_grid(rows, inferred_fps, min_frames=1, preserve_order=True)
+        if inferred_fps is not None
+        else [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+    )
     lines: list[str] = []
     serial = 1
     persisted: list[dict[str, Any]] = []
-    for row in rows or []:
+    for row in prepared_rows:
         if not isinstance(row, dict) or row.get("is_gap"):
             continue
-        text = str(row.get("text", "") or "").strip().replace("\u2028", "\n").replace(".", "")
+        text = strip_whisper_control_tokens(str(row.get("text", "") or "")).replace(".", "")
         if not text:
             continue
         start = _segment_start(row)
@@ -423,7 +438,7 @@ def _merge_srt_metadata(rows: list[dict[str, Any]], metadata: list[Any], *, sour
         item = dict(row)
         meta = metadata[idx] if idx < len(metadata) and isinstance(metadata[idx], dict) else {}
         item.update({key: value for key, value in meta.items() if key not in {"text", "start", "end"}})
-        item["text"] = str(row.get("text", "") or "")
+        item["text"] = strip_whisper_control_tokens(str(row.get("text", "") or ""))
         item["start"] = _safe_float(row.get("start", 0.0))
         item["end"] = _safe_float(row.get("end", item["start"]), item["start"])
         item["index"] = int(item.get("index", idx + 1) or idx + 1)
@@ -473,6 +488,7 @@ def load_external_subtitle_segments(project: dict[str, Any] | None) -> list[dict
 def load_external_stt_tracks(project: dict[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
     if not isinstance(project, dict):
         return {}
+    primary_fps = _project_primary_fps(project)
     asset_storage = project.get("asset_storage", {}) if isinstance(project.get("asset_storage"), dict) else {}
     tracks = asset_storage.get("tracks", {}) if isinstance(asset_storage.get("tracks"), dict) else {}
     analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
@@ -489,7 +505,7 @@ def load_external_stt_tracks(project: dict[str, Any] | None) -> dict[str, list[d
         if not path or not os.path.exists(path):
             continue
         rows = _merge_srt_metadata(parse_srt_to_segments(path), list(track.get("metadata") or []), source=source)
-        rows = sanitize_stt_track_rows(rows, source=source)
+        rows = sanitize_stt_track_rows(rows, source=source, primary_fps=primary_fps)
         if rows:
             out[source] = rows
     if out:

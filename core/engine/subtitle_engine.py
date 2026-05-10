@@ -2308,9 +2308,22 @@ def optimize_segments(
     get_logger().log(f"━━━ 자막 최적화 완료: {len(optimized)}개 ━━━\n")
     return optimized
 
-def save_srt(segments: list[dict], srt_path: str, apply_offset: bool = True):
+def save_srt(
+    segments: list[dict],
+    srt_path: str,
+    apply_offset: bool = True,
+    fps: float | int | str | None = None,
+    write_backup: bool = True,
+):
     from core.engine.srt_writer import save_srt as _save_srt
-    return _save_srt(segments, srt_path, apply_offset=apply_offset, adjust_timing_func=adjust_timing)
+    return _save_srt(
+        segments,
+        srt_path,
+        apply_offset=apply_offset,
+        adjust_timing_func=adjust_timing,
+        fps=fps,
+        write_backup=write_backup,
+    )
 
 def ask_gemini_to_split(
     text: str,

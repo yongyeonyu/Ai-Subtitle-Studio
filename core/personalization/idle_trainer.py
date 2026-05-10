@@ -1382,6 +1382,28 @@ class PersonalizationIdleTrainer(QObject):
             items.append(updated)
         return save_training_queue(items, self.store_dir)
 
+    def resume_for_home_idle(
+        self,
+        *,
+        preserve_idle_age: bool = False,
+        start_if_ready: bool = False,
+    ) -> dict[str, Any]:
+        self._stop_requested.clear()
+        self._suspended_until_ms = 0
+        self._suspend_reason = ""
+        if not bool(preserve_idle_age):
+            self.note_user_activity()
+        self._notify_learning_status_changed()
+        started = False
+        if bool(start_if_ready) and not self.is_busy() and self._owner_idle():
+            result = self.start_background_run(low_resource=self._auto_learning_low_resource())
+            started = bool(result.get("started"))
+        return {
+            "resumed": True,
+            "preserve_idle_age": bool(preserve_idle_age),
+            "started": started,
+        }
+
     def clear_pending_jobs(self, *, keep_completed: bool = True) -> dict[str, Any]:
         return clear_training_queue(self.store_dir, keep_completed=keep_completed)
 

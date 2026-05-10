@@ -4,9 +4,7 @@
 ui/main/main_file_ops.py
 FileOpsMixin — 파일/폴더 선택 · 배치 시작 · 멀티클립 진입 · 캐시 삭제 · 종료
 """
-import glob
 import os
-import tempfile
 
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
 from PyQt6.QtCore import QTimer
@@ -18,49 +16,37 @@ from core.path_manager import (
 from core.runtime import config
 from core.settings import load_settings, save_settings
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
+from ui.editor.editor_save_manager import (
+    backup_project_file_copy,
+    clear_reusable_caches,
+    reusable_cache_paths as _editor_reusable_cache_paths,
+)
 from ui.dialogs.message_box import ask_yes_no, confirm_save_changes, show_message
 
 
 def _reusable_cache_paths() -> list[str]:
-    from core.runtime import config
-
-    output_dir = os.path.abspath(str(config.OUTPUT_DIR or ""))
-    cache_paths = [
-        os.path.join(output_dir, ".media_probe_cache"),
-        os.path.join(output_dir, "cut_boundary_cache"),
-        os.path.join(output_dir, "waveform_cache"),
-        os.path.join(output_dir, "_analysis_cache"),
-        os.path.join(output_dir, "_audio_fingerprint"),
-        os.path.join(tempfile.gettempdir(), "ai_subtitle_studio_waveform_cache"),
-        os.path.join(tempfile.gettempdir(), "ai_subtitle_studio_roughcut"),
-        os.path.join(tempfile.gettempdir(), "ai_subtitle_studio_roughcut_thumbnails"),
-    ]
-    for pattern in (
-        "*_cleaned.wav",
-        "*_cleaned.wav.meta.json",
-        "*_raw.wav",
-        "*.vad.cache.json",
-        "*.vad.cache.json.gz",
-    ):
-        cache_paths.extend(glob.glob(os.path.join(output_dir, pattern)))
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for path in cache_paths:
-        normalized = os.path.abspath(os.path.expanduser(str(path or "")))
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        deduped.append(normalized)
-    return deduped
+    return _editor_reusable_cache_paths()
 
 
 class FileOpsMixin:
     """파일/폴더 선택 및 배치·멀티클립 모드 진입 관련 메서드."""
 
     def _confirm_save_dirty_editor_before_exit(self) -> bool:
+        self._editor_exit_save_completed = False
+        self._editor_exit_save_skipped = False
         editor = getattr(self, "_editor_widget", None)
         if editor is None:
             return True
+        helper = getattr(editor, "_confirm_close_before_exit", None)
+        if callable(helper):
+            before_dirty = bool(getattr(editor, "_is_dirty", False))
+            ok = bool(helper("종료 확인"))
+            after_dirty = bool(getattr(editor, "_is_dirty", False))
+            if ok and before_dirty and not after_dirty:
+                self._editor_exit_save_completed = True
+            elif ok and before_dirty and after_dirty:
+                self._editor_exit_save_skipped = True
+            return ok
         try:
             dirty_checker = getattr(editor, "_has_unsaved_changes", None)
             if callable(dirty_checker):
@@ -78,13 +64,18 @@ class FileOpsMixin:
         if reply == QMessageBox.StandardButton.Cancel:
             return False
         if reply == QMessageBox.StandardButton.No:
+            self._editor_exit_save_skipped = True
             return True
 
-        save = getattr(editor, "_on_save", None)
+        fast_exit_save = getattr(editor, "_on_save_for_exit", None)
+        save = fast_exit_save if callable(fast_exit_save) else getattr(editor, "_on_save", None)
         if not callable(save):
             return True
         try:
-            saved = bool(save(skip_auto_next=True))
+            if callable(fast_exit_save) and save is fast_exit_save:
+                saved = bool(save())
+            else:
+                saved = bool(save(skip_auto_next=True))
         except TypeError:
             saved = bool(save())
         except Exception as exc:
@@ -107,6 +98,7 @@ class FileOpsMixin:
                 default=QMessageBox.StandardButton.Ok,
             )
             return False
+        self._editor_exit_save_completed = True
         return True
 
     def _prepare_dialog_state(self):
@@ -330,41 +322,8 @@ class FileOpsMixin:
             "컷경계, VAD, 음성필터/전처리, 파형 등 재사용 캐쉬 파일을 모두 삭제하시겠습니까?",
             default_no=True,
         ):
-            import shutil
-
             try:
-                from core.auto_tracker import TRACKER_FILE
-                from core.media_info import clear_media_probe_cache_memory
-                from core.personalization.lora_vector_retriever import clear_lora_retrieval_caches
-                from core.project.project_io import clear_project_file_cache
-                from core.runtime import config
-                from ui.style import clear_line_icon_cache
-
-                removed_count = 0
-                for cache_path in _reusable_cache_paths():
-                    if not os.path.lexists(cache_path):
-                        continue
-                    if os.path.isdir(cache_path) and not os.path.islink(cache_path):
-                        shutil.rmtree(cache_path)
-                    else:
-                        os.remove(cache_path)
-                    removed_count += 1
-                os.makedirs(config.OUTPUT_DIR, exist_ok=True)
-
-                if os.path.exists(TRACKER_FILE):
-                    os.remove(TRACKER_FILE)
-                    removed_count += 1
-                clear_media_probe_cache_memory()
-                clear_project_file_cache()
-                clear_lora_retrieval_caches()
-                clear_line_icon_cache()
-                if hasattr(self, "_cloud_sync_manager"):
-                    mgr = self._cloud_sync_manager
-                    mgr._size_cache.clear()
-                    mgr._in_flight.clear()
-                runtime_cache_clear = getattr(self, "_clear_runtime_memory_caches", None)
-                if callable(runtime_cache_clear):
-                    runtime_cache_clear(include_gpu=False)
+                removed_count = int(clear_reusable_caches(main_window=self) or 0)
                 show_message(
                     self,
                     "완료",
@@ -438,35 +397,10 @@ class FileOpsMixin:
             self._open_editor_screen()
 
     def _backup_before_quick_exit(self, *, include_project_backup: bool = True):
-        import datetime
-        import shutil
-
-        editor = getattr(self, "_editor_widget", None)
-        if editor is not None:
-            try:
-                should_save = True
-                dirty_checker = getattr(editor, "_has_unsaved_changes", None)
-                if callable(dirty_checker):
-                    should_save = bool(dirty_checker())
-                elif hasattr(editor, "sm"):
-                    should_save = bool(getattr(editor.sm, "is_dirty", False))
-                if should_save and hasattr(editor, "_on_save"):
-                    editor._on_save(skip_auto_next=True)
-            except Exception as exc:
-                try:
-                    from core.runtime.logger import get_logger
-                    get_logger().log(f"⚠️ 종료 전 자막 저장 실패: {exc}")
-                except Exception:
-                    pass
-
         project_path = str(getattr(self, "_current_project_path", "") or "")
         if include_project_backup and project_path and os.path.exists(project_path):
             try:
-                backup_dir = os.path.join(os.path.dirname(project_path), "프로젝트백업")
-                os.makedirs(backup_dir, exist_ok=True)
-                stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                base, ext = os.path.splitext(os.path.basename(project_path))
-                shutil.copy2(project_path, os.path.join(backup_dir, f"{base}_{stamp}{ext or '.json'}"))
+                backup_project_file_copy(project_path)
             except Exception as exc:
                 try:
                     from core.runtime.logger import get_logger

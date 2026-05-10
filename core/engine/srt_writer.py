@@ -7,20 +7,63 @@ import json
 import os
 from datetime import datetime
 
+from core.frame_time import normalize_fps, normalize_segments_to_frame_grid
 from core.runtime import config
 from core.utils import seconds_to_srt_time
 from core.runtime.logger import get_logger
+from core.project.project_srt import strip_whisper_control_tokens
 
 
 def _normalize_saved_subtitle_text(text: str) -> str:
-    text = str(text or "").replace("\u2028", "\n").replace(".", "")
+    text = strip_whisper_control_tokens(str(text or "")).replace(".", "")
     lines = [" ".join(line.split()) for line in text.split("\n")]
     return "\n".join(line for line in lines if line)
 
 
-def save_srt(segments: list[dict], srt_path: str, apply_offset: bool = True, adjust_timing_func=None):
+def _infer_save_fps(segments: list[dict], fps: float | int | str | None = None) -> float | None:
+    try:
+        if fps is not None and float(fps) > 0.0:
+            return normalize_fps(fps)
+    except (TypeError, ValueError):
+        pass
+    for seg in list(segments or []):
+        if not isinstance(seg, dict):
+            continue
+        frame_range = seg.get("frame_range")
+        if isinstance(frame_range, dict):
+            value = frame_range.get("timeline_frame_rate")
+            try:
+                if value is not None and float(value) > 0.0:
+                    return normalize_fps(value)
+            except (TypeError, ValueError):
+                pass
+        for key in ("timeline_frame_rate", "frame_rate"):
+            value = seg.get(key)
+            try:
+                if value is not None and float(value) > 0.0:
+                    return normalize_fps(value)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def save_srt(
+    segments: list[dict],
+    srt_path: str,
+    apply_offset: bool = True,
+    adjust_timing_func=None,
+    fps: float | int | str | None = None,
+    write_backup: bool = True,
+):
     if apply_offset and callable(adjust_timing_func):
         segments = adjust_timing_func(segments)
+
+    effective_fps = _infer_save_fps(segments, fps)
+    prepared_segments = (
+        normalize_segments_to_frame_grid(segments, effective_fps, min_frames=1, preserve_order=True)
+        if effective_fps is not None
+        else [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+    )
 
     settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
     s = {}
@@ -54,7 +97,7 @@ def save_srt(segments: list[dict], srt_path: str, apply_offset: bool = True, adj
     idx = 1
     seen = set()
 
-    for seg in segments:
+    for seg in prepared_segments:
         if seg.get("stt_pending"):
             continue
         text = _normalize_saved_subtitle_text(seg.get("text", ""))
@@ -66,7 +109,10 @@ def save_srt(segments: list[dict], srt_path: str, apply_offset: bool = True, adj
         if end_t <= start_t:
             end_t = start_t + 0.1
 
-        key = (round(start_t, 1), text)
+        if effective_fps is not None:
+            key = (int(seg.get("timeline_start_frame", seg.get("start_frame", -1)) or -1), text)
+        else:
+            key = (round(start_t, 3), text)
         if key in seen:
             continue
         seen.add(key)
@@ -109,16 +155,21 @@ def save_srt(segments: list[dict], srt_path: str, apply_offset: bool = True, adj
     date_str = now.strftime("%Y%m%d")
     time_str = now.strftime("%H%M%S")
 
-    backup_plain = os.path.join(backup_dir, f"{base_name}_{date_str}_{time_str}.srt")
-    with open(backup_plain, "w", encoding="utf-8") as f:
-        f.write(plain_content)
+    if write_backup:
+        backup_plain = os.path.join(backup_dir, f"{base_name}_{date_str}_{time_str}.srt")
+        with open(backup_plain, "w", encoding="utf-8") as f:
+            f.write(plain_content)
 
-    if generate_color_srt:
-        backup_color = os.path.join(backup_dir, f"{base_name}_화자_{date_str}_{time_str}.srt")
-        with open(backup_color, "w", encoding="utf-8") as f:
-            f.write(color_content)
+        if generate_color_srt:
+            backup_color = os.path.join(backup_dir, f"{base_name}_화자_{date_str}_{time_str}.srt")
+            with open(backup_color, "w", encoding="utf-8") as f:
+                f.write(color_content)
 
-    log_msg = f"✅ 자막 저장 및 자동 백업 완료: {time_str}"
-    if not generate_color_srt:
-        log_msg += " (단일 화자 감지: 화자 분리 파일 생략)"
+        log_msg = f"✅ 자막 저장 및 자동 백업 완료: {time_str}"
+        if not generate_color_srt:
+            log_msg += " (단일 화자 감지: 화자 분리 파일 생략)"
+    else:
+        log_msg = f"✅ 자막 빠른 저장 완료: {time_str}"
+        if not generate_color_srt:
+            log_msg += " (단일 화자 감지: 화자 분리 파일 생략)"
     get_logger().log(log_msg)

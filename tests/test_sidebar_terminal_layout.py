@@ -1960,6 +1960,35 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_exit_confirm_no_does_not_save_again_during_backup(self):
+        window = MainWindow()
+        regular_save = mock.Mock(return_value=True)
+
+        class _Editor:
+            def _has_unsaved_changes(self):
+                return True
+
+            def _on_save(self, **kwargs):
+                return regular_save(**kwargs)
+
+        try:
+            window._editor_widget = _Editor()
+            with mock.patch(
+                "ui.main.main_file_ops.confirm_save_changes",
+                return_value=QMessageBox.StandardButton.No,
+            ):
+                self.assertTrue(window._confirm_save_dirty_editor_before_exit())
+
+            window._backup_before_quick_exit(include_project_backup=False)
+
+            regular_save.assert_not_called()
+            self.assertTrue(bool(getattr(window, "_editor_exit_save_skipped", False)))
+        finally:
+            window._editor_widget = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_exit_confirm_yes_saves_dirty_editor_before_runtime_pause(self):
         window = MainWindow()
         save = mock.Mock(return_value=True)
@@ -1980,6 +2009,62 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
                 self.assertTrue(window._confirm_save_dirty_editor_before_exit())
 
             save.assert_called_once_with(skip_auto_next=True)
+        finally:
+            window._editor_widget = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_exit_confirm_prefers_fast_exit_save_path(self):
+        window = MainWindow()
+        fast_save = mock.Mock(return_value=True)
+        regular_save = mock.Mock(return_value=True)
+
+        class _Editor:
+            def _has_unsaved_changes(self):
+                return True
+
+            def _on_save_for_exit(self):
+                return fast_save()
+
+            def _on_save(self, **kwargs):
+                return regular_save(**kwargs)
+
+        try:
+            window._editor_widget = _Editor()
+            with mock.patch(
+                "ui.main.main_file_ops.confirm_save_changes",
+                return_value=QMessageBox.StandardButton.Yes,
+            ):
+                self.assertTrue(window._confirm_save_dirty_editor_before_exit())
+
+            fast_save.assert_called_once_with()
+            regular_save.assert_not_called()
+            self.assertTrue(bool(getattr(window, "_editor_exit_save_completed", False)))
+        finally:
+            window._editor_widget = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_exit_backup_skips_second_save_after_fast_exit_save(self):
+        window = MainWindow()
+        regular_save = mock.Mock(return_value=True)
+
+        class _Editor:
+            def _has_unsaved_changes(self):
+                return True
+
+            def _on_save(self, **kwargs):
+                return regular_save(**kwargs)
+
+        try:
+            window._editor_widget = _Editor()
+            window._editor_exit_save_completed = True
+
+            window._backup_before_quick_exit(include_project_backup=False)
+
+            regular_save.assert_not_called()
         finally:
             window._editor_widget = None
             window.close()

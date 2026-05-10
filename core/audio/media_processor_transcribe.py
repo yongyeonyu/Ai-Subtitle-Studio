@@ -1626,7 +1626,10 @@ class VideoProcessorTranscribeMixin:
         try:
             if _cfg.IS_MAC and not use_coreml_whisper and not use_whisper_cpp and not use_transformers_whisper:
                 received = 0
-                while received < total:
+                next_emit_idx = 0
+                pending_payloads: dict[int, tuple[dict, dict]] = {}
+                done_seen = False
+                while received < total or (done_seen and next_emit_idx in pending_payloads):
                     line = proc.stdout.readline()
                     if not line:
                         break
@@ -1639,7 +1642,10 @@ class VideoProcessorTranscribeMixin:
                     if task_id != mac_task_id:
                         continue
                     if data.get("done"):
-                        break
+                        done_seen = True
+                        if received >= total:
+                            break
+                        continue
 
                     if data.get("fatal_error") or data.get("error"):
                         had_error = True
@@ -1656,54 +1662,59 @@ class VideoProcessorTranscribeMixin:
                         payload.setdefault("language_probability", data.get("language_probability"))
                         payload.setdefault("chunk_path", item.get("input_path"))
                         payload.setdefault("word_timestamps", data.get("word_timestamps", word_timestamps))
-                    chunk_segs = self._parse_whisper_payload(
-                        payload,
-                        item,
-                        vad_strict,
-                        target_end_sec=target_end_sec,
-                        is_single=is_single
-                    )
-                    chunk_segs = self._dedupe_overlapping_segments(
-                        chunk_segs,
-                        previous_end=prev_end,
-                        dedup_window=float(s.get("sub_dedup_window", 0.5) or 0.5),
-                        vad_segments=vad_strict,
-                    )
-                    chunk_segs = self._recheck_primary_low_score_with_secondary(
-                        chunk_dir,
-                        chunk_segs,
-                        s,
-                        vad_strict,
-                        target_model,
-                    )
-                    chunk_segs = self._recheck_word_timestamps_for_precision(
-                        chunk_dir,
-                        chunk_segs,
-                        s,
-                        vad_strict,
-                        target_model,
-                    )
-
-                    if chunk_segs:
-                        prev_end = chunk_segs[-1]["end"]
-                        if callable(preview_callback):
-                            try:
-                                preview_callback(chunk_segs, log_label)
-                            except Exception:
-                                pass
-
-                    if progress_by_audio_duration:
-                        processed_audio_sec += float(item.get("duration", 0.0) or 0.0)
-                        progress_sec = min(t_sec, processed_audio_sec)
-                    else:
-                        progress_sec = prev_end
-                    pct = min(100, int((progress_sec / t_sec) * 100))
-                    get_logger().log(self._format_transcribe_progress(log_label, progress_sec, t_sec, pct))
-
-                    yield chunk_segs, item["idx"] + 1, total
-                    processed_count += 1
-                    emitted_segment_count += len(chunk_segs or [])
+                    pending_payloads[idx] = (item, payload)
                     received += 1
+
+                    while next_emit_idx in pending_payloads:
+                        pending_item, pending_payload = pending_payloads.pop(next_emit_idx)
+                        chunk_segs = self._parse_whisper_payload(
+                            pending_payload,
+                            pending_item,
+                            vad_strict,
+                            target_end_sec=target_end_sec,
+                            is_single=is_single
+                        )
+                        chunk_segs = self._dedupe_overlapping_segments(
+                            chunk_segs,
+                            previous_end=prev_end,
+                            dedup_window=float(s.get("sub_dedup_window", 0.5) or 0.5),
+                            vad_segments=vad_strict,
+                        )
+                        chunk_segs = self._recheck_primary_low_score_with_secondary(
+                            chunk_dir,
+                            chunk_segs,
+                            s,
+                            vad_strict,
+                            target_model,
+                        )
+                        chunk_segs = self._recheck_word_timestamps_for_precision(
+                            chunk_dir,
+                            chunk_segs,
+                            s,
+                            vad_strict,
+                            target_model,
+                        )
+
+                        if chunk_segs:
+                            prev_end = chunk_segs[-1]["end"]
+                            if callable(preview_callback):
+                                try:
+                                    preview_callback(chunk_segs, log_label)
+                                except Exception:
+                                    pass
+
+                        if progress_by_audio_duration:
+                            processed_audio_sec += float(pending_item.get("duration", 0.0) or 0.0)
+                            progress_sec = min(t_sec, processed_audio_sec)
+                        else:
+                            progress_sec = prev_end
+                        pct = min(100, int((progress_sec / t_sec) * 100))
+                        get_logger().log(self._format_transcribe_progress(log_label, progress_sec, t_sec, pct))
+
+                        yield chunk_segs, pending_item["idx"] + 1, total
+                        processed_count += 1
+                        emitted_segment_count += len(chunk_segs or [])
+                        next_emit_idx += 1
 
                 if total > 0 and processed_count == 0:
                     if use_whisperkit_persistent:

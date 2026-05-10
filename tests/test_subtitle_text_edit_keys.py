@@ -2,7 +2,8 @@
 # Phase: PHASE2
 import os
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -66,6 +67,29 @@ class SubtitleTextEditKeyTests(unittest.TestCase):
             edit.keyPressEvent(self._key_event(Qt.Key.Key_Right))
 
             self.assertEqual(edit.textCursor().position(), 4)
+        finally:
+            edit.close()
+            edit.deleteLater()
+            self.app.processEvents()
+
+    def test_bare_shift_toggles_video_play_from_text_editor(self):
+        edit = SubtitleTextEdit()
+        try:
+            toggle_play = Mock()
+            edit._parent_widget = SimpleNamespace(
+                _toggle_video_play=toggle_play,
+                editor_popup=SimpleNamespace(is_visible=lambda: False),
+            )
+
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress,
+                Qt.Key.Key_Shift,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            edit.keyPressEvent(event)
+
+            toggle_play.assert_called_once_with()
+            self.assertTrue(event.isAccepted())
         finally:
             edit.close()
             edit.deleteLater()

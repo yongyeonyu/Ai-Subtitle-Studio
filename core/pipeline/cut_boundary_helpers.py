@@ -280,6 +280,28 @@ class PipelineCutBoundaryMixin:
                 rows = payload.get("cut_boundaries", []) if isinstance(payload, dict) else []
 
             rows = normalize_cut_boundaries(rows or [])
+            if not rows:
+                get_logger().log(
+                    f"  ♻️ [컷 경계] 빈 캐시는 완료 결과로 재사용하지 않습니다: {cache_path}"
+                )
+                if project_path and os.path.exists(project_path):
+                    try:
+                        project = read_project_file(project_path)
+                        analysis = project.setdefault("analysis", {})
+                        if (
+                            str(analysis.get("cut_boundary_cache_path") or "") == cache_path
+                            and not list(analysis.get("cut_boundaries", []) or [])
+                        ):
+                            for key in (
+                                "cut_boundary_prescan_done",
+                                "cut_boundary_cache_path",
+                                "cut_boundary_cache_type",
+                            ):
+                                analysis.pop(key, None)
+                            write_project_file(project_path, project)
+                    except Exception as inner_exc:
+                        get_logger().log(f"  ⚠️ [컷 경계] 빈 캐시 상태 정리 실패: {inner_exc}")
+                return None
 
             # ✅ 핵심: 현재 프로젝트 파일은 그대로 두고 analysis.cut_boundaries만 주입
             if project_path and os.path.exists(project_path):
@@ -332,6 +354,10 @@ class PipelineCutBoundaryMixin:
         - Cache stores only analysis.cut_boundaries-compatible rows.
         """
         try:
+            if not list(rows or []):
+                get_logger().log("  💾 [컷 경계] 빈 결과 캐시 저장 생략: 다음 열기에서 백그라운드 재확인")
+                return
+
             import time
             cache_path = self._cut_boundary_cache_path_for_start(files, settings)
 

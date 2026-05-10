@@ -2021,6 +2021,89 @@ class MediaProcessorOverlapTests(unittest.TestCase):
 
         self.assertEqual(rows[0][0][0]["text"], "fallback")
 
+    def test_mac_worker_results_are_emitted_in_chunk_index_order(self):
+        class _Stdout:
+            def __init__(self, lines):
+                self.lines = list(lines)
+
+            def readline(self):
+                return self.lines.pop(0) if self.lines else ""
+
+        class _Proc:
+            def __init__(self, lines):
+                self.stdout = _Stdout(lines)
+                self.returncode = 0
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chunk_dir = os.path.join(tmp, "chunks")
+            os.makedirs(chunk_dir, exist_ok=True)
+            wav_paths = [
+                os.path.join(chunk_dir, "vad_000_0.000.wav"),
+                os.path.join(chunk_dir, "vad_001_10.000.wav"),
+            ]
+            for wav_path in wav_paths:
+                with wave.open(wav_path, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(16000)
+                    wf.writeframes(b"\x00\x00" * 16000)
+
+            proc = _Proc(
+                [
+                    json.dumps(
+                        {
+                            "task_id": "task-1",
+                            "index": 1,
+                            "result": {
+                                "segments": [{"start": 0.0, "end": 0.5, "text": "뒤", "words": []}],
+                                "chunk_path": wav_paths[1],
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    json.dumps(
+                        {
+                            "task_id": "task-1",
+                            "index": 0,
+                            "result": {
+                                "segments": [{"start": 0.0, "end": 0.5, "text": "앞", "words": []}],
+                                "chunk_path": wav_paths[0],
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    json.dumps({"task_id": "task-1", "done": True}, ensure_ascii=False) + "\n",
+                ]
+            )
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "mlx-community/whisper-large-v3-turbo",
+                "w_none_temp_max": 0.0,
+                "stt_ensemble_enabled": False,
+                "stt_selective_secondary_recheck_enabled": False,
+                "stt_word_timestamps_mode": "selective",
+                "stt_word_timestamps_default_enabled": False,
+                "stt_word_timestamps_precision_enabled": False,
+            }
+
+            with patch.object(config, "IS_MAC", True), \
+                 patch("core.audio.whisper_coreml.is_coreml_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_transformers.is_transformers_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_mlx.ensure_worker", return_value=proc), \
+                 patch("core.audio.whisper_mlx.submit_task", return_value="task-1"), \
+                 patch("core.audio.whisper_mlx.stop_worker"):
+                rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False))
+
+        self.assertEqual([row[1] for row in rows], [1, 2])
+        self.assertEqual([row[0][0]["text"] for row in rows], ["앞", "뒤"])
+
     def test_dash_mlx_whisper_model_is_scheduled_as_gpu(self):
         accel = self.processor._whisper_runtime_accelerator(
             "youngouk/ghost613-turbo-korean-4bit-mlx",

@@ -3,7 +3,7 @@
 import os
 import re
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -64,6 +64,27 @@ class SubtitleLineBreakTests(unittest.TestCase):
             self.assertEqual(block.text(), "첫 줄\u2028둘째 줄")
             segs = editor._get_current_segments()
             self.assertEqual(segs[0]["text"], "첫 줄\n둘째 줄")
+        finally:
+            editor.text_edit.close()
+
+    def test_flush_queue_sorts_out_of_order_generated_segments_before_insert(self):
+        editor = self._editor()
+        try:
+            editor._segment_queue = [
+                {"start": 23.2, "end": 23.8, "text": "마지막", "speaker_list": ["00"]},
+                {"start": 0.9, "end": 1.5, "text": "처음", "speaker_list": ["00"]},
+                {"start": 2.0, "end": 2.7, "text": "둘째", "speaker_list": ["00"]},
+            ]
+
+            with patch(
+                "core.engine.subtitle_accuracy_pipeline.repair_subtitle_context_consistency",
+                return_value=(list(editor._segment_queue), {"applied": False}),
+            ):
+                editor._flush_queue()
+
+            segs = [seg for seg in editor._get_current_segments() if not seg.get("is_gap")]
+            self.assertEqual([seg["text"] for seg in segs], ["처음", "둘째", "마지막"])
+            self.assertTrue(segs[0]["start"] < segs[1]["start"] < segs[2]["start"])
         finally:
             editor.text_edit.close()
 

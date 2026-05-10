@@ -187,7 +187,7 @@ class FingerprintCacheTests(unittest.TestCase):
 
         self.assertNotEqual(low_path, medium_path)
 
-    def test_cut_boundary_cache_reuses_empty_result_as_completed_hit(self):
+    def test_cut_boundary_cache_ignores_empty_result_so_follower_can_retry(self):
         owner = _CutCacheOwner()
         old_output_dir = config.OUTPUT_DIR
         with tempfile.TemporaryDirectory() as tmp:
@@ -202,8 +202,8 @@ class FingerprintCacheTests(unittest.TestCase):
             finally:
                 config.OUTPUT_DIR = old_output_dir
 
-        self.assertEqual(cached, [])
-        self.assertEqual(owner.counts[-1], (0, True))
+        self.assertIsNone(cached)
+        self.assertEqual(owner.counts, [])
 
     def test_vad_timestamp_cache_invalidates_when_wav_is_replaced(self):
         processor = VideoProcessor()

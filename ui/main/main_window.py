@@ -125,7 +125,7 @@ class MainWindow(
         self._required_model_check_done = False
         self._personalization_learning_dialogs = []
         self._post_completion_idle_enabled = False
-        self._post_completion_idle_ms = 300_000
+        self._post_completion_idle_ms = 600_000
         self._app_event_filter_installed = False
         self._lora_foreground_busy_until_ms = 0
         self._lora_foreground_busy_reason = ""
@@ -1035,7 +1035,7 @@ class MainWindow(
         self._sig_runtime_audio_tune.connect(self._set_runtime_audio_tune_display)
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
-    def show_home(self):
+    def show_home(self, allow_home_idle_learning: bool = False):
         active_work = self._is_editor_ai_busy(getattr(self, "_editor_widget", None)) or self._is_backend_ai_busy()
         self._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.5, stop_active=False)
         self._stop_post_completion_idle_timer()
@@ -1052,9 +1052,25 @@ class MainWindow(
                 self._trash_bin.pop(0)
             self._editor_widget = None
         self._build_home_content()
+        trainer = getattr(self, "_personalization_idle_trainer", None)
+        resume_for_home_idle = getattr(trainer, "resume_for_home_idle", None) if trainer is not None else None
+        if callable(resume_for_home_idle):
+            try:
+                resume_for_home_idle(
+                    preserve_idle_age=bool(allow_home_idle_learning),
+                    start_if_ready=bool(allow_home_idle_learning),
+                )
+            except Exception:
+                pass
+
+    def _activate_editor_idle_mode(self, *, reason: str = "editor_open") -> None:
+        self._start_post_completion_idle_timer()
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
-            pause_lora("home_return")
+            try:
+                pause_lora(str(reason or "editor_open"), hold_ms=int(self._post_completion_idle_ms))
+            except Exception:
+                pause_lora(str(reason or "editor_open"))
 
     def _stop_active_ai_for_home(self):
         self._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.5, stop_active=True)
@@ -1400,7 +1416,7 @@ class MainWindow(
                 return
             except Exception:
                 pass
-        self.show_home()
+        self.show_home(allow_home_idle_learning=True)
 
     # ── 로그 토글 ────────────────────────────────────────
     def _apply_log_visible(self, visible: bool, *, persist: bool = True):

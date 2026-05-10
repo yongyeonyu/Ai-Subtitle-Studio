@@ -11,15 +11,22 @@ from PyQt6.QtWidgets import QSizePolicy
 
 from core.runtime import config
 from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
-from ui.timeline.timeline_analysis import analysis_markers_for_widget
+from ui.timeline.timeline_analysis import analysis_markers_for_widget, roughcut_major_markers_for_widget
 from ui.gpu_rendering import accelerated_widget_base, configure_lightweight_paint, configure_opengl_widget, gpu_backend_name
 
 GlobalCanvasBase = accelerated_widget_base("timeline")
 
-MINIMAP_WAVEFORM_BG = "#2B2500"
-MINIMAP_WAVEFORM_MIDLINE = QColor(130, 124, 67, 145)
-MINIMAP_WAVEFORM_SPEECH = QColor(80, 245, 238, 205)
-MINIMAP_WAVEFORM_SILENCE = QColor(45, 130, 130, 120)
+MINIMAP_BG = "#11181C"
+MINIMAP_TOP_LANE_BG = "#141D21"
+MINIMAP_BOTTOM_LANE_BG = "#0F1518"
+MINIMAP_DIVIDER = QColor("#2D3942")
+MINIMAP_MAJOR_FILL = QColor(255, 255, 255, 42)
+MINIMAP_MAJOR_BORDER = QColor("#FFFFFF")
+MINIMAP_SUBTITLE_FILL = QColor(132, 98, 22, 170)
+MINIMAP_SUBTITLE_BORDER = QColor("#FFD400")
+MINIMAP_PENDING_FILL = QColor(255, 69, 58, 185)
+MINIMAP_SILENCE_FILL = QColor(255, 149, 0, 138)
+MINIMAP_SILENCE_BORDER = QColor("#FF9500")
 
 
 class GlobalCanvas(GlobalCanvasBase):
@@ -28,7 +35,7 @@ class GlobalCanvas(GlobalCanvasBase):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setFixedHeight(36)
+        self.setFixedHeight(48)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         configure_lightweight_paint(self, opaque=True)
@@ -238,14 +245,55 @@ class GlobalCanvas(GlobalCanvasBase):
         if bool(getattr(self, "_shutdown_in_progress", False)):
             return QPixmap()
         pixmap = QPixmap(max(1, self.width()), max(1, self.height()))
-        pixmap.fill(QColor(MINIMAP_WAVEFORM_BG))
+        pixmap.fill(QColor(MINIMAP_BG))
         p = QPainter(pixmap)
         if not p.isActive():
             return pixmap
         w = pixmap.width()
         h = pixmap.height()
-        mid_y = h // 2
         total = float(self.total_duration or 0.0)
+        top_lane = QRect(0, 0, w, max(1, (h // 2) - 1))
+        bottom_lane = QRect(0, top_lane.bottom() + 1, w, max(1, h - top_lane.height()))
+        divider_y = top_lane.bottom() + 1
+
+        p.fillRect(top_lane, QColor(MINIMAP_TOP_LANE_BG))
+        p.fillRect(bottom_lane, QColor(MINIMAP_BOTTOM_LANE_BG))
+        p.setPen(QPen(MINIMAP_DIVIDER, 1))
+        p.drawLine(0, divider_y, w, divider_y)
+        p.drawRect(QRect(0, 0, max(1, w - 1), max(1, h - 1)))
+
+        def _rect_for_lane(start: float, end: float, lane: QRect, *, min_h_pad: int = 3) -> QRect:
+            if total <= 0:
+                return QRect()
+            x = int(start * (w / total))
+            sw = max(1, int((end - start) * (w / total)))
+            return QRect(
+                x,
+                lane.y() + min_h_pad,
+                sw,
+                max(1, lane.height() - (min_h_pad * 2)),
+            )
+
+        major_markers = roughcut_major_markers_for_widget(self)
+        if total > 0 and major_markers:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(MINIMAP_MAJOR_FILL)
+            major_border_lines: list[QLine] = []
+            for marker in major_markers:
+                try:
+                    start = max(0.0, float(marker.get("start", 0.0) or 0.0))
+                    end = max(start, float(marker.get("end", start) or start))
+                except Exception:
+                    continue
+                rect = _rect_for_lane(start, end, top_lane, min_h_pad=3)
+                if rect.isEmpty():
+                    continue
+                p.fillRect(rect, QColor(str(marker.get("color", MINIMAP_MAJOR_FILL.name()))))
+                major_border_lines.append(QLine(rect.left(), rect.top(), rect.left(), rect.bottom()))
+                major_border_lines.append(QLine(rect.right(), rect.top(), rect.right(), rect.bottom()))
+            if major_border_lines:
+                p.setPen(QPen(MINIMAP_MAJOR_BORDER, 1))
+                p.drawLines(major_border_lines)
 
         markers = analysis_markers_for_widget(
             self,
@@ -255,61 +303,48 @@ class GlobalCanvas(GlobalCanvasBase):
             total,
         )
 
-        if total > 0 and markers:
-            sc = w / max(0.001, total)
-            p.setPen(Qt.PenStyle.NoPen)
-            for marker in sorted(markers, key=lambda item: int(item.get("priority", 0) or 0)):
-                start = max(0.0, float(marker.get("start", 0.0) or 0.0))
-                end = max(start, float(marker.get("end", start) or start))
-                x = int(start * sc)
-                sw = max(1, int((end - start) * sc))
-                color = QColor(str(marker.get("color", "#8B949E")))
-                color.setAlpha(110 if int(marker.get("priority", 0) or 0) < 80 else 155)
-                p.fillRect(QRect(x, 3, sw, h - 6), color)
-
-        columns = self._build_waveform_columns(w, total)
-        if columns:
-            p.setPen(QPen(MINIMAP_WAVEFORM_MIDLINE, 1))
-            p.drawLine(0, mid_y, w, mid_y)
-            pen_speech = QPen(MINIMAP_WAVEFORM_SPEECH, 1)
-            pen_silence = QPen(MINIMAP_WAVEFORM_SILENCE, 1)
-            speech_lines: list[QLine] = []
-            silence_lines: list[QLine] = []
-            for x, (amp_h, in_speech) in enumerate(columns):
-                line = QLine(x, mid_y - amp_h, x, mid_y + amp_h)
-                if in_speech:
-                    speech_lines.append(line)
-                else:
-                    silence_lines.append(line)
-            if speech_lines:
-                p.setPen(pen_speech)
-                p.drawLines(speech_lines)
-            if silence_lines:
-                p.setPen(pen_silence)
-                p.drawLines(silence_lines)
-
         if total > 0:
-            sc = w / total
             p.setPen(Qt.PenStyle.NoPen)
             pending_rects: list[QRect] = []
             confirmed_rects: list[QRect] = []
+            silence_rects: list[QRect] = []
             for s in self.segments:
                 try:
-                    x = int(float(s["start"]) * sc)
-                    sw = max(1, int((float(s["end"]) - float(s["start"])) * sc))
+                    start = float(s["start"])
+                    end = float(s["end"])
                 except Exception:
                     continue
-                rect = QRect(x, 14, sw, 18)
+                rect = _rect_for_lane(start, end, bottom_lane, min_h_pad=4)
                 if s.get("stt_pending"):
                     pending_rects.append(rect)
                 else:
                     confirmed_rects.append(rect)
+            for marker in sorted(markers, key=lambda item: int(item.get("priority", 0) or 0)):
+                if str(marker.get("kind", "") or "").strip().lower() != "silence":
+                    continue
+                try:
+                    start = max(0.0, float(marker.get("start", 0.0) or 0.0))
+                    end = max(start, float(marker.get("end", start) or start))
+                except Exception:
+                    continue
+                silence_rects.append(_rect_for_lane(start, end, bottom_lane, min_h_pad=2))
             if confirmed_rects:
-                p.setBrush(QColor("#666666"))
+                p.setBrush(MINIMAP_SUBTITLE_FILL)
+                p.drawRects(confirmed_rects)
+                p.setPen(QPen(MINIMAP_SUBTITLE_BORDER, 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRects(confirmed_rects)
             if pending_rects:
-                p.setBrush(QColor("#FF453A"))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(MINIMAP_PENDING_FILL)
                 p.drawRects(pending_rects)
+            if silence_rects:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(MINIMAP_SILENCE_FILL)
+                p.drawRects(silence_rects)
+                p.setPen(QPen(MINIMAP_SILENCE_BORDER, 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRects(silence_rects)
 
         p.end()
         self._static_cache = pixmap
@@ -344,7 +379,7 @@ class GlobalCanvas(GlobalCanvasBase):
 
         p.setPen(QPen(QColor(config.ACCENT), 2))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(QRect(int(self.view_start * w), 1, max(1, int((self.view_end - self.view_start) * w)), 34))
+        p.drawRect(QRect(int(self.view_start * w), 1, max(1, int((self.view_end - self.view_start) * w)), max(1, self.height() - 3)))
 
         # 선택 클립 라벨 (우상단 숫자만)
         if self._clip_label:

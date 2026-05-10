@@ -10,6 +10,22 @@ SRT 파일 파싱 유틸
 import re
 import os
 
+from core.project.project_srt import strip_whisper_control_tokens
+
+
+def _sanitize_parsed_segments(segments: list) -> list:
+    cleaned = []
+    for seg in segments or []:
+        if not isinstance(seg, dict):
+            continue
+        text = strip_whisper_control_tokens(str(seg.get("text", "") or ""))
+        if not text:
+            continue
+        row = dict(seg)
+        row["text"] = text
+        cleaned.append(row)
+    return cleaned
+
 
 def parse_srt(srt_path: str) -> list:
     """
@@ -24,7 +40,7 @@ def parse_srt(srt_path: str) -> list:
         from core.native_swift_subtitle import parse_srt_via_swift
         native_segments = parse_srt_via_swift(srt_path)
         if native_segments:
-            return native_segments
+            return _sanitize_parsed_segments(native_segments)
     except Exception:
         pass
 
@@ -69,7 +85,7 @@ def parse_srt(srt_path: str) -> list:
             continue
 
         text_lines = lines[ts_line_idx + 1:]
-        text = '\n'.join(text_lines).strip()
+        text = strip_whisper_control_tokens('\n'.join(text_lines))
         if not text:
             continue
 

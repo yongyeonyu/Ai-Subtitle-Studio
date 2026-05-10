@@ -3,6 +3,19 @@ from __future__ import annotations
 import re
 
 
+WHISPER_CONTROL_TOKEN_RE = re.compile(r"<\|[^|>\n\r]{1,80}\|>")
+
+
+def strip_whisper_control_tokens(text: str) -> str:
+    """Remove Whisper timestamp/control tokens while preserving user text."""
+    cleaned = WHISPER_CONTROL_TOKEN_RE.sub(" ", str(text or ""))
+    cleaned = cleaned.replace("\u2028", "\n")
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r" *\n *", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def parse_srt_to_segments(srt_path: str) -> list[dict]:
     """Convert an SRT file into project segment dictionaries."""
     segments: list[dict] = []
@@ -39,7 +52,7 @@ def parse_srt_to_segments(srt_path: str) -> list[dict]:
         if not match:
             continue
 
-        text = "\n".join(lines[timestamp_line_index + 1:]).strip()
+        text = strip_whisper_control_tokens("\n".join(lines[timestamp_line_index + 1:]))
         if not text:
             continue
 

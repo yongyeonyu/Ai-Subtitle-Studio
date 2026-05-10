@@ -6,6 +6,15 @@ from PyQt6.QtCore import QSize, Qt, QRect, QPoint
 from PyQt6.QtGui import QPainter, QColor, QFont, QBrush
 from core.runtime import config
 
+
+class _SnapshotBlockUserData:
+    def __init__(self, meta: dict):
+        self.spk_id = str(meta.get("spk_id", "00") or "00")
+        self.start_sec = float(meta.get("start_sec", 0.0) or 0.0)
+        self.end_sec = meta.get("end_sec")
+        self.is_gap = bool(meta.get("is_gap", False))
+
+
 class TimestampArea(QWidget):
     def __init__(self, editor):
         super().__init__(editor)
@@ -79,6 +88,54 @@ class TimestampArea(QWidget):
     def _visible_start_block(self):
         return self._visible_start_block_for_y(0)
 
+    def _block_user_data(self, block):
+        ud = block.userData()
+        try:
+            getattr(ud, "start_sec")
+            return ud
+        except Exception:
+            pass
+        try:
+            snapshot = getattr(self.editor, "_timestamp_block_meta_snapshot", None)
+            meta = snapshot.get(int(block.blockNumber())) if isinstance(snapshot, dict) else None
+            if isinstance(meta, dict):
+                return _SnapshotBlockUserData(meta)
+            if meta is not None:
+                getattr(meta, "start_sec")
+                return meta
+        except Exception:
+            pass
+        try:
+            parent = getattr(self.editor, "_parent_widget", None)
+            if parent is not None:
+                line_num = int(block.blockNumber())
+                line_map = getattr(parent, "_cached_line_map", None)
+                if not isinstance(line_map, dict):
+                    refresher = getattr(parent, "_refresh_cached_line_map", None)
+                    line_map = refresher() if callable(refresher) else {}
+                seg = line_map.get(line_num) if isinstance(line_map, dict) else None
+                if isinstance(seg, dict):
+                    matcher = getattr(parent, "_segment_matches_block_text", None)
+                    if callable(matcher) and not matcher(seg, block.text()):
+                        return ud
+                    start_sec = float(seg.get("start", 0.0) or 0.0)
+                    end_sec = seg.get("end")
+                    try:
+                        end_sec = float(end_sec) if end_sec is not None else None
+                    except Exception:
+                        end_sec = None
+                    return _SnapshotBlockUserData(
+                        {
+                            "spk_id": seg.get("speaker", seg.get("spk", "00")),
+                            "start_sec": start_sec,
+                            "end_sec": end_sec,
+                            "is_gap": bool(seg.get("is_gap", False)),
+                        }
+                    )
+        except Exception:
+            pass
+        return ud
+
     def _line_update_rect(self, line_num: int, *, pad_y: int = 6) -> QRect:
         try:
             block = self.editor.document().findBlockByNumber(int(line_num))
@@ -143,7 +200,7 @@ class TimestampArea(QWidget):
         top = self._block_top_from_geom(geom)
         if not (top <= y <= top + geom.height()):
             return
-        ud = block.userData()
+        ud = self._block_user_data(block)
         if hasattr(ud, 'start_sec') and not getattr(ud, 'is_gap', False):
             line_num = block.blockNumber()
 
@@ -191,7 +248,7 @@ class TimestampArea(QWidget):
             geom = self.editor.document().documentLayout().blockBoundingRect(block)
             top = self._block_top_from_geom(geom)
             if top <= y <= top + geom.height():
-                ud = block.userData()
+                ud = self._block_user_data(block)
                 if hasattr(ud, 'start_sec') and not getattr(ud, 'is_gap', False):
                     first_line_top, first_line_height = self._get_first_line_geom(block, top, geom.height())
                     is_first_line_area = (first_line_top - 5 <= y <= first_line_top + first_line_height + 5)
@@ -278,11 +335,11 @@ class TimestampArea(QWidget):
             if top > paint_bottom: break
                 
             if top + height >= 0:
-                ud = block.userData()
+                ud = self._block_user_data(block)
                 if hasattr(ud, 'start_sec'):
                     idx = block.blockNumber()
                     is_active = (idx == current_line or hovered_line == idx or hovered_delete_line == idx)
-                    spk_color = speaker_colors.get(ud.spk_id, accent)
+                    spk_color = speaker_colors.get(getattr(ud, "spk_id", "00"), accent)
                     
                     # 💡 [해결] 전체 높이(height) 대신, 첫 번째 줄의 중심 Y좌표를 계산하여 UI를 그립니다.
                     first_line_top, first_line_height = self._get_first_line_geom(block, top, height)
@@ -305,7 +362,7 @@ class TimestampArea(QWidget):
                     draw_ts = True
                     prev_b = block.previous()
                     if prev_b.isValid():
-                        prev_ud = prev_b.userData()
+                        prev_ud = self._block_user_data(prev_b)
                         if (hasattr(prev_ud, 'start_sec')
                                 and prev_ud.start_sec == ud.start_sec
                                 and not getattr(ud, 'is_gap', False)):

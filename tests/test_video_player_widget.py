@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtMultimedia import QMediaPlayer
 
@@ -70,6 +70,15 @@ class _FrameStepEditor(EditorTimelineVideoMixin):
 
     def _get_current_segments(self):
         return []
+
+
+class _FrameStepOwner(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    def _on_step_frame(self, step):
+        self.calls.append(int(step))
 
 
 class VideoPlayerWidgetTests(unittest.TestCase):
@@ -147,6 +156,37 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertEqual(emitted, [-1, 1])
             self.assertEqual(widget.btn_prev_frame.text(), "<")
             self.assertEqual(widget.btn_next_frame.text(), ">")
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_frame_step_button_prefers_direct_owner_handler_for_fast_response(self):
+        owner = _FrameStepOwner()
+        widget = VideoPlayerWidget(owner)
+        emitted = []
+        try:
+            widget.frame_step_requested.connect(emitted.append)
+
+            widget.btn_next_frame.click()
+
+            self.assertEqual(owner.calls, [1])
+            self.assertEqual(emitted, [])
+        finally:
+            widget.close()
+            widget.deleteLater()
+            owner.close()
+            owner.deleteLater()
+            self.app.processEvents()
+
+    def test_play_button_tooltip_includes_editor_and_canvas_shortcuts(self):
+        widget = VideoPlayerWidget()
+        try:
+            tooltip = widget.btn_play.toolTip()
+
+            self.assertIn("Shift", tooltip)
+            self.assertIn("Space", tooltip)
+            self.assertIn("Tab", tooltip)
         finally:
             widget.close()
             widget.deleteLater()
@@ -693,10 +733,10 @@ class VideoPlayerWidgetTests(unittest.TestCase):
 
             frame, sec = widget.current_playback_frame_time()
 
-            self.assertEqual(frame, 24)
-            self.assertAlmostEqual(sec, 1.0, places=6)
-            self.assertEqual(widget.current_frame, 24)
-            self.assertAlmostEqual(widget.current_time, 1.0, places=6)
+            self.assertEqual(frame, 25)
+            self.assertAlmostEqual(sec, 25.0 / 24.0, places=6)
+            self.assertEqual(widget.current_frame, 25)
+            self.assertAlmostEqual(widget.current_time, 25.0 / 24.0, places=6)
         finally:
             widget.close()
             widget.deleteLater()
@@ -710,6 +750,16 @@ class VideoPlayerWidgetTests(unittest.TestCase):
         self.assertEqual(editor.applied_contexts, [])
         self.assertEqual(len(editor.video_player.frame_seek_calls), 1)
         self.assertAlmostEqual(editor.video_player.frame_seek_calls[0], 1.04, places=4)
+        self.assertEqual(editor.video_player.seek_direct_calls, [])
+
+    def test_frame_step_accepts_multi_frame_direction_for_keyboard_acceleration(self):
+        editor = _FrameStepEditor()
+
+        editor._on_step_frame(3)
+
+        self.assertEqual(editor.applied_contexts, [])
+        self.assertEqual(len(editor.video_player.frame_seek_calls), 1)
+        self.assertAlmostEqual(editor.video_player.frame_seek_calls[0], 1.12, places=4)
         self.assertEqual(editor.video_player.seek_direct_calls, [])
 
     def test_frame_step_context_switch_suppresses_thumbnail_extraction(self):

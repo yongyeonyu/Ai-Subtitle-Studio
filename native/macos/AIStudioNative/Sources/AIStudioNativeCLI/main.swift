@@ -32,6 +32,16 @@ func printUsage() {
       timeline-waveform-columns-f32le --width px --total sec [--vad-json json]
       timeline-segment-layout-json
       timeline-playhead-dirty-json
+      timeline-timing-drag-json
+      timeline-subtitle-merge-preview-json
+      timeline-subtitle-magnet-json
+      timeline-undo-snapshot-json
+      timeline-live-subtitle-preview-json
+      timeline-stt-candidate-selection-json
+      timeline-srt-metadata-match-json
+      timeline-editor-load-prep-json
+      timeline-drag-snap-base-json
+      timeline-segment-timing-edit-plan-json
       timeline-layout-jsonl-worker
       quality-score-json
       quality-score-jsonl-worker
@@ -224,6 +234,106 @@ func run() throws {
         FileHandle.standardOutput.write(data)
         FileHandle.standardOutput.write(Data("\n".utf8))
 
+    case "timeline-timing-drag-json":
+        let input = FileHandle.standardInput.readDataToEndOfFile()
+        let request = try JSONDecoder().decode(TimelineTimingDragRequest.self, from: input)
+        let response = TimelineEditing.apply(request)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(response)
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+
+    case "timeline-subtitle-merge-preview-json":
+        let input = FileHandle.standardInput.readDataToEndOfFile()
+        let request = try JSONDecoder().decode(TimelineSubtitleMergePreviewRequest.self, from: input)
+        let response = TimelineEditing.mergePreview(request)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(response)
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+
+    case "timeline-subtitle-magnet-json":
+        let input = FileHandle.standardInput.readDataToEndOfFile()
+        let request = try JSONDecoder().decode(TimelineSubtitleMagnetRequest.self, from: input)
+        let response = TimelineEditing.subtitleMagnet(request)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(response)
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+
+    case "timeline-undo-snapshot-json":
+        let input = FileHandle.standardInput.readDataToEndOfFile()
+        let request = try JSONDecoder().decode(TimelineUndoSnapshotRequest.self, from: input)
+        let response = TimelineEditing.undoSnapshot(request)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(response)
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+
+    case "timeline-live-subtitle-preview-json":
+        let input = FileHandle.standardInput.readDataToEndOfFile()
+        let request = try JSONDecoder().decode(TimelineLiveSubtitlePreviewRequest.self, from: input)
+        let response = TimelineEditing.liveSubtitlePreview(request)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(response)
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+
+    case "timeline-stt-candidate-selection-json":
+        let input = FileHandle.standardInput.readDataToEndOfFile()
+        let request = try JSONDecoder().decode(TimelineSTTCandidateSelectionRequest.self, from: input)
+        let response = TimelineEditing.sttCandidateSelection(request)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(response)
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+
+    case "timeline-srt-metadata-match-json":
+        let input = FileHandle.standardInput.readDataToEndOfFile()
+        let request = try JSONDecoder().decode(TimelineSRTMetadataMatchRequest.self, from: input)
+        let response = TimelineEditing.srtMetadataMatches(request)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(response)
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+
+    case "timeline-editor-load-prep-json":
+        let input = FileHandle.standardInput.readDataToEndOfFile()
+        let request = try JSONDecoder().decode(TimelineEditorLoadRequest.self, from: input)
+        let response = TimelineEditing.prepareEditorSegmentsForLoad(request)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(response)
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+
+    case "timeline-drag-snap-base-json":
+        let input = FileHandle.standardInput.readDataToEndOfFile()
+        let request = try JSONDecoder().decode(TimelineDragSnapBaseRequest.self, from: input)
+        let response = TimelineEditing.dragSnapBase(request)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(response)
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+
+    case "timeline-segment-timing-edit-plan-json":
+        let input = FileHandle.standardInput.readDataToEndOfFile()
+        let request = try JSONDecoder().decode(TimelineSegmentTimingEditPlanRequest.self, from: input)
+        let response = TimelineEditing.segmentTimingEditPlan(request)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(response)
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+
     case "timeline-layout-jsonl-worker":
         let decoder = JSONDecoder()
         let encoder = JSONEncoder()
@@ -245,6 +355,46 @@ func run() throws {
                 case "playhead_dirty":
                     let request = try decoder.decode(TimelinePlayheadDirtyRequest.self, from: data)
                     let response = TimelineLayout.playheadDirtyRect(request)
+                    FileHandle.standardOutput.write(try encoder.encode(response))
+                case "timing_drag":
+                    let request = try decoder.decode(TimelineTimingDragRequest.self, from: data)
+                    let response = TimelineEditing.apply(request)
+                    FileHandle.standardOutput.write(try encoder.encode(response))
+                case "merge_preview":
+                    let request = try decoder.decode(TimelineSubtitleMergePreviewRequest.self, from: data)
+                    let response = TimelineEditing.mergePreview(request)
+                    FileHandle.standardOutput.write(try encoder.encode(response))
+                case "subtitle_magnet":
+                    let request = try decoder.decode(TimelineSubtitleMagnetRequest.self, from: data)
+                    let response = TimelineEditing.subtitleMagnet(request)
+                    FileHandle.standardOutput.write(try encoder.encode(response))
+                case "undo_snapshot":
+                    let request = try decoder.decode(TimelineUndoSnapshotRequest.self, from: data)
+                    let response = TimelineEditing.undoSnapshot(request)
+                    FileHandle.standardOutput.write(try encoder.encode(response))
+                case "live_subtitle_preview":
+                    let request = try decoder.decode(TimelineLiveSubtitlePreviewRequest.self, from: data)
+                    let response = TimelineEditing.liveSubtitlePreview(request)
+                    FileHandle.standardOutput.write(try encoder.encode(response))
+                case "stt_candidate_selection":
+                    let request = try decoder.decode(TimelineSTTCandidateSelectionRequest.self, from: data)
+                    let response = TimelineEditing.sttCandidateSelection(request)
+                    FileHandle.standardOutput.write(try encoder.encode(response))
+                case "srt_metadata_match":
+                    let request = try decoder.decode(TimelineSRTMetadataMatchRequest.self, from: data)
+                    let response = TimelineEditing.srtMetadataMatches(request)
+                    FileHandle.standardOutput.write(try encoder.encode(response))
+                case "editor_load_prep":
+                    let request = try decoder.decode(TimelineEditorLoadRequest.self, from: data)
+                    let response = TimelineEditing.prepareEditorSegmentsForLoad(request)
+                    FileHandle.standardOutput.write(try encoder.encode(response))
+                case "drag_snap_base":
+                    let request = try decoder.decode(TimelineDragSnapBaseRequest.self, from: data)
+                    let response = TimelineEditing.dragSnapBase(request)
+                    FileHandle.standardOutput.write(try encoder.encode(response))
+                case "segment_timing_edit_plan":
+                    let request = try decoder.decode(TimelineSegmentTimingEditPlanRequest.self, from: data)
+                    let response = TimelineEditing.segmentTimingEditPlan(request)
                     FileHandle.standardOutput.write(try encoder.encode(response))
                 default:
                     let message = ["error": "Unsupported timeline layout task: \(task)"]

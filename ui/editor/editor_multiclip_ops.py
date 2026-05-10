@@ -121,7 +121,7 @@ class EditorMulticlipOpsMixin:
         except Exception:
             pass
 
-    def _reload_segments_from_list(self, segs, *, preserve_view: bool = False):
+    def _reload_segments_from_list(self, segs, *, preserve_view: bool = False, mark_dirty: bool = True):
         segs = self._normalize_multiclip_segment_order(segs)
         try:
             if getattr(self, "_queue_timer", None) is not None:
@@ -186,7 +186,8 @@ class EditorMulticlipOpsMixin:
             if hasattr(self, 'video_player') and self.video_player.total_time > 0:
                 total_dur = max(total_dur, self.video_player.total_time)
             self.timeline.update_segments(timeline_segments, self._active_seg_start, total_dur)
-            self._mark_dirty()
+            if mark_dirty:
+                self._mark_dirty()
             self._schedule_timeline()
         finally:
             self._suspend_append_segments_autoseek = prev_suspend_autoseek

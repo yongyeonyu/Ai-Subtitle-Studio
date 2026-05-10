@@ -42,6 +42,118 @@ PROJECT_FILE_FILTER = "Project Files (*.json)"
 
 
 class ProjectUIMixin:
+    def _project_cut_boundary_placeholder_rows(self, project: dict) -> list[dict]:
+        analysis = project.get("analysis", {}) or {}
+        rows = []
+        for key in (
+            "cut_boundary_topicless_middle_segments",
+            "topicless_middle_segments",
+            "roughcut_topicless_segments",
+            "middle_segments",
+        ):
+            raw = analysis.get(key)
+            if isinstance(raw, list) and raw:
+                rows = raw
+                break
+        if not rows:
+            raw = project.get("middle_segments")
+            if isinstance(raw, list):
+                rows = raw
+        return [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+
+    def _project_cut_boundary_resume_needed(self, project: dict) -> bool:
+        analysis = project.get("analysis", {}) or {}
+        cut_rows = analysis.get("cut_boundaries")
+        if not isinstance(cut_rows, list):
+            cut_rows = []
+        provisional_rows = project_cut_boundary_provisional_segments(project)
+        if provisional_rows:
+            return True
+        if cut_rows:
+            return False
+
+        has_cut_state = any(
+            key in analysis
+            for key in (
+                "cut_boundary_prescan_done",
+                "cut_boundary_cache_path",
+                "cut_boundary_cache_type",
+                "cut_boundary_resume_required",
+                "cut_boundary_provisional_boundaries",
+                "cut_boundary_topicless_middle_segments",
+                "topicless_middle_segments",
+                "roughcut_topicless_segments",
+                "middle_segments",
+            )
+        )
+        if not has_cut_state:
+            return False
+        if bool(analysis.get("cut_boundary_resume_required")):
+            return True
+        if bool(analysis.get("cut_boundary_prescan_done")):
+            return True
+        placeholders = self._project_cut_boundary_placeholder_rows(project)
+        return bool(placeholders)
+
+    def _resume_cut_boundary_prescan_for_open_project(self, filepath: str, project: dict, media: list[str]) -> bool:
+        """Restart background cut-boundary verification when a saved project is stuck.
+
+        A project can be left with `cut_boundary_prescan_done=True` but zero
+        confirmed rows if an older empty cache was reused. Treat that as
+        unfinished so the pioneer/follower workers run in the background.
+        """
+        media = [path for path in list(media or []) if path and os.path.exists(path)]
+        if not filepath or not os.path.exists(filepath) or not media:
+            return False
+        if not self._project_cut_boundary_resume_needed(project):
+            return False
+
+        try:
+            from core.cut_boundary import cut_boundary_enabled
+        except Exception:
+            cut_boundary_enabled = None
+
+        settings = dict(self._load_local_settings())
+        settings.update(dict(project.get("user_settings", {}) or {}))
+        try:
+            enabled = cut_boundary_enabled(settings) if callable(cut_boundary_enabled) else True
+        except Exception:
+            enabled = True
+        if not enabled:
+            return False
+
+        backend = getattr(self, "backend", None)
+        scan = getattr(backend, "_auto_scan_cut_boundaries_for_start", None)
+        if not callable(scan):
+            return False
+
+        try:
+            from core.project.project_io import read_project_file, write_project_file
+
+            saved = read_project_file(filepath)
+            saved["user_settings"] = dict(settings or {})
+            analysis = saved.setdefault("analysis", {})
+            if not list(analysis.get("cut_boundaries", []) or []):
+                for key in (
+                    "cut_boundary_prescan_done",
+                    "cut_boundary_cache_path",
+                    "cut_boundary_cache_type",
+                    "cut_boundary_resume_required",
+                    "cut_boundary_resume_reason",
+                ):
+                    analysis.pop(key, None)
+            write_project_file(filepath, saved)
+        except Exception as exc:
+            get_logger().log(f"⚠️ 프로젝트 컷 경계 재확인 상태 정리 실패: {exc}")
+
+        try:
+            scan(filepath, media)
+            get_logger().log("🎬 [컷 경계] 프로젝트 열기 후 백그라운드 중분류 재확인 시작")
+            return True
+        except Exception as exc:
+            get_logger().log(f"⚠️ 프로젝트 컷 경계 백그라운드 재확인 시작 실패: {exc}")
+            return False
+
     def _load_local_settings(self) -> dict:
         try:
             from core.project.data_manager import load_settings
@@ -104,39 +216,63 @@ class ProjectUIMixin:
         if editor is None:
             return False
         try:
-            if hasattr(editor, "_reload_segments_from_list"):
-                editor._reload_segments_from_list(segments)
+            provisional_boundaries = project_cut_boundary_provisional_segments(project)
+            voice_activity = project_voice_activity_segments(project)
+            timeline = getattr(editor, "timeline", None)
+            if timeline is not None and hasattr(timeline, "set_auto_gap_segments_enabled"):
+                timeline.set_auto_gap_segments_enabled(False)
+            if hasattr(editor, "apply_loaded_canvas_state"):
+                editor.apply_loaded_canvas_state(
+                    segments,
+                    auto_gap_segments_enabled=False,
+                    boundary_times=self._project_boundary_times or [],
+                    provisional_boundaries=provisional_boundaries,
+                    voice_activity_segments=voice_activity,
+                    mark_dirty=False,
+                )
+            elif hasattr(editor, "_reload_segments_from_list"):
+                try:
+                    editor._reload_segments_from_list(segments, mark_dirty=False)
+                except TypeError as exc:
+                    if "mark_dirty" not in str(exc):
+                        raise
+                    editor._reload_segments_from_list(segments)
             else:
                 editor.append_segments(segments)
             if len(media) > 1 and hasattr(editor, "_apply_multiclip_state_from_owner"):
                 editor._apply_multiclip_state_from_owner()
             if hasattr(editor, "_set_process_completed"):
                 editor._set_process_completed()
-            provisional_boundaries = project_cut_boundary_provisional_segments(project)
             if hasattr(editor, "_schedule_timeline"):
                 editor._schedule_timeline()
+            runtime_refresh = getattr(self, "_refresh_opened_editor_runtime", None)
+            if callable(runtime_refresh):
+                runtime_refresh(editor)
 
             def _restore_deferred_state():
                 try:
                     stt_preview = project_stt_preview_segments(project)
-                    if stt_preview:
-                        editor._live_stt_preview_segments = stt_preview
-                        if hasattr(editor, "_schedule_timeline"):
-                            editor._schedule_timeline()
-                    voice_activity = project_voice_activity_segments(project)
-                    if hasattr(editor, "_refresh_video_subtitle_context"):
+                    if hasattr(editor, "apply_canvas_aux_state"):
+                        editor.apply_canvas_aux_state(
+                            stt_preview_segments=stt_preview,
+                            schedule_timeline=bool(stt_preview),
+                        )
+                    runtime_refresh = getattr(self, "_refresh_opened_editor_runtime", None)
+                    if callable(runtime_refresh):
+                        runtime_refresh(editor)
+                    elif hasattr(editor, "_refresh_video_subtitle_context"):
                         editor._refresh_video_subtitle_context()
-                    if provisional_boundaries and hasattr(editor, "timeline") and hasattr(editor.timeline, "set_scan_boundary_times"):
-                        if hasattr(editor, "_set_auto_cut_boundary_scan_lines"):
-                            editor._set_auto_cut_boundary_scan_lines(provisional_boundaries)
-                        else:
-                            editor.timeline.set_scan_boundary_times(provisional_boundaries)
-                    if voice_activity and hasattr(editor, "set_voice_activity_segments"):
-                        editor.set_voice_activity_segments(voice_activity)
+                    QTimer.singleShot(
+                        320,
+                        lambda fp=filepath, pr=project, md=list(media or []): self._resume_cut_boundary_prescan_for_open_project(fp, pr, md),
+                    )
                 except Exception as inner_exc:
                     get_logger().log(f"⚠️ 프로젝트 지연 상태 복원 실패: {inner_exc}")
 
             QTimer.singleShot(120, _restore_deferred_state)
+            schedule_runtime_refresh = getattr(self, "_schedule_opened_editor_runtime_refresh", None)
+            if callable(schedule_runtime_refresh):
+                schedule_runtime_refresh(editor)
         except Exception as e:
             get_logger().log(f"⚠️ 프로젝트 자막 복원 실패: {e}")
         return True

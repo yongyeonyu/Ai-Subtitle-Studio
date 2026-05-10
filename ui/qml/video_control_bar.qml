@@ -118,23 +118,6 @@ Rectangle {
         }
 
         Rectangle {
-            width: timeTextItem.implicitWidth + 22
-            height: 32
-            radius: 9
-            color: badgeBackground()
-            border.width: 1
-            border.color: playing ? "#34C759" : "#313A42"
-            Text {
-                id: timeTextItem
-                anchors.centerIn: parent
-                text: root.timeText
-                color: "#EAF2F8"
-                font.pixelSize: 11
-                font.bold: true
-            }
-        }
-
-        Rectangle {
             width: 36
             height: 32
             radius: 9
@@ -171,6 +154,23 @@ Rectangle {
             MouseArea {
                 anchors.fill: parent
                 onClicked: root.nextScanRequested()
+            }
+        }
+
+        Rectangle {
+            width: timeTextItem.implicitWidth + 22
+            height: 32
+            radius: 9
+            color: badgeBackground()
+            border.width: 1
+            border.color: playing ? "#34C759" : "#313A42"
+            Text {
+                id: timeTextItem
+                anchors.centerIn: parent
+                text: root.timeText
+                color: "#EAF2F8"
+                font.pixelSize: 11
+                font.bold: true
             }
         }
     }

@@ -5,12 +5,13 @@ ui/timeline_canvas.py
 Timeline canvas
 """
 from bisect import bisect_left, bisect_right
+import math
 
 import numpy as np
 from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QSizePolicy, QScrollArea
 
-from core.frame_time import normalize_fps, snap_sec_to_frame
+from core.frame_time import frame_count, frame_to_sec, normalize_fps, sec_to_nearest_frame, snap_sec_to_frame
 
 from ui.timeline.timeline_constants import (
     CANVAS_H,
@@ -40,12 +41,14 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     gap_to_segs             = pyqtSignal(float, float)
     gap_generate_requested  = pyqtSignal(float, float, float, str)
     scrub_sec               = pyqtSignal(float)
+    drag_preview_sec        = pyqtSignal(float)
     drag_started            = pyqtSignal()
     drag_finished           = pyqtSignal()
     step_frame              = pyqtSignal(int)
     sig_inline_text_changed = pyqtSignal(int, str)
     sig_editing_mode        = pyqtSignal(bool)
     sig_split_request       = pyqtSignal(int, float, int)
+    sig_speaker_split_request = pyqtSignal(int, int)
     sig_clip_selected       = pyqtSignal(int)
     sig_clip_delete_requested = pyqtSignal(int)
     sig_clip_add_requested    = pyqtSignal()   #  : clip_idx
@@ -81,6 +84,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.frame_rate: float = 30.0
         self.segments:     list[dict] = []
         self.gap_segments: list[dict] = []
+        self.auto_generate_gap_segments: bool = True
+        self.show_gap_insert_controls: bool = True
         self.vad_segments: list[dict] = []
         self.voice_activity_segments: list[dict] = []
         self.total_duration: float = 0.0
@@ -91,6 +96,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._waveform = None
         self.boundary_times: list[float] = []
         self.scan_boundary_times: list[float] = []
+        self.user_alignment_guides: list[float] = []
         self.show_scan_boundary_markers: bool = False
         self._multiclip_boxes: list[dict] = []   # 
         self._clip_delete_rects: list[tuple[int, QRect]] = []
@@ -112,18 +118,32 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self._drag_adj_orig_end_l:   float = 0.0
         self._drag_adj_orig_start_r: float = 0.0
         self._drag_adj_orig_end_r:   float = 0.0
+        self._drag_merge_pair: tuple[int, int] | None = None
 
         self._snap_lines = []
         self._drag_guide_x: int | None = None
         self._drag_snap_candidate: dict | None = None
         self._is_scrubbing = False
         self._is_panning = False
+        self._pending_center_drag_seg: dict | None = None
+        self._pending_center_drag_x: int = 0
+        self._pending_center_drag_y: int = 0
 
         self._edit_active   = False
         self._edit_line     = -1
         self._edit_text     = ""
         self._edit_orig     = ""
         self._edit_cursor   = 0
+        self._inline_editor = None
+        self._inline_editor_syncing = False
+        self._inline_editor_context_menu_open = False
+        self._arrow_key_hold_direction: int = 0
+        self._arrow_key_hold_started_mono: float = 0.0
+        self._arrow_key_hold_repeat_active: bool = False
+        self._arrow_key_hold_timer = QTimer(self)
+        self._arrow_key_hold_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._arrow_key_hold_timer.setInterval(90)
+        self._arrow_key_hold_timer.timeout.connect(self._emit_arrow_key_hold_step)
         self._cursor_vis    = True
         self._cursor_timer  = QTimer(self)
         self._cursor_timer.setInterval(500)
@@ -170,14 +190,164 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     # ---------------------------------------------------------
     def set_zoom(self, new_pps):
         self.pps = max(5.0, min(500.0, new_pps))
+        if getattr(self, "_edit_active", False) and hasattr(self, "_sync_inline_editor_geometry"):
+            self._sync_inline_editor_geometry()
         self._update_viewport_region()
+
+    def _pixels_per_frame(self) -> float:
+        return max(0.001, float(getattr(self, "pps", 1.0) or 1.0)) / max(1.0, float(self._get_fps() or 30.0))
+
+    def _frame_from_sec(self, sec) -> int:
+        return sec_to_nearest_frame(sec, self._get_fps())
+
+    def _sec_from_frame(self, frame: int) -> float:
+        return frame_to_sec(frame, self._get_fps())
+
+    def _frame_from_x(self, x) -> int:
+        return max(0, int(round(float(x or 0.0) / max(0.001, self._pixels_per_frame()))))
+
+    def _sec_from_x(self, x) -> float:
+        return self._sec_from_frame(self._frame_from_x(x))
+
+    def _frame_delta_from_pixels(self, delta_x) -> int:
+        return int(round(float(delta_x or 0.0) / max(0.001, self._pixels_per_frame())))
+
+    def _sec_delta_from_pixels(self, delta_x) -> float:
+        return float(self._frame_delta_from_pixels(delta_x)) / max(1.0, float(self._get_fps() or 30.0))
+
+    def _frame_x(self, frame: int) -> int:
+        return int(round(max(0, int(frame or 0)) * self._pixels_per_frame()))
+
+    def _frame_step_sec(self) -> float:
+        return 1.0 / max(1.0, float(self._get_fps() or 30.0))
+
+    def _normalize_canvas_sec(self, sec) -> float:
+        try:
+            value = float(sec or 0.0)
+        except Exception:
+            value = 0.0
+        return max(0.0, self._snap_to_frame(value))
+
+    def _normalize_canvas_row(self, row: dict, *, preserve_positive_span: bool = True) -> dict:
+        item = dict(row or {})
+        try:
+            raw_start = float(item.get("start", 0.0) or 0.0)
+        except Exception:
+            raw_start = 0.0
+        try:
+            raw_end = float(item.get("end", raw_start) or raw_start)
+        except Exception:
+            raw_end = raw_start
+        start = self._normalize_canvas_sec(raw_start)
+        end = self._normalize_canvas_sec(raw_end)
+        if end < start:
+            start, end = end, start
+        if preserve_positive_span and raw_end > raw_start and end <= start:
+            end = self._normalize_canvas_sec(start + self._frame_step_sec())
+        item["start"] = start
+        item["end"] = max(start, end)
+        return item
+
+    def _normalize_explicit_gap_rows(self, gaps) -> list[dict]:
+        normalized: list[dict] = []
+        for gap in list(gaps or []):
+            if not isinstance(gap, dict):
+                continue
+            item = self._normalize_canvas_row(gap, preserve_positive_span=False)
+            if float(item.get("end", item.get("start", 0.0)) or 0.0) <= float(item.get("start", 0.0) or 0.0):
+                continue
+            item["_explicit_gap"] = True
+            normalized.append(item)
+        return normalized
+
+    def _rebuild_gap_segments_from_canvas_state(self, *, source_gaps=None) -> None:
+        old_active = {
+            (
+                self._normalize_canvas_sec(g.get("start", 0.0)),
+                self._normalize_canvas_sec(g.get("end", g.get("start", 0.0))),
+            )
+            for g in list(getattr(self, "gap_segments", []) or [])
+            if isinstance(g, dict) and g.get("active")
+        }
+        explicit_rows = self._normalize_explicit_gap_rows(
+            source_gaps
+            if source_gaps is not None
+            else [g for g in list(getattr(self, "gap_segments", []) or []) if bool(g.get("_explicit_gap"))]
+        )
+        auto_gaps = _build_gaps(self.segments, self.total_duration, self._get_fps()) if bool(getattr(self, "auto_generate_gap_segments", True)) else []
+        if explicit_rows and auto_gaps:
+            new_gaps = self._preserve_explicit_gaps(auto_gaps, explicit_rows)
+        elif explicit_rows:
+            new_gaps = [dict(g) for g in explicit_rows]
+        else:
+            new_gaps = auto_gaps
+        for gap in new_gaps:
+            key = (
+                self._normalize_canvas_sec(gap.get("start", 0.0)),
+                self._normalize_canvas_sec(gap.get("end", gap.get("start", 0.0))),
+            )
+            if key in old_active:
+                gap["active"] = True
+        self.gap_segments = new_gaps
 
     def set_frame_rate(self, fps: float):
         normalized = normalize_fps(fps)
         if abs(float(getattr(self, "frame_rate", 0.0) or 0.0) - normalized) < 0.0001:
             return
         self.frame_rate = normalized
+        self.segments = [
+            self._normalize_canvas_row(seg)
+            for seg in list(getattr(self, "segments", []) or [])
+            if isinstance(seg, dict)
+        ]
+        self._rebuild_gap_segments_from_canvas_state()
+        if getattr(self, "active_seg_start", None) is not None:
+            self.active_seg_start = self._normalize_canvas_sec(self.active_seg_start)
+            self._sync_active_segment_key(self.active_seg_start)
+        if getattr(self, "playhead_sec", None) is not None:
+            self.playhead_sec = self._normalize_canvas_sec(self.playhead_sec)
+        if getattr(self, "llm_review_segment", None):
+            self.llm_review_segment = self._normalize_canvas_row(self.llm_review_segment)
+        self.user_alignment_guides = self._normalize_user_alignment_guides(getattr(self, "user_alignment_guides", []))
+        if getattr(self, "_edit_active", False) and hasattr(self, "_sync_inline_editor_geometry"):
+            self._sync_inline_editor_geometry()
         self._invalidate_render_cache()
+
+    def _normalize_user_alignment_guides(self, times) -> list[float]:
+        normalized: list[float] = []
+        total = max(0.0, float(getattr(self, "total_duration", 0.0) or 0.0))
+        for item in list(times or []):
+            try:
+                sec = self._snap_to_frame(float(item or 0.0))
+            except Exception:
+                continue
+            if sec < 0.0:
+                continue
+            if total > 0.0 and sec > total + 0.001:
+                continue
+            if any(abs(sec - prev) < 0.001 for prev in normalized):
+                continue
+            normalized.append(sec)
+        normalized.sort()
+        if len(normalized) > 96:
+            normalized = normalized[-96:]
+        return normalized
+
+    def set_user_alignment_guides(self, times) -> bool:
+        normalized = self._normalize_user_alignment_guides(times)
+        current = self._normalize_user_alignment_guides(getattr(self, "user_alignment_guides", []))
+        if len(normalized) == len(current) and all(abs(a - b) < 0.001 for a, b in zip(normalized, current)):
+            return False
+        self.user_alignment_guides = normalized
+        self._drag_snap_base_cache_key = None
+        self._drag_snap_base_candidates = []
+        self._render_epoch = int(getattr(self, "_render_epoch", 0) or 0) + 1
+        self.update()
+        self._notify_scenegraph_layer()
+        return True
+
+    def add_user_alignment_guides(self, times) -> bool:
+        return self.set_user_alignment_guides(times)
 
     def _invalidate_marker_caches(self):
         self._analysis_markers_cache_key = None
@@ -232,10 +402,11 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
     def _paint_time_window(self, rect: QRect | None = None, *, pad_px: int = 96) -> tuple[float, float]:
         rect = rect or self.rect()
-        pps = max(0.001, float(getattr(self, "pps", 1.0) or 1.0))
         left = max(0, int(rect.left()) - int(pad_px))
         right = max(left + 1, int(rect.right()) + int(pad_px) + 1)
-        return max(0.0, left / pps), max(0.0, right / pps)
+        left_frame = self._frame_from_x(left)
+        right_frame = max(left_frame + 1, self._frame_from_x(right))
+        return self._sec_from_frame(left_frame), self._sec_from_frame(right_frame)
 
     def _viewport_paint_clip(self, rect: QRect | None = None, *, pad_px: int = 128) -> QRect:
         """Clamp resize/full-widget repaints to the scroll viewport.
@@ -268,6 +439,8 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         return paint_rect.intersected(visible)
 
     def _update_viewport_region(self, *, pad_px: int = 160) -> None:
+        if getattr(self, "_edit_active", False) and hasattr(self, "_sync_inline_editor_geometry"):
+            self._sync_inline_editor_geometry()
         try:
             rect = self._viewport_paint_clip(QRect(self.rect()), pad_px=pad_px)
             if rect.isValid() and not rect.isEmpty():
@@ -474,9 +647,9 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         return list(self._visible_voice_activity_cache)
 
     def _items_near_x_for_hit(self, items, cache_name: str, x: int | float, *, pad_px: int = 24) -> list:
-        pps = max(0.001, float(getattr(self, "pps", 1.0) or 1.0))
-        center_sec = max(0.0, float(x or 0.0) / pps)
-        pad_sec = max(0.02, float(pad_px or 0) / pps)
+        center_sec = self._sec_from_x(x)
+        pad_frames = max(1, int(math.ceil(float(pad_px or 0) / max(0.001, self._pixels_per_frame()))))
+        pad_sec = max(self._frame_step_sec(), float(pad_frames) / max(1.0, float(self._get_fps() or 30.0)))
         return self._visible_items_for_paint(items, cache_name, center_sec, center_sec, pad_sec=pad_sec)
 
     def _segments_near_x_for_hit(self, x: int | float, *, pad_px: int = 24) -> list[dict]:
@@ -654,21 +827,28 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         source_gaps = []
         segments = []
         geometry_checksum = 0
+        source_gap_checksum = 0
         content_end_ms = 0
         for s in rows:
             if not isinstance(s, dict):
                 continue
-            try:
-                start_ms = int(round(float(s.get("start", 0.0) or 0.0) * 1000.0))
-                end_ms = int(round(float(s.get("end", s.get("start", 0.0)) or 0.0) * 1000.0))
-            except Exception:
-                start_ms = 0
-                end_ms = 0
             if s.get("is_gap"):
+                source_gap = self._normalize_canvas_row(s, preserve_positive_span=False)
+                start_ms = int(round(float(source_gap.get("start", 0.0) or 0.0) * 1000.0))
+                end_ms = int(round(float(source_gap.get("end", source_gap.get("start", 0.0)) or 0.0) * 1000.0))
                 if end_ms > start_ms:
-                    source_gaps.append(dict(s))
+                    source_gap["_explicit_gap"] = True
+                    source_gaps.append(source_gap)
+                    source_gap_checksum = (
+                        (source_gap_checksum * 1000003)
+                        ^ (start_ms * 131)
+                        ^ (end_ms * 17)
+                    ) & 0xFFFFFFFF
                 continue
-            segments.append(s)
+            segment = self._normalize_canvas_row(s)
+            start_ms = int(round(float(segment.get("start", 0.0) or 0.0) * 1000.0))
+            end_ms = int(round(float(segment.get("end", segment.get("start", 0.0)) or 0.0) * 1000.0))
+            segments.append(segment)
             content_end_ms = max(content_end_ms, end_ms)
             geometry_checksum = ((geometry_checksum * 1000003) ^ (start_ms * 31) ^ end_ms) & 0xFFFFFFFF
         previous_geometry_signature = getattr(self, "_segments_geometry_signature", None)
@@ -688,25 +868,15 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             len(self.segments),
             int(round(float(self.total_duration or 0.0) * 1000.0)),
             len(source_gaps),
+            bool(getattr(self, "auto_generate_gap_segments", True)),
             geometry_checksum,
+            source_gap_checksum,
         )
         self._segments_geometry_signature = segments_geometry_signature
         gaps_changed = bool(source_gaps) or gap_signature != getattr(self, "_gap_segments_signature", None)
         if gaps_changed:
-            generated_gaps = _build_gaps(self.segments, self.total_duration)
-            if source_gaps:
-                new_gaps = self._preserve_explicit_gaps(generated_gaps, source_gaps)
-            else:
-                new_gaps = generated_gaps
-            old_active = {
-                (g["start"], g["end"])
-                for g in self.gap_segments
-                if g.get("active")
-            }
-
-            for gap in new_gaps:
-                if (gap["start"], gap["end"]) in old_active:
-                    gap["active"] = True
+            self._rebuild_gap_segments_from_canvas_state(source_gaps=source_gaps)
+            for gap in self.gap_segments:
                 for source in source_gaps:
                     try:
                         same_start = abs(float(source.get("start", 0.0) or 0.0) - float(gap.get("start", 0.0) or 0.0)) < 0.05
@@ -719,8 +889,6 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
                         if key in source:
                             gap[key] = source[key]
                     break
-
-            self.gap_segments = new_gaps
             self._gap_segments_signature = gap_signature
         if not bool(getattr(self, "_voice_activity_segments_external", False)):
             self.voice_activity_segments = []
@@ -760,9 +928,11 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             self._segment_store_geometry_signature = None
 
         if active_sec is not None:
-            self.active_seg_start = active_sec
-            self._sync_active_segment_key(active_sec)
+            self.active_seg_start = self._normalize_canvas_sec(active_sec)
+            self._sync_active_segment_key(self.active_seg_start)
 
+        if getattr(self, "_edit_active", False) and hasattr(self, "_sync_inline_editor_geometry"):
+            self._sync_inline_editor_geometry()
         self._update_viewport_region()
 
     def set_llm_review_segment(self, payload: dict | None) -> None:
@@ -779,10 +949,10 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             self.update()
             return
         if end <= start:
-            end = start + max(0.05, 1.0 / max(1.0, float(getattr(self, "frame_rate", 30.0) or 30.0)))
+            end = start + self._frame_step_sec()
         data["start"] = start
         data["end"] = end
-        self.llm_review_segment = data
+        self.llm_review_segment = self._normalize_canvas_row(data)
         self.update()
 
     def _preserve_explicit_gaps(self, generated_gaps: list[dict], source_gaps: list[dict]) -> list[dict]:
@@ -892,8 +1062,10 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
     def set_active(self, sec):
         old_rect = self._active_segment_repaint_rect()
-        self.active_seg_start = sec
-        self._sync_active_segment_key(sec)
+        self.active_seg_start = self._normalize_canvas_sec(sec)
+        self._sync_active_segment_key(self.active_seg_start)
+        if getattr(self, "_edit_active", False) and hasattr(self, "_sync_inline_editor_geometry"):
+            self._sync_inline_editor_geometry()
         dirty = old_rect.united(self._active_segment_repaint_rect())
         self._update_dirty_rect(dirty)
 
@@ -923,10 +1095,11 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
         self.update()
 
     def _x(self, sec):
-        return int(sec * self.pps)
+        return self._frame_x(self._frame_from_sec(sec))
 
     def total_width(self):
-        return max(self.width(), int(self.total_duration * self.pps) + 96)
+        total_frames = frame_count(getattr(self, "total_duration", 0.0), self._get_fps())
+        return max(self.width(), self._frame_x(total_frames) + 96)
 
     def _icon_rect(self, x1, x2):
         return QRect(x1 + (x2 - x1) // 2 - (ICON_SZ // 2), SEG_TOP + 22, ICON_SZ, ICON_SZ)

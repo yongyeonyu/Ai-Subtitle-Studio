@@ -12,7 +12,7 @@ from PyQt6.QtMultimedia import QMediaPlayer
 from core.media_info import probe_media
 from core.frame_time import normalize_fps
 from ui.editor.subtitle_text_edit import SubtitleBlockData
-from ui.editor.editor_helpers import get_sub_block_indices, insert_gap_after
+from ui.editor.editor_helpers import get_sub_block_indices
 from ui.dialogs.qml_popup import show_context_menu
 
 
@@ -39,6 +39,10 @@ class EditorVideoControlsMixin:
         self.space_shortcut.setEnabled(not active)
 
     def _on_space_pressed(self):
+        handler = getattr(self, "_handle_repeat_play_pause_shortcut", None)
+        if callable(handler):
+            handler("window_space")
+            return
         self._toggle_video_play()
 
     def _toggle_video_play(self):
@@ -220,87 +224,6 @@ class EditorVideoControlsMixin:
         self.text_edit.update_margins()
         cur.endEditBlock()
         self._redraw_timeline()
-
-    def _set_segment_start_to_playhead(self):
-        self._undo_mgr.push_immediate()
-        sec = self._snap_to_frame(getattr(self.timeline.canvas, 'playhead_sec', getattr(self.video_player, 'current_time', 0.0)))
-        cur = self.text_edit.textCursor()
-        block = cur.block()
-        ud = block.userData()
-        if not isinstance(ud, SubtitleBlockData) or ud.is_gap:
-            return
-
-        orig_start = ud.start_sec
-        cur.beginEditBlock()
-
-        first_block = block
-        while first_block.previous().isValid():
-            p_ud = first_block.previous().userData()
-            if isinstance(p_ud, SubtitleBlockData) and not p_ud.is_gap and abs(p_ud.start_sec - orig_start) < 0.05:
-                first_block = first_block.previous()
-            else:
-                break
-
-        prev_block = first_block.previous()
-        if sec > orig_start and prev_block.isValid():
-            prev_ud = prev_block.userData()
-            if isinstance(prev_ud, SubtitleBlockData) and not prev_ud.is_gap:
-                insert_gap_after(prev_block, orig_start)
-
-        b = first_block
-        while b.isValid():
-            b_ud = b.userData()
-            if isinstance(b_ud, SubtitleBlockData) and not b_ud.is_gap and abs(b_ud.start_sec - orig_start) < 0.05:
-                b_ud.start_sec = sec
-                b = b.next()
-            else:
-                break
-
-        self.text_edit.update_margins()
-        cur.endEditBlock()
-        if hasattr(self.text_edit, 'timestampArea'):
-            self.text_edit.timestampArea.update()
-        self._redraw_timeline()
-
-    def _set_segment_end_to_playhead(self):
-        self._undo_mgr.push_immediate()
-        sec = self._snap_to_frame(getattr(self.timeline.canvas, 'playhead_sec', getattr(self.video_player, 'current_time', 0.0)))
-        cur = self.text_edit.textCursor()
-        block = cur.block()
-        ud = block.userData()
-        if not isinstance(ud, SubtitleBlockData) or ud.is_gap:
-            return
-
-        orig_start = ud.start_sec
-        if sec <= orig_start:
-            return
-
-        cur.beginEditBlock()
-
-        last_block = block
-        while True:
-            nxt = last_block.next()
-            if nxt.isValid():
-                n_ud = nxt.userData()
-                if isinstance(n_ud, SubtitleBlockData) and not n_ud.is_gap and abs(n_ud.start_sec - orig_start) < 0.05:
-                    last_block = nxt
-                else:
-                    break
-            else:
-                break
-
-        next_block = last_block.next()
-        if next_block.isValid() and isinstance(next_block.userData(), SubtitleBlockData) and next_block.userData().is_gap:
-            next_block.userData().start_sec = sec
-        else:
-            insert_gap_after(last_block, sec)
-
-        cur.endEditBlock()
-        self.text_edit.update_margins()
-        if hasattr(self.text_edit, 'timestampArea'):
-            self.text_edit.timestampArea.update()
-        self._redraw_timeline()
-
 
     def _on_timeline_seg_right_clicked(self, start_sec: float, gpos: QPoint):
         seg = self._segment_for_start_sec(start_sec)

@@ -48,16 +48,16 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_auto_save_defaults_to_five_minutes_and_clamps_low_values(self):
+    def test_auto_save_is_fixed_to_five_minutes(self):
         editor = _AutoSaveEditor()
         editor.settings = {}
         self.assertEqual(editor._auto_save_interval_ms(), 300_000)
 
         editor.settings = {"editor_auto_save_interval_sec": 1}
-        self.assertEqual(editor._auto_save_interval_ms(), 120_000)
+        self.assertEqual(editor._auto_save_interval_ms(), 300_000)
 
         editor.settings = {"editor_auto_save_interval_sec": 600}
-        self.assertEqual(editor._auto_save_interval_ms(), 600_000)
+        self.assertEqual(editor._auto_save_interval_ms(), 300_000)
 
     def test_auto_save_skips_document_scan_when_nothing_changed(self):
         editor = _AutoSaveEditor()
@@ -86,6 +86,18 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         editor.sm = SimpleNamespace(is_locked=False, is_dirty=True, state="ST_COMP", start_autosave=Mock())
         editor._has_unsaved_changes = Mock(side_effect=AssertionError("completed generation must not autosave"))
         editor._get_current_segments = Mock(side_effect=AssertionError("completed generation must not scan subtitles"))
+
+        editor._on_auto_save()
+
+        editor.sm.start_autosave.assert_not_called()
+        editor._has_unsaved_changes.assert_not_called()
+
+    def test_auto_save_is_blocked_until_manual_save_for_manual_confirm_operations(self):
+        editor = _AutoSaveEditor()
+        editor._autosave_requires_manual_save = True
+        editor.sm = SimpleNamespace(is_locked=False, is_dirty=True, state="ST_EDITING", start_autosave=Mock())
+        editor._has_unsaved_changes = Mock(side_effect=AssertionError("manual-save-required state must not autosave"))
+        editor._get_current_segments = Mock(side_effect=AssertionError("manual-save-required state must not scan"))
 
         editor._on_auto_save()
 

@@ -88,6 +88,82 @@ class SubtitleBlockData(QTextBlockUserData):
         self.live_preview_source = str(live_preview_source or "")
         self.live_preview_stage = str(live_preview_stage or "")
 
+
+def subtitle_block_data_to_meta(ud: SubtitleBlockData) -> dict:
+    return {
+        "spk_id": getattr(ud, "spk_id", "00"),
+        "start_sec": getattr(ud, "start_sec", 0.0),
+        "end_sec": getattr(ud, "end_sec", None),
+        "is_gap": bool(getattr(ud, "is_gap", False)),
+        "stt_mode": bool(getattr(ud, "stt_mode", False)),
+        "stt_pending": bool(getattr(ud, "stt_pending", False)),
+        "original_text": str(getattr(ud, "original_text", "") or ""),
+        "dictated_text": str(getattr(ud, "dictated_text", "") or ""),
+        "quality": dict(getattr(ud, "quality", {}) or {}),
+        "quality_history": list(getattr(ud, "quality_history", []) or []),
+        "quality_candidates": list(getattr(ud, "quality_candidates", []) or []),
+        "quality_signature": str(getattr(ud, "quality_signature", "") or ""),
+        "clip_idx": getattr(ud, "clip_idx", None),
+        "clip_file": str(getattr(ud, "clip_file", "") or ""),
+        "stt_selected_source": str(getattr(ud, "stt_selected_source", "") or ""),
+        "stt_ensemble_llm_selected_source": str(getattr(ud, "stt_ensemble_llm_selected_source", "") or ""),
+        "stt_candidates": list(getattr(ud, "stt_candidates", []) or []),
+        "stt_ensemble_source": str(getattr(ud, "stt_ensemble_source", "") or ""),
+        "stt_ensemble_llm_selected_label": str(getattr(ud, "stt_ensemble_llm_selected_label", "") or ""),
+        "stt_ensemble_similarity": getattr(ud, "stt_ensemble_similarity", None),
+        "stt_ensemble_needs_llm_review": bool(getattr(ud, "stt_ensemble_needs_llm_review", False)),
+        "stt_ensemble_inserted_from_stt2": bool(getattr(ud, "stt_ensemble_inserted_from_stt2", False)),
+        "stt_ensemble_word_rover": dict(getattr(ud, "stt_ensemble_word_rover", {}) or {}),
+        "score": getattr(ud, "score", None),
+        "stt_score": getattr(ud, "stt_score", None),
+        "score_color": str(getattr(ud, "score_color", "") or ""),
+        "stt_score_color": str(getattr(ud, "stt_score_color", "") or ""),
+        "stt_score_label": str(getattr(ud, "stt_score_label", "") or ""),
+        "stt_score_flags": list(getattr(ud, "stt_score_flags", []) or []),
+        "stt_score_components": dict(getattr(ud, "stt_score_components", {}) or {}),
+        "live_preview": bool(getattr(ud, "live_preview", False)),
+        "live_preview_source": str(getattr(ud, "live_preview_source", "") or ""),
+        "live_preview_stage": str(getattr(ud, "live_preview_stage", "") or ""),
+    }
+
+
+def subtitle_block_data_from_meta(meta: dict) -> SubtitleBlockData:
+    return SubtitleBlockData(
+        str(meta.get("spk_id", "00") or "00"),
+        float(meta.get("start_sec", 0.0) or 0.0),
+        bool(meta.get("is_gap", False)),
+        end_sec=meta.get("end_sec"),
+        stt_mode=bool(meta.get("stt_mode", False)),
+        stt_pending=bool(meta.get("stt_pending", False)),
+        original_text=str(meta.get("original_text", "") or ""),
+        dictated_text=str(meta.get("dictated_text", "") or ""),
+        quality=dict(meta.get("quality") or {}),
+        quality_history=list(meta.get("quality_history") or []),
+        quality_candidates=list(meta.get("quality_candidates") or []),
+        quality_signature=str(meta.get("quality_signature", "") or ""),
+        clip_idx=meta.get("clip_idx"),
+        clip_file=str(meta.get("clip_file", "") or ""),
+        stt_selected_source=str(meta.get("stt_selected_source", "") or ""),
+        stt_ensemble_llm_selected_source=str(meta.get("stt_ensemble_llm_selected_source", "") or ""),
+        stt_candidates=list(meta.get("stt_candidates") or []),
+        stt_ensemble_source=str(meta.get("stt_ensemble_source", "") or ""),
+        stt_ensemble_llm_selected_label=str(meta.get("stt_ensemble_llm_selected_label", "") or ""),
+        stt_ensemble_similarity=meta.get("stt_ensemble_similarity"),
+        stt_ensemble_needs_llm_review=bool(meta.get("stt_ensemble_needs_llm_review", False)),
+        stt_ensemble_inserted_from_stt2=bool(meta.get("stt_ensemble_inserted_from_stt2", False)),
+        stt_ensemble_word_rover=dict(meta.get("stt_ensemble_word_rover") or {}),
+        score=meta.get("score"),
+        stt_score=meta.get("stt_score"),
+        score_color=str(meta.get("score_color", "") or ""),
+        stt_score_color=str(meta.get("stt_score_color", "") or ""),
+        stt_score_label=str(meta.get("stt_score_label", "") or ""),
+        stt_score_flags=list(meta.get("stt_score_flags") or []),
+        stt_score_components=dict(meta.get("stt_score_components") or {}),
+        live_preview=bool(meta.get("live_preview", False)),
+        live_preview_source=str(meta.get("live_preview_source", "") or ""),
+        live_preview_stage=str(meta.get("live_preview_stage", "") or ""),
+    )
+
 class SubtitleHighlighter(QSyntaxHighlighter):
     def __init__(self, document: QTextDocument):
         super().__init__(document)
@@ -240,6 +316,7 @@ class SubtitleTextEdit(QTextEdit):
         self._selection_locked = False
         self._gpu_document_overlay_active = False
         self._last_user_scroll_at = 0.0
+        self._timestamp_block_meta_snapshot = {}
         self.setUndoRedoEnabled(True)
         self.setAcceptRichText(False)
         self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
@@ -372,6 +449,7 @@ class SubtitleTextEdit(QTextEdit):
         if area is None:
             return False
         try:
+            self._refresh_timestamp_meta_snapshot()
             self._update_margin()
             cr = self.contentsRect()
             area.setGeometry(QRect(cr.left(), cr.top(), area.sizeHint().width(), cr.height()))
@@ -388,6 +466,24 @@ class SubtitleTextEdit(QTextEdit):
             except Exception:
                 pass
             return False
+
+    def _refresh_timestamp_meta_snapshot(self) -> None:
+        """Keep a fallback copy so imported SRT time tags survive viewport refreshes."""
+        try:
+            doc = self.document()
+            snapshot = {}
+            block = doc.begin()
+            while block.isValid():
+                ud = block.userData()
+                if isinstance(ud, SubtitleBlockData):
+                    snapshot[int(block.blockNumber())] = subtitle_block_data_to_meta(ud)
+                block = block.next()
+            if snapshot:
+                self._timestamp_block_meta_snapshot = snapshot
+        except RuntimeError:
+            return
+        except Exception:
+            return
 
     def _schedule_cursor_moved(self):
         timer = getattr(self, "_cursor_moved_timer", None)
@@ -564,6 +660,15 @@ class SubtitleTextEdit(QTextEdit):
         return range(int(start_line), int(end_line) + 1)
 
     def update_margins(self):
+        parent = getattr(self, "_parent_widget", None)
+        suspend_restore = bool(getattr(parent, "_suspend_block_user_data_restore", False)) if parent is not None else False
+        if not bool(getattr(self, "_bulk_segment_load_active", False)) and not suspend_restore:
+            repairer = getattr(parent, "_restore_visible_block_user_data", None)
+            if callable(repairer):
+                try:
+                    repairer()
+                except Exception:
+                    pass
         doc = self.document()
         prev_doc_signals = bool(doc.blockSignals(True))  # margin changes must not look like text edits
         cur = None
@@ -931,6 +1036,19 @@ class SubtitleTextEdit(QTextEdit):
                 elif key == Qt.Key.Key_Up: popup.navigate(-1); return
                 elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter): popup.confirm(); return
                 elif key == Qt.Key.Key_Escape: popup.close_popup(refocus=True); return
+
+        if key == Qt.Key.Key_Shift and not e.isAutoRepeat():
+            parent = getattr(self, "_parent_widget", None)
+            handler = getattr(parent, "_handle_repeat_play_pause_shortcut", None)
+            toggle = getattr(parent, "_toggle_video_play", None)
+            if callable(handler):
+                handler("text_shift")
+                e.accept()
+                return
+            if callable(toggle):
+                toggle()
+                e.accept()
+                return
 
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             parent = getattr(self, "_parent_widget", None)

@@ -465,6 +465,16 @@ class VideoPlayerWidget(QWidget):
             self.quick_subtitle_overlay.setVisible(False)
             self.quick_subtitle_overlay.raise_()
 
+    def _play_pause_tooltip_text(self) -> str:
+        return (
+            "재생/일시정지\n"
+            "Tab: 기본\n"
+            "Shift: 자막 에디터\n"
+            "Space: 캔버스\n"
+            "반복재생 체크 시 선택 세그먼트만 반복\n"
+            "캔버스 Space 두 번: 다음 세그먼트"
+        )
+
     def _build_control_bar(self) -> QWidget:
         ctrl = QWidget()
         ctrl.setFixedHeight(48)
@@ -495,7 +505,7 @@ class VideoPlayerWidget(QWidget):
 
         self.btn_play = self._create_transport_button(
             "▶",
-            tooltip="재생/일시정지 (Tab)",
+            tooltip=self._play_pause_tooltip_text(),
             callback=self.toggle_play,
         )
         ctrl_layout.addWidget(self.btn_play)
@@ -1683,8 +1693,35 @@ class VideoPlayerWidget(QWidget):
         self.scan_cut_requested.emit(direction)
 
     def request_frame_step(self, direction: int):
-        step = -1 if int(direction or 0) < 0 else 1
+        try:
+            step = int(direction or 0)
+        except Exception:
+            step = 1
+        if step == 0:
+            return
         self.pause_video()
+        owner = self
+        visited: set[int] = set()
+        while owner is not None and id(owner) not in visited:
+            visited.add(id(owner))
+            handler = getattr(owner, "_on_step_frame", None)
+            if callable(handler):
+                try:
+                    handler(step)
+                    return
+                except Exception:
+                    break
+            next_owner = None
+            try:
+                next_owner = owner.parentWidget()
+            except Exception:
+                next_owner = None
+            if next_owner is None:
+                try:
+                    next_owner = owner.parent()
+                except Exception:
+                    next_owner = None
+            owner = next_owner
         self.frame_step_requested.emit(step)
 
 
@@ -1692,6 +1729,14 @@ class VideoPlayerWidget(QWidget):
         if not getattr(self, '_source_ready', True):
             self._pending_autoplay = True
             return
+        starting = self.media_player.playbackState() != QMediaPlayer.PlaybackState.PlayingState
+        if starting:
+            prepare_repeat = getattr(self, "_repeat_play_prepare_callback", None)
+            if callable(prepare_repeat):
+                try:
+                    prepare_repeat()
+                except Exception:
+                    pass
         self._ensure_audio_outputs()
         if not self._ensure_media_source_loaded():
             self._pending_autoplay = True

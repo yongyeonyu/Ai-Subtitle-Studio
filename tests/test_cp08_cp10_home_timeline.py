@@ -31,10 +31,10 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
         self.assertTrue(hasattr(main_window_module, "config"))
         self.assertTrue(hasattr(main_window_module.config, "IS_MAC"))
 
-    def test_post_completion_idle_default_is_five_minutes(self):
+    def test_post_completion_idle_default_is_ten_minutes(self):
         window = MainWindow()
         try:
-            self.assertEqual(window._post_completion_idle_ms, 300_000)
+            self.assertEqual(window._post_completion_idle_ms, 600_000)
         finally:
             self._cleanup_window(window)
 
@@ -60,6 +60,24 @@ class Cp08Cp10HomeTimelineTests(unittest.TestCase):
             window._on_post_completion_idle_timeout()
             self.assertTrue(window._post_completion_idle_enabled)
             self.assertGreater(window._post_completion_idle_remaining_ms(), 0)
+        finally:
+            self._cleanup_window(window)
+
+    def test_idle_timeout_returns_home_and_allows_home_idle_learning(self):
+        window = MainWindow()
+        try:
+            trainer = getattr(window, "_personalization_idle_trainer", None)
+            self.assertIsNotNone(trainer)
+            window._post_completion_idle_ms = 10_000
+            window.stack.setCurrentWidget(window.editor_page)
+
+            with patch.object(window, "show_home", wraps=window.show_home) as show_home, \
+                 patch.object(trainer, "resume_for_home_idle", wraps=trainer.resume_for_home_idle) as resume_home:
+                window._start_post_completion_idle_timer()
+                window._on_post_completion_idle_timeout()
+
+            show_home.assert_called_once_with(allow_home_idle_learning=True)
+            resume_home.assert_called_once_with(preserve_idle_age=True, start_if_ready=True)
         finally:
             self._cleanup_window(window)
 

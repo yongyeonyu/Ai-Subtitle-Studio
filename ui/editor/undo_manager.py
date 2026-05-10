@@ -21,9 +21,11 @@ class SnapshotState:
     multiclip_files: list
     multiclip_boundaries: list
     project_boundary_times: list
+    user_alignment_guides: list
     active_clip_idx: int
     live_stt_preview_segments: list
     cached_segments: list
+    native_snapshot: dict | None = None
 
 
 class UndoManager:
@@ -115,9 +117,23 @@ class UndoManager:
         multiclip_boundaries = [dict(x) for x in list(getattr(owner, '_multiclip_boundaries', []) or [])] if owner else []
         project_boundary_times = list(getattr(owner, '_project_boundary_times', []) or []) if owner else []
         canvas = getattr(getattr(editor, "timeline", None), "canvas", None)
+        user_alignment_guides = list(getattr(canvas, "user_alignment_guides", []) or []) if canvas is not None else []
         active_clip_idx = int(getattr(canvas, '_active_clip_idx', getattr(owner, '_active_clip_idx', 0)) or 0)
         cursor_line = editor.text_edit.textCursor().blockNumber()
         live_stt_preview_segments = [dict(seg) for seg in list(getattr(editor, "_live_stt_preview_segments", []) or [])]
+        native_snapshot = None
+        try:
+            from core.native_swift_timeline import capture_undo_snapshot_via_swift
+
+            native_snapshot = capture_undo_snapshot_via_swift(
+                blocks=blocks,
+                segments=cached_segments,
+                cursor_line=cursor_line,
+                active_clip_idx=active_clip_idx,
+                project_boundary_times=project_boundary_times,
+            )
+        except Exception:
+            native_snapshot = None
         return SnapshotState(
             blocks,
             canvas_end_map,
@@ -125,9 +141,11 @@ class UndoManager:
             multiclip_files,
             multiclip_boundaries,
             project_boundary_times,
+            user_alignment_guides,
             active_clip_idx,
             live_stt_preview_segments,
             cached_segments,
+            native_snapshot,
         )
 
     def _restore(self, state: SnapshotState):
@@ -198,21 +216,33 @@ class UndoManager:
                 editor.timeline.update_segments(combined, getattr(editor, "_active_seg_start", None), total_dur)
             except Exception:
                 pass
+            try:
+                if hasattr(editor.timeline, "set_user_alignment_guides"):
+                    editor.timeline.set_user_alignment_guides(list(state.user_alignment_guides or []))
+            except Exception:
+                pass
         if hasattr(editor, '_schedule_timeline'):
             editor._schedule_timeline()
         self._is_restoring = False
 
     @staticmethod
     def _is_same(a: SnapshotState, b: SnapshotState) -> bool:
+        native_a = a.native_snapshot if isinstance(a.native_snapshot, dict) else None
+        native_b = b.native_snapshot if isinstance(b.native_snapshot, dict) else None
+        if native_a is not None and native_b is not None:
+            if str(native_a.get("fingerprint", "") or "") and str(native_b.get("fingerprint", "") or ""):
+                return str(native_a.get("fingerprint", "") or "") == str(native_b.get("fingerprint", "") or "")
         return (
             a.blocks == b.blocks and
             a.canvas_end_map == b.canvas_end_map and
             a.multiclip_files == b.multiclip_files and
             a.multiclip_boundaries == b.multiclip_boundaries and
             a.project_boundary_times == b.project_boundary_times and
+            a.user_alignment_guides == b.user_alignment_guides and
             a.active_clip_idx == b.active_clip_idx and
             a.live_stt_preview_segments == b.live_stt_preview_segments and
-            a.cached_segments == b.cached_segments
+            a.cached_segments == b.cached_segments and
+            a.native_snapshot == b.native_snapshot
         )
 
     @staticmethod

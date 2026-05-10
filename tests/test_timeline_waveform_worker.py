@@ -5,6 +5,7 @@ import numpy as np
 
 from core.native_swift_subtitle import find_native_cli_path
 from core.native_swift_timeline import (
+    apply_timing_drag_via_swift,
     build_segment_layout_via_swift,
     build_waveform_columns_via_swift,
     playhead_dirty_rect_via_swift,
@@ -136,6 +137,38 @@ class TimelineWaveformWorkerTests(unittest.TestCase):
             )
 
         self.assertEqual(rect, {"height": 36, "left": 92, "top": 0, "width": 117, "x": 200})
+
+    def test_swift_timing_drag_bridge_shapes_payload(self):
+        with patch("core.native_swift_timeline._request_worker", return_value={"end": 2.3}) as request_worker:
+            result = apply_timing_drag_via_swift(
+                edge="square_right",
+                delta=0.28,
+                original_start=1.0,
+                original_end=2.0,
+                min_value=1.1,
+                max_value=4.0,
+                frame_rate=10.0,
+                snap_threshold=0.12,
+                candidates=[
+                    {"time": 2.3, "kind": "subtitle", "threshold": 0.15},
+                    {"time": 3.0, "kind": "timeline"},
+                    {"time": "bad"},
+                ],
+            )
+
+        self.assertEqual(result, {"end": 2.3})
+        request_worker.assert_called_once()
+        task, payload = request_worker.call_args.args
+        self.assertEqual(task, "timing_drag")
+        self.assertEqual(payload["edge"], "square_right")
+        self.assertAlmostEqual(payload["delta"], 0.28, places=6)
+        self.assertEqual(
+            payload["candidates"],
+            [
+                {"time": 2.3, "kind": "subtitle", "threshold": 0.15},
+                {"time": 3.0, "kind": "timeline", "threshold": 0.12},
+            ],
+        )
 
 
 if __name__ == "__main__":
