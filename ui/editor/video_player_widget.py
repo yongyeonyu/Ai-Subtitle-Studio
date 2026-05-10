@@ -302,10 +302,13 @@ class VideoPlayerWidget(QWidget):
 
 
     def _on_duration_changed(self, duration):
+        if duration <= 0:
+            # Some backends emit a transient zero duration while swapping from
+            # the original 4K file to the generated 720p proxy. Keep the probed
+            # media duration so the control bar does not fall back to 00:00/00:00.
+            return
         self.total_time = duration / 1000.0
         self._rebuild_frame_time_map()
-        if duration <= 0:
-            return
         self._apply_loaded_media_state()
 
     def _rebuild_frame_time_map(self, duration: float | None = None, fps: float | None = None):
@@ -395,6 +398,42 @@ class VideoPlayerWidget(QWidget):
             button.clicked.connect(callback)
         return button
 
+    def _fallback_to_qt_video_backend(self, reason: Exception | str):
+        try:
+            from core.runtime.logger import get_logger
+
+            get_logger().log(f"  ⚠️ [비디오] mpv 미리보기 초기화 실패 → Qt 백엔드로 전환: {reason}")
+        except Exception:
+            pass
+        old_player = getattr(self, "media_player", None)
+        try:
+            if old_player is not None and hasattr(old_player, "stop"):
+                old_player.stop()
+        except Exception:
+            pass
+        try:
+            if old_player is not None and hasattr(old_player, "deleteLater"):
+                old_player.deleteLater()
+        except Exception:
+            pass
+        player = QMediaPlayer(self)
+        player.backend_name = "qt"  # type: ignore[attr-defined]
+        player.uses_qt_audio = True  # type: ignore[attr-defined]
+        self.media_player = player
+        self.audio_player = player
+        self.audio_output = None
+        try:
+            self._worker.media_player = player
+        except Exception:
+            pass
+        player.durationChanged.connect(self._on_duration_changed)
+        player.mediaStatusChanged.connect(self._on_media_status_changed)
+        try:
+            player.playbackStateChanged.connect(self._on_playback_state_changed)
+        except Exception:
+            pass
+        return player
+
     def _build_video_surface_stack(self) -> None:
         self.video_container = QWidget()
         self.video_container.setStyleSheet("background: #000000; border-radius: 4px;")
@@ -403,7 +442,11 @@ class VideoPlayerWidget(QWidget):
         self.video_stack.setParent(self.video_container)
 
         if hasattr(self.media_player, "create_video_widget"):
-            self.video_widget = self.media_player.create_video_widget()
+            try:
+                self.video_widget = self.media_player.create_video_widget()
+            except Exception as exc:
+                self._fallback_to_qt_video_backend(exc)
+                self.video_widget = VideoSurfaceView()
         else:
             self.video_widget = VideoSurfaceView()
         self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -909,6 +952,11 @@ class VideoPlayerWidget(QWidget):
                 except Exception:
                     pass
                 return ""
+            if self._source_needs_preview_proxy():
+                try:
+                    self.info_label.setText("720p 프리뷰 준비 중")
+                except Exception:
+                    pass
         return path
 
     def _source_needs_preview_proxy(self) -> bool:
@@ -941,7 +989,9 @@ class VideoPlayerWidget(QWidget):
                     return bool(value)
         except Exception:
             pass
-        return True
+        # Keep the real media loaded immediately. Waiting for the proxy leaves
+        # the preview at a thumbnail-only 00:00/00:00 state on long 4K clips.
+        return False
 
     def _start_proxy_build(self, src: str, dst: str):
         proc = getattr(self, "_proxy_build_proc", None)

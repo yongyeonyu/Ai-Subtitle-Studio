@@ -123,6 +123,12 @@ class EditorTruthCaptureTests(unittest.TestCase):
             self.assertEqual(row["settings_snapshot"]["sub_max_cps"], 12)
             self.assertEqual(row["stt_candidate_snapshot"]["candidates"][0]["source"], "STT1")
             self.assertEqual(row["source_before_edit"], "안녕하세요 오늘 갈게요")
+            boundaries = row["word_boundary_learning"]
+            self.assertEqual(boundaries["subtitle_start_word"], "안녕하세요")
+            self.assertEqual(boundaries["line_start_words"], ["안녕하세요", "오늘"])
+            self.assertEqual(boundaries["line_breaks"][0]["before_word"], "안녕하세요")
+            self.assertEqual(boundaries["line_breaks"][0]["after_word"], "오늘")
+            self.assertEqual(row["style_profile"]["word_boundaries"]["line_breaks"][0]["pair"], "안녕하세요->오늘")
             self.assertEqual(row["user_edit_metrics"]["schema"], "ai_subtitle_studio.user_edit_metrics.v1")
             self.assertEqual(row["user_edit_metrics"]["severity"], "large")
             self.assertGreater(row["user_edit_metrics"]["text"]["levenshtein_distance"], 0)

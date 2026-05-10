@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from core.runtime.memory_manager import (
     RuntimeMemoryManager,
+    SubtitleGenerationMemoryGuard,
     prune_runtime_disk_caches,
     runtime_disk_cache_usage,
 )
@@ -128,6 +129,46 @@ class RuntimeMemoryManagerTests(unittest.TestCase):
 
             self.assertEqual(result["pressure_stage"], "warning")
             self.assertEqual(result["rss_bytes"], 3 * 1024 ** 3)
+
+    def test_subtitle_generation_guard_writes_stage_snapshot_and_cleans(self):
+        snapshot = {
+            "memory_bytes": 16 * 1024 ** 3,
+            "available_memory_bytes": 1 * 1024 ** 3,
+            "available_memory_ratio": 0.06,
+            "memory_pressure_stage": "critical",
+            "logical_cores": 8,
+            "physical_cores": 4,
+            "performance_cores": 4,
+            "cpu_load_ratio": 0.12,
+        }
+        callbacks = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("core.runtime.memory_manager.current_resource_snapshot", return_value=snapshot), \
+                 patch("core.runtime.memory_manager.process_rss_bytes", return_value=8 * 1024 ** 3), \
+                 patch("core.runtime.memory_manager.trim_runtime_memory_caches", return_value={"actions": ["trim"]}) as trim:
+                guard = SubtitleGenerationMemoryGuard(
+                    settings={
+                        "runtime_memory_tracemalloc_enabled": False,
+                        "subtitle_generation_memory_checkpoint_interval_ms": 0,
+                    },
+                    diagnostics_dir=tmp,
+                    cache_paths=[],
+                    pressure_callback=lambda stage, payload: callbacks.append(
+                        (stage, payload.get("subtitle_generation_stage"))
+                    ),
+                )
+                result = guard.checkpoint(
+                    "stt_transcribe_done",
+                    include_gpu=True,
+                    cleanup=True,
+                    force=True,
+                )
+
+            self.assertEqual(result["pressure_stage"], "critical")
+            self.assertEqual(result["subtitle_generation_stage"], "stt_transcribe_done")
+            self.assertIn(("critical", "stt_transcribe_done"), callbacks)
+            self.assertTrue((Path(tmp) / "subtitle_generation_latest.json").exists())
+            self.assertTrue(trim.called)
 
 
 if __name__ == "__main__":

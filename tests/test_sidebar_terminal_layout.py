@@ -9,7 +9,7 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QComboBox, QTableWidgetItem, QWidget
+from PyQt6.QtWidgets import QApplication, QLabel, QSizePolicy, QComboBox, QTableWidgetItem, QWidget, QMessageBox
 
 from ui.main.main_window import MainWindow
 
@@ -1923,6 +1923,83 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             self.assertFalse(editor.save_called)
         finally:
             window._editor_widget = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_quick_exit_cancel_keeps_app_running_when_editor_is_dirty(self):
+        window = MainWindow()
+
+        class _Editor:
+            def _has_unsaved_changes(self):
+                return True
+
+            def _on_save(self, **_kwargs):
+                raise AssertionError("cancelled exit must not save")
+
+        try:
+            window._editor_widget = _Editor()
+            window._pause_all_runtime_work_for_exit = mock.Mock()
+            window._start_runtime_cleanup_for_app_exit_async = mock.Mock()
+            window._schedule_forced_process_exit = mock.Mock()
+
+            with mock.patch(
+                "ui.main.main_file_ops.confirm_save_changes",
+                return_value=QMessageBox.StandardButton.Cancel,
+            ), mock.patch("ui.main.main_file_ops.QApplication.quit") as quit_app:
+                window._quick_exit()
+
+            self.assertFalse(getattr(window, "_quick_exit_requested", False))
+            window._pause_all_runtime_work_for_exit.assert_not_called()
+            window._start_runtime_cleanup_for_app_exit_async.assert_not_called()
+            window._schedule_forced_process_exit.assert_not_called()
+            quit_app.assert_not_called()
+        finally:
+            window._editor_widget = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_exit_confirm_yes_saves_dirty_editor_before_runtime_pause(self):
+        window = MainWindow()
+        save = mock.Mock(return_value=True)
+
+        class _Editor:
+            def _has_unsaved_changes(self):
+                return True
+
+            def _on_save(self, **kwargs):
+                return save(**kwargs)
+
+        try:
+            window._editor_widget = _Editor()
+            with mock.patch(
+                "ui.main.main_file_ops.confirm_save_changes",
+                return_value=QMessageBox.StandardButton.Yes,
+            ):
+                self.assertTrue(window._confirm_save_dirty_editor_before_exit())
+
+            save.assert_called_once_with(skip_auto_next=True)
+        finally:
+            window._editor_widget = None
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_window_close_cancel_ignores_event_before_runtime_pause(self):
+        window = MainWindow()
+        event = SimpleNamespace(accept=mock.Mock(), ignore=mock.Mock())
+        try:
+            window._confirm_save_dirty_editor_before_exit = mock.Mock(return_value=False)
+            window._pause_all_runtime_work_for_exit = mock.Mock()
+
+            with mock.patch.dict(os.environ, {"QT_QPA_PLATFORM": "cocoa"}):
+                MainWindow.closeEvent(window, event)
+
+            event.ignore.assert_called_once()
+            event.accept.assert_not_called()
+            window._pause_all_runtime_work_for_exit.assert_not_called()
+        finally:
             window.close()
             window.deleteLater()
             self.app.processEvents()

@@ -30,6 +30,8 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - STT Mode portable project state: `stt_mode_state` keeps VAD work segments, raw dictation, rolling windows, and final subtitle mirrors separate from the normal vector subtitle canvas.
 - STT Mode iPad compatibility scope is intentionally limited to project state and STT LoRA/runtime policy bundles; this repository does not implement an iPad app.
 - Stable editor text, video, and timeline render frames with frame-based or whole-editor GPU rendering policy.
+- Subtitle generation completion is driven by backend-finalized, saveable subtitle segments rather than STT progress alone, so completion autosave waits and retries instead of saving an empty timeline.
+- Editor exit flows ask to save unsaved changes before fast runtime/model cleanup starts.
 - Fast editor-mode subtitle movement using line-map caches, dirty-rectangle timeline updates, visible-window video context refreshes, and non-jittery active-segment scrolling.
 - Native/OpenCV cut-boundary verification, FFmpeg scene prepass, direct FFmpeg audio extraction, and benchmark-profile backend routing for long media.
 - Korean Whisper KomixV2 STT candidates, including alias, Hugging Face original, and MLX variants, are available as clearly labeled STT2 choices.
@@ -111,12 +113,15 @@ Typical local data:
 
 - `output/`
 - `projects/`
+- `projects/프로젝트백업/`
 - `dataset/user_settings.json`
 - `dataset/folder_settings.json`
 - `dataset/video_preview_cache/`
 - `dataset/lora_personalization/`
 
 Do not commit private media, generated output, API keys, NAS paths, iCloud paths, or user project data.
+
+Project JSON numbered backups are stored in `projects/프로젝트백업/` next to the active project file. Legacy numbered backups in the project root are moved into that folder during the next save.
 
 ## Handoff Documents
 

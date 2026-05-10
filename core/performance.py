@@ -11,21 +11,39 @@ from __future__ import annotations
 
 import os
 import platform
-import re
-import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-import importlib.util
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from core.json_file import read_json_file
 from core.native_json import dumps_json_bytes
-from core.settings_profiles import hardcoded_default_settings
+from core.runtime.hardware_profile import darwin_sysctl_int as _sysctl_int
+from core.runtime.hardware_profile import hardware_profile
+from core.runtime import qt_runtime as _qt_runtime
+
+
+configure_qt_application_font = _qt_runtime.configure_qt_application_font
+configure_qt_runtime = _qt_runtime.configure_qt_runtime
+qt_application_font_family = _qt_runtime.qt_application_font_family
+_QT_GPU_RENDERING_SETTINGS_REQUEST = _qt_runtime._qt_gpu_rendering_settings_request
+
+
+def _qt_gpu_rendering_settings_request() -> tuple[bool | None, bool | None, str]:
+    """Compatibility hook for tests and legacy callers patching core.performance."""
+    return _QT_GPU_RENDERING_SETTINGS_REQUEST()
+
+
+def configure_qt_gpu_rendering_before_app() -> None:
+    """Apply Qt GPU setup while keeping the historical patch point alive."""
+    original = _qt_runtime._qt_gpu_rendering_settings_request
+    _qt_runtime._qt_gpu_rendering_settings_request = _qt_gpu_rendering_settings_request
+    try:
+        _qt_runtime.configure_qt_gpu_rendering_before_app()
+    finally:
+        _qt_runtime._qt_gpu_rendering_settings_request = original
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -40,150 +58,6 @@ def _positive_int(value: Any, default: int = 0) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
-
-
-def _sysctl_int(name: str) -> int:
-    if platform.system() != "Darwin":
-        return 0
-    try:
-        proc = subprocess.run(
-            ["sysctl", "-n", name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=1.0,
-        )
-        return _positive_int((proc.stdout or "").strip(), 0)
-    except Exception:
-        return 0
-
-
-def _sysctl_str(name: str) -> str:
-    if platform.system() != "Darwin":
-        return ""
-    try:
-        proc = subprocess.run(
-            ["sysctl", "-n", name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=1.0,
-        )
-        return str(proc.stdout or "").strip()
-    except Exception:
-        return ""
-
-
-def _apple_chip_parts(brand: str) -> tuple[str, int, str]:
-    text = str(brand or "").strip()
-    match = re.search(r"\bApple\s+(M(?P<generation>\d+)(?:\s+(?P<tier>Ultra|Max|Pro))?)\b", text, re.IGNORECASE)
-    if not match:
-        return text, 0, "base"
-    chip_name = "Apple " + re.sub(r"\s+", " ", match.group(1).strip())
-    generation = _positive_int(match.group("generation"), 0)
-    tier = str(match.group("tier") or "base").strip().lower()
-    return chip_name, generation, tier or "base"
-
-
-@lru_cache(maxsize=1)
-def _apple_gpu_core_count() -> int:
-    if platform.system() != "Darwin":
-        return 0
-    try:
-        proc = subprocess.run(
-            ["system_profiler", "SPDisplaysDataType"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=2.5,
-        )
-    except Exception:
-        return 0
-    text = str(proc.stdout or "")
-    for pattern in (
-        r"Total Number of Cores:\s*(\d+)",
-        r"GPU Cores:\s*(\d+)",
-    ):
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return _positive_int(match.group(1), 0)
-    return 0
-
-
-def _apple_neural_engine_core_estimate(chip_generation: int) -> int:
-    # Apple does not expose ANE cores through a stable public sysctl. For M-series
-    # scheduling we only need a slot estimate, and all current M-series chips
-    # expose a Core ML / Neural Engine path with a 16-core class ANE.
-    return 16 if chip_generation > 0 else 0
-
-
-@lru_cache(maxsize=1)
-def hardware_profile() -> dict:
-    logical = max(1, os.cpu_count() or 1)
-    physical = _sysctl_int("hw.physicalcpu") or logical
-    performance_cores = _sysctl_int("hw.perflevel0.physicalcpu")
-    efficiency_cores = _sysctl_int("hw.perflevel1.physicalcpu")
-    memory_bytes = _sysctl_int("hw.memsize")
-    brand_string = _sysctl_str("machdep.cpu.brand_string") or platform.processor()
-    chip_name, chip_generation, chip_tier = _apple_chip_parts(brand_string)
-
-    if performance_cores <= 0:
-        # Some macOS hosts may not expose perflevel sysctl values. Use physical
-        # cores as a stability-first cap for CPU-bound worker defaults.
-        performance_cores = physical
-
-    is_darwin_arm = platform.system() == "Darwin" and platform.machine().lower() in {"arm64", "aarch64"}
-    accelerators = {
-        "xcodebuild": bool(shutil.which("xcodebuild")),
-        "swift": bool(shutil.which("swift")),
-        "mlx": importlib.util.find_spec("mlx") is not None,
-        "mlx_whisper": importlib.util.find_spec("mlx_whisper") is not None,
-        "torch": importlib.util.find_spec("torch") is not None,
-        "coreml_cli": bool(shutil.which("argmax-cli") or shutil.which("whisperkit-cli")),
-        "cuda_cli": bool(shutil.which("nvidia-smi")),
-        "directml": importlib.util.find_spec("torch_directml") is not None,
-        "openvino": importlib.util.find_spec("openvino") is not None,
-    }
-    worker = PROJECT_ROOT / "experiments" / "whisperkit_persistent_worker" / ".build" / "release" / "WhisperKitPersistentWorker"
-    accelerators["whisperkit_persistent_worker"] = worker.exists() or bool(shutil.which("WhisperKitPersistentWorker"))
-    if accelerators["cuda_cli"]:
-        accelerators["cuda"] = True
-    gpu_cores = _apple_gpu_core_count() if is_darwin_arm else 0
-    neural_engine_cores = _apple_neural_engine_core_estimate(chip_generation) if is_darwin_arm else 0
-    if is_darwin_arm:
-        # Metal is hardware-provided on Apple Silicon. MLX availability is
-        # tracked separately because STT model routing still needs mlx-whisper.
-        accelerators["metal"] = True
-        accelerators["metal_gpu"] = True
-        accelerators["metal_gpu_cores"] = gpu_cores
-        # Apple Neural Engine access is generally routed through Core ML /
-        # WhisperKit rather than direct Python APIs.
-        accelerators["neural_engine_path"] = bool(
-            accelerators["coreml_cli"] or accelerators["whisperkit_persistent_worker"] or neural_engine_cores
-        )
-
-    return {
-        "system": platform.system(),
-        "machine": platform.machine(),
-        "brand_string": brand_string,
-        "chip_name": chip_name,
-        "chip_generation": chip_generation,
-        "chip_tier": chip_tier,
-        "logical_cores": logical,
-        "physical_cores": max(1, physical),
-        "performance_cores": max(1, performance_cores),
-        "efficiency_cores": max(0, efficiency_cores),
-        "gpu_cores": max(0, gpu_cores),
-        "neural_engine_cores": max(0, neural_engine_cores),
-        "memory_bytes": max(0, memory_bytes),
-        "accelerators": accelerators,
-    }
 
 
 def apple_silicon_runtime_profile(
@@ -215,19 +89,16 @@ def apple_silicon_runtime_profile(
         balanced = performance + min(efficiency, 3)
         wide = logical
         sustained = performance + min(efficiency, 4)
-        follower_start_percent = 20
         chip_reason = "m5_or_newer_perf_plus_efficiency"
     elif generation >= 3:
         balanced = performance + min(efficiency, 2)
         wide = performance + min(efficiency, 4)
         sustained = performance + min(efficiency, 3)
-        follower_start_percent = 25
         chip_reason = "m3_m4_balanced_efficiency"
     else:
         balanced = performance + min(efficiency, 2)
         wide = performance + min(efficiency, 4)
         sustained = balanced
-        follower_start_percent = 25
         chip_reason = "generic_apple_silicon"
 
     logical_cap = logical if max_profile else max(1, logical - 1)
@@ -260,6 +131,11 @@ def apple_silicon_runtime_profile(
     # 6/8/10 pioneer workers and 6/8/10 follower splits were slower or missed
     # boundary candidates at worker seams.
     cut_boundary_workers = 4
+    # BENCH LOCK 2026-05-10: starting follower verification at 20% with 8-row
+    # streaming batches made provisional/formal boundary merging too chatty on
+    # long 4K clips. The earlier benchmark-stable cadence was faster end-to-end.
+    cut_follower_stream_start_percent = 25
+    cut_follower_stream_batch_size = 16
     profile_payload = {
         "schema": "ai_subtitle_studio.apple_silicon_chip_profile.v1",
         "chip_name": profile.get("chip_name") or profile.get("brand_string") or "Apple Silicon",
@@ -302,8 +178,8 @@ def apple_silicon_runtime_profile(
             "cut_pioneer_workers": cut_boundary_workers,
             "cut_follower_workers": cut_boundary_workers,
             "cut_follower_outer_splits": cut_boundary_workers,
-            "cut_follower_stream_start_percent": follower_start_percent,
-            "cut_follower_stream_batch_size": max(8, cut_boundary_workers * 2),
+            "cut_follower_stream_start_percent": cut_follower_stream_start_percent,
+            "cut_follower_stream_batch_size": cut_follower_stream_batch_size,
             "subtitle_prepass_workers": wide,
             "llm_workers": min(4, llm_resource_max),
             "llm_resource_max": llm_resource_max,
@@ -589,42 +465,6 @@ def _safe_bool(value: Any, default: bool = True) -> bool:
     if isinstance(value, str):
         return value.strip().lower() not in {"0", "false", "off", "no", "끔", "아니오"}
     return bool(value)
-
-
-def _qt_gpu_rendering_settings_request() -> tuple[bool | None, bool | None, str]:
-    try:
-        from core.runtime import config as runtime_config
-
-        settings_path = Path(runtime_config.DATASET_DIR) / "user_settings.json"
-        dataset_dir = runtime_config.DATASET_DIR
-    except Exception:
-        settings_path = PROJECT_ROOT / "dataset" / "user_settings.json"
-        dataset_dir = str(settings_path.parent)
-    settings = hardcoded_default_settings(
-        dataset_dir=dataset_dir,
-        include_custom_defaults=True,
-        include_folder_settings=False,
-    )
-    data = read_json_file(settings_path, default={}, expected_type=dict, context="qt_gpu_settings", log_errors=False)
-    if isinstance(data, dict):
-        settings.update(data)
-    scope = str(settings.get("editor_rendering_gpu_scope", settings.get("gpu_rendering_scope", "")) or "").strip().lower()
-    gpu_requested = True if scope in {"all", "whole", "full", "global", "전체"} else None
-    force_requested = None
-    if "editor_rendering_force_qt_opengl" in settings:
-        force_requested = _safe_bool(settings.get("editor_rendering_force_qt_opengl"), False)
-    elif "force_qt_opengl" in settings:
-        force_requested = _safe_bool(settings.get("force_qt_opengl"), False)
-    backend = str(
-        settings.get(
-            "editor_rendering_qt_backend",
-            settings.get("gpu_qt_backend", "auto"),
-        )
-        or "auto"
-    ).strip().lower()
-    if backend not in {"auto", "metal", "opengl"}:
-        backend = "auto"
-    return gpu_requested, force_requested, backend
 
 
 def mark_runtime_scheduler_start(settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1077,145 +917,3 @@ def atomic_write_json(path: str | Path, payload: dict) -> None:
         except Exception:
             pass
         raise
-
-
-def qt_application_font_family() -> str:
-    """Return the concrete Qt application font for the current platform."""
-    try:
-        from core.runtime import config
-
-        configured = str(getattr(config, "FONT", "") or "").strip()
-    except Exception:
-        configured = ""
-    if platform.system() == "Darwin":
-        return configured or "Apple SD Gothic Neo"
-    return configured
-
-
-def configure_qt_application_font() -> str:
-    """Pin QApplication to a real platform font before widgets trigger aliases."""
-    family = qt_application_font_family()
-    if not family:
-        return ""
-    try:
-        from PyQt6.QtGui import QFont
-        from PyQt6.QtWidgets import QApplication
-    except Exception:
-        return ""
-    app = QApplication.instance()
-    if app is None:
-        return ""
-    try:
-        font = QFont(app.font())
-        if str(font.family() or "") == family:
-            return family
-        font.setFamily(family)
-        app.setFont(font)
-        return family
-    except Exception:
-        return ""
-
-
-def configure_qt_runtime() -> None:
-    """Tune Qt global caches after QApplication is created."""
-    configure_qt_application_font()
-    try:
-        from PyQt6.QtGui import QPixmapCache
-    except Exception:
-        return
-
-    profile = hardware_profile()
-    memory_gb = float(profile.get("memory_bytes") or 0) / (1024 ** 3)
-    if memory_gb >= 32:
-        limit_kb = 131072
-    elif memory_gb >= 16:
-        limit_kb = 65536
-    else:
-        limit_kb = 32768
-    try:
-        QPixmapCache.setCacheLimit(max(QPixmapCache.cacheLimit(), limit_kb))
-    except Exception:
-        pass
-
-
-def configure_qt_gpu_rendering_before_app() -> None:
-    """Apply Qt OpenGL setup before QApplication is created.
-
-    Normal app launches default to GPU compositing/OpenGL. Tests and offscreen
-    runs remain conservative unless the caller explicitly opts in with env vars.
-    """
-    if str(os.environ.get("QT_QPA_PLATFORM", "")).lower() == "offscreen":
-        return
-    # Default off in real app runs too. On macOS, forcing global Qt OpenGL can
-    # crash QtMultimedia/video widgets with Segmentation fault: 11.
-    gpu_default = "0"
-    settings_gpu, settings_force, settings_backend = _qt_gpu_rendering_settings_request()
-    gpu_value = os.environ.get("AI_SUBTITLE_GPU_RENDERING")
-    gpu_requested = (
-        str(gpu_value if gpu_value is not None else gpu_default).lower() in {"1", "true", "yes", "on"}
-        if gpu_value is not None or settings_gpu is None
-        else bool(settings_gpu)
-    )
-    if not gpu_requested:
-        return
-    force_value = os.environ.get("AI_SUBTITLE_FORCE_QT_OPENGL")
-    force_requested = (
-        str(force_value if force_value is not None else "0").lower() in {"1", "true", "yes", "on"}
-        if force_value is not None or settings_force is None
-        else bool(settings_force)
-    )
-    backend_value = str(os.environ.get("AI_SUBTITLE_QT_GPU_BACKEND", settings_backend or "auto") or "auto").strip().lower()
-    if backend_value not in {"auto", "metal", "opengl"}:
-        backend_value = "auto"
-    if platform.system() == "Darwin" and force_value is None and backend_value != "opengl":
-        force_requested = False
-    if force_requested:
-        backend_value = "opengl"
-    if backend_value == "auto":
-        backend_value = "metal" if platform.system() == "Darwin" else "opengl"
-
-    if backend_value == "metal" and platform.system() == "Darwin":
-        os.environ.setdefault("QSG_RHI_BACKEND", "metal")
-        if str(os.environ.get("QT_QUICK_BACKEND", "") or "").strip().lower() == "hardware":
-            os.environ.pop("QT_QUICK_BACKEND", None)
-        return
-
-    if not force_requested:
-        return
-
-    os.environ.setdefault("QT_OPENGL", "desktop")
-    os.environ.setdefault("QSG_RHI_BACKEND", "opengl")
-
-    try:
-        from PyQt6.QtCore import Qt
-        from PyQt6.QtGui import QSurfaceFormat
-        from PyQt6.QtWidgets import QApplication
-    except Exception:
-        return
-
-    for attr in (
-        getattr(Qt.ApplicationAttribute, "AA_ShareOpenGLContexts", None),
-        getattr(Qt.ApplicationAttribute, "AA_UseDesktopOpenGL", None),
-    ):
-        if attr is None:
-            continue
-        try:
-            QApplication.setAttribute(attr, True)
-        except Exception:
-            pass
-
-    try:
-        fmt = QSurfaceFormat()
-        fmt.setRenderableType(QSurfaceFormat.RenderableType.OpenGL)
-        fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
-        if platform.system() == "Darwin":
-            fmt.setVersion(3, 2)
-        else:
-            fmt.setVersion(3, 3)
-        fmt.setDepthBufferSize(0)
-        fmt.setStencilBufferSize(0)
-        fmt.setSamples(0)
-        fmt.setSwapInterval(0)
-        QSurfaceFormat.setDefaultFormat(fmt)
-    except Exception:
-        pass

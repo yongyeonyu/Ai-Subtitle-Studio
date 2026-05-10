@@ -23,6 +23,7 @@ _STDERR_NOISE_FILTER_INSTALLED = False
 _STDERR_NOISE_FILTER_ORIGINAL_FD = None
 _STDERR_NOISE_PATTERNS = (
     b"TSM AdjustCapsLockLEDForKeyTransitionHandling",
+    b"error messaging the mach port for IMKCFRunLoopWakeUpReliable",
 )
 
 

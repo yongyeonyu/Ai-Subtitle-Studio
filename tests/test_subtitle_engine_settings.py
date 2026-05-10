@@ -398,6 +398,68 @@ class SubtitleEngineSettingsTests(unittest.TestCase):
             1.5,
         )
 
+    def test_clean_strips_whisper_control_tokens(self):
+        cleaned = subtitle_engine._clean("<|startoftranscript|><|6.78|> 이게 펠리칸입니다")
+
+        self.assertEqual(cleaned, "이게 펠리칸입니다")
+
+    def test_clean_strips_periods_reintroduced_by_corrections(self):
+        cleaned = subtitle_engine._clean("안녕", {"안녕": "안녕."})
+
+        self.assertEqual(cleaned, "안녕")
+
+    def test_final_text_policy_strips_source_variant_periods(self):
+        result = subtitle_engine._enforce_final_subtitle_text_policy(
+            [{"start": 0.0, "end": 1.0, "text": "안녕하세요. 반갑습니다."}],
+            None,
+        )
+
+        self.assertEqual(result[0]["text"], "안녕하세요 반갑습니다")
+
+    def test_save_srt_strips_periods_as_final_guard(self):
+        from core.engine.srt_writer import save_srt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "period_guard.srt")
+            save_srt([{"start": 0.0, "end": 1.0, "text": "안녕하세요."}], path, apply_offset=False)
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+        self.assertIn("안녕하세요", content)
+        self.assertNotIn("안녕하세요.", content)
+
+    def test_project_text_asset_srt_strips_periods(self):
+        from core.project.project_assets import write_srt_track
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "assets", "final.srt")
+            info = write_srt_track([{"start": 0.0, "end": 1.0, "text": "프로젝트 저장."}], path)
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+        self.assertEqual(info["rows"][0]["text"], "프로젝트 저장")
+        self.assertNotIn("프로젝트 저장.", content)
+
+    def test_process_one_strips_whisper_tokens_before_builtin_split(self):
+        segment = {
+            "start": 0.0,
+            "end": 3.0,
+            "text": "<|startoftranscript|><|6.78|> 이게 펠리칸입니다 다음 설명입니다",
+            "words": [
+                {"word": "<|startoftranscript|>", "start": 0.0, "end": 0.01},
+                {"word": "<|6.78|>", "start": 0.01, "end": 0.02},
+                {"word": "이게", "start": 0.02, "end": 0.4},
+                {"word": "펠리칸입니다", "start": 0.45, "end": 1.2},
+                {"word": "다음", "start": 1.25, "end": 1.7},
+                {"word": "설명입니다", "start": 1.75, "end": 2.6},
+            ],
+        }
+
+        result = subtitle_engine._process_one((segment, {}, 8, {}, "사용 안함", "", "", False, {}))
+
+        self.assertTrue(result)
+        self.assertNotIn("<|", " ".join(item["text"] for item in result))
+
     def test_local_ollama_workers_are_capped(self):
         workers, mode = subtitle_engine._effective_llm_workers(
             "gemma4:e4b",

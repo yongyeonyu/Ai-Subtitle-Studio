@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from core.native_macos_memory import native_allocator_pressure_relief
 from core.performance import current_resource_snapshot
 
 
@@ -32,6 +33,12 @@ class NativeMacOSMemoryTests(unittest.TestCase):
         self.assertEqual(snapshot["memory_pressure_stage"], "warning")
         self.assertEqual(snapshot["process_rss_bytes"], 512 * 1024 ** 2)
         self.assertEqual(snapshot["native_memory"]["source"], "swift_mach_vm")
+
+    def test_native_allocator_pressure_relief_respects_disabled_setting(self):
+        result = native_allocator_pressure_relief({"macos_allocator_pressure_relief_enabled": False})
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "disabled")
 
 
 if __name__ == "__main__":

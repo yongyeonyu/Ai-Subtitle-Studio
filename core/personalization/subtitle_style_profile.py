@@ -85,6 +85,48 @@ def _brand_tokens(*texts: Any) -> list[str]:
     return found[:12]
 
 
+def _word_tokens(text: Any, *, limit: int = 8) -> list[str]:
+    tokens: list[str] = []
+    for token in re.findall(r"[0-9A-Za-z가-힣][0-9A-Za-z가-힣_+-]*", str(text or "")):
+        clean = token.strip(".,!?~～…")
+        if clean:
+            tokens.append(clean)
+        if len(tokens) >= limit:
+            break
+    return tokens
+
+
+def _line_word_boundaries(lines: list[str]) -> dict[str, Any]:
+    line_tokens = [_word_tokens(line, limit=6) for line in lines]
+    line_start_words = [tokens[0] for tokens in line_tokens if tokens]
+    subtitle_start_word = line_start_words[0] if line_start_words else ""
+    subtitle_start_bigram = " ".join(line_tokens[0][:2]) if line_tokens and line_tokens[0] else ""
+    line_breaks: list[dict[str, Any]] = []
+    for index in range(max(0, len(line_tokens) - 1)):
+        previous = line_tokens[index]
+        following = line_tokens[index + 1]
+        if not previous or not following:
+            continue
+        before_word = previous[-1]
+        after_word = following[0]
+        line_breaks.append(
+            {
+                "line_index": index,
+                "before_word": before_word,
+                "after_word": after_word,
+                "before_bigram": " ".join(previous[-2:]),
+                "after_bigram": " ".join(following[:2]),
+                "pair": f"{before_word}->{after_word}",
+            }
+        )
+    return {
+        "subtitle_start_word": subtitle_start_word,
+        "subtitle_start_bigram": subtitle_start_bigram,
+        "line_start_words": line_start_words[:8],
+        "line_breaks": line_breaks[:8],
+    }
+
+
 def build_subtitle_style_profile(
     *,
     raw_text: Any,
@@ -113,6 +155,7 @@ def build_subtitle_style_profile(
     parentheticals = _parenthetical_blocks(raw)
     brand_tokens = _brand_tokens(raw, speech, input_text)
     punctuation = _punctuation_counts(raw)
+    word_boundaries = _line_word_boundaries(lines)
 
     return {
         "schema": STYLE_PROFILE_SCHEMA,
@@ -123,6 +166,7 @@ def build_subtitle_style_profile(
             "max_line_chars": max(line_lengths) if line_lengths else 0,
             "prefers_multiline": len(lines) >= 2,
         },
+        "word_boundaries": word_boundaries,
         "tone": {
             "label": _tone_label(speech),
             "has_honorific": bool(re.search(r"(요|습니다|입니다|합니다|드립니다)", speech)),

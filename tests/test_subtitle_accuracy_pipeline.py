@@ -342,6 +342,32 @@ class SubtitleAccuracyPipelineTests(unittest.TestCase):
         self.assertGreaterEqual(repaired[1]["start"], repaired[0]["end"])
         self.assertGreater(decision["after_score"], decision["before_score"])
 
+    def test_context_repair_drops_parent_shadowed_by_following_split_children(self):
+        repaired, decision = repair_subtitle_context_consistency(
+            [
+                {"start": 349.53, "end": 351.30, "text": "저거 예약해야지 볼 수 있는데"},
+                {"start": 351.40, "end": 355.30, "text": "저거 현대 모터 스튜디오 홈페이지 들어가서 예약을"},
+                {"start": 355.51, "end": 356.20, "text": "현대 모터스튜디오 홈페이지 들어가서"},
+                {"start": 356.31, "end": 358.10, "text": "예약을 해야 되거든요"},
+            ],
+            {
+                "subtitle_context_consistency_enabled": True,
+                "subtitle_context_repair_enabled": True,
+            },
+        )
+
+        self.assertTrue(decision["applied"])
+        self.assertEqual(decision["dropped_shadow_duplicates"], 1)
+        self.assertEqual(
+            [row["text"] for row in repaired],
+            [
+                "저거 예약해야지 볼 수 있는데",
+                "현대 모터스튜디오 홈페이지 들어가서",
+                "예약을 해야 되거든요",
+            ],
+        )
+        self.assertEqual(decision["after_counts"]["shadow_duplicate_segments"], 0)
+
     def test_context_repair_extends_cps_jump_into_safe_gap(self):
         repaired, decision = repair_subtitle_context_consistency(
             [

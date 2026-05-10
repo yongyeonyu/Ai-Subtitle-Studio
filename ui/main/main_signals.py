@@ -76,6 +76,9 @@ class SignalHandlersMixin:
     def update_editor_status(self, c_idx, t_total):
         self._sig_update_status.emit(c_idx, t_total)
 
+    def finalize_editor_generation_complete(self, reason: str = "backend_done"):
+        self._sig_finalize_generation_complete.emit(str(reason or "backend_done"))
+
     def append_log(self, msg):
         self.log_text.append(msg)
         self.log_text.verticalScrollBar().setValue(
@@ -205,6 +208,18 @@ class SignalHandlersMixin:
         if self._editor_widget:
             if hasattr(self._editor_widget, "update_progress"):
                 self._editor_widget.update_progress(c_idx, t_total)
+
+    def _do_finalize_generation_complete(self, reason: str = "backend_done"):
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None:
+            return
+        finalizer = getattr(editor, "_finalize_generation_from_backend", None)
+        if callable(finalizer):
+            finalizer(reason=str(reason or "backend_done"))
+            return
+        fallback = getattr(editor, "_set_process_completed", None)
+        if callable(fallback):
+            fallback()
 
     def _do_restart_multiclip(self, files, folder=None):
         if not self.backend:

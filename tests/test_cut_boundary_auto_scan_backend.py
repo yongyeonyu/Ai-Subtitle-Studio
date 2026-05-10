@@ -5,11 +5,13 @@ from unittest.mock import patch
 from core.cut_boundary_auto_scan import (
     _cut_boundary_pioneer_worker_ranges,
     build_auto_grid_scan_helpers,
+    cut_boundary_cv2_capture_backend,
     cut_boundary_memory_pressure_stage,
     cut_boundary_pressure_worker_cap,
     configure_cut_boundary_cv2_threads,
     cut_follower_verify_backend,
     high_cost_visual_scan_skip_meta,
+    open_cut_boundary_video_capture,
 )
 from core.cut_boundary_auto_verify import build_strict_verify_helpers
 from core.cut_boundary_backend_router import CutBoundaryBackendChoice
@@ -46,6 +48,44 @@ class _ClosedCaptureCv2(_FakeCv2):
         capture = _ClosedCapture()
         self.captures.append(capture)
         return capture
+
+
+class _BackendCapture:
+    def __init__(self, opened=True):
+        self.opened = bool(opened)
+        self.released = False
+
+    def isOpened(self):
+        return self.opened
+
+    def release(self):
+        self.released = True
+
+
+class _BackendCaptureCv2(_FakeCv2):
+    CAP_AVFOUNDATION = 1200
+
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    def VideoCapture(self, *args):
+        self.calls.append(tuple(args))
+        return _BackendCapture(opened=True)
+
+
+class _OneArgCaptureCv2(_FakeCv2):
+    CAP_AVFOUNDATION = 1200
+
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    def VideoCapture(self, path, *args):
+        if args:
+            raise TypeError("one-arg test capture")
+        self.calls.append((path,))
+        return _BackendCapture(opened=True)
 
 
 class _SequentialCapture:
@@ -218,6 +258,24 @@ class CutBoundaryAutoScanBackendTests(unittest.TestCase):
         self.assertFalse(meta["applied"])
         self.assertEqual(meta["reason"], "opencv_auto")
         self.assertEqual(fake_cv2.threads, 8)
+
+    def test_cut_cv2_capture_prefers_avfoundation_on_macos(self):
+        fake_cv2 = _BackendCaptureCv2()
+        with patch("core.cut_boundary_auto_scan.sys.platform", "darwin"):
+            backend = cut_boundary_cv2_capture_backend(fake_cv2, {"scan_cut_cv2_video_backend": "auto"})
+            cap = open_cut_boundary_video_capture(fake_cv2, "/tmp/clip.mp4", {"scan_cut_cv2_video_backend": "auto"})
+
+        self.assertEqual(backend, fake_cv2.CAP_AVFOUNDATION)
+        self.assertTrue(cap.isOpened())
+        self.assertEqual(fake_cv2.calls, [("/tmp/clip.mp4", fake_cv2.CAP_AVFOUNDATION)])
+
+    def test_cut_cv2_capture_falls_back_for_one_arg_capture(self):
+        fake_cv2 = _OneArgCaptureCv2()
+        with patch("core.cut_boundary_auto_scan.sys.platform", "darwin"):
+            cap = open_cut_boundary_video_capture(fake_cv2, "/tmp/clip.mp4", {"scan_cut_cv2_video_backend": "auto"})
+
+        self.assertTrue(cap.isOpened())
+        self.assertEqual(fake_cv2.calls, [("/tmp/clip.mp4",)])
 
     def test_pioneer_worker_ranges_overlap_one_step_to_protect_seams(self):
         ranges = _cut_boundary_pioneer_worker_ranges(

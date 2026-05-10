@@ -103,6 +103,111 @@ class MediaProcessorOverlapTests(unittest.TestCase):
 
         self.assertEqual([(item.start, item.end) for item in ranges], [(10.0, 15.0), (30.0, 35.0)])
 
+    def test_word_precision_recheck_uses_user_selected_stt1_model(self):
+        segments = [{"start": 0.0, "end": 1.0, "text": "저신뢰", "stt_score": 20}]
+        settings = {
+            "selected_whisper_model": "mlx-community/whisper-large-v3-mlx",
+            "stt_word_timestamps_mode": "selective",
+            "stt_word_timestamps_default_enabled": False,
+            "stt_word_timestamps_precision_enabled": True,
+        }
+
+        with tempfile.TemporaryDirectory() as chunk_dir, \
+             patch.object(self.processor, "_word_precision_ranges", return_value=[SimpleNamespace(start=0.0, end=1.0)]), \
+             patch.object(self.processor, "_prepare_recheck_clip", return_value={"start": 0.0, "end": 1.0}), \
+             patch.object(self.processor, "_collect_transcribe_result", return_value=[]) as collect:
+            result = self.processor._recheck_word_timestamps_for_precision(
+                chunk_dir,
+                segments,
+                settings,
+                [],
+                "whisperkit-persistent:large-v3-v20240930_626MB",
+            )
+
+        self.assertEqual(result, segments)
+        self.assertEqual(collect.call_args.args[1], "mlx-community/whisper-large-v3-mlx")
+        overrides = collect.call_args.kwargs["settings_overrides"]
+        self.assertFalse(overrides["runtime_backend_autotune_enabled"])
+        self.assertEqual(overrides["stt_backend_policy"], "quality")
+        self.assertFalse(overrides["stt_primary_fast_native_enabled"])
+        self.assertFalse(overrides["stt_npu_prefer_enabled"])
+        self.assertFalse(overrides["whisperkit_native_auto_enabled"])
+
+    def test_word_precision_recheck_allows_explicit_precision_model(self):
+        segments = [{"start": 0.0, "end": 1.0, "text": "저신뢰", "stt_score": 20}]
+        settings = {
+            "selected_whisper_model": "mlx-community/whisper-large-v3-mlx",
+            "stt_word_timestamps_precision_model": "whisperkit-persistent:large-v3-v20240930_turbo_632MB",
+            "stt_word_timestamps_mode": "selective",
+            "stt_word_timestamps_default_enabled": False,
+            "stt_word_timestamps_precision_enabled": True,
+        }
+
+        with tempfile.TemporaryDirectory() as chunk_dir, \
+             patch.object(self.processor, "_word_precision_ranges", return_value=[SimpleNamespace(start=0.0, end=1.0)]), \
+             patch.object(self.processor, "_prepare_recheck_clip", return_value={"start": 0.0, "end": 1.0}), \
+             patch.object(self.processor, "_collect_transcribe_result", return_value=[]) as collect:
+            self.processor._recheck_word_timestamps_for_precision(
+                chunk_dir,
+                segments,
+                settings,
+                [],
+                "whisperkit-persistent:large-v3-v20240930_626MB",
+            )
+
+        self.assertEqual(collect.call_args.args[1], "whisperkit-persistent:large-v3-v20240930_turbo_632MB")
+
+    def test_native_batch_refine_routes_precision_rechecks_after_full_stt1_pass(self):
+        with tempfile.TemporaryDirectory() as chunk_dir:
+            for idx, start in enumerate((0.0, 2.0)):
+                wav_path = os.path.join(chunk_dir, f"vad_{idx:03d}_{start:.3f}.wav")
+                with wave.open(wav_path, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(16000)
+                    wf.writeframes(b"\x00\x00" * 16000)
+
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "primary-native",
+                "selected_whisper_model_secondary": "secondary-native",
+                "runtime_backend_autotune_enabled": False,
+                "stt_backend_policy": "quality",
+                "stt_ensemble_enabled": False,
+                "stt_native_batch_refine_enabled": True,
+                "stt_word_timestamps_mode": "selective",
+                "stt_word_timestamps_default_enabled": False,
+                "stt_word_timestamps_precision_enabled": True,
+                "stt_persistent_runtime_reuse_enabled": False,
+            }
+
+            batched_result = [([{"start": 0.0, "end": 1.0, "text": "배치 완료"}], 1, 1)]
+            with patch.object(config, "IS_MAC", True), \
+                 patch.object(self.processor, "_transcribe_selective_ensemble", return_value=iter(batched_result)) as batch:
+                rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False))
+
+        self.assertEqual(rows, batched_result)
+        self.assertEqual(batch.call_args.kwargs["primary_model"], "primary-native")
+        self.assertEqual(batch.call_args.kwargs["secondary_model"], "secondary-native")
+
+    def test_native_batch_refine_can_be_disabled_for_streaming_chunks(self):
+        settings = {
+            "stt_native_batch_refine_enabled": False,
+            "stt_ensemble_enabled": False,
+            "stt_word_timestamps_mode": "selective",
+            "stt_word_timestamps_default_enabled": False,
+            "stt_word_timestamps_precision_enabled": True,
+        }
+
+        with patch.object(config, "IS_MAC", True):
+            requested = self.processor._native_batch_refine_requested(
+                settings,
+                "primary-native",
+                model_override=None,
+                total_chunks=2,
+            )
+
+        self.assertFalse(requested)
+
     def test_build_grouped_chunks_applies_overlap_to_long_vad_sector(self):
         chunks = self.processor._build_grouped_chunks(
             [{"start": 10.0, "end": 80.0}],
@@ -1718,6 +1823,76 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertIs(ensure_worker.return_value, proc)
         self.assertEqual(submit_task.call_args.kwargs["model"], "whisperkit-persistent:large-v3-v20240930_626MB")
         self.assertFalse(submit_task.call_args.kwargs["word_timestamps"])
+
+    def test_transcribe_falls_back_to_mlx_when_whisperkit_returns_no_chunks(self):
+        class _Stdout:
+            def __init__(self, lines):
+                self.lines = list(lines)
+
+            def readline(self):
+                return self.lines.pop(0) if self.lines else ""
+
+        class _Proc:
+            def __init__(self, lines):
+                self.stdout = _Stdout(lines)
+                self.returncode = 0
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chunk_dir = os.path.join(tmp, "chunks")
+            os.makedirs(chunk_dir, exist_ok=True)
+            wav_path = os.path.join(chunk_dir, "vad_000_0.000.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000)
+
+            empty_swift_proc = _Proc([
+                json.dumps({"task_id": "task-empty", "done": True}, ensure_ascii=False) + "\n",
+            ])
+            mlx_proc = _Proc([
+                json.dumps(
+                    {
+                        "task_id": "task-mlx",
+                        "index": 0,
+                        "result": {
+                            "segments": [{"start": 0.0, "end": 0.5, "text": "재시도 성공", "words": []}]
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                json.dumps({"task_id": "task-mlx", "done": True}, ensure_ascii=False) + "\n",
+            ])
+            self.processor._load_all_settings = lambda: {
+                "selected_whisper_model": "whisperkit-persistent:large-v3",
+                "w_none_temp_max": 0.0,
+                "stt_ensemble_enabled": False,
+                "stt_selective_secondary_recheck_enabled": False,
+                "stt_word_timestamps_mode": "off",
+                "stt_word_timestamps_default_enabled": False,
+                "stt_word_timestamps_precision_enabled": False,
+                "stt_persistent_runtime_reuse_enabled": False,
+            }
+
+            with patch.object(config, "IS_MAC", True), \
+                 patch("core.audio.whisper_coreml.is_coreml_whisper_model", return_value=False), \
+                 patch("core.audio.whisper_transformers.is_transformers_whisper_model", return_value=False), \
+                 patch("core.audio.whisperkit_persistent.ensure_worker", return_value=empty_swift_proc), \
+                 patch("core.audio.whisperkit_persistent.submit_task", return_value="task-empty"), \
+                 patch("core.audio.whisperkit_persistent.stop_worker"), \
+                 patch("core.audio.whisper_mlx.ensure_worker", return_value=mlx_proc), \
+                 patch("core.audio.whisper_mlx.submit_task", return_value="task-mlx"), \
+                 patch("core.audio.whisper_mlx.stop_worker"):
+                rows = list(self.processor.transcribe(chunk_dir, cleanup_chunk_dir=False))
+
+        self.assertEqual(rows[0][0][0]["text"], "재시도 성공")
 
     def test_transcribe_can_route_to_whisper_cpp_backend(self):
         class _Stdout:

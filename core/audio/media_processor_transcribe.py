@@ -15,6 +15,34 @@ from concurrent.futures import ThreadPoolExecutor
 
 from core.audio import stt_rescue
 from core.audio.runtime_cleanup import clear_audio_model_memory_caches
+from core.audio.stt_runtime_policy import (
+    ensemble_scheduler_context,
+    ensemble_scheduler_suffix,
+    resolve_runtime_whisper_model,
+    whisper_runtime_accelerator,
+)
+from core.audio.transcribe_policy_helpers import (
+    chunk_sort_key,
+    chunk_start_from_path,
+    mac_primary_fast_native_model,
+    segment_chunk_path,
+    segment_has_score,
+    segment_needs_word_precision,
+    segment_overlaps_range,
+    segment_score_100,
+    setting_bool,
+    setting_float,
+    stt_candidate_keep_score,
+    stt_persistent_runtime_reuse_enabled,
+    stt_selective_ensemble_enabled,
+    stt_word_timestamps_for_pass,
+    wav_duration,
+)
+from core.audio.whisperkit_empty_fallback import (
+    stop_empty_whisperkit_worker,
+    whisperkit_empty_fallback_overrides,
+    whisperkit_empty_result_fallback_model,
+)
 from core.platform_compat import ffmpeg_binary
 from core.runtime import config
 from core.runtime.logger import get_logger
@@ -38,82 +66,25 @@ def _parse_worker_json_line(line: str):
 
 
 class VideoProcessorTranscribeMixin:
-    @staticmethod
-    def _resolve_runtime_whisper_model(model: str, *, log_label: str = "STT") -> tuple[str, bool]:
-        raw = str(model or "").strip()
-        if not raw:
-            return raw, False
-        from core.audio.whisper_transformers import (
-            is_transformers_whisper_model,
-            transformers_whisper_fallback_model,
-            transformers_whisper_runtime_status,
-        )
-
-        if not is_transformers_whisper_model(raw):
-            return raw, False
-        available, reason = transformers_whisper_runtime_status()
-        if available:
-            return raw, False
-        fallback_model = str(transformers_whisper_fallback_model(raw) or "").strip()
-        if fallback_model and fallback_model != raw:
-            get_logger().log(
-                f"  ↩️ [{log_label}] Transformers Whisper 런타임 사용 불가 ({reason}) → {fallback_model} fallback"
-            )
-            return fallback_model, True
-        get_logger().log(f"  ⚠️ [{log_label}] Transformers Whisper 런타임 사용 불가: {reason}")
-        return raw, False
-
-    @staticmethod
-    def _whisper_runtime_accelerator(model: str, settings: dict | None = None) -> str:
-        raw = str(model or "").strip()
-        if not raw:
-            return "cpu"
-        from core.audio.torch_acceleration import torch_acceleration_snapshot
-        from core.audio.whisper_coreml import is_coreml_whisper_model
-        from core.audio.whisper_cpp import is_whisper_cpp_model
-        from core.audio.whisper_transformers import is_transformers_whisper_model
-
-        lowered = raw.lower()
-        if is_coreml_whisper_model(raw):
-            return "npu"
-        if is_whisper_cpp_model(raw):
-            return "cpu"
-        if (
-            "mlx-community/" in lowered
-            or lowered.startswith("mlx:")
-            or lowered.startswith("mlx_")
-            or lowered.endswith("-mlx")
-            or "/mlx-" in lowered
-            or "-mlx-" in lowered
-        ):
-            return "gpu"
-        if is_transformers_whisper_model(raw):
-            torch_snapshot = torch_acceleration_snapshot(settings=settings, task="stt")
-            primary = str(torch_snapshot.get("primary_backend") or "cpu").strip().lower()
-            return "gpu" if primary in {"mps", "cuda"} else "cpu"
-        return "cpu"
-
-    def _ensemble_scheduler_context(
-        self,
-        primary_model: str,
-        secondary_model: str,
-        settings: dict | None,
-    ) -> tuple[str, str, str]:
-        primary_accel = self._whisper_runtime_accelerator(primary_model, settings)
-        secondary_accel = self._whisper_runtime_accelerator(secondary_model, settings)
-        backend_mix = f"STT1={primary_accel.upper()} STT2={secondary_accel.upper()}"
-        return primary_accel, secondary_accel, backend_mix
-
-    @staticmethod
-    def _ensemble_scheduler_suffix(scheduler_meta: dict, backend_mix: str) -> str:
-        details: list[str] = [str(backend_mix or "").strip()]
-        reductions = ",".join(scheduler_meta.get("reductions") or [])
-        if reductions:
-            details.append(reductions)
-        if scheduler_meta.get("accelerator_mix_applied"):
-            details.append(f"mix-floor={scheduler_meta.get('accelerator_mix_floor')}")
-        details = [item for item in details if item]
-        return f" ({', '.join(details)})" if details else ""
+    _chunk_sort_key = staticmethod(chunk_sort_key)
+    _chunk_start_from_path = staticmethod(chunk_start_from_path)
+    _mac_primary_fast_native_model = staticmethod(mac_primary_fast_native_model)
+    _segment_chunk_path = staticmethod(segment_chunk_path)
+    _segment_has_score = staticmethod(segment_has_score)
+    _segment_needs_word_precision = staticmethod(segment_needs_word_precision)
+    _segment_overlaps_range = staticmethod(segment_overlaps_range)
+    _segment_score_100 = staticmethod(segment_score_100)
+    _setting_bool = staticmethod(setting_bool)
+    _setting_float = staticmethod(setting_float)
+    _stt_candidate_keep_score = staticmethod(stt_candidate_keep_score)
+    _stt_persistent_runtime_reuse_enabled = staticmethod(stt_persistent_runtime_reuse_enabled)
+    _stt_selective_ensemble_enabled = staticmethod(stt_selective_ensemble_enabled)
+    _stt_word_timestamps_for_pass = staticmethod(stt_word_timestamps_for_pass)
+    _wav_duration = staticmethod(wav_duration)
+    _resolve_runtime_whisper_model = staticmethod(resolve_runtime_whisper_model)
+    _whisper_runtime_accelerator = staticmethod(whisper_runtime_accelerator)
+    _ensemble_scheduler_context = staticmethod(ensemble_scheduler_context)
+    _ensemble_scheduler_suffix = staticmethod(ensemble_scheduler_suffix)
 
     def _collect_transcribe_result(
         self,
@@ -339,155 +310,6 @@ class VideoProcessorTranscribeMixin:
             "hallucination_silence_threshold": 0.6,
         }
 
-    @staticmethod
-    def _stt_candidate_keep_score(settings: dict | None) -> float:
-        try:
-            score = float((settings or {}).get("stt_candidate_keep_score", 24.0) or 24.0)
-        except Exception:
-            score = 24.0
-        return max(0.0, min(100.0, score))
-
-    @staticmethod
-    def _setting_bool(settings: dict | None, key: str, default: bool = False) -> bool:
-        value = (settings or {}).get(key, default)
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on", "사용", "켜짐"}
-        return bool(value)
-
-    @staticmethod
-    def _setting_float(settings: dict | None, key: str, default: float) -> float:
-        try:
-            return float((settings or {}).get(key, default))
-        except Exception:
-            return default
-
-    @staticmethod
-    def _stt_word_timestamps_for_pass(settings: dict | None) -> bool:
-        settings = settings or {}
-        if bool(settings.get("stt_word_timestamp_precision_pass", False)):
-            return VideoProcessorTranscribeMixin._setting_bool(
-                settings,
-                "stt_word_timestamps_precision_enabled",
-                True,
-            )
-        mode = str(settings.get("stt_word_timestamps_mode") or "always").strip().lower()
-        if mode in {"off", "false", "none", "disabled"}:
-            return False
-        if mode in {"always", "on", "true", "word", "words"}:
-            return True
-        return VideoProcessorTranscribeMixin._setting_bool(
-            settings,
-            "stt_word_timestamps_default_enabled",
-            False,
-        )
-
-    @staticmethod
-    def _stt_selective_ensemble_enabled(settings: dict | None) -> bool:
-        settings = settings or {}
-        if VideoProcessorTranscribeMixin._setting_bool(settings, "stt_ensemble_parallel_enabled", False):
-            return False
-        return VideoProcessorTranscribeMixin._setting_bool(settings, "stt_ensemble_selective_enabled", False)
-
-    @staticmethod
-    def _stt_persistent_runtime_reuse_enabled(settings: dict | None) -> bool:
-        if not bool(getattr(config, "IS_MAC", False)):
-            return False
-        return VideoProcessorTranscribeMixin._setting_bool(
-            settings,
-            "stt_persistent_runtime_reuse_enabled",
-            True,
-        )
-
-    @staticmethod
-    def _mac_primary_fast_native_model(model: str, settings: dict | None, log_label: str = "STT") -> str:
-        """Use the Mac-native turbo model for the first STT1 pass only.
-
-        Quality is kept by leaving STT2 rescue and word-timestamp precision
-        passes on their requested models.
-        """
-        if not bool(getattr(config, "IS_MAC", False)):
-            return str(model or "").strip()
-        if not VideoProcessorTranscribeMixin._setting_bool(settings, "stt_primary_fast_native_enabled", True):
-            return str(model or "").strip()
-        label = str(log_label or "STT").strip().upper()
-        if label not in {"STT1"}:
-            return str(model or "").strip()
-        if VideoProcessorTranscribeMixin._setting_bool(settings, "stt_word_timestamp_precision_pass", False):
-            return str(model or "").strip()
-
-        raw = str(model or "").strip()
-        lowered = raw.lower()
-        if not raw:
-            return str((settings or {}).get("stt_primary_fast_native_model") or config.WHISPERKIT_FAST_MODEL)
-        whisper_large_family = "large-v3" in lowered or "whisper-large-v3" in lowered
-        if not whisper_large_family:
-            return raw
-        return str(
-            (settings or {}).get("stt_primary_fast_native_model")
-            or getattr(config, "WHISPERKIT_FAST_MODEL", "")
-            or raw
-        ).strip()
-
-    @staticmethod
-    def _segment_score_100(segment: dict | None) -> float:
-        segment = segment or {}
-        for key in ("stt_score", "score", "confidence", "avg_confidence"):
-            value = segment.get(key)
-            if value is None:
-                continue
-            try:
-                score = float(value)
-            except Exception:
-                continue
-            if score <= 1.0:
-                score *= 100.0
-            return max(0.0, min(100.0, score))
-        return 0.0
-
-    @staticmethod
-    def _segment_has_score(segment: dict | None) -> bool:
-        segment = segment or {}
-        return any(segment.get(key) is not None for key in ("stt_score", "score", "confidence", "avg_confidence"))
-
-    @staticmethod
-    def _segment_needs_word_precision(segment: dict, settings: dict | None) -> bool:
-        if not isinstance(segment, dict) or not str(segment.get("text") or "").strip():
-            return False
-        if segment.get("words"):
-            return False
-        if any(bool(segment.get(key)) for key in ("editor_selected", "selected", "precision_review", "needs_review")):
-            return True
-        score_threshold = VideoProcessorTranscribeMixin._setting_float(
-            settings,
-            "stt_word_timestamps_precision_threshold",
-            72.0,
-        )
-        if (
-            VideoProcessorTranscribeMixin._segment_has_score(segment)
-            and VideoProcessorTranscribeMixin._segment_score_100(segment) <= score_threshold
-        ):
-            return True
-        quality = dict(segment.get("quality") or {})
-        if str(quality.get("confidence_label") or "").strip().lower() in {"red", "yellow"}:
-            return True
-        flags = {str(flag) for flag in (quality.get("flags") or ())}
-        if flags.intersection({"outside_vad_speech", "high_cps", "short_duration_long_text", "word_timestamps_missing"}):
-            return True
-        meta = dict(segment.get("asr_metadata") or {})
-        hallucination = dict(meta.get("hallucination_risk") or {})
-        try:
-            if float(hallucination.get("risk", 0.0) or 0.0) >= 0.25:
-                return True
-        except Exception:
-            pass
-        vad = dict(meta.get("vad_alignment") or {})
-        try:
-            ratio = vad.get("vad_overlap_ratio")
-            if ratio is not None and float(ratio) < 0.35:
-                return True
-        except Exception:
-            pass
-        return bool(segment.get("stt_ensemble_needs_llm_review"))
     def _normalize_scored_stt_tracks(
         self,
         tracks: dict[str, list[dict]],
@@ -523,37 +345,6 @@ class VideoProcessorTranscribeMixin:
                 pass
 
         return _callback
-    @staticmethod
-    def _segment_chunk_path(segment: dict) -> str:
-        meta = dict(segment.get("asr_metadata") or {})
-        return str(meta.get("chunk_path") or segment.get("chunk_path") or "")
-    @staticmethod
-    def _chunk_start_from_path(path: str) -> float:
-        name = os.path.basename(str(path or ""))
-        match = re.search(r"vad_\d+_([\d.]+)\.wav$", name)
-        if not match:
-            return 0.0
-        try:
-            return float(match.group(1))
-        except Exception:
-            return 0.0
-    @staticmethod
-    def _chunk_sort_key(path: str) -> tuple[float, str]:
-        return (VideoProcessorTranscribeMixin._chunk_start_from_path(path), os.path.basename(str(path or "")))
-    @staticmethod
-    def _wav_duration(path: str) -> float:
-        try:
-            with wave.open(path, "r") as w:
-                return w.getnframes() / float(w.getframerate())
-        except Exception:
-            return 0.0
-    @staticmethod
-    def _segment_overlaps_range(segment: dict, start: float, end: float) -> bool:
-        seg_start = float(segment.get("start", 0.0) or 0.0)
-        seg_end = float(segment.get("end", seg_start) or seg_start)
-        overlap = max(0.0, min(seg_end, end) - max(seg_start, start))
-        span = max(0.001, min(max(seg_end - seg_start, 0.0), max(end - start, 0.0)))
-        return overlap / span >= 0.35
     def _ffmpeg_trim_recheck_clip(self, src_wav: str, out_wav: str, start_sec: float, duration_sec: float, settings: dict | None = None) -> bool:
         filter_chain = stt_rescue.rescue_audio_filter(settings)
         cmd = [
@@ -879,13 +670,20 @@ class VideoProcessorTranscribeMixin:
         if not prepared:
             return segments
 
-        model = str(settings.get("stt_word_timestamps_precision_model") or primary_model or "").strip() or primary_model
+        configured_precision_model = str(settings.get("stt_word_timestamps_precision_model") or "").strip()
+        selected_primary_model = str(settings.get("selected_whisper_model") or "").strip()
+        model = configured_precision_model or selected_primary_model or str(primary_model or "").strip()
         overrides = {
             "stt_ensemble_enabled": False,
             "stt_selective_secondary_recheck_enabled": False,
             "stt_candidate_scoring_enabled": True,
+            "runtime_backend_autotune_enabled": False,
+            "stt_backend_policy": "quality",
             "stt_quality_preset": "precise",
             "stt_rescue_whisper_mode": True,
+            "stt_primary_fast_native_enabled": False,
+            "stt_npu_prefer_enabled": False,
+            "whisperkit_native_auto_enabled": False,
             "stt_word_timestamp_precision_pass": True,
             "stt_word_timestamps_mode": "always",
             "stt_word_timestamps_default_enabled": True,
@@ -1317,6 +1115,43 @@ class VideoProcessorTranscribeMixin:
                 shutil.rmtree(chunk_dir, ignore_errors=True)
             self._release_after_transcribe_job("STT 선택 앙상블")
 
+    def _native_batch_refine_requested(
+        self,
+        settings: dict,
+        primary_model: str,
+        *,
+        model_override: str | None,
+        total_chunks: int,
+    ) -> bool:
+        """Finish native STT1 first, then batch expensive rechecks once.
+
+        Running low-score STT2 rescue or word-timestamp precision inside every
+        chunk callback repeatedly hops from Swift/MLX back into Python.  On
+        macOS the faster path is one native STT1 pass followed by a single
+        batched refinement over only the uncertain ranges.
+        """
+        if model_override is not None:
+            return False
+        if not bool(getattr(config, "IS_MAC", False)):
+            return False
+        if total_chunks <= 1:
+            return False
+        if not self._setting_bool(settings, "stt_native_batch_refine_enabled", True):
+            return False
+        if bool(settings.get("stt_ensemble_enabled", False)):
+            return False
+        if bool(settings.get("stt_word_timestamp_precision_pass", False)):
+            return False
+        if bool(settings.get("stt_rescue_whisper_mode", False)):
+            return False
+
+        word_precision = (
+            self._setting_bool(settings, "stt_word_timestamps_precision_enabled", True)
+            and not self._stt_word_timestamps_for_pass(settings)
+        )
+        secondary_recheck = self._selective_secondary_recheck_enabled(settings, primary_model)
+        return bool(word_precision or secondary_recheck)
+
     def transcribe_ensemble(
         self,
         chunk_dir: str,
@@ -1577,6 +1412,28 @@ class VideoProcessorTranscribeMixin:
             pass
         target_model = prefer_npu_whisper_model(target_model, _s, purpose="stt", log_label=log_label)
         target_model, _used_runtime_fallback = self._resolve_runtime_whisper_model(target_model, log_label=log_label)
+        if self._native_batch_refine_requested(
+            _s,
+            target_model,
+            model_override=model_override,
+            total_chunks=total,
+        ):
+            secondary_model = str(_s.get("selected_whisper_model_secondary") or "").strip()
+            get_logger().log(
+                "  ⚡ [STT Native Batch] Swift/MLX 1차 인식을 먼저 끝내고 "
+                "저신뢰 STT2/단어정밀 보정은 한 번에 배치 처리합니다"
+            )
+            yield from self._transcribe_selective_ensemble(
+                chunk_dir,
+                primary_model=target_model,
+                secondary_model=secondary_model,
+                settings=_s,
+                target_end_sec=target_end_sec,
+                is_single=is_single,
+                preview_callback=preview_callback,
+                cleanup_chunk_dir=cleanup_chunk_dir,
+            )
+            return
         self._notify_stage(f"⏳ [{log_label}] Whisper 인식 중")
         get_logger().log(f"\n🎯 [{log_label}] Whisper 인식 시작 (총 {total}블록, 모델: {target_model.split(chr(47))[-1]})")
 
@@ -1762,7 +1619,9 @@ class VideoProcessorTranscribeMixin:
         self._whisper_proc = proc
         prev_end = 0.0
         had_error = False
+        handled_by_fallback = False
         processed_count = 0
+        emitted_segment_count = 0
 
         try:
             if _cfg.IS_MAC and not use_coreml_whisper and not use_whisper_cpp and not use_transformers_whisper:
@@ -1776,7 +1635,8 @@ class VideoProcessorTranscribeMixin:
                     if data is None:
                         continue
 
-                    if data.get("task_id") != mac_task_id:
+                    task_id = data.get("task_id", data.get("taskId"))
+                    if task_id != mac_task_id:
                         continue
                     if data.get("done"):
                         break
@@ -1842,7 +1702,69 @@ class VideoProcessorTranscribeMixin:
 
                     yield chunk_segs, item["idx"] + 1, total
                     processed_count += 1
+                    emitted_segment_count += len(chunk_segs or [])
                     received += 1
+
+                if total > 0 and processed_count == 0:
+                    if use_whisperkit_persistent:
+                        fallback_model = whisperkit_empty_result_fallback_model(target_model, s)
+                        get_logger().log(
+                            f"  ⚠️ [{log_label}] WhisperKit 결과 chunk가 0개라 MLX로 즉시 재시도합니다: "
+                            f"{fallback_model.split(chr(47))[-1]}"
+                        )
+                        handled_by_fallback = True
+                        stop_empty_whisperkit_worker(self, proc)
+                        previous_overrides = getattr(self, "_fast_mode_overrides", None)
+                        fallback_overrides = whisperkit_empty_fallback_overrides(
+                            previous_overrides,
+                            fallback_model,
+                        )
+                        self._fast_mode_overrides = fallback_overrides
+                        try:
+                            yield from self.transcribe(
+                                chunk_dir,
+                                is_fast_mode=is_fast_mode,
+                                target_end_sec=target_end_sec,
+                                is_single=is_single,
+                                model_override=fallback_model,
+                                cleanup_chunk_dir=cleanup_chunk_dir,
+                                log_label=log_label,
+                                preview_callback=preview_callback,
+                            )
+                        finally:
+                            self._fast_mode_overrides = previous_overrides
+                        return
+                    had_error = True
+                    raise RuntimeError("whisper produced 0 chunks")
+
+                if total > 0 and emitted_segment_count == 0 and use_whisperkit_persistent:
+                    fallback_model = whisperkit_empty_result_fallback_model(target_model, s)
+                    get_logger().log(
+                        f"  ⚠️ [{log_label}] WhisperKit 결과 자막이 비어 있어 MLX로 즉시 재시도합니다: "
+                        f"{fallback_model.split(chr(47))[-1]}"
+                    )
+                    handled_by_fallback = True
+                    stop_empty_whisperkit_worker(self, proc)
+                    previous_overrides = getattr(self, "_fast_mode_overrides", None)
+                    fallback_overrides = whisperkit_empty_fallback_overrides(
+                        previous_overrides,
+                        fallback_model,
+                    )
+                    self._fast_mode_overrides = fallback_overrides
+                    try:
+                        yield from self.transcribe(
+                            chunk_dir,
+                            is_fast_mode=is_fast_mode,
+                            target_end_sec=target_end_sec,
+                            is_single=is_single,
+                            model_override=fallback_model,
+                            cleanup_chunk_dir=cleanup_chunk_dir,
+                            log_label=log_label,
+                            preview_callback=preview_callback,
+                        )
+                    finally:
+                        self._fast_mode_overrides = previous_overrides
+                    return
 
             else:
                 for item in q:
@@ -1906,6 +1828,7 @@ class VideoProcessorTranscribeMixin:
                     get_logger().log(self._format_transcribe_progress(log_label, progress_sec, t_sec, pct))
                     yield chunk_segs, item["idx"] + 1, total
                     processed_count += 1
+                    emitted_segment_count += len(chunk_segs or [])
 
                 proc.wait()
                 if proc.returncode not in (0, None):
@@ -1916,12 +1839,13 @@ class VideoProcessorTranscribeMixin:
                     raise RuntimeError("whisper produced 0 chunks")
 
         finally:
-            self._release_after_transcribe_job(log_label, force_stop=had_error)
-            if cleanup_chunk_dir:
+            if not handled_by_fallback:
+                self._release_after_transcribe_job(log_label, force_stop=had_error)
+            if cleanup_chunk_dir and not handled_by_fallback:
                 shutil.rmtree(chunk_dir, ignore_errors=True)
-            if had_error:
+            if had_error and not handled_by_fallback:
                 get_logger().log(f"[WARN] {log_label} Whisper transcription aborted due to worker failure")
-            else:
+            elif not handled_by_fallback:
                 get_logger().log(f"[DONE] {log_label} Whisper transcription completed")
     @staticmethod
     def _format_transcribe_progress(log_label: str, current_sec: float, total_sec: float, pct: int) -> str:

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import core.project.project_io as project_io
 from core.project.project_io import clear_project_file_cache, read_project_file, write_project_file
-from core.project.project_manager import extract_model_settings, load_project, merge_project_model_settings, save_project
+from core.project.project_manager import create_project, extract_model_settings, load_project, merge_project_model_settings, save_project
 from core.project.project_phase1b import enrich_existing_project_file
 from core.project.project_context import (
     SUBTITLE_CANVAS_VECTOR_SCHEMA,
@@ -37,6 +37,38 @@ def _state_segments(state: dict) -> list[dict]:
 
 
 class ProjectContextTests(unittest.TestCase):
+    def test_create_project_archives_existing_base_json_inside_backup_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = str(Path(tmp) / "video.mp4")
+            with patch("core.project.project_manager.PROJECTS_DIR", tmp), patch(
+                "core.project.project_manager._get_media_probe",
+                return_value={"duration": 10.0, "fps": 30.0},
+            ):
+                first_path = Path(create_project("same_name", media_paths=[media_path], user_settings={}))
+                first_payload = read_project_file(str(first_path))
+                first_created_at = first_payload["created_at"]
+                legacy_root_backup = Path(tmp) / "same_name_1.json"
+                legacy_root_backup.write_text(
+                    json.dumps({"project_name": "legacy-root-backup"}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+
+                second_path = Path(create_project("same_name", media_paths=[media_path], user_settings={}))
+                second_payload = read_project_file(str(second_path))
+
+            backup_dir = Path(tmp) / "프로젝트백업"
+            legacy_archived = backup_dir / "same_name_1.json"
+            archived = backup_dir / "same_name_2.json"
+
+            self.assertEqual(first_path, second_path)
+            self.assertTrue(second_path.exists())
+            self.assertTrue(legacy_archived.exists())
+            self.assertTrue(archived.exists())
+            self.assertFalse((Path(tmp) / "same_name_1.json").exists())
+            self.assertEqual(json.loads(legacy_archived.read_text(encoding="utf-8"))["project_name"], "legacy-root-backup")
+            self.assertEqual(second_payload["history"]["previous_base_project"], str(archived))
+            self.assertEqual(read_project_file(str(archived))["created_at"], first_created_at)
+
     def test_build_editor_state_separates_multiclip_and_subtitles(self):
         state = build_editor_state(
             mode="multiclip",

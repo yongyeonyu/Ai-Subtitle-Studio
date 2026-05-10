@@ -4,7 +4,7 @@ import os
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -428,6 +428,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
             editor._cached_segs[0],
             ensure_visible=True,
             move_cursor=True,
+            sync_playhead=False,
         )
         editor.timeline.center_to_sec.assert_not_called()
 
@@ -1475,7 +1476,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
-    def test_settled_scrub_moves_editor_cursor_to_playhead_segment(self):
+    def test_settled_scrub_moves_editor_cursor_without_snapping_playhead_to_segment_start(self):
         editor = _PlaybackEditor()
         editor.video_fps = 30.0
         editor.video_player = SimpleNamespace(
@@ -1505,7 +1506,7 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             self.assertEqual(editor.text_edit.textCursor().blockNumber(), 2)
             editor.timeline.set_active.assert_called_once_with(4.0)
-            editor.timeline.set_playhead.assert_any_call(4.0)
+            self.assertNotIn(call(4.0), editor.timeline.set_playhead.mock_calls)
             self.assertIsNone(editor._pending_scrub_sec)
         finally:
             editor.text_edit.close()

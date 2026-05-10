@@ -166,6 +166,7 @@ def build_editor_truth_patterns(rows: Iterable[dict[str, Any]] | None) -> list[d
                     "trigger": _extra(row).get("trigger"),
                     "line_break_pattern": row.get("line_break_pattern"),
                     "punctuation_pattern": row.get("punctuation_pattern"),
+                    "word_boundary_learning": row.get("word_boundary_learning"),
                     "hard_case_reasons": _extra(row).get("hard_case_reasons"),
                 },
             }

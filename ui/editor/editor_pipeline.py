@@ -185,6 +185,9 @@ class EditorPipelineMixin:
         except Exception:
             pass
         self._completion_handled = False
+        self._process_completed_finalized = False
+        self._generation_completion_autosave_done = False
+        self._generation_completion_autosave_pending = False
 
         if not is_restart:
             try:
@@ -369,13 +372,26 @@ class EditorPipelineMixin:
             backend._auto_scan_cut_boundaries_for_start(project_path, media_files)
 
     def _set_process_completed(self):
-        if hasattr(self, "_flush_pending_segment_queue_now"):
-            self._flush_pending_segment_queue_now()
-        if getattr(self, 'is_auto_start', False):
-            self.sm.complete_auto_mode()
-        else:
-            self.sm.complete_ai()
-        self._clear_processing_indicators()
+        if bool(getattr(self, "_process_completed_finalized", False)):
+            self._schedule_generation_completion_autosave(delay_ms=250)
+            return
+        self._process_completed_finalized = True
+        try:
+            if hasattr(self, "_flush_pending_segment_queue_now"):
+                self._flush_pending_segment_queue_now()
+        except Exception as exc:
+            get_logger().log(f"⚠️ 생성 완료 전 세그먼트 flush 실패: {exc}")
+        try:
+            if getattr(self, 'is_auto_start', False):
+                self.sm.complete_auto_mode()
+            else:
+                self.sm.complete_ai()
+        except Exception as exc:
+            get_logger().log(f"⚠️ 생성 완료 상태 전환 실패: {exc}")
+        try:
+            self._clear_processing_indicators()
+        except Exception:
+            pass
         main_w = self.window()
         try:
             force_idle = getattr(main_w, "_force_editor_idle_after_generation", None)
@@ -415,9 +431,112 @@ class EditorPipelineMixin:
             QTimer.singleShot(900, lambda: self._schedule_post_generation_roughcut_draft(force=True))
         # E fix: 자막 생성 완료 후 타임라인/캔버스 재동기화
         QTimer.singleShot(200, self._post_completion_sync)
+        self._schedule_generation_completion_autosave(delay_ms=650)
         unlock_sidebar = getattr(main_w, "_unlock_workspace_sidebar_width", None)
         if callable(unlock_sidebar):
             QTimer.singleShot(1300, unlock_sidebar)
+
+    def _finalize_generation_from_backend(self, *, reason: str = "backend_done", attempt: int = 0):
+        """Backend-side completion safety net for missed final progress signals."""
+        if not bool(getattr(self, "_process_completed_finalized", False)):
+            if not self._has_saveable_generation_segments():
+                if int(attempt) < 60:
+                    if int(attempt) in {0, 5, 15, 30}:
+                        get_logger().log("⏳ 자막 생성 완료 대기: 최종 자막 세그먼트 반영 중")
+                    try:
+                        self.sm.update_progress(0, 1, 0, "⏳ 최종 자막 반영 중...")
+                    except Exception:
+                        pass
+                    QTimer.singleShot(
+                        500,
+                        lambda r=str(reason or "backend_done"), a=int(attempt) + 1: self._finalize_generation_from_backend(
+                            reason=r,
+                            attempt=a,
+                        ),
+                    )
+                    return
+                get_logger().log("⚠️ 자막 생성 완료 보류: 저장 가능한 최종 자막 세그먼트를 찾지 못했습니다.")
+                try:
+                    self.sm.update_progress(0, 1, 0, "⚠️ 최종 자막 세그먼트 없음")
+                except Exception:
+                    pass
+                return
+            try:
+                self._completion_handled = True
+            except Exception:
+                pass
+            self._set_process_completed()
+            return
+        self._schedule_generation_completion_autosave(delay_ms=250)
+
+    def _has_saveable_generation_segments(self) -> bool:
+        try:
+            if getattr(self, "_segment_queue", None) and hasattr(self, "_flush_pending_segment_queue_now"):
+                self._flush_pending_segment_queue_now()
+        except Exception:
+            pass
+        try:
+            segments = list(self._get_current_segments() or [])
+        except Exception:
+            segments = []
+        for seg in segments:
+            if not isinstance(seg, dict) or bool(seg.get("is_gap")):
+                continue
+            if str(seg.get("text", "") or "").strip():
+                return True
+        return False
+
+    def _schedule_generation_completion_autosave(self, *, delay_ms: int = 650, attempt: int = 0) -> None:
+        if bool(getattr(self, "_generation_completion_autosave_done", False)):
+            return
+        if bool(getattr(self, "is_auto_start", False)):
+            return
+        self._generation_completion_autosave_pending = True
+        QTimer.singleShot(max(0, int(delay_ms)), lambda a=int(attempt): self._run_generation_completion_autosave(a))
+
+    def _run_generation_completion_autosave(self, attempt: int = 0) -> None:
+        if bool(getattr(self, "_generation_completion_autosave_done", False)):
+            return
+        try:
+            if getattr(self, "_segment_queue", None) and hasattr(self, "_flush_pending_segment_queue_now"):
+                self._flush_pending_segment_queue_now()
+        except Exception:
+            pass
+        if not self._has_saveable_generation_segments():
+            if int(attempt) < 60:
+                if int(attempt) in {0, 5, 15, 30}:
+                    get_logger().log("⏳ 생성 완료 자동 저장 대기: 최종 자막 반영 중")
+                self._schedule_generation_completion_autosave(delay_ms=500, attempt=int(attempt) + 1)
+                return
+            get_logger().log("⚠️ 생성 완료 자동 저장 보류: 최종 자막 세그먼트를 아직 찾지 못했습니다.")
+            self._generation_completion_autosave_pending = False
+            return
+        quality_busy = any(
+            bool(getattr(self, attr, False))
+            for attr in (
+                "_auto_quality_review_pending",
+                "_auto_quality_review_scheduled",
+                "_quality_review_running",
+            )
+        )
+        if quality_busy and int(attempt) < 30:
+            self._schedule_generation_completion_autosave(delay_ms=500, attempt=int(attempt) + 1)
+            return
+        save = getattr(self, "_on_save", None)
+        if not callable(save):
+            self._generation_completion_autosave_pending = False
+            return
+        try:
+            ok = bool(save(skip_auto_next=True))
+        except Exception as exc:
+            get_logger().log(f"⚠️ 생성 완료 자동 저장 실패: {exc}")
+            ok = False
+        self._generation_completion_autosave_pending = False
+        if ok:
+            self._generation_completion_autosave_done = True
+            get_logger().log("💾 생성 완료 자동 저장 완료")
+        else:
+            get_logger().log("⚠️ 생성 완료 자동 저장을 완료하지 못했습니다. 수동 저장을 확인해 주세요.")
 
     def _schedule_post_generation_model_release(self):
         """자막 생성 완료 후 남아 있는 AI/STT/LLM 모델 언로드를 예약한다."""
@@ -1563,10 +1682,16 @@ class EditorPipelineMixin:
 
         self.sm.update_progress(c_idx, t_total, pct)
 
-        # ✅ 완료 조건 단일화
+        # STT 진행률 100%는 "인식 청크 완료"일 뿐입니다.
+        # LoRA/Deep/LLM 최적화와 최종 세그먼트 삽입이 끝난 뒤 backend finalizer가 완료를 확정합니다.
         if t_total > 0 and c_idx >= t_total and not getattr(self, '_completion_handled', False):
-            self._completion_handled = True
-            QTimer.singleShot(0, self._set_process_completed)
+            try:
+                sm = getattr(self, "sm", None)
+                stage_active = bool(sm._is_stage_status_active()) if sm is not None and hasattr(sm, "_is_stage_status_active") else False
+                if not stage_active:
+                    self.sm.update_progress(c_idx, t_total, pct, "⏳ 자막 최적화/검수 중...")
+            except Exception:
+                pass
 
     def update_status(self, text, is_final=False, is_raw=False):
         import threading as _th

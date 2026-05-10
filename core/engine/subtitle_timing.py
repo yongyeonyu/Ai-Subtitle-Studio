@@ -279,6 +279,20 @@ def _segment_gap_settings(base: dict, segment: dict) -> dict:
     return merged
 
 
+def _lora_split_floor_chars(settings: dict, segment: dict) -> int:
+    if not _setting_bool(settings, "subtitle_lora_split_floor_enabled", True):
+        return 0
+    has_lora_style = bool(
+        segment.get("_lora_segment_settings")
+        or segment.get("_lora_gap_settings")
+        or segment.get("_lora_generation_profile")
+        or segment.get("_lora_segment_score") is not None
+    )
+    if not has_lora_style:
+        return 0
+    return _clamp_int(settings.get("subtitle_lora_split_floor_chars"), 12, 36, 20)
+
+
 def _time_bounds(row: dict) -> tuple[float, float]:
     start = _as_float(row.get("start", row.get("timeline_start", 0.0)))
     end = _as_float(row.get("end", row.get("timeline_end", start)), start)
@@ -722,20 +736,27 @@ def _is_common_split_break(left_word: dict, right_word: dict | None) -> bool:
 
 def _common_split_policy_settings(settings: dict, seg: dict) -> dict:
     merged = _segment_gap_settings(settings, seg)
-    threshold = _clamp_int(merged.get("split_length_threshold"), 8, 32, 10)
-    default_target = max(12, min(18, int(round(threshold * 1.6))))
+    threshold = _clamp_int(merged.get("split_length_threshold"), 8, 36, 20)
+    lora_floor = _lora_split_floor_chars(merged, seg)
+    if lora_floor:
+        threshold = max(threshold, lora_floor)
+    default_target = max(18, min(26, int(round(threshold * 1.1))))
     target_chars = _clamp_int(
         merged.get("subtitle_common_split_target_chars"),
         8,
-        28,
+        36,
         default_target,
     )
+    if lora_floor:
+        target_chars = max(target_chars, lora_floor)
     hard_chars = _clamp_int(
         merged.get("subtitle_common_split_hard_max_chars"),
-        max(target_chars + 2, 12),
-        40,
-        max(target_chars + 6, int(round(target_chars * 1.5))),
+        max(target_chars + 4, 16),
+        56,
+        max(target_chars + 10, int(round(target_chars * 1.6))),
     )
+    if lora_floor:
+        hard_chars = max(hard_chars, max(lora_floor + 8, int(round(lora_floor * 1.6))))
     configured_max_duration = _setting_float(merged, "sub_max_duration", 6.0)
     default_max_duration = min(max(2.4, configured_max_duration), 5.5)
     hard_duration = _clamp_float(
@@ -756,6 +777,7 @@ def _common_split_policy_settings(settings: dict, seg: dict) -> dict:
         "hard_chars": hard_chars,
         "hard_duration": hard_duration,
         "min_duration": min_duration,
+        "lora_floor_chars": lora_floor,
     }
 
 
@@ -771,7 +793,7 @@ def _common_split_violation(seg: dict, settings: dict) -> bool:
     start, end = _time_bounds(seg)
     duration = max(0.0, end - start)
     chars = _compact_len(text)
-    if chars > policy["target_chars"]:
+    if chars > policy["hard_chars"]:
         return True
     return duration > policy["hard_duration"] + 0.001
 
@@ -892,7 +914,7 @@ def _native_common_split_items(rows: list[dict], settings: dict) -> tuple[list[d
     policies: list[dict] = []
     for row in rows:
         policy = _common_split_policy_settings(settings, row)
-        if row.get("is_gap"):
+        if row.get("is_gap") or not _common_split_violation(row, settings):
             policy = {**policy, "enabled": False}
         words = _words_for_common_split(row)
         start, end = _time_bounds(row)

@@ -34,6 +34,13 @@ from core.engine.subtitle_macro_chunks import (
     llm_macro_chunk_enabled as _llm_macro_chunk_enabled,
     process_llm_macro_groups as _process_llm_macro_groups,
 )
+from core.engine.subtitle_native_word_split import native_builtin_word_groups as _native_builtin_word_groups
+from core.engine.subtitle_text_policy import (
+    clean_subtitle_text as _clean,
+    enforce_final_subtitle_text_policy as _enforce_final_subtitle_text_policy,
+    split_visible_len as _split_visible_len,
+    strip_stt_control_tokens as _strip_stt_control_tokens,
+)
 from core.engine.subtitle_accuracy_pipeline import (
     append_accuracy_decision,
     annotate_subtitle_auto_review,
@@ -165,30 +172,6 @@ _HALLUC_PHRASES = [
     "번역 중", "처리 중", "대화 내용", "Korean conversation",
     "subtitle", "transcription", "Thank you for watching"
 ]
-
-_TS_BRACKET = re.compile(r'\[\s*\d{1,3}[:.]\d{1,2}(?:[:.]\d+)?\s*\]\s*')
-_TS_NO_BRACKET = re.compile(r'^\s*\d{1,3}[:.]\d{1,2}(?:[:.]\d+)?\s+') 
-_JUNK_PATTERN = re.compile(r'[\x00-\x08\x0b-\x1f\x7f]')
-
-def _clean(text: str, corrections: dict | None = None) -> str:
-    original = text
-    text = _TS_BRACKET.sub(' ', text)
-    text = _TS_NO_BRACKET.sub(' ', text)
-    
-    if text != original:
-        get_logger().log(f"[정제-시간태그] 삭제: '{original[:15]}' => '{text[:15]}'")
-    
-    text = _JUNK_PATTERN.sub("", text)
-    text = text.replace(".", "").replace("\r", "")
-    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.split('\n')]
-    text = "\n".join(line for line in lines if line)
-    
-    if corrections:
-        for old, new in corrections.items():
-            if old and old in text:
-                text = text.replace(old, new)
-                get_logger().log(f"[정제-교정사전] 적용: '{old}' => '{new}'")
-    return text
 
 def _sanitize(segments: list[dict], corrections: dict) -> list[dict]:
     result = []
@@ -386,6 +369,7 @@ def is_natural_break(word: str, next_word: str, rules: dict) -> bool:
     if sw and re.match(r"^(" + "|".join(re.escape(w) for w in sw) + r")", nw_clean):
         return True
     return False
+
 
 def ask_exaone_to_split(
     text: str,
@@ -708,6 +692,7 @@ def _compact_output_selector_decision(decision: dict | None, *, stage: str = "")
                     "context_consistency_score": metrics.get("context_consistency_score"),
                     "context_repeat_segments": metrics.get("context_repeat_segments"),
                     "context_overlap_segments": metrics.get("context_overlap_segments"),
+                    "context_shadow_duplicate_segments": metrics.get("context_shadow_duplicate_segments"),
                     "lora_style_score": metrics.get("lora_style_score"),
                     "lora_style_drift_segments": metrics.get("lora_style_drift_segments"),
                 },
@@ -757,6 +742,7 @@ def _attach_context_repair_policy(segments: list[dict], decision: dict | None, s
         "dropped_repeats": decision.get("dropped_repeats", 0),
         "dropped_empty": decision.get("dropped_empty", 0),
         "dropped_hallucinations": decision.get("dropped_hallucinations", 0),
+        "dropped_shadow_duplicates": decision.get("dropped_shadow_duplicates", 0),
         "shifted_starts": decision.get("shifted_starts", 0),
         "extended_ends": decision.get("extended_ends", 0),
         "extended_cps_segments": decision.get("extended_cps_segments", 0),
@@ -778,7 +764,8 @@ def _bool_setting(settings: dict, key: str, default: bool = True) -> bool:
 
 def _lora_style_merge_settings(settings: dict | None) -> dict:
     settings = dict(settings or {})
-    max_chars = max(8, _setting_int(settings, "split_length_threshold", 16))
+    lora_floor_chars = max(8, _setting_int(settings, "subtitle_lora_split_floor_chars", 20))
+    max_chars = max(lora_floor_chars, _setting_int(settings, "split_length_threshold", 20))
     min_duration = max(
         _setting_float(settings, "sub_min_duration", 0.3),
         _setting_float(settings, "subtitle_lora_micro_merge_min_duration", 0.8),
@@ -871,6 +858,7 @@ def _context_repair_output_variant(segments: list[dict], vad_segments: list[dict
     get_logger().log(
         "[자막문맥-자동복구] "
         f"반복 삭제 {decision.get('dropped_repeats', 0)}개, "
+        f"부분중복 삭제 {decision.get('dropped_shadow_duplicates', 0)}개, "
         f"겹침 보정 {decision.get('shifted_starts', 0)}개 "
         f"(score {decision.get('before_score')}→{decision.get('after_score')})"
     )
@@ -1335,9 +1323,12 @@ def _process_one(args: tuple) -> list[dict]:
         runtime_settings = None
 
     spk  = seg.get("speaker", "SPEAKER_00")
-    text = seg.get("text", "").strip()
+    raw_text = str(seg.get("text", "") or "")
+    text = _strip_stt_control_tokens(raw_text).strip()
     if not text:
         return []
+    if text != raw_text.strip():
+        seg = {**seg, "text": text}
 
     # 💡 [추가] duration 정의
     duration = seg.get("end", 0) - seg.get("start", 0)
@@ -1496,22 +1487,44 @@ def _process_one(args: tuple) -> list[dict]:
         return final_result
 
     result = []
-    buf    = []
-    for i, w in enumerate(words):
-        buf.append(w)
-        is_last = (i == len(words) - 1)
-        flush   = False
-        if not is_last:
-            nw   = words[i + 1]
-            gap  = nw["start"] - w["end"]
-            clen = sum(len(x["word"].replace(" ", "").replace("\n", "")) for x in buf)
-            flush = (gap >= gap_break_sec
-                     or (clen >= threshold and is_natural_break(w["word"], nw["word"], rules))
-                     or clen >= int(threshold * _ENFORCE_RATIO))
-        else:
-            flush = True
-        if flush:
-            t = " ".join(x["word"] for x in buf)
+    native_groups = _native_builtin_word_groups(
+        words,
+        rules=rules,
+        threshold=threshold,
+        gap_break_sec=gap_break_sec,
+        default_gap_break_sec=_GAP_BREAK_SEC,
+        natural_break_func=is_natural_break,
+        visible_len_func=_split_visible_len,
+    )
+    if native_groups:
+        iterable_groups = [words[begin:end] for begin, end in native_groups]
+    else:
+        iterable_groups = []
+        buf = []
+        buf_len = 0
+        for i, w in enumerate(words):
+            buf.append(w)
+            buf_len += _split_visible_len(str(w.get("word", "") or ""))
+            is_last = (i == len(words) - 1)
+            flush = False
+            if not is_last:
+                nw = words[i + 1]
+                gap = nw["start"] - w["end"]
+                flush = (
+                    gap >= gap_break_sec
+                    or (buf_len >= threshold and is_natural_break(w["word"], nw["word"], rules))
+                    or buf_len >= int(threshold * _ENFORCE_RATIO)
+                )
+            else:
+                flush = True
+            if flush:
+                iterable_groups.append(buf)
+                buf = []
+                buf_len = 0
+
+    for buf in iterable_groups:
+        if buf:
+            t = " ".join(str(x.get("word", "") or "") for x in buf)
             ct = _clean(t, corrections)
             if ct and len(ct.replace(" ", "").replace("\n", "")) >= 2:
                 result.append(_attach_lora_and_deep_timing({
@@ -1522,9 +1535,8 @@ def _process_one(args: tuple) -> list[dict]:
                     "speaker": buf[0].get("speaker", spk),
                     "words":   buf,
                 }, segment_lora, segment_settings))
-            buf = []
             
-    if len(result) > 1:
+    if len(result) > 1 and _setting_bool(segment_settings, "subtitle_builtin_split_verbose_log", False):
         get_logger().log(f"[분할-내장알고리즘] '{text[:15]}...' -> {len(result)}조각 안전 분리")
     return result
 
@@ -1536,9 +1548,12 @@ def _process_one_llm_only(args: tuple) -> list[dict]:
         seg, rules, threshold, corrections, model, user_prompt, api_key, conservative = args
         runtime_settings = None
     spk = seg.get("speaker", "SPEAKER_00")
-    text = str(seg.get("text", "") or "").strip()
+    raw_text = str(seg.get("text", "") or "")
+    text = _strip_stt_control_tokens(raw_text).strip()
     if not text:
         return []
+    if text != raw_text.strip():
+        seg = {**seg, "text": text}
 
     duration = float(seg.get("end", 0.0) or 0.0) - float(seg.get("start", 0.0) or 0.0)
     segment_settings, segment_lora = _segment_lora_runtime({**seg, "text": text}, runtime_settings, rules, threshold)
@@ -1785,7 +1800,9 @@ def _optimizer_context() -> tuple[dict, list[dict], str, dict, int, str, str, di
             "[딥러닝-런타임보정] "
             + ", ".join(f"{key}: {item.get('old')}→{item.get('new')}" for key, item in list(changes.items())[:6])
         )
-    threshold = _setting_int(loaded_settings, "split_length_threshold", 10)
+    threshold = _setting_int(loaded_settings, "split_length_threshold", 20)
+    if _setting_bool(loaded_settings, "subtitle_lora_split_floor_enabled", True):
+        threshold = max(threshold, _setting_int(loaded_settings, "subtitle_lora_split_floor_chars", 20))
     _EXAONE_WORKERS = _setting_int(loaded_settings, "llm_threads", 6, fallback_key="llm_workers")
     _LOCAL_OLLAMA_WORKER_CAP = _setting_int(loaded_settings, "local_ollama_llm_max_workers", 2)
     _GAP_BREAK_SEC = _setting_float(loaded_settings, "sub_gap_break_sec", 1.5)
@@ -1927,7 +1944,7 @@ def _codex_native_fast_path_needs_llm(seg: dict, normal_gate_needs: bool, settin
     text = str(seg.get("text", "") or "")
     compact_len = len(text.replace(" ", "").replace("\n", ""))
     row_settings = dict(seg.get("_lora_segment_settings") or {})
-    threshold = max(1, _setting_int({**dict(settings or {}), **row_settings}, "split_length_threshold", 10))
+    threshold = max(1, _setting_int({**dict(settings or {}), **row_settings}, "split_length_threshold", 20))
     long_ratio = max(1.0, _setting_float(settings or {}, "codex_subtitle_native_fast_path_long_text_llm_ratio", 2.8))
     return compact_len >= int(threshold * long_ratio)
 
@@ -2280,9 +2297,11 @@ def optimize_segments(
     optimized = _self_review_subtitle_quality(optimized, vad_segments or [], loaded_settings)
     optimized = _annotate_context_consistency(optimized, loaded_settings)
     optimized = _apply_output_variant_selector(optimized, original_segments, vad_segments or [], loaded_settings, stage="llm")
+    optimized = _enforce_final_subtitle_text_policy(optimized, corrections)
     optimized = _annotate_auto_review(optimized, loaded_settings)
     optimized = _annotate_stage_confidence(optimized, loaded_settings)
     optimized = _annotate_completion_report(optimized, loaded_settings)
+    optimized = _enforce_final_subtitle_text_policy(optimized, None)
     _log_accuracy_metrics(optimized, loaded_settings)
     _record_deep_policy_learning(optimized, loaded_settings)
     _emit_llm_progress(llm_progress_callback, active=False)

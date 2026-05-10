@@ -34,6 +34,7 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     stt_candidate_selected  = pyqtSignal(dict)
     seg_double_clicked      = pyqtSignal(int, float)
     seg_time_changed        = pyqtSignal(int, float, float, str)
+    seg_timing_confirm_requested = pyqtSignal(list)
     seg_to_gap              = pyqtSignal(int)
     gap_activated           = pyqtSignal(float, float)
     gap_to_segs             = pyqtSignal(float, float)

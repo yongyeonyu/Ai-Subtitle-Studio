@@ -942,16 +942,23 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             owner = _DummyOwner()
             trainer = PersonalizationIdleTrainer(owner, store_dir=tmpdir)
             trainer._poll_timer.stop()
+            trainer._current_learning_mode = "lite"
             try:
-                result = trainer.request_immediate_stop(
-                    reason="user_input_interrupt",
-                    hold_ms=0,
-                    join_timeout_sec=0,
-                )
+                with patch(
+                    "core.personalization.idle_trainer._cleanup_lora_training_runtime",
+                    return_value={"actions": ["gc.collect"]},
+                ) as cleanup_runtime:
+                    result = trainer.request_immediate_stop(
+                        reason="user_input_interrupt",
+                        hold_ms=0,
+                        join_timeout_sec=0,
+                    )
 
                 self.assertTrue(result["stop_requested"])
                 self.assertEqual(result["reason"], "user_input_interrupt")
                 self.assertTrue(trainer._stop_requested.is_set())
+                self.assertFalse(trainer.learning_status()["active"])
+                cleanup_runtime.assert_called()
             finally:
                 trainer._poll_timer.stop()
                 trainer.deleteLater()

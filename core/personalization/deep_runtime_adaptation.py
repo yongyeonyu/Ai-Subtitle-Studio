@@ -402,6 +402,19 @@ def adapt_runtime_settings_from_deep_events(
         current_ratio = _safe_float(out.get("llm_confidence_gate_max_compact_ratio"), 1.45)
         set_value("llm_confidence_gate_max_compact_ratio", round(_clamp_float(current_ratio + (0.04 * learning_rate), 1.08, 1.8), 3), "recent_quality_high_gate_safe")
 
+    if _safe_bool(out.get("subtitle_lora_split_floor_enabled"), False):
+        floor = _clamp_int(_safe_int(out.get("subtitle_lora_split_floor_chars"), 20), 12, 36)
+        split = _safe_int(out.get("split_length_threshold"), 20)
+        if split < floor:
+            set_value("split_length_threshold", floor, "lora_split_floor")
+        target = _safe_int(out.get("subtitle_common_split_target_chars"), floor)
+        if target < floor:
+            set_value("subtitle_common_split_target_chars", floor, "lora_split_floor")
+        hard = _safe_int(out.get("subtitle_common_split_hard_max_chars"), max(floor + 8, int(floor * 1.6)))
+        hard_floor = max(floor + 8, int(floor * 1.6))
+        if hard < hard_floor:
+            set_value("subtitle_common_split_hard_max_chars", hard_floor, "lora_split_floor")
+
     meta = {
         "schema": DEEP_RUNTIME_ADAPTATION_SCHEMA,
         "applied": bool(changes),

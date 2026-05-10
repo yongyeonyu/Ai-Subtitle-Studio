@@ -245,6 +245,11 @@ class SubtitleTextEdit(QTextEdit):
         self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.setCursorWidth(3)
         self.timestampArea = TimestampArea(self)
+        try:
+            self.timestampArea.show()
+            self.timestampArea.raise_()
+        except Exception:
+            pass
         self.document().documentLayout().documentSizeChanged.connect(self._update_margin)
         self._margin_update_timer = QTimer(self)
         self._margin_update_timer.setSingleShot(True)
@@ -252,9 +257,13 @@ class SubtitleTextEdit(QTextEdit):
         self._timestamp_update_timer = QTimer(self)
         self._timestamp_update_timer.setSingleShot(True)
         self._timestamp_update_timer.timeout.connect(self._flush_timestamp_area_update)
-        self.verticalScrollBar().valueChanged.connect(self._schedule_timestamp_area_update)
-        self.verticalScrollBar().valueChanged.connect(self._schedule_quick_layer_sync)
-        self.verticalScrollBar().valueChanged.connect(self._schedule_visible_margin_update)
+        self._scroll_repaint_timer = QTimer(self)
+        self._scroll_repaint_timer.setSingleShot(True)
+        self._scroll_repaint_timer.timeout.connect(self._repaint_timestamp_layer_only)
+        self._scroll_idle_refresh_timer = QTimer(self)
+        self._scroll_idle_refresh_timer.setSingleShot(True)
+        self._scroll_idle_refresh_timer.timeout.connect(self._flush_scroll_idle_refresh)
+        self.verticalScrollBar().valueChanged.connect(self._on_vertical_scroll_changed)
         self.verticalScrollBar().actionTriggered.connect(self._mark_user_scroll_activity)
         self.verticalScrollBar().sliderPressed.connect(self._mark_user_scroll_activity)
         self.textChanged.connect(self._schedule_timestamp_area_update)
@@ -300,7 +309,46 @@ class SubtitleTextEdit(QTextEdit):
         if timer is None:
             self._flush_timestamp_area_update()
             return
-        timer.start(16)
+        timer.start(24)
+
+    def _on_vertical_scroll_changed(self, *_args):
+        if bool(getattr(self, "_bulk_segment_load_active", False)):
+            return
+        repaint_timer = getattr(self, "_scroll_repaint_timer", None)
+        if repaint_timer is None:
+            self._repaint_timestamp_layer_only()
+        else:
+            repaint_timer.start(0)
+        if getattr(self, "_quick_layer", None) is not None:
+            self._schedule_quick_layer_sync(delay_ms=40)
+        idle_timer = getattr(self, "_scroll_idle_refresh_timer", None)
+        if idle_timer is not None:
+            idle_timer.start(140)
+
+    def _repaint_timestamp_layer_only(self):
+        area = getattr(self, "timestampArea", None)
+        if area is None:
+            return
+        try:
+            cr = self.contentsRect()
+            target = QRect(cr.left(), cr.top(), area.sizeHint().width(), cr.height())
+            if area.geometry() != target:
+                area.setGeometry(target)
+            if not area.isVisible():
+                area.show()
+            area.update()
+        except RuntimeError:
+            return
+        except Exception:
+            try:
+                area.update()
+            except Exception:
+                pass
+
+    def _flush_scroll_idle_refresh(self):
+        if bool(getattr(self, "_bulk_segment_load_active", False)):
+            return
+        self._flush_timestamp_area_update()
 
     def _flush_timestamp_area_update(self):
         parent = getattr(self, "_parent_widget", None)
@@ -316,13 +364,30 @@ class SubtitleTextEdit(QTextEdit):
                 self.update_margins()
             except Exception:
                 pass
+        self.refresh_timestamp_layer()
+
+    def refresh_timestamp_layer(self) -> bool:
+        """Keep the timestamp/speaker margin visible after bulk SRT/project loads."""
         area = getattr(self, "timestampArea", None)
         if area is None:
-            return
+            return False
         try:
+            self._update_margin()
+            cr = self.contentsRect()
+            area.setGeometry(QRect(cr.left(), cr.top(), area.sizeHint().width(), cr.height()))
+            area.show()
+            area.raise_()
             area.update()
+            self.viewport().update()
+            return True
         except RuntimeError:
-            pass
+            return False
+        except Exception:
+            try:
+                area.update()
+            except Exception:
+                pass
+            return False
 
     def _schedule_cursor_moved(self):
         timer = getattr(self, "_cursor_moved_timer", None)
@@ -334,14 +399,18 @@ class SubtitleTextEdit(QTextEdit):
     def _emit_cursor_moved_debounced(self):
         self.cursor_moved.emit()
 
-    def _schedule_quick_layer_sync(self):
+    def _schedule_quick_layer_sync(self, delay_ms: int = 16):
         if bool(getattr(self, "_bulk_segment_load_active", False)):
             return
         timer = getattr(self, "_quick_layer_timer", None)
         if timer is None:
             self._sync_quick_layer()
             return
-        timer.start(16)
+        try:
+            delay = max(0, int(delay_ms))
+        except Exception:
+            delay = 16
+        timer.start(delay)
 
     def _schedule_visible_margin_update(self):
         timer = getattr(self, "_margin_update_timer", None)
@@ -662,9 +731,12 @@ class SubtitleTextEdit(QTextEdit):
             accent = "#465663"
             bg_fill = "transparent"
             italic = False
+            show_circle = False
+            delete_visible = False
             if isinstance(ud, SubtitleBlockData):
                 if not getattr(ud, "is_gap", False):
                     timestamp = self._format_quick_line_timecode(getattr(ud, "start_sec", 0.0))
+                    show_circle = True
                 if getattr(ud, "live_preview", False):
                     accent = "#64D2FF"
                     bg_fill = "#16303C"
@@ -678,6 +750,7 @@ class SubtitleTextEdit(QTextEdit):
             if active:
                 bg_fill = "#1B2C34"
                 accent = "#34C759"
+                delete_visible = bool(isinstance(ud, SubtitleBlockData) and not getattr(ud, "is_gap", False))
             text = block.text().replace("\u2028", "\n")
             lines.append(
                 {
@@ -690,6 +763,9 @@ class SubtitleTextEdit(QTextEdit):
                     "accent": accent,
                     "fill": bg_fill,
                     "italic": bool(italic),
+                    "showCircle": bool(show_circle),
+                    "deleteVisible": bool(delete_visible),
+                    "deleteHovered": False,
                 }
             )
             block = block.next()
@@ -714,13 +790,8 @@ class SubtitleTextEdit(QTextEdit):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        cr = self.contentsRect()
-        try:
-            self.timestampArea.setGeometry(QRect(cr.left(), cr.top(), self.timestampArea.sizeHint().width(), cr.height()))
-        except RuntimeError:
+        if not self.refresh_timestamp_layer():
             return
-        except Exception:
-            pass
 
         # 💡 [신규] 오버스크롤(Overscroll) 적용: 마지막 줄이 화면 중간에 오도록 하단 여백 추가!
         doc = self.document()

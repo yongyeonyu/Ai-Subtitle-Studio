@@ -338,6 +338,314 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
             self.assertEqual(verify_calls[0][0], media_path)
             self.assertEqual(verify_calls[0][1][0]["candidate_key"], "0:12.000")
 
+    def test_long_4k_cut_boundary_delays_follower_until_pioneer_finishes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = os.path.join(tmpdir, "sample.project.json")
+            media_path = os.path.join(tmpdir, "long_4k.mp4")
+            with open(media_path, "wb") as f:
+                f.write(b"media")
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump({"analysis": {}}, f)
+
+            backend = _DummyBackend(project_path)
+            backend._cut_boundary_placeholder_duration = lambda _files: 1450.0
+            backend._load_cut_boundary_cache_for_start = lambda *_args, **_kwargs: None
+            backend._save_cut_boundary_cache_for_start = lambda *_args, **_kwargs: None
+            backend._clear_completed_cut_boundary_provisionals = lambda *_args, **_kwargs: None
+            backend._force_cut_boundary_topicless_segments_to_project = lambda *_args, **_kwargs: None
+            backend._emit_cut_boundary_count_to_sidebar = lambda *_args, **_kwargs: None
+
+            verify_started = threading.Event()
+            scan_saw_follower_before_return = []
+            verify_calls = []
+            scan_runtime = []
+
+            def fake_scan(path, **kwargs):
+                scan_runtime.append({
+                    "sample_step_sec": float(kwargs.get("sample_step_sec", 0.0) or 0.0),
+                    "sequential_decode": bool(
+                        dict(kwargs.get("settings") or {}).get("scan_cut_pioneer_sequential_decode_enabled")
+                    ),
+                    "cv2_backend": str(dict(kwargs.get("settings") or {}).get("scan_cut_cv2_video_backend") or ""),
+                    "backend_policy": str(dict(kwargs.get("settings") or {}).get("cut_boundary_backend_policy") or ""),
+                })
+                progress_callback = kwargs.get("progress_callback")
+                if callable(progress_callback):
+                    progress_callback({
+                        "clip_idx": 0,
+                        "percent": 50,
+                        "worker_idx": 0,
+                        "worker_total": 4,
+                        "worker_percent": 50,
+                        "timestamp": 720.0,
+                        "duration": 1450.0,
+                        "provisional_detected": 1,
+                    })
+                row = {
+                    "timeline_sec": 720.0,
+                    "time": 720.0,
+                    "clip_local_sec": 720.0,
+                    "clip_idx": 0,
+                    "source": "unit_pioneer",
+                    "refine_pending": True,
+                }
+                found_callback = kwargs.get("found_callback")
+                if callable(found_callback):
+                    found_callback(dict(row), [dict(row)])
+                scan_saw_follower_before_return.append(verify_started.wait(timeout=0.2))
+                completion_callback = kwargs.get("completion_callback")
+                if callable(completion_callback):
+                    completion_callback({"clip_idx": 0, "worker_total": 4, "worker_completed": 4, "done": True})
+                return [row]
+
+            def fake_verify(path, rows, **kwargs):
+                verify_started.set()
+                verify_calls.append((path, list(rows or []), kwargs))
+                found_callback = kwargs.get("found_callback")
+                if callable(found_callback):
+                    for row in rows or []:
+                        fixed = dict(row)
+                        fixed["status"] = "verified"
+                        fixed["verified"] = True
+                        found_callback(fixed, [fixed])
+                return list(rows or [])
+
+            settings = {
+                "cut_boundary_detection_enabled": True,
+                "scan_cut_long4k_min_duration_sec": 600,
+                "scan_cut_follower_stream_start_percent": 25,
+                "scan_cut_follower_stream_min_interval_sec": 0.0,
+            }
+            with mock.patch("core.pipeline.cut_boundary_helpers.load_settings", return_value=settings), \
+                 mock.patch("core.media_info.probe_media", return_value={"duration": 1450.0, "width": 3840, "height": 2160, "fps": 59.94}), \
+                 mock.patch("core.cut_boundary.cut_boundary_enabled", return_value=True), \
+                 mock.patch("core.cut_boundary.cut_boundary_scan_profile", return_value={"positions": (0, 2, 4, 6, 8), "mask": "x5", "sample_step_sec": 1.0}), \
+                 mock.patch("core.cut_boundary.scan_media_cut_boundary_provisionals", side_effect=fake_scan), \
+                 mock.patch("core.cut_boundary.verify_media_cut_boundary_rows", side_effect=fake_verify), \
+                 mock.patch("core.cut_boundary.sync_project_cut_boundaries", lambda *_args, **_kwargs: None):
+                backend._auto_scan_cut_boundaries_for_start_sync(project_path, [media_path])
+
+            follower = getattr(backend, "_cut_boundary_follower_thread", None)
+            self.assertIsNotNone(follower)
+            follower.join(timeout=2.0)
+
+            self.assertFalse(follower.is_alive())
+            self.assertTrue(scan_saw_follower_before_return)
+            self.assertFalse(scan_saw_follower_before_return[0])
+            self.assertEqual(len(verify_calls), 1)
+            self.assertEqual(len(scan_runtime), 1)
+            self.assertEqual(scan_runtime[0]["sample_step_sec"], 1.0)
+            self.assertFalse(scan_runtime[0]["sequential_decode"])
+            self.assertEqual(scan_runtime[0]["cv2_backend"], "avfoundation")
+            self.assertEqual(scan_runtime[0]["backend_policy"], "fast")
+            verify_settings = dict(verify_calls[0][2].get("settings") or {})
+            self.assertTrue(verify_settings.get("scan_cut_follower_deferred_until_pioneer_done"))
+            self.assertEqual(int(verify_settings.get("scan_cut_follower_stream_start_percent", 0)), 100)
+            self.assertGreaterEqual(int(verify_settings.get("scan_cut_follower_stream_batch_size", 0)), 16)
+
+    def test_long_4k_deferred_follower_is_micro_batched_for_visible_progress(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = os.path.join(tmpdir, "sample.project.json")
+            media_path = os.path.join(tmpdir, "long_4k.mp4")
+            with open(media_path, "wb") as f:
+                f.write(b"media")
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump({"analysis": {}}, f)
+
+            backend = _DummyBackend(project_path)
+            backend._cut_boundary_placeholder_duration = lambda _files: 1450.0
+            backend._load_cut_boundary_cache_for_start = lambda *_args, **_kwargs: None
+            backend._save_cut_boundary_cache_for_start = lambda *_args, **_kwargs: None
+            backend._clear_completed_cut_boundary_provisionals = lambda *_args, **_kwargs: None
+            backend._force_cut_boundary_topicless_segments_to_project = lambda *_args, **_kwargs: None
+            backend._emit_cut_boundary_count_to_sidebar = lambda *_args, **_kwargs: None
+
+            verify_batch_sizes = []
+
+            def fake_scan(path, **kwargs):
+                rows = []
+                found_callback = kwargs.get("found_callback")
+                for idx in range(40):
+                    sec = 20.0 + idx * 10.0
+                    row = {
+                        "timeline_sec": sec,
+                        "time": sec,
+                        "clip_local_sec": sec,
+                        "clip_idx": 0,
+                        "source": "unit_pioneer",
+                        "refine_pending": True,
+                    }
+                    rows.append(row)
+                    if callable(found_callback):
+                        found_callback(dict(row), list(rows))
+                completion_callback = kwargs.get("completion_callback")
+                if callable(completion_callback):
+                    completion_callback({"clip_idx": 0, "worker_total": 4, "worker_completed": 4, "done": True})
+                return rows
+
+            def fake_verify(path, rows, **kwargs):
+                verify_batch_sizes.append(len(list(rows or [])))
+                found_callback = kwargs.get("found_callback")
+                verified = []
+                for row in rows or []:
+                    fixed = dict(row)
+                    fixed["status"] = "verified"
+                    fixed["verified"] = True
+                    verified.append(fixed)
+                    if callable(found_callback):
+                        found_callback(dict(fixed), list(verified))
+                return verified
+
+            settings = {
+                "cut_boundary_detection_enabled": True,
+                "scan_cut_long4k_min_duration_sec": 600,
+                "scan_cut_follower_verify_micro_batch_size": 999,
+                "scan_cut_follower_verify_micro_batch_max": 16,
+                "scan_cut_long4k_follower_stream_batch_size": 16,
+            }
+            with mock.patch("core.pipeline.cut_boundary_helpers.load_settings", return_value=settings), \
+                 mock.patch("core.media_info.probe_media", return_value={"duration": 1450.0, "width": 3840, "height": 2160, "fps": 59.94}), \
+                 mock.patch("core.cut_boundary.cut_boundary_enabled", return_value=True), \
+                 mock.patch("core.cut_boundary.cut_boundary_scan_profile", return_value={"positions": (0, 2, 4, 6, 8), "mask": "x5", "sample_step_sec": 1.0}), \
+                 mock.patch("core.cut_boundary.scan_media_cut_boundary_provisionals", side_effect=fake_scan), \
+                 mock.patch("core.cut_boundary.verify_media_cut_boundary_rows", side_effect=fake_verify), \
+                 mock.patch("core.cut_boundary.sync_project_cut_boundaries", lambda *_args, **_kwargs: None):
+                backend._auto_scan_cut_boundaries_for_start_sync(project_path, [media_path])
+
+            follower = getattr(backend, "_cut_boundary_follower_thread", None)
+            self.assertIsNotNone(follower)
+            follower.join(timeout=2.0)
+
+            self.assertFalse(follower.is_alive())
+            self.assertGreaterEqual(len(verify_batch_sizes), 3)
+            self.assertLessEqual(max(verify_batch_sizes), 16)
+            self.assertEqual(sum(verify_batch_sizes), 40)
+            self.assertTrue(
+                any(name == "_sig_preview_cut_boundary_scan_lines" and args and args[0] for name, args in backend.emitted)
+            )
+
+    def test_pioneer_uses_low_profile_while_follower_keeps_resolved_profile(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = os.path.join(tmpdir, "sample.project.json")
+            media_path = os.path.join(tmpdir, "clip.mp4")
+            with open(media_path, "wb") as f:
+                f.write(b"media")
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump({"analysis": {}}, f)
+
+            backend = _DummyBackend(project_path)
+            backend._load_cut_boundary_cache_for_start = lambda *_args, **_kwargs: None
+            backend._save_cut_boundary_cache_for_start = lambda *_args, **_kwargs: None
+            backend._clear_completed_cut_boundary_provisionals = lambda *_args, **_kwargs: None
+            backend._force_cut_boundary_topicless_segments_to_project = lambda *_args, **_kwargs: None
+            backend._emit_cut_boundary_count_to_sidebar = lambda *_args, **_kwargs: None
+
+            scan_levels = []
+            scan_setting_levels = []
+            scan_fast_runtime = []
+            verify_levels = []
+            verify_setting_levels = []
+            verify_fast_runtime = []
+
+            def fake_profile(settings):
+                level = str(settings.get("scan_cut_boundary_level") or "medium")
+                if level == "low":
+                    return {
+                        "level": "low",
+                        "resolved_level": "low",
+                        "positions": (1, 3, 7, 10, 12, 14, 17, 21, 23),
+                        "mask": "custom9",
+                        "sample_step_sec": 1.0,
+                    }
+                return {
+                    "level": "medium",
+                    "resolved_level": "medium",
+                    "positions": (0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24),
+                    "mask": "custom13",
+                    "sample_step_sec": 1.0,
+                }
+
+            def fake_scan(path, **kwargs):
+                profile = dict(kwargs.get("scan_profile") or {})
+                settings = dict(kwargs.get("settings") or {})
+                scan_levels.append(str(profile.get("level") or ""))
+                scan_setting_levels.append(str(settings.get("scan_cut_boundary_level") or ""))
+                scan_fast_runtime.append({
+                    "pioneer_workers": int(settings.get("scan_cut_pioneer_workers", 0) or 0),
+                    "verify_workers": int(settings.get("scan_cut_verify_workers", 0) or 0),
+                    "ffmpeg_scene_prepass": bool(settings.get("scan_cut_ffmpeg_scene_prepass_enabled")),
+                    "ffmpeg_scene_replace": bool(settings.get("scan_cut_ffmpeg_scene_replace_opencv_enabled")),
+                    "backend_policy": str(settings.get("cut_boundary_backend_policy") or ""),
+                    "cv2_backend": str(settings.get("scan_cut_cv2_video_backend") or ""),
+                    "sequential_decode": bool(settings.get("scan_cut_pioneer_sequential_decode_enabled")),
+                    "sample_step_sec": float(kwargs.get("sample_step_sec", 0.0) or 0.0),
+                })
+                row = {
+                    "timeline_sec": 10.0,
+                    "time": 10.0,
+                    "clip_local_sec": 10.0,
+                    "clip_idx": 0,
+                    "source": "unit_pioneer",
+                    "refine_pending": True,
+                }
+                completion_callback = kwargs.get("completion_callback")
+                if callable(completion_callback):
+                    completion_callback({"clip_idx": 0, "worker_total": 1, "worker_completed": 1, "done": True})
+                return [row]
+
+            def fake_verify(path, rows, **kwargs):
+                profile = dict(kwargs.get("scan_profile") or {})
+                settings = dict(kwargs.get("settings") or {})
+                verify_levels.append(str(profile.get("level") or ""))
+                verify_setting_levels.append(str(settings.get("scan_cut_boundary_level") or ""))
+                verify_fast_runtime.append({
+                    "verify_workers": int(settings.get("scan_cut_verify_workers", 0) or 0),
+                    "outer_splits": int(settings.get("scan_cut_follower_outer_splits", 0) or 0),
+                    "stream_batch": int(settings.get("scan_cut_follower_stream_batch_size", 0) or 0),
+                    "stream_start": int(settings.get("scan_cut_follower_stream_start_percent", 0) or 0),
+                })
+                return list(rows or [])
+
+            settings = {
+                "autopilot_enabled": False,
+                "cut_boundary_detection_enabled": True,
+                "scan_cut_boundary_level": "medium",
+                "cut_boundary_level": "medium",
+                "scan_cut_level": "medium",
+            }
+            with mock.patch("core.pipeline.cut_boundary_helpers.load_settings", return_value=settings), \
+                 mock.patch("core.cut_boundary.cut_boundary_enabled", return_value=True), \
+                 mock.patch("core.cut_boundary.cut_boundary_scan_profile", side_effect=fake_profile), \
+                 mock.patch("core.cut_boundary.scan_media_cut_boundary_provisionals", side_effect=fake_scan), \
+                 mock.patch("core.cut_boundary.verify_media_cut_boundary_rows", side_effect=fake_verify), \
+                 mock.patch("core.cut_boundary.sync_project_cut_boundaries", lambda *_args, **_kwargs: None):
+                backend._auto_scan_cut_boundaries_for_start_sync(project_path, [media_path])
+
+            follower = getattr(backend, "_cut_boundary_follower_thread", None)
+            self.assertIsNotNone(follower)
+            follower.join(timeout=2.0)
+
+            self.assertEqual(scan_levels, ["low"])
+            self.assertEqual(scan_setting_levels, ["low"])
+            self.assertEqual(scan_fast_runtime, [{
+                "pioneer_workers": 4,
+                "verify_workers": 4,
+                "ffmpeg_scene_prepass": False,
+                "ffmpeg_scene_replace": False,
+                "backend_policy": "fast",
+                "cv2_backend": "avfoundation",
+                "sequential_decode": False,
+                "sample_step_sec": 1.0,
+            }])
+            self.assertEqual(verify_levels, ["medium"])
+            self.assertEqual(verify_setting_levels, ["medium"])
+            self.assertEqual(verify_fast_runtime, [{
+                "verify_workers": 4,
+                "outer_splits": 4,
+                "stream_batch": 4,
+                "stream_start": 25,
+            }])
+
     def test_cut_boundary_pioneer_progress_never_exceeds_100_without_final_worker_total(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             project_path = os.path.join(tmpdir, "sample.project.json")

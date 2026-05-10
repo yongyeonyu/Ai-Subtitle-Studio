@@ -10,10 +10,12 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtMultimedia import QMediaPlayer
 
 from core.runtime import config
 from ui.editor.video_playback_backend import choose_video_backend
+from ui.editor.video_overlay_widgets import SubtitleQuickOverlay, VideoSurfaceView
 from ui.editor.video_player_widget import VideoPlayerWidget
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
 
@@ -82,8 +84,24 @@ class VideoPlayerWidgetTests(unittest.TestCase):
         self.assertEqual(choice.name, "qt")
         self.assertEqual(choice.reason, "test_or_offscreen_safe")
 
-    def test_video_backend_prefers_mpv_when_available(self):
+    def test_video_backend_auto_skips_embedded_mpv_without_safety_gate(self):
         with patch.dict(os.environ, {"AI_SUBTITLE_VIDEO_BACKEND": "auto"}, clear=True), \
+             patch("ui.editor.video_playback_backend._running_under_pytest", return_value=False), \
+             patch("ui.editor.video_playback_backend._offscreen_qt", return_value=False), \
+             patch("ui.editor.video_playback_backend._embedded_mpv_enabled", return_value=False), \
+             patch("ui.editor.video_playback_backend._mpv_available", return_value=True), \
+             patch("ui.editor.video_playback_backend._vlc_available", return_value=False):
+            choice = choose_video_backend()
+
+        self.assertEqual(choice.name, "qt")
+        self.assertEqual(choice.reason, "embedded_mpv_disabled")
+
+    def test_video_backend_prefers_mpv_when_explicitly_enabled(self):
+        with patch.dict(
+            os.environ,
+            {"AI_SUBTITLE_VIDEO_BACKEND": "auto", "AI_SUBTITLE_ENABLE_EMBEDDED_MPV": "1"},
+            clear=True,
+        ), \
              patch("ui.editor.video_playback_backend._running_under_pytest", return_value=False), \
              patch("ui.editor.video_playback_backend._offscreen_qt", return_value=False), \
              patch("ui.editor.video_playback_backend._mpv_available", return_value=True), \
@@ -109,6 +127,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
              patch("ui.editor.video_playback_backend._settings_requested_video_backend", return_value="qt"), \
              patch("ui.editor.video_playback_backend._running_under_pytest", return_value=False), \
              patch("ui.editor.video_playback_backend._offscreen_qt", return_value=False), \
+             patch("ui.editor.video_playback_backend._embedded_mpv_enabled", return_value=True), \
              patch("ui.editor.video_playback_backend._mpv_available", return_value=True), \
              patch("ui.editor.video_playback_backend._vlc_available", return_value=True):
             choice = choose_video_backend()
@@ -212,6 +231,43 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.deleteLater()
             self.app.processEvents()
 
+    def test_high_resolution_preview_uses_original_by_default_while_proxy_builds(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                src = os.path.join(tmp, "sample_4k.mp4")
+                with open(src, "wb") as f:
+                    f.write(b"video")
+
+                widget._source_width = 3840
+                widget._source_height = 2160
+                with patch.object(widget, "_preview_proxy_enabled", return_value=True), \
+                     patch.object(widget, "_start_proxy_build") as start_proxy_build:
+                    playback_path = widget._playback_path_for(src)
+
+                self.assertEqual(playback_path, src)
+                self.assertTrue(widget._source_ready)
+                self.assertEqual(widget._proxy_playback_path, src)
+                start_proxy_build.assert_called_once()
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_zero_duration_event_preserves_probed_media_duration(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget._rebuild_frame_time_map(duration=1450.3, fps=59.94)
+
+            widget._on_duration_changed(0)
+
+            self.assertAlmostEqual(widget.total_time, 1450.3, places=3)
+            self.assertGreater(widget.frame_time_map.total_frames, 0)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
     def test_preview_proxy_is_default_on_without_setting(self):
         widget = VideoPlayerWidget()
         try:
@@ -233,6 +289,40 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             widget.close()
             widget.deleteLater()
             self.app.processEvents()
+
+    def test_video_surface_uses_contain_aspect_ratio_to_avoid_preview_crop(self):
+        view = VideoSurfaceView()
+        try:
+            self.assertEqual(view.video_item.aspectRatioMode(), Qt.AspectRatioMode.KeepAspectRatio)
+        finally:
+            view.close()
+            view.deleteLater()
+            self.app.processEvents()
+
+    def test_video_surface_resize_preserves_parent_display_rect(self):
+        view = VideoSurfaceView()
+        try:
+            view.resize(640, 360)
+            self.app.processEvents()
+            explicit = QRectF(20, 30, 320, 180)
+            view.set_video_display_rect(explicit)
+
+            view.resize(800, 450)
+            self.app.processEvents()
+
+            self.assertEqual(view.video_item.pos().x(), explicit.left())
+            self.assertEqual(view.video_item.pos().y(), explicit.top())
+            self.assertEqual(view.video_item.size().width(), explicit.width())
+            self.assertEqual(view.video_item.size().height(), explicit.height())
+        finally:
+            view.close()
+            view.deleteLater()
+            self.app.processEvents()
+
+    def test_qml_video_subtitle_overlay_is_opt_in_to_avoid_black_metal_composite(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("ui.editor.video_overlay_widgets.scenegraph_enabled", return_value=True):
+            self.assertIsNone(SubtitleQuickOverlay.create())
 
     def test_source_name_badge_lives_on_control_bar_right(self):
         widget = VideoPlayerWidget()

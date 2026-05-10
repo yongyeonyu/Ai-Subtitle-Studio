@@ -203,6 +203,75 @@ def enrich_existing_project_file(project_path: str, owner, editor, segments: lis
     return project_path
 
 
+def restore_project_stt_preview_segments(editor, project: dict[str, Any] | None) -> int:
+    """Restore persisted STT1/STT2 candidate lanes into the editor timeline."""
+    if editor is None or not isinstance(project, dict):
+        return 0
+    previews = project_stt_preview_segments(project)
+    restored = [dict(row) for row in previews if isinstance(row, dict)]
+    try:
+        setattr(editor, "_live_stt_preview_segments", restored)
+    except Exception:
+        return 0
+    if not restored:
+        return 0
+
+    redraw = getattr(editor, "_redraw_timeline_with_live_preview", None)
+    if callable(redraw):
+        try:
+            redraw()
+            return len(restored)
+        except Exception:
+            pass
+
+    update_with_preview = getattr(editor, "_update_timeline_with_confirmed_and_preview", None)
+    if callable(update_with_preview):
+        try:
+            current = getattr(editor, "_get_current_segments", lambda: [])()
+            update_with_preview(list(current or []))
+            return len(restored)
+        except Exception:
+            pass
+
+    timeline = getattr(editor, "timeline", None)
+    if timeline is not None and hasattr(timeline, "update_segments"):
+        try:
+            current = list(getattr(editor, "_get_current_segments", lambda: [])() or [])
+        except Exception:
+            current = list(getattr(editor, "_cached_segs", []) or [])
+        def _sort_sec(seg: dict[str, Any], key: str) -> float:
+            try:
+                return float(seg.get(key, 0.0) or 0.0)
+            except Exception:
+                return 0.0
+        combined = sorted(
+            [
+                dict(seg)
+                for seg in current + restored
+                if isinstance(seg, dict) and not seg.get("is_gap")
+            ],
+            key=lambda seg: (
+                _sort_sec(seg, "start"),
+                _sort_sec(seg, "end"),
+                str(seg.get("stt_preview_source", "") or ""),
+            ),
+        )
+        try:
+            total_dur = max(float(seg.get("end", 0.0) or 0.0) for seg in combined) if combined else 0.0
+        except Exception:
+            total_dur = 0.0
+        try:
+            video_player = getattr(editor, "video_player", None)
+            total_dur = max(total_dur, float(getattr(video_player, "total_time", 0.0) or 0.0))
+        except Exception:
+            pass
+        try:
+            timeline.update_segments(combined, getattr(editor, "_active_seg_start", None), total_dur)
+        except Exception:
+            pass
+    return len(restored)
+
+
 def apply_project_ui_state(owner, editor, project_path: str) -> None:
     if not project_path or not os.path.exists(project_path):
         return
@@ -248,6 +317,10 @@ def apply_project_ui_state(owner, editor, project_path: str) -> None:
         pass
     try:
         setattr(editor, '_active_clip_idx', int(ws.get('active_clip_idx', 0) or 0))
+    except Exception:
+        pass
+    try:
+        restore_project_stt_preview_segments(editor, data)
     except Exception:
         pass
     try:

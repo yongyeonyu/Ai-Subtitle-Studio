@@ -374,7 +374,7 @@ def write_srt_track(rows: list[dict[str, Any]], srt_path: str) -> dict[str, Any]
     for row in rows or []:
         if not isinstance(row, dict) or row.get("is_gap"):
             continue
-        text = str(row.get("text", "") or "").strip().replace("\u2028", "\n")
+        text = str(row.get("text", "") or "").strip().replace("\u2028", "\n").replace(".", "")
         if not text:
             continue
         start = _segment_start(row)

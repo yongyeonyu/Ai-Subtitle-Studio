@@ -87,16 +87,19 @@ ai_subtitle_studio/
 │   │   ├── stt_lattice.py
 │   │   ├── stt_quality_presets.py
 │   │   ├── stt_rescue.py
+│   │   ├── stt_runtime_policy.py
 │   │   ├── stt_vad.py
 │   │   ├── torch_acceleration.py
+│   │   ├── transcribe_policy_helpers.py
 │   │   ├── vad_backend_router.py
 │   │   ├── whisper_coreml.py
 │   │   ├── whisper_cpp.py
 │   │   ├── whisper_faster.py
-│   │   ├── whisperkit_persistent.py
 │   │   ├── whisper_mlx.py
 │   │   ├── whisper_transformers.py
 │   │   ├── whisper_worker.py
+│   │   ├── whisperkit_empty_fallback.py
+│   │   ├── whisperkit_persistent.py
 │   │   └── worker_threads.py
 │   ├── engine
 │   │   ├── __init__.py
@@ -107,9 +110,11 @@ ai_subtitle_studio/
 │   │   ├── subtitle_accuracy_pipeline.py
 │   │   ├── subtitle_engine.py
 │   │   ├── subtitle_macro_chunks.py
+│   │   ├── subtitle_native_word_split.py
 │   │   ├── subtitle_one_click_fix.py
 │   │   ├── subtitle_prompts.py
 │   │   ├── subtitle_settings.py
+│   │   ├── subtitle_text_policy.py
 │   │   ├── subtitle_timing.py
 │   │   ├── subtitle_uncertainty.py
 │   │   ├── subtitle_why.py
@@ -121,9 +126,11 @@ ai_subtitle_studio/
 │   │   ├── llama_cpp_provider.py
 │   │   ├── ollama_provider.py
 │   │   ├── openai_provider.py
-│   │   ├── provider_router.py
 │   │   ├── provider_registry.py
+│   │   ├── provider_router.py
 │   │   └── secure_keys.py
+│   ├── native
+│   │   └── _native_cut_boundary.cpp
 │   ├── optimization
 │   │   ├── __init__.py
 │   │   ├── backend_policy.py
@@ -174,11 +181,14 @@ ai_subtitle_studio/
 │   │   ├── backend_core.py
 │   │   ├── background_prefetch.py
 │   │   ├── cut_boundary_helpers.py
+│   │   ├── cut_boundary_prescan_policy.py
 │   │   ├── multiclip_pipeline.py
 │   │   ├── pipeline_helpers.py
 │   │   ├── single_pipeline.py
 │   │   ├── startup_diagnostics.py
 │   │   ├── stt_preview_optimizer.py
+│   │   ├── subtitle_buffer_policy.py
+│   │   ├── subtitle_memory_guard.py
 │   │   └── topicless_segments.py
 │   ├── project
 │   │   ├── __init__.py
@@ -230,9 +240,11 @@ ai_subtitle_studio/
 │   ├── runtime
 │   │   ├── __init__.py
 │   │   ├── config.py
+│   │   ├── hardware_profile.py
 │   │   ├── logger.py
 │   │   ├── memory_manager.py
-│   │   └── multi_process.py
+│   │   ├── multi_process.py
+│   │   └── qt_runtime.py
 │   ├── stt_mode
 │   │   ├── __init__.py
 │   │   ├── dictation_state.py
@@ -272,19 +284,21 @@ ai_subtitle_studio/
 │   ├── backend_fast.py
 │   ├── cloud_sync.py
 │   ├── cut_boundary.py
+│   ├── cut_boundary_api.py
 │   ├── cut_boundary_audio.py
 │   ├── cut_boundary_auto.py
 │   ├── cut_boundary_auto_profile.py
 │   ├── cut_boundary_auto_scan.py
 │   ├── cut_boundary_auto_utils.py
 │   ├── cut_boundary_auto_verify.py
-│   ├── cut_boundary_api.py
 │   ├── cut_boundary_backend_router.py
 │   ├── cut_boundary_ffmpeg_scene.py
 │   ├── cut_boundary_fps.py
 │   ├── cut_boundary_fusion.py
 │   ├── cut_boundary_jump.py
+│   ├── cut_boundary_level_policy.py
 │   ├── cut_boundary_middle.py
+│   ├── cut_boundary_scan_runtime.py
 │   ├── frame_time.py
 │   ├── json_file.py
 │   ├── media_fingerprint.py
@@ -292,8 +306,6 @@ ai_subtitle_studio/
 │   ├── media_queue_order.py
 │   ├── mode_policy.py
 │   ├── model_manager.py
-│   ├── native
-│   │   └── _native_cut_boundary.cpp
 │   ├── native_cut_boundary.py
 │   ├── native_json.py
 │   ├── native_macos_acceleration.py
@@ -329,13 +341,18 @@ ai_subtitle_studio/
 │   ├── dataset_correction.json
 │   ├── golden_subtitle_suite.json
 │   └── model_registry.json
+├── experiments
+│   └── whisperkit_persistent_worker
+│       ├── Sources
+│       │   └── WhisperKitPersistentWorker
+│       │       └── main.swift
+│       ├── Package.resolved
+│       └── Package.swift
 ├── native
 │   ├── cut_boundary
 │   │   └── native_cut_boundary.cpp
 │   └── macos
 │       └── AIStudioNative
-│           ├── Package.swift
-│           ├── README.md
 │           ├── Sources
 │           │   ├── AIStudioCore
 │           │   │   ├── CommonSplitPlanner.swift
@@ -351,35 +368,30 @@ ai_subtitle_studio/
 │           │   │   └── NativeTimelineView.swift
 │           │   └── AIStudioNativeCLI
 │           │       └── main.swift
-│           └── Tests
-│               └── AIStudioCoreTests
-│                   ├── CommonSplitPlannerTests.swift
-│                   ├── ProjectJSONTests.swift
-│                   ├── SRTCodecTests.swift
-│                   ├── SubtitleQualityScorerTests.swift
-│                   ├── TimelineColumnsTests.swift
-│                   └── WaveformPeaksTests.swift
-├── experiments
-│   └── whisperkit_persistent_worker
-│       ├── Package.resolved
-│       ├── Package.swift
-│       └── Sources
-│           └── WhisperKitPersistentWorker
-│               └── main.swift
+│           ├── Tests
+│           │   └── AIStudioCoreTests
+│           │       ├── CommonSplitPlannerTests.swift
+│           │       ├── ProjectJSONTests.swift
+│           │       ├── SRTCodecTests.swift
+│           │       ├── SubtitleQualityScorerTests.swift
+│           │       ├── TimelineColumnsTests.swift
+│           │       └── WaveformPeaksTests.swift
+│           ├── Package.swift
+│           └── README.md
 ├── packaging
 │   └── macos
 │       ├── AI Subtitle Studio.entitlements
 │       ├── Build Beta DMG.command
-│       ├── Info.plist.template
-│       ├── Install or Update AI Subtitle Studio.command
-│       ├── README.md
 │       ├── build_app_bundle.sh
 │       ├── build_app_store_pkg.sh
 │       ├── build_beta_dmg.sh
 │       ├── create_dmg.sh
+│       ├── Info.plist.template
+│       ├── Install or Update AI Subtitle Studio.command
 │       ├── install_or_update_app.sh
 │       ├── notarize_app_bundle.sh
 │       ├── notarize_dmg.sh
+│       ├── README.md
 │       ├── sign_app_bundle.sh
 │       ├── upload_app_store_build.sh
 │       ├── validate_app_bundle.sh
@@ -400,9 +412,9 @@ ai_subtitle_studio/
 │   ├── test_cp03_cp04_status_ui.py
 │   ├── test_cp08_cp10_home_timeline.py
 │   ├── test_cp11_multiclip_offset.py
-│   ├── test_cut_boundary_audio.py
 │   ├── test_cut_boundary_adaptive_level.py
 │   ├── test_cut_boundary_api.py
+│   ├── test_cut_boundary_audio.py
 │   ├── test_cut_boundary_auto_scan_backend.py
 │   ├── test_cut_boundary_compare_resolution.py
 │   ├── test_cut_boundary_ffmpeg_scene.py
@@ -416,6 +428,7 @@ ai_subtitle_studio/
 │   ├── test_editor_auto_export.py
 │   ├── test_editor_autosave_cleanup.py
 │   ├── test_editor_roughcut_draft.py
+│   ├── test_editor_srt_open_refresh.py
 │   ├── test_editor_stable_frames.py
 │   ├── test_editor_stt_mode.py
 │   ├── test_editor_truth_capture.py
@@ -433,7 +446,6 @@ ai_subtitle_studio/
 │   ├── test_ipad_exchange.py
 │   ├── test_live_microphone_session.py
 │   ├── test_live_stt_cleanup.py
-│   ├── test_macos_bundle_runtime_paths.py
 │   ├── test_llm_candidate_policy.py
 │   ├── test_llm_correction_guard.py
 │   ├── test_lora_gap_autosettings.py
@@ -443,6 +455,7 @@ ai_subtitle_studio/
 │   ├── test_lora_settings_autopilot.py
 │   ├── test_lora_trial_scoring.py
 │   ├── test_lora_vector_retriever.py
+│   ├── test_macos_bundle_runtime_paths.py
 │   ├── test_media_fingerprint.py
 │   ├── test_media_processor_overlap.py
 │   ├── test_media_queue_order.py
@@ -526,6 +539,7 @@ ai_subtitle_studio/
 │   ├── test_subtitle_rules_runtime.py
 │   ├── test_subtitle_style_profile.py
 │   ├── test_subtitle_text_edit_keys.py
+│   ├── test_subtitle_text_edit_scroll.py
 │   ├── test_subtitle_uncertainty.py
 │   ├── test_subtitle_why.py
 │   ├── test_tablet_viewport_smoke.py
@@ -543,6 +557,16 @@ ai_subtitle_studio/
 │   ├── test_whisper_coreml.py
 │   ├── test_whisper_model_catalog.py
 │   └── test_word_resegmenter.py
+├── tools
+│   ├── apply_runtime_optimization_profile.py
+│   ├── benchmark_apple_silicon_scheduler.py
+│   ├── benchmark_dense_flow_cut_boundary.py
+│   ├── benchmark_llm_model_variants.py
+│   ├── benchmark_macos_native_pipeline.py
+│   ├── benchmark_native_policy_engine.py
+│   ├── benchmark_stt_native_backends.py
+│   ├── benchmark_subtitle_pipeline_variants.py
+│   └── build_native_extensions.py
 ├── ui
 │   ├── dialogs
 │   │   ├── __init__.py
@@ -672,6 +696,7 @@ ai_subtitle_studio/
 │   │   ├── timeline_paint.py
 │   │   ├── timeline_scenegraph.py
 │   │   ├── timeline_scenegraph.qml
+│   │   ├── timeline_segment_style.py
 │   │   ├── timeline_waveform.py
 │   │   └── timeline_widget.py
 │   ├── __init__.py
@@ -701,14 +726,4 @@ ai_subtitle_studio/
 ├── RELEASE_v03.25.01.md
 ├── RELEASE_v04.00.00.md
 ├── RELEASE_v04.00.01.md
-├── requirements-mac.txt
-├── tools
-│   ├── apply_runtime_optimization_profile.py
-│   ├── benchmark_apple_silicon_scheduler.py
-│   ├── benchmark_dense_flow_cut_boundary.py
-│   ├── benchmark_llm_model_variants.py
-│   ├── benchmark_macos_native_pipeline.py
-│   ├── benchmark_native_policy_engine.py
-│   ├── benchmark_subtitle_pipeline_variants.py
-│   ├── benchmark_stt_native_backends.py
-│   └── build_native_extensions.py
+└── requirements-mac.txt

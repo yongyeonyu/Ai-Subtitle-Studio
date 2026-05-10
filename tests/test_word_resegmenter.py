@@ -4,8 +4,10 @@ import unittest
 from unittest import mock
 
 from core.engine import subtitle_engine
+from core.engine.subtitle_native_word_split import native_builtin_word_groups
 from core.native_cut_boundary import word_split_groups
 from core.engine.word_resegmenter import resegment_by_word_timestamps
+from core.engine.subtitle_timing import apply_final_gap_settings
 from core.subtitle_quality.timestamp_regrouper import (
     regroup_by_word_timestamps,
     refine_segment_edges_with_context,
@@ -27,6 +29,25 @@ class WordResegmenterTests(unittest.TestCase):
             min_duration=0.1,
             gap_break_sec=1.5,
             word_gap_break_sec=0.65,
+        )
+        if groups is None:
+            self.skipTest("native C++ extension unavailable")
+
+        self.assertEqual(groups, [(0, 1), (1, 2)])
+
+    def test_subtitle_engine_native_word_split_bridge_matches_gap_rules(self):
+        words = [
+            {"word": "안녕하세요", "start": 0.0, "end": 0.8},
+            {"word": "다음입니다", "start": 2.7, "end": 3.5},
+        ]
+        groups = native_builtin_word_groups(
+            words,
+            rules={},
+            threshold=30,
+            gap_break_sec=1.5,
+            default_gap_break_sec=1.5,
+            natural_break_func=lambda _word, _next, _rules: False,
+            visible_len_func=lambda text: len(text.replace(" ", "").replace("\n", "")),
         )
         if groups is None:
             self.skipTest("native C++ extension unavailable")
@@ -278,7 +299,81 @@ class WordResegmenterTests(unittest.TestCase):
 
         self.assertEqual([item["text"] for item in result], ["일단 넥스 수소차"])
         self.assertEqual(result[0]["_lora_style_merge_policy"]["task"], "lora_style_micro_merge")
-        self.assertEqual(result[0]["_lora_segment_settings"]["split_length_threshold"], 16)
+        self.assertEqual(result[0]["_lora_segment_settings"]["split_length_threshold"], 20)
+
+    def test_lora_style_micro_merge_uses_twenty_char_floor_for_legacy_short_settings(self):
+        result = subtitle_engine._apply_lora_style_micro_merge(
+            [
+                {
+                    "start": 0.0,
+                    "end": 0.9,
+                    "text": "이번에 마크마가",
+                    "words": [
+                        {"word": "이번에", "start": 0.0, "end": 0.35},
+                        {"word": "마크마가", "start": 0.38, "end": 0.9},
+                    ],
+                },
+                {
+                    "start": 1.15,
+                    "end": 2.1,
+                    "text": "WEC 데뷔전에서",
+                    "words": [
+                        {"word": "WEC", "start": 1.15, "end": 1.45},
+                        {"word": "데뷔전에서", "start": 1.48, "end": 2.1},
+                    ],
+                },
+            ],
+            [],
+            {
+                "subtitle_lora_micro_merge_enabled": True,
+                "subtitle_lora_split_floor_chars": 20,
+                "split_length_threshold": 10,
+                "sub_min_duration": 0.3,
+                "sub_gap_break_sec": 1.5,
+                "continuous_threshold": 2.0,
+                "subtitle_lora_micro_merge_continuous_sec": 3.0,
+                "word_timing_gap_break_sec": 0.65,
+                "sub_max_duration": 6.0,
+                "sub_max_cps": 20,
+            },
+            stage="unit",
+        )
+
+        self.assertEqual([item["text"] for item in result], ["이번에 마크마가 WEC 데뷔전에서"])
+        self.assertEqual(result[0]["_lora_segment_settings"]["split_length_threshold"], 20)
+
+    def test_common_split_guard_does_not_recut_lora_twenty_char_style(self):
+        text = "이번에 마크마가 WEC 데뷔전에서 완주를 두 대 다 했잖아요"
+        words = [
+            {"word": token, "start": idx * 0.3, "end": idx * 0.3 + 0.25}
+            for idx, token in enumerate(text.split())
+        ]
+        result = apply_final_gap_settings(
+            [
+                {
+                    "start": 0.0,
+                    "end": 3.0,
+                    "text": text,
+                    "words": words,
+                    "_lora_segment_score": 95.0,
+                    "_lora_segment_settings": {"split_length_threshold": 10},
+                }
+            ],
+            {
+                "split_length_threshold": 10,
+                "subtitle_lora_split_floor_chars": 20,
+                "subtitle_common_split_guard_enabled": True,
+                "subtitle_common_split_target_chars": 16,
+                "subtitle_common_split_hard_max_chars": 24,
+                "subtitle_common_split_hard_max_duration_sec": 5.5,
+                "sub_min_duration": 0.2,
+                "sub_max_duration": 6.0,
+                "sub_gap_break_sec": 1.5,
+            },
+            force=True,
+        )
+
+        self.assertEqual([item["text"] for item in result], [text])
 
     def test_splits_when_duration_is_too_long(self):
         result = resegment_by_word_timestamps(

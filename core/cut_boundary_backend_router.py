@@ -58,10 +58,14 @@ def apply_cut_boundary_backend_settings(settings: dict[str, Any] | None) -> dict
     if backend in {"fast", "native", "opencv_proxy_fast", "native_opencv"}:
         data.setdefault("scan_cut_cv2_threads_per_worker", 1)
         data.setdefault("scan_cut_pioneer_sequential_decode_enabled", True)
-        data.setdefault("scan_cut_ffmpeg_scene_prepass_enabled", True)
-        data.setdefault("scan_cut_ffmpeg_scene_replace_opencv_enabled", True)
+        # Keep the benchmark-winning OpenCV 4-way pioneer as the default fast
+        # path. FFmpeg scene detection is still available when explicitly
+        # enabled, but replacing the pioneer made long 4K clips wait on a
+        # slower single prepass before temporary cut lines appeared.
+        data.setdefault("scan_cut_ffmpeg_scene_prepass_enabled", False)
+        data.setdefault("scan_cut_ffmpeg_scene_replace_opencv_enabled", False)
         data.setdefault("scan_cut_ffmpeg_scene_threshold", 0.30)
-        data.setdefault("scan_cut_ffmpeg_scene_timeout_sec", 90.0)
+        data.setdefault("scan_cut_ffmpeg_scene_timeout_sec", 6.0)
         data.setdefault("scan_cut_ffmpeg_scene_max_candidates", 300)
         data.setdefault("scan_cut_progress_sample_stride", 8)
         # BENCH LOCK 2026-05-09 (Apple M5, X5_시승기_후반.MP4 4K HEVC):

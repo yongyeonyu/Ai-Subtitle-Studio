@@ -9,6 +9,7 @@ from core.personalization.lora_rule_learning import (
     learn_rules_from_truth_table,
 )
 from core.personalization.lora_storage import append_truth_table_rows, initialize_lora_personalization_store, load_learned_rules
+from core.personalization.subtitle_style_profile import build_subtitle_style_profile
 
 
 class LoraRuleLearningTests(unittest.TestCase):
@@ -28,6 +29,12 @@ class LoraRuleLearningTests(unittest.TestCase):
                     line_break_pattern="8|8",
                     punctuation_pattern=".",
                     detected_split_rule="그러니까",
+                    extra={
+                        "style_profile": build_subtitle_style_profile(
+                            raw_text="오늘은 그러니까\n여기까지 할게요.",
+                            speech_text="오늘은 그러니까\n여기까지 할게요.",
+                        ),
+                    },
                 ).to_record(),
                 TruthTableRow(
                     media_id="media-002",
@@ -41,6 +48,12 @@ class LoraRuleLearningTests(unittest.TestCase):
                     line_break_pattern="12",
                     punctuation_pattern=".",
                     detected_split_rule="하지만",
+                    extra={
+                        "style_profile": build_subtitle_style_profile(
+                            raw_text="하지만 다음엔 더 잘할게요.",
+                            speech_text="하지만 다음엔 더 잘할게요.",
+                        ),
+                    },
                 ).to_record(),
                 TruthTableRow(
                     media_id="media-003",
@@ -54,6 +67,12 @@ class LoraRuleLearningTests(unittest.TestCase):
                     line_break_pattern="7|9",
                     punctuation_pattern=".",
                     detected_split_rule="그러니까",
+                    extra={
+                        "style_profile": build_subtitle_style_profile(
+                            raw_text="아니 그러니까\n진짜 여기까지예요.",
+                            speech_text="아니 그러니까\n진짜 여기까지예요.",
+                        ),
+                    },
                 ).to_record(),
             ]
             append_truth_table_rows(rows, tmpdir)
@@ -68,6 +87,9 @@ class LoraRuleLearningTests(unittest.TestCase):
             self.assertGreater(split_payload["items"][0]["confidence"], 0.6)
             self.assertEqual(line_payload["items"][0]["rule_text"], "8|8")
             self.assertIn("summary", split_payload["metadata"])
+            boundary_summary = line_payload["metadata"]["summary"]["editor_word_boundaries"]
+            self.assertEqual(boundary_summary["top_subtitle_start_words"][0]["word"], "오늘은")
+            self.assertEqual(boundary_summary["top_line_break_pairs"][0]["pair"], "그러니까->여기까지")
 
     def test_apply_split_rule_update_review_rewrites_temp_config_with_backup(self):
         with tempfile.TemporaryDirectory() as tmpdir:

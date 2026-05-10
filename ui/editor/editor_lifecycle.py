@@ -65,11 +65,75 @@ class EditorLifecycleMixin:
         except Exception:
             pass
 
+    def _refresh_opened_srt_editor_runtime(self, editor) -> None:
+        """Restore the same live editor state project loads get after hydration.
+
+        Direct SRT opens load text before the widget is visible, so the cached
+        segment metadata can miss the final timestamp margin/video provider
+        refresh that project hydration performs later.
+        """
+        if editor is None:
+            return
+        try:
+            cached = getattr(editor, "_cached_segs", None)
+            if isinstance(cached, list) and cached:
+                editor._rebuild_subtitle_memory_cache(cached)
+            else:
+                editor._rebuild_subtitle_memory_cache()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(editor, "_refresh_editor_timestamp_metadata"):
+                editor._refresh_editor_timestamp_metadata(full=True)
+        except Exception:
+            pass
+
+        text_edit = getattr(editor, "text_edit", None)
+        try:
+            if text_edit is not None and hasattr(text_edit, "update_margins"):
+                text_edit.update_margins()
+            if text_edit is not None and hasattr(text_edit, "refresh_timestamp_layer"):
+                text_edit.refresh_timestamp_layer()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(editor, "_refresh_video_subtitle_context"):
+                editor._refresh_video_subtitle_context()
+            video_player = getattr(editor, "video_player", None)
+            provider = getattr(editor, "_video_subtitle_context_for_player", None)
+            if video_player is not None and callable(provider):
+                if hasattr(video_player, "set_subtitle_provider"):
+                    video_player.set_subtitle_provider(provider)
+                elif hasattr(video_player, "refresh_subtitle_context"):
+                    video_player.refresh_subtitle_context(provider())
+                elif hasattr(video_player, "set_context_segments"):
+                    video_player.set_context_segments(provider())
+            canvas = getattr(getattr(editor, "timeline", None), "canvas", None)
+            playhead_sec = float(getattr(canvas, "playhead_sec", 0.0) or 0.0)
+            if video_player is not None and hasattr(video_player, "set_subtitle_display_time"):
+                local_sec = editor._global_to_local_sec(playhead_sec) if hasattr(editor, "_global_to_local_sec") else playhead_sec
+                video_player.set_subtitle_display_time(local_sec)
+        except Exception:
+            pass
+
+    def _schedule_opened_srt_editor_runtime_refresh(self, editor) -> None:
+        for delay_ms in (0, 120, 360, 720):
+            QTimer.singleShot(
+                delay_ms,
+                lambda e=editor: self._refresh_opened_srt_editor_runtime(e),
+            )
+
     def _open_srt_in_editor(self, srt_path):
         from core.srt_parser import parse_srt
         from core.subtitle_existing import backup_existing_srt, find_media_for_srt, validate_srt_duration
         from ui.editor.editor_widget import EditorWidget
         self._current_work_mode = "editor"
+        self._current_project_path = None
+        self._project_boundary_times = []
+        if hasattr(self, "_clear_multiclip_runtime_state"):
+            self._clear_multiclip_runtime_state()
         self._remove_old_editor()
         media_path = find_media_for_srt(srt_path) or srt_path
         ok, reason = validate_srt_duration(srt_path, media_path)
@@ -79,7 +143,10 @@ class EditorLifecycleMixin:
             QMessageBox.warning(self, "기존 자막 오류", reason)
             backup_existing_srt(srt_path)
             segments = []
-        editor = EditorWidget(video_name=os.path.basename(srt_path), segments=segments, media_path=media_path, parent=self)
+        display_name = os.path.basename(media_path if media_path and media_path != srt_path else srt_path)
+        editor = EditorWidget(video_name=display_name, segments=segments, media_path=media_path, parent=self)
+        editor._source_srt_path = srt_path
+        editor._last_saved_srt_outputs = [(srt_path, media_path)]
         editor._project_clips = None
         def _save_and_home(segs=None):
             if segs is not None: _save_srt_impl(srt_path, segs)
@@ -94,10 +161,7 @@ class EditorLifecycleMixin:
         if hasattr(editor, 'timeline') and self._project_boundary_times: editor.timeline.set_boundary_times(self._project_boundary_times)
         self.stack.insertWidget(1, editor); self.stack.setCurrentWidget(editor)
         self._schedule_editor_fit_to_view(editor)
-        if self._current_project_path:
-            self._restore_workspace(editor, self._current_project_path)
-            from core.project.project_phase1b import apply_project_ui_state
-            apply_project_ui_state(self, editor, self._current_project_path)
+        self._schedule_opened_srt_editor_runtime_refresh(editor)
         if hasattr(self, "_refresh_work_mode_ui"):
             QTimer.singleShot(0, self._refresh_work_mode_ui)
         if hasattr(self, "_release_ai_models_for_editor_mode"):

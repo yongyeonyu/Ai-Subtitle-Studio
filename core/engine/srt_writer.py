@@ -12,6 +12,12 @@ from core.utils import seconds_to_srt_time
 from core.runtime.logger import get_logger
 
 
+def _normalize_saved_subtitle_text(text: str) -> str:
+    text = str(text or "").replace("\u2028", "\n").replace(".", "")
+    lines = [" ".join(line.split()) for line in text.split("\n")]
+    return "\n".join(line for line in lines if line)
+
+
 def save_srt(segments: list[dict], srt_path: str, apply_offset: bool = True, adjust_timing_func=None):
     if apply_offset and callable(adjust_timing_func):
         segments = adjust_timing_func(segments)
@@ -51,7 +57,7 @@ def save_srt(segments: list[dict], srt_path: str, apply_offset: bool = True, adj
     for seg in segments:
         if seg.get("stt_pending"):
             continue
-        text = seg.get("text", "").strip().replace("\u2028", "\n")
+        text = _normalize_saved_subtitle_text(seg.get("text", ""))
         if not text or text == "\u200B":
             continue
 

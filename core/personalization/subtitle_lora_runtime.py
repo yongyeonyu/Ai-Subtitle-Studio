@@ -686,6 +686,7 @@ def _generation_profile_from_items(
                         "rule_text": rule,
                         "confidence": payload.get("confidence"),
                         "score": round(score, 2),
+                        "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
                     },
                     seen,
                     ("rule", kind, rule),
@@ -816,6 +817,19 @@ def lora_settings_for_subtitle_segment(
         if key in SEGMENT_LORA_SETTING_KEYS and value not in (None, ""):
             filtered.setdefault(key, value)
             profile.setdefault("deep_policy_settings", {})[key] = value
+    split_floor = _setting_int(settings, "subtitle_lora_split_floor_chars", 20)
+    if _setting_bool(settings, "subtitle_lora_split_floor_enabled", True) and top_score >= min_score and split_floor > 0:
+        current_split = _setting_int(filtered, "split_length_threshold", _setting_int(settings, "split_length_threshold", split_floor))
+        floor_value = _clamp_int(split_floor, 12, 36)
+        if current_split < floor_value:
+            filtered["split_length_threshold"] = floor_value
+            profile.setdefault("applied_settings", {})["split_length_threshold"] = floor_value
+            profile.setdefault("style_hints", []).append(
+                {
+                    "kind": "lora_split_floor",
+                    "text": f"LoRA 문장 호흡 보호: {floor_value}자 미만 마이크로 분할 방지",
+                }
+            )
     if policy_meta:
         profile["_deep_setting_policy"] = policy_meta
         profile["applied_settings"] = {

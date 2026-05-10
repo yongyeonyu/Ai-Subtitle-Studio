@@ -327,6 +327,7 @@ def build_editor_truth_records(
             previous_end_sec=previous_end_sec,
             next_start_sec=next_start_sec,
         )
+        word_boundary_learning = dict(style_profile.get("word_boundaries") or {})
         edit_metrics = measure_user_edit_metrics(
             {**seg, "source_before_edit": source_before_edit},
             final_text=text,
@@ -351,6 +352,7 @@ def build_editor_truth_records(
             "store_mode": "full_text" if store_full_text else "compact_pattern",
             "user_edit_metrics": edit_metrics,
             "style_profile": style_profile,
+            "word_boundary_learning": word_boundary_learning,
             "pattern_features": pattern_features,
             "speech_text_hash": stable_hash({"speech_text": speech_text})[:16],
             "hard_case": bool(hard_case_reasons),

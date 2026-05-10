@@ -23,7 +23,7 @@ CUT_BOUNDARY_GRID_PROFILES = {
     },
     "low": {
         "level": "low",
-        "label": "중간 - 5×5 선택 9칸",
+        "label": "낮음 - 5×5 선택 9칸",
         "grid": "5x5",
         "grid_size": 5,
         "mask": "custom9",

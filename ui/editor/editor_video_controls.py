@@ -69,6 +69,9 @@ class EditorVideoControlsMixin:
                 center_sec=self._subtitle_context_center_sec(local=bool(is_multiclip)) if hasattr(self, "_subtitle_context_center_sec") else None,
             )
         self.video_player.load(path, player_segs)
+        if hasattr(self, "_refresh_video_subtitle_context"):
+            QTimer.singleShot(0, self._refresh_video_subtitle_context)
+            QTimer.singleShot(180, self._refresh_video_subtitle_context)
         if hasattr(self, "_position_video_expand_button"):
             QTimer.singleShot(400, self._position_video_expand_button)
             QTimer.singleShot(1200, self._position_video_expand_button)
@@ -115,6 +118,14 @@ class EditorVideoControlsMixin:
                         self.video_player.seek(0.0)
             if hasattr(self, 'video_player'):
                 self.video_player.pause_video()
+                if hasattr(self, "_refresh_video_subtitle_context"):
+                    self._refresh_video_subtitle_context()
+                if hasattr(self.video_player, "set_subtitle_display_time"):
+                    try:
+                        playhead_sec = float(getattr(getattr(self.timeline, "canvas", None), "playhead_sec", 0.0) or 0.0)
+                        self.video_player.set_subtitle_display_time(self._global_to_local_sec(playhead_sec))
+                    except Exception:
+                        pass
             self._schedule_timeline()
         QTimer.singleShot(100, init_video)
 
@@ -530,13 +541,16 @@ class EditorVideoControlsMixin:
             pass
 
     def _confirm_review_segment(self, line: int):
+        self._confirm_review_segment_impl(line, push_undo=True)
+
+    def _confirm_review_segment_impl(self, line: int, *, push_undo: bool = True):
         block = self.text_edit.document().findBlockByNumber(int(line))
         if not block.isValid():
             return
         data = block.userData()
         if not isinstance(data, SubtitleBlockData) or data.is_gap:
             return
-        if hasattr(self, "_undo_mgr"):
+        if push_undo and hasattr(self, "_undo_mgr"):
             self._undo_mgr.push_immediate()
         quality = dict(getattr(data, "quality", {}) or {})
         history = list(getattr(data, "quality_history", []) or [])
@@ -556,6 +570,24 @@ class EditorVideoControlsMixin:
         self._accumulate_confirmed_segment_lora(line, data, quality)
         self._set_adjacent_silence_confirmed(line, True)
         self._set_review_segment_quality(line, quality, history)
+
+    def _on_timeline_timing_confirm_requested(self, lines: list):
+        unique_lines: list[int] = []
+        seen: set[int] = set()
+        for raw in list(lines or []):
+            try:
+                line = int(raw)
+            except Exception:
+                continue
+            if line >= 0 and line not in seen:
+                seen.add(line)
+                unique_lines.append(line)
+        if not unique_lines:
+            return
+        if hasattr(self, "_undo_mgr"):
+            self._undo_mgr.push_immediate()
+        for line in unique_lines:
+            self._confirm_review_segment_impl(line, push_undo=False)
 
     def _mark_review_segment_temporary(self, line: int):
         block = self.text_edit.document().findBlockByNumber(int(line))

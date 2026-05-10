@@ -170,6 +170,18 @@ class EditorMulticlipOpsMixin:
                 self._rebuild_subtitle_memory_cache(timeline_segments)
             else:
                 self._cached_segs = timeline_segments
+            refresher = getattr(self, "_refresh_editor_timestamp_metadata", None)
+            if callable(refresher):
+                refresher(full=True)
+                try:
+                    from PyQt6.QtCore import QTimer
+                    for delay_ms in (0, 120, 360):
+                        QTimer.singleShot(
+                            delay_ms,
+                            lambda e=self: e._refresh_editor_timestamp_metadata(full=False),
+                        )
+                except Exception:
+                    pass
             total_dur = timeline_segments[-1]['end'] if timeline_segments else 0.0
             if hasattr(self, 'video_player') and self.video_player.total_time > 0:
                 total_dur = max(total_dur, self.video_player.total_time)

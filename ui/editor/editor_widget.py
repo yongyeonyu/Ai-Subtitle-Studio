@@ -238,6 +238,12 @@ class EditorWidget(
                 loaded_segments = None
             if isinstance(loaded_segments, list):
                 self._rebuild_subtitle_memory_cache(loaded_segments)
+                self._refresh_editor_timestamp_metadata(full=True)
+                for delay_ms in (0, 120, 360):
+                    QTimer.singleShot(
+                        delay_ms,
+                        lambda e=self: e._refresh_editor_timestamp_metadata(full=False),
+                    )
                 total_dur = loaded_segments[-1]["end"] if loaded_segments else 0.0
                 if hasattr(self, "timeline"):
                     self.timeline.update_segments(loaded_segments, self._active_seg_start, total_dur)
@@ -577,6 +583,7 @@ class EditorWidget(
         # 멀티클립 전환
         if hasattr(self.timeline, 'sig_clip_selected'): self.timeline.sig_clip_selected.connect(self._on_clip_selected)
         if hasattr(self.timeline, 'seg_time_changed'): self.timeline.seg_time_changed.connect(self._on_seg_time_changed)
+        if hasattr(self.timeline, 'seg_timing_confirm_requested'): self.timeline.seg_timing_confirm_requested.connect(self._on_timeline_timing_confirm_requested)
         if hasattr(self.timeline, 'seg_to_gap'):       self.timeline.seg_to_gap.connect(self._on_seg_to_gap)
         if hasattr(self.timeline, 'gap_activated'):    self.timeline.gap_activated.connect(self._on_gap_activated)
         if hasattr(self.timeline, 'gap_to_segs'):      self.timeline.gap_to_segs.connect(self._on_gap_to_segs)
@@ -922,6 +929,7 @@ class EditorWidget(
             return []
 
     def _set_quality_running(self, running: bool):
+        self._quality_review_running = bool(running)
         if hasattr(self, "btn_quality_review"):
             self.btn_quality_review.setEnabled(not running)
             self.btn_quality_review.setText("검사 중" if running else "검사")
@@ -1009,6 +1017,13 @@ class EditorWidget(
                 restorer = getattr(self.window(), "_restore_normal_cursor", None)
                 if callable(restorer):
                     restorer(self)
+            except Exception:
+                pass
+            try:
+                if bool(getattr(self, "_generation_completion_autosave_pending", False)):
+                    scheduler = getattr(self, "_schedule_generation_completion_autosave", None)
+                    if callable(scheduler):
+                        scheduler(delay_ms=0)
             except Exception:
                 pass
 

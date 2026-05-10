@@ -87,6 +87,41 @@ def _cancelled_training_result(reason: str = "cancelled") -> dict[str, Any]:
     return {"status": "waiting", "score": None, "result": {"reason": str(reason or "cancelled"), "cancelled": True}}
 
 
+def _cleanup_lora_training_runtime(
+    reason: str = "idle_training_stop",
+    *,
+    include_gpu: bool = True,
+) -> dict[str, Any]:
+    """Release LoRA/audio runtime caches after an idle-training interruption."""
+    actions: list[str] = []
+    for module_name, func_name, kwargs in (
+        ("core.personalization.lora_vector_retriever", "clear_lora_retrieval_caches", {}),
+        ("core.audio.runtime_cleanup", "clear_audio_model_memory_caches", {"include_gpu": include_gpu}),
+        (
+            "core.runtime.memory_manager",
+            "trim_runtime_memory_caches",
+            {"stage": "personalization_stop", "include_gpu": include_gpu},
+        ),
+    ):
+        try:
+            module = __import__(module_name, fromlist=[func_name])
+            func = getattr(module, func_name, None)
+            if not callable(func):
+                continue
+            result = func(**kwargs)
+            actions.append(f"{module_name}.{func_name}")
+            if isinstance(result, dict):
+                actions.extend(str(action) for action in list(result.get("actions") or []) if action)
+        except Exception:
+            continue
+    try:
+        gc.collect()
+        actions.append("gc.collect")
+    except Exception:
+        pass
+    return {"reason": str(reason or "idle_training_stop"), "actions": actions}
+
+
 def _queue_status_label(status: Any) -> str:
     text = str(status or "waiting")
     return QUEUE_STATUS_LABELS.get(text, text)
@@ -874,6 +909,8 @@ def run_training_queue_once(
     progress_save_times: dict[str, float] = {}
 
     def save_progress(update: dict[str, Any]) -> None:
+        if _cancel_requested(cancel_callback):
+            return
         processed = int(update.get("processed", 0) or 0)
         total = int(update.get("total", 0) or 0)
         if total <= 0:
@@ -947,9 +984,13 @@ def run_training_queue_once(
                 progress_callback=save_progress,
                 cancel_callback=cancel_callback,
             )
+        cancelled_after_job = _cancel_requested(cancel_callback)
+        if cancelled_after_job:
+            outcome = _cancelled_training_result("paused_for_foreground_activity")
         payload = load_training_queue(store_dir)
         outcome_status = str(outcome.get("status") or "complete")
         outcome_reason = str((outcome.get("result") or {}).get("reason") or "")
+        outcome_cancelled = bool((outcome.get("result") or {}).get("cancelled")) or cancelled_after_job
         current_job = _job_from_payload(payload, job_id) or target
         checkpoint_stage = "completed" if outcome_status == "complete" else ("paused_for_resume" if outcome_status == "waiting" else outcome_status)
         checkpoint_progress = float(current_job.get("progress", 0.0) or 0.0)
@@ -1013,7 +1054,11 @@ def run_training_queue_once(
                     get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 생략: 쿨다운")
             except Exception as index_exc:
                 get_logger().log(f"⚠️ [개인화 학습] LoRA 검색 인덱스 갱신 실패: {index_exc}")
-        refresh_lora_personalization_manifest(store_dir, refresh_bundle=not low_resource)
+        if not outcome_cancelled:
+            refresh_lora_personalization_manifest(store_dir, refresh_bundle=not low_resource)
+        else:
+            _cleanup_lora_training_runtime("training_cancelled", include_gpu=True)
+            get_logger().log(f"⏸️ [LoRA 학습] 일시정지: {mode_label} · {_queue_job_type_label(job_type)}")
         summary_bits = [f"status={outcome.get('status', 'complete')}"]
         if outcome.get("score") is not None:
             summary_bits.append(f"score={float(outcome.get('score') or 0.0):.2f}")
@@ -1068,6 +1113,7 @@ class PersonalizationIdleTrainer(QObject):
         self._last_auto_learning_status_log = ""
         self._current_learning_mode = ""
         self._current_low_resource = True
+        self._last_stop_cleanup_at = 0.0
         self._learning_status_signal.connect(self._notify_learning_status_changed_on_main)
         recover_interrupted_training_jobs(self.store_dir, reason="trainer_startup")
         self._poll_timer = QTimer(self)
@@ -1093,8 +1139,12 @@ class PersonalizationIdleTrainer(QObject):
         thread = self._worker_thread
         return bool(thread is not None and thread.is_alive())
 
+    def _stop_pending_for_ui(self) -> bool:
+        return bool(self._stop_requested.is_set() and str(self._suspend_reason or "").strip())
+
     def learning_status(self) -> dict[str, Any]:
-        busy = self.is_busy() or bool(self._current_learning_mode)
+        stop_pending = self._stop_pending_for_ui()
+        busy = (self.is_busy() or bool(self._current_learning_mode)) and not stop_pending
         mode = str(self._current_learning_mode or ("lite" if self._current_low_resource else "heavy"))
         if not busy:
             mode = ""
@@ -1127,6 +1177,23 @@ class PersonalizationIdleTrainer(QObject):
 
     def _notify_learning_status_changed(self) -> None:
         self._learning_status_signal.emit()
+
+    def _cleanup_after_stop(
+        self,
+        reason: str,
+        *,
+        include_gpu: bool = True,
+        throttle_sec: float = 0.35,
+    ) -> dict[str, Any]:
+        now = time.monotonic()
+        try:
+            throttle = max(0.0, float(throttle_sec))
+        except Exception:
+            throttle = 0.35
+        if throttle > 0.0 and (now - float(self._last_stop_cleanup_at or 0.0)) < throttle:
+            return {"skipped": True, "reason": "cleanup_throttled"}
+        self._last_stop_cleanup_at = now
+        return _cleanup_lora_training_runtime(reason, include_gpu=include_gpu)
 
     def _log_auto_learning_status(self, context: str) -> None:
         summary = format_training_queue_status_summary(load_training_queue(self.store_dir))
@@ -1173,7 +1240,7 @@ class PersonalizationIdleTrainer(QObject):
             return {"started": bool(result.get("processed")), "result": result}
         finally:
             self._current_learning_mode = ""
-            gc.collect()
+            self._cleanup_after_stop("manual_training_complete", include_gpu=True, throttle_sec=0.0)
             self._notify_learning_status_changed()
 
     def _background_run_once(self, *, low_resource: bool = True, continuous: bool = False) -> None:
@@ -1191,7 +1258,7 @@ class PersonalizationIdleTrainer(QObject):
             self._last_job_finished_ms = QDateTime.currentMSecsSinceEpoch()
             self._log_auto_learning_status("백그라운드 완료")
             self._current_learning_mode = ""
-            gc.collect()
+            self._cleanup_after_stop("background_training_complete", include_gpu=True, throttle_sec=0.0)
             self._notify_learning_status_changed()
 
     def start_background_run(self, *, low_resource: bool = True, continuous: bool = False) -> dict[str, Any]:
@@ -1223,15 +1290,19 @@ class PersonalizationIdleTrainer(QObject):
             hold = int(hold_ms if hold_ms is not None else self.idle_window_ms)
         except Exception:
             hold = int(self.idle_window_ms)
+        was_busy = self.is_busy() or bool(self._current_learning_mode)
         self.note_user_activity()
         self._suspended_until_ms = max(int(self._suspended_until_ms or 0), now + max(0, hold))
         self._suspend_reason = str(reason or "foreground_activity")
         self._stop_requested.set()
-        gc.collect()
+        self._current_learning_mode = ""
+        if was_busy:
+            self._cleanup_after_stop(self._suspend_reason, include_gpu=True)
         self._notify_learning_status_changed()
         return {
             "suspended": True,
             "busy": self.is_busy(),
+            "was_busy": was_busy,
             "until_ms": int(self._suspended_until_ms or 0),
             "reason": self._suspend_reason,
         }
@@ -1256,8 +1327,10 @@ class PersonalizationIdleTrainer(QObject):
             recover_interrupted_training_jobs(self.store_dir, reason=reason)
             self._current_learning_mode = ""
             self._last_job_finished_ms = QDateTime.currentMSecsSinceEpoch()
-            gc.collect()
+            self._cleanup_after_stop(reason, include_gpu=True, throttle_sec=0.0)
             self._notify_learning_status_changed()
+        elif bool(result.get("was_busy")):
+            self._cleanup_after_stop(reason, include_gpu=True)
         return {
             **result,
             "stop_requested": True,
@@ -1267,6 +1340,9 @@ class PersonalizationIdleTrainer(QObject):
     def shutdown(self, *, timeout_sec: float = 3.0) -> dict[str, Any]:
         self._poll_timer.stop()
         self._stop_requested.set()
+        self._suspend_reason = "shutdown"
+        self._current_learning_mode = ""
+        self._cleanup_after_stop("shutdown", include_gpu=True, throttle_sec=0.0)
         thread = self._worker_thread
         alive = bool(thread is not None and thread.is_alive())
         if alive:
@@ -1276,8 +1352,14 @@ class PersonalizationIdleTrainer(QObject):
                 pass
         still_alive = bool(thread is not None and thread.is_alive())
         if still_alive:
+            self._current_learning_mode = ""
+            self._last_job_finished_ms = QDateTime.currentMSecsSinceEpoch()
+            self._notify_learning_status_changed()
             return {"stopped": False, "busy": True}
         recover_interrupted_training_jobs(self.store_dir, reason="shutdown")
+        self._current_learning_mode = ""
+        self._last_job_finished_ms = QDateTime.currentMSecsSinceEpoch()
+        self._notify_learning_status_changed()
         return {"stopped": True, "busy": False}
 
     def pause_pending_jobs(self) -> dict[str, Any]:

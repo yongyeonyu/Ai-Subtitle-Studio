@@ -10,6 +10,9 @@ Item {
     property int accentInset: 8
     property int textInset: 24
     property int rightInset: 28
+    property int timeLeft: 28
+    property int timeWidth: 92
+    property int circleX: Math.max(0, contentLeft - 22)
     property int cardRadius: 3
     property color surfaceColor: locked ? "#1C1C1E" : "#11181C"
     clip: true
@@ -23,6 +26,14 @@ Item {
         x: root.contentLeft
         y: 0
         width: Math.max(0, root.width - root.contentLeft)
+        height: root.height
+        color: root.surfaceColor
+    }
+
+    Rectangle {
+        x: 0
+        y: 0
+        width: Math.max(0, root.contentLeft)
         height: root.height
         color: root.surfaceColor
     }
@@ -47,6 +58,53 @@ Item {
                 border.width: modelData.active ? 1 : 0
                 border.color: modelData.active ? "#34C759" : "transparent"
                 opacity: modelData.active ? 0.98 : 0.90
+                antialiasing: true
+            }
+
+            Rectangle {
+                visible: !!modelData.deleteVisible
+                x: 5
+                y: Math.round((parent.height - 16) / 2)
+                width: 16
+                height: 16
+                radius: 4
+                color: modelData.deleteHovered ? "#FF4444" : "#442222"
+                antialiasing: true
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "\u00d7"
+                    color: modelData.deleteHovered ? "#FFFFFF" : "#FF8888"
+                    font.pixelSize: 11
+                    font.bold: true
+                }
+            }
+
+            Text {
+                visible: String(modelData.timestamp || "").length > 0
+                x: root.timeLeft
+                y: 0
+                width: root.timeWidth
+                height: parent.height
+                text: "[" + String(modelData.timestamp || "") + "]"
+                color: modelData.active ? (modelData.accent || "#00FF88") : "#00E58C"
+                font.family: "Menlo"
+                font.pixelSize: 13
+                font.bold: true
+                verticalAlignment: Text.AlignVCenter
+                horizontalAlignment: Text.AlignLeft
+                renderType: Text.QtRendering
+                clip: true
+            }
+
+            Rectangle {
+                visible: !!modelData.showCircle
+                x: root.circleX
+                y: Math.round((parent.height - width) / 2)
+                width: modelData.active ? 10 : 6
+                height: width
+                radius: width / 2
+                color: modelData.active ? (modelData.accent || "#34C759") : "#555555"
                 antialiasing: true
             }
 

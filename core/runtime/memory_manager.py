@@ -150,6 +150,13 @@ def prune_runtime_disk_caches(
 def trim_runtime_memory_caches(*, stage: str = "warning", include_gpu: bool = False) -> dict[str, Any]:
     stage_text = str(stage or "warning").strip().lower()
     actions: list[str] = []
+    settings: dict[str, Any] = {}
+    try:
+        from core.settings import load_settings
+
+        settings = dict(load_settings() or {})
+    except Exception:
+        settings = {}
     for module_name, func_name in (
         ("core.media_info", "clear_media_probe_cache_memory"),
         ("core.project.project_io", "clear_project_file_cache"),
@@ -168,6 +175,15 @@ def trim_runtime_memory_caches(*, stage: str = "warning", include_gpu: bool = Fa
     try:
         gc.collect()
         actions.append("gc.collect")
+    except Exception:
+        pass
+    try:
+        from core.native_macos_memory import native_allocator_pressure_relief
+
+        relief = native_allocator_pressure_relief(settings, stage=stage_text)
+        if relief.get("ok"):
+            released_mb = round(float(relief.get("released_bytes", 0) or 0) / float(1024 ** 2), 2)
+            actions.append(f"macos.malloc_zone_pressure_relief:{released_mb}MB")
     except Exception:
         pass
     if include_gpu:
@@ -202,6 +218,125 @@ def trim_runtime_memory_caches(*, stage: str = "warning", include_gpu: bool = Fa
             except Exception:
                 pass
     return {"stage": stage_text, "actions": actions}
+
+
+class SubtitleGenerationMemoryGuard:
+    """Stage-aware memory guard for the subtitle generation pipeline.
+
+    The app already has a UI-level memory monitor. This guard is intentionally
+    scoped to long-running generation stages so heavy STT/VAD/LLM phases can
+    publish snapshots and trim caches without waiting for the global timer.
+    """
+
+    def __init__(
+        self,
+        *,
+        settings: dict[str, Any] | None = None,
+        logger: Any = None,
+        diagnostics_dir: str | Path | None = None,
+        cache_paths: list[str | Path] | None = None,
+        pressure_callback: Callable[[str, dict[str, Any]], Any] | None = None,
+    ) -> None:
+        self.settings = dict(settings or {})
+        self.enabled = bool(self.settings.get("subtitle_generation_memory_guard_enabled", True))
+        self.logger = logger
+        self.manager = RuntimeMemoryManager(
+            settings=self.settings,
+            logger=logger,
+            diagnostics_dir=diagnostics_dir,
+            cache_paths=cache_paths,
+        )
+        self.manager.register_trim_callback("subtitle_generation", self._handle_pressure)
+        self.pressure_callback = pressure_callback
+        interval_ms = float(self.settings.get("subtitle_generation_memory_checkpoint_interval_ms", 3000) or 3000)
+        self.min_interval_sec = max(0.25, interval_ms / 1000.0)
+        self.gpu_trim_cooldown_sec = max(
+            2.0,
+            float(self.settings.get("subtitle_generation_gpu_trim_cooldown_sec", 8.0) or 8.0),
+        )
+        self.stage = "idle"
+        self._last_checkpoint_at = 0.0
+        self._last_gpu_trim_at = 0.0
+        self._last_notice_key = ""
+        self._last_snapshot: dict[str, Any] = {}
+
+    def checkpoint(
+        self,
+        stage: str,
+        *,
+        include_gpu: bool = False,
+        cleanup: bool = False,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        if not self.enabled:
+            return {}
+        now = time.time()
+        if not force and (now - self._last_checkpoint_at) < self.min_interval_sec:
+            return dict(self._last_snapshot)
+        self.stage = str(stage or "unknown")
+        self._last_checkpoint_at = now
+        snapshot = self.manager.poll()
+        snapshot["subtitle_generation_stage"] = self.stage
+        snapshot["checkpoint_include_gpu"] = bool(include_gpu)
+        snapshot["checkpoint_cleanup"] = bool(cleanup)
+
+        pressure_stage = str(snapshot.get("pressure_stage", "normal") or "normal")
+        should_gpu_trim = include_gpu and pressure_stage in {"warning", "critical"}
+        if cleanup or should_gpu_trim:
+            if cleanup or (now - self._last_gpu_trim_at) >= self.gpu_trim_cooldown_sec:
+                trim_result = trim_runtime_memory_caches(
+                    stage=pressure_stage if pressure_stage != "normal" else "stage",
+                    include_gpu=bool(include_gpu),
+                )
+                snapshot["stage_trim"] = trim_result
+                if include_gpu:
+                    self._last_gpu_trim_at = now
+
+        self._last_snapshot = dict(snapshot)
+        self._write_generation_snapshot(snapshot)
+        self._log_pressure_notice(pressure_stage, snapshot)
+        return dict(snapshot)
+
+    def stop(self) -> None:
+        try:
+            self.manager.stop()
+        except Exception:
+            pass
+
+    def _handle_pressure(self, stage: str, snapshot: dict[str, Any]) -> None:
+        payload = dict(snapshot or {})
+        payload["subtitle_generation_stage"] = self.stage
+        if self.pressure_callback is None:
+            return
+        try:
+            self.pressure_callback(stage, payload)
+        except Exception:
+            pass
+
+    def _write_generation_snapshot(self, snapshot: dict[str, Any]) -> None:
+        try:
+            atomic_write_json(self.manager.diagnostics_dir / "subtitle_generation_latest.json", snapshot)
+        except Exception:
+            pass
+
+    def _log_pressure_notice(self, pressure_stage: str, snapshot: dict[str, Any]) -> None:
+        if pressure_stage == "normal":
+            return
+        key = f"{pressure_stage}:{self.stage}"
+        if key == self._last_notice_key:
+            return
+        self._last_notice_key = key
+        if self.logger is None:
+            return
+        try:
+            rss_gb = float(snapshot.get("rss_gb", 0.0) or 0.0)
+            free_gb = float(((snapshot.get("resource") or {}).get("available_memory_bytes", 0) or 0)) / float(1024 ** 3)
+            self.logger.log(
+                f"🧹 [자막 메모리] {self.stage}: {pressure_stage} · "
+                f"rss={rss_gb:.2f}GB · free={free_gb:.2f}GB"
+            )
+        except Exception:
+            pass
 
 
 class RuntimeMemoryManager:
@@ -416,6 +551,7 @@ class RuntimeMemoryManager:
 
 __all__ = [
     "RuntimeMemoryManager",
+    "SubtitleGenerationMemoryGuard",
     "default_runtime_disk_cache_paths",
     "process_rss_bytes",
     "prune_runtime_disk_caches",

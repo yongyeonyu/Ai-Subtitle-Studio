@@ -55,6 +55,13 @@ def _whisperkit_auto_enabled(settings: dict[str, Any] | None) -> bool:
     return bool(value)
 
 
+def _whisperkit_empty_fallback_active(settings: dict[str, Any] | None) -> bool:
+    value = dict(settings or {}).get("stt_whisperkit_empty_fallback_active", False)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "on", "yes", "사용", "켜짐"}
+    return bool(value)
+
+
 def _whisperkit_model(model: str) -> str:
     raw = str(model or "").strip()
     lowered = raw.lower()
@@ -212,6 +219,7 @@ def select_stt_backend(model: str, settings: dict[str, Any] | None = None) -> St
         model_for_native = requested_model or "large-v3-turbo"
         if (
             bool(getattr(config, "IS_MAC", False))
+            and not _whisperkit_empty_fallback_active(data)
             and _whisperkit_auto_enabled(data)
             and _whisperkit_ready()
             and _whisperkit_supported_model(model_for_native)
@@ -234,7 +242,12 @@ def select_stt_backend(model: str, settings: dict[str, Any] | None = None) -> St
 
     mlx_alias = _mac_mlx_alias(requested_model)
     if mlx_alias:
-        if bool(getattr(config, "IS_MAC", False)) and _whisperkit_auto_enabled(data) and _whisperkit_ready():
+        if (
+            bool(getattr(config, "IS_MAC", False))
+            and not _whisperkit_empty_fallback_active(data)
+            and _whisperkit_auto_enabled(data)
+            and _whisperkit_ready()
+        ):
             return SttBackendChoice(
                 "whisperkit_persistent",
                 _whisperkit_model(requested_model),

@@ -343,7 +343,7 @@ class PerformanceMediaCacheTest(unittest.TestCase):
         self.assertEqual(profile["cpu"]["balanced_workers"], 7)
         self.assertEqual(profile["gpu"]["stt_slots"], 1)
         self.assertEqual(profile["npu"]["coreml_slots"], 1)
-        self.assertEqual(profile["pipeline"]["cut_follower_stream_start_percent"], 20)
+        self.assertEqual(profile["pipeline"]["cut_follower_stream_start_percent"], 25)
 
     def test_distributed_worker_ceiling_keeps_one_core_for_ui_in_max_profile(self):
         snapshot = {

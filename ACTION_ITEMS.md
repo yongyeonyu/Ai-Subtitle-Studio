@@ -62,6 +62,9 @@ The v04.00.01 Mac-native release completed the prior queue:
 - Native Swift bridges now cover subtitle/project/timeline/waveform/policy quality helpers intended for later reuse in a future iPad app, with Python kept as a fallback only where quality or compatibility still requires it.
 - Production macOS runtime now enables only benchmark-safe native routes by default and keeps Swift LoRA/Deep/LLM policy helpers behind an explicit experimental gate until speed and LoRA ranking parity are proven.
 - Native macOS memory helpers, packaging scripts, and benchmark tools are part of the active release set so the app can be profiled, packaged, and iterated as a Mac-first product.
+- Generation completion now waits for real saveable subtitle segments before marking the editor complete, then retries the completion autosave until segments are available.
+- Exit confirmation now asks to save unsaved editor changes before quick exit or window close cleanup runs.
+- Project JSON backups now live under `프로젝트백업/` instead of filling the project root with numbered backup files.
 - Release verification should be re-read from the latest `RELEASE_v*.md` only.
 
 Future work should start from a new user request rather than this completed backlog.

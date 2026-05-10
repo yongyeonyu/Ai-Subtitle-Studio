@@ -12,6 +12,7 @@ core/project_manager.py
 """
 
 import os
+import re
 import uuid
 from datetime import datetime
 from typing import List, Optional
@@ -93,16 +94,52 @@ def ensure_projects_dir():
     os.makedirs(PROJECTS_DIR, exist_ok=True)
 
 
+def _move_legacy_numbered_project_backups(folder: str, base: str, ext: str, backup_dir: str) -> None:
+    """Move old ``project_1.json`` style backups out of the active project folder."""
+    try:
+        names = os.listdir(folder)
+    except Exception:
+        return
+    pattern = re.compile(rf"^{re.escape(base)}_(\d+){re.escape(ext)}$")
+    numbered: list[tuple[int, str]] = []
+    for name in names:
+        match = pattern.match(name)
+        if not match:
+            continue
+        numbered.append((int(match.group(1)), name))
+    for _idx, name in sorted(numbered):
+        src = os.path.join(folder, name)
+        if not os.path.isfile(src):
+            continue
+        target = os.path.join(backup_dir, name)
+        if os.path.exists(target):
+            stem, suffix = os.path.splitext(name)
+            counter = 1
+            while True:
+                candidate = os.path.join(backup_dir, f"{stem}_legacy{counter}{suffix or ext}")
+                if not os.path.exists(candidate):
+                    target = candidate
+                    break
+                counter += 1
+        try:
+            os.replace(src, target)
+        except Exception:
+            pass
+
+
 def _archive_existing_base_project(filepath: str) -> str | None:
     """Move an existing base project aside so the base name always stays latest."""
     if not os.path.exists(filepath):
         return None
     folder = os.path.dirname(filepath)
+    backup_dir = os.path.join(folder, "프로젝트백업")
+    os.makedirs(backup_dir, exist_ok=True)
     base, ext = os.path.splitext(os.path.basename(filepath))
     ext = ext or ".json"
+    _move_legacy_numbered_project_backups(folder, base, ext, backup_dir)
     counter = 1
     while True:
-        archived = os.path.join(folder, f"{base}_{counter}{ext}")
+        archived = os.path.join(backup_dir, f"{base}_{counter}{ext}")
         if not os.path.exists(archived):
             os.replace(filepath, archived)
             return archived

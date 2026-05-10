@@ -256,8 +256,9 @@ class RuntimeOptimizationProfileTests(unittest.TestCase):
 
         self.assertEqual(settings["scan_cut_cv2_threads_per_worker"], 1)
         self.assertTrue(settings["scan_cut_pioneer_sequential_decode_enabled"])
-        self.assertTrue(settings["scan_cut_ffmpeg_scene_prepass_enabled"])
-        self.assertTrue(settings["scan_cut_ffmpeg_scene_replace_opencv_enabled"])
+        self.assertFalse(settings["scan_cut_ffmpeg_scene_prepass_enabled"])
+        self.assertFalse(settings["scan_cut_ffmpeg_scene_replace_opencv_enabled"])
+        self.assertEqual(settings["scan_cut_ffmpeg_scene_timeout_sec"], 6.0)
         self.assertEqual(settings["scan_cut_pioneer_workers"], 4)
 
 

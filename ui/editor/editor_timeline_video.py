@@ -123,7 +123,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
     # ---------------------------------------------------------
     # Common: Cursor ↔ Block Sync
     # ---------------------------------------------------------
-    def _sync_cursor_to_seg(self, seg, ensure_visible=True, move_cursor=True):
+    def _sync_cursor_to_seg(self, seg, ensure_visible=True, move_cursor=True, *, sync_playhead=True):
         """커서↔블록 동기화: active/하이라이트 + (옵션) 커서 이동"""
         self._active_seg_start = seg["start"]
         # 재생 중에는 set_active()가 내부 smooth scroll을 유발하므로 canvas만 직접 갱신
@@ -133,7 +133,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             self.timeline.canvas.set_active(seg["start"])
         else:
             self.timeline.set_active(seg["start"])
-        if (not is_playing) and hasattr(self, 'timeline') and hasattr(self.timeline, 'set_playhead'):
+        if sync_playhead and (not is_playing) and hasattr(self, 'timeline') and hasattr(self.timeline, 'set_playhead'):
             self._reset_playhead_smoothing(seg["start"])
             self.timeline.set_playhead(seg["start"])
         line_num = seg.get("line", 0)
@@ -587,7 +587,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                 and not bool(getattr(canvas, "_edit_active", False))
                 and not self._editor_manual_scroll_recent()
             )
-            self._sync_cursor_to_seg(seg, ensure_visible=move_editor, move_cursor=move_editor)
+            self._sync_cursor_to_seg(seg, ensure_visible=move_editor, move_cursor=move_editor, sync_playhead=False)
         self._pending_scrub_sec = None
 
     def _manual_global_sec_from_player(self) -> float:
@@ -631,7 +631,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         segs = self._get_current_segments()
         seg = find_segment_at(segs, global_sec, skip_gap=False)
         if seg and getattr(self, "_active_seg_start", None) != seg.get("start"):
-            self._sync_cursor_to_seg(seg)
+            self._sync_cursor_to_seg(seg, sync_playhead=False)
         self._reset_playhead_smoothing(global_sec)
         self.timeline.set_playhead(global_sec)
         self.timeline.center_to_sec(global_sec, smooth=False)
@@ -699,7 +699,7 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             segs = self._get_current_segments()
             seg = find_segment_at(segs, global_sec, skip_gap=False)
             if seg and getattr(self, "_active_seg_start", None) != seg.get("start"):
-                self._sync_cursor_to_seg(seg)
+                self._sync_cursor_to_seg(seg, sync_playhead=False)
         except Exception:
             pass
 
@@ -802,7 +802,10 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
             prev_ud = prev_block.userData()
             if isinstance(prev_ud, SubtitleBlockData):
                 if prev_ud.is_gap:
-                    if abs(float(prev_ud.start_sec) - float(ud.start_sec)) < 0.05:
+                    if (
+                        abs(float(prev_ud.start_sec) - float(ud.start_sec)) < 0.05
+                        or float(new_start) <= float(prev_ud.start_sec) + 0.05
+                    ):
                         delete_block_safely(prev_block)
                 else:
                     if edge_type not in ("diamond", "gap") and float(new_start) > old_start + 0.05:
@@ -823,7 +826,10 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                     next_next = next_block.next()
                     if next_next.isValid():
                         nnu = next_next.userData()
-                        if isinstance(nnu, SubtitleBlockData) and abs(float(new_end) - float(nnu.start_sec)) < 0.05:
+                        if (
+                            isinstance(nnu, SubtitleBlockData)
+                            and float(new_end) >= float(nnu.start_sec) - 0.05
+                        ):
                             delete_block_safely(next_block)
                         else:
                             next_ud.start_sec = new_end
@@ -995,24 +1001,81 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         self.text_edit.setTextCursor(cur)
         self._finalize_edit()
 
+    def _delete_gap_blocks_in_range(self, gap_start: float, gap_end: float) -> int:
+        """Remove document gap blocks inside a deleted silence range."""
+        doc = self.text_edit.document()
+        start = self._snap_to_frame(float(gap_start))
+        end = self._snap_to_frame(float(gap_end))
+        if end <= start:
+            return 0
+
+        gap_lines: list[int] = []
+        for i in range(doc.blockCount()):
+            block = doc.findBlockByNumber(i)
+            ud = block.userData()
+            if not isinstance(ud, SubtitleBlockData) or not ud.is_gap:
+                continue
+            gap_sec = self._snap_to_frame(float(ud.start_sec))
+            if start - 0.05 <= gap_sec <= end + 0.05:
+                gap_lines.append(i)
+
+        if not gap_lines:
+            return 0
+
+        cur = QTextCursor(doc)
+        cur.beginEditBlock()
+        removed = 0
+        for line in reversed(gap_lines):
+            block = doc.findBlockByNumber(line)
+            if block.isValid():
+                delete_block_safely(block)
+                removed += 1
+        cur.endEditBlock()
+
+        if hasattr(self.text_edit, "update_margins"):
+            self.text_edit.update_margins()
+        if hasattr(self.text_edit, "timestampArea"):
+            self.text_edit.timestampArea.update()
+        if hasattr(self, "_invalidate_segment_cache"):
+            self._invalidate_segment_cache()
+        return removed
+
     def _on_gap_to_segs(self, gap_start: float, gap_end: float):
         self._undo_mgr.push_immediate()
         gap_start = self._snap_to_frame(gap_start)
         gap_end = self._snap_to_frame(gap_end)
         gap_dur = self._snap_to_frame(gap_end - gap_start)
+        if gap_dur <= 0:
+            return
         push = float(self.settings.get("gap_push_rate", 0.7))
-        pull = max(0.0, min(1.0, 1.0 - push))
-        left = max((s for s in self.timeline.canvas.segments if s["end"] <= gap_start + 0.1), key=lambda s: s["end"], default=None)
-        right = min((s for s in self.timeline.canvas.segments if s["start"] >= gap_end - 0.1), key=lambda s: s["start"], default=None)
-        self.text_edit.textCursor().beginEditBlock()
+        push = max(0.0, min(1.0, push))
+        canvas_segments = [
+            s for s in getattr(getattr(self.timeline, "canvas", None), "segments", []) or []
+            if isinstance(s, dict) and not s.get("is_gap")
+        ]
+        left = max((s for s in canvas_segments if s["end"] <= gap_start + 0.1), key=lambda s: s["end"], default=None)
+        right = min((s for s in canvas_segments if s["start"] >= gap_end - 0.1), key=lambda s: s["start"], default=None)
+        min_len = max(0.02, min(0.1, 1.0 / max(1.0, self._current_frame_fps())))
         if left:
-            left["end"] = self._snap_to_frame(left["end"] + gap_dur * push)
+            if right:
+                boundary = self._snap_to_frame(gap_start + gap_dur * push)
+                boundary_min = self._snap_to_frame(float(left["start"]) + min_len)
+                boundary_max = self._snap_to_frame(float(right["end"]) - min_len)
+                if boundary_min <= boundary_max:
+                    boundary = max(boundary_min, min(boundary_max, boundary))
+                left["end"] = boundary
+            else:
+                left["end"] = gap_end
             self._on_seg_time_changed(left.get("line", 0), left["start"], left["end"], "gap")
         if right:
-            right["start"] = self._snap_to_frame(right["start"] - gap_dur * pull)
+            if left:
+                right["start"] = left["end"]
+            else:
+                right["start"] = gap_start
             self._on_seg_time_changed(right.get("line", 0), right["start"], right["end"], "gap")
 
-        self.text_edit.textCursor().endEditBlock()
+        self._delete_gap_blocks_in_range(gap_start, gap_end)
+        self._remove_live_detection_for_range(gap_start, gap_end)
         self._finalize_edit()
 
     def _gap_part_user_data(self, kind: str, start_sec: float) -> SubtitleBlockData:

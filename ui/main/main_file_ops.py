@@ -18,7 +18,7 @@ from core.path_manager import (
 from core.runtime import config
 from core.settings import load_settings, save_settings
 from core.work_mode import EDITOR_MODE, ROUGHCUT_MODE, SHORTFORM_MODE, normalize_work_mode
-from ui.dialogs.message_box import ask_yes_no, show_message
+from ui.dialogs.message_box import ask_yes_no, confirm_save_changes, show_message
 
 
 def _reusable_cache_paths() -> list[str]:
@@ -56,6 +56,58 @@ def _reusable_cache_paths() -> list[str]:
 
 class FileOpsMixin:
     """파일/폴더 선택 및 배치·멀티클립 모드 진입 관련 메서드."""
+
+    def _confirm_save_dirty_editor_before_exit(self) -> bool:
+        editor = getattr(self, "_editor_widget", None)
+        if editor is None:
+            return True
+        try:
+            dirty_checker = getattr(editor, "_has_unsaved_changes", None)
+            if callable(dirty_checker):
+                is_dirty = bool(dirty_checker())
+            elif hasattr(editor, "sm"):
+                is_dirty = bool(getattr(editor.sm, "is_dirty", False))
+            else:
+                is_dirty = bool(getattr(editor, "_is_dirty", False))
+        except Exception:
+            is_dirty = bool(getattr(editor, "_is_dirty", False))
+        if not is_dirty:
+            return True
+
+        reply = confirm_save_changes(self, title="종료 확인")
+        if reply == QMessageBox.StandardButton.Cancel:
+            return False
+        if reply == QMessageBox.StandardButton.No:
+            return True
+
+        save = getattr(editor, "_on_save", None)
+        if not callable(save):
+            return True
+        try:
+            saved = bool(save(skip_auto_next=True))
+        except TypeError:
+            saved = bool(save())
+        except Exception as exc:
+            show_message(
+                self,
+                "저장 실패",
+                f"종료 전 저장을 완료하지 못했습니다.\n{exc}",
+                icon=QMessageBox.Icon.Warning,
+                buttons=QMessageBox.StandardButton.Ok,
+                default=QMessageBox.StandardButton.Ok,
+            )
+            return False
+        if not saved:
+            show_message(
+                self,
+                "저장 확인",
+                "저장할 자막 세그먼트를 찾지 못했거나 저장이 완료되지 않았습니다.\n종료를 취소하고 상태를 확인해 주세요.",
+                icon=QMessageBox.Icon.Warning,
+                buttons=QMessageBox.StandardButton.Ok,
+                default=QMessageBox.StandardButton.Ok,
+            )
+            return False
+        return True
 
     def _prepare_dialog_state(self):
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
@@ -333,6 +385,9 @@ class FileOpsMixin:
                 )
 
     def _quick_exit(self):
+        confirm_exit = getattr(self, "_confirm_save_dirty_editor_before_exit", None)
+        if callable(confirm_exit) and not confirm_exit():
+            return
         self._quick_exit_requested = True
         busy_before_exit = False
         try:

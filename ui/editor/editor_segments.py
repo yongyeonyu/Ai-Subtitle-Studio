@@ -192,7 +192,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             or seg_norm in block_norm
         )
 
-    def _restore_visible_block_user_data(self) -> int:
+    def _restore_block_user_data_from_cache(self, *, visible_only: bool) -> int:
         text_edit = getattr(self, "text_edit", None)
         if text_edit is None or not hasattr(text_edit, "document"):
             return 0
@@ -203,25 +203,70 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             return 0
 
         doc = text_edit.document()
-        try:
-            start_line, end_line = text_edit.visible_block_number_range(pad_before=32, pad_after=64)
-        except Exception:
+        if visible_only:
+            try:
+                start_line, end_line = text_edit.visible_block_number_range(pad_before=32, pad_after=64)
+            except Exception:
+                start_line = 0
+                end_line = max(0, int(doc.blockCount()) - 1)
+        else:
             start_line = 0
             end_line = max(0, int(doc.blockCount()) - 1)
 
         repaired = 0
         block = doc.findBlockByNumber(int(start_line))
         while block.isValid() and block.blockNumber() <= int(end_line):
-            if not isinstance(block.userData(), SubtitleBlockData):
-                seg = cached_line_map.get(int(block.blockNumber()))
-                if not self._segment_matches_block_text(seg, block.text()):
-                    block = block.next()
-                    continue
+            current_meta = block.userData()
+            seg = cached_line_map.get(int(block.blockNumber()))
+            if not self._segment_matches_block_text(seg, block.text()):
+                block = block.next()
+                continue
+            needs_repair = not isinstance(current_meta, SubtitleBlockData)
+            if isinstance(current_meta, SubtitleBlockData) and isinstance(seg, dict):
+                try:
+                    seg_start = self._frame_time(max(0.0, float(seg.get("start", 0.0) or 0.0)))
+                    needs_repair = abs(float(current_meta.start_sec) - float(seg_start)) > 0.01
+                except Exception:
+                    needs_repair = False
+            if needs_repair:
                 meta = self._subtitle_block_data_from_segment(seg)
                 if meta is not None:
                     block.setUserData(meta)
                     repaired += 1
             block = block.next()
+        return repaired
+
+    def _restore_visible_block_user_data(self) -> int:
+        return self._restore_block_user_data_from_cache(visible_only=True)
+
+    def _restore_all_block_user_data(self) -> int:
+        return self._restore_block_user_data_from_cache(visible_only=False)
+
+    def _refresh_editor_timestamp_metadata(self, *, full: bool = False) -> int:
+        repaired = 0
+        try:
+            if full:
+                repaired = int(self._restore_all_block_user_data() or 0)
+            else:
+                repaired = int(self._restore_visible_block_user_data() or 0)
+        except Exception:
+            repaired = 0
+        text_edit = getattr(self, "text_edit", None)
+        refresher = getattr(text_edit, "refresh_timestamp_layer", None) if text_edit is not None else None
+        if callable(refresher):
+            try:
+                refresher()
+            except Exception:
+                pass
+        else:
+            timestamp_area = getattr(text_edit, "timestampArea", None) if text_edit is not None else None
+            try:
+                if timestamp_area is not None:
+                    timestamp_area.show()
+                    timestamp_area.raise_()
+                    timestamp_area.update()
+            except Exception:
+                pass
         return repaired
 
     def _subtitle_memory_segments(self) -> list[dict]:
@@ -905,7 +950,10 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         try:
             if hasattr(text_edit, "update_margins"):
                 text_edit.update_margins()
-            if timestamp_area is not None and hasattr(timestamp_area, "update"):
+            refresher = getattr(text_edit, "refresh_timestamp_layer", None)
+            if callable(refresher):
+                refresher()
+            elif timestamp_area is not None and hasattr(timestamp_area, "update"):
                 timestamp_area.update()
             quick_sync = getattr(text_edit, "_schedule_quick_layer_sync", None)
             if callable(quick_sync):
@@ -1981,6 +2029,37 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                 trimmed.append(right)
         return trimmed
 
+    def _overlapping_final_segments_for_stt_candidate(self, segments: list[dict], candidate: dict) -> list[dict]:
+        try:
+            cand_start = self._frame_time(float(candidate.get("start", 0.0) or 0.0))
+            cand_end = self._frame_time(float(candidate.get("end", cand_start) or cand_start))
+        except Exception:
+            return []
+        overlaps: list[dict] = []
+        for seg in segments or []:
+            if self._segment_overlaps_time_range(seg, cand_start, cand_end):
+                overlaps.append(dict(seg))
+        return overlaps
+
+    def _manual_exact_stt_candidate(self, candidate: dict, *, replaced_segments: list[dict]) -> dict:
+        exact = dict(candidate or {})
+        try:
+            raw_start = float(candidate.get("start", 0.0) or 0.0)
+            raw_end = float(candidate.get("end", raw_start) or raw_start)
+        except Exception:
+            raw_start, raw_end = 0.0, 0.0
+        exact["start"] = self._frame_time(max(0.0, raw_start))
+        exact["end"] = self._frame_time(max(float(exact["start"]) + 0.05, raw_end))
+        exact["_stt_placement_mode"] = "manual_exact_candidate_timing"
+        exact["_stt_original_candidate_start"] = raw_start
+        exact["_stt_original_candidate_end"] = raw_end
+        exact["_stt_replaced_segment_count"] = len(list(replaced_segments or []))
+        if "start_frame" in candidate:
+            exact["_stt_original_start_frame"] = candidate.get("start_frame")
+        if "end_frame" in candidate:
+            exact["_stt_original_end_frame"] = candidate.get("end_frame")
+        return exact
+
     def _final_segment_from_stt_candidate(self, candidate: dict) -> dict:
         source = self._stt_candidate_source(candidate)
         start = self._frame_time(max(0.0, float(candidate.get("start", 0.0) or 0.0)))
@@ -2003,13 +2082,32 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             "stt_candidates": [candidate_payload],
             "score": max(candidate_score, 98.0),
             "stt_score": max(candidate_score, 98.0),
-            "score_color": str(candidate.get("score_color") or candidate.get("stt_score_color") or ""),
+            "score_color": "green",
+            "manual_stt_candidate_locked": True,
+            "manual_stt_candidate_source": source,
+            "manual_stt_candidate_start": start,
+            "manual_stt_candidate_end": end,
+            "_deep_candidate_selector_policy": {
+                "task": "manual_stt_candidate_selection",
+                "decision": "user_locked_candidate",
+                "source": source,
+                "preserve_candidate_timing": True,
+                "placement_mode": str(candidate.get("_stt_placement_mode") or ""),
+                "replaced_segment_count": int(candidate.get("_stt_replaced_segment_count", 0) or 0),
+            },
+            "_deep_timing_policy": {
+                "task": "manual_stt_candidate_timing_lock",
+                "locked_source": source,
+                "start": start,
+                "end": end,
+                "preserve_candidate_timing": True,
+            },
             "quality": {
                 "confidence_label": "green",
                 "confidence_score": max(candidate_score, 98.0),
                 "confidence_reason": f"{source} 후보 수동 확정",
                 "manual_confirmed": True,
-                "flags": ["manual_confirmed", "stt_candidate_selected"],
+                "flags": ["manual_confirmed", "stt_candidate_selected", "manual_stt_candidate_locked"],
             },
         }
         for key in ("_clip_idx", "_clip_file"):
@@ -2068,9 +2166,20 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         # ---------------------------------------------------------
         # 3. 겹치는 최종 자막을 후보 경계 기준으로 잘라내고 새 확정 자막 삽입
         # ---------------------------------------------------------
-        placed_candidate = self._fit_stt_candidate_to_final_segment_slot(candidate, current)
+        replaced_segments = self._overlapping_final_segments_for_stt_candidate(current, candidate)
+        placed_candidate = self._manual_exact_stt_candidate(candidate, replaced_segments=replaced_segments)
         selected_seg = self._final_segment_from_stt_candidate(placed_candidate)
         candidate_anchor_sec = float(selected_seg.get("start", cand_start) or cand_start)
+        if replaced_segments:
+            selected_seg["manual_stt_selection_replaced_segments"] = [
+                {
+                    "start": seg.get("start"),
+                    "end": seg.get("end"),
+                    "text": seg.get("text"),
+                    "line": seg.get("line"),
+                }
+                for seg in replaced_segments[:8]
+            ]
 
         current = self._trim_final_segments_around_candidate(current, placed_candidate)
         current.append(selected_seg)
@@ -2232,6 +2341,22 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         if not self._segment_queue:
             return
         self._remove_live_editor_preview_overlapping(self._segment_queue)
+        try:
+            from core.engine.subtitle_accuracy_pipeline import repair_subtitle_context_consistency
+
+            repaired_queue, repair_decision = repair_subtitle_context_consistency(
+                [dict(seg) for seg in list(self._segment_queue or []) if isinstance(seg, dict)],
+                getattr(self, "settings", {}) or {},
+            )
+            if repair_decision.get("applied"):
+                dropped_shadow = int(repair_decision.get("dropped_shadow_duplicates", 0) or 0)
+                if dropped_shadow:
+                    get_logger().log(f"[자막문맥-자동복구] 에디터 반영 전 부분중복 자막 {dropped_shadow}개 제거")
+                self._segment_queue = list(repaired_queue or [])
+                if not self._segment_queue:
+                    return
+        except Exception:
+            pass
 
         cont_thresh = float(self.settings.get("continuous_threshold", 2.0))
         push_rate = float(self.settings.get("gap_push_rate", 0.7))

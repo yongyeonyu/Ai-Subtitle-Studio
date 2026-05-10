@@ -133,7 +133,7 @@ class GapSettingsDialog(QDialog):
 
         self.slider_split = QSlider(Qt.Orientation.Horizontal)
         self.slider_split.setRange(5, 50)
-        cur_split = int(self.result.get("split_length_threshold", 10))
+        cur_split = int(self.result.get("split_length_threshold", 20))
         self.slider_split.setValue(cur_split)
         self.lbl_split = QLabel(f"{cur_split} 자")
         form3.addRow("분할 기준 글자 수:", self._create_slider_row(self.slider_split, self.lbl_split, "split_length_threshold", 1.0, lambda v: f"{int(v)} 자", 

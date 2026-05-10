@@ -184,6 +184,7 @@ def _payload_for_kind(kind: str, row: dict[str, Any]) -> dict[str, Any]:
                 "confidence": row.get("confidence"),
                 "frequency": row.get("frequency"),
                 "examples": json_preview(row.get("examples") or []),
+                "metadata": json_preview(row.get("metadata") or {}),
             }
         )
     elif kind == "best_settings":

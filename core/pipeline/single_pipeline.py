@@ -15,15 +15,20 @@ from core.runtime import config
 from core.runtime.logger import get_logger
 from core.settings import load_settings, get_model_key
 from core.time_history import get_expected_time, add_history
-from core.personalization.subtitle_bundle_policy import (
-    resolve_subtitle_bundle_policy,
-    should_flush_subtitle_bundle,
+from core.personalization.subtitle_bundle_policy import resolve_subtitle_bundle_policy
+from core.pipeline.subtitle_buffer_policy import (
+    should_flush_final_subtitle_buffer as _should_flush_final_subtitle_buffer,
+    should_flush_live_subtitle_buffer as _should_flush_live_subtitle_buffer,
 )
 from core.pipeline.startup_diagnostics import (
     attach_expected_processing_time,
     build_startup_diagnostic,
     format_startup_diagnostic_log,
     persist_startup_diagnostic,
+)
+from core.pipeline.subtitle_memory_guard import (
+    create_subtitle_generation_memory_guard,
+    subtitle_generation_memory_checkpoint,
 )
 
 _SENTINEL = object()
@@ -33,73 +38,6 @@ def _is_deleted_qt_error(exc: BaseException) -> bool:
     return "wrapped C/C++ object" in str(exc) and "has been deleted" in str(exc)
 
 
-def _should_flush_final_subtitle_buffer(
-    current_duration: float,
-    chunk_time_limit: int,
-    *,
-    stt_ensemble_enabled: bool,
-    settings: dict | None = None,
-    buffer_segments: list[dict] | None = None,
-    cut_boundaries: list | None = None,
-    provisional_cut_boundaries: list | None = None,
-    media_duration_sec: float | None = None,
-) -> bool:
-    if settings is None and not buffer_segments and not cut_boundaries and not provisional_cut_boundaries:
-        # Backward-compatible live-preview behavior for legacy callers/tests.
-        try:
-            return float(current_duration or 0.0) > 0.0
-        except Exception:
-            return False
-    try:
-        flush, _policy = should_flush_subtitle_bundle(
-            current_duration,
-            chunk_time_limit,
-            settings=settings,
-            segments=buffer_segments,
-            cut_boundaries=cut_boundaries,
-            provisional_cut_boundaries=provisional_cut_boundaries,
-            media_duration_sec=media_duration_sec,
-        )
-        return bool(flush)
-    except Exception:
-        return False
-
-
-def _should_flush_live_subtitle_buffer(
-    current_duration: float,
-    chunk_time_limit: int,
-    *,
-    stt_ensemble_enabled: bool,
-    individual_queue_mode: bool | None = None,
-    settings: dict | None = None,
-    buffer_segments: list[dict] | None = None,
-    cut_boundaries: list | None = None,
-    provisional_cut_boundaries: list | None = None,
-    media_duration_sec: float | None = None,
-) -> bool:
-    if (
-        individual_queue_mode is not None
-        and settings is None
-        and not buffer_segments
-        and not cut_boundaries
-        and not provisional_cut_boundaries
-    ):
-        try:
-            return float(current_duration or 0.0) > 0.0
-        except Exception:
-            return False
-    return _should_flush_final_subtitle_buffer(
-        current_duration,
-        chunk_time_limit,
-        stt_ensemble_enabled=stt_ensemble_enabled,
-        settings=settings,
-        buffer_segments=buffer_segments,
-        cut_boundaries=cut_boundaries,
-        provisional_cut_boundaries=provisional_cut_boundaries,
-        media_duration_sec=media_duration_sec,
-    )
-
-
 class SinglePipelineMixin:
     """단일 / 배치 품질모드 파이프라인."""
 
@@ -107,6 +45,26 @@ class SinglePipelineMixin:
         text = str(status or "")
         self._ui_emit("_sig_update_queue", queue_index, text, "", "", "")
         self._ui_emit("_sig_editor_processing_stage", text)
+
+    def _create_subtitle_generation_memory_guard(self, target_file, queue_index: int):
+        return create_subtitle_generation_memory_guard(self, target_file, queue_index)
+
+    def _subtitle_generation_memory_checkpoint(
+        self,
+        guard,
+        stage: str,
+        *,
+        include_gpu: bool = False,
+        cleanup: bool = False,
+        force: bool = False,
+    ) -> dict:
+        return subtitle_generation_memory_checkpoint(
+            guard,
+            stage,
+            include_gpu=include_gpu,
+            cleanup=cleanup,
+            force=force,
+        )
 
     def _append_live_segments_to_editor(self, segments: list[dict]) -> None:
         segments = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
@@ -230,12 +188,14 @@ class SinglePipelineMixin:
                 pass
 
     def _process_one(self, target_file, queue_index):
+        memory_guard = self._create_subtitle_generation_memory_guard(target_file, queue_index)
         if getattr(self, "_individual_queue_mode", False):
             self._reset_backend_individual_clip_context(invalidate_prefetch=True)
             self._reset_ui_individual_clip_context(clear_project=True)
 
         # ── STEP 0: 백업 ──
         self._backup_existing(target_file)
+        self._subtitle_generation_memory_checkpoint(memory_guard, "backup_done", force=True)
 
         # ── 이벤트/콜백 ──
         edit_event = threading.Event()
@@ -327,8 +287,10 @@ class SinglePipelineMixin:
                     )
                     ui._current_project_path = project_path
                 get_logger().log("  🎬 [컷 경계] 시작 전 분석 단계 확인 중...")
+                self._subtitle_generation_memory_checkpoint(memory_guard, "cut_prescan_start", force=True)
                 self._auto_scan_cut_boundaries_for_start(project_path, media_files)
                 self._ui_emit("_sig_refresh_cut_boundary_placeholder")
+                self._subtitle_generation_memory_checkpoint(memory_guard, "cut_prescan_ready")
             except Exception as exc:
                 get_logger().log(f"  ⚠️ [컷 경계] 시작 전 백그라운드 준비 실패: {exc}")
 
@@ -340,6 +302,7 @@ class SinglePipelineMixin:
             if hasattr(self, "_apply_personalization_runtime_override_for_file"):
                 self._apply_personalization_runtime_override_for_file(target_file)
             self._reload_speaker_settings()
+            self._subtitle_generation_memory_checkpoint(memory_guard, "pipeline_iteration_start", force=True)
             vname = os.path.basename(target_file)
             fsize = (
                 os.path.getsize(target_file) / (1024 * 1024)
@@ -366,7 +329,9 @@ class SinglePipelineMixin:
                 # ✅ 순서 고정:
                 # 컷 경계/주제없음 중분류가 먼저 확정된 뒤 STT1/STT2가 시작되어야 한다.
                 if hasattr(self, "_wait_cut_boundary_prescan_before_stt"):
+                    self._subtitle_generation_memory_checkpoint(memory_guard, "cut_prescan_wait")
                     self._wait_cut_boundary_prescan_before_stt()
+                    self._subtitle_generation_memory_checkpoint(memory_guard, "cut_prescan_done", cleanup=True)
 
                 cut_boundary_snapshot = (
                     self._cut_boundary_snapshot_for_pipeline()
@@ -437,7 +402,15 @@ class SinglePipelineMixin:
                 except Exception as exc:
                     get_logger().log(f"  ⚠️ [컷 경계] STT 청크 hard cut 주입 실패: {exc}")
 
+                self._subtitle_generation_memory_checkpoint(memory_guard, "audio_extract_start", force=True)
                 res = self._get_audio_extract_result(target_file)
+                self._subtitle_generation_memory_checkpoint(
+                    memory_guard,
+                    "audio_extract_done",
+                    include_gpu=True,
+                    cleanup=True,
+                    force=True,
+                )
             finally:
                 if hasattr(self, "video_processor"):
                     self.video_processor.stage_callback = None
@@ -478,6 +451,7 @@ class SinglePipelineMixin:
                 )
             except Exception:
                 pass
+            self._subtitle_generation_memory_checkpoint(memory_guard, "stt_prepare_ready", force=True)
 
             get_logger().log("\n  [STT] Whisper 인식 → [자막 LLM] 교정/분리 파이프라인 가동...")
 
@@ -604,6 +578,11 @@ class SinglePipelineMixin:
                 _preview_opt_sentinel=preview_opt_sentinel,
             ):
                 try:
+                    self._subtitle_generation_memory_checkpoint(
+                        memory_guard,
+                        "stt_transcribe_start",
+                        force=True,
+                    )
                     if hasattr(self, "video_processor"):
                         self.video_processor.stage_callback = (
                             lambda status, qi=queue_index: self._emit_processing_stage(qi, status)
@@ -616,9 +595,20 @@ class SinglePipelineMixin:
                         if not self._active:
                             break
                         _opt_queue.put((chunk_segs, c_idx, t_total))
+                        self._subtitle_generation_memory_checkpoint(
+                            memory_guard,
+                            f"stt_transcribe_chunk:{c_idx}/{t_total}",
+                        )
                 finally:
                     if hasattr(self, "video_processor"):
                         self.video_processor.stage_callback = None
+                    self._subtitle_generation_memory_checkpoint(
+                        memory_guard,
+                        "stt_transcribe_done",
+                        include_gpu=True,
+                        cleanup=True,
+                        force=True,
+                    )
                     _preview_opt_queue.put(_preview_opt_sentinel)
                     _opt_queue.put(_SENTINEL)
 
@@ -691,6 +681,11 @@ class SinglePipelineMixin:
                             self._ui_emit("_sig_set_llm_review_segment", dict(payload or {}))
 
                         self._emit_processing_stage(queue_index, "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중")
+                        self._subtitle_generation_memory_checkpoint(
+                            memory_guard,
+                            "subtitle_optimize_start",
+                            force=True,
+                        )
                         opt = optimize_segments(
                             chunk_segs,
                             vad_segments=_vad_segs,
@@ -701,6 +696,11 @@ class SinglePipelineMixin:
                         opt = chunk_segs
                     finally:
                         self._ui_emit("_sig_set_llm_review_segment", {"active": False})
+                        self._subtitle_generation_memory_checkpoint(
+                            memory_guard,
+                            "subtitle_optimize_done",
+                            include_gpu=True,
+                        )
 
                     if not self._active or not self._ui_is_alive():
                         return
@@ -888,11 +888,19 @@ class SinglePipelineMixin:
             t_trans.join()
             t_preview.join()
             t_opt.join()
+            self._subtitle_generation_memory_checkpoint(
+                memory_guard,
+                "stt_optimizer_threads_done",
+                include_gpu=True,
+                cleanup=True,
+                force=True,
+            )
 
             # ✅ STT 완료 → 큐 즉시 업데이트
             if not self._active:
                 return
 
+            self._ui_emit("_sig_finalize_generation_complete", "stt_optimizer_threads_done")
             self._ui_emit("_sig_update_queue", queue_index, "저장 준비 중", "", "", "")
 
             try:
@@ -946,13 +954,27 @@ class SinglePipelineMixin:
             if not self._ui_is_alive():
                 self._active = False
                 return
+            self._subtitle_generation_memory_checkpoint(memory_guard, "save_export_start", force=True)
             self._save_and_export(target_file, queue_index, final_segments, is_auto_mode)
+            self._subtitle_generation_memory_checkpoint(
+                memory_guard,
+                "save_export_done",
+                include_gpu=True,
+                cleanup=True,
+                force=True,
+            )
 
             if action_state[0] == "restart":
                 self._handle_restart(target_file)
                 action_state[0] = "start"
                 continue
             break
+
+        if memory_guard is not None:
+            try:
+                memory_guard.stop()
+            except Exception:
+                pass
 
         if action_state[0] == "exit" or not getattr(self, "_active", True):
             try:

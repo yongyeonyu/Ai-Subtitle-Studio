@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from difflib import SequenceMatcher
 from statistics import median
 from time import time
 from typing import Any, Iterable
@@ -293,6 +294,97 @@ def _same_scope(left: dict[str, Any] | None, right: dict[str, Any] | None) -> bo
     if left_key is None and right_key is None:
         return True
     return left_key == right_key
+
+
+def _manual_timing_locked(segment: dict[str, Any] | None) -> bool:
+    if not isinstance(segment, dict):
+        return False
+    return bool(
+        segment.get("manual_stt_candidate_locked")
+        or segment.get("manual_timing_locked")
+        or segment.get("_manual_timing_locked")
+    )
+
+
+def _matching_coverage(left: str, right: str) -> float:
+    left = str(left or "")
+    right = str(right or "")
+    base = min(len(left), len(right))
+    if base <= 0:
+        return 0.0
+    if left in right or right in left:
+        return 1.0
+    matcher = SequenceMatcher(None, left, right, autojunk=False)
+    matched = sum(block.size for block in matcher.get_matching_blocks())
+    return max(0.0, min(1.0, matched / base))
+
+
+def _shadow_duplicate_following_info(
+    rows: list[dict[str, Any]],
+    index: int,
+    settings: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Detect a parent subtitle that is immediately repeated by following split children."""
+    settings = dict(settings or {})
+    if not _safe_bool(settings.get("subtitle_context_repair_drop_shadow_duplicates"), True):
+        return None
+    if index < 0 or index >= len(rows):
+        return None
+    current = rows[index]
+    if not isinstance(current, dict) or current.get("is_gap") or _manual_timing_locked(current):
+        return None
+    current_text = _compact_text(current.get("text"))
+    if len(current_text) < max(8, _safe_int(settings.get("subtitle_context_shadow_duplicate_min_chars"), 8)):
+        return None
+    current_start = _safe_float(current.get("start"), 0.0)
+    current_end = _safe_float(current.get("end"), current_start)
+    window = max(0.0, _safe_float(settings.get("subtitle_context_shadow_duplicate_window_sec"), 4.0))
+    max_followers = max(1, min(6, _safe_int(settings.get("subtitle_context_shadow_duplicate_max_followers"), 4)))
+    min_coverage = max(0.5, min(1.0, _safe_float(settings.get("subtitle_context_shadow_duplicate_min_coverage"), 0.72)))
+    min_similarity = max(0.3, min(1.0, _safe_float(settings.get("subtitle_context_shadow_duplicate_min_similarity"), 0.56)))
+
+    followers: list[dict[str, Any]] = []
+    for follower in rows[index + 1:]:
+        if not isinstance(follower, dict):
+            continue
+        if follower.get("is_gap"):
+            break
+        if not _same_scope(current, follower):
+            break
+        follower_start = _safe_float(follower.get("start"), current_end)
+        if follower_start < current_start - 0.05:
+            continue
+        if follower_start > current_end + window:
+            break
+        follower_text = _compact_text(follower.get("text"))
+        if not follower_text:
+            break
+        followers.append(follower)
+        if len(followers) >= max_followers:
+            break
+
+    if not followers:
+        return None
+    follower_text = "".join(_compact_text(row.get("text")) for row in followers)
+    if not follower_text or follower_text == current_text:
+        return None
+    # One exact shorter child after a full subtitle is usually a legitimate candidate display.
+    # A true shadow duplicate either spans multiple following children or the following text
+    # is at least as complete as the parent.
+    if len(followers) < 2 and len(follower_text) <= len(current_text) * 1.05:
+        return None
+    coverage = _matching_coverage(current_text, follower_text)
+    similarity = similarity_ratio(current_text, follower_text)
+    if coverage < min_coverage or similarity < min_similarity:
+        return None
+    return {
+        "follower_count": len(followers),
+        "coverage": round(coverage, 4),
+        "similarity": round(similarity, 4),
+        "current_chars": len(current_text),
+        "following_chars": len(follower_text),
+        "window_sec": round(window, 4),
+    }
 
 
 def _profile_score(profile: dict[str, Any] | None) -> float:
@@ -761,12 +853,14 @@ def subtitle_context_consistency_metrics(
     timing_order_violations = 0
     hallucination_phrase_segments = 0
     cps_jump_segments = 0
+    shadow_duplicate_segments = 0
 
     prev_start: float | None = None
     prev_end: float | None = None
     prev_text = ""
     prev_cps: float | None = None
-    for segment in list(segments or []):
+    rows = [segment for segment in list(segments or []) if isinstance(segment, dict)]
+    for index, segment in enumerate(rows):
         if not isinstance(segment, dict) or segment.get("is_gap"):
             continue
         total += 1
@@ -801,6 +895,8 @@ def subtitle_context_consistency_metrics(
                 and cps > max(max_cps * 1.15, prev_cps * cps_jump_ratio)
             ):
                 cps_jump_segments += 1
+        if _shadow_duplicate_following_info(rows, index, settings):
+            shadow_duplicate_segments += 1
 
         prev_start = start
         prev_end = end
@@ -818,6 +914,7 @@ def subtitle_context_consistency_metrics(
             + hallucination_phrase_segments * 18.0
             + empty_segments * 12.0
             + cps_jump_segments * 5.0
+            + shadow_duplicate_segments * 12.0
         ) / total
         score = max(0.0, min(100.0, 100.0 - penalty))
 
@@ -834,6 +931,7 @@ def subtitle_context_consistency_metrics(
         "hallucination_phrase_segments": hallucination_phrase_segments,
         "empty_segments": empty_segments,
         "cps_jump_segments": cps_jump_segments,
+        "shadow_duplicate_segments": shadow_duplicate_segments,
         "repeat_window_sec": round(repeat_window, 4),
         "near_duplicate_ratio": round(near_duplicate_ratio, 4),
     }
@@ -877,11 +975,15 @@ def annotate_subtitle_context_consistency(
             "end": round(end, 3),
             "cps": round(cps, 3),
         }
+        shadow_info = _shadow_duplicate_following_info(rows, index, settings)
 
         if not compact:
             flags.append("empty_text")
         if any(phrase.lower() in text.lower() for phrase in _HALLUCINATION_PHRASES):
             flags.append("hallucination_phrase")
+        if shadow_info:
+            flags.append("shadow_duplicate_following")
+            details["shadow_duplicate"] = shadow_info
         if prev_start is not None and start + 0.02 < prev_start:
             flags.append("timing_order_violation")
         if prev_end is not None:
@@ -916,6 +1018,7 @@ def annotate_subtitle_context_consistency(
             penalty += 14.0 if "timing_order_violation" in flags else 0.0
             penalty += 12.0 if "empty_text" in flags else 0.0
             penalty += 5.0 if "cps_jump" in flags else 0.0
+            penalty += 12.0 if "shadow_duplicate_following" in flags else 0.0
             details["previous_segment_index"] = prev_index
             row["_context_consistency_policy"] = _decision(
                 "context_consistency",
@@ -1145,6 +1248,7 @@ def repair_subtitle_context_consistency(
     dropped_repeats = 0
     dropped_empty = 0
     dropped_hallucinations = 0
+    dropped_shadow_duplicates = 0
     shifted_starts = 0
     extended_ends = 0
     extended_cps_segments = 0
@@ -1173,6 +1277,14 @@ def repair_subtitle_context_consistency(
         hallucination_phrase = _placeholder_hallucination_phrase(current.get("text"))
         if drop_hallucinations and hallucination_phrase:
             dropped_hallucinations += 1
+            continue
+
+        if (
+            drop_repeats
+            and not _manual_timing_locked(current)
+            and "shadow_duplicate_following" in flags
+        ):
+            dropped_shadow_duplicates += 1
             continue
 
         if (
@@ -1220,7 +1332,14 @@ def repair_subtitle_context_consistency(
 
     repaired = annotate_subtitle_context_consistency(repaired, settings)
     after_metrics = subtitle_context_consistency_metrics(repaired, settings)
-    applied = bool(dropped_repeats or dropped_empty or dropped_hallucinations or shifted_starts or extended_ends)
+    applied = bool(
+        dropped_repeats
+        or dropped_empty
+        or dropped_hallucinations
+        or dropped_shadow_duplicates
+        or shifted_starts
+        or extended_ends
+    )
     decision = _decision(
         "context_repair",
         model=CONTEXT_CONSISTENCY_MODEL_ID,
@@ -1229,6 +1348,7 @@ def repair_subtitle_context_consistency(
         dropped_repeats=dropped_repeats,
         dropped_empty=dropped_empty,
         dropped_hallucinations=dropped_hallucinations,
+        dropped_shadow_duplicates=dropped_shadow_duplicates,
         shifted_starts=shifted_starts,
         extended_ends=extended_ends,
         extended_cps_segments=extended_cps_segments,
@@ -1240,6 +1360,7 @@ def repair_subtitle_context_consistency(
             "overlap_segments": before_metrics.get("overlap_segments"),
             "timing_order_violations": before_metrics.get("timing_order_violations"),
             "cps_jump_segments": before_metrics.get("cps_jump_segments"),
+            "shadow_duplicate_segments": before_metrics.get("shadow_duplicate_segments"),
         },
         after_counts={
             "repeated_segments": after_metrics.get("repeated_segments"),
@@ -1247,6 +1368,7 @@ def repair_subtitle_context_consistency(
             "overlap_segments": after_metrics.get("overlap_segments"),
             "timing_order_violations": after_metrics.get("timing_order_violations"),
             "cps_jump_segments": after_metrics.get("cps_jump_segments"),
+            "shadow_duplicate_segments": after_metrics.get("shadow_duplicate_segments"),
         },
     )
     return repaired, decision
@@ -1320,6 +1442,7 @@ def subtitle_accuracy_metrics(segments: list[dict[str, Any]], settings: dict[str
         "context_overlap_segments": int(context.get("overlap_segments", 0) or 0),
         "context_timing_order_violations": int(context.get("timing_order_violations", 0) or 0),
         "context_cps_jump_segments": int(context.get("cps_jump_segments", 0) or 0),
+        "context_shadow_duplicate_segments": int(context.get("shadow_duplicate_segments", 0) or 0),
         "lora_style_score": lora_style.get("score") if lora_style.get("enabled") else None,
         "lora_style_profiled_segments": int(lora_style.get("profiled_segments", 0) or 0),
         "lora_style_drift_segments": int(lora_style.get("style_drift_segments", 0) or 0),

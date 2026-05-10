@@ -386,8 +386,6 @@ class MainRuntimeCleanupMixin:
         if target_editor is not None:
             for attr_name in (
                 "_is_ai_processing",
-                "_auto_quality_review_pending",
-                "_auto_quality_review_scheduled",
                 "_live_editor_preview_pending",
             ):
                 try:

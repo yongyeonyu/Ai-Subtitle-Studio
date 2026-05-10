@@ -150,8 +150,11 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     native_threads = _positive_int(chip_cpu.get("native_threads"), logical)
     ffmpeg_threads = _positive_int(chip_pipeline.get("ffmpeg_filter_threads"), balanced_workers)
     direct_ffmpeg_chunk_min_sec = float(chip_pipeline.get("direct_ffmpeg_chunk_min_sec", 1.0) or 1.0)
-    stream_start_percent = _positive_int(chip_pipeline.get("cut_follower_stream_start_percent"), 25)
-    stream_batch_size = _positive_int(chip_pipeline.get("cut_follower_stream_batch_size"), max(8, balanced_workers * 2))
+    # BENCH LOCK 2026-05-10: keep follower streaming deliberately less chatty.
+    # The 20%/8-row/0.1s M5 path caused frequent provisional/formal merge churn
+    # and was slower than the earlier benchmark-stable cadence on long 4K clips.
+    stream_start_percent = max(25, _positive_int(chip_pipeline.get("cut_follower_stream_start_percent"), 25))
+    stream_batch_size = max(16, _positive_int(chip_pipeline.get("cut_follower_stream_batch_size"), 16))
     stt_primary_slots = _positive_int(chip_pipeline.get("stt_primary_slots"), 1)
     npu_slots = _positive_int(chip_npu.get("coreml_slots"), 0)
 
@@ -230,7 +233,7 @@ def apply_apple_m_subtitle_pipeline_plan(settings: dict[str, Any] | None = None)
     set_opt("scan_cut_cv2_threads_per_worker", 1)
     set_opt("scan_cut_follower_stream_start_percent", stream_start_percent)
     set_opt("scan_cut_follower_stream_batch_size", max(BENCH_LOCKED_CUT_FOLLOWER_OUTER_SPLITS, stream_batch_size))
-    set_opt("scan_cut_follower_stream_min_interval_sec", 0.1)
+    set_opt("scan_cut_follower_stream_min_interval_sec", 0.75)
     # The follower verifier compares many tiny thumbnail grids. On Apple
     # Silicon this micro-kernel is usually faster on CPU unless the user
     # explicitly opts into MPS for benchmarking, so keep the default off but

@@ -46,6 +46,12 @@ class CutBoundaryAdaptiveLevelTests(unittest.TestCase):
         self.assertFalse(cut_boundary_adaptive_enabled(settings))
         self.assertEqual(cut_boundary_level(settings), "low")
 
+    def test_low_profile_label_matches_low_choice(self):
+        profile = cut_boundary_scan_profile({"scan_cut_boundary_level": "low"})
+
+        self.assertEqual(profile["resolved_level"], "low")
+        self.assertEqual(profile["label"], "낮음 - 5×5 선택 9칸")
+
 
 if __name__ == "__main__":
     unittest.main()

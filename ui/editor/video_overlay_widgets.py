@@ -59,7 +59,7 @@ class ThumbnailLabel(QLabel):
             if self._scaled_cache is None or self._scaled_cache_size != cache_size:
                 self._scaled_cache = self._pixmap.scaled(
                     self.size(),
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation
                 )
                 self._scaled_cache_size = cache_size
@@ -295,7 +295,8 @@ class VideoSurfaceView(QGraphicsView):
         super().__init__(parent)
         self._scene = QGraphicsScene(self)
         self.video_item = QGraphicsVideoItem()
-        self.video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatioByExpanding)
+        self.video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+        self._display_rect = QRectF()
         self._scene.addItem(self.video_item)
         self.subtitle_item = SubtitleSceneOverlayItem()
         self.subtitle_item.setVisible(False)
@@ -318,6 +319,7 @@ class VideoSurfaceView(QGraphicsView):
 
     def set_video_display_rect(self, rect):
         rect = QRectF(rect)
+        self._display_rect = QRectF(rect)
         self.video_item.setPos(rect.left(), rect.top())
         self.video_item.setSize(QSizeF(max(1.0, rect.width()), max(1.0, rect.height())))
 
@@ -325,7 +327,13 @@ class VideoSurfaceView(QGraphicsView):
         super().resizeEvent(event)
         rect = QRectF(0, 0, self.viewport().width(), self.viewport().height())
         self._scene.setSceneRect(rect)
-        self.set_video_display_rect(rect)
+        if self._display_rect.isNull() or self._display_rect.isEmpty():
+            self.set_video_display_rect(rect)
+        else:
+            self.video_item.setPos(self._display_rect.left(), self._display_rect.top())
+            self.video_item.setSize(
+                QSizeF(max(1.0, self._display_rect.width()), max(1.0, self._display_rect.height()))
+            )
 
 
 class SubtitleQuickOverlay(QWidget):
@@ -333,6 +341,8 @@ class SubtitleQuickOverlay(QWidget):
 
     @classmethod
     def create(cls, parent=None):
+        if str(os.environ.get("AI_SUBTITLE_ENABLE_QML_VIDEO_SUBTITLE_OVERLAY", "")).strip() != "1":
+            return None
         if not scenegraph_enabled("video"):
             return None
         qml_path = os.path.join(os.path.dirname(__file__), "video_subtitle_overlay.qml")

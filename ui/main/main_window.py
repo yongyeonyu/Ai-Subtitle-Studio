@@ -88,6 +88,7 @@ class MainWindow(
     _sig_update_project_boundary_times = pyqtSignal(list)
     _sig_set_llm_review_segment = pyqtSignal(dict)
     _sig_editor_processing_stage = pyqtSignal(str)
+    _sig_finalize_generation_complete = pyqtSignal(str)
     _sig_runtime_audio_tune = pyqtSignal(str, object)
 
     def __init__(self):
@@ -1030,6 +1031,7 @@ class MainWindow(
         self._sig_update_project_boundary_times.connect(self._on_project_boundary_times_updated)
         self._sig_set_llm_review_segment.connect(self._do_set_llm_review_segment)
         self._sig_editor_processing_stage.connect(self._do_editor_processing_stage)
+        self._sig_finalize_generation_complete.connect(self._do_finalize_generation_complete)
         self._sig_runtime_audio_tune.connect(self._set_runtime_audio_tune_display)
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
@@ -1500,6 +1502,10 @@ class MainWindow(
             except Exception:
                 pass
             event.accept()
+            return
+        confirm_exit = getattr(self, "_confirm_save_dirty_editor_before_exit", None)
+        if callable(confirm_exit) and not confirm_exit():
+            event.ignore()
             return
         busy_before_exit = False
         try:

@@ -52,10 +52,31 @@ def load_truth_table_rows(store_dir: str | Path | None = None) -> list[dict[str,
     return _read_jsonl(paths["truth_table"])
 
 
+def _word_boundary_payload(row: dict[str, Any], style_profile: dict[str, Any]) -> dict[str, Any]:
+    payload = row.get("word_boundary_learning")
+    if isinstance(payload, dict):
+        return payload
+    nested = style_profile.get("word_boundaries") if isinstance(style_profile, dict) else {}
+    return nested if isinstance(nested, dict) else {}
+
+
+def _top_word_items(counter: Counter[str], key: str = "word", limit: int = 12) -> list[dict[str, Any]]:
+    return [
+        {key: token, "frequency": count}
+        for token, count in counter.most_common(max(0, int(limit or 0)))
+        if str(token or "").strip()
+    ]
+
+
 def analyze_truth_table_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     split_counts: Counter[str] = Counter()
     line_break_counts: Counter[str] = Counter()
     punctuation_counts: Counter[str] = Counter()
+    subtitle_start_counts: Counter[str] = Counter()
+    line_start_counts: Counter[str] = Counter()
+    line_break_before_counts: Counter[str] = Counter()
+    line_break_after_counts: Counter[str] = Counter()
+    line_break_pair_counts: Counter[str] = Counter()
     split_examples: dict[str, list[str]] = {}
     line_examples: dict[str, list[str]] = {}
     split_media_refs: dict[str, set[str]] = {}
@@ -89,6 +110,28 @@ def analyze_truth_table_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 previous_end_sec=None,
                 next_start_sec=None,
             )
+        word_boundaries = _word_boundary_payload(row, style_profile)
+        subtitle_start = str(word_boundaries.get("subtitle_start_word") or "").strip()
+        if subtitle_start:
+            subtitle_start_counts[subtitle_start] += 1
+        for token in list(word_boundaries.get("line_start_words") or []):
+            clean = str(token or "").strip()
+            if clean:
+                line_start_counts[clean] += 1
+        for boundary in list(word_boundaries.get("line_breaks") or []):
+            if not isinstance(boundary, dict):
+                continue
+            before_word = str(boundary.get("before_word") or "").strip()
+            after_word = str(boundary.get("after_word") or "").strip()
+            pair = str(boundary.get("pair") or "").strip()
+            if before_word:
+                line_break_before_counts[before_word] += 1
+            if after_word:
+                line_break_after_counts[after_word] += 1
+            if not pair and before_word and after_word:
+                pair = f"{before_word}->{after_word}"
+            if pair:
+                line_break_pair_counts[pair] += 1
         tone_label = str(((style_profile.get("tone") or {}).get("label")) or "").strip()
         if tone_label:
             tone_counts[tone_label] += 1
@@ -183,6 +226,13 @@ def analyze_truth_table_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             ],
             "previous_gap_p50": _percentile(previous_gaps, 50),
             "next_gap_p50": _percentile(next_gaps, 50),
+        },
+        "editor_word_boundaries": {
+            "top_subtitle_start_words": _top_word_items(subtitle_start_counts),
+            "top_line_start_words": _top_word_items(line_start_counts),
+            "top_line_break_before_words": _top_word_items(line_break_before_counts),
+            "top_line_break_after_words": _top_word_items(line_break_after_counts),
+            "top_line_break_pairs": _top_word_items(line_break_pair_counts, key="pair"),
         },
     }
     return {

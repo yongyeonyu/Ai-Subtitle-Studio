@@ -46,11 +46,23 @@ class _Undo:
         pass
 
 
+class _TimelineTextEdit(QTextEdit):
+    def update_margins(self):
+        pass
+
+
 class _GapGenerateEditor(EditorTimelineVideoMixin, EditorSegmentsMixin):
     settings = {"spk1_id": "00"}
 
     def _multiclip_active_offset(self) -> float:
         return 0.0
+
+    def _redraw_timeline_preserve_resize_view(self, state: dict) -> None:
+        self.redraw_requested = True
+
+    def _invalidate_segment_cache(self):
+        super()._invalidate_segment_cache()
+        self.invalidated = True
 
     def _finalize_edit(self):
         self.finalized = True
@@ -305,6 +317,87 @@ class TimelineHitTargetTests(unittest.TestCase):
 
         self.assertEqual(deleted, [])
         self.assertEqual(clicked, [(0, 1.0)])
+
+    def test_right_click_above_subtitles_does_not_create_smart_split(self):
+        canvas = self._canvas()
+        canvas.resize(420, canvas.height())
+        canvas.playhead_sec = 1.5
+        smart_splits = []
+        canvas.sig_smart_split.connect(lambda *args: smart_splits.append(args))
+        try:
+            QTest.mouseClick(
+                canvas,
+                Qt.MouseButton.RightButton,
+                Qt.KeyboardModifier.NoModifier,
+                QPoint(canvas._x(1.5), SEG_TOP - 6),
+            )
+
+            self.assertEqual(smart_splits, [])
+        finally:
+            canvas.close()
+
+    def test_gap_delete_menu_emits_gap_to_segs(self):
+        canvas = TimelineCanvas()
+        canvas.set_frame_rate(30.0)
+        canvas.pps = 10.0
+        emitted = []
+        canvas.gap_to_segs.connect(lambda start, end: emitted.append((start, end)))
+        try:
+            with patch("ui.timeline.timeline_input.show_context_menu", return_value="delete"):
+                canvas._show_gap_generate_menu({"start": 1.0, "end": 5.0}, QPoint(10, 10), canvas._x(2.0))
+
+            self.assertEqual(emitted, [(1.0, 5.0)])
+        finally:
+            canvas.close()
+
+    def test_gap_delete_attaches_adjacent_subtitles_and_removes_gap_block(self):
+        class DummyCanvas:
+            def __init__(self):
+                self.segments = [
+                    {"start": 0.0, "end": 2.0, "text": "앞", "line": 0},
+                    {"start": 5.0, "end": 7.0, "text": "뒤", "line": 2},
+                ]
+                self.voice_activity_segments = [{"start": 2.0, "end": 5.0, "label": "무음구간"}]
+
+            def _invalidate_marker_caches(self):
+                self.invalidated = True
+
+            def update(self):
+                self.updated = True
+
+        class DummyTimeline:
+            def __init__(self):
+                self.canvas = DummyCanvas()
+
+        editor = _GapGenerateEditor()
+        editor.finalized = False
+        editor.redraw_requested = False
+        editor.invalidated = False
+        editor._undo_mgr = _Undo()
+        editor.timeline = DummyTimeline()
+        editor.video_player = None
+        editor.video_fps = 30.0
+        editor.text_edit = _TimelineTextEdit()
+        editor._live_stt_preview_segments = [{"start": 2.4, "end": 4.0, "text": "무음 후보"}]
+        try:
+            editor.text_edit.setPlainText("앞\n\n뒤")
+            doc = editor.text_edit.document()
+            doc.findBlockByNumber(0).setUserData(SubtitleBlockData("00", 0.0))
+            doc.findBlockByNumber(1).setUserData(make_gap_ud(2.0))
+            doc.findBlockByNumber(2).setUserData(SubtitleBlockData("00", 5.0))
+
+            editor._on_gap_to_segs(2.0, 5.0)
+
+            self.assertEqual(editor.text_edit.toPlainText().splitlines(), ["앞", "뒤"])
+            self.assertFalse(doc.findBlockByNumber(0).userData().is_gap)
+            self.assertFalse(doc.findBlockByNumber(1).userData().is_gap)
+            self.assertAlmostEqual(doc.findBlockByNumber(0).userData().start_sec, 0.0)
+            self.assertAlmostEqual(doc.findBlockByNumber(1).userData().start_sec, 4.1)
+            self.assertEqual(editor._live_stt_preview_segments, [])
+            self.assertEqual(editor.timeline.canvas.voice_activity_segments, [])
+            self.assertTrue(editor.finalized)
+        finally:
+            editor.text_edit.close()
 
     def test_gap_generate_to_playhead_splits_gap_and_adds_new_subtitle(self):
         editor = _GapGenerateEditor()
@@ -1086,6 +1179,92 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertTrue(editor.dirty)
             self.assertTrue(editor.finalized)
             self.assertTrue(editor.refreshed)
+        finally:
+            editor.text_edit.close()
+
+    def test_yellow_segment_timing_confirmation_is_required_until_confirmed(self):
+        canvas = TimelineCanvas()
+        try:
+            seg = {
+                "line": 0,
+                "start": 1.0,
+                "end": 2.0,
+                "text": "확인 필요",
+                "quality": {"confidence_label": "yellow", "flags": []},
+            }
+            self.assertTrue(canvas._segment_timing_confirmation_needed(seg))
+
+            seg["quality"]["manual_confirmed"] = True
+            seg["quality"]["flags"] = ["manual_confirmed"]
+            self.assertFalse(canvas._segment_timing_confirmation_needed(seg))
+        finally:
+            canvas.deleteLater()
+
+    def test_yellow_diamond_drag_emits_both_adjacent_segment_updates(self):
+        canvas = self._canvas()
+        try:
+            canvas.frame_rate = 100.0
+            canvas.total_duration = 4.0
+            for seg in canvas.segments:
+                seg["quality"] = {"confidence_label": "yellow", "flags": []}
+            emitted = []
+            confirmed = []
+            canvas.seg_time_changed.connect(
+                lambda line, start, end, edge: emitted.append((line, start, end, edge))
+            )
+            canvas.seg_timing_confirm_requested.connect(lambda lines: confirmed.extend(lines))
+
+            canvas._drag_edge = "diamond"
+            canvas._drag_diamond_pair = (0, 1)
+            canvas._drag_diamond_orig = 2.0
+            canvas._drag_snap_candidates_cache = [{"time": 2.2, "kind": "test"}]
+            with patch.object(canvas, "_ask_review_timing_confirmation", return_value="confirm"):
+                canvas._apply_drag(0.2)
+                canvas.mouseReleaseEvent(object())
+
+            self.assertAlmostEqual(canvas.segments[0]["end"], 2.2)
+            self.assertAlmostEqual(canvas.segments[1]["start"], 2.2)
+            self.assertEqual(
+                emitted,
+                [
+                    (0, 1.0, 2.2, "diamond"),
+                    (1, 2.2, 3.0, "diamond"),
+                ],
+            )
+            self.assertEqual(confirmed, [0, 1])
+        finally:
+            canvas.deleteLater()
+
+    def test_timing_confirm_request_confirms_review_segment(self):
+        editor = _ReviewEditor()
+        try:
+            editor.text_edit.setPlainText("이동한 자막")
+            block = editor.text_edit.document().findBlockByNumber(0)
+            block.setUserData(
+                SubtitleBlockData(
+                    "00",
+                    1.0,
+                    quality={"confidence_label": "yellow", "flags": ["quality_stale"]},
+                    quality_signature="old",
+                )
+            )
+            editor._segments = [
+                {
+                    "line": 0,
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "이동한 자막",
+                    "quality": {"confidence_label": "yellow", "flags": ["quality_stale"]},
+                }
+            ]
+
+            editor._on_timeline_timing_confirm_requested([0, 0])
+
+            data = block.userData()
+            self.assertEqual(data.quality["confidence_label"], "green")
+            self.assertTrue(data.quality["manual_confirmed"])
+            self.assertIn("manual_confirmed", data.quality["flags"])
+            self.assertNotIn("quality_stale", data.quality["flags"])
         finally:
             editor.text_edit.close()
 

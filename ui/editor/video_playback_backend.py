@@ -2,9 +2,10 @@
 # Phase: PHASE3
 """Selectable video playback backends for the editor preview.
 
-The editor prefers mpv when available because it gives us lightweight hardware
-decode and smoother 720p proxy playback after AI models have been unloaded.
-QtMultimedia remains the safest test/offscreen fallback.
+QtMultimedia is the production-safe default. python-mpv/libmpv can be faster,
+but on macOS it can abort the whole Python process from its native event thread
+when embedded with the current PyQt/QML stack, so it is kept behind an explicit
+unsafe experiment gate.
 """
 from __future__ import annotations
 
@@ -58,6 +59,30 @@ def _settings_requested_video_backend() -> str:
     return ""
 
 
+def _coerce_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in _TRUE_VALUES:
+        return True
+    if text in _FALSE_VALUES:
+        return False
+    return bool(default)
+
+
+def _embedded_mpv_enabled() -> bool:
+    env_value = _env_text("AI_SUBTITLE_ENABLE_EMBEDDED_MPV")
+    if env_value:
+        return env_value in _TRUE_VALUES
+    settings = _render_settings()
+    return _coerce_bool(settings.get("editor_embedded_mpv_enabled"), False) or _coerce_bool(
+        settings.get("editor_video_backend_unsafe_mpv_enabled"),
+        False,
+    )
+
+
 def _running_under_pytest() -> bool:
     return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
 
@@ -98,6 +123,13 @@ def choose_video_backend(preferred: str | None = None) -> VideoBackendChoice:
         return VideoBackendChoice("qt", "forced")
     if (requested == "auto") and (_running_under_pytest() or _offscreen_qt()):
         return VideoBackendChoice("qt", "test_or_offscreen_safe")
+    mpv_allowed = _embedded_mpv_enabled()
+    if requested == "auto" and bool(getattr(config, "IS_MAC", False)) and not mpv_allowed:
+        if _vlc_available():
+            return VideoBackendChoice("vlc", "libvlc_fallback")
+        return VideoBackendChoice("qt", "embedded_mpv_disabled")
+    if requested == "mpv" and not mpv_allowed:
+        return VideoBackendChoice("qt", "embedded_mpv_disabled")
     if requested in {"auto", "mpv"} and _mpv_available():
         return VideoBackendChoice("mpv", "preferred_lightweight_gpu_backend")
     if requested == "mpv":
@@ -224,19 +256,36 @@ class MpvPlaybackBackend(_BaseExternalBackend):
         import mpv  # type: ignore
 
         wid = int(self._video_widget.winId()) if self._video_widget is not None else 0
-        gpu_api = "metal" if bool(getattr(config, "IS_MAC", False)) else "opengl"
-        kwargs = {
+        base_kwargs = {
             "wid": str(wid) if wid else None,
-            "vo": "gpu-next",
-            "gpu_api": gpu_api,
             "hwdec": "auto-safe",
             "osc": False,
             "input_default_bindings": False,
             "input_vo_keyboard": False,
             "terminal": False,
         }
-        kwargs = {key: value for key, value in kwargs.items() if value is not None}
-        self._mpv = mpv.MPV(**kwargs)
+        base_kwargs = {key: value for key, value in base_kwargs.items() if value is not None}
+        if bool(getattr(config, "IS_MAC", False)):
+            attempts = [
+                {**base_kwargs, "vo": "gpu-next", "gpu_api": "vulkan", "gpu_context": "macvk"},
+                {**base_kwargs, "vo": "gpu-next", "gpu_api": "auto", "gpu_context": "auto"},
+                {**base_kwargs, "vo": "gpu"},
+            ]
+        else:
+            attempts = [
+                {**base_kwargs, "vo": "gpu-next", "gpu_api": "auto", "gpu_context": "auto"},
+                {**base_kwargs, "vo": "gpu"},
+            ]
+        last_exc: Exception | None = None
+        for kwargs in attempts:
+            try:
+                self._mpv = mpv.MPV(**kwargs)
+                break
+            except Exception as exc:
+                last_exc = exc
+                self._mpv = None
+        if self._mpv is None:
+            raise RuntimeError(f"mpv backend init failed: {last_exc}")
         try:
             self._mpv.pause = True
         except Exception:

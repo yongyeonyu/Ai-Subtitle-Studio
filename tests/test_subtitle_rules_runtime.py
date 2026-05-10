@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from core.personalization.lora_models import LearnedRuleEntry
+from core.personalization.lora_storage import initialize_lora_personalization_store, save_learned_rules
 from core.personalization.runtime_lora_context import build_runtime_lora_prompt
 from core.utils import load_rules, load_subtitle_rules
 
@@ -64,6 +66,42 @@ class SubtitleRulesRuntimeTests(unittest.TestCase):
         self.assertIn("기본 분리 글자수=19자", prompt)
         self.assertIn("그러니까", prompt)
         self.assertIn(",", prompt)
+
+    def test_runtime_lora_prompt_uses_editor_learned_start_and_line_break_words(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            initialize_lora_personalization_store(tmp)
+            save_learned_rules(
+                "line_break",
+                [
+                    LearnedRuleEntry(
+                        rule_text="8|8",
+                        rule_type="line_break_rule",
+                        frequency=3,
+                        confidence=0.9,
+                    ).to_record()
+                ],
+                tmp,
+                metadata={
+                    "summary": {
+                        "editor_word_boundaries": {
+                            "top_subtitle_start_words": [{"word": "그러니까", "frequency": 3}],
+                            "top_line_start_words": [{"word": "여기까지", "frequency": 2}],
+                            "top_line_break_before_words": [{"word": "오늘은", "frequency": 2}],
+                            "top_line_break_pairs": [{"pair": "오늘은->여기까지", "frequency": 2}],
+                        }
+                    }
+                },
+            )
+            settings = {
+                "editor_lora_runtime_enabled": True,
+                "split_length_threshold": 20,
+            }
+            prompt = build_runtime_lora_prompt("오늘은 여기까지 말할게요", {}, settings, store_dir=tmp)
+
+        self.assertIn("에디터에서 학습한 자막 시작 단어", prompt)
+        self.assertIn("그러니까", prompt)
+        self.assertIn("오늘은->여기까지", prompt)
+        self.assertIn("새 자막 시작단어 후보", prompt)
 
 
 if __name__ == "__main__":
