@@ -12,7 +12,7 @@ import json
 import os
 from typing import Any
 
-from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
+from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame, sec_to_nearest_frame
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 from core.project.subtitle_status import recheck_threshold, subtitle_status_payload
 from core.cut_boundary import (
@@ -78,6 +78,8 @@ STT_SEGMENT_METADATA_KEYS = (
     "subtitle_confidence_score",
     "subtitle_confidence_summary",
     "subtitle_completion_report",
+    "_stt_original_candidate_start_frame",
+    "_stt_original_candidate_end_frame",
     "_stt_lattice_policy",
     "_timing_fusion_policy",
     "_uncertainty_policy",
@@ -735,14 +737,51 @@ def build_stt_candidate_tracks(
         parent = parent or {}
         start = _safe_float(row.get("start", row.get("timeline_start", parent.get("start", 0.0))))
         end = _safe_float(row.get("end", row.get("timeline_end", parent.get("end", start))), start)
+        raw_frame_rate = normalize_fps(
+            row.get("timeline_frame_rate")
+            or row.get("frame_rate")
+            or parent.get("timeline_frame_rate")
+            or parent.get("frame_rate")
+            or fps
+        )
+        raw_start_frame = row.get(
+            "_stt_original_candidate_start_frame",
+            parent.get("_stt_original_candidate_start_frame"),
+        )
+        raw_end_frame = row.get(
+            "_stt_original_candidate_end_frame",
+            parent.get("_stt_original_candidate_end_frame"),
+        )
+        raw_start = _safe_float(
+            row.get(
+                "_stt_original_candidate_start",
+                row.get("original_start", parent.get("_stt_original_candidate_start", parent.get("original_start", start))),
+            ),
+            start,
+        )
+        raw_end = _safe_float(
+            row.get(
+                "_stt_original_candidate_end",
+                row.get("original_end", parent.get("_stt_original_candidate_end", parent.get("original_end", end))),
+            ),
+            raw_start,
+        )
+        if raw_start_frame is None:
+            raw_start_frame = sec_to_nearest_frame(raw_start, raw_frame_rate)
+        if raw_end_frame is None:
+            raw_end_frame = sec_to_nearest_frame(raw_end, raw_frame_rate)
+        raw_start_frame = _safe_int(raw_start_frame)
+        raw_end_frame = max(raw_start_frame + 1, _safe_int(raw_end_frame, raw_start_frame))
+        raw_start = frame_to_sec(raw_start_frame, raw_frame_rate)
+        raw_end = frame_to_sec(raw_end_frame, raw_frame_rate)
         start_frame = row.get("start_frame", row.get("timeline_start_frame"))
         end_frame = row.get("end_frame", row.get("timeline_end_frame"))
         if start_frame is None:
-            start_frame = int(start * fps)
+            start_frame = sec_to_nearest_frame(start, fps)
         if end_frame is None:
-            end_frame = int(max(start, end) * fps)
+            end_frame = sec_to_nearest_frame(max(start, end), fps)
         start_frame = _safe_int(start_frame)
-        end_frame = max(start_frame, _safe_int(end_frame, start_frame))
+        end_frame = max(start_frame + 1, _safe_int(end_frame, start_frame))
         key = (source_key, start_frame, end_frame, text)
         if key in seen:
             return
@@ -766,6 +805,10 @@ def build_stt_candidate_tracks(
                 "end": end_frame,
                 "timeline_frame_rate": fps,
             },
+            "_stt_original_candidate_start": raw_start,
+            "_stt_original_candidate_end": max(raw_start, raw_end),
+            "_stt_original_candidate_start_frame": raw_start_frame,
+            "_stt_original_candidate_end_frame": raw_end_frame,
         }
         for key_name in (
             "_clip_idx",
@@ -1086,14 +1129,53 @@ def _normalize_stt_preview_segments(
         text = str(seg.get("text", "") or "").strip()
         if not text:
             continue
-        start = _safe_float(seg.get("start", seg.get("timeline_start", 0.0)))
-        end = _safe_float(seg.get("end", seg.get("timeline_end", start)), start)
+        source = str(
+            seg.get("stt_preview_source")
+            or seg.get("stt_source")
+            or seg.get("stt_ensemble_source")
+            or "STT1"
+        )
+        preserve_raw_candidate_timing = source.strip().upper() in {"STT1", "STT2"}
+        raw_frame_rate = normalize_fps(
+            seg.get("timeline_frame_rate")
+            or seg.get("frame_rate")
+            or fps
+        )
+        raw_start_frame = seg.get("_stt_original_candidate_start_frame")
+        raw_end_frame = seg.get("_stt_original_candidate_end_frame")
+        raw_start = _safe_float(
+            seg.get(
+                "_stt_original_candidate_start",
+                seg.get("original_start", seg.get("start", seg.get("timeline_start", 0.0))),
+            )
+        )
+        raw_end = _safe_float(
+            seg.get(
+                "_stt_original_candidate_end",
+                seg.get("original_end", seg.get("end", seg.get("timeline_end", raw_start))),
+            ),
+            raw_start,
+        )
+        if raw_start_frame is None:
+            raw_start_frame = sec_to_nearest_frame(raw_start, raw_frame_rate)
+        if raw_end_frame is None:
+            raw_end_frame = sec_to_nearest_frame(raw_end, raw_frame_rate)
+        raw_start_frame = _safe_int(raw_start_frame)
+        raw_end_frame = max(raw_start_frame + 1, _safe_int(raw_end_frame, raw_start_frame))
+        raw_start = frame_to_sec(raw_start_frame, raw_frame_rate)
+        raw_end = frame_to_sec(raw_end_frame, raw_frame_rate)
+        start = raw_start
+        end = raw_end
         frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
         start_frame = seg.get("start_frame", seg.get("timeline_start_frame", frame_range.get("start")))
         end_frame = seg.get("end_frame", seg.get("timeline_end_frame", frame_range.get("end")))
-        if start_frame is not None:
+        if preserve_raw_candidate_timing and start_frame is None:
+            start_frame = raw_start_frame
+        if preserve_raw_candidate_timing and end_frame is None:
+            end_frame = raw_end_frame
+        if start_frame is not None and not preserve_raw_candidate_timing:
             start = frame_to_sec(start_frame, fps)
-        if end_frame is not None:
+        if end_frame is not None and not preserve_raw_candidate_timing:
             end = frame_to_sec(end_frame, fps)
         item = {
             "index": int(seg.get("index", idx + 1) or idx + 1),
@@ -1101,15 +1183,15 @@ def _normalize_stt_preview_segments(
             "end": max(start, end),
             "text": text,
             "speaker": str(seg.get("speaker", seg.get("spk", "00")) or "00"),
-            "stt_preview_source": str(
-                seg.get("stt_preview_source")
-                or seg.get("stt_source")
-                or seg.get("stt_ensemble_source")
-                or "STT1"
-            ),
+            "stt_preview_source": source,
             "stt_pending": True,
             "_live_stt_preview": True,
         }
+        if preserve_raw_candidate_timing:
+            item["_stt_original_candidate_start"] = raw_start
+            item["_stt_original_candidate_end"] = raw_end
+            item["_stt_original_candidate_start_frame"] = raw_start_frame
+            item["_stt_original_candidate_end_frame"] = raw_end_frame
         for key in ("_clip_idx", "_clip_file", "words", "quality", "quality_history", "quality_candidates"):
             if key in seg:
                 item[key] = seg.get(key)
@@ -1118,11 +1200,11 @@ def _normalize_stt_preview_segments(
                 item[key] = seg.get(key)
         item.update(_project_segment_status_payload(item, threshold=status_threshold))
         if start_frame is None:
-            start_frame = int(start * fps)
+            start_frame = sec_to_nearest_frame(start, fps)
         if end_frame is None:
-            end_frame = int(end * fps)
+            end_frame = sec_to_nearest_frame(end, fps)
         item["start_frame"] = _safe_int(start_frame)
-        item["end_frame"] = _safe_int(end_frame)
+        item["end_frame"] = max(item["start_frame"] + 1, _safe_int(end_frame, item["start_frame"]))
         item["timeline_start_frame"] = item["start_frame"]
         item["timeline_end_frame"] = item["end_frame"]
         item["frame_rate"] = fps

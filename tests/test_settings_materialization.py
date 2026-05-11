@@ -19,6 +19,19 @@ class SettingsMaterializationTests(unittest.TestCase):
                 json.dumps({"custom_default_knob": 123, "llm_threads": 5}),
                 encoding="utf-8",
             )
+            Path(tmp, "user_settings.json").write_text(
+                json.dumps(
+                    {
+                        "google_api_key": "google-secret",
+                        "openai_api_key": "openai-secret",
+                        "huggingface_token": "hf-secret",
+                        "google_api_key_saved": True,
+                        "openai_api_key_saved": True,
+                        "huggingface_token_saved": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
             Path(tmp, "folder_settings.json").write_text(
                 json.dumps({"nas_path": "/Volumes/video", "icloud_stt_quality_preset": "balanced"}),
                 encoding="utf-8",
@@ -37,6 +50,12 @@ class SettingsMaterializationTests(unittest.TestCase):
                 self.assertEqual(saved["user_prompt"], "")
                 self.assertEqual(saved["editor_roughcut_draft_prompt"], "")
                 self.assertIn("selected_audio_ai", saved["_auto_managed_by_lora"])
+                self.assertNotIn("google_api_key", saved)
+                self.assertNotIn("openai_api_key", saved)
+                self.assertNotIn("huggingface_token", saved)
+                self.assertTrue(saved["google_api_key_saved"])
+                self.assertTrue(saved["openai_api_key_saved"])
+                self.assertTrue(saved["huggingface_token_saved"])
                 self.assertEqual(saved["nas_path"], "/Volumes/video")
                 self.assertEqual(saved["icloud_stt_quality_preset"], "balanced")
                 self.assertEqual(loaded["custom_default_knob"], 123)
@@ -81,6 +100,28 @@ class SettingsMaterializationTests(unittest.TestCase):
         self.assertTrue(materialized["whisperkit_native_auto_enabled"])
         self.assertTrue(materialized["autopilot_enabled"])
 
+    def test_materialize_user_settings_strips_plaintext_api_secrets(self):
+        from core.settings_profiles import materialize_user_settings
+
+        materialized = materialize_user_settings(
+            {
+                "selected_model": "unit-test-model",
+                "google_api_key": "google-secret",
+                "openai_api_key": "openai-secret",
+                "huggingface_token": "hf-secret",
+                "google_api_key_saved": True,
+                "openai_api_key_saved": True,
+                "huggingface_token_saved": True,
+            }
+        )
+
+        self.assertNotIn("google_api_key", materialized)
+        self.assertNotIn("openai_api_key", materialized)
+        self.assertNotIn("huggingface_token", materialized)
+        self.assertTrue(materialized["google_api_key_saved"])
+        self.assertTrue(materialized["openai_api_key_saved"])
+        self.assertTrue(materialized["huggingface_token_saved"])
+
     def test_project_data_manager_save_writes_materialized_settings(self):
         from core.project import data_manager
 
@@ -93,7 +134,17 @@ class SettingsMaterializationTests(unittest.TestCase):
             ):
                 try:
                     config.DATASET_DIR = tmp
-                    data_manager.save_settings({"selected_model": "unit-test-model"})
+                    data_manager.save_settings(
+                        {
+                            "selected_model": "unit-test-model",
+                            "google_api_key": "google-secret",
+                            "openai_api_key": "openai-secret",
+                            "huggingface_token": "hf-secret",
+                            "google_api_key_saved": True,
+                            "openai_api_key_saved": True,
+                            "huggingface_token_saved": True,
+                        }
+                    )
                     saved = json.loads(Path(tmp, "user_settings.json").read_text(encoding="utf-8"))
 
                     self.assertEqual(saved["selected_model"], "unit-test-model")
@@ -101,6 +152,12 @@ class SettingsMaterializationTests(unittest.TestCase):
                     self.assertIn("selected_whisper_model", saved)
                     self.assertIn("nas_path", saved)
                     self.assertEqual(saved["_settings_storage"], "dataset/user_settings.json")
+                    self.assertNotIn("google_api_key", saved)
+                    self.assertNotIn("openai_api_key", saved)
+                    self.assertNotIn("huggingface_token", saved)
+                    self.assertTrue(saved["google_api_key_saved"])
+                    self.assertTrue(saved["openai_api_key_saved"])
+                    self.assertTrue(saved["huggingface_token_saved"])
                 finally:
                     config.DATASET_DIR = original_dataset_dir
 

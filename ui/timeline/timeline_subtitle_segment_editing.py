@@ -563,7 +563,13 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         return max(frame, pixel)
 
     def _add_snap_candidate(self, candidates: list[dict], sec, kind: str, source=None):
-        raw_value = _as_float(sec, -1.0)
+        if isinstance(sec, dict):
+            raw_value = _as_float(
+                sec.get("timeline_sec", sec.get("time", sec.get("start", sec.get("timeline_start", -1.0)))),
+                -1.0,
+            )
+        else:
+            raw_value = _as_float(sec, -1.0)
         if raw_value < 0.0:
             return
         value = self._snap_to_frame(raw_value)

@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from typing import Any
 
-from core.frame_time import normalize_fps, normalize_segments_to_frame_grid
+from core.frame_time import frame_to_sec, normalize_fps, normalize_segments_to_frame_grid, sec_to_nearest_frame
 from core.project.project_srt import parse_srt_to_segments, strip_whisper_control_tokens
 from core.utils import seconds_to_srt_time
 
@@ -109,6 +109,8 @@ _COMPACT_META_KEYS = {
     "subtitle_confidence_score",
     "subtitle_confidence_summary",
     "subtitle_completion_report",
+    "_stt_original_candidate_start_frame",
+    "_stt_original_candidate_end_frame",
     "_stt_lattice_policy",
     "_timing_fusion_policy",
     "_uncertainty_policy",
@@ -130,6 +132,13 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return int(default)
 
 
 def _project_primary_fps(project: dict[str, Any] | None) -> float:
@@ -195,6 +204,103 @@ def _segment_end(seg: dict[str, Any]) -> float:
     return max(start, _safe_float(seg.get("end", seg.get("timeline_end", start)), start))
 
 
+def _segment_timing_fps(seg: dict[str, Any], default: float = 30.0) -> float:
+    frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+    return normalize_fps(
+        seg.get("timeline_frame_rate")
+        or frame_range.get("timeline_frame_rate")
+        or seg.get("frame_rate")
+        or seg.get("source_frame_rate")
+        or default
+    )
+
+
+def _frame_timing_payload(
+    start_frame: Any,
+    end_frame: Any,
+    fps: float,
+    *,
+    min_frames: int = 1,
+) -> dict[str, Any]:
+    start_value = max(0, _safe_int(start_frame))
+    end_value = _safe_int(end_frame, start_value)
+    if min_frames > 0:
+        end_value = max(start_value + int(min_frames), end_value)
+    else:
+        end_value = max(start_value, end_value)
+    return {
+        "start_frame": start_value,
+        "end_frame": end_value,
+        "timeline_start_frame": start_value,
+        "timeline_end_frame": end_value,
+        "frame_rate": fps,
+        "timeline_frame_rate": fps,
+        "frame_range": {
+            "unit": "frame",
+            "start": start_value,
+            "end": end_value,
+            "timeline_frame_rate": fps,
+        },
+    }
+
+
+def _segment_frame_payload(
+    seg: dict[str, Any],
+    *,
+    default_fps: float = 30.0,
+    min_frames: int = 1,
+) -> dict[str, Any]:
+    fps = _segment_timing_fps(seg, default_fps)
+    frame_range = seg.get("frame_range", {}) if isinstance(seg.get("frame_range"), dict) else {}
+    start_frame = seg.get("start_frame", seg.get("timeline_start_frame", frame_range.get("start")))
+    end_frame = seg.get("end_frame", seg.get("timeline_end_frame", frame_range.get("end")))
+    if start_frame is None:
+        start_frame = sec_to_nearest_frame(_segment_start(seg), fps)
+    if end_frame is None:
+        end_frame = sec_to_nearest_frame(_segment_end(seg), fps)
+    return _frame_timing_payload(start_frame, end_frame, fps, min_frames=min_frames)
+
+
+def _original_candidate_frame_payload(
+    seg: dict[str, Any],
+    *,
+    default_fps: float = 30.0,
+    min_frames: int = 1,
+    include_seconds: bool = True,
+) -> dict[str, Any]:
+    fps = _segment_timing_fps(seg, default_fps)
+    start_frame = seg.get("_stt_original_candidate_start_frame")
+    end_frame = seg.get("_stt_original_candidate_end_frame")
+    if start_frame is None:
+        raw_start = _safe_float(
+            seg.get(
+                "_stt_original_candidate_start",
+                seg.get("original_start", seg.get("start", seg.get("timeline_start", 0.0))),
+            )
+        )
+        start_frame = sec_to_nearest_frame(raw_start, fps)
+    if end_frame is None:
+        raw_end = _safe_float(
+            seg.get(
+                "_stt_original_candidate_end",
+                seg.get("original_end", seg.get("end", seg.get("timeline_end", 0.0))),
+            )
+        )
+        end_frame = sec_to_nearest_frame(raw_end, fps)
+    payload = {
+        "_stt_original_candidate_start_frame": max(0, _safe_int(start_frame)),
+        "_stt_original_candidate_end_frame": max(0, _safe_int(end_frame, _safe_int(start_frame))),
+    }
+    if min_frames > 0 and payload["_stt_original_candidate_end_frame"] <= payload["_stt_original_candidate_start_frame"]:
+        payload["_stt_original_candidate_end_frame"] = payload["_stt_original_candidate_start_frame"] + int(min_frames)
+    elif payload["_stt_original_candidate_end_frame"] < payload["_stt_original_candidate_start_frame"]:
+        payload["_stt_original_candidate_end_frame"] = payload["_stt_original_candidate_start_frame"]
+    if include_seconds:
+        payload["_stt_original_candidate_start"] = frame_to_sec(payload["_stt_original_candidate_start_frame"], fps)
+        payload["_stt_original_candidate_end"] = frame_to_sec(payload["_stt_original_candidate_end_frame"], fps)
+    return payload
+
+
 def _track_signature(rows: list[dict[str, Any]]) -> str:
     compact = [
         {
@@ -257,12 +363,22 @@ def sanitize_stt_track_rows(
         if end <= start:
             end = start + 0.1
         item = dict(row)
-        item["start"] = start
-        item["end"] = end
         item["text"] = text
         if source:
             item["source"] = source
             item["stt_preview_source"] = source
+        timing = _segment_frame_payload(item, default_fps=primary_fps, min_frames=1)
+        item.update(timing)
+        item["start"] = frame_to_sec(timing["start_frame"], timing["timeline_frame_rate"])
+        item["end"] = frame_to_sec(timing["end_frame"], timing["timeline_frame_rate"])
+        item.update(
+            _original_candidate_frame_payload(
+                item,
+                default_fps=timing["timeline_frame_rate"],
+                min_frames=1,
+                include_seconds=True,
+            )
+        )
         cleaned.append((idx, item))
 
     fps = max(1.0, _safe_float(primary_fps, 30.0))
@@ -290,27 +406,20 @@ def sanitize_stt_track_rows(
 
     out: list[dict[str, Any]] = []
     for item in selected:
-        if _segment_end(item) <= _segment_start(item):
-            item["end"] = _segment_start(item) + 0.05
+        timing = _segment_frame_payload(item, default_fps=fps, min_frames=1)
+        item.update(timing)
+        item["start"] = frame_to_sec(timing["start_frame"], timing["timeline_frame_rate"])
+        item["end"] = frame_to_sec(timing["end_frame"], timing["timeline_frame_rate"])
+        item.update(
+            _original_candidate_frame_payload(
+                item,
+                default_fps=timing["timeline_frame_rate"],
+                min_frames=1,
+                include_seconds=True,
+            )
+        )
         item["index"] = len(out) + 1
         out.append(item)
-    for item in out:
-        start = _segment_start(item)
-        end = _segment_end(item)
-        start_frame = int(round(start * fps))
-        end_frame = max(start_frame + 1, int(round(end * fps)))
-        item["start_frame"] = start_frame
-        item["end_frame"] = end_frame
-        item["timeline_start_frame"] = start_frame
-        item["timeline_end_frame"] = end_frame
-        item["frame_rate"] = fps
-        item["timeline_frame_rate"] = fps
-        item["frame_range"] = {
-            "unit": "frame",
-            "start": start_frame,
-            "end": end_frame,
-            "timeline_frame_rate": fps,
-        }
     return out
 
 
@@ -339,13 +448,40 @@ def _compact_value(value: Any, depth: int = 0) -> Any:
     return str(value)
 
 
-def compact_segment_metadata(seg: dict[str, Any], index: int, *, source: str = "") -> dict[str, Any]:
+def compact_segment_metadata(
+    seg: dict[str, Any],
+    index: int,
+    *,
+    source: str = "",
+    default_fps: float = 30.0,
+) -> dict[str, Any]:
     meta: dict[str, Any] = {"index": int(index)}
     for key in _COMPACT_META_KEYS:
         if key in seg:
             value = _compact_value(seg.get(key))
             if value not in (None, "", [], {}):
                 meta[key] = value
+    timing = _segment_frame_payload(seg, default_fps=default_fps, min_frames=1)
+    meta.update(timing)
+    if source or any(
+        key in seg
+        for key in (
+            "_stt_original_candidate_start_frame",
+            "_stt_original_candidate_end_frame",
+            "_stt_original_candidate_start",
+            "_stt_original_candidate_end",
+            "original_start",
+            "original_end",
+        )
+    ):
+        meta.update(
+            _original_candidate_frame_payload(
+                seg,
+                default_fps=timing["timeline_frame_rate"],
+                min_frames=1,
+                include_seconds=False,
+            )
+        )
     text = str(seg.get("text", "") or "")
     if text:
         meta["text_hash"] = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
@@ -430,7 +566,13 @@ def _track_manifest(project_path: str, key: str, srt_info: dict[str, Any], metad
     }
 
 
-def _merge_srt_metadata(rows: list[dict[str, Any]], metadata: list[Any], *, source: str = "") -> list[dict[str, Any]]:
+def _merge_srt_metadata(
+    rows: list[dict[str, Any]],
+    metadata: list[Any],
+    *,
+    source: str = "",
+    primary_fps: float = 30.0,
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for idx, row in enumerate(rows or []):
         if not isinstance(row, dict):
@@ -441,10 +583,22 @@ def _merge_srt_metadata(rows: list[dict[str, Any]], metadata: list[Any], *, sour
         item["text"] = strip_whisper_control_tokens(str(row.get("text", "") or ""))
         item["start"] = _safe_float(row.get("start", 0.0))
         item["end"] = _safe_float(row.get("end", item["start"]), item["start"])
+        timing = _segment_frame_payload(item, default_fps=primary_fps, min_frames=1)
+        item.update(timing)
+        item["start"] = frame_to_sec(timing["start_frame"], timing["timeline_frame_rate"])
+        item["end"] = frame_to_sec(timing["end_frame"], timing["timeline_frame_rate"])
         item["index"] = int(item.get("index", idx + 1) or idx + 1)
         if source:
             item["source"] = source
             item["stt_preview_source"] = source
+            item.update(
+                _original_candidate_frame_payload(
+                    item,
+                    default_fps=timing["timeline_frame_rate"],
+                    min_frames=1,
+                    include_seconds=True,
+                )
+            )
         out.append(item)
     return out
 
@@ -479,8 +633,13 @@ def load_external_subtitle_segments(project: dict[str, Any] | None) -> list[dict
         return []
     track = _track_from_project(project, _FINAL_TRACK)
     path = resolve_project_asset_path(project, track.get("path"))
+    primary_fps = _project_primary_fps(project)
     if path and os.path.exists(path):
-        return _merge_srt_metadata(parse_srt_to_segments(path), list(track.get("metadata") or []))
+        return _merge_srt_metadata(
+            parse_srt_to_segments(path),
+            list(track.get("metadata") or []),
+            primary_fps=primary_fps,
+        )
     cached = project.get("_external_subtitle_segments_cache")
     return [dict(row) for row in cached] if isinstance(cached, list) else []
 
@@ -504,7 +663,12 @@ def load_external_stt_tracks(project: dict[str, Any] | None) -> dict[str, list[d
         path = resolve_project_asset_path(project, track.get("path"))
         if not path or not os.path.exists(path):
             continue
-        rows = _merge_srt_metadata(parse_srt_to_segments(path), list(track.get("metadata") or []), source=source)
+        rows = _merge_srt_metadata(
+            parse_srt_to_segments(path),
+            list(track.get("metadata") or []),
+            source=source,
+            primary_fps=primary_fps,
+        )
         rows = sanitize_stt_track_rows(rows, source=source, primary_fps=primary_fps)
         if rows:
             out[source] = rows
@@ -559,13 +723,19 @@ def externalize_project_text_assets(
     asset_dir = project_asset_dir(project_path)
     subtitle_dir = os.path.join(asset_dir, "subtitles")
     os.makedirs(subtitle_dir, exist_ok=True)
-    final_segments = list(final_segments or [])
+    primary_fps = _project_primary_fps(project)
+    final_segments = normalize_segments_to_frame_grid(
+        list(final_segments or []),
+        primary_fps,
+        min_frames=1,
+        preserve_order=True,
+    )
     stt_tracks = dict(stt_tracks or {})
 
     tracks_manifest: dict[str, Any] = {}
     final_info = write_srt_track(final_segments, os.path.join(subtitle_dir, "final.srt"))
     final_metadata = [
-        compact_segment_metadata(row, idx + 1)
+        compact_segment_metadata(row, idx + 1, default_fps=primary_fps)
         for idx, row in enumerate(list(final_info.get("rows") or []))
     ]
     final_track = _track_manifest(project_path, _FINAL_TRACK, final_info, final_metadata)
@@ -573,13 +743,17 @@ def externalize_project_text_assets(
 
     stt_external_tracks: dict[str, Any] = {}
     for source in ("STT1", "STT2"):
-        rows = sanitize_stt_track_rows(list(stt_tracks.get(source) or []), source=source)
+        rows = sanitize_stt_track_rows(
+            list(stt_tracks.get(source) or []),
+            source=source,
+            primary_fps=primary_fps,
+        )
         if not rows:
             continue
         key = f"{_STT_TRACK_PREFIX}{source.lower()}"
         info = write_srt_track(rows, os.path.join(subtitle_dir, f"{source.lower()}.srt"))
         metadata = [
-            compact_segment_metadata(row, idx + 1, source=source)
+            compact_segment_metadata(row, idx + 1, source=source, default_fps=primary_fps)
             for idx, row in enumerate(list(info.get("rows") or []))
         ]
         track = _track_manifest(project_path, key, info, metadata)

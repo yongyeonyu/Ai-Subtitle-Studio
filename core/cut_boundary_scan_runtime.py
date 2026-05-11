@@ -189,7 +189,11 @@ def cut_follower_verify_backend(
     data = dict(settings or {})
     if str(pressure_stage or "").strip().lower() in {"warning", "critical"}:
         return "cpu"
-    if not _setting_bool(data.get("scan_cut_follower_mps_enabled"), False):
+    explicit_toggle = data.get("scan_cut_follower_mps_enabled")
+    if explicit_toggle in (None, ""):
+        if not _setting_bool(data.get("runtime_native_cut_boundary_enabled"), True):
+            return "cpu"
+    elif not _setting_bool(explicit_toggle, False):
         return "cpu"
     if str(platform_name or sys.platform).strip().lower() != "darwin":
         return "cpu"

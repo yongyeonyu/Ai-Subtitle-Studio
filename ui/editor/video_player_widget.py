@@ -14,12 +14,12 @@ from bisect import bisect_right
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QSizePolicy, QStackedWidget)
-from PyQt6.QtCore import Qt, QTimer, QRectF, QUrl, QEvent, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QUrl, QEvent, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QColor
 
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from core.runtime import config
-from core.frame_time import build_frame_time_map, normalize_fps, snap_sec_to_frame
+from core.frame_time import build_frame_time_map, normalize_fps, sec_to_floor_frame, snap_sec_to_frame
 from core.platform_compat import ffmpeg_binary, hidden_subprocess_kwargs
 from core.roughcut import default_thumbnail_cache_dir, ensure_thumbnail
 from core.video_preview_proxy import preview_proxy_path_for
@@ -708,9 +708,11 @@ class VideoPlayerWidget(QWidget):
         rect = self.video_container.rect()
         self.video_stack.setGeometry(rect)
         video_rect = self._displayed_video_rect(rect)
+        overlay_parent = self._subtitle_overlay_parent()
+        overlay_rect = self._map_overlay_rect_to_parent(video_rect, overlay_parent)
         try:
-            self.sub_label.setParent(self.video_container)
-            self.sub_label.setGeometry(video_rect)
+            self.sub_label.setParent(overlay_parent)
+            self.sub_label.setGeometry(overlay_rect)
         except Exception:
             self.sub_label.setParent(self.video_container)
             self.sub_label.setGeometry(rect)
@@ -718,8 +720,8 @@ class VideoPlayerWidget(QWidget):
         quick_overlay = getattr(self, "quick_subtitle_overlay", None)
         if quick_overlay is not None:
             try:
-                quick_overlay.setParent(self.video_container)
-                quick_overlay.setGeometry(video_rect)
+                quick_overlay.setParent(overlay_parent)
+                quick_overlay.setGeometry(overlay_rect)
                 quick_overlay.raise_()
             except Exception:
                 pass
@@ -730,6 +732,24 @@ class VideoPlayerWidget(QWidget):
             self.video_widget.set_video_display_rect(QRectF(video_rect))
         except Exception:
             pass
+
+    def _subtitle_overlay_parent(self):
+        item = self._scene_subtitle_item()
+        if item is not None:
+            return self.video_container
+        return getattr(self, "video_widget", None) or self.video_container
+
+    def _map_overlay_rect_to_parent(self, rect, parent):
+        if parent is None or parent is self.video_container:
+            return rect
+        try:
+            top_left = parent.mapFrom(self.video_container, rect.topLeft())
+            return QRect(top_left, rect.size())
+        except Exception:
+            try:
+                return parent.rect()
+            except Exception:
+                return rect
 
     def _set_source_name_badge(self, path: str):
         name = os.path.basename(str(path or "").strip())
@@ -1112,7 +1132,7 @@ class VideoPlayerWidget(QWidget):
         return bool(default)
 
 
-    def load(self, path, segments=None):
+    def load(self, path, segments=None, *, defer_probe: bool = False):
         self._set_segments(segments or [])
         if self._pending_segments is None:
             self._pending_segments = list(self.segments)
@@ -1120,22 +1140,23 @@ class VideoPlayerWidget(QWidget):
             self._set_source_name_badge(path)
             self._current_source_path = path
             self._video_surface_primed = False
-            try:
-                from core.media_info import probe_media
-                info = probe_media(path)
-                w = float(info.get("width", 0) or 0)
-                h = float(info.get("height", 0) or 0)
-                self._source_width = int(w) if w > 0 else 0
-                self._source_height = int(h) if h > 0 else 0
-                self._rebuild_frame_time_map(
-                    duration=float(info.get("duration", 0.0) or self.total_time or 0.0),
-                    fps=float(info.get("fps", 0.0) or self.frame_rate or 30.0),
-                )
-                self._source_aspect = (w / h) if w > 0 and h > 0 else (16 / 9)
-            except Exception:
-                self._source_aspect = 16 / 9
-                self._source_width = 0
-                self._source_height = 0
+            if not defer_probe:
+                try:
+                    from core.media_info import probe_media
+                    info = probe_media(path)
+                    w = float(info.get("width", 0) or 0)
+                    h = float(info.get("height", 0) or 0)
+                    self._source_width = int(w) if w > 0 else 0
+                    self._source_height = int(h) if h > 0 else 0
+                    self._rebuild_frame_time_map(
+                        duration=float(info.get("duration", 0.0) or self.total_time or 0.0),
+                        fps=float(info.get("fps", 0.0) or self.frame_rate or 30.0),
+                    )
+                    self._source_aspect = (w / h) if w > 0 and h > 0 else (16 / 9)
+                except Exception:
+                    self._source_aspect = 16 / 9
+                    self._source_width = 0
+                    self._source_height = 0
             playback_path = self._playback_path_for(path)
             self._pending_media_source_path = playback_path
             self._pending_seek_sec = self._pending_seek_sec if self._pending_seek_sec is not None else 0.0
@@ -1336,7 +1357,13 @@ class VideoPlayerWidget(QWidget):
             sec = 0.0
         if clamp_total and self.total_time > 0.0:
             sec = min(sec, max(0.0, float(self.total_time or 0.0)))
-        frame = self.frame_for_sec(sec)
+        frame_map = getattr(self, "frame_time_map", None)
+        if frame_map is None:
+            frame_map = build_frame_time_map(self.total_time, self.frame_rate)
+            self.frame_time_map = frame_map
+        frame = sec_to_floor_frame(sec, getattr(frame_map, "fps", self.frame_rate))
+        if getattr(frame_map, "total_frames", 0) > 0:
+            frame = max(0, min(frame, max(0, int(frame_map.total_frames) - 1)))
         return self.sec_for_frame(frame)
 
     def _sync_media_position_for_frame(self, frame: int) -> int:

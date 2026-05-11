@@ -22,16 +22,16 @@ from core.project.project_manager import (
     save_project,
 )
 from core.project.project_context import (
-    project_clip_boundaries,
     project_cut_boundary_provisional_segments,
-    project_voice_activity_segments,
     project_active_work_mode,
     project_media_files,
     project_roughcut_state,
     project_segments_to_editor,
-    project_stt_preview_segments,
 )
 from core.work_mode import EDITOR_MODE, normalize_work_mode
+from ui.editor.editor_project_open_native import (
+    open_project_segments_in_editor as native_open_project_segments_in_editor,
+)
 from ui.project.clip_order_dialog import OrderDialog
 
 
@@ -41,9 +41,33 @@ PROJECT_MEDIA_FILTER = (
 PROJECT_FILE_FILTER = "Project Files (*.json)"
 
 
+def _is_placeholder_middle_row(row: dict) -> bool:
+    if not isinstance(row, dict):
+        return False
+    title = str(row.get("title", row.get("name", "")) or "")
+    tags = row.get("tags", []) or []
+    if isinstance(tags, str):
+        tags = [tags]
+    return bool(
+        row.get("is_topicless_placeholder")
+        or row.get("is_cut_boundary_placeholder")
+        or row.get("source") == "cut_boundary"
+        or title == "주제없음"
+        or "컷경계" in tags
+    )
+
+
+def _rows_are_placeholder_only(rows) -> bool:
+    rows = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+    return bool(rows) and all(_is_placeholder_middle_row(row) for row in rows)
+
+
 class ProjectUIMixin:
     def _project_cut_boundary_placeholder_rows(self, project: dict) -> list[dict]:
         analysis = project.get("analysis", {}) or {}
+        middle_rows = analysis.get("middle_segments")
+        if isinstance(middle_rows, list) and middle_rows and not _rows_are_placeholder_only(middle_rows):
+            return [dict(row) for row in middle_rows if isinstance(row, dict)]
         rows = []
         for key in (
             "cut_boundary_topicless_middle_segments",
@@ -70,6 +94,11 @@ class ProjectUIMixin:
         if provisional_rows:
             return True
         if cut_rows:
+            return False
+        middle_rows = analysis.get("middle_segments")
+        if isinstance(middle_rows, list) and middle_rows and not _rows_are_placeholder_only(middle_rows):
+            return False
+        if bool(analysis.get("cut_boundary_topicless_finalized")):
             return False
 
         has_cut_state = any(
@@ -191,91 +220,7 @@ class ProjectUIMixin:
         ]
 
     def _open_project_segments_in_editor(self, filepath: str, project: dict, media: list[str], segments: list[dict]):
-        if not media:
-            return False
-
-        boundaries = project_clip_boundaries(project)
-        if len(media) > 1:
-            self._multiclip_files = list(media)
-            self._multiclip_boundaries = boundaries
-            self._project_boundary_times = [b["end"] for b in boundaries[:-1]] if len(boundaries) > 1 else []
-        else:
-            self._multiclip_files = []
-            self._multiclip_boundaries = []
-            self._project_boundary_times = []
-
-        self._current_project_path = filepath
-        self._is_auto_pipeline = False
-        self._on_save_cb = None
-        self._on_start_cb = None
-        self._on_prev_cb = None
-        self._on_exit_cb = None
-        self._init_editor(media[0], is_batch=False)
-
-        editor = getattr(self, "_editor_widget", None)
-        if editor is None:
-            return False
-        try:
-            provisional_boundaries = project_cut_boundary_provisional_segments(project)
-            voice_activity = project_voice_activity_segments(project)
-            timeline = getattr(editor, "timeline", None)
-            if timeline is not None and hasattr(timeline, "set_auto_gap_segments_enabled"):
-                timeline.set_auto_gap_segments_enabled(False)
-            if hasattr(editor, "apply_loaded_canvas_state"):
-                editor.apply_loaded_canvas_state(
-                    segments,
-                    auto_gap_segments_enabled=False,
-                    boundary_times=self._project_boundary_times or [],
-                    provisional_boundaries=provisional_boundaries,
-                    voice_activity_segments=voice_activity,
-                    mark_dirty=False,
-                )
-            elif hasattr(editor, "_reload_segments_from_list"):
-                try:
-                    editor._reload_segments_from_list(segments, mark_dirty=False)
-                except TypeError as exc:
-                    if "mark_dirty" not in str(exc):
-                        raise
-                    editor._reload_segments_from_list(segments)
-            else:
-                editor.append_segments(segments)
-            if len(media) > 1 and hasattr(editor, "_apply_multiclip_state_from_owner"):
-                editor._apply_multiclip_state_from_owner()
-            if hasattr(editor, "_set_process_completed"):
-                editor._set_process_completed()
-            if hasattr(editor, "_schedule_timeline"):
-                editor._schedule_timeline()
-            runtime_refresh = getattr(self, "_refresh_opened_editor_runtime", None)
-            if callable(runtime_refresh):
-                runtime_refresh(editor)
-
-            def _restore_deferred_state():
-                try:
-                    stt_preview = project_stt_preview_segments(project)
-                    if hasattr(editor, "apply_canvas_aux_state"):
-                        editor.apply_canvas_aux_state(
-                            stt_preview_segments=stt_preview,
-                            schedule_timeline=bool(stt_preview),
-                        )
-                    runtime_refresh = getattr(self, "_refresh_opened_editor_runtime", None)
-                    if callable(runtime_refresh):
-                        runtime_refresh(editor)
-                    elif hasattr(editor, "_refresh_video_subtitle_context"):
-                        editor._refresh_video_subtitle_context()
-                    QTimer.singleShot(
-                        320,
-                        lambda fp=filepath, pr=project, md=list(media or []): self._resume_cut_boundary_prescan_for_open_project(fp, pr, md),
-                    )
-                except Exception as inner_exc:
-                    get_logger().log(f"⚠️ 프로젝트 지연 상태 복원 실패: {inner_exc}")
-
-            QTimer.singleShot(120, _restore_deferred_state)
-            schedule_runtime_refresh = getattr(self, "_schedule_opened_editor_runtime_refresh", None)
-            if callable(schedule_runtime_refresh):
-                schedule_runtime_refresh(editor)
-        except Exception as e:
-            get_logger().log(f"⚠️ 프로젝트 자막 복원 실패: {e}")
-        return True
+        return native_open_project_segments_in_editor(self, filepath, project, media, segments)
 
     def _create_project(self):
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)

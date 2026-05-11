@@ -204,6 +204,49 @@ def dense_flow_pair_metrics(
         return None
 
 
+def gray_rollback_search(
+    gray_rows: Any,
+    *,
+    start_frame: int,
+    hi_frame: int,
+    stages: Any,
+    region_threshold: float,
+    target_samples: int,
+    gray_required_regions: int,
+    gray_1f_threshold: float,
+    gray_2f_threshold: float,
+    gray_window_required: int,
+    gray_window_threshold: float,
+    peak_bonus_scale: float = 0.18,
+    peak_contrast_scale: float = 0.16,
+    peak_sharpness_scale: float = 0.08,
+) -> dict[str, Any] | None:
+    if not native_cut_boundary_enabled():
+        return None
+    try:
+        values = _native.gray_rollback_search(
+            gray_rows,
+            int(start_frame),
+            int(hi_frame),
+            stages,
+            float(region_threshold),
+            int(target_samples or 64),
+            int(gray_required_regions or 1),
+            float(gray_1f_threshold),
+            float(gray_2f_threshold),
+            int(gray_window_required or 1),
+            float(gray_window_threshold),
+            float(peak_bonus_scale),
+            float(peak_contrast_scale),
+            float(peak_sharpness_scale),
+        )
+        if not isinstance(values, dict):
+            return None
+        return dict(values)
+    except Exception:
+        return None
+
+
 def waveform_peaks_f32le(
     raw: bytes | bytearray | memoryview | None,
     *,

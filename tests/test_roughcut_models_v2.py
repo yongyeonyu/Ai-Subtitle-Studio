@@ -4,6 +4,7 @@ import json
 import unittest
 from unittest import mock
 
+from core.roughcut.editor_draft import build_editor_roughcut_draft_prompt
 from core.roughcut import (
     DEFAULT_ROUGHCUT_PROMPT_V1,
     RoughCutDraftState,
@@ -135,7 +136,39 @@ class RoughCutModelsV2Tests(unittest.TestCase):
         self.assertEqual(override.threads, 7)
         self.assertTrue(override.context_policy["auto_enabled"])
         self.assertIn("중분류 A/B/C/D", DEFAULT_ROUGHCUT_PROMPT_V1)
+        self.assertIn("합치거나 분리할 수 있다", DEFAULT_ROUGHCUT_PROMPT_V1)
+        self.assertIn("자막 전체와 영상 흐름을 이해", DEFAULT_ROUGHCUT_PROMPT_V1)
+        self.assertIn("실외에서 실내로 들어가거나", DEFAULT_ROUGHCUT_PROMPT_V1)
+        self.assertIn("음향 환경 전환도 강한 중분류 후보", DEFAULT_ROUGHCUT_PROMPT_V1)
         self.assertIn("단순한 말 끊김", DEFAULT_ROUGHCUT_PROMPT_V1)
+
+    def test_editor_roughcut_prompt_treats_reference_middle_segments_as_revisable(self):
+        prompt = json.loads(
+            build_editor_roughcut_draft_prompt(
+                [
+                    {"start": 0.0, "end": 2.0, "text": "도입 설명"},
+                    {"start": 2.0, "end": 4.0, "text": "실내 기능 소개"},
+                ],
+                reference_major_segments=[
+                    {
+                        "major_id": "A",
+                        "title": "임시 중분류",
+                        "summary": "초안",
+                        "start": 0.0,
+                        "end": 4.0,
+                        "tags": ["초안"],
+                    }
+                ],
+            )
+        )
+
+        instructions = prompt["editor_instructions"]
+        self.assertIn("reference_major_segments는 고정 답안이 아니라 참고 초안", instructions)
+        self.assertIn("필요하면 여러 구간을 합치거나 하나를 둘 이상으로 분리", instructions)
+        self.assertIn("최종 판단 기준은 reference가 아니라 전체 subtitle_rows", instructions)
+        self.assertIn("실외→실내", instructions)
+        self.assertIn("1. subtitle_rows 전체를 끝까지 읽고 전체 내용을 확인한다.", instructions)
+        self.assertEqual(prompt["reference_major_segments"][0]["tags"], ["초안"])
 
     def test_roughcut_context_policy_uses_lora_deep_auto_rows(self):
         payload = {
@@ -279,6 +312,8 @@ class RoughCutModelsV2Tests(unittest.TestCase):
             self.assertEqual(major["topic_level"], "middle_category")
             self.assertEqual(major["candidate_topic_hint"], "촬영 장비 세팅")
             self.assertIn("중분류 주제", payload["task_instruction"])
+            self.assertIn("tags도 반드시 함께 작성", payload["task_instruction"])
+            self.assertIn("tags", captured["prompt"]["output_contract"]["schema"]["item_recommended"])
             return {
                 "topics": [
                     {
@@ -316,6 +351,41 @@ class RoughCutModelsV2Tests(unittest.TestCase):
         self.assertEqual(labeled[0].title, "야간 촬영 장비 세팅")
         self.assertEqual(labeled[0].summary, "카메라 렌즈와 조명을 준비해 야간 촬영 품질을 높이는 구간")
         self.assertEqual(labeled[0].tags, ("카메라", "야간촬영"))
+
+    def test_major_topic_labels_normalize_string_tags_from_llm(self):
+        segments = (
+            RoughCutSegment(
+                segment_id="A",
+                major_id="A",
+                start=0.0,
+                end=6.0,
+                subtitle_ids=(0, 1, 2),
+                title="실내 소개",
+            ),
+        )
+        subtitles = (
+            SubtitleSegment(0.0, 1.5, "시트 착좌감과 조절 기능을 먼저 봅니다", subtitle_id=0),
+            SubtitleSegment(2.0, 3.5, "센터패시아와 수납 구성도 함께 확인합니다", subtitle_id=1),
+            SubtitleSegment(4.0, 5.5, "실내 마감과 디자인 특징을 정리합니다", subtitle_id=2),
+        )
+
+        labeled = apply_major_topic_labels(
+            segments,
+            subtitles,
+            settings={"roughcut_llm_enabled": True},
+            llm_client=lambda _prompt: {
+                "topics": [
+                    {
+                        "major_id": "A",
+                        "topic": "차량 실내 리뷰",
+                        "summary": "실내 편의와 마감 포인트를 정리하는 구간",
+                        "tags": "시트, 기능, 디자인 특징, 수납공간",
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual(labeled[0].tags, ("시트", "기능", "디자인 특징", "수납공간"))
 
     def test_major_topic_labels_do_not_accept_raw_first_subtitle_copy(self):
         first_text = "오늘은 BMW 차량 외장 디자인을 자세히 살펴보겠습니다"
@@ -376,6 +446,32 @@ class RoughCutModelsV2Tests(unittest.TestCase):
         )
 
         self.assertEqual(labeled[0].title, "주행 연비 평가")
+
+    def test_major_topic_labels_fall_back_to_subtitle_topics_when_llm_disabled(self):
+        segments = (
+            RoughCutSegment(
+                segment_id="A",
+                major_id="A",
+                start=0.0,
+                end=8.0,
+                subtitle_ids=(0, 1, 2),
+                title="주제없음",
+            ),
+        )
+        subtitles = (
+            SubtitleSegment(0.0, 2.0, "이제 BMW X5 실내 버튼 구성과 수납 공간을 살펴보겠습니다", subtitle_id=0),
+            SubtitleSegment(2.2, 4.5, "센터 디스플레이와 시트 조작 편의성도 함께 확인합니다", subtitle_id=1),
+            SubtitleSegment(5.0, 7.0, "뒷좌석 공간과 실내 마감 품질까지 정리합니다", subtitle_id=2),
+        )
+
+        labeled = apply_major_topic_labels(
+            segments,
+            subtitles,
+            settings={"roughcut_llm_enabled": False},
+        )
+
+        self.assertEqual(labeled[0].title, "실내 편의 사양")
+        self.assertIn("실내", labeled[0].summary)
 
 
 if __name__ == "__main__":

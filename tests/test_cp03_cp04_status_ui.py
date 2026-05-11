@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QObject, Qt
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import QApplication, QLabel, QTableWidget, QTextEdit, QWidget
+from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QTableWidget, QTextEdit, QWidget
 
 from core.runtime import config
 from core.state_manager import SubtitleStateManager
@@ -19,6 +19,7 @@ from core.work_mode import EDITOR_MODE
 from ui.editor.editor_actions import EditorActionsMixin
 from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.home_ui import HomeUIMixin
+from ui.main.main_signals import SignalHandlersMixin
 from ui.menu_bar import StatusRail
 from ui.queue_widget import QueueMixin
 
@@ -151,6 +152,105 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         finally:
             rail.close()
 
+    def test_refresh_cut_boundary_placeholder_preserves_editor_result_when_roughcut_is_empty(self):
+        placeholder_result = {"segments": [{"major_id": "A", "title": "주제없음"}]}
+        editor = SimpleNamespace(
+            _roughcut_result=None,
+            redraws=0,
+        )
+
+        def _refresh_from_project():
+            editor._roughcut_result = dict(placeholder_result)
+
+        editor._refresh_cut_boundary_placeholder_from_project = _refresh_from_project
+        editor._redraw_timeline = lambda: setattr(editor, "redraws", int(editor.redraws) + 1)
+
+        roughcut = SimpleNamespace(_result=None)
+        refresh_calls = []
+        roughcut.refresh_from_editor = lambda analyze_if_missing=False: refresh_calls.append(bool(analyze_if_missing))
+
+        window = SimpleNamespace(
+            _editor_widget=editor,
+            _roughcut_widget=roughcut,
+            _editor_roughcut_result={"stale": True},
+        )
+
+        SignalHandlersMixin._do_refresh_cut_boundary_placeholder(window)
+
+        self.assertEqual(refresh_calls, [False])
+        self.assertEqual(window._editor_roughcut_result, placeholder_result)
+        self.assertEqual(editor.redraws, 1)
+
+    def test_footer_menu_button_style_has_checked_feedback(self):
+        from ui.editor.editor_widget import EditorWidget
+
+        class _Editor:
+            _footer_menu_button_style = EditorWidget._footer_menu_button_style
+
+        editor = _Editor()
+        style = editor._footer_menu_button_style(font_size="11px")
+
+        self.assertIn("QPushButton:checked", style)
+        self.assertIn("QPushButton:hover:checked", style)
+        self.assertIn("border-color: #D7EBFF", style)
+
+    def test_sync_footer_menu_button_states_marks_active_and_video_visible(self):
+        from ui.editor.editor_widget import EditorWidget
+
+        class _Editor:
+            _sync_footer_menu_button_states = EditorWidget._sync_footer_menu_button_states
+
+        btn_ai = QPushButton("AI")
+        btn_ai.setCheckable(True)
+        btn_spk = QPushButton("화자")
+        btn_spk.setCheckable(True)
+        btn_gap = QPushButton("간격")
+        btn_gap.setCheckable(True)
+        btn_vid = QPushButton("비디오")
+        btn_vid.setCheckable(True)
+
+        editor = _Editor()
+        editor._footer_menu_buttons = {
+            "ai": btn_ai,
+            "speaker": btn_spk,
+            "gap": btn_gap,
+            "video": btn_vid,
+        }
+        editor._active_footer_menu_id = "speaker"
+        editor.video_player = SimpleNamespace(isVisible=lambda: True)
+
+        editor._sync_footer_menu_button_states()
+
+        self.assertFalse(btn_ai.isChecked())
+        self.assertTrue(btn_spk.isChecked())
+        self.assertFalse(btn_gap.isChecked())
+        self.assertTrue(btn_vid.isChecked())
+
+    def test_invoke_footer_menu_action_resets_transient_selection_after_callback(self):
+        from ui.editor.editor_widget import EditorWidget
+
+        class _Editor:
+            _sync_footer_menu_button_states = EditorWidget._sync_footer_menu_button_states
+            _invoke_footer_menu_action = EditorWidget._invoke_footer_menu_action
+
+        btn_ai = QPushButton("AI")
+        btn_ai.setCheckable(True)
+        editor = _Editor()
+        editor._footer_menu_buttons = {"ai": btn_ai}
+        editor._active_footer_menu_id = ""
+        editor.video_player = None
+
+        seen = []
+
+        def _callback():
+            seen.append(btn_ai.isChecked())
+
+        editor._invoke_footer_menu_action("ai", _callback, transient=True)
+
+        self.assertEqual(seen, [True])
+        self.assertFalse(btn_ai.isChecked())
+        self.assertEqual(editor._active_footer_menu_id, "")
+
     def test_status_rail_shows_generation_mode_while_processing(self):
         rail = StatusRail()
         try:
@@ -264,11 +364,14 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
 
             EditorPipelineMixin._trim_cut_boundary_state_for_partial_rerun(editor, 40.0)
 
-            self.assertEqual(main_w._project_boundary_times, [10.0])
-            self.assertEqual(timeline.boundary_times, [10.0])
+            self.assertEqual(len(main_w._project_boundary_times), 1)
+            self.assertEqual(main_w._project_boundary_times[0]["timeline_sec"], 10.0)
+            self.assertEqual(len(timeline.boundary_times), 1)
+            self.assertEqual(timeline.boundary_times[0]["timeline_sec"], 10.0)
             self.assertEqual(len(editor._auto_cut_boundary_scan_lines), 1)
             self.assertEqual(editor._auto_cut_boundary_scan_lines[0]["timeline_sec"], 12.0)
-            self.assertEqual(sig_boundaries.emitted[-1], [10.0])
+            self.assertEqual(len(sig_boundaries.emitted[-1]), 1)
+            self.assertEqual(sig_boundaries.emitted[-1][0]["timeline_sec"], 10.0)
             self.assertIsNone(backend._cut_boundary_pipeline_cache)
             self.assertEqual(len(backend._cut_boundary_provisional_rows), 1)
 
@@ -326,6 +429,244 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         self.assertEqual(prescan[1], SubtitleStateManager.ST_PROC)
         self.assertIn("정지", prescan[2])
         self.assertIn("시작 준비", prescan[3])
+
+    def test_prepare_cut_boundaries_before_start_forces_rescan_for_existing_project(self):
+        class _Backend:
+            def __init__(self):
+                self.calls = []
+                self._force_cut_boundary_rescan_once = False
+                self._cut_boundary_prescan_completed = True
+
+            def _auto_scan_cut_boundaries_for_start(self, project_path, files):
+                self.calls.append((project_path, list(files or [])))
+
+        class DummyEditor(EditorPipelineMixin):
+            def __init__(self, main, media_path):
+                self.main = main
+                self.media_path = media_path
+                self.settings = {}
+
+            def window(self):
+                return self.main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = os.path.join(tmp, "sample.mp4")
+            project_path = os.path.join(tmp, "sample.assp")
+            open(media_path, "wb").close()
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump({"analysis": {"cut_boundary_prescan_done": True}}, f, ensure_ascii=False)
+
+            backend = _Backend()
+            main = SimpleNamespace(
+                backend=backend,
+                _multiclip_files=[],
+                _current_project_path=project_path,
+            )
+            editor = DummyEditor(main, media_path)
+
+            editor._prepare_cut_boundaries_before_start()
+
+        self.assertEqual(backend.calls, [(project_path, [media_path])])
+        self.assertTrue(backend._force_cut_boundary_rescan_once)
+        self.assertFalse(backend._cut_boundary_prescan_completed)
+
+    def test_prepare_cut_boundaries_before_start_forces_rescan_for_new_project_too(self):
+        class _Backend:
+            def __init__(self):
+                self.calls = []
+                self._force_cut_boundary_rescan_once = False
+                self._cut_boundary_prescan_completed = True
+
+            def _auto_scan_cut_boundaries_for_start(self, project_path, files):
+                self.calls.append((project_path, list(files or [])))
+
+        class DummyEditor(EditorPipelineMixin):
+            def __init__(self, main, media_path):
+                self.main = main
+                self.media_path = media_path
+                self.settings = {"example": True}
+
+            def window(self):
+                return self.main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = os.path.join(tmp, "sample.mp4")
+            project_path = os.path.join(tmp, "created.assp")
+            open(media_path, "wb").close()
+
+            backend = _Backend()
+            main = SimpleNamespace(
+                backend=backend,
+                _multiclip_files=[],
+                _current_project_path="",
+            )
+            editor = DummyEditor(main, media_path)
+
+            with patch("ui.editor.editor_pipeline.create_project", return_value=project_path):
+                editor._prepare_cut_boundaries_before_start()
+
+        self.assertEqual(backend.calls, [(project_path, [media_path])])
+        self.assertEqual(main._current_project_path, project_path)
+        self.assertTrue(backend._force_cut_boundary_rescan_once)
+        self.assertFalse(backend._cut_boundary_prescan_completed)
+
+    def test_stop_pipeline_clears_pending_editor_work_before_backend_stop(self):
+        class _Timer:
+            def __init__(self):
+                self.stopped = False
+
+            def stop(self):
+                self.stopped = True
+
+        class _Event:
+            def __init__(self):
+                self.set_called = False
+
+            def set(self):
+                self.set_called = True
+
+        class _Backend:
+            def __init__(self):
+                self._active = True
+                self._edit_event = _Event()
+                self._start_event = _Event()
+                self.stop_called = False
+
+            def stop(self, *, log_context="파이프라인 중단"):
+                self.stop_called = True
+                self.stop_context = log_context
+                self._active = False
+
+        class DummyEditor(EditorPipelineMixin):
+            def __init__(self):
+                self.sm = SubtitleStateManager()
+                self.sm.start_ai_all()
+                self._segment_queue = [{"text": "pending"}]
+                self._live_editor_preview_queue = [{"text": "preview"}]
+                self._live_editor_preview_keys = {("STT1", 0.0, 1.0, "preview")}
+                self._pending_cursor_video_seek_sec = 12.3
+                self._queue_timer = _Timer()
+                self._live_editor_preview_timer = _Timer()
+                self._timeline_timer = _Timer()
+                self._video_context_refresh_timer = _Timer()
+                self._cursor_video_seek_timer = _Timer()
+                self._spinner_timer = _Timer()
+                self.main = SimpleNamespace(
+                    _stop_post_completion_idle_timer=lambda: None,
+                    backend_fast=None,
+                    backend=_Backend(),
+                    _unlock_workspace_sidebar_width=lambda: None,
+                )
+
+            def window(self):
+                return self.main
+
+        editor = DummyEditor()
+
+        with patch("ui.editor.editor_pipeline.QTimer.singleShot") as single_shot:
+            editor._stop_pipeline()
+
+        self.assertEqual(editor._segment_queue, [])
+        self.assertEqual(editor._live_editor_preview_queue, [])
+        self.assertEqual(editor._live_editor_preview_keys, set())
+        self.assertIsNone(editor._pending_cursor_video_seek_sec)
+        self.assertTrue(editor._queue_timer.stopped)
+        self.assertTrue(editor._live_editor_preview_timer.stopped)
+        self.assertTrue(editor._timeline_timer.stopped)
+        self.assertTrue(editor._video_context_refresh_timer.stopped)
+        self.assertTrue(editor._cursor_video_seek_timer.stopped)
+        self.assertTrue(editor.main.backend.stop_called)
+        self.assertTrue(editor.main.backend._edit_event.set_called)
+        self.assertTrue(editor.main.backend._start_event.set_called)
+        self.assertEqual(editor.main.backend.stop_context, "작업 중지")
+        single_shot.assert_any_call(120, editor._safe_enable_start_btn)
+
+    def test_state_machine_progress_only_update_skips_redundant_menu_sync(self):
+        from ui.editor.editor_widget import EditorWidget
+
+        class _Label:
+            def __init__(self):
+                self._text = ""
+
+            def setText(self, text):
+                self._text = str(text)
+
+            def text(self):
+                return self._text
+
+        class _Button:
+            def __init__(self):
+                self.text_value = ""
+                self.enabled_value = True
+                self.calls = 0
+
+            def setText(self, text):
+                self.calls += 1
+                self.text_value = str(text)
+
+            def setEnabled(self, enabled):
+                self.calls += 1
+                self.enabled_value = bool(enabled)
+
+        class _Editor:
+            _on_state_machine_update = EditorWidget._on_state_machine_update
+            _clean_action_label = EditorWidget._clean_action_label
+
+            def __init__(self):
+                self._is_ai_processing = False
+                self._is_dirty = False
+                self.status_lbl = _Label()
+                self.btn_start = _Button()
+                self.apply_lock_calls = 0
+                self.menu_sync_calls = 0
+                self.saved_refresh_calls = 0
+                self.main = SimpleNamespace(
+                    sync_menu_from_editor=lambda _editor: setattr(self, "menu_sync_calls", self.menu_sync_calls + 1),
+                    _refresh_saved_status_label=lambda **_kwargs: setattr(self, "saved_refresh_calls", self.saved_refresh_calls + 1),
+                )
+
+            def window(self):
+                return self.main
+
+            def _apply_text_editor_lock_state(self):
+                self.apply_lock_calls += 1
+
+        editor = _Editor()
+
+        editor._on_state_machine_update("MODE_AI_ALL", "ST_PROC", True, True, "처리중 (1/10)", "■ 정지", True)
+        editor._on_state_machine_update("MODE_AI_ALL", "ST_PROC", True, True, "처리중 (2/10)", "■ 정지", True)
+
+        self.assertEqual(editor.menu_sync_calls, 1)
+        self.assertEqual(editor.saved_refresh_calls, 1)
+        self.assertEqual(editor.status_lbl.text(), "처리중 (2/10)")
+        self.assertEqual(editor.btn_start.text_value, "정지")
+        self.assertTrue(editor.btn_start.enabled_value)
+
+    def test_processing_lock_uses_selection_lock_for_text_editor(self):
+        from ui.editor.editor_widget import EditorWidget
+
+        class _TextEdit:
+            def __init__(self):
+                self.selection_locked_calls = []
+
+            def set_selection_locked(self, locked):
+                self.selection_locked_calls.append(bool(locked))
+
+        class _Editor:
+            _apply_text_editor_lock_state = EditorWidget._apply_text_editor_lock_state
+
+            def __init__(self):
+                self.text_edit = _TextEdit()
+                self.sm = SimpleNamespace(is_locked=True)
+
+            def _timeline_lock_edit_enabled(self):
+                return False
+
+        editor = _Editor()
+
+        editor._apply_text_editor_lock_state()
+
+        self.assertEqual(editor.text_edit.selection_locked_calls, [True])
 
     def test_queue_completion_status_completes_editor_state(self):
         class DummyQueue(QueueMixin):
@@ -1319,6 +1660,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.assertFalse(window.backend._reuse_existing_multiclip_subtitles)
                 self.assertEqual(window.backend._reuse_clip_indices, set())
                 self.assertTrue(window.backend._force_no_reuse_once)
+                self.assertTrue(window.backend._force_cut_boundary_rescan_once)
                 self.assertFalse(window.backend.is_first_start)
                 self.assertGreater(window.backend.pipeline_start_time, 0.0)
                 self.assertEqual(editor.text_edit.toPlainText(), "")
@@ -1445,6 +1787,7 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 self.assertNotIn("cut_boundary_prescan_done", saved["analysis"])
                 self.assertNotIn("cut_boundary_cache_path", saved["analysis"])
                 self.assertNotIn("cut_boundary_cache_type", saved["analysis"])
+                self.assertTrue(bool(getattr(backend, "_force_cut_boundary_rescan_once", False)))
             finally:
                 window.close()
                 window.deleteLater()

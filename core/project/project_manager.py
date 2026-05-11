@@ -39,6 +39,17 @@ from core.project.project_assets import (
     hydrate_project_text_asset_cache,
     project_uses_external_text_assets,
 )
+from core.roughcut.cut_boundary_placeholder import (
+    build_topicless_middle_segments,
+    rows_are_placeholder_only,
+    store_topicless_placeholders_in_project_data,
+)
+from core.roughcut import (
+    build_editor_roughcut_candidate_payload,
+    build_editor_roughcut_draft_result,
+    merge_editor_roughcut_draft_state,
+    run_editor_roughcut_llm_draft,
+)
 from core.project.subtitle_status import subtitle_status_payload
 from core.project.project_io import read_project_file, write_project_file
 from core.project.project_srt import parse_srt_to_segments
@@ -47,6 +58,7 @@ from core.project.project_model_settings import (
     extract_model_settings,
     merge_project_model_settings,
 )
+from core.settings_profiles import sanitize_persisted_settings
 from core.project.recovery_state import (
     attach_recovery_state_to_project,
     build_recovery_checkpoint,
@@ -228,6 +240,323 @@ def _vector_segment_count(project: dict) -> int:
     return len(rows) if isinstance(rows, list) else 0
 
 
+def _project_total_duration(clips: list[dict] | None) -> float:
+    return max((float(item.get("timeline_end", 0.0) or 0.0) for item in list(clips or [])), default=0.0)
+
+
+def _project_middle_segment_rows(rows) -> list[dict]:
+    out: list[dict] = []
+    for idx, row in enumerate(list(rows or []), start=1):
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        major_id = str(item.get("major_id") or item.get("segment_id") or item.get("id") or chr(64 + min(idx, 26))).strip()
+        if not major_id:
+            major_id = chr(64 + min(idx, 26))
+        segment_id = str(item.get("segment_id") or item.get("id") or major_id).strip() or major_id
+        title = str(item.get("title") or item.get("name") or f"중분류 {major_id}").strip()
+        summary = str(item.get("summary") or item.get("llm_summary") or "").strip()
+        try:
+            start = float(item.get("start", item.get("timeline_start", 0.0)) or 0.0)
+        except Exception:
+            start = 0.0
+        try:
+            end = float(item.get("end", item.get("timeline_end", start)) or start)
+        except Exception:
+            end = start
+        placeholder = bool(
+            item.get("is_topicless_placeholder")
+            or item.get("is_cut_boundary_placeholder")
+            or str(item.get("story_role") or "") == "topicless_placeholder"
+            or title == "주제없음"
+        )
+        default_display_title = major_id if placeholder else f"{major_id} - {title}"
+        tags = item.get("tags", item.get("keywords", [])) or []
+        if isinstance(tags, str):
+            tags = [tags]
+        keywords = [str(tag).strip() for tag in list(tags or []) if str(tag).strip()]
+        stored_keywords = item.get("keywords", keywords)
+        if isinstance(stored_keywords, str):
+            stored_keywords = [stored_keywords]
+        item.update(
+            {
+                "id": str(item.get("id") or major_id),
+                "segment_id": segment_id,
+                "chapter_id": str(item.get("chapter_id") or major_id),
+                "major_id": major_id,
+                "title": title,
+                "name": str(item.get("name") or title),
+                "display_title": str(item.get("display_title") or default_display_title).strip(),
+                "display_name": str(item.get("display_name") or item.get("display_title") or default_display_title).strip(),
+                "label": str(item.get("label") or item.get("display_title") or default_display_title).strip(),
+                "summary": summary,
+                "llm_summary": str(item.get("llm_summary") or summary)[:240],
+                "start": start,
+                "end": max(start, end),
+                "timeline_start": start,
+                "timeline_end": max(start, end),
+                "tags": keywords,
+                "keywords": [str(tag).strip() for tag in list(stored_keywords or []) if str(tag).strip()],
+                "source": str(item.get("source") or ("cut_boundary" if placeholder else "roughcut_draft")).strip(),
+                "level": str(item.get("level") or "middle"),
+                "segment_type": str(item.get("segment_type") or "middle"),
+                "roughcut_level": str(item.get("roughcut_level") or "middle"),
+                "category": str(item.get("category") or "middle"),
+                "is_middle_segment": True,
+                "is_topicless_placeholder": placeholder,
+                "is_cut_boundary_placeholder": bool(item.get("is_cut_boundary_placeholder") or placeholder),
+            }
+        )
+        out.append(item)
+    return out
+
+
+def _selected_roughcut_candidate_segments(roughcut_state: dict | None) -> list[dict]:
+    state = dict(roughcut_state or {})
+    selected = str(state.get("selected_candidate_id") or "").strip()
+    candidates = [dict(item) for item in list(state.get("candidates", []) or []) if isinstance(item, dict)]
+    if not candidates:
+        return []
+    candidate = next((item for item in candidates if str(item.get("candidate_id") or "") == selected), None)
+    if candidate is None:
+        candidate = candidates[0]
+    rows = candidate.get("segments")
+    return [dict(row) for row in list(rows or []) if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _store_project_middle_segments(project: dict, rows) -> list[dict]:
+    if not isinstance(project, dict):
+        return []
+    saved_rows = _project_middle_segment_rows(rows)
+    if not saved_rows:
+        return []
+    project.setdefault("analysis", {})
+    project["analysis"]["middle_segment_schema"] = "middle_segments.v1"
+    project["analysis"]["middle_segments"] = list(saved_rows)
+    project["analysis"]["middle_segments_updated_at"] = datetime.now().isoformat()
+    project["analysis"]["middle_segments_placeholder_only"] = rows_are_placeholder_only(saved_rows)
+    project["middle_segments"] = list(saved_rows)
+    if rows_are_placeholder_only(project.get("roughcut_segments", [])):
+        project["roughcut_segments"] = list(saved_rows)
+    return saved_rows
+
+
+def _project_roughcut_source_segments(segments: list[dict] | None) -> list[dict]:
+    out: list[dict] = []
+    for idx, row in enumerate(list(segments or [])):
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("text", "") or "").strip()
+        if not text:
+            continue
+        try:
+            start = float(row.get("timeline_start", row.get("start", 0.0)) or 0.0)
+        except Exception:
+            start = 0.0
+        try:
+            end = float(row.get("timeline_end", row.get("end", start)) or start)
+        except Exception:
+            end = start
+        out.append(
+            {
+                "id": str(row.get("id") or f"subtitle_{idx + 1:04d}"),
+                "subtitle_id": idx,
+                "start": start,
+                "end": max(start, end),
+                "text": text,
+                "speaker": str(row.get("speaker", "00") or "00"),
+            }
+        )
+    return out
+
+
+def _scan_confirmed_cut_boundaries_for_project(
+    clips: list[dict] | None,
+    *,
+    settings: dict | None = None,
+    primary_fps: float = 30.0,
+) -> list[dict]:
+    clips = [dict(item) for item in list(clips or []) if isinstance(item, dict)]
+    settings = dict(settings or {})
+    if not clips or not cut_boundary_enabled(settings):
+        return []
+
+    try:
+        from core.cut_boundary import (
+            cut_boundary_scan_profile,
+            scan_media_cut_boundary_provisionals,
+            verify_media_cut_boundary_rows,
+        )
+    except Exception:
+        return []
+
+    try:
+        scan_profile = cut_boundary_scan_profile(settings)
+    except Exception:
+        scan_profile = {
+            "level": str(settings.get("scan_cut_boundary_level", settings.get("cut_boundary_level", "medium")) or "medium"),
+            "positions": (0, 2, 4, 6, 8),
+            "mask": "x5",
+        }
+
+    try:
+        sample_step_sec = float(
+            settings.get(
+                "scan_cut_provisional_sample_step_sec",
+                settings.get("scan_cut_auto_sample_step_sec", 2.0),
+            )
+            or 2.0
+        )
+    except Exception:
+        sample_step_sec = 2.0
+
+    try:
+        threshold = float(settings.get("scan_cut_auto_threshold", settings.get("scan_cut_threshold", 24.0)) or 24.0)
+    except Exception:
+        threshold = 24.0
+
+    confirmed_rows: list[dict] = []
+    for idx, clip in enumerate(clips):
+        path = str(clip.get("source_path", "") or "")
+        if not path or not os.path.exists(path):
+            continue
+        offset = float(clip.get("timeline_start", 0.0) or 0.0)
+        try:
+            provisional_rows = scan_media_cut_boundary_provisionals(
+                path,
+                clip_offset=offset,
+                clip_idx=idx,
+                sample_step_sec=sample_step_sec,
+                threshold=threshold,
+                scan_profile=scan_profile,
+                sample_positions=scan_profile.get("positions", ()),
+                sample_mask=scan_profile.get("mask", ""),
+                settings=settings,
+                settings_preloaded=True,
+            )
+            verified_rows = verify_media_cut_boundary_rows(
+                path,
+                provisional_rows,
+                clip_offset=offset,
+                clip_idx=idx,
+                scan_profile=scan_profile,
+                sample_positions=scan_profile.get("positions", ()),
+                settings=settings,
+                settings_preloaded=True,
+            )
+        except Exception:
+            continue
+        for row in list(verified_rows or []):
+            if not isinstance(row, dict):
+                continue
+            if row.get("verified") or row.get("visual_verify_skipped"):
+                confirmed_rows.append(dict(row))
+
+    return normalize_cut_boundaries(confirmed_rows, primary_fps=primary_fps)
+
+
+def _prefill_project_cut_boundary_artifacts(
+    project: dict,
+    *,
+    clips: list[dict] | None,
+    settings: dict | None = None,
+    primary_fps: float = 30.0,
+) -> list[dict]:
+    clips = [dict(item) for item in list(clips or []) if isinstance(item, dict)]
+    settings = dict(settings or {})
+    if not clips or not cut_boundary_enabled(settings):
+        return []
+    confirmed_rows = _scan_confirmed_cut_boundaries_for_project(
+        clips,
+        settings=settings,
+        primary_fps=primary_fps,
+    )
+    topicless_rows = build_topicless_middle_segments(
+        confirmed_rows,
+        media_duration=_project_total_duration(clips),
+    )
+    store_topicless_placeholders_in_project_data(
+        project,
+        topicless_rows,
+        cut_boundaries=confirmed_rows,
+        finalized=True,
+    )
+    return confirmed_rows
+
+
+def _finalize_project_middle_segment_artifacts(
+    project: dict,
+    *,
+    subtitle_segments: list[dict] | None,
+    clips: list[dict] | None,
+    settings: dict | None = None,
+) -> list[dict]:
+    source_segments = _project_roughcut_source_segments(subtitle_segments)
+    if not source_segments:
+        return []
+
+    analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
+    reference_rows = [
+        dict(row)
+        for row in list(
+            analysis.get("cut_boundary_topicless_middle_segments")
+            or analysis.get("topicless_middle_segments")
+            or analysis.get("middle_segments")
+            or []
+        )
+        if isinstance(row, dict)
+    ]
+    reviewed_rows = [
+        dict(row)
+        for row in list(
+            analysis.get("cut_boundary_reviewed_rows")
+            or analysis.get("cut_boundaries")
+            or []
+        )
+        if isinstance(row, dict)
+    ]
+    confirmed_rows = [dict(row) for row in list(analysis.get("cut_boundaries", []) or []) if isinstance(row, dict)]
+    media_files = [str(item.get("source_path", "") or "") for item in list(clips or []) if isinstance(item, dict)]
+    source_path = media_files[0] if media_files else ""
+    clip_boundaries = [
+        {
+            "start": float(item.get("timeline_start", 0.0) or 0.0),
+            "end": float(item.get("timeline_end", 0.0) or 0.0),
+            "file": str(item.get("source_path", "") or ""),
+            "name": os.path.basename(str(item.get("source_path", "") or "")),
+        }
+        for item in list(clips or [])
+        if isinstance(item, dict)
+    ]
+    llm_payload = run_editor_roughcut_llm_draft(
+        source_segments,
+        settings=settings or {},
+        cut_boundaries=confirmed_rows,
+        reference_major_segments=reference_rows,
+        reviewed_cut_boundaries=reviewed_rows,
+    )
+    result = build_editor_roughcut_draft_result(
+        source_segments,
+        media_duration=_project_total_duration(clips),
+        source_path=source_path,
+        settings=settings or {},
+        llm_payload=llm_payload,
+        reference_major_segments=reference_rows,
+    )
+    candidate = build_editor_roughcut_candidate_payload(
+        result,
+        source_segments=source_segments,
+        settings=settings or {},
+        source_path=source_path,
+        source_media=os.path.basename(source_path) if source_path else "현재 프로젝트",
+        media_files=media_files,
+        clip_boundaries=clip_boundaries,
+        editor_mode="multiclip" if len(media_files) > 1 else "single",
+    )
+    project["roughcut_state"] = merge_editor_roughcut_draft_state(project.get("roughcut_state", {}) or {}, candidate)
+    return _store_project_middle_segments(project, candidate.get("segments") or [])
+
+
 def _external_text_storage_enabled(project: dict, user_settings: dict | None = None) -> bool:
     settings = user_settings if isinstance(user_settings, dict) else project.get("user_settings", {})
     if isinstance(settings, dict) and "project_external_srt_storage_enabled" in settings:
@@ -320,6 +649,7 @@ def create_project(
     """새 프로젝트 JSON 생성 → 파일 경로 반환"""
     ensure_projects_dir()
     now = datetime.now().isoformat()
+    persisted_user_settings = sanitize_persisted_settings(user_settings)
 
     clips = []
     cumulative = 0.0
@@ -436,7 +766,12 @@ def create_project(
             "cut_boundary_schema": "cut_boundaries.v1",
             "cut_boundaries": [],
             "cut_boundary_settings": {
-                "enabled": bool((user_settings or {}).get("cut_boundary_detection_enabled", (user_settings or {}).get("scan_cut_enabled", True))),
+                "enabled": bool(
+                    persisted_user_settings.get(
+                        "cut_boundary_detection_enabled",
+                        persisted_user_settings.get("scan_cut_enabled", True),
+                    )
+                ),
                 "detector": "opencv-gray-pyramid60"
             }
         },
@@ -451,8 +786,8 @@ def create_project(
             "project_panel_visible": True
         },
 
-        "user_settings": user_settings or {},
-        "model_settings": build_model_settings_snapshot(user_settings),
+        "user_settings": persisted_user_settings,
+        "model_settings": build_model_settings_snapshot(persisted_user_settings),
 
         # 하위 호환용
         "media": [
@@ -485,24 +820,37 @@ def create_project(
                     status="saved",
                     detail="project_created",
                     segments=segments,
-                    settings=user_settings or {},
+                    settings=persisted_user_settings,
                 ),
             )
         except Exception:
             pass
 
+    primary_fps = normalize_fps(clips[0].get("fps") if clips else 30.0)
+    _prefill_project_cut_boundary_artifacts(
+        project,
+        clips=clips,
+        settings=persisted_user_settings,
+        primary_fps=primary_fps,
+    )
+    _finalize_project_middle_segment_artifacts(
+        project,
+        subtitle_segments=segments,
+        clips=clips,
+        settings=persisted_user_settings,
+    )
     _sanitize_project_workspace_fields(project)
     sync_project_cut_boundaries(
         project,
-        settings=user_settings or {},
-        primary_fps=normalize_fps(clips[0].get("fps") if clips else 30.0),
+        settings=persisted_user_settings,
+        primary_fps=primary_fps,
     )
     _augment_project_frame_metadata(project)
     _externalize_project_payload(
         filepath,
         project,
         segments=project_segments_to_editor(project),
-        user_settings=user_settings or {},
+        user_settings=persisted_user_settings,
     )
     _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)
@@ -518,6 +866,7 @@ def save_project(
     media_paths: Optional[List[str]] = None,
     srt_path: Optional[str] = None,
     segments: Optional[List[dict]] = None,
+    middle_segments: Optional[List[dict]] = None,
     user_settings: Optional[dict] = None,
     workspace: Optional[dict] = None,
     roughcut_state: Optional[dict] = None,
@@ -535,6 +884,14 @@ def save_project(
         return
 
     project = _read_json(filepath)
+    stored_user_settings = sanitize_persisted_settings(project.get("user_settings", {}))
+    if "user_settings" in project:
+        project["user_settings"] = stored_user_settings
+    effective_user_settings = (
+        sanitize_persisted_settings(user_settings)
+        if user_settings is not None
+        else stored_user_settings
+    )
     project["version"] = PROJECT_SCHEMA_VERSION
     project["phase"] = "PHASE2"
     project["updated_at"] = datetime.now().isoformat()
@@ -610,18 +967,10 @@ def save_project(
         if provisional_cut_boundaries is not None
         else project_cut_provisional_boundaries(project, primary_fps=primary_fps)
     )
-    cut_enabled = cut_boundary_enabled(user_settings if user_settings is not None else project.get("user_settings", {}))
+    cut_enabled = cut_boundary_enabled(effective_user_settings)
     explicit_stt_preview_update = stt_preview_segments is not None
-    if explicit_stt_preview_update:
-        from core.cut_boundary import magnetize_segments_to_cut_boundaries
-
-        stt_preview_segments = magnetize_segments_to_cut_boundaries(
-            stt_preview_segments,
-            confirmed_boundaries=existing_cut_boundaries,
-            provisional_boundaries=existing_provisional_cut_boundaries,
-            enabled=cut_enabled,
-            primary_fps=primary_fps,
-        )
+    # STT1/STT2 preview lanes represent raw candidate timing and must survive
+    # subtitle magnet / cut-boundary save cycles unchanged.
     effective_stt_preview_segments = (
         stt_preview_segments
         if explicit_stt_preview_update
@@ -819,8 +1168,8 @@ def save_project(
 
     # ── 사용자 설정 ──
     if user_settings is not None:
-        project["user_settings"] = user_settings
-        project["model_settings"] = build_model_settings_snapshot(user_settings)
+        project["user_settings"] = effective_user_settings
+        project["model_settings"] = build_model_settings_snapshot(effective_user_settings)
     elif "model_settings" not in project and isinstance(project.get("user_settings"), dict):
         project["model_settings"] = build_model_settings_snapshot(project.get("user_settings"))
 
@@ -843,6 +1192,12 @@ def save_project(
         project["roughcut_state"] = dict(roughcut_state or {})
     else:
         project.setdefault("roughcut_state", project.get("roughcut_state", {}) or {})
+    if middle_segments is not None:
+        _store_project_middle_segments(project, middle_segments)
+    else:
+        selected_middle_segments = _selected_roughcut_candidate_segments(project.get("roughcut_state", {}) or {})
+        if selected_middle_segments:
+            _store_project_middle_segments(project, selected_middle_segments)
 
     editor_stt = (project.get("editor_state", {}) or {}).get("stt", {}) or {}
     candidate_tracks = editor_stt.get("candidate_tracks")
@@ -866,7 +1221,7 @@ def save_project(
                 primary_media_path = str(media_items[0].get("path") or "")
             graph_result = persist_subtitle_accuracy_graph(
                 list(segments or []),
-                user_settings if user_settings is not None else project.get("user_settings", {}),
+                effective_user_settings,
                 media_path=primary_media_path,
                 project_path=filepath,
             )
@@ -890,7 +1245,7 @@ def save_project(
                 primary_media_path = str(media_items[0].get("path") or "")
             lattice_result = persist_stt_lattice_artifact(
                 list(segments or []),
-                user_settings if user_settings is not None else project.get("user_settings", {}),
+                effective_user_settings,
                 media_path=primary_media_path,
                 project_path=filepath,
             )
@@ -918,7 +1273,7 @@ def save_project(
             or ((project.get("editor_state", {}) or {}).get("analysis", {}) or {}).get("recovery_state")
             or {}
         )
-        settings_for_recovery = user_settings if user_settings is not None else project.get("user_settings", {})
+        settings_for_recovery = effective_user_settings
         artifacts = {}
         if srt_path is not None:
             artifacts["srt_path"] = srt_path
@@ -963,7 +1318,7 @@ def save_project(
     _sanitize_project_workspace_fields(project)
     sync_project_cut_boundaries(
         project,
-        settings=user_settings if user_settings is not None else project.get("user_settings", {}),
+        settings=effective_user_settings,
         primary_fps=primary_fps,
         provisional_boundaries=existing_provisional_cut_boundaries,
     )
@@ -972,7 +1327,7 @@ def save_project(
         filepath,
         project,
         segments=project_segments_to_editor(project),
-        user_settings=user_settings if user_settings is not None else project.get("user_settings", {}),
+        user_settings=effective_user_settings,
     )
     _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)
@@ -1065,7 +1420,16 @@ def list_projects() -> list:
 # ─────────────────────────────────────────────
 
 def get_boundary_times(project: dict) -> list:
-    """프로젝트에서 클립 경계 시간 리스트 반환 (마지막 제외)"""
+    """프로젝트에서 표시/스냅용 컷 경계 rows 반환.
+
+    우선순위:
+    1. analysis.cut_boundaries 정식 컷 경계
+    2. 멀티클립 클립 경계(하위 호환 fallback)
+    """
+    confirmed = [dict(row) for row in list(project_cut_boundaries(project) or []) if isinstance(row, dict)]
+    if confirmed:
+        return confirmed
+
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", [])
     boundaries = []
     for c in clips:
@@ -1087,6 +1451,9 @@ def add_media_to_project(filepath: str, new_paths: list):
         return
 
     project = _read_json(filepath)
+    project_user_settings = sanitize_persisted_settings(project.get("user_settings", {}))
+    if "user_settings" in project:
+        project["user_settings"] = project_user_settings
     project["version"] = PROJECT_SCHEMA_VERSION
     project["phase"] = "PHASE2"
 
@@ -1159,13 +1526,13 @@ def add_media_to_project(filepath: str, new_paths: list):
 
     project["updated_at"] = datetime.now().isoformat()
     _sanitize_project_workspace_fields(project)
-    sync_project_cut_boundaries(project, settings=project.get("user_settings", {}))
+    sync_project_cut_boundaries(project, settings=project_user_settings)
     _augment_project_frame_metadata(project)
     _externalize_project_payload(
         filepath,
         project,
         segments=project_segments_to_editor(project),
-        user_settings=project.get("user_settings", {}),
+        user_settings=project_user_settings,
     )
     _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)
@@ -1177,6 +1544,9 @@ def merge_srt_to_project(filepath: str) -> int | None:
         return None
 
     project = _read_json(filepath)
+    project_user_settings = sanitize_persisted_settings(project.get("user_settings", {}))
+    if "user_settings" in project:
+        project["user_settings"] = project_user_settings
     project["version"] = PROJECT_SCHEMA_VERSION
     project["phase"] = "PHASE2"
     clips = sorted(
@@ -1242,13 +1612,13 @@ def merge_srt_to_project(filepath: str) -> int | None:
     project.setdefault("roughcut_state", {})
     project["updated_at"] = datetime.now().isoformat()
     _sanitize_project_workspace_fields(project)
-    sync_project_cut_boundaries(project, settings=project.get("user_settings", {}))
+    sync_project_cut_boundaries(project, settings=project_user_settings)
     _augment_project_frame_metadata(project)
     _externalize_project_payload(
         filepath,
         project,
         segments=project_segments_to_editor(project),
-        user_settings=project.get("user_settings", {}),
+        user_settings=project_user_settings,
     )
     _prune_project_payload_for_vector_storage(project)
     _write_json(filepath, project)

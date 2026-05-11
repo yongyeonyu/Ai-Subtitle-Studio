@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QMessageBox, QLineEdit, QComboBox,
     QToolButton, QCheckBox, QApplication, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QEvent
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QEvent, QEventLoop
 from PyQt6.QtGui import QKeySequence, QShortcut, QTextCursor, QIcon
 
 from core.runtime import config
@@ -28,7 +28,7 @@ from ui.timeline.timeline_widget import TimelineWidget
 from ui.timeline.timeline_constants import FOCUS_BORDER_COLOR, FOCUS_BORDER_WIDTH
 from ui.timeline.speaker_labels import current_speaker_settings
 from ui.responsive_profile import responsive_profile_for_size
-from ui.style import button_style, label_style, line_icon, tool_button_style
+from ui.style import COLORS, button_style, label_style, line_icon, tool_button_style
 from ui.editor.editor_popup_qt import EditorPopup
 from ui.editor.video_player_widget import VideoPlayerWidget
 from ui.editor.stable_render_frame import StableRenderFrame
@@ -306,11 +306,16 @@ class EditorWidget(
             except Exception:
                 pass
 
-        if hasattr(self, 'status_lbl'):
+        cleaned_btn_txt = self._clean_action_label(btn_txt)
+        if hasattr(self, 'status_lbl') and self.status_lbl.text() != lbl_txt:
             self.status_lbl.setText(lbl_txt)
         if hasattr(self, 'btn_start'):
-            self.btn_start.setText(self._clean_action_label(btn_txt))
-            self.btn_start.setEnabled(btn_en)
+            last_button_signature = getattr(self, "_last_start_button_signature", None)
+            button_signature = (cleaned_btn_txt, bool(btn_en))
+            if last_button_signature != button_signature:
+                self.btn_start.setText(cleaned_btn_txt)
+                self.btn_start.setEnabled(btn_en)
+                self._last_start_button_signature = button_signature
         main_w = self.window()
         if is_locked and not was_processing and hasattr(main_w, "_lock_workspace_sidebar_width"):
             try:
@@ -322,13 +327,24 @@ class EditorWidget(
                 main_w._unlock_workspace_sidebar_width()
             except Exception:
                 pass
-        if hasattr(main_w, "sync_menu_from_editor"):
+        menu_signature = (mode, state, bool(is_locked), bool(is_dirty), cleaned_btn_txt, bool(btn_en))
+        if hasattr(main_w, "sync_menu_from_editor") and menu_signature != getattr(self, "_last_menu_sync_signature", None):
             main_w.sync_menu_from_editor(self)
-        if hasattr(main_w, "_refresh_saved_status_label"):
+            self._last_menu_sync_signature = menu_signature
+        saved_status_signature = (
+            bool(is_dirty),
+            bool(is_locked),
+            bool(state == SubtitleStateManager.ST_SAVED),
+        )
+        if (
+            hasattr(main_w, "_refresh_saved_status_label")
+            and saved_status_signature != getattr(self, "_last_saved_status_signature", None)
+        ):
             main_w._refresh_saved_status_label(
                 is_dirty=is_dirty,
                 touch_saved_time=(not is_dirty and state == SubtitleStateManager.ST_SAVED),
             )
+            self._last_saved_status_signature = saved_status_signature
         self._apply_text_editor_lock_state()
 
     def _animate_status(self):
@@ -761,11 +777,12 @@ class EditorWidget(
             return
         timeline_locked = self._timeline_lock_edit_enabled()
         processing_locked = bool(getattr(getattr(self, "sm", None), "is_locked", False))
+        editor_locked = bool(timeline_locked or processing_locked)
         if hasattr(text_edit, "set_selection_locked"):
-            text_edit.set_selection_locked(timeline_locked)
+            text_edit.set_selection_locked(editor_locked)
         else:
-            text_edit.setReadOnly(timeline_locked or processing_locked)
-        if not timeline_locked and processing_locked:
+            text_edit.setReadOnly(editor_locked)
+        if not timeline_locked and processing_locked and not hasattr(text_edit, "set_selection_locked"):
             text_edit.setReadOnly(True)
             text_edit.setStyleSheet("QTextEdit { background-color: #1a1a1a; color: #888888; }")
 
@@ -1339,13 +1356,29 @@ class EditorWidget(
         self.btn_gap = QPushButton("⏱️ 간격")
         self.btn_vid = QPushButton("🎬 비디오")
         self._top_btns = [
-            (self.btn_ai,  "⚙️ AI",      "AI",      self._show_settings),
-            (self.btn_spk, "🗣️ 화자",    "화자",     self._show_speaker_settings),
-            (self.btn_gap, "⏱️ 간격",    "간격",     self._show_gap_settings),
-            (self.btn_vid, "🎬 비디오",  "비디오",   self._toggle_video),
+            ("ai",      self.btn_ai,  "⚙️ AI",      "AI",      self._show_settings),
+            ("speaker", self.btn_spk, "🗣️ 화자",    "화자",     self._show_speaker_settings),
+            ("gap",     self.btn_gap, "⏱️ 간격",    "간격",     self._show_gap_settings),
+            ("video",   self.btn_vid, "🎬 비디오",  "비디오",   self._toggle_video),
         ]
-        for btn, _, _, slot in self._top_btns:
-            btn.setStyleSheet(button_style("toolbar")); btn.clicked.connect(slot); btn_row.addWidget(btn)
+        self._footer_menu_buttons = {menu_id: btn for menu_id, btn, *_rest in self._top_btns}
+        self._active_footer_menu_id = ""
+        for menu_id, btn, _full_t, _comp_t, slot in self._top_btns:
+            btn.setCheckable(True)
+            btn.setAutoDefault(False)
+            btn.setDefault(False)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+            btn.clicked.connect(
+                lambda _checked=False, item_id=menu_id, action=slot: self._invoke_footer_menu_action(
+                    item_id,
+                    action,
+                    transient=(item_id != "video"),
+                )
+            )
+            btn_row.addWidget(btn)
+        self._apply_footer_menu_button_styles(force=True)
+        self._sync_footer_menu_button_states()
         btn_row.addStretch(); left_vbox.addLayout(btn_row)
 
         # ── 중앙 ──
@@ -1390,6 +1423,80 @@ class EditorWidget(
         btn.setStyleSheet(tool_button_style("toolbar"))
         return btn
 
+    def _footer_menu_button_style(self, *, font_size: str = "11px", padding: str = "6px 8px") -> str:
+        return (
+            "QPushButton { "
+            f"background: {COLORS['control']}; color: {COLORS['text']}; "
+            f"border: 1px solid {COLORS['separator']}; padding: {padding}; "
+            f"font-size: {font_size}; border-radius: 8px; min-height: 28px; min-width: 64px; "
+            "} "
+            f"QPushButton:hover {{ background: {COLORS['control_hover']}; border-color: #5A6A76; color: #FFFFFF; }} "
+            f"QPushButton:checked {{ background: #1F3A56; border-color: {COLORS['primary']}; color: #D7EBFF; }} "
+            "QPushButton:hover:checked { background: #24496B; border-color: #74A9FF; color: #F5FBFF; } "
+            "QPushButton:pressed { background: #182830; border-color: #D7EBFF; padding-top: 6px; padding-bottom: 6px; } "
+            "QPushButton:disabled { color: #6F767D; background: #151A1E; border-color: #222A31; }"
+        )
+
+    def _apply_footer_menu_button_styles(self, *, force: bool = False):
+        profile = responsive_profile_for_size(self.width(), self.height())
+        is_compact = self.width() < profile.editor_compact_width
+        top_font = "10px" if is_compact else "11px"
+        signature = (bool(is_compact), str(top_font))
+        if not force and signature == getattr(self, "_last_footer_menu_style_signature", None):
+            return
+
+        style = self._footer_menu_button_style(font_size=top_font, padding="6px 8px")
+        for _menu_id, btn, full_t, comp_t, _slot in getattr(self, "_top_btns", []):
+            btn.setText(comp_t if is_compact else full_t)
+            btn.setStyleSheet(style)
+        for btn, full_t, comp_t, _slot in getattr(self, "_bot_btns", []):
+            if btn != getattr(self, "btn_start", None):
+                btn.setText(comp_t if is_compact else full_t)
+        self._last_footer_menu_style_signature = signature
+
+    def _sync_footer_menu_button_states(self):
+        buttons = dict(getattr(self, "_footer_menu_buttons", {}) or {})
+        if not buttons:
+            return
+        active_id = str(getattr(self, "_active_footer_menu_id", "") or "")
+        video_player = getattr(self, "video_player", None)
+        try:
+            video_visible = bool(video_player is not None and video_player.isVisible())
+        except Exception:
+            video_visible = False
+        for menu_id, btn in buttons.items():
+            checked = bool(menu_id == active_id)
+            if menu_id == "video" and video_visible:
+                checked = True
+            try:
+                if btn.isChecked() != checked:
+                    btn.setChecked(checked)
+                btn.update()
+            except Exception:
+                pass
+
+    def _invoke_footer_menu_action(self, menu_id: str, callback, *, transient: bool = True):
+        if transient:
+            self._active_footer_menu_id = str(menu_id or "")
+            self._sync_footer_menu_button_states()
+            try:
+                btn = (getattr(self, "_footer_menu_buttons", {}) or {}).get(menu_id)
+                if btn is not None:
+                    btn.repaint()
+                QApplication.processEvents(
+                    QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
+                    | QEventLoop.ProcessEventsFlag.ExcludeSocketNotifiers,
+                    1,
+                )
+            except Exception:
+                pass
+        try:
+            return callback()
+        finally:
+            if transient:
+                self._active_footer_menu_id = ""
+                self._sync_footer_menu_button_states()
+
     def _clean_action_label(self, text: str) -> str:
         label = str(text or "")
         for token in ("🧠", "▶", "🔄", "⏳", "⌛", "💾", "🎥", "■"):
@@ -1400,14 +1507,7 @@ class EditorWidget(
         super().resizeEvent(event)
         QTimer.singleShot(0, self._position_video_expand_button)
         QTimer.singleShot(0, self._sync_editor_focus_border)
-        profile = responsive_profile_for_size(self.width(), self.height())
-        is_compact = self.width() < profile.editor_compact_width
-        top_font = "10px" if is_compact else "11px"
-        for btn, full_t, comp_t, _ in getattr(self, '_top_btns', []):
-            btn.setText(comp_t if is_compact else full_t); btn.setStyleSheet(button_style("toolbar", font_size=top_font, padding="6px 8px"))
-        for btn, full_t, comp_t, _ in getattr(self, '_bot_btns', []):
-            if btn != getattr(self, 'btn_start', None):
-                btn.setText(comp_t if is_compact else full_t)
+        self._apply_footer_menu_button_styles()
 
     def _position_video_expand_button(self):
         return

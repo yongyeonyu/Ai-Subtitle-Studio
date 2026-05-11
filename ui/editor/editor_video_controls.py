@@ -56,38 +56,22 @@ class EditorVideoControlsMixin:
         else:
             self.video_player.show()
             self.splitter.setSizes([6500, 3500])
+        sync_footer_buttons = getattr(self, "_sync_footer_menu_button_states", None)
+        if callable(sync_footer_buttons):
+            try:
+                sync_footer_buttons()
+            except Exception:
+                pass
         if hasattr(self, "_position_video_expand_button"):
             QTimer.singleShot(0, self._position_video_expand_button)
             QTimer.singleShot(120, self._position_video_expand_button)
 
-    def _load_video(self, path: str, *, load_waveform: bool = True):
-        segs = self._get_current_segments()
-        is_multiclip = bool(getattr(self.window(), "_multiclip_boundaries", []))
-        if is_multiclip and hasattr(self, '_build_local_segments_for_clip'):
-            clip_idx = int(getattr(self.timeline.canvas, '_active_clip_idx', getattr(self.window(), '_active_clip_idx', 0)) or 0)
-            segs = self._build_local_segments_for_clip(clip_idx, segs)
-        player_segs = segs
-        if hasattr(self, "_subtitle_context_window_from_segments"):
-            player_segs = self._subtitle_context_window_from_segments(
-                segs,
-                center_sec=self._subtitle_context_center_sec(local=bool(is_multiclip)) if hasattr(self, "_subtitle_context_center_sec") else None,
-            )
-        self.video_player.load(path, player_segs)
-        if hasattr(self, "_refresh_video_subtitle_context"):
-            QTimer.singleShot(0, self._refresh_video_subtitle_context)
-            QTimer.singleShot(180, self._refresh_video_subtitle_context)
-        if hasattr(self, "_position_video_expand_button"):
-            QTimer.singleShot(400, self._position_video_expand_button)
-            QTimer.singleShot(1200, self._position_video_expand_button)
-
-        is_multiclip = bool(getattr(self.window(), "_multiclip_boundaries", []))
-        if load_waveform and hasattr(self.timeline, 'load_waveform') and not is_multiclip:
-            self.timeline.load_waveform(path)
-
-        info = probe_media(path)
+    def _apply_loaded_video_probe_info(self, path: str, info: dict | None) -> None:
+        info = dict(info or {})
         self.video_fps = normalize_fps(info.get("fps", 0.0) or 30.0)
         if hasattr(self, "timeline") and hasattr(self.timeline, "set_frame_rate"):
             self.timeline.set_frame_rate(self.video_fps)
+        is_multiclip = bool(getattr(self.window(), "_multiclip_boundaries", []))
         if (
             hasattr(self, "timeline")
             and hasattr(self.timeline, "_apply_single_media_duration")
@@ -100,6 +84,56 @@ class EditorVideoControlsMixin:
         height = int(info.get("height", 0) or 0)
         raw_aspect = (width / height) if width > 0 and height > 0 else 16 / 9
         self._video_preview_aspect = (16 / 9) if raw_aspect >= 1.25 else 1.0
+
+    def _schedule_deferred_video_probe(self, path: str, *, delay_ms: int = 120) -> None:
+        token = object()
+        self._deferred_video_probe_token = token
+
+        def _run_probe() -> None:
+            if getattr(self, "_deferred_video_probe_token", None) is not token:
+                return
+            if str(getattr(self, "media_path", "") or "") != str(path or ""):
+                return
+            try:
+                info = probe_media(path)
+                self._apply_loaded_video_probe_info(path, info)
+            except Exception:
+                pass
+
+        QTimer.singleShot(max(0, int(delay_ms)), _run_probe)
+
+    def _load_video(self, path: str, *, load_waveform: bool = True, defer_media_probe: bool = False):
+        segs = self._get_current_segments()
+        is_multiclip = bool(getattr(self.window(), "_multiclip_boundaries", []))
+        if is_multiclip and hasattr(self, '_build_local_segments_for_clip'):
+            clip_idx = int(getattr(self.timeline.canvas, '_active_clip_idx', getattr(self.window(), '_active_clip_idx', 0)) or 0)
+            segs = self._build_local_segments_for_clip(clip_idx, segs)
+        player_segs = segs
+        if hasattr(self, "_subtitle_context_window_from_segments"):
+            player_segs = self._subtitle_context_window_from_segments(
+                segs,
+                center_sec=self._subtitle_context_center_sec(local=bool(is_multiclip)) if hasattr(self, "_subtitle_context_center_sec") else None,
+            )
+        try:
+            self.video_player.load(path, player_segs, defer_probe=bool(defer_media_probe))
+        except TypeError:
+            self.video_player.load(path, player_segs)
+        if hasattr(self, "_refresh_video_subtitle_context"):
+            QTimer.singleShot(0, self._refresh_video_subtitle_context)
+            QTimer.singleShot(180, self._refresh_video_subtitle_context)
+        if hasattr(self, "_position_video_expand_button"):
+            QTimer.singleShot(400, self._position_video_expand_button)
+            QTimer.singleShot(1200, self._position_video_expand_button)
+
+        is_multiclip = bool(getattr(self.window(), "_multiclip_boundaries", []))
+        if load_waveform and hasattr(self.timeline, 'load_waveform') and not is_multiclip:
+            self.timeline.load_waveform(path)
+
+        if defer_media_probe:
+            self._schedule_deferred_video_probe(path)
+        else:
+            info = probe_media(path)
+            self._apply_loaded_video_probe_info(path, info)
 
         self._vid_wait_cnt = 0
         def init_video():

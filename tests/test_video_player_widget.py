@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication, QWidget
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import QObject, Qt, QRectF, QUrl, pyqtSignal
 from PyQt6.QtMultimedia import QMediaPlayer
 
 from core.runtime import config
@@ -79,6 +79,55 @@ class _FrameStepOwner(QWidget):
 
     def _on_step_frame(self, step):
         self.calls.append(int(step))
+
+
+class _ExternalLikePlayer(QObject):
+    durationChanged = pyqtSignal(int)
+    mediaStatusChanged = pyqtSignal(object)
+
+    backend_name = "external-test"
+    uses_qt_audio = False
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._source = QUrl()
+        self._video_widget = None
+
+    def create_video_widget(self, parent=None):
+        widget = QWidget(parent)
+        widget.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+        self._video_widget = widget
+        return widget
+
+    def setVideoOutput(self, _output):
+        return
+
+    def setAudioOutput(self, _output):
+        return
+
+    def source(self):
+        return self._source
+
+    def setSource(self, source=None):
+        self._source = source if isinstance(source, QUrl) else QUrl()
+
+    def playbackState(self):
+        return QMediaPlayer.PlaybackState.PausedState
+
+    def position(self):
+        return 0
+
+    def play(self):
+        return
+
+    def pause(self):
+        return
+
+    def stop(self):
+        return
+
+    def setPosition(self, _position_ms):
+        return
 
 
 class VideoPlayerWidgetTests(unittest.TestCase):
@@ -408,6 +457,29 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertEqual(widget._last_sub, "다음 자막")
             self.assertEqual(widget.sub_label.text(), "다음 자막")
             self.assertEqual(widget.video_widget.subtitle_item.text(), "다음 자막")
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_external_video_backend_hosts_subtitle_overlay_on_video_widget(self):
+        with patch("ui.editor.video_player_widget.create_video_backend", return_value=_ExternalLikePlayer()):
+            widget = VideoPlayerWidget()
+        try:
+            widget.resize(640, 360)
+            widget.video_container.resize(640, 360)
+            widget._source_aspect = 16 / 9
+            widget._display_aspect = 16 / 9
+            widget._layout_video_overlay()
+            widget.set_context_segments([
+                {"start": 0.0, "end": 2.0, "text": "외부 백엔드 자막"},
+            ])
+            widget.set_subtitle_display_time(0.5)
+
+            self.assertIsNone(widget._scene_subtitle_item())
+            self.assertIs(widget.sub_label.parentWidget(), widget.video_widget)
+            self.assertFalse(widget.sub_label.isHidden())
+            self.assertEqual(widget.sub_label.text(), "외부 백엔드 자막")
         finally:
             widget.close()
             widget.deleteLater()

@@ -41,12 +41,74 @@ def _can_overwrite_segments(rows) -> bool:
     return all(_is_placeholder_row(row) for row in rows if isinstance(row, dict))
 
 
+def rows_are_placeholder_only(rows) -> bool:
+    rows = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+    return bool(rows) and all(_is_placeholder_row(row) for row in rows)
+
+
+def store_topicless_placeholders_in_project_data(
+    project: dict,
+    rows,
+    *,
+    cut_boundaries: Iterable | None = None,
+    finalized: bool = False,
+) -> list[dict]:
+    """Persist frame-synced topicless middle rows into an in-memory project payload."""
+    if not isinstance(project, dict):
+        return []
+
+    saved_rows = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+    saved_cuts = [dict(row) for row in list(cut_boundaries or []) if isinstance(row, dict)]
+
+    project.setdefault("analysis", {})
+    analysis = project["analysis"]
+    analysis["cut_boundaries"] = list(saved_cuts)
+    analysis["cut_boundary_topicless_middle_segments"] = list(saved_rows)
+    analysis["topicless_middle_segments"] = list(saved_rows)
+    analysis["roughcut_topicless_segments"] = list(saved_rows)
+    analysis["middle_segments"] = list(saved_rows)
+    analysis["cut_boundary_topicless_updated_at"] = time.time()
+    analysis["cut_boundary_topicless_finalized"] = bool(finalized)
+    if finalized:
+        analysis["cut_boundary_resume_required"] = False
+        for key in (
+            "cut_boundary_prescan_done",
+            "cut_boundary_cache_path",
+            "cut_boundary_cache_type",
+            "cut_boundary_resume_reason",
+            "cut_boundary_provisional_boundaries",
+        ):
+            analysis.pop(key, None)
+
+    # roughcut 계열 필드에도 placeholder-only 상태면 즉시 반영
+    for key in ("roughcut", "roughcut_draft", "roughcut_result"):
+        box = project.setdefault(key, {})
+        if isinstance(box, dict) and _can_overwrite_segments(box.get("segments", [])):
+            box["segments"] = list(saved_rows)
+            box["chapters"] = []
+            box["edit_decisions"] = []
+            box["edl_segments"] = []
+            box["guide_markdown"] = ""
+            box["schema_version"] = "roughcut_result.v2"
+            box["draft_state"] = {"status": "review"}
+            box["video_summary"] = f"컷 경계 기반 주제없음 중분류 {len(saved_rows)}개"
+
+    if _can_overwrite_segments(project.get("roughcut_segments", [])):
+        project["roughcut_segments"] = list(saved_rows)
+
+    if _can_overwrite_segments(project.get("middle_segments", [])):
+        project["middle_segments"] = list(saved_rows)
+
+    return saved_rows
+
+
 def apply_topicless_placeholders_to_project(
     project_path: str,
     cut_boundaries: Iterable,
     *,
     media_duration: float | None = None,
     include_trailing: bool = False,
+    finalized: bool = False,
 ) -> list[dict]:
     """Save gray topicless middle segments into the current project.
 
@@ -65,38 +127,12 @@ def apply_topicless_placeholders_to_project(
         return []
 
     project = read_project_file(project_path)
-
-    project.setdefault("analysis", {})
-    analysis = project["analysis"]
-
-    analysis["cut_boundaries"] = list(cut_boundaries or [])
-
-    # UI/roughcut loader가 어떤 이름을 보든 찾을 수 있게 호환 저장
-    analysis["cut_boundary_topicless_middle_segments"] = list(rows)
-    analysis["topicless_middle_segments"] = list(rows)
-    analysis["roughcut_topicless_segments"] = list(rows)
-    analysis["middle_segments"] = list(rows)
-
-    # roughcut 계열 필드에도 placeholder-only 상태면 즉시 반영
-    for key in ("roughcut", "roughcut_draft", "roughcut_result"):
-        box = project.setdefault(key, {})
-        if isinstance(box, dict) and _can_overwrite_segments(box.get("segments", [])):
-            box["segments"] = list(rows)
-            box["chapters"] = []
-            box["edit_decisions"] = []
-            box["edl_segments"] = []
-            box["guide_markdown"] = ""
-            box["schema_version"] = "roughcut_result.v2"
-            box["draft_state"] = {"status": "review"}
-            box["video_summary"] = f"컷 경계 기반 주제없음 중분류 {len(rows)}개"
-
-    if _can_overwrite_segments(project.get("roughcut_segments", [])):
-        project["roughcut_segments"] = list(rows)
-
-    if _can_overwrite_segments(project.get("middle_segments", [])):
-        project["middle_segments"] = list(rows)
-
-    analysis["cut_boundary_topicless_updated_at"] = time.time()
+    store_topicless_placeholders_in_project_data(
+        project,
+        rows,
+        cut_boundaries=cut_boundaries,
+        finalized=bool(finalized),
+    )
 
     write_project_file(project_path, project)
 
@@ -114,6 +150,10 @@ def extract_topicless_placeholders_from_project(project_path: str) -> list[dict]
 
     analysis = project.get("analysis", {}) if isinstance(project, dict) else {}
 
+    middle_rows = analysis.get("middle_segments", [])
+    if isinstance(middle_rows, list) and middle_rows and not rows_are_placeholder_only(middle_rows):
+        return [dict(row) for row in middle_rows if isinstance(row, dict)]
+
     for key in (
         "cut_boundary_topicless_middle_segments",
         "topicless_middle_segments",
@@ -130,6 +170,10 @@ def extract_topicless_placeholders_from_project(project_path: str) -> list[dict]
             rows = box.get("segments", [])
             if rows and all(_is_placeholder_row(row) for row in rows if isinstance(row, dict)):
                 return list(rows)
+
+    rows = project.get("middle_segments", [])
+    if isinstance(rows, list) and rows and not rows_are_placeholder_only(rows):
+        return [dict(row) for row in rows if isinstance(row, dict)]
 
     rows = project.get("roughcut_segments", [])
     if rows and all(_is_placeholder_row(row) for row in rows if isinstance(row, dict)):
@@ -202,7 +246,6 @@ def _topicless_frame_from_boundary(row, fps: float) -> int | None:
                 return sec_to_frame(sec, fps)
         except Exception:
             pass
-
     return None
 
 
@@ -299,6 +342,7 @@ def build_topicless_middle_segments(
     *,
     media_duration: float | None = None,
     include_trailing: bool = False,
+    prefer_all_boundary_frames: bool = False,
 ) -> list[dict]:
     """
     컷 경계 기준 회색 주제없음 중분류 생성.
@@ -338,12 +382,24 @@ def build_topicless_middle_segments(
     except Exception:
         settings = {}
 
-    cut_frames = coalesce_topicless_middle_boundary_frames(
-        cut_rows,
-        fps=fps,
-        duration_frame=duration_frame,
-        settings=settings,
-    )
+    if bool(prefer_all_boundary_frames):
+        cut_frames = sorted(
+            {
+                frame
+                for frame in (
+                    _topicless_frame_from_boundary(row, fps)
+                    for row in list(cut_rows or [])
+                )
+                if frame is not None and frame > 0 and (duration_frame <= 0 or frame < duration_frame)
+            }
+        )
+    else:
+        cut_frames = coalesce_topicless_middle_boundary_frames(
+            cut_rows,
+            fps=fps,
+            duration_frame=duration_frame,
+            settings=settings,
+        )
 
     # 핵심: 컷이 없어도 duration을 알면 전체 A 주제없음 생성
     if not cut_frames:
@@ -441,11 +497,13 @@ def build_topicless_middle_segments(
     *,
     media_duration: float | None = None,
     include_trailing: bool = False,
+    prefer_all_boundary_frames: bool = False,
 ) -> list[dict]:
     rows = _topicless_original_build_topicless_middle_segments(
         cut_boundaries,
         media_duration=media_duration,
         include_trailing=include_trailing,
+        prefer_all_boundary_frames=bool(prefer_all_boundary_frames),
     )
     _topicless_log_split_rows(rows, context=f"build include_trailing={bool(include_trailing)}")
     return rows
@@ -457,12 +515,14 @@ def apply_topicless_placeholders_to_project(
     *,
     media_duration: float | None = None,
     include_trailing: bool = False,
+    finalized: bool = False,
 ) -> list[dict]:
     rows = _topicless_original_apply_topicless_placeholders_to_project(
         project_path,
         cut_boundaries,
         media_duration=media_duration,
         include_trailing=include_trailing,
+        finalized=bool(finalized),
     )
     _topicless_log_split_rows(rows, context=f"project-save include_trailing={bool(include_trailing)}")
     return rows

@@ -30,6 +30,7 @@ from core.project.project_context import (
 from core.project.project_assets import externalize_project_text_assets
 from core.project.project_srt import parse_srt_to_segments
 from core.cut_boundary import split_segments_by_cut_boundaries
+from core.roughcut.models import RoughCutDraftState, RoughCutResult, RoughCutSegment
 
 
 def _state_segments(state: dict) -> list[dict]:
@@ -68,6 +69,209 @@ class ProjectContextTests(unittest.TestCase):
             self.assertEqual(json.loads(legacy_archived.read_text(encoding="utf-8"))["project_name"], "legacy-root-backup")
             self.assertEqual(second_payload["history"]["previous_base_project"], str(archived))
             self.assertEqual(read_project_file(str(archived))["created_at"], first_created_at)
+
+    def test_create_project_strips_plaintext_api_keys_from_user_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = Path(tmp) / "video.mp4"
+            media_path.write_bytes(b"video")
+            with patch("core.project.project_manager.PROJECTS_DIR", tmp), patch(
+                "core.project.project_manager._get_media_probe",
+                return_value={"duration": 10.0, "fps": 30.0},
+            ):
+                project_path = Path(
+                    create_project(
+                        "secret_safe_project",
+                        media_paths=[str(media_path)],
+                        user_settings={
+                            "selected_model": "exaone3.5:7.8b",
+                            "google_api_key": "google-secret",
+                            "openai_api_key": "openai-secret",
+                            "huggingface_token": "hf-secret",
+                            "google_api_key_saved": True,
+                            "openai_api_key_saved": True,
+                            "huggingface_token_saved": True,
+                        },
+                    )
+                )
+                payload = read_project_file(str(project_path))
+
+        stored = dict(payload.get("user_settings") or {})
+        self.assertNotIn("google_api_key", stored)
+        self.assertNotIn("openai_api_key", stored)
+        self.assertNotIn("huggingface_token", stored)
+        self.assertTrue(stored["google_api_key_saved"])
+        self.assertTrue(stored["openai_api_key_saved"])
+        self.assertTrue(stored["huggingface_token_saved"])
+
+    def test_save_project_removes_legacy_plaintext_api_keys_from_existing_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = Path(tmp) / "video.mp4"
+            media_path.write_bytes(b"video")
+            with patch("core.project.project_manager.PROJECTS_DIR", tmp), patch(
+                "core.project.project_manager._get_media_probe",
+                return_value={"duration": 10.0, "fps": 30.0},
+            ):
+                project_path = Path(
+                    create_project(
+                        "legacy_secret_cleanup",
+                        media_paths=[str(media_path)],
+                        user_settings={"selected_model": "exaone3.5:7.8b"},
+                    )
+                )
+
+            payload = read_project_file(str(project_path))
+            payload["user_settings"] = {
+                "selected_model": "exaone3.5:7.8b",
+                "google_api_key": "google-secret",
+                "openai_api_key": "openai-secret",
+                "huggingface_token": "hf-secret",
+                "google_api_key_saved": True,
+                "openai_api_key_saved": True,
+                "huggingface_token_saved": True,
+            }
+            write_project_file(str(project_path), payload)
+
+            save_project(str(project_path))
+            repaired = read_project_file(str(project_path))
+
+        stored = dict(repaired.get("user_settings") or {})
+        self.assertNotIn("google_api_key", stored)
+        self.assertNotIn("openai_api_key", stored)
+        self.assertNotIn("huggingface_token", stored)
+        self.assertTrue(stored["google_api_key_saved"])
+        self.assertTrue(stored["openai_api_key_saved"])
+        self.assertTrue(stored["huggingface_token_saved"])
+
+    def test_create_project_prefills_confirmed_cut_boundaries_and_middle_segments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = Path(tmp) / "video.mp4"
+            media_path.write_bytes(b"video")
+            with patch("core.project.project_manager.PROJECTS_DIR", tmp), patch(
+                "core.project.project_manager._get_media_probe",
+                return_value={"duration": 300.0, "fps": 24.0},
+            ), patch(
+                "core.cut_boundary.cut_boundary_scan_profile",
+                return_value={"level": "medium", "positions": (0, 2, 4, 6, 8), "mask": "x5"},
+            ), patch(
+                "core.cut_boundary.scan_media_cut_boundary_provisionals",
+                return_value=[{"timeline_sec": 150.0, "timeline_frame": 3600, "fps": 24.0}],
+            ), patch(
+                "core.cut_boundary.verify_media_cut_boundary_rows",
+                return_value=[{"timeline_sec": 150.0, "timeline_frame": 3600, "fps": 24.0, "verified": True}],
+            ):
+                project_path = Path(
+                    create_project(
+                        "cut_prefill",
+                        media_paths=[str(media_path)],
+                        user_settings={"cut_boundary_detection_enabled": True},
+                    )
+                )
+                payload = load_project(str(project_path), hydrate_text_assets=False)
+
+        cut_rows = project_cut_boundary_segments(payload)
+        self.assertEqual(len(cut_rows), 1)
+        self.assertEqual(cut_rows[0]["timeline_frame"], 3600)
+        middle_rows = list(((payload.get("analysis", {}) or {}).get("cut_boundary_topicless_middle_segments")) or [])
+        self.assertEqual([row["major_id"] for row in middle_rows], ["A", "B"])
+        self.assertEqual(
+            [(row["timeline_start_frame"], row["timeline_end_frame"]) for row in middle_rows],
+            [(0, 3600), (3600, 7200)],
+        )
+        self.assertTrue(payload["analysis"]["cut_boundary_topicless_finalized"])
+
+    def test_create_project_with_subtitles_persists_final_middle_segments_and_frames(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_path = Path(tmp) / "video.mp4"
+            media_path.write_bytes(b"video")
+            srt_path = Path(tmp) / "video.srt"
+            srt_path.write_text(
+                "1\n00:00:01,000 --> 00:00:04,000\n도입 자막입니다.\n\n"
+                "2\n00:02:35,000 --> 00:02:39,000\n후반 자막입니다.\n",
+                encoding="utf-8",
+            )
+            llm_refs = {}
+            result = RoughCutResult(
+                segments=(
+                    RoughCutSegment(
+                        segment_id="major_A",
+                        major_id="A",
+                        start=0.0,
+                        end=150.0,
+                        title="도입 주제",
+                        summary="앞부분 요약",
+                        tags=("오프닝", "제품 소개"),
+                        status="confirmed",
+                    ),
+                    RoughCutSegment(
+                        segment_id="major_B",
+                        major_id="B",
+                        start=150.0,
+                        end=300.0,
+                        title="후반 주제",
+                        summary="뒷부분 요약",
+                        tags=("실내", "시트", "디자인 특징"),
+                        status="confirmed",
+                    ),
+                ),
+                video_summary="중분류 2개",
+                draft_state=RoughCutDraftState(status="confirmed"),
+                schema_version="roughcut_result.v2",
+            )
+
+            def _fake_llm(*_args, **kwargs):
+                llm_refs["reference_major_segments"] = list(kwargs.get("reference_major_segments") or [])
+                llm_refs["reviewed_cut_boundaries"] = list(kwargs.get("reviewed_cut_boundaries") or [])
+                return None
+
+            with patch("core.project.project_manager.PROJECTS_DIR", tmp), patch(
+                "core.project.project_manager._get_media_probe",
+                return_value={"duration": 300.0, "fps": 24.0},
+            ), patch(
+                "core.cut_boundary.cut_boundary_scan_profile",
+                return_value={"level": "medium", "positions": (0, 2, 4, 6, 8), "mask": "x5"},
+            ), patch(
+                "core.cut_boundary.scan_media_cut_boundary_provisionals",
+                return_value=[{"timeline_sec": 150.0, "timeline_frame": 3600, "fps": 24.0}],
+            ), patch(
+                "core.cut_boundary.verify_media_cut_boundary_rows",
+                return_value=[{"timeline_sec": 150.0, "timeline_frame": 3600, "fps": 24.0, "verified": True}],
+            ), patch(
+                "core.project.project_manager.run_editor_roughcut_llm_draft",
+                side_effect=_fake_llm,
+            ), patch(
+                "core.project.project_manager.build_editor_roughcut_draft_result",
+                return_value=result,
+            ):
+                project_path = Path(
+                    create_project(
+                        "cut_prefill_with_topics",
+                        media_paths=[str(media_path)],
+                        srt_path=str(srt_path),
+                        user_settings={"cut_boundary_detection_enabled": True},
+                    )
+                )
+                payload = load_project(str(project_path), hydrate_text_assets=False)
+
+        middle_rows = list(((payload.get("analysis", {}) or {}).get("middle_segments")) or [])
+        self.assertEqual([row["major_id"] for row in middle_rows], ["A", "B"])
+        self.assertEqual([row["title"] for row in middle_rows], ["도입 주제", "후반 주제"])
+        self.assertEqual(middle_rows[0]["tags"], ["오프닝", "제품 소개"])
+        self.assertEqual(middle_rows[1]["tags"], ["실내", "시트", "디자인 특징"])
+        self.assertEqual(middle_rows[1]["keywords"], ["실내", "시트", "디자인 특징"])
+        self.assertEqual(
+            [(row["timeline_start_frame"], row["timeline_end_frame"]) for row in middle_rows],
+            [(0, 3600), (3600, 7200)],
+        )
+        self.assertEqual(
+            payload["roughcut_state"]["selected_candidate_id"],
+            "editor_post_generation_roughcut_draft",
+        )
+        self.assertEqual(
+            [row["major_id"] for row in llm_refs["reference_major_segments"]],
+            ["A", "B"],
+        )
+        self.assertEqual(len(llm_refs["reviewed_cut_boundaries"]), 1)
+        self.assertEqual(llm_refs["reviewed_cut_boundaries"][0]["timeline_frame"], 3600)
 
     def test_build_editor_state_separates_multiclip_and_subtitles(self):
         state = build_editor_state(
@@ -966,7 +1170,8 @@ class ProjectContextTests(unittest.TestCase):
         self.assertAlmostEqual(subtitles[0]["start"], 3.0, places=6)
         previews = project_stt_preview_segments(loaded)
         self.assertEqual(len(previews), 1)
-        self.assertAlmostEqual(previews[0]["start"], 3.0, places=6)
+        self.assertAlmostEqual(previews[0]["start"], 2.5, places=6)
+        self.assertAlmostEqual(previews[0]["end"], 3.5, places=6)
 
     def test_project_segments_to_editor_prefers_saved_frame_numbers(self):
         project = {
@@ -1131,6 +1336,8 @@ class ProjectContextTests(unittest.TestCase):
             final_srt = path.parent / raw_payload["subtitles"]["srt_path"]
             stt1_srt = path.parent / raw_payload["asset_storage"]["tracks"]["stt_stt1"]["path"]
             stt2_srt = path.parent / raw_payload["asset_storage"]["tracks"]["stt_stt2"]["path"]
+            final_meta = raw_payload["asset_storage"]["tracks"]["final"]["metadata"][0]
+            stt1_meta = raw_payload["asset_storage"]["tracks"]["stt_stt1"]["metadata"][0]
 
             self.assertEqual(raw_payload["subtitles"]["storage"], "external_srt")
             self.assertEqual(raw_payload["editor_state"]["rendering"]["subtitle_canvas"]["segments"], [])
@@ -1141,6 +1348,17 @@ class ProjectContextTests(unittest.TestCase):
             self.assertTrue(stt2_srt.exists())
             self.assertIn("최종 자막", final_srt.read_text(encoding="utf-8"))
             self.assertNotIn("후보 하나", path.read_text(encoding="utf-8"))
+            self.assertEqual((final_meta["start_frame"], final_meta["end_frame"]), (0, 24))
+            self.assertEqual((stt1_meta["start_frame"], stt1_meta["end_frame"]), (0, 24))
+            self.assertEqual(
+                (
+                    stt1_meta["_stt_original_candidate_start_frame"],
+                    stt1_meta["_stt_original_candidate_end_frame"],
+                ),
+                (0, 24),
+            )
+            self.assertNotIn("_stt_original_candidate_start", stt1_meta)
+            self.assertNotIn("_stt_original_candidate_end", stt1_meta)
 
             loaded = load_project(str(path))
             segment = project_segments_to_editor(loaded)[0]
@@ -1288,6 +1506,99 @@ class ProjectContextTests(unittest.TestCase):
 
         self.assertEqual([row["text"] for row in first_previews], [row["text"] for row in previews])
         self.assertEqual([row["text"] for row in second_previews], [row["text"] for row in previews])
+
+    def test_project_save_keeps_raw_stt_preview_timing_even_when_cut_boundaries_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"video")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "03.00.25",
+                        "workspace": {},
+                        "timeline": {"timebase": {"primary_fps": 24.0}, "tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                        "analysis": {
+                            "cut_boundaries": [
+                                {"timeline_sec": 1.0, "timeline_frame": 24, "fps": 24.0}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            previews = [
+                {"start": 0.0, "end": 1.0, "text": "STT1 앞", "stt_preview_source": "STT1"},
+                {"start": 0.5, "end": 1.5, "text": "STT1 중간", "stt_preview_source": "STT1"},
+                {"start": 1.4, "end": 2.0, "text": "STT1 뒤", "stt_preview_source": "STT1"},
+                {"start": 0.0, "end": 2.0, "text": "STT2 전체", "stt_preview_source": "STT2"},
+            ]
+            with patch("core.project.project_manager.probe_media", return_value={"duration": 4.0, "fps": 24.0}):
+                save_project(
+                    str(path),
+                    media_paths=[str(media)],
+                    segments=[{"start": 0.0, "end": 2.0, "text": "최종", "speaker": "00"}],
+                    stt_preview_segments=previews,
+                )
+            first = load_project(str(path))
+            first_previews = project_stt_preview_segments(first)
+            save_project(
+                str(path),
+                segments=project_segments_to_editor(first),
+                stt_preview_segments=first_previews,
+            )
+            second = load_project(str(path))
+            second_previews = project_stt_preview_segments(second)
+
+        expected = [
+            ("STT1", "STT1 앞", 0.0, 1.0, 0, 24),
+            ("STT1", "STT1 중간", 0.5, 1.5, 12, 36),
+            ("STT1", "STT1 뒤", 34.0 / 24.0, 2.0, 34, 48),
+            ("STT2", "STT2 전체", 0.0, 2.0, 0, 48),
+        ]
+        self.assertEqual(
+            [
+                (
+                    row["stt_preview_source"],
+                    row["text"],
+                    row["start"],
+                    row["end"],
+                    row["start_frame"],
+                    row["end_frame"],
+                )
+                for row in first_previews
+            ],
+            expected,
+        )
+        self.assertEqual(
+            [
+                (
+                    row["stt_preview_source"],
+                    row["text"],
+                    row["start"],
+                    row["end"],
+                    row["start_frame"],
+                    row["end_frame"],
+                )
+                for row in second_previews
+            ],
+            expected,
+        )
+        stt2_rows = [row for row in second_previews if row["stt_preview_source"] == "STT2"]
+        self.assertEqual(len(stt2_rows), 1)
+        self.assertEqual((stt2_rows[0]["start_frame"], stt2_rows[0]["end_frame"]), (0, 48))
+        stt1_tail = next(row for row in second_previews if row["text"] == "STT1 뒤")
+        self.assertEqual(
+            (
+                stt1_tail["_stt_original_candidate_start_frame"],
+                stt1_tail["_stt_original_candidate_end_frame"],
+            ),
+            (34, 48),
+        )
 
     def test_project_open_can_skip_heavy_external_candidate_hydration(self):
         with tempfile.TemporaryDirectory() as tmp:

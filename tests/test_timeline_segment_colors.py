@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from core.audio.stt_candidate_scorer import stt_score_to_color
 from ui.timeline.timeline_paint import (
     SEGMENT_TEXT_KIND_STYLES,
+    scan_boundary_marker_label,
     segment_text_kind,
     scan_boundary_marker_visual,
     subtitle_confidence_chips,
@@ -565,10 +566,10 @@ class TimelineSegmentColorTests(unittest.TestCase):
 
     def test_scan_boundary_visual_distinguishes_provisional_from_verified(self):
         provisional = scan_boundary_marker_visual({"timeline_sec": 1.2, "status": "provisional"})
-        verified = scan_boundary_marker_visual({"timeline_sec": 1.2, "status": "verified", "verified": True})
+        verified = scan_boundary_marker_visual({"timeline_sec": 1.2, "status": "checked", "scan_checked": True})
 
-        self.assertEqual(provisional, {"color": "#00FFFF", "width": 2, "style": "solid"})
-        self.assertEqual(verified, {"color": "#6EA8FF", "width": 2, "style": "solid"})
+        self.assertEqual(provisional, {"color": "#00B7FF", "width": 1, "style": "solid"})
+        self.assertEqual(verified, {"color": "#8E8E93", "width": 1, "style": "dot"})
 
     def test_scan_boundary_visual_uses_audio_gain_neon_green_hint(self):
         style = scan_boundary_marker_visual(
@@ -577,23 +578,23 @@ class TimelineSegmentColorTests(unittest.TestCase):
                 "status": "provisional",
                 "source": "audio_gain_provisional",
                 "line_color": "#39FF14",
-                "line_style": "dash",
+                "line_style": "solid",
             }
         )
 
-        self.assertEqual(style, {"color": "#39FF14", "width": 3, "style": "dash"})
+        self.assertEqual(style, {"color": "#39FF14", "width": 1, "style": "solid"})
 
     def test_scan_boundary_visual_honors_gray_dotted_provisional_style(self):
         style = scan_boundary_marker_visual(
             {"timeline_sec": 1.2, "status": "provisional", "line_color": "gray", "line_style": "dotted"}
         )
 
-        self.assertEqual(style, {"color": "#8E8E93", "width": 2, "style": "dot"})
+        self.assertEqual(style, {"color": "#8E8E93", "width": 1, "style": "dot"})
 
-    def test_scan_boundary_hover_still_uses_cyan_highlight(self):
+    def test_scan_boundary_hover_uses_neon_blue_highlight(self):
         style = scan_boundary_marker_visual({"timeline_sec": 1.2, "status": "verified"}, hover=True)
 
-        self.assertEqual(style, {"color": "#00FFFF", "width": 3, "style": "solid"})
+        self.assertEqual(style, {"color": "#00B7FF", "width": 3, "style": "solid"})
 
     def test_scan_boundary_visual_marks_follower_work_without_blue_confirmed_line(self):
         style = scan_boundary_marker_visual(
@@ -605,7 +606,40 @@ class TimelineSegmentColorTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(style, {"color": "#FFCC00", "width": 3, "style": "dash"})
+        self.assertEqual(style, {"color": "#FFCC00", "width": 2, "style": "dash"})
+
+    def test_scan_boundary_labels_keep_temporary_and_audio_as_lines_only(self):
+        self.assertEqual(
+            scan_boundary_marker_label(
+                {
+                    "timeline_sec": 1.2,
+                    "status": "provisional",
+                    "source": "audio_gain_provisional",
+                }
+            ),
+            "",
+        )
+        self.assertEqual(
+            scan_boundary_marker_label(
+                {
+                    "timeline_sec": 1.2,
+                    "status": "provisional",
+                    "source": "visual_provisional",
+                }
+            ),
+            "",
+        )
+        self.assertEqual(
+            scan_boundary_marker_label(
+                {
+                    "timeline_sec": 1.2,
+                    "status": "verifying",
+                    "detector_stage": "follower",
+                    "follower_active": True,
+                }
+            ),
+            "",
+        )
 
     def test_roughcut_major_markers_accept_project_dict_segments(self):
         markers = roughcut_major_markers(
@@ -625,7 +659,48 @@ class TimelineSegmentColorTests(unittest.TestCase):
         self.assertEqual(len(markers), 1)
         self.assertEqual(markers[0]["label"], "A")
         self.assertEqual(markers[0]["title"], "주제없음")
-        self.assertEqual(markers[0]["color"], "#FFFFFF")
+        self.assertEqual(markers[0]["display_label"], "A")
+
+    def test_roughcut_major_markers_prefer_explicit_display_and_color(self):
+        markers = roughcut_major_markers(
+            {
+                "segments": [
+                    {
+                        "major_id": "A",
+                        "title": "주제없음",
+                        "display_title": "A - 주제없음",
+                        "color": "#8E8E93",
+                        "start": 0.0,
+                        "end": 10.0,
+                        "status": "needs_review",
+                        "is_topicless_placeholder": True,
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(markers[0]["display_label"], "A - 주제없음")
+        self.assertEqual(markers[0]["color"], "#8E8E93")
+        self.assertNotEqual(markers[0]["color"], roughcut_major_color("A", 0))
+
+    def test_roughcut_major_markers_expose_display_label_with_topic(self):
+        markers = roughcut_major_markers(
+            {
+                "segments": [
+                    {
+                        "major_id": "B",
+                        "title": "X5 실내인테리어 소개 부분",
+                        "start": 10.0,
+                        "end": 22.0,
+                        "status": "confirmed",
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(markers[0]["label"], "B")
+        self.assertEqual(markers[0]["display_label"], "B - X5 실내인테리어 소개 부분")
+        self.assertEqual(markers[0]["color"], roughcut_major_color("B", 0))
 
     def test_roughcut_major_palette_has_distinct_a_to_z_colors(self):
         colors = [roughcut_major_color(chr(65 + i), i) for i in range(26)]

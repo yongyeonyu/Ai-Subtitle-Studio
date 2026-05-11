@@ -99,15 +99,16 @@ def cut_boundary_scan_marker_verified(marker) -> bool:
         return False
     status = str(marker.get("status", "") or "").strip().lower()
     return (
-        status in {"verified", "confirmed", "accepted", "done"}
+        status in {"verified", "confirmed", "accepted", "done", "checked", "reviewed"}
         or bool(marker.get("verified"))
         or bool(marker.get("confirmed"))
+        or bool(marker.get("scan_checked"))
     )
 
 
 def scan_boundary_marker_visual(marker, *, hover: bool = False) -> dict:
     if hover:
-        return {"color": "#00FFFF", "width": 3, "style": "solid"}
+        return {"color": "#00B7FF", "width": 3, "style": "solid"}
     if isinstance(marker, dict):
         status = str(marker.get("status", "") or "").strip().lower()
         stage = str(marker.get("detector_stage", "") or "").strip().lower()
@@ -116,9 +117,9 @@ def scan_boundary_marker_visual(marker, *, hover: bool = False) -> dict:
             or stage == "follower"
             or bool(marker.get("follower_active"))
         ):
-            return {"color": "#FFCC00", "width": 3, "style": "dash"}
+            return {"color": "#FFCC00", "width": 2, "style": "dash"}
     if cut_boundary_scan_marker_verified(marker):
-        return {"color": "#6EA8FF", "width": 2, "style": "solid"}
+        return {"color": "#8E8E93", "width": 1, "style": "dot"}
     if isinstance(marker, dict):
         raw_color = str(marker.get("line_color", "") or "").strip()
         color_aliases = {
@@ -126,8 +127,9 @@ def scan_boundary_marker_visual(marker, *, hover: bool = False) -> dict:
             "green": "#39FF14",
             "gray": "#8E8E93",
             "grey": "#8E8E93",
-            "cyan": "#00FFFF",
+            "cyan": "#00B7FF",
             "neon_green": "#39FF14",
+            "neon_blue": "#00B7FF",
         }
         color = color_aliases.get(raw_color.lower(), raw_color)
         if color:
@@ -139,25 +141,30 @@ def scan_boundary_marker_visual(marker, *, hover: bool = False) -> dict:
                 "dot": "dot",
             }
             style = style_aliases.get(raw_style, "solid")
-            width = 3 if color.upper() == "#39FF14" else 2
+            width = 1
             return {"color": color, "width": width, "style": style}
-    return {"color": "#00FFFF", "width": 2, "style": "solid"}
+    return {"color": "#00B7FF", "width": 1, "style": "solid"}
+
+
+def official_boundary_marker_visual(marker) -> dict:
+    if isinstance(marker, dict):
+        raw_color = str(marker.get("line_color", "") or "").strip()
+        if raw_color:
+            color_aliases = {
+                "white": "#F5F7FA",
+                "light": "#F5F7FA",
+                "gray": "#D0D7DE",
+                "grey": "#D0D7DE",
+            }
+            color = color_aliases.get(raw_color.lower(), raw_color)
+            return {"color": color or "#F5F7FA", "width": 1, "style": "solid"}
+    return {"color": "#F5F7FA", "width": 1, "style": "solid"}
 
 
 def scan_boundary_marker_label(marker) -> str:
-    if not isinstance(marker, dict):
-        return "임시"
-    label = str(marker.get("ui_label", "") or "").strip()
-    if label:
-        return label
-    status = str(marker.get("status", "") or "").strip().lower()
-    stage = str(marker.get("detector_stage", "") or "").strip().lower()
-    if status in {"verifying", "checking", "follower", "follower_verifying"} or stage == "follower" or bool(marker.get("follower_active")):
-        return "후발대"
-    source = str(marker.get("source", "") or marker.get("provisional_type", "") or "").strip().lower()
-    if "audio" in source or source == "audio_gain":
-        return "음성"
-    return "임시"
+    # 컷 경계는 전부 1px 선으로만 보여야 하므로 작업 라벨 박스를 붙이지 않는다.
+    _ = marker
+    return ""
 
 
 def segment_text_kind(text: str) -> str:
@@ -475,6 +482,7 @@ __all__ = [
     "STAGE_CONFIDENCE_COLORS",
     "build_stt_selection_index",
     "cut_boundary_scan_marker_verified",
+    "official_boundary_marker_visual",
     "final_stt_selection_source",
     "scan_boundary_marker_label",
     "scan_boundary_marker_visual",

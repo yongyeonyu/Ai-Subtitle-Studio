@@ -133,6 +133,51 @@ def _augment_vector_subtitle_canvas(project: dict, clips: list[dict], primary_fp
                 clip_ref["file"] = str(clip.get("source_path") or "")
 
 
+def _augment_frame_synced_ranges(rows, primary_fps: float) -> None:
+    if not isinstance(rows, list):
+        return
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        frame_range = row.get("frame_range", {}) if isinstance(row.get("frame_range"), dict) else {}
+        row_fps = normalize_fps(
+            row.get("timeline_frame_rate")
+            or frame_range.get("timeline_frame_rate")
+            or row.get("frame_rate")
+            or primary_fps
+        )
+        start_frame = row.get("start_frame", row.get("timeline_start_frame", frame_range.get("start")))
+        end_frame = row.get("end_frame", row.get("timeline_end_frame", frame_range.get("end")))
+        if start_frame is not None:
+            start = frame_to_sec(start_frame, row_fps)
+        else:
+            start = float(row.get("start", row.get("timeline_start", 0.0)) or 0.0)
+            start_frame = sec_to_frame(start, primary_fps)
+        if end_frame is not None:
+            end = frame_to_sec(end_frame, row_fps)
+        else:
+            end = float(row.get("end", row.get("timeline_end", start)) or start)
+            end_frame = sec_to_frame(end, primary_fps)
+        start_frame = int(start_frame)
+        end_frame = max(start_frame, int(end_frame))
+        row["start_frame"] = start_frame
+        row["end_frame"] = end_frame
+        row["timeline_start_frame"] = start_frame
+        row["timeline_end_frame"] = end_frame
+        row["frame_rate"] = primary_fps
+        row["timeline_frame_rate"] = primary_fps
+        row["start"] = frame_to_sec(start_frame, primary_fps)
+        row["end"] = max(row["start"], frame_to_sec(end_frame, primary_fps))
+        row["timeline_start"] = row["start"]
+        row["timeline_end"] = row["end"]
+        row["frame_range"] = {
+            "unit": "frame",
+            "start": start_frame,
+            "end": end_frame,
+            "timeline_frame_rate": primary_fps,
+        }
+
+
 def _augment_project_frame_metadata(project: dict, probe_func: ProbeFunc | None = None):
     clips = project.get("timeline", {}).get("tracks", [{}])[0].get("clips", []) or []
     first_info = {}
@@ -312,6 +357,13 @@ def _augment_project_frame_metadata(project: dict, probe_func: ProbeFunc | None 
 
     analysis = project.get("analysis")
     if isinstance(analysis, dict):
+        for key in (
+            "cut_boundary_topicless_middle_segments",
+            "topicless_middle_segments",
+            "roughcut_topicless_segments",
+            "middle_segments",
+        ):
+            _augment_frame_synced_ranges(analysis.get(key), primary_fps)
         segments = analysis.get("voice_activity_segments")
         if isinstance(segments, list):
             analysis["voice_activity_schema"] = analysis.get("voice_activity_schema") or "subtitle_detection.v1"
@@ -354,3 +406,10 @@ def _augment_project_frame_metadata(project: dict, probe_func: ProbeFunc | None 
                 "subtitle_detection.v1",
             )
             editor_state["analysis"]["voice_activity_timebase"] = dict(project["timeline"]["timebase"])
+
+    _augment_frame_synced_ranges(project.get("middle_segments"), primary_fps)
+    _augment_frame_synced_ranges(project.get("roughcut_segments"), primary_fps)
+    for key in ("roughcut", "roughcut_draft", "roughcut_result"):
+        box = project.get(key)
+        if isinstance(box, dict):
+            _augment_frame_synced_ranges(box.get("segments"), primary_fps)

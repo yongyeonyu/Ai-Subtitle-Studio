@@ -8,7 +8,7 @@ from unittest.mock import Mock, call, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtGui import QWheelEvent, QTextCursor
+from PyQt6.QtGui import QColor, QWheelEvent, QTextCursor
 from PyQt6.QtCore import QObject, QPoint, QPointF, QRect, Qt, pyqtSignal
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QTextEdit, QWidget
@@ -21,7 +21,7 @@ from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
 from ui.timeline.timeline_widget import TimelineWidget
 from ui.timeline.timeline_canvas import TimelineCanvasBase
-from ui.timeline.timeline_global import GlobalCanvasBase
+from ui.timeline.timeline_global import GlobalCanvasBase, MINIMAP_TOP_LANE_BG
 
 
 class _DummyEditor(EditorSegmentsMixin):
@@ -2130,6 +2130,36 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             self.assertFalse(pixmap.isNull())
             self.assertEqual(pixmap.height(), 48)
+        finally:
+            timeline.close()
+
+    def test_global_canvas_major_segments_render_outline_without_fill(self):
+        timeline = TimelineWidget()
+        try:
+            canvas = timeline.global_canvas
+            canvas.resize(420, canvas.height())
+            canvas.total_duration = 20.0
+            canvas.update_segments([], 20.0)
+            canvas.set_vad_segments([])
+            canvas._middle_segments = [
+                {
+                    "start": 2.0,
+                    "end": 8.0,
+                    "major_id": "A",
+                    "title": "실내 인테리어 소개",
+                    "status": "confirmed",
+                }
+            ]
+
+            pixmap = canvas._build_static_cache()
+            image = pixmap.toImage()
+            bg = QColor(MINIMAP_TOP_LANE_BG).name()
+            top_lane_center_y = max(4, ((canvas.height() // 2) - 1) // 2)
+            inside_x = canvas._sec_to_px(5.0)
+            border_x = canvas._sec_to_px(2.0)
+
+            self.assertEqual(image.pixelColor(inside_x, top_lane_center_y).name(), bg)
+            self.assertNotEqual(image.pixelColor(border_x, top_lane_center_y).name(), bg)
         finally:
             timeline.close()
 

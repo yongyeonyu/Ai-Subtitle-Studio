@@ -9,6 +9,7 @@ from unittest import mock
 
 import core.cut_boundary as cut_boundary
 from core.pipeline.pipeline_helpers import PipelineHelpersMixin
+from core.runtime import config
 
 
 class _DummyUi:
@@ -63,6 +64,106 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
             self.assertEqual(cut_mock.call_count, 1)
             self.assertEqual(provisional_mock.call_count, 1)
 
+    def test_cut_boundary_cache_reuse_persists_finalized_topicless_middle_segments(self):
+        old_output_dir = config.OUTPUT_DIR
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config.OUTPUT_DIR = tmpdir
+            try:
+                project_path = os.path.join(tmpdir, "sample.project.json")
+                media_path = os.path.join(tmpdir, "sample.mp4")
+                with open(media_path, "wb") as f:
+                    f.write(b"media")
+                with open(project_path, "w", encoding="utf-8") as f:
+                    json.dump({"analysis": {}}, f, ensure_ascii=False, indent=2)
+
+                backend = _DummyBackend(project_path)
+                rows = [{"timeline_sec": 300.0, "time": 300.0, "timeline_frame": 9000, "fps": 30.0}]
+                backend._save_cut_boundary_cache_for_start([media_path], {}, rows)
+
+                cached = backend._load_cut_boundary_cache_for_start(project_path, [media_path], {})
+                with open(project_path, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+            finally:
+                config.OUTPUT_DIR = old_output_dir
+
+        self.assertEqual(len(cached or []), 1)
+        analysis = dict(saved.get("analysis") or {})
+        self.assertEqual(len(analysis.get("cut_boundaries") or []), 1)
+        self.assertTrue(bool(analysis.get("cut_boundary_topicless_finalized")))
+        self.assertEqual(len(analysis.get("middle_segments") or []), 1)
+        self.assertEqual(analysis["middle_segments"][0]["major_id"], "A")
+        self.assertEqual(int(analysis["middle_segments"][0]["timeline_end_frame"]), 9000)
+        self.assertNotIn("cut_boundary_cache_path", analysis)
+        self.assertTrue(bool(getattr(backend, "_cut_boundary_prescan_completed", False)))
+        self.assertTrue(
+            any(name == "_sig_refresh_cut_boundary_placeholder" for name, _args in backend.emitted)
+        )
+        self.assertTrue(
+            any(name == "_sig_update_project_boundary_times" and args for name, args in backend.emitted)
+        )
+
+    def test_cut_boundary_cache_reuse_can_be_bypassed_once_for_restart(self):
+        old_output_dir = config.OUTPUT_DIR
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config.OUTPUT_DIR = tmpdir
+            try:
+                project_path = os.path.join(tmpdir, "sample.project.json")
+                media_path = os.path.join(tmpdir, "sample.mp4")
+                with open(media_path, "wb") as f:
+                    f.write(b"media")
+                with open(project_path, "w", encoding="utf-8") as f:
+                    json.dump({"analysis": {}}, f, ensure_ascii=False, indent=2)
+
+                backend = _DummyBackend(project_path)
+                rows = [{"timeline_sec": 300.0, "time": 300.0, "timeline_frame": 9000, "fps": 30.0}]
+                backend._save_cut_boundary_cache_for_start([media_path], {}, rows)
+                backend._force_cut_boundary_rescan_once = True
+
+                skipped = backend._load_cut_boundary_cache_for_start(project_path, [media_path], {})
+                reused = backend._load_cut_boundary_cache_for_start(project_path, [media_path], {})
+            finally:
+                config.OUTPUT_DIR = old_output_dir
+
+        self.assertIsNone(skipped)
+        self.assertFalse(bool(getattr(backend, "_force_cut_boundary_rescan_once", False)))
+        self.assertEqual(len(reused or []), 1)
+
+    def test_cut_boundary_rescan_request_is_requeued_after_active_prescan_finishes(self):
+        backend = _DummyBackend("")
+        first_started = threading.Event()
+        allow_first_finish = threading.Event()
+        second_started = threading.Event()
+        calls = []
+
+        def fake_sync(project_path, files):
+            calls.append((project_path, list(files or [])))
+            if len(calls) == 1:
+                first_started.set()
+                allow_first_finish.wait(timeout=1.0)
+            else:
+                second_started.set()
+
+        backend._auto_scan_cut_boundaries_for_start_sync = fake_sync
+
+        backend._auto_scan_cut_boundaries_for_start("/tmp/sample.assp", ["sample.mp4"])
+        self.assertTrue(first_started.wait(timeout=1.0))
+
+        backend._force_cut_boundary_rescan_once = True
+        backend._auto_scan_cut_boundaries_for_start("/tmp/sample.assp", ["sample.mp4"])
+
+        allow_first_finish.set()
+        self.assertTrue(second_started.wait(timeout=1.0))
+
+        follower = getattr(backend, "_cut_boundary_prescan_thread", None)
+        if follower is not None:
+            follower.join(timeout=1.0)
+
+        self.assertEqual(calls, [
+            ("/tmp/sample.assp", ["sample.mp4"]),
+            ("/tmp/sample.assp", ["sample.mp4"]),
+        ])
+        self.assertEqual(getattr(backend, "_cut_boundary_prescan_pending_request", None), None)
+
     def test_follower_marks_then_removes_checked_provisional_rows(self):
         backend = _DummyBackend("")
         provisional_rows = [
@@ -94,6 +195,197 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
 
         self.assertTrue(removed)
         self.assertEqual([round(row["timeline_sec"], 2) for row in provisional_rows], [20.0, 10.02])
+
+    def test_clear_completed_provisionals_persists_reviewed_rows_and_clears_temp_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = os.path.join(tmpdir, "sample.project.json")
+            with open(project_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "analysis": {
+                            "cut_boundaries": [],
+                            "cut_boundary_provisional_boundaries": [{"timeline_sec": 9.5, "time": 9.5}],
+                        }
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            backend = _DummyBackend(project_path)
+            backend._cut_boundary_provisional_rows = [{"timeline_sec": 9.5, "time": 9.5}]
+
+            backend._clear_completed_cut_boundary_provisionals(
+                project_path,
+                detected=[{"timeline_sec": 10.0, "time": 10.0}],
+                reviewed_rows=[{"timeline_sec": 10.0, "time": 10.0, "status": "checked"}],
+            )
+
+            with open(project_path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+
+        self.assertEqual(saved["analysis"]["cut_boundary_provisional_boundaries"], [])
+        self.assertEqual(saved["analysis"]["cut_boundary_reviewed_rows"][0]["timeline_sec"], 10.0)
+        self.assertEqual(getattr(backend, "_cut_boundary_provisional_rows", []), [])
+        self.assertTrue(
+            any(name == "_sig_preview_cut_boundary_scan_lines" and args == ([],) for name, args in backend.emitted)
+        )
+
+    def test_follower_keeps_single_a_middle_when_verified_rows_are_empty(self):
+        old_output_dir = config.OUTPUT_DIR
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config.OUTPUT_DIR = tmpdir
+            try:
+                project_path = os.path.join(tmpdir, "sample.project.json")
+                media_path = os.path.join(tmpdir, "sample.mp4")
+                with open(media_path, "wb") as f:
+                    f.write(b"media")
+                with open(project_path, "w", encoding="utf-8") as f:
+                    json.dump({"analysis": {}}, f, ensure_ascii=False, indent=2)
+
+                backend = _DummyBackend(project_path)
+                backend._cut_boundary_placeholder_duration = lambda _files=None: 120.0
+
+                def fake_scan(path, **kwargs):
+                    rows = [
+                        {
+                            "timeline_sec": 10.0,
+                            "time": 10.0,
+                            "clip_local_sec": 10.0,
+                            "clip_idx": 0,
+                            "timeline_frame": 300,
+                            "fps": 30.0,
+                            "source": "audio_gain_provisional",
+                        },
+                        {
+                            "timeline_sec": 30.0,
+                            "time": 30.0,
+                            "clip_local_sec": 30.0,
+                            "clip_idx": 0,
+                            "timeline_frame": 900,
+                            "fps": 30.0,
+                            "source": "visual_provisional",
+                        },
+                    ]
+                    found_callback = kwargs.get("found_callback")
+                    if callable(found_callback):
+                        for row in rows:
+                            found_callback(dict(row), [dict(row)])
+                    completion_callback = kwargs.get("completion_callback")
+                    if callable(completion_callback):
+                        completion_callback(
+                            {"clip_idx": 0, "worker_total": 1, "worker_completed": 1, "done": True}
+                        )
+                    return rows
+
+                def fake_verify(path, rows, **kwargs):
+                    return []
+
+                with mock.patch(
+                    "core.pipeline.cut_boundary_helpers.load_settings",
+                    return_value={"cut_boundary_detection_enabled": True},
+                ), mock.patch(
+                    "core.cut_boundary.cut_boundary_enabled",
+                    return_value=True,
+                ), mock.patch(
+                    "core.cut_boundary.cut_boundary_scan_profile",
+                    return_value={"positions": (0, 2, 4, 6, 8), "mask": "x5"},
+                ), mock.patch(
+                    "core.cut_boundary.scan_media_cut_boundary_provisionals",
+                    side_effect=fake_scan,
+                ), mock.patch(
+                    "core.cut_boundary.verify_media_cut_boundary_rows",
+                    side_effect=fake_verify,
+                ):
+                    backend._auto_scan_cut_boundaries_for_start_sync(project_path, [media_path])
+                    follower = getattr(backend, "_cut_boundary_follower_thread", None)
+                    if follower is not None:
+                        follower.join(timeout=2.0)
+
+                with open(project_path, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+            finally:
+                config.OUTPUT_DIR = old_output_dir
+
+        analysis = dict(saved.get("analysis") or {})
+        self.assertEqual(len(analysis.get("cut_boundaries") or []), 0)
+        self.assertTrue(bool(analysis.get("cut_boundary_topicless_finalized")))
+        self.assertEqual(len(analysis.get("middle_segments") or []), 1)
+        bounds = [
+            (
+                int(row.get("timeline_start_frame", -1)),
+                int(row.get("timeline_end_frame", -1)),
+            )
+            for row in list(analysis.get("middle_segments") or [])
+        ]
+        self.assertEqual(bounds, [(0, 3600)])
+        self.assertTrue(
+            any(name == "_sig_refresh_cut_boundary_placeholder" for name, _args in backend.emitted)
+        )
+        self.assertTrue(
+            any(name == "_sig_preview_cut_boundary_topicless_segments" for name, _args in backend.emitted)
+        )
+        scan_line_previews = [
+            list(args[0] or [])
+            for name, args in backend.emitted
+            if name == "_sig_preview_cut_boundary_scan_lines" and args
+        ]
+        self.assertTrue(scan_line_previews)
+        self.assertEqual(scan_line_previews[-1], [])
+
+    def test_pipeline_topicless_builder_keeps_coalesced_final_middle_segments_by_default(self):
+        backend = _DummyBackend("")
+        backend._cut_boundary_placeholder_duration = lambda _files=None: 120.0
+
+        with mock.patch(
+            "core.settings.load_settings",
+            return_value={
+                "scan_cut_topicless_min_segment_sec": 120.0,
+                "scan_cut_topicless_hard_min_segment_sec": 45.0,
+            },
+        ), mock.patch(
+            "core.cut_boundary_middle.coalesce_topicless_middle_boundary_frames",
+            return_value=[900],
+        ) as coalesce_mock:
+            rows = backend._build_cut_boundary_topicless_rows(
+                [
+                    {"timeline_sec": 10.0, "timeline_frame": 300, "fps": 30.0, "status": "confirmed", "confirmed": True},
+                    {"timeline_sec": 30.0, "timeline_frame": 900, "fps": 30.0, "status": "confirmed", "confirmed": True},
+                ],
+                files=["/tmp/sample.mp4"],
+                done=True,
+            )
+
+        self.assertTrue(coalesce_mock.called)
+        bounds = [(round(row["start"], 3), round(row["end"], 3)) for row in rows]
+        self.assertEqual(bounds, [(0.0, 30.0), (30.0, 120.0)])
+
+    def test_pipeline_topicless_builder_can_use_all_frames_for_follower_reviewed_rows(self):
+        backend = _DummyBackend("")
+        backend._cut_boundary_placeholder_duration = lambda _files=None: 120.0
+
+        with mock.patch(
+            "core.settings.load_settings",
+            return_value={
+                "scan_cut_topicless_min_segment_sec": 120.0,
+                "scan_cut_topicless_hard_min_segment_sec": 45.0,
+            },
+        ), mock.patch(
+            "core.cut_boundary_middle.coalesce_topicless_middle_boundary_frames",
+            return_value=[900],
+        ) as coalesce_mock:
+            rows = backend._build_cut_boundary_topicless_rows(
+                [
+                    {"timeline_sec": 10.0, "timeline_frame": 300, "fps": 30.0, "status": "checked", "scan_checked": True},
+                    {"timeline_sec": 30.0, "timeline_frame": 900, "fps": 30.0, "status": "checked", "scan_checked": True},
+                ],
+                files=["/tmp/sample.mp4"],
+                done=True,
+                prefer_all_frames=True,
+            )
+
+        self.assertFalse(coalesce_mock.called)
+        bounds = [(round(row["start"], 3), round(row["end"], 3)) for row in rows]
+        self.assertEqual(bounds, [(0.0, 10.0), (10.0, 30.0), (30.0, 120.0)])
 
     def test_split_by_saved_cut_boundaries_offset_skips_pre_offset_boundaries(self):
         backend = _DummyBackend("")
@@ -431,7 +723,7 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
 
             self.assertFalse(follower.is_alive())
             self.assertTrue(scan_saw_follower_before_return)
-            self.assertFalse(scan_saw_follower_before_return[0])
+            self.assertTrue(scan_saw_follower_before_return[0])
             self.assertEqual(len(verify_calls), 1)
             self.assertEqual(len(scan_runtime), 1)
             self.assertEqual(scan_runtime[0]["sample_step_sec"], 1.0)
@@ -439,11 +731,11 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
             self.assertEqual(scan_runtime[0]["cv2_backend"], "avfoundation")
             self.assertEqual(scan_runtime[0]["backend_policy"], "fast")
             verify_settings = dict(verify_calls[0][2].get("settings") or {})
-            self.assertTrue(verify_settings.get("scan_cut_follower_deferred_until_pioneer_done"))
-            self.assertEqual(int(verify_settings.get("scan_cut_follower_stream_start_percent", 0)), 100)
-            self.assertGreaterEqual(int(verify_settings.get("scan_cut_follower_stream_batch_size", 0)), 16)
+            self.assertFalse(bool(verify_settings.get("scan_cut_follower_deferred_until_pioneer_done")))
+            self.assertLessEqual(int(verify_settings.get("scan_cut_follower_stream_start_percent", 100)), 25)
+            self.assertLessEqual(int(verify_settings.get("scan_cut_follower_stream_batch_size", 99)), 8)
 
-    def test_long_4k_deferred_follower_is_micro_batched_for_visible_progress(self):
+    def test_long_4k_native_streaming_follower_is_micro_batched_for_visible_progress(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             project_path = os.path.join(tmpdir, "sample.project.json")
             media_path = os.path.join(tmpdir, "long_4k.mp4")
@@ -637,7 +929,7 @@ class PipelineCutBoundaryCacheTests(unittest.TestCase):
                 "sequential_decode": False,
                 "sample_step_sec": 1.0,
             }])
-            self.assertEqual(verify_levels, ["medium"])
+            self.assertEqual(verify_levels, ["follower"])
             self.assertEqual(verify_setting_levels, ["medium"])
             self.assertEqual(verify_fast_runtime, [{
                 "verify_workers": 4,

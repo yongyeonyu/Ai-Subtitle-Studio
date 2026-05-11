@@ -1900,6 +1900,40 @@ class SidebarTerminalLayoutTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_pause_editor_runtime_for_exit_aborts_pending_editor_ui_work(self):
+        window = MainWindow()
+
+        class _Timer:
+            def __init__(self):
+                self.stopped = False
+
+            def stop(self):
+                self.stopped = True
+
+        events = []
+        try:
+            editor = SimpleNamespace(
+                _abort_pending_editor_processing_ui_work=lambda: events.append("abort"),
+                sm=SimpleNamespace(stop_processing=lambda message: events.append(("stop", message))),
+                _spinner_timer=_Timer(),
+                _roughcut_draft_timer=_Timer(),
+                _cut_boundary_scan_timer=_Timer(),
+                video_player=None,
+            )
+
+            paused = window._pause_editor_runtime_for_exit(editor)
+
+            self.assertTrue(paused)
+            self.assertIn("abort", events)
+            self.assertIn(("stop", "앱 종료로 작업을 일시 정지했습니다."), events)
+            self.assertTrue(editor._spinner_timer.stopped)
+            self.assertTrue(editor._roughcut_draft_timer.stopped)
+            self.assertTrue(editor._cut_boundary_scan_timer.stopped)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_exit_backup_skips_editor_save_when_no_unsaved_changes(self):
         window = MainWindow()
 

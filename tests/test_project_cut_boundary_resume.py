@@ -94,6 +94,78 @@ class ProjectCutBoundaryResumeTests(unittest.TestCase):
             self.assertFalse(resumed)
             self.assertEqual(ui.backend.calls, [])
 
+    def test_finalized_topicless_placeholder_only_project_does_not_restart_prescan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "sample.mp4")
+            project_path = os.path.join(tmp, "sample.json")
+            open(media, "wb").close()
+            self._write_project(
+                project_path,
+                media,
+                {
+                    "cut_boundaries": [],
+                    "cut_boundary_topicless_finalized": True,
+                    "cut_boundary_topicless_middle_segments": [
+                        {
+                            "id": "A",
+                            "major_id": "A",
+                            "title": "주제없음",
+                            "is_topicless_placeholder": True,
+                            "timeline_start_frame": 0,
+                            "timeline_end_frame": 300,
+                        }
+                    ],
+                },
+            )
+            with open(project_path, encoding="utf-8") as handle:
+                project = json.load(handle)
+
+            ui = _ProjectUI({"scan_cut_boundary_level": "medium", "cut_boundary_level": "medium"})
+            resumed = ui._resume_cut_boundary_prescan_for_open_project(project_path, project, [media])
+
+            self.assertFalse(resumed)
+            self.assertEqual(ui.backend.calls, [])
+
+    def test_final_middle_segments_without_confirmed_cuts_do_not_restart_prescan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media = os.path.join(tmp, "sample.mp4")
+            project_path = os.path.join(tmp, "sample.json")
+            open(media, "wb").close()
+            self._write_project(
+                project_path,
+                media,
+                {
+                    "cut_boundaries": [],
+                    "cut_boundary_topicless_middle_segments": [
+                        {
+                            "id": "A",
+                            "major_id": "A",
+                            "title": "주제없음",
+                            "is_topicless_placeholder": True,
+                        }
+                    ],
+                    "middle_segments": [
+                        {
+                            "id": "A",
+                            "major_id": "A",
+                            "title": "도입 주제",
+                            "summary": "실제 최종 중분류",
+                            "start": 0.0,
+                            "end": 12.0,
+                            "status": "confirmed",
+                        }
+                    ],
+                },
+            )
+            with open(project_path, encoding="utf-8") as handle:
+                project = json.load(handle)
+
+            ui = _ProjectUI({"scan_cut_boundary_level": "medium", "cut_boundary_level": "medium"})
+            resumed = ui._resume_cut_boundary_prescan_for_open_project(project_path, project, [media])
+
+            self.assertFalse(resumed)
+            self.assertEqual(ui.backend.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

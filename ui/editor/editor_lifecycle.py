@@ -5,14 +5,28 @@ ui/editor_lifecycle.py
 MainWindow 에디터 열기/저장/닫기 Mixin
 """
 import os
-import re
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore import QTimer
 
 from core.runtime.logger import get_logger
 from core.path_manager import get_srt_path
-from core.project.project_manager import PROJECTS_DIR, get_boundary_times, load_project
+from core.project.project_manager import get_boundary_times, load_project
 from ui.editor.editor_save_manager import backup_subtitle_file_copy
+from ui.editor.editor_project_open_native import (
+    find_project_for_srt_open as native_find_project_for_srt_open,
+    merge_srt_segments_with_project_metadata as native_merge_srt_segments_with_project_metadata,
+    normalized_open_path as native_normalized_open_path,
+    normalized_segment_text as native_normalized_segment_text,
+    project_matches_opened_srt as native_project_matches_opened_srt,
+    project_sidecar_candidates_for_srt as native_project_sidecar_candidates_for_srt,
+    refresh_opened_editor_runtime as native_refresh_opened_editor_runtime,
+    restore_project_context_for_srt_open as native_restore_project_context_for_srt_open,
+    schedule_native_editor_post_open_tasks as native_schedule_native_editor_post_open_tasks,
+    schedule_native_open_editor_media as native_schedule_native_open_editor_media,
+    schedule_editor_fit_to_view as native_schedule_editor_fit_to_view,
+    schedule_opened_editor_runtime_refresh as native_schedule_opened_editor_runtime_refresh,
+    segment_metadata_match_score as native_segment_metadata_match_score,
+)
 from ui.dialogs.message_box import confirm_save_changes
 
 
@@ -51,347 +65,65 @@ def _save_srt_impl(srt_path, segments):
 class EditorLifecycleMixin:
 
     def _normalized_open_path(self, path: str | None) -> str:
-        if not path:
-            return ""
-        try:
-            return os.path.normcase(os.path.abspath(os.path.expanduser(str(path))))
-        except Exception:
-            return ""
+        return native_normalized_open_path(path)
 
     def _project_sidecar_candidates_for_srt(self, srt_path: str, media_path: str | None = None) -> list[str]:
-        """Return likely project JSON files for a direct SRT open."""
-        candidates: list[str] = []
-
-        def _add(path: str | None):
-            if not path:
-                return
-            normalized = self._normalized_open_path(path)
-            if normalized and normalized not in candidates and os.path.exists(normalized):
-                candidates.append(normalized)
-
-        srt_abs = self._normalized_open_path(srt_path)
-        if srt_abs:
-            srt_dir = os.path.dirname(srt_abs)
-            srt_stem = os.path.splitext(os.path.basename(srt_abs))[0]
-            _add(os.path.join(PROJECTS_DIR, f"{srt_stem}.json"))
-
-            # Externalized project subtitles live in:
-            #   <project>.assets/subtitles/final.srt
-            # so walking back to <project>.json makes SRT open behave like
-            # project open, minus STT1/STT2 preview tracks.
-            if os.path.basename(srt_dir) == "subtitles":
-                asset_dir = os.path.dirname(srt_dir)
-                asset_name = os.path.basename(asset_dir)
-                if asset_name.endswith(".assets"):
-                    project_name = asset_name[: -len(".assets")]
-                    _add(os.path.join(os.path.dirname(asset_dir), f"{project_name}.json"))
-
-        media_abs = self._normalized_open_path(media_path)
-        if media_abs and media_abs != srt_abs:
-            media_stem = os.path.splitext(os.path.basename(media_abs))[0]
-            _add(os.path.join(PROJECTS_DIR, f"{media_stem}.json"))
-
-        try:
-            for name in os.listdir(PROJECTS_DIR):
-                if not name.lower().endswith(".json"):
-                    continue
-                _add(os.path.join(PROJECTS_DIR, name))
-        except Exception:
-            pass
-
-        return candidates
+        return native_project_sidecar_candidates_for_srt(srt_path, media_path)
 
     def _project_matches_opened_srt(self, project: dict, srt_path: str, media_path: str | None = None) -> bool:
-        if not isinstance(project, dict):
-            return False
-        srt_abs = self._normalized_open_path(srt_path)
-        media_abs = self._normalized_open_path(media_path)
-        try:
-            from core.project.project_assets import resolve_project_asset_path
-            from core.project.project_context import project_media_files
-        except Exception:
-            resolve_project_asset_path = None
-            project_media_files = None
-
-        raw_srt_paths = [
-            project.get("srt_path"),
-            (project.get("subtitle", {}) or {}).get("path"),
-            (project.get("subtitles", {}) or {}).get("srt_path"),
-            ((project.get("editor_state", {}) or {}).get("subtitles", {}) or {}).get("srt_path"),
-        ]
-        subtitles = project.get("subtitles", {}) if isinstance(project.get("subtitles"), dict) else {}
-        external_track = subtitles.get("external_track")
-        if isinstance(external_track, dict):
-            raw_srt_paths.append(external_track.get("path"))
-        external_tracks = subtitles.get("external_tracks")
-        if isinstance(external_tracks, dict):
-            for track in external_tracks.values():
-                if isinstance(track, dict):
-                    raw_srt_paths.append(track.get("path"))
-        asset_storage = project.get("asset_storage", {}) if isinstance(project.get("asset_storage"), dict) else {}
-        tracks = asset_storage.get("tracks", {}) if isinstance(asset_storage.get("tracks"), dict) else {}
-        for key, track in tracks.items():
-            if str(key) in {"final", "subtitle_final"} and isinstance(track, dict):
-                raw_srt_paths.append(track.get("path"))
-
-        for raw in raw_srt_paths:
-            if not raw:
-                continue
-            try:
-                resolved = resolve_project_asset_path(project, raw) if callable(resolve_project_asset_path) else str(raw)
-            except Exception:
-                resolved = str(raw)
-            if self._normalized_open_path(resolved) == srt_abs:
-                return True
-
-        if media_abs and callable(project_media_files):
-            try:
-                for path in project_media_files(project):
-                    if self._normalized_open_path(path) == media_abs:
-                        return True
-            except Exception:
-                pass
-        return False
+        return native_project_matches_opened_srt(project, srt_path, media_path)
 
     def _find_project_for_srt_open(self, srt_path: str, media_path: str | None = None) -> tuple[str, dict | None]:
-        for project_path in self._project_sidecar_candidates_for_srt(srt_path, media_path):
-            project = load_project(project_path, hydrate_text_assets=True)
-            if not isinstance(project, dict):
-                continue
-            if self._project_matches_opened_srt(project, srt_path, media_path):
-                return project_path, project
-
-            srt_abs = self._normalized_open_path(srt_path)
-            srt_dir = os.path.dirname(srt_abs)
-            if os.path.basename(srt_dir) == "subtitles":
-                asset_dir = os.path.dirname(srt_dir)
-                asset_name = os.path.basename(asset_dir)
-                expected = os.path.join(
-                    os.path.dirname(asset_dir),
-                    f"{asset_name.removesuffix('.assets')}.json",
-                )
-                if self._normalized_open_path(project_path) == self._normalized_open_path(expected):
-                    return project_path, project
-        return "", None
+        return native_find_project_for_srt_open(srt_path, media_path)
 
     @staticmethod
     def _normalized_segment_text(text: str | None) -> str:
-        return re.sub(r"\s+", " ", str(text or "").strip())
+        return native_normalized_segment_text(text)
 
     def _segment_metadata_match_score(self, srt_seg: dict, project_seg: dict, srt_index: int, project_index: int) -> int:
-        try:
-            start_delta = abs(float(srt_seg.get("start", 0.0) or 0.0) - float(project_seg.get("start", 0.0) or 0.0))
-            end_delta = abs(float(srt_seg.get("end", 0.0) or 0.0) - float(project_seg.get("end", 0.0) or 0.0))
-        except Exception:
-            start_delta = end_delta = 999.0
-        srt_text = self._normalized_segment_text(srt_seg.get("text"))
-        project_text = self._normalized_segment_text(project_seg.get("text"))
-        score = 0
-        if start_delta <= 0.05 and end_delta <= 0.05:
-            score += 50
-        elif start_delta <= 0.25 and end_delta <= 0.25:
-            score += 34
-        elif start_delta <= 0.6 and end_delta <= 0.6:
-            score += 16
-        if srt_text and project_text:
-            if srt_text == project_text:
-                score += 44
-            elif srt_text in project_text or project_text in srt_text:
-                score += 22
-        if srt_index == project_index:
-            score += 12
-        return score
+        return native_segment_metadata_match_score(srt_seg, project_seg, srt_index, project_index)
 
     def _merge_srt_segments_with_project_metadata(self, srt_segments: list[dict], project_segments: list[dict]) -> list[dict]:
-        """Preserve SRT timing/text while restoring project-only UI metadata."""
-        if not srt_segments or not project_segments:
-            return [dict(seg) for seg in list(srt_segments or []) if isinstance(seg, dict)]
-        project_rows = [dict(seg) for seg in list(project_segments or []) if isinstance(seg, dict)]
-        native_matches = None
-        try:
-            from core.native_swift_timeline import match_srt_project_metadata_via_swift
-
-            native_matches = match_srt_project_metadata_via_swift(
-                srt_segments=list(srt_segments or []),
-                project_segments=project_rows,
-            )
-        except Exception:
-            native_matches = None
-        used: set[int] = set()
-        merged: list[dict] = []
-        timing_keys = {
-            "start",
-            "end",
-            "timeline_start",
-            "timeline_end",
-            "start_frame",
-            "end_frame",
-            "timeline_start_frame",
-            "timeline_end_frame",
-            "frame_range",
-        }
-        preserve_srt_keys = {"line", "index", "text", "is_gap", *timing_keys}
-
-        for idx, raw_srt in enumerate(list(srt_segments or [])):
-            if not isinstance(raw_srt, dict):
-                continue
-            best_idx = -1
-            if isinstance(native_matches, list) and idx < len(native_matches):
-                try:
-                    native_idx = int(native_matches[idx])
-                except Exception:
-                    native_idx = -1
-                if native_idx >= 0 and native_idx not in used and native_idx < len(project_rows):
-                    best_idx = native_idx
-            if best_idx < 0:
-                best_score = -1
-                for project_idx, project_seg in enumerate(project_rows):
-                    if project_idx in used:
-                        continue
-                    score = self._segment_metadata_match_score(raw_srt, project_seg, idx, project_idx)
-                    if score > best_score:
-                        best_idx = project_idx
-                        best_score = score
-
-                if best_score < 30 and len(project_rows) == len(srt_segments) and idx < len(project_rows) and idx not in used:
-                    best_idx = idx
-                elif best_idx < 0 and idx < len(project_rows) and idx not in used:
-                    best_idx = idx
-
-            item = dict(raw_srt)
-            item["line"] = idx
-            if best_idx >= 0:
-                project_seg = project_rows[best_idx]
-                used.add(best_idx)
-                try:
-                    timing_close = (
-                        abs(float(item.get("start", 0.0) or 0.0) - float(project_seg.get("start", 0.0) or 0.0)) <= 0.08
-                        and abs(float(item.get("end", 0.0) or 0.0) - float(project_seg.get("end", 0.0) or 0.0)) <= 0.08
-                    )
-                except Exception:
-                    timing_close = False
-                for key, value in project_seg.items():
-                    if key in preserve_srt_keys:
-                        continue
-                    if key in timing_keys and not timing_close:
-                        continue
-                    item[key] = value
-            merged.append(item)
-        return merged
+        return native_merge_srt_segments_with_project_metadata(srt_segments, project_segments)
 
     def _restore_project_context_for_srt_open(self, editor, project_path: str, project: dict | None) -> None:
-        if editor is None or not project_path or not isinstance(project, dict):
-            return
-        try:
-            editor._linked_project_path_for_srt = project_path
-        except Exception:
-            pass
-        try:
-            if hasattr(self, "_restore_workspace"):
-                self._restore_workspace(editor, project_path)
-        except Exception:
-            pass
-
-        try:
-            refresher = getattr(editor, "_refresh_cut_boundary_placeholder_from_project", None)
-            if callable(refresher):
-                QTimer.singleShot(0, refresher)
-                QTimer.singleShot(180, refresher)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(editor, "_schedule_timeline"):
-                editor._schedule_timeline()
-            elif hasattr(editor, "_redraw_timeline"):
-                editor._redraw_timeline()
-        except Exception:
-            pass
+        native_restore_project_context_for_srt_open(self, editor, project_path, project)
 
     def _schedule_editor_fit_to_view(self, editor, delay_ms: int = 120):
-        if not hasattr(editor, "timeline"):
-            return
-        timeline = editor.timeline
-        delays = (0, delay_ms, max(delay_ms + 160, 300))
-        try:
-            if hasattr(editor, "_schedule_initial_open_layout"):
-                editor._schedule_initial_open_layout(delays=delays)
-                return
-            if hasattr(timeline, "schedule_time_window_seconds"):
-                timeline.schedule_time_window_seconds(
-                    10.0,
-                    start_sec=0.0,
-                    delays=delays,
-                )
-            elif hasattr(timeline, "schedule_fit_to_view"):
-                timeline.schedule_fit_to_view((0, delay_ms, max(delay_ms + 140, 260)))
-            elif hasattr(timeline, "fit_to_view"):
-                QTimer.singleShot(max(0, int(delay_ms)), timeline.fit_to_view)
-        except Exception:
-            pass
+        native_schedule_editor_fit_to_view(editor, delay_ms=delay_ms)
 
     def _refresh_opened_editor_runtime(self, editor) -> None:
-        """Restore live editor state after SRT/project hydration.
-
-        SRT and project opens both load text before all video/timeline widgets
-        have settled, so refresh timestamp metadata and the video subtitle
-        provider after the editor is visible.
-        """
-        if editor is None:
-            return
-        try:
-            cached = getattr(editor, "_cached_segs", None)
-            if isinstance(cached, list) and cached:
-                editor._rebuild_subtitle_memory_cache(cached)
-            else:
-                editor._rebuild_subtitle_memory_cache()
-        except Exception:
-            pass
-
-        try:
-            if hasattr(editor, "_refresh_editor_timestamp_metadata"):
-                editor._refresh_editor_timestamp_metadata(full=True)
-        except Exception:
-            pass
-
-        text_edit = getattr(editor, "text_edit", None)
-        try:
-            if text_edit is not None and hasattr(text_edit, "update_margins"):
-                text_edit.update_margins()
-            if text_edit is not None and hasattr(text_edit, "refresh_timestamp_layer"):
-                text_edit.refresh_timestamp_layer()
-        except Exception:
-            pass
-
-        try:
-            if hasattr(editor, "_refresh_video_subtitle_context"):
-                editor._refresh_video_subtitle_context()
-            video_player = getattr(editor, "video_player", None)
-            provider = getattr(editor, "_video_subtitle_context_for_player", None)
-            if video_player is not None and callable(provider):
-                if hasattr(video_player, "set_subtitle_provider"):
-                    video_player.set_subtitle_provider(provider)
-                elif hasattr(video_player, "refresh_subtitle_context"):
-                    video_player.refresh_subtitle_context(provider())
-                elif hasattr(video_player, "set_context_segments"):
-                    video_player.set_context_segments(provider())
-            canvas = getattr(getattr(editor, "timeline", None), "canvas", None)
-            playhead_sec = float(getattr(canvas, "playhead_sec", 0.0) or 0.0)
-            if video_player is not None and hasattr(video_player, "set_subtitle_display_time"):
-                local_sec = editor._global_to_local_sec(playhead_sec) if hasattr(editor, "_global_to_local_sec") else playhead_sec
-                video_player.set_subtitle_display_time(local_sec)
-        except Exception:
-            pass
+        native_refresh_opened_editor_runtime(editor)
 
     def _refresh_opened_srt_editor_runtime(self, editor) -> None:
         self._refresh_opened_editor_runtime(editor)
 
+    def _schedule_native_open_editor_media(self, editor, media_path: str | None) -> None:
+        native_schedule_native_open_editor_media(self, editor, media_path)
+
+    def _schedule_native_editor_post_open_tasks(
+        self,
+        editor,
+        *,
+        restore_workspace_callback=None,
+        apply_project_ui_callback=None,
+        load_multiclip_waveform_callback=None,
+        preload_segments_callback=None,
+    ) -> None:
+        native_schedule_native_editor_post_open_tasks(
+            self,
+            editor,
+            restore_workspace_callback=restore_workspace_callback,
+            apply_project_ui_callback=apply_project_ui_callback,
+            load_multiclip_waveform_callback=load_multiclip_waveform_callback,
+            preload_segments_callback=preload_segments_callback,
+        )
+
     def _schedule_opened_editor_runtime_refresh(self, editor) -> None:
-        for delay_ms in (0, 120, 360, 720):
-            QTimer.singleShot(
-                delay_ms,
-                lambda e=editor: self._refresh_opened_editor_runtime(e),
-            )
+        native_schedule_opened_editor_runtime_refresh(
+            editor,
+            refresh_callback=self._refresh_opened_editor_runtime,
+        )
 
     def _schedule_opened_srt_editor_runtime_refresh(self, editor) -> None:
         self._schedule_opened_editor_runtime_refresh(editor)
@@ -452,6 +184,7 @@ class EditorLifecycleMixin:
             segments=[],
             media_path=media_path,
             parent=self,
+            defer_media_load=True,
             hydrate_existing_srt_on_empty=False,
         )
         editor._source_srt_path = srt_path
@@ -486,6 +219,7 @@ class EditorLifecycleMixin:
             self._attach_global_menu_to_editor(editor)
         if hasattr(editor, 'set_terminal_visible_layout'): editor.set_terminal_visible_layout(True)
         self.stack.insertWidget(1, editor); self.stack.setCurrentWidget(editor)
+        self._schedule_native_open_editor_media(editor, media_path)
         if hasattr(self, "_activate_editor_idle_mode"):
             self._activate_editor_idle_mode(reason="direct_srt_open")
         if linked_project:
@@ -518,7 +252,7 @@ class EditorLifecycleMixin:
             segments=[],
             media_path=target_file,
             parent=self,
-            defer_media_load=bool(is_batch),
+            defer_media_load=True,
             hydrate_existing_srt_on_empty=False,
         )
         editor.is_auto_start = is_batch; self._editor_widget = editor
@@ -557,7 +291,10 @@ class EditorLifecycleMixin:
             # 메인 캔버스
             editor.timeline.canvas._multiclip_boxes = boxes
             editor.timeline.canvas._active_clip_idx = 0
-            editor.timeline.canvas.boundary_times = [bd["end"] for bd in self._multiclip_boundaries[:-1]]
+            if hasattr(editor.timeline, "set_boundary_times"):
+                editor.timeline.set_boundary_times(list(getattr(self, "_project_boundary_times", []) or []))
+            else:
+                editor.timeline.canvas.boundary_times = list(getattr(self, "_project_boundary_times", []) or [])
             editor.timeline.canvas.total_duration = total_dur
 
             # 글로벌 캔버스
@@ -585,12 +322,15 @@ class EditorLifecycleMixin:
             gc.update()
 
             editor.timeline.canvas.update()
-            editor.timeline.load_multiclip_waveform(self._multiclip_boundaries)
+            def _deferred_multiclip_waveform_load():
+                editor.timeline.load_multiclip_waveform(self._multiclip_boundaries)
 
-            # PHASE1-B: 에디터 진입 직후 기존 자막 사전 로드
-            # backend에서만 reuse flag 읽기 (stale self 값 무시)
-            _reuse_flag = getattr(getattr(self, 'backend', None), '_reuse_existing_multiclip_subtitles', False)
-            if _reuse_flag is True:
+            def _deferred_preload_existing_multiclip_segments():
+                # PHASE1-B: 에디터 진입 직후 기존 자막 사전 로드
+                # backend에서만 reuse flag 읽기 (stale self 값 무시)
+                _reuse_flag = getattr(getattr(self, 'backend', None), '_reuse_existing_multiclip_subtitles', False)
+                if _reuse_flag is not True:
+                    return
                 for _ri, _bd in enumerate(self._multiclip_boundaries):
                     _rf = _bd.get('file', '')
                     _rsrt = os.path.splitext(_rf)[0] + '.srt' if _rf else ''
@@ -629,7 +369,6 @@ class EditorLifecycleMixin:
                                     self._sig_update_queue.emit(_ri, '✅기존자막', ' - ', '', '')
                         except Exception as _re:
                             get_logger().log(f'  [PRE] 기존 자막 사전 로드 실패: {os.path.basename(_rf)} / {_re}')
-                # reuse 완료 → 완료 상태 전환 (버튼 "재시작"으로)
                 try:
                     _reuse_count = len(getattr(self, '_reuse_clip_indices', set()) or set())
                     _total_count = len(self._multiclip_boundaries)
@@ -664,10 +403,34 @@ class EditorLifecycleMixin:
             self.global_menu_bar.bind_editor(editor)
         if hasattr(self, "_attach_global_menu_to_editor"):
             self._attach_global_menu_to_editor(editor)
+        restore_workspace_callback = None
+        apply_project_ui_callback = None
         if self._current_project_path:
-            self._restore_workspace(editor, self._current_project_path)
-            from core.project.project_phase1b import apply_project_ui_state
-            apply_project_ui_state(self, editor, self._current_project_path)
+            restore_workspace_callback = lambda e=editor, p=self._current_project_path: self._restore_workspace(e, p)
+            apply_project_ui_callback = None
+            try:
+                from core.project.project_phase1b import apply_project_ui_state
+
+                apply_project_ui_callback = lambda e=editor, p=self._current_project_path: apply_project_ui_state(self, e, p)
+            except Exception:
+                apply_project_ui_callback = None
+            self._schedule_native_editor_post_open_tasks(
+                editor,
+                restore_workspace_callback=restore_workspace_callback,
+                apply_project_ui_callback=apply_project_ui_callback,
+                load_multiclip_waveform_callback=(
+                    _deferred_multiclip_waveform_load if hasattr(self, '_multiclip_boundaries') and self._multiclip_boundaries else None
+                ),
+                preload_segments_callback=(
+                    _deferred_preload_existing_multiclip_segments if hasattr(self, '_multiclip_boundaries') and self._multiclip_boundaries else None
+                ),
+            )
+        elif hasattr(self, '_multiclip_boundaries') and self._multiclip_boundaries:
+            self._schedule_native_editor_post_open_tasks(
+                editor,
+                load_multiclip_waveform_callback=_deferred_multiclip_waveform_load,
+                preload_segments_callback=_deferred_preload_existing_multiclip_segments,
+            )
         if hasattr(self, "_refresh_work_mode_ui"):
             QTimer.singleShot(0, self._refresh_work_mode_ui)
         if hasattr(self, "_release_ai_models_for_editor_mode"):
@@ -680,6 +443,8 @@ class EditorLifecycleMixin:
                     auto_start=True,
                 ),
             )
+        else:
+            self._schedule_native_open_editor_media(editor, target_file)
 
     def _remove_old_editor(self):
         old = getattr(self, "_editor_widget", None)

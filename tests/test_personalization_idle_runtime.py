@@ -481,6 +481,46 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
             build_index.assert_not_called()
             refresh_bundle.assert_not_called()
 
+    def test_cancelled_completion_skips_post_job_prune_and_retrieval_refresh(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+            enqueue_default_training_jobs([], store_dir=tmpdir)
+            cancel_checks = {"count": 0}
+
+            def delayed_cancel():
+                cancel_checks["count"] += 1
+                return cancel_checks["count"] >= 4
+
+            def complete_without_cancel(*args, **kwargs):
+                return {"status": "complete", "score": 1.0, "result": {"reason": "finished_before_stop"}}
+
+            with (
+                patch("core.personalization.idle_trainer.run_training_job", side_effect=complete_without_cancel),
+                patch("core.personalization.idle_trainer.prune_low_value_personalization_data") as prune,
+                patch("core.personalization.idle_trainer.build_lora_retrieval_index") as build_index,
+                patch(
+                    "core.personalization.idle_trainer._cleanup_lora_training_runtime",
+                    return_value={"actions": ["gc.collect"]},
+                ) as cleanup_runtime,
+            ):
+                result = run_training_queue_once(
+                    tmpdir,
+                    cancel_callback=delayed_cancel,
+                )
+
+            self.assertTrue(result["processed"])
+            outcome = dict(result.get("outcome") or {})
+            self.assertEqual(outcome.get("status"), "complete")
+            self.assertEqual(
+                (outcome.get("post_completion_maintenance") or {}).get("reason"),
+                "cancelled",
+            )
+            prune.assert_not_called()
+            build_index.assert_not_called()
+            cleanup_runtime.assert_called_once()
+            queue_item = load_training_queue(tmpdir)["items"][0]
+            self.assertEqual(queue_item["status"], "complete")
+
     def test_low_resource_completed_job_does_not_refresh_retrieval_index_in_app_process(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             initialize_lora_personalization_store(tmpdir)

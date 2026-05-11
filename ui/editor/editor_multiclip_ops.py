@@ -92,7 +92,10 @@ class EditorMulticlipOpsMixin:
         total_dur = owner._multiclip_boundaries[-1]['end'] if owner._multiclip_boundaries else 0.0
         self.timeline.canvas._multiclip_boxes = boxes
         self.timeline.canvas._active_clip_idx = 0
-        self.timeline.canvas.boundary_times = [bd['end'] for bd in owner._multiclip_boundaries[:-1]]
+        if hasattr(self.timeline, "set_boundary_times"):
+            self.timeline.set_boundary_times(list(getattr(owner, "_project_boundary_times", []) or []))
+        else:
+            self.timeline.canvas.boundary_times = list(getattr(owner, "_project_boundary_times", []) or [])
         self.timeline.canvas.total_duration = total_dur
         try:
             owner._active_clip_idx = 0
@@ -208,7 +211,7 @@ class EditorMulticlipOpsMixin:
         remapped, new_bounds = self._remap_segments_for_multiclip_files(files)
         owner._multiclip_files = files
         owner._multiclip_boundaries = new_bounds
-        owner._project_boundary_times = [b['end'] for b in new_bounds[:-1]] if len(new_bounds) > 1 else []
+        owner._project_boundary_times = []
         owner._active_clip_idx = max(0, min(clip_idx, len(files) - 1)) if files else 0
         self._reload_segments_from_list(remapped)
         self._apply_multiclip_state_from_owner()
@@ -242,7 +245,7 @@ class EditorMulticlipOpsMixin:
                 use_existing = ask_yes_no(self, "기존 자막 사용", "기존 자막을 사용하시겠습니까?")
         owner._multiclip_files = new_files
         owner._multiclip_boundaries = new_bounds
-        owner._project_boundary_times = [b['end'] for b in new_bounds[:-1]] if len(new_bounds) > 1 else []
+        owner._project_boundary_times = []
         owner._active_clip_idx = int(getattr(owner, '_active_clip_idx', 0) or 0)
         if use_existing:
             for f in added_files:

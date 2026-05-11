@@ -1,6 +1,7 @@
 # Version: 03.09.24
 # Phase: PHASE2
 import json
+import tempfile
 import unittest
 from unittest import mock
 
@@ -37,6 +38,130 @@ def _segments(count: int = 7) -> list[dict]:
 
 
 class EditorRoughcutDraftTests(unittest.TestCase):
+    def test_draft_reference_major_segments_prefers_project_topicless_segments(self):
+        class _Main:
+            def __init__(self, path):
+                self._current_project_path = path
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self, path):
+                self._main = _Main(path)
+                self._middle_segments = [{"major_id": "Z", "title": "최종 중분류", "start": 0.0, "end": 10.0}]
+
+            def window(self):
+                return self._main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/project.json"
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "analysis": {
+                            "cut_boundary_topicless_middle_segments": [
+                                {"major_id": "A", "title": "주제없음", "start": 0.0, "end": 5.0}
+                            ],
+                            "middle_segments": [
+                                {"major_id": "B", "title": "최종 중분류", "start": 0.0, "end": 5.0}
+                            ],
+                        }
+                    },
+                    fh,
+                    ensure_ascii=False,
+                )
+
+            editor = _Editor(path)
+            rows = editor._draft_reference_major_segments()
+
+        self.assertEqual([row["major_id"] for row in rows], ["A"])
+
+    def test_draft_reviewed_cut_boundaries_prefers_project_reviewed_rows_over_provisional_memory(self):
+        class _Main:
+            def __init__(self, path):
+                self._current_project_path = path
+
+        class _Editor(EditorRoughcutDraftMixin):
+            def __init__(self, path):
+                self._main = _Main(path)
+                self._cut_boundary_provisional_rows = [{"candidate_key": "prov", "timeline_sec": 1.0}]
+
+            def window(self):
+                return self._main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/project.json"
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "analysis": {
+                            "cut_boundary_reviewed_rows": [
+                                {"candidate_key": "reviewed", "timeline_sec": 2.0, "verified": True}
+                            ]
+                        }
+                    },
+                    fh,
+                    ensure_ascii=False,
+                )
+
+            editor = _Editor(path)
+            rows = editor._draft_reviewed_cut_boundaries()
+
+        self.assertEqual([row["candidate_key"] for row in rows], ["reviewed"])
+
+    def test_apply_cut_boundary_topicless_rows_invalidates_global_canvas_static_cache(self):
+        class _Carrier:
+            def __init__(self):
+                self.updated = False
+                self.invalidated_markers = False
+                self.invalidated_static = False
+                self._paint_index_cache = {}
+
+            def update(self):
+                self.updated = True
+
+            def _invalidate_marker_caches(self):
+                self.invalidated_markers = True
+
+            def _invalidate_static_cache(self):
+                self.invalidated_static = True
+
+        class _Timeline(_Carrier):
+            def __init__(self):
+                super().__init__()
+                self.canvas = _Carrier()
+                self.global_canvas = _Carrier()
+
+        class _Main(_Carrier):
+            pass
+
+        class _Editor(EditorPipelineMixin, _Carrier):
+            def __init__(self):
+                _Carrier.__init__(self)
+                self._main = _Main()
+                self.timeline = _Timeline()
+
+            def window(self):
+                return self._main
+
+        editor = _Editor()
+        rows = [
+            {
+                "start": 0.0,
+                "end": 12.0,
+                "major_id": "A",
+                "title": "주제없음",
+                "is_topicless_placeholder": True,
+            }
+        ]
+
+        editor._apply_cut_boundary_topicless_rows_to_ui(rows, source="cache")
+
+        self.assertTrue(editor.invalidated_static)
+        self.assertTrue(editor.timeline.canvas.invalidated_markers)
+        self.assertTrue(editor.timeline.global_canvas.invalidated_static)
+        self.assertTrue(editor.timeline.global_canvas.updated)
+        self.assertEqual(editor.timeline.global_canvas._middle_segments, rows)
+        self.assertEqual(editor._roughcut_result["source"], "cut_boundary_cache")
+
     def test_completion_schedules_roughcut_and_sync_after_cleanup(self):
         class _Timer:
             def __init__(self):
@@ -108,12 +233,13 @@ class EditorRoughcutDraftTests(unittest.TestCase):
             self.assertEqual(editor._spinner_timer.stop_count, 1)
             self.assertEqual(editor._last_live_processing_stage, "")
             self.assertEqual(editor._next_live_processing_stage_at, 0.0)
-            self.assertEqual([delay for delay, _callback in scheduled[:2]], [900, 200])
+            self.assertIn(0, [delay for delay, _callback in scheduled])
+            self.assertEqual([delay for delay, _callback in scheduled[1:3]], [900, 200])
 
-            scheduled[0][1]()
+            next(callback for delay, callback in scheduled if delay == 900)()
             self.assertEqual(editor.roughcut_schedule_count, 1)
 
-            scheduled[1][1]()
+            next(callback for delay, callback in scheduled if delay == 200)()
             self.assertEqual(editor.post_sync_count, 1)
             self.assertEqual(main.release_calls, [])
 
@@ -346,9 +472,73 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertIn("자막 생성이 완료된 뒤", payload["editor_instructions"])
         self.assertIn("전체를 먼저 훑어보고", payload["editor_instructions"])
         self.assertIn("화면 전환, 주제 전환, 장소 전환", payload["editor_instructions"])
+        self.assertIn("실외에서 실내로 들어오거나", payload["editor_instructions"])
+        self.assertIn("음향 경계로 먼저 크게 나뉜 구간 안에서도", payload["editor_instructions"])
         self.assertIn("단순한 말 끊김", payload["editor_instructions"])
         self.assertIn("10개 이하", payload["editor_instructions"])
         self.assertIn("공백 없이", payload["editor_instructions"])
+        self.assertIn("중분류를 하나만 반환하면 잘못된 결과", payload["editor_instructions"])
+        self.assertEqual(payload["workflow_steps"][0], "subtitle_rows 전체를 먼저 끝까지 읽고 영상 전체 내용을 파악한다.")
+
+    def test_editor_draft_prompt_includes_reference_major_segments(self):
+        from core.roughcut import build_editor_roughcut_draft_prompt
+
+        prompt = build_editor_roughcut_draft_prompt(
+            _segments(3),
+            reference_major_segments=[
+                {
+                    "major_id": "A",
+                    "title": "주제없음",
+                    "summary": "컷 경계 기반 임시 중분류",
+                    "start": 0.0,
+                    "end": 3.6,
+                    "timeline_start_frame": 0,
+                    "timeline_end_frame": 108,
+                    "frame_range": {"unit": "frame", "start": 0, "end": 108, "timeline_frame_rate": 30.0},
+                    "is_topicless_placeholder": True,
+                }
+            ],
+        )
+        payload = json.loads(prompt)
+
+        self.assertIn("reference_major_segments", payload)
+        self.assertEqual(payload["reference_major_segments"][0]["major_id"], "A")
+        self.assertTrue(payload["reference_major_segments"][0]["is_topicless_placeholder"])
+        self.assertIn("임시 중분류 초안", payload["editor_instructions"])
+        self.assertIn("실외→실내", payload["editor_instructions"])
+        self.assertIn("추가로 다시 분리할 수 있다", payload["editor_instructions"])
+
+    def test_editor_draft_prompt_includes_reviewed_audio_boundaries(self):
+        from core.roughcut import build_editor_roughcut_draft_prompt
+
+        prompt = build_editor_roughcut_draft_prompt(
+            _segments(3),
+            reviewed_cut_boundaries=[
+                {
+                    "candidate_key": "audio_01",
+                    "timeline_sec": 12.5,
+                    "timeline_frame": 375,
+                    "source": "audio_gain_provisional",
+                    "audio_gain_db_delta": 14.2,
+                    "status": "checked",
+                },
+                {
+                    "candidate_key": "visual_01",
+                    "timeline_sec": 13.0,
+                    "timeline_frame": 390,
+                    "status": "verified",
+                    "score": 92.0,
+                },
+            ],
+        )
+        payload = json.loads(prompt)
+
+        self.assertIn("reviewed_cut_boundaries", payload)
+        self.assertIn("audio_boundary_hints", payload)
+        self.assertEqual(payload["audio_boundary_hints"][0]["kind"], "audio")
+        self.assertEqual(payload["audio_boundary_hints"][0]["boundary_id"], "audio_01")
+        self.assertIn("audio_boundary_hints는 후발대가 검토한 음성 경계 후보", payload["editor_instructions"])
+        self.assertIn("reviewed_cut_boundaries는 후발대가 롤백 검토하며 다시 본 컷 경계 힌트", payload["editor_instructions"])
 
     def test_editor_draft_llm_uses_roughcut_specific_model_gate(self):
         from core.roughcut.editor_draft import run_editor_roughcut_llm_draft
@@ -527,6 +717,10 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertEqual(editor.redraw_calls, 1)
         self.assertIs(main._editor_roughcut_result, result)
         self.assertIsNone(editor._roughcut_draft_thread)
+        self.assertEqual(
+            [row["major_id"] for row in getattr(editor, "_middle_segments")],
+            [segment.major_id for segment in result.segments],
+        )
 
     def test_chunked_editor_draft_merges_llm_chunks_using_global_subtitle_ids(self):
         from core.roughcut.editor_draft import run_editor_roughcut_llm_draft
@@ -608,6 +802,106 @@ class EditorRoughcutDraftTests(unittest.TestCase):
         self.assertEqual(result.segments[0].minor_groups[0].subtitle_ids, (0,))
         self.assertEqual(len(result.chapters), 7)
         self.assertEqual(len(result.edl_segments), 3)
+
+    def test_reference_major_segments_shape_local_draft_boundaries(self):
+        result = build_editor_roughcut_draft_result(
+            _segments(6),
+            settings={"editor_roughcut_draft_max_major_segments": 10},
+            reference_major_segments=[
+                {
+                    "major_id": "A",
+                    "title": "주제없음",
+                    "summary": "도입 구간",
+                    "start": 0.0,
+                    "end": 3.6,
+                    "timeline_start_frame": 0,
+                    "timeline_end_frame": 108,
+                    "frame_range": {"unit": "frame", "start": 0, "end": 108, "timeline_frame_rate": 30.0},
+                    "is_topicless_placeholder": True,
+                },
+                {
+                    "major_id": "B",
+                    "title": "주제없음",
+                    "summary": "후반 구간",
+                    "start": 3.6,
+                    "end": 7.2,
+                    "timeline_start_frame": 108,
+                    "timeline_end_frame": 216,
+                    "frame_range": {"unit": "frame", "start": 108, "end": 216, "timeline_frame_rate": 30.0},
+                    "is_topicless_placeholder": True,
+                },
+            ],
+        )
+
+        self.assertEqual([segment.major_id for segment in result.segments], ["A", "B"])
+        self.assertAlmostEqual(result.segments[0].start, 0.0)
+        self.assertAlmostEqual(result.segments[0].end, result.segments[1].start)
+
+    def test_llm_single_major_group_is_rejected_when_reference_has_multiple_segments(self):
+        result = build_editor_roughcut_draft_result(
+            _segments(12),
+            settings={"editor_roughcut_draft_max_major_segments": 10},
+            llm_payload={
+                "major_segments": [
+                    {
+                        "major_id": "A",
+                        "title": "전체 통합",
+                        "summary": "영상 전체를 하나로 묶음",
+                        "start_subtitle_id": 0,
+                        "end_subtitle_id": 11,
+                        "confidence": 0.9,
+                        "status": "confirmed",
+                    }
+                ]
+            },
+            reference_major_segments=[
+                {
+                    "major_id": "A",
+                    "title": "도입",
+                    "summary": "도입 구간",
+                    "start": 0.0,
+                    "end": 7.2,
+                },
+                {
+                    "major_id": "B",
+                    "title": "후반",
+                    "summary": "후반 구간",
+                    "start": 7.2,
+                    "end": 14.4,
+                },
+            ],
+        )
+
+        self.assertEqual([segment.major_id for segment in result.segments], ["A", "B"])
+        self.assertGreater(len(result.segments[0].subtitle_ids), 0)
+        self.assertGreater(len(result.segments[1].subtitle_ids), 0)
+
+    def test_llm_single_major_group_is_rejected_for_long_subtitle_flow(self):
+        result = build_editor_roughcut_draft_result(
+            _segments(12),
+            settings={
+                "roughcut_major_min_subtitle_count": 1,
+                "editor_roughcut_draft_max_subtitle_count": 2,
+                "editor_roughcut_draft_max_major_segments": 10,
+            },
+            llm_payload={
+                "major_segments": [
+                    {
+                        "major_id": "A",
+                        "title": "전체 통합",
+                        "summary": "긴 자막 흐름을 하나로 묶음",
+                        "start_subtitle_id": 0,
+                        "end_subtitle_id": 11,
+                        "confidence": 0.9,
+                        "status": "confirmed",
+                    }
+                ]
+            },
+        )
+
+        self.assertGreaterEqual(len(result.segments), 2)
+        self.assertEqual(result.segments[0].major_id, "A")
+        self.assertEqual(result.segments[1].major_id, "B")
 
     def test_timeline_major_markers_expose_abc_segments(self):
         result = build_editor_roughcut_draft_result(

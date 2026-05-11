@@ -507,6 +507,13 @@ class MainRuntimeCleanupMixin:
             return False
         stopped_any = False
         try:
+            abort_pending = getattr(editor, "_abort_pending_editor_processing_ui_work", None)
+            if callable(abort_pending):
+                abort_pending()
+                stopped_any = True
+        except Exception:
+            pass
+        try:
             state_manager = getattr(editor, "sm", None)
             if state_manager is not None and hasattr(state_manager, "stop_processing"):
                 state_manager.stop_processing("앱 종료로 작업을 일시 정지했습니다.")

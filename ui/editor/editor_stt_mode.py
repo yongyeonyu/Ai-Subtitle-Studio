@@ -187,7 +187,10 @@ class EditorSTTModeMixin:
             for item in source:
                 try:
                     if isinstance(item, dict):
-                        sec = float(item.get("time", item.get("start", item.get("timeline_start", 0.0))) or 0.0)
+                        sec = float(
+                            item.get("timeline_sec", item.get("time", item.get("start", item.get("timeline_start", 0.0))))
+                            or 0.0
+                        )
                         key = ("dict", round(sec, 3))
                         payload = dict(item)
                         payload.setdefault("time", sec)
@@ -201,7 +204,12 @@ class EditorSTTModeMixin:
                     continue
                 seen.add(key)
                 rows.append(payload)
-        rows.sort(key=lambda row: float(row.get("time", row.get("start", row.get("timeline_start", 0.0))) or 0.0))
+        rows.sort(
+            key=lambda row: float(
+                row.get("timeline_sec", row.get("time", row.get("start", row.get("timeline_start", 0.0))))
+                or 0.0
+            )
+        )
         return rows
 
     def _start_stt_vad_detection(self) -> bool:

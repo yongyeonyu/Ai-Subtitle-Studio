@@ -226,6 +226,7 @@ class SignalHandlersMixin:
             return
         try:
             self.backend._force_no_reuse_once = True
+            self.backend._force_cut_boundary_rescan_once = True
         except Exception:
             pass
         self.backend.start_multiclip_pipeline(list(files or []), folder=folder)
@@ -234,6 +235,13 @@ class SignalHandlersMixin:
         editor = getattr(self, "_editor_widget", None)
         if editor is None:
             return
+        previous_result = getattr(self, "_editor_roughcut_result", None)
+        refresh_placeholder = getattr(editor, "_refresh_cut_boundary_placeholder_from_project", None)
+        if callable(refresh_placeholder):
+            try:
+                refresh_placeholder()
+            except Exception as exc:
+                get_logger().log(f"⚠️ 컷 경계 placeholder 프로젝트 반영 실패: {exc}")
         roughcut = getattr(self, "_roughcut_widget", None)
         if roughcut is None:
             try:
@@ -252,7 +260,13 @@ class SignalHandlersMixin:
             except Exception as exc:
                 get_logger().log(f"⚠️ 컷 경계 placeholder 갱신 실패: {exc}")
                 return
-        self._editor_roughcut_result = getattr(roughcut, "_result", None)
+        fallback_result = (
+            getattr(roughcut, "_result", None)
+            or getattr(editor, "_roughcut_result", None)
+            or getattr(editor, "roughcut_result", None)
+            or previous_result
+        )
+        self._editor_roughcut_result = fallback_result
         try:
             if hasattr(editor, "_redraw_timeline"):
                 editor._redraw_timeline()

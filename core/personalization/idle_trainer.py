@@ -990,7 +990,7 @@ def run_training_queue_once(
         payload = load_training_queue(store_dir)
         outcome_status = str(outcome.get("status") or "complete")
         outcome_reason = str((outcome.get("result") or {}).get("reason") or "")
-        outcome_cancelled = bool((outcome.get("result") or {}).get("cancelled")) or cancelled_after_job
+        stop_after_job = bool((outcome.get("result") or {}).get("cancelled")) or cancelled_after_job
         current_job = _job_from_payload(payload, job_id) or target
         checkpoint_stage = "completed" if outcome_status == "complete" else ("paused_for_resume" if outcome_status == "waiting" else outcome_status)
         checkpoint_progress = float(current_job.get("progress", 0.0) or 0.0)
@@ -1014,47 +1014,57 @@ def run_training_queue_once(
         _save_queue_payload(payload, store_dir, refresh_manifest=not low_resource)
         prune_result: dict[str, Any] = {}
         if outcome_status == "complete":
-            appended_counts: dict[str, int] = {}
-            result_payload = dict(outcome.get("result") or {})
-            if job_type == "optimize_settings":
-                appended_counts["setting_trials"] = int(result_payload.get("trial_count", 0) or 0)
-            elif job_type == "optimize_prompts":
-                appended_counts["prompt_trials"] = int(result_payload.get("trial_count", 0) or 0)
-            if not low_resource:
-                try:
-                    prune_result = prune_low_value_personalization_data(
-                        store_dir=store_dir,
-                        trigger=f"training_job:{job_type}",
-                        appended_counts=appended_counts,
-                    )
-                    outcome["retention"] = prune_result
-                except Exception as prune_exc:
-                    get_logger().log(f"⚠️ [개인화 학습] 낮은 점수 정리 실패: {prune_exc}")
+            stop_after_job = stop_after_job or _cancel_requested(cancel_callback)
+            if stop_after_job:
+                outcome["post_completion_maintenance"] = {"skipped": True, "reason": "cancelled"}
+                get_logger().log("⏸️ [LoRA 학습] 중지 요청 감지: 후속 정리와 검색 인덱스 갱신을 생략합니다.")
             else:
-                outcome["retention"] = {"skipped": True, "reason": "low_resource_idle"}
-            try:
-                if low_resource:
-                    outcome["retrieval_index"] = {
-                        "skipped": True,
-                        "reason": LOW_RESOURCE_INDEX_DEFERRED_REASON,
-                    }
-                    get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 생략: 저전력 자동")
-                elif _lora_index_refresh_due(store_dir):
-                    get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 중")
-                    retrieval_index = build_lora_retrieval_index(store_dir)
-                    outcome["retrieval_index"] = {
-                        "doc_count": int(retrieval_index.get("doc_count", 0) or 0),
-                        "updated_at": retrieval_index.get("updated_at"),
-                    }
-                    get_logger().log(
-                        f"🧠 [LoRA 학습] 검색 인덱스 갱신 완료: {int(retrieval_index.get('doc_count', 0) or 0)}개 기억"
-                    )
+                appended_counts: dict[str, int] = {}
+                result_payload = dict(outcome.get("result") or {})
+                if job_type == "optimize_settings":
+                    appended_counts["setting_trials"] = int(result_payload.get("trial_count", 0) or 0)
+                elif job_type == "optimize_prompts":
+                    appended_counts["prompt_trials"] = int(result_payload.get("trial_count", 0) or 0)
+                if not low_resource:
+                    try:
+                        prune_result = prune_low_value_personalization_data(
+                            store_dir=store_dir,
+                            trigger=f"training_job:{job_type}",
+                            appended_counts=appended_counts,
+                        )
+                        outcome["retention"] = prune_result
+                    except Exception as prune_exc:
+                        get_logger().log(f"⚠️ [개인화 학습] 낮은 점수 정리 실패: {prune_exc}")
                 else:
-                    outcome["retrieval_index"] = {"skipped": True, "reason": "low_resource_cooldown"}
-                    get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 생략: 쿨다운")
-            except Exception as index_exc:
-                get_logger().log(f"⚠️ [개인화 학습] LoRA 검색 인덱스 갱신 실패: {index_exc}")
-        if not outcome_cancelled:
+                    outcome["retention"] = {"skipped": True, "reason": "low_resource_idle"}
+                stop_after_job = _cancel_requested(cancel_callback)
+                if stop_after_job:
+                    outcome["post_completion_maintenance"] = {"skipped": True, "reason": "cancelled_after_retention"}
+                    get_logger().log("⏸️ [LoRA 학습] 중지 요청 감지: 검색 인덱스 갱신을 생략합니다.")
+                else:
+                    try:
+                        if low_resource:
+                            outcome["retrieval_index"] = {
+                                "skipped": True,
+                                "reason": LOW_RESOURCE_INDEX_DEFERRED_REASON,
+                            }
+                            get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 생략: 저전력 자동")
+                        elif _lora_index_refresh_due(store_dir):
+                            get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 중")
+                            retrieval_index = build_lora_retrieval_index(store_dir)
+                            outcome["retrieval_index"] = {
+                                "doc_count": int(retrieval_index.get("doc_count", 0) or 0),
+                                "updated_at": retrieval_index.get("updated_at"),
+                            }
+                            get_logger().log(
+                                f"🧠 [LoRA 학습] 검색 인덱스 갱신 완료: {int(retrieval_index.get('doc_count', 0) or 0)}개 기억"
+                            )
+                        else:
+                            outcome["retrieval_index"] = {"skipped": True, "reason": "low_resource_cooldown"}
+                            get_logger().log("🧠 [LoRA 학습] 검색 인덱스 갱신 생략: 쿨다운")
+                    except Exception as index_exc:
+                        get_logger().log(f"⚠️ [개인화 학습] LoRA 검색 인덱스 갱신 실패: {index_exc}")
+        if not stop_after_job:
             refresh_lora_personalization_manifest(store_dir, refresh_bundle=not low_resource)
         else:
             _cleanup_lora_training_runtime("training_cancelled", include_gpu=True)

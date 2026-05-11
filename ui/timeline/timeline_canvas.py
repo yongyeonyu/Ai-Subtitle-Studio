@@ -452,13 +452,20 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
 
     @staticmethod
     def _paint_item_bounds(item: dict) -> tuple[float, float]:
-        try:
-            start = float(item.get("start", item.get("timeline_sec", item.get("time", 0.0))) or 0.0)
-        except Exception:
-            start = 0.0
-        try:
-            end = float(item.get("end", item.get("timeline_end", start)) or start)
-        except Exception:
+        if isinstance(item, dict):
+            try:
+                start = float(item.get("start", item.get("timeline_sec", item.get("time", 0.0))) or 0.0)
+            except Exception:
+                start = 0.0
+            try:
+                end = float(item.get("end", item.get("timeline_end", start)) or start)
+            except Exception:
+                end = start
+        else:
+            try:
+                start = float(item or 0.0)
+            except Exception:
+                start = 0.0
             end = start
         if end < start:
             start, end = end, start
@@ -467,8 +474,6 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
     def _linear_visible_items_for_paint(self, items, start_sec: float, end_sec: float) -> list:
         visible = []
         for item in items or []:
-            if not isinstance(item, dict):
-                continue
             start, end = self._paint_item_bounds(item)
             if end >= start_sec and start <= end_sec:
                 visible.append(item)

@@ -5,7 +5,7 @@ ui/timeline_global.py
 Global timeline minimap
 """
 import numpy as np
-from PyQt6.QtCore import QLine, QRect, Qt, pyqtSignal
+from PyQt6.QtCore import QRect, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QSizePolicy
 
@@ -20,7 +20,6 @@ MINIMAP_BG = "#11181C"
 MINIMAP_TOP_LANE_BG = "#141D21"
 MINIMAP_BOTTOM_LANE_BG = "#0F1518"
 MINIMAP_DIVIDER = QColor("#2D3942")
-MINIMAP_MAJOR_FILL = QColor(255, 255, 255, 42)
 MINIMAP_MAJOR_BORDER = QColor("#FFFFFF")
 MINIMAP_SUBTITLE_FILL = QColor(132, 98, 22, 170)
 MINIMAP_SUBTITLE_BORDER = QColor("#FFD400")
@@ -186,6 +185,16 @@ class GlobalCanvas(GlobalCanvasBase):
         return int(max(0.0, float(sec or 0.0)) * self.width() / total)
 
     def _static_key(self):
+        major_signature = tuple(
+            (
+                round(float(marker.get("start", 0.0) or 0.0), 3),
+                round(float(marker.get("end", marker.get("start", 0.0)) or 0.0), 3),
+                str(marker.get("display_label", "") or marker.get("label", "") or ""),
+                str(marker.get("color", "") or ""),
+                str(marker.get("status", "") or ""),
+            )
+            for marker in roughcut_major_markers_for_widget(self)
+        )
         return (
             self.width(),
             self.height(),
@@ -193,6 +202,7 @@ class GlobalCanvas(GlobalCanvasBase):
             len(self.segments),
             len(self.vad_segments),
             id(self._waveform),
+            major_signature,
         )
 
     def _build_waveform_columns(self, width: int, total: float) -> list[tuple[int, bool]]:
@@ -276,9 +286,8 @@ class GlobalCanvas(GlobalCanvasBase):
 
         major_markers = roughcut_major_markers_for_widget(self)
         if total > 0 and major_markers:
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(MINIMAP_MAJOR_FILL)
-            major_border_lines: list[QLine] = []
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setBrush(Qt.BrushStyle.NoBrush)
             for marker in major_markers:
                 try:
                     start = max(0.0, float(marker.get("start", 0.0) or 0.0))
@@ -288,12 +297,12 @@ class GlobalCanvas(GlobalCanvasBase):
                 rect = _rect_for_lane(start, end, top_lane, min_h_pad=3)
                 if rect.isEmpty():
                     continue
-                p.fillRect(rect, QColor(str(marker.get("color", MINIMAP_MAJOR_FILL.name()))))
-                major_border_lines.append(QLine(rect.left(), rect.top(), rect.left(), rect.bottom()))
-                major_border_lines.append(QLine(rect.right(), rect.top(), rect.right(), rect.bottom()))
-            if major_border_lines:
-                p.setPen(QPen(MINIMAP_MAJOR_BORDER, 1))
-                p.drawLines(major_border_lines)
+                border = QColor(str(marker.get("color", MINIMAP_MAJOR_BORDER.name())))
+                p.setPen(QPen(border, 1))
+                rounded = QRectF(rect.adjusted(0, 0, -1, -1))
+                radius = max(2.0, min(4.0, rounded.height() / 2.4))
+                p.drawRoundedRect(rounded, radius, radius)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         markers = analysis_markers_for_widget(
             self,

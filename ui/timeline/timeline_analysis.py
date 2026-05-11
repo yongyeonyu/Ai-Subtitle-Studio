@@ -158,6 +158,14 @@ def roughcut_major_markers(result: Any) -> list[dict]:
             return segment.get(name, default)
         return getattr(segment, name, default)
 
+    def _placeholder_title(segment: Any, title: str) -> bool:
+        return bool(
+            _field(segment, "is_topicless_placeholder", False)
+            or _field(segment, "is_cut_boundary_placeholder", False)
+            or str(_field(segment, "story_role", "") or "") == "topicless_placeholder"
+            or title == "주제없음"
+        )
+
     for index, segment in enumerate(segments):
         start = _as_float(_field(segment, "start", None))
         end = _as_float(_field(segment, "end", None))
@@ -166,21 +174,27 @@ def roughcut_major_markers(result: Any) -> list[dict]:
         major_id = str(_field(segment, "major_id", "") or _field(segment, "segment_id", "") or chr(65 + (index % 26)))
         title = str(_field(segment, "title", "") or "")
         status = str(_field(segment, "status", "") or "provisional")
-        # Middle-category blocks are a visual grouping aid only. Keep the
-        # underlying roughcut/cut-boundary data intact, but render the lane in a
-        # neutral white style so it does not compete with subtitle quality colors.
-        color = "#FFFFFF"
+        explicit_color = str(_field(segment, "border_color", "") or _field(segment, "color", "") or "").strip()
+        color = explicit_color or roughcut_major_color(major_id, index)
+        explicit_display = str(
+            _field(segment, "display_title", "")
+            or _field(segment, "display_name", "")
+            or _field(segment, "label", "")
+            or ""
+        ).strip()
+        display_label = explicit_display or (major_id if _placeholder_title(segment, title) or not title else f"{major_id} - {title}")
         markers.append(
             {
                 "start": start,
                 "end": end,
                 "kind": "roughcut_major",
                 "label": major_id,
+                "display_label": display_label,
                 "title": title,
                 "status": status,
                 "color": color,
                 "priority": 100,
-                "alpha": 72 if status == "confirmed" else 42,
+                "alpha": 255,
             }
         )
     return markers

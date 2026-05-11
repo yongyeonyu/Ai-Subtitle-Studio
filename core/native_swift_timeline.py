@@ -37,6 +37,18 @@ def _vad_payload(vad_segments: list | tuple | None) -> str:
     return json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
 
 
+def _boundary_time_value(item) -> float:
+    try:
+        if isinstance(item, dict):
+            return float(
+                item.get("timeline_sec", item.get("time", item.get("start", item.get("timeline_start", 0.0))))
+                or 0.0
+            )
+        return float(item or 0.0)
+    except Exception:
+        return 0.0
+
+
 def build_waveform_columns_via_swift(
     waveform: np.ndarray,
     *,
@@ -371,8 +383,8 @@ def apply_subtitle_magnet_via_swift(
     payload: dict[str, Any] = {
         "segments": rows,
         "thresholdSec": float(threshold_sec or 0.0),
-        "boundaryTimes": [float(value or 0.0) for value in list(boundary_times or [])],
-        "provisionalBoundaries": [float(value or 0.0) for value in list(provisional_boundaries or [])],
+        "boundaryTimes": [_boundary_time_value(value) for value in list(boundary_times or [])],
+        "provisionalBoundaries": [_boundary_time_value(value) for value in list(provisional_boundaries or [])],
         "vadSegments": [
             {
                 "start": float(item.get("start", 0.0) or 0.0),
@@ -430,7 +442,7 @@ def capture_undo_snapshot_via_swift(
         ],
         "cursorLine": int(cursor_line or 0),
         "activeClipIndex": int(active_clip_idx or 0),
-        "projectBoundaryTimes": [float(value or 0.0) for value in list(project_boundary_times or [])],
+        "projectBoundaryTimes": [_boundary_time_value(value) for value in list(project_boundary_times or [])],
     }
     decoded = _request_worker("undo_snapshot", payload)
     if decoded is not None:
@@ -655,8 +667,8 @@ def build_subtitle_drag_snap_base_via_swift(
             for item in list(voice_activity_segments or [])
             if isinstance(item, dict)
         ],
-        "boundaryTimes": [float(value or 0.0) for value in list(boundary_times or [])],
-        "scanBoundaryTimes": [float(value or 0.0) for value in list(scan_boundary_times or [])],
+        "boundaryTimes": [_boundary_time_value(value) for value in list(boundary_times or [])],
+        "scanBoundaryTimes": [_boundary_time_value(value) for value in list(scan_boundary_times or [])],
         "userGuides": [float(value or 0.0) for value in list(user_guides or [])],
         "roughcutRanges": [
             {

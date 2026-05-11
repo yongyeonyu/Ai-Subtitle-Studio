@@ -8,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
 
 from ui.editor.editor_widget import EditorWidget
+from ui.editor.editor_save_manager import EditorSaveManagerMixin
 from ui.editor.editor_pipeline import EditorPipelineMixin
 from ui.main.main_window import MainWindow
 
@@ -18,8 +19,31 @@ class _AutoSaveEditor:
     _on_auto_save = EditorWidget._on_auto_save
 
 
+class _SaveBoundaryEditor(EditorSaveManagerMixin):
+    def __init__(self):
+        self._auto_cut_boundary_scan_active = False
+        self._auto_cut_boundary_scan_lines = [{"timeline_sec": 12.0, "time": 12.0, "status": "provisional"}]
+        self.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(
+                scan_boundary_times=[{"timeline_sec": 12.0, "time": 12.0, "status": "provisional"}],
+            )
+        )
+        self._window = SimpleNamespace(
+            backend=SimpleNamespace(
+                _cut_boundary_prescan_completed=True,
+                _cut_boundary_prescan_thread=None,
+                _cut_boundary_follower_thread=None,
+            ),
+            backend_fast=None,
+        )
+
+    def window(self):
+        return self._window
+
+
 class _CompletionEditor(EditorPipelineMixin):
     def __init__(self):
+        self._segment_state = [{"start": 0.0, "end": 1.0, "text": "ok"}]
         self.sm = SimpleNamespace(
             complete_ai=Mock(),
             complete_auto_mode=Mock(),
@@ -28,7 +52,11 @@ class _CompletionEditor(EditorPipelineMixin):
         self._clear_processing_indicators = Mock()
         self._post_completion_sync = Mock()
         self._on_save = Mock(return_value=True)
-        self._get_current_segments = Mock(return_value=[{"start": 0.0, "end": 1.0, "text": "ok"}])
+        self._get_current_segments = Mock(side_effect=lambda: list(self._segment_state))
+        self.append_segments = Mock(side_effect=self._append_segments_impl)
+        self._set_auto_cut_boundary_scan_active = Mock()
+        self._set_auto_cut_boundary_scan_lines = Mock()
+        self._refresh_cut_boundary_placeholder_from_project = Mock()
         self.settings = {}
         self.is_auto_start = False
         self._segment_queue = []
@@ -37,7 +65,18 @@ class _CompletionEditor(EditorPipelineMixin):
             sync_menu_from_editor=Mock(),
             _refresh_saved_status_label=Mock(),
             _start_post_completion_idle_timer=Mock(),
+            backend=SimpleNamespace(
+                _last_generation_final_segments=[],
+                _last_generation_final_media_path="",
+                _cut_boundary_prescan_thread=None,
+                _cut_boundary_follower_thread=None,
+            ),
+            backend_fast=None,
         )
+        self.media_path = "/tmp/test.mp4"
+
+    def _append_segments_impl(self, segments):
+        self._segment_state = [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
 
     def window(self):
         return self._window
@@ -191,6 +230,49 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
 
         editor._on_save.assert_not_called()
         single_shot.assert_called_once()
+
+    def test_backend_generation_finalizer_recovers_missing_segments_from_backend_backup(self):
+        editor = _CompletionEditor()
+        editor._segment_state = []
+        editor._window.backend._last_generation_final_media_path = editor.media_path
+        editor._window.backend._last_generation_final_segments = [
+            {"start": 0.0, "end": 1.0, "text": "복구된 자막"},
+        ]
+
+        with patch("ui.editor.editor_pipeline.QTimer.singleShot", side_effect=lambda _delay, callback: callback()):
+            editor._finalize_generation_from_backend(reason="test")
+
+        editor.append_segments.assert_called_once()
+        editor.sm.complete_ai.assert_called_once()
+        editor._on_save.assert_called_once_with(skip_auto_next=True)
+        self.assertTrue(editor._process_completed_finalized)
+        self.assertEqual(editor._segment_state[0]["text"], "복구된 자막")
+
+    def test_set_process_completed_clears_stale_cut_boundary_preview_when_backend_idle(self):
+        editor = _CompletionEditor()
+
+        with patch("ui.editor.editor_pipeline.QTimer.singleShot", side_effect=lambda _delay, callback: callback()):
+            editor._set_process_completed()
+
+        editor._set_auto_cut_boundary_scan_active.assert_called_with(False)
+        editor._set_auto_cut_boundary_scan_lines.assert_called_with([])
+        editor._refresh_cut_boundary_placeholder_from_project.assert_called_once()
+
+    def test_project_save_suppresses_stale_provisional_boundaries_after_scan_completed(self):
+        editor = _SaveBoundaryEditor()
+
+        rows = editor._project_provisional_cut_boundaries_for_save()
+
+        self.assertEqual(rows, [])
+
+    def test_project_save_keeps_provisional_boundaries_while_scan_is_active(self):
+        editor = _SaveBoundaryEditor()
+        editor._auto_cut_boundary_scan_active = True
+
+        rows = editor._project_provisional_cut_boundaries_for_save()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["timeline_sec"], 12.0)
 
 
 if __name__ == "__main__":

@@ -160,55 +160,29 @@ def install_topicless_segment_helpers(PipelineHelpersMixin):
         }
 
 
-    def _patched_build_cut_boundary_topicless_rows(self, detected, *, files=None, done: bool = False) -> list[dict]:
-        """
-        컷 경계 기반 회색 주제없음 중분류 rows 생성.
+    def _patched_build_cut_boundary_topicless_rows(
+        self,
+        detected,
+        *,
+        files=None,
+        done: bool = False,
+        prefer_all_frames: bool = False,
+    ) -> list[dict]:
+        from core.cut_boundary_native_plan import build_middle_segments_for_stage
 
-        컷 경계 체크 ON이면:
-        - detected가 비어도 전체 A 주제없음 생성
-        - detected가 늘어나면 frame 기준으로 A/B/C split
-        """
-        from core.frame_time import sec_to_frame
-
-        fps = _pipeline_topicless_fps_from_detected(self, detected, files=files)
-
-        duration = self._cut_boundary_placeholder_duration(files)
-        duration_frame = 0
+        duration = 0.0
         try:
-            if duration > 0.0:
-                duration_frame = sec_to_frame(float(duration), fps)
+            duration = float(self._cut_boundary_placeholder_duration(files) or 0.0)
         except Exception:
-            duration_frame = 0
+            duration = 0.0
 
-        cut_frames = []
-        for row in list(detected or []):
-            frame = _pipeline_topicless_frame_from_row(row, fps)
-            if frame is not None and frame > 0:
-                cut_frames.append(int(frame))
-
-        cut_frames = sorted(set(cut_frames))
-
-        # 컷이 아직 없어도 전체 A 생성
-        if not cut_frames:
-            if duration_frame > 0:
-                return [_pipeline_topicless_row(1, 0, duration_frame, fps)]
-            return []
-
-        boundary_frames = [0] + cut_frames
-
-        # duration을 알면 마지막 컷~영상끝 구간도 항상 생성
-        if duration_frame > boundary_frames[-1]:
-            boundary_frames.append(duration_frame)
-
-        rows = []
-        for i in range(len(boundary_frames) - 1):
-            start_frame = int(boundary_frames[i])
-            end_frame = int(boundary_frames[i + 1])
-            if end_frame <= start_frame:
-                continue
-            rows.append(_pipeline_topicless_row(i + 1, start_frame, end_frame, fps))
-
-        return rows
+        return build_middle_segments_for_stage(
+            [dict(row) for row in list(detected or []) if isinstance(row, dict)],
+            media_duration=max(0.0, duration),
+            files=list(files or []),
+            done=bool(done),
+            prefer_all_boundary_frames=bool(prefer_all_frames),
+        )
 
 
     PipelineHelpersMixin._build_cut_boundary_topicless_rows = _patched_build_cut_boundary_topicless_rows
@@ -284,6 +258,8 @@ def install_topicless_segment_helpers(PipelineHelpersMixin):
         *,
         files=None,
         done: bool = False,
+        middle_source_rows=None,
+        prefer_all_frames: bool = False,
     ):
         rows = _pipeline_original_force_cut_boundary_topicless_segments_to_project(
             self,
@@ -291,6 +267,8 @@ def install_topicless_segment_helpers(PipelineHelpersMixin):
             detected,
             files=files,
             done=done,
+            middle_source_rows=middle_source_rows,
+            prefer_all_frames=bool(prefer_all_frames),
         )
 
         try:
@@ -491,63 +469,29 @@ def install_topicless_segment_helpers(PipelineHelpersMixin):
         }
 
 
-    def _patched_build_cut_boundary_topicless_rows(self, detected, *, files=None, done: bool = False) -> list[dict]:
-        from core.cut_boundary_middle import coalesce_topicless_middle_boundary_frames
-        from core.frame_time import sec_to_frame
+    def _patched_build_cut_boundary_topicless_rows(
+        self,
+        detected,
+        *,
+        files=None,
+        done: bool = False,
+        prefer_all_frames: bool = False,
+    ) -> list[dict]:
+        from core.cut_boundary_native_plan import build_middle_segments_for_stage
 
-        fps = _pipeline_topicless_fps_from_detected(self, detected, files=files)
-
-        duration = self._cut_boundary_placeholder_duration(files)
-        duration_frame = 0
+        duration = 0.0
         try:
-            if duration > 0.0:
-                duration_frame = sec_to_frame(float(duration), fps)
+            duration = float(self._cut_boundary_placeholder_duration(files) or 0.0)
         except Exception:
-            duration_frame = 0
+            duration = 0.0
 
-        cut_rows = []
-        for row in list(detected or []):
-            frame = _pipeline_topicless_frame_from_row(row, fps)
-            if frame is not None and frame > 0:
-                if isinstance(row, dict):
-                    cut_rows.append(dict(row))
-                else:
-                    cut_rows.append({"timeline_frame": int(frame), "frame": int(frame), "fps": fps})
-
-        try:
-            from core.settings import load_settings
-
-            settings = dict(load_settings() or {})
-        except Exception:
-            settings = {}
-
-        cut_frames = coalesce_topicless_middle_boundary_frames(
-            cut_rows,
-            fps=fps,
-            duration_frame=duration_frame,
-            settings=settings,
+        return build_middle_segments_for_stage(
+            [dict(row) for row in list(detected or []) if isinstance(row, dict)],
+            media_duration=max(0.0, duration),
+            files=list(files or []),
+            done=bool(done),
+            prefer_all_boundary_frames=bool(prefer_all_frames),
         )
-
-        # 컷이 없어도 전체 A 생성
-        if not cut_frames:
-            if duration_frame > 0:
-                rows = [_pipeline_topicless_row(1, 0, duration_frame, fps)]
-            else:
-                rows = []
-        else:
-            boundaries = [0] + cut_frames
-            if duration_frame > boundaries[-1]:
-                boundaries.append(duration_frame)
-
-            rows = []
-            for i in range(len(boundaries) - 1):
-                start_frame = int(boundaries[i])
-                end_frame = int(boundaries[i + 1])
-                if end_frame <= start_frame:
-                    continue
-                rows.append(_pipeline_topicless_row(i + 1, start_frame, end_frame, fps))
-
-        return rows
 
 
     PipelineHelpersMixin._build_cut_boundary_topicless_rows = _patched_build_cut_boundary_topicless_rows

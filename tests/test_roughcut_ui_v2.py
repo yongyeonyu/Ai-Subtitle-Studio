@@ -131,6 +131,7 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertFalse(hasattr(dialog, "spin_roughcut_lookahead_rows"))
             self.assertNotIn("google_api_key", collected)
             self.assertNotIn("openai_api_key", collected)
+            self.assertNotIn("huggingface_token", collected)
         finally:
             dialog.close()
 

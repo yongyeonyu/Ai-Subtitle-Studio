@@ -885,6 +885,7 @@ class MainWindow(
             backend._reuse_existing_multiclip_subtitles = False
             backend._reuse_clip_indices = set()
             backend._force_no_reuse_once = True
+            backend._force_cut_boundary_rescan_once = True
             backend._speaker_map = []
             backend.pipeline_start_time = time.time()
             backend.is_first_start = False
@@ -967,6 +968,10 @@ class MainWindow(
                 write_project_file(project_path, project)
             except Exception as exc:
                 get_logger().log(f"⚠️ 재시작 컷 경계 설정 갱신 실패: {exc}")
+        try:
+            backend._force_cut_boundary_rescan_once = True
+        except Exception:
+            pass
         try:
             scan(project_path, files)
         except Exception as exc:

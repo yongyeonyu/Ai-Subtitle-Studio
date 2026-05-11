@@ -34,6 +34,7 @@ from core.audio.stt_quality_presets import (
 )
 from core.accuracy_policy import apply_accuracy_first_runtime_settings
 from core.mode_policy import mode_to_stt_quality, selected_mode_from_settings
+from core.settings_profiles import sanitize_persisted_settings
 from core.settings_simplifier import (
     apply_simple_operation_mode,
     normalize_simple_operation_mode,
@@ -1240,9 +1241,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             "nas_stt_quality_preset": auto_start_mode,
         })
         save_path_settings(path_settings)
-        res.pop("google_api_key", None)
-        res.pop("openai_api_key", None)
-        return res
+        return sanitize_persisted_settings(res)
 
     def _notify_runtime_settings_applied(self):
         parent = self.parent()

@@ -16,6 +16,30 @@ def _compact(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
+def _normalize_tags(value: Any, *, limit: int = 8) -> tuple[str, ...]:
+    raw_items: list[str]
+    if isinstance(value, str):
+        raw_items = re.split(r"[,/|#\n\r]+", value)
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = [str(item) for item in value]
+    else:
+        raw_items = []
+    seen: set[str] = set()
+    tags: list[str] = []
+    for raw in raw_items:
+        tag = _compact(raw).strip("#- ")
+        if not tag:
+            continue
+        key = tag.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        tags.append(tag[:32])
+        if len(tags) >= max(1, int(limit or 8)):
+            break
+    return tuple(tags)
+
+
 _TOPIC_PREFIX_RE = re.compile(
     r"^(?:주제|중분류|중분류\s*주제|토픽|topic|title|제목|라벨|label)\s*[:：\-]\s*",
     re.IGNORECASE,
@@ -236,6 +260,9 @@ def _topic_payload(segments: list[RoughCutSegment], subtitles: list[SubtitleSegm
             "task_instruction": (
                 "최종 확정된 각 중분류의 모든 subtitle_rows를 읽고 중분류 주제(topic_level=middle_category)를 작성한다. "
                 "topic은 첫 자막/마지막 자막/말문을 복사한 문장이 아니라, 묶음 전체를 대표하는 10~22자 한국어 명사구여야 한다. "
+                "각 중분류마다 tags도 반드시 함께 작성한다. "
+                "tags는 나중에 프로젝트 파일과 러프컷 편집기에서 바로 사용할 핵심 키워드 목록이며, 2~6개의 짧은 명사형 단어/구로 만든다. "
+                "예: topic='차량 실내 리뷰'이면 tags=['시트', '기능', '디자인 특징', '수납공간']처럼 자막 근거가 분명한 핵심어만 넣는다. "
                 "candidate_topic_hint와 keywords는 참고만 하되, 자막 전체 근거가 더 정확하면 더 구체적인 중분류 주제로 바꾼다. "
                 "금지: '내용', '대화', '상황', '설명', '영상', '리뷰'처럼 너무 넓은 단어만 쓰기. "
                 "좋은 예: '고속 주행 연비 평가', '주행 보조 기능 확인', '실내 편의 사양 점검', '외관 디자인 특징', '촬영 장비 세팅'."
@@ -266,9 +293,31 @@ def _topic_map_from_llm(data: dict[str, Any], rows_by_major: dict[str, list[Subt
         topics[major_id] = {
             "topic": topic,
             "summary": _compact(row.get("summary") or "")[:240],
-            "tags": tuple(str(tag).strip() for tag in list(row.get("tags") or []) if str(tag).strip())[:8]
-            if isinstance(row.get("tags"), list)
-            else (),
+            "tags": _normalize_tags(row.get("tags")),
+        }
+    return topics
+
+
+def _heuristic_topic_map(
+    segments: list[RoughCutSegment],
+    rows_by_major: dict[str, list[SubtitleSegment]],
+) -> dict[str, dict[str, Any]]:
+    topics: dict[str, dict[str, Any]] = {}
+    for segment in list(segments or []):
+        major_id = _major_id(segment)
+        if not major_id:
+            continue
+        rows = rows_by_major.get(major_id, [])
+        if not rows:
+            continue
+        fallback = segment.title or segment.summary or segment.llm_summary or major_id
+        topic = _topic_from_subtitles(rows, fallback=fallback)
+        if not topic:
+            continue
+        topics[major_id] = {
+            "topic": topic,
+            "summary": _representative_excerpt(rows)[:240],
+            "tags": tuple(extract_keywords(_compact(" ".join(row.text for row in rows if row.text)), top_k=4)),
         }
     return topics
 
@@ -295,9 +344,9 @@ def apply_major_topic_labels(
         settings=settings,
         llm_client=llm_client,
     )
-    if not result.ok:
-        return tuple(segment_items)
-    topic_map = _topic_map_from_llm(result.data, rows_by_major)
+    topic_map = _topic_map_from_llm(result.data, rows_by_major) if result.ok else {}
+    if not topic_map:
+        topic_map = _heuristic_topic_map(segment_items, rows_by_major)
     if not topic_map:
         return tuple(segment_items)
 

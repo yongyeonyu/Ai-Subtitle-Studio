@@ -192,6 +192,11 @@ class SinglePipelineMixin:
         if getattr(self, "_individual_queue_mode", False):
             self._reset_backend_individual_clip_context(invalidate_prefetch=True)
             self._reset_ui_individual_clip_context(clear_project=True)
+        try:
+            self._last_generation_final_media_path = str(target_file or "")
+            self._last_generation_final_segments = []
+        except Exception:
+            pass
 
         # ── STEP 0: 백업 ──
         self._backup_existing(target_file)
@@ -888,6 +893,13 @@ class SinglePipelineMixin:
             t_trans.join()
             t_preview.join()
             t_opt.join()
+            try:
+                self._last_generation_final_media_path = str(target_file or "")
+                self._last_generation_final_segments = [
+                    dict(seg) for seg in list(auto_collected_segs or []) if isinstance(seg, dict)
+                ]
+            except Exception:
+                pass
             self._subtitle_generation_memory_checkpoint(
                 memory_guard,
                 "stt_optimizer_threads_done",

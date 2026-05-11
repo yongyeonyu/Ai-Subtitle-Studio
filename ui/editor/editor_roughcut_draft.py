@@ -14,6 +14,167 @@ from core.runtime.logger import get_logger
 
 
 class EditorRoughcutDraftMixin:
+    def _draft_reference_major_segments(self) -> list[dict]:
+        try:
+            window_owner = self.window()
+        except Exception:
+            window_owner = None
+        preferred_rows = []
+        fallback_rows = []
+        for owner in (self, window_owner):
+            if owner is None:
+                continue
+            for attr in (
+                "_cut_boundary_topicless_middle_segments",
+                "cut_boundary_topicless_middle_segments",
+            ):
+                raw = getattr(owner, attr, None)
+                if isinstance(raw, list) and raw:
+                    preferred_rows = [dict(row) for row in raw if isinstance(row, dict)]
+                    if preferred_rows:
+                        return preferred_rows
+            for attr in (
+                "_middle_segments",
+                "middle_segments",
+                "_roughcut_segments",
+                "roughcut_segments",
+            ):
+                raw = getattr(owner, attr, None)
+                if isinstance(raw, list) and raw:
+                    fallback_rows = [dict(row) for row in raw if isinstance(row, dict)]
+                    if fallback_rows:
+                        break
+        try:
+            main_w = self.window()
+            project_path = str(getattr(main_w, "_current_project_path", "") or "")
+        except Exception:
+            project_path = ""
+        if not project_path:
+            return []
+        try:
+            from core.project.project_io import read_project_file
+
+            project = read_project_file(project_path)
+            analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
+            for key in (
+                "cut_boundary_topicless_middle_segments",
+                "topicless_middle_segments",
+                "roughcut_topicless_segments",
+            ):
+                rows = analysis.get(key, [])
+                if isinstance(rows, list) and rows:
+                    return [dict(row) for row in rows if isinstance(row, dict)]
+            rows = analysis.get("middle_segments", [])
+            if isinstance(rows, list) and rows:
+                return [dict(row) for row in rows if isinstance(row, dict)]
+            rows = project.get("middle_segments", [])
+            if isinstance(rows, list) and rows:
+                return [dict(row) for row in rows if isinstance(row, dict)]
+        except Exception:
+            pass
+        if fallback_rows:
+            return fallback_rows
+        return []
+
+    def _draft_reviewed_cut_boundaries(self) -> list[dict]:
+        try:
+            window_owner = self.window()
+        except Exception:
+            window_owner = None
+        for owner in (self, window_owner):
+            if owner is None:
+                continue
+            for attr in (
+                "_cut_boundary_reviewed_rows",
+                "cut_boundary_reviewed_rows",
+            ):
+                raw = getattr(owner, attr, None)
+                if isinstance(raw, list) and raw:
+                    rows = [dict(row) for row in raw if isinstance(row, dict)]
+                    if rows:
+                        return rows
+        try:
+            main_w = self.window()
+            project_path = str(getattr(main_w, "_current_project_path", "") or "")
+        except Exception:
+            project_path = ""
+        if not project_path or not os.path.exists(project_path):
+            return [dict(row) for row in list(getattr(self, "_auto_cut_boundary_scan_lines", []) or []) if isinstance(row, dict)]
+        try:
+            from core.project.project_io import read_project_file
+
+            project = read_project_file(project_path)
+            analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
+            rows = list(
+                analysis.get("cut_boundary_reviewed_rows")
+                or analysis.get("cut_boundaries")
+                or analysis.get("cut_boundary_provisional_boundaries")
+                or []
+            )
+            return [dict(row) for row in rows if isinstance(row, dict)]
+        except Exception:
+            rows = list(getattr(self, "_cut_boundary_provisional_rows", []) or [])
+            if not rows:
+                rows = list(getattr(self, "_auto_cut_boundary_scan_lines", []) or [])
+            return [dict(row) for row in rows if isinstance(row, dict)]
+
+    def _apply_roughcut_middle_segments_to_ui(self, rows: list[dict], result) -> None:
+        rows = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+        try:
+            main_w = self.window()
+        except Exception:
+            main_w = None
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        global_canvas = getattr(timeline, "global_canvas", None) if timeline is not None else None
+        row_attrs = (
+            "_middle_segments",
+            "middle_segments",
+            "_roughcut_segments",
+            "roughcut_segments",
+            "_chapter_segments",
+            "chapter_segments",
+            "_roughcut_draft_segments",
+        )
+        result_attrs = ("_roughcut_result", "roughcut_result", "_roughcut_draft_result")
+        for obj in (self, main_w, timeline, canvas, global_canvas):
+            if obj is None:
+                continue
+            for attr in row_attrs:
+                try:
+                    setattr(obj, attr, list(rows))
+                except Exception:
+                    pass
+            for attr in result_attrs:
+                try:
+                    setattr(obj, attr, result)
+                except Exception:
+                    pass
+            try:
+                invalidator = getattr(obj, "_invalidate_marker_caches", None)
+                if callable(invalidator):
+                    invalidator()
+                static_invalidator = getattr(obj, "_invalidate_static_cache", None)
+                if callable(static_invalidator):
+                    static_invalidator()
+                if hasattr(obj, "_roughcut_major_cache_key"):
+                    obj._roughcut_major_cache_key = None
+                    obj._roughcut_major_cache = []
+                if hasattr(obj, "_analysis_markers_cache_key"):
+                    obj._analysis_markers_cache_key = None
+                if hasattr(obj, "_visible_analysis_markers_cache_key"):
+                    obj._visible_analysis_markers_cache_key = None
+                if hasattr(obj, "_paint_index_cache"):
+                    obj._paint_index_cache.pop("roughcut_major_markers", None)
+                if hasattr(obj, "_render_epoch"):
+                    obj._render_epoch = int(getattr(obj, "_render_epoch", 0) or 0) + 1
+            except Exception:
+                pass
+            try:
+                obj.update()
+            except Exception:
+                pass
+
     def _post_generation_local_llm_release_requested(self, settings: dict, segments: list[dict]) -> bool:
         if not bool(getattr(self, "_post_generation_models_release_requested", False)) and not bool(
             getattr(self, "_post_generation_models_released", False)
@@ -171,6 +332,8 @@ class EditorRoughcutDraftMixin:
         except Exception:
             pass
         source_media = f"멀티클립 {len(media_files)}개" if len(media_files) > 1 else os.path.basename(media_path or "")
+        reference_major_segments = self._draft_reference_major_segments()
+        reviewed_cut_boundaries = self._draft_reviewed_cut_boundaries()
         self._roughcut_draft_generation += 1
         generation = int(self._roughcut_draft_generation)
 
@@ -183,6 +346,7 @@ class EditorRoughcutDraftMixin:
                 source_path=media_path,
                 settings=settings,
                 llm_payload=llm_payload,
+                reference_major_segments=reference_major_segments,
             )
             payload = build_editor_roughcut_candidate_payload(
                 result,
@@ -270,6 +434,8 @@ class EditorRoughcutDraftMixin:
                     settings=settings,
                     cut_boundaries=confirmed_cut_boundaries,
                     provisional_cut_boundaries=provisional_cut_boundaries,
+                    reference_major_segments=reference_major_segments,
+                    reviewed_cut_boundaries=reviewed_cut_boundaries,
                 )
                 if llm_payload is None:
                     self._roughcut_llm_cooldown_until = time.time() + 10.0
@@ -319,6 +485,7 @@ class EditorRoughcutDraftMixin:
                     source_path=media_path,
                     settings=settings,
                     llm_payload=None,
+                    reference_major_segments=self._draft_reference_major_segments(),
                 )
                 candidate = build_editor_roughcut_candidate_payload(
                     result,
@@ -372,11 +539,13 @@ class EditorRoughcutDraftMixin:
             save_project(
                 project_path,
                 segments=segments,
+                middle_segments=list(candidate.get("segments", []) or []),
                 user_settings=dict(getattr(self, "settings", {}) or {}),
                 roughcut_state=roughcut_state,
                 active_work_mode=EDITOR_MODE,
                 persist_analysis_artifacts=False,
             )
+            self._apply_roughcut_middle_segments_to_ui(list(candidate.get("segments", []) or []), result)
             setattr(main_w, "_editor_roughcut_result", result)
             roughcut = getattr(main_w, "_roughcut_widget", None)
             if roughcut is not None:

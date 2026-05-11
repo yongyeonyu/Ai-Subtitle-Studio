@@ -116,6 +116,48 @@ class NativeCutBoundaryTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["mean_fy"], 0.0, places=6)
         self.assertAlmostEqual(metrics["coherence"], 1.0, places=6)
 
+    def test_native_gray_rollback_search_refines_to_adjacent_peak(self):
+        previous = os.environ.get("AI_SUBTITLE_NATIVE_CUT_BOUNDARY")
+
+        def thumb(value: int):
+            return tuple(bytes([value]) * 64 for _ in range(4))
+
+        try:
+            os.environ["AI_SUBTITLE_NATIVE_CUT_BOUNDARY"] = "1"
+            if not native.native_cut_boundary_enabled():
+                self.skipTest("native cut-boundary extension unavailable")
+            rollback = native.gray_rollback_search(
+                [
+                    thumb(0),
+                    thumb(0),
+                    thumb(0),
+                    thumb(96),
+                    thumb(96),
+                    thumb(96),
+                    thumb(96),
+                ],
+                start_frame=0,
+                hi_frame=4,
+                stages=[4, 3],
+                region_threshold=10.0,
+                target_samples=64,
+                gray_required_regions=2,
+                gray_1f_threshold=20.0,
+                gray_2f_threshold=24.0,
+                gray_window_required=2,
+                gray_window_threshold=40.0,
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("AI_SUBTITLE_NATIVE_CUT_BOUNDARY", None)
+            else:
+                os.environ["AI_SUBTITLE_NATIVE_CUT_BOUNDARY"] = previous
+
+        self.assertIsNotNone(rollback)
+        self.assertEqual(int(rollback["best_adj"]["frame"]), 2)
+        self.assertEqual(int(rollback["best_win"]["frame"]), 2)
+        self.assertGreaterEqual(float(rollback["best_win"]["score"]), 40.0)
+
     def test_waveform_peaks_f32le_matches_reference_downsample(self):
         import numpy as np
 

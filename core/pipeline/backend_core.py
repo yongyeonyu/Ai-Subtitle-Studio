@@ -250,7 +250,7 @@ class CoreBackend(PipelineHelpersMixin, SinglePipelineMixin, MulticlipPipelineMi
         get_logger().log(f"🚀 총 {len(self.files_to_process)}개 파일 처리 시작!")
         try:
             refresher = getattr(self.ui, "_poll_runtime_resource_coordinator", None)
-            if callable(refresher):
+            if callable(refresher) and threading.current_thread() is threading.main_thread():
                 refresher()
         except Exception:
             pass

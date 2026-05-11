@@ -11,6 +11,7 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Iterable
 
+from core.cut_boundary_audio import is_audio_gain_boundary
 from core.llm.openai_provider import is_codex_model, is_openai_model, resolve_openai_model
 from core.llm.secure_keys import get_api_key
 from core.project.project_context import segment_signature
@@ -41,7 +42,15 @@ EDITOR_ROUGHCUT_DRAFT_CANDIDATE_ID = "editor_post_generation_roughcut_draft"
 
 DEFAULT_EDITOR_ROUGHCUT_DRAFT_PROMPT = """너는 자막 생성이 완료된 뒤 전체 자막을 기반으로 러프컷 초안을 만드는 편집 보조자다.
 완성된 자막 전체를 먼저 훑어보고 영상의 큰 흐름을 파악한 뒤 중분류 A/B/C/D를 나눈다.
+반드시 다음 순서로 판단한다. 1. subtitle_rows 전체를 끝까지 읽고 전체 내용을 확인한다. 2. reference_major_segments로 전달된 임시 중분류 구간을 확인한다. 3. audio_boundary_hints와 reviewed_cut_boundaries를 참고해 음성 전환과 컷 변화를 다시 대조한다. 4. 그 결과를 바탕으로 최종 major_segments를 다시 출력한다.
+처음 만들어진 중분류 초안이나 컷 경계 기반 중분류는 참고 자료일 뿐이며, 전체 자막 흐름을 다시 읽은 뒤 필요하면 과감하게 합치거나 분리할 수 있다.
+최종 목표는 기존 중분류를 보존하는 것이 아니라 생성된 자막 전체를 이해하고 주제별 흐름에 맞는 가장 자연스러운 중분류를 다시 만드는 것이다.
+영상/음성 기반으로 먼저 만들어진 확정컷 중분류는 출발점일 뿐이며, 최종 중분류는 반드시 자막 내용과 서사 흐름을 기준으로 다시 확정한다.
+같은 주제로 이어지는 구간은 여러 확정컷을 하나의 중분류로 합칠 수 있고, 하나의 확정컷 안에서도 자막 주제가 분명히 갈라지면 둘 이상의 중분류로 다시 나눌 수 있다.
+전체 자막에 도입, 전개, 비교, 전환, 마무리처럼 여러 주제 흐름이 보이는데도 중분류를 하나만 반환하면 잘못된 결과다.
 중분류 경계는 개별 자막 문장이 아니라 화면 전환, 주제 전환, 장소 전환, 행동 단계 전환처럼 시청자가 장면이 바뀌었다고 느끼는 지점을 우선한다.
+음향 환경이 바뀌는 전환점도 강한 중분류 후보다. 예를 들어 실외에서 실내로 들어오거나, 차량/매장/스튜디오처럼 공간의 울림과 배경소음이 확실히 달라지면 같은 화제가 이어져도 새 중분류를 우선 검토한다.
+다만 음향 경계로 먼저 크게 나뉜 구간 안에서도 자막 주제가 더 세분되면 그 안에서 다시 둘 이상으로 나눌 수 있다.
 단순한 말 끊김, 짧은 침묵, 같은 주제 안의 문장 변화, 단어 반복, 말투 변화만으로는 새 중분류를 만들지 않는다.
 경계가 애매하면 자막 개수를 늘려도 하나의 중분류로 유지하고, 명확한 전환점이 있을 때만 나눈다.
 중분류만 만든다.
@@ -200,6 +209,8 @@ def build_editor_roughcut_draft_prompt(
     *,
     settings: dict[str, Any] | None = None,
     chunk_scope: dict[str, Any] | None = None,
+    reference_major_segments: list[dict[str, Any]] | None = None,
+    reviewed_cut_boundaries: list[dict[str, Any]] | None = None,
 ) -> str:
     rows = _subtitle_prompt_rows(segments)
     policy = resolve_roughcut_context_policy(settings or {}, subtitle_rows=rows)
@@ -212,21 +223,57 @@ def build_editor_roughcut_draft_prompt(
             "\nchunk_scope.core_start_subtitle_id부터 core_end_subtitle_id까지만 확정 경계 대상으로 본다."
             "\n앞뒤 문맥은 참고용일 뿐이며 core 범위를 벗어나는 새 구간은 만들지 않는다."
         )
+    reference_rows = _reference_major_segments_payload(reference_major_segments)
+    if reference_rows:
+        instructions += (
+            "\nreference_major_segments는 영상/음성 컷 경계와 후발대 검토를 거쳐 먼저 만들어진 임시 중분류 초안이다."
+            "\nreference_major_segments는 고정 답안이 아니라 참고 초안이며, 전체 subtitle_rows를 다시 읽은 뒤 필요하면 여러 구간을 합치거나 하나를 둘 이상으로 분리할 수 있다."
+            "\n최종 판단 기준은 reference가 아니라 전체 subtitle_rows에서 드러나는 실제 주제 흐름과 영상 전개다."
+            "\nreference_major_segments가 여러 구간으로 나뉘어 있다면, 최종 결과는 그 구간 수를 무조건 유지할 필요는 없지만 자막상 여러 주제 흐름이 보이는데 한 개의 거대 중분류로 붕괴되어서는 안 된다."
+            "\n각 reference 구간의 주제와 경계를 다시 확인하고 더 정확한 중분류로 다듬는다."
+            "\n영상/음성 기반 reference가 잘게 잡힌 경우에는 같은 주제로 자연스럽게 이어지는 구간을 합칠 수 있다."
+            "\n반대로 reference 한 구간 안에서도 자막 주제가 뚜렷하게 갈라지면 둘 이상으로 다시 분리해야 한다."
+            "\n특히 실외→실내, 차량→실내, 조용한 공간→시끄러운 공간처럼 음향 환경이 확실히 바뀌는 reference 경계는 강한 중분류 후보로 보고 먼저 살핀다."
+            "\n그 음향 경계로 먼저 구간을 나눈 뒤에도, 각 구간 내부 자막 주제가 더 갈라지면 추가로 다시 분리할 수 있다."
+            "\n중분류가 너무 크게 뭉쳐서 한 덩어리 설명문처럼 보이면 잘못된 결과다. 도입, 비교, 전환, 결론처럼 흐름이 바뀌면 과감하게 나눈다."
+            "\n가능하면 기존 major_id A~Z 순서를 유지하되, title/summary는 실제 자막 주제에 맞게 적극적으로 고친다."
+            "\ntitle은 타임라인에 바로 표시될 중분류 주제명이므로, 자막 내용을 복붙하지 말고 10~22자 안팎의 짧은 한국어 주제명으로 작성한다."
+            "\ntags는 각 중분류의 핵심 키워드 2~6개를 짧은 명사형으로 작성한다."
+        )
+    reviewed_boundary_rows = _reviewed_cut_boundary_payload(reviewed_cut_boundaries)
+    audio_boundary_rows = _reviewed_cut_boundary_payload(reviewed_cut_boundaries, audio_only=True)
+    if audio_boundary_rows:
+        instructions += (
+            "\naudio_boundary_hints는 후발대가 검토한 음성 경계 후보이며, 실외↔실내나 차량↔실내처럼 음향 환경이 크게 바뀌는 구간을 우선 확인해야 한다."
+            "\naudio_boundary_hints 자체를 기계적으로 모두 채택하지는 말고, 전체 subtitle_rows를 읽은 뒤 실제 주제 전환과 함께 맞는지 확인한 후 중분류 외곽 경계로 사용할지 결정한다."
+            "\n같은 audio_boundary_hints 구간 안에서도 자막 주제가 더 갈라지면 다시 둘 이상으로 분리할 수 있다."
+        )
+    if reviewed_boundary_rows:
+        instructions += (
+            "\nreviewed_cut_boundaries는 후발대가 롤백 검토하며 다시 본 컷 경계 힌트다."
+            "\n중분류 시작과 끝은 reviewed_cut_boundaries와 audio_boundary_hints 근처를 우선 검토하되, 최종 확정은 전체 subtitle_rows에서 읽히는 실제 내용 흐름으로 결정한다."
+        )
     body = {
         "prompt_id": "editor_post_generation_roughcut_draft_v1",
         "language": "ko",
         "editor_instructions": instructions,
+        "workflow_steps": [
+            "subtitle_rows 전체를 먼저 끝까지 읽고 영상 전체 내용을 파악한다.",
+            "reference_major_segments로 전달된 임시 중분류 구간을 확인한다.",
+            "audio_boundary_hints와 reviewed_cut_boundaries를 참고해 음성 전환과 컷 전환 후보를 다시 본다.",
+            "임시 중분류를 참고하되 필요하면 합치거나 분리해서 최종 major_segments를 출력한다.",
+        ],
         "output_contract": {
             "json_only": True,
             "schema": {
                 "major_segments": [
                     {
                         "major_id": "A",
-                        "title": "중분류 제목",
+                        "title": "중분류 주제명",
                         "summary": "짧은 요약",
                         "start_subtitle_id": 0,
                         "end_subtitle_id": 4,
-                        "tags": ["선택 태그"],
+                        "tags": ["핵심 태그", "보조 태그"],
                         "confidence": 0.0,
                         "status": "provisional",
                     }
@@ -240,6 +287,12 @@ def build_editor_roughcut_draft_prompt(
             if key not in {"deep_summary"}
         },
     }
+    if reference_rows:
+        body["reference_major_segments"] = reference_rows
+    if reviewed_boundary_rows:
+        body["reviewed_cut_boundaries"] = reviewed_boundary_rows
+    if audio_boundary_rows:
+        body["audio_boundary_hints"] = audio_boundary_rows
     if isinstance(chunk_scope, dict):
         body["chunk_scope"] = {
             key: value
@@ -268,6 +321,8 @@ def run_editor_roughcut_llm_draft(
     timeout: int = 45,
     cut_boundaries: list[Any] | None = None,
     provisional_cut_boundaries: list[Any] | None = None,
+    reference_major_segments: list[dict[str, Any]] | None = None,
+    reviewed_cut_boundaries: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     settings = settings or {}
     rows = _subtitle_prompt_rows(segments)
@@ -285,7 +340,12 @@ def run_editor_roughcut_llm_draft(
             provisional_cut_boundaries=provisional_cut_boundaries,
         )
         if str(scope.get("mode") or "") == "single":
-            prompt = build_editor_roughcut_draft_prompt(segments, settings=settings)
+            prompt = build_editor_roughcut_draft_prompt(
+                segments,
+                settings=settings,
+                reference_major_segments=reference_major_segments,
+                reviewed_cut_boundaries=reviewed_cut_boundaries,
+            )
             return _call_editor_roughcut_json(provider, model, prompt, timeout=timeout)
 
         subtitles = _normalize_subtitles(segments)
@@ -306,6 +366,18 @@ def run_editor_roughcut_llm_draft(
                 prompt_segments,
                 settings=settings,
                 chunk_scope=chunk,
+                reference_major_segments=_reference_major_segments_payload(
+                    _reference_major_segments_for_timerange(
+                        reference_major_segments,
+                        start_sec=prompt_subtitles[0].start if prompt_subtitles else 0.0,
+                        end_sec=prompt_subtitles[-1].end if prompt_subtitles else 0.0,
+                    )
+                ),
+                reviewed_cut_boundaries=_reviewed_cut_boundaries_for_timerange(
+                    reviewed_cut_boundaries,
+                    start_sec=prompt_subtitles[0].start if prompt_subtitles else 0.0,
+                    end_sec=prompt_subtitles[-1].end if prompt_subtitles else 0.0,
+                ),
             )
             payload = None
             try:
@@ -366,6 +438,7 @@ def build_editor_roughcut_draft_result(
     source_path: str = "",
     settings: dict[str, Any] | None = None,
     llm_payload: dict[str, Any] | None = None,
+    reference_major_segments: list[dict[str, Any]] | None = None,
 ) -> RoughCutResult:
     settings = merge_roughcut_settings(settings or {})
     subtitles = _normalize_subtitles(subtitle_segments)
@@ -377,9 +450,21 @@ def build_editor_roughcut_draft_result(
         )
 
     duration = _draft_media_duration(media_duration, subtitles)
+    reference_groups = _major_groups_from_reference_segments(reference_major_segments, subtitles)
+    local_groups = _local_major_groups_from_subtitles(subtitles, settings=settings)
     groups = _major_groups_from_llm_payload(llm_payload, subtitles)
+    if _should_reject_overcollapsed_llm_groups(
+        groups,
+        subtitles,
+        media_duration=duration,
+        reference_groups=reference_groups,
+        local_groups=local_groups,
+    ):
+        groups = reference_groups if len(reference_groups) >= 2 else local_groups
     if not groups:
-        groups = _local_major_groups_from_subtitles(subtitles, settings=settings)
+        groups = reference_groups
+    if not groups:
+        groups = local_groups
     groups = _normalize_major_groups(
         groups,
         max_count=_editor_major_max_segment_count(settings),
@@ -651,6 +736,220 @@ def _subtitle_prompt_rows(segments: list[dict[str, Any]]) -> list[dict[str, Any]
     return rows
 
 
+def _reference_major_segments_payload(reference_major_segments: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
+    for idx, row in enumerate(list(reference_major_segments or []), start=1):
+        if not isinstance(row, dict):
+            continue
+        start = _float_or_none(row.get("start", row.get("timeline_start")))
+        end = _float_or_none(row.get("end", row.get("timeline_end")))
+        if start is None or end is None or end <= start:
+            continue
+        major_id = str(row.get("major_id") or row.get("segment_id") or row.get("id") or _major_code(idx - 1)).strip()
+        if not major_id:
+            major_id = _major_code(idx - 1)
+        payload.append(
+            {
+                "major_id": major_id,
+                "title": str(row.get("title") or row.get("display_title") or row.get("name") or f"중분류 {major_id}").strip(),
+                "summary": str(row.get("summary") or row.get("llm_summary") or "").strip()[:240],
+                "tags": [str(tag).strip() for tag in list(row.get("tags") or []) if str(tag).strip()][:8],
+                "start": round(float(start), 3),
+                "end": round(float(end), 3),
+                "status": str(row.get("status") or "provisional"),
+                "is_topicless_placeholder": bool(
+                    row.get("is_topicless_placeholder")
+                    or row.get("is_cut_boundary_placeholder")
+                    or str(row.get("story_role") or "") == "topicless_placeholder"
+                ),
+                "frame_range": dict(row.get("frame_range") or {}) if isinstance(row.get("frame_range"), dict) else {},
+            }
+        )
+    payload.sort(key=lambda item: (float(item.get("start", 0.0)), float(item.get("end", 0.0)), str(item.get("major_id") or "")))
+    return payload
+
+
+def _cut_boundary_time_from_row(row: dict[str, Any] | None) -> float | None:
+    if not isinstance(row, dict):
+        return None
+    return _float_or_none(
+        row.get(
+            "timeline_sec",
+            row.get(
+                "time",
+                row.get(
+                    "start",
+                    row.get("timeline_start"),
+                ),
+            ),
+        )
+    )
+
+
+def _cut_boundary_frame_from_row(row: dict[str, Any] | None) -> int | None:
+    if not isinstance(row, dict):
+        return None
+    for key in ("timeline_frame", "frame", "start_frame", "timeline_start_frame"):
+        try:
+            value = row.get(key)
+            if value is None:
+                continue
+            return int(value)
+        except Exception:
+            continue
+    return None
+
+
+def _reviewed_cut_boundary_payload(
+    reviewed_cut_boundaries: list[dict[str, Any]] | None,
+    *,
+    audio_only: bool = False,
+    limit: int = 160,
+) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
+    for idx, row in enumerate(list(reviewed_cut_boundaries or []), start=1):
+        if not isinstance(row, dict):
+            continue
+        is_audio = is_audio_gain_boundary(row)
+        if audio_only and not is_audio:
+            continue
+        sec = _cut_boundary_time_from_row(row)
+        if sec is None:
+            continue
+        frame = _cut_boundary_frame_from_row(row)
+        score = _float_or_none(
+            row.get(
+                "score",
+                row.get(
+                    "verify_score",
+                    row.get("gray_window_score"),
+                ),
+            )
+        )
+        audio_gain = _float_or_none(row.get("audio_gain_db_delta"))
+        boundary = {
+            "boundary_id": str(
+                row.get("candidate_key")
+                or row.get("id")
+                or row.get("source_id")
+                or f"boundary_{idx}"
+            ).strip(),
+            "time": round(float(sec), 3),
+            "frame": frame,
+            "kind": "audio" if is_audio else "visual",
+            "status": str(
+                row.get("status")
+                or ("verified" if row.get("verified") else "reviewed")
+            ).strip()
+            or "reviewed",
+            "source": str(row.get("source") or row.get("detector") or "").strip(),
+            "review_role": "audio_anchor" if is_audio else "boundary_hint",
+            "frame_range": dict(row.get("frame_range") or {}) if isinstance(row.get("frame_range"), dict) else {},
+        }
+        if score is not None:
+            boundary["score"] = round(float(score), 3)
+        if audio_gain is not None:
+            boundary["audio_gain_db_delta"] = round(float(audio_gain), 3)
+        payload.append(boundary)
+        if len(payload) >= max(1, int(limit or 1)):
+            break
+    payload.sort(
+        key=lambda item: (
+            float(item.get("time", 0.0) or 0.0),
+            str(item.get("kind") or ""),
+            str(item.get("boundary_id") or ""),
+        )
+    )
+    return payload
+
+
+def _reference_major_segments_for_timerange(
+    reference_major_segments: list[dict[str, Any]] | None,
+    *,
+    start_sec: float,
+    end_sec: float,
+) -> list[dict[str, Any]]:
+    rows = _reference_major_segments_payload(reference_major_segments)
+    if not rows:
+        return []
+    kept = [
+        dict(row)
+        for row in rows
+        if float(row.get("end", 0.0)) > float(start_sec)
+        and float(row.get("start", 0.0)) < float(end_sec)
+    ]
+    return kept or rows
+
+
+def _reviewed_cut_boundaries_for_timerange(
+    reviewed_cut_boundaries: list[dict[str, Any]] | None,
+    *,
+    start_sec: float,
+    end_sec: float,
+) -> list[dict[str, Any]]:
+    rows = [dict(row) for row in list(reviewed_cut_boundaries or []) if isinstance(row, dict)]
+    if not rows:
+        return []
+    kept = []
+    for row in rows:
+        sec = _cut_boundary_time_from_row(row)
+        if sec is None:
+            continue
+        if float(start_sec) <= float(sec) <= float(end_sec):
+            kept.append(dict(row))
+    return kept or rows
+
+
+def _major_groups_from_reference_segments(
+    reference_major_segments: list[dict[str, Any]] | None,
+    subtitles: list[SubtitleSegment],
+) -> list[dict[str, Any]]:
+    refs = _reference_major_segments_payload(reference_major_segments)
+    if not refs or not subtitles:
+        return []
+
+    used_ids: set[int] = set()
+    groups: list[dict[str, Any]] = []
+    for idx, ref in enumerate(refs):
+        start = float(ref.get("start", 0.0) or 0.0)
+        end = float(ref.get("end", start) or start)
+        if end <= start:
+            continue
+        is_last = idx == len(refs) - 1
+        selected = []
+        for global_idx, item in enumerate(subtitles):
+            sid = _subtitle_id(item, global_idx)
+            if sid in used_ids:
+                continue
+            midpoint = (float(item.start) + float(item.end)) / 2.0
+            if start <= midpoint < end or (is_last and start <= midpoint <= end):
+                selected.append(item)
+        if not selected:
+            continue
+        for global_idx, item in enumerate(subtitles):
+            if item in selected:
+                used_ids.add(_subtitle_id(item, global_idx))
+        raw_title = str(ref.get("title") or "").strip()
+        title = _title_from_subtitles(selected) if (not raw_title or "주제없음" in raw_title) else raw_title
+        raw_summary = str(ref.get("summary") or "").strip()
+        summary = _summary_from_subtitles(selected) if (not raw_summary or "임시 중분류" in raw_summary) else raw_summary
+        groups.append(
+            {
+                "major_id": str(ref.get("major_id") or _major_code(idx)),
+                "title": title or f"중분류 {_major_code(idx)}",
+                "summary": summary,
+                "tags": tuple(str(tag).strip() for tag in list(ref.get("tags") or []) if str(tag).strip())[:8],
+                "confidence": 0.58 if bool(ref.get("is_topicless_placeholder")) else 0.72,
+                "status": str(ref.get("status") or ("provisional" if bool(ref.get("is_topicless_placeholder")) else "confirmed")),
+                "subtitles": selected,
+            }
+        )
+    covered = sum(len(group.get("subtitles", []) or []) for group in groups)
+    if covered < max(1, len(subtitles) // 2):
+        return []
+    return groups
+
+
 def _local_major_groups_from_subtitles(subtitles: list[SubtitleSegment], *, settings: dict[str, Any]) -> list[dict[str, Any]]:
     min_count = max(1, int(settings.get("roughcut_major_min_subtitle_count", 5) or 5))
     max_count = max(min_count, int(settings.get("editor_roughcut_draft_max_subtitle_count", max(8, min_count * 2)) or max(8, min_count * 2)))
@@ -695,6 +994,31 @@ def _local_major_groups_from_subtitles(subtitles: list[SubtitleSegment], *, sett
             }
         )
     return groups
+
+
+def _should_reject_overcollapsed_llm_groups(
+    groups: list[dict[str, Any]],
+    subtitles: list[SubtitleSegment],
+    *,
+    media_duration: float,
+    reference_groups: list[dict[str, Any]] | None = None,
+    local_groups: list[dict[str, Any]] | None = None,
+) -> bool:
+    if len(groups or []) != 1:
+        return False
+    subtitle_count = len(subtitles or [])
+    if subtitle_count < 6:
+        return False
+    duration = max(0.0, float(media_duration or 0.0))
+    reference_count = len(reference_groups or [])
+    local_count = len(local_groups or [])
+    if reference_count >= 2:
+        return True
+    if local_count >= 3 and (subtitle_count >= 10 or duration >= 60.0):
+        return True
+    if local_count >= 2 and duration >= 90.0:
+        return True
+    return False
 
 
 def _major_groups_from_llm_payload(payload: dict[str, Any] | None, subtitles: list[SubtitleSegment]) -> list[dict[str, Any]]:

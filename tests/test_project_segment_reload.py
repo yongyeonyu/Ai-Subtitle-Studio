@@ -16,7 +16,8 @@ from ui.editor.editor_multiclip_ops import EditorMulticlipOpsMixin
 from ui.editor.editor_widget import EditorWidget
 from ui.editor.subtitle_text_edit import SubtitleBlockData
 from ui.editor.undo_manager import UndoManager
-from ui.project import project_panel as project_panel_module
+from core.project.project_manager import get_boundary_times
+from ui.editor import editor_project_open_native as project_open_native_module
 from ui.project.project_panel import ProjectUIMixin
 from core.project.project_assets import externalize_project_text_assets
 from core.project.project_phase1b import restore_project_stt_preview_segments
@@ -341,6 +342,115 @@ class _ProjectOpenWindow(ProjectUIMixin, EditorLifecycleMixin):
         self._refresh_opened_editor_runtime(editor)
 
 
+class _Signal:
+    def __init__(self):
+        self._callbacks = []
+
+    def connect(self, callback):
+        self._callbacks.append(callback)
+
+
+class _LifecycleTimeline:
+    def __init__(self):
+        self.boundary_times = []
+
+    def set_boundary_times(self, times):
+        self.boundary_times = list(times or [])
+
+
+class _LifecycleEditor:
+    def __init__(self, video_name, segments, media_path=None, parent=None, defer_media_load=False, hydrate_existing_srt_on_empty=True):
+        self.video_name = video_name
+        self.segments = list(segments or [])
+        self.media_path = media_path
+        self.parent = parent
+        self.defer_media_load = bool(defer_media_load)
+        self.hydrate_existing_srt_on_empty = bool(hydrate_existing_srt_on_empty)
+        self.is_auto_start = False
+        self._queue_mode_fit_view = False
+        self._project_clips = None
+        self.timeline = _LifecycleTimeline()
+        self.sig_start = _Signal()
+        self.sig_prev = _Signal()
+        self.sig_exit = _Signal()
+        self.sig_next = _Signal()
+        self.sig_save = _Signal()
+        self.sig_auto_save = _Signal()
+        self._terminal_layout_visible = None
+
+        class _SM:
+            def init_state(inner_self):
+                inner_self.state = "ST_IDLE"
+
+            def init_auto_state(inner_self):
+                inner_self.state = "ST_AUTO"
+
+        self.sm = _SM()
+
+    def set_terminal_visible_layout(self, visible):
+        self._terminal_layout_visible = bool(visible)
+
+
+class _LifecycleStack:
+    def __init__(self):
+        self.widgets = []
+        self.current = None
+
+    def insertWidget(self, index, widget):
+        if widget in self.widgets:
+            self.widgets.remove(widget)
+        index = max(0, min(int(index), len(self.widgets)))
+        self.widgets.insert(index, widget)
+
+    def setCurrentWidget(self, widget):
+        self.current = widget
+
+
+class _LifecycleOwner(EditorLifecycleMixin):
+    def __init__(self):
+        self.stack = _LifecycleStack()
+        self._current_project_path = None
+        self._project_boundary_times = [1.25, 2.5]
+        self._multiclip_boundaries = []
+        self._editor_widget = None
+        self._on_start_cb = None
+        self._on_save_cb = None
+        self._on_prev_cb = None
+        self.backend = None
+        self.scheduled_media = []
+        self.fit_calls = 0
+        self.idle_mode_reason = None
+
+    def _remove_old_editor(self):
+        return None
+
+    def _schedule_native_open_editor_media(self, editor, media_path: str | None):
+        self.scheduled_media.append((editor, str(media_path or "")))
+
+    def _schedule_editor_fit_to_view(self, editor, delay_ms: int = 120):
+        self.fit_calls += 1
+
+    def _activate_editor_idle_mode(self, reason=""):
+        self.idle_mode_reason = str(reason or "")
+
+
+class _BootstrapTimeline:
+    def __init__(self):
+        self.waveform_paths = []
+
+    def load_waveform(self, path):
+        self.waveform_paths.append(str(path))
+
+
+class _BootstrapEditor:
+    def __init__(self):
+        self.timeline = _BootstrapTimeline()
+        self.load_calls = []
+
+    def _load_video(self, path, *, load_waveform=True, defer_media_probe=False):
+        self.load_calls.append((str(path), bool(load_waveform), bool(defer_media_probe)))
+
+
 class _Editor(EditorMulticlipOpsMixin):
     def __init__(self):
         self._queue_timer = _Timer()
@@ -381,7 +491,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             "editor_state": {},
         }
 
-        with patch.object(project_panel_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
             opened = window._open_project_segments_in_editor(
                 "/tmp/sample_project.json",
                 project,
@@ -400,6 +510,98 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor.video_player.provider(), segments)
         self.assertEqual(editor.video_player.context_segments, segments)
         self.assertEqual(editor.video_player.display_time, 0.0)
+
+    def test_init_editor_uses_deferred_media_and_native_fast_open_bootstrap(self):
+        owner = _LifecycleOwner()
+        target_file = "/tmp/native-fast-open.mp4"
+
+        with patch("ui.editor.editor_widget.EditorWidget", _LifecycleEditor):
+            owner._init_editor(target_file, is_batch=False)
+
+        self.assertIsNotNone(owner._editor_widget)
+        self.assertTrue(owner._editor_widget.defer_media_load)
+        self.assertFalse(owner._editor_widget.hydrate_existing_srt_on_empty)
+        self.assertEqual(owner._editor_widget.timeline.boundary_times, owner._project_boundary_times)
+        self.assertIs(owner.stack.current, owner._editor_widget)
+        self.assertEqual(owner.scheduled_media, [(owner._editor_widget, target_file)])
+        self.assertEqual(owner.fit_calls, 1)
+        self.assertEqual(owner.idle_mode_reason, "editor_open")
+
+    def test_native_open_media_bootstrap_stages_video_then_waveform(self):
+        owner = type("Owner", (), {"_editor_widget": None, "_multiclip_boundaries": []})()
+        editor = _BootstrapEditor()
+        owner._editor_widget = editor
+        delays = []
+
+        def _run_now(delay, callback):
+            delays.append(int(delay))
+            callback()
+
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=_run_now):
+            project_open_native_module.schedule_native_open_editor_media(owner, editor, "/tmp/clip.mp4")
+
+        self.assertEqual(delays, [32, 180])
+        self.assertEqual(editor.load_calls, [("/tmp/clip.mp4", False, True)])
+        self.assertEqual(editor.timeline.waveform_paths, ["/tmp/clip.mp4"])
+
+    def test_native_open_media_bootstrap_skips_stale_editor(self):
+        owner = type("Owner", (), {"_editor_widget": None, "_multiclip_boundaries": []})()
+        editor = _BootstrapEditor()
+        owner._editor_widget = editor
+        scheduled = []
+
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda delay, cb: scheduled.append((int(delay), cb))):
+            project_open_native_module.schedule_native_open_editor_media(owner, editor, "/tmp/clip.mp4")
+
+        owner._editor_widget = object()
+        for _delay, callback in scheduled:
+            callback()
+
+        self.assertEqual(editor.load_calls, [])
+
+    def test_native_editor_post_open_tasks_run_in_staged_order(self):
+        owner = type("Owner", (), {"_editor_widget": None})()
+        editor = type("Editor", (), {})()
+        owner._editor_widget = editor
+        seen = []
+
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+            project_open_native_module.schedule_native_editor_post_open_tasks(
+                owner,
+                editor,
+                restore_workspace_callback=lambda: seen.append("restore"),
+                apply_project_ui_callback=lambda: seen.append("project_ui"),
+                load_multiclip_waveform_callback=lambda: seen.append("waveform"),
+                preload_segments_callback=lambda: seen.append("preload"),
+            )
+
+        self.assertEqual(seen, ["restore", "project_ui", "waveform", "preload"])
+
+    def test_get_boundary_times_prefers_confirmed_cut_rows_over_clip_boundaries(self):
+        project = {
+            "timeline": {
+                "tracks": [
+                    {
+                        "clips": [
+                            {"source_path": "/tmp/a.mp4", "timeline_start": 0.0, "timeline_end": 12.0},
+                            {"source_path": "/tmp/b.mp4", "timeline_start": 12.0, "timeline_end": 24.0},
+                        ]
+                    }
+                ]
+            },
+            "analysis": {
+                "cut_boundaries": [
+                    {"timeline_sec": 5.0, "timeline_frame": 150, "fps": 30.0},
+                    {"timeline_sec": 17.0, "timeline_frame": 510, "fps": 30.0},
+                ]
+            },
+        }
+
+        boundaries = get_boundary_times(project)
+
+        self.assertEqual(len(boundaries), 2)
+        self.assertEqual(boundaries[0]["timeline_sec"], 5.0)
+        self.assertEqual(boundaries[1]["timeline_sec"], 17.0)
 
     def test_reload_replaces_pending_segments_before_project_restore(self):
         editor = _Editor()

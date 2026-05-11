@@ -136,10 +136,51 @@ class EditorPipelineMixin:
         except RuntimeError:
             pass
 
+    def _abort_pending_editor_processing_ui_work(self):
+        for timer_name in (
+            "_queue_timer",
+            "_live_editor_preview_timer",
+            "_timeline_timer",
+            "_video_context_refresh_timer",
+            "_cursor_video_seek_timer",
+        ):
+            try:
+                timer = getattr(self, timer_name, None)
+                if timer is not None and hasattr(timer, "stop"):
+                    timer.stop()
+            except Exception:
+                pass
+        try:
+            if hasattr(self, "_segment_queue"):
+                self._segment_queue.clear()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_live_editor_preview_queue"):
+                self._live_editor_preview_queue.clear()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_live_editor_preview_keys"):
+                self._live_editor_preview_keys.clear()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_pending_cursor_video_seek_sec"):
+                self._pending_cursor_video_seek_sec = None
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_live_editor_preview_pending"):
+                self._live_editor_preview_pending = False
+        except Exception:
+            pass
+
     def _stop_pipeline(self):
         main_w = self.window()
         if hasattr(main_w, "_stop_post_completion_idle_timer"):
             main_w._stop_post_completion_idle_timer()
+        self._abort_pending_editor_processing_ui_work()
         self.sm.stop_processing("작업이 중지되었습니다.")
         self._clear_processing_indicators()
         active_backend = None
@@ -148,6 +189,23 @@ class EditorPipelineMixin:
         elif hasattr(main_w, "backend") and main_w.backend:
             active_backend = main_w.backend
         if active_backend is not None:
+            try:
+                active_backend._active = False
+                if hasattr(active_backend, "_edit_event"):
+                    active_backend._edit_event.set()
+                if hasattr(active_backend, "_start_event"):
+                    active_backend._start_event.set()
+            except Exception:
+                pass
+            try:
+                from PyQt6.QtCore import QEventLoop
+                from PyQt6.QtWidgets import QApplication
+
+                app = QApplication.instance()
+                if app is not None:
+                    app.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
+            except Exception:
+                pass
             active_backend.stop(log_context="작업 중지")
         try:
             unlock_sidebar = getattr(main_w, "_unlock_workspace_sidebar_width", None)
@@ -155,7 +213,7 @@ class EditorPipelineMixin:
                 unlock_sidebar()
         except Exception:
             pass
-        QTimer.singleShot(1000, self._safe_enable_start_btn)
+        QTimer.singleShot(120, self._safe_enable_start_btn)
 
     def _start_pipeline(self, is_restart=False):
         main_w = self.window()
@@ -369,6 +427,11 @@ class EditorPipelineMixin:
             main_w._current_project_path = project_path
 
         if backend is not None and hasattr(backend, "_auto_scan_cut_boundaries_for_start"):
+            try:
+                backend._force_cut_boundary_rescan_once = True
+                backend._cut_boundary_prescan_completed = False
+            except Exception:
+                pass
             backend._auto_scan_cut_boundaries_for_start(project_path, media_files)
 
     def _set_process_completed(self):
@@ -427,6 +490,10 @@ class EditorPipelineMixin:
                 cleanup(reason="subtitle_generation_complete", editor=self)
         except Exception:
             pass
+        try:
+            self._clear_stale_cut_boundary_scan_after_completion()
+        except Exception:
+            pass
         if hasattr(self, "_schedule_post_generation_roughcut_draft"):
             QTimer.singleShot(900, lambda: self._schedule_post_generation_roughcut_draft(force=True))
         # E fix: 자막 생성 완료 후 타임라인/캔버스 재동기화
@@ -440,6 +507,18 @@ class EditorPipelineMixin:
         """Backend-side completion safety net for missed final progress signals."""
         if not bool(getattr(self, "_process_completed_finalized", False)):
             if not self._has_saveable_generation_segments():
+                try:
+                    recovered = bool(self._recover_generation_segments_from_backend_backup())
+                except Exception as exc:
+                    recovered = False
+                    get_logger().log(f"⚠️ 자막 생성 완료 복구 실패: {exc}")
+                if recovered:
+                    try:
+                        self._completion_handled = True
+                    except Exception:
+                        pass
+                    self._set_process_completed()
+                    return
                 if int(attempt) < 60:
                     if int(attempt) in {0, 5, 15, 30}:
                         get_logger().log("⏳ 자막 생성 완료 대기: 최종 자막 세그먼트 반영 중")
@@ -485,6 +564,90 @@ class EditorPipelineMixin:
             if str(seg.get("text", "") or "").strip():
                 return True
         return False
+
+    def _recover_generation_segments_from_backend_backup(self) -> bool:
+        try:
+            main_w = self.window()
+        except Exception:
+            return False
+        backend = getattr(main_w, "backend", None)
+        if backend is None:
+            backend = getattr(main_w, "backend_fast", None)
+        if backend is None:
+            return False
+        backup_media = str(getattr(backend, "_last_generation_final_media_path", "") or "")
+        editor_media = str(getattr(self, "media_path", "") or "")
+        if backup_media and editor_media and os.path.normpath(backup_media) != os.path.normpath(editor_media):
+            return False
+        backup_segments = [
+            dict(seg)
+            for seg in list(getattr(backend, "_last_generation_final_segments", []) or [])
+            if isinstance(seg, dict)
+        ]
+        if not backup_segments:
+            return False
+        backup_segments = [
+            dict(seg)
+            for seg in backup_segments
+            if not bool(seg.get("is_gap")) and str(seg.get("text", "") or "").strip()
+        ]
+        if not backup_segments:
+            return False
+        get_logger().log("⚠️ 에디터 최종 자막 누락 감지: 백엔드 결과로 즉시 복구합니다.")
+        appender = getattr(self, "append_segments", None)
+        if not callable(appender):
+            return False
+        appender(backup_segments)
+        flusher = getattr(self, "_flush_pending_segment_queue_now", None)
+        if callable(flusher):
+            flusher()
+        restored = self._has_saveable_generation_segments()
+        if restored:
+            try:
+                backend._last_generation_final_segments = []
+            except Exception:
+                pass
+        return restored
+
+    def _clear_stale_cut_boundary_scan_after_completion(self) -> bool:
+        try:
+            main_w = self.window()
+        except Exception:
+            return False
+        backend_candidates = [
+            getattr(main_w, "backend", None),
+            getattr(main_w, "backend_fast", None),
+        ]
+        scan_busy = False
+        for backend in backend_candidates:
+            if backend is None:
+                continue
+            try:
+                prescan = getattr(backend, "_cut_boundary_prescan_thread", None)
+                follower = getattr(backend, "_cut_boundary_follower_thread", None)
+                if (prescan is not None and prescan.is_alive()) or (follower is not None and follower.is_alive()):
+                    scan_busy = True
+                    break
+            except Exception:
+                continue
+        if scan_busy:
+            return False
+        try:
+            setter = getattr(self, "_set_auto_cut_boundary_scan_active", None)
+            if callable(setter):
+                setter(False)
+        except Exception:
+            pass
+        try:
+            line_setter = getattr(self, "_set_auto_cut_boundary_scan_lines", None)
+            if callable(line_setter):
+                line_setter([])
+        except Exception:
+            pass
+        refresher = getattr(self, "_refresh_cut_boundary_placeholder_from_project", None)
+        if callable(refresher):
+            QTimer.singleShot(0, refresher)
+        return True
 
     def _schedule_generation_completion_autosave(self, *, delay_ms: int = 650, attempt: int = 0) -> None:
         if bool(getattr(self, "_generation_completion_autosave_done", False)):
@@ -770,6 +933,12 @@ class EditorPipelineMixin:
                 except Exception:
                     pass
             try:
+                invalidator = getattr(obj, "_invalidate_marker_caches", None)
+                if callable(invalidator):
+                    invalidator()
+                static_invalidator = getattr(obj, "_invalidate_static_cache", None)
+                if callable(static_invalidator):
+                    static_invalidator()
                 if hasattr(obj, "_roughcut_major_cache_key"):
                     obj._roughcut_major_cache_key = None
                     obj._roughcut_major_cache = []
@@ -838,7 +1007,10 @@ class EditorPipelineMixin:
             if not project_path:
                 return
 
-            from core.roughcut.cut_boundary_placeholder import extract_topicless_placeholders_from_project
+            from core.roughcut.cut_boundary_placeholder import (
+                extract_topicless_placeholders_from_project,
+                rows_are_placeholder_only,
+            )
             rows = extract_topicless_placeholders_from_project(project_path)
             rows = [dict(row) for row in list(rows or [])]
 
@@ -861,6 +1033,12 @@ class EditorPipelineMixin:
             # roughcut result 형태로도 반영
             result_dict = None
             if rows:
+                placeholder_only = rows_are_placeholder_only(rows)
+                review_required = any(
+                    bool(row.get("needs_review"))
+                    or str(row.get("status") or "provisional") != "confirmed"
+                    for row in rows
+                )
                 result_dict = {
                     "segments": list(rows),
                     "chapters": [],
@@ -868,8 +1046,12 @@ class EditorPipelineMixin:
                     "edl_segments": [],
                     "guide_markdown": "",
                     "schema_version": "roughcut_result.v2",
-                    "draft_state": {"status": "review"},
-                    "video_summary": f"컷 경계 기반 주제없음 중분류 {len(rows)}개",
+                    "draft_state": {"status": "review" if review_required else "confirmed"},
+                    "video_summary": (
+                        f"컷 경계 기반 주제없음 중분류 {len(rows)}개"
+                        if placeholder_only
+                        else f"프로젝트 중분류 {len(rows)}개"
+                    ),
                 }
             for attr in ("_roughcut_result", "roughcut_result", "_roughcut_draft_result"):
                 try:
@@ -899,6 +1081,26 @@ class EditorPipelineMixin:
                         setattr(obj, attr, list(rows))
                     except Exception:
                         pass
+                try:
+                    invalidator = getattr(obj, "_invalidate_marker_caches", None)
+                    if callable(invalidator):
+                        invalidator()
+                    static_invalidator = getattr(obj, "_invalidate_static_cache", None)
+                    if callable(static_invalidator):
+                        static_invalidator()
+                    if hasattr(obj, "_roughcut_major_cache_key"):
+                        obj._roughcut_major_cache_key = None
+                        obj._roughcut_major_cache = []
+                    if hasattr(obj, "_analysis_markers_cache_key"):
+                        obj._analysis_markers_cache_key = None
+                    if hasattr(obj, "_visible_analysis_markers_cache_key"):
+                        obj._visible_analysis_markers_cache_key = None
+                    if hasattr(obj, "_paint_index_cache"):
+                        obj._paint_index_cache.pop("roughcut_major_markers", None)
+                    if hasattr(obj, "_render_epoch"):
+                        obj._render_epoch = int(getattr(obj, "_render_epoch", 0) or 0) + 1
+                except Exception:
+                    pass
                 try:
                     obj.update()
                 except Exception:
@@ -1173,30 +1375,19 @@ class EditorPipelineMixin:
             project_provisional_rows or getattr(self, "_auto_cut_boundary_scan_lines", []),
             start_sec,
         )
-        prefix_times = []
-        for item in list(prefix_time_rows or []):
-            try:
-                if isinstance(item, dict):
-                    sec = float(item.get("timeline_sec", item.get("time", item.get("start", 0.0))) or 0.0)
-                else:
-                    sec = float(item)
-                prefix_times.append(sec)
-            except Exception:
-                continue
-
         if main_w is not None:
             try:
-                main_w._project_boundary_times = list(prefix_times)
+                main_w._project_boundary_times = list(prefix_time_rows)
             except Exception:
                 pass
             try:
                 if hasattr(main_w, "_sig_update_project_boundary_times"):
-                    main_w._sig_update_project_boundary_times.emit(list(prefix_times))
+                    main_w._sig_update_project_boundary_times.emit(list(prefix_time_rows))
             except Exception:
                 pass
 
         try:
-            self._project_boundary_times = list(prefix_times)
+            self._project_boundary_times = list(prefix_time_rows)
         except Exception:
             pass
         try:
@@ -1208,7 +1399,7 @@ class EditorPipelineMixin:
             timeline = getattr(self, "timeline", None)
             if timeline is not None:
                 if hasattr(timeline, "set_boundary_times"):
-                    timeline.set_boundary_times(list(prefix_times))
+                    timeline.set_boundary_times(list(prefix_time_rows))
                 if hasattr(timeline, "set_scan_boundary_times"):
                     timeline.set_scan_boundary_times(list(prefix_provisionals))
         except Exception:

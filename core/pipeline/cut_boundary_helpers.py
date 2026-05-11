@@ -13,6 +13,14 @@ import time
 from core.autopilot_policy import apply_autopilot_runtime_policy, hybrid_cut_boundary_decision
 from core.cut_boundary_api import CUT_BOUNDARY_ALGORITHM_ID, CUT_BOUNDARY_ALGORITHM_VERSION, CUT_BOUNDARY_API_VERSION
 from core.cut_boundary_audio import AUDIO_GAIN_LINE_COLOR, is_audio_gain_boundary
+from core.cut_boundary_native_plan import (
+    build_middle_segments_for_stage,
+    build_follower_native_verify_settings,
+    build_provisional_native_settings,
+    checked_provisional_boundary_row,
+    provisional_boundary_row,
+    reviewed_middle_source_rows,
+)
 from core.media_fingerprint import media_fingerprint_digest
 from core.pipeline.cut_boundary_prescan_policy import (
     cut_boundary_adaptive_prescan_plan,
@@ -130,6 +138,7 @@ class PipelineCutBoundaryMixin:
         *,
         settings: dict | None = None,
         detected: list[dict] | None = None,
+        reviewed_rows: list[dict] | None = None,
         emit: bool = True,
     ) -> None:
         """Remove temporary cut-boundary rows after follower verification finishes.
@@ -164,6 +173,8 @@ class PipelineCutBoundaryMixin:
             analysis = project.setdefault("analysis", {})
             if detected is not None:
                 analysis["cut_boundaries"] = normalize_cut_boundaries(list(detected or []))
+            if reviewed_rows is not None:
+                analysis["cut_boundary_reviewed_rows"] = normalize_cut_boundaries(list(reviewed_rows or []))
             analysis["cut_boundary_provisional_boundaries"] = []
             sync_project_cut_boundaries(
                 project,
@@ -260,6 +271,14 @@ class PipelineCutBoundaryMixin:
         try:
             from core.cut_boundary import normalize_cut_boundaries, sync_project_cut_boundaries
 
+            if bool(getattr(self, "_force_cut_boundary_rescan_once", False)):
+                try:
+                    self._force_cut_boundary_rescan_once = False
+                except Exception:
+                    pass
+                get_logger().log("  🔄 [컷 경계] 재시작 요청으로 캐시를 건너뛰고 음성/임시/후발대를 다시 분석합니다")
+                return None
+
             cache_path = self._cut_boundary_cache_path_for_start(files, settings)
             if not os.path.exists(cache_path):
                 return None
@@ -326,13 +345,35 @@ class PipelineCutBoundaryMixin:
                     detected=rows,
                     emit=True,
                 )
+                try:
+                    self._force_cut_boundary_topicless_segments_to_project(
+                        project_path,
+                        rows,
+                        files=list(files or []),
+                        done=True,
+                    )
+                except Exception as topicless_exc:
+                    get_logger().log(
+                        f"  ⚠️ [컷 경계] 캐시 재사용 중분류 세그먼트 확정 실패: {topicless_exc}"
+                    )
 
             get_logger().log(
                 f"  ♻️ [컷 경계] 캐시 재사용: {len(rows)}개 "
                 f"(analysis.cut_boundaries only, {cache_path})"
             )
+            try:
+                self._cut_boundary_prescan_completed = True
+            except Exception:
+                pass
             emitter = getattr(self, "_ui_emit", None)
             if callable(emitter):
+                try:
+                    emitter(
+                        "_sig_update_project_boundary_times",
+                        [dict(row) for row in list(rows or []) if isinstance(row, dict)],
+                    )
+                except Exception:
+                    pass
                 emitter("_sig_refresh_cut_boundary_placeholder")
             counter = getattr(self, "_emit_cut_boundary_count_to_sidebar", None)
             if callable(counter):
@@ -542,123 +583,51 @@ class PipelineCutBoundaryMixin:
             pass
         return 0.0
 
-    def _build_cut_boundary_topicless_rows(self, detected, *, files=None, done: bool = False) -> list[dict]:
-        """Build gray middle-level topicless rows from detected cut boundaries.
-
-        During scan:
-        - if first cut exists, immediately create 00:00~first_cut.
-
-        After full scan:
-        - also include last_cut~video_end.
-        """
-        from core.cut_boundary_middle import coalesce_topicless_middle_boundary_frames
-        from core.frame_time import frame_to_sec, sec_to_frame
-
-        settings = load_settings() or {}
-        fps = 30.0
-        found_fps = False
-        for row in list(detected or []):
-            if not isinstance(row, dict):
-                continue
-            for key in ("fps", "timeline_frame_rate", "frame_rate"):
-                try:
-                    value = float(row.get(key) or 0.0)
-                    if value > 1.0:
-                        fps = value
-                        found_fps = True
-                        break
-                except Exception:
-                    pass
-            if found_fps:
-                break
+    def _reviewed_cut_boundary_rows_for_middle_segments(
+        self,
+        provisional_rows,
+        *,
+        detected_rows=None,
+    ) -> list[dict]:
         try:
-            from core.frame_time import normalize_fps
-
-            fps = normalize_fps(fps)
+            from core.cut_boundary import normalize_cut_boundaries
         except Exception:
-            fps = 30.0
+            normalize_cut_boundaries = None
 
+        merged = reviewed_middle_source_rows(
+            provisional_rows,
+            detected_rows=detected_rows,
+            candidate_key_resolver=getattr(self, "_cut_boundary_candidate_key", None),
+        )
+        if callable(normalize_cut_boundaries):
+            try:
+                merged = normalize_cut_boundaries(list(merged))
+            except Exception:
+                pass
+        return merged
+
+    def _build_cut_boundary_topicless_rows(
+        self,
+        detected,
+        *,
+        files=None,
+        done: bool = False,
+        prefer_all_frames: bool = False,
+    ) -> list[dict]:
+        media_duration = self._cut_boundary_placeholder_duration(files)
         cut_rows = []
         for row in list(detected or []):
             sec = self._cut_boundary_sec_from_row(row)
-            if sec is not None and sec > 0.0:
-                item = dict(row) if isinstance(row, dict) else {"timeline_sec": round(float(sec), 3), "time": round(float(sec), 3)}
-                cut_rows.append(item)
-
-        duration = self._cut_boundary_placeholder_duration(files)
-        duration_frame = sec_to_frame(duration, fps) if duration > 0.0 else 0
-        cut_frames = coalesce_topicless_middle_boundary_frames(
-            cut_rows,
-            fps=fps,
-            duration_frame=duration_frame,
-            settings=settings,
-        )
-        if not cut_frames:
-            return []
-
-        boundaries = [0] + list(cut_frames)
-
-        if done and duration_frame > boundaries[-1]:
-            boundaries.append(duration_frame)
-
-        rows = []
-        for i in range(len(boundaries) - 1):
-            start = frame_to_sec(int(boundaries[i]), fps)
-            end = frame_to_sec(int(boundaries[i + 1]), fps)
-            if end <= start:
+            if sec is None or sec <= 0.0:
                 continue
-
-            seg_id = f"cut_topicless_middle_{i + 1:03d}"
-            rows.append({
-                "id": seg_id,
-                "segment_id": seg_id,
-                "chapter_id": seg_id,
-                "major_id": seg_id,
-
-                "start": round(start, 3),
-                "end": round(end, 3),
-
-                "title": "주제없음",
-                "name": "주제없음",
-                "summary": "컷 경계 기반으로 자동 생성된 임시 중분류 세그먼트입니다.",
-                "llm_summary": "",
-
-                "tags": ["컷경계", "주제없음"],
-                "source": "cut_boundary",
-                "story_role": "topicless_placeholder",
-                "narrative_function": "cut_boundary_placeholder",
-
-                # UI가 어느 키를 보든 회색 placeholder로 인식할 수 있게 넓게 저장
-                "level": "middle",
-                "segment_type": "middle",
-                "roughcut_level": "middle",
-                "category": "middle",
-                "is_middle_segment": True,
-
-                "is_topicless_placeholder": True,
-                "is_cut_boundary_placeholder": True,
-                "topicless": True,
-
-                "color_role": "topicless",
-                "display_color": "gray",
-                "ui_color": "gray",
-                "color": "#9CA3AF",
-
-                "needs_review": True,
-                "status": "needs_review",
-                "safety": "acceptable",
-                "importance": 0.0,
-                "importance_score": 0.0,
-                "boundary_confidence": 1.0,
-
-                "can_move": True,
-                "can_trim": True,
-                "can_remove": True,
-                "move_risk": "low",
-                "dependencies": [],
-            })
-
-        return rows
+            cut_rows.append(dict(row) if isinstance(row, dict) else {"timeline_sec": round(float(sec), 3), "time": round(float(sec), 3)})
+        return build_middle_segments_for_stage(
+            cut_rows,
+            media_duration=media_duration,
+            files=list(files or []),
+            done=bool(done),
+            prefer_all_boundary_frames=bool(prefer_all_frames),
+        )
 
     def _placeholder_rows_can_be_overwritten(self, rows) -> bool:
         rows = list(rows or [])
@@ -695,6 +664,8 @@ class PipelineCutBoundaryMixin:
         *,
         files=None,
         done: bool = False,
+        middle_source_rows=None,
+        prefer_all_frames: bool = False,
     ) -> list[dict]:
         """Persist gray topicless middle segments immediately.
 
@@ -707,40 +678,23 @@ class PipelineCutBoundaryMixin:
                 return []
 
             rows = self._build_cut_boundary_topicless_rows(
-                detected,
+                detected if middle_source_rows is None else middle_source_rows,
                 files=list(files or []),
                 done=bool(done),
+                prefer_all_frames=bool(prefer_all_frames),
             )
             if not rows:
                 return []
 
             project = read_project_file(project_path)
+            from core.roughcut.cut_boundary_placeholder import store_topicless_placeholders_in_project_data
 
-            project.setdefault("analysis", {})
-            analysis = project["analysis"]
-
-            # 원본 컷 경계
-            analysis["cut_boundaries"] = list(detected or [])
-
-            # UI/러프컷 로더가 어떤 이름을 보든 찾을 수 있게 중복 저장
-            analysis["cut_boundary_topicless_middle_segments"] = list(rows)
-            analysis["topicless_middle_segments"] = list(rows)
-            analysis["roughcut_topicless_segments"] = list(rows)
-            analysis["middle_segments"] = list(rows)
-
-            # roughcut 계열 저장소에도 placeholder-only 상태면 즉시 반영
-            for key in ("roughcut", "roughcut_draft", "roughcut_result"):
-                box = project.setdefault(key, {})
-                if isinstance(box, dict) and self._placeholder_rows_can_be_overwritten(box.get("segments", [])):
-                    box["segments"] = list(rows)
-                    box["schema_version"] = "roughcut_result.v2"
-                    box["draft_state"] = {"status": "review"}
-
-            # 일부 UI가 top-level segments를 볼 수 있어 보조 저장
-            if self._placeholder_rows_can_be_overwritten(project.get("roughcut_segments", [])):
-                project["roughcut_segments"] = list(rows)
-            if self._placeholder_rows_can_be_overwritten(project.get("middle_segments", [])):
-                project["middle_segments"] = list(rows)
+            store_topicless_placeholders_in_project_data(
+                project,
+                rows,
+                cut_boundaries=detected,
+                finalized=bool(done),
+            )
 
             write_project_file(project_path, project)
 
@@ -846,14 +800,32 @@ class PipelineCutBoundaryMixin:
 
             old_thread = getattr(self, "_cut_boundary_prescan_thread", None)
             if old_thread is not None and old_thread.is_alive():
+                force_rescan_requested = bool(getattr(self, "_force_cut_boundary_rescan_once", False))
+                if force_rescan_requested:
+                    try:
+                        self._cut_boundary_prescan_pending_request = {
+                            "project_path": str(project_path or ""),
+                            "files": list(files or []),
+                            "force_rescan": True,
+                        }
+                    except Exception:
+                        pass
                 self._ui_emit("_sig_set_cut_boundary_scan_active", True)
                 try:
                     self._emit_cut_boundary_count_to_sidebar(0, percent=0, done=False)
                 except Exception:
                     pass
+                if force_rescan_requested:
+                    try:
+                        get_logger().log(
+                            "  🔄 [컷 경계] 진행 중 스캔이 끝나면 음성/임시/후발대 재확인을 바로 다시 시작하도록 예약했습니다"
+                        )
+                    except Exception:
+                        pass
                 return []
 
             def _worker():
+                pending_request = None
                 try:
                     self._auto_scan_cut_boundaries_for_start_sync(project_path, list(files or []))
                 except Exception as exc:
@@ -861,6 +833,35 @@ class PipelineCutBoundaryMixin:
                         get_logger().log(f"  ⚠️ [컷 경계] 백그라운드 자동 분석 실패: {exc}")
                     except Exception:
                         pass
+                finally:
+                    try:
+                        if getattr(self, "_cut_boundary_prescan_thread", None) is threading.current_thread():
+                            self._cut_boundary_prescan_thread = None
+                    except Exception:
+                        pass
+                    try:
+                        raw_pending = getattr(self, "_cut_boundary_prescan_pending_request", None)
+                        if isinstance(raw_pending, dict) and raw_pending:
+                            pending_request = dict(raw_pending)
+                            self._cut_boundary_prescan_pending_request = None
+                    except Exception:
+                        pending_request = None
+                    if pending_request:
+                        try:
+                            next_project_path = str(pending_request.get("project_path") or project_path or "")
+                            next_files = list(pending_request.get("files") or list(files or []))
+                            if bool(pending_request.get("force_rescan", False)):
+                                self._force_cut_boundary_rescan_once = True
+                                self._cut_boundary_prescan_completed = False
+                            get_logger().log("  🔄 [컷 경계] 대기 중이던 재확인 요청을 이어서 시작합니다")
+                            self._auto_scan_cut_boundaries_for_start(next_project_path, next_files)
+                        except Exception as rerun_exc:
+                            try:
+                                get_logger().log(
+                                    f"  ⚠️ [컷 경계] 대기 중 재확인 재시작 실패: {rerun_exc}"
+                                )
+                            except Exception:
+                                pass
 
             thread = threading.Thread(
                 target=_worker,
@@ -939,28 +940,12 @@ class PipelineCutBoundaryMixin:
             settings["scan_cut_pioneer_sequential_decode_enabled"] = bool(
                 adaptive_plan.get("pioneer_sequential_decode", False)
             )
-            provisional_settings = dict(settings)
-            provisional_settings["scan_cut_boundary_level"] = "low"
-            provisional_settings["cut_boundary_level"] = "low"
-            provisional_settings["scan_cut_level"] = "low"
-            provisional_settings["scan_cut_compare_max_width"] = int(
-                settings.get("scan_cut_provisional_compare_max_width", 640) or 640
+            realtime_preview_enabled = _truthy_setting(settings.get("scan_cut_realtime_preview_enabled"), True)
+            provisional_settings, provisional_scan_profile = build_provisional_native_settings(
+                settings,
+                sample_step_sec=float(settings.get("scan_cut_provisional_sample_step_sec", 1.0) or 1.0),
             )
-            provisional_settings["scan_cut_compare_max_height"] = int(
-                settings.get("scan_cut_provisional_compare_max_height", 360) or 360
-            )
-            try:
-                provisional_scan_profile = cut_boundary_scan_profile(provisional_settings)
-            except Exception:
-                provisional_scan_profile = {
-                    "level": "low",
-                    "label": "낮음 - 5×5 선택 9칸",
-                    "grid": "5x5",
-                    "grid_size": 5,
-                    "mask": "custom9",
-                    "positions": (1, 3, 7, 10, 12, 14, 17, 21, 23),
-                    "cell_count": 9,
-                }
+            follower_verify_settings_template, follower_scan_profile = build_follower_native_verify_settings(settings)
             provisional_settings["scan_cut_boundary_resolved_level"] = str(
                 provisional_scan_profile.get("resolved_level")
                 or provisional_scan_profile.get("level")
@@ -973,21 +958,33 @@ class PipelineCutBoundaryMixin:
             settings["scan_cut_boundary_provisional_mask"] = str(provisional_scan_profile.get("mask") or "")
             try:
                 get_logger().log(
-                    "  🎬 [컷 경계] 임시선 선발대는 낮음 프로파일로 빠르게 확인하고, "
-                    f"정식 검증은 {settings['scan_cut_boundary_resolved_level']} 프로파일을 유지합니다"
+                    "  🎬 [컷 경계] 선발대는 720p 3×3 십자가 4칸으로 임시선을 만들고, "
+                    "후발대는 1080p 5×5 중앙 3×3 롤백 검증으로 확정합니다"
                 )
                 if adaptive_plan.get("follower_start_after_pioneer"):
                     get_logger().log(
-                        "  🚀 [컷 경계] adaptive: 긴 4K → OpenCV 4-way 선발대 우선, "
+                        "  🚀 [컷 경계] adaptive: 긴 4K도 동일 규칙 유지, "
                         "후발대는 선발대 완료 후 지연 검증"
                     )
                 else:
                     get_logger().log(
                         "  🚀 [컷 경계] 임시선 고속 경로: "
-                        "OpenCV 4-way 선발대 + 4-way 후발대 병렬 검증"
+                        "OpenCV 4-way 선발대 + native 후발대 병렬 롤백 검증"
                     )
             except Exception:
                 pass
+
+            try:
+                initial_rows = self._force_cut_boundary_topicless_segments_to_project(
+                    project_path,
+                    [],
+                    files=list(files or []),
+                    done=False,
+                )
+                if initial_rows and realtime_preview_enabled:
+                    self._ui_emit("_sig_preview_cut_boundary_topicless_segments", list(initial_rows))
+            except Exception as initial_exc:
+                get_logger().log(f"  ⚠️ [컷 경계] 초기 A 중분류 생성 실패: {initial_exc}")
 
             cached = self._load_cut_boundary_cache_for_start(project_path, files, settings)
             if cached is not None:
@@ -996,11 +993,11 @@ class PipelineCutBoundaryMixin:
             clip_boundaries = list(getattr(self.ui, "_multiclip_boundaries", []) or [])
             detected: list[dict] = []
             provisional_rows: list[dict] = []
+            reviewed_middle_rows: list[dict] = []
             list_lock = threading.RLock()
             follower_queue: "queue.Queue[dict | None]" = queue.Queue()
             self._cut_boundary_provisional_rows = []
             total_files = len(list(files or []))
-            realtime_preview_enabled = _truthy_setting(settings.get("scan_cut_realtime_preview_enabled"), True)
             progress_preview_interval_sec = 0.18
             last_preview_emit_mono = 0.0
             last_detected_save_mono = 0.0
@@ -1098,24 +1095,56 @@ class PipelineCutBoundaryMixin:
                 pass
 
             def _style_provisional_row(row: dict) -> dict:
-                styled = dict(row or {})
-                styled["status"] = "provisional"
+                styled = provisional_boundary_row(row)
                 styled["verified"] = False
                 styled.setdefault("candidate_key", self._cut_boundary_candidate_key(styled))
-                styled.setdefault("detector_stage", "pioneer")
                 if is_audio_gain_boundary(styled):
                     decision = hybrid_cut_boundary_decision(styled, settings)
                     styled["autopilot_cut_boundary_decision"] = decision
-                    styled["line_color"] = str(styled.get("line_color") or decision.get("line_color") or AUDIO_GAIN_LINE_COLOR)
-                    styled["line_style"] = str(styled.get("line_style") or "dash")
                     styled["provisional_type"] = "audio_gain"
                     styled.setdefault("source", "audio_gain_provisional")
                 else:
                     styled["autopilot_cut_boundary_decision"] = hybrid_cut_boundary_decision(styled, settings)
-                    styled["line_color"] = "gray"
-                    styled["line_style"] = "dotted"
                     styled.setdefault("source", "visual_provisional")
                 return styled
+
+            def _checked_provisional_row(row: dict, *, verified: bool = False) -> dict:
+                checked = checked_provisional_boundary_row(row, verified=verified)
+                checked.setdefault("candidate_key", self._cut_boundary_candidate_key(checked))
+                checked["ui_label"] = ""
+                return checked
+
+            def _merge_reviewed_middle_rows(rows_to_merge: list[dict]) -> bool:
+                nonlocal reviewed_middle_rows
+                incoming = [dict(row) for row in list(rows_to_merge or []) if isinstance(row, dict)]
+                if not incoming:
+                    return False
+                merged = [dict(row) for row in list(reviewed_middle_rows or []) if isinstance(row, dict)]
+                key_to_index: dict[str, int] = {}
+                for idx, item in enumerate(list(merged)):
+                    key = str(item.get("candidate_key") or self._cut_boundary_candidate_key(item))
+                    item["candidate_key"] = key
+                    key_to_index[key] = idx
+                changed = False
+                for item in incoming:
+                    key = str(item.get("candidate_key") or self._cut_boundary_candidate_key(item))
+                    item["candidate_key"] = key
+                    prev_idx = key_to_index.get(key)
+                    if prev_idx is None:
+                        key_to_index[key] = len(merged)
+                        merged.append(item)
+                        changed = True
+                        continue
+                    if merged[prev_idx] != item:
+                        merged[prev_idx] = item
+                        changed = True
+                if not changed:
+                    return False
+                reviewed_middle_rows = self._reviewed_cut_boundary_rows_for_middle_segments(
+                    merged,
+                    detected_rows=[],
+                )
+                return True
 
             def _save_detected_now(*, force: bool = False):
                 nonlocal last_detected_save_mono
@@ -1232,62 +1261,8 @@ class PipelineCutBoundaryMixin:
                 return max(1, min(row_count, follower_stream_batch_size))
 
             def _follower_verify_settings(reason: str, row_count: int) -> dict:
-                tuned = dict(settings)
-                if not bool(settings.get("scan_cut_follower_4k_fast_verify_enabled", True)):
-                    return tuned
-                fast_path = bool(
-                    follower_start_after_pioneer
-                    or row_count >= int(settings.get("scan_cut_follower_fast_verify_min_rows", 32) or 32)
-                    or adaptive_plan.get("mode") == "long_4k_deferred_follower"
-                )
-                if not fast_path:
-                    return tuned
-
-                def _int_cap(key: str, default_value: int, cap: int) -> int:
-                    try:
-                        value = int(tuned.get(key, default_value) or default_value)
-                    except Exception:
-                        value = default_value
-                    return max(1, min(value, cap))
-
-                def _float_cap(key: str, default_value: float, cap: float) -> float:
-                    try:
-                        value = float(tuned.get(key, default_value) or default_value)
-                    except Exception:
-                        value = default_value
-                    return min(float(value), float(cap))
-
-                # 4K follower verification only needs a small local confirmation
-                # window because the pioneer already generated coarse candidates.
-                # This keeps dense-flow/color checks accurate while avoiding long
-                # 4K frame-range reads for every provisional line.
-                tuned["scan_cut_compare_max_width"] = _int_cap("scan_cut_compare_max_width", 640, 640)
-                tuned["scan_cut_compare_max_height"] = _int_cap("scan_cut_compare_max_height", 360, 360)
-                tuned["scan_cut_auto_verify_rollback_frames"] = _int_cap(
-                    "scan_cut_auto_verify_rollback_frames",
-                    18,
-                    18,
-                )
-                tuned["scan_cut_auto_verify_forward_frames"] = _int_cap(
-                    "scan_cut_auto_verify_forward_frames",
-                    12,
-                    12,
-                )
-                tuned["scan_cut_auto_verify_window_stages"] = [9, 3, 1]
-                tuned["scan_cut_color_avg_window_frames"] = _int_cap("scan_cut_color_avg_window_frames", 9, 9)
-                tuned["scan_cut_dense_flow_width"] = _int_cap("scan_cut_dense_flow_width", 192, 192)
-                tuned["scan_cut_dense_flow_window_radius"] = _int_cap("scan_cut_dense_flow_window_radius", 1, 1)
-                tuned["scan_cut_dense_flow_backend"] = str(tuned.get("scan_cut_dense_flow_backend") or "dis")
-                tuned["scan_cut_sample_width"] = _int_cap("scan_cut_sample_width", 12, 12)
-                tuned["scan_cut_sample_height"] = _int_cap("scan_cut_sample_height", 7, 7)
-                tuned["scan_cut_target_samples"] = _int_cap("scan_cut_target_samples", 40, 40)
-                tuned["scan_cut_follower_strict_multiplier"] = _float_cap(
-                    "scan_cut_follower_strict_multiplier",
-                    1.0,
-                    1.0,
-                )
-                tuned["scan_cut_follower_fast_verify_active"] = True
-                return tuned
+                _ = (reason, row_count)
+                return dict(follower_verify_settings_template)
 
             def _compact_follower_rows_for_verify(rows: list[dict], reason: str) -> tuple[list[dict], list[dict]]:
                 if not rows or str(reason or "") == "stream":
@@ -1539,11 +1514,24 @@ class PipelineCutBoundaryMixin:
             ):
                 verified_rows = [dict(row) for row in list(verified_rows or []) if isinstance(row, dict)]
                 relocated_rows = [dict(row) for row in list(relocated_rows or []) if isinstance(row, dict)]
+                verified_keys = {
+                    self._cut_boundary_candidate_key(row)
+                    for row in list(verified_rows or [])
+                    if isinstance(row, dict)
+                }
                 checked_keys = {
                     self._cut_boundary_candidate_key(row)
                     for row in list(checked_rows or [])
                     if isinstance(row, dict)
                 }
+                checked_preview_rows = [
+                    _checked_provisional_row(
+                        row,
+                        verified=self._cut_boundary_candidate_key(row) in verified_keys,
+                    )
+                    for row in list(checked_rows or [])
+                    if isinstance(row, dict)
+                ]
                 verified_positions: list[tuple[int, float]] = []
                 for row in verified_rows:
                     sec = self._cut_boundary_sec_from_row(row)
@@ -1562,13 +1550,18 @@ class PipelineCutBoundaryMixin:
                         detected[:] = normalize_cut_boundaries(list(detected) + verified_rows)
                         changed_detected = True
 
+                    middle_review_rows = list(verified_rows or []) + list(relocated_rows or [])
+                    middle_review_rows.extend(
+                        row
+                        for row in list(checked_preview_rows or [])
+                        if isinstance(row, dict) and is_audio_gain_boundary(row)
+                    )
+                    changed_middle_review = _merge_reviewed_middle_rows(middle_review_rows)
+
                     if checked_keys or verified_positions or relocated_rows:
                         kept = []
                         for item in provisional_rows:
                             if not isinstance(item, dict):
-                                kept.append(item)
-                                continue
-                            if bool(item.get("follower_relocated") or item.get("rollback_relocated")):
                                 kept.append(item)
                                 continue
                             key = str(item.get("candidate_key") or self._cut_boundary_candidate_key(item))
@@ -1609,29 +1602,44 @@ class PipelineCutBoundaryMixin:
                                 old_sec = float(item.get("timeline_sec", item.get("time", 0.0)) or 0.0)
                             except Exception:
                                 old_sec = 0.0
-                            if old_clip_idx == clip_idx and abs(old_sec - relocated_sec) <= 0.75:
+                            item_status = str(item.get("status", "") or "").strip().lower() if isinstance(item, dict) else ""
+                            if (
+                                old_clip_idx == clip_idx
+                                and abs(old_sec - relocated_sec) <= 0.75
+                                and item_status != "checked"
+                            ):
                                 changed_preview = True
                                 continue
                             kept.append(item)
-                        kept.append(relocated)
                         provisional_rows[:] = kept
                         changed_preview = True
 
                     if changed_preview:
                         provisional_rows[:] = normalize_cut_boundaries(list(provisional_rows))
                     preview_rows = [dict(item) for item in provisional_rows]
-                    detected_times = [
-                        float(item.get("timeline_sec", item.get("time", 0.0)) or 0.0)
-                        for item in detected
-                    ]
+                    reviewed_rows = [dict(item) for item in reviewed_middle_rows]
+                    detected_rows = [dict(item) for item in detected]
                     detected_count = len(detected)
                     self._cut_boundary_provisional_rows = [dict(item) for item in provisional_rows]
 
                 if changed_preview and realtime_preview_enabled:
                     self._ui_emit("_sig_preview_cut_boundary_scan_lines", preview_rows)
-                if changed_detected and realtime_preview_enabled:
-                    self._ui_emit("_sig_update_project_boundary_times", detected_times)
+                middle_preview_source_rows = self._reviewed_cut_boundary_rows_for_middle_segments(
+                    reviewed_rows,
+                    detected_rows=detected_rows,
+                )
+                if changed_detected:
+                    self._ui_emit("_sig_update_project_boundary_times", detected_rows)
                     self._ui_emit("_sig_refresh_cut_boundary_placeholder")
+                if (changed_detected or changed_preview or changed_middle_review) and realtime_preview_enabled and middle_preview_source_rows:
+                    middle_preview_rows = self._build_cut_boundary_topicless_rows(
+                        middle_preview_source_rows,
+                        files=list(files or []),
+                        done=True,
+                        prefer_all_frames=False,
+                    )
+                    if middle_preview_rows:
+                        self._ui_emit("_sig_preview_cut_boundary_topicless_segments", middle_preview_rows)
                 if changed_detected or changed_preview:
                     _save_detected_now(force=force_save)
                 if changed_detected:
@@ -1738,8 +1746,8 @@ class PipelineCutBoundaryMixin:
                                 rows,
                                 clip_offset=job["offset"],
                                 clip_idx=job["clip_idx"],
-                                scan_profile=scan_profile,
-                                sample_positions=scan_profile.get("positions", ()),
+                                scan_profile=follower_scan_profile,
+                                sample_positions=follower_scan_profile.get("positions", ()),
                                 settings=verify_settings,
                                 settings_preloaded=True,
                                 found_callback=_collect_verified,
@@ -1782,10 +1790,15 @@ class PipelineCutBoundaryMixin:
                                 pass
                     with list_lock:
                         final_detected = [dict(item) for item in detected]
+                        final_middle_source_rows = self._reviewed_cut_boundary_rows_for_middle_segments(
+                            reviewed_middle_rows,
+                            detected_rows=final_detected,
+                        )
                     self._clear_completed_cut_boundary_provisionals(
                         project_path,
                         settings=settings,
                         detected=final_detected,
+                        reviewed_rows=final_middle_source_rows,
                     )
                     self._save_cut_boundary_cache_for_start(files, settings, final_detected)
                     self._cut_boundary_prescan_completed = True
@@ -1796,6 +1809,8 @@ class PipelineCutBoundaryMixin:
                             final_detected,
                             files=list(files or []),
                             done=True,
+                            middle_source_rows=(final_middle_source_rows or final_detected),
+                            prefer_all_frames=False,
                         )
                     except Exception as exc:
                         get_logger().log(f"  ⚠️ [컷 경계] 최종 중분류 확정 실패: {exc}")
@@ -1804,15 +1819,14 @@ class PipelineCutBoundaryMixin:
                             provisional_rows[:] = []
                             self._cut_boundary_provisional_rows = []
                         self._ui_emit("_sig_set_cut_boundary_scan_active", False)
-                        if realtime_preview_enabled:
-                            self._ui_emit("_sig_preview_cut_boundary_scan_lines", [])
+                        self._ui_emit("_sig_preview_cut_boundary_scan_lines", [])
                         try:
                             self._emit_cut_boundary_count_to_sidebar(len(final_detected), done=True)
                         except Exception:
                             pass
                     self._ui_emit(
                         "_sig_update_project_boundary_times",
-                        [float(row.get("timeline_sec", row.get("time", 0.0)) or 0.0) for row in final_detected],
+                        [dict(row) for row in list(final_detected or []) if isinstance(row, dict)],
                     )
                     with follower_progress_lock:
                         checked_final = int(follower_checked_candidates or 0)

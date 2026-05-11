@@ -1,7 +1,9 @@
+import os
 import sys
 import unittest
 from unittest.mock import patch
 
+from core import native_cut_boundary as native
 from core.cut_boundary_auto_scan import (
     _cut_boundary_pioneer_worker_ranges,
     build_auto_grid_scan_helpers,
@@ -187,12 +189,26 @@ class CutBoundaryAutoScanBackendTests(unittest.TestCase):
             }
         )["_auto_dense_flow_cut_check"]
 
-    def test_cut_follower_uses_cpu_by_default_without_touching_mps(self):
+    def test_cut_follower_uses_native_mps_by_default_when_runtime_native_is_enabled(self):
+        self.assertEqual(
+            cut_follower_verify_backend(
+                {"runtime_native_cut_boundary_enabled": True},
+                platform_name="darwin",
+                mps_available=lambda: True,
+            ),
+            "mps",
+        )
+
+    def test_cut_follower_keeps_cpu_when_runtime_native_is_disabled(self):
         def fail_if_called():
-            raise AssertionError("MPS availability should not be checked when disabled")
+            raise AssertionError("MPS availability should not be checked when runtime native is disabled")
 
         self.assertEqual(
-            cut_follower_verify_backend({}, platform_name="darwin", mps_available=fail_if_called),
+            cut_follower_verify_backend(
+                {"runtime_native_cut_boundary_enabled": False},
+                platform_name="darwin",
+                mps_available=fail_if_called,
+            ),
             "cpu",
         )
 
@@ -725,11 +741,194 @@ class CutBoundaryAutoScanBackendTests(unittest.TestCase):
             capture_calls[1],
             {
                 "start_frame": 5,
-                "end_frame": 11,
+                "end_frame": 12,
                 "capture_gray": False,
                 "capture_color": True,
             },
         )
+
+    def test_strict_verify_uses_native_gray_rollback_search_for_precise_frame(self):
+        previous = os.environ.get("AI_SUBTITLE_NATIVE_CUT_BOUNDARY")
+        try:
+            os.environ["AI_SUBTITLE_NATIVE_CUT_BOUNDARY"] = "1"
+            if not native.native_cut_boundary_enabled():
+                self.skipTest("native cut-boundary extension unavailable")
+
+            def thumb(value: int):
+                return tuple(bytes([value]) * 64 for _ in range(5))
+
+            def capture_maps(_cap, _cv2, **kwargs):
+                start_frame = int(kwargs["start_frame"])
+                end_frame = int(kwargs["end_frame"])
+                if kwargs.get("capture_gray", True):
+                    gray_map = {}
+                    for frame_no in range(start_frame, end_frame + 1):
+                        gray_map[frame_no] = thumb(0 if frame_no <= 7 else 120)
+                    return gray_map, {}
+                color_map = {frame_no: frame_no for frame_no in range(start_frame, end_frame + 1)}
+                return {}, color_map
+
+            def should_not_run(*_args, **_kwargs):
+                raise AssertionError("python gray delta fallback should not run when native rollback search is enabled")
+
+            strict_verify = build_strict_verify_helpers(
+                {
+                    "normalize_cut_boundary_level": lambda level: str(level or "medium"),
+                    "get_level_positions": lambda scan_profile, sample_positions: tuple(sample_positions or (0, 1, 2, 3, 4)),
+                    "_auto_capture_verify_maps": capture_maps,
+                    "_auto_gray_delta": should_not_run,
+                    "_auto_color_avg_delta": lambda *args, **kwargs: (25.0, 5, [25.0]),
+                    "_auto_gray_delta_mps": should_not_run,
+                    "_auto_color_avg_delta_mps": lambda *args, **kwargs: (25.0, 5, [25.0]),
+                    "_mps_available": lambda: False,
+                }
+            )["_auto_grid_v3_manual_verify_strict"]
+
+            result = strict_verify(
+                object(),
+                object(),
+                fps=10.0,
+                frame_count=45,
+                coarse_frame=10,
+                settings={
+                    "scan_cut_auto_verify_rollback_frames": 5,
+                    "scan_cut_auto_verify_forward_frames": 5,
+                    "scan_cut_color_avg_window_frames": 3,
+                    "scan_cut_auto_verify_window_stages": [4, 2, 1],
+                    "scan_cut_follower_dense_flow_enabled": False,
+                },
+                sample_positions=(0, 1, 2, 3, 4),
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("AI_SUBTITLE_NATIVE_CUT_BOUNDARY", None)
+            else:
+                os.environ["AI_SUBTITLE_NATIVE_CUT_BOUNDARY"] = previous
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["frame"], 7)
+        self.assertEqual(result["mode"], "gray_window_color_avg")
+
+    def test_strict_verify_uses_one_second_window_independent_of_fps(self):
+        capture_calls = []
+
+        def capture_maps(_cap, _cv2, **kwargs):
+            capture_calls.append(
+                {
+                    "start_frame": int(kwargs["start_frame"]),
+                    "end_frame": int(kwargs["end_frame"]),
+                    "capture_gray": bool(kwargs.get("capture_gray")),
+                    "capture_color": bool(kwargs.get("capture_color")),
+                }
+            )
+            start_frame = int(kwargs["start_frame"])
+            end_frame = int(kwargs["end_frame"])
+            if kwargs.get("capture_gray", True):
+                return ({frame_no: frame_no for frame_no in range(start_frame, end_frame + 1)}, {})
+            return ({}, {frame_no: frame_no for frame_no in range(start_frame, end_frame + 1)})
+
+        strict_verify = build_strict_verify_helpers(
+            {
+                "normalize_cut_boundary_level": lambda level: str(level or "medium"),
+                "get_level_positions": lambda scan_profile, sample_positions: tuple(sample_positions or (0, 1, 2, 3, 4)),
+                "_auto_capture_verify_maps": capture_maps,
+                "_auto_gray_delta": lambda *_args, **_kwargs: (120.0, 5, [120.0]),
+                "_auto_color_avg_delta": lambda *_args, **_kwargs: (25.0, 5, [25.0]),
+                "_auto_gray_delta_mps": lambda *_args, **_kwargs: (120.0, 5, [120.0]),
+                "_auto_color_avg_delta_mps": lambda *_args, **_kwargs: (25.0, 5, [25.0]),
+                "_mps_available": lambda: False,
+            }
+        )["_auto_grid_v3_manual_verify_strict"]
+
+        result = strict_verify(
+            object(),
+            object(),
+            fps=60.0,
+            frame_count=500,
+            coarse_frame=240,
+            settings={
+                "scan_cut_auto_verify_rollback_window_sec": 1.0,
+                "scan_cut_auto_verify_forward_window_sec": 1.0,
+                "scan_cut_color_avg_window_frames": 3,
+                "scan_cut_auto_verify_window_stages": [4, 2, 1],
+                "scan_cut_follower_dense_flow_enabled": False,
+            },
+            sample_positions=(0, 1, 2, 3, 4),
+        )
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(
+            capture_calls[0],
+            {
+                "start_frame": 180,
+                "end_frame": 305,
+                "capture_gray": True,
+                "capture_color": False,
+            },
+        )
+
+    def test_strict_verify_uses_local_color_consensus_to_resolve_gray_conflict(self):
+        def capture_maps(_cap, _cv2, **kwargs):
+            start_frame = int(kwargs["start_frame"])
+            end_frame = int(kwargs["end_frame"])
+            frame_map = {frame_no: frame_no for frame_no in range(start_frame, end_frame + 1)}
+            if kwargs.get("capture_gray", True):
+                return frame_map, {}
+            return {}, frame_map
+
+        def gray_delta(a, b, **_kwargs):
+            pair = (int(a), int(b))
+            if pair == (8, 9):
+                return 85.0, 5, [85.0]
+            if pair == (14, 18):
+                return 150.0, 5, [150.0]
+            return 0.0, 0, []
+
+        def color_delta(a, b, **_kwargs):
+            pair = (int(a), int(b))
+            if pair == (14, 15):
+                return 28.0, 5, [28.0]
+            if pair == (13, 15):
+                return 26.0, 5, [26.0]
+            if pair == (8, 9):
+                return 10.0, 1, [10.0]
+            return 0.0, 0, []
+
+        strict_verify = build_strict_verify_helpers(
+            {
+                "normalize_cut_boundary_level": lambda level: str(level or "medium"),
+                "get_level_positions": lambda scan_profile, sample_positions: tuple(sample_positions or (0, 1, 2, 3, 4)),
+                "_auto_capture_verify_maps": capture_maps,
+                "_auto_gray_delta": gray_delta,
+                "_auto_color_avg_delta": color_delta,
+                "_auto_gray_delta_mps": gray_delta,
+                "_auto_color_avg_delta_mps": color_delta,
+                "_mps_available": lambda: False,
+            }
+        )["_auto_grid_v3_manual_verify_strict"]
+
+        result = strict_verify(
+            object(),
+            object(),
+            fps=10.0,
+            frame_count=60,
+            coarse_frame=14,
+            settings={
+                "scan_cut_auto_verify_rollback_frames": 8,
+                "scan_cut_auto_verify_forward_frames": 8,
+                "scan_cut_color_avg_window_frames": 3,
+                "scan_cut_auto_verify_window_stages": [4, 1],
+                "scan_cut_follower_gray_agreement_frames": 3,
+                "scan_cut_follower_gray_color_agreement_frames": 4,
+                "scan_cut_follower_local_color_confirm_frames": 4,
+                "scan_cut_follower_dense_flow_enabled": False,
+            },
+            sample_positions=(0, 1, 2, 3, 4),
+        )
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["frame"], 14)
+        self.assertEqual(result["mode"], "gray_window_color_avg")
 
 
 if __name__ == "__main__":

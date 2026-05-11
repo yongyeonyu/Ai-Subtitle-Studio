@@ -75,6 +75,7 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Generation completion state: the editor does not mark subtitle generation complete from STT progress alone. Backend finalization waits until saveable subtitle segments exist, retries completion autosave when the timeline is still being populated, and prevents empty-segment auto-save failures.
 - Exit-save state: both sidebar quick exit and native window close ask whether to save unsaved editor changes before runtime pause, model cleanup, or application quit.
 - Project backup state: numbered project JSON backups are archived under a sibling `프로젝트백업/` folder, and legacy root-level numbered backups are moved there on the next project save.
+- Direct SRT parity state: opening a subtitle file now searches for a matching sidecar project JSON and rehydrates project subtitle metadata so timestamp tags, speaker circles, quality/stage chips, voice-activity overlays, provisional cut-boundary lines, and cut-boundary placeholder middle segments render like project-open state; pure SRT open still intentionally omits STT1/STT2 preview lanes.
 - Editor layout state: the editor text pane, video preview, and timeline are mounted inside stable render frames so Start/status changes do not resize the major editor surfaces.
 - Fast quality state: Fast mode stays lightweight but selectively rechecks low-score STT1 spans with the secondary STT model when configured, preserving minimum quality without rerunning the full High stack.
 - Playback state: post-generation quality review, roughcut draft work, prefetch, cleanup, and model release are deferred or throttled while video playback is active.
@@ -86,6 +87,7 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Dashboard state: the sidebar engine dashboard shows ten stages: cut boundary, preprocessing, audio filter, STT1, STT2, VAD, subtitle LLM, roughcut LLM, LoRA, and deep learning.
 - Editor performance state: subtitle line edits update cached line maps and the affected timeline dirty rectangle instead of rebuilding the full segment lookup; playback/editor sync respects recent manual scrolling and avoids recentering already visible active segments.
 - Runtime scheduling state: cut-boundary pioneer/follower workers use topology-aware CPU planning, OpenCV thread caps, progress throttling, optional FFmpeg scene prepass, optional C++ native helper kernels, and optical-flow follower verification for candidate-only rollback checks.
+- Cut-boundary contract state: generation start must immediately create one full-range middle segment `A - 주제없음`; audio provisional boundaries render as neon-green 1px solid lines, visual provisional boundaries render as neon-blue 1px solid lines, follower-checked provisional boundaries render as gray dotted lines, and follower-reviewed rows create the first colored A-Z middle-segment draft before the roughcut LLM refines it from subtitles.
 - Backend routing state: STT, VAD, cut-boundary, audio extraction, LLM, and editor rendering paths now default to native policies on this branch, with optional benchmark profile materialization stored outside Git.
 - Mac-native acceleration state: production runtime uses only benchmark-safe native routes by default: WhisperKit/Core ML/MLX STT, C++ VAD overlap/alignment math, C++ LLM macro grouping, adaptive Swift batch quality scoring, and adaptive Swift common split planning. Swift LoRA scoring, Swift Deep rerank, and Swift LLM candidate policy remain benchmark-only behind `native_swift_policy_experimental_enabled` or the explicit experimental environment gate because they were slower or changed LoRA ranking parity.
 - Apple Silicon scheduling state: runtime worker counts, FFmpeg thread budgets, pioneer/follower cut-boundary concurrency, and GPU/NPU slot use can now be materialized from detected Apple Silicon topology, including M5-specific defaults on the current Mac.
@@ -100,6 +102,7 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 - Popup/UI state: QML context menus and message dialogs have compact Apple-style sizing, hover/press feedback, outside-click dismissal, and Korean-only global menu labels.
 - STT ensemble state: parallel STT1/STT2 runs clone chunk directories per worker and clean them afterward so one worker cannot delete audio chunks still needed by the other.
 - Verification state: `v04.00.01` release verification passed with focused mac-native regression tests, `compileall`, `git diff --check`, and release handoff refresh. Full release verification details are in `RELEASE_v04.00.01.md`.
+- Latest regression checkpoint: after the direct-SRT/project-hydration parity fix on 2026-05-10, `venv/bin/python -m pytest -q`, `venv/bin/python -m compileall -q main.py core ui tests`, and `git diff --check -- .` all passed.
 
 ## Collaboration Rules
 
@@ -124,6 +127,7 @@ If the release changes the app version, update `core/runtime/config.py` as the s
 ## Runtime And UI Rules
 
 - Audio preset, VAD, preprocessing, Mode, and LLM selection must flow through shared services where possible.
+- Keep cut-boundary planning centralized. Prefer `core/cut_boundary_native_plan.py` for placeholder/provisional/middle-segment row rules and `core/native/_native_cut_boundary.cpp` for native rollback/search kernels instead of re-spreading the same logic across UI helpers.
 - Mode is user-facing as `Fast`, `Auto`, and `High`; old STT quality keys remain compatibility storage where needed.
 - Direct user controls for STT1, STT2, subtitle LLM, roughcut LLM, audio model list, and VAD model list must remain available.
 - LoRA or personalization learning must not start on the Editor screen. It should start only after the Home screen has been idle long enough, and user mouse or keyboard input should stop it quickly.

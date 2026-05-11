@@ -40,6 +40,21 @@ def _to_float(value: Any, fallback: float) -> float:
         return fallback
 
 
+def _to_bool(value: Any, fallback: bool) -> bool:
+    if value is None:
+        return bool(fallback)
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if not text:
+        return bool(fallback)
+    if text in {"1", "true", "yes", "on", "enabled", "enable", "사용", "켜기", "켬"}:
+        return True
+    if text in {"0", "false", "no", "off", "disabled", "disable", "미사용", "끄기", "끔"}:
+        return False
+    return bool(fallback)
+
+
 def fast_cut_boundary_prescan_settings(settings: dict | None) -> dict:
     """Return benchmark-stable settings for temporary cut-boundary prescan.
 
@@ -159,12 +174,57 @@ def cut_boundary_adaptive_prescan_plan(settings: dict | None, files: list[str] |
         min_height = 1700
 
     enabled = bool(settings.get("scan_cut_adaptive_follower_schedule_enabled", True))
+    native_streaming_enabled = _to_bool(
+        settings.get("scan_cut_long4k_native_streaming_follower_enabled"),
+        True,
+    ) and _to_bool(settings.get("runtime_native_cut_boundary_enabled"), True)
     is_4k = width >= min_width or height >= min_height
     width_unknown = width <= 0 and height <= 0
     long_media = duration_sec >= min_duration
     long_4k = bool(enabled and long_media and (is_4k or (width_unknown and duration_sec >= max(1200.0, min_duration))))
 
     if long_4k:
+        if native_streaming_enabled:
+            stream_start = _to_int(
+                settings.get("scan_cut_long4k_native_follower_stream_start_percent", settings.get("scan_cut_follower_stream_start_percent", 25))
+                or settings.get("scan_cut_follower_stream_start_percent", 25)
+                or 25,
+                25,
+            )
+            stream_batch = _to_int(
+                settings.get("scan_cut_long4k_native_follower_stream_batch_size", settings.get("scan_cut_follower_stream_batch_size", 4))
+                or settings.get("scan_cut_follower_stream_batch_size", 4)
+                or 4,
+                4,
+            )
+            base_step_sec = _to_float(settings.get("scan_cut_long4k_provisional_sample_step_sec", 4.0) or 4.0, 4.0)
+            scout_enabled = bool(settings.get("scan_cut_pioneer_packet_scout_enabled", True))
+            if scout_enabled:
+                provisional_step_sec = 1.0
+            elif not has_preview_proxy:
+                max_samples = max(60, _to_int(settings.get("scan_cut_no_proxy_pioneer_max_samples", 180) or 180, 180))
+                no_proxy_floor = _to_float(settings.get("scan_cut_no_proxy_min_sample_step_sec", 8.0) or 8.0, 8.0)
+                budget_step_sec = (duration_sec / float(max_samples)) if duration_sec > 0.0 else base_step_sec
+                provisional_step_sec = max(base_step_sec, no_proxy_floor, budget_step_sec)
+            else:
+                provisional_step_sec = base_step_sec
+            return {
+                "mode": "long_4k_native_streaming_follower",
+                "follower_start_after_pioneer": False,
+                "stream_start_percent": max(0, min(50, stream_start)),
+                "stream_batch_size": max(4, min(8, stream_batch)),
+                "stream_min_interval_sec": max(
+                    0.05,
+                    _to_float(settings.get("scan_cut_follower_stream_min_interval_sec", 0.10) or 0.10, 0.10),
+                ),
+                "follower_start_delay_sec": 0.0,
+                "provisional_sample_step_sec": max(1.0, min(16.0, provisional_step_sec)),
+                "pioneer_sequential_decode": False,
+                "has_preview_proxy": bool(has_preview_proxy),
+                "duration_sec": duration_sec,
+                "width": width,
+                "height": height,
+            }
         stream_start = _to_int(settings.get("scan_cut_long4k_follower_stream_start_percent", 100) or 100, 100)
         stream_batch = _to_int(settings.get("scan_cut_long4k_follower_stream_batch_size", 16) or 16, 16)
         start_delay = _to_float(settings.get("scan_cut_long4k_follower_start_delay_sec", 0.0) or 0.0, 0.0)

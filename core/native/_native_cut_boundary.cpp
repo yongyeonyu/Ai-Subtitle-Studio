@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -11,6 +12,30 @@ namespace {
 struct BufferView {
     Py_buffer view{};
     bool acquired = false;
+
+    BufferView() = default;
+    BufferView(const BufferView&) = delete;
+    BufferView& operator=(const BufferView&) = delete;
+
+    BufferView(BufferView&& other) noexcept
+        : view(other.view), acquired(other.acquired) {
+        other.acquired = false;
+        std::memset(&other.view, 0, sizeof(other.view));
+    }
+
+    BufferView& operator=(BufferView&& other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+        if (acquired) {
+            PyBuffer_Release(&view);
+        }
+        view = other.view;
+        acquired = other.acquired;
+        other.acquired = false;
+        std::memset(&other.view, 0, sizeof(other.view));
+        return *this;
+    }
 
     ~BufferView() {
         if (acquired) {
@@ -110,6 +135,25 @@ bool dict_set_long(PyObject* dict, const char* key, long value) {
     }
     const int status = PyDict_SetItemString(dict, key, item);
     Py_DECREF(item);
+    return status == 0;
+}
+
+bool dict_set_string(PyObject* dict, const char* key, const std::string& value) {
+    PyObject* item = PyUnicode_FromStringAndSize(value.data(), static_cast<Py_ssize_t>(value.size()));
+    if (item == nullptr) {
+        return false;
+    }
+    const int status = PyDict_SetItemString(dict, key, item);
+    Py_DECREF(item);
+    return status == 0;
+}
+
+bool dict_set_owned(PyObject* dict, const char* key, PyObject* value) {
+    if (value == nullptr) {
+        return false;
+    }
+    const int status = PyDict_SetItemString(dict, key, value);
+    Py_DECREF(value);
     return status == 0;
 }
 
@@ -215,6 +259,168 @@ bool sequence_to_ints(PyObject* obj, std::vector<int>& out) {
     }
     Py_DECREF(seq);
     return true;
+}
+
+struct GrayThumb {
+    std::vector<BufferView> regions;
+};
+
+struct DeltaSummary {
+    double score = 0.0;
+    int hits = 0;
+    std::vector<double> deltas;
+};
+
+struct FramePeak {
+    bool has = false;
+    int frame = -1;
+    double norm = -1.0;
+    double contrast = 0.0;
+    double sharpness = 1.0;
+};
+
+struct RollbackCandidate {
+    bool has = false;
+    int frame = -1;
+    double score = -1.0;
+    int regions = 0;
+    std::vector<double> deltas;
+    std::string mode;
+    double threshold = 0.0;
+    int stage = 0;
+    double rank = -1.0;
+};
+
+double gray_candidate_norm(double score, double threshold, int regions, int required_regions, double region_bonus_scale) {
+    const double safe_threshold = std::max(1e-6, threshold);
+    return (score / safe_threshold) + std::min(regions, required_regions) * region_bonus_scale;
+}
+
+bool parse_gray_rows(PyObject* rows_obj, std::vector<GrayThumb>& out) {
+    PyObject* rows_seq = PySequence_Fast(rows_obj, "gray rollback rows must be a sequence");
+    if (rows_seq == nullptr) {
+        return false;
+    }
+
+    const Py_ssize_t frame_count = PySequence_Fast_GET_SIZE(rows_seq);
+    out.reserve(static_cast<size_t>(frame_count));
+    PyObject** frame_items = PySequence_Fast_ITEMS(rows_seq);
+    for (Py_ssize_t frame_index = 0; frame_index < frame_count; ++frame_index) {
+        PyObject* frame_obj = frame_items[frame_index];
+        PyObject* region_seq = PySequence_Fast(frame_obj, "gray rollback frame must be a sequence");
+        if (region_seq == nullptr) {
+            Py_DECREF(rows_seq);
+            return false;
+        }
+        const Py_ssize_t region_count = PySequence_Fast_GET_SIZE(region_seq);
+        PyObject** region_items = PySequence_Fast_ITEMS(region_seq);
+
+        GrayThumb thumb;
+        thumb.regions.reserve(static_cast<size_t>(region_count));
+        for (Py_ssize_t region_index = 0; region_index < region_count; ++region_index) {
+            BufferView region;
+            if (!get_buffer(region_items[region_index], region)) {
+                Py_DECREF(region_seq);
+                Py_DECREF(rows_seq);
+                return false;
+            }
+            thumb.regions.push_back(std::move(region));
+        }
+        Py_DECREF(region_seq);
+        out.push_back(std::move(thumb));
+    }
+    Py_DECREF(rows_seq);
+    return true;
+}
+
+bool compute_gray_summary(
+    const GrayThumb& left,
+    const GrayThumb& right,
+    double region_threshold,
+    int target_samples,
+    DeltaSummary& out
+) {
+    const size_t n = std::min(left.regions.size(), right.regions.size());
+    out.score = 0.0;
+    out.hits = 0;
+    out.deltas.clear();
+    out.deltas.reserve(n);
+    if (n == 0) {
+        return false;
+    }
+
+    for (size_t index = 0; index < n; ++index) {
+        const BufferView& left_region = left.regions[index];
+        const BufferView& right_region = right.regions[index];
+        const auto* left_bytes = static_cast<const unsigned char*>(left_region.view.buf);
+        const auto* right_bytes = static_cast<const unsigned char*>(right_region.view.buf);
+        const double delta = delta_bytes_raw(
+            left_bytes,
+            left_region.view.len,
+            right_bytes,
+            right_region.view.len,
+            target_samples
+        );
+        out.deltas.push_back(delta);
+        if (delta >= region_threshold) {
+            out.hits += 1;
+        }
+    }
+
+    std::vector<double> ranked = out.deltas;
+    std::sort(ranked.begin(), ranked.end(), std::greater<double>());
+    const size_t top_n = std::min<size_t>(3, ranked.size());
+    double score = 0.0;
+    for (size_t index = 0; index < top_n; ++index) {
+        score += ranked[index];
+    }
+    out.score = score / static_cast<double>(top_n > 0 ? top_n : 1);
+    return true;
+}
+
+PyObject* rollback_candidate_to_dict(const RollbackCandidate& candidate, bool include_threshold) {
+    PyObject* out = PyDict_New();
+    if (out == nullptr) {
+        return nullptr;
+    }
+    if (candidate.has) {
+        if (!dict_set_long(out, "frame", candidate.frame) ||
+            !dict_set_double(out, "score", candidate.score) ||
+            !dict_set_long(out, "regions", candidate.regions) ||
+            !dict_set_string(out, "mode", candidate.mode) ||
+            !dict_set_double(out, "rank", candidate.rank) ||
+            !dict_set_long(out, "stage", candidate.stage) ||
+            !dict_set_owned(out, "deltas", float_list_from_vector(candidate.deltas))) {
+            Py_DECREF(out);
+            return nullptr;
+        }
+        if (include_threshold && !dict_set_double(out, "threshold", candidate.threshold)) {
+            Py_DECREF(out);
+            return nullptr;
+        }
+    } else {
+        Py_INCREF(Py_None);
+        if (PyDict_SetItemString(out, "frame", Py_None) != 0) {
+            Py_DECREF(Py_None);
+            Py_DECREF(out);
+            return nullptr;
+        }
+        Py_DECREF(Py_None);
+        if (!dict_set_double(out, "score", -1.0) ||
+            !dict_set_long(out, "regions", 0) ||
+            !dict_set_string(out, "mode", candidate.mode) ||
+            !dict_set_double(out, "rank", -1.0) ||
+            !dict_set_long(out, "stage", candidate.stage) ||
+            !dict_set_owned(out, "deltas", PyList_New(0))) {
+            Py_DECREF(out);
+            return nullptr;
+        }
+        if (include_threshold && !dict_set_double(out, "threshold", candidate.threshold)) {
+            Py_DECREF(out);
+            return nullptr;
+        }
+    }
+    return out;
 }
 
 PyObject* py_delta_bytes(PyObject*, PyObject* args) {
@@ -454,6 +660,232 @@ PyObject* py_dense_flow_pair_metrics(PyObject*, PyObject* args) {
         !dict_set_double(out, "mean_fy", mean_fy) ||
         !dict_set_double(out, "coherence", coherence) ||
         !dict_set_long(out, "pixel_count", count)) {
+        Py_DECREF(out);
+        return nullptr;
+    }
+    return out;
+}
+
+PyObject* py_gray_rollback_search(PyObject*, PyObject* args) {
+    PyObject* rows_obj = nullptr;
+    int start_frame = 0;
+    int hi_frame = 0;
+    PyObject* stages_obj = nullptr;
+    double region_threshold = 0.0;
+    int target_samples = 64;
+    int gray_required_regions = 1;
+    double gray_1f_threshold = 30.0;
+    double gray_2f_threshold = 34.5;
+    int gray_window_required = 1;
+    double gray_window_threshold = 90.0;
+    double peak_bonus_scale = 0.18;
+    double peak_contrast_scale = 0.16;
+    double peak_sharpness_scale = 0.08;
+    if (!PyArg_ParseTuple(
+            args,
+            "OiiOdiiddid|ddd:gray_rollback_search",
+            &rows_obj,
+            &start_frame,
+            &hi_frame,
+            &stages_obj,
+            &region_threshold,
+            &target_samples,
+            &gray_required_regions,
+            &gray_1f_threshold,
+            &gray_2f_threshold,
+            &gray_window_required,
+            &gray_window_threshold,
+            &peak_bonus_scale,
+            &peak_contrast_scale,
+            &peak_sharpness_scale)) {
+        return nullptr;
+    }
+
+    target_samples = clamp_target_samples(target_samples);
+    gray_required_regions = std::max(1, gray_required_regions);
+    gray_window_required = std::max(1, gray_window_required);
+    peak_bonus_scale = std::max(0.0, peak_bonus_scale);
+    peak_contrast_scale = std::max(0.0, peak_contrast_scale);
+    peak_sharpness_scale = std::max(0.0, peak_sharpness_scale);
+
+    std::vector<int> stages;
+    if (!sequence_to_ints(stages_obj, stages)) {
+        return nullptr;
+    }
+    if (stages.empty()) {
+        stages.push_back(1);
+    }
+
+    std::vector<GrayThumb> rows;
+    if (!parse_gray_rows(rows_obj, rows)) {
+        return nullptr;
+    }
+    if (rows.empty() || hi_frame < start_frame) {
+        Py_RETURN_NONE;
+    }
+
+    const int row_count = static_cast<int>(rows.size());
+    const int adj_frame_min = start_frame;
+    const int adj_frame_max = hi_frame + 1;
+    const int frame_peak_count = std::max(0, adj_frame_max - adj_frame_min + 1);
+    std::vector<FramePeak> frame_peaks(static_cast<size_t>(frame_peak_count));
+    RollbackCandidate best_adj;
+    best_adj.mode = "1f";
+    best_adj.threshold = gray_1f_threshold;
+    RollbackCandidate best_win;
+    best_win.mode = "gray_window_rollback";
+
+    auto update_frame_peak = [&](int frame_no, double norm) {
+        const int peak_index = frame_no - adj_frame_min;
+        if (peak_index < 0 || peak_index >= frame_peak_count) {
+            return;
+        }
+        FramePeak& peak = frame_peaks[static_cast<size_t>(peak_index)];
+        if (!peak.has || norm > peak.norm) {
+            peak.has = true;
+            peak.frame = frame_no;
+            peak.norm = norm;
+        }
+    };
+
+    auto refresh_frame_peak_metrics = [&]() {
+        for (int peak_index = 0; peak_index < frame_peak_count; ++peak_index) {
+            FramePeak& peak = frame_peaks[static_cast<size_t>(peak_index)];
+            if (!peak.has) {
+                continue;
+            }
+            const double left_1 = (peak_index - 1 >= 0 && frame_peaks[static_cast<size_t>(peak_index - 1)].has)
+                ? frame_peaks[static_cast<size_t>(peak_index - 1)].norm
+                : 0.0;
+            const double right_1 = (peak_index + 1 < frame_peak_count && frame_peaks[static_cast<size_t>(peak_index + 1)].has)
+                ? frame_peaks[static_cast<size_t>(peak_index + 1)].norm
+                : 0.0;
+            const double left_2 = (peak_index - 2 >= 0 && frame_peaks[static_cast<size_t>(peak_index - 2)].has)
+                ? frame_peaks[static_cast<size_t>(peak_index - 2)].norm
+                : left_1;
+            const double right_2 = (peak_index + 2 < frame_peak_count && frame_peaks[static_cast<size_t>(peak_index + 2)].has)
+                ? frame_peaks[static_cast<size_t>(peak_index + 2)].norm
+                : right_1;
+            const double local_neighbor_max = std::max(left_1, right_1);
+            const double local_neighbor_avg = std::max(1e-6, (left_1 + right_1 + left_2 + right_2) / 4.0);
+            peak.contrast = std::max(0.0, peak.norm - local_neighbor_max);
+            peak.sharpness = peak.norm / local_neighbor_avg;
+        }
+    };
+
+    auto consider_adj = [&](const char* mode, int frame_no, const DeltaSummary& summary, double threshold) {
+        const double norm = gray_candidate_norm(
+            summary.score,
+            threshold,
+            summary.hits,
+            gray_required_regions,
+            0.03
+        );
+        update_frame_peak(frame_no, norm);
+        if (!best_adj.has || norm > best_adj.rank) {
+            best_adj.has = true;
+            best_adj.frame = frame_no;
+            best_adj.score = summary.score;
+            best_adj.regions = summary.hits;
+            best_adj.deltas = summary.deltas;
+            best_adj.mode = mode;
+            best_adj.threshold = threshold;
+            best_adj.stage = 1;
+            best_adj.rank = norm;
+        }
+    };
+
+    Py_BEGIN_ALLOW_THREADS
+    for (int frame_no = start_frame; frame_no <= hi_frame; ++frame_no) {
+        const int index = frame_no - start_frame;
+        if (index < 0 || index >= row_count) {
+            continue;
+        }
+
+        if (index + 1 < row_count) {
+            DeltaSummary summary;
+            if (compute_gray_summary(rows[static_cast<size_t>(index)], rows[static_cast<size_t>(index + 1)], region_threshold, target_samples, summary)) {
+                consider_adj("1f", frame_no, summary, gray_1f_threshold);
+            }
+        }
+
+        if (index + 2 < row_count) {
+            DeltaSummary summary;
+            if (compute_gray_summary(rows[static_cast<size_t>(index)], rows[static_cast<size_t>(index + 2)], region_threshold, target_samples, summary)) {
+                consider_adj("2f", frame_no + 1, summary, gray_2f_threshold);
+            }
+        }
+    }
+
+    refresh_frame_peak_metrics();
+
+    for (int raw_stage : stages) {
+        const int stage = std::max(1, raw_stage);
+        for (int frame_no = start_frame; frame_no <= hi_frame; ++frame_no) {
+            const int index = frame_no - start_frame;
+            if (index < 0 || index + stage >= row_count) {
+                continue;
+            }
+            DeltaSummary summary;
+            if (!compute_gray_summary(rows[static_cast<size_t>(index)], rows[static_cast<size_t>(index + stage)], region_threshold, target_samples, summary)) {
+                continue;
+            }
+
+            int refined_frame = frame_no;
+            double peak_rank = 0.0;
+            double peak_contrast = 0.0;
+            double peak_sharpness = 1.0;
+            const int span_lo = std::max(adj_frame_min, frame_no);
+            const int span_hi = std::min(adj_frame_max, frame_no + stage);
+            for (int candidate_frame = span_lo; candidate_frame <= span_hi; ++candidate_frame) {
+                const int peak_index = candidate_frame - adj_frame_min;
+                if (peak_index < 0 || peak_index >= frame_peak_count) {
+                    continue;
+                }
+                const FramePeak& peak = frame_peaks[static_cast<size_t>(peak_index)];
+                const double local_peak_rank = peak.norm + (peak.contrast * peak_contrast_scale) + (std::max(0.0, peak.sharpness - 1.0) * peak_sharpness_scale);
+                if (peak.has && local_peak_rank > peak_rank) {
+                    peak_rank = local_peak_rank;
+                    refined_frame = candidate_frame;
+                    peak_contrast = peak.contrast;
+                    peak_sharpness = peak.sharpness;
+                }
+            }
+            const double base_rank = gray_candidate_norm(
+                summary.score,
+                gray_window_threshold,
+                summary.hits,
+                gray_window_required,
+                0.04
+            );
+            const double combined_rank = base_rank
+                + (peak_rank * peak_bonus_scale)
+                + (peak_contrast * peak_contrast_scale)
+                + (std::max(0.0, peak_sharpness - 1.0) * peak_sharpness_scale);
+            if (!best_win.has || combined_rank > best_win.rank || (std::abs(combined_rank - best_win.rank) < 1e-6 && summary.score > best_win.score)) {
+                best_win.has = true;
+                best_win.frame = refined_frame;
+                best_win.score = summary.score;
+                best_win.regions = summary.hits;
+                best_win.deltas = summary.deltas;
+                best_win.mode = "gray_window_rollback";
+                best_win.threshold = gray_window_threshold;
+                best_win.stage = stage;
+                best_win.rank = combined_rank;
+            }
+        }
+    }
+    Py_END_ALLOW_THREADS
+
+    PyObject* out = PyDict_New();
+    if (out == nullptr) {
+        return nullptr;
+    }
+    if (!dict_set_owned(out, "best_adj", rollback_candidate_to_dict(best_adj, true)) ||
+        !dict_set_owned(out, "best_win", rollback_candidate_to_dict(best_win, true)) ||
+        !dict_set_long(out, "frame_start", start_frame) ||
+        !dict_set_long(out, "frame_stop", hi_frame) ||
+        !dict_set_long(out, "row_count", row_count)) {
         Py_DECREF(out);
         return nullptr;
     }
@@ -776,6 +1208,7 @@ PyMethodDef methods[] = {
     {"gray_delta", py_gray_delta, METH_VARARGS, "Compute sampled gray-region deltas."},
     {"color_avg_delta", py_color_avg_delta, METH_VARARGS, "Compute color average deltas."},
     {"dense_flow_pair_metrics", py_dense_flow_pair_metrics, METH_VARARGS, "Compute dense optical-flow pair metrics without NumPy temporaries."},
+    {"gray_rollback_search", py_gray_rollback_search, METH_VARARGS, "Search rollback window densely and refine the cut frame with native C++."},
     {"waveform_peaks_f32le", py_waveform_peaks_f32le, METH_VARARGS, "Downsample f32le PCM bytes into normalized waveform peaks."},
     {"interval_overlaps", py_interval_overlaps, METH_VARARGS, "Compute segment/VAD interval overlaps."},
     {"word_split_groups", py_word_split_groups, METH_VARARGS, "Split word indexes into subtitle groups with native C++ thresholds."},

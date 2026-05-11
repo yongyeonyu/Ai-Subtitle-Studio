@@ -12,6 +12,15 @@ from core.runtime import config
 
 
 USER_SETTINGS_SCHEMA = "ai_subtitle_studio.user_settings.v2"
+PERSISTED_SECRET_SETTING_KEYS = frozenset(
+    {
+        "google_api_key",
+        "openai_api_key",
+        "huggingface_token",
+        "huggingface_api_key",
+        "hf_token",
+    }
+)
 
 
 UI_ENGINE_DEFAULTS: dict[str, Any] = {
@@ -433,6 +442,9 @@ CUT_BOUNDARY_DEFAULTS: dict[str, Any] = {
     "scan_cut_incremental_save_interval_sec": 0.75,
     "scan_cut_topicless_min_segment_sec": 120.0,
     "scan_cut_topicless_hard_min_segment_sec": 45.0,
+    "scan_cut_topicless_audio_priority_min_segment_sec": 24.0,
+    "scan_cut_topicless_audio_priority_window_sec": 12.0,
+    "scan_cut_topicless_audio_snap_visual_window_sec": 8.0,
     "scan_cut_topicless_audio_hard_delta_db": 8.0,
     "scan_cut_topicless_visual_hard_score": 140.0,
     "roughcut_boundary_fusion_enabled": True,
@@ -1055,6 +1067,7 @@ def materialize_user_settings(
     out = hardcoded_default_settings(dataset_dir=dataset_dir)
     if input_settings:
         out.update(deepcopy(input_settings))
+    out = sanitize_persisted_settings(out)
     if input_has_user_llm:
         out["subtitle_llm_user_selected"] = True
     out["user_prompt"] = ""
@@ -1084,11 +1097,21 @@ def materialize_user_settings(
     return apply_mode_runtime_settings(apply_autopilot_runtime_policy(out))
 
 
+def sanitize_persisted_settings(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not isinstance(settings, dict):
+        return {}
+    sanitized = dict(settings)
+    for key in PERSISTED_SECRET_SETTING_KEYS:
+        sanitized.pop(key, None)
+    return sanitized
+
+
 def is_lora_auto_managed_setting(key: str) -> bool:
     return str(key or "") in LORA_AUTO_MANAGED_SETTING_KEYS
 
 
 __all__ = [
+    "PERSISTED_SECRET_SETTING_KEYS",
     "LORA_AUTO_MANAGED_SETTING_KEYS",
     "USER_SETTINGS_SCHEMA",
     "custom_defaults_path",
@@ -1098,4 +1121,5 @@ __all__ = [
     "load_custom_defaults",
     "load_folder_settings",
     "materialize_user_settings",
+    "sanitize_persisted_settings",
 ]

@@ -2889,7 +2889,7 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
             return
         self._segment_queue.extend(segments)
         if not self._queue_timer.isActive():
-            self._queue_timer.start(80)
+            self._queue_timer.start(self._live_append_reschedule_delay_ms(len(self._segment_queue)))
 
     def _flush_queue(self):
         try:
@@ -2931,6 +2931,12 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         ]
         if not self._segment_queue:
             return
+        remaining_segments: list[dict] = []
+        batch_limit = self._live_append_batch_limit()
+        if batch_limit > 0 and len(self._segment_queue) > batch_limit:
+            remaining_segments = [dict(seg) for seg in list(self._segment_queue[batch_limit:]) if isinstance(seg, dict)]
+            self._segment_queue = [dict(seg) for seg in list(self._segment_queue[:batch_limit]) if isinstance(seg, dict)]
+        has_more_pending = bool(remaining_segments)
 
         cont_thresh = float(self.settings.get("continuous_threshold", 2.0))
         push_rate = float(self.settings.get("gap_push_rate", 0.7))
@@ -3151,15 +3157,25 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         if getattr(self, "_queue_mode_fit_view", False) and hasattr(self, "timeline"):
             try:
                 setattr(self.timeline, "_manual_zoom_since_fit", False)
-                if hasattr(self.timeline, "schedule_fit_to_view"):
+                if has_more_pending:
+                    pass
+                elif hasattr(self.timeline, "schedule_fit_to_view"):
                     self.timeline.schedule_fit_to_view((0, 120, 260))
                 elif hasattr(self.timeline, "fit_to_view"):
                     QTimer.singleShot(0, self.timeline.fit_to_view)
             except Exception:
                 pass
-        self._refresh_video_subtitle_context()
+        if has_more_pending:
+            timer = getattr(self, "_video_context_refresh_timer", None)
+            if timer is not None:
+                try:
+                    timer.start(90)
+                except Exception:
+                    pass
+        else:
+            self._refresh_video_subtitle_context()
 
-        suppress_autoseek = bool(getattr(self, "_suspend_append_segments_autoseek", False))
+        suppress_autoseek = bool(getattr(self, "_suspend_append_segments_autoseek", False)) or has_more_pending
 
         if is_initial:
             self._is_initial_load = False
@@ -3186,6 +3202,12 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
                             auto_correct=bool(self.settings.get("subtitle_quality_auto_correct_enabled", False))
                         ),
                     )
+        if has_more_pending:
+            self._segment_queue = list(remaining_segments)
+            try:
+                self._queue_timer.start(self._live_append_reschedule_delay_ms(len(self._segment_queue)))
+            except Exception:
+                self._flush_queue()
 
     # ---------------------------------------------------------
     # Segment I/O
@@ -3622,6 +3644,29 @@ class EditorSegmentsMixin(EditorRoughcutDraftMixin):
         if getattr(self, '_inline_updating', False):
             return
         self._timeline_timer.start(120)
+
+    def _live_append_batch_limit(self) -> int:
+        try:
+            locked = bool(getattr(getattr(self, "sm", None), "is_locked", False))
+        except Exception:
+            locked = False
+        if not locked:
+            return 0
+        try:
+            value = int((getattr(self, "settings", {}) or {}).get("editor_live_append_batch_size", 8) or 8)
+        except Exception:
+            value = 8
+        return max(1, min(24, value))
+
+    def _live_append_reschedule_delay_ms(self, pending_count: int = 0) -> int:
+        try:
+            locked = bool(getattr(getattr(self, "sm", None), "is_locked", False))
+        except Exception:
+            locked = False
+        if not locked:
+            return 80
+        backlog = max(0, int(pending_count or 0))
+        return 10 if backlog >= 16 else 18
 
     def _on_drag_started(self): 
         # 💡 드래그를 시작하기 직전의 전체 뷰 스냅샷 저장!

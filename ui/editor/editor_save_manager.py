@@ -390,6 +390,47 @@ class EditorSaveManagerMixin:
         except Exception:
             pass
 
+    def _project_provisional_cut_boundaries_for_save(self) -> list[dict]:
+        provisional_cut_boundaries = []
+        try:
+            if hasattr(self, "timeline") and hasattr(self.timeline, "canvas"):
+                canvas = self.timeline.canvas
+                provisional_cut_boundaries = list(getattr(canvas, "scan_boundary_times", []) or [])
+        except Exception:
+            provisional_cut_boundaries = []
+        if not provisional_cut_boundaries:
+            provisional_cut_boundaries = list(getattr(self, "_auto_cut_boundary_scan_lines", []) or [])
+
+        scan_active = bool(getattr(self, "_auto_cut_boundary_scan_active", False))
+        if scan_active:
+            return list(provisional_cut_boundaries or [])
+
+        try:
+            main_w = self.window()
+        except Exception:
+            return list(provisional_cut_boundaries or [])
+
+        backend_candidates = [
+            getattr(main_w, "backend", None),
+            getattr(main_w, "backend_fast", None),
+        ]
+        for backend in backend_candidates:
+            if backend is None:
+                continue
+            try:
+                prescan = getattr(backend, "_cut_boundary_prescan_thread", None)
+                follower = getattr(backend, "_cut_boundary_follower_thread", None)
+                scan_busy = bool(
+                    (prescan is not None and prescan.is_alive())
+                    or (follower is not None and follower.is_alive())
+                )
+                scan_completed = bool(getattr(backend, "_cut_boundary_prescan_completed", False))
+            except Exception:
+                continue
+            if scan_completed and not scan_busy:
+                return []
+        return list(provisional_cut_boundaries or [])
+
     def _segments_for_srt_output(self, segs: list[dict]) -> list[dict]:
         try:
             main_w = self.window()
@@ -844,8 +885,7 @@ class EditorSaveManagerMixin:
         except Exception:
             voice_activity_segments = []
             provisional_cut_boundaries = []
-        if not provisional_cut_boundaries:
-            provisional_cut_boundaries = list(getattr(self, "_auto_cut_boundary_scan_lines", []) or [])
+        provisional_cut_boundaries = self._project_provisional_cut_boundaries_for_save()
         stt_mode_state = None
         stt_mode_learning = None
         if getattr(self, "_stt_mode_enabled", False) or getattr(self, "_stt_work_segments", None):
