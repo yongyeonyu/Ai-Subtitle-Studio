@@ -271,6 +271,14 @@ struct DeltaSummary {
     std::vector<double> deltas;
 };
 
+struct EdgeSeriesSummary {
+    double score = 0.0;
+    double diff = 0.0;
+    double coverage = 0.0;
+    int regions = 0;
+    std::vector<double> deltas;
+};
+
 struct FramePeak {
     bool has = false;
     int frame = -1;
@@ -375,6 +383,83 @@ bool compute_gray_summary(
         score += ranked[index];
     }
     out.score = score / static_cast<double>(top_n > 0 ? top_n : 1);
+    return true;
+}
+
+bool compute_edge_series_summary(
+    const BufferView& left,
+    const BufferView& right,
+    double region_threshold,
+    double diff_threshold,
+    EdgeSeriesSummary& out
+) {
+    if (left.view.ndim != 2 || right.view.ndim != 2) {
+        return false;
+    }
+    const Py_ssize_t h = left.view.shape[0];
+    const Py_ssize_t w = left.view.shape[1];
+    if (h <= 0 || w <= 0 || right.view.shape[0] != h || right.view.shape[1] != w) {
+        return false;
+    }
+    if (left.view.itemsize != 1 || right.view.itemsize != 1) {
+        return false;
+    }
+
+    out.score = 0.0;
+    out.diff = 0.0;
+    out.coverage = 0.0;
+    out.regions = 0;
+    out.deltas.assign(4, 0.0);
+
+    const Py_ssize_t mid_x = std::max<Py_ssize_t>(1, w / 2);
+    const Py_ssize_t mid_y = std::max<Py_ssize_t>(1, h / 2);
+    double region_sums[4] = {0.0, 0.0, 0.0, 0.0};
+    long region_counts[4] = {0, 0, 0, 0};
+    double diff_sum = 0.0;
+    long coverage_count = 0;
+    long count = 0;
+
+    for (Py_ssize_t y = 0; y < h; ++y) {
+        for (Py_ssize_t x = 0; x < w; ++x) {
+            const double left_value = static_cast<double>(read_u8_at(left, y, x));
+            const double right_value = static_cast<double>(read_u8_at(right, y, x));
+            const double diff = std::abs(left_value - right_value);
+            diff_sum += diff;
+            if (diff >= diff_threshold) {
+                ++coverage_count;
+            }
+            const int region_index = (y >= mid_y ? 2 : 0) + (x >= mid_x ? 1 : 0);
+            region_sums[region_index] += diff;
+            region_counts[region_index] += 1;
+            ++count;
+        }
+    }
+
+    if (count <= 0) {
+        return false;
+    }
+
+    for (int idx = 0; idx < 4; ++idx) {
+        const double denom = static_cast<double>(region_counts[idx] > 0 ? region_counts[idx] : 1);
+        const double value = region_sums[idx] / denom;
+        out.deltas[static_cast<size_t>(idx)] = value;
+        if (value >= region_threshold) {
+            out.regions += 1;
+        }
+    }
+
+    std::vector<double> ranked = out.deltas;
+    std::sort(ranked.begin(), ranked.end(), std::greater<double>());
+    const size_t top_n = std::min<size_t>(3, ranked.size());
+    double score = 0.0;
+    for (size_t idx = 0; idx < top_n; ++idx) {
+        score += ranked[idx];
+    }
+
+    const double denom = static_cast<double>(count);
+    out.score = score / static_cast<double>(top_n > 0 ? top_n : 1);
+    out.diff = diff_sum / denom;
+    out.coverage = static_cast<double>(coverage_count) / denom;
     return true;
 }
 
@@ -498,6 +583,88 @@ PyObject* py_gray_delta(PyObject*, PyObject* args) {
     }
     score /= static_cast<double>(top_n > 0 ? top_n : 1);
     return tuple_score_hits_deltas(score, hits, deltas);
+}
+
+PyObject* py_gray_edge_series(PyObject*, PyObject* args) {
+    PyObject* frames_obj = nullptr;
+    double region_threshold = 24.0;
+    double diff_threshold = 32.0;
+    if (!PyArg_ParseTuple(args, "Odd:gray_edge_series", &frames_obj, &region_threshold, &diff_threshold)) {
+        return nullptr;
+    }
+
+    PyObject* frames_seq = PySequence_Fast(frames_obj, "frames must be a sequence");
+    if (frames_seq == nullptr) {
+        return nullptr;
+    }
+    const Py_ssize_t frame_count = PySequence_Fast_GET_SIZE(frames_seq);
+    if (frame_count < 2) {
+        Py_DECREF(frames_seq);
+        return PyList_New(0);
+    }
+
+    std::vector<BufferView> frames;
+    frames.reserve(static_cast<size_t>(frame_count));
+    PyObject** frame_items = PySequence_Fast_ITEMS(frames_seq);
+    for (Py_ssize_t idx = 0; idx < frame_count; ++idx) {
+        BufferView frame;
+        if (!get_buffer(frame_items[idx], frame, PyBUF_ND | PyBUF_STRIDES)) {
+            Py_DECREF(frames_seq);
+            return nullptr;
+        }
+        if (frame.view.ndim != 2 || frame.view.itemsize != 1) {
+            Py_DECREF(frames_seq);
+            PyErr_SetString(PyExc_ValueError, "gray edge series expects uint8 2D arrays");
+            return nullptr;
+        }
+        frames.push_back(std::move(frame));
+    }
+    Py_DECREF(frames_seq);
+
+    std::vector<EdgeSeriesSummary> summaries(static_cast<size_t>(frame_count - 1));
+    bool ok = true;
+    Py_BEGIN_ALLOW_THREADS
+    for (Py_ssize_t idx = 0; idx + 1 < frame_count; ++idx) {
+        if (!compute_edge_series_summary(
+                frames[static_cast<size_t>(idx)],
+                frames[static_cast<size_t>(idx + 1)],
+                region_threshold,
+                diff_threshold,
+                summaries[static_cast<size_t>(idx)])) {
+            ok = false;
+            break;
+        }
+    }
+    Py_END_ALLOW_THREADS
+
+    if (!ok) {
+        PyErr_SetString(PyExc_ValueError, "gray edge series expects matching uint8 2D arrays");
+        return nullptr;
+    }
+
+    PyObject* out = PyList_New(frame_count - 1);
+    if (out == nullptr) {
+        return nullptr;
+    }
+    for (Py_ssize_t idx = 0; idx + 1 < frame_count; ++idx) {
+        const EdgeSeriesSummary& summary = summaries[static_cast<size_t>(idx)];
+        PyObject* item = PyDict_New();
+        if (item == nullptr) {
+            Py_DECREF(out);
+            return nullptr;
+        }
+        if (!dict_set_double(item, "score", summary.score) ||
+            !dict_set_double(item, "diff", summary.diff) ||
+            !dict_set_double(item, "coverage", summary.coverage) ||
+            !dict_set_long(item, "regions", summary.regions) ||
+            !dict_set_owned(item, "deltas", float_list_from_vector(summary.deltas))) {
+            Py_DECREF(item);
+            Py_DECREF(out);
+            return nullptr;
+        }
+        PyList_SET_ITEM(out, idx, item);
+    }
+    return out;
 }
 
 PyObject* py_color_avg_delta(PyObject*, PyObject* args) {
@@ -1206,6 +1373,7 @@ PyObject* py_llm_macro_group_ranges(PyObject*, PyObject* args) {
 PyMethodDef methods[] = {
     {"delta_bytes", py_delta_bytes, METH_VARARGS, "Sampled byte mean absolute delta."},
     {"gray_delta", py_gray_delta, METH_VARARGS, "Compute sampled gray-region deltas."},
+    {"gray_edge_series", py_gray_edge_series, METH_VARARGS, "Compute consecutive edge-frame deltas and quadrant hit summaries."},
     {"color_avg_delta", py_color_avg_delta, METH_VARARGS, "Compute color average deltas."},
     {"dense_flow_pair_metrics", py_dense_flow_pair_metrics, METH_VARARGS, "Compute dense optical-flow pair metrics without NumPy temporaries."},
     {"gray_rollback_search", py_gray_rollback_search, METH_VARARGS, "Search rollback window densely and refine the cut frame with native C++."},

@@ -1694,15 +1694,12 @@ class EditorPipelineMixin:
                 except Exception:
                     pass
 
-                t_diarize = None
-                if getattr(backend, "max_speakers", 1) > 1 and hasattr(backend, "_prepare_speaker_map"):
-                    t_diarize = threading.Thread(
-                        target=backend._prepare_speaker_map,
-                        args=(audio_for_diarization,),
-                        daemon=True,
-                        name="partial-diarizer",
+                if hasattr(backend, "_prepare_speaker_map_before_stt"):
+                    backend._prepare_speaker_map_before_stt(
+                        audio_for_diarization,
+                        speaker_preflight=getattr(backend, "_autopilot_speaker_preflight", None),
+                        stage_callback=lambda text: sig.status.emit("STATUS_SPEAKER", text),
                     )
-                    t_diarize.start()
 
                 def _emit_processed_preview(chunk_segs, label="STT"):
                     preview = optimize_stt_preview_segments(
@@ -1791,17 +1788,8 @@ class EditorPipelineMixin:
                             context="부분 재인식",
                         )
 
-                    if getattr(backend, "max_speakers", 1) > 1 and getattr(backend, "_speaker_map", None):
-                        try:
-                            from core.audio.diarize import get_speaker_for_segment
-
-                            for seg in opt:
-                                spk_full = get_speaker_for_segment(
-                                    seg["start"], seg["end"], backend._speaker_map
-                                )
-                                seg["speaker"] = spk_full.replace("SPEAKER_", "")
-                        except Exception:
-                            pass
+                    if hasattr(backend, "_apply_speaker_map_to_segments"):
+                        opt = backend._apply_speaker_map_to_segments(opt)
 
                     opt = apply_final_gap_settings(opt, force=True)
                     if hasattr(backend, "_magnetize_by_saved_cut_boundaries"):
@@ -1827,12 +1815,6 @@ class EditorPipelineMixin:
                     return []
 
                 def do_optimize():
-                    if t_diarize and t_diarize.is_alive():
-                        try:
-                            t_diarize.join()
-                        except Exception:
-                            pass
-
                     seg_buffer = []
                     last_c_idx = 0
                     last_t_total = 1

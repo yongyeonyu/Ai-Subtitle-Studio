@@ -7,11 +7,29 @@ Rectangle {
     property string iconText: "AI"
     property color accentColor: "#34C759"
     property bool flashOn: false
+    property real progressRatio: 0.0
+    property bool progressActive: false
+    property bool progressCompleted: false
 
     radius: 8
-    color: flashOn ? "#173D28" : "#15331F"
+    clip: true
+    color: root.progressCompleted ? (flashOn ? "#173D28" : "#15331F") : "transparent"
     border.width: 1
     border.color: root.accentColor
+
+    Rectangle {
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: root.progressCompleted
+               ? parent.width
+               : Math.max(0, Math.min(parent.width, parent.width * Math.max(0.0, Math.min(root.progressRatio, 0.99))))
+        radius: parent.radius
+        visible: root.progressCompleted || root.progressActive
+        color: root.progressCompleted
+               ? Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, root.flashOn ? 0.20 : 0.16)
+               : Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, root.flashOn ? 0.34 : 0.24)
+    }
 
     Row {
         anchors.fill: parent

@@ -15,6 +15,7 @@ from core.runtime import config
 from ui.dialogs.qml_popup import show_context_menu
 from ui.editor.editor_helpers import find_segment_at
 from ui.responsive_profile import responsive_profile_for_size
+from ui.timeline.timeline_analysis import roughcut_precision_guides_for_widget, roughcut_precision_guides_signature
 from ui.timeline.timeline_canvas_editing import apply_timing_drag
 
 from ui.timeline.speaker_labels import current_speaker_settings, speaker_labels_for_segment
@@ -168,6 +169,10 @@ class TimelineInputMixin:
             return None
         return None
 
+    def _timing_drag_preserves_playhead(self, edge: str | None = None) -> bool:
+        edge_name = str(edge if edge is not None else getattr(self, "_drag_edge", "") or "")
+        return edge_name in {"diamond", "square_left", "square_right"}
+
     def _finish_timing_drag_cleanup(self, dirty: QRect | None = None) -> None:
         self.drag_finished.emit()
         self._drag_seg = self._drag_edge = self._drag_adj_l = self._drag_adj_r = None
@@ -219,6 +224,19 @@ class TimelineInputMixin:
 
     def _is_stt_preview_segment(self, seg: dict) -> bool:
         return bool(seg.get("stt_pending") or seg.get("_live_stt_preview") or seg.get("_live_subtitle_preview"))
+
+    def _is_raw_stt_preview_segment(self, seg: dict) -> bool:
+        return bool(seg.get("stt_pending") or seg.get("_live_stt_preview"))
+
+    def _is_project_placeholder_segment(self, seg: dict) -> bool:
+        return bool(seg.get("_project_placeholder_segment"))
+
+    def _is_non_editable_canvas_segment(self, seg: dict) -> bool:
+        return bool(
+            seg.get("is_gap")
+            or self._is_stt_preview_segment(seg)
+            or self._is_project_placeholder_segment(seg)
+        )
 
     def _stt_preview_source(self, seg: dict) -> str:
         source = (
@@ -339,7 +357,7 @@ class TimelineInputMixin:
             seg = next(
                 (
                     s for s in candidates
-                    if not self._is_stt_preview_segment(s)
+                    if not self._is_non_editable_canvas_segment(s)
                     and abs(s["start"] - self.active_seg_start) < 0.5
                 ),
                 None,
@@ -380,7 +398,7 @@ class TimelineInputMixin:
 
         target = None
         for seg in reversed(self._editable_segments_sorted() if hasattr(self, "_editable_segments_sorted") else self.segments):
-            if self._is_stt_preview_segment(seg):
+            if self._is_non_editable_canvas_segment(seg):
                 continue
             if seg["start"] < self.playhead_sec - 0.1:
                 target = seg["start"]
@@ -399,7 +417,7 @@ class TimelineInputMixin:
 
         target = None
         for seg in self._editable_segments_sorted() if hasattr(self, "_editable_segments_sorted") else self.segments:
-            if self._is_stt_preview_segment(seg):
+            if self._is_non_editable_canvas_segment(seg):
                 continue
             if seg["start"] > self.playhead_sec + 0.1:
                 target = seg["start"]
@@ -415,7 +433,7 @@ class TimelineInputMixin:
     def _emit_smart_split_at_playhead(self):
         sec = self._snap_to_frame(self.playhead_sec)
         candidates = self._visible_items_for_paint(self.segments, "segments", sec, sec, pad_sec=0.02) if hasattr(self, "_visible_items_for_paint") else self.segments
-        seg = find_segment_at([s for s in candidates if not self._is_stt_preview_segment(s)], sec, skip_gap=True)
+        seg = find_segment_at([s for s in candidates if not self._is_non_editable_canvas_segment(s)], sec, skip_gap=True)
         if not seg: return
         if sec <= seg["start"] + 0.05 or sec >= seg["end"] - 0.05: return
         mid = (seg["start"] + seg["end"]) / 2.0
@@ -538,7 +556,7 @@ class TimelineInputMixin:
     def _speaker_lane_seg_at(self, x: int, y: int):
         candidates = self._segments_near_x_for_hit(x, pad_px=14) if hasattr(self, "_segments_near_x_for_hit") else self.segments
         for seg in candidates:
-            if self._is_stt_preview_segment(seg):
+            if self._is_non_editable_canvas_segment(seg):
                 continue
             if self._speaker_lane_hit_rect_for_seg(seg).contains(x, y):
                 return seg
@@ -553,7 +571,7 @@ class TimelineInputMixin:
             return None
         candidates = self._segments_near_x_for_hit(x, pad_px=12) if hasattr(self, "_segments_near_x_for_hit") else self.segments
         for seg in candidates:
-            if not self._is_stt_preview_segment(seg):
+            if not self._is_raw_stt_preview_segment(seg):
                 continue
             source = self._stt_preview_source(seg)
             if lane_source == "STT1" and source == "STT2":
@@ -729,7 +747,7 @@ class TimelineInputMixin:
             hits.append((score, seg, edge))
 
         for seg in candidates:
-            if self._is_stt_preview_segment(seg):
+            if self._is_non_editable_canvas_segment(seg):
                 continue
             is_active = self._is_active_segment(seg) if hasattr(self, "_is_active_segment") else (
                 self.active_seg_start is not None and abs(float(seg.get("start", 0.0) or 0.0) - float(self.active_seg_start)) < 0.5
@@ -787,7 +805,7 @@ class TimelineInputMixin:
     def _center_drag_hit(self, seg: dict, x: int, y: int) -> bool:
         if not isinstance(seg, dict):
             return False
-        if self._is_stt_preview_segment(seg) or not (SEG_TOP <= y <= SEG_BOT):
+        if self._is_non_editable_canvas_segment(seg) or not (SEG_TOP <= y <= SEG_BOT):
             return False
         x1, x2 = self._x(seg["start"]), self._x(seg["end"])
         if x <= x1 or x >= x2:
@@ -813,7 +831,7 @@ class TimelineInputMixin:
         candidates = self._segments_near_x_for_hit(x, pad_px=20) if hasattr(self, "_segments_near_x_for_hit") else self.segments
         matches: list[tuple[tuple[int, int, int], dict]] = []
         for seg in candidates:
-            if self._is_stt_preview_segment(seg):
+            if self._is_non_editable_canvas_segment(seg):
                 continue
             is_active = self._is_active_segment(seg) if hasattr(self, "_is_active_segment") else (
                 self.active_seg_start is not None and abs(float(seg.get("start", 0.0) or 0.0) - float(self.active_seg_start)) < 0.5
@@ -856,7 +874,7 @@ class TimelineInputMixin:
         else:
             editable = []
             for raw_idx, seg in enumerate(self.segments):
-                if self._is_stt_preview_segment(seg) or bool(seg.get("is_gap")):
+                if self._is_non_editable_canvas_segment(seg):
                     continue
                 if "start" not in seg or "end" not in seg:
                     continue
@@ -1183,7 +1201,8 @@ class TimelineInputMixin:
             self._clear_active_gaps_for_segment_drag()
             self._drag_snap_candidates_cache = self._drag_snap_candidates()
             self._drag_last_paint_rect = self._drag_visual_rect()
-            self.scrub_sec.emit(click_sec)
+            if not self._timing_drag_preserves_playhead("diamond"):
+                self.scrub_sec.emit(click_sec)
             self.setCursor(QCursor(Qt.CursorShape.SizeHorCursor)); return
 
         candidate = self._stt_candidate_at(x, y)
@@ -1208,7 +1227,8 @@ class TimelineInputMixin:
         handle_hit = self._handle_drag_at(x, y)
         if handle_hit:
             self._clear_pending_center_drag()
-            self.scrub_sec.emit(click_sec)
+            if not self._timing_drag_preserves_playhead(str(handle_hit[1] or "")):
+                self.scrub_sec.emit(click_sec)
             self._setup_drag(handle_hit[0], handle_hit[1], x)
             return
 
@@ -1591,6 +1611,10 @@ class TimelineInputMixin:
             )
         except Exception:
             roughcut_key = None
+        try:
+            precision_key = roughcut_precision_guides_signature(self)
+        except Exception:
+            precision_key = ()
         return (
             segment_key,
             id(getattr(self, "gap_segments", None)),
@@ -1608,6 +1632,7 @@ class TimelineInputMixin:
             int(round(float(getattr(self, "total_duration", 0.0) or 0.0) * 1000.0)),
             round(float(self._get_fps() if hasattr(self, "_get_fps") else 30.0), 3),
             roughcut_key,
+            precision_key,
         )
 
     def _build_drag_snap_base_candidates(self) -> list[dict]:
@@ -1619,9 +1644,7 @@ class TimelineInputMixin:
 
         candidates: list[dict] = []
         for seg in list(getattr(self, "segments", []) or []):
-            if not isinstance(seg, dict) or bool(seg.get("is_gap")):
-                continue
-            if self._is_stt_preview_segment(seg):
+            if not isinstance(seg, dict) or self._is_non_editable_canvas_segment(seg):
                 continue
             kind = "subtitle"
             self._add_snap_candidate(candidates, seg.get("start"), kind, seg)
@@ -1643,6 +1666,12 @@ class TimelineInputMixin:
             self._add_snap_candidate(candidates, sec, "cut_temporary", bt)
         for guide_sec in list(getattr(self, "user_alignment_guides", []) or []):
             self._add_snap_candidate(candidates, guide_sec, "user_guide", None)
+        try:
+            precision_guides = roughcut_precision_guides_for_widget(self)
+        except Exception:
+            precision_guides = []
+        for guide in list(precision_guides or []):
+            self._add_snap_candidate(candidates, guide.get("time"), "roughcut_precision", guide)
         try:
             markers = self.roughcut_major_markers_cached() if hasattr(self, "roughcut_major_markers_cached") else []
         except Exception:
@@ -1668,7 +1697,7 @@ class TimelineInputMixin:
             source = item.get("source")
             if source is dragged:
                 continue
-            if item.get("kind") in {"gap", "user_guide"}:
+            if item.get("kind") in {"gap", "user_guide", "roughcut_precision"}:
                 snapped_edge = self._snap_to_frame(_as_float(item.get("time"), -1.0))
                 if any(abs(snapped_edge - original) < 0.05 for original in drag_original_edges):
                     continue
@@ -1676,6 +1705,7 @@ class TimelineInputMixin:
 
         priority = {
             "user_guide": 13,
+            "roughcut_precision": 12,
             "cut_official": 12,
             "cut_temporary": 11,
             "subtitle": 10,
@@ -1697,12 +1727,12 @@ class TimelineInputMixin:
 
     def _snap_candidate_threshold_sec(self, candidate: dict, base_threshold: float) -> float:
         kind = str((candidate or {}).get("kind") or "")
-        if kind != "user_guide":
+        if kind not in {"user_guide", "roughcut_precision"}:
             return base_threshold
         pps = max(1.0, float(getattr(self, "pps", 1.0) or 1.0))
-        expanded_px = 18.0 / pps
+        expanded_px = (18.0 if kind == "user_guide" else 14.0) / pps
         fps = max(1.0, float(self._get_fps() if hasattr(self, "_get_fps") else 30.0))
-        return max(base_threshold, expanded_px, 2.0 / fps)
+        return max(base_threshold, expanded_px, (2.0 if kind == "user_guide" else 1.5) / fps)
 
     def _snap_drag_time(self, value: float, candidates: list[dict], threshold: float, min_value: float, max_value: float) -> tuple[float, dict | None]:
         value = self._snap_to_frame(value)

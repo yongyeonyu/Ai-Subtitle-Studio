@@ -310,6 +310,16 @@ def build_follower_native_verify_settings(
         _safe_int("scan_cut_dense_flow_window_radius", 3),
     )
     tuned["scan_cut_dense_flow_backend"] = str(tuned.get("scan_cut_dense_flow_backend") or "dis")
+    tuned["scan_cut_follower_visual_jump_enabled"] = bool(
+        tuned.get("scan_cut_follower_visual_jump_enabled", True)
+    )
+    tuned["scan_cut_follower_visual_jump_width"] = max(
+        960,
+        _safe_int(
+            "scan_cut_follower_visual_jump_width",
+            int(tuned.get("scan_cut_live_visual_width", 960) or 960),
+        ),
+    )
     tuned["scan_cut_sample_width"] = max(15, _safe_int("scan_cut_sample_width", 18))
     tuned["scan_cut_sample_height"] = max(9, _safe_int("scan_cut_sample_height", 10))
     tuned["scan_cut_target_samples"] = max(64, _safe_int("scan_cut_target_samples", 81))

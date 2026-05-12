@@ -365,6 +365,18 @@ class MainRuntimeCleanupMixin:
             pass
         if stage_text == "critical":
             try:
+                trainer_busy = False
+                trainer = getattr(self, "_personalization_idle_trainer", None)
+                if trainer is not None:
+                    status = getattr(trainer, "learning_status", None)
+                    if callable(status):
+                        trainer_busy = bool((status() or {}).get("active"))
+                    if not trainer_busy and hasattr(trainer, "is_busy"):
+                        trainer_busy = bool(trainer.is_busy())
+                    if not trainer_busy:
+                        trainer_busy = bool(getattr(trainer, "_current_learning_mode", ""))
+                if trainer_busy:
+                    return {"stage": stage_text, "actions": actions}
                 busy = bool(self._is_editor_ai_busy(getattr(self, "_editor_widget", None)) or self._is_backend_ai_busy())
             except Exception:
                 busy = True

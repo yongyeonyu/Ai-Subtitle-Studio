@@ -1110,7 +1110,13 @@ def run_training_queue_once(
 class PersonalizationIdleTrainer(QObject):
     _learning_status_signal = pyqtSignal()
 
-    def __init__(self, owner, *, store_dir: str | Path | None = None):
+    def __init__(
+        self,
+        owner,
+        *,
+        store_dir: str | Path | None = None,
+        recover_on_startup: bool = True,
+    ):
         super().__init__(owner)
         self.owner = owner
         self.store_dir = str(store_dir) if store_dir else None
@@ -1132,13 +1138,54 @@ class PersonalizationIdleTrainer(QObject):
         self._last_native_input_interrupt_at = 0.0
         self._native_input_watchdog_stop = threading.Event()
         self._native_input_watchdog_thread: threading.Thread | None = None
+        self._startup_recovery_thread: threading.Thread | None = None
+        self._startup_recovery_started = False
+        self._startup_recovery_completed = False
+        self._startup_recovery_lock = threading.Lock()
         self._learning_status_signal.connect(self._notify_learning_status_changed_on_main)
-        recover_interrupted_training_jobs(self.store_dir, reason="trainer_startup")
+        if recover_on_startup:
+            self.ensure_startup_recovery(async_run=False, reason="trainer_startup")
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(LOW_RESOURCE_POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._poll)
         self._poll_timer.start()
         self._start_native_input_watchdog()
+
+    def ensure_startup_recovery(
+        self,
+        *,
+        async_run: bool = True,
+        reason: str = "trainer_startup",
+    ) -> dict[str, Any]:
+        with self._startup_recovery_lock:
+            if self._startup_recovery_started:
+                thread = self._startup_recovery_thread
+                return {
+                    "started": False,
+                    "completed": bool(self._startup_recovery_completed),
+                    "running": bool(thread is not None and thread.is_alive()),
+                }
+            self._startup_recovery_started = True
+            self._startup_recovery_completed = False
+
+        def _run() -> None:
+            try:
+                recover_interrupted_training_jobs(self.store_dir, reason=reason)
+            finally:
+                self._startup_recovery_completed = True
+
+        if not async_run:
+            _run()
+            return {"started": True, "completed": True, "running": False}
+
+        thread = threading.Thread(
+            target=_run,
+            daemon=True,
+            name="personalization-startup-recovery",
+        )
+        self._startup_recovery_thread = thread
+        thread.start()
+        return {"started": True, "completed": False, "running": True}
 
     def note_user_activity(self) -> None:
         self.last_user_activity_ms = QDateTime.currentMSecsSinceEpoch()

@@ -267,7 +267,11 @@ def subtitle_segment_visual_style(
         and not _quality_filter_matches(quality, q_label, q_filter, q_flags)
     )
 
-    if review_state in SUBTITLE_STATE_SEGMENT_COLORS and not kind_style and not is_stt_pending:
+    if bool(seg.get("_project_placeholder_segment")):
+        fill = "#172127" if not active else "#1D2C34"
+        border = str(seg.get("border_color") or seg.get("color") or "#5AC8FA")
+        text = ""
+    elif review_state in SUBTITLE_STATE_SEGMENT_COLORS and not kind_style and not is_stt_pending:
         fill, border = SUBTITLE_STATE_SEGMENT_COLORS[review_state]
         text = ""
     elif kind_style:

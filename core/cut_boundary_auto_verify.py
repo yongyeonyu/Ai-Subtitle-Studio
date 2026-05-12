@@ -5,6 +5,129 @@
 from __future__ import annotations
 
 
+_FALSE_VALUES = {"0", "false", "off", "no", "disabled", "사용 안함", "끔"}
+
+
+def _setting_bool(value, default: bool = True) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, str):
+        return value.strip().lower() not in _FALSE_VALUES
+    return bool(value)
+
+
+def follower_visual_jump_cut_check(
+    cap,
+    cv2_mod,
+    *,
+    frame: int,
+    frame_count: int,
+    settings: dict | None = None,
+) -> dict:
+    settings = dict(settings or {})
+    if not _setting_bool(settings.get("scan_cut_follower_visual_jump_enabled"), True):
+        return {"available": False, "passed": False, "reason": "disabled"}
+    if cap is None or cv2_mod is None:
+        return {"available": False, "passed": False, "reason": "missing_backend"}
+
+    try:
+        from core.visual_cut_jump import (
+            create_visual_cut_flow_engine,
+            is_visual_cut_peak,
+            prepare_visual_cut_frame,
+            visual_cut_pair_metrics,
+        )
+    except Exception:
+        return {"available": False, "passed": False, "reason": "helper_unavailable"}
+
+    frame_count = max(0, int(frame_count or 0))
+    center = int(frame or 0)
+    if frame_count <= 3 or center < 2 or center >= (frame_count - 1):
+        return {"available": False, "passed": False, "reason": "not_enough_frames"}
+
+    width_default = settings.get("scan_cut_live_visual_width", 960)
+    try:
+        max_width = max(320, min(int(settings.get("scan_cut_follower_visual_jump_width", width_default) or width_default), 4096))
+    except Exception:
+        max_width = 960
+    backend_preference = str(settings.get("scan_cut_dense_flow_backend", "dis") or "dis").strip().lower()
+
+    def _read_prepared(index: int):
+        try:
+            cap.set(cv2_mod.CAP_PROP_POS_FRAMES, int(index))
+            ok, frame_bgr = cap.read()
+        except Exception:
+            return None
+        if not ok:
+            return None
+        try:
+            return prepare_visual_cut_frame(
+                frame_bgr,
+                cv2_mod,
+                max_width=max_width,
+            )
+        except Exception:
+            return None
+
+    frames = {
+        idx: _read_prepared(idx)
+        for idx in range(center - 2, center + 2)
+    }
+    if any(item is None for item in frames.values()):
+        return {"available": False, "passed": False, "reason": "frame_unavailable"}
+
+    try:
+        flow_engine, _backend_name = create_visual_cut_flow_engine(
+            cv2_mod,
+            backend_preference=backend_preference,
+        )
+    except Exception:
+        flow_engine, _backend_name = None, "flow_unavailable"
+
+    prev_metrics = visual_cut_pair_metrics(
+        frames[center - 2],
+        frames[center - 1],
+        cv2_mod,
+        flow_engine=flow_engine,
+        backend_preference=backend_preference,
+    )
+    current_metrics = visual_cut_pair_metrics(
+        frames[center - 1],
+        frames[center],
+        cv2_mod,
+        flow_engine=flow_engine,
+        backend_preference=backend_preference,
+    )
+    next_metrics = visual_cut_pair_metrics(
+        frames[center],
+        frames[center + 1],
+        cv2_mod,
+        flow_engine=flow_engine,
+        backend_preference=backend_preference,
+    )
+    if not isinstance(prev_metrics, dict) or not isinstance(current_metrics, dict) or not isinstance(next_metrics, dict):
+        return {"available": False, "passed": False, "reason": "metrics_unavailable"}
+
+    peak = is_visual_cut_peak(
+        prev_metrics,
+        current_metrics,
+        next_metrics,
+        history=[prev_metrics],
+        settings=settings,
+    )
+    if not isinstance(peak, dict):
+        return {"available": False, "passed": False, "reason": "peak_unavailable"}
+    return {
+        "available": True,
+        "passed": bool(peak.get("passed")),
+        "reason": str(peak.get("reason", "") or "peak_unavailable"),
+        "frame": int(center),
+        "pair": [int(center - 1), int(center)],
+        "max_width": int(max_width),
+        **peak,
+    }
+
+
 def build_strict_verify_helpers(deps: dict):
     normalize_cut_boundary_level = deps["normalize_cut_boundary_level"]
     get_level_positions = deps["get_level_positions"]
@@ -630,6 +753,54 @@ def build_strict_verify_helpers(deps: dict):
             "rollback_relocated": True,
         }
 
+    def _boundary_visual_jump_check(
+        cap,
+        cv2_mod,
+        *,
+        boundary_frame: int,
+        frame_count: int,
+        settings: dict | None = None,
+    ) -> dict:
+        try:
+            boundary_frame = int(boundary_frame or 0)
+        except Exception:
+            boundary_frame = 0
+        frame_count = max(0, int(frame_count or 0))
+        candidates = []
+        seen = set()
+        for probe_frame in (boundary_frame, boundary_frame + 1):
+            probe_frame = int(probe_frame)
+            if probe_frame in seen or probe_frame < 0 or probe_frame >= frame_count:
+                continue
+            seen.add(probe_frame)
+            try:
+                result = follower_visual_jump_cut_check(
+                    cap,
+                    cv2_mod,
+                    frame=probe_frame,
+                    frame_count=frame_count,
+                    settings=settings,
+                )
+            except Exception:
+                result = {"available": False, "passed": False, "reason": "probe_failed"}
+            payload = dict(result or {})
+            payload["probe_frame"] = int(probe_frame)
+            payload["boundary_frame"] = int(boundary_frame)
+            candidates.append(payload)
+        if not candidates:
+            return {"available": False, "passed": False, "reason": "probe_unavailable", "boundary_frame": int(boundary_frame)}
+        candidates.sort(
+            key=lambda item: (
+                bool(item.get("passed")),
+                float(item.get("score", -1.0) or -1.0),
+                -abs(int(item.get("probe_frame", boundary_frame) or boundary_frame) - int(boundary_frame + 1)),
+            ),
+            reverse=True,
+        )
+        best = dict(candidates[0])
+        best["checked_frames"] = [int(item.get("probe_frame", boundary_frame) or boundary_frame) for item in candidates]
+        return best
+
     def _best_local_color_candidate(
         color_map: dict,
         *,
@@ -1090,12 +1261,28 @@ def build_strict_verify_helpers(deps: dict):
                 local_color = dict(selected_gray.get("local_color") or {})
                 local_color_pass = bool(selected_gray.get("local_color_pass"))
 
+        visual_jump = _boundary_visual_jump_check(
+            cap,
+            cv2_mod,
+            boundary_frame=int(selected_gray["frame"]),
+            frame_count=frame_count,
+            settings=settings,
+        )
+        visual_jump_pass = bool(visual_jump.get("passed"))
+
         if local_color_pass:
             selected_frame = int(local_color["frame"])
             color_result = local_color
         elif color_pass and abs(int(best_color["frame"]) - int(selected_gray["frame"])) <= gray_color_agreement_frames:
             selected_frame = int(selected_gray["frame"])
             color_result = best_color
+        elif visual_jump_pass:
+            selected_frame = int(selected_gray["frame"])
+            color_result = (
+                local_color
+                if isinstance(local_color, dict) and local_color
+                else (best_color if isinstance(best_color, dict) else {})
+            )
         else:
             provisional_candidates = list(gray_candidates) + [best_color]
             if local_color:
@@ -1109,8 +1296,13 @@ def build_strict_verify_helpers(deps: dict):
             frame_count=frame_count,
             settings=settings,
         )
-        if not flow_check.get("passed", True):
-            return {"passed": False, "reason": "dense_flow_motion_reject", "dense_flow": dict(flow_check)}
+        if not flow_check.get("passed", True) and not visual_jump_pass:
+            return {
+                "passed": False,
+                "reason": "dense_flow_motion_reject",
+                "dense_flow": dict(flow_check),
+                "visual_jump": dict(visual_jump),
+            }
 
         same_scene_similarity = _frame_mean_color_similarity(
             color_map,
@@ -1126,6 +1318,7 @@ def build_strict_verify_helpers(deps: dict):
             and float(same_scene_similarity.get("score", 0.0) or 0.0) <= same_scene_max_score
             and float(same_scene_similarity.get("luma_delta", 0.0) or 0.0) <= same_scene_max_luma
             and float(same_scene_similarity.get("chroma_delta", 0.0) or 0.0) <= same_scene_max_chroma
+            and not visual_jump_pass
         ):
             return {
                 "passed": False,
@@ -1137,6 +1330,7 @@ def build_strict_verify_helpers(deps: dict):
                     "chroma_delta": float(same_scene_similarity.get("chroma_delta", 0.0) or 0.0),
                 },
                 "dense_flow": dict(flow_check),
+                "visual_jump": dict(visual_jump),
             }
 
         try:
@@ -1159,6 +1353,9 @@ def build_strict_verify_helpers(deps: dict):
             "color_deltas": list(color_result.get("deltas") or []),
             "color_frame": int(color_result.get("frame", selected_frame) or selected_frame),
             "dense_flow": dict(flow_check),
+            "visual_jump": dict(visual_jump),
+            "visual_jump_confirmed": bool(visual_jump_pass),
+            "dense_flow_overridden_by_visual_jump": bool(not flow_check.get("passed", True) and visual_jump_pass),
             "grid_cells": selected_count,
         }
 

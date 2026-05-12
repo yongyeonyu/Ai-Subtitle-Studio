@@ -1,6 +1,7 @@
 ## AI Subtitle Studio - Requirements (macOS Apple Silicon)
 ## Python 3.11
 ## 설치: python3.11 -m pip install -r requirements-mac.txt
+## 선택: ChatGPT 구독형 Codex CLI 사용 시 Homebrew Cask로 설치 -> brew install codex
 ## 선택: RNNoise 필터는 pip 패키지가 아니라 rnnoise_demo 실행 파일 또는 RNNOISE_BINARY 환경변수가 필요
 ## 선택: Resemble Enhance는 앱의 모델 관리에서 별도 설치
 

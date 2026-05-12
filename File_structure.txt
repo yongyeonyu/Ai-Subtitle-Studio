@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.02-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_2_RELEASED
-Last-Updated: 2026-05-12
+Document-Version: 04.00.03-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_3_RELEASED
+Last-Updated: 2026-05-13
 Updated-By: Codex
 Scope: Actual project filesystem map generated from tracked source files plus untracked non-ignored release files. `.git/`, `venv/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.codex_work/`, and large runtime cache/output folders are intentionally not expanded.
 Role-Description-Rule: Tree entries are generated from actual paths; review notes are removed.
@@ -9,9 +9,9 @@ Role-Description-Rule: Tree entries are generated from actual paths; review note
 ================================================================================
 AI Subtitle Studio - Actual Project File Structure
 Created: 2026-04-20
-Last Updated: 2026-05-12
-Phase: MAC_NATIVE_APPSTORE_V4_0_2_RELEASED
-App Version: 04.00.02
+Last Updated: 2026-05-13
+Phase: MAC_NATIVE_APPSTORE_V4_0_3_RELEASED
+App Version: 04.00.03
 Structure Document: File_structure.txt
 Note: This file is an actual tree map and excludes cache-only Python bytecode folders, virtualenvs, local Codex scratch files, secrets, and large runtime output/cache folders.
 ================================================================================
@@ -340,6 +340,7 @@ ai_subtitle_studio/
 │   ├── subtitle_existing.py
 │   ├── time_history.py
 │   ├── utils.py
+│   ├── visual_cut_jump.py
 │   ├── video_codec.py
 │   ├── video_preview_proxy.py
 │   └── work_mode.py
@@ -563,6 +564,7 @@ ai_subtitle_studio/
 │   ├── test_timeline_speaker_labels.py
 │   ├── test_timeline_waveform_worker.py
 │   ├── test_torch_acceleration.py
+│   ├── test_visual_cut_jump.py
 │   ├── test_video_player_widget.py
 │   ├── test_video_preview_proxy.py
 │   ├── test_whisper_coreml.py
@@ -736,4 +738,5 @@ ai_subtitle_studio/
 ├── RELEASE_v04.00.00.md
 ├── RELEASE_v04.00.01.md
 ├── RELEASE_v04.00.02.md
+├── RELEASE_v04.00.03.md
 └── requirements-mac.txt

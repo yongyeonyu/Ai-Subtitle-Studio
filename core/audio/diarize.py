@@ -23,6 +23,7 @@ _DIARIZE_DEPENDENCIES = (
     ("sklearn", "scikit-learn"),
 )
 _missing_dependency_notice_logged = False
+_SPEAKER_CACHE_SCHEMA = "ai_subtitle_studio.diarization_cache.v2"
 
 
 def missing_diarization_packages() -> list[str]:
@@ -56,16 +57,172 @@ def log_missing_diarization_dependencies(missing: list[str] | None = None) -> No
         f"화자 분리가 필요하면 venv/bin/python -m pip install {packages}"
     )
 
+
+def _normalize_speaker_id(raw) -> str:
+    speaker = str(raw or "").strip()
+    if speaker.startswith("SPEAKER_"):
+        speaker = speaker.replace("SPEAKER_", "", 1)
+    return speaker or "00"
+
+
+def _clean_caption_line(text: str) -> str:
+    parts: list[str] = []
+    for raw_line in str(text or "").replace("\u2028", "\n").splitlines():
+        line = " ".join(str(raw_line or "").split()).strip()
+        if line.startswith("-"):
+            line = line[1:].strip()
+        if line:
+            parts.append(line)
+    return " ".join(parts).strip()
+
+
+def _load_cached_speaker_map(cache_file: str, *, min_speakers: int, max_speakers: int) -> list[dict]:
+    if not os.path.exists(cache_file):
+        return []
+    try:
+        with open(cache_file, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception:
+        return []
+
+    if isinstance(payload, list):
+        return [dict(item) for item in payload if isinstance(item, dict)]
+
+    if not isinstance(payload, dict):
+        return []
+
+    cached_map = payload.get("speaker_map")
+    if not isinstance(cached_map, list):
+        return []
+    if str(payload.get("schema") or "") not in {"", _SPEAKER_CACHE_SCHEMA}:
+        return []
+    try:
+        cached_min = int(payload.get("min_speakers", min_speakers) or min_speakers)
+        cached_max = int(payload.get("max_speakers", max_speakers) or max_speakers)
+    except Exception:
+        cached_min = int(min_speakers or 1)
+        cached_max = int(max_speakers or 1)
+    if cached_min != int(min_speakers or 1) or cached_max != int(max_speakers or 1):
+        return []
+    return [dict(item) for item in cached_map if isinstance(item, dict)]
+
+
+def _save_cached_speaker_map(
+    cache_file: str,
+    speaker_map: list[dict],
+    *,
+    min_speakers: int,
+    max_speakers: int,
+    detected_speakers: int,
+) -> None:
+    payload = {
+        "schema": _SPEAKER_CACHE_SCHEMA,
+        "min_speakers": int(min_speakers or 1),
+        "max_speakers": int(max_speakers or 1),
+        "detected_speakers": int(detected_speakers or 1),
+        "speaker_map": [dict(item) for item in list(speaker_map or []) if isinstance(item, dict)],
+    }
+    try:
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _estimate_speaker_count(
+    embeddings: np.ndarray,
+    *,
+    min_speakers: int,
+    max_speakers: int,
+) -> tuple[int, dict]:
+    try:
+        from sklearn.cluster import KMeans
+        from sklearn.metrics import silhouette_score
+    except Exception:
+        return max(1, min(int(max_speakers or 1), 3)), {
+            "reason": "metrics_unavailable",
+            "candidates": [],
+        }
+
+    total = int(len(embeddings) or 0)
+    upper = max(1, min(int(max_speakers or 1), 3, total))
+    lower = max(1, min(int(min_speakers or 1), upper))
+    if total < 6 or upper <= 1:
+        return max(1, lower), {
+            "reason": "short_audio",
+            "candidates": [],
+        }
+
+    scored: list[dict] = []
+    for cluster_count in range(max(2, lower), upper + 1):
+        if total < cluster_count * 2:
+            continue
+        try:
+            kmeans = KMeans(n_clusters=cluster_count, random_state=42, n_init=10)
+            labels = kmeans.fit_predict(embeddings)
+        except Exception:
+            continue
+        unique = sorted(set(int(item) for item in list(labels)))
+        if len(unique) < 2:
+            continue
+        try:
+            score = float(silhouette_score(embeddings, labels))
+        except Exception:
+            continue
+        counts = np.bincount(labels, minlength=cluster_count).astype(int).tolist()
+        smallest = min(counts or [0])
+        largest = max(counts or [1])
+        balance = float(smallest) / float(max(1, largest))
+        penalty = 0.0
+        if balance < 0.08:
+            penalty = 0.08
+        elif balance < 0.14:
+            penalty = 0.03
+        adjusted = score - penalty
+        scored.append(
+            {
+                "count": cluster_count,
+                "score": round(score, 4),
+                "adjusted": round(adjusted, 4),
+                "balance": round(balance, 4),
+                "counts": counts,
+            }
+        )
+
+    if not scored:
+        return max(1, lower), {
+            "reason": "insufficient_candidates",
+            "candidates": [],
+        }
+
+    scored.sort(key=lambda item: (float(item.get("adjusted", -1.0)), float(item.get("score", -1.0))), reverse=True)
+    best = dict(scored[0])
+    detected = int(best.get("count", 1) or 1)
+    adjusted = float(best.get("adjusted", 0.0) or 0.0)
+    if lower <= 1 and adjusted < 0.12:
+        detected = 1
+    elif detected == 3 and len(scored) > 1:
+        second = dict(scored[1])
+        if int(second.get("count", 1) or 1) == 2:
+            if adjusted - float(second.get("adjusted", adjusted) or adjusted) < 0.025:
+                detected = 2
+
+    return max(lower, detected), {
+        "reason": "silhouette_search",
+        "selected": best,
+        "candidates": scored,
+    }
+
 def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2) -> list[dict]:
     cache_file = f"{os.path.splitext(file_path)[0]}_speaker_cache.json"
-    if os.path.exists(cache_file):
-        try:
-            with open(cache_file, "r", encoding="utf-8") as f:
-                speaker_map = json.load(f)
-            if speaker_map:
-                get_logger().log("⚡ [캐시 적중] 이전에 분석한 화자 분리 데이터를 불러왔습니다!")
-                return speaker_map
-        except Exception: pass
+    speaker_map = _load_cached_speaker_map(
+        cache_file,
+        min_speakers=min_speakers,
+        max_speakers=max_speakers,
+    )
+    if speaker_map:
+        get_logger().log("⚡ [캐시 적중] 이전에 분석한 화자 분리 데이터를 불러왔습니다!")
+        return speaker_map
 
     missing = missing_diarization_packages()
     if missing:
@@ -117,6 +274,8 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
     t_logger = threading.Thread(target=heartbeat_logger, daemon=True)
     t_logger.start()
     
+    speaker_map: list[dict] = []
+
     try:
         signal, fs = torchaudio.load(file_path)
         if signal.shape[0] > 1:
@@ -155,9 +314,22 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
         # 크기(음량)를 무시하고 오직 '목소리 톤'만으로 비교하여 20분 중 3분만 말하는 게스트의 목소리가 묻히지 않게 살려냅니다!
         embeddings = np.array(embeddings)
         embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
-        
-        kmeans = KMeans(n_clusters=max_speakers, random_state=42, n_init=10)
-        labels = kmeans.fit_predict(embeddings)
+
+        detected_speakers, detection_meta = _estimate_speaker_count(
+            embeddings,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
+        get_logger().log(
+            "🗣️ [화자 분리] 전체 오디오 기준 화자 수 자동 판정: "
+            f"{detected_speakers}명 (후보 {detection_meta.get('candidates', [])})"
+        )
+
+        if detected_speakers <= 1:
+            labels = np.zeros(len(embeddings), dtype=int)
+        else:
+            kmeans = KMeans(n_clusters=detected_speakers, random_state=42, n_init=10)
+            labels = kmeans.fit_predict(embeddings)
         
         smoothed_labels = list(labels)
         for i in range(1, len(labels)-1):
@@ -317,17 +489,25 @@ def get_speaker_map(file_path: str, min_speakers: int = 1, max_speakers: int = 2
         except Exception:
             pass
         clear_audio_model_memory_caches(include_gpu=True)
-        
+
+    detected_unique = len({str(item.get("speaker") or "") for item in list(speaker_map or []) if isinstance(item, dict)})
     if not speaker_map:
         get_logger().log("⚠️ 2명 이상의 화자를 구분하지 못하여 단일 화자로 처리합니다.")
         dur = total_samples / 16000.0 if 'total_samples' in locals() else 0.0
         speaker_map.append({"start": 0.0, "end": dur, "speaker": "SPEAKER_00"})
+        detected_unique = 1
     else:
-        get_logger().log(f"✅ 화자 분리 완료! 총 {len(speaker_map)}번의 대화 교체가 감지되었습니다.")
-        try:
-            with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump(speaker_map, f, ensure_ascii=False, indent=2)
-        except Exception: pass
+        get_logger().log(
+            f"✅ 화자 분리 완료! 화자 {max(1, detected_unique)}명 / "
+            f"대화 교체 {len(speaker_map)}개 구간 감지"
+        )
+    _save_cached_speaker_map(
+        cache_file,
+        speaker_map,
+        min_speakers=min_speakers,
+        max_speakers=max_speakers,
+        detected_speakers=max(1, detected_unique),
+    )
         
     return speaker_map
 
@@ -354,3 +534,170 @@ def get_speaker_for_segment(start_t: float, end_t: float, speaker_map: list[dict
         if dist < min_dist:
             min_dist = dist; closest_spk = spk_seg["speaker"]
     return closest_spk
+
+
+def assign_speaker_map_to_segment(segment: dict, speaker_map: list[dict]) -> dict:
+    row = dict(segment or {})
+    if not speaker_map:
+        speaker = _normalize_speaker_id(row.get("speaker", row.get("spk", "00")))
+        row["speaker"] = speaker
+        row.setdefault("speaker_list", [speaker])
+        return row
+
+    start_t = float(row.get("start", 0.0) or 0.0)
+    end_t = float(row.get("end", start_t) or start_t)
+    dominant = _normalize_speaker_id(get_speaker_for_segment(start_t, end_t, speaker_map))
+    row["speaker"] = dominant
+
+    words = [dict(word) for word in list(row.get("words") or []) if isinstance(word, dict)]
+    speakers_in_order: list[str] = []
+    if words:
+        updated_words = []
+        for word in words:
+            word_start = float(word.get("start", start_t) or start_t)
+            word_end = float(word.get("end", word_start) or word_start)
+            word_speaker = _normalize_speaker_id(get_speaker_for_segment(word_start, word_end, speaker_map))
+            updated = dict(word)
+            updated["speaker"] = word_speaker
+            updated_words.append(updated)
+            if word_speaker not in speakers_in_order:
+                speakers_in_order.append(word_speaker)
+        row["words"] = updated_words
+    if not speakers_in_order:
+        speakers_in_order = [dominant]
+    row["speaker_list"] = speakers_in_order[:3]
+    return row
+
+
+def assign_speakers_to_segments(segments: list[dict], speaker_map: list[dict]) -> list[dict]:
+    return [
+        assign_speaker_map_to_segment(seg, speaker_map)
+        for seg in list(segments or [])
+        if isinstance(seg, dict)
+    ]
+
+
+def _speaker_line_items_for_segment(segment: dict, *, max_lines: int = 2) -> list[dict]:
+    row = dict(segment or {})
+    existing_lines = [line.strip() for line in str(row.get("text", "") or "").replace("\u2028", "\n").splitlines() if line.strip()]
+    existing_speakers = [_normalize_speaker_id(item) for item in list(row.get("speaker_list", []) or []) if str(item or "").strip()]
+    if len(existing_lines) > 1 and len(existing_speakers) >= len(existing_lines):
+        return [
+            {
+                "speaker": existing_speakers[idx],
+                "text": _clean_caption_line(line),
+            }
+            for idx, line in enumerate(existing_lines[:max_lines])
+            if _clean_caption_line(line)
+        ]
+    words = [dict(word) for word in list(row.get("words") or []) if isinstance(word, dict)]
+    runs: list[dict] = []
+    for word in sorted(words, key=lambda item: (float(item.get("start", 0.0) or 0.0), float(item.get("end", 0.0) or 0.0))):
+        text = _clean_caption_line(word.get("word", ""))
+        if not text:
+            continue
+        speaker = _normalize_speaker_id(word.get("speaker", row.get("speaker", "00")))
+        start = float(word.get("start", row.get("start", 0.0)) or row.get("start", 0.0) or 0.0)
+        end = float(word.get("end", start) or start)
+        if runs and runs[-1]["speaker"] == speaker and start - float(runs[-1]["end"]) <= 0.18:
+            runs[-1]["text"] = f"{runs[-1]['text']} {text}".strip()
+            runs[-1]["end"] = end
+            continue
+        runs.append(
+            {
+                "speaker": speaker,
+                "text": text,
+                "start": start,
+                "end": end,
+            }
+        )
+    if 1 < len(runs) <= max_lines:
+        if all(float(runs[idx + 1]["start"]) - float(runs[idx]["end"]) <= 0.22 for idx in range(len(runs) - 1)):
+            return runs
+    fallback_speaker = _normalize_speaker_id(row.get("speaker", row.get("spk", "00")))
+    fallback_text = _clean_caption_line(row.get("text", ""))
+    return [{"speaker": fallback_speaker, "text": fallback_text}] if fallback_text else []
+
+
+def merge_speaker_overlap_subtitles(
+    segments: list[dict],
+    *,
+    max_lines: int = 2,
+    join_gap_sec: float = 0.18,
+    min_overlap_sec: float = 0.08,
+) -> list[dict]:
+    ordered = [
+        dict(seg)
+        for seg in sorted(
+            [seg for seg in list(segments or []) if isinstance(seg, dict)],
+            key=lambda item: (float(item.get("start", 0.0) or 0.0), float(item.get("end", item.get("start", 0.0)) or 0.0)),
+        )
+    ]
+    if not ordered:
+        return []
+
+    merged: list[dict] = []
+    for seg in ordered:
+        line_items = _speaker_line_items_for_segment(seg, max_lines=max_lines)
+        if not line_items:
+            continue
+        seg_start = float(seg.get("start", 0.0) or 0.0)
+        seg_end = float(seg.get("end", seg_start) or seg_start)
+        candidate = dict(seg)
+        candidate["_speaker_lines"] = line_items[:max_lines]
+        candidate["speaker"] = line_items[0]["speaker"]
+        candidate["speaker_list"] = [str(item.get("speaker") or "") for item in line_items[:max_lines]]
+
+        prev = merged[-1] if merged else None
+        if prev is not None:
+            prev_lines = list(prev.get("_speaker_lines") or [])
+            overlap = max(0.0, min(seg_end, float(prev.get("end", seg_start) or seg_start)) - max(seg_start, float(prev.get("start", 0.0) or 0.0)))
+            gap = seg_start - float(prev.get("end", seg_start) or seg_start)
+            can_append = (
+                len(prev_lines) == 1
+                and len(line_items) == 1
+                and len(prev_lines) + len(line_items) <= max_lines
+                and str(prev_lines[-1].get("speaker") or "") != str(line_items[0].get("speaker") or "")
+                and (overlap >= min_overlap_sec or gap <= join_gap_sec)
+            )
+            if can_append:
+                prev_lines.append(dict(line_items[0]))
+                prev["_speaker_lines"] = prev_lines
+                prev["speaker_list"] = [str(item.get("speaker") or "") for item in prev_lines]
+                prev["end"] = max(float(prev.get("end", seg_start) or seg_start), seg_end)
+                if seg_start < float(prev.get("start", seg_start) or seg_start):
+                    prev["start"] = seg_start
+                if seg.get("words"):
+                    prev_words = [dict(word) for word in list(prev.get("words") or []) if isinstance(word, dict)]
+                    prev_words.extend([dict(word) for word in list(seg.get("words") or []) if isinstance(word, dict)])
+                    prev["words"] = sorted(
+                        prev_words,
+                        key=lambda item: (float(item.get("start", 0.0) or 0.0), float(item.get("end", 0.0) or 0.0)),
+                    )
+                if seg.get("stt_candidates"):
+                    prev_candidates = [dict(item) for item in list(prev.get("stt_candidates") or []) if isinstance(item, dict)]
+                    prev_candidates.extend([dict(item) for item in list(seg.get("stt_candidates") or []) if isinstance(item, dict)])
+                    prev["stt_candidates"] = prev_candidates
+                prev["multispeaker_overlap"] = True
+                continue
+        merged.append(candidate)
+
+    out: list[dict] = []
+    for seg in merged:
+        row = dict(seg)
+        speaker_lines = [dict(item) for item in list(row.pop("_speaker_lines", []) or []) if isinstance(item, dict)]
+        if not speaker_lines:
+            continue
+        texts = [str(item.get("text") or "").strip() for item in speaker_lines if str(item.get("text") or "").strip()]
+        speakers = [_normalize_speaker_id(item.get("speaker")) for item in speaker_lines if str(item.get("speaker") or "").strip()]
+        if not texts:
+            continue
+        row["speaker"] = speakers[0] if speakers else _normalize_speaker_id(row.get("speaker", "00"))
+        row["speaker_list"] = speakers[:max_lines] if speakers else [row["speaker"]]
+        if len(texts) > 1:
+            row["text"] = "\n".join(f"- {text}" for text in texts[:max_lines])
+            row["multispeaker_overlap"] = True
+        else:
+            row["text"] = texts[0]
+        out.append(row)
+    return out

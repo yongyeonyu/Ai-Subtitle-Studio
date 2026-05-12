@@ -90,6 +90,21 @@ class EditorCanvasStateTests(unittest.TestCase):
         self.assertEqual(ordered[0]["timeline_end_frame"], ordered[1]["timeline_start_frame"])
         self.assertEqual(editor.reloaded["segments"][0]["timeline_end_frame"], editor.reloaded["segments"][1]["timeline_start_frame"])
 
+    def test_apply_loaded_canvas_state_resolves_overlaps_on_frame_grid(self):
+        editor = _DummyEditor()
+
+        ordered = editor.apply_loaded_canvas_state(
+            [
+                {"start": 0.0, "end": 1.5, "text": "첫째"},
+                {"start": 1.0, "end": 2.0, "text": "둘째"},
+            ],
+            preserve_view=False,
+            mark_dirty=False,
+        )
+
+        self.assertLessEqual(ordered[0]["end"], ordered[1]["start"])
+        self.assertEqual(ordered[0]["timeline_end_frame"], ordered[1]["timeline_start_frame"])
+
     def test_apply_canvas_aux_state_can_skip_schedule(self):
         editor = _DummyEditor()
 

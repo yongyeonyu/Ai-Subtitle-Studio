@@ -19,6 +19,84 @@ from core.project.project_manager import PROJECTS_DIR, get_boundary_times, load_
 from core.runtime.logger import get_logger
 
 
+def _project_placeholder_segments_from_rows(project: dict, rows: list[dict]) -> list[dict]:
+    from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame
+    from core.project.project_format import project_primary_fps
+
+    primary_fps = normalize_fps(project_primary_fps(project) or 30.0)
+    placeholder_rows: list[dict] = []
+    for idx, row in enumerate(list(rows or [])):
+        if not isinstance(row, dict):
+            continue
+        start = float(row.get("start", 0.0) or 0.0)
+        end = float(row.get("end", start) or start)
+        start_frame = row.get("start_frame", row.get("timeline_start_frame"))
+        end_frame = row.get("end_frame", row.get("timeline_end_frame"))
+        if start_frame is not None:
+            start = frame_to_sec(start_frame, primary_fps)
+        if end_frame is not None:
+            end = frame_to_sec(end_frame, primary_fps)
+        end = max(start, end)
+        if end <= start:
+            continue
+        label = str(
+            row.get("display_title")
+            or row.get("display_name")
+            or row.get("label")
+            or row.get("title")
+            or row.get("name")
+            or f"구간 {idx + 1}"
+        ).strip()
+        color = str(row.get("border_color") or row.get("color") or "").strip() or "#5AC8FA"
+        segment = {
+            "line": idx,
+            "start": start,
+            "end": end,
+            "text": label,
+            "speaker": "RG",
+            "_project_placeholder_segment": True,
+            "_project_placeholder_label": label,
+            "color": color,
+            "border_color": color,
+            "frame_rate": primary_fps,
+            "timeline_frame_rate": primary_fps,
+            "start_frame": int(start_frame) if start_frame is not None else sec_to_frame(start, primary_fps),
+            "end_frame": int(end_frame) if end_frame is not None else sec_to_frame(end, primary_fps),
+        }
+        segment["timeline_start_frame"] = int(segment["start_frame"])
+        segment["timeline_end_frame"] = int(segment["end_frame"])
+        segment["frame_range"] = {
+            "unit": "frame",
+            "start": int(segment["start_frame"]),
+            "end": int(segment["end_frame"]),
+            "timeline_frame_rate": primary_fps,
+        }
+        placeholder_rows.append(segment)
+    return placeholder_rows
+
+
+def _project_placeholder_segments(project: dict) -> list[dict]:
+    analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
+    rows = []
+    for key in (
+        "middle_segments",
+        "cut_boundary_topicless_middle_segments",
+        "topicless_middle_segments",
+        "roughcut_topicless_segments",
+    ):
+        raw = analysis.get(key)
+        if isinstance(raw, list) and raw:
+            rows = raw
+            break
+    if not rows:
+        for key in ("middle_segments", "roughcut_segments"):
+            raw = project.get(key)
+            if isinstance(raw, list) and raw:
+                rows = raw
+                break
+    return _project_placeholder_segments_from_rows(project, list(rows or []))
+
+
 def schedule_native_open_editor_media(
     owner,
     editor,
@@ -520,11 +598,16 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
         project_stt_preview_segments,
         project_voice_activity_segments,
     )
-    from core.project.project_format import project_primary_fps
+    from core.project.project_format import project_primary_fps, project_total_duration
 
     confirmed_boundaries = get_boundary_times(project)
     boundaries = project_clip_boundaries(project)
     analysis = project.get("analysis", {}) if isinstance(project.get("analysis"), dict) else {}
+    reviewed_cut_boundaries = [
+        dict(row)
+        for row in list(analysis.get("cut_boundary_reviewed_rows") or [])
+        if isinstance(row, dict)
+    ]
     preliminary_middle_segments = [
         dict(row)
         for row in list(
@@ -554,11 +637,34 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
     if editor is None:
         return False
     try:
+        placeholder_segments = _project_placeholder_segments(project) if not list(segments or []) else []
+        try:
+            setattr(editor, "_project_placeholder_segments", list(placeholder_segments))
+        except Exception:
+            pass
         primary_fps = float(project_primary_fps(project) or 30.0)
+        project_duration = float(project_total_duration(project) or 0.0)
         try:
             setattr(editor, "video_fps", primary_fps)
         except Exception:
             pass
+        video_player = getattr(editor, "video_player", None)
+        if video_player is not None and project_duration > 0.0:
+            try:
+                prime_media_timing = getattr(video_player, "prime_media_timing", None)
+                if callable(prime_media_timing):
+                    prime_media_timing(duration=project_duration, fps=primary_fps)
+                else:
+                    rebuild_frame_time_map = getattr(video_player, "_rebuild_frame_time_map", None)
+                    if callable(rebuild_frame_time_map):
+                        rebuild_frame_time_map(duration=project_duration, fps=primary_fps)
+                    else:
+                        setattr(video_player, "total_time", project_duration)
+                    set_frame_rate = getattr(video_player, "set_frame_rate", None)
+                    if callable(set_frame_rate):
+                        set_frame_rate(primary_fps)
+            except Exception:
+                pass
         timeline = getattr(editor, "timeline", None)
         if timeline is not None:
             try:
@@ -596,9 +702,27 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
             stt_preview_segments=[],
             mark_dirty=False,
         )
+        if (
+            timeline is not None
+            and len(media) <= 1
+            and project_duration > 0.0
+            and hasattr(timeline, "_apply_single_media_duration")
+        ):
+            try:
+                timeline._apply_single_media_duration(project_duration, source_path=media[0])
+            except TypeError:
+                timeline._apply_single_media_duration(project_duration)
         for obj in (owner, editor, timeline, canvas, global_canvas):
             if obj is None:
                 continue
+            try:
+                setattr(obj, "_project_placeholder_segments", list(placeholder_segments))
+            except Exception:
+                pass
+            try:
+                setattr(obj, "_cut_boundary_reviewed_rows", list(reviewed_cut_boundaries))
+            except Exception:
+                pass
             for attr in ("_preliminary_middle_segments", "preliminary_middle_segments"):
                 try:
                     setattr(obj, attr, list(preliminary_middle_segments))
@@ -611,6 +735,15 @@ def open_project_segments_in_editor(owner, filepath: str, project: dict, media: 
                 editor._set_process_completed(suppress_post_generation_tasks=True)
             except TypeError:
                 editor._set_process_completed()
+        if not list(segments or []):
+            refresher = getattr(editor, "_refresh_cut_boundary_placeholder_from_project", None)
+            if callable(refresher):
+                try:
+                    refresher()
+                except Exception:
+                    pass
+                QTimer.singleShot(0, refresher)
+                QTimer.singleShot(180, refresher)
         if hasattr(editor, "_schedule_timeline"):
             editor._schedule_timeline()
         runtime_refresh = getattr(owner, "_refresh_opened_editor_runtime", None)

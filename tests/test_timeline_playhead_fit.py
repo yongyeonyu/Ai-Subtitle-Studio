@@ -23,6 +23,8 @@ from ui.timeline.timeline_widget import TimelineWidget
 from ui.timeline.timeline_canvas import TimelineCanvasBase
 from ui.timeline.timeline_global import (
     GlobalCanvasBase,
+    MINIMAP_BOTTOM_SILENCE_LANE_BG,
+    MINIMAP_BOTTOM_SUBTITLE_LANE_BG,
     MINIMAP_PRELIMINARY_LANE_BG,
     MINIMAP_REFERENCE_LANE_BG,
     MINIMAP_TOP_LANE_BG,
@@ -1583,6 +1585,30 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             timeline.close()
 
+    def test_loading_same_media_waveform_preserves_seeded_duration_until_worker_ready(self):
+        timeline = TimelineWidget()
+        try:
+            timeline._apply_single_media_duration(24.0 * 60.0, source_path="/tmp/new.mp4")
+            timeline._waveform_path = "/tmp/old.mp4"
+
+            with patch("ui.timeline.timeline_widget.WaveformWorker", _FakeWaveformWorker):
+                timeline.load_waveform("/tmp/new.mp4", force=True)
+
+                self.assertEqual(timeline.canvas.total_duration, 24.0 * 60.0)
+                self.assertEqual(timeline.global_canvas.total_duration, 24.0 * 60.0)
+
+                worker = timeline._wf_worker
+                self.assertIsNotNone(worker)
+                self.assertTrue(worker.started)
+
+                worker.ready.emit([0.0, 0.5, 0.2], 24.0 * 60.0)
+                self.app.processEvents()
+
+            self.assertEqual(timeline.canvas.total_duration, 24.0 * 60.0)
+            self.assertEqual(timeline.global_canvas.total_duration, 24.0 * 60.0)
+        finally:
+            timeline.close()
+
     def test_timeline_hides_manual_slider_but_keeps_programmatic_scroll(self):
         timeline = TimelineWidget()
         try:
@@ -2089,6 +2115,47 @@ class TimelinePlayheadFitTests(unittest.TestCase):
         finally:
             editor.text_edit.close()
 
+    def test_playhead_active_interval_defaults_to_frame_rate_budget(self):
+        editor = _DummyTimelineVideoEditor()
+        editor.settings = {}
+        editor.video_fps = 59.94
+
+        self.assertEqual(editor._playhead_active_interval_ms(), 17)
+
+    def test_on_scrub_ignores_timing_drag_that_keeps_playhead_fixed(self):
+        editor = _DummyTimelineVideoEditor()
+        editor._timeline_drag_in_progress = True
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(_drag_edge="diamond"),
+            set_playhead=Mock(),
+        )
+        editor._reset_playhead_smoothing = Mock()
+        editor._schedule_scrub_preview = Mock()
+        editor._schedule_scrub_settle = Mock()
+
+        editor._on_scrub(2.0)
+
+        editor.timeline.set_playhead.assert_not_called()
+        editor._reset_playhead_smoothing.assert_not_called()
+        editor._schedule_scrub_preview.assert_not_called()
+        editor._schedule_scrub_settle.assert_not_called()
+
+    def test_timing_drag_preview_ignores_arrow_drag_that_keeps_playhead_fixed(self):
+        editor = _DummyTimelineVideoEditor()
+        editor._timeline_drag_in_progress = True
+        editor.timeline = SimpleNamespace(
+            canvas=SimpleNamespace(_drag_edge="square_right"),
+            set_playhead=Mock(),
+        )
+        editor._reset_playhead_smoothing = Mock()
+        editor._schedule_scrub_preview = Mock()
+
+        editor._on_timing_drag_preview(2.4)
+
+        editor.timeline.set_playhead.assert_not_called()
+        editor._reset_playhead_smoothing.assert_not_called()
+        editor._schedule_scrub_preview.assert_not_called()
+
     def test_playhead_smoothing_ignores_small_backward_jitter(self):
         editor = _DummyTimelineVideoEditor()
         editor.video_fps = 30.0
@@ -2165,6 +2232,50 @@ class TimelinePlayheadFitTests(unittest.TestCase):
 
             self.assertEqual(image.pixelColor(inside_x, top_lane_center_y).name(), bg)
             self.assertNotEqual(image.pixelColor(border_x, top_lane_center_y).name(), bg)
+        finally:
+            timeline.close()
+
+    def test_global_canvas_bottom_lane_splits_subtitles_above_silence(self):
+        timeline = TimelineWidget()
+        try:
+            canvas = timeline.global_canvas
+            canvas.resize(420, canvas.height())
+            canvas.total_duration = 20.0
+            canvas.update_segments(
+                [
+                    {"start": 1.0, "end": 4.0, "text": "첫 자막"},
+                ],
+                20.0,
+            )
+            canvas.set_vad_segments([])
+            subtitle_lane, silence_lane = canvas._bottom_content_lanes(canvas.width(), canvas.height())
+            subtitle_bg = QColor(MINIMAP_BOTTOM_SUBTITLE_LANE_BG).name()
+            silence_bg = QColor(MINIMAP_BOTTOM_SILENCE_LANE_BG).name()
+            subtitle_x = canvas._sec_to_px(2.5)
+            silence_x = canvas._sec_to_px(10.0)
+
+            with patch(
+                "ui.timeline.timeline_global.analysis_markers_for_widget",
+                return_value=[
+                    {
+                        "kind": "silence",
+                        "start": 9.0,
+                        "end": 11.0,
+                        "priority": 10,
+                        "color": "#FF9500",
+                    }
+                ],
+            ):
+                pixmap = canvas._build_static_cache()
+
+            image = pixmap.toImage()
+            subtitle_y = subtitle_lane.center().y()
+            silence_y = silence_lane.center().y()
+
+            self.assertNotEqual(image.pixelColor(subtitle_x, subtitle_y).name(), subtitle_bg)
+            self.assertEqual(image.pixelColor(subtitle_x, silence_y).name(), silence_bg)
+            self.assertEqual(image.pixelColor(silence_x, subtitle_y).name(), subtitle_bg)
+            self.assertNotEqual(image.pixelColor(silence_x, silence_y).name(), silence_bg)
         finally:
             timeline.close()
 

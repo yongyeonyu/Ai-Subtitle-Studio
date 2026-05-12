@@ -8,7 +8,7 @@ import re
 import urllib.error
 import urllib.request
 
-from core.llm.codex_provider import DEFAULT_CODEX_LABEL, is_codex_model
+from core.llm.codex_provider import CODEX_CLI_MODEL_MAP, DEFAULT_CODEX_LABEL, is_codex_model
 
 
 OPENAI_MODEL_MAP = {
@@ -16,7 +16,7 @@ OPENAI_MODEL_MAP = {
     "OpenAI GPT-5 Mini [유료/API 균형]": "gpt-5-mini",
     "OpenAI GPT-5.2 [유료/API 고품질]": "gpt-5.2",
     "OpenAI GPT-5.2 Chat [유료/API ChatGPT]": "gpt-5.2-chat-latest",
-    DEFAULT_CODEX_LABEL: "codex-chatgpt-cli",
+    **CODEX_CLI_MODEL_MAP,
 }
 
 

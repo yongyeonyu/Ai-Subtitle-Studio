@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QObject, Qt
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QTableWidget, QTextEdit, QWidget
+from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QWidget
 
 from core.runtime import config
 from core.state_manager import SubtitleStateManager
@@ -149,6 +149,70 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
                 _get_current_segments=lambda: [{"start": 0.0, "end": 1.0, "text": "테스트"}],
             )
             self.assertEqual(rail._stage_text(EDITOR_MODE, completed_editor), "완료")
+        finally:
+            rail.close()
+
+    def test_status_rail_uses_expected_time_progress_fill_and_caps_before_completion(self):
+        rail = StatusRail()
+        table = QTableWidget(1, 5)
+        table.setItem(0, 0, QTableWidgetItem("자막 생성 중"))
+        main = SimpleNamespace(
+            _current_work_mode=EDITOR_MODE,
+            queue_table=table,
+            _expected_seconds={0: 100.0},
+            _file_start_times={0: 1000.0},
+            _current_queue_active_row=lambda: 0,
+            _queue_status_flags=lambda _status: (False, False, True),
+        )
+        state_manager = SubtitleStateManager()
+        state_manager.start_ai_all()
+        editor = SimpleNamespace(
+            sm=state_manager,
+            status_lbl=QLabel("⏳ [전처리] FFMPEG 오디오 추출 중"),
+            current_state="ST_PROC",
+            current_mode="MODE_AI_ALL",
+            _is_ai_processing=True,
+            _stt_mode_enabled=False,
+            _get_current_segments=lambda: [],
+        )
+        rail.window = lambda: main
+        try:
+            with patch("ui.menu_bar.time.time", return_value=1049.0):
+                rail.refresh_from_editor(editor)
+
+            self.assertIn("전처리 49%", rail.state_button.text())
+            self.assertEqual(rail._progress_percent, 49)
+            self.assertLess(rail._progress_ratio, 1.0)
+            self.assertIn("00:49 / 01:40", rail.state_button.toolTip())
+            self.assertIn("qlineargradient", rail.state_button.styleSheet())
+        finally:
+            rail.close()
+
+    def test_status_rail_completion_keeps_full_box_and_no_inflight_percent(self):
+        rail = StatusRail()
+        main = SimpleNamespace(_current_work_mode=EDITOR_MODE)
+        state_manager = SubtitleStateManager()
+        state_manager.start_ai_all()
+        state_manager.update_progress(10, 10, 100)
+        state_manager.complete_ai()
+        editor = SimpleNamespace(
+            sm=state_manager,
+            status_lbl=QLabel("✨ 자막 생성 완료"),
+            current_state="ST_COMP",
+            current_mode="MODE_AI_ALL",
+            _is_ai_processing=False,
+            _stt_mode_enabled=False,
+            _get_current_segments=lambda: [{"start": 0.0, "end": 1.0, "text": "완료"}],
+        )
+        rail.window = lambda: main
+        try:
+            rail.refresh_from_editor(editor)
+
+            self.assertEqual(rail._progress_percent, 100)
+            self.assertTrue(rail._progress_completed)
+            self.assertIn("완료", rail.state_button.text())
+            self.assertNotIn("99%", rail.state_button.text())
+            self.assertTrue(any(color in rail.state_button.styleSheet() for color in ("#173D28", "#15331F")))
         finally:
             rail.close()
 
@@ -392,6 +456,15 @@ class Cp03Cp04StatusUiTests(unittest.TestCase):
         state_manager.set_custom_status("⏳ LLM 최적화 중")
         state_manager.update_progress(1, 3, 33)
         self.assertIn("LLM", state_manager._status_msg)
+        self.assertEqual(state_manager.progress_percent, 33)
+
+    def test_processing_progress_percent_stays_below_100_until_completion(self):
+        state_manager = SubtitleStateManager()
+        state_manager.start_ai_all()
+        state_manager.update_progress(10, 10, 100)
+        self.assertEqual(state_manager.progress_percent, 99)
+        state_manager.complete_ai()
+        self.assertEqual(state_manager.progress_percent, 100)
 
     def test_start_pipeline_marks_processing_before_cut_prescan(self):
         class DummyEditor(EditorPipelineMixin):

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+import math
 
 from PyQt6.QtCore import QTimer
 
@@ -1168,6 +1169,8 @@ class EditorScanCutCoreMixin:
         except Exception:
             pass
 
+        self._scan_cut_pending_direction = 0
+        self._scan_cut_launch_token = None
         self._scan_cut_state = None
         self._set_scan_cut_button_active(0)
 
@@ -1178,6 +1181,823 @@ class EditorScanCutCoreMixin:
                 pass
 
         print(f"🟢 [scan-cut] CANCEL reason={reason}", flush=True)
+
+    def _scan_live_visual_jump_enabled(self) -> bool:
+        settings = getattr(self, "settings", {}) or {}
+        raw = settings.get("scan_cut_live_visual_enabled", True)
+        if isinstance(raw, str):
+            return raw.strip().lower() not in {"0", "false", "no", "off", "disabled", "미사용"}
+        return bool(raw)
+
+    def _scan_live_visual_follower_verify_enabled(self) -> bool:
+        settings = getattr(self, "settings", {}) or {}
+        raw = settings.get("scan_cut_live_visual_follower_verify_enabled", True)
+        if isinstance(raw, str):
+            return raw.strip().lower() not in {"0", "false", "no", "off", "disabled", "미사용"}
+        return bool(raw)
+
+    def _scan_verify_live_visual_candidate(self, candidate: dict | None, *, direction: int) -> dict | None:
+        if not isinstance(candidate, dict):
+            return candidate
+        if not self._scan_live_visual_follower_verify_enabled():
+            return candidate
+
+        try:
+            fps = float(self._current_frame_fps())
+        except Exception:
+            fps = 30.0
+
+        try:
+            pioneer_frame = int(candidate.get("boundary_frame", 0) or 0)
+        except Exception:
+            pioneer_frame = 0
+        if pioneer_frame < 0:
+            return candidate
+
+        verified = self._scan_verify_cut_boundary_candidate(
+            pioneer_frame,
+            fps,
+            reason=f"live_visual_follower dir={int(1 if int(direction) > 0 else -1)}",
+        )
+        if not isinstance(verified, dict) or not bool(verified.get("available")):
+            return candidate
+        if not bool(verified.get("passed")):
+            try:
+                provisional_frame = int(verified.get("provisional_frame", -1) or -1)
+            except Exception:
+                provisional_frame = -1
+            provisional_window = max(2, min(24, int(round(max(fps, 1.0) * 0.25))))
+            if provisional_frame >= 0 and abs(provisional_frame - pioneer_frame) <= provisional_window:
+                provisional_sec = self._snap_to_frame(
+                    float(verified.get("provisional_sec", provisional_frame / max(fps, 1e-6)) or (provisional_frame / max(fps, 1e-6)))
+                )
+                merged = dict(candidate)
+                merged.update(
+                    {
+                        "boundary_frame": int(provisional_frame),
+                        "boundary_sec": float(provisional_sec),
+                        "follower_verified": True,
+                        "follower_verified_provisional": True,
+                        "follower_verified_frame": int(provisional_frame),
+                        "follower_verified_sec": float(provisional_sec),
+                        "follower_verified_score": float(verified.get("provisional_score", 0.0) or 0.0),
+                        "follower_verified_regions": int(verified.get("provisional_regions", 0) or 0),
+                        "follower_verified_mode": str(verified.get("provisional_mode", verified.get("reason", "strict_provisional")) or "strict_provisional"),
+                        "follower_verified_reason": str(verified.get("reason", "strict_provisional") or "strict_provisional"),
+                    }
+                )
+                print(
+                    f"🧭 [scan-cut-live] follower provisional pioneer={pioneer_frame} -> frame={provisional_frame} "
+                    f"mode={merged['follower_verified_mode']} score={merged['follower_verified_score']:.2f} "
+                    f"regions={merged['follower_verified_regions']}",
+                    flush=True,
+                )
+                return merged
+            print(
+                f"↩️ [scan-cut-live] follower verify miss pioneer={pioneer_frame} "
+                f"reason={verified.get('reason', '-')}",
+                flush=True,
+            )
+            return candidate
+
+        try:
+            verified_sec = self._snap_to_frame(float(verified.get("sec", 0.0) or 0.0))
+        except Exception:
+            verified_sec = float(candidate.get("boundary_sec", 0.0) or 0.0)
+        verified_frame = max(0, int(round(verified_sec * max(fps, 1e-6))))
+
+        merged = dict(candidate)
+        merged.update(
+            {
+                "boundary_frame": int(verified_frame),
+                "boundary_sec": float(verified_sec),
+                "follower_verified": True,
+                "follower_verified_frame": int(verified_frame),
+                "follower_verified_sec": float(verified_sec),
+                "follower_verified_score": float(verified.get("score", 0.0) or 0.0),
+                "follower_verified_regions": int(verified.get("regions", 0) or 0),
+                "follower_verified_mode": str(verified.get("mode", verified.get("reason", "strict_verify")) or "strict_verify"),
+                "follower_verified_reason": str(verified.get("reason", verified.get("mode", "strict_verify")) or "strict_verify"),
+            }
+        )
+        print(
+            f"🧭 [scan-cut-live] follower verify pioneer={pioneer_frame} -> frame={verified_frame} "
+            f"mode={merged['follower_verified_mode']} score={merged['follower_verified_score']:.2f} "
+            f"regions={merged['follower_verified_regions']}",
+            flush=True,
+        )
+        return merged
+
+    def _scan_live_visual_search_frames(self, fps: float) -> int:
+        settings = getattr(self, "settings", {}) or {}
+        try:
+            explicit = int(settings.get("scan_cut_live_visual_max_frames", 0) or 0)
+        except Exception:
+            explicit = 0
+        if explicit > 0:
+            return max(12, min(explicit, 1800))
+        try:
+            sec = float(settings.get("scan_cut_live_visual_max_sec", 8.0) or 8.0)
+        except Exception:
+            sec = 8.0
+        return max(12, min(int(round(max(0.5, sec) * max(float(fps or 30.0), 1.0))), 1800))
+
+    def _scan_live_visual_coarse_search_frames(self, fps: float) -> int:
+        settings = getattr(self, "settings", {}) or {}
+        try:
+            explicit = int(settings.get("scan_cut_live_visual_coarse_max_frames", 0) or 0)
+        except Exception:
+            explicit = 0
+        if explicit > 0:
+            return max(60, min(explicit, 3600))
+        try:
+            sec = float(settings.get("scan_cut_live_visual_coarse_max_sec", 8.0) or 8.0)
+        except Exception:
+            sec = 8.0
+        return max(60, min(int(round(max(1.0, sec) * max(float(fps or 30.0), 1.0))), 3600))
+
+    def _scan_live_visual_coarse_stride_frames(self, fps: float) -> int:
+        settings = getattr(self, "settings", {}) or {}
+        try:
+            explicit = int(settings.get("scan_cut_live_visual_coarse_stride_frames", 0) or 0)
+        except Exception:
+            explicit = 0
+        if explicit > 0:
+            return max(3, min(explicit, 120))
+        return max(10, min(int(round(max(float(fps or 30.0), 1.0) * 0.33)), 30))
+
+    def _scan_live_visual_coarse_width(self) -> int:
+        settings = getattr(self, "settings", {}) or {}
+        base_width = self._scan_live_visual_width()
+        try:
+            return max(320, min(int(settings.get("scan_cut_live_visual_coarse_width", min(base_width, 640)) or min(base_width, 640)), 1920))
+        except Exception:
+            return min(base_width, 640)
+
+    def _scan_live_visual_candidate_topk(self) -> int:
+        settings = getattr(self, "settings", {}) or {}
+        try:
+            return max(2, min(int(settings.get("scan_cut_live_visual_candidate_topk", 6) or 6), 12))
+        except Exception:
+            return 6
+
+    def _scan_live_visual_candidate_min_score(self) -> float:
+        settings = getattr(self, "settings", {}) or {}
+        try:
+            return max(0.25, min(float(settings.get("scan_cut_live_visual_candidate_min_score", 0.90) or 0.90), 4.0))
+        except Exception:
+            return 0.90
+
+    def _scan_live_native_coarse_enabled(self) -> bool:
+        settings = getattr(self, "settings", {}) or {}
+        value = settings.get("scan_cut_live_native_coarse_enabled")
+        if value is None:
+            value = settings.get("runtime_native_cut_boundary_enabled", True)
+        try:
+            text = str(value).strip().lower()
+            return text not in {"0", "false", "off", "no", "disabled", "disable", "끔"}
+        except Exception:
+            return bool(value)
+
+    def _scan_live_visual_interval_margin_frames(self, fps: float, stride_frames: int) -> int:
+        settings = getattr(self, "settings", {}) or {}
+        try:
+            explicit = int(settings.get("scan_cut_live_visual_interval_margin_frames", 0) or 0)
+        except Exception:
+            explicit = 0
+        if explicit > 0:
+            return max(2, min(explicit, 240))
+        return max(int(stride_frames or 0), max(4, int(round(max(float(fps or 30.0), 1.0) * 0.25))))
+
+    def _scan_live_visual_width(self) -> int:
+        settings = getattr(self, "settings", {}) or {}
+        try:
+            return max(320, min(int(settings.get("scan_cut_live_visual_width", 960) or 960), 3840))
+        except Exception:
+            return 960
+
+    def _scan_live_visual_refine_width(self) -> int:
+        settings = getattr(self, "settings", {}) or {}
+        try:
+            return max(320, min(int(settings.get("scan_cut_live_visual_refine_width", 1920) or 1920), 4096))
+        except Exception:
+            return 1920
+
+    def _scan_live_visual_refine_radius(self) -> int:
+        settings = getattr(self, "settings", {}) or {}
+        try:
+            return max(1, min(int(settings.get("scan_cut_live_visual_refine_radius", 2) or 2), 6))
+        except Exception:
+            return 2
+
+    def _scan_prepare_visual_frame_payload(self, global_frame: int, *, max_width: int, cache: dict | None = None):
+        key = (int(global_frame), int(max_width))
+        if isinstance(cache, dict) and key in cache:
+            return cache.get(key)
+
+        cv2_mod = self._scan_get_cv2_module()
+        if not cv2_mod:
+            return None
+
+        try:
+            from core.visual_cut_jump import prepare_visual_cut_frame
+        except Exception as exc:
+            print(f"⚠️ [scan-cut] visual jump helper import 실패: {exc}", flush=True)
+            return None
+
+        try:
+            fps = float(self._current_frame_fps())
+        except Exception:
+            fps = 30.0
+        global_sec = max(0.0, float(int(global_frame)) / max(fps, 1e-6))
+
+        try:
+            source_path, local_sec, ctx = self._scan_source_and_local_sec(global_sec)
+        except Exception:
+            return None
+        if not source_path:
+            return None
+
+        cap = self._scan_get_cv2_capture(source_path)
+        if cap is None:
+            return None
+
+        try:
+            source_fps = float(cap.get(cv2_mod.CAP_PROP_FPS) or 0.0)
+        except Exception:
+            source_fps = 0.0
+        if source_fps <= 1.0:
+            source_fps = fps
+        local_frame = max(0, int(round(float(local_sec) * source_fps)))
+
+        try:
+            current_pos = int(cap.get(cv2_mod.CAP_PROP_POS_FRAMES) or 0)
+            if current_pos != local_frame:
+                cap.set(cv2_mod.CAP_PROP_POS_FRAMES, local_frame)
+            ok, frame_bgr = cap.read()
+        except Exception:
+            return None
+        if not ok or frame_bgr is None:
+            return None
+
+        prepared = prepare_visual_cut_frame(frame_bgr, cv2_mod, max_width=int(max_width))
+        if not isinstance(prepared, dict):
+            return None
+
+        payload = {
+            **prepared,
+            "global_frame": int(global_frame),
+            "global_sec": float(global_sec),
+            "source_path": str(source_path),
+            "local_sec": float(local_sec),
+            "local_frame": int(local_frame),
+            "clip_idx": int((ctx or {}).get("clip_idx", 0) or 0),
+        }
+        if isinstance(cache, dict):
+            cache[key] = payload
+        return payload
+
+    def _scan_refine_live_visual_cut(self, candidate: dict, *, coarse_history: list[dict] | None = None):
+        if not isinstance(candidate, dict):
+            return candidate
+
+        refine_width = self._scan_live_visual_refine_width()
+        coarse_width = int(candidate.get("analysis_width", 0) or 0)
+        if refine_width <= 0 or (coarse_width > 0 and refine_width <= coarse_width):
+            return candidate
+
+        cv2_mod = self._scan_get_cv2_module()
+        if not cv2_mod:
+            return candidate
+
+        try:
+            from core.visual_cut_jump import (
+                create_visual_cut_flow_engine,
+                score_visual_cut_metrics,
+                visual_cut_pair_metrics,
+            )
+        except Exception:
+            return candidate
+
+        try:
+            frame = int(candidate.get("boundary_frame"))
+        except Exception:
+            return candidate
+
+        radius = self._scan_live_visual_refine_radius()
+        start_frame = max(0, frame - radius)
+        end_frame = max(start_frame, frame + radius)
+        cache: dict = {}
+        settings = getattr(self, "settings", {}) or {}
+        backend_preference = str(settings.get("scan_cut_dense_flow_backend", "dis") or "dis").strip().lower()
+        flow_engine, _backend = create_visual_cut_flow_engine(cv2_mod, backend_preference=backend_preference)
+        history = list(coarse_history or [])[-12:]
+        best = dict(candidate)
+
+        for left_frame in range(start_frame, end_frame + 1):
+            left_payload = self._scan_prepare_visual_frame_payload(left_frame, max_width=refine_width, cache=cache)
+            right_payload = self._scan_prepare_visual_frame_payload(left_frame + 1, max_width=refine_width, cache=cache)
+            if not left_payload or not right_payload:
+                continue
+            metric = visual_cut_pair_metrics(
+                left_payload,
+                right_payload,
+                cv2_mod,
+                flow_engine=flow_engine,
+                backend_preference=backend_preference,
+            )
+            if not isinstance(metric, dict):
+                continue
+            metric.update(
+                {
+                    "boundary_frame": int(left_frame),
+                    "boundary_sec": float(left_payload["global_sec"]),
+                    "left_frame": int(left_frame),
+                    "right_frame": int(left_frame + 1),
+                    "analysis_width": int(refine_width),
+                    "source_changed": bool(left_payload.get("source_path") != right_payload.get("source_path")),
+                }
+            )
+            scored = score_visual_cut_metrics(metric, history=history, settings=settings)
+            history.append(metric)
+            history = history[-12:]
+            if not isinstance(scored, dict):
+                continue
+            if float(scored.get("score", 0.0) or 0.0) >= float(best.get("score", 0.0) or 0.0):
+                best = dict(scored)
+
+        if int(best.get("analysis_width", 0) or 0) == refine_width:
+            best["refined"] = True
+        return best
+
+    def _scan_select_live_visual_candidates(
+        self,
+        candidates: list[dict],
+        *,
+        stride_frames: int,
+        top_k: int,
+    ) -> list[dict]:
+        if not candidates:
+            return []
+        selected: list[dict] = []
+        native_coarse = any(bool((row or {}).get("coarse_native")) for row in list(candidates or []))
+        overlap_margin = 0 if native_coarse else max(2, int(round(max(int(stride_frames or 0), 1) * 0.5)))
+        for item in sorted(
+            [dict(row) for row in list(candidates or []) if isinstance(row, dict)],
+            key=lambda row: (
+                float(row.get("score", 0.0) or 0.0),
+                float(row.get("edge_residual", 0.0) or 0.0),
+                float(row.get("edge_diff", 0.0) or 0.0),
+            ),
+            reverse=True,
+        ):
+            start = int(item.get("interval_start_frame", item.get("boundary_frame", 0)) or 0)
+            end = int(item.get("interval_end_frame", start) or start)
+            overlaps = False
+            for chosen in selected:
+                chosen_start = int(chosen.get("interval_start_frame", chosen.get("boundary_frame", 0)) or 0)
+                chosen_end = int(chosen.get("interval_end_frame", chosen_start) or chosen_start)
+                if overlap_margin <= 0:
+                    overlaps = max(start, chosen_start) < min(end, chosen_end)
+                else:
+                    overlaps = max(start, chosen_start) <= (min(end, chosen_end) + overlap_margin)
+                if overlaps:
+                    overlaps = True
+                    break
+            if overlaps:
+                continue
+            selected.append(item)
+            if len(selected) >= max(1, int(top_k or 1)):
+                break
+        return selected
+
+    def _scan_is_live_visual_coarse_peak(
+        self,
+        prev_item: dict | None,
+        current_item: dict | None,
+        next_item: dict | None,
+        *,
+        min_score: float,
+    ) -> bool:
+        if not isinstance(current_item, dict):
+            return False
+
+        current_score = float(current_item.get("score", 0.0) or 0.0)
+        if current_score < float(min_score or 0.0):
+            return False
+
+        prev_score = float((prev_item or {}).get("score", 0.0) or 0.0)
+        next_score = float((next_item or {}).get("score", 0.0) or 0.0)
+        if current_score < prev_score or current_score < next_score:
+            return False
+
+        current_residual = float(current_item.get("edge_residual", 0.0) or 0.0)
+        current_diff = float(current_item.get("edge_diff", 0.0) or 0.0)
+        prev_residual = float((prev_item or {}).get("edge_residual", 0.0) or 0.0)
+        next_residual = float((next_item or {}).get("edge_residual", 0.0) or 0.0)
+        prev_diff = float((prev_item or {}).get("edge_diff", 0.0) or 0.0)
+        next_diff = float((next_item or {}).get("edge_diff", 0.0) or 0.0)
+
+        return (
+            current_residual >= max(prev_residual, next_residual)
+            or current_diff >= max(prev_diff, next_diff)
+        )
+
+    def _scan_find_live_visual_cut_in_window(
+        self,
+        start_frame: int,
+        end_frame: int,
+        *,
+        analysis_width: int,
+        direction: int,
+        payload_cache: dict | None = None,
+        coarse_history: list[dict] | None = None,
+    ):
+        cv2_mod = self._scan_get_cv2_module()
+        if not cv2_mod:
+            return None
+
+        try:
+            from core.visual_cut_jump import (
+                create_visual_cut_flow_engine,
+                is_visual_cut_peak,
+                visual_cut_pair_metrics,
+            )
+        except Exception:
+            return None
+
+        left_bound = max(0, min(int(start_frame or 0), int(end_frame or 0)))
+        right_bound = max(left_bound + 1, max(int(start_frame or 0), int(end_frame or 0)))
+        if right_bound <= left_bound:
+            return None
+
+        settings = getattr(self, "settings", {}) or {}
+        backend_preference = str(settings.get("scan_cut_dense_flow_backend", "dis") or "dis").strip().lower()
+        flow_engine, _backend = create_visual_cut_flow_engine(cv2_mod, backend_preference=backend_preference)
+        raw_history: list[dict] = []
+        best = None
+
+        for left_frame in range(left_bound, right_bound):
+            left_payload = self._scan_prepare_visual_frame_payload(left_frame, max_width=analysis_width, cache=payload_cache)
+            right_payload = self._scan_prepare_visual_frame_payload(left_frame + 1, max_width=analysis_width, cache=payload_cache)
+            if not left_payload or not right_payload:
+                continue
+            metric = visual_cut_pair_metrics(
+                left_payload,
+                right_payload,
+                cv2_mod,
+                flow_engine=flow_engine,
+                backend_preference=backend_preference,
+            )
+            if not isinstance(metric, dict):
+                continue
+            metric.update(
+                {
+                    "boundary_frame": int(left_frame),
+                    "boundary_sec": float(left_payload["global_sec"]),
+                    "left_frame": int(left_frame),
+                    "right_frame": int(left_frame + 1),
+                    "analysis_width": int(analysis_width),
+                    "source_changed": bool(left_payload.get("source_path") != right_payload.get("source_path")),
+                }
+            )
+            raw_history.append(metric)
+            if len(raw_history) < 3:
+                continue
+            history = list(coarse_history or [])[-6:] + raw_history[max(0, len(raw_history) - 14):-2]
+            scored = is_visual_cut_peak(
+                raw_history[-3],
+                raw_history[-2],
+                raw_history[-1],
+                history=history[-12:],
+                settings=settings,
+            )
+            if not bool(scored.get("passed")):
+                continue
+            scored["direction"] = int(1 if int(direction) > 0 else -1)
+            if best is None or float(scored.get("score", 0.0) or 0.0) > float(best.get("score", 0.0) or 0.0):
+                best = dict(scored)
+        return best
+
+    def _scan_find_live_visual_cut(self, direction: int):
+        if not self._scan_live_visual_jump_enabled():
+            return None
+
+        cv2_mod = self._scan_get_cv2_module()
+        if not cv2_mod:
+            return None
+
+        try:
+            from core.visual_cut_jump import (
+                create_visual_cut_flow_engine,
+                is_visual_cut_peak,
+                native_visual_cut_coarse_series,
+                score_visual_cut_coarse_metrics,
+                visual_cut_pair_metrics,
+            )
+        except Exception as exc:
+            print(f"⚠️ [scan-cut] visual jump helper 준비 실패: {exc}", flush=True)
+            return None
+        try:
+            from core.visual_cut_jump import score_visual_cut_metrics
+        except Exception as exc:
+            print(f"⚠️ [scan-cut] visual jump scoring 준비 실패: {exc}", flush=True)
+            return None
+
+        try:
+            fps = float(self._current_frame_fps())
+        except Exception:
+            fps = 30.0
+        try:
+            direction_i = 1 if int(direction) > 0 else -1
+        except Exception:
+            direction_i = 1
+        try:
+            start_sec = float(self._manual_global_sec_from_player())
+        except Exception:
+            start_sec = 0.0
+        start_frame = max(0, int(round(start_sec * fps)))
+        fine_width = self._scan_live_visual_width()
+        coarse_width = self._scan_live_visual_coarse_width()
+        coarse_stride = self._scan_live_visual_coarse_stride_frames(fps)
+        coarse_max_frames = self._scan_live_visual_coarse_search_frames(fps)
+        candidate_topk = self._scan_live_visual_candidate_topk()
+        candidate_min_score = self._scan_live_visual_candidate_min_score()
+        interval_margin = self._scan_live_visual_interval_margin_frames(fps, coarse_stride)
+        settings = getattr(self, "settings", {}) or {}
+        backend_preference = str(settings.get("scan_cut_dense_flow_backend", "dis") or "dis").strip().lower()
+        flow_engine, flow_backend = create_visual_cut_flow_engine(cv2_mod, backend_preference=backend_preference)
+
+        payload_cache: dict = {}
+        inspected_intervals: set[tuple[int, int]] = set()
+        left_payload = self._scan_prepare_visual_frame_payload(start_frame, max_width=coarse_width, cache=payload_cache)
+        if not left_payload:
+            return None
+
+        def _inspect_candidate(candidate: dict, *, reason: str) -> dict | None:
+            interval_start = int(candidate.get("interval_start_frame", candidate.get("boundary_frame", 0)) or 0)
+            interval_end = int(candidate.get("interval_end_frame", interval_start + coarse_stride) or (interval_start + coarse_stride))
+            interval_key = (interval_start, interval_end)
+            if interval_key in inspected_intervals:
+                return None
+            inspected_intervals.add(interval_key)
+
+            window_start = max(0, interval_start - interval_margin)
+            window_end = max(window_start + 1, interval_end + interval_margin)
+            fine_candidate = self._scan_find_live_visual_cut_in_window(
+                window_start,
+                window_end,
+                analysis_width=fine_width,
+                direction=direction_i,
+                payload_cache=payload_cache,
+                coarse_history=[candidate],
+            )
+            if not isinstance(fine_candidate, dict):
+                print(
+                    f"↪️ [scan-cut-live] window reject {window_start}-{window_end} "
+                    f"seed={interval_start}-{interval_end} seed_score={float(candidate.get('score', 0.0) or 0.0):.2f} "
+                    f"reason={reason}",
+                    flush=True,
+                )
+                return None
+
+            refined = self._scan_refine_live_visual_cut(fine_candidate, coarse_history=[candidate])
+            print(
+                f"🎯 [scan-cut-live] CUT dir={direction_i} "
+                f"frame={int(refined.get('boundary_frame', interval_start) or interval_start)} "
+                f"sec={float(refined.get('boundary_sec', 0.0) or 0.0):.3f}s "
+                f"score={float(refined.get('score', 0.0) or 0.0):.3f} "
+                f"edge_res={float(refined.get('edge_residual', 0.0) or 0.0):.4f} "
+                f"edge_diff={float(refined.get('edge_diff', 0.0) or 0.0):.4f} "
+                f"motion={float(refined.get('mean_motion_px', 0.0) or 0.0):.2f} "
+                f"coh={float(refined.get('coherence', 0.0) or 0.0):.3f} "
+                f"seed={interval_start}-{interval_end} reason={reason}",
+                flush=True,
+            )
+            return refined
+
+        def _build_dense_flow_coarse_scan():
+            dense_raw_history: list[dict] = []
+            dense_series: list[dict] = []
+            dense_candidates: list[dict] = []
+            for idx in range(1, len(sparse_payloads)):
+                right_payload = sparse_payloads[idx]
+                if direction_i > 0:
+                    pair_left = sparse_payloads[idx - 1]
+                    pair_right = right_payload
+                else:
+                    pair_left = right_payload
+                    pair_right = sparse_payloads[idx - 1]
+
+                metric = visual_cut_pair_metrics(
+                    pair_left,
+                    pair_right,
+                    cv2_mod,
+                    flow_engine=flow_engine,
+                    backend_preference=backend_preference,
+                )
+                if not isinstance(metric, dict):
+                    continue
+                metric.update(
+                    {
+                        "boundary_frame": int(pair_left["global_frame"]),
+                        "boundary_sec": float(pair_left["global_sec"]),
+                        "left_frame": int(pair_left["global_frame"]),
+                        "right_frame": int(pair_right["global_frame"]),
+                        "analysis_width": int(coarse_width),
+                        "flow_backend": str(flow_backend),
+                        "source_changed": bool(pair_left.get("source_path") != pair_right.get("source_path")),
+                        "interval_start_frame": int(min(pair_left["global_frame"], pair_right["global_frame"])),
+                        "interval_end_frame": int(max(pair_left["global_frame"], pair_right["global_frame"])),
+                        "interval_stride_frames": int(abs(int(pair_right["global_frame"]) - int(pair_left["global_frame"]))),
+                    }
+                )
+                dense_raw_history.append(metric)
+                history = dense_raw_history[-8:-1]
+                scored = score_visual_cut_metrics(metric, history=history, settings=settings)
+                if not isinstance(scored, dict):
+                    continue
+                coarse_item = {
+                    **metric,
+                    **scored,
+                    "direction": int(direction_i),
+                }
+                dense_series.append(coarse_item)
+                if float(coarse_item.get("score", 0.0) or 0.0) >= candidate_min_score:
+                    dense_candidates.append(coarse_item)
+            return dense_series, dense_candidates
+
+        coarse_steps = max(1, int(math.ceil(float(coarse_max_frames) / max(float(coarse_stride), 1.0))))
+        sparse_payloads: list[dict] = [left_payload]
+        for step_idx in range(1, coarse_steps + 1):
+            right_frame = start_frame + (direction_i * coarse_stride * step_idx)
+            if right_frame < 0:
+                break
+            right_payload = self._scan_prepare_visual_frame_payload(right_frame, max_width=coarse_width, cache=payload_cache)
+            if not right_payload:
+                break
+            sparse_payloads.append(right_payload)
+
+        native_coarse_used = False
+        raw_history: list[dict] = []
+        coarse_series: list[dict] = []
+        coarse_candidates: list[dict] = []
+        if self._scan_live_native_coarse_enabled():
+            try:
+                native_series = native_visual_cut_coarse_series(
+                    sparse_payloads,
+                    region_threshold=float(settings.get("scan_cut_live_native_coarse_region_threshold", 24.0) or 24.0),
+                    diff_threshold=float(settings.get("scan_cut_live_native_coarse_diff_threshold", 32.0) or 32.0),
+                )
+            except Exception:
+                native_series = None
+            if isinstance(native_series, list) and native_series:
+                native_coarse_used = True
+                for metric in native_series:
+                    if not isinstance(metric, dict):
+                        continue
+                    metric = dict(metric)
+                    metric["flow_backend"] = "native_edge_series"
+                    raw_history.append(metric)
+                    history = raw_history[-8:-1]
+                    scored = score_visual_cut_coarse_metrics(metric, history=history, settings=settings)
+                    if not isinstance(scored, dict):
+                        continue
+                    coarse_item = {
+                        **metric,
+                        **scored,
+                        "direction": int(direction_i),
+                    }
+                    coarse_series.append(coarse_item)
+                    if float(coarse_item.get("score", 0.0) or 0.0) >= candidate_min_score:
+                        coarse_candidates.append(coarse_item)
+
+        def _inspect_coarse_candidates(series: list[dict], candidates: list[dict], *, backend_label: str, inspect_cap: int | None = None):
+            for idx in range(1, max(1, len(series) - 1)):
+                if idx + 1 >= len(series):
+                    break
+                prev_item = series[idx - 1]
+                current_item = series[idx]
+                next_item = series[idx + 1]
+                if self._scan_is_live_visual_coarse_peak(
+                    prev_item,
+                    current_item,
+                    next_item,
+                    min_score=candidate_min_score,
+                ):
+                    refined = _inspect_candidate(current_item, reason="coarse_peak")
+                    if isinstance(refined, dict):
+                        return refined
+
+            selected_candidates = self._scan_select_live_visual_candidates(
+                candidates,
+                stride_frames=coarse_stride,
+                top_k=(max(candidate_topk, 10) if backend_label == "cpp_native" else candidate_topk),
+            )
+            if not selected_candidates:
+                return None
+
+            ordered_candidates = sorted(
+                list(selected_candidates or []),
+                key=lambda item: int(item.get("interval_start_frame", item.get("boundary_frame", 0)) or 0),
+                reverse=direction_i < 0,
+            )
+            print(
+                f"🔎 [scan-cut-live] COARSE dir={direction_i} "
+                f"search_frames={coarse_max_frames} stride={coarse_stride} width={coarse_width} "
+                f"backend={backend_label} "
+                f"candidates="
+                + ", ".join(
+                    f"{int(item.get('interval_start_frame', 0) or 0)}-{int(item.get('interval_end_frame', 0) or 0)}"
+                    f"@{float(item.get('score', 0.0) or 0.0):.2f}"
+                    for item in list(ordered_candidates or [])
+                ),
+                flush=True,
+            )
+            limit = len(ordered_candidates) if inspect_cap is None else max(1, min(len(ordered_candidates), int(inspect_cap)))
+            for candidate in list(ordered_candidates or [])[:limit]:
+                refined = _inspect_candidate(candidate, reason="coarse_fallback")
+                if isinstance(refined, dict):
+                    return refined
+            return None
+
+        if native_coarse_used:
+            refined = _inspect_coarse_candidates(
+                coarse_series,
+                coarse_candidates,
+                backend_label="cpp_native",
+                inspect_cap=max(2, min(4, candidate_topk)),
+            )
+            if isinstance(refined, dict):
+                return refined
+            print("↪️ [scan-cut-live] native coarse miss -> dense flow fallback", flush=True)
+
+        coarse_series, coarse_candidates = _build_dense_flow_coarse_scan()
+        refined = _inspect_coarse_candidates(
+            coarse_series,
+            coarse_candidates,
+            backend_label=str(flow_backend),
+        )
+        if isinstance(refined, dict):
+            return refined
+
+        return None
+
+    def _scan_jump_to_live_visual_cut(self, direction: int) -> bool:
+        candidate = self._scan_find_live_visual_cut(direction)
+        if not isinstance(candidate, dict):
+            return False
+        candidate = self._scan_verify_live_visual_candidate(candidate, direction=direction)
+        if not isinstance(candidate, dict):
+            return False
+
+        try:
+            target_sec = self._snap_to_frame(float(candidate.get("boundary_sec", 0.0) or 0.0))
+        except Exception:
+            return False
+        if target_sec < 0.0:
+            return False
+
+        try:
+            if hasattr(self.video_player, "pause_video"):
+                self.video_player.pause_video()
+        except Exception:
+            pass
+
+        self._set_scan_cut_button_active(direction)
+        try:
+            self._scan_preview_global_sec(target_sec)
+        except Exception:
+            timeline = getattr(self, "timeline", None)
+            if timeline is not None:
+                try:
+                    timeline.set_playhead(target_sec)
+                except Exception:
+                    pass
+        try:
+            self._scan_show_cut_thumbnail(target_sec)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self.video_player, "info_label"):
+                if bool(candidate.get("follower_verified")):
+                    self.video_player.info_label.setText(
+                        f"실화면 컷 정지 · 후발대 {str(candidate.get('follower_verified_mode', 'strict_verify') or 'strict_verify')}"
+                    )
+                else:
+                    self.video_player.info_label.setText(
+                        f"실화면 컷 정지 · score {float(candidate.get('score', 0.0) or 0.0):.2f}"
+                    )
+        except Exception:
+            pass
+
+        try:
+            QTimer.singleShot(120, lambda: self._set_scan_cut_button_active(0))
+        except Exception:
+            self._set_scan_cut_button_active(0)
+
+        return True
 
 
     def _scan_cached_cut_jump_enabled(self) -> bool:
@@ -1333,72 +2153,107 @@ class EditorScanCutCoreMixin:
             direction = 1
 
         current_state = getattr(self, "_scan_cut_state", None)
+        pending_direction = int(getattr(self, "_scan_cut_pending_direction", 0) or 0)
         if current_state:
             active_dir = int(current_state.get("direction", 0) or 0)
             if active_dir == direction:
                 self._cancel_scan_cut("same-button-toggle")
                 return
             self._cancel_scan_cut("switch-direction", update_label=False)
-
-        if self._scan_jump_to_cached_cut_boundary(direction):
-            return
+        elif pending_direction:
+            if pending_direction == direction:
+                self._cancel_scan_cut("same-button-pending-toggle")
+                return
+            self._cancel_scan_cut("switch-direction-pending", update_label=False)
 
         if hasattr(self.video_player, "pause_video"):
             self.video_player.pause_video()
 
         self._set_scan_cut_button_active(direction)
-        fps = self._current_frame_fps()
-        start_sec = self._manual_global_sec_from_player()
-        start_frame = max(0, int(round(start_sec * fps)))
-        threshold = self._scan_threshold()
-        interval = self._scan_interval_ms()
-        max_frames = self._scan_max_frames()
-        start_image = self._scan_capture_image_at_global(start_sec)
-
-        print(
-            f"🎬 [scan-cut] START dir={direction} start_frame={start_frame} "
-            f"start={start_frame / fps:.3f}s fps={fps:.3f} threshold={threshold:.2f} "
-            f"interval={interval}ms max_frames={max_frames} "
-            f"image={self._scan_image_backend_label() if start_image is not None else 'NONE'}",
-            flush=True,
-        )
-
-        if start_image is None:
-            try:
-                self.video_player.info_label.setText("컷 경계 탐색 실패 · 프레임 없음")
-            except Exception:
-                pass
-            self._set_scan_cut_button_active(0)
-            return
-
-        self._scan_cut_state = {
-            "direction": direction,
-            "last_frame": start_frame,
-            "last_image": start_image,
-            "frames": 0,
-            "threshold": threshold,
-            "hard_threshold": self._scan_hard_threshold(),
-            "consecutive_hits_required": self._scan_consecutive_hits_required(),
-            "consecutive_hits": 0,
-            "first_hit_frame": None,
-            "first_hit_sec": None,
-            "max_frames": max_frames,
-            "busy": False,
-        }
-
-        if not hasattr(self, "_scan_cut_timer"):
-            self._scan_cut_timer = QTimer(self)
-            self._scan_cut_timer.timeout.connect(self._scan_cut_tick)
-
         try:
-            self.video_player.info_label.setText("컷 경계 탐색 중...")
+            if hasattr(self.video_player, "info_label"):
+                self.video_player.info_label.setText("실화면 컷 탐색 준비 중...")
         except Exception:
             pass
+        launch_token = object()
+        self._scan_cut_pending_direction = int(direction)
+        self._scan_cut_launch_token = launch_token
 
-        self._scan_set_timeline_input_locked(True)
-        self._scan_cut_timer.stop()
-        self._scan_cut_timer.setInterval(interval)
-        self._scan_cut_timer.start()
+        def _launch_scan() -> None:
+            if getattr(self, "_scan_cut_launch_token", None) is not launch_token:
+                return
+            self._scan_cut_launch_token = None
+            self._scan_cut_pending_direction = 0
+
+            try:
+                if hasattr(self.video_player, "info_label"):
+                    self.video_player.info_label.setText("실화면 컷 탐색 중...")
+            except Exception:
+                pass
+
+            if self._scan_jump_to_live_visual_cut(direction):
+                return
+
+            if self._scan_jump_to_cached_cut_boundary(direction):
+                return
+
+            fps = self._current_frame_fps()
+            start_sec = self._manual_global_sec_from_player()
+            start_frame = max(0, int(round(start_sec * fps)))
+            threshold = self._scan_threshold()
+            interval = self._scan_interval_ms()
+            max_frames = self._scan_max_frames()
+            start_image = self._scan_capture_image_at_global(start_sec)
+
+            print(
+                f"🎬 [scan-cut] START dir={direction} start_frame={start_frame} "
+                f"start={start_frame / fps:.3f}s fps={fps:.3f} threshold={threshold:.2f} "
+                f"interval={interval}ms max_frames={max_frames} "
+                f"image={self._scan_image_backend_label() if start_image is not None else 'NONE'}",
+                flush=True,
+            )
+
+            if start_image is None:
+                try:
+                    self.video_player.info_label.setText("컷 경계 탐색 실패 · 프레임 없음")
+                except Exception:
+                    pass
+                self._set_scan_cut_button_active(0)
+                return
+
+            self._scan_cut_state = {
+                "direction": direction,
+                "last_frame": start_frame,
+                "last_image": start_image,
+                "frames": 0,
+                "threshold": threshold,
+                "hard_threshold": self._scan_hard_threshold(),
+                "consecutive_hits_required": self._scan_consecutive_hits_required(),
+                "consecutive_hits": 0,
+                "first_hit_frame": None,
+                "first_hit_sec": None,
+                "max_frames": max_frames,
+                "busy": False,
+            }
+
+            if not hasattr(self, "_scan_cut_timer"):
+                self._scan_cut_timer = QTimer(self)
+                self._scan_cut_timer.timeout.connect(self._scan_cut_tick)
+
+            try:
+                self.video_player.info_label.setText("컷 경계 탐색 중...")
+            except Exception:
+                pass
+
+            self._scan_set_timeline_input_locked(True)
+            self._scan_cut_timer.stop()
+            self._scan_cut_timer.setInterval(interval)
+            self._scan_cut_timer.start()
+
+        try:
+            QTimer.singleShot(0, _launch_scan)
+        except Exception:
+            _launch_scan()
 
 
 

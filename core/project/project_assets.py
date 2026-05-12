@@ -731,10 +731,11 @@ def hydrate_project_text_asset_cache(project: dict[str, Any] | None) -> dict[str
         if isinstance(editor_state, dict):
             stt_state = editor_state.setdefault("stt", {})
             if isinstance(stt_state, dict):
-                stt_state["candidate_tracks"] = {
-                    source: [dict(row) for row in rows]
-                    for source, rows in stt_tracks.items()
-                }
+                if not isinstance(stt_state.get("candidate_tracks"), dict) or not stt_state.get("candidate_tracks"):
+                    stt_state["candidate_tracks"] = {
+                        source: [dict(row) for row in rows]
+                        for source, rows in stt_tracks.items()
+                    }
                 stt_state["candidate_counts"] = {
                     source: len(rows)
                     for source, rows in stt_tracks.items()
@@ -760,6 +761,7 @@ def externalize_project_text_assets(
         primary_fps,
         min_frames=1,
         preserve_order=True,
+        enforce_non_overlap=True,
     )
     stt_tracks = dict(stt_tracks or {})
 
@@ -775,6 +777,8 @@ def externalize_project_text_assets(
         dict(row) for row in list(final_info.get("rows") or []) if isinstance(row, dict)
     ]
 
+    inline_stt_tracks: dict[str, list[dict[str, Any]]] = {}
+    inline_stt_preview_segments: list[dict[str, Any]] = []
     stt_external_tracks: dict[str, Any] = {}
     for source in ("STT1", "STT2"):
         rows = sanitize_stt_track_rows(
@@ -782,6 +786,14 @@ def externalize_project_text_assets(
             source=source,
             primary_fps=primary_fps,
         )
+        if rows:
+            inline_stt_tracks[source] = [dict(row) for row in rows]
+            for row in rows:
+                preview_row = dict(row)
+                preview_row["stt_preview_source"] = source
+                preview_row["stt_pending"] = True
+                preview_row["_live_stt_preview"] = True
+                inline_stt_preview_segments.append(preview_row)
         if not rows:
             continue
         key = f"{_STT_TRACK_PREFIX}{source.lower()}"
@@ -827,33 +839,58 @@ def externalize_project_text_assets(
         canvas["segment_signature"] = final_track["signature"]
         canvas["source"] = PROJECT_EXTERNAL_STORAGE
         stt_state = editor_state.setdefault("stt", {})
-        stt_state["preview_segments"] = []
-        stt_state["candidate_tracks"] = {}
+        stt_state["preview_segments"] = [
+            dict(row)
+            for row in list(
+                inline_stt_preview_segments
+                or stt_state.get("preview_segments")
+                or []
+            )
+            if isinstance(row, dict)
+        ]
+        stt_state["candidate_tracks"] = {
+            source: [dict(row) for row in rows]
+            for source, rows in inline_stt_tracks.items()
+            if isinstance(rows, list)
+        }
         stt_state["external_tracks"] = {
             source: _track_ref(track)
             for source, track in stt_external_tracks.items()
         }
         stt_state["candidate_counts"] = {
-            source: int(track.get("segment_count", 0) or 0)
-            for source, track in stt_external_tracks.items()
+            source: len(rows)
+            for source, rows in inline_stt_tracks.items()
         }
         editor_analysis = editor_state.setdefault("analysis", {})
         if isinstance(editor_analysis, dict):
-            editor_analysis.pop("stt_candidate_tracks", None)
+            if inline_stt_tracks:
+                editor_analysis["stt_candidate_tracks"] = {
+                    source: [dict(row) for row in rows]
+                    for source, rows in inline_stt_tracks.items()
+                }
+            else:
+                editor_analysis.pop("stt_candidate_tracks", None)
             editor_analysis["external_stt_tracks"] = {
                 source: _track_ref(track)
                 for source, track in stt_external_tracks.items()
             }
     analysis = project.setdefault("analysis", {})
-    analysis.pop("stt_candidate_tracks", None)
-    analysis["stt_candidate_schema"] = "stt_candidate_tracks.external_srt.v1"
+    if inline_stt_tracks:
+        analysis["stt_candidate_schema"] = "stt_candidate_tracks.v1"
+        analysis["stt_candidate_tracks"] = {
+            source: [dict(row) for row in rows]
+            for source, rows in inline_stt_tracks.items()
+        }
+    else:
+        analysis.pop("stt_candidate_tracks", None)
+        analysis["stt_candidate_schema"] = "stt_candidate_tracks.external_srt.v1"
     analysis["external_stt_tracks"] = {
         source: _track_ref(track)
         for source, track in stt_external_tracks.items()
     }
     analysis["stt_candidate_counts"] = {
-        source: int(track.get("segment_count", 0) or 0)
-        for source, track in stt_external_tracks.items()
+        source: len(rows)
+        for source, rows in inline_stt_tracks.items()
     }
     return project
 

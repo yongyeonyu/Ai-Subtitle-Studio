@@ -12,7 +12,7 @@ import json
 import os
 from typing import Any
 
-from core.frame_time import frame_to_sec, normalize_fps, sec_to_frame, sec_to_nearest_frame
+from core.frame_time import frame_to_sec, normalize_fps, normalize_segments_to_frame_grid, sec_to_frame, sec_to_nearest_frame
 from core.work_mode import EDITOR_MODE, normalize_work_mode
 from core.project.subtitle_status import recheck_threshold, subtitle_status_payload
 from core.cut_boundary import (
@@ -1163,6 +1163,15 @@ def _normalize_editor_segments(segments: list[dict[str, Any]], *, primary_fps: f
                 item[key] = seg.get(key)
         item.update(_project_segment_status_payload(item, threshold=status_threshold))
         out.append(item)
+    out = normalize_segments_to_frame_grid(
+        out,
+        fps,
+        min_frames=1,
+        preserve_order=False,
+        enforce_non_overlap=True,
+    )
+    for idx, item in enumerate(out):
+        item["line"] = int(idx)
     return out
 
 

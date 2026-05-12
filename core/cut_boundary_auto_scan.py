@@ -27,7 +27,11 @@ from core.cut_boundary_scan_runtime import (
 )
 from core.performance import balanced_task_slices, current_resource_snapshot
 from core.runtime.multi_process import runtime_parallel_worker_plan
-from core.cut_boundary_backend_router import apply_cut_boundary_backend_settings, select_cut_boundary_backend
+from core.cut_boundary_backend_router import (
+    CutBoundaryBackendChoice,
+    apply_cut_boundary_backend_settings,
+    select_cut_boundary_backend,
+)
 from core.platform_compat import ffmpeg_binary, ffprobe_binary, hidden_subprocess_kwargs
 
 
@@ -1508,18 +1512,30 @@ def build_auto_grid_scan_helpers(deps: dict):
             return normalize_cut_boundaries(provisional_rows or [])
 
         settings = apply_cut_boundary_backend_settings(settings)
+        verify_capture_settings = dict(settings)
+        verify_capture_settings["scan_cut_cv2_video_backend"] = str(
+            verify_capture_settings.get("scan_cut_follower_cv2_video_backend", "default") or "default"
+        )
         original_filepath = str(filepath)
         backend_choice = select_cut_boundary_backend(original_filepath, settings)
         scan_filepath = backend_choice.scan_path
+        if backend_choice.use_proxy and not _setting_bool(settings.get("scan_cut_follower_use_preview_proxy_enabled"), False):
+            scan_filepath = original_filepath
+            backend_choice = CutBoundaryBackendChoice(
+                backend_choice.backend,
+                scan_filepath,
+                f"{backend_choice.reason}_follower_original",
+                False,
+            )
         configure_cut_boundary_cv2_threads(cv2, settings)
-        cap = open_cut_boundary_video_capture(cv2, scan_filepath, settings)
+        cap = open_cut_boundary_video_capture(cv2, scan_filepath, verify_capture_settings)
         if not cap.isOpened() and scan_filepath != original_filepath:
             try:
                 cap.release()
             except Exception:
                 pass
             scan_filepath = original_filepath
-            cap = open_cut_boundary_video_capture(cv2, scan_filepath, settings)
+            cap = open_cut_boundary_video_capture(cv2, scan_filepath, verify_capture_settings)
         if not cap.isOpened():
             try:
                 cap.release()
@@ -1601,7 +1617,11 @@ def build_auto_grid_scan_helpers(deps: dict):
                         local_sec = 0.0
                 coarse_frame = max(0, int(round(local_sec * fps)))
                 owns_cap = verify_cap is None
-                local_cap = verify_cap if verify_cap is not None else open_cut_boundary_video_capture(cv2, scan_filepath, settings)
+                local_cap = (
+                    verify_cap
+                    if verify_cap is not None
+                    else open_cut_boundary_video_capture(cv2, scan_filepath, verify_capture_settings)
+                )
                 if local_cap is None:
                     return None
                 if not local_cap.isOpened():
@@ -1787,7 +1807,7 @@ def build_auto_grid_scan_helpers(deps: dict):
 
             def _verify_batch(start_idx: int, end_idx: int):
                 local_results = []
-                verify_cap = open_cut_boundary_video_capture(cv2, scan_filepath, settings)
+                verify_cap = open_cut_boundary_video_capture(cv2, scan_filepath, verify_capture_settings)
                 try:
                     if not verify_cap.isOpened():
                         return [None for _ in verify_rows[start_idx:end_idx]]

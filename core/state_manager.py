@@ -44,6 +44,9 @@ class SubtitleStateManager(QObject):
         self.state = self.ST_IDLE
         self.is_locked = False
         self.is_dirty = False
+        self.progress_current = 0
+        self.progress_total = 0
+        self.progress_percent = 0
         self._status_msg = "💤 대기중"
         self._button_text = "시작"
         self._button_enabled = True
@@ -70,6 +73,9 @@ class SubtitleStateManager(QObject):
     def set_idle(self):
         self.state = self.ST_IDLE
         self.is_locked = False
+        self.progress_current = 0
+        self.progress_total = 0
+        self.progress_percent = 0
         self._status_msg = "💤 대기중"
         self._button_text = "▶ 시작"
         self._button_enabled = True
@@ -79,6 +85,9 @@ class SubtitleStateManager(QObject):
         self.state = self.ST_PROC
         self.is_locked = True
         self.is_dirty = True
+        self.progress_current = 0
+        self.progress_total = 0
+        self.progress_percent = 0
         self._status_msg = "⏳ 처리중..."
         self._button_text = "■ 정지"
         self._button_enabled = True
@@ -87,6 +96,18 @@ class SubtitleStateManager(QObject):
     def update_progress(self, current, total, percent, custom_msg=""):
         if self.state != self.ST_PROC:
             return
+        try:
+            self.progress_current = max(0, int(current or 0))
+        except Exception:
+            self.progress_current = 0
+        try:
+            self.progress_total = max(0, int(total or 0))
+        except Exception:
+            self.progress_total = 0
+        try:
+            self.progress_percent = max(0, min(99, int(percent or 0)))
+        except Exception:
+            self.progress_percent = 0
         if custom_msg:
             self._status_msg = custom_msg
         elif not self._is_stage_status_active():
@@ -100,6 +121,8 @@ class SubtitleStateManager(QObject):
         self.state = self.ST_COMP
         self.is_locked = False
         self.is_dirty = True
+        self.progress_current = max(self.progress_current, self.progress_total)
+        self.progress_percent = 100
         self._status_msg = "✨ 자막 생성 완료"
         self._button_text = "🔄 재시작"
         self._button_enabled = True
@@ -109,6 +132,8 @@ class SubtitleStateManager(QObject):
         self.state = self.ST_SAVED
         self.is_locked = False
         self.is_dirty = False
+        self.progress_current = max(self.progress_current, self.progress_total)
+        self.progress_percent = 100
         self._status_msg = "💾 저장 완료"
         self._button_text = "🔄 재시작"
         self._button_enabled = True
@@ -119,11 +144,13 @@ class SubtitleStateManager(QObject):
             return
         self.state = self.ST_EDITING
         self.is_dirty = True
+        self.progress_percent = 0
         self._status_msg = "✏ 편집 중"
         self._emit()
 
     def start_autosave(self):
         self.state = self.ST_AUTOSAVE
+        self.progress_percent = 0
         self._status_msg = "💾 자동 저장 중..."
         self._emit()
 
@@ -131,6 +158,9 @@ class SubtitleStateManager(QObject):
         """send_ntfy 파라미터는 호환성 유지용 (실제 ntfy 전송 없음)"""
         self.state = self.ST_IDLE
         self.is_locked = False
+        self.progress_current = 0
+        self.progress_total = 0
+        self.progress_percent = 0
         self._status_msg = msg
         self._button_text = "🔄 재시작"
         self._button_enabled = True

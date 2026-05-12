@@ -100,18 +100,7 @@ def _project_payload_for_disk(project: dict[str, Any]) -> dict[str, Any]:
             rendering["subtitle_canvas"] = canvas
             editor_state["rendering"] = rendering
 
-            stt_state = dict(editor_state.get("stt", {}) or {})
-            stt_state["preview_segments"] = []
-            stt_state["candidate_tracks"] = {}
-            editor_state["stt"] = stt_state
-            editor_analysis = dict(editor_state.get("analysis", {}) or {})
-            editor_analysis.pop("stt_candidate_tracks", None)
-            editor_state["analysis"] = editor_analysis
             payload["editor_state"] = editor_state
-
-            analysis = dict(payload.get("analysis", {}) or {})
-            analysis.pop("stt_candidate_tracks", None)
-            payload["analysis"] = analysis
     except Exception:
         pass
     return build_storage_project_payload(payload)

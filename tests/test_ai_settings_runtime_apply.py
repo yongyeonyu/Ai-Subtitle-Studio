@@ -82,7 +82,17 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
         try:
             window._unified_dashboard = True
             window._build_home_content()
-            dialog = SettingsDialog({}, window)
+            with patch("core.llm.codex_provider.codex_login_status", return_value={
+                "available": True,
+                "binary": "/opt/homebrew/bin/codex",
+                "logged_in": True,
+                "auth_mode": "chatgpt",
+                "subscription_access": True,
+                "usage_based_access": False,
+                "message": "ChatGPT 구독 로그인됨",
+                "raw_status": "Logged in using ChatGPT",
+            }):
+                dialog = SettingsDialog({}, window)
             self.assertFalse(hasattr(dialog, "tabs"))
             label_texts = [label.text() for label in dialog.findChildren(QLabel)]
             self.assertFalse(any("자막 정확도 프리셋" in text for text in label_texts))
@@ -101,6 +111,8 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
             self.assertNotIn("러프컷 분석에서 LLM 사용", widget_texts)
             self.assertFalse(any("API Key / 온도" in text for text in label_texts))
             self.assertTrue(any("Hugging Face Token:" in text for text in label_texts))
+            self.assertTrue(hasattr(dialog, "btn_codex_cli_login"))
+            self.assertIn("ChatGPT 구독 로그인됨", dialog.lbl_codex_cli_status.text())
             self.assertIsNone(getattr(window, "sidebar_preset_panel", None))
             self.assertFalse(hasattr(window, "sidebar_stt_quality_combo"))
             self.assertFalse(hasattr(window, "sidebar_audio_preset_combo"))
@@ -126,6 +138,7 @@ class AISettingsRuntimeApplyTest(unittest.TestCase):
         try:
             roughcut_models = {str(item.get("name") or "") for item in window._roughcut_llm_items()}
             self.assertIn(DEFAULT_CODEX_LABEL, roughcut_models)
+            self.assertIn("OpenAI Codex GPT-5.5 [ChatGPT CLI 구독]", roughcut_models)
 
             inherited_name, _ = window._roughcut_llm_name(
                 {

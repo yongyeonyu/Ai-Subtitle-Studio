@@ -370,6 +370,99 @@ class PipelineHelpersMixin(PipelineCutBoundaryMixin):
         except Exception:
             self._speaker_map = []
 
+    def _speaker_prepass_upper_bound(self, speaker_preflight: dict | None = None) -> int:
+        try:
+            configured_max = int(getattr(self, "max_speakers", 1) or 1)
+        except Exception:
+            configured_max = 1
+        estimated = 1
+        if isinstance(speaker_preflight, dict):
+            try:
+                estimated = int(speaker_preflight.get("estimated_speaker_count", 1) or 1)
+            except Exception:
+                estimated = 1
+        effective = max(configured_max, estimated)
+        if estimated >= 2 and configured_max <= 1:
+            effective = 3
+        if effective <= 1:
+            return 1
+        return max(2, min(3, effective))
+
+    def _prepare_speaker_map_before_stt(
+        self,
+        audio_path: str,
+        *,
+        speaker_preflight: dict | None = None,
+        stage_callback=None,
+    ) -> list[dict]:
+        path = str(audio_path or "").strip()
+        if not path or not os.path.exists(path):
+            self._speaker_map = []
+            try:
+                self.video_processor._speaker_map = []
+            except Exception:
+                pass
+            return []
+
+        effective_max = self._speaker_prepass_upper_bound(speaker_preflight)
+        if effective_max <= 1:
+            self._speaker_map = []
+            try:
+                self.video_processor._speaker_map = []
+            except Exception:
+                pass
+            return []
+
+        if callable(stage_callback):
+            try:
+                stage_callback("⏳ [화자] 전체 오디오 기준 화자 수/구간 분석 중")
+            except Exception:
+                pass
+
+        old_min = int(getattr(self, "min_speakers", 1) or 1)
+        old_max = int(getattr(self, "max_speakers", 1) or 1)
+        try:
+            self.min_speakers = 1
+            self.max_speakers = effective_max
+            self._prepare_speaker_map(path)
+        finally:
+            self.min_speakers = old_min
+            self.max_speakers = old_max
+
+        speaker_map = [dict(item) for item in list(getattr(self, "_speaker_map", []) or []) if isinstance(item, dict)]
+        self._speaker_map = speaker_map
+        try:
+            self.video_processor._speaker_map = [dict(item) for item in speaker_map]
+        except Exception:
+            pass
+
+        detected_count = len({str(item.get("speaker") or "") for item in speaker_map}) if speaker_map else 0
+        self._detected_speaker_count = detected_count
+        if callable(stage_callback):
+            try:
+                label = (
+                    f"🗣️ 화자 {detected_count}명 확정 · Whisper 준비 중"
+                    if detected_count > 1
+                    else "🗣️ 단일 화자 확정 · Whisper 준비 중"
+                )
+                stage_callback(label)
+            except Exception:
+                pass
+        return speaker_map
+
+    def _apply_speaker_map_to_segments(self, segments: list[dict]) -> list[dict]:
+        speaker_map = [dict(item) for item in list(getattr(self, "_speaker_map", []) or []) if isinstance(item, dict)]
+        if not speaker_map:
+            return [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+        try:
+            from core.audio.diarize import assign_speakers_to_segments, merge_speaker_overlap_subtitles
+
+            labeled = assign_speakers_to_segments(segments, speaker_map)
+            return merge_speaker_overlap_subtitles(labeled)
+        except Exception as exc:
+            get_logger().log(f"  ⚠️ [화자] 자막 화자 적용/겹침 병합 실패: {exc}")
+            return [dict(seg) for seg in list(segments or []) if isinstance(seg, dict)]
+
     # ─── NTFY 알림 ───────────────────────────────────────
     def _send_ntfy_notification(self, title, message, tags=""):
         from core.notifier import send_ntfy

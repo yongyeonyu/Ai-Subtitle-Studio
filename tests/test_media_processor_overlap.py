@@ -280,6 +280,36 @@ class MediaProcessorOverlapTests(unittest.TestCase):
         self.assertEqual(parsed[0]["asr_metadata"]["vad_alignment"]["vad_aligned"], True)
         self.assertEqual(parsed[0]["quality"]["vad_alignment_score"], 100.0)
 
+    def test_parse_whisper_payload_applies_precomputed_speaker_map(self):
+        self.processor._speaker_map = [
+            {"start": 10.0, "end": 10.95, "speaker": "SPEAKER_00"},
+            {"start": 10.95, "end": 12.0, "speaker": "SPEAKER_01"},
+        ]
+        payload = {
+            "backend": "unit-test",
+            "segments": [
+                {
+                    "start": 0.0,
+                    "end": 2.0,
+                    "text": "안녕하세요 반갑습니다",
+                    "words": [
+                        {"word": "안녕하세요", "start": 0.1, "end": 0.8},
+                        {"word": "반갑습니다", "start": 1.1, "end": 1.7},
+                    ],
+                }
+            ],
+        }
+
+        parsed = self.processor._parse_whisper_payload(
+            payload,
+            {"input_path": "/tmp/chunk.wav", "ov_start_offset": 10.0},
+            vad_strict=[],
+        )
+
+        self.assertEqual(parsed[0]["speaker"], "00")
+        self.assertEqual(parsed[0]["speaker_list"], ["00", "01"])
+        self.assertEqual([word["speaker"] for word in parsed[0]["words"]], ["00", "01"])
+
     def test_post_stt_vad_does_not_filter_words_before_alignment(self):
         payload = {
             "backend": "unit-test",
@@ -1163,6 +1193,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                     "whisper_chunk_overlap_sec": 0.0,
                     "direct_ffmpeg_chunk_extract": True,
                     "direct_ffmpeg_chunk_min_sec": 10,
+                    "speaker_preassign_before_stt_enabled": False,
                 }
                 self.processor._media_duration_for_progress = lambda _path: 65.0
                 self.processor._run_media_command_no_progress = fake_no_progress
@@ -1229,6 +1260,7 @@ class MediaProcessorOverlapTests(unittest.TestCase):
                     "direct_ffmpeg_chunk_batch_extract": True,
                     "direct_ffmpeg_chunk_batch_size": 8,
                     "audio_chunk_routing_enabled": False,
+                    "speaker_preassign_before_stt_enabled": False,
                 }
                 self.processor._media_duration_for_progress = lambda _path: 65.0
                 self.processor._run_media_command_no_progress = fake_no_progress

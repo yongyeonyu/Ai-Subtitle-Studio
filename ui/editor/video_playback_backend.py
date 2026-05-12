@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -124,10 +125,14 @@ def choose_video_backend(preferred: str | None = None) -> VideoBackendChoice:
     if (requested == "auto") and (_running_under_pytest() or _offscreen_qt()):
         return VideoBackendChoice("qt", "test_or_offscreen_safe")
     mpv_allowed = _embedded_mpv_enabled()
-    if requested == "auto" and bool(getattr(config, "IS_MAC", False)) and not mpv_allowed:
+    if requested == "auto" and bool(getattr(config, "IS_MAC", False)):
         if _vlc_available():
-            return VideoBackendChoice("vlc", "libvlc_fallback")
-        return VideoBackendChoice("qt", "embedded_mpv_disabled")
+            return VideoBackendChoice("vlc", "mac_vlc_preferred")
+        if mpv_allowed and _mpv_available():
+            return VideoBackendChoice("mpv", "vlc_unavailable_mpv_fallback")
+        if not mpv_allowed:
+            return VideoBackendChoice("qt", "embedded_mpv_disabled")
+        return VideoBackendChoice("qt", "vlc_unavailable")
     if requested == "mpv" and not mpv_allowed:
         return VideoBackendChoice("qt", "embedded_mpv_disabled")
     if requested in {"auto", "mpv"} and _mpv_available():
@@ -144,18 +149,31 @@ def choose_video_backend(preferred: str | None = None) -> VideoBackendChoice:
 class _BaseExternalBackend(QObject):
     durationChanged = pyqtSignal(int)
     mediaStatusChanged = pyqtSignal(object)
+    playbackStateChanged = pyqtSignal(object)
+    positionChanged = pyqtSignal(int)
 
     backend_name = "external"
     uses_qt_audio = False
+    PlaybackState = QMediaPlayer.PlaybackState
+    MediaStatus = QMediaPlayer.MediaStatus
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._source_path = ""
         self._video_widget: QWidget | None = None
         self._duration_ms = 0
+        self._source_load_serial = 0
         self._last_end_emitted = False
+        self._playback_state = QMediaPlayer.PlaybackState.PausedState
+        self._position_anchor_ms = 0
+        self._position_anchor_mono = time.monotonic()
+        self._last_sampled_position_ms = 0
+        self._last_sampled_position_mono = self._position_anchor_mono
+        self._last_emitted_position_ms = -1
+        self._active_poll_interval_ms = 16
+        self._idle_poll_interval_ms = 120
         self._poll_timer = QTimer(self)
-        self._poll_timer.setInterval(120)
+        self._poll_timer.setInterval(self._idle_poll_interval_ms)
         self._poll_timer.timeout.connect(self._poll)
 
     def create_video_widget(self, parent=None) -> QWidget:
@@ -175,43 +193,142 @@ class _BaseExternalBackend(QObject):
         return QUrl.fromLocalFile(self._source_path) if self._source_path else QUrl()
 
     def setSource(self, source: QUrl) -> None:
+        self._source_load_serial += 1
+        serial = int(self._source_load_serial)
         self._source_path = source.toLocalFile() if hasattr(source, "toLocalFile") else str(source or "")
         self._last_end_emitted = False
+        self._duration_ms = 0
+        self._poll_timer.stop()
         self._load_source(self._source_path)
-        self.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.LoadedMedia)
+        self._set_playback_state(QMediaPlayer.PlaybackState.PausedState)
+        self._record_position_anchor(0, force_emit=True)
+        if not self._source_path:
+            try:
+                self.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.NoMedia)
+            except Exception:
+                pass
+            return
+        self._set_poll_interval(self._idle_poll_interval_ms)
+        self._poll_timer.start()
+        QTimer.singleShot(0, lambda s=serial: self._finish_source_load(s))
 
     def playbackState(self):
-        return QMediaPlayer.PlaybackState.PlayingState if self._is_playing() else QMediaPlayer.PlaybackState.PausedState
+        return self._playback_state
 
     def play(self) -> None:
         self._play()
+        self._set_playback_state(QMediaPlayer.PlaybackState.PlayingState)
+        self._set_poll_interval(self._active_poll_interval_ms)
+        self._refresh_position_clock(force_backend_sample=True)
         self._poll_timer.start()
 
     def pause(self) -> None:
         self._pause()
+        self._refresh_position_clock(force_backend_sample=True)
+        self._set_playback_state(QMediaPlayer.PlaybackState.PausedState)
+        self._set_poll_interval(self._idle_poll_interval_ms)
         self._poll()
 
     def stop(self) -> None:
         self._stop()
+        self._set_playback_state(QMediaPlayer.PlaybackState.StoppedState)
         self._poll_timer.stop()
+        self._record_position_anchor(0, force_emit=True)
 
     def position(self) -> int:
-        return max(0, int(self._position_ms()))
+        return self.playback_clock_position_ms()
 
     def setPosition(self, position_ms: int) -> None:
         self._set_position_ms(max(0, int(position_ms or 0)))
         self._last_end_emitted = False
+        self._record_position_anchor(max(0, int(position_ms or 0)), force_emit=True)
         self._poll()
 
+    def duration(self) -> int:
+        return max(0, int(self._duration() or self._duration_ms or 0))
+
+    def playback_clock_position_ms(self) -> int:
+        self._refresh_position_clock(force_backend_sample=False)
+        return self._predict_position_ms(time.monotonic())
+
+    def precise_position_ms(self) -> int:
+        return self.playback_clock_position_ms()
+
     def _poll(self) -> None:
-        duration = max(0, int(self._duration()))
+        duration = self.duration()
         if duration and duration != self._duration_ms:
             self._duration_ms = duration
             self.durationChanged.emit(duration)
-        if duration and self.position() >= max(0, duration - 80) and not self._is_playing():
+        self._refresh_position_clock(force_backend_sample=True)
+        pos_ms = self._predict_position_ms(time.monotonic())
+        if pos_ms != self._last_emitted_position_ms:
+            self._last_emitted_position_ms = pos_ms
+            self.positionChanged.emit(pos_ms)
+        if self._playback_state == QMediaPlayer.PlaybackState.PlayingState and not self._is_playing():
+            if duration and pos_ms >= max(0, duration - 80):
+                self._set_playback_state(QMediaPlayer.PlaybackState.StoppedState)
+            else:
+                self._set_playback_state(QMediaPlayer.PlaybackState.PausedState)
+                self._set_poll_interval(self._idle_poll_interval_ms)
+        if duration and pos_ms >= max(0, duration - 80) and not self._is_playing():
             if not self._last_end_emitted:
                 self._last_end_emitted = True
                 self.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.EndOfMedia)
+
+    def _set_poll_interval(self, interval_ms: int) -> None:
+        try:
+            interval_ms = max(8, int(interval_ms))
+            if int(self._poll_timer.interval()) != interval_ms:
+                self._poll_timer.setInterval(interval_ms)
+        except Exception:
+            pass
+
+    def _record_position_anchor(self, position_ms: int, *, force_emit: bool = False) -> None:
+        now_mono = time.monotonic()
+        clamped = max(0, int(position_ms or 0))
+        self._position_anchor_ms = clamped
+        self._position_anchor_mono = now_mono
+        self._last_sampled_position_ms = clamped
+        self._last_sampled_position_mono = now_mono
+        if force_emit or clamped != self._last_emitted_position_ms:
+            self._last_emitted_position_ms = clamped
+            self.positionChanged.emit(clamped)
+
+    def _predict_position_ms(self, now_mono: float) -> int:
+        predicted = max(0, int(self._position_anchor_ms))
+        if self._playback_state == QMediaPlayer.PlaybackState.PlayingState:
+            predicted += max(0, int((float(now_mono) - float(self._position_anchor_mono)) * 1000.0))
+        duration = max(0, int(self._duration_ms or 0))
+        if duration > 0:
+            predicted = min(predicted, duration)
+        return max(0, predicted)
+
+    def _refresh_position_clock(self, *, force_backend_sample: bool) -> None:
+        now_mono = time.monotonic()
+        playing = self._playback_state == QMediaPlayer.PlaybackState.PlayingState
+        sample_age = max(0.0, float(now_mono - self._last_sampled_position_mono))
+        if not force_backend_sample:
+            if playing and sample_age < 0.045:
+                return
+            if (not playing) and sample_age < 0.120:
+                return
+        try:
+            raw_ms = max(0, int(self._position_ms()))
+        except Exception:
+            raw_ms = int(self._last_sampled_position_ms or 0)
+        if playing:
+            raw_ms = max(raw_ms, self._predict_position_ms(now_mono))
+        self._position_anchor_ms = raw_ms
+        self._position_anchor_mono = now_mono
+        self._last_sampled_position_ms = raw_ms
+        self._last_sampled_position_mono = now_mono
+
+    def _set_playback_state(self, state) -> None:
+        next_state = state
+        if next_state == self._playback_state:
+            return
+        self._playback_state = next_state
+        self.playbackStateChanged.emit(next_state)
 
     def _load_source(self, _path: str) -> None:  # pragma: no cover - abstract shim
         raise NotImplementedError
@@ -236,6 +353,14 @@ class _BaseExternalBackend(QObject):
 
     def _duration(self) -> int:  # pragma: no cover - abstract shim
         raise NotImplementedError
+
+    def _finish_source_load(self, serial: int) -> None:
+        if int(serial or 0) != int(getattr(self, "_source_load_serial", 0) or 0):
+            return
+        if not str(getattr(self, "_source_path", "") or ""):
+            return
+        self._poll()
+        self.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.LoadedMedia)
 
 
 class MpvPlaybackBackend(_BaseExternalBackend):

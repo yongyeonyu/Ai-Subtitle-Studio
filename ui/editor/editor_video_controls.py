@@ -69,6 +69,7 @@ class EditorVideoControlsMixin:
     def _apply_loaded_video_probe_info(self, path: str, info: dict | None) -> None:
         info = dict(info or {})
         self.video_fps = normalize_fps(info.get("fps", 0.0) or 30.0)
+        duration = float(info.get("duration", 0.0) or 0.0)
         if hasattr(self, "timeline") and hasattr(self.timeline, "set_frame_rate"):
             self.timeline.set_frame_rate(self.video_fps)
         is_multiclip = bool(getattr(self.window(), "_multiclip_boundaries", []))
@@ -76,10 +77,26 @@ class EditorVideoControlsMixin:
             hasattr(self, "timeline")
             and hasattr(self.timeline, "_apply_single_media_duration")
             and not is_multiclip
+            and duration > 0.0
         ):
-            self.timeline._apply_single_media_duration(float(info.get("duration", 0.0) or 0.0))
-        if hasattr(self, "video_player") and hasattr(self.video_player, "set_frame_rate"):
-            self.video_player.set_frame_rate(self.video_fps)
+            try:
+                self.timeline._apply_single_media_duration(duration, source_path=path)
+            except TypeError:
+                self.timeline._apply_single_media_duration(duration)
+        if hasattr(self, "video_player") and duration > 0.0:
+            prime_media_timing = getattr(self.video_player, "prime_media_timing", None)
+            if callable(prime_media_timing):
+                prime_media_timing(duration=duration, fps=self.video_fps)
+            else:
+                if hasattr(self.video_player, "set_frame_rate"):
+                    self.video_player.set_frame_rate(self.video_fps)
+                try:
+                    self.video_player.total_time = max(
+                        float(getattr(self.video_player, "total_time", 0.0) or 0.0),
+                        duration,
+                    )
+                except Exception:
+                    pass
         width = int(info.get("width", 0) or 0)
         height = int(info.get("height", 0) or 0)
         raw_aspect = (width / height) if width > 0 and height > 0 else 16 / 9

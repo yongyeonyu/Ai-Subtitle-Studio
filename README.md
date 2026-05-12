@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-04.00.02-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.00.02-30D158?style=for-the-badge)](RELEASE_v04.00.02.md)
+[![App Version](https://img.shields.io/badge/app-04.00.03-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.00.03-30D158?style=for-the-badge)](RELEASE_v04.00.03.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -30,9 +30,11 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - STT Mode portable project state: `stt_mode_state` keeps VAD work segments, raw dictation, rolling windows, and final subtitle mirrors separate from the normal vector subtitle canvas.
 - STT Mode iPad compatibility scope is intentionally limited to project state and STT LoRA/runtime policy bundles; this repository does not implement an iPad app.
 - Stable editor text, video, and timeline render frames with frame-based or whole-editor GPU rendering policy.
+- VLC-backed playback can drive a monotonic playhead sync path so the timeline follows real playback more closely on macOS.
 - Subtitle generation completion is driven by backend-finalized, saveable subtitle segments rather than STT progress alone, so completion autosave waits and retries instead of saving an empty timeline.
 - Editor exit flows ask to save unsaved changes before fast runtime/model cleanup starts.
 - Fast editor-mode subtitle movement using line-map caches, dirty-rectangle timeline updates, visible-window video context refreshes, and non-jittery active-segment scrolling.
+- `<<` and `>>` navigation can use a visual jump scout plus follower rollback verification to stop on real hard-cut boundaries even when adjacent shots share similar colors.
 - Native/OpenCV cut-boundary verification, FFmpeg scene prepass, direct FFmpeg audio extraction, and benchmark-profile backend routing for long media.
 - Korean Whisper KomixV2 STT candidates, including alias, Hugging Face original, and MLX variants, are available as clearly labeled STT2 choices.
 - Swift WhisperKit persistent STT routes through the Python transcription pipeline as the default macOS STT1 backend; MLX and whisper.cpp remain fallback/native comparison paths.
@@ -44,6 +46,7 @@ The macOS packaging scripts under `packaging/macos/` can now build and validate 
 - Common subtitle split/clamp planning now has a Swift-native adaptive planner for large packaged macOS batches, while Python preserves existing row metadata and assembly.
 - Production macOS native acceleration is intentionally conservative: STT uses WhisperKit/Core ML/MLX, VAD alignment uses C++ overlap math, LLM macro grouping uses C++, and Swift LoRA/Deep/LLM policy helpers stay behind an explicit experimental gate until benchmarks prove both speed and LoRA ranking parity.
 - Word timestamps default to off for fast STT passes, then re-run selectively on low-score, editor-selected, precision-review, or VAD-risk spans.
+- Multi-speaker generation can pre-assign up to three speakers from whole-audio diarization before Whisper finalization and emit Netflix-style multiline overlap captions while preserving `speaker_list` project metadata.
 - ClearVoice can use a native FFmpeg single-pass path instead of waiting on the slower deep-learning enhancer when the quality-safe preset allows it.
 - OpenAI Codex ChatGPT CLI can be selected as a subscription-backed LLM provider without requiring an API key or Ollama model preflight.
 - Compact QML popup/menu surfaces use outside-click dismissal, hover/press feedback, and Korean-only bottom/global menu labels.
@@ -142,10 +145,10 @@ If a new chat receives only `AGENTS.md`, the assistant must find and read the ot
 
 | Item | Value |
 | --- | --- |
-| App version in code | `04.00.02` |
-| Latest release checkpoint | `v04.00.02` |
-| Handoff document version | `04.00.02-mac-native` |
-| Active phase | `MAC_NATIVE_APPSTORE_V4_0_2_RELEASED` |
+| App version in code | `04.00.03` |
+| Latest release checkpoint | `v04.00.03` |
+| Handoff document version | `04.00.03-mac-native` |
+| Active phase | `MAC_NATIVE_APPSTORE_V4_0_3_RELEASED` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
 | Supported target platforms | macOS, Apple Silicon first |
@@ -176,7 +179,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.00.02.md`](RELEASE_v04.00.02.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.00.03.md`](RELEASE_v04.00.03.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

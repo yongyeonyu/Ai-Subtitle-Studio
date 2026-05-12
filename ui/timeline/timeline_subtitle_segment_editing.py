@@ -22,6 +22,7 @@ from core.native_swift_timeline import (
 from core.runtime import config
 from ui.editor.editor_helpers import find_segment_at
 from ui.timeline.speaker_labels import current_speaker_settings, speaker_labels_for_segment
+from ui.timeline.timeline_analysis import roughcut_precision_guides_for_widget, roughcut_precision_guides_signature
 from ui.timeline.timeline_canvas_editing import (
     NEW_SUBTITLE_PLACEHOLDER,
     TimelineInlineEditMixin as _LegacyTimelineInlineEditMixin,
@@ -536,7 +537,11 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
     def _apply_drag(self, delta):
         _legacy_apply_timing_drag(self, delta)
         preview_sec = self._timing_drag_preview_sec() if hasattr(self, "_timing_drag_preview_sec") else None
-        if preview_sec is not None:
+        preserve_playhead = bool(
+            hasattr(self, "_timing_drag_preserves_playhead")
+            and self._timing_drag_preserves_playhead()
+        )
+        if preview_sec is not None and not preserve_playhead:
             try:
                 self.drag_preview_sec.emit(float(preview_sec))
             except Exception:
@@ -593,6 +598,10 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
             )
         except Exception:
             roughcut_key = None
+        try:
+            precision_key = roughcut_precision_guides_signature(self)
+        except Exception:
+            precision_key = ()
         return (
             segment_key,
             id(getattr(self, "gap_segments", None)),
@@ -610,6 +619,7 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
             int(round(float(getattr(self, "total_duration", 0.0) or 0.0) * 1000.0)),
             round(float(self._get_fps() if hasattr(self, "_get_fps") else 30.0), 3),
             roughcut_key,
+            precision_key,
         )
 
     def _build_drag_snap_base_candidates(self) -> list[dict]:
@@ -661,6 +671,18 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
                     except Exception:
                         row["source"] = None
                 prepared.append(row)
+            for guide in list(roughcut_precision_guides_for_widget(self) or []):
+                try:
+                    time_value = self._snap_to_frame(float(guide.get("time", 0.0) or 0.0))
+                except Exception:
+                    continue
+                prepared.append(
+                    {
+                        "time": time_value,
+                        "kind": "roughcut_precision",
+                        "source": dict(guide),
+                    }
+                )
             self._drag_snap_base_cache_key = key
             self._drag_snap_base_candidates = prepared
             return prepared
@@ -692,6 +714,12 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
         for guide_sec in list(getattr(self, "user_alignment_guides", []) or []):
             self._add_snap_candidate(candidates, guide_sec, "user_guide", None)
         try:
+            precision_guides = roughcut_precision_guides_for_widget(self)
+        except Exception:
+            precision_guides = []
+        for guide in list(precision_guides or []):
+            self._add_snap_candidate(candidates, guide.get("time"), "roughcut_precision", guide)
+        try:
             markers = self.roughcut_major_markers_cached() if hasattr(self, "roughcut_major_markers_cached") else []
         except Exception:
             markers = []
@@ -716,7 +744,7 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
             source = item.get("source")
             if source is dragged:
                 continue
-            if item.get("kind") in {"gap", "user_guide"}:
+            if item.get("kind") in {"gap", "user_guide", "roughcut_precision"}:
                 snapped_edge = self._snap_to_frame(_as_float(item.get("time"), -1.0))
                 if any(abs(snapped_edge - original) < 0.05 for original in drag_original_edges):
                     continue
@@ -724,6 +752,7 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
 
         priority = {
             "user_guide": 13,
+            "roughcut_precision": 12,
             "cut_official": 12,
             "cut_temporary": 11,
             "subtitle": 10,
@@ -745,12 +774,12 @@ class TimelineSubtitleSegmentEditingMixin(_LegacyTimelineInlineEditMixin):
 
     def _snap_candidate_threshold_sec(self, candidate: dict, base_threshold: float) -> float:
         kind = str((candidate or {}).get("kind") or "")
-        if kind != "user_guide":
+        if kind not in {"user_guide", "roughcut_precision"}:
             return base_threshold
         pps = max(1.0, float(getattr(self, "pps", 1.0) or 1.0))
-        expanded_px = 18.0 / pps
+        expanded_px = (18.0 if kind == "user_guide" else 14.0) / pps
         fps = max(1.0, float(self._get_fps() if hasattr(self, "_get_fps") else 30.0))
-        return max(base_threshold, expanded_px, 2.0 / fps)
+        return max(base_threshold, expanded_px, (2.0 if kind == "user_guide" else 1.5) / fps)
 
     def _snap_drag_time(self, value: float, candidates: list[dict], threshold: float, min_value: float, max_value: float) -> tuple[float, dict | None]:
         value = self._snap_to_frame(value)

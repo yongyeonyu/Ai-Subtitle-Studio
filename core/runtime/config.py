@@ -1,4 +1,4 @@
-# Version: 04.00.02
+# Version: 04.00.03
 # Phase: PHASE12_MacNativeV4Release
 
 
@@ -13,7 +13,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "04.00.02"
+APP_VERSION = "04.00.03"
 MACBOOK_ONLY_APP = True
 SUPPORTED_OS_NAMES = ("Darwin",)
 APP_STORE_TARGET = True
@@ -227,6 +227,26 @@ DEFAULT_ADV_SETTINGS = {
     "scan_cut_follower_scene_candidate_compact_gap_sec": 0.40,
     "scan_cut_pioneer_dense_flow_confirm_enabled": True,
     "scan_cut_pioneer_strict_multiplier": 0.72,
+    "scan_cut_live_visual_enabled": True,
+    "scan_cut_live_visual_max_sec": 8.0,
+    "scan_cut_live_visual_coarse_max_sec": 8.0,
+    "scan_cut_live_visual_coarse_stride_frames": 20,
+    "scan_cut_live_visual_coarse_width": 640,
+    "scan_cut_live_visual_candidate_topk": 6,
+    "scan_cut_live_visual_candidate_min_score": 0.90,
+    "scan_cut_live_visual_follower_verify_enabled": True,
+    "scan_cut_live_visual_width": 960,
+    "scan_cut_live_visual_refine_width": 1920,
+    "scan_cut_live_visual_refine_radius": 2,
+    "scan_cut_live_visual_min_edge_residual": 0.045,
+    "scan_cut_live_visual_min_edge_diff": 0.060,
+    "scan_cut_live_visual_min_residual_ratio": 0.78,
+    "scan_cut_live_visual_min_motion_jump": 2.3,
+    "scan_cut_live_visual_abs_motion_px": 7.5,
+    "scan_cut_live_visual_max_coherence": 0.82,
+    "scan_cut_live_visual_min_score": 1.05,
+    "scan_cut_live_visual_peak_ratio": 1.12,
+    "scan_cut_live_visual_peak_margin": 0.12,
     "vad_detection_cache_enabled": True,
     # BENCH LOCK 2026-05-09: API LLM stays single-worker in runtime planning;
     # local 7B-class LLMs are resource-adaptive with a cap of 2 on this 16GB M5.

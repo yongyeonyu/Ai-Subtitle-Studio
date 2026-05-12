@@ -104,6 +104,8 @@ class CutBoundaryNativePlanTests(unittest.TestCase):
         self.assertGreaterEqual(tuned["scan_cut_dense_flow_width"], 448)
         self.assertGreaterEqual(tuned["scan_cut_dense_flow_window_radius"], 3)
         self.assertGreaterEqual(tuned["scan_cut_dense_flow_motion_votes_required"], 4)
+        self.assertTrue(bool(tuned["scan_cut_follower_visual_jump_enabled"]))
+        self.assertGreaterEqual(tuned["scan_cut_follower_visual_jump_width"], 960)
         self.assertGreaterEqual(tuned["scan_cut_follower_gray_agreement_frames"], 3)
         self.assertGreaterEqual(tuned["scan_cut_follower_gray_color_agreement_frames"], 3)
         self.assertGreaterEqual(tuned["scan_cut_follower_local_color_confirm_frames"], 2)

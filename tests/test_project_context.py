@@ -695,7 +695,7 @@ class ProjectContextTests(unittest.TestCase):
             )
             loaded = load_project(str(path))
 
-        self.assertEqual(loaded["version"], "04.00.01")
+        self.assertEqual(loaded["version"], "04.00.02")
         self.assertEqual(project_active_work_mode(loaded), "roughcut")
         self.assertEqual(project_roughcut_state(loaded)["source_signature"], "sig")
         self.assertEqual(project_roughcut_state(loaded)["selected_candidate_id"], "candidate_a")
@@ -1506,13 +1506,20 @@ class ProjectContextTests(unittest.TestCase):
 
             self.assertEqual(raw_payload["subtitles"]["storage"], "external_srt")
             self.assertEqual(raw_payload["editor_state"]["rendering"]["subtitle_canvas"]["segments"], [])
-            self.assertEqual(raw_payload["editor_state"]["stt"]["candidate_tracks"], {})
-            self.assertNotIn("stt_candidate_tracks", raw_payload["analysis"])
+            self.assertEqual(
+                [row["text"] for row in raw_payload["editor_state"]["stt"]["preview_segments"]],
+                ["후보 하나", "후보 둘"],
+            )
+            self.assertEqual(
+                [row["text"] for row in raw_payload["editor_state"]["stt"]["candidate_tracks"]["STT1"]],
+                ["후보 하나"],
+            )
+            self.assertIn("stt_candidate_tracks", raw_payload["analysis"])
             self.assertTrue(final_srt.exists())
             self.assertTrue(stt1_srt.exists())
             self.assertTrue(stt2_srt.exists())
             self.assertIn("최종 자막", final_srt.read_text(encoding="utf-8"))
-            self.assertNotIn("후보 하나", path.read_text(encoding="utf-8"))
+            self.assertIn("후보 하나", path.read_text(encoding="utf-8"))
             self.assertEqual((final_meta["start_frame"], final_meta["end_frame"]), (0, 24))
             self.assertEqual((stt1_meta["start_frame"], stt1_meta["end_frame"]), (0, 24))
             self.assertEqual(
@@ -1800,6 +1807,43 @@ class ProjectContextTests(unittest.TestCase):
         self.assertNotIn("stt_candidates", lazy_segments[0])
         self.assertIn("_external_stt_tracks_cache", eager_loaded)
         self.assertEqual(eager_segments[0]["stt_candidates"][0]["text"], "후보")
+
+    def test_save_project_rewrites_overlapping_final_segments_to_non_overlapping_frames(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.json"
+            media = Path(tmp) / "clip.mp4"
+            media.write_bytes(b"video")
+            path.write_text(
+                json.dumps(
+                    {
+                        "app": "AI Subtitle Studio",
+                        "version": "04.00.02",
+                        "workspace": {},
+                        "timeline": {"tracks": [{"clips": []}]},
+                        "media": [],
+                        "subtitles": {"segments": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("core.project.project_manager.probe_media", return_value={"duration": 5.0, "fps": 24.0}):
+                save_project(
+                    str(path),
+                    media_paths=[str(media)],
+                    segments=[
+                        {"start": 0.0, "end": 1.5, "text": "첫째", "speaker": "00"},
+                        {"start": 1.0, "end": 2.0, "text": "둘째", "speaker": "00"},
+                    ],
+                )
+
+            loaded = load_project(str(path))
+            rows = project_segments_to_editor(loaded)
+
+        self.assertEqual([row["text"] for row in rows], ["첫째", "둘째"])
+        self.assertLessEqual(rows[0]["end"], rows[1]["start"])
+        self.assertEqual(rows[0]["timeline_end_frame"], rows[1]["timeline_start_frame"])
 
     def test_project_open_reuses_hot_text_caches_after_save(self):
         with tempfile.TemporaryDirectory() as tmp:

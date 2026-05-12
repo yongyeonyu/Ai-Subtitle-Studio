@@ -1969,6 +1969,14 @@ class VideoProcessorTranscribeMixin:
             if vad_strict:
                 segment = annotate_segment_vad_alignment(segment, vad_strict)
             segment = annotate_segment_hallucination_risk(segment, vad_segments=vad_strict)
+            speaker_map = [dict(item) for item in list(getattr(self, "_speaker_map", []) or []) if isinstance(item, dict)]
+            if speaker_map:
+                try:
+                    from core.audio.diarize import assign_speaker_map_to_segment
+
+                    segment = assign_speaker_map_to_segment(segment, speaker_map)
+                except Exception:
+                    pass
             chunk_segs.append(segment)
 
         return chunk_segs

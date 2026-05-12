@@ -175,6 +175,33 @@ class CoreBackendFast(CoreBackend):
         except Exception:
             pass
 
+        base_name = os.path.splitext(os.path.basename(target_file))[0]
+        cleaned_wav = str(getattr(self.video_processor, "last_cleaned_wav", "") or "")
+        raw_wav = str(getattr(self.video_processor, "last_raw_wav", "") or "")
+        if (not cleaned_wav or not os.path.exists(cleaned_wav)) and hasattr(self.video_processor, "_audio_work_paths"):
+            try:
+                audio_paths = self.video_processor._audio_work_paths(target_file)
+                cleaned_wav = str(audio_paths.get("cleaned_wav") or cleaned_wav)
+                raw_wav = str(audio_paths.get("raw_wav") or raw_wav)
+            except Exception:
+                pass
+        if not cleaned_wav:
+            cleaned_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}_cleaned.wav")
+        if not raw_wav:
+            raw_wav = os.path.join(config.OUTPUT_DIR, f"{base_name}.wav")
+        if os.path.exists(cleaned_wav):
+            audio_for_diarization = cleaned_wav
+        elif os.path.exists(raw_wav):
+            audio_for_diarization = raw_wav
+        else:
+            audio_for_diarization = target_file
+
+        self._prepare_speaker_map_before_stt(
+            audio_for_diarization,
+            speaker_preflight=getattr(self, "_autopilot_speaker_preflight", None),
+            stage_callback=lambda status, qi=queue_index: self._emit_processing_stage(qi, status),
+        )
+
         # ── STEP 2: ETA 계산 + STT 시작 ──
         try:
             s = load_settings()
@@ -307,6 +334,7 @@ class CoreBackendFast(CoreBackend):
                     )
                 if hasattr(self, "_split_by_saved_cut_boundaries"):
                     opt = self._split_by_saved_cut_boundaries(opt, context="정확도 우선 최종 자막")
+                opt = self._apply_speaker_map_to_segments(opt)
                 opt = align_stt_candidates_to_subtitle_segments(opt)
                 all_segments.extend([dict(seg) for seg in opt])
 

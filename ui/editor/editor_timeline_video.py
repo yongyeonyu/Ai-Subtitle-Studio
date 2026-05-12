@@ -43,9 +43,11 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
     def _playhead_active_interval_ms(self) -> int:
         try:
             settings = getattr(self, "settings", {}) or {}
-            return max(24, min(80, int(settings.get("playhead_active_interval_ms", 45) or 45)))
+            fps = normalize_fps(getattr(self, "video_fps", 30.0) or 30.0)
+            default_interval = max(16, min(33, int(round(1000.0 / max(1.0, float(fps))))))
+            return max(16, min(80, int(settings.get("playhead_active_interval_ms", default_interval) or default_interval)))
         except Exception:
-            return 45
+            return 33
 
     def _snap_to_frame(self, sec: float) -> float:
         return snap_sec_to_frame(sec, self._current_frame_fps())
@@ -118,6 +120,9 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         if video_player is not None and hasattr(video_player, "current_playback_frame_time"):
             _frame, local_sec = video_player.current_playback_frame_time()
             return float(local_sec)
+        pos_getter = getattr(player, "playback_clock_position_ms", None)
+        if callable(pos_getter):
+            return self._snap_to_frame(float(pos_getter()) / 1000.0)
         return self._snap_to_frame(player.position() / 1000.0)
 
 
@@ -487,6 +492,21 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         except Exception:
             pass
 
+    def _timing_drag_keeps_playhead_fixed(self) -> bool:
+        if not bool(getattr(self, "_timeline_drag_in_progress", False)):
+            return False
+        timeline = getattr(self, "timeline", None)
+        canvas = getattr(timeline, "canvas", None)
+        if canvas is None:
+            return False
+        checker = getattr(canvas, "_timing_drag_preserves_playhead", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                return False
+        edge = str(getattr(canvas, "_drag_edge", "") or "")
+        return edge in {"diamond", "square_left", "square_right"}
 
     def _on_scrub(self, sec):
         if hasattr(self, "_scan_should_block_user_timeline_input") and self._scan_should_block_user_timeline_input():
@@ -494,6 +514,8 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
                 self.video_player.info_label.setText("컷 경계 탐색 중에는 타임라인 입력이 잠깁니다.")
             except Exception:
                 pass
+            return
+        if self._timing_drag_keeps_playhead_fixed():
             return
 
         sec = self._snap_to_frame(sec)
@@ -506,6 +528,8 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
 
     def _on_timing_drag_preview(self, sec: float) -> None:
         if hasattr(self, "_scan_should_block_user_timeline_input") and self._scan_should_block_user_timeline_input():
+            return
+        if self._timing_drag_keeps_playhead_fixed():
             return
         sec = self._snap_to_frame(sec)
         self._reset_playhead_smoothing(sec)
@@ -632,7 +656,13 @@ class EditorTimelineVideoMixin(EditorScanCutCoreMixin):
         fps = self._current_frame_fps()
         timeline_sec = self._snap_to_frame(float(getattr(self.timeline.canvas, "playhead_sec", 0.0) or 0.0))
         try:
-            local_sec = self._snap_to_frame(float(self.video_player.media_player.position() or 0) / 1000.0)
+            player = getattr(self.video_player, "media_player", None)
+            pos_getter = getattr(player, "playback_clock_position_ms", None)
+            if callable(pos_getter):
+                pos_ms = float(pos_getter() or 0.0)
+            else:
+                pos_ms = float(player.position() or 0.0)
+            local_sec = self._snap_to_frame(pos_ms / 1000.0)
             global_sec = self._snap_to_frame(self._local_to_global_sec(local_sec))
             if abs(global_sec - timeline_sec) <= max(0.30, 10.0 / max(1.0, fps)):
                 return global_sec

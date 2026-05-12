@@ -63,9 +63,16 @@ class _BackendCapture:
     def release(self):
         self.released = True
 
+    def get(self, _prop):
+        return 10.0
+
 
 class _BackendCaptureCv2(_FakeCv2):
     CAP_AVFOUNDATION = 1200
+    CAP_PROP_FPS = 1
+    CAP_PROP_FRAME_COUNT = 2
+    CAP_PROP_FRAME_WIDTH = 3
+    CAP_PROP_FRAME_HEIGHT = 4
 
     def __init__(self):
         super().__init__()
@@ -488,6 +495,140 @@ class CutBoundaryAutoScanBackendTests(unittest.TestCase):
         self.assertEqual(rows, [])
         self.assertTrue(fake_cv2.paths)
         self.assertTrue(all(path == "/fake/proxy_720p.mp4" for path in fake_cv2.paths))
+
+    def test_follower_verify_defaults_to_original_media_even_when_preview_proxy_exists(self):
+        fake_cv2 = _SequentialCaptureCv2()
+        helpers = build_auto_grid_scan_helpers(
+            {
+                "normalize_fps": lambda fps: fps,
+                "sec_to_frame": lambda sec, fps: int(round(sec * fps)),
+                "normalize_cut_boundaries": lambda rows, primary_fps=None: list(rows or []),
+                "normalize_cut_boundary_level": lambda level: str(level or "medium"),
+                "_selected_grid_delta": lambda prev, gray, positions: (0.0, [0.0]),
+                "_cb_level_interval_sec": lambda level: 1.0,
+                "_cb_level_effective_threshold": lambda level, threshold: float(threshold or 0.0),
+                "_cb_level_min_gap_sec": lambda level: 8.0,
+                "_cb_cuda_available": lambda: False,
+                "_auto_downscale_frame_for_compare": lambda frame, cv2, settings=None: frame,
+                "_auto_grid_v3_manual_verify_strict": lambda *args, **kwargs: {
+                    "passed": True,
+                    "frame": 10,
+                    "sec": 1.0,
+                    "score": 55.0,
+                    "regions": 4,
+                    "color_score": 22.0,
+                    "color_regions": 3,
+                    "grid_cells": 9,
+                    "reason": "gray_adj_color_avg",
+                },
+                "_auto_grid_v3_manual_verify_strict_mps": lambda *args, **kwargs: {"passed": False},
+                "_mps_available": lambda: False,
+                "original_detect_media_cut_boundaries": lambda *args, **kwargs: [],
+            }
+        )
+
+        with patch.dict(sys.modules, {"cv2": fake_cv2}), patch(
+            "core.cut_boundary_auto_scan.select_cut_boundary_backend",
+            return_value=CutBoundaryBackendChoice("opencv_proxy_fast", "/fake/proxy_720p.mp4", "test", True),
+        ):
+            rows = helpers["verify_media_cut_boundary_rows"](
+                "/fake/original_4k.mov",
+                [
+                    {
+                        "timeline_sec": 1.0,
+                        "clip_local_sec": 1.0,
+                        "timeline_frame": 10,
+                        "frame": 10,
+                        "fps": 10.0,
+                        "frame_rate": 10.0,
+                        "timeline_frame_rate": 10.0,
+                        "score": 12.0,
+                        "regions": 2,
+                        "source": "visual_provisional",
+                        "status": "provisional",
+                        "clip_idx": 0,
+                    }
+                ],
+                clip_offset=0.0,
+                clip_idx=0,
+                settings={
+                    "scan_cut_use_preview_proxy_enabled": True,
+                },
+                settings_preloaded=True,
+                scan_profile={"level": "follower"},
+                sample_positions=(0,),
+            )
+
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(fake_cv2.paths)
+        self.assertTrue(all(path == "/fake/original_4k.mov" for path in fake_cv2.paths))
+
+    def test_follower_verify_uses_default_capture_backend_for_precise_seeks(self):
+        fake_cv2 = _BackendCaptureCv2()
+        helpers = build_auto_grid_scan_helpers(
+            {
+                "normalize_fps": lambda fps: fps,
+                "sec_to_frame": lambda sec, fps: int(round(sec * fps)),
+                "normalize_cut_boundaries": lambda rows, primary_fps=None: list(rows or []),
+                "normalize_cut_boundary_level": lambda level: str(level or "medium"),
+                "_selected_grid_delta": lambda prev, gray, positions: (0.0, [0.0]),
+                "_cb_level_interval_sec": lambda level: 1.0,
+                "_cb_level_effective_threshold": lambda level, threshold: float(threshold or 0.0),
+                "_cb_level_min_gap_sec": lambda level: 8.0,
+                "_cb_cuda_available": lambda: False,
+                "_auto_downscale_frame_for_compare": lambda frame, cv2, settings=None: frame,
+                "_auto_grid_v3_manual_verify_strict": lambda *args, **kwargs: {
+                    "passed": True,
+                    "frame": 10,
+                    "sec": 1.0,
+                    "score": 55.0,
+                    "regions": 4,
+                    "color_score": 22.0,
+                    "color_regions": 3,
+                    "grid_cells": 9,
+                    "reason": "gray_adj_color_avg",
+                },
+                "_auto_grid_v3_manual_verify_strict_mps": lambda *args, **kwargs: {"passed": False},
+                "_mps_available": lambda: False,
+                "original_detect_media_cut_boundaries": lambda *args, **kwargs: [],
+            }
+        )
+
+        with patch.dict(sys.modules, {"cv2": fake_cv2}), patch(
+            "core.cut_boundary_auto_scan.select_cut_boundary_backend",
+            return_value=CutBoundaryBackendChoice("native_opencv", "/fake/original_4k.mov", "test", False),
+        ):
+            rows = helpers["verify_media_cut_boundary_rows"](
+                "/fake/original_4k.mov",
+                [
+                    {
+                        "timeline_sec": 1.0,
+                        "clip_local_sec": 1.0,
+                        "timeline_frame": 10,
+                        "frame": 10,
+                        "fps": 10.0,
+                        "frame_rate": 10.0,
+                        "timeline_frame_rate": 10.0,
+                        "score": 12.0,
+                        "regions": 2,
+                        "source": "visual_provisional",
+                        "status": "provisional",
+                        "clip_idx": 0,
+                    }
+                ],
+                clip_offset=0.0,
+                clip_idx=0,
+                settings={
+                    "scan_cut_cv2_video_backend": "avfoundation",
+                },
+                settings_preloaded=True,
+                scan_profile={"level": "follower"},
+                sample_positions=(0,),
+            )
+
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(fake_cv2.calls)
+        self.assertTrue(all(len(call) == 1 for call in fake_cv2.calls))
 
     def test_ffmpeg_scene_prepass_can_replace_opencv_pioneer(self):
         fake_cv2 = _SequentialCaptureCv2()
@@ -989,6 +1130,147 @@ class CutBoundaryAutoScanBackendTests(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertEqual(result["reason"], "same_scene_color_similarity")
         self.assertTrue(result["same_scene_color_similarity"])
+
+    def test_strict_verify_keeps_cut_when_visual_jump_peak_overrides_same_scene_similarity(self):
+        def capture_maps(_cap, _cv2, **kwargs):
+            start_frame = int(kwargs["start_frame"])
+            end_frame = int(kwargs["end_frame"])
+            if kwargs.get("capture_gray", True):
+                return ({frame_no: frame_no for frame_no in range(start_frame, end_frame + 1)}, {})
+            color_map = {}
+            for frame_no in range(start_frame, end_frame + 1):
+                if frame_no <= 10:
+                    color_map[frame_no] = [(40.0, 90.0, 120.0)] * 5
+                else:
+                    color_map[frame_no] = [(42.0, 92.0, 121.0)] * 5
+            return ({}, color_map)
+
+        def gray_delta(a, b, **_kwargs):
+            pair = (int(a), int(b))
+            if pair == (10, 11):
+                return 130.0, 5, [130.0]
+            if pair == (9, 13):
+                return 155.0, 5, [155.0]
+            return 0.0, 0, []
+
+        strict_verify = build_strict_verify_helpers(
+            {
+                "normalize_cut_boundary_level": lambda level: str(level or "medium"),
+                "get_level_positions": lambda scan_profile, sample_positions: tuple(sample_positions or (0, 1, 2, 3, 4)),
+                "_auto_capture_verify_maps": capture_maps,
+                "_auto_gray_delta": gray_delta,
+                "_auto_color_avg_delta": lambda *_args, **_kwargs: (24.0, 5, [24.0]),
+                "_auto_gray_delta_mps": gray_delta,
+                "_auto_color_avg_delta_mps": lambda *_args, **_kwargs: (24.0, 5, [24.0]),
+                "_mps_available": lambda: False,
+            }
+        )["_auto_grid_v3_manual_verify_strict"]
+
+        with patch(
+            "core.cut_boundary_auto_verify.follower_visual_jump_cut_check",
+            return_value={
+                "available": True,
+                "passed": True,
+                "reason": "peak_cut",
+                "score": 1.41,
+                "edge_residual": 0.22,
+                "edge_diff": 0.19,
+            },
+        ):
+            result = strict_verify(
+                object(),
+                object(),
+                fps=10.0,
+                frame_count=60,
+                coarse_frame=10,
+                settings={
+                    "scan_cut_auto_verify_rollback_frames": 8,
+                    "scan_cut_auto_verify_forward_frames": 8,
+                    "scan_cut_color_avg_window_frames": 3,
+                    "scan_cut_auto_verify_window_stages": [4, 1],
+                    "scan_cut_follower_local_color_confirm_frames": 4,
+                    "scan_cut_follower_dense_flow_enabled": False,
+                    "scan_cut_follower_same_scene_color_enabled": True,
+                    "scan_cut_follower_same_scene_color_max_score": 6.0,
+                    "scan_cut_follower_same_scene_color_max_luma_delta": 4.0,
+                    "scan_cut_follower_same_scene_color_max_chroma_delta": 3.0,
+                },
+                sample_positions=(0, 1, 2, 3, 4),
+            )
+
+        self.assertTrue(result["passed"])
+        self.assertTrue(result["visual_jump_confirmed"])
+        self.assertTrue(result["visual_jump"]["passed"])
+        self.assertNotEqual(result["reason"], "same_scene_color_similarity")
+
+    def test_strict_verify_can_promote_color_avg_failure_when_next_frame_visual_jump_peaks(self):
+        def capture_maps(_cap, _cv2, **kwargs):
+            start_frame = int(kwargs["start_frame"])
+            end_frame = int(kwargs["end_frame"])
+            if kwargs.get("capture_gray", True):
+                return ({frame_no: frame_no for frame_no in range(start_frame, end_frame + 1)}, {})
+            color_map = {}
+            for frame_no in range(start_frame, end_frame + 1):
+                color_map[frame_no] = [(40.0, 90.0, 120.0)] * 5
+            return ({}, color_map)
+
+        def gray_delta(a, b, **_kwargs):
+            pair = (int(a), int(b))
+            if pair == (10, 11):
+                return 132.0, 5, [132.0]
+            if pair == (9, 13):
+                return 158.0, 5, [158.0]
+            return 0.0, 0, []
+
+        strict_verify = build_strict_verify_helpers(
+            {
+                "normalize_cut_boundary_level": lambda level: str(level or "medium"),
+                "get_level_positions": lambda scan_profile, sample_positions: tuple(sample_positions or (0, 1, 2, 3, 4)),
+                "_auto_capture_verify_maps": capture_maps,
+                "_auto_gray_delta": gray_delta,
+                "_auto_color_avg_delta": lambda *_args, **_kwargs: (6.0, 1, [6.0]),
+                "_auto_gray_delta_mps": gray_delta,
+                "_auto_color_avg_delta_mps": lambda *_args, **_kwargs: (6.0, 1, [6.0]),
+                "_mps_available": lambda: False,
+            }
+        )["_auto_grid_v3_manual_verify_strict"]
+
+        def visual_jump_side_effect(_cap, _cv2, *, frame, frame_count, settings=None):
+            return {
+                "available": True,
+                "passed": int(frame) == 11,
+                "reason": "peak_cut" if int(frame) == 11 else "below_peak_threshold",
+                "score": 1.44 if int(frame) == 11 else 0.72,
+                "edge_residual": 0.21 if int(frame) == 11 else 0.03,
+                "edge_diff": 0.18 if int(frame) == 11 else 0.06,
+            }
+
+        with patch(
+            "core.cut_boundary_auto_verify.follower_visual_jump_cut_check",
+            side_effect=visual_jump_side_effect,
+        ):
+            result = strict_verify(
+                object(),
+                object(),
+                fps=10.0,
+                frame_count=60,
+                coarse_frame=10,
+                settings={
+                    "scan_cut_auto_verify_rollback_frames": 8,
+                    "scan_cut_auto_verify_forward_frames": 8,
+                    "scan_cut_color_avg_window_frames": 3,
+                    "scan_cut_auto_verify_window_stages": [4, 1],
+                    "scan_cut_follower_local_color_confirm_frames": 4,
+                    "scan_cut_follower_dense_flow_enabled": False,
+                },
+                sample_positions=(0, 1, 2, 3, 4),
+            )
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(int(result["frame"]), 10)
+        self.assertTrue(result["visual_jump_confirmed"])
+        self.assertEqual(int(result["visual_jump"]["probe_frame"]), 11)
+        self.assertEqual(result["reason"], "gray_adj_color_avg")
 
 
 if __name__ == "__main__":

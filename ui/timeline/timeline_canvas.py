@@ -1202,7 +1202,11 @@ class TimelineCanvas(TimelineInlineEditMixin, TimelineInputMixin, TimelinePaintM
             for raw_idx, seg in enumerate(self.segments):
                 if not isinstance(seg, dict):
                     continue
-                if seg.get("is_gap") or bool(seg.get("stt_pending") or seg.get("_live_stt_preview") or seg.get("_live_subtitle_preview")):
+                if (
+                    seg.get("is_gap")
+                    or bool(seg.get("stt_pending") or seg.get("_live_stt_preview") or seg.get("_live_subtitle_preview"))
+                    or bool(seg.get("_project_placeholder_segment"))
+                ):
                     continue
                 editable.append((raw_idx, seg))
             editable.sort(key=lambda item: (float(item[1].get("start", 0.0) or 0.0), float(item[1].get("end", 0.0) or 0.0), int(item[0])))

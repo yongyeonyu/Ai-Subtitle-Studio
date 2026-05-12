@@ -186,6 +186,10 @@ class VideoPlayerWidget(QWidget):
         self._proxy_build_dst: str = ""
         self._scan_cut_active_direction: int = 0
         self._shutdown_in_progress = False
+        self._playback_clock_anchor_ms: int = 0
+        self._playback_clock_anchor_mono: float = time.monotonic()
+        self._playback_clock_last_backend_ms: int = 0
+        self._playback_clock_last_state = QMediaPlayer.PlaybackState.PausedState
 
         self.media_player = create_video_backend(self)
         self.audio_output = None
@@ -197,12 +201,8 @@ class VideoPlayerWidget(QWidget):
         self.audio_player = self.media_player 
         self._worker = _WorkerProxy(self)
 
-        self.media_player.durationChanged.connect(self._on_duration_changed)
-        self.media_player.mediaStatusChanged.connect(self._on_media_status_changed)
-        try:
-            self.media_player.playbackStateChanged.connect(self._on_playback_state_changed)
-        except Exception:
-            pass
+        self._connect_media_player_signals(self.media_player)
+        self._reset_playback_clock(0)
 
         _pretendard = "/Library/Fonts/Pretendard-Regular.ttf"
         if os.path.exists(_pretendard):
@@ -285,17 +285,26 @@ class VideoPlayerWidget(QWidget):
         path = str(getattr(self, "_pending_media_source_path", "") or "")
         if not path:
             return False
+        expected_path = os.path.normpath(path)
         try:
             current = self.media_player.source().toLocalFile() if hasattr(self.media_player, "source") else ""
         except Exception:
             current = ""
-        if self._media_source_loaded and os.path.normpath(current or "") == os.path.normpath(path):
+        current_norm = os.path.normpath(current or "")
+        if self._media_source_loaded and current_norm == expected_path:
             return True
-        source_changed = self._set_media_source_if_needed(self.media_player, path)
-        self._media_source_loaded = True
-        if source_changed:
+        if current_norm != expected_path:
             self._video_surface_primed = False
             self._source_ready = False
+        source_changed = self._set_media_source_if_needed(self.media_player, path)
+        try:
+            current_after = self.media_player.source().toLocalFile() if hasattr(self.media_player, "source") else ""
+        except Exception:
+            current_after = ""
+        self._media_source_loaded = True
+        if source_changed:
+            if os.path.normpath(current_after or "") == expected_path and bool(getattr(self, "_source_ready", False)):
+                return True
             return False
         self._source_ready = True
         return True
@@ -307,8 +316,7 @@ class VideoPlayerWidget(QWidget):
             # the original 4K file to the generated 720p proxy. Keep the probed
             # media duration so the control bar does not fall back to 00:00/00:00.
             return
-        self.total_time = duration / 1000.0
-        self._rebuild_frame_time_map()
+        self.prime_media_timing(duration=float(duration) / 1000.0)
         self._apply_loaded_media_state()
 
     def _rebuild_frame_time_map(self, duration: float | None = None, fps: float | None = None):
@@ -322,6 +330,19 @@ class VideoPlayerWidget(QWidget):
             self.current_time = self.frame_time_map.sec_for_frame(self.current_frame)
         except Exception:
             self.current_frame = 0
+
+    def prime_media_timing(self, duration: float, fps: float | None = None) -> None:
+        self._rebuild_frame_time_map(duration=duration, fps=fps)
+        try:
+            cur_sec = max(0.0, float(getattr(self, "current_time", 0.0) or 0.0))
+            total_sec = max(0.0, float(getattr(self, "total_time", 0.0) or 0.0))
+            cur_m, cur_s = divmod(int(cur_sec), 60)
+            total_m, total_s = divmod(int(total_sec), 60)
+            self.time_label.setText(f"{cur_m:02d}:{cur_s:02d} / {total_m:02d}:{total_s:02d}")
+        except Exception:
+            pass
+        self._last_time_label_ms = int(max(0.0, float(getattr(self, "current_time", 0.0) or 0.0)) * 1000.0)
+        self._sync_quick_control_bar()
 
     def _apply_loaded_media_state(self):
         # Different clip sources must finish loading before we consume pending
@@ -368,16 +389,103 @@ class VideoPlayerWidget(QWidget):
         from PyQt6.QtMultimedia import QMediaPlayer as _QMP
         if status in (_QMP.MediaStatus.LoadedMedia, _QMP.MediaStatus.BufferedMedia):
             self._apply_loaded_media_state()
+            self._reset_playback_clock()
         if status == _QMP.MediaStatus.EndOfMedia:
             cb = getattr(self, '_end_of_media_callback', None)
             if callable(cb):
                 cb()
 
     def _on_playback_state_changed(self, state):
+        self._playback_clock_last_state = state
+        self._reset_playback_clock()
         if state == QMediaPlayer.PlaybackState.PlayingState:
             self._video_surface_primed = True
             self._hide_thumbnail()
         self._update_btn()
+
+    def _on_media_position_changed(self, position_ms: int):
+        self._set_playback_clock_anchor(position_ms)
+
+    def _connect_media_player_signals(self, player) -> None:
+        if player is None:
+            return
+        player.durationChanged.connect(self._on_duration_changed)
+        player.mediaStatusChanged.connect(self._on_media_status_changed)
+        try:
+            player.playbackStateChanged.connect(self._on_playback_state_changed)
+        except Exception:
+            pass
+        try:
+            player.positionChanged.connect(self._on_media_position_changed)
+        except Exception:
+            pass
+
+    def _playback_state_value(self):
+        player = getattr(self, "media_player", None)
+        try:
+            state = player.playbackState()
+        except Exception:
+            state = QMediaPlayer.PlaybackState.PausedState
+        return state
+
+    def _raw_media_position_ms(self) -> int:
+        player = getattr(self, "media_player", None)
+        try:
+            return max(0, int(player.position()))
+        except Exception:
+            return 0
+
+    def _media_duration_ms(self) -> int:
+        player = getattr(self, "media_player", None)
+        try:
+            return max(0, int(player.duration()))
+        except Exception:
+            return 0
+
+    def _set_playback_clock_anchor(self, position_ms: int, now_mono: float | None = None) -> int:
+        anchor_ms = max(0, int(position_ms or 0))
+        now = time.monotonic() if now_mono is None else float(now_mono)
+        self._playback_clock_anchor_ms = anchor_ms
+        self._playback_clock_anchor_mono = now
+        self._playback_clock_last_backend_ms = anchor_ms
+        return anchor_ms
+
+    def _reset_playback_clock(self, position_ms: int | None = None) -> int:
+        anchor_ms = self._raw_media_position_ms() if position_ms is None else max(0, int(position_ms or 0))
+        self._playback_clock_last_state = self._playback_state_value()
+        return self._set_playback_clock_anchor(anchor_ms)
+
+    def _playback_clock_position_ms(self) -> int:
+        player = getattr(self, "media_player", None)
+        if player is None:
+            return 0
+        state = self._playback_state_value()
+        precise_getter = getattr(player, "playback_clock_position_ms", None)
+        if callable(precise_getter):
+            pos_ms = max(0, int(precise_getter()))
+            self._playback_clock_last_state = state
+            self._set_playback_clock_anchor(pos_ms)
+            return pos_ms
+
+        now_mono = time.monotonic()
+        raw_ms = self._raw_media_position_ms()
+        if state != self._playback_clock_last_state:
+            self._playback_clock_last_state = state
+            return self._set_playback_clock_anchor(raw_ms, now_mono)
+
+        if raw_ms > self._playback_clock_last_backend_ms or raw_ms + 120 < self._playback_clock_last_backend_ms:
+            return self._set_playback_clock_anchor(raw_ms, now_mono)
+
+        if state == QMediaPlayer.PlaybackState.PlayingState:
+            predicted = max(
+                raw_ms,
+                int(self._playback_clock_anchor_ms + max(0.0, now_mono - self._playback_clock_anchor_mono) * 1000.0),
+            )
+            duration_ms = self._media_duration_ms()
+            if duration_ms > 0:
+                predicted = min(predicted, duration_ms)
+            return predicted
+        return raw_ms
 
     def _create_transport_button(
         self,
@@ -402,7 +510,8 @@ class VideoPlayerWidget(QWidget):
         try:
             from core.runtime.logger import get_logger
 
-            get_logger().log(f"  ⚠️ [비디오] mpv 미리보기 초기화 실패 → Qt 백엔드로 전환: {reason}")
+            backend_name = str(getattr(getattr(self, "media_player", None), "backend_name", "external") or "external")
+            get_logger().log(f"  ⚠️ [비디오] {backend_name} 미리보기 초기화 실패 → Qt 백엔드로 전환: {reason}")
         except Exception:
             pass
         old_player = getattr(self, "media_player", None)
@@ -426,12 +535,8 @@ class VideoPlayerWidget(QWidget):
             self._worker.media_player = player
         except Exception:
             pass
-        player.durationChanged.connect(self._on_duration_changed)
-        player.mediaStatusChanged.connect(self._on_media_status_changed)
-        try:
-            player.playbackStateChanged.connect(self._on_playback_state_changed)
-        except Exception:
-            pass
+        self._connect_media_player_signals(player)
+        self._reset_playback_clock(0)
         return player
 
     def _build_video_surface_stack(self) -> None:
@@ -674,12 +779,12 @@ class VideoPlayerWidget(QWidget):
         inactive = self._control_button_style(font_size=13, padding="6px 8px")
         active = (
             "QPushButton { "
-            "background: #1F8F4D; color: #FFFFFF; "
-            "border: 1px solid #30D158; border-radius: 6px; "
+            "background: #1A84FF; color: #FFFFFF; "
+            "border: 1px solid #7DC3FF; border-radius: 6px; "
             "padding: 6px 8px; font-size: 13px; font-weight: 800; "
             "} "
-            "QPushButton:hover { background: #25A85A; color: #FFFFFF; } "
-            "QPushButton:pressed { background: #187A40; }"
+            "QPushButton:hover { background: #3392FF; color: #FFFFFF; } "
+            "QPushButton:pressed { background: #0C6DE0; }"
         )
 
         prev_btn = getattr(self, "btn_scan_prev_cut", None)
@@ -929,10 +1034,10 @@ class VideoPlayerWidget(QWidget):
             settings_path = os.path.join(config.DATASET_DIR, "user_settings.json")
             if os.path.exists(settings_path):
                 with open(settings_path, "r", encoding="utf-8") as f:
-                    return max(24, min(80, int(json.load(f).get("video_ui_interval_ms", 50))))
+                    return max(16, min(80, int(json.load(f).get("video_ui_interval_ms", 33))))
         except Exception:
             pass
-        return 50
+        return 33
 
     def _get_audio_ai_setting(self) -> str:
         """user_settings.json에서 selected_audio_ai를 읽어 반환합니다."""
@@ -1094,6 +1199,7 @@ class VideoPlayerWidget(QWidget):
             self.media_player.pause()
             self.media_player.setSource(QUrl.fromLocalFile(_proxy_path))
             self.media_player.setPosition(pos_ms)
+            self._reset_playback_clock(pos_ms)
             self._pending_media_source_path = _proxy_path
             self._proxy_playback_path = _proxy_path
             self._media_source_loaded = True
@@ -1162,6 +1268,7 @@ class VideoPlayerWidget(QWidget):
             self._pending_seek_sec = self._pending_seek_sec if self._pending_seek_sec is not None else 0.0
             self._media_source_loaded = False
             self._source_ready = bool(playback_path)
+            self._reset_playback_clock(0)
             if self.has_vocal_track or isinstance(getattr(self, "vocal_player", None), QMediaPlayer):
                 self._release_vocal_player()
             if self.audio_output is not None:
@@ -1370,6 +1477,7 @@ class VideoPlayerWidget(QWidget):
         pos_ms = self.position_ms_for_frame(frame)
         if self._media_source_loaded:
             self.media_player.setPosition(pos_ms)
+            self._reset_playback_clock(pos_ms)
         if getattr(self, "has_vocal_track", False) and self._media_source_loaded:
             self._ensure_vocal_player().setPosition(pos_ms)
         return pos_ms
@@ -1406,7 +1514,7 @@ class VideoPlayerWidget(QWidget):
         if frame_map is None:
             frame_map = build_frame_time_map(self.total_time, self.frame_rate)
             self.frame_time_map = frame_map
-        frame = frame_map.frame_for_position_ms(self.media_player.position())
+        frame = frame_map.frame_for_position_ms(self._playback_clock_position_ms())
         sec = frame_map.sec_for_frame(frame)
         self.current_frame = frame
         self.current_time = sec
@@ -1789,6 +1897,7 @@ class VideoPlayerWidget(QWidget):
                 start_sec = self.sec_for_frame(start_frame)
             if start_sec > 0.05:
                 self.media_player.setPosition(self.position_ms_for_frame(start_frame))
+                self._reset_playback_clock(self.position_ms_for_frame(start_frame))
             if getattr(self, 'has_vocal_track', False):
                 self._ensure_vocal_player().setPosition(self.media_player.position())
             self.media_player.play()

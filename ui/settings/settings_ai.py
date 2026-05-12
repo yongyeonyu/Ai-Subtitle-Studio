@@ -72,11 +72,17 @@ def _ai_settings_panel_stylesheet() -> str:
         "border-radius: 12px; padding: 8px 10px;"
         f"color: #D8E9FF;"
         "}"
+        "#AiCodexCliStatusLabel {"
+        "background: rgba(52, 199, 89, 0.08);"
+        "border: 1px solid rgba(52, 199, 89, 0.24);"
+        "border-radius: 12px; padding: 8px 10px;"
+        "color: #E4FFF0;"
+        "}"
         "#AiApiSectionLabel {"
         f"color: {COLORS['text']}; font-size: 13px; font-weight: 900;"
         "}"
         "#GoogleApiKeyInput, #OpenAiApiKeyInput, #HuggingFaceTokenInput {"
-        "padding-left: 10px; font-size: 12px;"
+            "padding-left: 10px; font-size: 12px;"
         "}"
     )
 
@@ -278,10 +284,41 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
 
     def _build_api_keys_section(self, form: QFormLayout):
         api_card, api_card_layout = self._make_section_card(
-            "클라우드 API 키",
-            "Google, OpenAI, Hugging Face 연동 키를 저장하고 교체합니다.",
+            "클라우드 인증",
+            "ChatGPT CLI 구독 로그인과 Google/OpenAI/Hugging Face 연동 키를 함께 관리합니다.",
         )
         api_form = self._make_card_form()
+
+        codex_cli_row = QVBoxLayout()
+        codex_cli_row.setContentsMargins(0, 0, 0, 0)
+        codex_cli_row.setSpacing(8)
+        self.lbl_codex_cli_status = QLabel("")
+        self.lbl_codex_cli_status.setWordWrap(True)
+        self.lbl_codex_cli_status.setObjectName("AiCodexCliStatusLabel")
+        codex_cli_row.addWidget(self.lbl_codex_cli_status)
+
+        codex_cli_buttons = QHBoxLayout()
+        codex_cli_buttons.setContentsMargins(0, 0, 0, 0)
+        codex_cli_buttons.setSpacing(8)
+        self.btn_codex_cli_login = QPushButton("로그인")
+        self.btn_codex_cli_refresh = QPushButton("상태 새로고침")
+        self.btn_codex_cli_logout = QPushButton("로그아웃")
+        for btn, width, min_width in (
+            (self.btn_codex_cli_login, 78, 64),
+            (self.btn_codex_cli_refresh, 112, 96),
+            (self.btn_codex_cli_logout, 86, 72),
+        ):
+            self._fit_action_button(btn, width)
+            btn.setStyleSheet(self._settings_button_style("toolbar", min_width=min_width))
+        self.btn_codex_cli_login.clicked.connect(self._on_codex_cli_login)
+        self.btn_codex_cli_refresh.clicked.connect(self._refresh_codex_cli_status)
+        self.btn_codex_cli_logout.clicked.connect(self._on_codex_cli_logout)
+        codex_cli_buttons.addWidget(self.btn_codex_cli_login)
+        codex_cli_buttons.addWidget(self.btn_codex_cli_refresh)
+        codex_cli_buttons.addWidget(self.btn_codex_cli_logout)
+        codex_cli_buttons.addStretch(1)
+        codex_cli_row.addLayout(codex_cli_buttons)
+        api_form.addRow("ChatGPT CLI:", codex_cli_row)
 
         self.input_api_key = QLineEdit()
         self.input_api_key.setObjectName("GoogleApiKeyInput")
@@ -305,6 +342,7 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         api_form.addRow("Hugging Face Token:", self.input_huggingface_token)
         api_card_layout.addLayout(api_form)
         form.addRow(api_card)
+        self._refresh_codex_cli_status()
 
     def _build_chunk_bundle_section(self, form: QFormLayout, settings: dict):
         # 3. 자막 묶음 단위 (슬라이더 세팅)
@@ -1090,18 +1128,25 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
             self.lbl_model_info.setToolTip("")
             return
             
-        size_gb = m_data['size'] / (1024**3)
+        size_bytes = int(m_data.get('size') or 0)
+        size_gb = size_bytes / (1024**3) if size_bytes > 0 else 0.0
         details = m_data.get('details', {})
         billing = details.get('billing', '무료/로컬' if details.get('format') == 'ollama' else '')
+        if str(details.get("format") or "").lower() == "cli":
+            size_part = "🖥️ <b>실행:</b> 로컬 Codex CLI"
+            plain_size_part = "실행: 로컬 Codex CLI"
+        else:
+            size_part = f"📦 <b>용량:</b> {size_gb:.2f} GB"
+            plain_size_part = f"용량: {size_gb:.2f} GB"
         parts = [
-            f"📦 <b>용량:</b> {size_gb:.2f} GB",
+            size_part,
             f"🧠 <b>패밀리:</b> {details.get('family', 'Unknown')}",
             f"📊 <b>파라미터:</b> {details.get('parameter_size', 'Unknown')}",
             f"⚙️ <b>포맷:</b> {details.get('format', 'gguf').upper()}",
             f"💳 <b>비용:</b> {billing}",
         ]
         plain_parts = [
-            f"용량: {size_gb:.2f} GB",
+            plain_size_part,
             f"패밀리: {details.get('family', 'Unknown')}",
             f"파라미터: {details.get('parameter_size', 'Unknown')}",
             f"포맷: {details.get('format', 'gguf').upper()}",
@@ -1109,6 +1154,70 @@ class SettingsDialog(QDialog, SettingsRoughcutMixin):
         ]
         self.lbl_model_info.setText("  |  ".join(parts))
         self.lbl_model_info.setToolTip(" / ".join(plain_parts))
+
+    def _refresh_codex_cli_status(self):
+        if not hasattr(self, "lbl_codex_cli_status"):
+            return
+        try:
+            from core.llm.codex_provider import codex_login_status
+
+            status = codex_login_status()
+        except Exception as exc:
+            status = {
+                "available": False,
+                "logged_in": False,
+                "message": f"Codex CLI 상태 확인 실패: {exc}",
+                "binary": "",
+                "auth_mode": "",
+            }
+        binary = str(status.get("binary") or "")
+        auth_mode = str(status.get("auth_mode") or "")
+        message = str(status.get("message") or "Codex CLI 상태 알 수 없음")
+        detail = []
+        if binary:
+            detail.append(f"경로: {binary}")
+        if auth_mode == "chatgpt":
+            detail.append("권한: ChatGPT subscription access")
+        elif auth_mode in {"api_key", "access_token"}:
+            detail.append("권한: usage-based access")
+        status_text = message if not detail else f"{message}\n" + "\n".join(detail)
+        self.lbl_codex_cli_status.setText(status_text)
+        available = bool(status.get("available"))
+        logged_in = bool(status.get("logged_in"))
+        self.btn_codex_cli_login.setEnabled(available)
+        self.btn_codex_cli_logout.setEnabled(available and logged_in)
+
+    def _on_codex_cli_login(self):
+        try:
+            from core.llm.codex_provider import launch_codex_cli_login
+
+            ok, detail = launch_codex_cli_login()
+        except Exception as exc:
+            ok, detail = False, str(exc)
+        if ok:
+            QMessageBox.information(
+                self,
+                "ChatGPT CLI 로그인",
+                f"{detail}\n\n로그인 완료 후 '상태 새로고침'을 눌러 반영해 주세요.",
+            )
+        else:
+            QMessageBox.warning(self, "ChatGPT CLI 로그인 실패", detail)
+        self._refresh_codex_cli_status()
+
+    def _on_codex_cli_logout(self):
+        if QMessageBox.question(self, "ChatGPT CLI 로그아웃", "Codex CLI에서 로그아웃할까요?") != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            from core.llm.codex_provider import run_codex_logout
+
+            ok, detail = run_codex_logout()
+        except Exception as exc:
+            ok, detail = False, str(exc)
+        if ok:
+            QMessageBox.information(self, "ChatGPT CLI 로그아웃", detail)
+        else:
+            QMessageBox.warning(self, "ChatGPT CLI 로그아웃 실패", detail)
+        self._refresh_codex_cli_status()
 
     def _sync_auto_preset_button_state(self):
         if not hasattr(self, "btn_auto_audio_preset"):

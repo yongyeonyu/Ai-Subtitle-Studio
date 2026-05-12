@@ -4,7 +4,7 @@ from typing import Any
 
 from core.frame_time import frame_count, frame_duration, normalize_fps
 
-PROJECT_SCHEMA_VERSION = "04.00.02"
+PROJECT_SCHEMA_VERSION = "04.00.03"
 PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.v4"
 PROJECT_VIDEO_SCHEMA = "ai_subtitle_studio.project.video_header.v1"
 

@@ -1,6 +1,7 @@
 # Version: 03.09.26
 # Phase: PHASE2
 import os
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -35,7 +36,11 @@ from ui.timeline.timeline_paint import (
     stt_candidate_selection_state,
     stt_candidate_unselected,
 )
-from ui.timeline.timeline_analysis import subtitle_detection_segments_for_editor
+from ui.timeline.timeline_analysis import (
+    boundary_row_is_voice_boundary,
+    roughcut_precision_guides_for_widget,
+    subtitle_detection_segments_for_editor,
+)
 from ui.editor.editor_helpers import make_gap_ud
 from ui.editor.editor_segments import EditorSegmentsMixin
 from ui.editor.editor_scan_cut_core import EditorScanCutCoreMixin
@@ -265,6 +270,67 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertGreater(border_color.green(), 160)
             self.assertGreater(border_color.green(), border_color.red())
             self.assertGreater(border_color.green(), border_color.blue())
+        finally:
+            canvas.close()
+            canvas.deleteLater()
+
+    def test_stt_preview_font_matches_subtitle_segment_font_size(self):
+        canvas = self._canvas()
+        try:
+            self.assertEqual(
+                canvas._stt_preview_font().pointSize(),
+                canvas._subtitle_segment_font().pointSize(),
+            )
+        finally:
+            canvas.deleteLater()
+
+    def test_playback_keeps_canvas_text_density_and_speaker_labels_visible(self):
+        holder = QWidget()
+        holder._is_video_playing = lambda: True
+        canvas = TimelineCanvas(holder)
+        try:
+            canvas.resize(520, canvas.height())
+            canvas.pps = 120.0
+            canvas.total_duration = 4.0
+            canvas.segments = [
+                {
+                    "start": 1.0,
+                    "end": 3.0,
+                    "text": "주제 자막",
+                    "speaker": "00",
+                    "line": 0,
+                }
+            ]
+            canvas._speaker_settings_provider = lambda: {
+                "spk1_id": "00",
+                "spk1_label": "화자1",
+                "spk1_color": "#579DFF",
+            }
+            canvas.roughcut_major_markers_cached = lambda: [
+                {
+                    "start": 0.8,
+                    "end": 3.2,
+                    "major_id": "A",
+                    "label": "A 주제",
+                    "display_label": "A 주제",
+                    "color": "#FFCC00",
+                }
+            ]
+            speaker_draw_calls = []
+            original_draw_speaker_names = canvas._draw_speaker_names
+
+            def _spy_draw_speaker_names(painter, rect, color, names):
+                speaker_draw_calls.append(list(names))
+                return original_draw_speaker_names(painter, rect, color, names)
+
+            canvas._draw_speaker_names = _spy_draw_speaker_names
+            canvas.show()
+            self.app.processEvents()
+
+            canvas.grab()
+
+            self.assertEqual(canvas._paint_density_mode, "full")
+            self.assertTrue(speaker_draw_calls)
         finally:
             canvas.close()
             canvas.deleteLater()
@@ -1394,6 +1460,609 @@ class TimelineHitTargetTests(unittest.TestCase):
         self.assertEqual(result["frame"], 205)
         self.assertAlmostEqual(result["sec"], 205.0 / 30.0, places=3)
 
+    def test_scan_cut_request_prefers_live_visual_jump_before_cached_boundary(self):
+        calls = []
+
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.settings = {"cut_boundary_detection_enabled": True}
+                self.timeline = SimpleNamespace(canvas=SimpleNamespace(playhead_sec=1.0, total_duration=10.0))
+                self.video_player = SimpleNamespace(
+                    pause_video=Mock(),
+                    info_label=SimpleNamespace(setText=Mock()),
+                )
+
+            def _set_scan_cut_button_active(self, direction):
+                calls.append(("active", int(direction)))
+
+            def _scan_jump_to_live_visual_cut(self, direction):
+                calls.append(("live", int(direction)))
+                return True
+
+            def _scan_jump_to_cached_cut_boundary(self, direction):
+                calls.append(("cached", int(direction)))
+                return True
+
+        editor = DummyEditor()
+
+        with patch("ui.editor.editor_scan_cut_core.QTimer.singleShot", side_effect=lambda _ms, fn: fn()):
+            editor._on_scan_cut_requested(1)
+
+        self.assertEqual(calls, [("active", 1), ("live", 1)])
+        editor.video_player.pause_video.assert_called_once()
+        editor.video_player.info_label.setText.assert_called_with("실화면 컷 탐색 중...")
+
+    def test_scan_cut_request_defers_live_scan_until_next_event_loop_turn(self):
+        callbacks = []
+        calls = []
+
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.settings = {"cut_boundary_detection_enabled": True}
+                self.timeline = SimpleNamespace(canvas=SimpleNamespace(playhead_sec=1.0, total_duration=10.0))
+                self.video_player = SimpleNamespace(
+                    pause_video=Mock(),
+                    info_label=SimpleNamespace(setText=Mock()),
+                    set_scan_cut_active=Mock(),
+                )
+
+            def _scan_jump_to_live_visual_cut(self, direction):
+                calls.append(("live", int(direction)))
+                return True
+
+            def _scan_jump_to_cached_cut_boundary(self, direction):
+                calls.append(("cached", int(direction)))
+                return True
+
+        editor = DummyEditor()
+
+        with patch("ui.editor.editor_scan_cut_core.QTimer.singleShot", side_effect=lambda _ms, fn: callbacks.append(fn)):
+            editor._on_scan_cut_requested(1)
+
+        self.assertEqual(calls, [])
+        editor.video_player.pause_video.assert_called_once()
+        editor.video_player.set_scan_cut_active.assert_called_with(1)
+        self.assertEqual(int(getattr(editor, "_scan_cut_pending_direction", 0) or 0), 1)
+        editor.video_player.info_label.setText.assert_called_with("실화면 컷 탐색 준비 중...")
+        self.assertEqual(len(callbacks), 1)
+
+        callbacks[0]()
+
+        self.assertEqual(calls, [("live", 1)])
+        self.assertEqual(int(getattr(editor, "_scan_cut_pending_direction", 0) or 0), 0)
+        self.assertEqual(editor.video_player.info_label.setText.call_args_list[-1].args[0], "실화면 컷 탐색 중...")
+
+    def test_scan_jump_to_live_visual_cut_applies_follower_verify_result(self):
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.settings = {}
+                self.video_player = SimpleNamespace(
+                    pause_video=Mock(),
+                    info_label=SimpleNamespace(setText=Mock()),
+                )
+                self.previewed = []
+                self.thumbed = []
+
+            def _scan_find_live_visual_cut(self, direction):
+                self.find_direction = int(direction)
+                return {
+                    "boundary_frame": 2040,
+                    "boundary_sec": 34.034,
+                    "score": 1.33,
+                }
+
+            def _scan_verify_cut_boundary_candidate(self, coarse_frame, fps, *, reason=""):
+                self.verify_args = (int(coarse_frame), float(fps), str(reason))
+                return {
+                    "available": True,
+                    "passed": True,
+                    "frame": 2038,
+                    "sec": 34.000633,
+                    "score": 222.0,
+                    "regions": 5,
+                    "mode": "gray_window_rollback_mps",
+                    "reason": "strict_verify",
+                }
+
+            def _current_frame_fps(self):
+                return 59.94005994005994
+
+            def _snap_to_frame(self, sec):
+                return float(sec)
+
+            def _set_scan_cut_button_active(self, direction):
+                self.active_direction = int(direction)
+
+            def _scan_preview_global_sec(self, sec):
+                self.previewed.append(float(sec))
+
+            def _scan_show_cut_thumbnail(self, sec):
+                self.thumbed.append(float(sec))
+
+        editor = DummyEditor()
+
+        result = editor._scan_jump_to_live_visual_cut(1)
+
+        self.assertTrue(result)
+        self.assertEqual(editor.find_direction, 1)
+        self.assertEqual(editor.verify_args[0], 2040)
+        self.assertAlmostEqual(editor.previewed[-1], 34.000633, places=6)
+        self.assertAlmostEqual(editor.thumbed[-1], 34.000633, places=6)
+        self.assertEqual(editor.video_player.info_label.setText.call_args_list[-1].args[0], "실화면 컷 정지 · 후발대 gray_window_rollback_mps")
+
+    def test_scan_jump_to_live_visual_cut_accepts_follower_provisional_frame_near_pioneer(self):
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.settings = {}
+                self.video_player = SimpleNamespace(
+                    pause_video=Mock(),
+                    info_label=SimpleNamespace(setText=Mock()),
+                )
+                self.previewed = []
+
+            def _scan_find_live_visual_cut(self, direction):
+                return {
+                    "boundary_frame": 2040,
+                    "boundary_sec": 34.034,
+                    "score": 1.33,
+                }
+
+            def _scan_verify_cut_boundary_candidate(self, coarse_frame, fps, *, reason=""):
+                return {
+                    "available": True,
+                    "passed": False,
+                    "reason": "color_avg_failed",
+                    "provisional_frame": 2038,
+                    "provisional_sec": 34.000633,
+                    "provisional_score": 84.52,
+                    "provisional_regions": 12,
+                    "provisional_mode": "1f",
+                }
+
+            def _current_frame_fps(self):
+                return 59.94005994005994
+
+            def _snap_to_frame(self, sec):
+                return float(sec)
+
+            def _set_scan_cut_button_active(self, direction):
+                self.active_direction = int(direction)
+
+            def _scan_preview_global_sec(self, sec):
+                self.previewed.append(float(sec))
+
+            def _scan_show_cut_thumbnail(self, sec):
+                self.thumbed = float(sec)
+
+        editor = DummyEditor()
+
+        result = editor._scan_jump_to_live_visual_cut(1)
+
+        self.assertTrue(result)
+        self.assertAlmostEqual(editor.previewed[-1], 34.000633, places=6)
+        self.assertAlmostEqual(editor.thumbed, 34.000633, places=6)
+        self.assertEqual(editor.video_player.info_label.setText.call_args_list[-1].args[0], "실화면 컷 정지 · 후발대 1f")
+
+    def test_live_visual_cut_uses_full_coarse_series_to_find_2038_peak(self):
+        interval_scores = {
+            1798: 2.04,
+            1818: 0.41,
+            1838: 0.35,
+            1858: 0.30,
+            1878: 0.28,
+            1898: 0.82,
+            1918: 0.84,
+            1938: 0.87,
+            1958: 0.76,
+            1978: 0.72,
+            1998: 0.75,
+            2018: 0.72,
+            2038: 1.32,
+            2058: 0.86,
+        }
+        window_calls = []
+
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.settings = {}
+
+            def _scan_get_cv2_module(self):
+                return object()
+
+            def _current_frame_fps(self):
+                return 59.94005994005994
+
+            def _manual_global_sec_from_player(self):
+                return 30.0
+
+            def _scan_source_and_local_sec(self, global_sec):
+                return "/tmp/tinyping.mp4", float(global_sec), {"clip_idx": 0}
+
+            def _scan_get_cv2_capture(self, source_path):
+                return object()
+
+            def _scan_prepare_visual_frame_payload(self, global_frame, *, max_width, cache=None):
+                return {
+                    "global_frame": int(global_frame),
+                    "global_sec": float(global_frame) / self._current_frame_fps(),
+                    "source_path": "/tmp/tinyping.mp4",
+                }
+
+            def _scan_find_live_visual_cut_in_window(
+                self,
+                start_frame,
+                end_frame,
+                *,
+                analysis_width,
+                direction,
+                payload_cache=None,
+                coarse_history=None,
+            ):
+                seed = int((coarse_history or [{}])[0].get("interval_start_frame", -1) or -1)
+                window_calls.append((int(start_frame), int(end_frame), seed))
+                if seed != 2038:
+                    return None
+                return {
+                    "boundary_frame": 2038,
+                    "boundary_sec": 2038.0 / self._current_frame_fps(),
+                    "score": 1.9207,
+                    "analysis_width": int(analysis_width),
+                    "edge_residual": 0.0878,
+                    "edge_diff": 0.0862,
+                    "mean_motion_px": 52.03,
+                    "coherence": 0.573,
+                }
+
+            def _scan_refine_live_visual_cut(self, candidate, *, coarse_history=None):
+                return dict(candidate)
+
+        def fake_metrics(left_payload, right_payload, _cv2_mod, **_kwargs):
+            return {
+                "edge_residual": 0.08,
+                "edge_diff": 0.08,
+                "residual_ratio": 1.0,
+                "coverage": 0.35,
+                "mean_motion_px": 10.0,
+                "coherence": 0.55,
+                "backend": "mock",
+                "metrics_backend": "mock",
+                "hard_cut_like": False,
+            }
+
+        def fake_score(metric, *, history=None, settings=None):
+            start = int(metric.get("interval_start_frame", metric.get("boundary_frame", 0)) or 0)
+            return {
+                **metric,
+                "score": float(interval_scores.get(start, 0.10)),
+                "residual_jump": 1.0,
+                "diff_jump": 1.0,
+                "motion_jump": 1.0,
+                "baseline_edge_residual": 0.05,
+                "baseline_edge_diff": 0.05,
+                "baseline_motion_px": 5.0,
+                "target_edge_residual": 0.05,
+                "target_edge_diff": 0.05,
+                "min_residual_ratio": 0.78,
+                "max_coherence": 0.82,
+            }
+
+        editor = DummyEditor()
+
+        with patch("core.visual_cut_jump.create_visual_cut_flow_engine", return_value=(object(), "mock")), patch(
+            "core.visual_cut_jump.visual_cut_pair_metrics",
+            side_effect=fake_metrics,
+        ), patch(
+            "core.visual_cut_jump.score_visual_cut_metrics",
+            side_effect=fake_score,
+        ):
+            result = editor._scan_find_live_visual_cut(1)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(int(result["boundary_frame"]), 2038)
+        self.assertEqual([seed for _start, _end, seed in window_calls], [2038])
+        self.assertGreaterEqual(window_calls[0][0], 2018)
+        self.assertLessEqual(window_calls[0][1], 2078)
+
+    def test_live_visual_cut_prefers_native_coarse_series_before_dense_flow_pairs(self):
+        interval_scores = {
+            1838: 0.38,
+            1858: 0.34,
+            1878: 0.31,
+            1898: 0.80,
+            1918: 0.84,
+            1938: 0.88,
+            1958: 0.72,
+            1978: 0.68,
+            1998: 0.74,
+            2018: 0.70,
+            2038: 1.41,
+            2058: 0.82,
+        }
+        window_calls = []
+
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.settings = {
+                    "scan_cut_live_native_coarse_enabled": True,
+                    "runtime_native_cut_boundary_enabled": True,
+                }
+
+            def _scan_get_cv2_module(self):
+                return object()
+
+            def _current_frame_fps(self):
+                return 59.94005994005994
+
+            def _manual_global_sec_from_player(self):
+                return 31.0
+
+            def _scan_source_and_local_sec(self, global_sec):
+                return "/tmp/tinyping.mp4", float(global_sec), {"clip_idx": 0}
+
+            def _scan_get_cv2_capture(self, source_path):
+                return object()
+
+            def _scan_prepare_visual_frame_payload(self, global_frame, *, max_width, cache=None):
+                return {
+                    "global_frame": int(global_frame),
+                    "global_sec": float(global_frame) / self._current_frame_fps(),
+                    "source_path": "/tmp/tinyping.mp4",
+                    "width": int(max_width),
+                    "edges": object(),
+                }
+
+            def _scan_find_live_visual_cut_in_window(
+                self,
+                start_frame,
+                end_frame,
+                *,
+                analysis_width,
+                direction,
+                payload_cache=None,
+                coarse_history=None,
+            ):
+                seed = int((coarse_history or [{}])[0].get("interval_start_frame", -1) or -1)
+                window_calls.append(seed)
+                if seed != 2038:
+                    return None
+                return {
+                    "boundary_frame": 2038,
+                    "boundary_sec": 2038.0 / self._current_frame_fps(),
+                    "score": 1.88,
+                    "analysis_width": int(analysis_width),
+                    "edge_residual": 0.084,
+                    "edge_diff": 0.083,
+                    "mean_motion_px": 48.0,
+                    "coherence": 0.58,
+                }
+
+            def _scan_refine_live_visual_cut(self, candidate, *, coarse_history=None):
+                return dict(candidate)
+
+        def fake_native_series(payloads, *, region_threshold=24.0, diff_threshold=32.0):
+            rows = []
+            for idx in range(len(payloads) - 1):
+                start = min(int(payloads[idx]["global_frame"]), int(payloads[idx + 1]["global_frame"]))
+                rows.append(
+                    {
+                        "boundary_frame": start,
+                        "boundary_sec": float(start) / 59.94005994005994,
+                        "left_frame": int(payloads[idx]["global_frame"]),
+                        "right_frame": int(payloads[idx + 1]["global_frame"]),
+                        "analysis_width": 640,
+                        "edge_diff": 0.08,
+                        "edge_residual": 0.08,
+                        "coverage": 0.24,
+                        "coarse_native_regions": 3,
+                        "coarse_native_deltas": [40.0, 42.0, 39.0, 18.0],
+                        "coarse_native_raw": 0.08,
+                        "interval_start_frame": start,
+                        "interval_end_frame": max(int(payloads[idx]["global_frame"]), int(payloads[idx + 1]["global_frame"])),
+                        "interval_stride_frames": abs(int(payloads[idx + 1]["global_frame"]) - int(payloads[idx]["global_frame"])),
+                        "source_changed": False,
+                    }
+                )
+            return rows
+
+        def fake_native_score(metric, *, history=None, settings=None):
+            start = int(metric.get("interval_start_frame", 0) or 0)
+            return {
+                **metric,
+                "score": float(interval_scores.get(start, 0.10)),
+                "diff_jump": 1.0,
+                "coverage_jump": 1.0,
+                "raw_jump": 1.0,
+                "baseline_edge_diff": 0.05,
+                "baseline_coverage": 0.05,
+                "baseline_coarse_raw": 0.05,
+                "target_edge_diff": 0.05,
+                "target_coverage": 0.05,
+                "target_coarse_raw": 0.05,
+                "min_regions": 2,
+            }
+
+        editor = DummyEditor()
+
+        with patch("core.visual_cut_jump.create_visual_cut_flow_engine", return_value=(object(), "mock")), patch(
+            "core.visual_cut_jump.native_visual_cut_coarse_series",
+            side_effect=fake_native_series,
+        ), patch(
+            "core.visual_cut_jump.score_visual_cut_coarse_metrics",
+            side_effect=fake_native_score,
+        ), patch(
+            "core.visual_cut_jump.visual_cut_pair_metrics",
+            side_effect=AssertionError("dense flow coarse path should not run"),
+        ):
+            result = editor._scan_find_live_visual_cut(1)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(int(result["boundary_frame"]), 2038)
+        self.assertEqual(window_calls, [2038])
+
+    def test_live_visual_cut_falls_back_to_dense_flow_when_native_coarse_misses(self):
+        native_scores = {
+            2138: 1.10,
+            2098: 1.02,
+            2078: 0.98,
+            2058: 0.96,
+        }
+        dense_scores = {
+            2038: 1.34,
+        }
+        window_calls = []
+
+        class DummyEditor(EditorScanCutCoreMixin):
+            def __init__(self):
+                self.settings = {
+                    "scan_cut_live_native_coarse_enabled": True,
+                    "runtime_native_cut_boundary_enabled": True,
+                }
+
+            def _scan_get_cv2_module(self):
+                return object()
+
+            def _current_frame_fps(self):
+                return 59.94005994005994
+
+            def _manual_global_sec_from_player(self):
+                return 36.0
+
+            def _scan_source_and_local_sec(self, global_sec):
+                return "/tmp/tinyping.mp4", float(global_sec), {"clip_idx": 0}
+
+            def _scan_get_cv2_capture(self, source_path):
+                return object()
+
+            def _scan_prepare_visual_frame_payload(self, global_frame, *, max_width, cache=None):
+                return {
+                    "global_frame": int(global_frame),
+                    "global_sec": float(global_frame) / self._current_frame_fps(),
+                    "source_path": "/tmp/tinyping.mp4",
+                    "width": int(max_width),
+                    "edges": object(),
+                }
+
+            def _scan_find_live_visual_cut_in_window(
+                self,
+                start_frame,
+                end_frame,
+                *,
+                analysis_width,
+                direction,
+                payload_cache=None,
+                coarse_history=None,
+            ):
+                seed = int((coarse_history or [{}])[0].get("interval_start_frame", -1) or -1)
+                window_calls.append(seed)
+                if seed != 2038:
+                    return None
+                return {
+                    "boundary_frame": 2038,
+                    "boundary_sec": 2038.0 / self._current_frame_fps(),
+                    "score": 1.90,
+                    "analysis_width": int(analysis_width),
+                    "edge_residual": 0.087,
+                    "edge_diff": 0.086,
+                    "mean_motion_px": 49.0,
+                    "coherence": 0.57,
+                }
+
+            def _scan_refine_live_visual_cut(self, candidate, *, coarse_history=None):
+                return dict(candidate)
+
+        def fake_native_series(payloads, *, region_threshold=24.0, diff_threshold=32.0):
+            rows = []
+            for idx in range(len(payloads) - 1):
+                start = min(int(payloads[idx]["global_frame"]), int(payloads[idx + 1]["global_frame"]))
+                rows.append(
+                    {
+                        "boundary_frame": start,
+                        "boundary_sec": float(start) / 59.94005994005994,
+                        "left_frame": int(payloads[idx]["global_frame"]),
+                        "right_frame": int(payloads[idx + 1]["global_frame"]),
+                        "analysis_width": 640,
+                        "edge_diff": 0.08,
+                        "edge_residual": 0.08,
+                        "coverage": 0.24,
+                        "coarse_native_regions": 3,
+                        "coarse_native_deltas": [40.0, 42.0, 39.0, 18.0],
+                        "coarse_native_raw": 0.08,
+                        "interval_start_frame": start,
+                        "interval_end_frame": max(int(payloads[idx]["global_frame"]), int(payloads[idx + 1]["global_frame"])),
+                        "interval_stride_frames": abs(int(payloads[idx + 1]["global_frame"]) - int(payloads[idx]["global_frame"])),
+                        "source_changed": False,
+                    }
+                )
+            return rows
+
+        def fake_native_score(metric, *, history=None, settings=None):
+            start = int(metric.get("interval_start_frame", 0) or 0)
+            return {
+                **metric,
+                "score": float(native_scores.get(start, 0.20)),
+                "diff_jump": 1.0,
+                "coverage_jump": 1.0,
+                "raw_jump": 1.0,
+                "baseline_edge_diff": 0.05,
+                "baseline_coverage": 0.05,
+                "baseline_coarse_raw": 0.05,
+                "target_edge_diff": 0.05,
+                "target_coverage": 0.05,
+                "target_coarse_raw": 0.05,
+                "min_regions": 2,
+            }
+
+        def fake_dense_metrics(left_payload, right_payload, _cv2_mod, **_kwargs):
+            return {
+                "edge_residual": 0.08,
+                "edge_diff": 0.08,
+                "residual_ratio": 1.0,
+                "coverage": 0.35,
+                "mean_motion_px": 10.0,
+                "coherence": 0.55,
+                "backend": "mock",
+                "metrics_backend": "mock",
+                "hard_cut_like": False,
+            }
+
+        def fake_dense_score(metric, *, history=None, settings=None):
+            start = int(metric.get("interval_start_frame", metric.get("boundary_frame", 0)) or 0)
+            return {
+                **metric,
+                "score": float(dense_scores.get(start, 0.10)),
+                "residual_jump": 1.0,
+                "diff_jump": 1.0,
+                "motion_jump": 1.0,
+                "baseline_edge_residual": 0.05,
+                "baseline_edge_diff": 0.05,
+                "baseline_motion_px": 5.0,
+                "target_edge_residual": 0.05,
+                "target_edge_diff": 0.05,
+                "min_residual_ratio": 0.78,
+                "max_coherence": 0.82,
+            }
+
+        editor = DummyEditor()
+
+        with patch("core.visual_cut_jump.create_visual_cut_flow_engine", return_value=(object(), "mock")), patch(
+            "core.visual_cut_jump.native_visual_cut_coarse_series",
+            side_effect=fake_native_series,
+        ), patch(
+            "core.visual_cut_jump.score_visual_cut_coarse_metrics",
+            side_effect=fake_native_score,
+        ), patch(
+            "core.visual_cut_jump.visual_cut_pair_metrics",
+            side_effect=fake_dense_metrics,
+        ), patch(
+            "core.visual_cut_jump.score_visual_cut_metrics",
+            side_effect=fake_dense_score,
+        ):
+            result = editor._scan_find_live_visual_cut(-1)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(int(result["boundary_frame"]), 2038)
+        self.assertIn(2038, window_calls)
+
     def test_relative_refine_uses_strict_verified_frame(self):
         class DummyEditor:
             def __init__(self):
@@ -1584,7 +2253,7 @@ class TimelineHitTargetTests(unittest.TestCase):
             self.assertIsNotNone(editor)
             self.assertTrue(editor.isVisible())
             self.assertEqual(canvas._subtitle_segment_font().pointSize(), 11)
-            self.assertEqual(canvas._stt_preview_font().pointSize(), 10)
+            self.assertEqual(canvas._stt_preview_font().pointSize(), 11)
 
             start_cursor = editor.textCursor()
             start_cursor.setPosition(0)
@@ -1707,6 +2376,28 @@ class TimelineHitTargetTests(unittest.TestCase):
 
         self.assertFalse(canvas._edit_active)
         self.assertIsNone(canvas._handle_drag_at(canvas._x(1.0), STT1_TOP + 8))
+
+    def test_stt_lane_hit_ignores_subtitle_preview_rows(self):
+        canvas = self._canvas()
+        subtitle_preview = {
+            "start": 1.0,
+            "end": 2.0,
+            "text": "자막 드래프트",
+            "stt_preview_source": "STT1",
+            "_live_subtitle_preview": True,
+        }
+        stt_preview = {
+            "start": 1.0,
+            "end": 2.0,
+            "text": "STT1 후보",
+            "stt_preview_source": "STT1",
+            "stt_pending": True,
+        }
+        canvas.segments = [subtitle_preview, stt_preview]
+
+        hit = canvas._stt_candidate_at(canvas._x(1.5), STT1_TOP + 8)
+
+        self.assertEqual(hit["text"], "STT1 후보")
 
     def test_stt_candidate_selected_by_llm_matches_source_and_overlap(self):
         candidate = {"start": 1.0, "end": 2.0, "text": "STT2 후보", "stt_preview_source": "STT2", "stt_pending": True}
@@ -1897,12 +2588,11 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas._setup_drag(target, "square_right", canvas._x(target["end"]))
             canvas._apply_drag(0.2)
 
-            self.assertTrue(bool(emitted))
-            self.assertAlmostEqual(emitted[-1], 3.2)
+            self.assertEqual(emitted, [])
         finally:
             canvas.deleteLater()
 
-    def test_diamond_drag_emits_live_preview_sec_for_video_frame(self):
+    def test_diamond_drag_keeps_playhead_fixed_without_live_preview_sec(self):
         canvas = self._canvas()
         try:
             canvas.frame_rate = 100.0
@@ -1916,8 +2606,51 @@ class TimelineHitTargetTests(unittest.TestCase):
             canvas._drag_snap_candidates_cache = [{"time": 2.2, "kind": "test"}]
             canvas._apply_drag(0.2)
 
-            self.assertTrue(bool(emitted))
-            self.assertAlmostEqual(emitted[-1], 2.2)
+            self.assertEqual(emitted, [])
+        finally:
+            canvas.deleteLater()
+
+    def test_diamond_mouse_press_does_not_scrub_playhead(self):
+        canvas = self._canvas()
+        try:
+            canvas.resize(420, canvas.height())
+            scrubbed = []
+            canvas.scrub_sec.connect(lambda sec: scrubbed.append(sec))
+
+            point = QPoint(canvas._x(2.0), DIAMOND_Y)
+            QTest.mousePress(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+
+            self.assertEqual(scrubbed, [])
+            self.assertEqual(getattr(canvas, "_drag_edge", None), "diamond")
+        finally:
+            canvas.deleteLater()
+
+    def test_segment_handle_mouse_press_does_not_scrub_playhead(self):
+        canvas = self._canvas()
+        try:
+            canvas.resize(420, canvas.height())
+            scrubbed = []
+            canvas.scrub_sec.connect(lambda sec: scrubbed.append(sec))
+
+            hit_point = None
+            handle_edge = None
+            target_x = canvas._x(canvas.segments[0]["end"])
+            for probe_x in range(target_x - 20, target_x + 21):
+                for probe_y in range(SEG_TOP + 8, SUBTITLE_BOT + 8):
+                    hit = canvas._handle_drag_at(probe_x, probe_y)
+                    if hit and str(hit[1]) == "square_right":
+                        hit_point = QPoint(probe_x, probe_y)
+                        handle_edge = str(hit[1])
+                        break
+                if hit_point is not None:
+                    break
+
+            self.assertIsNotNone(hit_point)
+            QTest.mousePress(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, hit_point)
+
+            self.assertEqual(scrubbed, [])
+            self.assertEqual(handle_edge, "square_right")
+            self.assertEqual(getattr(canvas, "_drag_edge", None), "square_right")
         finally:
             canvas.deleteLater()
 
@@ -1971,6 +2704,120 @@ class TimelineHitTargetTests(unittest.TestCase):
 
             self.assertAlmostEqual(target["end"], 3.45)
             self.assertEqual(dict(canvas._drag_snap_candidate or {}).get("kind"), "user_guide")
+        finally:
+            canvas.deleteLater()
+
+    def test_roughcut_precision_guides_inherit_major_segment_color_and_skip_segment_edges(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.frame_rate = 30.0
+            canvas.total_duration = 40.0
+            canvas.roughcut_major_markers_cached = lambda: [
+                {
+                    "start": 0.0,
+                    "end": 20.0,
+                    "label": "B",
+                    "display_label": "B - 러프컷",
+                    "color": "#FF453A",
+                }
+            ]
+            canvas._cut_boundary_reviewed_rows = [
+                {"timeline_sec": 5.0, "timeline_frame": 150, "status": "verified", "confirmed": True},
+                {"timeline_sec": 20.0, "timeline_frame": 600, "status": "verified", "confirmed": True},
+            ]
+
+            guides = roughcut_precision_guides_for_widget(canvas)
+
+            self.assertEqual(len(guides), 1)
+            self.assertAlmostEqual(guides[0]["time"], 5.0)
+            self.assertEqual(guides[0]["major_id"], "B")
+            self.assertEqual(guides[0]["color"], "#FF453A")
+            self.assertEqual(guides[0]["line_style"], "dash")
+            self.assertEqual(guides[0]["alpha"], 128)
+        finally:
+            canvas.deleteLater()
+
+    def test_roughcut_precision_guides_skip_unverified_audio_gain_provisional_rows(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.frame_rate = 30.0
+            canvas.total_duration = 40.0
+            canvas.roughcut_major_markers_cached = lambda: [
+                {
+                    "start": 0.0,
+                    "end": 20.0,
+                    "label": "A",
+                    "display_label": "A - 러프컷",
+                    "color": "#34C759",
+                }
+            ]
+            canvas._cut_boundary_reviewed_rows = [
+                {
+                    "timeline_sec": 5.0,
+                    "timeline_frame": 150,
+                    "source": "audio_gain_provisional",
+                    "boundary_kind": "audio",
+                    "status": "checked",
+                    "verified": False,
+                    "scan_checked": True,
+                    "line_style": "dotted",
+                },
+                {
+                    "timeline_sec": 6.0,
+                    "timeline_frame": 180,
+                    "source": "visual",
+                    "boundary_kind": "scene",
+                    "status": "verified",
+                    "verified": True,
+                    "confirmed": True,
+                },
+            ]
+
+            guides = roughcut_precision_guides_for_widget(canvas)
+
+            self.assertEqual(len(guides), 1)
+            self.assertAlmostEqual(guides[0]["time"], 6.0)
+        finally:
+            canvas.deleteLater()
+
+    def test_boundary_row_is_voice_boundary_detects_audio_rows(self):
+        self.assertTrue(boundary_row_is_voice_boundary({"source": "audio_gain_provisional"}))
+        self.assertTrue(boundary_row_is_voice_boundary({"boundary_kind": "audio", "source": "visual"}))
+        self.assertFalse(boundary_row_is_voice_boundary({"boundary_kind": "scene", "source": "visual"}))
+
+    def test_drag_snap_candidates_include_roughcut_precision_guides(self):
+        canvas = TimelineCanvas()
+        try:
+            canvas.frame_rate = 30.0
+            canvas.pps = 100.0
+            canvas.total_duration = 12.0
+            canvas.segments = [
+                {"start": 1.0, "end": 2.0, "text": "앞", "line": 0},
+                {"start": 4.0, "end": 5.0, "text": "중간", "line": 1},
+            ]
+            canvas.roughcut_major_markers_cached = lambda: [
+                {
+                    "start": 0.0,
+                    "end": 10.0,
+                    "label": "A",
+                    "display_label": "A - 러프컷",
+                    "color": "#34C759",
+                }
+            ]
+            canvas._cut_boundary_reviewed_rows = [
+                {
+                    "timeline_sec": 4.5,
+                    "timeline_frame": 135,
+                    "status": "verified",
+                    "confirmed": True,
+                }
+            ]
+
+            candidates = canvas._build_drag_snap_base_candidates()
+            precision = [item for item in candidates if item.get("kind") == "roughcut_precision"]
+
+            self.assertEqual(len(precision), 1)
+            self.assertAlmostEqual(float(precision[0]["time"]), 4.5)
         finally:
             canvas.deleteLater()
 

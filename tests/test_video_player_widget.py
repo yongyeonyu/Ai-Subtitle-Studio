@@ -14,7 +14,7 @@ from PyQt6.QtCore import QObject, Qt, QRectF, QUrl, pyqtSignal
 from PyQt6.QtMultimedia import QMediaPlayer
 
 from core.runtime import config
-from ui.editor.video_playback_backend import choose_video_backend
+from ui.editor.video_playback_backend import _BaseExternalBackend, choose_video_backend
 from ui.editor.video_overlay_widgets import SubtitleQuickOverlay, VideoSurfaceView
 from ui.editor.video_player_widget import VideoPlayerWidget
 from ui.editor.editor_timeline_video import EditorTimelineVideoMixin
@@ -130,6 +130,61 @@ class _ExternalLikePlayer(QObject):
         return
 
 
+class _PollingDurationBackend(_BaseExternalBackend):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._loaded_path = ""
+
+    def _load_source(self, path: str) -> None:
+        self._loaded_path = str(path or "")
+
+    def _play(self) -> None:
+        return
+
+    def _pause(self) -> None:
+        return
+
+    def _stop(self) -> None:
+        return
+
+    def _is_playing(self) -> bool:
+        return False
+
+    def _position_ms(self) -> int:
+        return 0
+
+    def _set_position_ms(self, _position_ms: int) -> None:
+        return
+
+    def _duration(self) -> int:
+        return 3210 if self._loaded_path else 0
+
+
+class _SyncLoadedBackend(_ExternalLikePlayer):
+    playbackStateChanged = pyqtSignal(object)
+    positionChanged = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._state = QMediaPlayer.PlaybackState.PausedState
+
+    def setSource(self, source=None):
+        self._source = source if isinstance(source, QUrl) else QUrl()
+        self.durationChanged.emit(4000)
+        self.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.LoadedMedia)
+
+    def playbackState(self):
+        return self._state
+
+    def play(self):
+        self._state = QMediaPlayer.PlaybackState.PlayingState
+        self.playbackStateChanged.emit(self._state)
+
+    def pause(self):
+        self._state = QMediaPlayer.PlaybackState.PausedState
+        self.playbackStateChanged.emit(self._state)
+
+
 class VideoPlayerWidgetTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -144,6 +199,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
 
     def test_video_backend_auto_skips_embedded_mpv_without_safety_gate(self):
         with patch.dict(os.environ, {"AI_SUBTITLE_VIDEO_BACKEND": "auto"}, clear=True), \
+             patch("ui.editor.video_playback_backend.config.IS_MAC", True), \
              patch("ui.editor.video_playback_backend._running_under_pytest", return_value=False), \
              patch("ui.editor.video_playback_backend._offscreen_qt", return_value=False), \
              patch("ui.editor.video_playback_backend._embedded_mpv_enabled", return_value=False), \
@@ -154,23 +210,25 @@ class VideoPlayerWidgetTests(unittest.TestCase):
         self.assertEqual(choice.name, "qt")
         self.assertEqual(choice.reason, "embedded_mpv_disabled")
 
-    def test_video_backend_prefers_mpv_when_explicitly_enabled(self):
+    def test_video_backend_auto_prefers_vlc_on_mac_even_when_mpv_is_available(self):
         with patch.dict(
             os.environ,
             {"AI_SUBTITLE_VIDEO_BACKEND": "auto", "AI_SUBTITLE_ENABLE_EMBEDDED_MPV": "1"},
             clear=True,
         ), \
+             patch("ui.editor.video_playback_backend.config.IS_MAC", True), \
              patch("ui.editor.video_playback_backend._running_under_pytest", return_value=False), \
              patch("ui.editor.video_playback_backend._offscreen_qt", return_value=False), \
              patch("ui.editor.video_playback_backend._mpv_available", return_value=True), \
              patch("ui.editor.video_playback_backend._vlc_available", return_value=True):
             choice = choose_video_backend()
 
-        self.assertEqual(choice.name, "mpv")
-        self.assertEqual(choice.reason, "preferred_lightweight_gpu_backend")
+        self.assertEqual(choice.name, "vlc")
+        self.assertEqual(choice.reason, "mac_vlc_preferred")
 
     def test_video_backend_uses_vlc_when_mpv_is_unavailable(self):
         with patch.dict(os.environ, {"AI_SUBTITLE_VIDEO_BACKEND": "auto"}, clear=True), \
+             patch("ui.editor.video_playback_backend.config.IS_MAC", True), \
              patch("ui.editor.video_playback_backend._running_under_pytest", return_value=False), \
              patch("ui.editor.video_playback_backend._offscreen_qt", return_value=False), \
              patch("ui.editor.video_playback_backend._mpv_available", return_value=False), \
@@ -178,7 +236,7 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             choice = choose_video_backend()
 
         self.assertEqual(choice.name, "vlc")
-        self.assertEqual(choice.reason, "libvlc_fallback")
+        self.assertEqual(choice.reason, "mac_vlc_preferred")
 
     def test_video_backend_can_be_forced_by_render_settings(self):
         with patch.dict(os.environ, {}, clear=True), \
@@ -352,6 +410,51 @@ class VideoPlayerWidgetTests(unittest.TestCase):
 
             self.assertAlmostEqual(widget.total_time, 1450.3, places=3)
             self.assertGreater(widget.frame_time_map.total_frames, 0)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_external_backend_source_load_primes_duration_without_pressing_play(self):
+        backend = _PollingDurationBackend()
+        durations = []
+        try:
+            backend.durationChanged.connect(durations.append)
+
+            backend.setSource(QUrl.fromLocalFile("/tmp/sample.mp4"))
+            self.app.processEvents()
+
+            self.assertEqual(durations, [3210])
+            self.assertEqual(backend.duration(), 3210)
+            self.assertTrue(backend._poll_timer.isActive())
+        finally:
+            backend.deleteLater()
+            self.app.processEvents()
+
+    def test_sync_loaded_backend_does_not_leave_play_button_stuck(self):
+        with patch("ui.editor.video_player_widget.create_video_backend", return_value=_SyncLoadedBackend()):
+            widget = VideoPlayerWidget()
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f, \
+                 patch("core.media_info.probe_media", return_value={
+                     "duration": 4.0,
+                     "fps": 30.0,
+                     "width": 1280,
+                     "height": 720,
+                 }), \
+                 patch.object(widget, "_playback_path_for", return_value=f.name), \
+                 patch.object(widget, "_extract_and_show_thumbnail"):
+                widget.load(f.name, [], defer_probe=False)
+
+            self.assertTrue(widget._source_ready)
+
+            widget.toggle_play()
+
+            self.assertEqual(
+                widget.media_player.playbackState(),
+                QMediaPlayer.PlaybackState.PlayingState,
+            )
+            self.assertFalse(widget._pending_autoplay)
         finally:
             widget.close()
             widget.deleteLater()
@@ -801,7 +904,13 @@ class VideoPlayerWidgetTests(unittest.TestCase):
         widget = VideoPlayerWidget()
         try:
             widget._rebuild_frame_time_map(duration=10.0, fps=24.0)
-            widget.media_player = SimpleNamespace(position=lambda: 1041, stop=lambda: None)
+            widget.media_player = SimpleNamespace(
+                position=lambda: 1041,
+                duration=lambda: 10_000,
+                playbackState=lambda: QMediaPlayer.PlaybackState.PausedState,
+                stop=lambda: None,
+            )
+            widget._reset_playback_clock(1041)
 
             frame, sec = widget.current_playback_frame_time()
 
@@ -809,6 +918,28 @@ class VideoPlayerWidgetTests(unittest.TestCase):
             self.assertAlmostEqual(sec, 25.0 / 24.0, places=6)
             self.assertEqual(widget.current_frame, 25)
             self.assertAlmostEqual(widget.current_time, 25.0 / 24.0, places=6)
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_current_playback_time_extrapolates_when_backend_position_stalls_during_playback(self):
+        widget = VideoPlayerWidget()
+        try:
+            widget._rebuild_frame_time_map(duration=10.0, fps=30.0)
+            widget.media_player = SimpleNamespace(
+                position=lambda: 1000,
+                duration=lambda: 10_000,
+                playbackState=lambda: QMediaPlayer.PlaybackState.PlayingState,
+                stop=lambda: None,
+            )
+            with patch("ui.editor.video_player_widget.time.monotonic", side_effect=[100.0, 100.040]):
+                widget._reset_playback_clock(1000)
+                frame, sec = widget.current_playback_frame_time()
+
+            self.assertEqual(frame, 31)
+            self.assertAlmostEqual(sec, 31.0 / 30.0, places=6)
+            self.assertGreater(widget.current_time, 1.0)
         finally:
             widget.close()
             widget.deleteLater()

@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.00.02-mac-native
-Phase: MAC_NATIVE_APPSTORE_V4_0_2_RELEASED
-Last-Updated: 2026-05-12
+Document-Version: 04.00.03-mac-native
+Phase: MAC_NATIVE_APPSTORE_V4_0_3_RELEASED
+Last-Updated: 2026-05-13
 Updated-By: Codex
 Purpose: Remaining work queue only.
 -->
@@ -19,9 +19,9 @@ Purpose: Remaining work queue only.
 ## Metadata
 
 ```yaml
-app_version: "04.00.02"
-document_version: "04.00.02-mac-native"
-phase: "MAC_NATIVE_APPSTORE_V4_0_2_RELEASED"
+app_version: "04.00.03"
+document_version: "04.00.03-mac-native"
+phase: "MAC_NATIVE_APPSTORE_V4_0_3_RELEASED"
 next_phase: null
 commit_policy: "Commit only when the user explicitly asks."
 product_priority: "Accuracy before speed."
@@ -54,20 +54,14 @@ release_handoff_files:
 
 ## Completion Snapshot
 
-The v04.00.02 Mac-native release completed the prior queue:
+The v04.00.03 Mac-native release completed the prior queue:
 
-- The repository now targets macOS Apple Silicon only on this branch; Windows launcher and Windows-only dependency files were removed from the active release path.
-- Apple Silicon scheduling now includes chip-aware worker budgeting, FFmpeg thread caps, pioneer/follower cut-boundary planning, and accelerator slot distribution for the detected Mac.
-- STT candidate scoring and STT1/STT2 merge work now reuse indexed or native overlap calculations instead of rescanning every peer segment.
-- Native Swift bridges now cover subtitle/project/timeline/waveform/policy quality helpers intended for later reuse in a future iPad app, with Python kept as a fallback only where quality or compatibility still requires it.
-- Production macOS runtime now enables only benchmark-safe native routes by default and keeps Swift LoRA/Deep/LLM policy helpers behind an explicit experimental gate until speed and LoRA ranking parity are proven.
-- Native macOS memory helpers, packaging scripts, and benchmark tools are part of the active release set so the app can be profiled, packaged, and iterated as a Mac-first product.
-- Generation completion now waits for real saveable subtitle segments before marking the editor complete, then retries the completion autosave until segments are available.
-- Exit confirmation now asks to save unsaved editor changes before quick exit or window close cleanup runs.
-- Project JSON backups now live under `프로젝트백업/` instead of filling the project root with numbered backup files.
-- Canonical project JSON saves now keep the `video` header first, use frame/FPS metadata as the reload contract, and reload external subtitle/STT assets through project-path-aware readers.
-- Background LoRA and app-exit cleanup now tolerate old and new trainer shutdown signatures so input or quit requests can pause runtime work without blocking the UI.
-- Correction-dictionary cleanup, STT worker I/O, subtitle segment filtering, subtitle accuracy helpers, cut-boundary cache handling, and editor segment bulk loading have smaller native-ready modules.
+- App startup, Home-idle cleanup, and foreground busy-state release now avoid blocking the first editor/home transition on interrupted-training recovery or deferred learning work.
+- Playback and timeline interaction now keep the playhead visually synchronized with VLC-backed playback, preserve the playhead during subtitle handle drags, and avoid overlay ghost artifacts.
+- Cut-boundary navigation now adds visual jump scouting plus follower rollback verification so `<<` and `>>` can land on hard cuts that look similar in color.
+- Project save/load now preserves STT1/STT2 preview tracks inside project JSON, normalizes subtitle timing on the frame grid, and suppresses lingering audio-only provisional cut guides after reload.
+- ChatGPT Codex CLI can now be selected as both subtitle LLM and roughcut LLM through the app settings and model lists.
+- Multi-speaker generation now supports whole-audio speaker pre-assignment before Whisper finalization and Netflix-style multiline overlap captions with preserved `speaker_list` metadata.
 - Release verification should be re-read from the latest `RELEASE_v*.md` only.
 
 Future work should start from a new user request rather than this completed backlog.

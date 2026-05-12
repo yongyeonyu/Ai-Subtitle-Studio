@@ -137,6 +137,8 @@ class MainWindow(
         self._runtime_auto_audio_file = ""
         self._runtime_auto_audio_tune = {}
         self._runtime_auto_audio_decision = {}
+        self._startup_deferred_tasks_scheduled = False
+        self._startup_deferred_tasks_completed = False
 
         settings = load_settings()
         self._auto_start_on = settings.get("auto_start_enabled", True)
@@ -162,7 +164,7 @@ class MainWindow(
 
         self._build_ui()
         self._connect_signals()
-        self._personalization_idle_trainer = PersonalizationIdleTrainer(self)
+        self._personalization_idle_trainer = PersonalizationIdleTrainer(self, recover_on_startup=False)
         self._attach_app_event_filter()
         self._initialize_runtime_memory_manager(settings)
         self._initialize_runtime_resource_coordinator(settings)
@@ -184,6 +186,27 @@ class MainWindow(
                 self._start_auto_watchers_after_launch()
             else:
                 QTimer.singleShot(1600 if getattr(config, "IS_MAC", False) else 0, self._start_auto_watchers_after_launch)
+
+    def showEvent(self, event):  # noqa: N802 - Qt override
+        super().showEvent(event)
+        if getattr(self, "_startup_deferred_tasks_scheduled", False):
+            return
+        self._startup_deferred_tasks_scheduled = True
+        QTimer.singleShot(0, self._run_deferred_startup_tasks)
+
+    def _run_deferred_startup_tasks(self):
+        if getattr(self, "_startup_deferred_tasks_completed", False):
+            return
+        self._startup_deferred_tasks_completed = True
+        trainer = getattr(self, "_personalization_idle_trainer", None)
+        if trainer is None:
+            return
+        starter = getattr(trainer, "ensure_startup_recovery", None)
+        if callable(starter):
+            try:
+                starter(async_run=True, reason="trainer_startup_deferred")
+            except Exception:
+                pass
 
     def _start_auto_watchers_after_launch(self):
         if self._auto_start_on and getattr(self, "_is_icloud_auto_mode", False):
@@ -1047,15 +1070,33 @@ class MainWindow(
 
     # ── 홈 / 에디터 전환 ────────────────────────────────
     def show_home(self, allow_home_idle_learning: bool = False):
-        active_work = self._is_editor_ai_busy(getattr(self, "_editor_widget", None)) or self._is_backend_ai_busy()
+        editor = getattr(self, "_editor_widget", None)
+        active_work = self._is_editor_ai_busy(editor) or self._is_backend_ai_busy()
         self._cleanup_runtime_for_navigation(context="홈 이동", timeout_sec=0.5, stop_active=False)
         self._stop_post_completion_idle_timer()
+        defer_home_idle_learning = bool(
+            allow_home_idle_learning
+            and (
+                active_work
+                or bool(getattr(self, "_runtime_cleanup_in_progress", False))
+                or bool(getattr(self, "_editor_ai_release_in_progress", False))
+            )
+        )
+        try:
+            self._restore_normal_cursor(self, editor)
+        except Exception:
+            pass
         if not active_work:
             self._reset_transient_multiclip_state()
         self._dock_global_menu_to_workspace()
         self.stack.setCurrentIndex(0)
         if hasattr(self, "_show_bottom_queue_table"):
             self._show_bottom_queue_table()
+        for delay_ms in (0, 120, 360):
+            try:
+                QTimer.singleShot(delay_ms, lambda saved_editor=editor: self._restore_normal_cursor(self, saved_editor))
+            except Exception:
+                pass
         if self._editor_widget and not getattr(self, "_unified_dashboard", False):
             self._trash_bin = getattr(self, "_trash_bin", [])
             self._trash_bin.append(self._editor_widget)
@@ -1067,9 +1108,17 @@ class MainWindow(
         resume_for_home_idle = getattr(trainer, "resume_for_home_idle", None) if trainer is not None else None
         if callable(resume_for_home_idle):
             try:
+                if defer_home_idle_learning:
+                    now = QDateTime.currentMSecsSinceEpoch()
+                    hold_ms = max(2500, int(getattr(self, "_post_completion_idle_ms", 600_000) / 240))
+                    self._lora_foreground_busy_until_ms = max(
+                        int(getattr(self, "_lora_foreground_busy_until_ms", 0) or 0),
+                        now + hold_ms,
+                    )
+                    self._lora_foreground_busy_reason = "home_navigation_cleanup"
                 resume_for_home_idle(
                     preserve_idle_age=bool(allow_home_idle_learning),
-                    start_if_ready=bool(allow_home_idle_learning),
+                    start_if_ready=bool(allow_home_idle_learning and not defer_home_idle_learning),
                 )
             except Exception:
                 pass

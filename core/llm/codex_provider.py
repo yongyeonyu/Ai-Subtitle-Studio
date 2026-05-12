@@ -5,22 +5,54 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 
+DEFAULT_CODEX_LABEL = "OpenAI Codex ChatGPT [구독/CLI/API키 불필요]"
+CODEX_CLI_MODEL_CATALOG = (
+    {
+        "display_name": DEFAULT_CODEX_LABEL,
+        "cli_model": "",
+        "family": "OpenAI Codex CLI",
+        "label": "기본",
+    },
+    {
+        "display_name": "OpenAI Codex GPT-5.5 [ChatGPT CLI 구독]",
+        "cli_model": "gpt-5.5",
+        "family": "GPT-5.5",
+        "label": "고품질",
+    },
+    {
+        "display_name": "OpenAI Codex GPT-5.4 [ChatGPT CLI 구독]",
+        "cli_model": "gpt-5.4",
+        "family": "GPT-5.4",
+        "label": "균형",
+    },
+    {
+        "display_name": "OpenAI Codex GPT-5.4 Mini [ChatGPT CLI 구독]",
+        "cli_model": "gpt-5.4-mini",
+        "family": "GPT-5.4 Mini",
+        "label": "경량",
+    },
+)
+CODEX_CLI_MODEL_MAP = {
+    str(item["display_name"]): str(item.get("cli_model", "") or "")
+    for item in CODEX_CLI_MODEL_CATALOG
+}
 CODEX_MODEL_ALIASES = {
     "Codex ChatGPT [구독/CLI]",
     "OpenAI Codex ChatGPT [구독/CLI]",
     "OpenAI Codex [구독/CLI/API키 불필요]",
     "OpenAI Codex ChatGPT [구독/CLI/API키 불필요]",
     "codex-chatgpt-cli",
+    *CODEX_CLI_MODEL_MAP.keys(),
 }
-
-DEFAULT_CODEX_LABEL = "OpenAI Codex ChatGPT [구독/CLI/API키 불필요]"
 
 _OUTPUT_SCHEMA = {
     "type": "object",
@@ -68,6 +100,132 @@ def _codex_binary() -> str:
     if available:
         return detail
     raise RuntimeError(detail)
+
+
+def resolve_codex_cli_model(model_name: str) -> str:
+    text = str(model_name or "").strip()
+    if not text:
+        return ""
+    return str(CODEX_CLI_MODEL_MAP.get(text, "") or "")
+
+
+def codex_login_status() -> dict:
+    available, detail = codex_cli_available()
+    status = {
+        "available": bool(available),
+        "binary": detail if available else "",
+        "logged_in": False,
+        "auth_mode": "",
+        "subscription_access": False,
+        "usage_based_access": False,
+        "message": str(detail or ""),
+        "raw_status": "",
+    }
+    if not available:
+        return status
+    try:
+        proc = subprocess.run(
+            [str(detail), "login", "status"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            shell=False,
+        )
+    except Exception as exc:
+        status["message"] = f"Codex 로그인 상태 확인 실패: {exc}"
+        return status
+    raw = str(proc.stdout or proc.stderr or "").strip()
+    lowered = raw.lower()
+    status["raw_status"] = raw
+    if "logged in using chatgpt" in lowered:
+        status.update(
+            logged_in=True,
+            auth_mode="chatgpt",
+            subscription_access=True,
+            message="ChatGPT 구독 로그인됨",
+        )
+        return status
+    if "logged in using api key" in lowered or "api key" in lowered:
+        status.update(
+            logged_in=True,
+            auth_mode="api_key",
+            usage_based_access=True,
+            message="OpenAI API 키 로그인됨",
+        )
+        return status
+    if "access token" in lowered:
+        status.update(
+            logged_in=True,
+            auth_mode="access_token",
+            usage_based_access=True,
+            message="액세스 토큰 로그인됨",
+        )
+        return status
+    if raw:
+        status["message"] = raw
+    else:
+        status["message"] = "Codex CLI 미로그인"
+    return status
+
+
+def launch_codex_cli_login() -> tuple[bool, str]:
+    codex_bin = _codex_binary()
+    command = f"{shlex.quote(codex_bin)} login"
+    if platform.system() == "Darwin":
+        script = [
+            "osascript",
+            "-e",
+            'tell application "Terminal" to activate',
+            "-e",
+            f'tell application "Terminal" to do script {json.dumps(command)}',
+        ]
+        try:
+            proc = subprocess.run(
+                script,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=8,
+                shell=False,
+            )
+        except Exception as exc:
+            return False, f"Terminal에서 Codex 로그인을 시작하지 못했습니다: {exc}"
+        if proc.returncode == 0:
+            return True, "터미널에서 Codex 로그인 창을 열었습니다."
+        detail = str(proc.stderr or proc.stdout or "").strip()
+        return False, detail or "Terminal에서 Codex 로그인을 시작하지 못했습니다."
+    try:
+        subprocess.Popen([codex_bin, "login"], shell=False)
+    except Exception as exc:
+        return False, f"Codex 로그인을 시작하지 못했습니다: {exc}"
+    return True, "Codex 로그인 절차를 시작했습니다."
+
+
+def run_codex_logout() -> tuple[bool, str]:
+    codex_bin = _codex_binary()
+    try:
+        proc = subprocess.run(
+            [codex_bin, "logout"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=8,
+            shell=False,
+        )
+    except Exception as exc:
+        return False, f"Codex 로그아웃 실패: {exc}"
+    if proc.returncode == 0:
+        detail = str(proc.stdout or "").strip()
+        return True, detail or "Codex CLI에서 로그아웃했습니다."
+    detail = str(proc.stderr or proc.stdout or "").strip()
+    return False, detail or "Codex CLI 로그아웃 실패"
 
 
 def _timeout(default: int) -> int:
@@ -163,7 +321,7 @@ def _parse_json_object(output: str) -> dict | None:
     return None
 
 
-def _command(codex_bin: str, schema_path: Path, output_path: Path) -> list[str]:
+def _command(codex_bin: str, schema_path: Path, output_path: Path, model_name: str) -> list[str]:
     cmd = [
         codex_bin,
         "exec",
@@ -179,6 +337,8 @@ def _command(codex_bin: str, schema_path: Path, output_path: Path) -> list[str]:
         str(output_path),
     ]
     model = str(os.environ.get("AI_SUBTITLE_CODEX_MODEL", "") or "").strip()
+    if not model:
+        model = resolve_codex_cli_model(model_name)
     if model:
         cmd.extend(["--model", model])
     effort = str(os.environ.get("AI_SUBTITLE_CODEX_EFFORT", "") or "").strip()
@@ -203,7 +363,7 @@ def _run_codex_json_task(
         schema_path = tmpdir / "schema.json"
         output_path = tmpdir / "last_message.json"
         schema_path.write_text(json.dumps(schema, ensure_ascii=False), encoding="utf-8")
-        cmd = _command(codex_bin, schema_path, output_path)
+        cmd = _command(codex_bin, schema_path, output_path, model_name)
         env = os.environ.copy()
         env.setdefault("NO_COLOR", "1")
         kwargs = {}

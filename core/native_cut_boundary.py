@@ -149,6 +149,45 @@ def gray_delta(
         return None
 
 
+def gray_edge_series(
+    frames: Any,
+    *,
+    region_threshold: float,
+    diff_threshold: float,
+) -> list[dict[str, Any]] | None:
+    if not native_cut_boundary_enabled():
+        return None
+    try:
+        import numpy as np
+
+        prepared = [np.ascontiguousarray(frame, dtype=np.uint8) for frame in list(frames or [])]
+        if len(prepared) < 2:
+            return []
+        values = _native.gray_edge_series(
+            prepared,
+            float(region_threshold),
+            float(diff_threshold),
+        )
+        if not isinstance(values, list):
+            return None
+        out: list[dict[str, Any]] = []
+        for item in values:
+            if not isinstance(item, dict):
+                return None
+            out.append(
+                {
+                    "score": float(item.get("score", 0.0) or 0.0),
+                    "diff": float(item.get("diff", 0.0) or 0.0),
+                    "coverage": float(item.get("coverage", 0.0) or 0.0),
+                    "regions": int(item.get("regions", 0) or 0),
+                    "deltas": [float(value) for value in list(item.get("deltas") or [])],
+                }
+            )
+        return out
+    except Exception:
+        return None
+
+
 def color_avg_delta(
     prev_avg: Any,
     next_avg: Any,

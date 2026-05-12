@@ -2226,6 +2226,11 @@ class EditorSegmentsMixin(EditorSegmentsBulkLoadMixin, EditorRoughcutDraftMixin)
         # ---------------------------------------------------------
         native_plan = self._plan_stt_candidate_selection_native(current, candidate)
         if isinstance(native_plan, dict):
+            existing_preview_before_native = [
+                dict(seg)
+                for seg in list(getattr(self, "_live_stt_preview_segments", []) or [])
+                if isinstance(seg, dict)
+            ]
             slot_start_value = native_plan.get("slotStart", native_plan.get("slot_start"))
             slot_end_value = native_plan.get("slotEnd", native_plan.get("slot_end"))
             slot = (
@@ -2245,16 +2250,24 @@ class EditorSegmentsMixin(EditorSegmentsBulkLoadMixin, EditorRoughcutDraftMixin)
                 for seg in list(native_plan.get("selectedCandidates", native_plan.get("selected_candidates")) or [])
                 if isinstance(seg, dict)
             ]
-            self._live_stt_preview_segments = [
-                {
+            native_filtered_preview = []
+            for seg in list(native_plan.get("filteredPreviewSegments", native_plan.get("filtered_preview_segments")) or []):
+                if not isinstance(seg, dict):
+                    continue
+                normalized_preview = {
                     **dict(seg),
                     **({"stt_preview_source": dict(seg).get("sttPreviewSource")} if dict(seg).get("sttPreviewSource") not in (None, "") else {}),
                     **({"stt_source": dict(seg).get("sttSource")} if dict(seg).get("sttSource") not in (None, "") else {}),
                     **({"stt_ensemble_source": dict(seg).get("sttEnsembleSource")} if dict(seg).get("sttEnsembleSource") not in (None, "") else {}),
                 }
-                for seg in list(native_plan.get("filteredPreviewSegments", native_plan.get("filtered_preview_segments")) or [])
-                if isinstance(seg, dict)
-            ]
+                normalized_preview["stt_pending"] = True
+                normalized_preview["_live_stt_preview"] = True
+                native_filtered_preview.append(normalized_preview)
+            self._live_stt_preview_segments = (
+                native_filtered_preview
+                if native_filtered_preview or not existing_preview_before_native
+                else existing_preview_before_native
+            )
             slot_parts = []
             merged_text_for_slot = ""
             placed_candidate = dict(selected_candidates_native[0]) if selected_candidates_native else self._manual_exact_stt_candidate(candidate, replaced_segments=replaced_segments)
@@ -3239,10 +3252,18 @@ class EditorSegmentsMixin(EditorSegmentsBulkLoadMixin, EditorRoughcutDraftMixin)
         segs = self._get_current_segments()
         if not isinstance(getattr(self, "_subtitle_memory_cache", None), dict):
             self._rebuild_subtitle_memory_cache(segs)
-        timeline_segs = segs
+        timeline_segs = list(segs or [])
+        placeholder = [
+            dict(seg)
+            for seg in list(getattr(self, "_project_placeholder_segments", []) or [])
+            if isinstance(seg, dict)
+        ]
+        confirmed = [seg for seg in list(segs or []) if not seg.get("is_gap")]
+        if not confirmed and placeholder:
+            confirmed = list(placeholder)
+            timeline_segs = placeholder
         preview = list(getattr(self, "_live_stt_preview_segments", []) or [])
         if preview:
-            confirmed = [seg for seg in segs if not seg.get("is_gap")]
             subtitle_preview = self._build_live_subtitle_preview_segments(preview, confirmed)
             timeline_segs = sorted(
                 confirmed + subtitle_preview + preview,

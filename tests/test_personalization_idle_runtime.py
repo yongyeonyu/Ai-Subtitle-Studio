@@ -193,6 +193,29 @@ class PersonalizationIdleRuntimeTests(unittest.TestCase):
                 trainer._poll_timer.stop()
                 trainer.deleteLater()
 
+    def test_idle_trainer_can_defer_startup_recovery_until_after_ui_launch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initialize_lora_personalization_store(tmpdir)
+
+            owner = _DummyOwner()
+            with patch("core.personalization.idle_trainer.recover_interrupted_training_jobs") as recover:
+                trainer = PersonalizationIdleTrainer(owner, store_dir=tmpdir, recover_on_startup=False)
+                trainer._poll_timer.stop()
+                try:
+                    recover.assert_not_called()
+
+                    first = trainer.ensure_startup_recovery(async_run=False, reason="unit_test_startup")
+                    second = trainer.ensure_startup_recovery(async_run=False, reason="unit_test_startup")
+
+                    self.assertTrue(first["started"])
+                    self.assertTrue(first["completed"])
+                    self.assertFalse(first["running"])
+                    self.assertFalse(second["started"])
+                    recover.assert_called_once_with(tmpdir, reason="unit_test_startup")
+                finally:
+                    trainer._poll_timer.stop()
+                    trainer.deleteLater()
+
     def test_native_input_snapshot_requests_immediate_stop_when_learning(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             initialize_lora_personalization_store(tmpdir)

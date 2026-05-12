@@ -110,6 +110,12 @@ class _Timeline:
     def set_auto_gap_segments_enabled(self, enabled: bool):
         self.auto_gap_segments_enabled = bool(enabled)
 
+    def _apply_single_media_duration(self, dur, source_path=None):
+        duration = float(dur or 0.0)
+        self.canvas.total_duration = duration
+        self.global_canvas.total_duration = duration
+        self._single_media_duration_path = str(source_path or "")
+
 
 class _Status:
     def text(self):
@@ -297,6 +303,7 @@ class _ProjectOpenEditor:
         self.completed = False
         self.completed_kwargs = None
         self.scheduled = False
+        self.placeholder_refreshes = 0
         self.timestamp_refreshes = []
         self.video_context_refreshes = 0
         self.memory_rebuilds = []
@@ -332,11 +339,15 @@ class _ProjectOpenEditor:
     def _schedule_timeline(self):
         self.scheduled = True
 
+    def _refresh_cut_boundary_placeholder_from_project(self):
+        self.placeholder_refreshes += 1
+
 
 class _CanvasStateEditor(EditorCanvasStateMixin):
     def __init__(self):
         self.video_fps = 30.0
         self.timeline = _Timeline()
+        self.video_player = _VideoPlayer(total_time=0.0)
         self._cached_segs = []
         self._live_stt_preview_segments = []
         self.scheduled = False
@@ -344,6 +355,8 @@ class _CanvasStateEditor(EditorCanvasStateMixin):
     def _reload_segments_from_list(self, segments, preserve_view=False, mark_dirty=False):
         self._cached_segs = [dict(seg) for seg in list(segments or [])]
         total_dur = max((float(seg.get("end", 0.0) or 0.0) for seg in self._cached_segs), default=0.0)
+        if getattr(self.video_player, "total_time", 0.0) > 0.0:
+            total_dur = max(total_dur, float(self.video_player.total_time))
         self.timeline.update_segments(self._cached_segs, None, total_dur)
 
     def _get_current_segments(self):
@@ -358,6 +371,8 @@ class _CanvasStateEditor(EditorCanvasStateMixin):
             key=lambda seg: (float(seg.get("start", 0.0) or 0.0), float(seg.get("end", 0.0) or 0.0)),
         )
         total_dur = max((float(seg.get("end", 0.0) or 0.0) for seg in combined), default=0.0)
+        if getattr(self.video_player, "total_time", 0.0) > 0.0:
+            total_dur = max(total_dur, float(self.video_player.total_time))
         self.timeline.update_segments(combined, None, total_dur)
 
 
@@ -525,6 +540,14 @@ class ProjectSegmentReloadTests(unittest.TestCase):
             "timeline": {"tracks": [{"clips": [{"source_path": "/tmp/sample.mp4"}]}]},
             "editor_state": {},
             "analysis": {
+                "cut_boundary_reviewed_rows": [
+                    {
+                        "timeline_sec": 1.0,
+                        "timeline_frame": 30,
+                        "status": "verified",
+                        "confirmed": True,
+                    }
+                ],
                 "preliminary_middle_segments": [
                     {
                         "start": 0.0,
@@ -558,6 +581,7 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor.video_player.context_segments, segments)
         self.assertEqual(editor.video_player.display_time, 0.0)
         self.assertEqual(getattr(editor, "_preliminary_middle_segments")[0]["major_id"], "A")
+        self.assertEqual(getattr(editor, "_cut_boundary_reviewed_rows")[0]["timeline_frame"], 30)
 
     def test_apply_loaded_canvas_state_uses_segment_frame_rate_from_project_rows(self):
         editor = _CanvasStateEditor()
@@ -669,8 +693,8 @@ class ProjectSegmentReloadTests(unittest.TestCase):
 
         self.assertTrue(opened)
         self.assertEqual(editor._live_stt_preview_segments, [])
-        self.assertLess(editor.timeline.canvas.total_duration, 3.0)
-        self.assertAlmostEqual(editor.timeline.canvas.total_duration, 120.0 / 59.94, places=4)
+        self.assertLess(editor.timeline.canvas.total_duration, 44.0 * 60.0)
+        self.assertAlmostEqual(editor.timeline.canvas.total_duration, 1450.265483, places=6)
 
     def test_project_open_uses_video_header_primary_fps_when_timeline_timebase_is_missing(self):
         class _ProjectCanvasEditor(_CanvasStateEditor):
@@ -731,7 +755,83 @@ class ProjectSegmentReloadTests(unittest.TestCase):
 
         self.assertTrue(opened)
         self.assertAlmostEqual(editor.video_fps, 59.94, places=2)
-        self.assertAlmostEqual(editor.timeline.canvas.total_duration, 120.0 / 59.94, places=4)
+        self.assertAlmostEqual(editor.timeline.canvas.total_duration, 1450.265483, places=6)
+
+    def test_project_open_builds_placeholder_timeline_segments_when_subtitles_are_empty(self):
+        editor = _ProjectOpenEditor()
+        window = _ProjectOpenWindow(editor)
+        project = {
+            "video": {
+                "primary_fps": 59.94,
+                "duration_sec": 1450.265483,
+                "timebase": {"primary_fps": 59.94},
+            },
+            "timeline": {
+                "total_duration": 1450.265483,
+            },
+            "analysis": {
+                "middle_segments": [
+                    {
+                        "start": 0.0,
+                        "end": 1450.2488,
+                        "major_id": "A",
+                        "title": "주제없음",
+                        "display_title": "A - 주제없음",
+                        "color": "#34C759",
+                    }
+                ]
+            },
+            "editor_state": {"stt": {"preview_segments": []}},
+        }
+
+        with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+            opened = window._open_project_segments_in_editor(
+                "/tmp/sample_project.json",
+                project,
+                ["/tmp/sample.mp4"],
+                [],
+            )
+
+        self.assertTrue(opened)
+        self.assertEqual(len(editor._project_placeholder_segments), 1)
+        self.assertTrue(editor._project_placeholder_segments[0]["_project_placeholder_segment"])
+        self.assertEqual(editor._project_placeholder_segments[0]["text"], "A - 주제없음")
+        self.assertGreaterEqual(editor.placeholder_refreshes, 1)
+
+    def test_redraw_timeline_falls_back_to_project_placeholder_segments(self):
+        class _PlaceholderTimelineEditor(EditorSegmentsMixin):
+            def __init__(self):
+                self.status_lbl = _Status()
+                self.timeline = _Timeline()
+                self.video_player = _VideoPlayer(total_time=10.0)
+                self._active_seg_start = None
+                self._cached_segs = []
+                self._segment_queue = []
+                self._queue_timer = _QueueTimer()
+                self._subtitle_memory_cache = {}
+                self._project_placeholder_segments = [
+                    {
+                        "line": 0,
+                        "start": 0.0,
+                        "end": 9.5,
+                        "text": "A - 주제없음",
+                        "_project_placeholder_segment": True,
+                    }
+                ]
+
+            def _get_current_segments(self):
+                return []
+
+            def _rebuild_subtitle_memory_cache(self, segments=None):
+                self._subtitle_memory_cache = {}
+                return self._subtitle_memory_cache
+
+        editor = _PlaceholderTimelineEditor()
+        editor._redraw_timeline()
+
+        self.assertEqual(len(editor.timeline.updated[0]), 1)
+        self.assertTrue(editor.timeline.updated[0][0]["_project_placeholder_segment"])
+        self.assertEqual(editor.timeline.updated[0][0]["text"], "A - 주제없음")
 
     def test_init_editor_uses_deferred_media_and_native_fast_open_bootstrap(self):
         owner = _LifecycleOwner()
@@ -1185,6 +1285,50 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(editor.reload_called_with[0]["quality"]["confidence_label"], "green")
         self.assertEqual(len(editor._live_stt_preview_segments), 1)
         self.assertEqual(editor._live_stt_preview_segments[0]["text"], "STT1 후보")
+
+    def test_select_stt_candidate_native_plan_keeps_live_preview_flags(self):
+        editor = _LivePreviewEditor()
+        editor._cached_segs = [{"start": 1.0, "end": 2.0, "text": "기존", "speaker": "00"}]
+        editor.preview_stt_segments([
+            {"start": 1.0, "end": 2.0, "text": "STT1 후보", "stt_preview_source": "STT1"}
+        ])
+        editor._plan_stt_candidate_selection_native = lambda current, candidate: {
+            "usedSlot": True,
+            "slotStart": 1.0,
+            "slotEnd": 2.0,
+            "replacedSegments": [{"start": 1.0, "end": 2.0, "text": "기존", "line": 0}],
+            "selectedCandidates": [
+                {
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "STT1 후보",
+                    "source": "STT1",
+                    "speaker": "00",
+                    "score": 98.0,
+                    "sttScore": 98.0,
+                    "placementMode": "manual_final_slot_replace",
+                    "originalCandidateStart": 1.0,
+                    "originalCandidateEnd": 2.0,
+                    "replacedSegmentCount": 1,
+                    "slotCandidateParts": [],
+                }
+            ],
+            "filteredPreviewSegments": [
+                {
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "STT1 후보",
+                    "sttPreviewSource": "STT1",
+                }
+            ],
+        }
+
+        editor.select_stt_candidate_as_subtitle(editor._live_stt_preview_segments[0])
+
+        self.assertEqual(len(editor._live_stt_preview_segments), 1)
+        self.assertTrue(editor._live_stt_preview_segments[0]["stt_pending"])
+        self.assertTrue(editor._live_stt_preview_segments[0]["_live_stt_preview"])
+        self.assertEqual(editor._live_stt_preview_segments[0]["stt_preview_source"], "STT1")
 
     def test_select_stt_candidate_strips_whisper_control_tokens(self):
         editor = _LivePreviewEditor()

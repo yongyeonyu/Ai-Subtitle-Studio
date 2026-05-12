@@ -4,6 +4,7 @@
 ui/timeline_widget.py
 Timeline widget container
 """
+import os
 import time
 
 import numpy as np
@@ -85,6 +86,8 @@ def _compact_toolbar_button_style(*, font_size: str = "11px", padding: str = "2p
 class TimelinePlayheadOverlay(QWidget):
     """Paint the moving playhead without invalidating the heavy timeline body."""
 
+    _DIRTY_MARGIN_PX = 16
+
     def __init__(self, timeline, parent=None):
         super().__init__(parent)
         self._timeline = timeline
@@ -122,11 +125,12 @@ class TimelinePlayheadOverlay(QWidget):
         if getattr(self, "_quick", None) is not None:
             self._sync_quick_layer()
             return True
+        margin = int(self._DIRTY_MARGIN_PX)
         if old_px is None:
-            self.update(QRect(max(0, visual_px - 12), 0, 25, max(1, self.height())))
+            self.update(QRect(max(0, visual_px - margin), 0, margin * 2 + 1, max(1, self.height())))
         else:
-            left = max(0, min(old_px, visual_px) - 12)
-            right = min(max(1, self.width()), max(old_px, visual_px) + 13)
+            left = max(0, min(old_px, visual_px) - margin)
+            right = min(max(1, self.width()), max(old_px, visual_px) + margin + 1)
             self.update(QRect(left, 0, max(1, right - left), max(1, self.height())))
         return True
 
@@ -193,6 +197,12 @@ class TimelinePlayheadOverlay(QWidget):
         painter = QPainter(self)
         if not painter.isActive():
             return
+        # Explicitly clear the dirty strip first. A translucent QWidget overlay
+        # on macOS can otherwise keep the previous playhead pixels around and
+        # show "ghost" handles while the playhead moves.
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        painter.fillRect(event.rect(), Qt.GlobalColor.transparent)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         color = QColor("#4AFF80") if getattr(canvas, "focus_mode", "segment") == "waveform" else QColor("#FF4444")
         painter.setPen(QPen(color, 2))
@@ -437,6 +447,7 @@ class TimelineWidget(QWidget):
         if clear_duration:
             self.canvas.total_duration = 0.0
             self.global_canvas.total_duration = 0.0
+            self._single_media_duration_path = ""
         target_w = self._canvas_width_for_duration(float(getattr(self.canvas, "total_duration", 0.0) or 0.0))
         if self.canvas.width() != target_w:
             self.canvas.setFixedWidth(target_w)
@@ -463,11 +474,16 @@ class TimelineWidget(QWidget):
                 canvas._invalidate_render_cache()
             canvas.update()
 
-    def _apply_single_media_duration(self, dur: float) -> None:
+    def _apply_single_media_duration(self, dur: float, source_path: str | None = None) -> None:
         self._reset_single_media_context(clear_duration=False)
         duration = max(0.0, float(dur or 0.0))
         self.canvas.total_duration = duration
         self.global_canvas.total_duration = duration
+        if source_path is not None:
+            try:
+                self._single_media_duration_path = os.path.normpath(str(source_path or ""))
+            except Exception:
+                self._single_media_duration_path = str(source_path or "")
         target_w = self._canvas_width_for_duration(duration)
         if self.canvas.width() != target_w:
             self.canvas.setFixedWidth(target_w)
@@ -1347,8 +1363,20 @@ class TimelineWidget(QWidget):
 
         path = str(path or "")
         path_changed = path != str(getattr(self, "_waveform_path", "") or "")
+        known_duration_path = str(getattr(self, "_single_media_duration_path", "") or "")
+        current_duration = max(
+            0.0,
+            float(getattr(self.canvas, "total_duration", 0.0) or 0.0),
+            float(getattr(self.global_canvas, "total_duration", 0.0) or 0.0),
+        )
+        preserve_seeded_duration = bool(
+            current_duration > 0.0
+            and path
+            and known_duration_path
+            and os.path.normpath(known_duration_path) == os.path.normpath(path)
+        )
         if path_changed or force:
-            self._reset_single_media_context(clear_duration=True)
+            self._reset_single_media_context(clear_duration=not preserve_seeded_duration)
             self.canvas.set_waveform(None)
             self.global_canvas.set_waveform(None)
             self._multiclip_waveform_buffer = None
@@ -1458,7 +1486,7 @@ class TimelineWidget(QWidget):
         if sender is not self._wf_worker:
             return
 
-        self._apply_single_media_duration(d)
+        self._apply_single_media_duration(d, source_path=str(getattr(self, "_waveform_path", "") or ""))
         self.canvas.set_waveform(wf)
         self.global_canvas.set_waveform(wf)
         self.waveform_ready.emit(str(getattr(self, "_waveform_path", "") or ""), float(d or 0.0))

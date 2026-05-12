@@ -36,7 +36,7 @@ class SettingsRoughcutMixin:
             ("사용 안 함", "none"),
             ("llama.cpp / GGUF", "llama_cpp"),
             ("Ollama", "ollama"),
-            ("OpenAI", "openai"),
+            ("OpenAI API / ChatGPT CLI", "openai"),
             ("Gemini", "google"),
         ):
             self.combo_roughcut_llm_provider.addItem(label, value)

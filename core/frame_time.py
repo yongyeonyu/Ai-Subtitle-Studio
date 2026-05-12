@@ -164,6 +164,7 @@ def normalize_segments_to_frame_grid(
     collapse_micro_gaps: bool = False,
     max_gap_frames: int = 1,
     preserve_order: bool = False,
+    enforce_non_overlap: bool = False,
 ) -> list[dict]:
     normalized_fps = normalize_fps(fps)
     rows = [normalize_segment_to_frame_grid(seg, normalized_fps, min_frames=min_frames) for seg in list(segments or []) if isinstance(seg, dict)]
@@ -213,6 +214,29 @@ def normalize_segments_to_frame_grid(
                     "end": cur_end,
                     "timeline_frame_rate": normalized_fps,
                 }
+    if enforce_non_overlap and rows:
+        prev_end_frame: int | None = None
+        for row in rows:
+            if bool(row.get("is_gap", False)):
+                continue
+            start_frame, end_frame = segment_frame_bounds(row, normalized_fps, min_frames=min_frames)
+            if prev_end_frame is not None and start_frame < prev_end_frame:
+                start_frame = int(prev_end_frame)
+                end_frame = max(start_frame + max(1, int(min_frames or 1)), end_frame)
+                row["start"] = frame_to_sec(start_frame, normalized_fps)
+                row["end"] = frame_to_sec(end_frame, normalized_fps)
+                row["start_frame"] = start_frame
+                row["end_frame"] = end_frame
+                row["timeline_start_frame"] = start_frame
+                row["timeline_end_frame"] = end_frame
+                if isinstance(row.get("frame_range"), dict):
+                    row["frame_range"] = {
+                        **dict(row.get("frame_range") or {}),
+                        "start": start_frame,
+                        "end": end_frame,
+                        "timeline_frame_rate": normalized_fps,
+                    }
+            prev_end_frame = end_frame
     return rows
 
 

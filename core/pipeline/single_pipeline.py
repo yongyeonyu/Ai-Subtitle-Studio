@@ -516,26 +516,13 @@ class SinglePipelineMixin:
             elif os.path.exists(raw_wav):
                 audio_for_diarization = raw_wav
             else:
-                wav_in_chunks = sorted(
-                    [
-                        os.path.join(chunk_dir, f)
-                        for f in os.listdir(chunk_dir)
-                        if f.endswith(".wav")
-                    ]
-                )
-                audio_for_diarization = (
-                    wav_in_chunks[0] if wav_in_chunks else target_file
-                )
+                audio_for_diarization = target_file
 
-            t_diarize = None
-            if self.max_speakers > 1:
-                t_diarize = threading.Thread(
-                    target=self._prepare_speaker_map,
-                    args=(audio_for_diarization,),
-                    daemon=True,
-                    name="diarizer",
-                )
-                t_diarize.start()
+            self._prepare_speaker_map_before_stt(
+                audio_for_diarization,
+                speaker_preflight=getattr(self, "_autopilot_speaker_preflight", None),
+                stage_callback=lambda status, qi=queue_index: self._emit_processing_stage(qi, status),
+            )
 
             auto_collected_segs = []
             preview_opt_queue = queue.Queue()
@@ -619,7 +606,6 @@ class SinglePipelineMixin:
 
             def _do_optimize_impl(
                 _opt_queue=opt_queue,
-                _t_diarize=t_diarize,
                 _vad_segs=vad_segs,
                 _auto_collected_segs=auto_collected_segs,
             ):
@@ -627,10 +613,6 @@ class SinglePipelineMixin:
                 from core.engine.subtitle_timing import align_stt_candidates_to_subtitle_segments
 
                 total_files = len(self.files_to_process)
-
-                if _t_diarize and _t_diarize.is_alive():
-                    get_logger().log("\n⏳ [안내] 화자 분리 연산 대기 중...")
-                    _t_diarize.join()
 
                 try:
                     s = load_settings()
@@ -724,55 +706,7 @@ class SinglePipelineMixin:
                     opt = self._split_by_saved_cut_boundaries(opt, context="에디터 최종 자막")
                     opt = self._align_subtitle_segments_to_vad(opt, _vad_segs, context="에디터")
 
-                    if self.max_speakers > 1 and self._speaker_map:
-                        from core.audio.diarize import get_speaker_for_segment
-
-                        for seg in opt:
-                            spk_full = get_speaker_for_segment(
-                                seg["start"], seg["end"], self._speaker_map
-                            )
-                            seg["speaker"] = spk_full.replace("SPEAKER_", "")
-
-                        grouped_opt = []
-                        for seg in opt:
-                            text = seg.get("text", "").strip()
-                            if text.startswith("-"):
-                                text = text.lstrip("-").strip()
-                            spk = seg.get("speaker", "00")
-                            if not grouped_opt:
-                                seg["text_list"] = [text]
-                                seg["speaker_list"] = [spk]
-                                grouped_opt.append(seg)
-                            else:
-                                prev = grouped_opt[-1]
-                                gap = seg["start"] - prev["end"]
-                                if (
-                                    gap < 1.5
-                                    and spk != prev["speaker_list"][-1]
-                                    and len(prev["speaker_list"]) < 2
-                                ):
-                                    prev["text_list"].append(text)
-                                    prev["speaker_list"].append(spk)
-                                    prev["end"] = max(prev["end"], seg["end"])
-                                else:
-                                    seg["text_list"] = [text]
-                                    seg["speaker_list"] = [spk]
-                                    grouped_opt.append(seg)
-
-                        for seg in grouped_opt:
-                            if len(seg.get("text_list", [])) > 1:
-                                seg["text"] = (
-                                    f"- {seg['text_list'][0]}\n- {seg['text_list'][1]}"
-                                )
-                            else:
-                                seg["text"] = (
-                                    seg["text_list"][0]
-                                    if "text_list" in seg
-                                    else seg.get("text", "")
-                                )
-                            if "text_list" in seg:
-                                del seg["text_list"]
-                        opt = grouped_opt
+                    opt = self._apply_speaker_map_to_segments(opt)
 
                     if opt:
                         opt[0]["_subtitle_bundle_policy"] = {

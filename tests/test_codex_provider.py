@@ -8,7 +8,11 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from core.llm import codex_provider
-from core.llm.codex_provider import DEFAULT_CODEX_LABEL, is_codex_model
+from core.llm.codex_provider import (
+    CODEX_CLI_MODEL_MAP,
+    DEFAULT_CODEX_LABEL,
+    is_codex_model,
+)
 from core.llm import openai_provider
 
 
@@ -21,6 +25,10 @@ class CodexProviderTests(unittest.TestCase):
     def test_is_codex_model_rejects_normal_openai_labels(self):
         self.assertFalse(is_codex_model("OpenAI GPT-5 Mini [유료/API 균형]"))
         self.assertFalse(is_codex_model("gpt-5-mini"))
+
+    def test_codex_cli_model_catalog_includes_gpt_55(self):
+        self.assertIn("OpenAI Codex GPT-5.5 [ChatGPT CLI 구독]", CODEX_CLI_MODEL_MAP)
+        self.assertEqual(CODEX_CLI_MODEL_MAP["OpenAI Codex GPT-5.5 [ChatGPT CLI 구독]"], "gpt-5.5")
 
     def test_parse_chunks_accepts_exact_json(self):
         self.assertEqual(codex_provider._parse_chunks('{"result": ["a", "b"]}'), ["a", "b"])
@@ -87,6 +95,29 @@ class CodexProviderTests(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["timeout"], 7)
         self.assertIn("AI Subtitle Studio's subtitle segmentation engine", captured["kwargs"]["input"])
 
+    def test_split_text_passes_explicit_codex_cli_model_to_exec(self):
+        captured = {}
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+            output_path.write_text(json.dumps({"result": ["a"]}), encoding="utf-8")
+            return _Result()
+
+        with patch("core.llm.codex_provider.shutil.which", return_value="/usr/local/bin/codex"), \
+                patch("core.llm.codex_provider.subprocess.run", side_effect=fake_run):
+            result = codex_provider.split_text("OpenAI Codex GPT-5.5 [ChatGPT CLI 구독]", "split this", timeout=7)
+
+        self.assertEqual(result, ["a"])
+        cmd = captured["cmd"]
+        self.assertIn("--model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "gpt-5.5")
+
     def test_split_text_raises_on_timeout(self):
         with patch("core.llm.codex_provider.shutil.which", return_value="/usr/local/bin/codex"), \
                 patch("core.llm.codex_provider.subprocess.run", side_effect=subprocess.TimeoutExpired("codex", 1)):
@@ -99,6 +130,21 @@ class CodexProviderTests(unittest.TestCase):
             result = openai_provider.split_text("", DEFAULT_CODEX_LABEL, "prompt")
         self.assertEqual(result, ["a", "b"])
         split.assert_called_once()
+
+    def test_codex_login_status_recognizes_chatgpt_subscription_access(self):
+        class _Result:
+            returncode = 0
+            stdout = "Logged in using ChatGPT\n"
+            stderr = ""
+
+        with patch("core.llm.codex_provider.shutil.which", return_value="/usr/local/bin/codex"), \
+                patch("core.llm.codex_provider.subprocess.run", return_value=_Result()):
+            status = codex_provider.codex_login_status()
+
+        self.assertTrue(status["available"])
+        self.assertTrue(status["logged_in"])
+        self.assertEqual(status["auth_mode"], "chatgpt")
+        self.assertTrue(status["subscription_access"])
 
     def test_startup_ollama_preflight_skips_codex_and_cloud_models(self):
         from ui.main.main_signals import _is_preflight_local_ollama_model

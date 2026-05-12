@@ -23,13 +23,13 @@ Rectangle {
 
     function buttonBackground(active, primary) {
         if (active && primary) return "#1F8F4D"
-        if (active) return "#2D3942"
+        if (active) return "#1A84FF"
         return primary ? "#27323A" : "#20282F"
     }
 
     function buttonBorder(active, primary) {
         if (active && primary) return "#30D158"
-        if (active) return "#579DFF"
+        if (active) return "#7DC3FF"
         return primary ? "#3E5661" : "#313A42"
     }
 

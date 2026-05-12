@@ -24,6 +24,8 @@ GlobalCanvasBase = accelerated_widget_base("timeline")
 MINIMAP_BG = "#11181C"
 MINIMAP_TOP_LANE_BG = "#141D21"
 MINIMAP_BOTTOM_LANE_BG = "#0F1518"
+MINIMAP_BOTTOM_SUBTITLE_LANE_BG = "#131B20"
+MINIMAP_BOTTOM_SILENCE_LANE_BG = "#10161A"
 MINIMAP_DIVIDER = QColor("#2D3942")
 MINIMAP_MAJOR_BORDER = QColor("#FFFFFF")
 MINIMAP_PRELIMINARY_LANE_BG = "#122229"
@@ -69,6 +71,30 @@ class GlobalCanvas(GlobalCanvasBase):
     def _invalidate_static_cache(self):
         self._static_cache = None
         self._static_cache_key = None
+
+    def _base_lane_rects(self, width: int, height: int) -> tuple[QRect, QRect, int]:
+        top_lane = QRect(0, 0, max(1, int(width or 0)), max(1, (max(1, int(height or 0)) // 2) - 1))
+        bottom_lane = QRect(
+            0,
+            top_lane.bottom() + 1,
+            max(1, int(width or 0)),
+            max(1, max(1, int(height or 0)) - top_lane.height()),
+        )
+        divider_y = top_lane.bottom() + 1
+        return top_lane, bottom_lane, divider_y
+
+    def _bottom_content_lanes(self, width: int, height: int) -> tuple[QRect, QRect]:
+        _, bottom_lane, _ = self._base_lane_rects(width, height)
+        subtitle_h = max(1, bottom_lane.height() // 2)
+        silence_h = max(1, bottom_lane.height() - subtitle_h - 1)
+        subtitle_lane = QRect(bottom_lane.x(), bottom_lane.y(), bottom_lane.width(), subtitle_h)
+        silence_lane = QRect(
+            bottom_lane.x(),
+            subtitle_lane.bottom() + 1,
+            bottom_lane.width(),
+            silence_h,
+        )
+        return subtitle_lane, silence_lane
         
     def set_whisper_progress(self, sec: float):
         px = self._sec_to_px(sec)
@@ -291,14 +317,17 @@ class GlobalCanvas(GlobalCanvasBase):
         w = pixmap.width()
         h = pixmap.height()
         total = float(self.total_duration or 0.0)
-        top_lane = QRect(0, 0, w, max(1, (h // 2) - 1))
-        bottom_lane = QRect(0, top_lane.bottom() + 1, w, max(1, h - top_lane.height()))
-        divider_y = top_lane.bottom() + 1
+        top_lane, bottom_lane, divider_y = self._base_lane_rects(w, h)
+        subtitle_lane, silence_lane = self._bottom_content_lanes(w, h)
+        bottom_inner_divider_y = subtitle_lane.bottom() + 1
 
         p.fillRect(top_lane, QColor(MINIMAP_TOP_LANE_BG))
         p.fillRect(bottom_lane, QColor(MINIMAP_BOTTOM_LANE_BG))
+        p.fillRect(subtitle_lane, QColor(MINIMAP_BOTTOM_SUBTITLE_LANE_BG))
+        p.fillRect(silence_lane, QColor(MINIMAP_BOTTOM_SILENCE_LANE_BG))
         p.setPen(QPen(MINIMAP_DIVIDER, 1))
         p.drawLine(0, divider_y, w, divider_y)
+        p.drawLine(0, bottom_inner_divider_y, w, bottom_inner_divider_y)
         p.drawRect(QRect(0, 0, max(1, w - 1), max(1, h - 1)))
 
         def _rect_for_lane(start: float, end: float, lane: QRect, *, min_h_pad: int = 3) -> QRect:
@@ -406,7 +435,7 @@ class GlobalCanvas(GlobalCanvasBase):
                     end = float(s["end"])
                 except Exception:
                     continue
-                rect = _rect_for_lane(start, end, bottom_lane, min_h_pad=4)
+                rect = _rect_for_lane(start, end, subtitle_lane, min_h_pad=2)
                 if s.get("stt_pending"):
                     pending_rects.append(rect)
                 else:
@@ -419,7 +448,7 @@ class GlobalCanvas(GlobalCanvasBase):
                     end = max(start, float(marker.get("end", start) or start))
                 except Exception:
                     continue
-                silence_rects.append(_rect_for_lane(start, end, bottom_lane, min_h_pad=2))
+                silence_rects.append(_rect_for_lane(start, end, silence_lane, min_h_pad=1))
             if confirmed_rects:
                 p.setBrush(MINIMAP_SUBTITLE_FILL)
                 p.drawRects(confirmed_rects)

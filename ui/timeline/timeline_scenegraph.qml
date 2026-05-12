@@ -7,6 +7,7 @@ Item {
     property real fps: 30
     property real viewportX: 0
     property string fontFamily: "Arial"
+    property int canvasTextPixelSize: 12
 
     Repeater {
         model: root.segments
@@ -69,7 +70,7 @@ Item {
             text: modelData.text
             color: modelData.textColor
             font.family: root.fontFamily
-            font.pixelSize: modelData.preview ? 11 : 12
+            font.pixelSize: root.canvasTextPixelSize
             elide: parent.width < 164 ? Text.ElideRight : Text.ElideNone
             wrapMode: parent.width < 164 ? Text.NoWrap : Text.WordWrap
             verticalAlignment: parent.width < 164 ? Text.AlignVCenter : Text.AlignTop
@@ -116,7 +117,7 @@ Item {
                 text: modelData.speakerText
                 color: "#DCE3EA"
                 font.family: root.fontFamily
-                font.pixelSize: 10
+                font.pixelSize: root.canvasTextPixelSize
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
                 clip: true

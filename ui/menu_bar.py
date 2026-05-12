@@ -7,6 +7,7 @@ This replaces duplicated sidebar/editor action menus while keeping the editor's
 existing button/state-machine objects alive behind the scenes.
 """
 import os
+import time
 
 from PyQt6.QtCore import QSize, Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor
@@ -43,6 +44,15 @@ class StatusRail(QWidget):
         self._flash_timer = QTimer(self)
         self._flash_timer.setInterval(200)
         self._flash_timer.timeout.connect(self._tick_flash)
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(1000)
+        self._progress_timer.timeout.connect(self._tick_progress)
+        self._editor_ref = None
+        self._progress_ratio = 0.0
+        self._progress_percent = 0
+        self._progress_active = False
+        self._progress_completed = False
+        self._progress_tooltip = ""
         self._quick_mode_text = "에디터"
         self._quick_stage_text = "검토"
         self._quick_icon_text = "ED"
@@ -72,15 +82,40 @@ class StatusRail(QWidget):
         return btn
 
     def refresh_from_editor(self, editor):
+        self._editor_ref = editor
         mode_key = normalize_work_mode(getattr(self.window(), "_current_work_mode", EDITOR_MODE))
 
         mode_text, mode_icon, mode_color = self._mode_meta(mode_key, editor)
-        stage_text = self._stage_text(mode_key, editor)
+        base_stage_text = self._stage_text(mode_key, editor)
+        progress_meta = self._progress_meta(editor, mode_key, base_stage_text)
+        stage_text = str(progress_meta.get("stage_text", base_stage_text) or base_stage_text)
         text = f"{mode_text} | {stage_text}"
-        self._apply_button_state(self.state_button, text, mode_icon, mode_color)
-        if text != self._last_state_text:
-            self._last_state_text = text
+        self._apply_button_state(
+            self.state_button,
+            text,
+            mode_icon,
+            mode_color,
+            progress_ratio=float(progress_meta.get("ratio", 0.0) or 0.0),
+            progress_percent=int(progress_meta.get("percent", 0) or 0),
+            progress_active=bool(progress_meta.get("active", False)),
+            progress_completed=bool(progress_meta.get("completed", False)),
+            tooltip=str(progress_meta.get("tooltip", "") or ""),
+        )
+        state_key = "|".join(
+            [
+                str(mode_key or ""),
+                str(mode_text or ""),
+                str(base_stage_text or ""),
+                str(mode_icon or ""),
+                str(mode_color or ""),
+                "1" if bool(progress_meta.get("active", False)) else "0",
+                "1" if bool(progress_meta.get("completed", False)) else "0",
+            ]
+        )
+        if state_key != self._last_state_text:
+            self._last_state_text = state_key
             self._start_flash()
+        self._sync_progress_timer(bool(progress_meta.get("active", False)))
 
     def _mode_meta(self, mode_key: str, editor) -> tuple[str, str, str]:
         mode_key = normalize_work_mode(mode_key)
@@ -220,10 +255,149 @@ class StatusRail(QWidget):
             return "검토"
         return "완료"
 
-    def _apply_button_state(self, btn, text, icon, color):
+    def _format_clock(self, sec: float) -> str:
+        try:
+            total = max(0, int(float(sec or 0.0)))
+        except Exception:
+            return "00:00"
+        minutes, seconds = divmod(total, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def _color_rgba(self, color_value: str, alpha: float) -> str:
+        color = QColor(str(color_value or "#34C759"))
+        alpha_i = max(0, min(255, int(round(float(alpha) * 255.0))))
+        return f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha_i})"
+
+    def _queue_progress_meta(self) -> dict | None:
+        main = self.window()
+        if main is None:
+            return None
+        active_row_fn = getattr(main, "_current_queue_active_row", None)
+        if not callable(active_row_fn):
+            return None
+        try:
+            row = int(active_row_fn())
+        except Exception:
+            return None
+        table = getattr(main, "queue_table", None)
+        if table is None or row < 0 or row >= table.rowCount():
+            return None
+        status_item = table.item(row, 0)
+        status_text = str(status_item.text() if status_item is not None else "")
+        status_flags = getattr(main, "_queue_status_flags", None)
+        if callable(status_flags):
+            try:
+                done, _error, active = status_flags(status_text)
+            except Exception:
+                done, active = False, False
+        else:
+            done = "완료" in status_text
+            active = "대기" not in status_text and not done
+
+        expected_seconds = float((getattr(main, "_expected_seconds", {}) or {}).get(row, 0.0) or 0.0)
+        started_at = float((getattr(main, "_file_start_times", {}) or {}).get(row, 0.0) or 0.0)
+        if done:
+            return {
+                "active": False,
+                "completed": True,
+                "ratio": 1.0,
+                "percent": 100,
+                "tooltip": "작업 완료",
+            }
+        if not active or expected_seconds <= 0.0 or started_at <= 0.0:
+            return None
+
+        elapsed = max(0.0, time.time() - started_at)
+        raw_ratio = elapsed / max(expected_seconds, 1e-6)
+        percent = max(0, min(99, int(raw_ratio * 100.0)))
+        ratio = max(0.0, min(0.99, raw_ratio))
+        return {
+            "active": True,
+            "completed": False,
+            "ratio": ratio,
+            "percent": percent,
+            "tooltip": f"진행 {percent}% · {self._format_clock(elapsed)} / {self._format_clock(expected_seconds)}",
+        }
+
+    def _progress_meta(self, editor, mode_key: str, base_stage_text: str) -> dict:
+        base_stage = str(base_stage_text or "대기")
+        completed = base_stage == "완료"
+        active = False
+        ratio = 1.0 if completed else 0.0
+        percent = 100 if completed else 0
+        tooltip = ""
+
+        if not completed and mode_key == EDITOR_MODE and editor is not None:
+            queue_meta = self._queue_progress_meta()
+            if isinstance(queue_meta, dict):
+                active = bool(queue_meta.get("active", False))
+                completed = bool(queue_meta.get("completed", False))
+                ratio = float(queue_meta.get("ratio", 0.0) or 0.0)
+                percent = int(queue_meta.get("percent", 0) or 0)
+                tooltip = str(queue_meta.get("tooltip", "") or "")
+            else:
+                state = str(getattr(getattr(editor, "sm", None), "state", "") or "")
+                active = state == "ST_PROC" or bool(getattr(editor, "_is_ai_processing", False))
+                if active:
+                    progress_percent = int(getattr(getattr(editor, "sm", None), "progress_percent", 0) or 0)
+                    percent = max(0, min(99, progress_percent))
+                    ratio = max(0.0, min(0.99, percent / 100.0))
+                    if percent > 0:
+                        tooltip = f"진행 {percent}%"
+
+        stage_text = base_stage if not active or completed or percent <= 0 else f"{base_stage} {percent}%"
+        if completed:
+            percent = 100
+            ratio = 1.0
+            active = False
+        return {
+            "stage_text": stage_text,
+            "active": bool(active),
+            "completed": bool(completed),
+            "ratio": float(ratio),
+            "percent": int(percent),
+            "tooltip": tooltip,
+        }
+
+    def _sync_progress_timer(self, active: bool) -> None:
+        if bool(active):
+            if not self._progress_timer.isActive():
+                self._progress_timer.start()
+            return
+        self._progress_timer.stop()
+
+    def _tick_progress(self):
+        editor = getattr(self, "_editor_ref", None)
+        if editor is None:
+            self._progress_timer.stop()
+            return
+        self.refresh_from_editor(editor)
+
+    def _apply_button_state(
+        self,
+        btn,
+        text,
+        icon,
+        color,
+        *,
+        progress_ratio: float = 0.0,
+        progress_percent: int = 0,
+        progress_active: bool = False,
+        progress_completed: bool = False,
+        tooltip: str = "",
+    ):
+        self._progress_ratio = max(0.0, min(1.0, float(progress_ratio or 0.0)))
+        self._progress_percent = max(0, min(100, int(progress_percent or 0)))
+        self._progress_active = bool(progress_active)
+        self._progress_completed = bool(progress_completed)
+        self._progress_tooltip = str(tooltip or "")
         btn.setText(text)
         btn.setIcon(line_icon(icon, color, 20))
         btn.setStyleSheet(self._state_style(self._flash_on))
+        btn.setToolTip(self._progress_tooltip or str(text or ""))
         parts = [segment.strip() for segment in str(text or "").split("|", 1)]
         self._quick_mode_text = parts[0] if parts else ""
         self._quick_stage_text = parts[1] if len(parts) > 1 else ""
@@ -239,15 +413,33 @@ class StatusRail(QWidget):
         self._sync_quick_shell()
 
     def _state_style(self, flash=False):
-        bg = "#173D28" if flash else "#15331F"
+        accent = str(getattr(self, "_quick_color", "#34C759") or "#34C759")
+        completed = bool(getattr(self, "_progress_completed", False))
+        active = bool(getattr(self, "_progress_active", False))
+        ratio = max(0.0, min(1.0, float(getattr(self, "_progress_ratio", 0.0) or 0.0)))
+        if completed:
+            bg = "#173D28" if flash else "#15331F"
+        elif active and ratio > 0.0:
+            fill = self._color_rgba(accent, 0.36 if flash else 0.26)
+            rest = "rgba(7, 11, 12, 24)"
+            edge = min(0.99, max(0.0, ratio))
+            next_edge = min(1.0, edge + 0.002)
+            bg = (
+                "qlineargradient("
+                "x1:0, y1:0, x2:1, y2:0, "
+                f"stop:0 {fill}, stop:{edge:.4f} {fill}, "
+                f"stop:{next_edge:.4f} {rest}, stop:1 {rest})"
+            )
+        else:
+            bg = "rgba(0, 0, 0, 0)"
         return (
             "QToolButton { "
-            f"background: {bg}; color: #D9FFE3; border: 1px solid #34C759; "
+            f"background: {bg}; color: #D9FFE3; border: 1px solid {accent}; "
             "border-radius: 7px; padding: 3px 8px; font-size: 11px; font-weight: 700; "
             "text-align: left; "
             "} "
             "QToolButton:hover { "
-            f"background: {bg}; color: #D9FFE3; border: 1px solid #34C759; "
+            f"background: {bg}; color: #D9FFE3; border: 1px solid {accent}; "
             "} "
             "QToolButton::menu-indicator { image: none; }"
         )
@@ -311,6 +503,9 @@ class StatusRail(QWidget):
             root.setProperty("iconText", str(getattr(self, "_quick_icon_text", "AI") or "AI"))
             root.setProperty("accentColor", QColor(str(getattr(self, "_quick_color", "#34C759") or "#34C759")))
             root.setProperty("flashOn", bool(getattr(self, "_flash_on", False)))
+            root.setProperty("progressRatio", float(getattr(self, "_progress_ratio", 0.0) or 0.0))
+            root.setProperty("progressActive", bool(getattr(self, "_progress_active", False)))
+            root.setProperty("progressCompleted", bool(getattr(self, "_progress_completed", False)))
         except Exception:
             pass
 

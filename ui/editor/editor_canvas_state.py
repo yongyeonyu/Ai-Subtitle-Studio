@@ -92,6 +92,7 @@ class EditorCanvasStateMixin:
             collapse_micro_gaps=True,
             max_gap_frames=1,
             preserve_order=True,
+            enforce_non_overlap=True,
         )
         for idx, seg in enumerate(ordered):
             seg["line"] = idx

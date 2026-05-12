@@ -214,6 +214,33 @@ def roughcut_major_markers_for_widget(widget: Any) -> list[dict]:
     return roughcut_major_markers(result) if result is not None else []
 
 
+def _widget_attr_rows(widget: Any, attr_names: tuple[str, ...]) -> list[Any]:
+    rows: list[Any] = []
+    owner = widget
+    seen_owners: set[int] = set()
+    while owner is not None:
+        owner_id = id(owner)
+        if owner_id in seen_owners:
+            break
+        seen_owners.add(owner_id)
+        for attr in attr_names:
+            value = getattr(owner, attr, None)
+            if isinstance(value, list) and value:
+                rows.extend(list(value))
+        owner = owner.parent() if hasattr(owner, "parent") else None
+
+    try:
+        window = widget.window()
+    except Exception:
+        window = None
+    if window is not None and id(window) not in seen_owners:
+        for attr in attr_names:
+            value = getattr(window, attr, None)
+            if isinstance(value, list) and value:
+                rows.extend(list(value))
+    return rows
+
+
 def _rows_attr_for_widget(widget: Any, attr_names: tuple[str, ...]) -> list[dict]:
     owner = widget
     while owner is not None:
@@ -246,6 +273,168 @@ def topicless_major_markers_for_widget(widget: Any) -> list[dict]:
         ("_cut_boundary_topicless_middle_segments", "cut_boundary_topicless_middle_segments"),
     )
     return roughcut_major_markers(rows) if rows else []
+
+
+def _boundary_row_sec(row: Any) -> float | None:
+    if isinstance(row, dict):
+        return _as_float(
+            row.get("timeline_sec", row.get("time", row.get("start", row.get("timeline_start", None))))
+        )
+    return _as_float(row)
+
+
+def _boundary_row_frame(row: Any, fps: float) -> int | None:
+    if isinstance(row, dict):
+        for key in ("timeline_frame", "frame", "start_frame", "timeline_start_frame"):
+            try:
+                value = row.get(key)
+                if value is not None:
+                    return int(value)
+            except Exception:
+                continue
+    sec = _boundary_row_sec(row)
+    if sec is None:
+        return None
+    return int(round(float(sec) * max(1.0, float(fps or 30.0))))
+
+
+def _boundary_row_source_kind(row: Any) -> str:
+    if not isinstance(row, dict):
+        return "official"
+    status = str(row.get("status", "") or "").strip().lower()
+    stage = str(row.get("detector_stage", "") or "").strip().lower()
+    if bool(row.get("follower_relocated") or row.get("rollback_relocated") or row.get("middle_snap_only")):
+        return "reviewed"
+    if (
+        status in {"checked", "reviewed", "verified", "confirmed", "accepted", "done"}
+        or bool(row.get("verified"))
+        or bool(row.get("confirmed"))
+        or bool(row.get("scan_checked"))
+        or stage.startswith("follower")
+    ):
+        return "reviewed"
+    if "line_color" in row or "line_style" in row or "boundary_kind" in row:
+        return "provisional"
+    return "official"
+
+
+def boundary_row_is_voice_boundary(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    source = str(row.get("source", "") or "").strip().lower()
+    boundary_kind = str(row.get("boundary_kind", "") or "").strip().lower()
+    return source == "audio_gain_provisional" or boundary_kind == "audio"
+
+
+def _boundary_row_allows_precision_guide(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return True
+
+    if bool(row.get("middle_snap_only") or row.get("follower_relocated") or row.get("rollback_relocated")):
+        return True
+
+    if boundary_row_is_voice_boundary(row):
+        return False
+    return True
+
+
+def roughcut_precision_guides_for_widget(widget: Any) -> list[dict]:
+    try:
+        markers = (
+            widget.roughcut_major_markers_cached()
+            if hasattr(widget, "roughcut_major_markers_cached")
+            else roughcut_major_markers_for_widget(widget)
+        )
+    except Exception:
+        markers = roughcut_major_markers_for_widget(widget)
+    if not markers:
+        return []
+
+    try:
+        fps = float(widget._get_fps() if hasattr(widget, "_get_fps") else 30.0)
+    except Exception:
+        fps = 30.0
+    fps = max(1.0, fps)
+    edge_slop_sec = max(0.001, 1.1 / fps)
+
+    reviewed_rows = _widget_attr_rows(widget, ("_cut_boundary_reviewed_rows", "cut_boundary_reviewed_rows"))
+    provisional_rows = _widget_attr_rows(widget, ("scan_boundary_times", "_auto_cut_boundary_scan_lines"))
+    official_rows = _widget_attr_rows(widget, ("boundary_times", "_project_boundary_times"))
+    source_rows = [*official_rows, *reviewed_rows, *provisional_rows]
+    if not source_rows:
+        return []
+
+    guides: list[dict] = []
+    seen: set[tuple[str, int]] = set()
+    priority = {"official": 3, "reviewed": 2, "provisional": 1}
+    guide_index: dict[tuple[str, int], int] = {}
+
+    for row in list(source_rows or []):
+        if not _boundary_row_allows_precision_guide(row):
+            continue
+        sec = _boundary_row_sec(row)
+        if sec is None or sec <= 0.0:
+            continue
+        source_kind = _boundary_row_source_kind(row)
+        row_frame = _boundary_row_frame(row, fps)
+        if row_frame is None or row_frame <= 0:
+            continue
+
+        for marker in list(markers or []):
+            start = _as_float(marker.get("start"))
+            end = _as_float(marker.get("end"))
+            if start is None or end is None or end <= start:
+                continue
+            if sec <= (start + edge_slop_sec) or sec >= (end - edge_slop_sec):
+                continue
+            if sec < start or sec > end:
+                continue
+            major_id = str(marker.get("label", "") or marker.get("major_id", "") or "")
+            key = (major_id, int(row_frame))
+            item = {
+                "time": float(sec),
+                "start": float(sec),
+                "end": float(sec),
+                "major_id": major_id,
+                "kind": "roughcut_precision",
+                "source_kind": source_kind,
+                "source": dict(row) if isinstance(row, dict) else row,
+                "snap_only": bool(
+                    isinstance(row, dict)
+                    and (row.get("middle_snap_only") or row.get("follower_relocated") or row.get("rollback_relocated"))
+                ),
+                "color": str(marker.get("color", "#8E8E93") or "#8E8E93"),
+                "alpha": 128,
+                "line_style": "dash",
+                "line_width": 2,
+            }
+            prev_idx = guide_index.get(key)
+            if prev_idx is None:
+                guide_index[key] = len(guides)
+                guides.append(item)
+                seen.add(key)
+                continue
+            prev = guides[prev_idx]
+            if priority.get(source_kind, 0) > priority.get(str(prev.get("source_kind") or ""), 0):
+                guides[prev_idx] = item
+            break
+
+    guides.sort(key=lambda item: (float(item.get("time", 0.0) or 0.0), str(item.get("major_id", "") or "")))
+    return guides
+
+
+def roughcut_precision_guides_signature(widget: Any) -> tuple:
+    guides = roughcut_precision_guides_for_widget(widget)
+    return tuple(
+        (
+            str(item.get("major_id", "") or ""),
+            round(float(item.get("time", 0.0) or 0.0), 4),
+            str(item.get("color", "") or ""),
+            str(item.get("source_kind", "") or ""),
+            bool(item.get("snap_only")),
+        )
+        for item in list(guides or [])
+    )
 
 
 def editor_analysis_markers(
